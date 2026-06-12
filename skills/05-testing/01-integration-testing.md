@@ -18,6 +18,18 @@ Read this page first to get the main workflow; for specific mappings read these 
 
 `run_integration.sh` performs a preflight check at startup. If the alias is missing it exits and prints the `sudo ifconfig lo0 alias …` command — run it manually once as instructed. The alias is lost after a reboot and must be re-added; for permanent effect use a launchd plist (instructions in the prompt).
 
+## Preflight quality gates
+
+Integration is the project's key control point, so `run_integration.sh` enforces three repo-wide quality gates at the very top of `main()`, in order. **Any failure aborts with `exit 1` before any build or test runs**, and they run on every invocation — including `--no-prepare` (only the build step is gated by prepare, not these gates).
+
+| Gate | Entry point | Enforces |
+|------|-------------|----------|
+| English-Only Lint | `cicd/checks/check_english_only.sh` | no non-English letter scripts outside `docs/` and `tasks/` |
+| Agent-doc Validation | `python3 cicd/checks/validate_agent_docs.py` | `AGENTS.md` / `skills/` links, frontmatter, indexes, stale `src/` refs |
+| Types Purity | `cicd/checks/check_types_purity.sh` | `edgion-resources` stays a clean leaf crate (no `crate::core::` edges) |
+
+These are the same `cicd/checks/*` entry points CI uses — there is no `Makefile` (the former `make check-*` targets were dissolved into standalone `cicd/` scripts). To reproduce a gate failure standalone, run its entry point directly, e.g. `python3 cicd/checks/validate_agent_docs.py`. A common cause is doc-vs-code drift after a refactor (e.g. a `skills/` file referencing a moved/deleted `src/` path) — fix the reference, not the gate.
+
 ## Quick start
 
 ```bash

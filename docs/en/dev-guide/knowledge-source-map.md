@@ -46,7 +46,7 @@ Example:
 3. When adding a new high-frequency workflow, add or improve a skill first.
 4. When adding long background material, write it in `docs/` first and link from the skill.
 5. Platform-specific files should remain thin entry wrappers, not grow into a second knowledge tree.
-6. After changing `AGENTS.md`, `skills/`, or this dev-guide entry layer, run `make check-agent-docs` to catch broken links and stale architecture paths.
+6. After changing `AGENTS.md`, `skills/`, or this dev-guide entry layer, run `python3 cicd/checks/validate_agent_docs.py` to catch broken links and stale architecture paths.
 
 ## Current Migration Priorities
 

@@ -89,7 +89,7 @@ if [[ "${SKIP_BUILD}" != "true" ]]; then
     --build-arg BUILD_TYPE=bin \
     --build-arg PROFILE="${PROFILE}" \
     -t "${CONTROLLER_IMAGE}" \
-    -f docker/Dockerfile .
+    -f cicd/docker/Dockerfile .
 
   echo "  Building gateway..."
   docker build ${NO_CACHE} \
@@ -97,7 +97,7 @@ if [[ "${SKIP_BUILD}" != "true" ]]; then
     --build-arg BUILD_TYPE=bin \
     --build-arg PROFILE="${PROFILE}" \
     -t "${GATEWAY_IMAGE}" \
-    -f docker/Dockerfile .
+    -f cicd/docker/Dockerfile .
 
   echo "  Images built: ${CONTROLLER_IMAGE}, ${GATEWAY_IMAGE}"
 else

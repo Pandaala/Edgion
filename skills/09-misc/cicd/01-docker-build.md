@@ -6,23 +6,22 @@ description: Use when building Edgion images with Docker, understanding the mult
 
 Use this skill to answer:
 
-- How the multi-stage build in `docker/Dockerfile` actually flows
+- How the multi-stage build in `cicd/docker/Dockerfile` actually flows
 - What layer `cargo-chef` caches
 - What the build args `BINARY`, `BUILD_TYPE`, and `FEATURES` each affect
-- When to use `docker/Dockerfile` vs. `docker/Dockerfile.runtime`
+- When to use `cicd/docker/Dockerfile` vs. `cicd/docker/Dockerfile.runtime`
 
 ## Main files
 
-- `docker/Dockerfile` — multi-stage source build (covered in detail below)
-- `docker/Dockerfile.builder` — standalone build-environment image
-- `docker/Dockerfile.runtime` — packages a pre-built artifact into a runtime image
+- `cicd/docker/Dockerfile` — multi-stage source build (covered in detail below)
+- `cicd/docker/Dockerfile.builder` — standalone build-environment image
+- `cicd/docker/Dockerfile.runtime` — packages a pre-built artifact into a runtime image
 
-Other variants in `docker/` (not detailed here):
+Other variants in `cicd/docker/` (not detailed here):
 
-- `docker/Dockerfile.all-in-one` (+ `docker/all-in-one-entrypoint.sh`) — packages pre-built binaries + the frontend dashboard + nginx into one image; two modes via `ALL_IN_ONE_MODE`: `controller-gateway` (controller + gateway + dashboard) or `center` (center + dashboard). Driven by `build-image.sh`
-- `docker/Dockerfile.allbin` — builds all binaries (controller, center, cli) from source in one pass, using BuildKit cache mounts for fast incremental rebuilds
+- `cicd/docker/Dockerfile.controller-gateway` (+ `cicd/docker/controller-gateway-entrypoint.sh`) — packages pre-built binaries (controller + gateway + cli) into one standalone backend image (no dashboard/nginx). Driven by `build-image.sh --controller-gateway`
 
-## The 4 stages of `docker/Dockerfile`
+## The 4 stages of `cicd/docker/Dockerfile`
 
 ### 1. `chef`
 
@@ -78,7 +77,7 @@ Caching meaning:
 docker build \
   --build-arg BINARY=edgion-gateway \
   -t edgion/edgion-gateway:local \
-  -f docker/Dockerfile .
+  -f cicd/docker/Dockerfile .
 ```
 
 ### Build the controller
@@ -87,7 +86,7 @@ docker build \
 docker build \
   --build-arg BINARY=edgion-controller \
   -t edgion/edgion-controller:local \
-  -f docker/Dockerfile .
+  -f cicd/docker/Dockerfile .
 ```
 
 ### Build an example
@@ -97,7 +96,7 @@ docker build \
   --build-arg BUILD_TYPE=example \
   --build-arg BINARY=test_server \
   -t edgion/edgion-test-server:local \
-  -f docker/Dockerfile .
+  -f cicd/docker/Dockerfile .
 ```
 
 ### Switch features
@@ -107,10 +106,10 @@ docker build \
   --build-arg BINARY=edgion-gateway \
   --build-arg FEATURES="allocator-jemalloc,rustls" \
   -t edgion/edgion-gateway:rustls \
-  -f docker/Dockerfile .
+  -f cicd/docker/Dockerfile .
 ```
 
-## When to use `docker/Dockerfile.runtime`
+## When to use `cicd/docker/Dockerfile.runtime`
 
 This file is not a source-build image; it "packages an already-built artifact into a runtime image".
 
@@ -134,7 +133,7 @@ Example:
 
 ```bash
 docker build \
-  -f docker/Dockerfile.runtime \
+  -f cicd/docker/Dockerfile.runtime \
   --build-arg BINARY=gateway \
   --build-arg BUILD_TYPE=bin \
   --build-arg BINARY_PATH=target/release \
@@ -143,7 +142,7 @@ docker build \
 
 ## Multi-architecture and the builder image
 
-`docker/Dockerfile.builder` is a standalone "build environment image", more suitable for:
+`cicd/docker/Dockerfile.builder` is a standalone "build environment image", more suitable for:
 
 - Building Linux targets from any host
 - Multi-architecture build experiments
@@ -152,7 +151,7 @@ docker build \
 Example approach:
 
 ```bash
-docker build --platform linux/arm64 -t edgion-builder -f docker/Dockerfile.builder .
+docker build --platform linux/arm64 -t edgion-builder -f cicd/docker/Dockerfile.builder .
 docker run --rm --platform linux/arm64 -v "$(pwd)":/project edgion-builder \
   cargo build --release --target aarch64-unknown-linux-gnu
 ```

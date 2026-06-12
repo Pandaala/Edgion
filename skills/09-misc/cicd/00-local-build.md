@@ -110,8 +110,8 @@ sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
 Look at:
 
-- `docker/Dockerfile.builder`
-- `docker/Dockerfile`
+- `cicd/docker/Dockerfile.builder`
+- `cicd/docker/Dockerfile`
 - `.github/workflows/build-image.yml`
 
 These three are the project's actual ground truth for "the minimum set of build dependencies" and "how cross-compilation is done".

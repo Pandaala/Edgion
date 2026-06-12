@@ -1,0 +1,59 @@
+# Edgion Controller-Gateway Dockerfile
+# Packages pre-built backend binaries into a single standalone container:
+# edgion-controller + edgion-gateway + edgion-cli (for debugging).
+#
+# The management dashboard is NOT bundled here — it is deployed separately
+# (see the edgion-dashboard repository) and talks to the controller admin API.
+#
+# Build arguments:
+#   BINARY_PATH:  Path to pre-built backend binaries (e.g. target/aarch64-unknown-linux-gnu/release)
+#   RUNTIME_BASE: Runtime base image (default: debian:bookworm-slim)
+#
+# Usage (called by build-image.sh --controller-gateway):
+#   docker buildx build -f cicd/docker/Dockerfile.controller-gateway \
+#     --build-arg BINARY_PATH=target/aarch64-unknown-linux-gnu/release \
+#     -t edgion-controller-gateway:latest .
+
+ARG RUNTIME_BASE=debian:bookworm-slim
+FROM ${RUNTIME_BASE}
+
+ARG BINARY_PATH
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    libssl3 \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy pre-built backend binaries
+RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
+    cp /tmp/binaries/edgion-controller /usr/local/bin/edgion-controller && \
+    cp /tmp/binaries/edgion-gateway /usr/local/bin/edgion-gateway && \
+    cp /tmp/binaries/edgion-cli /usr/local/bin/edgion-cli && \
+    chmod +x /usr/local/bin/edgion-controller /usr/local/bin/edgion-gateway /usr/local/bin/edgion-cli
+
+# Copy config files
+RUN --mount=type=bind,source=config,target=/tmp/config \
+    mkdir -p /etc/edgion && \
+    cp -r /tmp/config/*.toml /etc/edgion/ 2>/dev/null; true
+
+COPY --chmod=755 cicd/docker/controller-gateway-entrypoint.sh /usr/local/bin/controller-gateway-entrypoint.sh
+
+ENV RUST_LOG=info
+ENV RUST_BACKTRACE=full
+
+# Expose ports:
+#   80, 443 — gateway data plane
+#   12100   — controller probe (health/ready)
+#   12101   — controller admin API
+#   12151   — controller gRPC
+EXPOSE 80 443 12100 12101 12151
+
+ENTRYPOINT ["/usr/local/bin/controller-gateway-entrypoint.sh"]
+
+# Labels
+LABEL maintainer="Edgion Team"
+LABEL org.opencontainers.image.source="https://github.com/Pandaala/Edgion"
+LABEL org.opencontainers.image.description="Edgion Controller-Gateway - Controller + Gateway"
+LABEL org.opencontainers.image.licenses="Apache-2.0"

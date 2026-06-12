@@ -15,9 +15,9 @@
 #   - Docker with Buildx support
 #
 # Usage:
-#   ./build-image.sh                           # Build arm64 only (default for arm64 host)
-#   ./build-image.sh --arch amd64,arm64        # Build both architectures
-#   ./build-image.sh --arch amd64,arm64 --push # Build and push multi-arch images
+#   cicd/build-image.sh                           # Build arm64 only (default for arm64 host)
+#   cicd/build-image.sh --arch amd64,arm64        # Build both architectures
+#   cicd/build-image.sh --arch amd64,arm64 --push # Build and push multi-arch images
 
 set -eo pipefail
 
@@ -35,27 +35,18 @@ RUST_VERSION="${RUST_VERSION:-1.92}"
 FEATURES="${FEATURES:-default}"
 BINARIES="gateway controller"
 EXAMPLES="test_server test_client"
-DASHBOARD_REPO="git@github.com:Pandaala/edgion-dashboard.git"
 
 # =============================================================================
 # Internal variables  (no need to change unless you know what you're doing)
 # =============================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="${SCRIPT_DIR}"
+# Script lives in cicd/; the build context / project root is one level up.
+PROJECT_DIR="$(dirname "${SCRIPT_DIR}")"
 BUILDER_IMAGE="edgion-builder"
-# The dashboard is always pulled fresh from the remote (never vendored locally).
-DASHBOARD_CLONE="${PROJECT_DIR}/docker/.all-in-one-dashboard"
 
-# Map all-in-one mode to Docker image name
-all_in_one_image_name() {
-    local mode=$1
-    if [[ "${mode}" == "controller-gateway" ]]; then
-        echo "edgion-all-in-one"
-    else
-        echo "edgion-all-in-one-${mode}"
-    fi
-}
+# Docker image name for the standalone controller-gateway bundle.
+CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway"
 
 # Ensure Docker Buildx builder exists and is selected
 ensure_buildx() {
@@ -142,14 +133,15 @@ Options:
     --compile-only               Only compile binaries, don't build images
     --with-examples              Also build test_server and test_client images
     --with-example               Alias of --with-examples
-    --all-in-one-controller-gateway     Build all-in-one image: dashboard + controller + gateway
-                                 Image: edgion-all-in-one (standalone, skips standard images)
+    --controller-gateway         Build standalone bundle image: controller + gateway
+                                 Image: edgion-controller-gateway (skips standard images)
     -h, --help                   Show this help message
 
-All-in-One Notes:
-    --all-in-one-controller-gateway produces a standalone image that bundles the
-    frontend dashboard with controller + gateway and nginx. The dashboard is pulled
-    fresh from the remote (same as above). When specified, standard images are NOT built.
+Controller-Gateway Notes:
+    --controller-gateway produces a standalone image that bundles controller +
+    gateway (+ cli) into a single container for quick evaluation / single-node
+    use. The management dashboard is NOT included (deploy it separately). When
+    specified, standard images are NOT built.
 
 Environment Variables:
     IMAGE_REGISTRY      Docker registry (default: docker.io)
@@ -181,8 +173,8 @@ Examples:
     # Build and push with test_server and test_client
     $0 --arch arm64,amd64 --push --with-examples
 
-    # Build all-in-one: dashboard + controller + gateway
-    $0 --all-in-one-controller-gateway
+    # Build controller-gateway bundle: controller + gateway
+    $0 --controller-gateway
 
 Build Flow:
     Stage 1: Build Docker builder image (one-time)
@@ -220,13 +212,13 @@ check_prerequisites() {
     fi
 
     # Check required files
-    if [[ ! -f "${PROJECT_DIR}/docker/Dockerfile.runtime" ]]; then
-        log_error "docker/Dockerfile.runtime not found"
+    if [[ ! -f "${PROJECT_DIR}/cicd/docker/Dockerfile.runtime" ]]; then
+        log_error "cicd/docker/Dockerfile.runtime not found"
         has_error=true
     fi
 
-    if [[ ! -f "${PROJECT_DIR}/docker/Dockerfile.builder" ]]; then
-        log_error "docker/Dockerfile.builder not found"
+    if [[ ! -f "${PROJECT_DIR}/cicd/docker/Dockerfile.builder" ]]; then
+        log_error "cicd/docker/Dockerfile.builder not found"
         has_error=true
     fi
 
@@ -276,7 +268,7 @@ ensure_builder_image() {
         --platform "${platform}" \
         --build-arg "RUST_VERSION=${RUST_VERSION}" \
         -t "${tag}" \
-        -f "${PROJECT_DIR}/docker/Dockerfile.builder" \
+        -f "${PROJECT_DIR}/cicd/docker/Dockerfile.builder" \
         "${PROJECT_DIR}"
 
     log_success "Builder image ${tag} created"
@@ -405,7 +397,7 @@ build_images() {
 
         local build_cmd=(
             docker buildx build
-            --file docker/Dockerfile.runtime
+            --file cicd/docker/Dockerfile.runtime
             --build-arg "BINARY=${binary}"
             --build-arg "BUILD_TYPE=bin"
             --build-arg "BINARY_PATH=${bin_path}"
@@ -470,7 +462,7 @@ build_example_images() {
 
         local build_cmd=(
             docker buildx build
-            --file docker/Dockerfile.runtime
+            --file cicd/docker/Dockerfile.runtime
             --build-arg "BINARY=${example}"
             --build-arg "BUILD_TYPE=example"
             --build-arg "BINARY_PATH=${bin_path}"
@@ -629,88 +621,22 @@ merge_example_manifests() {
 }
 
 # =============================================================================
-# All-in-One: Clone / update frontend dashboard from GitHub
+# Controller-Gateway: Compile backend binaries for the bundle
 # =============================================================================
 
-prepare_dashboard() {
-    # Always pull a fresh shallow clone from the remote — the dashboard is never
-    # vendored or read from a local checkout.
-    DASHBOARD_DIR="${DASHBOARD_CLONE}"
-    log_info "Cloning dashboard from ${DASHBOARD_REPO}..."
-    rm -rf "${DASHBOARD_DIR}"
-    git clone --depth 1 "${DASHBOARD_REPO}" "${DASHBOARD_DIR}" || {
-        log_error "Failed to clone dashboard from ${DASHBOARD_REPO}"
-        exit 1
-    }
-
-    if [[ ! -f "${DASHBOARD_DIR}/package.json" ]]; then
-        log_error "Dashboard not found — package.json missing"
-        exit 1
-    fi
-
-    log_success "Dashboard source ready at ${DASHBOARD_DIR}"
-}
-
-# =============================================================================
-# All-in-One: Build frontend dashboard
-# =============================================================================
-
-compile_frontend() {
-    log_stage "All-in-One: Building frontend dashboard"
-
-    prepare_dashboard
-
-    # Build frontend in Docker for consistency (no local Node.js required)
-    log_info "Running npm ci + npm run build inside Docker (node:20-slim)..."
-    local ver="${VERSION#v}"   # strip leading 'v' so package.json gets e.g. 0.1.22
-    local pkg_json="${DASHBOARD_DIR}/package.json"
-    local pkg_json_orig
-    pkg_json_orig=$(cat "${pkg_json}")   # backup before docker modifies it
-
-    docker run --rm \
-        -v "${DASHBOARD_DIR}":/app \
-        -w /app \
-        node:20-slim \
-        bash -c "npm pkg set version='${ver}' && npm ci --prefer-offline && npm run build"
-    local rc=$?
-
-    echo "${pkg_json_orig}" > "${pkg_json}"   # restore to avoid dirty working tree
-
-    if [[ ${rc} -ne 0 ]]; then
-        log_error "Frontend build failed"
-        exit 1
-    fi
-
-    # Copy dist into Docker build context
-    rm -rf "${PROJECT_DIR}/docker/.all-in-one-dist"
-    cp -r "${DASHBOARD_DIR}/dist" "${PROJECT_DIR}/docker/.all-in-one-dist"
-
-    log_success "Frontend dashboard built successfully"
-}
-
-# =============================================================================
-# All-in-One: Compile backend binaries needed for a specific all-in-one mode
-# =============================================================================
-
-compile_all_in_one_binaries() {
+compile_controller_gateway_binaries() {
     local arch=$1
     local force_rebuild=$2
-    local all_in_one_mode=$3   # "controller-gateway"
 
     local arch_info
     arch_info=$(get_arch_info "${arch}")
     IFS=':' read -r platform target suffix <<< "${arch_info}"
     local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
 
-    # Determine which binaries to compile
-    local bins="--bin edgion-cli"
-    case "${all_in_one_mode}" in
-        controller-gateway)
-            bins="${bins} --bin edgion-gateway --bin edgion-controller"
-            ;;
-    esac
+    # Bundle binaries: controller + gateway + cli
+    local bins="--bin edgion-cli --bin edgion-gateway --bin edgion-controller"
 
-    log_info "Compiling all-in-one [${all_in_one_mode}] binaries for ${arch} (${target})..."
+    log_info "Compiling controller-gateway binaries for ${arch} (${target})..."
     log_info "This may take several minutes on first build..."
 
     ensure_builder_image "${platform}"
@@ -736,22 +662,21 @@ compile_all_in_one_binaries() {
         bash -c "${build_cmd}"
 
     if [[ $? -ne 0 ]]; then
-        log_error "All-in-one compilation failed for ${arch} (${all_in_one_mode})"
+        log_error "Controller-gateway compilation failed for ${arch}"
         exit 1
     fi
 
-    log_success "Compiled all-in-one [${all_in_one_mode}] binaries for ${arch}"
+    log_success "Compiled controller-gateway binaries for ${arch}"
 }
 
 # =============================================================================
-# All-in-One: Build a single all-in-one Docker image
+# Controller-Gateway: Build the standalone bundle Docker image
 # =============================================================================
 
-build_all_in_one_image() {
+build_controller_gateway_image() {
     local arch=$1
     local push=$2
     local version=$3
-    local all_in_one_mode=$4   # "controller-gateway"
 
     local arch_info
     arch_info=$(get_arch_info "${arch}")
@@ -760,21 +685,17 @@ build_all_in_one_image() {
 
     ensure_buildx
 
-    local image_name
-    image_name=$(all_in_one_image_name "${all_in_one_mode}")
-
+    local image_name="${CONTROLLER_GATEWAY_IMAGE}"
     local image_base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${image_name}"
     local image_tag="${image_base}:${version}_${suffix}"
 
-    log_info "Building all-in-one [${all_in_one_mode}] image for ${arch}..."
+    log_info "Building controller-gateway image for ${arch}..."
     log_info "  Tag: ${image_tag}"
 
     local build_cmd=(
         docker buildx build
-        --file docker/Dockerfile.all-in-one
-        --build-arg "ALL_IN_ONE_MODE=${all_in_one_mode}"
+        --file cicd/docker/Dockerfile.controller-gateway
         --build-arg "BINARY_PATH=${bin_path}"
-        --build-arg "DASHBOARD_DIST_PATH=docker/.all-in-one-dist"
         --platform "${platform}"
         --tag "${image_tag}"
     )
@@ -790,22 +711,21 @@ build_all_in_one_image() {
     "${build_cmd[@]}"
 
     if [[ $? -ne 0 ]]; then
-        log_error "Failed to build all-in-one [${all_in_one_mode}] image for ${arch}"
+        log_error "Failed to build controller-gateway image for ${arch}"
         exit 1
     fi
 
     log_success "Built ${image_name}:${version}_${suffix}"
-    BUILD_INFO+=("all-in-one-${all_in_one_mode}|${image_tag}|${arch}")
+    BUILD_INFO+=("controller-gateway|${image_tag}|${arch}")
 }
 
 # =============================================================================
-# All-in-One: Merge multi-architecture manifest for a single all-in-one image
+# Controller-Gateway: Merge multi-architecture manifest for the bundle image
 # =============================================================================
 
-merge_all_in_one_manifest() {
+merge_controller_gateway_manifest() {
     local version=$1
-    local all_in_one_mode=$2
-    shift 2
+    shift 1
     local archs=("$@")
 
     local version_no_v="${version#v}"
@@ -816,9 +736,7 @@ merge_all_in_one_manifest() {
         minor=$(echo "${version_no_v}" | cut -d. -f1-2)
     fi
 
-    local image_name
-    image_name=$(all_in_one_image_name "${all_in_one_mode}")
-
+    local image_name="${CONTROLLER_GATEWAY_IMAGE}"
     local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${image_name}"
 
     log_info "Creating multi-arch manifest for ${image_name}..."
@@ -858,18 +776,16 @@ merge_all_in_one_manifest() {
 }
 
 # =============================================================================
-# All-in-One: Print summary for one all-in-one image
+# Controller-Gateway: Print summary for the bundle image
 # =============================================================================
 
-print_all_in_one_summary() {
+print_controller_gateway_summary() {
     local version_no_v=$1
     local push=$2
-    local all_in_one_mode=$3
-    shift 3
+    shift 2
     local archs=("$@")
 
-    local image_name
-    image_name=$(all_in_one_image_name "${all_in_one_mode}")
+    local image_name="${CONTROLLER_GATEWAY_IMAGE}"
 
     if [[ "${push}" == "true" ]]; then
         echo "  ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${image_name}:${version_no_v}"
@@ -900,7 +816,7 @@ main() {
     local rebuild=false
     local compile_only=false
     local with_examples=false
-    local all_in_one_controller_gateway=false
+    local controller_gateway=false
     local from_tag=false
     local version="${VERSION}"
 
@@ -934,8 +850,8 @@ main() {
                 with_examples=true
                 shift
                 ;;
-            --all-in-one-controller-gateway)
-                all_in_one_controller_gateway=true
+            --controller-gateway)
+                controller_gateway=true
                 shift
                 ;;
             -h|--help)
@@ -950,12 +866,6 @@ main() {
         esac
     done
 
-    # Derived flag: any all-in-one mode requested?
-    local any_all_in_one=false
-    if [[ "${all_in_one_controller_gateway}" == "true" ]]; then
-        any_all_in_one=true
-    fi
-
     # --from-tag: resolve version from current git tag
     if [[ "${from_tag}" == "true" ]]; then
         if ! git rev-parse --git-dir > /dev/null 2>&1; then
@@ -966,7 +876,7 @@ main() {
         git_tag=$(git describe --tags --exact-match 2>/dev/null || echo "")
         if [[ -z "${git_tag}" ]]; then
             log_error "HEAD is not on a git tag. Please create a tag first:"
-            log_error "  git tag v0.x.0 && ./build-image.sh --from-tag --push"
+            log_error "  git tag v0.x.0 && cicd/build-image.sh --from-tag --push"
             exit 1
         fi
         local git_commit
@@ -1021,9 +931,9 @@ main() {
     log_info "Architectures: ${archs[*]}"
     log_info "Registry: ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}"
     log_info "Push: ${push}"
-    if [[ "${any_all_in_one}" == "true" ]]; then
-        log_info "Mode: All-in-One (standalone images)"
-        [[ "${all_in_one_controller_gateway}" == "true" ]] && log_info "  → edgion-all-in-one (dashboard + controller + gateway)"
+    if [[ "${controller_gateway}" == "true" ]]; then
+        log_info "Mode: Controller-Gateway (standalone bundle image)"
+        log_info "  → edgion-controller-gateway (controller + gateway)"
     else
         log_info "Mode: Standard"
         [[ "${with_examples}" == "true" ]] && log_info "  → With examples"
@@ -1035,37 +945,31 @@ main() {
     BUILD_INFO=()
 
     # =========================================================================
-    # All-in-One path — completely separate from standard
+    # Controller-Gateway path — completely separate from standard
     # =========================================================================
-    if [[ "${any_all_in_one}" == "true" ]]; then
+    if [[ "${controller_gateway}" == "true" ]]; then
 
         # --- Compile backend binaries ---
-        local compile_mode="controller-gateway"
-
-        log_stage "All-in-One: Compiling backend binaries (${compile_mode})"
+        log_stage "Controller-Gateway: Compiling backend binaries"
         for arch in "${archs[@]}"; do
-            compile_all_in_one_binaries "${arch}" "${rebuild}" "${compile_mode}"
+            compile_controller_gateway_binaries "${arch}" "${rebuild}"
         done
 
-        # --- Build frontend ---
-        compile_frontend
-
         if [[ "${compile_only}" == "true" ]]; then
-            log_success "All-in-one compilation completed (--compile-only)"
-            rm -rf "${PROJECT_DIR}/docker/.all-in-one-dist"
+            log_success "Controller-gateway compilation completed (--compile-only)"
             exit 0
         fi
 
-        # --- Build all-in-one Docker images ---
-        log_stage "All-in-One: Building Docker images"
+        # --- Build Docker image ---
+        log_stage "Controller-Gateway: Building Docker images"
         for arch in "${archs[@]}"; do
-            [[ "${all_in_one_controller_gateway}" == "true" ]] && build_all_in_one_image "${arch}" "${push}" "${version}" "controller-gateway"
+            build_controller_gateway_image "${arch}" "${push}" "${version}"
         done
 
         # --- Merge manifests ---
         if [[ "${push}" == "true" ]] && [[ ${#archs[@]} -gt 1 ]]; then
-            log_stage "All-in-One: Creating multi-architecture manifests"
-            [[ "${all_in_one_controller_gateway}" == "true" ]] && merge_all_in_one_manifest "${version}" "controller-gateway" "${archs[@]}"
+            log_stage "Controller-Gateway: Creating multi-architecture manifests"
+            merge_controller_gateway_manifest "${version}" "${archs[@]}"
         elif [[ "${push}" == "true" ]]; then
             log_info "Single architecture, creating simple tags..."
             local version_no_v="${version#v}"
@@ -1073,30 +977,20 @@ main() {
             arch_info=$(get_arch_info "${archs[0]}")
             IFS=':' read -r _ _ suffix <<< "${arch_info}"
 
-            for all_in_one_mode in controller-gateway; do
-                local flag_var="all_in_one_${all_in_one_mode//-/_}"
-                [[ "${!flag_var}" != "true" ]] && continue
-
-                local image_name
-                image_name=$(all_in_one_image_name "${all_in_one_mode}")
-                local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${image_name}"
-                docker buildx imagetools create \
-                    -t "${base}:${version_no_v}" \
-                    -t "${base}:latest" \
-                    "${base}:${version}_${suffix}"
-            done
+            local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/${CONTROLLER_GATEWAY_IMAGE}"
+            docker buildx imagetools create \
+                -t "${base}:${version_no_v}" \
+                -t "${base}:latest" \
+                "${base}:${version}_${suffix}"
         fi
 
         # --- Summary ---
         echo ""
-        log_success "All-in-one build completed successfully!"
+        log_success "Controller-gateway build completed successfully!"
         echo ""
-        log_info "Built all-in-one images:"
+        log_info "Built controller-gateway image:"
         local version_no_v="${version#v}"
-        [[ "${all_in_one_controller_gateway}" == "true" ]] && print_all_in_one_summary "${version_no_v}" "${push}" "controller-gateway" "${archs[@]}"
-
-        # Cleanup temporary frontend dist
-        rm -rf "${PROJECT_DIR}/docker/.all-in-one-dist"
+        print_controller_gateway_summary "${version_no_v}" "${push}" "${archs[@]}"
         echo ""
         return 0
     fi

@@ -15,7 +15,7 @@ This walkthrough assumes **Kubernetes mode** with a backend `Service` that has r
 Deploy the controller, gateway, CRDs, and base configuration:
 
 ```bash
-deploy/kubernetes/scripts/deploy.sh -y
+cicd/deploy/kubernetes/scripts/deploy.sh -y
 ```
 
 Confirm the control plane and data plane are running:

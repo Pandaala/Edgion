@@ -13,7 +13,7 @@ In standalone mode, the controller uses a **file-system config center** — it w
 
 ```bash
 # Start controller + gateway with default config
-deploy/standalone/start.sh --work-dir /usr/local/edgion
+cicd/deploy/standalone/start.sh --work-dir /usr/local/edgion
 ```
 
 ## Installation
@@ -220,7 +220,7 @@ edgion-gateway \
 ### Stop
 
 ```bash
-deploy/standalone/stop.sh --work-dir /usr/local/edgion
+cicd/deploy/standalone/stop.sh --work-dir /usr/local/edgion
 ```
 
 ## Managing Routes

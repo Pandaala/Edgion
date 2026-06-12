@@ -21,13 +21,13 @@ Edgion 当前有两条主路径：
 仓库提供了一键部署脚本，可以安装 CRD、Controller（控制平面）、Gateway（数据平面）及基础配置：
 
 ```bash
-deploy/kubernetes/scripts/deploy.sh -y
+cicd/deploy/kubernetes/scripts/deploy.sh -y
 ```
 
 如果只需要先安装 CRD，运行：
 
 ```bash
-deploy/kubernetes/scripts/install_crds.sh
+cicd/deploy/kubernetes/scripts/install_crds.sh
 ```
 
 部署前建议先确认：
@@ -47,7 +47,7 @@ deploy/kubernetes/scripts/install_crds.sh
 仓库提供了启动脚本，以本地进程方式启动 Controller 和 Gateway，并加载内置的文件系统配置：
 
 ```bash
-deploy/standalone/start.sh
+cicd/deploy/standalone/start.sh
 ```
 
 默认使用 `/usr/local/edgion` 作为工作目录；可以通过 `--work-dir <path>` 指定，通过 `--foreground` 将两个进程保持在终端前台运行。

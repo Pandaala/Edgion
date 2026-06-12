@@ -139,6 +139,9 @@ pingora-ketama.workspace = true
 tower.workspace = true
 
 
+[build-dependencies]
+tonic-build.workspace = true
+
 [dev-dependencies]
 edgion-common = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true

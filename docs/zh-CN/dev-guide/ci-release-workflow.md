@@ -70,7 +70,7 @@ CI 和 release 现在都依赖同一个本地 action：
 
 1. `cargo check --all-targets`
 2. `cargo fmt --all -- --check`
-3. `make check-agent-docs`
+3. `python3 cicd/checks/validate_agent_docs.py`
 4. `cargo clippy --all-targets`
 5. `cargo test --all`
 6. 汇总 job `ci-success`
@@ -78,7 +78,7 @@ CI 和 release 现在都依赖同一个本地 action：
 这里有几个容易被误解的点：
 
 - 当前 CI 命令没有默认扩大到 `--all-features`
-- `make check-agent-docs` 专门负责兜住 `AGENTS.md`、`skills/` 和 dev-guide 入口层的一致性
+- `python3 cicd/checks/validate_agent_docs.py` 专门负责兜住 `AGENTS.md`、`skills/` 和 dev-guide 入口层的一致性
 - `fmt` job 不安装系统依赖，也不开 Cargo cache
 - `ci-success` 的作用是给 branch protection 一个稳定汇总结果，不是重复跑检查
 
@@ -111,7 +111,7 @@ CI 和 release 现在都依赖同一个本地 action：
 作用：
 
 - 下载前一步的二进制产物
-- 用 `docker/Dockerfile.runtime` 打 runtime 镜像
+- 用 `cicd/docker/Dockerfile.runtime` 打 runtime 镜像
 - 按架构推送镜像 tag
 
 ### 4. `merge-manifests`
@@ -139,7 +139,7 @@ CI 和 release 现在都依赖同一个本地 action：
 ```bash
 cargo check --all-targets
 cargo fmt --all -- --check
-make check-agent-docs
+python3 cicd/checks/validate_agent_docs.py
 cargo clippy --all-targets
 cargo test --all
 ```
@@ -198,4 +198,3 @@ cargo test --all
 
 - [AI 协作与 Skills 使用指南](./ai-agent-collaboration.md)
 - [知识来源映射与维护规则](./knowledge-source-map.md)
-- [Makefile](../../../Makefile)

@@ -190,7 +190,7 @@ requestPlugins:
 
 - **独立部署（裸金属 / 虚拟机）** — Controller 和 Gateway 作为原生进程运行，无需 Kubernetes。配置来源为本地 YAML 文件或 etcd。
 
-- **All-in-One 容器** — 单个容器镜像打包 Controller、Gateway 和管理前端。适用于快速评估、演示和单节点环境。
+- **Controller-Gateway 容器** — 单个容器镜像打包 Controller 和 Gateway。适用于快速评估、演示和单节点环境。管理前端单独部署。
 
 ## 文档
 

@@ -28,7 +28,7 @@ are not accepted — see below.
   `admin_listen: 0.0.0.0` override at all — the configmaps rely on the loopback default and the
   admin port is intentionally not cluster-reachable. `/health` + `/ready` moved to a dedicated probe port
   (`probe_listen`, default `0.0.0.0:12000`), so kubelet no longer dials the admin port.
-- The K8s readiness/startup probes (`deploy/kubernetes/gateway/deployment.yaml`) are `httpGet` on port
+- The K8s readiness/startup probes (`cicd/deploy/kubernetes/gateway/deployment.yaml`) are `httpGet` on port
   **12000** (the probe port), which kubelet dials over the **pod IP**. The probe port carries no sensitive
   data, so binding `0.0.0.0` there is safe; the admin port stays loopback. This removes the old tension
   where a pod-IP readiness probe forced `admin_listen` to `0.0.0.0`.

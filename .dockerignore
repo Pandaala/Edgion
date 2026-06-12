@@ -58,10 +58,9 @@ docs/
 .dockerignore
 docker-compose*.yml
 
-# Development tools
-build-image.sh
-Makefile
-scripts/
+# Development tools (build/check scripts — not needed in image build context)
+cicd/*.sh
+cicd/checks/
 
 # Testing only (keep examples/ for test_server/test_client builds)
 tests/
@@ -75,5 +74,5 @@ LICENSE-*
 *.backup
 *.old
 
-# All-in-one cloned dashboard repo (only docker/.all-in-one-dist is needed in context)
-docker/.all-in-one-dashboard/
+# All-in-one cloned dashboard repo (only cicd/docker/.all-in-one-dist is needed in context)
+cicd/docker/.all-in-one-dashboard/

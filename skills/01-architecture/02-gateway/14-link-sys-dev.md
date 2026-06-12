@@ -281,7 +281,7 @@ If you modified an existing system, run the corresponding entry point first:
 If you modified docs / skill / AI entry points, also run:
 
 ```bash
-make check-agent-docs
+python3 cicd/checks/validate_agent_docs.py
 ```
 
 ## Related

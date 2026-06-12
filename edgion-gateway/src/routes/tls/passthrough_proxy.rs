@@ -28,8 +28,8 @@ use crate::routes::common::{is_core_service_backend_ref, UNSAFE_UPSTREAM_ADDRESS
 use crate::routes::l4_duplex::bidirectional_relay;
 use crate::runtime::matching::route::hostname_matches_listener;
 use crate::runtime::store::get_listener_gateway_info_store;
+use crate::util::proxy_protocol::ProxyProtocolV2Builder;
 use crate::{MatchedInfo, Rsc};
-use edgion_common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::ListenerKey;
 use edgion_resources::ResourceMeta;

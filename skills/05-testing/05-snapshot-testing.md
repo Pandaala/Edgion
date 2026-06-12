@@ -227,7 +227,7 @@ Use only when (a) is structurally blocked AND (b) would require a regex zoo larg
 Introducing it requires:
 1. Adding `insta = "1"` to `[dev-dependencies]`.
 2. Documenting in the PR description why (a) and (b) were considered and rejected, with a worked example.
-3. Optionally adding `cargo insta review` to a `Makefile` target.
+3. Optionally adding `cargo insta review` to a `cicd/` helper script (the repo has no `Makefile`).
 
 Do not reach for `insta` before exhausting (a) and (b).
 
@@ -274,7 +274,7 @@ This skill is registered in `skills/05-testing/SKILL.md` Part 1 — Standard tes
 After modifying the registry, run:
 
 ```bash
-make check-agent-docs
+python3 cicd/checks/validate_agent_docs.py
 ```
 
 to confirm the registry is consistent with the files on disk.

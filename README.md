@@ -300,7 +300,7 @@ The following deployment modes are supported:
 
 - **Standalone (Bare-Metal / VM)** — Runs Controller and Gateway as native processes without Kubernetes. Configuration is sourced from local YAML files or etcd.
 
-- **All-in-One Container** — A single container image bundling Controller, Gateway, and the management frontend. Designed for quick evaluation, demos, and single-node environments.
+- **Controller-Gateway Container** — A single container image bundling Controller and Gateway. Designed for quick evaluation, demos, and single-node environments. The management frontend is deployed separately.
 
 ## Documentation
 

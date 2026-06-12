@@ -40,7 +40,7 @@ Typical example: `fn default_true() -> bool { true }`, `fn is_true(v: &bool) -> 
 **Accepted as a real finding (verdict updated 2026-05-29).** The project rule is now
 unambiguous: **all content written into source files must be English** — identifiers,
 `//` / `///` / `/* */` comments, doc comments, TODO/FIXME, and log/error literals
-(see both the global and project `CLAUDE.md`). The `make check-agent-docs` /
+(see both the global and project `CLAUDE.md`). The `python3 cicd/checks/validate_agent_docs.py` /
 `check-english-only` lint enforces this. The only on-disk Chinese exception is
 user-facing documentation under `docs/zh/`.
 
@@ -63,6 +63,5 @@ not, by itself, a finding.
   - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs`
   - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
   - `edgion-controller/src/conf_mgr/conf_center/etcd/config.rs`
-- `edgion-common/src/fed_sync/mod.rs` adds a module-level comment explaining that it contains only proto types; runtime logic lives in `controller::fed_sync` / `center::fed_sync` respectively.
 
 If the strings `fix-change` or orphan codes like `I4/M6/C1` are spotted again in the future — those are newly introduced; treat as dead links; no need to scan the 6 already-cleaned files again.

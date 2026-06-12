@@ -67,7 +67,7 @@ pub struct EdgionHttpProxy {
     pub enable_http2: bool,
 
     /// Real IP extractor for trusted proxy support
-    pub real_ip_extractor: Option<Arc<edgion_common::utils::RealIpExtractor>>,
+    pub real_ip_extractor: Option<Arc<crate::util::RealIpExtractor>>,
 
     /// Preflight request handler
     pub preflight_handler: PreflightHandler,

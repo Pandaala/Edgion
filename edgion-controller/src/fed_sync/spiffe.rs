@@ -1,6 +1,6 @@
 //! Pure SPIFFE URI-SAN parsing and matching for the federation plane.
-//! Shared by the Center server (identity binding) and the Controller
-//! startup self-check. No I/O — operates on DER bytes the caller already holds.
+//! Used by the Controller federation client to verify the Center peer
+//! identity. No I/O — operates on DER bytes the caller already holds.
 
 use x509_parser::certificate::X509Certificate;
 use x509_parser::extensions::{GeneralName, ParsedExtension};

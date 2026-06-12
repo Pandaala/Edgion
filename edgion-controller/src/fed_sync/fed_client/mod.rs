@@ -17,7 +17,7 @@ use tonic::transport::Channel;
 use crate::authz::{Authorizer, Verb};
 use crate::conf_mgr::ConfMgr;
 use crate::config::CenterClientConfig;
-use edgion_common::fed_sync::proto::{
+use crate::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
     federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage,
     FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, Pong, RegisterRequest, StatsReport,
@@ -120,9 +120,9 @@ pub async fn run(
     match std::fs::read(tls_cfg.cert_path()) {
         Ok(pem_bytes) => {
             let ok = first_cert_der_from_pem(&pem_bytes)
-                .and_then(|d| edgion_common::fed_sync::spiffe::extract_single_spiffe_uri(&d).ok())
-                .and_then(|u| edgion_common::fed_sync::spiffe::parse_controller_spiffe(&u))
-                .map(|p| edgion_common::fed_sync::spiffe::path_matches(&p, &config.cluster, &config.name))
+                .and_then(|d| crate::fed_sync::spiffe::extract_single_spiffe_uri(&d).ok())
+                .and_then(|u| crate::fed_sync::spiffe::parse_controller_spiffe(&u))
+                .map(|p| crate::fed_sync::spiffe::path_matches(&p, &config.cluster, &config.name))
                 .unwrap_or(false);
             if !ok {
                 tracing::error!(
@@ -422,7 +422,7 @@ async fn handle_center_message(
                 request_id = %cmd.request_id,
                 "CommandRequest received"
             );
-            use edgion_common::fed_sync::proto::command_request::Command;
+            use crate::fed_sync::proto::command_request::Command;
             let (success, message) = match cmd.command {
                 Some(Command::Reload(_)) => {
                     use tower::ServiceExt;
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn self_check_accepts_matching_path() {
-        use edgion_common::fed_sync::spiffe::{parse_controller_spiffe, path_matches};
+        use crate::fed_sync::spiffe::{parse_controller_spiffe, path_matches};
         let p = parse_controller_spiffe("spiffe://td/controllers/prod/ctrl-1").unwrap();
         assert!(path_matches(&p, "prod", "ctrl-1"));
         assert!(!path_matches(&p, "prod", "other"));
@@ -853,7 +853,7 @@ mod tests {
     async fn watch_request_denied_by_rbac_sends_forbidden_and_no_watch_started() {
         use crate::authz::{Authorizer, CenterPolicy};
         use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig};
-        use edgion_common::fed_sync::proto::{controller_message::Payload as CtrlPayload, FedWatchRequest};
+        use crate::fed_sync::proto::{controller_message::Payload as CtrlPayload, FedWatchRequest};
         use std::sync::Arc;
 
         // Construct a minimal ConfMgr using the FileSystem backend (temp dir).

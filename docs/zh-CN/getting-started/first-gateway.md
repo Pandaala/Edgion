@@ -15,7 +15,7 @@
 部署 Controller（控制平面）、Gateway（数据平面）、CRD 及基础配置：
 
 ```bash
-deploy/kubernetes/scripts/deploy.sh -y
+cicd/deploy/kubernetes/scripts/deploy.sh -y
 ```
 
 确认控制平面和数据平面正常运行：

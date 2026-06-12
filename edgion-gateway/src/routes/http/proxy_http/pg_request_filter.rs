@@ -6,12 +6,12 @@ use crate::runtime::hostname_matches_listener;
 use crate::runtime::store::get_listener_gateway_info_store;
 use crate::runtime::store::listener_gateway_info::format_gateway_key;
 use crate::services::acme::challenge_store::get_global_challenge_store;
+use crate::util::net::host_without_port;
 use crate::{
     end_response_400, end_response_404, end_response_421, end_response_500, end_response_grpc_unimplemented,
     terminate_with_fallback,
 };
 use crate::{EdgionHttpContext, TlsConnId, TlsConnMeta};
-use edgion_common::utils::net::host_without_port;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::get_path_normalization_config;
 use edgion_resources::path_normalization::{

@@ -1234,7 +1234,7 @@ main() {
     # Coverage mode notification (heavy lifting done by prepare.sh / start_all.sh)
     if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
         log_info "Coverage mode: profraw will accumulate under target/"
-        log_info "Run 'make coverage-report' after this completes to generate HTML"
+        log_info "Run './cicd/coverage.sh report' after this completes to generate HTML"
     fi
 
     # Parse args
@@ -1389,7 +1389,7 @@ main() {
     # Pre-flight Check 0: Only English letter scripts allowed outside docs/ and tasks/
     # =============================================================================
     log_section "Pre-flight Check: English-Only Lint"
-    if ! "${PROJECT_ROOT}/scripts/check_english_only.sh"; then
+    if ! "${PROJECT_ROOT}/cicd/checks/check_english_only.sh"; then
         log_error "English-only check failed — translate offending text to English before running integration tests"
         exit 1
     fi
@@ -1399,11 +1399,21 @@ main() {
     # Pre-flight Check 1: Agent-doc validation (links, frontmatter, indexes, ...)
     # =============================================================================
     log_section "Pre-flight Check: Agent-doc Validation"
-    if ! python3 "${PROJECT_ROOT}/tools/validate_agent_docs.py"; then
+    if ! python3 "${PROJECT_ROOT}/cicd/checks/validate_agent_docs.py"; then
         log_error "Agent-doc validation failed — fix doc consistency issues before running integration tests"
         exit 1
     fi
     log_success "Agent-doc validation passed"
+
+    # =============================================================================
+    # Pre-flight Check 2: edgion-resources leaf purity (no crate::core:: edges)
+    # =============================================================================
+    log_section "Pre-flight Check: Types Purity"
+    if ! "${PROJECT_ROOT}/cicd/checks/check_types_purity.sh"; then
+        log_error "Types-purity check failed — edgion-resources must stay a clean leaf (no crate::core:: edges)"
+        exit 1
+    fi
+    log_success "Types-purity check passed"
 
     if ! ensure_nofile_limit "$REQUIRED_NOFILE"; then
         log_error "File descriptor limit check failed"

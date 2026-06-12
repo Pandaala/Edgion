@@ -444,7 +444,7 @@ EOF
 
 build_and_import_local_images() {
   local arch build_script build_version
-  build_script="${PROJECT_ROOT}/build-image.sh"
+  build_script="${PROJECT_ROOT}/cicd/build-image.sh"
   arch="${IMAGE_ARCH}"
   if [[ -z "${arch}" ]]; then
     arch="$(auto_detect_image_arch)"

@@ -91,7 +91,7 @@ cargo check --all-targets
 cargo fmt --all -- --check
 cargo clippy --all-targets
 cargo test --all
-make check-agent-docs
+python3 cicd/checks/validate_agent_docs.py
 
 # Targeted integration test
 ./edgion-tests/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
@@ -107,7 +107,7 @@ When the user says "run check", "check the code", "format the code", "run CI", "
 1. **Format**: `cargo fmt --all` (apply directly — not `--check`)
 2. **Compile check**: `cargo check --all-targets`
 3. **Lint**: `cargo clippy --all-targets`
-4. **Doc consistency**: `make check-agent-docs`
+4. **Doc consistency**: `python3 cicd/checks/validate_agent_docs.py`
 
 Steps 2/3/4 may run in parallel. If any step fails, report the error immediately and try to fix it; after fixing, re-run that step. Once all pass, summarize the result.
 

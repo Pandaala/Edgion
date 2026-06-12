@@ -172,7 +172,7 @@ overwrite a running binary there (Text file busy). Always stage in `/tmp/` then
 | `Text file busy` | Overwriting running binary in-place | `rm -f` then `cp`, or use `mv` (atomic) |
 | Wrong architecture | Built for darwin/arm64 | Use `cargo zigbuild --target x86_64-unknown-linux-gnu` |
 | GatewayClass not Accepted | Controller crashed on new binary | Check logs: `kubectl logs -n $NS $CTRL_POD --tail=50` |
-| `pkill: executable file not found in $PATH` | Runtime image missing `procps` | Rebuild from current `docker/Dockerfile*` (already installs `procps`); on a legacy image, find the PID from `/proc/*/comm` and `kill -TERM` it instead. |
+| `pkill: executable file not found in $PATH` | Runtime image missing `procps` | Rebuild from current `cicd/docker/Dockerfile*` (already installs `procps`); on a legacy image, find the PID from `/proc/*/comm` and `kill -TERM` it instead. |
 
 ## 7. Related Docs
 

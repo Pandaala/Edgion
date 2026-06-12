@@ -1,7 +1,7 @@
 use crate::backends::discovery::get_global_service_store;
 use crate::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
+use crate::util::net::{classify_backend_addr, BlockedBackendReason};
 use crate::EdgionHttpContext;
-use edgion_common::utils::net::{classify_backend_addr, BlockedBackendReason};
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use edgion_resources::edgion_status::EdgionStatus;
 use edgion_resources::resources::BackendTLSPolicy;

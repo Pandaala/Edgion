@@ -53,7 +53,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Validate agent docs
-        run: make check-agent-docs
+        run: python3 cicd/checks/validate_agent_docs.py
 
   clippy:
     name: Clippy

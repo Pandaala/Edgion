@@ -13,11 +13,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(out_dir.join("config_sync_descriptor.bin"))
         .compile_protos(&[format!("{}/config_sync.proto", proto_dir)], &[proto_dir])?;
 
-    // fed_sync: federation client (still used by the controller's fed_sync).
-    let fed_proto_dir = "src/fed_sync/proto";
-    tonic_build::configure()
-        .file_descriptor_set_path(out_dir.join("fed_sync_descriptor.bin"))
-        .compile_protos(&[format!("{}/fed_sync.proto", fed_proto_dir)], &[fed_proto_dir])?;
-
     Ok(())
 }

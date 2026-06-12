@@ -11,4 +11,4 @@ jobs:
       - name: Install ripgrep
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       - name: Run check
-        run: make check-english-only
+        run: ./cicd/checks/check_english_only.sh

@@ -7,8 +7,8 @@
 # is always 0; the reviewer decides what to do with the output.
 #
 # Usage:
-#   scripts/verify_log_only_diff.sh <git-diff-range>
-#   scripts/verify_log_only_diff.sh log-overhaul-start..HEAD
+#   cicd/checks/verify_log_only_diff.sh <git-diff-range>
+#   cicd/checks/verify_log_only_diff.sh log-overhaul-start..HEAD
 #
 # Safe patterns for a `+` or `-` line (heuristic):
 #   - Line containing a push / push_err / tracing::*! call with string literal

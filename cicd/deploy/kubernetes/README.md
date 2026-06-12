@@ -12,7 +12,7 @@ Deploy Edgion API Gateway to a Kubernetes cluster using Gateway API.
 
 ```bash
 # Deploy everything (CRDs, controller, gateway, base config)
-deploy/kubernetes/scripts/deploy.sh -y
+cicd/deploy/kubernetes/scripts/deploy.sh -y
 ```
 
 This single command will:
@@ -26,7 +26,7 @@ This single command will:
 ## Directory Structure
 
 ```
-deploy/kubernetes/
+cicd/deploy/kubernetes/
 ├── namespace.yaml              # edgion-system namespace
 ├── versions.env                # Default image versions
 ├── controller/
@@ -56,13 +56,13 @@ If you prefer manual control over each step:
 ### 1. Create Namespace
 
 ```bash
-kubectl apply -f deploy/kubernetes/namespace.yaml
+kubectl apply -f cicd/deploy/kubernetes/namespace.yaml
 ```
 
 ### 2. Install CRDs
 
 ```bash
-deploy/kubernetes/scripts/install_crds.sh
+cicd/deploy/kubernetes/scripts/install_crds.sh
 ```
 
 This installs the [Gateway API CRDs](https://gateway-api.sigs.k8s.io/) from the experimental channel (needed for TCPRoute and UDPRoute, while also serving the Standard resources) and Edgion-specific CRDs (EdgionTls, EdgionPlugins, etc.).
@@ -70,7 +70,7 @@ This installs the [Gateway API CRDs](https://gateway-api.sigs.k8s.io/) from the 
 ### 3. Deploy Controller
 
 ```bash
-kubectl apply -f deploy/kubernetes/controller/
+kubectl apply -f cicd/deploy/kubernetes/controller/
 ```
 
 The controller watches Kubernetes resources and streams configuration to gateways via gRPC. It runs in HA mode with leader election — only the leader pod actively watches and syncs.
@@ -78,7 +78,7 @@ The controller watches Kubernetes resources and streams configuration to gateway
 ### 4. Deploy Gateway
 
 ```bash
-kubectl apply -f deploy/kubernetes/gateway/
+kubectl apply -f cicd/deploy/kubernetes/gateway/
 ```
 
 The gateway is the stateless data plane. It connects to the controller's leader service for configuration and handles all traffic proxying.
@@ -86,7 +86,7 @@ The gateway is the stateless data plane. It connects to the controller's leader 
 ### 5. Apply Base Config
 
 ```bash
-kubectl apply -f deploy/kubernetes/base-config/
+kubectl apply -f cicd/deploy/kubernetes/base-config/
 ```
 
 This creates:
@@ -181,7 +181,7 @@ Override via environment variables or edit `versions.env`:
 ```bash
 CONTROLLER_IMAGE=myregistry/edgion-controller:latest \
 GATEWAY_IMAGE=myregistry/edgion-gateway:latest \
-  deploy/kubernetes/scripts/deploy.sh -y
+  cicd/deploy/kubernetes/scripts/deploy.sh -y
 ```
 
 ## Adding Listeners
@@ -226,10 +226,10 @@ kubectl patch svc edgion-gateway -n edgion-system -p '{"spec":{"type":"LoadBalan
 
 ```bash
 # Remove Edgion (keep CRDs and namespace)
-deploy/kubernetes/scripts/cleanup.sh
+cicd/deploy/kubernetes/scripts/cleanup.sh
 
 # Full removal including CRDs and namespace
-deploy/kubernetes/scripts/cleanup.sh --with-crds --with-namespace
+cicd/deploy/kubernetes/scripts/cleanup.sh --with-crds --with-namespace
 ```
 
 ## Troubleshooting

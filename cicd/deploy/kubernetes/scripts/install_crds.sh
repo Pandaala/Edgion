@@ -13,7 +13,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+# scripts -> kubernetes -> deploy -> cicd -> repo root
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 EDGION_CRD_DIR="${REPO_ROOT}/config/crd/edgion-crd"
 
 CHANNEL="experimental"

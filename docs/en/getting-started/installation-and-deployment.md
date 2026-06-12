@@ -21,13 +21,13 @@ As a practical default:
 The repository ships a one-shot deployment script that installs the CRDs, controller, gateway, and base configuration:
 
 ```bash
-deploy/kubernetes/scripts/deploy.sh -y
+cicd/deploy/kubernetes/scripts/deploy.sh -y
 ```
 
 If you only need the CRDs first, run:
 
 ```bash
-deploy/kubernetes/scripts/install_crds.sh
+cicd/deploy/kubernetes/scripts/install_crds.sh
 ```
 
 Before deploying, it is worth checking:
@@ -47,7 +47,7 @@ Recommended next reading:
 The repository ships a start script that launches the controller and gateway as local processes with the bundled file-system config:
 
 ```bash
-deploy/standalone/start.sh
+cicd/deploy/standalone/start.sh
 ```
 
 By default it uses `/usr/local/edgion` as the working directory; pass `--work-dir <path>` to change it, and `--foreground` to keep both processes attached to the terminal.

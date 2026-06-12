@@ -12,7 +12,7 @@ description: The ACME HTTP-01 challenge host extraction now strips the Host port
 
 `acme_challenge_token_and_host` (`edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs`)
 now strips the Host-header port via the shared `host_without_port` helper
-(`edgion-common/src/utils/net.rs`), which preserves an IPv6 literal's brackets so the extracted
+(`edgion-gateway/src/util/net.rs`), which preserves an IPv6 literal's brackets so the extracted
 host can match the stored `entry.domain` in `challenge_store.lookup`.
 
 Re-reports of the form "ACME HTTP-01 `Host: [::1]:80` is split into `[`", "the challenge lookup
@@ -76,6 +76,6 @@ Re-open only if:
 - Unit tests `acme_challenge_token_and_host_extracts_token_and_strips_host_port` (IPv4/reg-name)
   and `acme_challenge_token_and_host_strips_port_from_ipv6_literal_host` (bracketed IPv6) in
   `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs`; helper coverage in
-  `test_host_without_port` (`edgion-common/src/utils/net.rs`).
+  `test_host_without_port` (`edgion-gateway/src/util/net.rs`).
 </content>
 </invoke>

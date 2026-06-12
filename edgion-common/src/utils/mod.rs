@@ -1,12 +1,17 @@
+use anyhow::{Context, Result};
+use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-pub mod net;
-pub use net::*;
+/// Default gRPC listen address for the controller operator endpoint.
+pub const DEFAULT_OPERATOR_GRPC_ADDR: &str = "127.0.0.1:50061";
 
-pub mod real_ip_extractor;
-pub use real_ip_extractor::{extract_ip_string, RealIpExtractor};
-
-pub mod proxy_protocol;
+/// Parse a listen address string into a [`SocketAddr`], falling back to `default`
+/// when `addr` is `None`.
+pub fn parse_listen_addr(addr: Option<&String>, default: &str) -> Result<SocketAddr> {
+    let candidate = addr.map(String::as_str).unwrap_or(default);
+    SocketAddr::from_str(candidate).with_context(|| format!("failed to parse listen address '{}'", candidate))
+}
 
 /// Get the number of available CPU cores on the system
 ///

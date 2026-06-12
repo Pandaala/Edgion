@@ -37,9 +37,9 @@ pub use validation::validate_endpoint_in_route;
 
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::runtime::ServerHeaderOpts;
+use crate::util::net::resolve_domain;
 use crate::EdgionHttpContext;
 use crate::{end_response_500, end_response_503};
-use edgion_common::utils::net::resolve_domain;
 use edgion_resources::edgion_status::EdgionStatus;
 use edgion_resources::ParsedLBPolicy;
 use peer_builder::{

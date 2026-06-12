@@ -2,7 +2,6 @@ pub mod api;
 pub mod auth;
 pub mod conf_sync;
 pub mod conf_sync_config;
-pub mod fed_sync;
 pub mod grpc_tls;
 pub mod http_util;
 pub mod jwt_common;

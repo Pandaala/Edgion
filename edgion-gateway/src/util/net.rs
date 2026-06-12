@@ -1,15 +1,7 @@
-use anyhow::{Context, Result};
 use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
 use pingora_core::{Error as PingoraError, ErrorType};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::str::FromStr;
-
-pub const DEFAULT_OPERATOR_GRPC_ADDR: &str = "127.0.0.1:50061";
-
-pub fn parse_listen_addr(addr: Option<&String>, default: &str) -> Result<SocketAddr> {
-    let candidate = addr.map(String::as_str).unwrap_or(default);
-    SocketAddr::from_str(candidate).with_context(|| format!("failed to parse listen address '{}'", candidate))
-}
 
 /// Category of backend address blocked for security reasons.
 ///

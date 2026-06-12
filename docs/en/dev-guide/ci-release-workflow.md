@@ -70,7 +70,7 @@ The current `ci.yml` check order is:
 
 1. `cargo check --all-targets`
 2. `cargo fmt --all -- --check`
-3. `make check-agent-docs`
+3. `python3 cicd/checks/validate_agent_docs.py`
 4. `cargo clippy --all-targets`
 5. `cargo test --all`
 6. summary job `ci-success`
@@ -78,7 +78,7 @@ The current `ci.yml` check order is:
 A few details are easy to misunderstand:
 
 - the current CI commands do not automatically expand to `--all-features`
-- `make check-agent-docs` is the guardrail for `AGENTS.md`, `skills/`, and the dev-guide entry layer
+- `python3 cicd/checks/validate_agent_docs.py` is the guardrail for `AGENTS.md`, `skills/`, and the dev-guide entry layer
 - the `fmt` job does not install system dependencies and does not use Cargo cache
 - `ci-success` exists to provide a stable branch-protection result, not to re-run checks
 
@@ -111,7 +111,7 @@ Purpose:
 Purpose:
 
 - download the binary artifacts from the previous stage
-- build runtime images via `docker/Dockerfile.runtime`
+- build runtime images via `cicd/docker/Dockerfile.runtime`
 - push architecture-specific tags
 
 ### 4. `merge-manifests`
@@ -139,7 +139,7 @@ If you only want to reproduce the current CI checks locally, start with:
 ```bash
 cargo check --all-targets
 cargo fmt --all -- --check
-make check-agent-docs
+python3 cicd/checks/validate_agent_docs.py
 cargo clippy --all-targets
 cargo test --all
 ```
@@ -196,4 +196,3 @@ If the task also touches feature combinations or build dependencies, continue wi
 
 - [AI Collaboration and Skill Usage Guide](./ai-agent-collaboration.md)
 - [Knowledge Source Map and Maintenance Rules](./knowledge-source-map.md)
-- [Makefile](../../../Makefile)

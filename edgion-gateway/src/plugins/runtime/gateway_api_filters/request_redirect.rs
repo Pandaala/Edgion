@@ -8,7 +8,7 @@ use pingora_http::ResponseHeader;
 
 use crate::plugins::runtime::log::{la, PluginLog};
 use crate::plugins::runtime::traits::{PluginSession, RequestFilter};
-use edgion_common::utils::net::host_without_port;
+use crate::util::net::host_without_port;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::HTTPRequestRedirectFilter;
 

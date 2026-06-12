@@ -33,7 +33,7 @@ Inject `EDGION_ADMIN_USERNAME`, `EDGION_ADMIN_PASSWORD`, and `EDGION_ADMIN_JWT_S
 
 **RBAC prerequisite**: the Controller ServiceAccount needs only
 `secrets: [get, list, watch]` — the `create` verb is no longer required. Both
-`deploy/kubernetes/controller/rbac.yaml` and
+`cicd/deploy/kubernetes/controller/rbac.yaml` and
 `examples/k8stest/kubernetes/controller/rbac.yaml` reflect this.
 
 ```bash

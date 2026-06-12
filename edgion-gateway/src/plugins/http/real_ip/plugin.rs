@@ -8,7 +8,7 @@ use std::net::{IpAddr, SocketAddr};
 
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use edgion_common::utils::RealIpExtractor;
+use crate::util::RealIpExtractor;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::RealIpConfig;
 

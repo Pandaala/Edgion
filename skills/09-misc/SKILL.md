@@ -32,7 +32,7 @@ cargo build --release --no-default-features --features "allocator-jemalloc,rustl
 
 # Code checks
 cargo check && cargo clippy && cargo fmt --check
-make check-agent-docs
+python3 cicd/checks/validate_agent_docs.py
 ```
 
 Additional entry points:
@@ -42,8 +42,8 @@ Additional entry points:
 
 ### Docker build
 ```bash
-# See the Dockerfiles under the docker/ directory
-docker build -f docker/Dockerfile -t edgion .
+# See the Dockerfiles under the cicd/docker/ directory
+docker build -f cicd/docker/Dockerfile -t edgion .
 ```
 
 ### Release workflow

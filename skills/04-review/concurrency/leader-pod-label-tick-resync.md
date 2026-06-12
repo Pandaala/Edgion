@@ -24,7 +24,7 @@ label patch blocking before announcing leadership" are **not accepted**.
 
 **1. The label is a routing selector, so desync was a real outage, not cosmetics**
 
-`deploy/kubernetes/controller/service.yaml` selects `edgion.io/leader: "true"` for the
+`cicd/deploy/kubernetes/controller/service.yaml` selects `edgion.io/leader: "true"` for the
 `edgion-controller-leader` Service. In the default `leader-only` HA mode all Gateways
 sync config through that Service. A transient apiserver error exactly at the
 acquired-leadership transition left the Service with zero endpoints, and nothing ever

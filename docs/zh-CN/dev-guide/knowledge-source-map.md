@@ -46,7 +46,7 @@
 3. 新增高频 workflow 时，优先新增或改进 skill。
 4. 新增长篇背景说明时，优先写进 `docs/`，然后在 skill 中链接。
 5. 平台专属文件只能做入口和补充，不能长成第二套知识树。
-6. 修改 `AGENTS.md`、`skills/` 或这层 dev-guide 入口文档后，执行 `make check-agent-docs`，及时发现坏链接和过期架构路径。
+6. 修改 `AGENTS.md`、`skills/` 或这层 dev-guide 入口文档后，执行 `python3 cicd/checks/validate_agent_docs.py`，及时发现坏链接和过期架构路径。
 
 ## 当前迁移优先级
 

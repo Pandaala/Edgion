@@ -4,7 +4,7 @@
 #
 # - docs/ is the human-facing documentation layer (bilingual zh-CN / en).
 # - tasks/ contains personal in-progress work notes.
-# - Everything else (skills/, src/, examples/, scripts/, tools/, root files,
+# - Everything else (skills/, src/, examples/, cicd/, root files,
 #   config/, etc.) must be English only.
 #
 # Blocked Unicode ranges (letter-bearing scripts of non-English languages):
@@ -30,7 +30,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 PATTERN='[\x{0400}-\x{04FF}\x{0590}-\x{05FF}\x{0600}-\x{06FF}\x{0900}-\x{097F}\x{0E00}-\x{0E7F}\x{1100}-\x{11FF}\x{3040}-\x{309F}\x{30A0}-\x{30FF}\x{3400}-\x{4DBF}\x{4E00}-\x{9FFF}\x{AC00}-\x{D7AF}\x{F900}-\x{FAFF}]'

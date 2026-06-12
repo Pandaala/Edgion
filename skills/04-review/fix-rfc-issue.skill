@@ -436,7 +436,7 @@ Run in sequence:
 
 1. `cargo check --all-targets` — must pass.
 2. `cargo clippy --all-targets` — must pass with no new warnings.
-3. `make check-agent-docs` — must pass (this enforces English-only + skills consistency, which RFC fixes touching `skills/` may break).
+3. `python3 cicd/checks/validate_agent_docs.py` — must pass (this enforces English-only + skills consistency, which RFC fixes touching `skills/` may break).
 
 If all pass:
 - Verify Step 4e was actually executed (the finding file is gone, INDEX.md is updated).
@@ -471,7 +471,7 @@ When tempted to skip a step, check this table first:
 | "Pingora limitation note in the code is probably stale" | Verify against current pingora-core source / upstream issues before working around. Re-creating worked-around bugs is the #1 RFC-fix regression source. |
 | "Suggested fix in the finding file is obviously right" | The discovery agent was sonnet at finding-time; it didn't run Step 1.5. Treat it as input, not decision. |
 | "Step 5 review is overkill for a doc-comment-only change" | Doc-comment fixes can encode wrong divergence rationale, mis-cite RFCs, or leak into auto-generated API docs. Mandatory, no exceptions. |
-| "cargo check passed, clippy is probably fine" | Step 6 requires both + `make check-agent-docs` (English-only + skills consistency). All three. |
+| "cargo check passed, clippy is probably fine" | Step 6 requires both + `python3 cicd/checks/validate_agent_docs.py` (English-only + skills consistency). All three. |
 | "User said 'fix this finding' once, I can skip future confirmation prompts on similar findings" | Approval is per-gate per-finding. Each Step 1 / 1.5 / 2 panel needs its own confirmation. |
 
 If your reasoning matches any row: **stop, return to the skipped gate, run it properly.**

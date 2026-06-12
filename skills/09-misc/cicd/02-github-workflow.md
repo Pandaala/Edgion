@@ -18,7 +18,7 @@ The repo currently has four workflows under `.github/workflows/`:
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
 | `ci.yml` | `push` / `pull_request` to `main` / `master` | Rust check / fmt / clippy / test + agent-docs gate |
-| `check-english-only.yml` | `pull_request` + `push` to `main` | Runs `make check-english-only` — the English-only gate the project relies on |
+| `check-english-only.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_english_only.sh` — the English-only gate the project relies on |
 | `docs.yml` | `push` to `main` touching `docs/**` (or `workflow_dispatch`) | VitePress build + GitHub Pages deploy |
 | `build-image.yml` | `workflow_dispatch` (manual only) | Cross-compile binaries, build/push runtime images, merge manifests, create release |
 
@@ -29,7 +29,7 @@ The repo currently has four workflows under `.github/workflows/`:
 - [../../../.github/workflows/check-english-only.yml](../../../.github/workflows/check-english-only.yml)
 - [../../../.github/workflows/docs.yml](../../../.github/workflows/docs.yml)
 - [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml)
-- [../../../docker/Dockerfile.runtime](../../../docker/Dockerfile.runtime)
+- [../../../cicd/docker/Dockerfile.runtime](../../../cicd/docker/Dockerfile.runtime)
 - [00-local-build.md](00-local-build.md)
 - [01-docker-build.md](01-docker-build.md)
 
@@ -39,7 +39,7 @@ The repo currently has four workflows under `.github/workflows/`:
 
 1. `check` -> `cargo check --all-targets`
 2. `fmt` -> `cargo fmt --all -- --check`
-3. `agent-docs` -> `make check-agent-docs`
+3. `agent-docs` -> `python3 cicd/checks/validate_agent_docs.py`
 4. `clippy` -> `cargo clippy --all-targets`
 5. `test` -> `cargo test --all`
 6. `ci-success` -> aggregates the results of the previous five jobs to provide a stable check for branch protection
@@ -47,7 +47,7 @@ The repo currently has four workflows under `.github/workflows/`:
 Key facts:
 
 - The four Rust jobs `check`, `fmt`, `clippy`, and `test` each run the local action [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml) first
-- `agent-docs` only needs checkout + `make check-agent-docs`; it does not depend on Rust toolchain initialization
+- `agent-docs` only needs checkout + `python3 cicd/checks/validate_agent_docs.py`; it does not depend on Rust toolchain initialization
 - `fmt` does not install system dependencies and does not enable cargo cache; the other build-style Rust jobs install dependencies and enable cache
 - The current CI commands do not include `--all-features`; before changing this, confirm whether you really want to expand the matrix rather than casually inflate CI cost
 
@@ -93,7 +93,7 @@ When changing it, treat it as "shared infrastructure", not as a private script f
 
 3. `build-and-push-images`
    - Downloads the binaries from the previous stage
-   - Builds runtime images using [../../../docker/Dockerfile.runtime](../../../docker/Dockerfile.runtime)
+   - Builds runtime images using [../../../cicd/docker/Dockerfile.runtime](../../../cicd/docker/Dockerfile.runtime)
    - Pushes per architecture (only `gateway` and `controller` get images; `edgion-cli` is built but not imaged):
      - `pandaala/edgion-gateway:<tag>_amd64`
      - `pandaala/edgion-gateway:<tag>_arm64`
@@ -138,7 +138,7 @@ When changing it, treat it as "shared infrastructure", not as a private script f
 ```bash
 cargo check --all-targets
 cargo fmt --all -- --check
-make check-agent-docs
+python3 cicd/checks/validate_agent_docs.py
 cargo clippy --all-targets
 cargo test --all
 ```
@@ -160,7 +160,7 @@ cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-
 
 ```bash
 docker build \
-  --file docker/Dockerfile.runtime \
+  --file cicd/docker/Dockerfile.runtime \
   --build-arg BINARY=gateway \
   --build-arg BINARY_PATH=target/x86_64-unknown-linux-gnu/release \
   -t edgion-gateway:local .

@@ -68,7 +68,7 @@ cmd_build() {
       --build-arg BUILD_TYPE=bin \
       --build-arg PROFILE="${PROFILE}" \
       -t "${CONTROLLER_IMAGE}" \
-      -f docker/Dockerfile .
+      -f cicd/docker/Dockerfile .
     echo "Controller image built: ${CONTROLLER_IMAGE}"
   fi
 
@@ -79,7 +79,7 @@ cmd_build() {
       --build-arg BUILD_TYPE=bin \
       --build-arg PROFILE="${PROFILE}" \
       -t "${GATEWAY_IMAGE}" \
-      -f docker/Dockerfile .
+      -f cicd/docker/Dockerfile .
     echo "Gateway image built: ${GATEWAY_IMAGE}"
   fi
 }
@@ -191,7 +191,7 @@ cmd_hotpatch() {
       --build-arg BINARY=edgion-controller \
       --build-arg BUILD_TYPE=bin \
       -t "${CONTROLLER_IMAGE}" \
-      -f docker/Dockerfile .
+      -f cicd/docker/Dockerfile .
 
     echo "Extracting binary from image..."
     local cid
@@ -217,7 +217,7 @@ cmd_hotpatch() {
       --build-arg BINARY=edgion-gateway \
       --build-arg BUILD_TYPE=bin \
       -t "${GATEWAY_IMAGE}" \
-      -f docker/Dockerfile .
+      -f cicd/docker/Dockerfile .
 
     echo "Extracting binary from image..."
     local cid
