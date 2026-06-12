@@ -1227,7 +1227,7 @@ fn validate_listener_resolved_refs(
                                     (std::str::from_utf8(cert_data), std::str::from_utf8(key_data))
                                 {
                                     if let Err(e) =
-                                        crate::core::gateway::tls::validation::check_key_matches_cert(cert_str, key_str)
+                                        crate::core::common::tls_validation::check_key_matches_cert(cert_str, key_str)
                                     {
                                         errors.push(GatewayResolvedRefsError::SecretInvalid {
                                             namespace: cert_ns.to_string(),

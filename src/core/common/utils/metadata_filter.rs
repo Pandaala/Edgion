@@ -13,7 +13,7 @@
 //!
 //! For a typical HTTPRoute, this can reduce size from ~4KB to ~800B (~80% savings).
 
-use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
+use crate::core::common::config::conf_center::MetadataFilterConfig;
 use kube::Resource;
 
 /// Clean metadata by removing blocked annotations and managedFields
@@ -26,7 +26,7 @@ use kube::Resource;
 ///
 /// ```ignore
 /// use crate::core::common::utils::clean_metadata;
-/// use crate::core::controller::conf_mgr::MetadataFilterConfig;
+/// use crate::core::common::config::conf_center::MetadataFilterConfig;
 ///
 /// let config = MetadataFilterConfig::default();
 /// let mut route: HTTPRoute = /* ... */;

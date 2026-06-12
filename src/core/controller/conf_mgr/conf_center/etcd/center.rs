@@ -18,7 +18,7 @@ use crate::core::controller::conf_mgr::conf_center::traits::{
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownHandle;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::ConfigSyncServer;
-use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
+use crate::core::common::link::providers::etcd::EtcdLinkClient;
 
 /// EtcdCenter — configuration center backed by etcd.
 pub struct EtcdCenter {

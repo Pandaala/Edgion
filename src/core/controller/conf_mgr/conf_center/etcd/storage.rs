@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use crate::core::controller::conf_mgr::conf_center::traits::{
     CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult,
 };
-use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
+use crate::core::common::link::providers::etcd::EtcdLinkClient;
 
 /// Etcd-backed configuration storage implementing `CenterApi`.
 pub struct EtcdStorage {

@@ -480,27 +480,19 @@ fn is_valid_san_pattern(host: &str) -> bool {
 }
 
 /// Check if private key is valid and matches the certificate's public key
-pub(crate) fn check_key_matches_cert(cert_pem: &str, key_pem: &str) -> Result<(), CertValidationError> {
-    let key_pair = rcgen::KeyPair::from_pem(key_pem)
-        .map_err(|e| CertValidationError::KeyParseError(format!("Failed to parse private key: {}", e)))?;
-
-    let pem = Pem::iter_from_buffer(cert_pem.as_bytes())
-        .next()
-        .ok_or_else(|| CertValidationError::CertParseError("No PEM block found in cert".to_string()))?
-        .map_err(|e| CertValidationError::CertParseError(format!("Cert PEM parse error: {}", e)))?;
-
-    let (_, cert) = X509Certificate::from_der(&pem.contents)
-        .map_err(|e| CertValidationError::CertParseError(format!("X.509 parse error: {}", e)))?;
-    let cert_pubkey_raw = &cert.public_key().subject_public_key.data;
-    let key_pubkey_raw = key_pair.public_key_raw();
-
-    if cert_pubkey_raw.as_ref() != key_pubkey_raw {
-        return Err(CertValidationError::KeyMismatch(
-            "Private key does not match certificate public key".to_string(),
-        ));
+impl From<crate::core::common::tls_validation::KeyCertMatchError> for CertValidationError {
+    fn from(e: crate::core::common::tls_validation::KeyCertMatchError) -> Self {
+        use crate::core::common::tls_validation::KeyCertMatchError;
+        match e {
+            KeyCertMatchError::CertParse(msg) => CertValidationError::CertParseError(msg),
+            KeyCertMatchError::KeyParse(msg) => CertValidationError::KeyParseError(msg),
+            KeyCertMatchError::Mismatch(msg) => CertValidationError::KeyMismatch(msg),
+        }
     }
+}
 
-    Ok(())
+pub(crate) fn check_key_matches_cert(cert_pem: &str, key_pem: &str) -> Result<(), CertValidationError> {
+    crate::core::common::tls_validation::check_key_matches_cert(cert_pem, key_pem).map_err(CertValidationError::from)
 }
 
 /// Validate mTLS client authentication configuration

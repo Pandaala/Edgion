@@ -21,7 +21,7 @@ use crate::core::controller::conf_mgr::conf_center::non_kube_common::{spawn_all_
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
 use crate::core::controller::conf_mgr::ControllerRuntime;
-use crate::core::gateway::link_sys::providers::etcd::EtcdLinkClient;
+use crate::core::common::link::providers::etcd::EtcdLinkClient;
 use edgion_resources::ResourceMeta;
 
 /// Backend implementation that wires `EtcdWatcher` and `EtcdResourceController`

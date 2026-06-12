@@ -12,7 +12,7 @@
 //! # Usage
 //!
 //! ```ignore
-//! use crate::core::gateway::link_sys::get_etcd_client;
+//! use crate::core::common::link::get_etcd_client;
 //!
 //! if let Some(client) = get_etcd_client("default/etcd-main") {
 //!     client.put_string("my-key", "my-value").await?;

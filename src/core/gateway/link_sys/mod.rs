@@ -11,14 +11,14 @@
 //! automatically dispatching resource changes to the appropriate sub-module managers.
 //! Runtime clients are stored in separate ArcSwap stores for typed access.
 
-pub mod credential;
-pub mod health;
-pub mod lifecycle;
 pub mod providers;
 pub mod runtime;
-pub mod tls;
 
-pub use health::LinkSysHealth;
+// Link-system core now lives in `common::link`. Re-export the modules and the
+// `LinkSysHealth` type from their original paths so existing
+// `gateway::link_sys::{credential, tls, health, lifecycle, LinkSysHealth}` call
+// sites keep resolving without churn.
+pub use crate::core::common::link::{credential, health, lifecycle, tls, LinkSysHealth};
 
 pub use providers::webhook::{
     get_webhook_call_handle, WebhookCallError, WebhookCallHandle, WebhookCallRequest, WebhookCallResult,

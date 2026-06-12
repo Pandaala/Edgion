@@ -15,7 +15,7 @@ use etcd_client::{
 };
 
 use super::client::EtcdLinkClient;
-use crate::core::gateway::link_sys::LinkSysHealth;
+use crate::core::common::link::LinkSysHealth;
 
 // ============================================================================
 // KV Operations

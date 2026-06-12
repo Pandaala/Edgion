@@ -97,7 +97,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                 let key_pem = data.get(KEY).and_then(|b| std::str::from_utf8(&b.0).ok());
 
                 if let (Some(cert_str), Some(key_str)) = (cert_pem, key_pem) {
-                    if let Err(e) = crate::core::gateway::tls::validation::check_key_matches_cert(cert_str, key_str) {
+                    if let Err(e) = crate::core::common::tls_validation::check_key_matches_cert(cert_str, key_str) {
                         warnings.push(e.to_string());
                     }
                 }

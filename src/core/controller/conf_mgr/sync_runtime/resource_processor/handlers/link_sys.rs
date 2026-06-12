@@ -17,10 +17,9 @@ use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, resolved_refs_condition, update_condition, HandlerContext,
     ProcessResult, ProcessorHandler, ResolvedRefsError, ResourceRef,
 };
-use crate::core::gateway::backends::service_kind::EdgionService;
 use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::prelude_resources::LinkSys;
-use edgion_resources::resources::common::SecretObjectReference;
+use edgion_resources::resources::common::{EdgionService, SecretObjectReference};
 use edgion_resources::resources::link_sys::webhook::WebhookTarget;
 use edgion_resources::resources::link_sys::{LinkSysStatus, SystemConfig};
 

@@ -1,4 +1,4 @@
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret_by_name;
+use crate::core::common::secret::get_secret_by_name;
 use crate::core::gateway::observe::logs::ssl_log::log_ssl;
 use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::runtime::matching::{match_gateway_tls, GatewayTlsEntry};

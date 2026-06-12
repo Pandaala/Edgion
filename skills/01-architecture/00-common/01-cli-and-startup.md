@@ -147,7 +147,7 @@ wd.resolve("/var/log/app.log"); // Absolute path → unchanged
 
 ## Log initialization
 
-### Shared logging function (`src/core/gateway/observe/logs/sys_log.rs`)
+### Shared logging function (`src/core/common/observe/logs.rs`)
 
 Both Controller and Gateway call the same `init_logging()` function:
 

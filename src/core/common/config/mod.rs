@@ -1,11 +1,15 @@
 use crate::core::common::auth::AdminAuthConfig;
-use crate::core::controller::conf_mgr::{ConfCenterConfig, FileSystemConfig};
+use crate::core::common::config::conf_center::{ConfCenterConfig, FileSystemConfig};
 use anyhow::{Context, Result};
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+
+/// Configuration Center schema types (backend-agnostic), shared by the
+/// controller runtime and the shared config loader below.
+pub mod conf_center;
 
 /// Global controller configuration for runtime access
 static CONTROLLER_CONFIG: OnceLock<EdgionControllerConfig> = OnceLock::new();
@@ -891,8 +895,8 @@ impl EdgionControllerConfig {
     }
 
     /// Convert to SysLogConfig (for system logging)
-    pub fn to_log_config(&self) -> crate::core::gateway::observe::SysLogConfig {
-        use crate::core::gateway::observe::SysLogConfig;
+    pub fn to_log_config(&self) -> crate::core::common::observe::SysLogConfig {
+        use crate::core::common::observe::SysLogConfig;
         use edgion_resources::work_dir;
 
         // Use work_dir to resolve the log directory path

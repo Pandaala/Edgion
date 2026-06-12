@@ -331,7 +331,7 @@ fn tls_ready_inner(tls: Option<&TlsConfig>) -> bool {
 /// Returns `false` when the CRD declares a `certs.secretRef` but the
 /// Controller has not yet injected the `Secret`. TLS parse failures are
 /// caught inside the provider by
-/// [`tls::build_material`](crate::core::gateway::link_sys::tls::build_material).
+/// [`tls::build_material`](crate::core::common::link::tls::build_material).
 pub fn tls_ready(ls: &LinkSys) -> bool {
     let tls = match &ls.spec.config {
         SystemConfig::Redis(r) => r.tls.as_ref(),

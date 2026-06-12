@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::controller::conf_mgr::sync_runtime::resource_processor::get_secret;
+use crate::core::common::secret::get_secret;
 
 impl OpenidConnect {
     pub(super) fn random_urlsafe(bytes_len: usize) -> String {

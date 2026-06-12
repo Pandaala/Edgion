@@ -56,5 +56,5 @@ Re-open only if:
 - F-015 (Round B follow-up, closed 2026-05-27) — `tasks/plugins/plugins-http-F015-oidc-session-secret-resolved-per-request.md`, closed as accepted-tradeoff with no code change.
 - Source: `src/core/gateway/plugins/http/openid_connect/session_cookie.rs:11-16,57-97,215-218`
 - Controller resolver: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/openid_connect.rs:23-112`
-- Empty global store: `src/core/controller/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_store.rs:84-104` (no writers tree-wide)
+- Empty global store: `src/core/common/secret/secret_store.rs:84-104` (no writers tree-wide)
 - Sibling skill: [oidc/resolved-secret-empty-fallthrough.md](resolved-secret-empty-fallthrough.md)
