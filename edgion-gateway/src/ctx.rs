@@ -811,6 +811,12 @@ pub struct EdgionHttpContext {
     /// When Some, try_get_peer will route directly to this addr instead of running LB.
     pub sp_target_addr: Option<std::net::SocketAddr>,
 
+    /// Direct evidence that an earlier attempt consumed the SP sticky target
+    /// (`sp_target_addr.take()` returned `Some`). Drives the cross-attempt token
+    /// refresh in `upstream_peer_http`. Plain field, no serde attribute
+    /// (`EdgionHttpContext` has no serde derive).
+    pub sp_sticky_consumed: bool,
+
     /// Per-Gateway operator override for loopback upstream addresses.
     /// Link-local / metadata ranges are never allowed by this switch.
     pub allow_loopback_upstream: bool,
@@ -933,6 +939,7 @@ impl EdgionHttpContext {
             mirror_state: None,
             sp_state: SessionPersistenceState::Inactive,
             sp_target_addr: None,
+            sp_sticky_consumed: false,
             allow_loopback_upstream: false,
             resolved_global_plugins: None,
             resolved_route_ext_refs: None,

@@ -282,6 +282,10 @@ where
     F: FnOnce() -> Result<Arc<crate::lb::EdgionBackend>, EdgionStatus>,
 {
     if let Some(target_addr) = ctx.sp_target_addr.take() {
+        // Mark consumption regardless of the taken target's health: the
+        // healthy/unhealthy outcomes are handled by the in-attempt fallback
+        // state machine, while this flag is the cross-attempt refresh evidence.
+        ctx.sp_sticky_consumed = true;
         // Look up the live Arc from the cell so inc_conn/dec_conn/update_ewma
         // operate on the same object that the selector tracks. Wrapping a fresh
         // EdgionBackend here would create an orphan: metric calls would be on a

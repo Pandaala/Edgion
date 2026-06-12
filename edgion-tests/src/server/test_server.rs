@@ -350,6 +350,14 @@ fn create_echo_router(server_addr_str: String) -> Router {
         // --- Retry-sequence endpoints (for retry-on-status integration tests) ---
         .route("/retry-sequence/{test_id}/{status_list}", get(retry_sequence_handler))
         .route("/retry-sequence-reset", get(retry_sequence_reset_handler))
+        // --- Streaming-body endpoints (for per-try-timeout mid-body tests) ---
+        // GET /stream-stall/{test_id}: 200 + one body chunk, then hang the body forever
+        .route("/stream-stall/{test_id}", get(stream_stall_handler))
+        // GET /stream-trickle/{test_id}/{chunks}/{interval_ms}: 200 + N chunks spaced apart, then finish
+        .route(
+            "/stream-trickle/{test_id}/{chunks}/{interval_ms}",
+            get(stream_trickle_handler),
+        )
         // --- Circuit-breaker endpoints (for circuit-breaker integration tests) ---
         .route("/cb-fail/{test_id}/{fail_count}", get(cb_fail_handler))
         .route("/cb-reset", get(cb_reset_handler))
@@ -749,6 +757,80 @@ async fn retry_sequence_reset_handler() -> impl IntoResponse {
     store.clear();
     info!("retry-sequence/reset: cleared {} test entries", count);
     (axum::http::StatusCode::OK, format!("cleared {} entries", count))
+}
+
+/// /stream-stall/{test_id}
+/// Sends 200 + response headers + ONE body chunk, then stalls the body stream
+/// forever (the connection is held open with no further bytes). Models a backend
+/// that commits a response then hangs mid-body.
+///
+/// Routed through a per-try-timeout rule, the gateway's `backendRequest` bound
+/// fires while the body is in flight. Because response headers are already
+/// committed downstream, the per-try `response_written` guard forbids a retry
+/// (retrying would corrupt the half-sent response). The client therefore sees a
+/// 200 with a truncated/errored body at ~backendRequest, and exactly one
+/// upstream attempt is made.
+async fn stream_stall_handler(Path(test_id): Path<String>) -> impl IntoResponse {
+    use axum::body::{Body, Bytes};
+    use axum::http::StatusCode;
+    use axum::response::Response;
+
+    // One channel item is emitted immediately (the first/only body chunk); the
+    // sender is then parked in a detached task so the stream never terminates.
+    // The 30s park is a safety cap — the gateway cuts the attempt long before.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    tokio::spawn(async move {
+        let _ = tx.send(Ok(Bytes::from_static(b"stall-chunk-1;"))).await;
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        drop(tx);
+    });
+
+    let body = Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("x-test-id", test_id)
+        .header("x-stream-mode", "stall")
+        .body(body)
+        .unwrap()
+}
+
+/// /stream-trickle/{test_id}/{chunks}/{interval_ms}
+/// Sends 200 + `chunks` body chunks spaced `interval_ms` apart, then completes
+/// the body normally. Models a backend that keeps making steady progress.
+///
+/// When `interval_ms` is below the route's `backendRequest` bound, no single
+/// read stalls long enough to trip the per-try timeout, so the full body is
+/// delivered even though the total transfer exceeds `backendRequest` — pinning
+/// the per-I/O ("an attempt that keeps making progress is not killed")
+/// semantics. `chunks` is clamped to [1, 50] and `interval_ms` to <= 5000.
+async fn stream_trickle_handler(Path((test_id, chunks, interval_ms)): Path<(String, u32, u64)>) -> impl IntoResponse {
+    use axum::body::{Body, Bytes};
+    use axum::http::StatusCode;
+    use axum::response::Response;
+
+    let chunks = chunks.clamp(1, 50);
+    let interval_ms = interval_ms.min(5_000);
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    tokio::spawn(async move {
+        for i in 0..chunks {
+            if interval_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(interval_ms)).await;
+            }
+            if tx.send(Ok(Bytes::from(format!("trickle-chunk-{};", i)))).await.is_err() {
+                break; // downstream went away
+            }
+        }
+        // Dropping tx ends the stream → body completes normally.
+    });
+
+    let body = Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("x-test-id", test_id)
+        .header("x-stream-mode", "trickle")
+        .body(body)
+        .unwrap()
 }
 
 /// /cb-fail/{test_id}/{fail_count}

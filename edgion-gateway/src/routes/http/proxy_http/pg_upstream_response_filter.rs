@@ -23,51 +23,10 @@ pub fn upstream_response_filter(
     let status_code = upstream_response.status.as_u16();
     ctx.request_info.status = Some(status_code);
 
-    // Inject session persistence cookie/header if needed.
-    match ctx.sp_state {
-        SessionPersistenceState::InjectNew | SessionPersistenceState::InjectUpdate => {
-            let sp_config = ctx
-                .route_unit
-                .as_ref()
-                .and_then(|ru| ru.rule.session_persistence.clone());
-
-            if let Some(sp) = sp_config {
-                // Use ip:port from current upstream (backfilled by backfill_upstream_addr)
-                let backend_addr = ctx.get_current_upstream().and_then(|u| match (&u.ip, u.port) {
-                    (Some(ip), Some(port)) => Some(format!("{}:{}", ip, port)),
-                    _ => None,
-                });
-
-                if let Some(addr) = backend_addr {
-                    let token = session_persistence::generate_session_token(&addr);
-
-                    match session_persistence::get_persistence_type(&sp) {
-                        SessionPersistenceType::Cookie => {
-                            let is_tls = session.as_downstream().digest().is_some_and(|d| d.ssl_digest.is_some());
-                            // NOTE (filter-04c): this Set-Cookie is appended
-                            // directly onto the upstream header, NOT via
-                            // pending_response_header_ops. If a response-phase
-                            // plugin replaces this response with a local reply,
-                            // build_response_local_reply discards the upstream
-                            // header, so sticky-session continuity is
-                            // intentionally LOST on a replaced response — matching
-                            // Envoy (no cookie carry-over onto a local/error
-                            // reply). Accepted as designed; see
-                            // skills/04-review/architecture/local-reply-drops-sticky-set-cookie.md
-                            let cookie_value = session_persistence::build_set_cookie_value(&sp, &token, is_tls);
-                            let _ = upstream_response.append_header("Set-Cookie", &cookie_value);
-                        }
-                        SessionPersistenceType::Header => {
-                            let header_name = session_persistence::get_session_name(&sp).to_owned();
-                            let _ = upstream_response.append_header(header_name, &token);
-                        }
-                    }
-                }
-            }
-            ctx.sp_state = SessionPersistenceState::Inactive;
-        }
-        SessionPersistenceState::Inactive => {} // no injection needed
-    }
+    // Session-persistence cookie/header injection runs AFTER the retry-on-status
+    // decision below — see the relocated block — so a response that will be
+    // discarded for retry does not consume the inject state or carry a pointless
+    // Set-Cookie.
 
     // Apply custom server headers (including Server header)
     edgion_http.server_header_opts.apply_to_response(upstream_response);
@@ -120,6 +79,59 @@ pub fn upstream_response_filter(
                     }
                 }
             }
+        }
+    }
+
+    // Inject session persistence cookie/header if needed. Runs here, AFTER the
+    // retry-on-status decision, so a response about to be discarded for retry
+    // neither consumes the inject state nor carries a pointless Set-Cookie.
+    // Skip 1xx informational headers: on h1 upstreams pingora delivers each 1xx
+    // through this same filter, and injecting there would consume the state and
+    // lose the cookie on the final response.
+    if !upstream_response.status.is_informational() {
+        match ctx.sp_state {
+            SessionPersistenceState::InjectNew | SessionPersistenceState::InjectUpdate => {
+                let sp_config = ctx
+                    .route_unit
+                    .as_ref()
+                    .and_then(|ru| ru.rule.session_persistence.clone());
+
+                if let Some(sp) = sp_config {
+                    // Use ip:port from current upstream (backfilled by backfill_upstream_addr)
+                    let backend_addr = ctx.get_current_upstream().and_then(|u| match (&u.ip, u.port) {
+                        (Some(ip), Some(port)) => Some(format!("{}:{}", ip, port)),
+                        _ => None,
+                    });
+
+                    if let Some(addr) = backend_addr {
+                        let token = session_persistence::generate_session_token(&addr);
+
+                        match session_persistence::get_persistence_type(&sp) {
+                            SessionPersistenceType::Cookie => {
+                                let is_tls = session.as_downstream().digest().is_some_and(|d| d.ssl_digest.is_some());
+                                // NOTE (filter-04c): this Set-Cookie is appended
+                                // directly onto the upstream header, NOT via
+                                // pending_response_header_ops. If a response-phase
+                                // plugin replaces this response with a local reply,
+                                // build_response_local_reply discards the upstream
+                                // header, so sticky-session continuity is
+                                // intentionally LOST on a replaced response — matching
+                                // Envoy (no cookie carry-over onto a local/error
+                                // reply). Accepted as designed; see
+                                // skills/04-review/architecture/local-reply-drops-sticky-set-cookie.md
+                                let cookie_value = session_persistence::build_set_cookie_value(&sp, &token, is_tls);
+                                let _ = upstream_response.append_header("Set-Cookie", &cookie_value);
+                            }
+                            SessionPersistenceType::Header => {
+                                let header_name = session_persistence::get_session_name(&sp).to_owned();
+                                let _ = upstream_response.append_header(header_name, &token);
+                            }
+                        }
+                    }
+                }
+                ctx.sp_state = SessionPersistenceState::Inactive;
+            }
+            SessionPersistenceState::Inactive => {} // no injection needed
         }
     }
 

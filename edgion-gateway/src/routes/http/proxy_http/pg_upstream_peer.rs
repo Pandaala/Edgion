@@ -214,6 +214,9 @@ pub async fn upstream_peer_http(
     let mut peer = if ctx.sp_target_addr.is_some() {
         get_peer_with_sp_fallback(edgion_http, session, ctx).await?
     } else {
+        // A retry that re-selects via plain LB after an earlier attempt consumed
+        // the sticky target must refresh the token to the backend now serving.
+        sp_refresh_on_cross_attempt_retry(ctx);
         get_peer(session, ctx, false, &edgion_http.server_header_opts).await?
     };
 
@@ -394,6 +397,30 @@ async fn get_peer_with_sp_fallback(
             // Strict mode: no fallback to normal LB. Defer to get_peer to surface a typed error.
             get_peer(session, ctx, false, &edgion_http.server_header_opts).await
         }
+    }
+}
+
+/// On a plain-LB peer selection, arm `sp_state = InjectUpdate` when this is a
+/// cross-attempt retry whose earlier attempt consumed the SP sticky target.
+/// Reads the inputs off `ctx` and defers the decision to the pure
+/// `sp_should_refresh_on_cross_attempt_retry`.
+#[inline]
+fn sp_refresh_on_cross_attempt_retry(ctx: &mut EdgionHttpContext) {
+    let sp = ctx
+        .route_unit
+        .as_ref()
+        .and_then(|ru| ru.rule.session_persistence.as_ref());
+    let sp_configured = sp.is_some();
+    let strict = sp.and_then(|sp| sp.strict).unwrap_or(false);
+
+    if sp_should_refresh_on_cross_attempt_retry(
+        ctx.sp_sticky_consumed,
+        ctx.try_cnt,
+        sp_configured,
+        strict,
+        &ctx.sp_state,
+    ) {
+        ctx.sp_state = SessionPersistenceState::InjectUpdate;
     }
 }
 
@@ -843,10 +870,36 @@ fn decide_want_raw(annotation: Option<bool>, external_jump_preserve_raw: bool, c
     }
 }
 
+/// Decide whether a cross-attempt retry that re-selected via plain LB must
+/// refresh the session-persistence token in the response.
+///
+/// Pure function of the five relevant inputs so the full matrix is unit-testable
+/// (mirrors the `decide_want_raw` pattern). Returns `true` only when ALL hold:
+///
+/// - `sticky_consumed` — an earlier attempt consumed the sticky target
+///   (`sp_sticky_consumed`), i.e. direct evidence rather than inference from
+///   `Inactive`;
+/// - `try_cnt >= 2` — `begin_upstream_attempt` already incremented, so this is a
+///   retry attempt, not the first;
+/// - `sp_configured` — the route has `session_persistence`;
+/// - `!strict` — strict mode keeps the in-attempt fallback semantics untouched;
+/// - `sp_state == Inactive` — never downgrade an already-armed
+///   `InjectNew` / `InjectUpdate`.
+#[inline]
+fn sp_should_refresh_on_cross_attempt_retry(
+    sticky_consumed: bool,
+    try_cnt: u32,
+    sp_configured: bool,
+    strict: bool,
+    sp_state: &SessionPersistenceState,
+) -> bool {
+    sticky_consumed && try_cnt >= 2 && sp_configured && !strict && *sp_state == SessionPersistenceState::Inactive
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{decide_want_raw, fold_peer_timeouts};
-    use crate::PeerTimeoutSource;
+    use super::{decide_want_raw, fold_peer_timeouts, sp_should_refresh_on_cross_attempt_retry};
+    use crate::{PeerTimeoutSource, SessionPersistenceState};
     use std::time::Duration;
 
     #[test]
@@ -944,6 +997,96 @@ mod tests {
         assert!(absolute.to_string().contains("example.com"));
         // The pg_upstream_peer.rs idempotency check at upstream_peer_http uses
         // path() so absolute-form requests don't trigger spurious set_uri writes.
+    }
+
+    // --- sp_should_refresh_on_cross_attempt_retry matrix ---
+
+    #[test]
+    fn sp_refresh_fires_on_consumed_retry_nonstrict_inactive() {
+        // The one combination that yields a refresh.
+        assert!(sp_should_refresh_on_cross_attempt_retry(
+            true,
+            2,
+            true,
+            false,
+            &SessionPersistenceState::Inactive,
+        ));
+    }
+
+    #[test]
+    fn sp_refresh_skips_when_not_consumed() {
+        assert!(!sp_should_refresh_on_cross_attempt_retry(
+            false,
+            2,
+            true,
+            false,
+            &SessionPersistenceState::Inactive,
+        ));
+    }
+
+    #[test]
+    fn sp_refresh_skips_on_first_attempt() {
+        // try_cnt == 1 means this is the first attempt, not a retry.
+        assert!(!sp_should_refresh_on_cross_attempt_retry(
+            true,
+            1,
+            true,
+            false,
+            &SessionPersistenceState::Inactive,
+        ));
+    }
+
+    #[test]
+    fn sp_refresh_skips_when_sp_not_configured() {
+        assert!(!sp_should_refresh_on_cross_attempt_retry(
+            true,
+            2,
+            false,
+            false,
+            &SessionPersistenceState::Inactive,
+        ));
+    }
+
+    #[test]
+    fn sp_refresh_skips_in_strict_mode() {
+        assert!(!sp_should_refresh_on_cross_attempt_retry(
+            true,
+            2,
+            true,
+            true,
+            &SessionPersistenceState::Inactive,
+        ));
+    }
+
+    #[test]
+    fn sp_refresh_does_not_downgrade_inject_new() {
+        // An already-armed InjectNew/InjectUpdate must not be touched.
+        assert!(!sp_should_refresh_on_cross_attempt_retry(
+            true,
+            2,
+            true,
+            false,
+            &SessionPersistenceState::InjectNew,
+        ));
+        assert!(!sp_should_refresh_on_cross_attempt_retry(
+            true,
+            2,
+            true,
+            false,
+            &SessionPersistenceState::InjectUpdate,
+        ));
+    }
+
+    #[test]
+    fn sp_refresh_fires_on_later_retries() {
+        // try_cnt >= 2 covers the second retry and beyond.
+        assert!(sp_should_refresh_on_cross_attempt_retry(
+            true,
+            3,
+            true,
+            false,
+            &SessionPersistenceState::Inactive,
+        ));
     }
 
     fn s(n: u64) -> Option<Duration> {
