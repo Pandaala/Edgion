@@ -161,15 +161,15 @@ Corresponding script:
 
 The following directories still contain `127.0.0.1/localhost/fixed admin port` assumptions and should be reworked first:
 
-- `examples/code/client/suites/http_route/backend/*`
-- `examples/code/client/suites/edgion_plugins/direct_endpoint/*`
-- `examples/code/client/suites/edgion_plugins/all_endpoint_status/*`
-- `examples/code/client/suites/edgion_plugins/dynamic_external_upstream/*`
-- `examples/code/client/suites/gateway/allowed_routes/*`
-- `examples/code/client/suites/gateway/listener_hostname/*`
-- `examples/code/client/suites/gateway/combined/*`
-- `examples/code/client/suites/gateway/dynamic/*`
-- `examples/code/client/suites/tcp_route/stream_plugins/*`
+- `edgion-tests/src/client/suites/http_route/backend/*`
+- `edgion-tests/src/client/suites/edgion_plugins/direct_endpoint/*`
+- `edgion-tests/src/client/suites/edgion_plugins/all_endpoint_status/*`
+- `edgion-tests/src/client/suites/edgion_plugins/dynamic_external_upstream/*`
+- `edgion-tests/src/client/suites/gateway/allowed_routes/*`
+- `edgion-tests/src/client/suites/gateway/listener_hostname/*`
+- `edgion-tests/src/client/suites/gateway/combined/*`
+- `edgion-tests/src/client/suites/gateway/dynamic/*`
+- `edgion-tests/src/client/suites/tcp_route/stream_plugins/*`
 
 ## 9. Mapping to the base workflow
 

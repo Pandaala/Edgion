@@ -1,5 +1,10 @@
 [workspace]
-members = [".", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller"]
+members = [".", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller", "edgion-tests"]
+# `edgion-tests` is the ~56k-line end-to-end harness. It is a member (so
+# `cargo build -p edgion-tests` works and CI can target it), but is kept out of
+# `default-members` so a bare `cargo build` / `cargo check --all-targets` for
+# production does NOT compile it. Build it explicitly with `-p edgion-tests`.
+default-members = [".", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller"]
 # Pin resolver v2 explicitly: the root package builds with resolver 2 (edition
 # 2021), but a workspace defaults to resolver 1 unless stated. Resolver 1 would
 # union features across the dependency graph and could enable both
@@ -17,33 +22,9 @@ authors = ["pandalaa"]
 name = "edgion"
 path = "src/lib.rs"
 
-[[bin]]
-name = "cache_residue"
-path = "examples/code/validator/cache_residue.rs"
-
-[[example]]
-name = "build_test_proto"
-path = "examples/code/build_test_proto.rs"
-
-[[example]]
-name = "test_server"
-path = "examples/code/server/test_server.rs"
-
-[[example]]
-name = "test_client"
-path = "examples/code/client/test_client.rs"
-
-[[example]]
-name = "test_client_direct"
-path = "examples/code/client_direct/test_client_direct.rs"
-
-[[example]]
-name = "resource_diff"
-path = "examples/code/validator/resource_diff.rs"
-
-[[example]]
-name = "config_load_validator"
-path = "examples/code/validator/config_load_validator.rs"
+# NOTE: the end-to-end test entrypoints (cache_residue + the 6 example targets)
+# moved to the `edgion-tests` workspace crate. Build them with
+# `cargo build -p edgion-tests --bin <name>`.
 
 [features]
 # Default features
@@ -206,10 +187,8 @@ tonic-build = "0.12"
 [dev-dependencies]
 # Enable edgion-common's cross-crate test helpers for the root crate's tests.
 edgion-common = { path = "edgion-common", features = ["test-util"] }
-# The `test_client` example drives config via the CLI client (dev/example only).
-edgion-cli = { path = "edgion-cli" }
-# The `test_client` ACME suite drives the controller's ACME client (dev/example only).
-edgion-controller = { path = "edgion-controller" }
+# NOTE: the `edgion-cli` / `edgion-controller` dev-deps moved to the
+# `edgion-tests` crate along with the test_client example + ACME suite.
 tempfile = "3"
 h2 = "0.4"
 tokio-tungstenite = "0.28"

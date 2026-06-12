@@ -68,7 +68,7 @@ use super::*;
 # List every source file that has an externalized test file:
 rg -l '#\[path = "tests/.*_test\.rs"\]' src
 # Review only production changes (exclude separated tests + the integration harness):
-git diff main... -- ':(exclude)**/tests/*_test.rs' ':(exclude)**/tests.rs' ':(exclude)examples/code/**'
+git diff main... -- ':(exclude)**/tests/*_test.rs' ':(exclude)**/tests.rs' ':(exclude)edgion-tests/src/**'
 ```
 
 The leading `// Unit tests for this module live in ...` comment + the `#[path]` line are the machine-readable markers; AI review tooling should scope to non-test paths via the exclusion above.

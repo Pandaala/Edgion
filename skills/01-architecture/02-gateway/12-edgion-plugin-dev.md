@@ -478,7 +478,7 @@ Cover these four layers in priority order:
 
 Verifying initial state is not enough — add a dynamic scenario that exercises the "YAML update → runtime behavior change" path. Templates: remove a credential (BasicAuth) or switch an enum field (RateLimit `onMissingKey`).
 
-- Look at existing scenarios to get started: `examples/code/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`.
+- Look at existing scenarios to get started: `edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`.
 - conf directory convention: `examples/test/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/` (`load_conf.sh` automatically skips `updates/` and `delete/`).
 - For the detailed steps, CLI entry, and registration sites: [../../05-testing/01-integration-testing.md "Dynamic (hot reload) testing" section](../../05-testing/01-integration-testing.md).
 

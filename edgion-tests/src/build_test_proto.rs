@@ -1,20 +1,20 @@
 // Standalone program to generate test_service proto code
 //
 // Usage:
-//   cargo run --example build_test_proto
+//   cargo run -p edgion-tests --bin build_test_proto
 //
-// This generates proto_gen/test.rs from examples/proto/test_service.proto
+// This generates edgion-tests/src/proto_gen/test.rs from the test_service.proto.
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::path::Path;
 
-    let out_dir = "examples/code/proto_gen";
+    let out_dir = "edgion-tests/src/proto_gen";
     std::fs::create_dir_all(out_dir)?;
 
     let proto_candidates = [
         "examples/proto/test_service.proto",
         "examples/test/proto/test_service.proto",
-        "examples/code/proto/test_service.proto",
+        "edgion-tests/src/proto/test_service.proto",
     ];
     let proto_path = proto_candidates.iter().find(|p| Path::new(*p).exists()).copied();
     let generated_file = format!("{}/test.rs", out_dir);

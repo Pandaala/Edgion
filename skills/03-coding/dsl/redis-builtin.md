@@ -137,7 +137,7 @@ declared in `linkSysRefs[0].name`.
 
 Config: `examples/test/conf/EdgionPlugins/Dsl/25_EdgionPlugins_dsl-redis.yaml`
 Routes: `examples/test/conf/EdgionPlugins/Dsl/HTTPRoute_dsl-redis.yaml`
-Test client: `examples/code/client/suites/edgion_plugins/dsl/dsl.rs` — scenario 25 (4 test cases)
+Test client: `edgion-tests/src/client/suites/edgion_plugins/dsl/dsl.rs` — scenario 25 (4 test cases)
 
 ## Adding new redis.* functions
 

@@ -1,0 +1,121 @@
+[package]
+name = "edgion-tests"
+version = "0.1.0"
+edition = "2021"
+authors = ["pandalaa"]
+# Internal end-to-end test harness — never published, and deliberately kept out
+# of the workspace `default-members` so a normal `cargo build` / `cargo build
+# --workspace` does NOT compile these ~56k lines. CI builds it explicitly with
+# `cargo build -p edgion-tests`.
+publish = false
+
+[lib]
+name = "edgion_tests"
+path = "src/lib.rs"
+
+# Executable entrypoints. They live next to the shared framework modules under
+# `src/` and consume them via the `edgion_tests` library crate.
+[[bin]]
+name = "test_client"
+path = "src/client/test_client.rs"
+
+[[bin]]
+name = "test_client_direct"
+path = "src/client_direct/test_client_direct.rs"
+
+[[bin]]
+name = "test_server"
+path = "src/server/test_server.rs"
+
+[[bin]]
+name = "resource_diff"
+path = "src/validator/resource_diff.rs"
+
+[[bin]]
+name = "config_load_validator"
+path = "src/validator/config_load_validator.rs"
+
+[[bin]]
+name = "cache_residue"
+path = "src/validator/cache_residue.rs"
+
+[[bin]]
+name = "build_test_proto"
+path = "src/build_test_proto.rs"
+
+[dependencies]
+# Internal path deps. `edgion-controller` is pulled in only for the ACME suite
+# (option A — drives the controller's ACME client directly); `edgion-cli` drives
+# config via the CLI client; `edgion-resources` provides shared schema types.
+edgion-resources = { path = "../edgion-resources" }
+edgion-controller = { path = "../edgion-controller" }
+edgion-cli = { path = "../edgion-cli" }
+
+# Async runtime / error handling
+tokio = { version = "1.49", features = ["full"] }
+tokio-util = "0.7"
+tokio-stream = "0.1"
+tokio-rustls = "0.26"
+async-trait = "0.1"
+anyhow = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# HTTP / gRPC test origin + clients. This crate uses rustls directly and so
+# sidesteps the gateway's mutually-exclusive boringssl/rustls feature dance.
+axum = { version = "0.8.8", features = ["macros", "ws"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
+tonic-reflection = "0.12"
+prost = "0.13"
+# Used by the `build_test_proto` helper binary to regenerate the gRPC stubs.
+tonic-build = "0.12"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
+rustls = { version = "0.23", features = ["ring"] }
+rustls-native-certs = "0.8"
+h2 = "0.4"
+http = "1.4.0"
+tokio-tungstenite = "0.28"
+proxy-header = "0.1.2"
+
+# CLI / output formatting
+clap = { version = "4.5", features = ["derive", "env"] }
+colored = "2.2"
+console = "0.16"
+
+# Crypto / encoding helpers used by the plugin suites
+base64 = "0.22"
+hex = "0.4"
+jsonwebtoken = "9"
+hmac = "0.12"
+aes-gcm = "0.10"
+sha2 = "0.10"
+sha1 = "0.10.6"
+x509-parser = { version = "0.18", features = ["verify"] }
+
+# Certificates / TLS test material
+rcgen = { version = "0.14.7", features = ["x509-parser"] }
+instant-acme = "0.8.4"
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
+
+# Misc utilities
+chrono = "0.4"
+time = { version = "0.3", features = ["std"] }
+cookie = "0.18.1"
+uuid = { version = "1.19", features = ["v4"] }
+regex = "1.12"
+rand = "0.9"
+percent-encoding = "2.3"
+parking_lot = "0.12"
+futures = "0.3.31"
+bytes = "1.11.1"
+tower = { version = "0.5", features = ["util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+wiremock = "0.6"
+tempfile = "3"

@@ -273,9 +273,9 @@ References for existing samples:
 
 ### Item 3 entry: the dynamic scenario framework
 
-Hot-reload regression must not stop at "is the new value in the store" — make the connection / route actually exercise the new behavior. The `examples/code/client/dynamic/` framework supports N-phase state-machine assertions; the built-in scenarios are HTTP-level (`gateway_dynamic`, `dsl_dynamic`, `basic_auth_dynamic`, `rate_limit_dynamic`); stream plugins **don't have a scenario template yet** — `ScenarioCtx` / `assert_phase` is scheduled by `TestSuite`, so in principle writing a `TestSuite` that emits TCP/TLS traffic is enough to reuse the entire orchestration.
+Hot-reload regression must not stop at "is the new value in the store" — make the connection / route actually exercise the new behavior. The `edgion-tests/src/client/dynamic/` framework supports N-phase state-machine assertions; the built-in scenarios are HTTP-level (`gateway_dynamic`, `dsl_dynamic`, `basic_auth_dynamic`, `rate_limit_dynamic`); stream plugins **don't have a scenario template yet** — `ScenarioCtx` / `assert_phase` is scheduled by `TestSuite`, so in principle writing a `TestSuite` that emits TCP/TLS traffic is enough to reuse the entire orchestration.
 
-How to write it: follow the structure of `examples/code/client/dynamic/scenarios/basic_auth_dynamic.rs`, replacing the phase suite with a stream-aware one (verifying connection accept/deny, TLS handshake behavior, etc.). For detailed registration sites and CLI entry, see [../../05-testing/01-integration-testing.md "Dynamic (hot reload) testing" section](../../05-testing/01-integration-testing.md).
+How to write it: follow the structure of `edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs`, replacing the phase suite with a stream-aware one (verifying connection accept/deny, TLS handshake behavior, etc.). For detailed registration sites and CLI entry, see [../../05-testing/01-integration-testing.md "Dynamic (hot reload) testing" section](../../05-testing/01-integration-testing.md).
 
 ## Review checklist
 

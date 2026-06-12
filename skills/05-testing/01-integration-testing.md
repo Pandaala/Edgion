@@ -61,16 +61,16 @@ Each job's stdout/stderr is captured to `integration_testing/run_all_<timestamp>
 ## Memorize the actual directory layout
 
 - `examples/test/conf/`: test YAML, organized by resource/item
-- `examples/code/client/`: Rust test client and suite implementations
-- `examples/code/server/test_server.rs`: local HTTP/gRPC/WebSocket/TCP/UDP test backend
-- `examples/code/validator/`: `resource_diff`, `config_load_validator`
+- `edgion-tests/src/client/`: Rust test client and suite implementations
+- `edgion-tests/src/server/test_server.rs`: local HTTP/gRPC/WebSocket/TCP/UDP test backend
+- `edgion-tests/src/validator/`: `resource_diff`, `config_load_validator`
 - `examples/test/scripts/integration/run_integration.sh`: main entry (shared controller/gateway suites)
 - `examples/test/scripts/integration/run_all_integration.sh`: top-level orchestrator that sequences `run_integration.sh` plus every standalone integration script (Etcd / ES LinkSys, ACME, Center, CLI, FileWatcher) and emits a unified report
 - `examples/test/scripts/utils/`: `prepare.sh`, `start_all_with_conf.sh`, `load_conf.sh`, `kill_all.sh`
 - `examples/test/scripts/gen_certs/`: test certificate generation scripts
 - `integration_testing/testing_<timestamp>/`: this run's logs, PIDs, generated Secrets, and report directory
 
-Do not search for code or cert scripts using older test-directory conventions. Current code lives in `examples/code/`; cert scripts are in `examples/test/scripts/gen_certs/`.
+Do not search for code or cert scripts using older test-directory conventions. Current code lives in `edgion-tests/src/`; cert scripts are in `examples/test/scripts/gen_certs/`.
 
 ## Run flow
 
@@ -126,13 +126,13 @@ The usual order is:
 1. Write or modify YAML under `examples/test/conf/<Resource>/<Item>/`
 2. Update `examples/test/conf/ports.json` if a new listener port is needed
 3. If the YAML uses a new field, first confirm the corresponding CRD covers it
-4. Then modify `examples/code/client/suites/...`
+4. Then modify `edgion-tests/src/client/suites/...`
 
 When a test fails, first determine "the configuration didn't take effect" vs "the assertion is wrong" — don't go straight to runtime code.
 
 ### 3. Reuse `test_server`; do not casually invent a new backend
 
-For most HTTP, gRPC, WebSocket, TCP, UDP, ForwardAuth, OIDC, mirror, delay, and status-code scenarios, `test_server` is sufficient. Only extend `examples/code/server/test_server.rs` when existing endpoints or protocols truly do not cover your scenario.
+For most HTTP, gRPC, WebSocket, TCP, UDP, ForwardAuth, OIDC, mirror, delay, and status-code scenarios, `test_server` is sufficient. Only extend `edgion-tests/src/server/test_server.rs` when existing endpoints or protocols truly do not cover your scenario.
 
 The backend ports and endpoints already supported by `test_server` are in [references/test-server-capabilities.md](references/test-server-capabilities.md).
 
@@ -140,10 +140,10 @@ The backend ports and endpoints already supported by `test_server` are in [refer
 
 When adding a new suite, you typically need to update at least:
 
-- `examples/code/client/suites/<family>/...`
-- `examples/code/client/suites/<family>/mod.rs`
-- `examples/code/client/suites/mod.rs`
-- `examples/code/client/test_client.rs`
+- `edgion-tests/src/client/suites/<family>/...`
+- `edgion-tests/src/client/suites/<family>/mod.rs`
+- `edgion-tests/src/client/suites/mod.rs`
+- `edgion-tests/src/client/test_client.rs`
 
 If you only add an item under an existing family, the most commonly missed places in `test_client.rs` are:
 
@@ -179,7 +179,7 @@ First run the narrowest command:
 If you need to repeatedly hit traffic or control phases yourself, after preserving the scene call:
 
 ```bash
-./target/debug/examples/test_client -g -r <Resource> -i <Item>
+./target/debug/test_client -g -r <Resource> -i <Item>
 ```
 
 ## Dynamic (hot reload) testing
@@ -198,17 +198,17 @@ Hot-reload tests are orchestrated by the Rust-side scenario framework and **run 
 # Narrow run (-r set to non-Gateway, e.g. -r EdgionPlugins): skips dynamic for faster iteration
 
 # List registered scenario ids
-./target/debug/examples/test_client --list-dynamic-scenarios
+./target/debug/test_client --list-dynamic-scenarios
 
 # Run a single scenario (after preserving the scene)
-./target/debug/examples/test_client -g --dynamic-scenario BasicAuthDynamic
+./target/debug/test_client -g --dynamic-scenario BasicAuthDynamic
 ```
 
 The final step of the full `run_integration.sh` flow enumerates the output of `--list-dynamic-scenarios` and invokes `--dynamic-scenario` one by one; each appears as `Dyn_<id>` in `report.log`.
 
 ### Current scenario set
 
-> Source of truth is `examples/code/client/dynamic/registry.rs` (`all()`); run `--list-dynamic-scenarios` for the live list. As of this writing it registers 10 scenarios:
+> Source of truth is `edgion-tests/src/client/dynamic/registry.rs` (`all()`); run `--list-dynamic-scenarios` for the live list. As of this writing it registers 10 scenarios:
 
 | Scenario id | conf directory (`conf_path`) | Verifies |
 |-------------|----------|---------|
@@ -225,8 +225,8 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 
 ### Where the framework lives
 
-- Framework code: `examples/code/client/dynamic/`
-  - `ctx.rs` — `ScenarioCtx`: composition operators `assert_phase`, `wait_phase`, `apply_dir`, `delete_resources`, `sleep` (the legacy `wait_resource_sync` method has been removed; the underlying `wait::wait_for_resource_sync` function and the `examples/code/validator/resource_diff` binary are kept as a setup-time sanity check)
+- Framework code: `edgion-tests/src/client/dynamic/`
+  - `ctx.rs` — `ScenarioCtx`: composition operators `assert_phase`, `wait_phase`, `apply_dir`, `delete_resources`, `sleep` (the legacy `wait_resource_sync` method has been removed; the underlying `wait::wait_for_resource_sync` function and the `edgion-tests/src/validator/resource_diff` binary are kept as a setup-time sanity check)
   - `scenario.rs` — `Scenario` struct + `PhaseSuite` phase→suite factory mapping
   - `registry.rs` — explicit `all()` list (one line per new scenario)
   - `scenarios/<id>.rs` — one file per scenario; the N-phase state machine is glued together with `ScenarioCtx`
@@ -236,9 +236,9 @@ The final step of the full `run_integration.sh` flow enumerates the output of `-
 ### Adding a dynamic scenario
 
 1. Write `initial/` + `updates/` YAML under `examples/test/conf/<Resource>/<Item>/DynamicTest/` (`load_conf.sh` automatically skips `updates/` and `delete/`)
-2. Write two phase suites in `examples/code/client/suites/<family>/dynamic.rs` (`<Name>InitialTestSuite` / `<Name>UpdateTestSuite`); re-export them via the family `mod.rs` to `suites::*`
+2. Write two phase suites in `edgion-tests/src/client/suites/<family>/dynamic.rs` (`<Name>InitialTestSuite` / `<Name>UpdateTestSuite`); re-export them via the family `mod.rs` to `suites::*`
 3. Add branches to the three dispatch tables in `test_client.rs`: `resolve_suite` (for aliases if needed), `suite_to_port_key`, `add_suites_for_suite` (selects a suite by `--phase`)
-4. Write the scenario in `examples/code/client/dynamic/scenarios/<id>.rs`; the `run` function chains the N phases in order: `assert_phase` (initial) → `apply_dir` / `delete_resources` (changes) → `wait_phase` (with timeout, until the final-state business assertions all pass). **Do not** rely on `sleep` as a fallback and **do not** use `wait_resource_sync` — the former is unreliable, and the latter is no longer exposed on ScenarioCtx
+4. Write the scenario in `edgion-tests/src/client/dynamic/scenarios/<id>.rs`; the `run` function chains the N phases in order: `assert_phase` (initial) → `apply_dir` / `delete_resources` (changes) → `wait_phase` (with timeout, until the final-state business assertions all pass). **Do not** rely on `sleep` as a fallback and **do not** use `wait_resource_sync` — the former is unreliable, and the latter is no longer exposed on ScenarioCtx
 5. Add `pub mod <id>;` to `dynamic/scenarios/mod.rs`
 6. Append `crate::dynamic::scenarios::<id>::SCENARIO` to `all()` in `dynamic/registry.rs`
 
@@ -250,12 +250,12 @@ A scenario internally schedules suites via `ctx.assert_phase(scenario, "initial"
 
 ```bash
 # Run only the initial-phase assertions
-./target/debug/examples/test_client -g -r <Resource> -i <Item> --phase initial
+./target/debug/test_client -g -r <Resource> -i <Item> --phase initial
 # After manually applying updates/, run the update-phase assertions
 ./target/debug/edgion-cli --server http://127.0.0.1:12101 \
     apply -f examples/test/conf/<Resource>/<Item>/DynamicTest/updates/
 sleep 3
-./target/debug/examples/test_client -g -r <Resource> -i <Item> --phase update
+./target/debug/test_client -g -r <Resource> -i <Item> --phase update
 ```
 
 The `--phase` argument is still effective (each dynamic dispatch routes to the corresponding suite by phase) and is the common entry point for investigating a phase's behavior inside a scenario.
@@ -317,7 +317,7 @@ A new standalone script must include a header comment explaining "why the main e
 When a new suite / new script contains any of the following, the reviewer must block the merge and ask the author to either reuse the main process or be added to the exception list above:
 
 - `Command::new("edgion-gateway")` / `Command::new("./edgion-gateway")` / `spawn_gateway`-style calls
-- A new script under `examples/code/client/` or `examples/test/scripts/` (not in the exception list) calling `start_all` / `start_all_with_conf`
+- A new script under `edgion-tests/src/client/` or `examples/test/scripts/` (not in the exception list) calling `start_all` / `start_all_with_conf`
 - Repeatedly killing / restarting `edgion-gateway` within the same script (unless the test is specifically about Gateway restart behavior — even then only one restart cycle is allowed)
 
 Reasonable `Command::new` examples (do not block): invoking external tools like `openssl`, `docker`, `curl` to validate client-side protocols — they don't count as "starting Gateway".

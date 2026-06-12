@@ -54,8 +54,8 @@ Dynamic scenarios run by default as the final step of the full `run_integration.
 ./examples/test/scripts/integration/run_integration.sh
 
 # List / run a single scenario
-./target/debug/examples/test_client --list-dynamic-scenarios
-./target/debug/examples/test_client -g --dynamic-scenario <id>
+./target/debug/test_client --list-dynamic-scenarios
+./target/debug/test_client -g --dynamic-scenario <id>
 ```
 For the scenario framework and how to add new scenarios see [the "Dynamic (hot reload) testing" section in 01-integration-testing.md](01-integration-testing.md).
 
@@ -65,7 +65,7 @@ cat ${WORK_DIR}/report.log
 ```
 
 ### Key test directories
-- `examples/code/` — test code (client/server/validator)
+- `edgion-tests/src/` — test code (client/server/validator)
 - `examples/test/conf/` — test configurations (organized by resource type)
 - `examples/test/scripts/` — test scripts
 - `integration_testing/` — runtime working directory (gitignored)

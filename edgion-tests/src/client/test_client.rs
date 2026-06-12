@@ -5,19 +5,13 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
 
-pub mod access_log_client;
-mod dynamic;
-mod framework;
-mod log_analyzer;
-pub mod metrics_helper;
-mod port_config;
-mod reporter;
-mod suites;
+// Shared client framework lives in the `edgion_tests` library crate.
+use edgion_tests::framework::{self, TestContext, TestRunner};
+use edgion_tests::reporter::{ConsoleReporter, JsonReporter};
+use edgion_tests::{dynamic, port_config, suites};
 
 use anyhow::Result;
 use clap::Parser;
-use framework::{TestContext, TestRunner};
-use reporter::{ConsoleReporter, JsonReporter};
 use std::path::PathBuf;
 use std::sync::Once;
 use std::time::Instant;

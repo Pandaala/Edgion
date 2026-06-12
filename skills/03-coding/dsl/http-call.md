@@ -98,6 +98,6 @@ spec:
 ## Adding new tests
 
 Integration test config: `examples/test/conf/EdgionPlugins/Dsl/24_EdgionPlugins_dsl-http-call.yaml`
-Test client: `examples/code/client/suites/edgion_plugins/dsl/dsl.rs` — see `test_http_call_success` (scenario 24).
+Test client: `edgion-tests/src/client/suites/edgion_plugins/dsl/dsl.rs` — see `test_http_call_success` (scenario 24).
 
 Use `resp.set_header()` in DSL test scripts when you need to assert on the result from the test client — `req.set_header()` only reaches the backend echo, not the test client response.

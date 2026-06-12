@@ -38,8 +38,8 @@ cargo build --release
 # Common binaries
 cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-cli
 
-# Common examples
-cargo build --release --example test_server --example test_client
+# Common test-harness binaries (live in the edgion-tests crate)
+cargo build --release -p edgion-tests --bin test_server --bin test_client
 ```
 
 ## Feature combinations
@@ -71,14 +71,14 @@ For more detailed feature semantics:
 | `cargo build` | `target/debug/` |
 | `cargo build --release` | `target/release/` |
 | `cargo build --target <triple> --release` | `target/<triple>/release/` |
-| `cargo build --example <name> --release` | `target/release/examples/` |
+| `cargo build -p edgion-tests --bin <name> --release` | `target/release/` |
 
 Common files:
 
 - `target/debug/edgion-gateway`
 - `target/release/edgion-controller`
 - `target/release/edgion-cli`
-- `target/release/examples/test_server`
+- `target/release/test_server`
 
 ## Cross-compilation
 

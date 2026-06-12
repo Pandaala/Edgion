@@ -11,8 +11,9 @@ pub struct HeaderCertAuthTestSuite;
 const TEST_HOST: &str = "header-cert-auth-test.example.com";
 const CERT_HEADER_NAME: &str = "X-Client-Cert";
 
-const COMPILE_TIME_SECRET_YAML: &str =
-    include_str!("../../../../../test/conf/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml");
+const COMPILE_TIME_SECRET_YAML: &str = include_str!(
+    "../../../../../../examples/test/conf/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml"
+);
 
 const RUNTIME_SECRET_RELATIVE: &str =
     "generated-secrets/HTTPRoute/Backend/BackendTLS/ClientCert_edge_backend-client-cert.yaml";

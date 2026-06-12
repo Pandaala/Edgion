@@ -46,7 +46,7 @@ An ignore-path is a structural constant (a legitimate value that never returns t
 - A fixed number of registered items (kind list, watch object count)
 - Values that are normally `>0` during the test (e.g., `gateway_config.gateways` — sourced from `GatewayStore::count()` since runtime-F003)
 
-Modify the `IGNORE_PATHS` constant in `examples/code/validator/cache_residue.rs`. Every addition must include a commit message explaining why this field does not count as a leak.
+Modify the `IGNORE_PATHS` constant in `edgion-tests/src/validator/cache_residue.rs`. Every addition must include a commit message explaining why this field does not count as a leak.
 
 ## Reverse verification
 
@@ -79,7 +79,7 @@ Diagnosis order:
 
 - Spec: `docs/superpowers/specs/2026-04-26-cache-residue-detection-design.md`
 - Plan: `docs/superpowers/plans/2026-04-26-cache-residue-detection.md`
-- Validator: `examples/code/validator/cache_residue.rs`
+- Validator: `edgion-tests/src/validator/cache_residue.rs`
 - Wipe handler: `edgion-controller/src/api/wipe_handlers.rs`
 - Gateway store-stats: `edgion-gateway/src/api/mod.rs:312-442`
 - Controller store-stats: `edgion-controller/src/api/debug_handlers.rs`

@@ -10,7 +10,7 @@ This file only answers three things:
 
 | Family | YAML directory | Rust entry | `--gateway` | Notes |
 |------|-----------|-----------|-------------|------|
-| `HTTPRoute/Basic` | `examples/test/conf/HTTPRoute/Basic/` | `examples/code/client/suites/http_route/` | No | Direct HTTP basic capability |
+| `HTTPRoute/Basic` | `examples/test/conf/HTTPRoute/Basic/` | `edgion-tests/src/client/suites/http_route/` | No | Direct HTTP basic capability |
 | `HTTPRoute/Match` | `examples/test/conf/HTTPRoute/Match/` | `HttpMatchTestSuite` | Yes | Relies on gateway route matching |
 | `HTTPRoute/Backend/*` | `examples/test/conf/HTTPRoute/Backend/` | `LBRoundRobinTestSuite`, `LBConsistentHashTestSuite`, `WeightedBackendTestSuite`, `TimeoutTestSuite`, `HealthCheckTestSuite`, `GrpcHealthCheckTestSuite`, `HealthCheckTransitionTestSuite`, `PartiallyInvalidTestSuite`, `RetryOnStatusTestSuite`, `CircuitBreakerTestSuite`, `SessionPersistenceTestSuite` | Yes | Load balancing, timeout, health check, partially invalid rules, retry, circuit breaking, session persistence |
 | `HTTPRoute/Filters/*` | `examples/test/conf/HTTPRoute/Filters/` | `HttpRedirectTestSuite`, `HttpSecurityTestSuite`, `HeaderModifierTestSuite`, `FilterConflictTestSuite` | Yes | Redirect, security, header modifier, filter conflict |
@@ -36,8 +36,8 @@ This file only answers three things:
 | `Gateway/PortConflict` | `examples/test/conf/Gateway/PortConflict/` | `PortConflictTestSuite` | Yes | listener port conflict |
 | `Gateway/StreamPlugins` | `examples/test/conf/Gateway/StreamPlugins/` | `StreamPluginsTestSuite` | Yes | Gateway-level stream plugin |
 | `Gateway/Combined` | `examples/test/conf/Gateway/Combined/` | `CombinedScenariosTestSuite` | Yes | Combined scenarios |
-| `EdgionPlugins/*` | `examples/test/conf/EdgionPlugins/` | `examples/code/client/suites/edgion_plugins/` | Yes | Most plugin tests share the `EdgionPlugins` port key |
-| `EdgionTls/*` | `examples/test/conf/EdgionTls/` | `examples/code/client/suites/edgion_tls/` | Yes | HTTPS, gRPC TLS, mTLS, cipher, port-only |
+| `EdgionPlugins/*` | `examples/test/conf/EdgionPlugins/` | `edgion-tests/src/client/suites/edgion_plugins/` | Yes | Most plugin tests share the `EdgionPlugins` port key |
+| `EdgionTls/*` | `examples/test/conf/EdgionTls/` | `edgion-tests/src/client/suites/edgion_tls/` | Yes | HTTPS, gRPC TLS, mTLS, cipher, port-only |
 | `Status/RefGrant` | `examples/test/conf/Status/RefGrant/` | `RefGrantStatusTestSuite` | No | `ReferenceGrant` status validation |
 | `Status/BackendTLSPolicy` | `examples/test/conf/Status/BackendTLSPolicy/` | `BackendTlsStatusTestSuite` | No | `BackendTLSPolicy` validation and status |
 | `Status/TLSListenerMode` | `examples/test/conf/Status/TLSListenerMode/` | `TlsListenerModeStatusTestSuite` | Yes | TLS listener mode status validation (Passthrough=Accepted, Mixed=UnsupportedTLSMode) |
@@ -76,7 +76,7 @@ These directories all use the same `EdgionPlugins` listener key, only the suite 
 - `DirectEndpoint`
 - `Dsl`
 
-When adding a new HTTP plugin test, first look for the closest existing implementation under `examples/code/client/suites/edgion_plugins/` before deciding whether to add a new subdirectory.
+When adding a new HTTP plugin test, first look for the closest existing implementation under `edgion-tests/src/client/suites/edgion_plugins/` before deciding whether to add a new subdirectory.
 
 ## Top 3 things easy to miss in `test_client.rs`
 
@@ -101,5 +101,5 @@ A lot of "YAML is there but the test didn't run" issues end up at one of these t
 ./examples/test/scripts/integration/run_integration.sh --no-prepare -r EdgionPlugins -i JwtAuth
 
 # Replay directly after preserving the scene
-./target/debug/examples/test_client -g -r Gateway -i StreamPlugins
+./target/debug/test_client -g -r Gateway -i StreamPlugins
 ```

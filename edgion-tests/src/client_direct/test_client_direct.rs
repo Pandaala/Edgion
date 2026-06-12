@@ -12,29 +12,17 @@
 //   - udp       UDP tests
 //   - all       Run all tests
 
-// Reuse client modules
+// Reuse the shared client framework from the `edgion_tests` library crate.
 #![allow(clippy::module_inception)]
 #![allow(dead_code)]
 #![allow(unused_imports)]
-#[path = "../client/access_log_client.rs"]
-pub mod access_log_client;
-#[path = "../client/framework.rs"]
-mod framework;
-#[path = "../client/log_analyzer.rs"]
-mod log_analyzer;
-#[path = "../client/metrics_helper.rs"]
-pub mod metrics_helper;
-#[path = "../client/port_config.rs"]
-mod port_config;
-#[path = "../client/reporter.rs"]
-mod reporter;
-#[path = "../client/suites/mod.rs"]
-mod suites;
+
+use edgion_tests::framework::{TestContext, TestRunner};
+use edgion_tests::reporter::ConsoleReporter;
+use edgion_tests::suites;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use framework::{TestContext, TestRunner};
-use reporter::ConsoleReporter;
 use std::path::PathBuf;
 use std::sync::Once;
 use std::time::Instant;

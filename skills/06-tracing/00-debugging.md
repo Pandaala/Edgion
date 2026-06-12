@@ -128,13 +128,13 @@ Decision rules:
 For batch comparison, just run:
 
 ```bash
-./target/debug/examples/resource_diff
+./target/debug/resource_diff
 ```
 
 Or specify the addresses:
 
 ```bash
-./target/debug/examples/resource_diff \
+./target/debug/resource_diff \
   --controller-url http://127.0.0.1:12101 \
   --gateway-url http://127.0.0.1:12001
 ```
@@ -204,7 +204,7 @@ curl -s http://127.0.0.1:12001/api/v1/testing/access-log/<trace-id> | jq .
 For plugin issues, `stage_logs` is the most useful; for upstream issues, look first at `backend.upstreams` and `errors`.
 
 A ready-made client on the code side:
-- `examples/code/client/access_log_client.rs`
+- `edgion-tests/src/client/access_log_client.rs`
 
 ## Step 5: check Metrics
 
@@ -357,4 +357,4 @@ For those, jump to:
 - `edgion-cli`: `edgion-cli/src/cli/`
 - Gateway startup entry: `edgion-gateway/src/cli/mod.rs`
 - Controller startup entry: `edgion-controller/src/cli/mod.rs`
-- Resource sync verification tool: `examples/code/validator/resource_diff.rs`
+- Resource sync verification tool: `edgion-tests/src/validator/resource_diff.rs`

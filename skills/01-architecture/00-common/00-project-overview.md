@@ -135,9 +135,9 @@ Created in `new_ctx()` and consumed in `logging()`. Plugins interact with it thr
 
 | Component | Path | Purpose |
 |------|------|------|
-| `test_server` | `examples/code/server/test_server.rs` | Multi-protocol echo backend (HTTP, gRPC, WebSocket, TCP, UDP, auth) |
-| `test_client` | `examples/code/client/test_client.rs` | Test runner based on the TestSuite trait |
-| `resource_diff` | `examples/code/validator/resource_diff.rs` | Controller ↔ Gateway sync verification |
+| `test_server` | `edgion-tests/src/server/test_server.rs` | Multi-protocol echo backend (HTTP, gRPC, WebSocket, TCP, UDP, auth) |
+| `test_client` | `edgion-tests/src/client/test_client.rs` | Test runner based on the TestSuite trait |
+| `resource_diff` | `edgion-tests/src/validator/resource_diff.rs` | Controller ↔ Gateway sync verification |
 | `run_integration.sh` | `examples/test/scripts/integration/` | End-to-end integration test orchestration |
 | Test configurations | `examples/test/conf/` | YAML resources organized by `Resource/Item/` |
 | Port registry | `examples/test/conf/ports.json` | Unique port allocation per test suite |
