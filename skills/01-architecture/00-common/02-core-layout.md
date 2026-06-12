@@ -148,7 +148,7 @@ separate EdgionCenter repository. The Controller side still depends on the share
 Deliberately kept small:
 
 ```
-src/core/common/
+edgion-common/src/
 ├── auth/         # OIDC JWT authentication state (AuthMiddlewareState, JWKS cache)
 ├── local_auth/   # Local HS256 JWT authentication (login, token issuance)
 ├── unified_auth/ # Unified authentication middleware (OIDC + local sequential validation)

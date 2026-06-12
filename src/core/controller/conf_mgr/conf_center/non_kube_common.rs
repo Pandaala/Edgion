@@ -203,7 +203,7 @@ impl CenterBase {
 
             // 6. Create ConfigSyncServer and register all WatchObjs.
             let config_sync_server = Arc::new(ConfigSyncServer::new());
-            let no_sync_kinds = crate::core::common::config::get_no_sync_kinds();
+            let no_sync_kinds = edgion_common::config::get_no_sync_kinds();
             let no_sync_refs: Vec<&str> = no_sync_kinds.iter().map(|s| s.as_str()).collect();
             config_sync_server.register_all(self.runtime.processor_registry.all_watch_objs(&no_sync_refs));
 
@@ -340,7 +340,7 @@ where
     H: ProcessorHandler<K> + 'static,
     B: LocalControllerBackend,
 {
-    let capacity = crate::core::common::config::get_cache_capacity(kind);
+    let capacity = edgion_common::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
         kind,
         capacity,

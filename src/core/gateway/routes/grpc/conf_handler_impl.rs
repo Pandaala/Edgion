@@ -1,4 +1,3 @@
-use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::routes::common::{
     effective_hostnames, filter_accepted_parent_refs, gateways_from_parent_refs,
 };
@@ -7,6 +6,7 @@ use crate::core::gateway::routes::grpc::match_unit::{
 };
 use crate::core::gateway::routes::grpc::routes_mgr::{resolved_listeners_for_grpc_route, GlobalGrpcRouteManagers};
 use crate::core::gateway::routes::grpc::{get_global_grpc_route_managers, GrpcRouteRuleUnit};
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::{GRPCRoute, GRPCRouteRule, ListenerKey, ResourceMeta};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

@@ -4,7 +4,7 @@
 
 ## 1. What is ConfHandler
 
-`ConfHandler<T>` is the standard interface used by the **Gateway data plane** to receive and process configuration changes (defined in `src/core/common/conf_sync/traits.rs`).
+`ConfHandler<T>` is the standard interface used by the **Gateway data plane** to receive and process configuration changes (defined in `edgion-common/src/conf_sync/traits.rs`).
 
 ```
 Controller → gRPC Watch/List → ClientCache → ConfHandler<T>.full_set / partial_update

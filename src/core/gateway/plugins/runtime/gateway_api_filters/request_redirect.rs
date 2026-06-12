@@ -6,9 +6,9 @@ use async_trait::async_trait;
 use http::StatusCode;
 use pingora_http::ResponseHeader;
 
-use crate::core::common::utils::net::host_without_port;
 use crate::core::gateway::plugins::runtime::log::{la, PluginLog};
 use crate::core::gateway::plugins::runtime::traits::{PluginSession, RequestFilter};
+use edgion_common::utils::net::host_without_port;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::HTTPRequestRedirectFilter;
 

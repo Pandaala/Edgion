@@ -8,9 +8,9 @@
 //!                     PluginMetaData, LinkSys, ReferenceGrant
 //! Tier 3 (low-level): Service, EndpointSlice, Secret, ConfigMap
 
-use crate::core::common::api::ApiResponse;
 use crate::core::controller::api::types::AdminState;
 use axum::{extract::State, response::Json};
+use edgion_common::api::ApiResponse;
 use edgion_resources::ResourceKind;
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -164,7 +164,7 @@ mod tests {
                 .expect("ConfMgr::create failed"),
         );
         let schema_validator = Arc::new(SchemaValidator::empty());
-        let (tx, _rx) = tokio::sync::watch::channel(crate::core::common::config::CenterClientConfig::default());
+        let (tx, _rx) = tokio::sync::watch::channel(edgion_common::config::CenterClientConfig::default());
         let authorizer = std::sync::Arc::new(crate::core::controller::authz::Authorizer::new(
             crate::core::controller::authz::CenterPolicy::deny_all(),
         ));

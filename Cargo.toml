@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "edgion-resources"]
+members = [".", "edgion-resources", "edgion-common", "edgion-cli"]
 # Pin resolver v2 explicitly: the root package builds with resolver 2 (edition
 # 2021), but a workspace defaults to resolver 1 unless stated. Resolver 1 would
 # union features across the dependency graph and could enable both
@@ -24,10 +24,6 @@ path = "src/bin/edgion_gateway.rs"
 [[bin]]
 name = "edgion-controller"
 path = "src/bin/edgion_controller.rs"
-
-[[bin]]
-name = "edgion-cli"
-path = "src/bin/edgion_ctl.rs"
 
 [[bin]]
 name = "cache_residue"
@@ -89,6 +85,9 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 
 # Shared resource/config schema crate (leaf; reused by the future EdgionCenter)
 edgion-resources = { path = "edgion-resources" }
+
+# Shared common crate (config loader, observe, secret store, link core, etc.)
+edgion-common = { path = "edgion-common" }
 
 # Core async runtime and error handling
 tokio = { version = "1.49", features = ["full"] }
@@ -209,6 +208,10 @@ tower = { version = "0.5", features = ["util"] }
 tonic-build = "0.12"
 
 [dev-dependencies]
+# Enable edgion-common's cross-crate test helpers for the root crate's tests.
+edgion-common = { path = "edgion-common", features = ["test-util"] }
+# The `test_client` example drives config via the CLI client (dev/example only).
+edgion-cli = { path = "edgion-cli" }
 tempfile = "3"
 h2 = "0.4"
 tokio-tungstenite = "0.28"

@@ -1,7 +1,7 @@
-use crate::core::common::utils::net::{classify_backend_addr, BlockedBackendReason};
 use crate::core::gateway::backends::discovery::get_global_service_store;
 use crate::core::gateway::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
 use crate::core::gateway::EdgionHttpContext;
+use edgion_common::utils::net::{classify_backend_addr, BlockedBackendReason};
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use edgion_resources::edgion_status::EdgionStatus;
 use edgion_resources::resources::BackendTLSPolicy;
@@ -272,7 +272,7 @@ pub(crate) fn validate_endpoint_backend_addr(
 ) -> Result<(), EdgionStatus> {
     match classify_backend_addr(addr) {
         Some(BlockedBackendReason::Localhost)
-            if allow_loopback_upstream || crate::core::common::config::is_integration_testing_mode() =>
+            if allow_loopback_upstream || edgion_common::config::is_integration_testing_mode() =>
         {
             Ok(())
         }

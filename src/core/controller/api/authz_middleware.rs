@@ -41,7 +41,7 @@ use crate::core::controller::authz::{Authorizer, Role};
 /// any other admin route (callers pass a Bearer token). They are still only
 /// mounted under test mode (`create_admin_router`).
 fn is_skipped(path: &str) -> bool {
-    crate::core::common::auth::public_paths::is_static_public(path)
+    edgion_common::auth::public_paths::is_static_public(path)
 }
 
 /// Authorization route_layer middleware.
@@ -112,10 +112,10 @@ pub async fn authz_layer(State(authorizer): State<Arc<Authorizer>>, req: Request
             // Unknown/absent route => deny. Source is "unknown" because we cannot
             // determine whether this was a Center or cli-token request without a
             // matched route to classify.
-            crate::core::common::observe::fed_metrics::record_rbac_denied(
+            edgion_common::observe::fed_metrics::record_rbac_denied(
                 "unknown",
                 "unknown",
-                crate::core::common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
+                edgion_common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
             );
             return forbidden();
         }
@@ -133,17 +133,17 @@ pub async fn authz_layer(State(authorizer): State<Arc<Authorizer>>, req: Request
         // NEVER as a metric label (unbounded cardinality).
         let (source, provider) = if let Some(ref id) = cli_identity {
             (
-                crate::core::common::observe::fed_metrics::labels::rbac_source::CLI_TOKEN,
+                edgion_common::observe::fed_metrics::labels::rbac_source::CLI_TOKEN,
                 id.name.as_str(),
             )
         } else {
             (
-                crate::core::common::observe::fed_metrics::labels::rbac_source::CENTER,
+                edgion_common::observe::fed_metrics::labels::rbac_source::CENTER,
                 "center",
             )
         };
 
-        crate::core::common::observe::fed_metrics::record_rbac_denied(verb.as_str(), kind_label, source);
+        edgion_common::observe::fed_metrics::record_rbac_denied(verb.as_str(), kind_label, source);
 
         // Structured log: classified verb/kind + matched template + identity.
         // `token_name` is a log field only (never a metric label).
@@ -241,14 +241,14 @@ pub(crate) async fn assign_superuser_if_no_role(mut req: Request<Body>, next: Ne
     // AuthBypass source without a Role is also caught.
     if req
         .extensions()
-        .get::<crate::core::common::unified_auth::AuthBypass>()
+        .get::<edgion_common::unified_auth::AuthBypass>()
         .is_some()
     {
         // Emit metric so this bug path is observable.
-        crate::core::common::observe::fed_metrics::record_rbac_denied(
+        edgion_common::observe::fed_metrics::record_rbac_denied(
             "unknown",
             "unknown",
-            crate::core::common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
+            edgion_common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
         );
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
     }
@@ -258,7 +258,7 @@ pub(crate) async fn assign_superuser_if_no_role(mut req: Request<Body>, next: Ne
     // unified_auth via skip_paths carries no claims and must NOT be treated as admin.
     if req
         .extensions()
-        .get::<crate::core::common::unified_auth::UnifiedAuthClaims>()
+        .get::<edgion_common::unified_auth::UnifiedAuthClaims>()
         .is_some()
     {
         req.extensions_mut()
@@ -268,10 +268,10 @@ pub(crate) async fn assign_superuser_if_no_role(mut req: Request<Body>, next: Ne
 
     // Case 4: no Role, no AuthBypass, no claims — unauthenticated (skip_paths bypass on a
     // business route). Fail closed and make the bug path observable.
-    crate::core::common::observe::fed_metrics::record_rbac_denied(
+    edgion_common::observe::fed_metrics::record_rbac_denied(
         "unknown",
         "unknown",
-        crate::core::common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
+        edgion_common::observe::fed_metrics::labels::rbac_source::UNKNOWN,
     );
     (StatusCode::FORBIDDEN, "Forbidden").into_response()
 }
@@ -284,8 +284,8 @@ mod tests {
     use std::sync::Arc;
     use tower::ServiceExt;
 
-    use crate::core::common::config::{FedAllowRule, FedRbacConfig};
     use crate::core::controller::authz::{Authorizer, CenterPolicy, Role};
+    use edgion_common::config::{FedAllowRule, FedRbacConfig};
 
     /// Build a test router that:
     /// 1. Has an outer layer that inserts the given `Role` into request extensions
@@ -386,7 +386,7 @@ mod tests {
     /// returns 200.
     #[tokio::test]
     async fn assign_layer_inserts_superuser_when_no_role() {
-        use crate::core::common::unified_auth::{AuthProvider, UnifiedAuthClaims};
+        use edgion_common::unified_auth::{AuthProvider, UnifiedAuthClaims};
 
         // Build a router that wires the two layers in the same order as serve_with_shutdown:
         //   authz_layer first (innermost route_layer), then assign_superuser on top (outermost).
@@ -475,7 +475,7 @@ mod tests {
     /// (c) `AuthBypass` present but no Role (bug path) → 403, never Superuser
     #[tokio::test]
     async fn cli_role_kept_admin_gets_superuser_bypass_without_role_403() {
-        use crate::core::common::unified_auth::{AuthBypass, AuthProvider, UnifiedAuthClaims};
+        use edgion_common::unified_auth::{AuthBypass, AuthProvider, UnifiedAuthClaims};
 
         // Helper: build a router with:
         //   assign_superuser_if_no_role (outermost route_layer) → authz_layer (innermost)
@@ -617,10 +617,10 @@ mod tests {
     /// matching the wiring in `serve_with_shutdown` exactly.
     #[tokio::test]
     async fn e2e_cli_token_granted_denied_and_no_token() {
-        use crate::core::common::config::{FedAllowRule, FedRbacConfig};
-        use crate::core::common::local_auth::LocalAuthConfig;
         use crate::core::controller::api::create_admin_router;
         use crate::core::controller::authz::{sha256_hex, CenterPolicy, CliTokenEntry};
+        use edgion_common::config::{FedAllowRule, FedRbacConfig};
+        use edgion_common::local_auth::LocalAuthConfig;
 
         // ── Setup: build a real Authorizer with one cli token that can list GatewayClass.
         // GatewayClass is cluster-scoped, matching /api/v1/cluster/{kind}.
@@ -666,7 +666,7 @@ mod tests {
                     .expect("ConfMgr::create"),
             );
             let schema_validator = Arc::new(SchemaValidator::empty());
-            let (tx, _rx) = tokio::sync::watch::channel(crate::core::common::config::CenterClientConfig::default());
+            let (tx, _rx) = tokio::sync::watch::channel(edgion_common::config::CenterClientConfig::default());
             create_admin_router(conf_mgr, schema_validator, None, az.clone(), tx)
         };
 
@@ -684,10 +684,10 @@ mod tests {
             ..LocalAuthConfig::default()
         };
         let auth_state =
-            crate::core::common::unified_auth::UnifiedAuthState::from_configs(None, Some(&local_cfg), true, "e2e_test")
+            edgion_common::unified_auth::UnifiedAuthState::from_configs(None, Some(&local_cfg), true, "e2e_test")
                 .expect("auth state");
 
-        let composed = crate::core::common::api::compose_admin_routes(business, auth_state, true);
+        let composed = edgion_common::api::compose_admin_routes(business, auth_state, true);
 
         // Wrap with cli-pre as the outermost layer (matching serve_with_shutdown).
         let app: Router = composed.layer(axum::middleware::from_fn_with_state(

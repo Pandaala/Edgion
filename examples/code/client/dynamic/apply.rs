@@ -12,10 +12,10 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 
-use edgion::core::ctl::cli::client::EdgionClient;
-use edgion::core::ctl::cli::commands::apply::apply;
-use edgion::core::ctl::cli::commands::delete::delete;
-use edgion::core::ctl::cli::TargetType;
+use edgion_cli::cli::client::EdgionClient;
+use edgion_cli::cli::commands::apply::apply;
+use edgion_cli::cli::commands::delete::delete;
+use edgion_cli::cli::TargetType;
 
 /// Build an EdgionClient targeting the Controller (ConfCenter).
 pub fn build_client(controller_url: &str) -> Result<EdgionClient> {

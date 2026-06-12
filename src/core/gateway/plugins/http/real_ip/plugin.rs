@@ -6,9 +6,9 @@
 use async_trait::async_trait;
 use std::net::{IpAddr, SocketAddr};
 
-use crate::core::common::utils::RealIpExtractor;
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use edgion_common::utils::RealIpExtractor;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::RealIpConfig;
 

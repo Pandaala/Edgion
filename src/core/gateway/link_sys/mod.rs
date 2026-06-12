@@ -18,7 +18,7 @@ pub mod runtime;
 // `LinkSysHealth` type from their original paths so existing
 // `gateway::link_sys::{credential, tls, health, lifecycle, LinkSysHealth}` call
 // sites keep resolving without churn.
-pub use crate::core::common::link::{credential, health, lifecycle, tls, LinkSysHealth};
+pub use edgion_common::link::{credential, health, lifecycle, tls, LinkSysHealth};
 
 pub use providers::webhook::{
     get_webhook_call_handle, WebhookCallError, WebhookCallHandle, WebhookCallRequest, WebhookCallResult,

@@ -104,9 +104,10 @@ main() {
         exit 1
     fi
     
-    # Build edgion-cli
+    # Build edgion-cli (now its own workspace crate — needs -p to disambiguate
+    # the package from the equally-named binary).
     log_section "Build edgion-cli"
-    if ! build_binary "edgion-cli" "--bin edgion-cli"; then
+    if ! build_binary "edgion-cli" "-p edgion-cli --bin edgion-cli"; then
         log_error "Build failed! Exiting..."
         exit 1
     fi

@@ -25,7 +25,7 @@ use tokio::sync::{mpsc, RwLock};
 
 use super::event::EtcdEvent;
 use crate::core::controller::conf_mgr::sync_runtime::ShutdownSignal;
-use crate::core::common::link::providers::etcd::EtcdLinkClient;
+use edgion_common::link::providers::etcd::EtcdLinkClient;
 
 /// Sender type for per-kind event channels.
 pub type KindEventSender = mpsc::Sender<EtcdEvent>;

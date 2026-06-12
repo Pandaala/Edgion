@@ -15,7 +15,7 @@ When a review reports "Edgion permits an unsafe mode somewhere (`skip_tls`, `All
 
 1. **Metric name**: `edgion_system_error_state` (gauge; value is always `1` when the condition is active; only resets on process restart)
 2. **Labels**:
-   - `component`: reporting subject (defined in `src/core/common/observe/system_metrics.rs::components`)
+   - `component`: reporting subject (defined in `edgion-common/src/observe/system_metrics.rs::components`)
      - Currently: `conf_sync_client`, `conf_sync_server`, `fed_sync_client`, `fed_sync_server`
    - `reason`: degradation condition type (defined in `system_metrics.rs::reasons`)
      - Currently: `skip_tls`, `plaintext_default`, `peer_identity_self_check`
@@ -41,7 +41,7 @@ When a review reports "Edgion permits an unsafe mode somewhere (`skip_tls`, `All
 Decide in the following order:
 
 1. **Is the metric already reported?**
-   - Check whether `src/core/common/observe/system_metrics.rs::components` covers the report point
+   - Check whether `edgion-common/src/observe/system_metrics.rs::components` covers the report point
    - Check whether `system_metrics.rs::reasons` covers this degradation type
 2. **Does it match the "applicable" scenarios** (see above)?
 3. All three are yes → point to this file + `tasks/security-audit/04-admin-api.md` M2 decision and close
@@ -57,7 +57,7 @@ Decide in the following order:
 
 - Decision date: 2026-04-22
 - Decision source: `tasks/security-audit/04-admin-api.md` M2 (gRPC `skip_tls=true` plaintext connection)
-- Implementation file: `src/core/common/observe/system_metrics.rs`
+- Implementation file: `edgion-common/src/observe/system_metrics.rs`
 - First-batch covered sites: 5 `skip_tls=true` branches (Gateway / Controller / Center)
 - Typical Alertmanager rule (configured on the operator side, not built into Edgion):
   ```yaml

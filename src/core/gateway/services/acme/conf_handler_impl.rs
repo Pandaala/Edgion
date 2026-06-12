@@ -4,7 +4,7 @@
 //! active challenge tokens into the AcmeChallengeStore.
 
 use super::challenge_store::get_global_challenge_store;
-use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
+use edgion_common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use edgion_resources::resources::edgion_acme::EdgionAcme;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

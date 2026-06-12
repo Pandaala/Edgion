@@ -80,7 +80,7 @@ N_backend / N_route depend on cluster scale; in production, start with the defau
 
 ### Federation Metrics (Center + Controller)
 
-All Federation baseline metrics are exposed under the `edgion_fed_` prefix. Definitions and helpers are in `src/core/common/observe/fed_metrics.rs`. All label value domains are compile-time constants (see the `labels` submodule in the same file).
+All Federation baseline metrics are exposed under the `edgion_fed_` prefix. Definitions and helpers are in `edgion-common/src/observe/fed_metrics.rs`. All label value domains are compile-time constants (see the `labels` submodule in the same file).
 
 | Metric | Type | Labels | Source Process |
 |--------|------|--------|----------------|

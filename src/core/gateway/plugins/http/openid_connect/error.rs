@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use jsonwebtoken::errors::ErrorKind;
 
-use crate::core::common::jwt_common::map_jwt_decode_error;
+use edgion_common::jwt_common::map_jwt_decode_error;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum OidcVerifyError {

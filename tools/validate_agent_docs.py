@@ -38,7 +38,11 @@ FENCED_CODE_RE = re.compile(r"(?ms)^([ \t]*)(`{3,}|~{3,}).*?\n.*?^\1\2\s*$")
 INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
 NAME_RE = re.compile(r"(?m)^name:\s*.+$")
 DESC_RE = re.compile(r"(?m)^description:\s*.+$")
-SOURCE_PATH_RE = re.compile(r"\bsrc/[a-zA-Z0-9_/]+\.rs\b")
+# Matches a Rust source path, optionally prefixed by a workspace-crate dir
+# (e.g. ``edgion-cli/src/bin/edgion_ctl.rs``). The optional ``crate`` group lets
+# the validator resolve crate-prefixed paths instead of mis-parsing the inner
+# ``src/...`` portion (whose first segment may collide with a root ``src/`` dir).
+SOURCE_PATH_RE = re.compile(r"\b(?:(?P<crate>[a-zA-Z0-9_-]+)/)?(?P<src>src/[a-zA-Z0-9_/]+\.rs)\b")
 
 
 def iter_target_files() -> list[Path]:
@@ -111,10 +115,20 @@ def validate_source_paths(files: list[Path]) -> list[str]:
             file.read_text(encoding="utf-8").splitlines(), 1
         ):
             for match in SOURCE_PATH_RE.finditer(line):
-                path_part = match.group()
-                first_seg = path_part[len("src/"):].split("/", 1)[0]
-                if first_seg not in valid_tops:
-                    continue
+                crate = match.group("crate")
+                src_part = match.group("src")
+                if crate is not None and (REPO_ROOT / crate).is_dir():
+                    # Crate-prefixed workspace path (e.g. ``edgion-cli/src/...``):
+                    # resolve the full path directly.
+                    path_part = f"{crate}/{src_part}"
+                else:
+                    # Bare ``src/...`` reference into the root crate. Filter out
+                    # paths whose first segment is not a real top-level entry so
+                    # external-crate citations don't false-positive.
+                    first_seg = src_part[len("src/"):].split("/", 1)[0]
+                    if first_seg not in valid_tops:
+                        continue
+                    path_part = src_part
                 key = (file, path_part)
                 if key in seen:
                     continue

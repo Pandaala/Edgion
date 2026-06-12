@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::common::http_util::fetch_json_limited;
+use edgion_common::http_util::fetch_json_limited;
 
 impl OpenidConnect {
     pub(super) fn is_header_value_safe(value: &str) -> bool {

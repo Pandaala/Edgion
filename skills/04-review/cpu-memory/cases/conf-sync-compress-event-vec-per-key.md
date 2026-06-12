@@ -17,7 +17,7 @@ Fix suggestions of the form "collapse `Vec<ResourceChange>` to a single `has_add
 
 **1. The "unbounded memory / OOM" framing is inaccurate.**
 
-`ResourceChange` is a 6-variant `Copy` enum that fits in 1 byte (`src/core/common/conf_sync/traits.rs:5-19`). Even 1000 events on a single key is ~1 KB plus one `Vec` heap allocation — negligible. The `HashMap` key count is bounded by the number of distinct resource names, which is governed by the controller's event batch size. There is no realistic OOM surface.
+`ResourceChange` is a 6-variant `Copy` enum that fits in 1 byte (`edgion-common/src/conf_sync/traits.rs:5-19`). Even 1000 events on a single key is ~1 KB plus one `Vec` heap allocation — negligible. The `HashMap` key count is bounded by the number of distinct resource names, which is governed by the controller's event batch size. There is no realistic OOM surface.
 
 **2. It is a control-plane path, not the request hot path.**
 
@@ -45,5 +45,5 @@ Re-open this decision only if:
 
 - F-012 (`tasks/issues/conf-sync-F012-event-compression-unbounded-vec.md`), Round B verdict: confirmed, OOM overstated, severity → Low; closed won't-fix 2026-05-21.
 - Source: `src/core/gateway/conf_sync/cache_client/cache_data.rs` (`CompressEvent`, `add_event`, `process_compressed_events`).
-- Enum size: `src/core/common/conf_sync/traits.rs:5-19` (`ResourceChange` 1-byte `Copy`).
+- Enum size: `edgion-common/src/conf_sync/traits.rs:5-19` (`ResourceChange` 1-byte `Copy`).
 - Methodology: [cpu-memory/performance-review-methodology.md](../performance-review-methodology.md).

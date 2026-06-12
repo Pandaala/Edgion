@@ -99,7 +99,7 @@ where
     H: ProcessorHandler<K> + 'static,
 {
     // 1. Create ResourceProcessor with capacity from config
-    let capacity = crate::core::common::config::get_cache_capacity(kind);
+    let capacity = edgion_common::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
         kind,
         capacity,
@@ -154,7 +154,7 @@ where
     H: ProcessorHandler<K> + 'static,
 {
     // 1. Create ResourceProcessor with capacity from config
-    let capacity = crate::core::common::config::get_cache_capacity(kind);
+    let capacity = edgion_common::config::get_cache_capacity(kind);
     let processor = Arc::new(ResourceProcessor::new(
         kind,
         capacity,

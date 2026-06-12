@@ -14,9 +14,9 @@
 //! Live-read against `ConfCenter`; cheap because `EdgionPlugins` count is
 //! small. No snapshot infrastructure, no background task.
 
-use crate::core::common::api::ApiResponse;
 use crate::core::controller::api::types::AdminState;
 use axum::{extract::State, http::StatusCode, response::Json};
+use edgion_common::api::ApiResponse;
 use edgion_resources::ResourceKind;
 use serde::Serialize;
 use std::sync::Arc;

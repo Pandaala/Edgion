@@ -132,7 +132,7 @@ pub fn add_http_listener(
 
     // Initialize RealIpExtractor from configuration
     let real_ip_extractor = if let Some(real_ip_config) = &context.edgion_gateway_config.spec.real_ip {
-        match crate::core::common::utils::RealIpExtractor::new(
+        match edgion_common::utils::RealIpExtractor::new(
             &real_ip_config.trusted_ips,
             real_ip_config.real_ip_header.clone(),
             real_ip_config.recursive,

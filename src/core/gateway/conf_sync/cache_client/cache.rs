@@ -1,6 +1,6 @@
 use super::cache_data::CacheData;
-use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
-use crate::core::common::conf_sync::types::ListData;
+use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
+use edgion_common::conf_sync::types::ListData;
 use edgion_resources::ResourceMeta;
 use kube::Resource;
 use parking_lot::RwLock;
@@ -96,10 +96,8 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     }
 
     /// Set the configuration processor for this cache
-    pub fn set_conf_processor(
-        &self,
-        processor: Box<dyn crate::core::common::conf_sync::traits::ConfHandler<T> + Send + Sync>,
-    ) where
+    pub fn set_conf_processor(&self, processor: Box<dyn edgion_common::conf_sync::traits::ConfHandler<T> + Send + Sync>)
+    where
         T: Clone + ResourceMeta,
     {
         let mut cache = self.cache_data.write();
@@ -180,7 +178,7 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         let mut cache = self.cache_data.write();
         cache.add_compress_event(
             key.to_string(),
-            crate::core::common::conf_sync::traits::ResourceChange::EventUpdate,
+            edgion_common::conf_sync::traits::ResourceChange::EventUpdate,
         );
 
         tracing::info!(

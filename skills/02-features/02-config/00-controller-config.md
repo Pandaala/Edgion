@@ -10,7 +10,7 @@ description: Full schema for the edgion-controller YAML configuration.
 ## Files to Reference
 
 - Sample configuration: `config/edgion-controller.yaml`
-- Configuration structure: `src/core/common/config/mod.rs`
+- Configuration structure: `edgion-common/src/config/mod.rs`
 - `conf_center` top level: `src/core/controller/conf_mgr/conf_center/config.rs`
 - FileSystem mode: `src/core/controller/conf_mgr/conf_center/file_system/config.rs`
 - Kubernetes mode: `src/core/controller/conf_mgr/conf_center/kubernetes/config.rs`
@@ -195,7 +195,7 @@ CLI special cases:
 
 ## `[auth]` — OIDC Authentication (Admin API)
 
-When enabled, the Admin API requires an OIDC JWT Bearer token. Defined in `src/core/common/auth/config.rs::AdminAuthConfig`, packed by `UnifiedAuthState::from_configs` into the unified auth state, and ultimately mounted via `common::api::compose_admin_routes` with `unified_auth_middleware`.
+When enabled, the Admin API requires an OIDC JWT Bearer token. Defined in `edgion-common/src/auth/config.rs::AdminAuthConfig`, packed by `UnifiedAuthState::from_configs` into the unified auth state, and ultimately mounted via `common::api::compose_admin_routes` with `unified_auth_middleware`.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -343,7 +343,7 @@ center:
 
 Static Bearer tokens that grant role-scoped access to the Controller Admin API. Each entry binds a token to a fine-grained RBAC policy using the same `(verb, kind)` model as `[center].rbac`. Tokens are never stored in plaintext — only their SHA-256 hex digest is persisted. Hot-reloadable.
 
-**Source:** `src/core/common/config/mod.rs` (`CliTokenConfig`).
+**Source:** `edgion-common/src/config/mod.rs` (`CliTokenConfig`).
 
 ### Field Reference
 

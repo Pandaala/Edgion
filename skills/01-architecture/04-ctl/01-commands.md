@@ -252,7 +252,7 @@ edgion-cli gen-certs --output k8s --cert-name primary
 ### Module structure
 
 ```
-src/core/ctl/
+edgion-cli/src/
 ├── certs/
 │   └── mod.rs                # generate_certs() → CertBundle (CA, Server, Client)
 └── cli/
@@ -280,7 +280,7 @@ edgion-cli gen-token
 
 | Module | Path |
 |------|------|
-| Token generation | `src/core/ctl/cli/token.rs` (`gen_token`) |
+| Token generation | `edgion-cli/src/cli/token.rs` (`gen_token`) |
 
 ## login — authentication
 
@@ -299,8 +299,8 @@ The token is saved to `~/.edgion/token` and automatically attached by subsequent
 
 | Module | Path |
 |------|------|
-| CLI auto-authentication logic | `src/core/ctl/cli/auto_auth.rs` |
-| Token file management | `src/core/ctl/cli/token.rs` |
+| CLI auto-authentication logic | `edgion-cli/src/cli/auto_auth.rs` |
+| Token file management | `edgion-cli/src/cli/token.rs` |
 
 ## Auto-authentication (ensure_auth)
 

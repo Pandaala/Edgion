@@ -1,8 +1,8 @@
-use crate::core::common::conf_sync::types::ListData;
 use crate::core::gateway::backends::{create_ep_slice_handler, create_service_handler};
 use crate::core::gateway::conf_sync::cache_client::{ClientCache, DynClientCache};
 use crate::core::gateway::routes::create_route_manager_handler;
 use anyhow::Result;
+use edgion_common::conf_sync::types::ListData;
 use edgion_resources::prelude_resources::*;
 use edgion_resources::resource_defs::get_resource_info;
 use edgion_resources::{all_resource_type_names, GatewayBaseConf, ResourceKind};
@@ -195,7 +195,7 @@ impl ConfigClient {
     /// so adding a new kind without wiring it will cause a compile error.
     pub async fn set_all_grpc_clients(
         &self,
-        client: crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient<tonic::transport::Channel>,
+        client: edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient<tonic::transport::Channel>,
     ) {
         use edgion_resources::resource_defs::all_resource_kind_names;
 

@@ -1,5 +1,5 @@
-use crate::core::common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use crate::core::gateway::link_sys::providers::webhook::manager::configure_webhook_global_max;
+use edgion_common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use edgion_resources::prelude_resources::EdgionGatewayConfig;
 use kube::ResourceExt;
 use parking_lot::RwLock;

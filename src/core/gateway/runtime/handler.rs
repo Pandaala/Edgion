@@ -1,4 +1,3 @@
-use crate::core::common::conf_sync::traits::ConfHandler;
 use crate::core::gateway::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store;
 use crate::core::gateway::routes::grpc::get_global_grpc_route_managers;
 use crate::core::gateway::routes::http::get_global_http_route_managers;
@@ -9,6 +8,7 @@ use crate::core::gateway::runtime::matching::rebuild_gateway_tls_matcher;
 use crate::core::gateway::runtime::store::{
     get_global_gateway_store, get_listener_gateway_info_store, rebuild_listener_gateway_infos,
 };
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::prelude_resources::Gateway;
 use edgion_resources::ListenerKey;
 use kube::ResourceExt;

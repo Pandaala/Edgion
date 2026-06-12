@@ -25,8 +25,8 @@ use std::sync::Arc;
 use axum::{body::Body, extract::State, middleware::Next, response::Response};
 use http::Request;
 
-use crate::core::common::unified_auth::AuthBypass;
 use crate::core::controller::authz::Authorizer;
+use edgion_common::unified_auth::AuthBypass;
 
 /// Audit identity for a cli-token-authenticated request.
 ///
@@ -98,8 +98,8 @@ mod tests {
     use http::{Request, StatusCode};
     use tower::ServiceExt;
 
-    use crate::core::common::config::{FedAllowRule, FedRbacConfig};
     use crate::core::controller::authz::{sha256_hex, Authorizer, CenterPolicy, CliTokenEntry};
+    use edgion_common::config::{FedAllowRule, FedRbacConfig};
 
     /// Build an `Authorizer` with a single cli token registered under `tok`.
     fn az_with_token(tok: &str) -> Arc<Authorizer> {
@@ -134,7 +134,7 @@ mod tests {
                     let has_role = req.extensions().get::<crate::core::controller::authz::Role>().is_some();
                     let has_bypass = req
                         .extensions()
-                        .get::<crate::core::common::unified_auth::AuthBypass>()
+                        .get::<edgion_common::unified_auth::AuthBypass>()
                         .is_some();
                     let has_id = req.extensions().get::<CliTokenIdentity>().is_some();
                     format!("{has_role}-{has_bypass}-{has_id}")
@@ -167,7 +167,7 @@ mod tests {
                 "/probe",
                 get(|req: Request<Body>| async move {
                     req.extensions()
-                        .get::<crate::core::common::unified_auth::AuthBypass>()
+                        .get::<edgion_common::unified_auth::AuthBypass>()
                         .is_some()
                         .to_string()
                 }),
@@ -201,7 +201,7 @@ mod tests {
                 "/probe",
                 get(|req: Request<Body>| async move {
                     req.extensions()
-                        .get::<crate::core::common::unified_auth::AuthBypass>()
+                        .get::<edgion_common::unified_auth::AuthBypass>()
                         .is_some()
                         .to_string()
                 }),
@@ -236,7 +236,7 @@ mod tests {
                 "/api/v1/auth/me",
                 get(|req: Request<Body>| async move {
                     req.extensions()
-                        .get::<crate::core::common::unified_auth::AuthBypass>()
+                        .get::<edgion_common::unified_auth::AuthBypass>()
                         .is_some()
                         .to_string()
                 }),

@@ -13,11 +13,11 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 
-use crate::core::common::secret::get_secret;
 use crate::core::gateway::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, set_claims_headers,
 };
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use edgion_common::secret::get_secret;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{JweContentEncryption, JweDecryptConfig};
 

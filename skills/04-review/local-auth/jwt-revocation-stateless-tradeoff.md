@@ -64,5 +64,5 @@ Common pattern: **the code refuses to introduce illusory defense infrastructure 
 
 - Decision date: 2026-04-22
 - Decision source: `tasks/security-audit/03-cryptography.md` M11 (Option E — doc-only)
-- Changes this round: `skills/02-features/02-config/03-auth-bootstrap.md` adds a "JWT revocation semantics" section + the doc comment of the `jwt_expiry_hours` field in `src/core/common/local_auth/config.rs` is enhanced. **Zero code behavior change**
+- Changes this round: `skills/02-features/02-config/03-auth-bootstrap.md` adds a "JWT revocation semantics" section + the doc comment of the `jwt_expiry_hours` field in `edgion-common/src/local_auth/config.rs` is enhanced. **Zero code behavior change**
 - Related references: Argo CD's [Self-Signed JWT for Local Account](https://argo-cd.readthedocs.io/en/stable/operator-manual/user-management/#local-users-and-accounts) is the closest industry analog to Edgion's local admin JWT

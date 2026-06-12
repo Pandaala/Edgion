@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
-use crate::core::common::conf_sync::traits::ConfHandler;
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::resources::plugin_metadata::{
     ClusterRegionRouteConfig, GlobalConnectionIpRestrictionData, IpListData, KeyListData, MetaDataEntry,
     PluginMetaData, ServiceRegionRouteConfig,

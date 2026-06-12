@@ -50,7 +50,7 @@ A single Crate (not a workspace) with three `[[bin]]` targets:
 |--------|---------|-----------|------|
 | `edgion-gateway` | `src/bin/edgion_gateway.rs` | Synchronous entry; internally manages its own Tokio + Pingora main loop | Data plane |
 | `edgion-controller` | `src/bin/edgion_controller.rs` | `#[tokio::main(multi_thread)]` | Control plane |
-| `edgion-cli` | `src/bin/edgion_ctl.rs` | `#[tokio::main]` single-threaded | CLI tool |
+| `edgion-cli` | `edgion-cli/src/bin/edgion_ctl.rs` | `#[tokio::main]` single-threaded | CLI tool |
 
 > The federation Center binary (`edgion-center`) has been extracted to the separate EdgionCenter repository.
 

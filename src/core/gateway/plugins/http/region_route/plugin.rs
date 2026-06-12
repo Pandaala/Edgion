@@ -15,11 +15,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::core::common::utils::net::host_without_port;
 use crate::core::gateway::plugins::runtime::log::{la, sensitive};
 use crate::core::gateway::plugins::runtime::plugin_metadata::get_global_plugin_metadata_store;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::core::gateway::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
+use edgion_common::utils::net::host_without_port;
 use edgion_resources::common::KeyGet;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{HashAlgorithm, RegionDef, RegionRouteConfig, RouteRule};

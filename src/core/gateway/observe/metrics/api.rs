@@ -1,7 +1,7 @@
 //! Gateway-specific wrappers around the shared `common::observe::metrics_api`.
 //!
 //! The generic recorder installation and `/metrics` handler live in
-//! `crate::core::common::observe::metrics_api`. This module wires Gateway's
+//! `edgion_common::observe::metrics_api`. This module wires Gateway's
 //! `MetricsConfig` (custom histogram buckets, cold-series eviction) into
 //! that primitive and exposes a standalone `serve`/`serve_with_shutdown`
 //! suitable for Gateway's dedicated metrics port.
@@ -9,10 +9,10 @@
 use axum::Router;
 use metrics_exporter_prometheus::Matcher;
 
-use crate::core::common::observe::metrics_api::{
+use crate::core::gateway::cli::config::MetricsConfig;
+use edgion_common::observe::metrics_api::{
     create_metrics_router as common_create_metrics_router, install_global_recorder, recorder_installed, RecorderConfig,
 };
-use crate::core::gateway::cli::config::MetricsConfig;
 
 /// Initialize the Prometheus metrics exporter with Gateway configuration.
 ///

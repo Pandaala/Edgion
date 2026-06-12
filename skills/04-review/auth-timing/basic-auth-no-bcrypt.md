@@ -25,7 +25,7 @@ Any other prefix returns `false`. Plaintext passwords in Secrets are auto-hashed
 
 ## What `local_auth` is — and isn't
 
-`src/core/common/local_auth/` (Controller admin auth, management plane) **still uses bcrypt** for the admin password. That is correct and unrelated: it computes the hash once at startup and verifies on rare admin-login requests, not on every data-plane request. The `bcrypt = "0.18"` Cargo dep is retained for `local_auth` only.
+`edgion-common/src/local_auth/` (Controller admin auth, management plane) **still uses bcrypt** for the admin password. That is correct and unrelated: it computes the hash once at startup and verifies on rare admin-login requests, not on every data-plane request. The `bcrypt = "0.18"` Cargo dep is retained for `local_auth` only.
 
 ## Review-finding handling
 

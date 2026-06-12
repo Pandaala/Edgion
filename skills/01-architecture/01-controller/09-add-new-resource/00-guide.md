@@ -64,7 +64,7 @@ Always update:
 
 - `edgion-resources/src/resources/<resource>.rs` or `edgion-resources/src/resources/<resource>/mod.rs`
 - `edgion-resources/src/resources/mod.rs`
-- `edgion-resources/src/mod.rs` only if you introduce a new export pattern beyond the normal `resources::*` flow
+- `edgion-resources/src/lib.rs` only if you introduce a new export pattern beyond the normal `resources::*` flow
 
 Notes:
 

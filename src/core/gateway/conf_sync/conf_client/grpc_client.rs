@@ -1,7 +1,7 @@
-use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
-use crate::core::common::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
-use crate::core::common::config::ConfSyncSecurityConfig;
 use crate::core::gateway::conf_sync::conf_client::ConfigClient;
+use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
+use edgion_common::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
+use edgion_common::config::ConfSyncSecurityConfig;
 use edgion_resources::rate_limit_config::set_gateway_instance_count;
 use edgion_resources::ResourceKind;
 use std::sync::Arc;
@@ -63,12 +63,12 @@ impl ConfigSyncClient {
                     component = "grpc_client",
                     "conf_sync mTLS skip_tls=true: connecting WITHOUT TLS. INSECURE, emergency use only!"
                 );
-                crate::core::common::observe::system_metrics::mark_system_error(
-                    crate::core::common::observe::system_metrics::components::CONF_SYNC_CLIENT,
-                    crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
+                edgion_common::observe::system_metrics::mark_system_error(
+                    edgion_common::observe::system_metrics::components::CONF_SYNC_CLIENT,
+                    edgion_common::observe::system_metrics::reasons::SKIP_TLS,
                 );
             } else {
-                let client_tls = crate::core::common::grpc_tls::load_client_tls(tls).await?;
+                let client_tls = edgion_common::grpc_tls::load_client_tls(tls).await?;
                 endpoint = endpoint
                     .tls_config(client_tls)
                     .map_err(|e| anyhow::anyhow!("Failed to configure client TLS: {}", e))?;

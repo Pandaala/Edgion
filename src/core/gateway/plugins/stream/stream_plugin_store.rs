@@ -13,7 +13,7 @@ use std::sync::LazyLock;
 
 use super::stream_plugin_runtime::StreamPluginRuntime;
 use super::tls_route::TlsRoutePluginRuntime;
-use crate::core::common::conf_sync::traits::ConfHandler;
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::resources::EdgionStreamPlugins;
 
 static GLOBAL_STREAM_PLUGIN_STORE: LazyLock<Arc<StreamPluginStore>> =

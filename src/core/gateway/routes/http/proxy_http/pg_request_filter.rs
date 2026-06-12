@@ -1,5 +1,4 @@
 use super::{resolve_global_plugins, resolve_route_ext_refs, EdgionHttpProxy};
-use crate::core::common::utils::net::host_without_port;
 use crate::core::gateway::ctx::NormalizedHostname;
 use crate::core::gateway::plugins::http::get_global_plugin_store;
 use crate::core::gateway::routes::grpc::{parse_grpc_timeout, try_match_grpc_route};
@@ -12,6 +11,7 @@ use crate::core::gateway::{
     terminate_with_fallback,
 };
 use crate::core::gateway::{EdgionHttpContext, TlsConnId, TlsConnMeta};
+use edgion_common::utils::net::host_without_port;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::get_path_normalization_config;
 use edgion_resources::path_normalization::{

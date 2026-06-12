@@ -1,9 +1,9 @@
-use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::udp::route_unit::UdpRouteUnit;
 use crate::core::gateway::routes::udp::routes_mgr::{
     get_global_udp_route_managers, resolved_listeners_for_route, GlobalUdpRouteManagers,
 };
+use edgion_common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
 use edgion_resources::UDPRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -101,7 +101,7 @@ impl GlobalUdpRouteManagers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::common::conf_sync::traits::ConfHandler;
+    use edgion_common::conf_sync::traits::ConfHandler;
     use edgion_resources::resources::common::ParentReference;
     use edgion_resources::resources::udp_route::*;
     use edgion_resources::ListenerKey;

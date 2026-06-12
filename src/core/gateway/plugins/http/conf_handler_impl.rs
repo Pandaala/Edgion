@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::{compile_plugins, get_global_plugin_store, CompiledPlugins, PluginStore};
-use crate::core::common::conf_sync::traits::ConfHandler;
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::resources::EdgionPlugins;
 
 /// Create a PluginStore handler for registration with ConfigClient

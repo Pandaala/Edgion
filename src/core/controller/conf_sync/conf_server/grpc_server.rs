@@ -12,13 +12,13 @@ const HTTP2_KEEPALIVE_INTERVAL_SECS: u64 = 10;
 /// HTTP/2 keepalive timeout — how long to wait for PING ACK before treating connection as dead (seconds).
 const HTTP2_KEEPALIVE_TIMEOUT_SECS: u64 = 5;
 
-use crate::core::common::conf_sync::proto::{
+use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
+use edgion_common::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, ServerMetaEvent, WatchRequest, WatchResponse,
     WatchServerMetaRequest,
 };
-use crate::core::common::config::ConfSyncSecurityConfig;
-use crate::core::controller::conf_mgr::sync_runtime::metrics::reload_metrics;
+use edgion_common::config::ConfSyncSecurityConfig;
 use edgion_resources::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
 use super::ConfigSyncServer;
@@ -74,12 +74,12 @@ impl ConfigSyncGrpcServer {
                     component = "grpc_server",
                     "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
                 );
-                crate::core::common::observe::system_metrics::mark_system_error(
-                    crate::core::common::observe::system_metrics::components::CONF_SYNC_SERVER,
-                    crate::core::common::observe::system_metrics::reasons::SKIP_TLS,
+                edgion_common::observe::system_metrics::mark_system_error(
+                    edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
+                    edgion_common::observe::system_metrics::reasons::SKIP_TLS,
                 );
             } else {
-                let server_tls = crate::core::common::grpc_tls::load_server_tls(tls).await?;
+                let server_tls = edgion_common::grpc_tls::load_server_tls(tls).await?;
                 builder = builder.tls_config(server_tls)?;
                 tracing::info!(component = "grpc_server", "conf_sync mTLS enabled for gRPC server");
             }

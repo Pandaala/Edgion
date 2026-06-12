@@ -26,7 +26,7 @@ If any of the three is missing, it is a "based on line count / looks similar"-dr
 - **Premise wrong**: the `secret_object_ref` / `secret_slot` / `tls` submodules are **shared by all resource types** including `gateway.rs`, `edgion_acme`, `EdgionTls`, `EdgionPlugins`, `link_sys`; not LinkSys-only.
 - **Verdict**: false positive. 124 lines is also far below any threshold worth splitting.
 
-### (b) `edgion-resources/src/mod.rs:53` `pub use self::resources::*` "new resources automatically become public API"
+### (b) `edgion-resources/src/lib.rs:53` `pub use self::resources::*` "new resources automatically become public API"
 
 - **Premise does not apply**: Edgion is a binary project (Controller / Gateway / edgion-cli / Center); does not publish a lib; there is no concept of "stable public API boundary".
 - **Verdict**: not applicable. Glob re-export inside a binary is a reasonable choice.
@@ -46,7 +46,7 @@ If any of the three is missing, it is a "based on line count / looks similar"-dr
 - **Cites a non-existent API**: `required_cache_names` did not appear in repo grep; the file also had no `is_ready` function; its single responsibility was `GatewayListenerConfig` query logic. The whole file has since been removed as orphan code (runtime-F003), which retroactively confirms the original finding's premise as wrong on yet another axis.
 - **Verdict**: finding's premise is wrong; close.
 
-### (f) `src/core/common/unified_auth/mod.rs` (808 lines = 559 non-test + 249 test) "should split into state/middleware/oidc/local"
+### (f) `edgion-common/src/unified_auth/mod.rs` (808 lines = 559 non-test + 249 test) "should split into state/middleware/oidc/local"
 
 - **Story line is complete**: types → state construction → middleware main flow → two validators → helpers; linearly readable, no duplication, no coupling leak.
 - **Splitting is negative-value**: `try_oidc_validation` / `try_local_validation` are thin adapters over `AuthMiddlewareState` / `LocalAuthState` and are not externally referenced; after splitting, readers must jump among 3 files to understand one request.

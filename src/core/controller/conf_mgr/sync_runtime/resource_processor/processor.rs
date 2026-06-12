@@ -38,11 +38,11 @@ pub enum WorkItemResult<K> {
     Skipped,
 }
 
-use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::controller::conf_mgr::conf_center::MetadataFilterConfig;
 use crate::core::controller::conf_mgr::ControllerRuntime;
 use crate::core::controller::conf_sync::conf_server::WatchObj;
 use crate::core::controller::conf_sync::ServerCache;
+use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use edgion_resources::ResourceMeta;
 
 use super::context::HandlerContext;
@@ -350,7 +350,7 @@ where
     pub async fn on_init_apply(&self, obj: K, existing_status_json: Option<String>) -> WorkItemResult<K> {
         // Reconstruct the resource_version floor from persisted rv before init proceeds.
         let rv = edgion_resources::resource::meta::extract_version(obj.meta());
-        crate::core::common::utils::bump_resource_version_floor(rv);
+        edgion_common::utils::bump_resource_version_floor(rv);
 
         let ctx = self.create_context(TriggerChain::default());
         self.process_resource(obj, &ctx, true, existing_status_json).await
@@ -494,7 +494,7 @@ where
         let rv = edgion_resources::resource::meta::extract_version(obj.meta());
 
         // Generate sv early so the entire processing span carries it for telemetry correlation
-        let sv = crate::core::common::utils::next_resource_version();
+        let sv = edgion_common::utils::next_resource_version();
         let span = tracing::info_span!(
             "process_resource",
             component = "resource_processor",
@@ -657,7 +657,7 @@ where
     /// Process resource deletion
     async fn process_delete(&self, cached_obj: &K, ctx: &HandlerContext) {
         let key = make_resource_key(cached_obj);
-        let sv = crate::core::common::utils::next_resource_version();
+        let sv = edgion_common::utils::next_resource_version();
         let span = tracing::info_span!(
             "process_delete",
             component = "resource_processor",
@@ -880,7 +880,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_processor_init_apply_bumps_resource_version_floor() {
-        use crate::core::common::utils::next_resource_version;
+        use edgion_common::utils::next_resource_version;
 
         let handler = Arc::new(TestHandler);
         let processor = ResourceProcessor::<TestResource>::new(

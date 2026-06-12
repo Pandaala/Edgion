@@ -1,5 +1,5 @@
-use edgion::core::common::startup::{init_crypto, install_panic_hook};
 use edgion::EdgionControllerCli;
+use edgion_common::startup::{init_crypto, install_panic_hook};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {

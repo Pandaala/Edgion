@@ -9,7 +9,7 @@ Controller and Gateway sync configuration via the `ConfigSync` gRPC service. Aft
 
 ## Proto definition
 
-The proto file lives at `src/core/common/conf_sync/proto/config_sync.proto`:
+The proto file lives at `edgion-common/src/conf_sync/proto/config_sync.proto`:
 
 ```protobuf
 service ConfigSync {
@@ -85,7 +85,7 @@ The version-tracking mechanism guarantees:
 
 ## Resource change events
 
-Resource changes are represented by the `ResourceChange` enum, defined in `src/core/common/conf_sync/traits.rs`:
+Resource changes are represented by the `ResourceChange` enum, defined in `edgion-common/src/conf_sync/traits.rs`:
 
 | Event type | Phase | Description |
 |---------|------|------|
@@ -121,7 +121,7 @@ Both gRPC channels support optional mTLS encryption:
 ### Configuration structure
 
 ```rust
-// src/core/common/config/mod.rs
+// edgion-common/src/config/mod.rs
 pub struct ConfSyncSecurityConfig {
     pub active: Option<String>,          // Name of the active certificate set
     pub certs: Vec<ConfSyncTlsConfig>,   // Multi-cert sets ([[...certs]] array)
@@ -206,7 +206,7 @@ center:
 
 ### Shared TLS loading layer
 
-TLS file reading logic is centralized in `src/core/common/grpc_tls.rs`:
+TLS file reading logic is centralized in `edgion-common/src/grpc_tls.rs`:
 
 | Function | Purpose |
 |------|------|
@@ -237,8 +237,8 @@ The `edgion-cli gen-certs` subcommand uses rcgen to generate a complete certific
 - **File mode**: certificates are written to the `<output_dir>/<cert-name>/` subdirectory, supporting multiple certificate sets coexisting
 - **K8s mode**: Secrets are named `{prefix}-controller-tls-{cert-name}` / `{prefix}-gateway-tls-{cert-name}`
 
-Certificate generation logic: `src/core/ctl/certs/mod.rs`
-Subcommand entry: `src/core/ctl/cli/commands/gen_certs.rs`
+Certificate generation logic: `edgion-cli/src/certs/mod.rs`
+Subcommand entry: `edgion-cli/src/cli/commands/gen_certs.rs`
 
 ### Integration testing
 
@@ -248,16 +248,16 @@ Subcommand entry: `src/core/ctl/cli/commands/gen_certs.rs`
 
 | Module | Path | Responsibility |
 |------|------|------|
-| **common/conf_sync** | `src/core/common/conf_sync/` | Proto definitions, shared traits (`CacheEventDispatch`, `ConfHandler`, `ResourceChange`), shared event/list/Watch types |
-| **common/config** | `src/core/common/config/mod.rs` | `ConfSyncSecurityConfig`, `ConfSyncTlsConfig` configuration structs |
+| **common/conf_sync** | `edgion-common/src/conf_sync/` | Proto definitions, shared traits (`CacheEventDispatch`, `ConfHandler`, `ResourceChange`), shared event/list/Watch types |
+| **common/config** | `edgion-common/src/config/mod.rs` | `ConfSyncSecurityConfig`, `ConfSyncTlsConfig` configuration structs |
 | **controller/conf_sync** | `src/core/controller/conf_sync/` | Server-side implementation: `ConfigSyncServer`, `ConfigSyncGrpcServer` (with mTLS), `ClientRegistry`, `WatchObj` trait |
 | **gateway/conf_sync** | `src/core/gateway/conf_sync/` | Client-side implementation: `ConfigSyncClient` (with mTLS), `ClientCache<T>`, `CacheData`, event_dispatch |
-| **ctl/certs** | `src/core/ctl/certs/mod.rs` | Certificate generation (rcgen): `generate_certs()` → `CertBundle` |
+| **ctl/certs** | `edgion-cli/src/certs/mod.rs` | Certificate generation (rcgen): `generate_certs()` → `CertBundle` |
 
 ### Key files
 
-- `src/core/common/conf_sync/proto/config_sync.proto` — Proto definitions
-- `src/core/common/conf_sync/traits.rs` — `ResourceChange`, `CacheEventDispatch`, `ConfHandler`
+- `edgion-common/src/conf_sync/proto/config_sync.proto` — Proto definitions
+- `edgion-common/src/conf_sync/traits.rs` — `ResourceChange`, `CacheEventDispatch`, `ConfHandler`
 - `src/core/controller/conf_sync/conf_server/config_sync_server.rs` — `ConfigSyncServer`
 - `src/core/controller/conf_sync/conf_server/grpc_server.rs` — `ConfigSyncGrpcServer`, `ConfigSyncServerProvider`
 - `src/core/controller/conf_sync/conf_server/client_registry.rs` — `ClientRegistry`

@@ -15,7 +15,7 @@ Fix suggestions of the form "always emit `Secure` unconditionally" or "auto-deri
 
 **1. Configurable, default-secure**
 
-Both `login_handler` and `logout_handler` (`src/core/common/local_auth/handlers.rs`) build the cookie with a conditional `Secure` segment driven by `LocalAuthState.cookie_secure` (sourced from `LocalAuthConfig.cookie_secure`, default `true`). The secure-by-default behavior is preserved; operators terminating TLS upstream (Ingress/sidecar) or running mesh-internal plain HTTP set `local_auth.cookie_secure = false`.
+Both `login_handler` and `logout_handler` (`edgion-common/src/local_auth/handlers.rs`) build the cookie with a conditional `Secure` segment driven by `LocalAuthState.cookie_secure` (sourced from `LocalAuthConfig.cookie_secure`, default `true`). The secure-by-default behavior is preserved; operators terminating TLS upstream (Ingress/sidecar) or running mesh-internal plain HTTP set `local_auth.cookie_secure = false`.
 
 **2. Logout reads the same flag**
 
@@ -40,7 +40,7 @@ Re-open only if:
 ## Reference Cases
 
 - common-center-02 (review-2), closed 2026-05-24
-- Config field: `src/core/common/local_auth/config.rs` (`cookie_secure`, `default_cookie_secure()`)
-- Handlers: `src/core/common/local_auth/handlers.rs` (`login_handler`, `logout_handler`)
+- Config field: `edgion-common/src/local_auth/config.rs` (`cookie_secure`, `default_cookie_secure()`)
+- Handlers: `edgion-common/src/local_auth/handlers.rs` (`login_handler`, `logout_handler`)
 - Docs: `docs/en/ops-guide/configuration/controller-config.md` → `[local_auth]`
 - Related: [jwt-revocation-stateless-tradeoff.md](jwt-revocation-stateless-tradeoff.md) — leaked-cookie revocation goes through `jwt_secret` rotation; the `Secure` flag is the prevention-side complement.

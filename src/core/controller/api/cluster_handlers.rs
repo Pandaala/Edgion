@@ -57,7 +57,7 @@ pub async fn create_cluster(
     let writer = state.conf_center();
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    let metadata = crate::core::common::utils::extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
+    let metadata = edgion_common::utils::extract_resource_metadata(&content).ok_or(StatusCode::BAD_REQUEST)?;
     let name = metadata.name.ok_or(StatusCode::BAD_REQUEST)?;
 
     // Parse, validate, and persist using create_one (fails if exists)
@@ -128,7 +128,7 @@ pub async fn update_cluster(
     // claims a different name, desynchronizing storage and the running cache. An
     // absent body name defers to the URL value. (K8s API server rejects the same
     // mismatch.)
-    if let Some(metadata) = crate::core::common::utils::extract_resource_metadata(&content) {
+    if let Some(metadata) = edgion_common::utils::extract_resource_metadata(&content) {
         if metadata.name.is_some_and(|meta_name| meta_name != name) {
             return Err(StatusCode::BAD_REQUEST);
         }
@@ -236,7 +236,7 @@ mod update_identity_tests {
                 .expect("ConfMgr::create"),
         );
         let schema_validator = Arc::new(SchemaValidator::empty());
-        let (tx, _rx) = tokio::sync::watch::channel(crate::core::common::config::CenterClientConfig::default());
+        let (tx, _rx) = tokio::sync::watch::channel(edgion_common::config::CenterClientConfig::default());
         let authorizer = Arc::new(crate::core::controller::authz::Authorizer::new(
             crate::core::controller::authz::CenterPolicy::deny_all(),
         ));

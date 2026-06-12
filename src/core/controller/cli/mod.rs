@@ -1,5 +1,3 @@
-use crate::core::common::config::ConfSyncSecurityConfig;
-use crate::core::common::{config::EdgionControllerConfig, utils};
 use crate::core::controller::api::{create_admin_router, serve_with_shutdown as serve_admin_api_with_shutdown};
 use crate::core::controller::conf_mgr::conf_center::traits::CenterLifeCycle;
 use crate::core::controller::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
@@ -7,6 +5,8 @@ use crate::core::controller::conf_sync::{ConfigSyncGrpcServer, ConfigSyncServerP
 use crate::core::controller::observe::init_logging;
 use anyhow::{anyhow, Result};
 use clap::Parser;
+use edgion_common::config::ConfSyncSecurityConfig;
+use edgion_common::{config::EdgionControllerConfig, utils};
 use edgion_resources::{init_work_dir, work_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -24,8 +24,8 @@ use tracing_appender::non_blocking::WorkerGuard;
 /// `auth.enabled=false` is present, a migration `tracing::warn!` is emitted
 /// at the call site (see `resolve_local_config` / the `run` method).
 pub(crate) fn derive_require_auth(
-    _auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
-    _local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    _auth_config: Option<&edgion_common::auth::AdminAuthConfig>,
+    _local_auth_config: Option<&edgion_common::local_auth::LocalAuthConfig>,
 ) -> bool {
     true
 }
@@ -46,10 +46,10 @@ pub(crate) fn derive_require_auth(
 /// treated as unconfigured: it logs a WARN and returns `None`. The process never
 /// panics or exits for missing credentials.
 pub(crate) fn resolve_local_config(
-    config: &crate::core::common::config::EdgionControllerConfig,
+    config: &edgion_common::config::EdgionControllerConfig,
     oidc_enabled: bool,
-) -> Option<crate::core::common::local_auth::LocalAuthConfig> {
-    use crate::core::common::local_auth::LocalAuthConfig;
+) -> Option<edgion_common::local_auth::LocalAuthConfig> {
+    use edgion_common::local_auth::LocalAuthConfig;
 
     let env_present = LocalAuthConfig::env_overrides_present();
 
@@ -234,12 +234,12 @@ impl EdgionControllerCli {
         probe_addr: SocketAddr,
         metrics_addr: SocketAddr,
         security: ConfSyncSecurityConfig,
-        auth_config: Option<crate::core::common::auth::AdminAuthConfig>,
-        local_auth_config: Option<crate::core::common::local_auth::LocalAuthConfig>,
+        auth_config: Option<edgion_common::auth::AdminAuthConfig>,
+        local_auth_config: Option<edgion_common::local_auth::LocalAuthConfig>,
         require_auth: bool,
         config_file: Option<String>,
         authorizer: std::sync::Arc<crate::core::controller::authz::Authorizer>,
-        center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
+        center_reload_tx: tokio::sync::watch::Sender<edgion_common::config::CenterClientConfig>,
         allow_admin_ips: Vec<String>,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
@@ -427,11 +427,11 @@ impl EdgionControllerCli {
         let config = EdgionControllerConfig::load(self.config.clone())?;
 
         // Initialize global controller config for runtime access (e.g., by ReferenceGrant validator)
-        crate::core::common::config::init_controller_config(config.clone());
+        edgion_common::config::init_controller_config(config.clone());
 
         // Initialize test mode if enabled via CLI --test-mode
         // This affects: metrics test features
-        crate::core::common::config::init_global_test_mode(self.config.test_mode);
+        edgion_common::config::init_global_test_mode(self.config.test_mode);
 
         // 1. Initialize environment (work_dir, logging)
         let _log_guard = self.init_environment(&config).await?;
@@ -440,8 +440,8 @@ impl EdgionControllerCli {
         // during startup (ConfMgr init, federation client connect, etc.) is
         // captured. The recorder is idempotent, so tests and combined modes
         // do not panic on re-install.
-        if let Err(e) = crate::core::common::observe::metrics_api::install_global_recorder(
-            crate::core::common::observe::metrics_api::RecorderConfig {
+        if let Err(e) = edgion_common::observe::metrics_api::install_global_recorder(
+            edgion_common::observe::metrics_api::RecorderConfig {
                 service: "edgion-controller",
                 idle_timeout_secs: 0,
                 histogram_buckets: &[],
@@ -694,8 +694,8 @@ impl EdgionControllerCli {
 #[cfg(test)]
 mod require_auth_tests {
     use super::*;
-    use crate::core::common::auth::AdminAuthConfig;
-    use crate::core::common::local_auth::LocalAuthConfig;
+    use edgion_common::auth::AdminAuthConfig;
+    use edgion_common::local_auth::LocalAuthConfig;
 
     fn oidc_enabled() -> AdminAuthConfig {
         let mut c = AdminAuthConfig::default();
@@ -797,7 +797,7 @@ mod require_auth_tests {
 
     #[test]
     fn resolve_nothing_configured_no_oidc_returns_none() {
-        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
@@ -808,7 +808,7 @@ mod require_auth_tests {
 
     #[test]
     fn resolve_nothing_configured_with_oidc_returns_none() {
-        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
@@ -819,7 +819,7 @@ mod require_auth_tests {
 
     #[test]
     fn resolve_enabled_empty_password_returns_none() {
-        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
@@ -830,7 +830,7 @@ mod require_auth_tests {
 
     #[test]
     fn resolve_disabled_returns_none() {
-        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
@@ -840,7 +840,7 @@ mod require_auth_tests {
 
     #[test]
     fn resolve_valid_local_returns_some() {
-        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
@@ -852,7 +852,7 @@ mod require_auth_tests {
 
     #[test]
     fn resolve_env_overrides_applied_onto_config() {
-        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
@@ -865,7 +865,7 @@ mod require_auth_tests {
 
     #[test]
     fn resolve_env_only_synthesizes_config() {
-        let _guard = crate::core::common::local_auth::config::ADMIN_ENV_TEST_LOCK
+        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         clear_admin_env();

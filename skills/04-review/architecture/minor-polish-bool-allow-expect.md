@@ -13,7 +13,7 @@ description: Decide on three recurring "polish" findings — weak-type bool para
 
 ### (a) `compose_admin_routes(.., local_auth_intent: bool)` should be an `enum LocalAuthIntention { Enabled, Disabled }`
 
-Location: `src/core/common/api/compose.rs::compose_admin_routes`.
+Location: `edgion-common/src/api/compose.rs::compose_admin_routes`.
 
 **Why not accepted**:
 
@@ -37,7 +37,7 @@ Location: the Center `fed_sync::server` `WatchEventRaw` struct (Center code is n
 
 ### (c) `init_crypto()` should use `.ok()` instead of `.expect()` for test-harness friendliness
 
-Location: `src/core/common/startup.rs:3-7`.
+Location: `edgion-common/src/startup.rs:3-7`.
 
 **Why not accepted**:
 

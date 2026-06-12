@@ -1,11 +1,11 @@
 use super::get_roundrobin_store;
-use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::core::gateway::backends::discovery::conf_handler_common::{update_affected_lbs, update_all_existing_lbs};
 use crate::core::gateway::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
 use crate::core::gateway::lb::compiled_selector;
 use crate::core::gateway::lb::runtime_state;
+use edgion_common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use edgion_resources::resources::health_check::ActiveHealthCheckConfig;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::{HashMap, HashSet};

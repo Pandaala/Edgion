@@ -33,8 +33,8 @@ When a review/audit report contains the following patterns, close as "no code fi
 
 Verify four points before closing:
 
-- `src/core/common/api/mod.rs` contains no reference to `CorsLayer` / `tower_http::cors::*`
-- The composition order in `src/core/common/api/compose.rs` does not contain a "CORS layer" step
+- `edgion-common/src/api/mod.rs` contains no reference to `CorsLayer` / `tower_http::cors::*`
+- The composition order in `edgion-common/src/api/compose.rs` does not contain a "CORS layer" step
 - `Cargo.toml` does not contain the `tower-http` dependency (or contains it but does not enable the `cors` feature)
 - `server.proxy` in `edgion-dashboard/vite.config.ts` still correctly forwards `/api` / `/health` to the backend (confirms dev still goes same-origin)
 

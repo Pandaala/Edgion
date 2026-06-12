@@ -1,5 +1,5 @@
 use super::{get_global_backend_tls_policy_store, BackendTLSPolicyStore};
-use crate::core::common::conf_sync::traits::ConfHandler;
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::resources::BackendTLSPolicy;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

@@ -1,4 +1,4 @@
-use crate::core::common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
+use edgion_common::conf_sync::traits::{arc_map_to_owned, ConfHandler};
 use edgion_resources::prelude_resources::GatewayClass;
 use kube::ResourceExt;
 use parking_lot::RwLock;

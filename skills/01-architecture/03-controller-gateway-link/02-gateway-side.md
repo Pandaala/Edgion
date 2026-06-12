@@ -107,7 +107,7 @@ Event dispatch also compresses event batches — multiple consecutive incrementa
 
 ## ConfHandler
 
-The configuration handler for each resource type, defined in `src/core/common/conf_sync/traits.rs`:
+The configuration handler for each resource type, defined in `edgion-common/src/conf_sync/traits.rs`:
 
 ```rust
 pub trait ConfHandler<T>: Send + Sync {

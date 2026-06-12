@@ -16,7 +16,7 @@ use axum::{extract::State, http::StatusCode, response::Json};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::core::common::api::ListResponse;
+use edgion_common::api::ListResponse;
 
 use super::types::AdminState;
 

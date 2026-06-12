@@ -7,9 +7,9 @@ use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
-use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
-use crate::core::common::utils;
 use crate::core::controller::conf_sync::conf_server::{WatchObj, WatchResponseSimple};
+use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
+use edgion_common::utils;
 use edgion_resources::ResourceMeta;
 
 pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
@@ -423,8 +423,8 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::common::conf_sync::traits::ResourceChange;
-    use crate::core::common::conf_sync::CacheEventDispatch;
+    use edgion_common::conf_sync::traits::ResourceChange;
+    use edgion_common::conf_sync::CacheEventDispatch;
     use edgion_resources::{ResourceKind, ResourceMeta};
     use kube::api::ObjectMeta;
     use serde::{Deserialize, Serialize};

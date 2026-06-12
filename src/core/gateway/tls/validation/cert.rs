@@ -480,9 +480,9 @@ fn is_valid_san_pattern(host: &str) -> bool {
 }
 
 /// Check if private key is valid and matches the certificate's public key
-impl From<crate::core::common::tls_validation::KeyCertMatchError> for CertValidationError {
-    fn from(e: crate::core::common::tls_validation::KeyCertMatchError) -> Self {
-        use crate::core::common::tls_validation::KeyCertMatchError;
+impl From<edgion_common::tls_validation::KeyCertMatchError> for CertValidationError {
+    fn from(e: edgion_common::tls_validation::KeyCertMatchError) -> Self {
+        use edgion_common::tls_validation::KeyCertMatchError;
         match e {
             KeyCertMatchError::CertParse(msg) => CertValidationError::CertParseError(msg),
             KeyCertMatchError::KeyParse(msg) => CertValidationError::KeyParseError(msg),
@@ -492,7 +492,7 @@ impl From<crate::core::common::tls_validation::KeyCertMatchError> for CertValida
 }
 
 pub(crate) fn check_key_matches_cert(cert_pem: &str, key_pem: &str) -> Result<(), CertValidationError> {
-    crate::core::common::tls_validation::check_key_matches_cert(cert_pem, key_pem).map_err(CertValidationError::from)
+    edgion_common::tls_validation::check_key_matches_cert(cert_pem, key_pem).map_err(CertValidationError::from)
 }
 
 /// Validate mTLS client authentication configuration

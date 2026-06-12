@@ -57,12 +57,12 @@ not, by itself, a finding.
 ## Already-Performed Cleanup (to avoid re-filing)
 
 - External task numbers like `tasks/fix-change/I*/M*/R*/C1/D2/S3` scattered in comments (linked tasks no longer exist) have been removed in the following files, while keeping substantive semantics:
-  - `src/core/common/link/credential.rs`
+  - `edgion-common/src/link/credential.rs`
   - `edgion-resources/src/resources/common/tls.rs`
   - `edgion-resources/src/credentials/materials.rs`
   - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs`
   - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
   - `src/core/controller/conf_mgr/conf_center/etcd/config.rs`
-- `src/core/common/fed_sync/mod.rs` adds a module-level comment explaining that it contains only proto types; runtime logic lives in `controller::fed_sync` / `center::fed_sync` respectively.
+- `edgion-common/src/fed_sync/mod.rs` adds a module-level comment explaining that it contains only proto types; runtime logic lives in `controller::fed_sync` / `center::fed_sync` respectively.
 
 If the strings `fix-change` or orphan codes like `I4/M6/C1` are spotted again in the future — those are newly introduced; treat as dead links; no need to scan the 6 already-cleaned files again.

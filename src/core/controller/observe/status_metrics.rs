@@ -378,7 +378,7 @@ use http::{header, StatusCode};
 /// by delegating to it first, then appending the resource-abnormal
 /// block when the snapshot is non-empty.
 pub(crate) async fn metrics_handler() -> Response {
-    let base = crate::core::common::observe::metrics_api::metrics_handler().await;
+    let base = edgion_common::observe::metrics_api::metrics_handler().await;
     let (parts, body) = base.into_parts();
     if parts.status != StatusCode::OK {
         return Response::from_parts(parts, body);

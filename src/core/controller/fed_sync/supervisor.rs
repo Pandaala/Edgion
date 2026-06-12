@@ -13,9 +13,9 @@ use std::sync::Arc;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 
-use crate::core::common::config::CenterClientConfig;
-use crate::core::common::observe::fed_metrics;
 use crate::core::controller::authz::Authorizer;
+use edgion_common::config::CenterClientConfig;
+use edgion_common::observe::fed_metrics;
 
 /// Maximum time to wait for the federation client task to exit on stop.
 const STOP_TIMEOUT_SECS: u64 = 10;
@@ -283,8 +283,8 @@ mod tests {
     //      unchanged) AND the authorizer policy is updated.
     //   2. `enabled` flip true->false stops the client; false->true restarts.
 
-    use crate::core::common::config::{FedAllowRule, FedRbacConfig};
     use crate::core::controller::authz::{CenterPolicy, Decision, Verb};
+    use edgion_common::config::{FedAllowRule, FedRbacConfig};
 
     /// Outcome of a single `run_supervisor` reload iteration.
     #[derive(Debug, PartialEq, Eq)]

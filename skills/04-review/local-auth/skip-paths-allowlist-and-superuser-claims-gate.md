@@ -27,7 +27,7 @@ The fix is two independent gates (both landed):
 
 **3. The allowlist set**
 
-`/health`, `/ready`, `/metrics` are public probe/metrics endpoints; `/api/v1/auth/*` are the public auth endpoints (login/logout/status are already unauthenticated by design). Nothing else is a legitimate bypass target. The shared helper `skip_path_is_allowlisted` (`src/core/common/auth/config.rs`) is the single source of truth, reused by both config validators.
+`/health`, `/ready`, `/metrics` are public probe/metrics endpoints; `/api/v1/auth/*` are the public auth endpoints (login/logout/status are already unauthenticated by design). Nothing else is a legitimate bypass target. The shared helper `skip_path_is_allowlisted` (`edgion-common/src/auth/config.rs`) is the single source of truth, reused by both config validators.
 
 ## Fix Suggestions Not Accepted
 
@@ -45,6 +45,6 @@ Re-open only if:
 ## Reference Cases
 
 - fr-cauth-01 (tasks/bug), closed 2026-05-29
-- Config allowlist: `src/core/common/auth/config.rs` (`skip_path_is_allowlisted`, `SKIP_PATHS_ALLOWLIST_ERR`, `AdminAuthConfig::validate`), `src/core/common/local_auth/config.rs` (`LocalAuthConfig::validate`)
+- Config allowlist: `edgion-common/src/auth/config.rs` (`skip_path_is_allowlisted`, `SKIP_PATHS_ALLOWLIST_ERR`, `AdminAuthConfig::validate`), `edgion-common/src/local_auth/config.rs` (`LocalAuthConfig::validate`)
 - Superuser gate: `src/core/controller/api/authz_middleware.rs` (`assign_superuser_if_no_role` Case 3/4) + regression test `no_claims_no_role_is_denied_not_superuser`
 - Docs: `skills/02-features/02-config/00-controller-config.md` → `[auth]` / `[local_auth]` `skip_paths` rows

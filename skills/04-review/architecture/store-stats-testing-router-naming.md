@@ -48,7 +48,7 @@ binaries:
 - Gateway: `src/core/gateway/api/mod.rs:513` — gated by `is_integration_testing_mode()`
 - Controller: `src/core/controller/api/mod.rs:441` — gated by `is_test_mode()`
 
-Auth/authz wiring follows: `src/core/common/unified_auth/mod.rs:144` adds the
+Auth/authz wiring follows: `edgion-common/src/unified_auth/mod.rs:144` adds the
 path to the auth skip set, and `src/core/controller/api/authz_classifier.rs:62`
 classifies it under `Verb::Debug`. The `Verb::Debug` taxonomy is the canonical
 expression of "this is a diagnostic endpoint regardless of mount condition" —
@@ -67,7 +67,7 @@ Proposal 2 in the F-B01 issue file (rename to `/api/v1/testing/store-stats`)
 would touch ~20+ files: `examples/test/scripts/conf-sync/run_conf_sync_test.sh`
 and `run_conf_sync_advanced_test.sh` (~15 call sites combined),
 `examples/code/validator/cache_residue.rs` (4 occurrences including mock-server
-paths), `src/core/common/unified_auth/mod.rs` (auth skip list),
+paths), `edgion-common/src/unified_auth/mod.rs` (auth skip list),
 `src/core/controller/api/authz_classifier.rs` (classifier mapping + its unit
 test at `:272`), Gateway `mod.rs:513`, Controller `mod.rs:441` +
 `debug_handlers.rs:51` doc comment, and 4 skill docs that document the path as
@@ -143,5 +143,5 @@ Re-open this decision only if:
 - `src/core/gateway/api/mod.rs:513` (Gateway route),
   `src/core/controller/api/mod.rs:441` (Controller route),
   `src/core/controller/api/debug_handlers.rs:51` (Controller handler doc),
-  `src/core/common/unified_auth/mod.rs:144` (auth skip),
+  `edgion-common/src/unified_auth/mod.rs:144` (auth skip),
   `src/core/controller/api/authz_classifier.rs:62` (Verb::Debug mapping).

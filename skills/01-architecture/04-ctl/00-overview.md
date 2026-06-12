@@ -152,7 +152,7 @@ edgion-cli -t client get httproute -o json | jq length
 ## Module structure
 
 ```
-src/core/ctl/
+edgion-cli/src/
 ├── cli/
 │   ├── mod.rs              # Cli struct, TargetType, Commands enum, command routing
 │   ├── client.rs           # EdgionClient HTTP client implementation

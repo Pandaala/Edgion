@@ -11,7 +11,7 @@ description: Both redirect sites now strip the Host port via the IPv6-aware host
 ## Conclusion
 
 Both redirect call sites now strip the Host-header port via the shared
-`host_without_port` helper (`src/core/common/utils/net.rs`), which preserves an IPv6
+`host_without_port` helper (`edgion-common/src/utils/net.rs`), which preserves an IPv6
 literal's brackets so the host can be re-emitted into a valid URL authority:
 
 - `EdgionHttpRedirectProxy::build_redirect_url_from_parts` (`src/core/gateway/routes/http/redirect_http.rs`)
@@ -71,7 +71,7 @@ Re-open only if:
 - redirect-F001 (review finding, deep review 2026-05-20; fixed 2026-05-21)
 - Same IPv6-authority defect class as [backends-F001](../backends/ipv6-probe-url-brackets.md),
   [backends-F017](../backends/clusterip-ipv6-no-brackets.md), and link-sys-F001.
-- Unit test `test_host_without_port` (`src/core/common/utils/net.rs`); integration regression
+- Unit test `test_host_without_port` (`edgion-common/src/utils/net.rs`); integration regression
   `http_redirect_ipv6_host_literal` (`examples/code/client/suites/http_route/filters/redirect.rs`)
   sends `Host: [::1]:8443` to the global HTTP→HTTPS redirect listener and asserts the `Location`
   keeps the brackets.

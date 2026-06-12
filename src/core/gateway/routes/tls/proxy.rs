@@ -12,7 +12,6 @@ use pingora_core::server::ShutdownWatch;
 use pingora_core::tls::ssl::NameType;
 use pingora_core::upstreams::peer::BasicPeer;
 
-use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::{
     resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr,
 };
@@ -23,6 +22,7 @@ use crate::core::gateway::routes::common::{is_core_service_backend_ref, UNSAFE_U
 use crate::core::gateway::routes::l4_duplex::bidirectional_relay;
 use crate::core::gateway::routes::tls::TlsRouteManager;
 use crate::core::gateway::{MatchedInfo, Rsc, TlsConnMeta};
+use edgion_common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::{ListenerKey, ResourceMeta};
 use serde::Serialize;

@@ -21,7 +21,6 @@ use super::proxy::{TlsContext, TlsUpstreamInfo};
 use super::sni_parser;
 use super::TlsDuplexHooks;
 use super::TlsRouteManager;
-use crate::core::common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use crate::core::gateway::backends::{
     resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr,
 };
@@ -32,6 +31,7 @@ use crate::core::gateway::routes::l4_duplex::bidirectional_relay;
 use crate::core::gateway::runtime::matching::route::hostname_matches_listener;
 use crate::core::gateway::runtime::store::get_listener_gateway_info_store;
 use crate::core::gateway::{MatchedInfo, Rsc};
+use edgion_common::utils::proxy_protocol::ProxyProtocolV2Builder;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::ListenerKey;
 use edgion_resources::ResourceMeta;

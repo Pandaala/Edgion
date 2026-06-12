@@ -1,9 +1,9 @@
-use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tcp::route_unit::TcpRouteUnit;
 use crate::core::gateway::routes::tcp::routes_mgr::{
     get_global_tcp_route_managers, resolved_listeners_for_route, GlobalTcpRouteManagers,
 };
+use edgion_common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
 use edgion_resources::TCPRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -101,7 +101,7 @@ impl GlobalTcpRouteManagers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::common::conf_sync::traits::ConfHandler;
+    use edgion_common::conf_sync::traits::ConfHandler;
     use edgion_resources::resources::common::ParentReference;
     use edgion_resources::resources::tcp_route::*;
     use edgion_resources::ListenerKey;

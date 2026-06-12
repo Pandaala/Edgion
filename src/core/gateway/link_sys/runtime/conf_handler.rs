@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::store::{get_global_link_sys_store, LinkSysStore};
-use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
+use edgion_common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use edgion_resources::resources::link_sys::LinkSys;
 
 /// Create a LinkSysStore handler for registration with ConfigClient

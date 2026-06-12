@@ -14,7 +14,6 @@ mod resource_locks;
 mod types;
 mod wipe_handlers;
 
-use crate::core::common::api::{self, ApiResponse};
 use crate::core::controller::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
     body::Body,
@@ -25,6 +24,7 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
+use edgion_common::api::{self, ApiResponse};
 use serde::Serialize;
 use std::sync::Arc;
 use types::AdminState;
@@ -188,12 +188,12 @@ fn apply_center_reload(state: &AdminState) {
         None => return,
     };
 
-    let cli_cfg = crate::core::common::config::EdgionControllerConfig {
+    let cli_cfg = edgion_common::config::EdgionControllerConfig {
         config_file: Some(path.clone()),
         ..Default::default()
     };
 
-    let full = match crate::core::common::config::EdgionControllerConfig::load(cli_cfg) {
+    let full = match edgion_common::config::EdgionControllerConfig::load(cli_cfg) {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(
@@ -325,7 +325,7 @@ pub fn build_admin_state(
     schema_validator: Arc<SchemaValidator>,
     config_file: Option<String>,
     authorizer: Arc<crate::core::controller::authz::Authorizer>,
-    center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
+    center_reload_tx: tokio::sync::watch::Sender<edgion_common::config::CenterClientConfig>,
 ) -> Arc<AdminState> {
     Arc::new(AdminState {
         conf_mgr,
@@ -359,7 +359,7 @@ pub fn create_admin_router(
     schema_validator: Arc<SchemaValidator>,
     config_file: Option<String>,
     authorizer: Arc<crate::core::controller::authz::Authorizer>,
-    center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
+    center_reload_tx: tokio::sync::watch::Sender<edgion_common::config::CenterClientConfig>,
 ) -> Router {
     let admin_state = build_admin_state(conf_mgr, schema_validator, config_file, authorizer, center_reload_tx);
 
@@ -456,7 +456,7 @@ pub fn create_admin_router(
         .route("/configserver/{kind}", get(configserver_handlers::get_resource))
         .with_state(admin_state.clone());
 
-    if crate::core::common::config::is_test_mode() {
+    if edgion_common::config::is_test_mode() {
         router = router
             .route(
                 "/api/v1/debug/store-stats",
@@ -479,12 +479,12 @@ pub async fn serve(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
-    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
-    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    auth_config: Option<&edgion_common::auth::AdminAuthConfig>,
+    local_auth_config: Option<&edgion_common::local_auth::LocalAuthConfig>,
     require_auth: bool,
     config_file: Option<String>,
     authorizer: Arc<crate::core::controller::authz::Authorizer>,
-    center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
+    center_reload_tx: tokio::sync::watch::Sender<edgion_common::config::CenterClientConfig>,
     allow_admin_ips: Vec<String>,
 ) -> anyhow::Result<()> {
     serve_with_shutdown(
@@ -512,16 +512,16 @@ pub async fn serve_with_shutdown(
     conf_mgr: Arc<ConfMgr>,
     schema_validator: Arc<SchemaValidator>,
     addr: std::net::SocketAddr,
-    auth_config: Option<&crate::core::common::auth::AdminAuthConfig>,
-    local_auth_config: Option<&crate::core::common::local_auth::LocalAuthConfig>,
+    auth_config: Option<&edgion_common::auth::AdminAuthConfig>,
+    local_auth_config: Option<&edgion_common::local_auth::LocalAuthConfig>,
     require_auth: bool,
     config_file: Option<String>,
     authorizer: Arc<crate::core::controller::authz::Authorizer>,
-    center_reload_tx: tokio::sync::watch::Sender<crate::core::common::config::CenterClientConfig>,
+    center_reload_tx: tokio::sync::watch::Sender<edgion_common::config::CenterClientConfig>,
     allow_admin_ips: Vec<String>,
     shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let auth_state = crate::core::common::unified_auth::UnifiedAuthState::from_configs(
+    let auth_state = edgion_common::unified_auth::UnifiedAuthState::from_configs(
         auth_config,
         local_auth_config,
         require_auth,
@@ -581,7 +581,7 @@ pub async fn serve_with_shutdown(
 
     // admin-api-02: outermost IP allowlist — rejects unauthorized peers before auth.
     // Not mounted when the allowlist is empty (allow-all, backward compatible).
-    let app = match crate::core::common::api::ip_allowlist::build_admin_ip_matcher(&allow_admin_ips)? {
+    let app = match edgion_common::api::ip_allowlist::build_admin_ip_matcher(&allow_admin_ips)? {
         Some(m) => {
             tracing::info!(
                 component = "admin_api",
@@ -590,7 +590,7 @@ pub async fn serve_with_shutdown(
             );
             app.layer(axum::middleware::from_fn_with_state(
                 m,
-                crate::core::common::api::ip_allowlist::ip_allowlist_middleware,
+                edgion_common::api::ip_allowlist::ip_allowlist_middleware,
             ))
         }
         None => {
@@ -619,8 +619,8 @@ pub async fn serve_with_shutdown(
 
 #[cfg(test)]
 mod auth_status_tests {
-    use crate::core::common::local_auth::{AuthStatus, LocalAuthConfig, LocalAuthState};
-    use crate::core::common::unified_auth::UnifiedAuthState;
+    use edgion_common::local_auth::{AuthStatus, LocalAuthConfig, LocalAuthState};
+    use edgion_common::unified_auth::UnifiedAuthState;
 
     fn valid_local() -> LocalAuthConfig {
         let mut c = LocalAuthConfig::default();
@@ -678,7 +678,7 @@ mod reload_center_tests {
         config_path: &str,
     ) -> (
         Arc<AdminState>,
-        tokio::sync::watch::Receiver<crate::core::common::config::CenterClientConfig>,
+        tokio::sync::watch::Receiver<edgion_common::config::CenterClientConfig>,
         tempfile::TempDir, // kept alive so its path stays valid
     ) {
         use crate::core::controller::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
@@ -691,7 +691,7 @@ mod reload_center_tests {
                 .expect("ConfMgr::create"),
         );
         let schema_validator = Arc::new(SchemaValidator::empty());
-        let (tx, rx) = tokio::sync::watch::channel(crate::core::common::config::CenterClientConfig::default());
+        let (tx, rx) = tokio::sync::watch::channel(edgion_common::config::CenterClientConfig::default());
         let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
         let state = Arc::new(AdminState {
             conf_mgr,
@@ -836,7 +836,7 @@ center:
                 .expect("ConfMgr::create"),
         );
         let schema_validator = Arc::new(SchemaValidator::empty());
-        let (tx, mut rx) = tokio::sync::watch::channel(crate::core::common::config::CenterClientConfig::default());
+        let (tx, mut rx) = tokio::sync::watch::channel(edgion_common::config::CenterClientConfig::default());
         let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
         let state = AdminState {
             conf_mgr,

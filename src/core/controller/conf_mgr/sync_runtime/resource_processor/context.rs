@@ -128,7 +128,7 @@ impl HandlerContext {
         K: kube::Resource,
     {
         if let Some(filter) = &self.metadata_filter {
-            crate::core::common::utils::clean_metadata(obj, filter);
+            edgion_common::utils::clean_metadata(obj, filter);
         }
     }
 }

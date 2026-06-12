@@ -1,5 +1,4 @@
 use super::EdgionHttpProxy;
-use crate::core::common::utils::net::{classify_backend_addr, resolve_domain, BlockedBackendReason};
 use crate::core::gateway::backends::EdgionService;
 use crate::core::gateway::backends::{get_peer, try_get_peer};
 use crate::core::gateway::ctx::BackendSource;
@@ -11,6 +10,7 @@ use crate::core::gateway::{
     end_response_500, end_response_503, end_response_grpc_unavailable, terminate_with_fallback,
 };
 use crate::core::gateway::{EdgionHttpContext, SessionPersistenceState, UpstreamJumpTarget};
+use edgion_common::utils::net::{classify_backend_addr, resolve_domain, BlockedBackendReason};
 use edgion_resources::err::EdError;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::get_path_normalization_config;

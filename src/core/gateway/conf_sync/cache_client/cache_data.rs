@@ -1,4 +1,4 @@
-use crate::core::common::conf_sync::traits::{ConfHandler, ResourceChange};
+use edgion_common::conf_sync::traits::{ConfHandler, ResourceChange};
 use edgion_resources::ResourceMeta;
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
@@ -246,7 +246,7 @@ impl CompressEvent {
     }
 
     /// Add an event for a resource key
-    pub fn add_event(&mut self, key: String, change: crate::core::common::conf_sync::traits::ResourceChange) {
+    pub fn add_event(&mut self, key: String, change: edgion_common::conf_sync::traits::ResourceChange) {
         self.events.entry(key).or_default().push(change);
     }
 
@@ -282,7 +282,7 @@ mod tests {
     //! deferred to integration coverage — see
     //! `tasks/todo-test-cover/05-integration-gaps-controller.md` #3/#4).
     use super::*;
-    use crate::core::common::conf_sync::traits::ResourceChange;
+    use edgion_common::conf_sync::traits::ResourceChange;
     use k8s_openapi::api::core::v1::ConfigMap;
     use kube::core::ObjectMeta;
 

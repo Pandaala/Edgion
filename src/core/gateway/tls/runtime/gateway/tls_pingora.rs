@@ -1,4 +1,3 @@
-use crate::core::common::secret::get_secret_by_name;
 use crate::core::gateway::observe::logs::ssl_log::log_ssl;
 use crate::core::gateway::observe::logs::LogBuffer;
 use crate::core::gateway::runtime::matching::{match_gateway_tls, GatewayTlsEntry};
@@ -8,6 +7,7 @@ use crate::core::gateway::tls::store::cert_matcher::match_sni;
 use crate::core::gateway::{MatchedInfo, Rsc, TlsConnMeta};
 use anyhow::anyhow;
 use anyhow::Result;
+use edgion_common::secret::get_secret_by_name;
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use edgion_resources::listener_key::ListenerKey;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;

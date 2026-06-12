@@ -1,7 +1,7 @@
-use crate::core::common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
-use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use crate::core::gateway::conf_sync::cache_client::cache_data::CacheData;
 use crate::core::gateway::observe::metrics::{global_metrics, record_config_event_parse_error};
+use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
+use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
 use edgion_resources::{
     ResourceMeta, WATCH_ERR_NOT_READY, WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD,
     WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED,
@@ -73,7 +73,7 @@ where
         log_context: &str,
         expected_server_id: &str,
     ) -> Result<ListResult, tonic::Status> {
-        let list_request = tonic::Request::new(crate::core::common::conf_sync::proto::ListRequest {
+        let list_request = tonic::Request::new(edgion_common::conf_sync::proto::ListRequest {
             key: gateway_class_key.to_string(),
             kind: T::kind_name().to_string(), // Use string kind name instead of enum
             expected_server_id: expected_server_id.to_string(),
@@ -247,7 +247,7 @@ where
                         }
                     };
 
-                    let request = tonic::Request::new(crate::core::common::conf_sync::proto::WatchRequest {
+                    let request = tonic::Request::new(edgion_common::conf_sync::proto::WatchRequest {
                         key: String::new(),
                         kind: T::kind_name().to_string(), // Use string kind name instead of enum
                         client_id: client_id.as_ref().clone(),
@@ -403,7 +403,7 @@ mod tests {
     //! `tasks/todo-test-cover/05-integration-gaps-controller.md` #3 (relist
     //! storm) and #4 (server_id failover).
     use super::*;
-    use crate::core::common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
+    use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
     use k8s_openapi::api::core::v1::ConfigMap;
     use kube::core::ObjectMeta;
 

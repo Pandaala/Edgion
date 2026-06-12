@@ -1,5 +1,5 @@
 use super::tls_store::{get_global_tls_store, TlsStore};
-use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
+use edgion_common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use edgion_resources::EdgionTls;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

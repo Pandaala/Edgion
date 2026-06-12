@@ -28,7 +28,7 @@ All three converge on the **same** `authz_layer` and the same `Authorizer`. The 
 
 ### unified_auth — the shared session gatekeeper
 
-The shared middleware (`src/core/common/unified_auth/mod.rs`) validates OIDC Bearer tokens, local HS256 JWTs, and the httpOnly cookie, in that order. It wraps *every* admin route via `compose_admin_routes`. Full request order, endpoints, cookie behavior, and auto-generated credentials are documented in
+The shared middleware (`edgion-common/src/unified_auth/mod.rs`) validates OIDC Bearer tokens, local HS256 JWTs, and the httpOnly cookie, in that order. It wraps *every* admin route via `compose_admin_routes`. Full request order, endpoints, cookie behavior, and auto-generated credentials are documented in
 [`02-admin-api.md` → Authentication System](02-admin-api.md#authentication-system).
 
 Authentication is mandatory. `require_auth` always derives to `true`; the old `!require_auth` pass-through early-return was deleted. Setting `enabled: false` is ignored with a startup `WARN` (it no longer disables auth). See
@@ -46,7 +46,7 @@ A Controller-private pre-authn layer that runs **outside** `unified_auth`, letti
 - **Additive**: a recognized token injects `Role::Restricted` + `AuthBypass` + `CliTokenIdentity`. An unrecognized/absent token is left untouched and falls through to `unified_auth` (which then 401s if no session).
 - **Auth-route skip**: `/api/v1/auth/*` is never processed here — injecting `AuthBypass` there would make `unified_auth` skip while `me_handler` still needs `Extension<UnifiedAuthClaims>`, producing a 500.
 
-The `AuthBypass` marker (`src/core/common/unified_auth/`) is the decoupling seam: cli-pre signals "already authenticated" so `unified_auth` skips its own checks, **without** `unified_auth` ever importing the authz engine (a maintained invariant — `common/unified_auth` is authz-free).
+The `AuthBypass` marker (`edgion-common/src/unified_auth/`) is the decoupling seam: cli-pre signals "already authenticated" so `unified_auth` skips its own checks, **without** `unified_auth` ever importing the authz engine (a maintained invariant — `common/unified_auth` is authz-free).
 
 ### Federation mTLS — the Center identity
 
@@ -150,7 +150,7 @@ Operator walkthrough and the full security checklist live in the human-facing op
 
 ## Observability
 
-Denials increment `edgion_fed_rbac_denied_total` via `record_rbac_denied(verb, kind, source)` (`src/core/common/observe/fed_metrics.rs`). The `source` label is bounded to `center | cli_token | unknown` — the cli-token *name* is **never** a metric label (unbounded cardinality); it appears only in the structured deny log (`token_name` / `provider` fields). `source` is derived from the presence of `CliTokenIdentity` in the request extensions.
+Denials increment `edgion_fed_rbac_denied_total` via `record_rbac_denied(verb, kind, source)` (`edgion-common/src/observe/fed_metrics.rs`). The `source` label is bounded to `center | cli_token | unknown` — the cli-token *name* is **never** a metric label (unbounded cardinality); it appears only in the structured deny log (`token_name` / `provider` fields). `source` is derived from the presence of `CliTokenIdentity` in the request extensions.
 
 ## Module map
 
@@ -161,10 +161,10 @@ Denials increment `edgion_fed_rbac_denied_total` via `record_rbac_denied(verb, k
 | Request → `(verb, kind)` classifier | `src/core/controller/api/authz_classifier.rs` |
 | cli_token_pre_authn + `CliTokenIdentity` | `src/core/controller/api/cli_token_middleware.rs` |
 | Built-in default Center policy | `src/core/controller/fed_sync/default_policy.rs` |
-| Shared session auth (OIDC + local JWT) + `AuthBypass` marker | `src/core/common/unified_auth/mod.rs` |
-| Local username/password (config/handlers/secret) | `src/core/common/local_auth/` |
-| Admin router composition (`compose_admin_routes`) | `src/core/common/api/compose.rs` |
-| `cli_tokens` / `center.rbac` config types (`FedRbacConfig`) | `src/core/common/config/mod.rs` |
+| Shared session auth (OIDC + local JWT) + `AuthBypass` marker | `edgion-common/src/unified_auth/mod.rs` |
+| Local username/password (config/handlers/secret) | `edgion-common/src/local_auth/` |
+| Admin router composition (`compose_admin_routes`) | `edgion-common/src/api/compose.rs` |
+| `cli_tokens` / `center.rbac` config types (`FedRbacConfig`) | `edgion-common/src/config/mod.rs` |
 
 ## Related docs
 

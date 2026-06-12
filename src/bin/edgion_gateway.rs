@@ -1,5 +1,5 @@
-use edgion::core::common::startup::{init_crypto, install_panic_hook};
 use edgion::EdgionGatewayCli;
+use edgion_common::startup::{init_crypto, install_panic_hook};
 
 fn main() {
     install_panic_hook();

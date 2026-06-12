@@ -7,12 +7,12 @@
 //! - ListenerPortManager registration for port conflict detection
 //! - Gateway API standard status management
 
-use crate::core::common::config::is_reference_grant_validation_enabled;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key, make_conflict_key,
     ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::core::controller::conf_mgr::ControllerRuntime;
+use edgion_common::config::is_reference_grant_validation_enabled;
 use edgion_resources::constants::annotations;
 use edgion_resources::constants::app::GATEWAY_NAME;
 use edgion_resources::listener_key::resolve_listener_addr;
@@ -1227,7 +1227,7 @@ fn validate_listener_resolved_refs(
                                     (std::str::from_utf8(cert_data), std::str::from_utf8(key_data))
                                 {
                                     if let Err(e) =
-                                        crate::core::common::tls_validation::check_key_matches_cert(cert_str, key_str)
+                                        edgion_common::tls_validation::check_key_matches_cert(cert_str, key_str)
                                     {
                                         errors.push(GatewayResolvedRefsError::SecretInvalid {
                                             namespace: cert_ns.to_string(),

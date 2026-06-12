@@ -1,5 +1,4 @@
 use super::{get_global_service_store, ServiceStore};
-use crate::core::common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use crate::core::gateway::backends::circuit_breaker::{
     config::parse_circuit_breaker_annotation, get_circuit_breaker_store,
 };
@@ -9,6 +8,7 @@ use crate::core::gateway::backends::health::check::{
 use crate::core::gateway::backends::panic_threshold::{get_panic_threshold_store, parse_panic_threshold_annotation};
 use crate::core::gateway::lb::compiled_selector;
 use crate::core::gateway::lb::runtime_state;
+use edgion_common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
 use k8s_openapi::api::core::v1::Service;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

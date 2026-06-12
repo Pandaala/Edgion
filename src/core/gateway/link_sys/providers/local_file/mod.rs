@@ -6,7 +6,7 @@ mod rotation;
 use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
 
-use crate::core::common::utils::available_cpu_cores;
+use edgion_common::utils::available_cpu_cores;
 use edgion_resources::output::{LocalFileWriterConfig, RotationConfig};
 use edgion_resources::work_dir;
 

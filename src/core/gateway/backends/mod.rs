@@ -35,11 +35,11 @@ pub use selector::{get_backends_for_service_key, select_roundrobin_backend_key};
 pub use service_kind::EdgionService;
 pub use validation::validate_endpoint_in_route;
 
-use crate::core::common::utils::net::resolve_domain;
 use crate::core::gateway::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::core::gateway::runtime::ServerHeaderOpts;
 use crate::core::gateway::EdgionHttpContext;
 use crate::core::gateway::{end_response_500, end_response_503};
+use edgion_common::utils::net::resolve_domain;
 use edgion_resources::edgion_status::EdgionStatus;
 use edgion_resources::ParsedLBPolicy;
 use peer_builder::{

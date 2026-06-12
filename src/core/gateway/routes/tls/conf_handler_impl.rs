@@ -1,8 +1,8 @@
-use crate::core::common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
 use crate::core::gateway::routes::l4_partial_update::apply_l4_partial_update;
 use crate::core::gateway::routes::tls::route_unit::TlsRouteUnit;
 use crate::core::gateway::routes::tls::routes_mgr::resolved_listeners_for_route;
 use crate::core::gateway::routes::tls::{get_global_tls_route_managers, GlobalTlsRouteManagers};
+use edgion_common::conf_sync::traits::{arc_map_into_owned, ConfHandler};
 use edgion_resources::TLSRoute;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;

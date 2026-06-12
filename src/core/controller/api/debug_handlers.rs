@@ -3,11 +3,11 @@
 //! Used by `cache_residue` validator to assert all in-memory caches are zero
 //! after a wipe-all sweep.
 
-use crate::core::common::api::ApiResponse;
 use crate::core::controller::api::types::AdminState;
 use crate::core::controller::conf_mgr::sync_runtime::resource_processor::ref_manager::RefManagerStats;
 use crate::core::controller::conf_mgr::CenterLifeCycle;
 use axum::{extract::State, response::Json};
+use edgion_common::api::ApiResponse;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -56,7 +56,7 @@ pub async fn store_stats(State(state): State<Arc<AdminState>>) -> Json<ApiRespon
     let secret_store = runtime.secret_store.count();
     let secret_ref_manager = SecretRefManagerStats::from(runtime.secret_ref_manager.stats());
 
-    let next_resource_version = crate::core::common::utils::current_resource_version();
+    let next_resource_version = edgion_common::utils::current_resource_version();
 
     let watch_count = state
         .conf_mgr

@@ -15,10 +15,10 @@ use pingora_core::tls::x509::{X509Ref, X509};
 use x509_parser::parse_x509_certificate;
 use x509_parser::pem::Pem;
 
-use crate::core::common::secret::get_secret;
 use crate::core::gateway::ctx::ClientCertInfo;
 use crate::core::gateway::plugins::http::common::auth_common::send_gateway_auth_error_response;
 use crate::core::gateway::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use edgion_common::secret::get_secret;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig};
 

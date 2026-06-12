@@ -25,8 +25,7 @@ use edgion_resources::ResourceKind;
 /// `GatewayHandler` for `certificateRefs`; when validation is disabled this always
 /// returns `false`, keeping behavior consistent with the other handlers.
 fn cross_ns_secret_ref_denied(ctx: &HandlerContext, owner_ns: &str, secret_ref: &SecretObjectReference) -> bool {
-    if !secret_ref.is_cross_namespace(owner_ns) || !crate::core::common::config::is_reference_grant_validation_enabled()
-    {
+    if !secret_ref.is_cross_namespace(owner_ns) || !edgion_common::config::is_reference_grant_validation_enabled() {
         return false;
     }
     let target_ns = secret_ref.effective_namespace(owner_ns);
@@ -97,7 +96,7 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
                 let key_pem = data.get(KEY).and_then(|b| std::str::from_utf8(&b.0).ok());
 
                 if let (Some(cert_str), Some(key_str)) = (cert_pem, key_pem) {
-                    if let Err(e) = crate::core::common::tls_validation::check_key_matches_cert(cert_str, key_str) {
+                    if let Err(e) = edgion_common::tls_validation::check_key_matches_cert(cert_str, key_str) {
                         warnings.push(e.to_string());
                     }
                 }

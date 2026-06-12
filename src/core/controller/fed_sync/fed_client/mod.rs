@@ -14,15 +14,15 @@ use tokio::sync::{watch, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
-use crate::core::common::config::CenterClientConfig;
-use crate::core::common::fed_sync::proto::{
+use crate::core::controller::authz::{Authorizer, Verb};
+use crate::core::controller::conf_mgr::ConfMgr;
+use edgion_common::config::CenterClientConfig;
+use edgion_common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
     federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage,
     FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, Pong, RegisterRequest, StatsReport,
 };
-use crate::core::common::observe::fed_metrics;
-use crate::core::controller::authz::{Authorizer, Verb};
-use crate::core::controller::conf_mgr::ConfMgr;
+use edgion_common::observe::fed_metrics;
 
 /// Minimum connection duration before backoff is reset.
 /// Connections shorter than this are considered unstable (e.g., Center crash-loop).
@@ -67,9 +67,9 @@ fn first_cert_der_from_pem(pem_bytes: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Map a federation mTLS refusal to its `system_error_state` reason label.
-fn refusal_reason(r: crate::core::common::config::MtlsRefusal) -> &'static str {
-    use crate::core::common::config::MtlsRefusal;
-    use crate::core::common::observe::system_metrics::reasons;
+fn refusal_reason(r: edgion_common::config::MtlsRefusal) -> &'static str {
+    use edgion_common::config::MtlsRefusal;
+    use edgion_common::observe::system_metrics::reasons;
     match r {
         MtlsRefusal::NoTls => reasons::NO_TLS_CONFIGURED,
         MtlsRefusal::SkipTls => reasons::SKIP_TLS,
@@ -106,8 +106,8 @@ pub async fn run(
                 ?refusal,
                 "Federation requires mTLS; client will not start"
             );
-            crate::core::common::observe::system_metrics::mark_system_error(
-                crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
+            edgion_common::observe::system_metrics::mark_system_error(
+                edgion_common::observe::system_metrics::components::FED_SYNC_CLIENT,
                 refusal_reason(refusal),
             );
             return;
@@ -120,9 +120,9 @@ pub async fn run(
     match std::fs::read(tls_cfg.cert_path()) {
         Ok(pem_bytes) => {
             let ok = first_cert_der_from_pem(&pem_bytes)
-                .and_then(|d| crate::core::common::fed_sync::spiffe::extract_single_spiffe_uri(&d).ok())
-                .and_then(|u| crate::core::common::fed_sync::spiffe::parse_controller_spiffe(&u))
-                .map(|p| crate::core::common::fed_sync::spiffe::path_matches(&p, &config.cluster, &config.name))
+                .and_then(|d| edgion_common::fed_sync::spiffe::extract_single_spiffe_uri(&d).ok())
+                .and_then(|u| edgion_common::fed_sync::spiffe::parse_controller_spiffe(&u))
+                .map(|p| edgion_common::fed_sync::spiffe::path_matches(&p, &config.cluster, &config.name))
                 .unwrap_or(false);
             if !ok {
                 tracing::error!(
@@ -131,9 +131,9 @@ pub async fn run(
                     name = %config.name,
                     "Client cert SPIFFE SAN does not match cluster/name; federation client will not start"
                 );
-                crate::core::common::observe::system_metrics::mark_system_error(
-                    crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
-                    crate::core::common::observe::system_metrics::reasons::PEER_IDENTITY_SELF_CHECK,
+                edgion_common::observe::system_metrics::mark_system_error(
+                    edgion_common::observe::system_metrics::components::FED_SYNC_CLIENT,
+                    edgion_common::observe::system_metrics::reasons::PEER_IDENTITY_SELF_CHECK,
                 );
                 return;
             }
@@ -144,9 +144,9 @@ pub async fn run(
                 error = %e,
                 "Cannot read client cert for self-check; federation client will not start"
             );
-            crate::core::common::observe::system_metrics::mark_system_error(
-                crate::core::common::observe::system_metrics::components::FED_SYNC_CLIENT,
-                crate::core::common::observe::system_metrics::reasons::PEER_IDENTITY_SELF_CHECK,
+            edgion_common::observe::system_metrics::mark_system_error(
+                edgion_common::observe::system_metrics::components::FED_SYNC_CLIENT,
+                edgion_common::observe::system_metrics::reasons::PEER_IDENTITY_SELF_CHECK,
             );
             return;
         }
@@ -249,7 +249,7 @@ async fn connect_and_run(
     let uri = format!("https://{}", addr);
 
     let endpoint = Channel::from_shared(uri)?;
-    let client_tls = crate::core::common::grpc_tls::load_client_tls(tls_cfg).await?;
+    let client_tls = edgion_common::grpc_tls::load_client_tls(tls_cfg).await?;
     let endpoint = endpoint
         .tls_config(client_tls)
         .map_err(|e| anyhow::anyhow!("Failed to configure federation client TLS: {}", e))?;
@@ -422,7 +422,7 @@ async fn handle_center_message(
                 request_id = %cmd.request_id,
                 "CommandRequest received"
             );
-            use crate::core::common::fed_sync::proto::command_request::Command;
+            use edgion_common::fed_sync::proto::command_request::Command;
             let (success, message) = match cmd.command {
                 Some(Command::Reload(_)) => {
                     use tower::ServiceExt;
@@ -607,10 +607,10 @@ async fn handle_center_message(
                 .allowed()
             {
                 let kind_label = crate::core::controller::api::authz_classifier::bounded_kind_label(&kind);
-                crate::core::common::observe::fed_metrics::record_rbac_denied(
+                edgion_common::observe::fed_metrics::record_rbac_denied(
                     "watch",
                     kind_label,
-                    crate::core::common::observe::fed_metrics::labels::rbac_source::CENTER,
+                    edgion_common::observe::fed_metrics::labels::rbac_source::CENTER,
                 );
                 // Mirror the existing watch-error frame shape: CtrlPayload::WatchEventResponse
                 // with a non-empty `error` field and all other fields defaulted to zero/empty.
@@ -802,7 +802,7 @@ mod tests {
 
     #[test]
     fn self_check_accepts_matching_path() {
-        use crate::core::common::fed_sync::spiffe::{parse_controller_spiffe, path_matches};
+        use edgion_common::fed_sync::spiffe::{parse_controller_spiffe, path_matches};
         let p = parse_controller_spiffe("spiffe://td/controllers/prod/ctrl-1").unwrap();
         assert!(path_matches(&p, "prod", "ctrl-1"));
         assert!(!path_matches(&p, "prod", "other"));
@@ -810,8 +810,8 @@ mod tests {
 
     #[test]
     fn federation_requires_mtls_channel() {
-        use crate::core::common::config::{ConfSyncSecurityConfig, ConfSyncTlsConfig, MtlsRefusal};
-        use crate::core::common::observe::system_metrics::reasons;
+        use edgion_common::config::{ConfSyncSecurityConfig, ConfSyncTlsConfig, MtlsRefusal};
+        use edgion_common::observe::system_metrics::reasons;
 
         // No TLS block -> NoTls -> reason no_tls_configured
         let none = ConfSyncSecurityConfig::default();
@@ -851,9 +851,9 @@ mod tests {
     /// without starting any watch (active_watch_cancel remains None).
     #[tokio::test]
     async fn watch_request_denied_by_rbac_sends_forbidden_and_no_watch_started() {
-        use crate::core::common::fed_sync::proto::{controller_message::Payload as CtrlPayload, FedWatchRequest};
         use crate::core::controller::authz::{Authorizer, CenterPolicy};
         use crate::core::controller::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig};
+        use edgion_common::fed_sync::proto::{controller_message::Payload as CtrlPayload, FedWatchRequest};
         use std::sync::Arc;
 
         // Construct a minimal ConfMgr using the FileSystem backend (temp dir).

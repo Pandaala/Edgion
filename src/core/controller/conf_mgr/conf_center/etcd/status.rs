@@ -8,7 +8,7 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::super::common::ErrorStatus;
-use crate::core::common::link::providers::etcd::EtcdLinkClient;
+use edgion_common::link::providers::etcd::EtcdLinkClient;
 
 /// Etcd-backed status handler.
 pub struct EtcdStatusHandler {

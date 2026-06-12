@@ -17,7 +17,7 @@ The Admin API listens on port 12101 (default) via Axum, used by the edgion-cli c
 
 ## Router Composition (compose_admin_routes)
 
-Controller and Center share a single admin-router composition entry: `src/core/common/api/compose.rs::compose_admin_routes(business, auth_state, local_auth_intent)`.
+Controller and Center share a single admin-router composition entry: `edgion-common/src/api/compose.rs::compose_admin_routes(business, auth_state, local_auth_intent)`.
 
 The internal composition order is fixed (callers cannot influence it):
 
@@ -252,7 +252,7 @@ The Admin API integrates a unified authentication middleware that supports OIDC 
 
 ### Authentication Middleware (unified_auth)
 
-Module location: `src/core/common/unified_auth/mod.rs`
+Module location: `edgion-common/src/unified_auth/mod.rs`
 
 Request authentication order:
 
@@ -302,8 +302,8 @@ See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and 
 
 | Module | Path |
 |--------|------|
-| Local auth (config/handlers/middleware/secret) | `src/core/common/local_auth/` |
-| Unified auth middleware (OIDC + local) | `src/core/common/unified_auth/mod.rs` |
+| Local auth (config/handlers/middleware/secret) | `edgion-common/src/local_auth/` |
+| Unified auth middleware (OIDC + local) | `edgion-common/src/unified_auth/mod.rs` |
 
 ## Startup Modes
 
