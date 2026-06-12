@@ -10,7 +10,7 @@ description: Full schema for the edgion-controller YAML configuration.
 ## Files to Reference
 
 - Sample configuration: `config/edgion-controller.yaml`
-- Configuration structure: `edgion-common/src/config/mod.rs`
+- Configuration structure: `edgion-controller/src/config/mod.rs`
 - `conf_center` top level: `edgion-controller/src/conf_mgr/conf_center/config.rs`
 - FileSystem mode: `edgion-controller/src/conf_mgr/conf_center/file_system/config.rs`
 - Kubernetes mode: `edgion-controller/src/conf_mgr/conf_center/kubernetes/config.rs`
@@ -343,7 +343,7 @@ center:
 
 Static Bearer tokens that grant role-scoped access to the Controller Admin API. Each entry binds a token to a fine-grained RBAC policy using the same `(verb, kind)` model as `[center].rbac`. Tokens are never stored in plaintext — only their SHA-256 hex digest is persisted. Hot-reloadable.
 
-**Source:** `edgion-common/src/config/mod.rs` (`CliTokenConfig`).
+**Source:** `edgion-controller/src/config/mod.rs` (`CliTokenConfig`).
 
 ### Field Reference
 

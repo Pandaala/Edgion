@@ -16,6 +16,7 @@ pub mod entry;
 pub mod access_decision;
 pub mod plugin_configs;
 pub mod plugin_validation;
+pub mod validate;
 
 #[cfg(test)]
 mod tests;

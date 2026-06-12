@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use super::ReferenceGrantStore;
 use crate::conf_mgr::ControllerRuntime;
-use edgion_common::config::is_reference_grant_validation_enabled;
+use crate::config::is_reference_grant_validation_enabled;
 use edgion_resources::resources::{gateway::SecretObjectReference, http_route::BackendObjectReference};
 
 /// Validator for cross-namespace references

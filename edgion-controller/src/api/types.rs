@@ -14,7 +14,7 @@ pub struct AdminState {
     /// Shared authorizer (hot-swappable Center policy) used by reload.
     pub authorizer: Arc<crate::authz::Authorizer>,
     /// Notifies the federation supervisor of `[center]` changes on reload.
-    pub center_reload_tx: tokio::sync::watch::Sender<edgion_common::config::CenterClientConfig>,
+    pub center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
 }
 
 impl AdminState {

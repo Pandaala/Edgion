@@ -74,13 +74,16 @@ impl EdgionPluginsHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
     fn preparse(&self, ep: &mut EdgionPlugins, _ctx: &HandlerContext) -> Vec<String> {
-        // The plugin runtime is now built gateway-side (`compile_plugins`); the
+        // The plugin runtime is built gateway-side (`compile_plugins`); the
         // schema carries no runtime. The controller only needs the validation
-        // errors for the K8s status condition, so compile and take the errors,
-        // discarding the runtime (it is serialized away to the gateway anyway).
-        edgion_gateway::plugins::http::compile_plugins(ep)
-            .preparse_errors
-            .clone()
+        // errors for the K8s status condition, so it runs the schema-layer
+        // `validate_plugins` instead of compiling a runtime it would throw away.
+        // This keeps the controller free of any `edgion-gateway` dependency. The
+        // one gap versus `compile_plugins` is the DSL deep checks (Rhai compile /
+        // VM init), which require the gateway-only DSL VM; the data plane still
+        // fails closed for those at runtime. See
+        // `edgion_resources::resources::edgion_plugins::validate`.
+        ep.validate_plugins()
     }
 
     async fn parse(&self, mut ep: EdgionPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionPlugins> {

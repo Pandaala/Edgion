@@ -99,7 +99,7 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::authz::{sha256_hex, Authorizer, CenterPolicy, CliTokenEntry};
-    use edgion_common::config::{FedAllowRule, FedRbacConfig};
+    use crate::config::{FedAllowRule, FedRbacConfig};
 
     /// Build an `Authorizer` with a single cli token registered under `tok`.
     fn az_with_token(tok: &str) -> Arc<Authorizer> {

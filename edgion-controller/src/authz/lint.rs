@@ -9,7 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crate::authz::{CenterPolicy, CliTokenEntry, Verb};
-use edgion_common::config::{CliTokenConfig, EdgionControllerConfig, FedRbacConfig};
+use crate::config::{CliTokenConfig, EdgionControllerConfig, FedRbacConfig};
 use edgion_resources::resource::kind::ResourceKind;
 
 /// Synthetic classifier kinds that are valid in a policy but are NOT `ResourceKind`s.
@@ -161,7 +161,7 @@ pub fn build_cli_token_map(cli_tokens: &[CliTokenConfig], context: &str) -> Hash
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_common::config::{FedAllowRule, FedRbacConfig};
+    use crate::config::{FedAllowRule, FedRbacConfig};
 
     fn valid_rbac() -> FedRbacConfig {
         FedRbacConfig {

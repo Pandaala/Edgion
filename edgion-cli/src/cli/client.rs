@@ -123,7 +123,7 @@ impl EdgionClient {
     /// Ensure we have a valid token. Called before first API request.
     /// Flow: (1) query auth/status, (2) dispatch on AuthStatus, (3) auto-login if needed.
     pub async fn ensure_auth(&mut self) -> Result<()> {
-        use edgion_common::local_auth::{AuthStatus, AuthStatusResponse};
+        use edgion_resources::auth_dto::{AuthStatus, AuthStatusResponse};
 
         let status_url = format!("{}/api/v1/auth/status", self.base_url);
         let resp = self

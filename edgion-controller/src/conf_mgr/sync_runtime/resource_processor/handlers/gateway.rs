@@ -12,7 +12,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     ConflictKey, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use crate::conf_mgr::ControllerRuntime;
-use edgion_common::config::is_reference_grant_validation_enabled;
+use crate::config::is_reference_grant_validation_enabled;
 use edgion_resources::constants::annotations;
 use edgion_resources::constants::app::GATEWAY_NAME;
 use edgion_resources::listener_key::resolve_listener_addr;

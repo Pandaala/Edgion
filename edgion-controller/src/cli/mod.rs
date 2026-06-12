@@ -2,11 +2,12 @@ use crate::api::{create_admin_router, serve_with_shutdown as serve_admin_api_wit
 use crate::conf_mgr::conf_center::traits::CenterLifeCycle;
 use crate::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
 use crate::conf_sync::{ConfigSyncGrpcServer, ConfigSyncServerProvider};
+use crate::config::EdgionControllerConfig;
 use crate::observe::init_logging;
 use anyhow::{anyhow, Result};
 use clap::Parser;
-use edgion_common::config::ConfSyncSecurityConfig;
-use edgion_common::{config::EdgionControllerConfig, utils};
+use edgion_common::conf_sync_config::ConfSyncSecurityConfig;
+use edgion_common::utils;
 use edgion_resources::{init_work_dir, work_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -46,7 +47,7 @@ pub(crate) fn derive_require_auth(
 /// treated as unconfigured: it logs a WARN and returns `None`. The process never
 /// panics or exits for missing credentials.
 pub(crate) fn resolve_local_config(
-    config: &edgion_common::config::EdgionControllerConfig,
+    config: &crate::config::EdgionControllerConfig,
     oidc_enabled: bool,
 ) -> Option<edgion_common::local_auth::LocalAuthConfig> {
     use edgion_common::local_auth::LocalAuthConfig;
@@ -239,7 +240,7 @@ impl EdgionControllerCli {
         require_auth: bool,
         config_file: Option<String>,
         authorizer: std::sync::Arc<crate::authz::Authorizer>,
-        center_reload_tx: tokio::sync::watch::Sender<edgion_common::config::CenterClientConfig>,
+        center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
         allow_admin_ips: Vec<String>,
         shutdown_handle: ShutdownHandle,
     ) -> Result<()> {
@@ -427,11 +428,11 @@ impl EdgionControllerCli {
         let config = EdgionControllerConfig::load(self.config.clone())?;
 
         // Initialize global controller config for runtime access (e.g., by ReferenceGrant validator)
-        edgion_common::config::init_controller_config(config.clone());
+        crate::config::init_controller_config(config.clone());
 
         // Initialize test mode if enabled via CLI --test-mode
         // This affects: metrics test features
-        edgion_common::config::init_global_test_mode(self.config.test_mode);
+        edgion_common::test_mode::init_global_test_mode(self.config.test_mode);
 
         // 1. Initialize environment (work_dir, logging)
         let _log_guard = self.init_environment(&config).await?;

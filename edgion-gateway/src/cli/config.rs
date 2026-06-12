@@ -138,7 +138,7 @@ pub struct EdgionGatewayConfig {
     /// Omit this section to keep plaintext gRPC (backward compatible).
     #[arg(skip)]
     #[serde(default)]
-    pub conf_sync_security: edgion_common::config::ConfSyncSecurityConfig,
+    pub conf_sync_security: edgion_common::conf_sync_config::ConfSyncSecurityConfig,
 
     /// URI path normalization configuration.
     ///

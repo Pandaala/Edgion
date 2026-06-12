@@ -2,15 +2,15 @@
 //!
 //! YAML-friendly (snake_case) configuration for the etcd backend, plus the
 //! conversion to `EtcdClientConfig` consumed by `EtcdLinkClient::from_config()`.
-//! All of this lives in `common` because the etcd provider and its credential
-//! state machine now live here too.
+//! This schema lives in the controller (`crate::config::conf_center::etcd`); the
+//! etcd link client and credential-state types it depends on live in `edgion-common`.
 
 use k8s_openapi::api::core::v1::Secret;
 use k8s_openapi::ByteString;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::link::credential::CredentialState;
+use edgion_common::link::credential::CredentialState;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
 use edgion_resources::resources::common::{SecretObjectReference, SecretSlot, TlsCerts, TlsConfig};

@@ -1,7 +1,6 @@
 //! Configuration Center top-level config.
 //!
-//! The schema definition now lives in `common::config::conf_center` so that
-//! shared config loading can reference it without a `common -> controller`
-//! dependency. Re-exported here to keep existing controller call sites stable.
+//! The schema definition lives in `crate::config::conf_center`. Re-exported here
+//! to keep existing controller call sites stable.
 
-pub use edgion_common::config::conf_center::config::ConfCenterConfig;
+pub use crate::config::conf_center::config::ConfCenterConfig;

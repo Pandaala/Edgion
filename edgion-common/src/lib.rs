@@ -1,7 +1,7 @@
 pub mod api;
 pub mod auth;
 pub mod conf_sync;
-pub mod config;
+pub mod conf_sync_config;
 pub mod fed_sync;
 pub mod grpc_tls;
 pub mod http_util;
@@ -11,6 +11,7 @@ pub mod local_auth;
 pub mod observe;
 pub mod secret;
 pub mod startup;
+pub mod test_mode;
 pub mod tls_validation;
 pub mod unified_auth;
 pub mod utils;

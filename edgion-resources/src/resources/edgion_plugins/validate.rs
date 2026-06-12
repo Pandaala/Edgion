@@ -1,0 +1,275 @@
+//! Schema-layer plugin validation, available to any consumer that needs the
+//! EdgionPlugins preparse errors WITHOUT building the gateway plugin runtime.
+//!
+//! # Relationship to `edgion-gateway`'s `compile_plugins`
+//!
+//! The gateway's `compile_plugins` produces `preparse_errors` as a side effect
+//! of building the `PluginRuntime`. The controller historically reached into the
+//! gateway purely to collect those errors for the EdgionPlugins K8s status
+//! condition, which forced a `controller -> gateway` crate dependency.
+//!
+//! [`EdgionPlugins::validate_plugins`] reproduces that error set at the schema
+//! layer so the controller no longer needs the gateway, with ONE documented
+//! exception: the DSL plugin's deep checks (Rhai script compilation and VM
+//! initialization) live in the gateway-only DSL VM and cannot run here.
+//! Concretely, for `Dsl` entries this function still runs
+//! `DslConfig::validation_error()` (structural config validation) but NOT the
+//! script-compile / VM-init checks. The data plane still fails closed at runtime
+//! for an uncompilable DSL script, so the only behavior change is that such
+//! errors are not surfaced onto the K8s status at ingest time.
+//!
+//! Every other error — condition regex compilation/validation, per-plugin
+//! `validation_error()`, alias validation, and wrong-stage placement — is
+//! reproduced with the same message text and ordering as `compile_plugins`.
+
+use super::conditions::PluginConditions;
+use super::edgion_plugin::EdgionPlugin;
+use super::EdgionPlugins;
+
+/// Per-variant stage applicability, mirroring the four
+/// `PluginRuntime::create_*_from_edgion` matches in `edgion-gateway`. The
+/// exhaustive match means a newly added `EdgionPlugin` variant fails to compile
+/// until its stages are declared here, keeping the two in lockstep.
+#[derive(Clone, Copy)]
+struct StageSet {
+    request: bool,
+    upstream_response_filter: bool,
+    upstream_response_body_filter: bool,
+    upstream_response: bool,
+}
+
+/// Which execution stages a plugin variant is valid for.
+///
+/// This mirrors `edgion-gateway`'s `create_*_from_edgion` stage gating: a
+/// variant that those functions answer with `WrongStage` is `false` here. The
+/// `upstream_response` stage currently accepts no plugins.
+fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
+    use EdgionPlugin::*;
+    // Tuple order: (request, upstreamResponseFilter, upstreamResponseBodyFilter, upstreamResponse)
+    let (request, upstream_response_filter, upstream_response_body_filter, upstream_response) = match plugin {
+        // Upstream-response-filter-stage-only plugins.
+        ResponseHeaderModifier(_) | DebugAccessLogToHeader(_) | ResponseRewrite(_) => (false, true, false, false),
+        // Upstream-response-body-filter-stage-only plugins.
+        BandwidthLimit(_) => (false, false, true, false),
+        // DSL runs in both the request and the upstream-response-filter stages.
+        Dsl(_) => (true, true, false, false),
+        // Everything else is request-stage-only.
+        RequestHeaderModifier(_)
+        | RequestRedirect(_)
+        | UrlRewrite(_)
+        | RequestMirror(_)
+        | BasicAuth(_)
+        | Cors(_)
+        | Csrf(_)
+        | IpRestriction(_)
+        | JwtAuth(_)
+        | JweDecrypt(_)
+        | HmacAuth(_)
+        | HeaderCertAuth(_)
+        | KeyAuth(_)
+        | LdapAuth(_)
+        | Mock(_)
+        | ProxyRewrite(_)
+        | RequestRestriction(_)
+        | RateLimit(_)
+        | RateLimitRedis(_)
+        | CtxSet(_)
+        | RealIp(_)
+        | ForwardAuth(_)
+        | OpenidConnect(_)
+        | DirectEndpoint(_)
+        | AllEndpointStatus(_)
+        | DynamicInternalUpstream(_)
+        | DynamicExternalUpstream(_)
+        | RegionRoute(_) => (true, false, false, false),
+    };
+    StageSet {
+        request,
+        upstream_response_filter,
+        upstream_response_body_filter,
+        upstream_response,
+    }
+}
+
+/// Compile + validate the regex conditions on a single entry, pushing any
+/// errors with the same wording the gateway's `compile_plugin_conditions` uses.
+/// `compile()` mutates in place, so we operate on a clone (only the errors are
+/// wanted here).
+fn collect_condition_errors(conds: &PluginConditions, label: &str, index: usize, errors: &mut Vec<String>) {
+    let mut conds = conds.clone();
+    if let Err(errs) = conds.compile() {
+        for e in errs {
+            errors.push(format!("{}[{}] conditions regex: {}", label, index, e));
+        }
+    }
+    if let Err(errs) = conds.validate() {
+        for e in errs {
+            errors.push(format!("{}[{}] conditions: {}", label, index, e));
+        }
+    }
+}
+
+impl EdgionPlugins {
+    /// Collect the preparse validation errors for this resource WITHOUT building
+    /// the gateway plugin runtime.
+    ///
+    /// Mirrors the `preparse_errors` that `edgion-gateway`'s `compile_plugins`
+    /// surfaces into the EdgionPlugins K8s status condition, minus the DSL deep
+    /// checks (Rhai compile / VM init) that require the gateway-only DSL VM. See
+    /// the module docs for the full contract.
+    pub fn validate_plugins(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        // Pass 1: condition regex compilation/validation for EVERY entry
+        // (enabled or not), in stage order — mirrors `compile_plugin_conditions`.
+        macro_rules! compile_conditions {
+            ($entries:expr, $label:literal) => {
+                if let Some(entries) = &$entries {
+                    for (i, entry) in entries.iter().enumerate() {
+                        if let Some(conds) = entry.conditions.as_ref() {
+                            collect_condition_errors(conds, $label, i, &mut errors);
+                        }
+                    }
+                }
+            };
+        }
+        compile_conditions!(self.spec.request_plugins, "requestPlugins");
+        compile_conditions!(
+            self.spec.upstream_response_filter_plugins,
+            "upstreamResponseFilterPlugins"
+        );
+        compile_conditions!(
+            self.spec.upstream_response_body_filter_plugins,
+            "upstreamResponseBodyFilterPlugins"
+        );
+        compile_conditions!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
+
+        // Pass 2: per-entry config/alias/stage validation for ENABLED entries,
+        // in stage order — mirrors the four `add_from_*` paths (minus runtime
+        // construction and the DSL deep checks).
+        macro_rules! validate_entries {
+            ($entries:expr, $label:literal, $stage_word:literal, $stage_field:ident) => {
+                if let Some(entries) = &$entries {
+                    for (i, entry) in entries.iter().enumerate() {
+                        if !entry.is_enabled() {
+                            continue;
+                        }
+                        let name = entry.plugin.type_name();
+                        // 1. Per-plugin config validation. On error, skip the
+                        //    remaining checks (mirrors the gateway `continue`).
+                        if let Some(err) = entry.plugin.validation_error() {
+                            errors.push(format!("{}[{}] ({}): {}", $label, i, name, err));
+                            continue;
+                        }
+                        // 2. Optional alias. Recorded but does NOT skip the stage
+                        //    check — the gateway only drops the invalid alias.
+                        if let Some(err) = entry.validate_alias() {
+                            errors.push(format!("{}[{}] ({}): {}", $label, i, name, err));
+                        }
+                        // 3. Wrong-stage placement.
+                        if !applicable_stages(&entry.plugin).$stage_field {
+                            errors.push(format!(
+                                "{}[{}] ({}): plugin is not valid for {} stage",
+                                $label, i, name, $stage_word
+                            ));
+                        }
+                    }
+                }
+            };
+        }
+        validate_entries!(self.spec.request_plugins, "requestPlugins", "request", request);
+        validate_entries!(
+            self.spec.upstream_response_filter_plugins,
+            "upstreamResponseFilterPlugins",
+            "upstream response filter",
+            upstream_response_filter
+        );
+        validate_entries!(
+            self.spec.upstream_response_body_filter_plugins,
+            "upstreamResponseBodyFilterPlugins",
+            "upstream response body filter",
+            upstream_response_body_filter
+        );
+        validate_entries!(
+            self.spec.upstream_response_plugins,
+            "upstreamResponsePlugins",
+            "upstream response",
+            upstream_response
+        );
+
+        errors
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::resources::edgion_plugins::{EdgionPluginsSpec, RequestFilterEntry};
+    use crate::resources::http_route::HTTPHeaderFilter;
+
+    fn header_filter() -> HTTPHeaderFilter {
+        HTTPHeaderFilter {
+            set: None,
+            add: None,
+            remove: None,
+        }
+    }
+
+    fn with_request_plugins(entries: Vec<RequestFilterEntry>) -> EdgionPlugins {
+        EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(entries),
+                ..Default::default()
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn valid_request_plugin_produces_no_errors() {
+        let ep = with_request_plugins(vec![RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(
+            header_filter(),
+        ))]);
+        assert!(ep.validate_plugins().is_empty());
+    }
+
+    #[test]
+    fn response_only_plugin_in_request_stage_is_wrong_stage() {
+        // ResponseHeaderModifier has no preparse validation_error, so the only
+        // error surfaced is the wrong-stage placement.
+        let ep = with_request_plugins(vec![RequestFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(
+            header_filter(),
+        ))]);
+        assert_eq!(
+            ep.validate_plugins(),
+            vec!["requestPlugins[0] (ResponseHeaderModifier): plugin is not valid for request stage".to_string()]
+        );
+    }
+
+    #[test]
+    fn disabled_entry_is_skipped() {
+        let ep = with_request_plugins(vec![RequestFilterEntry::with_enable(
+            EdgionPlugin::ResponseHeaderModifier(header_filter()),
+            false,
+        )]);
+        assert!(ep.validate_plugins().is_empty());
+    }
+
+    #[test]
+    fn invalid_alias_is_reported_and_does_not_skip_stage_check() {
+        // A valid, correctly-placed plugin with a bad alias yields exactly the
+        // alias error (and no spurious stage error).
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(header_filter()));
+        entry.alias = Some("bad alias".to_string());
+        let ep = with_request_plugins(vec![entry]);
+        assert_eq!(
+            ep.validate_plugins(),
+            vec![concat!(
+                "requestPlugins[0] (RequestHeaderModifier): ",
+                "alias must match [a-zA-Z0-9._-]{1,32} (contains disallowed character)"
+            )
+            .to_string()]
+        );
+    }
+}

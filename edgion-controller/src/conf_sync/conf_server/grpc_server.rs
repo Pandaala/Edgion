@@ -18,7 +18,7 @@ use edgion_common::conf_sync::proto::{
     ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, ServerMetaEvent, WatchRequest, WatchResponse,
     WatchServerMetaRequest,
 };
-use edgion_common::config::ConfSyncSecurityConfig;
+use edgion_common::conf_sync_config::ConfSyncSecurityConfig;
 use edgion_resources::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
 use super::ConfigSyncServer;

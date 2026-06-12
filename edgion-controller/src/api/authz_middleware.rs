@@ -284,7 +284,7 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::authz::{Authorizer, CenterPolicy, Role};
-    use edgion_common::config::{FedAllowRule, FedRbacConfig};
+    use crate::config::{FedAllowRule, FedRbacConfig};
 
     /// Build a test router that:
     /// 1. Has an outer layer that inserts the given `Role` into request extensions
@@ -618,7 +618,7 @@ mod tests {
     async fn e2e_cli_token_granted_denied_and_no_token() {
         use crate::api::create_admin_router;
         use crate::authz::{sha256_hex, CenterPolicy, CliTokenEntry};
-        use edgion_common::config::{FedAllowRule, FedRbacConfig};
+        use crate::config::{FedAllowRule, FedRbacConfig};
         use edgion_common::local_auth::LocalAuthConfig;
 
         // ── Setup: build a real Authorizer with one cli token that can list GatewayClass.
@@ -665,7 +665,7 @@ mod tests {
                     .expect("ConfMgr::create"),
             );
             let schema_validator = Arc::new(SchemaValidator::empty());
-            let (tx, _rx) = tokio::sync::watch::channel(edgion_common::config::CenterClientConfig::default());
+            let (tx, _rx) = tokio::sync::watch::channel(crate::config::CenterClientConfig::default());
             create_admin_router(conf_mgr, schema_validator, None, az.clone(), tx)
         };
 

@@ -25,7 +25,7 @@ use kube::Resource;
 /// # Example
 ///
 /// ```ignore
-/// use crate::utils::clean_metadata;
+/// use crate::conf_mgr::metadata_filter::clean_metadata;
 /// use crate::config::conf_center::MetadataFilterConfig;
 ///
 /// let config = MetadataFilterConfig::default();

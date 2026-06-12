@@ -486,7 +486,7 @@ impl KubernetesCenter {
         });
 
         // 6. Spawn caches-ready watcher (starts ACME on ready — leader-only mode)
-        let no_sync_kinds = edgion_common::config::get_no_sync_kinds();
+        let no_sync_kinds = crate::config::get_no_sync_kinds();
         let caches_handle = Self::spawn_caches_ready_task(
             config_sync_server.clone(),
             self.runtime.clone(),
@@ -846,7 +846,7 @@ impl KubernetesCenter {
         });
 
         // 6. Spawn caches-ready watcher (no ACME — started via start_leader_services)
-        let no_sync_kinds = edgion_common::config::get_no_sync_kinds();
+        let no_sync_kinds = crate::config::get_no_sync_kinds();
         let caches_handle = Self::spawn_caches_ready_task(
             config_sync_server.clone(),
             self.runtime.clone(),

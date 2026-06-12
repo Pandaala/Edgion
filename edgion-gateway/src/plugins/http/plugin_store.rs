@@ -369,4 +369,111 @@ mod compile_plugins_tests {
             compiled.preparse_errors
         );
     }
+
+    /// Drift guard between the two independent validation implementations.
+    ///
+    /// Since the controller no longer depends on `edgion-gateway`, it collects
+    /// the EdgionPlugins K8s-status preparse errors via the schema-layer
+    /// `EdgionPlugins::validate_plugins` (in `edgion-resources`), while the data
+    /// plane still produces them as a side effect of `compile_plugins` building
+    /// the runtime. These are SEPARATE code paths that must stay in lockstep —
+    /// if `validate_plugins` ever drops an error that `compile_plugins` still
+    /// reports, the controller would mark a genuinely-broken EdgionPlugins
+    /// `Accepted: True` (e.g. an auth plugin in the wrong stage that never runs).
+    ///
+    /// Compared as sorted sets: exact message text and ordering parity are
+    /// covered by the unit tests in
+    /// `edgion_resources::resources::edgion_plugins::validate`; this guard's job
+    /// is the stronger safety property that neither path has an error the other
+    /// lacks. DSL entries are intentionally excluded from the corpus — the
+    /// documented divergence is that `validate_plugins` cannot run the
+    /// gateway-only Rhai compile / VM-init deep checks.
+    #[test]
+    fn validate_plugins_matches_compile_plugins_error_set() {
+        fn sorted(mut v: Vec<String>) -> Vec<String> {
+            v.sort();
+            v
+        }
+        fn hf() -> HTTPHeaderFilter {
+            HTTPHeaderFilter {
+                set: None,
+                add: None,
+                remove: None,
+            }
+        }
+        // RequestHeaderModifier: request-stage-only. ResponseHeaderModifier:
+        // upstream-response-filter-stage-only. Neither has a `validation_error`,
+        // so any error comes purely from alias/condition/stage checks.
+        fn rhm() -> EdgionPlugin {
+            EdgionPlugin::RequestHeaderModifier(hf())
+        }
+        fn respm() -> EdgionPlugin {
+            EdgionPlugin::ResponseHeaderModifier(hf())
+        }
+        fn aliased(mut e: RequestFilterEntry, alias: &str) -> RequestFilterEntry {
+            e.alias = Some(alias.to_string());
+            e
+        }
+        fn mk(
+            request: Option<Vec<RequestFilterEntry>>,
+            urf: Option<Vec<UpstreamResponseFilterEntry>>,
+        ) -> EdgionPlugins {
+            EdgionPlugins {
+                metadata: Default::default(),
+                spec: EdgionPluginsSpec {
+                    request_plugins: request,
+                    upstream_response_filter_plugins: urf,
+                    ..Default::default()
+                },
+                status: None,
+            }
+        }
+
+        let cases: Vec<(&str, EdgionPlugins)> = vec![
+            ("valid_request", mk(Some(vec![RequestFilterEntry::new(rhm())]), None)),
+            (
+                "valid_urf",
+                mk(None, Some(vec![UpstreamResponseFilterEntry::new(respm())])),
+            ),
+            (
+                "wrong_stage_request",
+                mk(Some(vec![RequestFilterEntry::new(respm())]), None),
+            ),
+            (
+                "wrong_stage_urf",
+                mk(None, Some(vec![UpstreamResponseFilterEntry::new(rhm())])),
+            ),
+            (
+                "bad_alias_valid_stage",
+                mk(Some(vec![aliased(RequestFilterEntry::new(rhm()), "bad alias")]), None),
+            ),
+            (
+                "bad_alias_wrong_stage",
+                mk(Some(vec![aliased(RequestFilterEntry::new(respm()), "bad alias")]), None),
+            ),
+            (
+                "disabled_wrong_stage",
+                mk(Some(vec![RequestFilterEntry::with_enable(respm(), false)]), None),
+            ),
+            (
+                "mixed_multi_stage",
+                mk(
+                    Some(vec![RequestFilterEntry::new(rhm()), RequestFilterEntry::new(respm())]),
+                    Some(vec![
+                        UpstreamResponseFilterEntry::new(respm()),
+                        UpstreamResponseFilterEntry::new(rhm()),
+                    ]),
+                ),
+            ),
+        ];
+
+        for (name, ep) in cases {
+            let from_runtime = sorted(compile_plugins(&ep).preparse_errors.clone());
+            let from_schema = sorted(ep.validate_plugins());
+            assert_eq!(
+                from_runtime, from_schema,
+                "preparse error-set drift between compile_plugins (runtime) and validate_plugins (schema) for case `{name}`"
+            );
+        }
+    }
 }

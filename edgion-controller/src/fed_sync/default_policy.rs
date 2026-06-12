@@ -19,7 +19,7 @@
 //! the built-in default is NOT applied.
 
 use crate::authz::CenterPolicy;
-use edgion_common::config::{FedAllowRule, FedRbacConfig};
+use crate::config::{FedAllowRule, FedRbacConfig};
 use edgion_resources::resource::kind::ResourceKind;
 
 // ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ pub(crate) fn center_policy_from(rbac: Option<&FedRbacConfig>) -> CenterPolicy {
 mod tests {
     use super::*;
     use crate::authz::{Authorizer, Decision, Verb};
-    use edgion_common::config::FedAllowRule;
+    use crate::config::FedAllowRule;
 
     fn az() -> Authorizer {
         Authorizer::new(default_center_policy())

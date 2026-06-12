@@ -184,12 +184,17 @@ edgion-common/src/
 **Dependency direction constraints** (now enforced by the crate boundary — a
 violation is a compile error, not just a convention):
 - `edgion-common` must not depend on `edgion-gateway` or `edgion-controller`.
-- The only retained control→data edge is `edgion-controller` → `edgion-gateway`
-  via `plugins::http::compile_plugins` (plugin validation on resource ingest).
+- There is **no** control→data edge: `edgion-controller` does not depend on
+  `edgion-gateway`. Plugin validation on resource ingest runs the schema-layer
+  `EdgionPlugins::validate_plugins` (in `edgion-resources`), not the gateway's
+  `plugins::http::compile_plugins`. The two share the same underlying checks; the
+  schema layer omits only the DSL deep checks (Rhai compile / VM init), which the
+  data plane still enforces fail-closed at runtime.
 - The config-center schema (`ConfCenterConfig`, `FileSystemConfig`,
-  `KubernetesConfig`, `MetadataFilterConfig`, `EtcdConfig`) now lives in
-  `edgion-common/src/config/conf_center/`; the controller re-exports it from its
-  old paths. (This removed the former `common → controller` cycle.)
+  `KubernetesConfig`, `MetadataFilterConfig`, `EtcdConfig`) lives in
+  `edgion-controller/src/config/conf_center/` (controller-only — the gateway never
+  reads it); the controller's `conf_mgr/conf_center/*/config.rs` modules re-export
+  it from there for their runtime use.
 
 Types shared across bins must live in `edgion-resources` (pure schema) or
 `edgion-common` (shared runtime infra), so each side depends on those rather than

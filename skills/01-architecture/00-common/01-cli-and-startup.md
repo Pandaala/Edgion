@@ -205,7 +205,7 @@ ctl is a synchronous CLI tool that exits as soon as the command finishes.
 
 | Global variable | Location | Purpose |
 |---------|------|------|
-| `CONTROLLER_CONFIG` | `edgion-common/src/config/mod.rs` | Controller global configuration (`OnceLock`) |
+| `CONTROLLER_CONFIG` | `edgion-controller/src/config/mod.rs` | Controller global configuration (`OnceLock`) |
 | `GATEWAY_INSTANCE_COUNT` | same as above | Gateway cluster instance count (`AtomicU32`, used for cluster-level rate limiting) |
 | `GLOBAL_TEST_MODE` | same as above | Test mode flag (enables metrics test features) |
 | `GLOBAL_INTEGRATION_TESTING_MODE` | same as above | Integration testing mode (enables AccessLog storage + metrics test data) |

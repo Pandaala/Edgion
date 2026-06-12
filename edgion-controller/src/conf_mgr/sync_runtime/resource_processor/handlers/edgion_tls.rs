@@ -25,7 +25,7 @@ use edgion_resources::ResourceKind;
 /// `GatewayHandler` for `certificateRefs`; when validation is disabled this always
 /// returns `false`, keeping behavior consistent with the other handlers.
 fn cross_ns_secret_ref_denied(ctx: &HandlerContext, owner_ns: &str, secret_ref: &SecretObjectReference) -> bool {
-    if !secret_ref.is_cross_namespace(owner_ns) || !edgion_common::config::is_reference_grant_validation_enabled() {
+    if !secret_ref.is_cross_namespace(owner_ns) || !crate::config::is_reference_grant_validation_enabled() {
         return false;
     }
     let target_ns = secret_ref.effective_namespace(owner_ns);

@@ -1,6 +1,6 @@
 //! Shared TLS loading utilities for gRPC channels.
 
-use crate::config::ConfSyncTlsConfig;
+use crate::conf_sync_config::ConfSyncTlsConfig;
 
 /// Load server TLS config from certificate files.
 ///

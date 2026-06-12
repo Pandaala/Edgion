@@ -11,7 +11,7 @@ It supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, and WebSocket, and includes a
 - `edgion-resources` — shared resource/config schema (leaf).
 - `edgion-common` — shared infra: config loader, observability/log bootstrap, secret store, link-system core (+ etcd provider), TLS validation, auth, conf_sync/fed_sync proto codegen. Depends on `edgion-resources`. Backend-agnostic (TLS backend flows in via workspace `pingora-core` feature unification). Exposes a `test-util` feature for cross-crate test helpers.
 - `edgion-gateway` — data plane; the `edgion-gateway` binary lives here. Owns `boringssl`/`rustls` + allocator features.
-- `edgion-controller` — control plane; the `edgion-controller` binary lives here. Depends on `edgion-gateway` for the single retained edge (`plugins::http::compile_plugins`, used to validate plugins on resource ingest).
+- `edgion-controller` — control plane; the `edgion-controller` binary lives here. Depends only on `edgion-common`/`edgion-resources` — **not** on `edgion-gateway`. Plugin validation on resource ingest runs the schema-layer `EdgionPlugins::validate_plugins` (in `edgion-resources`), which reproduces the gateway `compile_plugins` preparse errors minus the DSL deep checks (Rhai compile / VM init, gateway-only). The former `controller → gateway` edge is gone, so the workspace dependency graph is a clean DAG (`resources → common → {gateway, controller, cli}`).
 - `edgion-cli` — the `edgion-cli` binary + lib; depends only on `edgion-common`/`edgion-resources`.
 - root `edgion` package — a thin umbrella that only hosts integration-test `examples/` and the `cache_residue` helper bin.
 

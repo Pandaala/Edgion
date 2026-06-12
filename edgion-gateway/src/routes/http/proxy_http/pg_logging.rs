@@ -44,7 +44,7 @@ pub async fn logging(
     let entry_json = entry.to_json();
 
     // Clone only when integration testing needs the log stored; production path is zero-copy.
-    let entry_json_for_store = if edgion_common::config::is_integration_testing_mode() {
+    let entry_json_for_store = if edgion_common::test_mode::is_integration_testing_mode() {
         let should_store = session
             .req_header()
             .headers
@@ -103,7 +103,7 @@ fn record_request_metrics(ctx: &EdgionHttpContext, error: Option<&PingoraError>)
 fn try_record_via_handles(ctx: &EdgionHttpContext, duration_ms: f64) -> bool {
     use crate::observe::metrics::route_handles::{protocol_to_idx, ps_index, status_to_idx, RouteMetricHandles};
 
-    if edgion_common::config::is_integration_testing_mode() {
+    if edgion_common::test_mode::is_integration_testing_mode() {
         return false;
     }
 
@@ -186,7 +186,7 @@ fn record_request_metrics_fallback(ctx: &EdgionHttpContext, error: Option<&Pingo
 
     let protocol = ctx.request_info.discover_protocol.as_deref().unwrap_or("http");
 
-    let (test_key, test_data) = if edgion_common::config::is_integration_testing_mode() {
+    let (test_key, test_data) = if edgion_common::test_mode::is_integration_testing_mode() {
         let key = ctx.gateway_info.metrics_test_key.as_deref().unwrap_or("");
         let data = build_test_data(ctx, error);
         (key, data)

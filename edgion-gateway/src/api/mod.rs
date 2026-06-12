@@ -181,7 +181,7 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>, admin_token: Option
         .with_state(config_client.clone());
 
     // Add testing endpoints (incl. /api/v1/server-info) only in integration testing mode.
-    if edgion_common::config::is_integration_testing_mode() {
+    if edgion_common::test_mode::is_integration_testing_mode() {
         router = router.merge(create_testing_router(config_client));
     }
 
@@ -1476,7 +1476,7 @@ pub async fn serve_with_shutdown(
         component = "admin_api_gateway",
         event = "server_starting",
         addr = %addr,
-        integration_testing = edgion_common::config::is_integration_testing_mode(),
+        integration_testing = edgion_common::test_mode::is_integration_testing_mode(),
         "Gateway Admin API server listening"
     );
 

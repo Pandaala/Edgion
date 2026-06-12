@@ -164,7 +164,7 @@ mod tests {
                 .expect("ConfMgr::create failed"),
         );
         let schema_validator = Arc::new(SchemaValidator::empty());
-        let (tx, _rx) = tokio::sync::watch::channel(edgion_common::config::CenterClientConfig::default());
+        let (tx, _rx) = tokio::sync::watch::channel(crate::config::CenterClientConfig::default());
         let authorizer = std::sync::Arc::new(crate::authz::Authorizer::new(crate::authz::CenterPolicy::deny_all()));
         Arc::new(AdminState {
             conf_mgr,

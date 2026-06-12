@@ -277,10 +277,10 @@ impl EdgionGatewayCli {
         // 10. Initialize integration testing mode from CLI flag
         // This flag activates: Access Log Store + Metrics Test Data collection
         let integration_testing = self.config.integration_testing_mode;
-        edgion_common::config::init_integration_testing_mode(integration_testing);
+        edgion_common::test_mode::init_integration_testing_mode(integration_testing);
 
         // 11. Initialize global test mode using the same flag
-        edgion_common::config::init_global_test_mode(integration_testing);
+        edgion_common::test_mode::init_global_test_mode(integration_testing);
 
         tracing::info!(
             component = "startup",

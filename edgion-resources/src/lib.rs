@@ -1,3 +1,4 @@
+pub mod auth_dto;
 pub mod common;
 pub mod constants;
 pub mod credentials;

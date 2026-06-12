@@ -44,6 +44,7 @@
 
 pub mod conf_center;
 mod manager;
+pub mod metadata_filter;
 pub mod processor_registry;
 pub mod runtime;
 mod schema_validator;

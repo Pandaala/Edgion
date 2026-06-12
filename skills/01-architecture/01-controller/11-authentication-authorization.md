@@ -164,7 +164,7 @@ Denials increment `edgion_fed_rbac_denied_total` via `record_rbac_denied(verb, k
 | Shared session auth (OIDC + local JWT) + `AuthBypass` marker | `edgion-common/src/unified_auth/mod.rs` |
 | Local username/password (config/handlers/secret) | `edgion-common/src/local_auth/` |
 | Admin router composition (`compose_admin_routes`) | `edgion-common/src/api/compose.rs` |
-| `cli_tokens` / `center.rbac` config types (`FedRbacConfig`) | `edgion-common/src/config/mod.rs` |
+| `cli_tokens` / `center.rbac` config types (`FedRbacConfig`) | `edgion-controller/src/config/mod.rs` |
 
 ## Related docs
 

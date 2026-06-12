@@ -20,10 +20,11 @@ allocator-jemalloc = ["tikv-jemallocator"]
 allocator-mimalloc = ["mimalloc"]
 allocator-system = []
 
-# TLS backend selection — the controller has no TLS-gated code of its own; it
-# forwards the choice to edgion-gateway (which it depends on for compile_plugins).
-boringssl = ["edgion-gateway/boringssl"]
-rustls = ["edgion-gateway/rustls"]
+# TLS backend selection — the controller has no TLS-gated code of its own, but
+# it links pingora (core/proxy) directly, so it must pick pingora's backend.
+# (Previously forwarded through the gateway crate; that dependency is now gone.)
+boringssl = ["pingora-core/boringssl", "pingora-proxy/boringssl"]
+rustls = ["pingora-core/rustls", "pingora-proxy/rustls"]
 
 [dependencies]
 # Memory allocators (optional, controlled by features)
@@ -35,10 +36,6 @@ edgion-resources.workspace = true
 
 # Shared common crate (config loader, observe, secret store, link core, etc.)
 edgion-common.workspace = true
-
-# Data-plane crate — the controller depends on it for plugin compilation
-# (the one intentional controller -> gateway edge).
-edgion-gateway.workspace = true
 
 # Core async runtime and error handling
 tokio.workspace = true
@@ -108,10 +105,6 @@ pingora-load-balancing.workspace = true
 pingora-proxy.workspace = true
 etcd-client.workspace = true
 fred.workspace = true
-
-# BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
-boring-sys = { workspace = true, optional = true }
-boring = { workspace = true, optional = true }
 
 # Metrics
 metrics.workspace = true

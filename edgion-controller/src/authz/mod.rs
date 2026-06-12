@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use arc_swap::ArcSwap;
 
-use edgion_common::config::FedRbacConfig;
+use crate::config::FedRbacConfig;
 
 /// The closed set of verbs the classifier can produce. Safe as a metric label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -237,7 +237,7 @@ impl Authorizer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_common::config::{FedAllowRule, FedRbacConfig};
+    use crate::config::{FedAllowRule, FedRbacConfig};
 
     fn policy(rules: Vec<(&[&str], &[&str])>) -> CenterPolicy {
         CenterPolicy::from_config(&FedRbacConfig {

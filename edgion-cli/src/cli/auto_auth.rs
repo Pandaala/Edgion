@@ -142,6 +142,18 @@ mod tests {
         "EDGION_ADMIN_JWT_SECRET",
     ];
 
+    // Process-global lock serializing `EDGION_ADMIN_*` env manipulation across
+    // these tests. CLI tests run in their own test binary (separate process), so
+    // a per-crate lock is equivalent to the controller's — no need to link the
+    // server-side auth module just for a mutex.
+    //
+    // `std::sync::Mutex` (not `parking_lot`) is deliberate: this is a test-only
+    // `Mutex<()>` whose guard is recovered on poison via `into_inner()` at the
+    // call sites, so poisoning is a non-issue and pulling in `parking_lot` just
+    // for it is not worth a new dependency.
+    #[allow(clippy::disallowed_types)]
+    static ADMIN_ENV_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn clear_admin_env() {
         for k in ADMIN_ENV_VARS {
             std::env::remove_var(k);
@@ -152,9 +164,7 @@ mod tests {
 
     #[test]
     fn detect_credentials_returns_env_creds_when_password_set() {
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = ADMIN_ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
         std::env::set_var("EDGION_ADMIN_USERNAME", "envuser");
         std::env::set_var("EDGION_ADMIN_PASSWORD", "envpass");
@@ -172,9 +182,7 @@ mod tests {
     #[test]
     fn detect_credentials_env_wins_over_readable_config_file() {
         use tempfile::TempDir;
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = ADMIN_ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
 
         // A real, readable config file with valid file-based credentials.
@@ -201,9 +209,7 @@ mod tests {
 
     #[test]
     fn detect_credentials_env_defaults_username_to_admin() {
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = ADMIN_ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
         // Only the password is set; username defaults to "admin".
         std::env::set_var("EDGION_ADMIN_PASSWORD", "envpass");
@@ -219,9 +225,7 @@ mod tests {
     #[test]
     fn detect_credentials_reads_local_auth_from_config_file() {
         use tempfile::TempDir;
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = ADMIN_ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
 
         let tmp = TempDir::new().unwrap();
@@ -243,9 +247,7 @@ mod tests {
     #[test]
     fn detect_credentials_empty_local_auth_password_returns_none() {
         use tempfile::TempDir;
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = ADMIN_ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
 
         let tmp = TempDir::new().unwrap();
@@ -265,9 +267,7 @@ mod tests {
     #[test]
     fn detect_credentials_disabled_local_auth_returns_none() {
         use tempfile::TempDir;
-        let _guard = edgion_common::local_auth::config::ADMIN_ENV_TEST_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = ADMIN_ENV_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         clear_admin_env();
 
         let tmp = TempDir::new().unwrap();

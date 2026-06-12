@@ -16,7 +16,7 @@ use tonic::transport::Channel;
 
 use crate::authz::{Authorizer, Verb};
 use crate::conf_mgr::ConfMgr;
-use edgion_common::config::CenterClientConfig;
+use crate::config::CenterClientConfig;
 use edgion_common::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
     federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage,
@@ -67,8 +67,8 @@ fn first_cert_der_from_pem(pem_bytes: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Map a federation mTLS refusal to its `system_error_state` reason label.
-fn refusal_reason(r: edgion_common::config::MtlsRefusal) -> &'static str {
-    use edgion_common::config::MtlsRefusal;
+fn refusal_reason(r: edgion_common::conf_sync_config::MtlsRefusal) -> &'static str {
+    use edgion_common::conf_sync_config::MtlsRefusal;
     use edgion_common::observe::system_metrics::reasons;
     match r {
         MtlsRefusal::NoTls => reasons::NO_TLS_CONFIGURED,
@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn federation_requires_mtls_channel() {
-        use edgion_common::config::{ConfSyncSecurityConfig, ConfSyncTlsConfig, MtlsRefusal};
+        use edgion_common::conf_sync_config::{ConfSyncSecurityConfig, ConfSyncTlsConfig, MtlsRefusal};
         use edgion_common::observe::system_metrics::reasons;
 
         // No TLS block -> NoTls -> reason no_tls_configured

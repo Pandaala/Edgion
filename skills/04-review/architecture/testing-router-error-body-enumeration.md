@@ -43,7 +43,7 @@ new information channel.
 
 `create_admin_router` only merges `create_testing_router` when
 `is_integration_testing_mode()` is true (`api/mod.rs:224`). The setter
-`init_integration_testing_mode` (`edgion-common/src/config/mod.rs:42-53`) emits a
+`init_integration_testing_mode` (`edgion-common/src/test_mode.rs`) emits a
 `tracing::warn!` on enable that reads "Integration testing mode enabled … **DO NOT
 enable in production**". A production operator turning the flag on is committing to
 running test fixtures, and the entire `/api/v1/testing/...` surface — access-log store
@@ -120,6 +120,6 @@ Re-open this decision only if:
   `get_etcd_client_by_name` (`:965-980`), `get_es_client_by_name` (`:1239-1254`),
   `redis_list_clients` / `etcd_list_clients` / `es_list_clients` route entries
   (`:583`, `:619`, `:629`).
-- `edgion-common/src/config/mod.rs` — `init_integration_testing_mode`
+- `edgion-common/src/test_mode.rs` — `init_integration_testing_mode`
   production-warning emission (`:42-53`), `is_integration_testing_mode` reader
   (`:57-59`).

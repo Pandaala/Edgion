@@ -268,7 +268,7 @@ pub(crate) fn validate_endpoint_backend_addr(
 ) -> Result<(), EdgionStatus> {
     match classify_backend_addr(addr) {
         Some(BlockedBackendReason::Localhost)
-            if allow_loopback_upstream || edgion_common::config::is_integration_testing_mode() =>
+            if allow_loopback_upstream || edgion_common::test_mode::is_integration_testing_mode() =>
         {
             Ok(())
         }
