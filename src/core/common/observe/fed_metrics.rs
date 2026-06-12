@@ -1,10 +1,16 @@
-//! Federation baseline metrics.
+//! Controller-side federation metrics.
 //!
-//! Shared by Center and Controller to emit Prometheus counters/gauges for
-//! federation plane observability. See
+//! Emits Prometheus counters/gauges for the federation plane from the
+//! Controller's point of view: connection lifecycle, watch events it serves,
+//! ready-gate wait, admin-API RBAC denials, and kill-switch state. See
 //! `docs/superpowers/specs/2026-04-19-fix-24-fed-metrics-baseline-design.md`
 //! for the full design and the rationale for dropping the original
 //! ticket's histograms and high-cardinality labels.
+//!
+//! The Center-only metrics (aggregator controller counts, watch list/error
+//! outcomes, mark-offline / evict-stale / session-reentry / session-takeover /
+//! peer-identity / consistency / fan-out) moved with Center to the standalone
+//! EdgionCenter repository.
 //!
 //! **Label value discipline:** every label value emitted here must come
 //! from a bounded enum (the `labels` submodule) or from a well-known
@@ -18,8 +24,7 @@ use metrics::{counter, gauge};
 /// and docs can reference the exact strings exposed on `/metrics`.
 pub mod names {
     /// Gauge: currently active federation connections (from the emitting
-    /// process's point of view). On Center this is the number of
-    /// controllers attached; on Controller this is 0 or 1.
+    /// process's point of view). On Controller this is 0 or 1.
     pub const CONNECTIONS_ACTIVE: &str = "edgion_fed_connections_active";
     /// Counter: federation session lifecycle events.
     pub const CONNECTION_EVENTS_TOTAL: &str = "edgion_fed_connection_events_total";
@@ -28,29 +33,8 @@ pub mod names {
     pub const CONNECTION_DURATION_LAST: &str = "edgion_fed_connection_duration_seconds_last";
     /// Counter: watch events flowing across the federation link.
     pub const WATCH_EVENTS_TOTAL: &str = "edgion_fed_watch_events_total";
-    /// Counter: initial list outcomes during watch setup.
-    pub const WATCH_LIST_TOTAL: &str = "edgion_fed_watch_list_total";
-    /// Counter: errors observed on the watch receive path.
-    pub const WATCH_ERRORS_TOTAL: &str = "edgion_fed_watch_errors_total";
-    /// Counter: controllers transitioned to offline in the registry.
-    pub const MARK_OFFLINE_TOTAL: &str = "edgion_fed_mark_offline_total";
-    /// Counter: stale entries evicted from registry/aggregator.
-    pub const EVICT_STALE_TOTAL: &str = "edgion_fed_evict_stale_total";
-    /// Counter: same `controller_id` re-registered while a prior session
-    /// was still in the registry (useful to detect reconnect storms).
-    pub const SESSION_REENTRY_TOTAL: &str = "edgion_fed_session_reentry_total";
-    /// Gauge: controllers known to the aggregator, broken down by cluster.
-    pub const AGGREGATOR_CONTROLLERS: &str = "edgion_fed_aggregator_controllers";
-    /// Counter: consistency-check API detected cross-controller divergence.
-    pub const CONSISTENCY_MISMATCH_TOTAL: &str = "edgion_fed_consistency_mismatch_total";
-    /// Counter: fan-out patch operations' aggregate outcome.
-    pub const FANOUT_TOTAL: &str = "edgion_fed_fanout_total";
     /// Gauge: last observed ready-gate wait in seconds (Controller side).
     pub const READY_GATE_WAIT_LAST: &str = "edgion_fed_ready_gate_wait_seconds_last";
-    /// Counter: peer-identity binding outcome on the federation gRPC server.
-    pub const PEER_IDENTITY_CHECK_TOTAL: &str = "edgion_fed_peer_identity_check_total";
-    /// Counter: a live session was displaced by a new connection (takeover).
-    pub const SESSION_TAKEOVER_TOTAL: &str = "edgion_fed_session_takeover_total";
     /// Counter: RBAC denials on the Controller admin-API federation path.
     /// Labels: `verb` (closed set from `Verb::as_str()` + "unknown"),
     /// `kind` (known ResourceKind, "*", "RegionRoute", or "unknown" — never raw input),
@@ -76,42 +60,6 @@ pub mod labels {
     pub mod direction {
         pub const SENT: &str = "sent";
         pub const RECV: &str = "recv";
-    }
-    pub mod watch_list_result {
-        pub const OK: &str = "ok";
-        pub const VERSION_TOO_OLD: &str = "version_too_old";
-        pub const PARSE_ERROR: &str = "parse_error";
-        pub const READY_WAIT: &str = "ready_wait";
-    }
-    pub mod watch_error_reason {
-        pub const PARSE_ERROR: &str = "parse_error";
-        pub const TIMEOUT: &str = "timeout";
-        pub const RECV_ERROR: &str = "recv_error";
-    }
-    pub mod offline_reason {
-        pub const HEARTBEAT: &str = "heartbeat";
-        pub const DISCONNECT: &str = "disconnect";
-        pub const RELOAD: &str = "reload";
-    }
-    pub mod evict_source {
-        pub const REGISTRY: &str = "registry";
-        pub const AGGREGATOR: &str = "aggregator";
-    }
-    pub mod fanout_op {
-        pub const PATCH_ENABLE: &str = "patch_enable";
-        pub const PATCH_PROFILE: &str = "patch_profile";
-    }
-    pub mod fanout_result {
-        pub const OK: &str = "ok";
-        pub const PARTIAL: &str = "partial";
-        pub const FAIL: &str = "fail";
-    }
-    pub mod peer_identity_result {
-        pub const OK: &str = "ok";
-        pub const MISMATCH: &str = "mismatch";
-        pub const NO_SPIFFE_SAN: &str = "no_spiffe_san";
-        pub const MULTI_SAN: &str = "multi_san";
-        pub const PARSE_ERROR: &str = "parse_error";
     }
     /// Bounded source values for `record_rbac_denied`. Identifies which
     /// authentication path originated the denied request.
@@ -158,65 +106,6 @@ pub fn record_watch_event(kind: &str, direction: &'static str) {
     counter!(names::WATCH_EVENTS_TOTAL, "kind" => kind.to_string(), "direction" => direction).increment(1);
 }
 
-#[inline]
-pub fn record_watch_list(kind: &str, result: &'static str) {
-    counter!(names::WATCH_LIST_TOTAL, "kind" => kind.to_string(), "result" => result).increment(1);
-}
-
-#[inline]
-pub fn record_watch_error(kind: &str, reason: &'static str) {
-    counter!(names::WATCH_ERRORS_TOTAL, "kind" => kind.to_string(), "reason" => reason).increment(1);
-}
-
-// ---------- Lifecycle (Center) ----------
-
-#[inline]
-pub fn record_mark_offline(reason: &'static str) {
-    counter!(names::MARK_OFFLINE_TOTAL, "reason" => reason).increment(1);
-}
-
-#[inline]
-pub fn record_evict_stale(source: &'static str) {
-    counter!(names::EVICT_STALE_TOTAL, "source" => source).increment(1);
-}
-
-#[inline]
-pub fn record_session_reentry() {
-    counter!(names::SESSION_REENTRY_TOTAL).increment(1);
-}
-
-#[inline]
-pub fn record_peer_identity_check(result: &'static str) {
-    counter!(names::PEER_IDENTITY_CHECK_TOTAL, "result" => result).increment(1);
-}
-
-#[inline]
-pub fn record_session_takeover() {
-    counter!(names::SESSION_TAKEOVER_TOTAL).increment(1);
-}
-
-// ---------- Aggregator (Center) ----------
-
-/// Set the number of controllers known to the aggregator for a given
-/// cluster. Callers must update this gauge whenever the aggregator's
-/// controller set mutates. The label `env` from the original ticket was
-/// dropped because `env` is a repeated field in RegisterRequest and
-/// cannot be represented as a single bounded label value.
-#[inline]
-pub fn set_aggregator_controllers(cluster: &str, count: u64) {
-    gauge!(names::AGGREGATOR_CONTROLLERS, "cluster" => cluster.to_string()).set(count as f64);
-}
-
-#[inline]
-pub fn record_consistency_mismatch() {
-    counter!(names::CONSISTENCY_MISMATCH_TOTAL).increment(1);
-}
-
-#[inline]
-pub fn record_fanout(op: &'static str, result: &'static str) {
-    counter!(names::FANOUT_TOTAL, "op" => op, "result" => result).increment(1);
-}
-
 // ---------- Ready gate (Controller) ----------
 
 #[inline]
@@ -259,41 +148,8 @@ pub fn record_kill_switch_state(enabled: bool) {
 }
 
 #[cfg(test)]
-mod peer_auth_metric_tests {
-    use super::*;
-
-    #[test]
-    fn peer_identity_metric_name_is_stable() {
-        assert_eq!(names::PEER_IDENTITY_CHECK_TOTAL, "edgion_fed_peer_identity_check_total");
-        assert_eq!(names::SESSION_TAKEOVER_TOTAL, "edgion_fed_session_takeover_total");
-    }
-
-    #[test]
-    fn peer_identity_result_labels_are_bounded() {
-        let _ = [
-            labels::peer_identity_result::OK,
-            labels::peer_identity_result::MISMATCH,
-            labels::peer_identity_result::NO_SPIFFE_SAN,
-            labels::peer_identity_result::MULTI_SAN,
-            labels::peer_identity_result::PARSE_ERROR,
-        ];
-    }
-
-    #[test]
-    fn recorders_do_not_panic() {
-        record_peer_identity_check(labels::peer_identity_result::OK);
-        record_session_takeover();
-    }
-}
-
-#[cfg(test)]
 mod tests {
     use super::labels::*;
-
-    // The 8 individual `*_labels_are_stable` tests that previously appeared
-    // here have been folded into `bounded_enum_value_sets_are_exhaustive_and_unique`
-    // below, which checks the full enum value set (stricter — adding or
-    // dropping a const breaks it) plus uniqueness across each enum.
 
     #[test]
     fn metric_names_have_edgion_fed_prefix() {
@@ -303,14 +159,6 @@ mod tests {
             CONNECTION_EVENTS_TOTAL,
             CONNECTION_DURATION_LAST,
             WATCH_EVENTS_TOTAL,
-            WATCH_LIST_TOTAL,
-            WATCH_ERRORS_TOTAL,
-            MARK_OFFLINE_TOTAL,
-            EVICT_STALE_TOTAL,
-            SESSION_REENTRY_TOTAL,
-            AGGREGATOR_CONTROLLERS,
-            CONSISTENCY_MISMATCH_TOTAL,
-            FANOUT_TOTAL,
             READY_GATE_WAIT_LAST,
         ] {
             assert!(
@@ -358,23 +206,6 @@ mod tests {
             ("event::RELOAD", event::RELOAD),
             ("direction::SENT", direction::SENT),
             ("direction::RECV", direction::RECV),
-            ("watch_list_result::OK", watch_list_result::OK),
-            ("watch_list_result::VERSION_TOO_OLD", watch_list_result::VERSION_TOO_OLD),
-            ("watch_list_result::PARSE_ERROR", watch_list_result::PARSE_ERROR),
-            ("watch_list_result::READY_WAIT", watch_list_result::READY_WAIT),
-            ("watch_error_reason::PARSE_ERROR", watch_error_reason::PARSE_ERROR),
-            ("watch_error_reason::TIMEOUT", watch_error_reason::TIMEOUT),
-            ("watch_error_reason::RECV_ERROR", watch_error_reason::RECV_ERROR),
-            ("offline_reason::HEARTBEAT", offline_reason::HEARTBEAT),
-            ("offline_reason::DISCONNECT", offline_reason::DISCONNECT),
-            ("offline_reason::RELOAD", offline_reason::RELOAD),
-            ("evict_source::REGISTRY", evict_source::REGISTRY),
-            ("evict_source::AGGREGATOR", evict_source::AGGREGATOR),
-            ("fanout_op::PATCH_ENABLE", fanout_op::PATCH_ENABLE),
-            ("fanout_op::PATCH_PROFILE", fanout_op::PATCH_PROFILE),
-            ("fanout_result::OK", fanout_result::OK),
-            ("fanout_result::PARTIAL", fanout_result::PARTIAL),
-            ("fanout_result::FAIL", fanout_result::FAIL),
             ("rbac_source::CENTER", rbac_source::CENTER),
             ("rbac_source::CLI_TOKEN", rbac_source::CLI_TOKEN),
             ("rbac_source::UNKNOWN", rbac_source::UNKNOWN),
@@ -396,14 +227,6 @@ mod tests {
             CONNECTION_EVENTS_TOTAL,
             CONNECTION_DURATION_LAST,
             WATCH_EVENTS_TOTAL,
-            WATCH_LIST_TOTAL,
-            WATCH_ERRORS_TOTAL,
-            MARK_OFFLINE_TOTAL,
-            EVICT_STALE_TOTAL,
-            SESSION_REENTRY_TOTAL,
-            AGGREGATOR_CONTROLLERS,
-            CONSISTENCY_MISMATCH_TOTAL,
-            FANOUT_TOTAL,
             READY_GATE_WAIT_LAST,
         ];
         for n in names {
@@ -448,49 +271,6 @@ mod tests {
         );
         check("direction", &[direction::SENT, direction::RECV], &["sent", "recv"]);
         check(
-            "watch_list_result",
-            &[
-                watch_list_result::OK,
-                watch_list_result::VERSION_TOO_OLD,
-                watch_list_result::PARSE_ERROR,
-                watch_list_result::READY_WAIT,
-            ],
-            &["ok", "version_too_old", "parse_error", "ready_wait"],
-        );
-        check(
-            "watch_error_reason",
-            &[
-                watch_error_reason::PARSE_ERROR,
-                watch_error_reason::TIMEOUT,
-                watch_error_reason::RECV_ERROR,
-            ],
-            &["parse_error", "timeout", "recv_error"],
-        );
-        check(
-            "offline_reason",
-            &[
-                offline_reason::HEARTBEAT,
-                offline_reason::DISCONNECT,
-                offline_reason::RELOAD,
-            ],
-            &["heartbeat", "disconnect", "reload"],
-        );
-        check(
-            "evict_source",
-            &[evict_source::REGISTRY, evict_source::AGGREGATOR],
-            &["registry", "aggregator"],
-        );
-        check(
-            "fanout_op",
-            &[fanout_op::PATCH_ENABLE, fanout_op::PATCH_PROFILE],
-            &["patch_enable", "patch_profile"],
-        );
-        check(
-            "fanout_result",
-            &[fanout_result::OK, fanout_result::PARTIAL, fanout_result::FAIL],
-            &["ok", "partial", "fail"],
-        );
-        check(
             "rbac_source",
             &[rbac_source::CENTER, rbac_source::CLI_TOKEN, rbac_source::UNKNOWN],
             &["center", "cli_token", "unknown"],
@@ -502,18 +282,10 @@ mod tests {
         // Without a Prometheus recorder installed, the metrics crate uses
         // a no-op recorder. Helpers must not panic in that case, which
         // also covers unit-test harnesses.
-        super::set_connections_active(role::CENTER, 0);
-        super::record_connection_event(role::CENTER, event::CONNECTED);
-        super::record_connection_duration(role::CENTER, 1.5);
+        super::set_connections_active(role::CONTROLLER, 0);
+        super::record_connection_event(role::CONTROLLER, event::CONNECTED);
+        super::record_connection_duration(role::CONTROLLER, 1.5);
         super::record_watch_event("PluginMetaData", direction::RECV);
-        super::record_watch_list("PluginMetaData", watch_list_result::OK);
-        super::record_watch_error("PluginMetaData", watch_error_reason::RECV_ERROR);
-        super::record_mark_offline(offline_reason::DISCONNECT);
-        super::record_evict_stale(evict_source::REGISTRY);
-        super::record_session_reentry();
-        super::set_aggregator_controllers("default", 3);
-        super::record_consistency_mismatch();
-        super::record_fanout(fanout_op::PATCH_ENABLE, fanout_result::OK);
         super::record_ready_gate_wait(0.25);
     }
 }
@@ -522,7 +294,7 @@ mod tests {
 mod rbac_metric_tests {
     use super::*;
 
-    /// Name constants for the new RBAC metrics must follow the `edgion_fed_` prefix
+    /// Name constants for the RBAC metrics must follow the `edgion_fed_` prefix
     /// convention and use only lowercase ASCII + underscores.
     #[test]
     fn rbac_metric_names_are_stable_and_valid() {
@@ -595,12 +367,12 @@ mod rbac_metric_tests {
         record_kill_switch_state(true);
     }
 
-    /// Task 7: `record_rbac_denied` with the `source` label must not panic for
+    /// `record_rbac_denied` with the `source` label must not panic for
     /// the cli_token source, confirming the three bounded source values are usable.
     #[test]
     fn rbac_denied_with_source_label_increments_without_panic() {
         use super::labels::rbac_source;
-        // The canonical Task-7 case: a cli token denied on Secret.
+        // The canonical case: a cli token denied on Secret.
         record_rbac_denied("get", "Secret", rbac_source::CLI_TOKEN);
         record_rbac_denied("list", "PluginMetaData", rbac_source::CENTER);
         record_rbac_denied("unknown", "unknown", rbac_source::UNKNOWN);
