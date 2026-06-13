@@ -185,6 +185,20 @@ impl EsLinkClient {
         }
     }
 
+    /// Non-blocking send for access-log callers.
+    ///
+    /// Returns Err on Full or Closed; never awaits. Use send_bulk() when
+    /// backpressure is preferable to dropping.
+    pub fn try_send_bulk(&self, doc: String) -> Result<()> {
+        let sender = self.bulk_sender.lock().clone();
+        let Some(sender) = sender else {
+            anyhow::bail!("ES [{}] not initialized (bulk sender not ready)", self.name);
+        };
+        sender
+            .try_send(doc)
+            .map_err(|e| anyhow::anyhow!("ES [{}] try_send_bulk: {}", self.name, e))
+    }
+
     /// Graceful shutdown: signal background task and drop sender, then await drain.
     pub async fn shutdown(&self) -> Result<()> {
         tracing::info!("ES [{}] shutting down", self.name);
@@ -294,5 +308,18 @@ mod tests {
         let result = EsLinkClient::from_config("test", &config, &no_auth());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn test_try_send_bulk_not_initialized_returns_err() {
+        let config = config_with_endpoints(vec!["http://localhost:9200".to_string()]);
+        let client = EsLinkClient::from_config("test/client", &config, &no_auth())
+            .expect("from_config should succeed with a valid endpoint");
+
+        // bulk_sender is None until init() is called
+        let result = client.try_send_bulk("test doc".to_string());
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("not initialized"), "unexpected error: {}", msg);
     }
 }

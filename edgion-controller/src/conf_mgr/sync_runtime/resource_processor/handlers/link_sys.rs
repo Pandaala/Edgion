@@ -282,7 +282,9 @@ async fn resolve_for_spec(
             }
             errors
         }
-        SystemConfig::Kafka(_) => Vec::new(),
+        SystemConfig::Kafka(kafka_config) => {
+            drive_standard(ctx, owner, kafka_config.sasl.as_mut(), kafka_config.tls.as_mut()).await
+        }
     }
 }
 

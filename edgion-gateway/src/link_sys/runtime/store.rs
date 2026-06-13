@@ -18,6 +18,7 @@ use crate::link_sys::credential;
 use crate::link_sys::lifecycle::LinkSysLifecycle;
 use crate::link_sys::providers::elasticsearch::EsLinkClient;
 use crate::link_sys::providers::etcd::EtcdLinkClient;
+use crate::link_sys::providers::kafka::KafkaLinkClient;
 use crate::link_sys::providers::redis::RedisLinkClient;
 use crate::link_sys::providers::webhook::WebhookLinkClient;
 use crate::link_sys::LinkSysHealth;
@@ -313,6 +314,36 @@ pub async fn health_check_all_es() -> Vec<LinkSysHealth> {
 }
 
 // ============================================================
+// Kafka runtime store
+// ============================================================
+
+/// Global runtime store for Kafka clients, keyed by "namespace/name".
+static KAFKA_RUNTIME: LazyLock<ProviderRuntimeStore<KafkaLinkClient>> = LazyLock::new(ProviderRuntimeStore::new);
+
+/// Get a Kafka client by LinkSys name ("namespace/name").
+///
+/// This is the primary API for DataSender and other callers.
+/// Returns None if the LinkSys resource doesn't exist or isn't a Kafka type.
+pub fn get_kafka_client(name: &str) -> Option<Arc<KafkaLinkClient>> {
+    KAFKA_RUNTIME.get(name)
+}
+
+/// List all registered Kafka client names.
+pub fn list_kafka_clients() -> Vec<String> {
+    KAFKA_RUNTIME.list()
+}
+
+/// Number of Kafka link clients currently in the runtime.
+pub fn kafka_client_count() -> usize {
+    KAFKA_RUNTIME.count()
+}
+
+/// Health check all registered Kafka clients.
+pub fn health_check_all_kafka() -> Vec<LinkSysHealth> {
+    KAFKA_RUNTIME.values().into_iter().map(|c| c.health_status()).collect()
+}
+
+// ============================================================
 // Webhook runtime store
 // ============================================================
 //
@@ -542,16 +573,19 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     let old_redis_snapshot = REDIS_RUNTIME.load_full();
     let old_etcd_snapshot = ETCD_RUNTIME.load_full();
     let old_es_snapshot = ES_RUNTIME.load_full();
+    let old_kafka_snapshot = KAFKA_RUNTIME.load_full();
 
     let mut new_webhook_map: HashMap<String, Arc<WebhookLinkClient>> = HashMap::new();
     let mut new_redis_map: HashMap<String, Arc<RedisLinkClient>> = HashMap::new();
     let mut new_etcd_map: HashMap<String, Arc<EtcdLinkClient>> = HashMap::new();
     let mut new_es_map: HashMap<String, Arc<EsLinkClient>> = HashMap::new();
+    let mut new_kafka_map: HashMap<String, Arc<KafkaLinkClient>> = HashMap::new();
 
     let mut preserved_webhook_keys: HashSet<String> = HashSet::new();
     let mut preserved_redis_keys: HashSet<String> = HashSet::new();
     let mut preserved_etcd_keys: HashSet<String> = HashSet::new();
     let mut preserved_es_keys: HashSet<String> = HashSet::new();
+    let mut preserved_kafka_keys: HashSet<String> = HashSet::new();
 
     for (key, ls) in data {
         match &ls.spec.config {
@@ -653,11 +687,25 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                     &mut new_es_map,
                 );
             }
-            _ => {
-                tracing::debug!(
+            edgion_resources::resources::link_sys::SystemConfig::Kafka(kafka_config) => {
+                let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
+                if carry_over_if_not_ready(
                     key,
-                    system_type = ?ls.spec.config.system_type(),
-                    "LinkSys resource registered (runtime not yet implemented)"
+                    "Kafka",
+                    auth.kind(),
+                    tls_ok,
+                    ready,
+                    &*old_kafka_snapshot,
+                    &mut new_kafka_map,
+                    &mut preserved_kafka_keys,
+                ) {
+                    continue;
+                }
+                register_for_full_set(
+                    key,
+                    "Kafka",
+                    || KafkaLinkClient::from_config(key, kafka_config, &auth),
+                    &mut new_kafka_map,
                 );
             }
         }
@@ -668,6 +716,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     swap_and_shutdown_olds("Redis", new_redis_map, preserved_redis_keys, &REDIS_RUNTIME);
     swap_and_shutdown_olds("Etcd", new_etcd_map, preserved_etcd_keys, &ETCD_RUNTIME);
     swap_and_shutdown_olds("Elasticsearch", new_es_map, preserved_es_keys, &ES_RUNTIME);
+    swap_and_shutdown_olds("Kafka", new_kafka_map, preserved_kafka_keys, &KAFKA_RUNTIME);
 }
 
 /// Dispatch incremental changes to sub-module managers.
@@ -736,22 +785,28 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                     &ES_RUNTIME,
                 );
             }
-            _ => {
-                tracing::debug!(
+            edgion_resources::resources::link_sys::SystemConfig::Kafka(kafka_config) => {
+                let (ready, tls_ok, auth) = credential_readiness(ls, credential::resolved_state);
+                if preserve_if_not_ready(key, "Kafka", auth.kind(), tls_ok, ready, &KAFKA_RUNTIME) {
+                    continue;
+                }
+                spawn_and_swap_partial(
                     key,
-                    system_type = ?ls.spec.config.system_type(),
-                    "LinkSys resource registered (runtime not yet implemented)"
+                    "Kafka",
+                    || KafkaLinkClient::from_config(key, kafka_config, &auth),
+                    &KAFKA_RUNTIME,
                 );
             }
         }
     }
 
-    // Handle remove — uniform across all 4 providers
+    // Handle remove — uniform across all providers
     for key in remove {
         spawn_shutdown_if_present(WEBHOOK_RUNTIME.remove(key), "Webhook");
         spawn_shutdown_if_present(REDIS_RUNTIME.remove(key), "Redis");
         spawn_shutdown_if_present(ETCD_RUNTIME.remove(key), "Etcd");
         spawn_shutdown_if_present(ES_RUNTIME.remove(key), "Elasticsearch");
+        spawn_shutdown_if_present(KAFKA_RUNTIME.remove(key), "Kafka");
     }
 }
 

@@ -21,7 +21,7 @@
 //!     let id = client.index_doc("my-index", &json!({"msg": "hello"})).await?;
 //!
 //!     // Bulk ingest (via background task)
-//!     client.send_bulk(r#"{"msg": "log line"}"#.to_string()).await?;
+//!     client.try_send_bulk(r#"{"msg": "log line"}"#.to_string())?; // non-blocking; use send_bulk() if backpressure is needed
 //!
 //!     // Search
 //!     let result = client.search("my-index", &json!({"query": {"match_all": {}}})).await?;
@@ -31,9 +31,11 @@
 pub mod bulk;
 pub mod client;
 pub mod config_mapping;
+pub mod log_sender;
 pub mod ops;
 
 // Re-export key types for convenient access
 pub use client::EsLinkClient;
 pub use config_mapping::EsBulkConfig;
+pub use log_sender::EsLogSender;
 pub use ops::{EsSearchHit, EsSearchResult};

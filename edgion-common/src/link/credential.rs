@@ -257,6 +257,11 @@ pub fn resolved_state(ls: &LinkSys) -> CredentialState<ResolvedCredential> {
                     .map(ResolvedCredential::WebhookApiKey)
             }
         },
+        SystemConfig::Kafka(kafka) => match kafka.sasl.as_ref() {
+            None => CredentialState::NotRequired,
+            Some(sasl) => state_from_optional_secret(sasl.password.secret.as_ref(), &BasicAuthResolver)
+                .map(ResolvedCredential::Basic),
+        },
         _ => CredentialState::NotRequired,
     }
 }
@@ -337,6 +342,7 @@ pub fn tls_ready(ls: &LinkSys) -> bool {
         SystemConfig::Redis(r) => r.tls.as_ref(),
         SystemConfig::Etcd(e) => e.tls.as_ref(),
         SystemConfig::Elasticsearch(es) => es.tls.as_ref(),
+        SystemConfig::Kafka(k) => k.tls.as_ref(),
         _ => None,
     };
     tls_ready_inner(tls)
@@ -798,5 +804,83 @@ mod tests {
             status: None,
         };
         assert!(!dispatch_gate(&ls));
+    }
+
+    // ------------------------------------------------------------
+    // resolved_state — Kafka SASL variants
+    // ------------------------------------------------------------
+
+    fn mk_kafka_linksys(sasl: Option<edgion_resources::resources::link_sys::kafka::KafkaSaslConfig>) -> LinkSys {
+        use edgion_resources::resources::link_sys::kafka::KafkaClientConfig;
+        LinkSys {
+            metadata: kube::api::ObjectMeta {
+                name: Some("kafka".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            spec: edgion_resources::resources::link_sys::LinkSysSpec {
+                config: SystemConfig::Kafka(KafkaClientConfig {
+                    brokers: vec!["broker1:9092".to_string()],
+                    sasl,
+                    tls: None,
+                    channel_size: None,
+                    linger_ms: None,
+                }),
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn resolved_state_kafka_no_sasl_is_not_required() {
+        let ls = mk_kafka_linksys(None);
+        assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
+    }
+
+    #[test]
+    fn resolved_state_kafka_sasl_pending_when_secret_missing() {
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::link_sys::kafka::KafkaSaslConfig;
+        let ls = mk_kafka_linksys(Some(KafkaSaslConfig {
+            username: "user".to_string(),
+            password: SecretSlot {
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "kafka-secret".into(),
+                    namespace: None,
+                },
+                secret: None,
+            },
+        }));
+        assert!(matches!(resolved_state(&ls), CredentialState::Pending));
+    }
+
+    #[test]
+    fn resolved_state_kafka_sasl_resolved_when_secret_present() {
+        use edgion_resources::resources::common::{SecretObjectReference, SecretSlot};
+        use edgion_resources::resources::link_sys::kafka::KafkaSaslConfig;
+        let ls = mk_kafka_linksys(Some(KafkaSaslConfig {
+            username: "user".to_string(),
+            password: SecretSlot {
+                secret_ref: SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "kafka-secret".into(),
+                    namespace: None,
+                },
+                secret: Some(mk_secret(&[("password", b"kafka-pass")])),
+            },
+        }));
+        assert!(matches!(
+            resolved_state(&ls),
+            CredentialState::Resolved(ResolvedCredential::Basic(_))
+        ));
+    }
+
+    #[test]
+    fn tls_ready_kafka_no_tls_is_true() {
+        let ls = mk_kafka_linksys(None);
+        assert!(tls_ready(&ls));
     }
 }

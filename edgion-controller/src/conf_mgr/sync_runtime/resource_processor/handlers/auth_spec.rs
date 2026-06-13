@@ -21,6 +21,7 @@ use edgion_resources::credentials::resolvers::{
 use edgion_resources::resources::common::{SecretSlot, TlsConfig};
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
 use edgion_resources::resources::link_sys::etcd::EtcdAuth;
+use edgion_resources::resources::link_sys::kafka::KafkaSaslConfig;
 use edgion_resources::resources::link_sys::redis::RedisAuth;
 use edgion_resources::resources::link_sys::webhook::WebhookAuth;
 
@@ -173,6 +174,32 @@ impl AuthSpec for ElasticsearchAuth {
 }
 
 // ============================================================================
+// AuthSpec impl — Kafka SASL/PLAIN
+// ============================================================================
+
+#[async_trait]
+impl AuthSpec for KafkaSaslConfig {
+    fn slot(&self) -> &SecretSlot {
+        &self.password
+    }
+    fn slot_mut(&mut self) -> &mut SecretSlot {
+        &mut self.password
+    }
+    fn provider_name(&self) -> &'static str {
+        "Kafka"
+    }
+    async fn resolve(&mut self, ctx: &HandlerContext, owner: &ResourceRef) -> Option<ResolvedRefsError> {
+        match resolve_one(ctx, owner, &self.password.secret_ref, &BasicAuthResolver).await {
+            Ok(s) => {
+                self.password.secret = s;
+                None
+            }
+            Err(e) => Some(e),
+        }
+    }
+}
+
+// ============================================================================
 // TlsSpec impl on TlsConfig — operates on TlsCerts.secret_ref + .secret directly
 // (TlsCerts intentionally NOT migrated to SecretSlot, see plan T6 revision)
 // ============================================================================
@@ -234,5 +261,15 @@ mod tests {
     fn es_auth_basic_slot_view() {
         let a = ElasticsearchAuth::Basic { slot: slot("es") };
         assert_eq!(<ElasticsearchAuth as AuthSpec>::slot(&a).secret_ref.name, "es");
+    }
+
+    #[test]
+    fn kafka_sasl_provider_name_and_slot() {
+        let a = KafkaSaslConfig {
+            username: "user".to_string(),
+            password: slot("kafka-secret"),
+        };
+        assert_eq!(<KafkaSaslConfig as AuthSpec>::provider_name(&a), "Kafka");
+        assert_eq!(<KafkaSaslConfig as AuthSpec>::slot(&a).secret_ref.name, "kafka-secret");
     }
 }

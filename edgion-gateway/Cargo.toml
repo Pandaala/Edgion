@@ -148,6 +148,7 @@ rcgen.workspace = true
 time.workspace = true
 sha1.workspace = true
 ldap3.workspace = true
+rskafka.workspace = true
 pingora-ketama.workspace = true
 tower.workspace = true
 

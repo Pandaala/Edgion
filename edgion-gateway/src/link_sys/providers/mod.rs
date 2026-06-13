@@ -1,4 +1,5 @@
 pub mod elasticsearch;
+pub mod kafka;
 pub mod local_file;
 pub mod redis;
 pub mod webhook;

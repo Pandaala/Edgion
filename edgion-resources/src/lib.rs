@@ -33,7 +33,9 @@ pub mod global_def {
 #[macro_use]
 pub mod resource;
 
-pub use self::output::{LocalFileWriterCfg, LocalFileWriterConfig, RotationConfig, RotationStrategy, StringOutput};
+pub use self::output::{
+    LinkSysRef, LocalFileWriterCfg, LocalFileWriterConfig, RotationConfig, RotationStrategy, StringOutput,
+};
 
 // Re-export from resource module
 pub use self::resource::ResourceKind;

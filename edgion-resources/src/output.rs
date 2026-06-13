@@ -7,8 +7,31 @@
 //! (`types::resources::link_sys`), which describes connections to external
 //! systems like Redis/Etcd. For the CRD, use `crate::{LinkSys, LinkSysSpec}`.
 
+use std::fmt;
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+/// Reference to a LinkSys resource by namespace + name.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkSysRef {
+    pub namespace: String,
+    pub name: String,
+}
+
+impl LinkSysRef {
+    /// Returns the "namespace/name" key used by runtime stores.
+    pub fn key(&self) -> String {
+        format!("{}/{}", self.namespace, self.name)
+    }
+}
+
+impl fmt::Display for LinkSysRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}/{}", self.namespace, self.name)
+    }
+}
 
 /// Log file rotation configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -95,21 +118,17 @@ impl Default for LocalFileWriterCfg {
 }
 
 /// String output destination configuration
-///
-/// Currently supports:
-/// - LocalFileWriter: write to local file with rotation
-///
-/// Future support:
-/// - Elasticsearch
-/// - Kafka
-/// - ClickHouse
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StringOutput {
     /// Write to local file
     LocalFile(LocalFileWriterCfg),
-    // TODO: Es(EsConfig),
-    // TODO: Kafka(KafkaConfig),
+    /// Ship to Elasticsearch via a LinkSys resource
+    #[serde(rename_all = "camelCase")]
+    Es { link_sys_ref: LinkSysRef },
+    /// Ship to Kafka via a LinkSys resource
+    #[serde(rename_all = "camelCase")]
+    Kafka { link_sys_ref: LinkSysRef, topic: String },
 }
 
 impl Default for StringOutput {
@@ -157,5 +176,73 @@ impl From<LocalFileWriterCfg> for LocalFileWriterConfig {
             queue_size: cfg.queue_size,
             rotation: cfg.rotation.unwrap_or_default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_link_sys_ref_key() {
+        let r = LinkSysRef {
+            namespace: "default".to_string(),
+            name: "es-main".to_string(),
+        };
+        assert_eq!(r.key(), "default/es-main");
+        assert_eq!(format!("{}", r), "default/es-main");
+    }
+
+    #[test]
+    fn test_string_output_es_serde_roundtrip_struct() {
+        let original = StringOutput::Es {
+            link_sys_ref: LinkSysRef {
+                namespace: "default".to_string(),
+                name: "es-main".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        assert_eq!(
+            json,
+            r#"{"es":{"linkSysRef":{"namespace":"default","name":"es-main"}}}"#
+        );
+        let roundtrip: StringOutput = serde_json::from_str(&json).unwrap();
+        match roundtrip {
+            StringOutput::Es { link_sys_ref } => {
+                assert_eq!(link_sys_ref.namespace, "default");
+                assert_eq!(link_sys_ref.name, "es-main");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_string_output_kafka_serde_roundtrip() {
+        let original = StringOutput::Kafka {
+            link_sys_ref: LinkSysRef {
+                namespace: "default".to_string(),
+                name: "kafka-main".to_string(),
+            },
+            topic: "edgion-access".to_string(),
+        };
+        let json = serde_json::to_string(&original).unwrap();
+        assert_eq!(
+            json,
+            r#"{"kafka":{"linkSysRef":{"namespace":"default","name":"kafka-main"},"topic":"edgion-access"}}"#
+        );
+        let roundtrip: StringOutput = serde_json::from_str(&json).unwrap();
+        match roundtrip {
+            StringOutput::Kafka { link_sys_ref, topic } => {
+                assert_eq!(link_sys_ref.key(), "default/kafka-main");
+                assert_eq!(topic, "edgion-access");
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_string_output_local_file_default_unchanged() {
+        let s = StringOutput::default();
+        assert!(matches!(s, StringOutput::LocalFile(_)));
     }
 }

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub mod common;
 pub mod elasticsearch;
 pub mod etcd;
+pub mod kafka;
 pub mod redis;
 pub mod webhook;
 
@@ -18,6 +19,7 @@ pub mod webhook;
 pub use common::SecretObjectReference;
 pub use elasticsearch::ElasticsearchClientConfig;
 pub use etcd::EtcdClientConfig;
+pub use kafka::KafkaClientConfig;
 pub use redis::RedisClientConfig;
 pub use webhook::WebhookServiceConfig;
 
@@ -60,15 +62,6 @@ pub enum SystemConfig {
     Webhook(WebhookServiceConfig),
 }
 
-// Placeholder types for future implementations
-
-/// Kafka client configuration (placeholder)
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-pub struct KafkaClientConfig {
-    /// Kafka brokers
-    pub brokers: Vec<String>,
-}
-
 impl SystemConfig {
     /// Get the system type
     pub fn system_type(&self) -> SystemType {
@@ -109,6 +102,14 @@ impl SystemConfig {
     pub fn as_elasticsearch(&self) -> Option<&ElasticsearchClientConfig> {
         match self {
             SystemConfig::Elasticsearch(config) => Some(config),
+            _ => None,
+        }
+    }
+
+    /// Get Kafka configuration if this is a Kafka system
+    pub fn as_kafka(&self) -> Option<&KafkaClientConfig> {
+        match self {
+            SystemConfig::Kafka(config) => Some(config),
             _ => None,
         }
     }
@@ -171,11 +172,11 @@ impl LinkSys {
                     errors.push(format!("Webhook configuration error: {}", err));
                 }
             }
-            // Placeholder variants (e.g. Kafka) are not validated as failures — the spec is
-            // structurally fine; the backend just isn't wired up yet. Keeping them as
-            // `Accepted=True` matches the original warn-only behaviour and avoids
-            // regressing any existing resources on upgrade.
-            _ => {}
+            SystemConfig::Kafka(kafka_config) => {
+                if kafka_config.brokers.is_empty() {
+                    errors.push("Kafka configuration has no brokers".to_string());
+                }
+            }
         }
         errors
     }

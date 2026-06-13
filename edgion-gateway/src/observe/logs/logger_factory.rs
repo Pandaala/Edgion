@@ -1,33 +1,21 @@
 //! Unified logger factory for creating different types of loggers
 
-use anyhow::Result;
 use std::sync::Arc;
 
-use crate::link_sys::providers::local_file::LogType;
-use crate::link_sys::{DataSender, LocalFileWriter};
+use anyhow::Result;
+use edgion_resources::{LocalFileWriterCfg, LocalFileWriterConfig, LogConfig, StringOutput};
+
+use crate::link_sys::providers::elasticsearch::EsLogSender;
+use crate::link_sys::providers::kafka::KafkaLogSender;
+use crate::link_sys::{DataSender, LocalFileWriter, LogType};
 use crate::observe::logs::ssl_log::SslLogger;
 use crate::observe::AccessLogger;
-use edgion_resources::{LocalFileWriterConfig, LogConfig, StringOutput};
 
-/// Build a `LocalFileWriterConfig` from the common `LogConfig` front-end.
+/// Build a `LocalFileWriterConfig` from the given `LocalFileWriterCfg`.
 ///
-/// Returns `None` when the logger is disabled by configuration or has an empty
-/// output path (both are operator-driven "logger off" cases, not errors).
-/// Future non-`LocalFile` `StringOutput` variants (Es, Kafka, ...) will need
-/// their own front-end builder and should not be funnelled through this one.
-fn build_writer_config(config: &LogConfig, log_type: LogType) -> Option<LocalFileWriterConfig> {
-    if !config.enabled {
-        tracing::info!(?log_type, "Logger disabled by configuration");
-        return None;
-    }
-
-    let StringOutput::LocalFile(file_cfg) = &config.output;
-
-    if file_cfg.path.is_empty() {
-        tracing::info!(?log_type, "Logger disabled (empty path)");
-        return None;
-    }
-
+/// Caller is responsible for checking `enabled` and `path.is_empty()` before
+/// calling this function.
+fn build_writer_config(file_cfg: &LocalFileWriterCfg, log_type: LogType) -> LocalFileWriterConfig {
     tracing::info!(
         ?log_type,
         path = %file_cfg.path,
@@ -45,38 +33,78 @@ fn build_writer_config(config: &LogConfig, log_type: LogType) -> Option<LocalFil
         writer_config = writer_config.with_rotation(rotation.clone());
     }
 
-    Some(writer_config)
+    writer_config
 }
 
-/// Create an async logger (for Access, TCP, UDP logs)
-/// Returns None if the log is disabled
+/// Create an async logger (for Access, TCP, UDP, TLS logs).
+/// Returns `None` if the log is disabled or the output is not supported.
 pub async fn create_async_logger(config: &LogConfig, log_type: LogType) -> Result<Option<Arc<AccessLogger>>> {
-    let Some(writer_config) = build_writer_config(config, log_type) else {
+    if !config.enabled {
+        tracing::info!(?log_type, "Logger disabled by configuration");
         return Ok(None);
-    };
+    }
 
-    // Create and initialize LocalFileWriter
-    let mut writer = LocalFileWriter::new(writer_config).with_log_type(log_type);
-    writer.init().await?;
-
-    // Register the writer
-    let mut logger = AccessLogger::new();
-    logger.register(Box::new(writer));
-
-    tracing::info!(?log_type, "Logger initialized successfully");
-
-    Ok(Some(Arc::new(logger)))
+    match &config.output {
+        StringOutput::LocalFile(file_cfg) => {
+            if file_cfg.path.is_empty() {
+                tracing::info!(?log_type, "Logger disabled (empty path)");
+                return Ok(None);
+            }
+            let writer_config = build_writer_config(file_cfg, log_type);
+            let mut writer = LocalFileWriter::new(writer_config).with_log_type(log_type);
+            writer.init().await?;
+            let mut logger = AccessLogger::new();
+            logger.register(Box::new(writer));
+            Ok(Some(Arc::new(logger)))
+        }
+        StringOutput::Es { link_sys_ref } => {
+            tracing::info!(?log_type, %link_sys_ref, "Initializing logger with ES output");
+            let sender = EsLogSender::new(link_sys_ref.clone());
+            let mut logger = AccessLogger::new();
+            logger.register(Box::new(sender));
+            Ok(Some(Arc::new(logger)))
+        }
+        StringOutput::Kafka { link_sys_ref, topic } => {
+            tracing::info!(?log_type, %link_sys_ref, %topic, "Initializing logger with Kafka output");
+            let sender = KafkaLogSender::new(link_sys_ref.clone(), topic.clone());
+            let mut logger = AccessLogger::new();
+            logger.register(Box::new(sender));
+            Ok(Some(Arc::new(logger)))
+        }
+    }
 }
 
-/// Create a sync logger (for SSL log which needs sync API for TLS callbacks)
-/// Returns None if the log is disabled
+/// Create a sync logger (for SSL log which needs sync API for TLS callbacks).
+/// Returns `None` if the log is disabled or the output is not supported.
 pub async fn create_sync_logger(config: &LogConfig) -> Result<Option<SslLogger>> {
-    let Some(writer_config) = build_writer_config(config, LogType::Ssl) else {
+    if !config.enabled {
+        tracing::info!("SSL logger disabled by configuration");
         return Ok(None);
-    };
-
-    // Create LocalFileWriter (SslLogger will initialize it internally)
-    let writer = LocalFileWriter::new(writer_config).with_log_type(LogType::Ssl);
-
-    Ok(Some(SslLogger::new(writer)))
+    }
+    match &config.output {
+        StringOutput::LocalFile(file_cfg) => {
+            if file_cfg.path.is_empty() {
+                tracing::info!("SSL logger disabled (empty path)");
+                return Ok(None);
+            }
+            let writer_config = build_writer_config(file_cfg, LogType::Ssl);
+            let writer = LocalFileWriter::new(writer_config).with_log_type(LogType::Ssl);
+            Ok(Some(SslLogger::new(writer)))
+        }
+        StringOutput::Es { link_sys_ref } => {
+            tracing::warn!(
+                %link_sys_ref,
+                "Es output is not supported for SSL logs (sync path); SSL logging disabled"
+            );
+            Ok(None)
+        }
+        StringOutput::Kafka { link_sys_ref, topic } => {
+            tracing::warn!(
+                %link_sys_ref,
+                %topic,
+                "Kafka output is not supported for SSL logs (sync path); SSL logging disabled"
+            );
+            Ok(None)
+        }
+    }
 }

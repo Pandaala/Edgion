@@ -113,6 +113,7 @@ fred = { version = "10", default-features = false, features = [
 rusqlite = { version = "0.31", features = ["bundled"] }
 # Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
 ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
+rskafka = { version = "0.5", default-features = false, features = ["transport-tls"] }
 
 # Crypto / encoding
 base64 = "0.22"
