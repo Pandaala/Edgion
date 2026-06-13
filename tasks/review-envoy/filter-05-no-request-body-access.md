@@ -19,20 +19,20 @@ first-class filter capabilities.
 
 ## Edgion's current design
 
-The `PluginSession` trait (`src/core/gateway/plugins/runtime/traits/session.rs`) is the sole
+The `PluginSession` trait (`edgion-gateway/src/plugins/runtime/traits/session.rs`) is the sole
 interface through which all HTTP plugins interact with the request. It exposes request headers,
 path, query, cookies, context variables, and various write methods, but contains **no method
 for reading request body bytes**. There is no `get_request_body()`, no buffering callback, and
 no `RequestBodyFilter` trait.
 
 The `request_body_filter` Pingora callback is implemented in
-`src/core/gateway/routes/http/proxy_http/pg_request_body_filter.rs`, but it is wired exclusively
+`edgion-gateway/src/routes/http/proxy_http/pg_request_body_filter.rs`, but it is wired exclusively
 to the internal request-mirroring implementation (`mirror_body_tee`). It is not exposed to the
 plugin runtime at all. No plugin trait or `PluginRuntime` method receives body chunks.
 
 The only partial exception is the HMAC auth plugin, which has a `validate_request_body` config
 field — but the plugin explicitly returns a 500 error when this is set, with the comment
-"body not supported" (`src/core/gateway/plugins/http/hmac_auth/plugin.rs:362`).
+"body not supported" (`edgion-gateway/src/plugins/http/hmac_auth/plugin.rs:359`).
 
 ## The problem / gap
 

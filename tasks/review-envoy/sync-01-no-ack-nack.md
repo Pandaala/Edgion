@@ -32,10 +32,10 @@ Edgion's `WatchResponse` carries only server-to-client fields: `data`, `sync_ver
 ever sends *back* to the Controller to report what it applied or whether it
 rejected something.
 
-Proto: `src/core/common/conf_sync/proto/config_sync.proto` lines 38-51.
+Proto: `edgion-common/src/conf_sync/proto/config_sync.proto` lines 36-51.
 
 The Gateway's watch loop (`start_watch` in
-`src/core/gateway/conf_sync/cache_client/event_dispatch.rs`, lines 270-365)
+`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs`, lines 270-388)
 silently skips any event it cannot parse (`continue;` on parse error at line 308)
 or logs an error and continues.  The only feedback path is re-starting the stream
 after a disconnection.  There is no structured message telling the Controller "I

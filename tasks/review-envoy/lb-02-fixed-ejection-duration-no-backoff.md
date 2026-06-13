@@ -31,12 +31,12 @@ Reference: Envoy docs — Outlier Detection; `OutlierDetection.base_ejection_tim
 
 ## Edgion's current design
 
-`CircuitBreakerConfig` (`src/core/gateway/backends/circuit_breaker/config.rs:8-15`)
+`CircuitBreakerConfig` (`edgion-gateway/src/backends/circuit_breaker/config.rs:8-15`)
 has a single `ejection_seconds: u64` field (default 30 s). There is no
 `num_times_ejected` counter, no `base_ejection_time` multiplier, and no
 `max_ejection_time` cap.
 
-`EndpointState` (`src/core/gateway/backends/circuit_breaker/store.rs:13-16`) tracks
+`EndpointState` (`edgion-gateway/src/backends/circuit_breaker/store.rs:13-16`) tracks
 only `consecutive_failures: u32` and `ejected_at: Option<Instant>`. When a backend
 is un-ejected (either by `is_ejected`'s auto-recovery check at `store.rs:118-124`
 or by `record_success` at `store.rs:192-197`), its entry is fully removed from

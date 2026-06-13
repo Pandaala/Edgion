@@ -22,28 +22,28 @@ traffic arrives at a listener that has no valid route or upstream.
 ## Edgion's current design
 
 Each resource kind is synced independently via a separate `Watch` RPC stream.
-`start_watch_kinds` in `src/core/gateway/conf_sync/conf_client/grpc_client.rs`
+`start_watch_kinds` in `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs`
 (lines 229-277) iterates over `effective_kinds` and calls `cache.start_watch_dyn()`
 for each kind without any sequencing constraint.  Every `start_watch_dyn` spawns
-its own independent `tokio::spawn` task (`event_dispatch.rs` line 135), each of
+its own independent `tokio::spawn` task (`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` line 135), each of
 which runs a List → Watch loop independently and calls `full_set` or
 `partial_update` on its ConfHandler as soon as data arrives.
 
 There is no coordination between, for example, the HTTPRoute cache task and the
 Service/EndpointSlice cache tasks.  The Gateway startup readiness check
-(`wait_for_ready` in `gateway/cli/mod.rs` lines 151-164) waits for all caches to
+(`wait_for_ready` in `edgion-gateway/src/cli/mod.rs` lines 201-214) waits for all caches to
 report `is_ready`, but that only means each cache has completed at least one
 successful List call — it does not enforce any ordering within the startup
 sequence, and it is irrelevant to runtime incremental updates.
 
 ## The problem / gap
 
-**At startup**: The HTTPRoute ConfHandler (`http/conf_handler_impl.rs`) calls
+**At startup**: The HTTPRoute ConfHandler (`edgion-gateway/src/routes/http/conf_handler_impl.rs`) calls
 `full_set` which immediately rebuilds the listener match engines
 (`rebuild_all_listener_managers`).  If the EndpointSlice cache task completes its
 first List before the Service cache task does (or vice versa), the route manager
 will start resolving backends against a partially populated store.  The
-`preload_load_balancers` call in `cli/mod.rs` line 282 runs *after*
+`preload_load_balancers` call in `edgion-gateway/src/cli/mod.rs` line 332 runs *after*
 `wait_for_ready` returns, so by then all caches have data — but the individual
 `full_set` callbacks fire *during* the List phase, before `wait_for_ready`
 completes, meaning early route rebuilds can observe an incomplete world.

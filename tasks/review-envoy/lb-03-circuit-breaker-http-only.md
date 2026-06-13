@@ -27,20 +27,20 @@ the HTTP proxy path:
 
 - `pg_fail_to_connect.rs:41` — `record_failure_by_addr` on upstream TCP connect
   failure (HTTP/gRPC proxy only).
-- `pg_error_while_proxy.rs:25` — `record_failure_by_addr` on mid-stream error
+- `pg_error_while_proxy.rs:33` — `record_failure_by_addr` on mid-stream error
   (HTTP proxy only, non-status-retry path).
-- `pg_upstream_response_filter.rs:111,113` — `record_failure_by_addr` /
+- `pg_upstream_response_filter.rs:177,179` — `record_failure_by_addr` /
   `record_success_by_addr` on HTTP status >= 500 / < 500.
 
-TCP routes (`src/core/gateway/routes/tcp/edgion_tcp.rs:147-177`) call
+TCP routes (`edgion-gateway/src/routes/tcp/edgion_tcp.rs:159-178`) call
 `select_roundrobin_backend_key` which honours the circuit breaker via
 `is_backend_healthy` (`selector.rs:49-53`). However, when a TCP upstream connection
-fails (`TcpStatus::UpstreamConnectionFailed`, `edgion_tcp.rs:175-178`), no
+fails (`TcpStatus::UpstreamConnectionFailed`, `edgion_tcp.rs:199-204`), no
 `record_failure_by_addr` is called. Likewise for UDP (`edgion_udp.rs`) and
 TLS passthrough (`tls/passthrough_proxy.rs`).
 
 The circuit-breaker store is configured per-service (`has_service` gate in
-`store.rs:237`), so even if TCP routes were to call `record_failure_by_addr`, the
+`store.rs:238`), so even if TCP routes were to call `record_failure_by_addr`, the
 service would need to have a circuit-breaker annotation — the gate is present, the
 call site is simply missing.
 

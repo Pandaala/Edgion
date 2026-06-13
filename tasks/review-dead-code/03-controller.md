@@ -1,6 +1,6 @@
-# Dead Code Candidates in src/core/controller/
+# Dead Code Candidates in edgion-controller/src/
 
-Scanned: all `.rs` files under `src/core/controller/` (≈130 files).  
+Scanned: all `.rs` files under `edgion-controller/src/` (≈130 files).  
 Method: grep-based reference counting + targeted cross-file verification.
 
 ---
@@ -11,14 +11,14 @@ These items the compiler itself flagged; annotations are present but stale or in
 
 | File:Line | Item | Notes |
 |-----------|------|-------|
-| `conf_sync/conf_server/grpc_server.rs:58` | `ConfigSyncGrpcServer::with_static_server()` | Annotated dead; no callers found anywhere in `src/` |
-| `conf_sync/conf_server/grpc_server.rs:161` | `ConfigSyncGrpcServer::serve_with_reflection()` | Annotated dead; no callers found anywhere in `src/` |
-| `conf_sync/conf_server/client_registry.rs:24,26` | `ClientMeta::client_name`, `ClientMeta::connected_at` | Annotated dead; struct fields written but never read |
-| `conf_mgr/sync_runtime/resource_processor/handler.rs:146` | `DefaultHandler` struct | Annotated dead; only used inside `#[cfg(test)]` in `processor.rs` |
-| `conf_mgr/sync_runtime/resource_processor/secret_utils/secret_store.rs:66` | `SecretStore::count()` | Annotation says "Task 12 pending" but **is already consumed** by `debug_handlers.rs:37` — annotation is stale, can be removed |
-| `conf_mgr/sync_runtime/resource_processor/secret_utils/secret_store.rs:72` | `SecretStore::keys()` | Annotated dead; truly unused in production — only referenced in an `#[allow(dead_code)]`-tagged test assertion |
-| `conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs:597` | `BackendTlsPolicyHandler::secret_has_ca_cert()` | Annotated dead; no callers found anywhere |
-| `api/types.rs:44` | `AdminState::is_ready()` | Annotated dead; never called in production |
+| `edgion-controller/src/conf_sync/conf_server/grpc_server.rs` | `ConfigSyncGrpcServer::with_static_server()` | Annotated dead; no callers found anywhere in `src/` — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-controller/src/conf_sync/conf_server/grpc_server.rs` | `ConfigSyncGrpcServer::serve_with_reflection()` | Annotated dead; no callers found anywhere in `src/` — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-controller/src/conf_sync/conf_server/client_registry.rs` | `ClientMeta::client_name`, `ClientMeta::connected_at` | Annotated dead; struct fields written but never read — REMOVED in refactor (not found 2026-06-13; `ClientMeta` is now an empty struct) |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handler.rs` | `DefaultHandler` struct | Annotated dead; only used inside `#[cfg(test)]` in `processor.rs` — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-common/src/secret/secret_store.rs:65` | `SecretStore::count()` | Annotation says "Task 12 pending" but **is already consumed** by `debug_handlers.rs:37` — annotation is stale, can be removed (file moved to `edgion-common`) |
+| `edgion-common/src/secret/secret_store.rs` | `SecretStore::keys()` | Annotated dead; truly unused in production — only referenced in an `#[allow(dead_code)]`-tagged test assertion — REMOVED in refactor (not found 2026-06-13; file moved to `edgion-common`) |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/backend_tls_policy.rs` | `BackendTlsPolicyHandler::secret_has_ca_cert()` | Annotated dead; no callers found anywhere — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-controller/src/api/types.rs:47` | `AdminState::is_ready()` | Annotated dead; never called in production |
 
 ---
 
@@ -26,8 +26,8 @@ These items the compiler itself flagged; annotations are present but stale or in
 
 | File:Line | Function | Notes |
 |-----------|----------|-------|
-| `conf_mgr/sync_runtime/resource_processor/status_utils.rs:376` | `accepted_condition_with_message()` | `pub fn` but **only called once** by `accepted_condition()` in the same file; not re-exported; effectively a private helper — should be `pub(super)` or merged into caller |
-| `conf_mgr/sync_runtime/resource_processor/secret_utils/secret_ref.rs:15` | `new_secret_ref_manager()` | `pub fn` but **only used in `#[cfg(test)]`** blocks; production code always calls `SecretRefManager::new()` or `SecretRefManager::with_component()` directly |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_utils.rs:404` | `accepted_condition_with_message()` | `pub fn` but **only called once** by `accepted_condition()` in the same file; not re-exported; effectively a private helper — should be `pub(super)` or merged into caller |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/secret_utils/secret_ref.rs:15` | `new_secret_ref_manager()` | `pub fn` but **only used in `#[cfg(test)]`** blocks; production code always calls `SecretRefManager::new()` or `SecretRefManager::with_component()` directly |
 
 ---
 
@@ -35,9 +35,9 @@ These items the compiler itself flagged; annotations are present but stale or in
 
 | File:Line | Item | Type | Notes |
 |-----------|------|------|-------|
-| `conf_mgr/sync_runtime/resource_processor/ref_manager.rs:124` | `RefManagerStats` | struct | Returned by `BidirectionalRefManager::stats()` and used in tests + one `revalidation_listener.rs` log call; exported broadly via `pub use` chain but the only non-test consumer is a tracing log — low value export |
-| `conf_sync/conf_server/config_sync_server.rs:17` | `EventDataSimple` | struct | Used internally within `config_sync_server.rs`; re-exported through `conf_sync/mod.rs` but consumed only in `gateway/conf_sync/` — the controller-side `pub use` in `conf_sync/mod.rs` seems unnecessary |
-| `conf_sync/conf_server/config_sync_server.rs:26` | `ListDataSimple` | struct | Same situation as `EventDataSimple`; re-exported in controller `conf_sync/mod.rs` but the real consumers are all in `gateway/conf_sync/` |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_manager.rs:124` | `RefManagerStats` | struct | Returned by `BidirectionalRefManager::stats()` and used in tests + one `revalidation_listener.rs` log call; exported broadly via `pub use` chain but the only non-test consumer is a tracing log — low value export |
+| `edgion-controller/src/conf_sync/conf_server/config_sync_server.rs:17` | `EventDataSimple` | struct | Used internally within `config_sync_server.rs`; re-exported through `conf_sync/mod.rs` but consumed only in `gateway/conf_sync/` — the controller-side `pub use` in `conf_sync/mod.rs` seems unnecessary |
+| `edgion-controller/src/conf_sync/conf_server/config_sync_server.rs:26` | `ListDataSimple` | struct | Same situation as `EventDataSimple`; re-exported in controller `conf_sync/mod.rs` but the real consumers are all in `gateway/conf_sync/` |
 
 ---
 
@@ -45,7 +45,7 @@ These items the compiler itself flagged; annotations are present but stale or in
 
 | File:Line | Item | Issue |
 |-----------|------|-------|
-| `conf_mgr/sync_runtime/resource_processor/secret_utils/secret_store.rs:65` | `SecretStore::count()` | Comment says "allow until Task 12" but `count()` is already called in `api/debug_handlers.rs:37`; annotation should be removed |
+| `edgion-common/src/secret/secret_store.rs:65` | `SecretStore::count()` | Comment says "allow until Task 12" but `count()` is already called in `api/debug_handlers.rs:37`; annotation should be removed (file moved to `edgion-common`) |
 
 ---
 

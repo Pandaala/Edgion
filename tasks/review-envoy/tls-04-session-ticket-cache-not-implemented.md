@@ -32,19 +32,19 @@ the certificate.
 `EdgionTlsExtend` defines both:
 
 ```rust
-// src/types/resources/edgion_tls.rs:195,199
+// edgion-resources/src/resources/edgion_tls.rs:203,207
 pub session_ticket: Option<SessionTicketConfig>,
 pub session_cache: Option<SessionCacheConfig>,
 ```
 
 `SessionTicketConfig` has `enabled`, `lifetime_seconds`,
 `rotation_interval_seconds`, and `key_secret_ref`
-(`edgion_tls.rs:213-226`).
+(`edgion-resources/src/resources/edgion_tls.rs:221-234`).
 `SessionCacheConfig` has `enabled`, `max_entries`, `ttl_seconds`
-(`edgion_tls.rs:231-241`).
+(`edgion-resources/src/resources/edgion_tls.rs:239-249`).
 
-None of these fields are consumed anywhere in `src/core/`. A grep for
-`session_ticket` and `session_cache` inside `src/core/` returns zero hits
+None of these fields are consumed anywhere in `edgion-gateway/src/` or `edgion-common/src/`. A grep for
+`session_ticket` and `session_cache` inside those directories returns zero hits
 (only the type definitions and test fixtures reference them). The gateway
 runs with BoringSSL's built-in session resumption defaults — session tickets
 enabled by default with a randomly-generated key that is regenerated at each

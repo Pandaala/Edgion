@@ -25,22 +25,22 @@ typed taxonomy lets tooling classify errors without text scraping.
 Validation errors in the Controller flow through two collections, both `Vec<String>`:
 
 - `validate()` returns `Vec<String>` in `ProcessorHandler` (inferred from usage at
-  `processor.rs:544`).
-- `preparse()` returns `Vec<String>` and also writes into `spec.preparse_errors: Vec<String>`
-  (`edgion_plugins/mod.rs:98`).
+  `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs:544`).
+- `preparse()` returns `Vec<String>` (`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs:550`).
+  **Refactor note (2026-06-13):** The `spec.preparse_errors: Vec<String>` field that was formerly embedded in `EdgionPluginsSpec` (`edgion_plugins/mod.rs:98`) has been removed from the resource type. Preparse errors on the controller side are now aggregated by `process_resource_inner` (processor.rs:550-554) and never stored in the spec. On the gateway side, `compile_plugins()` in `edgion-gateway/src/plugins/http/plugin_store.rs` stores preparse errors in `CompiledPlugins.preparse_errors` (a gateway-only field, not synced to K8s).
 
-Both are merged into `all_errors: Vec<String>` at `processor.rs:554`, which is passed to
+Both are merged into `all_errors: Vec<String>` at `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs:554`, which is passed to
 `update_status()`. Status conditions are set using `accepted_condition()` / `condition_true()` helpers
-(`processor.rs:579`). The `message` field of each Condition is a free-form string constructed from
+(`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs:579`). The `message` field of each Condition is a free-form string constructed from
 these error strings — no machine-readable code beyond the Gateway-API-standard `reason` field
 (e.g., `"Invalid"`, `"ResolvedRefs"`).
 
-On the Gateway side, the same `preparse_errors` field is populated during `pre_parse()` and logged
-as `tracing::warn!` at processor.rs:551. There is no structured error type beyond the string, no
+On the Gateway side, preparse errors returned by `preparse()` are logged as `tracing::warn!` at
+`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs:551`. There is no structured error type beyond the string, no
 error code, and no way to determine from the error whether retrying will help, whether it is a
 transient dependency issue, or a permanent schema violation.
 
-The watch error constants (`src/types/err.rs:4-9`) are typed strings but only cover sync-protocol
+The watch error constants (`edgion-resources/src/err.rs:4-9`) are typed strings but only cover sync-protocol
 errors (version mismatch, server restart), not resource-content errors.
 
 ## The problem / gap
@@ -80,9 +80,9 @@ Without a typed error taxonomy:
 
 ## Verification note
 
-Code confirmed (second-pass). `fn validate()` and `fn preparse()` both return `Vec<String>` in the trait at `src/core/controller/conf_mgr/sync_runtime/resource_processor/handler.rs:67,81`. All concrete implementations follow the same signature. The `all_errors: Vec<String>` merge at `processor.rs:554` and `update_status()` at line 579 are confirmed. The `WatchResponse.err` field in `config_sync.proto:49` is a plain `string`. The `record_config_event_parse_error` metric carries no resource key (confirmed at `gateway/observe/metrics/registry.rs:460` — only a `kind: &'static str` label, no namespace/name).
+Code confirmed (second-pass). `fn validate()` and `fn preparse()` both return `Vec<String>` in the trait at `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handler.rs:67,81`. All concrete implementations follow the same signature. The `all_errors: Vec<String>` merge at `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs:554` and `update_status()` at line 579 are confirmed. The `WatchResponse.err` field in `edgion-common/src/conf_sync/proto/config_sync.proto:49` is a plain `string`. The `record_config_event_parse_error` metric carries no resource key (confirmed at `edgion-gateway/src/observe/metrics/registry.rs:457` — only a `kind: &'static str` label, no namespace/name).
 
-Correction from first-pass verification: validation/preparse errors do NOT cause a requeue. `process_resource_inner` (processor.rs) continues through all pipeline stages on error, stores the resource in cache with error status, and returns `WorkItemResult::Processed`. Re-processing only happens when K8s issues a new event for the resource (e.g., a referenced Secret appears). The claim about "requeued after the same fixed delay" in the original finding is incorrect and has been corrected above. The remaining impacts (untyped status conditions, no resource key in Gateway parse-error metric) are accurate.
+Correction from first-pass verification: validation/preparse errors do NOT cause a requeue. `process_resource_inner` (`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs`) continues through all pipeline stages on error, stores the resource in cache with error status, and returns `WorkItemResult::Processed`. Re-processing only happens when K8s issues a new event for the resource (e.g., a referenced Secret appears). The claim about "requeued after the same fixed delay" in the original finding is incorrect and has been corrected above. The remaining impacts (untyped status conditions, no resource key in Gateway parse-error metric) are accurate.
 
 ## Suggested direction
 

@@ -24,12 +24,12 @@ bearing.
 
 Several LinkSys credential/auth types carry `#[serde(... deny_unknown_fields)]`:
 
-- `src/types/resources/link_sys/redis.rs:54` — `RedisAuth` (not `RedisTlsCerts`; `#[serde(deny_unknown_fields)]` on the auth struct)
-- `src/types/resources/link_sys/etcd.rs:66` — `EtcdTlsCerts`
-- `src/types/resources/link_sys/elasticsearch.rs:58` — `ElasticsearchAuth` (tag + deny_unknown_fields on enum)
-- `src/types/resources/link_sys/webhook.rs:20` — `WebhookAuth`; `webhook.rs:63` — `WebhookTarget` (not a second `WebhookAuth` variant)
-- `src/types/resources/common/secret_slot.rs:18` — `SecretSlot` (used across multiple resource types)
-- `src/types/resources/edgion_stream_plugins/stream_plugins.rs:21` — stream plugin config struct
+- `edgion-resources/src/resources/link_sys/redis.rs:54` — `RedisAuth` (not `RedisTlsCerts`; `#[serde(deny_unknown_fields)]` on the auth struct)
+- `edgion-resources/src/resources/link_sys/etcd.rs:66` — `EtcdAuth` (renamed from `EtcdTlsCerts` during refactor)
+- `edgion-resources/src/resources/link_sys/elasticsearch.rs:58` — `ElasticsearchAuth` (tag + deny_unknown_fields on enum)
+- `edgion-resources/src/resources/link_sys/webhook.rs:19` — `WebhookAuth`; `webhook.rs:62` — `WebhookTarget` (not a second `WebhookAuth` variant)
+- `edgion-resources/src/resources/common/secret_slot.rs:18` — `SecretSlot` (used across multiple resource types)
+- `edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs:25` — `GlobalConnectionIpRestrictionEntry` (stream plugin sub-config struct)
 
 `SecretSlot` in particular is used in multiple resources beyond LinkSys. `deny_unknown_fields` on
 `SecretSlot` means that if a future version of the struct adds any new optional field (e.g., an
@@ -49,7 +49,7 @@ a single serde attribute. When a new field is added to `SecretSlot`, `RedisTlsCe
 
 1. The Controller serializes the resource to JSON including the new field.
 2. The Gateway, running the old binary, deserializes the `LinkSys` resource via the gRPC list/watch
-   path (`event_dispatch.rs:95/323`).
+   path (`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:95/323`).
 3. serde rejects the JSON object because of `deny_unknown_fields` on the auth/TLS sub-struct.
 4. The entire `LinkSys` resource is dropped with a parse error, breaking the corresponding plugin
    integrations (Elasticsearch access logs, Redis rate limiting, etcd, webhooks) on the old Gateway.
@@ -69,7 +69,7 @@ benign additive change to a credential struct can cause this breakage.
 
 ## Verification note
 
-Code confirmed. All cited `deny_unknown_fields` annotations exist. Struct name corrected above (see bullet list). `LinkSys` is confirmed to be synced to the Gateway via `ClientCache<LinkSys>` in `config_client.rs:27`; the Gateway deserializes the JSON using the same `serde_json::from_str` path, so `deny_unknown_fields` on `SecretSlot`, `RedisAuth`, `EtcdTlsCerts`, `ElasticsearchAuth`, and `WebhookAuth`/`WebhookTarget` will reject the parent `LinkSys` resource if the Controller sends any unknown field. Security intent of blocking inline credentials is confirmed by test comments in `redis.rs:257-264` and `etcd.rs:274,496,503`.
+Code confirmed. All cited `deny_unknown_fields` annotations exist. Struct name corrected above (see bullet list). `LinkSys` is confirmed to be synced to the Gateway via `ClientCache<LinkSys>` in `edgion-gateway/src/conf_sync/conf_client/config_client.rs:27`; the Gateway deserializes the JSON using the same `serde_json::from_str` path, so `deny_unknown_fields` on `SecretSlot`, `RedisAuth`, `EtcdAuth`, `ElasticsearchAuth`, and `WebhookAuth`/`WebhookTarget` will reject the parent `LinkSys` resource if the Controller sends any unknown field. Security intent of blocking inline credentials is confirmed by test comments in `edgion-resources/src/resources/link_sys/redis.rs:257-264` and `edgion-resources/src/resources/link_sys/etcd.rs:274,496,503`.
 
 ## Suggested direction
 

@@ -21,7 +21,7 @@ a fast-churning resource type.
 ## Edgion's current design
 
 The Controller-side `EventStore<T>` is a fixed-capacity circular ring buffer
-(`cache_server/store.rs` lines 157-189).  The capacity is set at construction
+(`edgion-controller/src/conf_sync/cache_server/store.rs` lines 157-189).  The capacity is set at construction
 time and wraps around, evicting the oldest events when full.  When an event is
 overwritten, `expire_sync_version` is advanced to the overwritten event's
 `sync_version`:
@@ -37,11 +37,11 @@ if self.end_index - self.start_index >= self.capacity {
 ```
 
 A Gateway whose `from_version` falls below `expire_sync_version` receives a
-`WATCH_ERR_TOO_OLD_VERSION` error (`store.rs` lines 199-201), which causes the
+`WATCH_ERR_TOO_OLD_VERSION` error (`edgion-controller/src/conf_sync/cache_server/store.rs` lines 199-201), which causes the
 Gateway to break out of the watch loop and perform a full relist.
 
 The default capacity appears to be 200 events per kind (`EventStore::new` in
-`store.rs` line 159 uses the provided capacity or 200 as default; the
+`edgion-controller/src/conf_sync/cache_server/store.rs` line 159 uses the provided capacity or 200 as default; the
 `ServerCache::new` call signature shows `capacity: u32`).  For high-churn kinds
 (EndpointSlice updates during a rolling deploy; HTTPRoute changes during a policy
 rollout), 200 events can be exhausted in seconds.
@@ -49,8 +49,8 @@ rollout), 200 events can be exhausted in seconds.
 ## The problem / gap
 
 1. **Capacity is per-kind tunable via config, but defaults are uniform and
-   metrics are missing**: `ConfSyncConfig` (src/core/common/config/mod.rs
-   lines 324-370) exposes `default_capacity` (global default, defaults to 200)
+   metrics are missing**: `ConfSyncConfig` (`edgion-common/src/conf_sync/config.rs`
+   lines 21-41) exposes `default_capacity` (global default, defaults to 200)
    and `capacity_overrides` (per-kind override map).  So operators can tune
    capacity per kind without recompiling.  However, the defaults are uniform —
    EndpointSlice and GatewayClass both start at 200 unless explicitly overridden —
@@ -61,7 +61,7 @@ rollout), 200 events can be exhausted in seconds.
 
 2. **TooOldVersion triggers a full List, which is expensive**: a full List for
    EndpointSlice can be large (many pods × many services).  The 64 MB hard limit
-   on List responses (`config_sync_server.rs` lines 148-170) exists precisely
+   on List responses (`config_sync_server.rs` lines 147-170) exists precisely
    because this can be large.  A frequent TooOldVersion on EndpointSlice means
    repeated large List operations, which add CPU (serialization) and network load
    to the Controller, and increase the time during which the Gateway is running

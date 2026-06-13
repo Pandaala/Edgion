@@ -20,7 +20,7 @@ not reachable" (connect timeout) in monitoring.
 
 **HTTP/gRPC path**: Edgion correctly separates connection timeout from request
 timeout. `configure_peer_timeouts()` sets `peer.options.connection_timeout` separately
-from read/write timeouts (`src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs:461-495`),
+from read/write timeouts (`edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs:610-668`),
 and the connect timeout is drawn from `BackendTimeout.default_connect_timeout`
 (default 5s, configurable via `EdgionGatewayConfigSpec.http_timeout.backend`).
 This path is well-designed.
@@ -29,8 +29,8 @@ This path is well-designed.
 `TransportConnector::new(None)`, which accepts an optional `timeout` parameter.
 Neither passes a connect timeout; the value comes from Pingora's internal default
 (indefinite or OS TCP retransmit timeout if unset). Looking at the code in
-`src/core/gateway/routes/tcp/edgion_tcp.rs:173` and
-`src/core/gateway/routes/tls/proxy.rs:293`, there is no timeout set on
+`edgion-gateway/src/routes/tcp/edgion_tcp.rs:199` and
+`edgion-gateway/src/routes/tls/proxy.rs:296`, there is no timeout set on
 `connector.new_stream(&peer)`.
 
 There is also no Prometheus counter for connect timeouts on TCP/TLS L4 routes

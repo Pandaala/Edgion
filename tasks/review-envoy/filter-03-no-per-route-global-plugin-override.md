@@ -26,12 +26,13 @@ routes need the variant.
 ## Edgion's current design
 
 Global plugins are configured via `EdgionGatewayConfig.spec.global_plugins_ref`
-(`src/types/resources/edgion_gateway_config.rs:49`). At request time,
+(`edgion-resources/src/resources/edgion_gateway_config.rs:49`). At request time,
 `resolve_global_plugins` resolves this list once and stores the result in
 `ctx.resolved_global_plugins`. The global plugin runtimes are then executed unconditionally
-**before** all route-level plugins in `pg_request_filter.rs:196-207` and repeated in the
-response phases (`pg_upstream_response_filter.rs:135-142`,
-`pg_upstream_response_body_filter.rs:51-64`, `pg_response_filter.rs:50`).
+**before** all route-level plugins in `edgion-gateway/src/routes/http/proxy_http/pg_request_filter.rs:198-209` and repeated in the
+response phases (`edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_filter.rs:211-223`,
+`edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs:50-62`,
+`edgion-gateway/src/routes/http/proxy_http/pg_response_filter.rs:59`).
 
 There is no field on `HTTPRoute`, `GRPCRoute`, or any route rule that allows a route to:
 - Override the configuration of a specific global plugin with a route-specific config.

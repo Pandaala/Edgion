@@ -15,13 +15,13 @@ The go-control-plane cache (`cache.SnapshotCache`) similarly stores a per-node s
 
 ## Edgion's current design
 
-Edgion's `ConfigSyncServer` (`src/core/controller/conf_sync/conf_server/config_sync_server.rs`) maintains one `ServerCache<T>` per resource kind, each with its own independent `sync_version` counter (`utils::next_resource_version()` — a process-wide atomically-increasing integer).
+Edgion's `ConfigSyncServer` (`edgion-controller/src/conf_sync/conf_server/config_sync_server.rs`) maintains one `ServerCache<T>` per resource kind, each with its own independent `sync_version` counter (`utils::next_resource_version()` — a process-wide atomically-increasing integer).
 
 When a single user action affects multiple resource kinds simultaneously (e.g., adding an HTTPRoute that references a new Service triggers: HTTPRoute processed → route pushed, then Service processed → Service pushed), the two kinds are pushed as separate incremental events with consecutive but independent `sync_version` values. There is no "this batch of changes is complete" barrier in the gRPC stream.
 
 The `server_id` mechanism detects controller restarts but does not address the within-session cross-kind ordering gap. The Gateway client receives kind-specific Watch streams and processes them independently; there is no mechanism to hold a Route update until the corresponding Service update has also been received.
 
-From `src/core/controller/conf_sync/cache_server/cache.rs:366-416`, each `apply_change()` call immediately notifies watchers via `notify.notify_waiters()` — there is no batching or cross-kind coordination:
+From `edgion-controller/src/conf_sync/cache_server/cache.rs:366-416`, each `apply_change()` call immediately notifies watchers via `notify.notify_waiters()` — there is no batching or cross-kind coordination:
 
 ```rust
 ResourceChange::EventUpdate => {

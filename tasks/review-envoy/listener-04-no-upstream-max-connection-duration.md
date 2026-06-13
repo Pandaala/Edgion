@@ -28,8 +28,8 @@ Edgion's `ParsedBackendTimeout` defines three timeout fields:
 - `connect_timeout` (default 5s) — applied to connection establishment.
 - `request_timeout` (default 60s) — applied to individual request I/O.
 - `idle_timeout` (default 300s) — the connection is returned to the pool if idle
-  for this duration (`src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs:498`,
-  `src/core/gateway/routes/http/proxy_http/parse_timeout.rs:23`).
+  for this duration (`edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs:667`,
+  `edgion-gateway/src/routes/http/proxy_http/parse_timeout.rs:23`).
 
 There is no `max_connection_duration` or `max_requests_per_connection` for upstream
 connections. Once established, an upstream keepalive connection stays in the pool for
@@ -37,7 +37,7 @@ up to 300 seconds of idle time, with no upper bound on how long it has been aliv
 or how many requests it has served (beyond Pingora's own internal pool mechanics).
 
 The downstream keepalive request limit (`downstream_keepalive_request_limit`,
-`src/core/gateway/runtime/server/listener_builder.rs:183-195`) limits requests per
+`edgion-gateway/src/runtime/server/listener_builder.rs:199-216`) limits requests per
 *downstream* connection but has no upstream analogue.
 
 ## The problem / gap

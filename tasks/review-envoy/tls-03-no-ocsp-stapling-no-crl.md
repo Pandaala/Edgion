@@ -32,18 +32,19 @@ Edgion defines the schema for both features under `EdgionTlsExtend` but
 explicitly marks both as **reserved, not implemented**:
 
 - `EdgionTlsExtend.ocsp_stapling: Option<OcspStaplingConfig>` —
-  `src/types/resources/edgion_tls.rs:191`. The struct has `enabled`, `refresh_interval_seconds`,
+  `edgion-resources/src/resources/edgion_tls.rs:199`. The struct has `enabled`, `refresh_interval_seconds`,
   `fail_open`. The doc comment reads: "NOT IMPLEMENTED (reserved schema): the
   gateway performs NO OCSP stapling at the TLS handshake regardless of these
   values."
 - `EdgionTlsExtend.revocation_check: Option<RevocationCheckConfig>` —
-  `src/types/resources/edgion_tls.rs:203`. The struct has `mode: off/ocsp/crl`,
+  `edgion-resources/src/resources/edgion_tls.rs:211`. The struct has `mode: off/ocsp/crl`,
   `fail_open`. The doc comment reads: "NOT IMPLEMENTED (reserved schema): the
   gateway performs NO certificate revocation checking regardless of `mode`."
 
-The validation path in `cert.rs:188-205` detects when either field is set and
-emits a `tracing::warn!` at config-load time, but then continues. No OCSP
-request is ever made, no staple is ever attached, and no CRL is ever consulted.
+The validation path in `edgion-gateway/src/tls/store/tls_store.rs:60-76`
+(`warn_cert_advisories`) detects when either field is set and emits a
+`tracing::warn!` at config-load time, but then continues. No OCSP request is
+ever made, no staple is ever attached, and no CRL is ever consulted.
 
 ## The problem / gap
 
@@ -58,7 +59,7 @@ security gaps:
   it is possible.
 - **Revocation checking gap** (for mTLS): If a client certificate is revoked
   (compromised key), the CA's CRL or OCSP responder records the revocation, but
-  Edgion's mTLS path (`configure_mtls` in `tls_pingora.rs:1017-1073`) builds
+  Edgion's mTLS path (`configure_mtls` in `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs:1018-1077`) builds
   an `X509Store` from the CA bundle and calls `ssl.set_verify_cert_store` —
   with no CRL attached. A revoked client cert that is otherwise structurally
   valid will pass mTLS verification. This is a real security gap for any

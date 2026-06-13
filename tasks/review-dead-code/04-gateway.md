@@ -1,6 +1,6 @@
-# Dead Code Candidates in src/core/gateway/
+# Dead Code Candidates in edgion-gateway/src/
 
-Scanned 384 `.rs` files under `src/core/gateway/`.
+Scanned 384 `.rs` files under `edgion-gateway/src/`.
 
 ---
 
@@ -10,37 +10,37 @@ Scanned 384 `.rs` files under `src/core/gateway/`.
 
 | File | Line | Item | Notes |
 |------|------|------|-------|
-| `src/core/gateway/lb/lb_policy/config.rs` | 26 | `parse_policies(s)` | Parses comma-separated policy strings; no callers found in entire `src/` |
-| `src/core/gateway/lb/lb_policy/config.rs` | 32 | `parse_service_key(service_key)` | Private fn; only defined, never called |
-| `src/core/gateway/link_sys/runtime/data_sender.rs` | 46 | `type StringDataSender` | Type alias for `dyn DataSender<String>`; only defined here, referenced nowhere else |
-| `src/core/gateway/plugins/http/dsl/lang/parser/mod.rs` | 85 | `Parser::span_at(&self, input)` | Helper returning a `Span` at a parser offset; no callers |
-| `src/core/gateway/runtime/server/error_response.rs` | 150 | `end_response_403(...)` | 403 response helper; no calls in `src/` (403 is currently handled differently in plugins) |
+| `edgion-gateway/src/lb/lb_policy/config.rs` | 26 | `parse_policies(s)` | Parses comma-separated policy strings; no callers found in entire `src/` — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-gateway/src/lb/lb_policy/config.rs` | 32 | `parse_service_key(service_key)` | Private fn; only defined, never called — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-gateway/src/link_sys/runtime/data_sender.rs` | 46 | `type StringDataSender` | Type alias for `dyn DataSender<String>`; only defined here, referenced nowhere else — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-gateway/src/plugins/http/dsl/lang/parser/mod.rs` | 85 | `Parser::span_at(&self, input)` | Helper returning a `Span` at a parser offset; no callers — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-gateway/src/runtime/server/error_response.rs` | 150 | `end_response_403(...)` | 403 response helper; no calls in `src/` (403 is currently handled differently in plugins) — REMOVED in refactor (not found 2026-06-13) |
 
 ### Suppressions that are legitimate (field/function IS used)
 
 | File | Line | Item | Why suppressed |
 |------|------|------|----------------|
-| `src/core/gateway/plugins/http/openid_connect/plugin.rs` | 166 | `OpenidConnect::plugin_namespace` | Field used in `session_cookie.rs` impl block; Rust lint sees it as dead in the struct definition file because the read is in a sibling `impl` file. `#[allow]` is correct but could be removed by inlining or reorganising. |
-| `src/core/gateway/plugins/http/dsl/lang/compiler/mod.rs` | 33 | `Local::depth` | Field read in `emit.rs` (`local.depth < self.scope_depth`); same cross-file false-positive. |
-| `src/core/gateway/plugins/http/openid_connect/plugin.rs` | 131/134/139 | `id_token`, `refresh_token`, `token_type` in `TokenEndpointResponse` | Serde-deserialization fields; lint fires because they are never explicitly read after deserialization. Suppression is correct. |
-| `src/core/gateway/runtime/server/error_response.rs` | 189 | `end_response_421(...)` | Used in `pg_request_filter.rs:75`. The `#[allow]` is stale — can be removed. |
-| `src/core/gateway/plugins/runtime/conditional_filter.rs` | 43/89/143/189 | `without_conditions()` on all four conditional wrapper types | Convenience constructors; not called today but are API-surface helpers. Suppression intentional. |
-| `src/core/gateway/plugins/runtime/conditional_filter.rs` | 244 | `MockRequestFilter::run_count()` | Test-only helper inside `#[cfg(test)]` block. Suppression correct. |
-| `src/core/gateway/cache/lru.rs` | 456 | `TtlScenario::name` | Test struct field for scenario labelling; never read programmatically. Suppression correct. |
-| `src/core/gateway/tls/store/conf_handler.rs` | 40 | `create_test_tls()` | Inside `#[cfg(test)]`. Suppression correct. |
-| `src/core/gateway/tls/store/tls_store.rs` | 249 | `TlsStore::rebuild_matcher()` | Wrapper around `rebuild_matcher_from_data`; exists as a convenience API not yet called. |
-| `src/core/gateway/runtime/store/gateway.rs` | 41 | `GatewayStore::get_gateway()` | Used in `runtime/matching/route.rs:116,130` and `pg_request_filter.rs:53`. `#[allow]` is stale — can be removed. |
-| `src/core/gateway/config/gateway_class/conf_handler_impl.rs` | 18/24 | `get_gateway_class_by_name`, `list_gateway_classes` | Re-exported through `config/mod.rs`; used transitively in tests and `conf_client`. `#[allow]` is stale if the re-export chain resolves the lint. |
-| `src/core/gateway/config/edgion_gateway/conf_handler_impl.rs` | 19/25 | `get_edgion_gateway_config_by_name`, `list_edgion_gateway_configs` | Same pattern as above. |
-| `src/core/gateway/config/gateway_class/mod.rs` | 4 | `#[allow(unused_imports)]` on re-export line | Both functions are re-exported but possibly not consumed outside tests; the suppression prevents the re-export itself from triggering warnings. |
-| `src/core/gateway/config/edgion_gateway/mod.rs` | 4 | Same as above | Same rationale. |
-| `src/core/gateway/link_sys/providers/webhook/resolver.rs` | 157 | `_type_check()` in `#[cfg(test)]` | Type-checking helper, intentionally unused at runtime. |
+| `edgion-gateway/src/plugins/http/openid_connect/plugin.rs` | 161 | `OpenidConnect::plugin_namespace` | Field used in `session_cookie.rs` impl block; Rust lint sees it as dead in the struct definition file because the read is in a sibling `impl` file. `#[allow]` is correct but could be removed by inlining or reorganising. |
+| `edgion-gateway/src/plugins/http/dsl/lang/compiler/mod.rs` | 34 | `Local::depth` | Field read in `emit.rs` (`local.depth < self.scope_depth`); same cross-file false-positive. |
+| `edgion-gateway/src/plugins/http/openid_connect/plugin.rs` | 133/136/141 | `id_token`, `refresh_token`, `token_type` in `TokenEndpointResponse` | Serde-deserialization fields; lint fires because they are never explicitly read after deserialization. Suppression is correct. |
+| `edgion-gateway/src/runtime/server/error_response.rs` | 225 | `end_response_421(...)` | Used in `pg_request_filter.rs:75`. The `#[allow]` is stale — can be removed. |
+| `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | 62/130/206/274 | `without_conditions()` on all four conditional wrapper types | Convenience constructors; not called today but are API-surface helpers. Suppression intentional. |
+| `edgion-gateway/src/plugins/runtime/conditional_filter.rs` | 333 | `MockRequestFilter::run_count()` | Test-only helper inside `#[cfg(test)]` block. Suppression correct. |
+| `edgion-gateway/src/cache/lru.rs` | 465 | `TtlScenario::name` | Test struct field for scenario labelling; never read programmatically. Suppression correct. |
+| `edgion-gateway/src/tls/store/conf_handler.rs` | 41 | `create_test_tls()` | Inside `#[cfg(test)]`. Suppression correct. |
+| `edgion-gateway/src/tls/store/tls_store.rs` | 249 | `TlsStore::rebuild_matcher()` | Wrapper around `rebuild_matcher_from_data`; exists as a convenience API not yet called. — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-gateway/src/runtime/store/gateway.rs` | 41 | `GatewayStore::get_gateway()` | Used in `runtime/matching/route.rs:116,130` and `pg_request_filter.rs:53`. `#[allow]` is stale — can be removed. — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs` | 19/25 | `get_gateway_class_by_name`, `list_gateway_classes` | Re-exported through `config/mod.rs`; used transitively in tests and `conf_client`. `#[allow]` is stale if the re-export chain resolves the lint. |
+| `edgion-gateway/src/config/edgion_gateway/conf_handler_impl.rs` | 20/26 | `get_edgion_gateway_config_by_name`, `list_edgion_gateway_configs` | Same pattern as above. |
+| `edgion-gateway/src/config/gateway_class/mod.rs` | 4 | `#[allow(unused_imports)]` on re-export line | Both functions are re-exported but possibly not consumed outside tests; the suppression prevents the re-export itself from triggering warnings. |
+| `edgion-gateway/src/config/edgion_gateway/mod.rs` | 4 | Same as above | Same rationale. |
+| `edgion-gateway/src/link_sys/providers/webhook/resolver.rs` | 163 | `_type_check()` in `#[cfg(test)]` | Type-checking helper, intentionally unused at runtime. |
 
 ---
 
 ## Dead Plugin Struct Fields (0–1 refs in their module)
 
-All four `TlsRouteContext` fields flagged by the module-local scan (`listener_port`, `tls_id`, `rsc`, `is_mtls`) are **actively used** by callers in `src/core/gateway/routes/tls/` — the scan was too narrow (only looked inside the `tls_route/` plugin subdirectory). No genuinely dead struct fields were found in plugin directories.
+All four `TlsRouteContext` fields flagged by the module-local scan (`listener_port`, `tls_id`, `rsc`, `is_mtls`) are **actively used** by callers in `edgion-gateway/src/routes/tls/` — the scan was too narrow (only looked inside the `tls_route/` plugin subdirectory). No genuinely dead struct fields were found in plugin directories.
 
 The `mirror_log` module fields `entry_type` and `timestamp` on `MirrorLogEntry` are written via `new_entry()` (in the same file) and serialized to JSON via Serde — they are not dead.
 
@@ -50,10 +50,10 @@ The `mirror_log` module fields `entry_type` and `timestamp` on `MirrorLogEntry` 
 
 | File | Line | Function | Notes |
 |------|------|----------|-------|
-| `src/core/gateway/backends/health/check/config_store.rs` | 86 | `endpoint_slice_keys()` | Returns keys from the endpoint-slice config map; no call sites found outside the file |
-| `src/core/gateway/backends/health/check/config_store.rs` | 90 | `endpoint_keys()` | Returns keys from the per-endpoint config map; same — no call sites |
-| `src/core/gateway/backends/policy/backend_tls/backend_tls_policy_store.rs` | 287 | `get_by_namespace(namespace)` | Returns policies filtered by namespace; no callers found in `src/` |
-| `src/core/gateway/backends/policy/backend_tls/backend_tls_policy_store.rs` | 282 | `get_all()` | Returns full policy map clone; no callers (only self-referential internal construction) |
+| `edgion-gateway/src/backends/health/check/config_store.rs` | 86 | `endpoint_slice_keys()` | Returns keys from the endpoint-slice config map; no call sites found outside the file — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-gateway/src/backends/health/check/config_store.rs` | 90 | `endpoint_keys()` | Returns keys from the per-endpoint config map; same — no call sites — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | 287 | `get_by_namespace(namespace)` | Returns policies filtered by namespace; no callers found in `src/` — REMOVED in refactor (not found 2026-06-13) |
+| `edgion-gateway/src/backends/policy/backend_tls/backend_tls_policy_store.rs` | 282 | `get_all()` | Returns full policy map clone; no callers (only self-referential internal construction) — REMOVED in refactor (not found 2026-06-13) |
 
 Functions that appeared to have 0 refs but are actually used internally (only called from within the same file, e.g. via `self.X()`):
 - `record_failure` / `record_success` in `circuit_breaker/store.rs` — called by `record_failure_by_addr` / `record_success_by_addr` in the same file, which ARE used externally.
@@ -69,7 +69,7 @@ Functions that appeared to have 0 refs but are actually used internally (only ca
 
 | File | Line | Struct | Notes |
 |------|------|--------|-------|
-| `src/core/gateway/plugins/http/request_mirror/mirror_log.rs` | 7 | `MirrorLogEntry` | 0 refs **outside its own file** per grep filter, but the struct IS used internally by `new_entry()` and `emit_mirror_log()` which are called from `plugin.rs`. Not truly dead — the grep filter excluded the containing file. |
+| `edgion-gateway/src/plugins/http/request_mirror/mirror_log.rs` | 7 | `MirrorLogEntry` | 0 refs **outside its own file** per grep filter, but the struct IS used internally by `new_entry()` and `emit_mirror_log()` which are called from `plugin.rs`. Not truly dead — the grep filter excluded the containing file. |
 
 No plugin structs with zero genuine callers were found. The `AllEndpointStatusGlobalConfig` (1 external ref) is referenced from `cli/config.rs` and used by the plugin trait. `ConditionEvalResult` (1 external ref) is re-exported via `conditions/mod.rs`.
 
@@ -81,8 +81,8 @@ These `#[allow(dead_code)]` annotations are on items that **are used** — the s
 
 | File | Line | Item | Action |
 |------|------|------|--------|
-| `src/core/gateway/runtime/server/error_response.rs` | 189 | `end_response_421` | Remove `#[allow]` — function is called |
-| `src/core/gateway/runtime/store/gateway.rs` | 41 | `get_gateway` | Remove `#[allow]` — function is called |
+| `edgion-gateway/src/runtime/server/error_response.rs` | 225 | `end_response_421` | Remove `#[allow]` — function is called |
+| `edgion-gateway/src/runtime/store/gateway.rs` | 41 | `get_gateway` | Remove `#[allow]` — function is called — REMOVED in refactor (not found 2026-06-13) |
 
 ---
 

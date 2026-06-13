@@ -41,7 +41,7 @@ corrupt the stream.
 ## Edgion's current design
 
 Upstream TLS connections are built by `create_tls_peer` in
-`src/core/gateway/backends/peer_builder.rs:135-223`. This function calls:
+`edgion-gateway/src/backends/peer_builder.rs:135-219`. This function calls:
 
 - `HttpPeer::new(addr, true, sni)` — a Pingora standard TLS peer.
 - `HttpPeer::new_mtls(addr, sni, cert_key)` — a Pingora mTLS peer.
@@ -51,7 +51,7 @@ advertise `http/1.1` ALPN in the ClientHello. `create_tls_peer` never overrides
 `peer.options.alpn` for TLS gRPC backends.
 
 The backend app protocol detection (`detect_backend_app_protocol_key` in
-`peer_builder.rs:26`) reads the K8s Service `appProtocol` field and returns
+`edgion-gateway/src/backends/peer_builder.rs:26`) reads the K8s Service `appProtocol` field and returns
 `BackendAppProtocol::H2c` for `kubernetes.io/h2c` / `h2c`. `H2c` is plaintext
 HTTP/2; `apply_backend_app_protocol` sets `peer.options.set_http_version(2, 2)`
 which sets `ALPN::H2` correctly — but this path is only taken for plaintext
@@ -60,7 +60,7 @@ backends and is irrelevant to TLS.
 For a TLS backend using gRPC (which requires h2 over TLS), there is no
 corresponding path that sets `peer.options.alpn = ALPN::H2`.
 
-`BackendTLSPolicy` (`peer_builder.rs:188-220`) carries `subjectAltNames` for
+`BackendTLSPolicy` (`edgion-gateway/src/backends/peer_builder.rs:188-216`) carries `subjectAltNames` for
 SAN validation but has no `alpn_protocols` field.
 
 ## The problem / gap

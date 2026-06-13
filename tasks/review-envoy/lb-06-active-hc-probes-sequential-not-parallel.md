@@ -20,7 +20,7 @@ independent timers.
 
 ## Edgion's current design
 
-`health_check_loop` (`src/core/gateway/backends/health/check/manager.rs:110-245`)
+`health_check_loop` (`edgion-gateway/src/backends/health/check/manager.rs:110-245`)
 iterates the backend list **sequentially** within a single `tokio::task`:
 
 ```rust

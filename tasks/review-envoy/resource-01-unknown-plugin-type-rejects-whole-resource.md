@@ -20,7 +20,7 @@ recognise.
 ## Edgion's current design
 
 `EdgionPlugin` is a Rust `enum` with `#[serde(tag = "type", content = "config")]`
-(`src/types/resources/edgion_plugins/edgion_plugin.rs:24`):
+(`edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs:26`):
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -35,7 +35,7 @@ pub enum EdgionPlugin {
 ```
 
 At the Gateway, the full `EdgionPlugins` resource is received as JSON and deserialized in one shot via
-`serde_json::from_value::<T>(event_data.clone())` (`src/core/gateway/conf_sync/cache_client/event_dispatch.rs:323`).
+`serde_json::from_value::<T>(event_data.clone())` (`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:323`).
 If the JSON contains any `requestPlugins` entry whose `"type"` field names a variant that does not exist
 in the compiled enum — for example a plugin introduced in a newer Controller version — serde returns
 `Err`, and the entire `EdgionPlugins` resource is skipped with a `tracing::error!` and
@@ -43,7 +43,7 @@ in the compiled enum — for example a plugin introduced in a newer Controller v
 already in use by running routes, are also lost.
 
 The same failure path applies to the list (relist) path:
-`serde_json::from_str(&list_data.data)` at `event_dispatch.rs:95` returns an error and the list
+`serde_json::from_str(&list_data.data)` at `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:95` returns an error and the list
 call returns `tonic::Status::internal`, forcing a retry loop — meaning the Gateway cannot complete
 initialization until the Controller is downgraded or the Gateway binary is upgraded.
 
@@ -71,7 +71,7 @@ assumption that Controller and Gateway are always at the same binary version.
 
 ## Verification note
 
-Code confirmed. `EdgionPlugin` enum at `src/types/resources/edgion_plugins/edgion_plugin.rs:25` has `#[serde(tag = "type", content = "config")]` with no catch-all variant. The watch path at `event_dispatch.rs:323` processes per-event (`serde_json::from_value::<T>`) so only the single offending `EdgionPlugins` resource is dropped (the loop at line 315 continues for remaining events). However, the list path at `event_dispatch.rs:95` parses `Vec<EdgionPlugins>` atomically — a single bad plugin type in any resource in the array fails the entire list, losing ALL EdgionPlugins resources for that namespace. The severity claim is thus understated for the list path: not just "all plugins in one resource" are lost but all EdgionPlugins across the list batch.
+Code confirmed. `EdgionPlugin` enum at `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs:26` has `#[serde(tag = "type", content = "config")]` with no catch-all variant. The watch path at `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:323` processes per-event (`serde_json::from_value::<T>`) so only the single offending `EdgionPlugins` resource is dropped (the loop at line 315 continues for remaining events). However, the list path at `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs:95` parses `Vec<EdgionPlugins>` atomically — a single bad plugin type in any resource in the array fails the entire list, losing ALL EdgionPlugins resources for that namespace. The severity claim is thus understated for the list path: not just "all plugins in one resource" are lost but all EdgionPlugins across the list batch.
 
 ## Suggested direction
 

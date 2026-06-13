@@ -22,17 +22,17 @@ the new full-consistent config, never a mix.
 Edgion syncs each resource kind independently over separate gRPC watch streams. Each kind has its own
 `ClientCache<T>` with its own `CacheData`, its own debounce window (`BATCH_DEBOUNCE = 100ms`), and
 its own `ConfHandler` invocation that mutates an independent runtime store
-(`src/core/gateway/conf_sync/cache_client/cache_data.rs:11-12`).
+(`edgion-gateway/src/conf_sync/cache_client/cache_data.rs:11-12`).
 
 On the Gateway side, the per-kind handlers write to independent runtime stores that are each
 protected by per-kind `ArcSwap` or `RwLock`:
 
 - `PluginStore` holds `EdgionPlugins` behind an `ArcSwap<PluginMap>`
-  (`src/core/gateway/plugins/http/plugin_store.rs:21`).
+  (`edgion-gateway/src/plugins/http/plugin_store.rs:134-135`).
 - `GlobalHttpRouteManagers` holds `HTTPRoute` data behind per-listener `ArcSwap<DomainRouteRules>`
-  (`src/core/gateway/routes/http/routes_mgr.rs:264`).
+  (`edgion-gateway/src/routes/http/routes_mgr.rs:250`).
 - `GatewayStore` holds `Gateway` in its own `RwLock`
-  (`src/core/gateway/runtime/handler.rs:43`).
+  (`edgion-gateway/src/runtime/store/gateway.rs:67-68`).
 
 These stores are updated by separate Tokio tasks (one per kind), each woken by its own `Notify`
 after its own 100ms debounce. There is no cross-kind coordination primitive — no shared transaction
@@ -79,9 +79,9 @@ eliminate.
 ## Verification note
 
 Code confirmed. Minor line-number corrections from source verification:
-- `cache_data.rs:11-12` is the `BATCH_DEBOUNCE` constant and an adjacent comment; `CacheData` struct starts at line 17. The 100ms debounce claim is accurate.
-- `handler.rs:43` does not contain a `GatewayStore` field; `GatewayStore` is in `src/core/gateway/runtime/store/gateway.rs:62` behind `Arc<RwLock<GatewayStore>>`. The per-kind independent lock claim is accurate.
-- The `ExtensionRefFilter` failure path (`extension_ref.rs`: `prepare_execution` returning `Err(())` → HTTP 500) is confirmed in `src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs:134-144`.
+- `edgion-gateway/src/conf_sync/cache_client/cache_data.rs:11-12` is the `BATCH_DEBOUNCE` constant and an adjacent comment; `CacheData` struct starts at line 17. The 100ms debounce claim is accurate.
+- `handler.rs:43` does not contain a `GatewayStore` field; `GatewayStore` struct is in `edgion-gateway/src/runtime/store/gateway.rs:8`; the global `Arc<RwLock<GatewayStore>>` is at `edgion-gateway/src/runtime/store/gateway.rs:67-68`. The per-kind independent lock claim is accurate.
+- The `ExtensionRefFilter` failure path (`extension_ref.rs`: `prepare_execution` returning `Err(())` → HTTP 500) is confirmed in `edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs:134-144`.
 - This finding is distinct from `sync-02`: sync-02 covers Service/EndpointSlice and TLS cert ordering; resource-02 covers the HTTPRoute → EdgionPlugins plugin-reference torn-state window via `ExtensionRefFilter`.
 
 ## Suggested direction

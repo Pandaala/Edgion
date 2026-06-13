@@ -22,7 +22,7 @@ client to reconnect and re-sync — but it never blocks the event processing pat
 ## Edgion's current design
 
 On the Controller side, `ServerCache<T>::start_watcher_task`
-(`src/core/controller/conf_sync/cache_server/cache.rs` lines 125-206) spawns one
+(`edgion-controller/src/conf_sync/cache_server/cache.rs` lines 125-206) spawns one
 `tokio` task per watch client.  That task holds a reference to the shared
 `EventStore<T>` and sends events over a bounded `mpsc::channel(100)` to the next
 stage.
@@ -94,7 +94,7 @@ A single slow or stuck Gateway can:
 - In a fleet where one Gateway is on a degraded node, its watcher tasks consume
   Tokio worker resources on the Controller, indirectly degrading scheduling
   latency for healthy Gateways' tasks.
-- The 64 MB hard limit on List responses (`config_sync_server.rs` lines 148-170)
+- The 64 MB hard limit on List responses (`config_sync_server.rs` lines 147-170)
   protects against OOM on the List path but there is no equivalent protection on
   the Watch path: a large batch of events pushed into a full chain of channels
   will simply block.
