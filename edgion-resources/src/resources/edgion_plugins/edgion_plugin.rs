@@ -9,7 +9,7 @@ use super::plugin_configs::{
     DynamicInternalUpstreamConfig, ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig,
     JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig,
     ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig,
+    RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig,
 };
 use crate::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter,
@@ -18,8 +18,10 @@ use crate::resources::http_route::{
 /// Plugin enum for all supported plugin types
 ///
 /// Naming convention:
-/// - Gateway API standard plugins: keep original names (RequestHeaderModifier, etc.)
-/// - Custom Edgion plugins: use EdgionXxx naming (EdgionRateLimit, etc.)
+/// - Variant names are the user-facing `type:` values (serde `tag = "type"`), so
+///   they carry NO `Edgion` prefix — e.g. `RateLimit`, `DynamicInternalUpstream`.
+/// - Gateway API standard plugins keep their spec names (RequestHeaderModifier, etc.);
+///   custom Edgion plugins use a plain PascalCase name (RateLimit, CtxSet, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "config")]
 pub enum EdgionPlugin {
@@ -92,11 +94,13 @@ pub enum EdgionPlugin {
     Dsl(DslConfig),
     /// RegionRoute filter (consistent hash-range multi-region routing with optional failover)
     RegionRoute(RegionRouteConfig),
-    // TODO: Add more custom Edgion plugins here
-    // EdgionCircuitBreaker(CircuitBreakerConfig),
-    // EdgionWaf(WafConfig),
-    // EdgionCache(CacheConfig),
-    // EdgionTransform(TransformConfig),
+    /// TraceContext filter (W3C trace-context propagation)
+    TraceContext(TraceContextConfig),
+    // TODO: Add more custom Edgion plugins here (no `Edgion` prefix on the variant name)
+    // CircuitBreaker(CircuitBreakerConfig),
+    // Waf(WafConfig),
+    // Cache(CacheConfig),
+    // Transform(TransformConfig),
     // ...
 }
 
@@ -137,6 +141,7 @@ impl EdgionPlugin {
             EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
             EdgionPlugin::Dsl(_) => "Dsl",
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
+            EdgionPlugin::TraceContext(_) => "TraceContext",
         }
     }
 
@@ -188,6 +193,7 @@ impl EdgionPlugin {
             EdgionPlugin::RealIp(c) => c.validation_error(),
             EdgionPlugin::JwtAuth(c) => c.validation_error(),
             EdgionPlugin::DebugAccessLogToHeader(c) => c.validation_error(),
+            EdgionPlugin::TraceContext(c) => c.validation_error(),
 
             // Bucket 8 — Gateway API filter variants (foreign types, no trait impl)
             EdgionPlugin::RequestHeaderModifier(_)

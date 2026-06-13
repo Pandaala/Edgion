@@ -81,7 +81,8 @@ fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
         | AllEndpointStatus(_)
         | DynamicInternalUpstream(_)
         | DynamicExternalUpstream(_)
-        | RegionRoute(_) => (true, false, false, false),
+        | RegionRoute(_)
+        | TraceContext(_) => (true, false, false, false),
     };
     StageSet {
         request,
@@ -197,6 +198,20 @@ impl EdgionPlugins {
             upstream_response
         );
 
+        // At most one TraceContext in the request stage — multiple would each
+        // overwrite x-trace-id (last-write-wins), which is confusing.
+        if let Some(entries) = &self.spec.request_plugins {
+            let count = entries
+                .iter()
+                .filter(|e| e.is_enabled() && e.plugin.type_name() == "TraceContext")
+                .count();
+            if count > 1 {
+                errors.push(format!(
+                    "requestPlugins: at most one TraceContext plugin is allowed, found {count}"
+                ));
+            }
+        }
+
         errors
     }
 }
@@ -270,6 +285,60 @@ mod tests {
                 "alias must match [a-zA-Z0-9._-]{1,32} (contains disallowed character)"
             )
             .to_string()]
+        );
+    }
+}
+
+#[cfg(test)]
+mod trace_context_dup_tests {
+    use crate::resources::edgion_plugins::EdgionPlugins;
+
+    fn validate(yaml: &str) -> Vec<String> {
+        let plugins: EdgionPlugins = serde_yaml::from_str(yaml).expect("deserialize EdgionPlugins");
+        plugins.validate_plugins()
+    }
+
+    #[test]
+    fn rejects_two_trace_context() {
+        let errs = validate(
+            r#"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dup
+  namespace: default
+spec:
+  requestPlugins:
+    - type: TraceContext
+      config: {}
+    - type: TraceContext
+      config: {}
+"#,
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("at most one TraceContext")),
+            "expected duplicate error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn allows_single_trace_context() {
+        let errs = validate(
+            r#"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ok
+  namespace: default
+spec:
+  requestPlugins:
+    - type: TraceContext
+      config: {}
+"#,
+        );
+        assert!(
+            !errs.iter().any(|e| e.contains("at most one TraceContext")),
+            "unexpected duplicate error: {errs:?}"
         );
     }
 }

@@ -112,6 +112,34 @@ requestPlugins:
       onInvalid: reject
 ```
 
+#### Canary / A-B Testing (cookie-based)
+
+`DynamicInternalUpstream` is Edgion's equivalent of the "traffic-split" plugin found in other gateways: a request that carries a sticky cookie is pinned to a specific version, while everyone else falls through to normal weighted backend selection. Because `from.type` supports `cookie` as a first-class, by-name source, you do not need to regex the raw `Cookie` header.
+
+```yaml
+requestPlugins:
+  - type: DynamicInternalUpstream
+    config:
+      from:
+        type: cookie
+        name: canary          # by-name cookie lookup, no Cookie-header regex needed
+      rules:
+        - value: "v2"
+          backendRef:
+            name: api-v2
+      onMissing: fallback      # no canary cookie => normal weighted selection (e.g. 90/10)
+      onNoMatch: fallback      # cookie present but unknown value => weighted selection
+```
+
+```bash
+curl -H "Cookie: canary=v2" https://api.example.com/api   # pinned to api-v2
+curl https://api.example.com/api                          # weighted selection
+```
+
+> **Choosing a canary strategy**
+> - **Deterministic, sticky** (same user always sees the same version): use this plugin with a `cookie` / `header` source — the example above.
+> - **Percentage-based gradual rollout** (e.g. shift 5% → 25% → 100%): use `backendRefs` `weight` on the route, or a plugin `conditions.run` `probability` matcher. See [Backend Weight](../../backends/weight.md).
+
 ---
 
 ## DynamicExternalUpstream

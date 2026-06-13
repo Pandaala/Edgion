@@ -575,6 +575,11 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         Ok(())
     }
 
+    fn set_trace_id(&mut self, value: &str) -> PluginSessionResult<()> {
+        self.ctx.request_info.x_trace_id = Some(value.to_string());
+        Ok(())
+    }
+
     fn client_cert_info(&self) -> Option<crate::ctx::ClientCertInfo> {
         self.ctx.request_info.client_cert_info.clone()
     }

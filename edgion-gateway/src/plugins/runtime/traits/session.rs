@@ -149,6 +149,12 @@ pub trait PluginSession: Send + Sync {
     /// Used by RealIp plugin to update the extracted real client IP.
     fn set_remote_addr(&mut self, addr: &str) -> PluginSessionResult<()>;
 
+    /// Overwrite the request's trace id (`ctx.request_info.x_trace_id`).
+    ///
+    /// Used by the TraceContext plugin to align `x-trace-id` (access log +
+    /// response header) with the W3C `trace_id`.
+    fn set_trace_id(&mut self, value: &str) -> PluginSessionResult<()>;
+
     /// Get mTLS client certificate info extracted during handshake.
     ///
     /// Returns None when:

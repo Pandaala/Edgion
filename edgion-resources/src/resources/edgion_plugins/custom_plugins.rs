@@ -3,16 +3,13 @@
 //! This module is reserved for future custom Edgion edgion_plugins that extend beyond
 //! the Gateway API standard plugins.
 //!
-//! Future custom edgion_plugins will be added here, such as:
-//! - EdgionRateLimit(RateLimitConfig) - Rate limiting plugin
-//! - EdgionCircuitBreaker(CircuitBreakerConfig) - Circuit breaker plugin
-//! - EdgionAuth(AuthConfig) - Authentication plugin
-//! - EdgionWaf(WafConfig) - Web application firewall plugin
-//! - EdgionCache(CacheConfig) - Caching plugin
-//! - EdgionTransform(TransformConfig) - Request/response transformation plugin
-//! - EdgionObservability(ObservabilityConfig) - Observability plugin
-//! - EdgionCors(CorsConfig) - CORS configuration plugin
-//! - EdgionCompression(CompressionConfig) - Compression plugin
+//! Future custom edgion_plugins will be added here. Variant names carry NO
+//! `Edgion` prefix (they are the user-facing `type:` values), such as:
+//! - CircuitBreaker(CircuitBreakerConfig) - Circuit breaker plugin
+//! - Waf(WafConfig) - Web application firewall plugin
+//! - Cache(CacheConfig) - Caching plugin
+//! - Transform(TransformConfig) - Request/response transformation plugin
+//! - Compression(CompressionConfig) - Compression plugin
 //! - etc.
 //!
 //! # Example placeholder structure

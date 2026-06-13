@@ -32,5 +32,6 @@ Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
 | [request-mirror.md](request-mirror.md) | 请求镜像 |
 | [request-restriction.md](request-restriction.md) | 请求过滤 |
 | [response-rewrite.md](response-rewrite.md) | 响应重写 |
+| [trace-context.md](trace-context.md) | W3C Trace Context 传播 |
 | [all-endpoint-status.md](all-endpoint-status.md) | 查询所有后端 Endpoint 状态 |
 | [debug-access-log.md](debug-access-log.md) | 将 Access Log 注入响应头（仅开发用） |

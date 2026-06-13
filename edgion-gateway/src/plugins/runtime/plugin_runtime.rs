@@ -58,6 +58,7 @@ use crate::plugins::http::region_route::RegionRoute;
 use crate::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::plugins::http::request_restriction::RequestRestriction;
 use crate::plugins::http::response_rewrite::ResponseRewrite;
+use crate::plugins::http::trace_context::TraceContext;
 use crate::plugins::runtime::gateway_api_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, GapiCorsFilter, RequestHeaderModifierFilter,
     RequestRedirectFilter, ResponseHeaderModifierFilter, URLRewriteFilter,
@@ -783,6 +784,7 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(DynamicExternalUpstream::create(config)))
             }
             EdgionPlugin::RealIp(config) => CreateResult::Ok(Some(RealIp::create(config))),
+            EdgionPlugin::TraceContext(config) => CreateResult::Ok(Some(TraceContext::create(config))),
             EdgionPlugin::ForwardAuth(config) => CreateResult::Ok(Some(Box::new(ForwardAuth::new(config)))),
             EdgionPlugin::AllEndpointStatus(config) => CreateResult::Ok(Some(Box::new(AllEndpointStatus::new(config)))),
             EdgionPlugin::OpenidConnect(config) => {
@@ -834,6 +836,7 @@ impl PluginRuntime {
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
             | EdgionPlugin::RealIp(_)
+            | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::ForwardAuth(_)
             | EdgionPlugin::OpenidConnect(_)
             | EdgionPlugin::BandwidthLimit(_)
@@ -886,6 +889,7 @@ impl PluginRuntime {
             | EdgionPlugin::RateLimitRedis(_)
             | EdgionPlugin::CtxSet(_)
             | EdgionPlugin::RealIp(_)
+            | EdgionPlugin::TraceContext(_)
             | EdgionPlugin::ForwardAuth(_)
             | EdgionPlugin::OpenidConnect(_)
             | EdgionPlugin::DirectEndpoint(_)
@@ -921,6 +925,7 @@ impl PluginRuntime {
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::DirectEndpoint(_) => "DirectEndpoint",
             EdgionPlugin::RealIp(_) => "RealIp",
+            EdgionPlugin::TraceContext(_) => "TraceContext",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
             EdgionPlugin::OpenidConnect(_) => "OpenidConnect",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",

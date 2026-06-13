@@ -31,6 +31,7 @@ pub mod region_route;
 pub mod request_mirror;
 pub mod request_restriction;
 pub mod response_rewrite;
+pub mod trace_context;
 
 pub use all_endpoint_status::AllEndpointStatus;
 pub use bandwidth_limit::BandwidthLimit;

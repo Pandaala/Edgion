@@ -112,6 +112,34 @@ requestPlugins:
       onInvalid: reject
 ```
 
+#### 金丝雀 / A-B 测试（基于 cookie）
+
+`DynamicInternalUpstream` 是 Edgion 中其他网关"traffic-split 插件"的等价物：携带指定 cookie 的请求被固定到某个版本，其余请求落回正常的加权后端选择。由于 `from.type` 把 `cookie` 作为一等的具名来源，无需对原始 `Cookie` 头写正则。
+
+```yaml
+requestPlugins:
+  - type: DynamicInternalUpstream
+    config:
+      from:
+        type: cookie
+        name: canary          # 按名直取 cookie，无需正则匹配 Cookie 头
+      rules:
+        - value: "v2"
+          backendRef:
+            name: api-v2
+      onMissing: fallback      # 没有 canary cookie => 走正常加权选择（如 90/10）
+      onNoMatch: fallback      # cookie 存在但值未知 => 走加权选择
+```
+
+```bash
+curl -H "Cookie: canary=v2" https://api.example.com/api   # 固定到 api-v2
+curl https://api.example.com/api                          # 加权选择
+```
+
+> **如何选择金丝雀策略**
+> - **确定性、粘性**（同一用户始终看到同一版本）：用本插件配 `cookie` / `header` 来源，即上面的示例。
+> - **按百分比逐步放量**（如 5% → 25% → 100%）：用路由的 `backendRefs` `weight`，或插件 `conditions.run` 的 `probability` 匹配器。参见 [后端权重](../../backends/weight.md)。
+
 ---
 
 ## DynamicExternalUpstream

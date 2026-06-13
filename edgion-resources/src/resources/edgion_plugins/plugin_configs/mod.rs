@@ -28,6 +28,7 @@ mod real_ip;
 mod region_route;
 mod request_restriction;
 mod response_rewrite;
+mod trace_context;
 
 pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use bandwidth_limit::BandwidthLimitConfig;
@@ -67,3 +68,4 @@ pub use real_ip::RealIpConfig;
 pub use region_route::{HashAlgorithm, HashCalcConfig, PluginMetaDataRef, RegionDef, RegionRouteConfig, RouteRule};
 pub use request_restriction::{OnMissing, RequestRestrictionConfig, RestrictionRule, RestrictionSource, RuleMatchMode};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
+pub use trace_context::TraceContextConfig;

@@ -292,6 +292,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/RateLimitRedis" => "EdgionPlugins",
         "EdgionPlugins/BandwidthLimit" => "EdgionPlugins",
         "EdgionPlugins/RealIp" => "EdgionPlugins",
+        "EdgionPlugins/TraceContext" => "EdgionPlugins",
         "EdgionPlugins/RequestMirror" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/IpRestriction" => "EdgionPlugins",
@@ -1006,6 +1007,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RealIpPluginTestSuite));
+        }
+        "EdgionPlugins/TraceContext" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/TraceContext tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::TraceContextPluginTestSuite));
         }
         "EdgionPlugins/RequestMirror" => {
             if !gateway {

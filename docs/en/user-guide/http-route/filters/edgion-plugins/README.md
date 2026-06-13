@@ -32,5 +32,6 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [request-mirror.md](request-mirror.md) | Request mirroring |
 | [request-restriction.md](request-restriction.md) | Request filtering |
 | [response-rewrite.md](response-rewrite.md) | Response rewrite |
+| [trace-context.md](trace-context.md) | W3C Trace Context propagation |
 | [all-endpoint-status.md](all-endpoint-status.md) | Query all backend endpoint statuses |
 | [debug-access-log.md](debug-access-log.md) | Inject access log into response headers (dev only) |
