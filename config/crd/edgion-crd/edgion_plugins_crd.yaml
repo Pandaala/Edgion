@@ -167,6 +167,7 @@ spec:
                           - RegionRoute
                           - RequestMirror
                           - WebhookKeyGet
+                          - TraceContext
                       config:
                         type: object
                         description: "Plugin-specific configuration"
