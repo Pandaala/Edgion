@@ -7,9 +7,9 @@ use tokio::sync::{mpsc, Notify};
 
 use super::store::EventStore;
 use super::types::{EventType, ListData, WatchClient, WatchResponse};
+use crate::conf_mgr::sync_runtime::resource_version;
 use crate::conf_sync::conf_server::{WatchObj, WatchResponseSimple};
 use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
-use edgion_common::utils;
 use edgion_resources::ResourceMeta;
 
 pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
@@ -368,7 +368,7 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
         T: Resource + Send + 'static,
     {
         // Use provided sync_version or generate one
-        let sync_version = sv.unwrap_or_else(utils::next_resource_version);
+        let sync_version = sv.unwrap_or_else(resource_version::next_resource_version);
 
         tracing::info!(
             component = "cache_server",

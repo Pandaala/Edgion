@@ -12,6 +12,7 @@ use edgion_resources::resources::edgion_plugins::OnMissingKey;
 
 pub mod auth_common;
 pub mod http_client;
+pub mod http_util;
 
 pub use auth_common::{resolve_claim_path, send_gateway_auth_error_response, set_claims_headers, Claims};
 pub use http_client::{

@@ -13,12 +13,12 @@ const HTTP2_KEEPALIVE_INTERVAL_SECS: u64 = 10;
 const HTTP2_KEEPALIVE_TIMEOUT_SECS: u64 = 5;
 
 use crate::conf_mgr::sync_runtime::metrics::reload_metrics;
+use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
 use edgion_common::conf_sync::proto::{
     config_sync_server::{ConfigSync, ConfigSyncServer as ConfigSyncService},
     ListRequest, ListResponse, ServerInfoRequest, ServerInfoResponse, ServerMetaEvent, WatchRequest, WatchResponse,
     WatchServerMetaRequest,
 };
-use edgion_common::conf_sync_config::ConfSyncSecurityConfig;
 use edgion_resources::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
 use super::ConfigSyncServer;

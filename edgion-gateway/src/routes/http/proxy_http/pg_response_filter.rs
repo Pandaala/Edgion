@@ -84,6 +84,13 @@ pub async fn response_filter(
         ctx.request_info.status = Some(header.status.as_u16());
         ctx.request_info.response_committed = true;
         ctx.local_reply_written = true;
+        // Writing this reply and returning the abort `Err` below tears down the
+        // downstream connection. Disable keepalive first so Pingora's H1 codec
+        // emits `Connection: close` on the wire (no-op semantics for H2): without
+        // it the client sees a keepalive-eligible response, pools the connection,
+        // and may race to reuse the already-closed socket on a later request,
+        // surfacing as an intermittent transport-level send error.
+        session.set_keepalive(None);
         session.write_response_header(header, body_empty).await?;
         if !body_empty {
             session.write_response_body(Some(body), true).await?;

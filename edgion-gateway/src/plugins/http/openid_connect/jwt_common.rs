@@ -1,4 +1,4 @@
-//! Shared JWT/JWKS helpers used by both common auth middleware and the gateway OpenID Connect plugin.
+//! JWT/JWKS helpers for the gateway OpenID Connect plugin.
 
 use jsonwebtoken::errors::ErrorKind;
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, Jwk, JwkSet};

@@ -153,12 +153,9 @@ Deliberately kept small:
 
 ```
 edgion-common/src/
-├── auth/         # Shared auth primitives only: JwksProvider (gateway OIDC plugin) + public_paths
-├── api/          # Admin API utilities (IP allowlist, cache-control middleware, response types)
 ├── secret/       # Secret store
-├── jwt_common.rs # Common JWT/JWK utility functions (algorithm policy, JWK selection, error mapping)
-│                 #   ← both common and gateway depend on this module; gateway must not be reverse-depended on by common
-├── conf_sync/    # Shared proto / traits / sync types
+├── conf_sync/    # Shared proto / traits / sync types + gRPC sync security config
+│   ├── config.rs     # ConfSyncConfig / ConfSyncSecurityConfig / ConfSyncTlsConfig
 │   ├── proto/        # protobuf definitions
 │   ├── traits/       # CacheEventDispatch + ConfHandler
 │   └── types/        # Sync-related types
@@ -167,7 +164,6 @@ edgion-common/src/
 ├── config/       # Shared startup configuration
 ├── startup.rs    # Common process startup helpers
 ├── grpc_tls.rs   # Shared gRPC TLS setup
-├── http_util.rs  # Shared HTTP utilities
 ├── matcher/      # Shared matching algorithms
 │   ├── host_match/   # Domain matching (Hash + Radix)
 │   ├── ip_radix_tree/ # IP Radix tree

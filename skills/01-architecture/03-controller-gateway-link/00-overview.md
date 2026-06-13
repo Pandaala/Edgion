@@ -121,7 +121,7 @@ Both gRPC channels support optional mTLS encryption:
 ### Configuration structure
 
 ```rust
-// edgion-common/src/conf_sync_config.rs
+// edgion-common/src/conf_sync/config.rs
 pub struct ConfSyncSecurityConfig {
     pub active: Option<String>,          // Name of the active certificate set
     pub certs: Vec<ConfSyncTlsConfig>,   // Multi-cert sets ([[...certs]] array)
@@ -249,7 +249,7 @@ Subcommand entry: `edgion-cli/src/cli/commands/gen_certs.rs`
 | Module | Path | Responsibility |
 |------|------|------|
 | **common/conf_sync** | `edgion-common/src/conf_sync/` | Proto definitions, shared traits (`CacheEventDispatch`, `ConfHandler`, `ResourceChange`), shared event/list/Watch types |
-| **common/conf_sync_config** | `edgion-common/src/conf_sync_config.rs` | `ConfSyncSecurityConfig`, `ConfSyncTlsConfig` configuration structs |
+| **common/conf_sync::config** | `edgion-common/src/conf_sync/config.rs` | `ConfSyncSecurityConfig`, `ConfSyncTlsConfig` configuration structs |
 | **controller/conf_sync** | `edgion-controller/src/conf_sync/` | Server-side implementation: `ConfigSyncServer`, `ConfigSyncGrpcServer` (with mTLS), `ClientRegistry`, `WatchObj` trait |
 | **gateway/conf_sync** | `edgion-gateway/src/conf_sync/` | Client-side implementation: `ConfigSyncClient` (with mTLS), `ClientCache<T>`, `CacheData`, event_dispatch |
 | **ctl/certs** | `edgion-cli/src/certs/mod.rs` | Certificate generation (rcgen): `generate_certs()` → `CertBundle` |

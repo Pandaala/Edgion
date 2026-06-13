@@ -4,7 +4,7 @@ use tokio::fs;
 
 use crate::cli::client::{handle_response, EdgionClient};
 use crate::cli::output::{print_error, print_success};
-use edgion_common::utils::extract_resource_metadata;
+use edgion_resources::resource::meta::extract_resource_metadata;
 
 /// Delete command - deletes resources
 pub async fn delete(

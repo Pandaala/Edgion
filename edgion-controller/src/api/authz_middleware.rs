@@ -41,7 +41,7 @@ use crate::authz::{Authorizer, Role};
 /// any other admin route (callers pass a Bearer token). They are still only
 /// mounted under test mode (`create_admin_router`).
 fn is_skipped(path: &str) -> bool {
-    edgion_common::auth::public_paths::is_static_public(path)
+    crate::api::public_paths::is_static_public(path)
 }
 
 /// Authorization route_layer middleware.

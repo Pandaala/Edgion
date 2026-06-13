@@ -181,7 +181,7 @@ pub fn update_resource_version<T>(resource: &mut T)
 where
     T: kube::ResourceExt,
 {
-    let version = edgion_common::utils::next_resource_version();
+    let version = crate::conf_mgr::sync_runtime::resource_version::next_resource_version();
     resource.meta_mut().resource_version = Some(version.to_string());
 }
 

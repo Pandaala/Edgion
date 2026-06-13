@@ -8,11 +8,15 @@ mod common;
 mod configserver_handlers;
 mod debug_handlers;
 mod diagnostics_handlers;
+pub(crate) mod ip_allowlist;
 mod namespaced_handlers;
+mod public_paths;
 mod region_route_handlers;
 mod resource_locks;
 mod types;
 mod wipe_handlers;
+
+pub use types::{ApiResponse, ListResponse};
 
 use crate::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
@@ -23,11 +27,24 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
-use edgion_common::api::ApiResponse;
 use edgion_resources::auth_dto::{AuthStatus, AuthStatusResponse};
 use serde::Serialize;
 use std::sync::Arc;
 use types::AdminState;
+
+/// Inject `Cache-Control: no-store` on every admin API response.
+///
+/// Private caches (browsers, local proxies) are NOT bound by RFC 9111 §3.5's
+/// prohibition on storing responses with an `Authorization` header, so the
+/// server must make its intent explicit. Applied as the outermost layer of the
+/// Admin API so it fires unconditionally on every response path.
+async fn cache_control_no_store_middleware(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    response
+}
 
 /// Build the `/api/v1/auth/status` response from the `Authorizer`.
 ///
@@ -79,7 +96,7 @@ async fn require_token_configured_gate(
     request: Request,
     next: Next,
 ) -> Response {
-    if edgion_common::auth::public_paths::is_static_public(request.uri().path()) {
+    if crate::api::public_paths::is_static_public(request.uri().path()) {
         return next.run(request).await;
     }
     if !authorizer.cli_tokens_present() {
@@ -548,13 +565,11 @@ pub async fn serve_with_shutdown(
             authorizer,
             require_token_configured_gate,
         ))
-        .layer(axum::middleware::from_fn(
-            edgion_common::api::cache_control_no_store_middleware,
-        ));
+        .layer(axum::middleware::from_fn(cache_control_no_store_middleware));
 
     // admin-api-02: outermost IP allowlist — rejects unauthorized peers before auth.
     // Not mounted when the allowlist is empty (allow-all, backward compatible).
-    let app = match edgion_common::api::ip_allowlist::build_admin_ip_matcher(&allow_admin_ips)? {
+    let app = match ip_allowlist::build_admin_ip_matcher(&allow_admin_ips)? {
         Some(m) => {
             tracing::info!(
                 component = "admin_api",
@@ -563,7 +578,7 @@ pub async fn serve_with_shutdown(
             );
             app.layer(axum::middleware::from_fn_with_state(
                 m,
-                edgion_common::api::ip_allowlist::ip_allowlist_middleware,
+                ip_allowlist::ip_allowlist_middleware,
             ))
         }
         None => {

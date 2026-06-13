@@ -1,7 +1,7 @@
 use crate::conf_sync::conf_client::ConfigClient;
+use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
 use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use edgion_common::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
-use edgion_common::conf_sync_config::ConfSyncSecurityConfig;
 use edgion_resources::rate_limit_config::set_gateway_instance_count;
 use edgion_resources::ResourceKind;
 use std::sync::Arc;

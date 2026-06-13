@@ -4,13 +4,13 @@ use crate::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
 use crate::conf_sync::{ConfigSyncGrpcServer, ConfigSyncServerProvider};
 use crate::config::EdgionControllerConfig;
 use crate::observe::init_logging;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use edgion_common::conf_sync_config::ConfSyncSecurityConfig;
-use edgion_common::utils;
+use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
 use edgion_resources::{init_work_dir, work_dir, COMPONENT_EDGION_CONTROLLER, VERSION};
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
@@ -596,10 +596,10 @@ impl EdgionControllerCli {
 
         // 8. Parse addresses and start services with shutdown support
         // Note: Services start immediately but return UNAVAILABLE until ConfigServer is ready
-        let grpc_addr = utils::parse_listen_addr(Some(&config.grpc_listen()), utils::DEFAULT_OPERATOR_GRPC_ADDR)?;
-        let admin_addr = utils::parse_listen_addr(Some(&config.admin_listen()), "0.0.0.0:12101")?;
-        let probe_addr = utils::parse_listen_addr(Some(&config.probe_listen()), "0.0.0.0:12100")?;
-        let metrics_addr = utils::parse_listen_addr(Some(&config.metrics_listen()), "0.0.0.0:12190")?;
+        let grpc_addr = parse_listen_addr(Some(&config.grpc_listen()), DEFAULT_OPERATOR_GRPC_ADDR)?;
+        let admin_addr = parse_listen_addr(Some(&config.admin_listen()), "0.0.0.0:12101")?;
+        let probe_addr = parse_listen_addr(Some(&config.probe_listen()), "0.0.0.0:12100")?;
+        let metrics_addr = parse_listen_addr(Some(&config.metrics_listen()), "0.0.0.0:12190")?;
         let security = config.conf_sync_security.clone();
         security.validate()?;
 
@@ -619,4 +619,14 @@ impl EdgionControllerCli {
         )
         .await
     }
+}
+
+/// Default gRPC listen address for the controller operator endpoint.
+const DEFAULT_OPERATOR_GRPC_ADDR: &str = "127.0.0.1:50061";
+
+/// Parse a listen address string into a [`SocketAddr`], falling back to `default`
+/// when `addr` is `None`.
+fn parse_listen_addr(addr: Option<&String>, default: &str) -> Result<SocketAddr> {
+    let candidate = addr.map(String::as_str).unwrap_or(default);
+    SocketAddr::from_str(candidate).with_context(|| format!("failed to parse listen address '{}'", candidate))
 }

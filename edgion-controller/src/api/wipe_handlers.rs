@@ -9,8 +9,8 @@
 //! Tier 3 (low-level): Service, EndpointSlice, Secret, ConfigMap
 
 use crate::api::types::AdminState;
+use crate::api::ApiResponse;
 use axum::{extract::State, response::Json};
-use edgion_common::api::ApiResponse;
 use edgion_resources::ResourceKind;
 use serde::Serialize;
 use std::collections::BTreeMap;

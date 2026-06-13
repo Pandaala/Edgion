@@ -1,7 +1,7 @@
 use crate::config::conf_center::{ConfCenterConfig, FileSystemConfig};
 use anyhow::{Context, Result};
 use clap::Args;
-use edgion_common::conf_sync_config::{ConfSyncConfig, ConfSyncSecurityConfig};
+use edgion_common::conf_sync::config::{ConfSyncConfig, ConfSyncSecurityConfig};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -421,7 +421,7 @@ impl EdgionControllerConfig {
         Self::merge(&mut file_config, &cli_config);
 
         file_config.validate_metrics()?;
-        edgion_common::api::ip_allowlist::validate_admin_ips(&file_config.server.allow_admin_ips)?;
+        crate::api::ip_allowlist::validate_admin_ips(&file_config.server.allow_admin_ips)?;
 
         Ok(file_config)
     }

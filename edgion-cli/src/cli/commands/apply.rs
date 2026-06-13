@@ -4,7 +4,7 @@ use tokio::fs;
 
 use crate::cli::client::{handle_response, EdgionClient};
 use crate::cli::output::{print_error, print_success};
-use edgion_common::utils::extract_resource_metadata;
+use edgion_resources::resource::meta::extract_resource_metadata;
 
 /// Apply command - creates or updates resources from YAML files
 pub async fn apply(client: &EdgionClient, file_path: &str, dry_run: bool) -> Result<()> {

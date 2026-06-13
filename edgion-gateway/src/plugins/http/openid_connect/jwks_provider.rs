@@ -6,19 +6,19 @@
 //! a warn log) instead of propagating the fetch error.
 //! `JwksProviderConfig` parameterizes TTL / min refresh interval / response byte
 //! limit / timeout / component label. The discovery document shape is determined
-//! by the generic `D: DiscoveryDoc` -- admin uses a slim variant containing only
-//! `issuer + jwks_uri`, while the OIDC gateway plugin uses an extended variant
-//! (including 5 optional endpoints).
+//! by the generic `D: DiscoveryDoc` -- the OIDC gateway plugin uses an extended
+//! variant (including 5 optional endpoints).
 
 use jsonwebtoken::jwk::JwkSet;
 use reqwest::Client;
 use serde::de::DeserializeOwned;
+#[cfg(test)]
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 
-use crate::http_util::fetch_json_limited;
+use crate::plugins::http::common::http_util::fetch_json_limited;
 
 /// Trait every discovery-doc shape must implement so the provider can read
 /// the two universally-required fields. Extended fields (e.g. `token_endpoint`)
@@ -33,6 +33,7 @@ pub trait DiscoveryDoc: DeserializeOwned + Send + Sync + Clone + 'static {
 /// `verification_mode != JwksOnly`). Default is no-op.
 pub type DiscoveryValidator<D> = Arc<dyn Fn(&D) -> Result<(), String> + Send + Sync>;
 
+#[cfg(test)]
 pub fn no_op_validator<D: DiscoveryDoc>() -> DiscoveryValidator<D> {
     Arc::new(|_| Ok(()))
 }
@@ -50,13 +51,15 @@ pub struct JwksProviderConfig {
     pub component_label: &'static str,
 }
 
-/// Lean discovery doc for admin path — only the two universal fields.
+/// Minimal discovery doc test fixture — only the two universal fields.
+#[cfg(test)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct LeanDiscoveryDocument {
     pub issuer: String,
     pub jwks_uri: String,
 }
 
+#[cfg(test)]
 impl DiscoveryDoc for LeanDiscoveryDocument {
     fn issuer(&self) -> &str {
         &self.issuer
@@ -96,11 +99,6 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             jwks_state: RwLock::new(JwksState::default()),
             jwks_refresh: Mutex::new(()),
         })
-    }
-
-    /// Cached issuer (None until discovery has been fetched).
-    pub async fn issuer(&self) -> Option<String> {
-        self.discovery_doc.read().await.as_ref().map(|d| d.issuer().to_string())
     }
 
     /// Read-only cached discovery (no fetch). Used by gateway logout path which
@@ -257,7 +255,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 
     /// Test-only helper to inject a discovery doc directly, bypassing fetch.
     /// Used by OIDC plugin tests that exercise post-discovery code paths.
-    #[cfg(any(test, feature = "test-util"))]
+    #[cfg(test)]
     pub async fn seed_discovery(&self, doc: D) {
         *self.discovery_doc.write().await = Some(doc);
     }

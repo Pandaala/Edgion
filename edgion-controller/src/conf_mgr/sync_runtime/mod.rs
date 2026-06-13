@@ -8,6 +8,7 @@
 
 pub mod metrics;
 pub mod resource_processor;
+pub mod resource_version;
 pub mod shutdown;
 pub mod workqueue;
 

@@ -20,6 +20,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
 use super::error::{map_jwt_decode_error_typed, OidcVerifyError};
+use super::jwks_provider::{DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig};
+use super::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
 use crate::cache::ShardedLruCache;
 use crate::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
 use crate::plugins::http::common::auth_common::{
@@ -27,8 +29,6 @@ use crate::plugins::http::common::auth_common::{
 };
 use crate::plugins::http::common::http_client::get_http_client_with_ssl_verify;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
-use edgion_common::auth::jwks_provider::{DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig};
-use edgion_common::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::normalize_config_path;
 use edgion_resources::resources::edgion_plugins::{

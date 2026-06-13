@@ -205,7 +205,7 @@ edgion-gateway/src/plugins/
 │   ├── cors/
 │   ├── dsl/                       # DSL engine (with lang/ subdirectory: AST, compiler, VM)
 │   ├── ...
-│   ├── common/                    # shared plugin utilities (auth_common, jwt_common)
+│   ├── common/                    # shared plugin utilities (auth_common, http_client)
 │   ├── conf_handler_impl.rs       # EdgionPlugins ConfHandler implementation
 │   └── plugin_store.rs            # HTTP plugin resource store
 ├── stream/                        # TCP/UDP layer plugins

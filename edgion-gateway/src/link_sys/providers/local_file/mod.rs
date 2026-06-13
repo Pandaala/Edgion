@@ -6,7 +6,6 @@ mod rotation;
 use std::path::PathBuf;
 use std::sync::mpsc::SyncSender;
 
-use edgion_common::utils::available_cpu_cores;
 use edgion_resources::output::{LocalFileWriterConfig, RotationConfig};
 use edgion_resources::work_dir;
 
@@ -75,6 +74,7 @@ impl LocalFileWriter {
 
     /// Get the queue size, using default if not configured
     pub(super) fn get_queue_size(&self) -> usize {
-        self.queue_size.unwrap_or_else(|| available_cpu_cores() * 10_000)
+        self.queue_size
+            .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1) * 10_000)
     }
 }

@@ -15,8 +15,8 @@
 //! small. No snapshot infrastructure, no background task.
 
 use crate::api::types::AdminState;
+use crate::api::ApiResponse;
 use axum::{extract::State, http::StatusCode, response::Json};
-use edgion_common::api::ApiResponse;
 use edgion_resources::ResourceKind;
 use serde::Serialize;
 use std::sync::Arc;

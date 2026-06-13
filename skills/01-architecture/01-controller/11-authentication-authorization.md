@@ -108,8 +108,8 @@ IP allowlist                   (outermost — rejects unauthorized peers before 
           handler
 ```
 
-- **IP allowlist** (`edgion-common/src/api/ip_allowlist.rs`) is mounted only when `allow_admin_ips` is non-empty; otherwise allow-all (backward compatible).
-- **`cache_control_no_store`** (`edgion-common/src/api`) is cross-cutting and does not affect auth/authz semantics.
+- **IP allowlist** (`edgion-controller/src/api/ip_allowlist.rs`) is mounted only when `allow_admin_ips` is non-empty; otherwise allow-all (backward compatible).
+- **`cache_control_no_store`** (`edgion-controller/src/api/mod.rs`) is cross-cutting and does not affect auth/authz semantics.
 - **`require_token_configured_gate`** returns `503` + a startup WARN when no token (admin or cli) is registered, so a tokenless business request on an unconfigured controller yields `503` ("configure a token") rather than a bare `401`. It exempts the static public paths so `/api/v1/auth/status` and the probes stay reachable to report `Initializing`. **Admin app only** — never on the shared fed router (whose Center identity does not come from the token map).
 - The public `GET /api/v1/auth/status` route is merged **after** the `authz_layer` `route_layer`, so it stays reachable without a token. `route_layer` (not `.layer`) means `authz_layer` never runs on the 404 fallback.
 
@@ -142,7 +142,8 @@ Denials increment `edgion_fed_rbac_denied_total` via `record_rbac_denied(verb, k
 | 503 token gate + `/api/v1/auth/status` handler + onion assembly | `edgion-controller/src/api/mod.rs` |
 | Built-in default Center policy | `edgion-controller/src/fed_sync/default_policy.rs` |
 | Local admin token resolution (`EDGION_ADMIN_TOKEN` / `admin_token`) | `edgion-controller/src/cli/mod.rs` |
-| Shared JWKS provider (gateway OIDC plugin) + public paths | `edgion-common/src/auth/jwks_provider.rs`, `edgion-common/src/auth/public_paths.rs` |
+| Public paths (controller authz skip-set) | `edgion-controller/src/api/public_paths.rs` |
+| Gateway OIDC JWKS/discovery provider | `edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs` |
 | `cli_tokens` / `center.rbac` / `admin_token` config types | `edgion-controller/src/config/mod.rs` |
 
 ## Related docs

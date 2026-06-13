@@ -46,7 +46,7 @@ A snapshot cannot express the invariant being checked in these cases — it can 
 | Security boundaries | `edgion-gateway/src/tls/validation/cert.rs` mTLS `verify_depth` / SAN coverage |
 | Version compatibility | `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 |
 | Regression fixes with bug IDs | `edgion-gateway/src/lb/runtime_state/mod.rs` P0-07 leastconn count |
-| Pure cryptography / JWT verification (gateway OIDC plugin) | `edgion-common/src/jwt_common.rs` algorithm policy / JWK selection |
+| Pure cryptography / JWT verification (gateway OIDC plugin) | `edgion-gateway/src/plugins/http/openid_connect/jwt_common.rs` algorithm policy / JWK selection |
 
 ### Yellow light — usually refuse
 

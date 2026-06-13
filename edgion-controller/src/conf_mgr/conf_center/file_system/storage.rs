@@ -5,7 +5,7 @@
 
 use crate::conf_mgr::conf_center::traits::{CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult};
 use async_trait::async_trait;
-use edgion_common::utils::extract_resource_metadata;
+use edgion_resources::resource::meta::extract_resource_metadata;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;

@@ -101,7 +101,7 @@ pub async fn create_namespaced(
         StatusCode::BAD_REQUEST
     })?;
 
-    let metadata = edgion_common::utils::extract_resource_metadata(&content).ok_or_else(|| {
+    let metadata = edgion_resources::resource::meta::extract_resource_metadata(&content).ok_or_else(|| {
         tracing::warn!("Failed to extract metadata from request body");
         StatusCode::BAD_REQUEST
     })?;
@@ -337,7 +337,7 @@ pub async fn update_namespaced(
     // the URL name in non-K8s mode), desynchronizing storage and the running
     // cache. Absent body name/namespace defers to the URL value. (K8s API server
     // rejects the same mismatch.)
-    if let Some(metadata) = edgion_common::utils::extract_resource_metadata(&content) {
+    if let Some(metadata) = edgion_resources::resource::meta::extract_resource_metadata(&content) {
         if metadata.name.is_some_and(|meta_name| meta_name != name) {
             return Err(StatusCode::BAD_REQUEST);
         }
