@@ -1717,6 +1717,35 @@ main() {
     fi
 
     # =============================================================================
+    # Final Step: Requeue Dead Loop Detection
+    # =============================================================================
+    # Scan controller logs for trigger-chain cycle/depth errors that indicate a
+    # requeue dead loop was detected and suppressed. These should never appear in
+    # a healthy integration run; any occurrence is a bug in handler requeue logic.
+    log_section "Final Step: Requeue Dead Loop Detection"
+    local controller_log="${WORK_DIR}/logs/controller.log"
+    if [ -f "$controller_log" ]; then
+        local requeue_hits
+        requeue_hits=$(grep -c \
+            -e "Trigger cycle limit reached, dropping requeue" \
+            -e "Trigger chain depth limit reached, dropping requeue" \
+            "$controller_log" 2>/dev/null || true)
+        if [ "${requeue_hits:-0}" -gt 0 ]; then
+            log_error "Requeue dead loop detected: ${requeue_hits} occurrence(s) in controller.log"
+            grep \
+                -e "Trigger cycle limit reached, dropping requeue" \
+                -e "Trigger chain depth limit reached, dropping requeue" \
+                "$controller_log" | head -20 || true
+            ((++FAILED_TESTS))
+            test_failed=true
+        else
+            log_success "Requeue dead loop check passed (no dead loop events in controller log)"
+        fi
+    else
+        log_warn "Requeue dead loop check skipped — controller.log not found at ${controller_log}"
+    fi
+
+    # =============================================================================
     # Final Step: Cache Residue Detection (leak detection across all scenarios)
     # =============================================================================
     if [ "$SKIP_RESIDUE_CHECK" != "true" ]; then
