@@ -67,10 +67,7 @@ impl UdpStreamPluginsTestSuite {
                                     start.elapsed(),
                                     "Received 0 bytes — stream plugin may have used wrong source IP".to_string(),
                                 ),
-                                Ok(Err(e)) => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Recv failed: {}", e),
-                                ),
+                                Ok(Err(e)) => TestResult::failed(start.elapsed(), format!("Recv failed: {}", e)),
                                 Err(_) => TestResult::failed(
                                     start.elapsed(),
                                     "Timeout — stream plugin may have denied the packet (wrong IP extracted)"

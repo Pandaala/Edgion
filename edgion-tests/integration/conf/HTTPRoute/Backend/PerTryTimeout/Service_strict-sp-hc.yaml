@@ -1,0 +1,23 @@
+# Strict SP in-attempt fail-close Service: active HC marks 192.0.2.1 down,
+# while its token stays in the affinity map (built from all ready addresses).
+apiVersion: v1
+kind: Service
+metadata:
+  name: strict-sp-hc
+  namespace: edgion-test
+  annotations:
+    edgion.io/health-check: |
+      active:
+        type: http
+        path: /test
+        interval: 1s
+        timeout: 500ms
+        healthyThreshold: 1
+        unhealthyThreshold: 1
+        expectedStatuses:
+          - 200
+spec:
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

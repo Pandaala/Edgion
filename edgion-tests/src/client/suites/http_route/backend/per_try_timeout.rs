@@ -901,6 +901,216 @@ impl PerTryTimeoutTestSuite {
         )
     }
 
+    /// Scenario C2 (strict re-pin): a sticky per-try timeout retry must re-pin to
+    /// the SAME backend (not migrate via plain LB). Both upstream attempts share
+    /// one ip:port; stickiness is proven by attempt-0's token matching the cookie.
+    fn test_strict_repin_on_cross_attempt_retry() -> TestCase {
+        TestCase::new(
+            "strict_repin_on_cross_attempt_retry",
+            "Strict SP per-try timeout: cross-attempt retry re-pins to the same backend",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let seq_id = format!("ptt-sp-strict-{}", uuid::Uuid::new_v4());
+
+                    let client = reqwest::Client::builder()
+                        .no_proxy()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .timeout(Duration::from_secs(15))
+                        .build()
+                        .expect("client");
+
+                    let r1 = match client
+                        .get(format!("{}/test", ctx.http_url()))
+                        .header("Host", "strict-sp.example.com")
+                        .header("x-trace-id", format!("{}-init", seq_id))
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("request 1 failed: {}", e)),
+                    };
+                    if r1.status().as_u16() != 200 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("request 1 expected 200, got {}", r1.status()),
+                        );
+                    }
+                    let cookie1 = match r1.headers().get("set-cookie").and_then(|v| v.to_str().ok()) {
+                        Some(sc) if sc.starts_with("edgion-sp-strict=") => {
+                            sc.split(';').next().unwrap_or(sc).to_string()
+                        }
+                        other => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("request 1 Set-Cookie not 'edgion-sp-strict=': {:?}", other),
+                            )
+                        }
+                    };
+                    let token1 = cookie1.split('=').nth(1).unwrap_or("").to_string();
+
+                    let req_start = Instant::now();
+                    let r2 = match client
+                        .get(format!("{}/retry-sequence/{}/200d3000,200", ctx.http_url(), seq_id))
+                        .header("Host", "strict-sp.example.com")
+                        .header("cookie", &cookie1)
+                        .header("x-trace-id", &seq_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("request 2 failed: {}", e)),
+                    };
+                    let elapsed = req_start.elapsed();
+
+                    if r2.status().as_u16() != 200 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("request 2 expected 200 after re-pin retry, got {}", r2.status()),
+                        );
+                    }
+                    if elapsed < Duration::from_millis(950) || elapsed >= Duration::from_millis(2900) {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "elapsed {:?} outside [950ms, 2900ms) — per-try window/cancel off",
+                                elapsed
+                            ),
+                        );
+                    }
+
+                    let al_client = ctx.access_log_client();
+                    let entry = match al_client.get_access_log_with_retry(&seq_id, 20, 200).await {
+                        Ok(e) => e,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("access log entry not found for {}: {}", seq_id, e),
+                            )
+                        }
+                    };
+                    let upstreams = match entry.data["backend_context"]["upstreams"].as_array() {
+                        Some(u) if u.len() >= 2 => u,
+                        other => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("expected >= 2 upstream attempts, got {:?}", other),
+                            )
+                        }
+                    };
+                    let u0 = &upstreams[0];
+                    let u0_ip = u0["ip"].as_str().unwrap_or("");
+                    let u0_port = u0["port"].as_u64().unwrap_or(0);
+                    let last = &upstreams[upstreams.len() - 1];
+                    let last_ip = last["ip"].as_str().unwrap_or("");
+                    let last_port = last["port"].as_u64().unwrap_or(0);
+
+                    if sp_token(u0_ip, u0_port) != token1 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "stickiness not engaged: attempt0 {}:{} token != cookie1 token {}",
+                                u0_ip, u0_port, token1
+                            ),
+                        );
+                    }
+                    if (u0_ip, u0_port) != (last_ip, last_port) {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "strict re-pin failed: attempt0 {}:{} != retry {}:{} (migrated)",
+                                u0_ip, u0_port, last_ip, last_port
+                            ),
+                        );
+                    }
+                    if last["status"].as_u64().unwrap_or(0) != 200 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("last upstream status expected 200, got {}", last["status"]),
+                        );
+                    }
+                    let has_marker = entry.data["errors"]
+                        .as_array()
+                        .is_some_and(|errs| errs.iter().any(|e| e.as_str() == Some("BackendRequestTimeoutRetry")));
+                    if !has_marker {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "errors chain missing BackendRequestTimeoutRetry: {}",
+                                entry.data["errors"]
+                            ),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        format!(
+                            "strict re-pin OK in {:?}: both attempts on {}:{}",
+                            elapsed, last_ip, last_port
+                        ),
+                    )
+                })
+            },
+        )
+    }
+
+    /// Scenario C1 (strict in-attempt fail-close): a request whose cookie pins to
+    /// an unhealthy (active-HC-down) backend must get 503, not migrate to the
+    /// healthy backend. The cookie token is computed client-side for the known
+    /// unreachable address (192.0.2.1) — its token is in the affinity map.
+    fn test_strict_inattempt_fail_close_503() -> TestCase {
+        TestCase::new(
+            "strict_inattempt_fail_close_503",
+            "Strict SP: cookie pinned to an unhealthy backend fails closed with 503",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let client = reqwest::Client::builder()
+                        .no_proxy()
+                        .redirect(reqwest::redirect::Policy::none())
+                        .timeout(Duration::from_secs(10))
+                        .build()
+                        .expect("client");
+
+                    let token = sp_token("192.0.2.1", 30001);
+                    let cookie = format!("edgion-sp-strict-hc={}", token);
+
+                    let mut last = 0u16;
+                    for _ in 0..20 {
+                        let resp = client
+                            .get(format!("{}/test", ctx.http_url()))
+                            .header("Host", "strict-sp-hc.example.com")
+                            .header("cookie", &cookie)
+                            .send()
+                            .await;
+                        if let Ok(r) = resp {
+                            last = r.status().as_u16();
+                            if last == 503 {
+                                return TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "strict in-attempt fail-close returned 503".to_string(),
+                                );
+                            }
+                            if last == 200 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    "strict pinned-to-unhealthy returned 200 — silently migrated (bug)".to_string(),
+                                );
+                            }
+                        }
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                    }
+                    TestResult::failed(
+                        start.elapsed(),
+                        format!("expected 503 within poll window, last status {}", last),
+                    )
+                })
+            },
+        )
+    }
+
     /// Scenario B (Bug 2): a first request (no cookie) whose attempt-1 response
     /// is a retryable 503 must carry Set-Cookie on the final retried 200 — the
     /// inject state must survive the discarded attempt-1 response.
@@ -1026,6 +1236,8 @@ impl TestSuite for PerTryTimeoutTestSuite {
             Self::test_deadline_transition_not_retried(),
             Self::test_client_disconnect_is_logged(),
             Self::test_sticky_refresh_on_cross_attempt_retry(),
+            Self::test_strict_repin_on_cross_attempt_retry(),
+            Self::test_strict_inattempt_fail_close_503(),
             Self::test_first_request_cookie_survives_status_retry(),
         ]
     }

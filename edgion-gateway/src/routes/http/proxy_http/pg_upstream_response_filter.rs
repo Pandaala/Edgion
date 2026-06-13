@@ -2,6 +2,7 @@ use super::EdgionHttpProxy;
 use crate::routes::http::session_persistence;
 use crate::{EdgionHttpContext, SessionPersistenceState};
 use edgion_resources::resources::http_route::SessionPersistenceType;
+use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use std::time::Instant;
@@ -13,6 +14,27 @@ pub fn upstream_response_filter(
     upstream_response: &mut ResponseHeader,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
+    // Interim 1xx informational responses (100-Continue, 102-Processing,
+    // 103-Early-Hints) are delivered as separate HttpTask::Header on h1 upstreams
+    // (pingora's h1 client re-reads a response header for 100..=199), so each one
+    // runs through this filter. They are interim, not the final response: all
+    // response-phase bookkeeping — status/ht recording, retry-on-status,
+    // circuit-breaker success/failure, session-persistence injection, pending
+    // header-op application, and the sync response plugins — must be deferred to
+    // the final header task, otherwise the 1xx pollutes status/CB/ht and may even
+    // misfire retry-on-status. Forward the 1xx unmodified and let the final header
+    // do all of it. (h2 upstreams never surface 1xx here.)
+    //
+    // 101 Switching Protocols is deliberately EXCLUDED: it is terminal, not
+    // interim. After a 101 the h1 client stops reading response headers
+    // (`should_read_resp_header()` is false for 101), so there is no final header
+    // to defer to — the upgrade's ht/CB/ResponseHeaderModifier/plugin bookkeeping
+    // must run on the 101 itself. This matches pingora's own
+    // `is_informational_except_101` distinction.
+    if upstream_response.status.is_informational() && upstream_response.status.as_u16() != 101 {
+        return Ok(());
+    }
+
     // filter-04b: clear any stale local-reply stash from a previous upstream
     // attempt before this attempt's response-phase plugins run.
     ctx.local_reply_header = None;
@@ -85,9 +107,12 @@ pub fn upstream_response_filter(
     // Inject session persistence cookie/header if needed. Runs here, AFTER the
     // retry-on-status decision, so a response about to be discarded for retry
     // neither consumes the inject state nor carries a pointless Set-Cookie.
-    // Skip 1xx informational headers: on h1 upstreams pingora delivers each 1xx
-    // through this same filter, and injecting there would consume the state and
-    // lose the cookie on the final response.
+    // The `!is_informational()` guard now filters exactly one case: a terminal
+    // 101 Switching Protocols (the only 1xx reaching this point — true interim
+    // 100/102/103 early-return at the top). This deliberately changes the
+    // pre-1xx-guard behavior, which DID inject on a 101: a protocol-upgrade
+    // response (e.g. WebSocket) no longer receives a sticky Set-Cookie. Injecting
+    // on the final (non-1xx) response is the normal sticky-session path.
     if !upstream_response.status.is_informational() {
         match ctx.sp_state {
             SessionPersistenceState::InjectNew | SessionPersistenceState::InjectUpdate => {
@@ -97,9 +122,18 @@ pub fn upstream_response_filter(
                     .and_then(|ru| ru.rule.session_persistence.clone());
 
                 if let Some(sp) = sp_config {
-                    // Use ip:port from current upstream (backfilled by backfill_upstream_addr)
-                    let backend_addr = ctx.get_current_upstream().and_then(|u| match (&u.ip, u.port) {
-                        (Some(ip), Some(port)) => Some(format!("{}:{}", ip, port)),
+                    // Derive the token from the LB cell address (`lb_backend_addr`),
+                    // formatted with `std::net::SocketAddr::to_string()`, so it is
+                    // byte-identical to the affinity-map key built in
+                    // `lb::runtime_state::build_sp_affinity_map`. Using the peer
+                    // ip/port instead would mismatch the map in two ways: IPv6
+                    // `IpAddr::to_string()` drops the brackets the map key carries
+                    // (`::1:port` vs `[::1]:port`), and `resolve_target_port_key`
+                    // may rewrite the peer port away from the cell port — either
+                    // makes every request re-issue `InjectNew` and silently
+                    // degrade stickiness to plain LB.
+                    let backend_addr = ctx.get_current_upstream().and_then(|u| match u.lb_backend_addr {
+                        Some(SocketAddr::Inet(addr)) => Some(addr.to_string()),
                         _ => None,
                     });
 

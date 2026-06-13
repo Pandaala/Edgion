@@ -826,7 +826,7 @@ pub struct ParsedRouteRetry {
     pub attempts: Option<u32>,
     /// Base backoff duration (from retry.backoff, parsed from string)
     pub backoff: Option<std::time::Duration>,
-    /// HTTP status codes that trigger retry (from retry.codes, validated to 100-599)
+    /// HTTP status codes that trigger retry (from retry.codes, validated to 400-599)
     pub codes: Option<Vec<u16>>,
 }
 

@@ -274,7 +274,13 @@ impl HTTPRoute {
                 codes
                     .iter()
                     .filter_map(|&c| {
-                        if (100..=599).contains(&c) {
+                        // Retry status codes are restricted to 400..=599 to match
+                        // the upstream Gateway API HTTPRouteRetry CRD validation.
+                        // Informational (1xx) and success/redirect (2xx/3xx) codes
+                        // are never a meaningful retry trigger and a 1xx code here
+                        // would otherwise let retry-on-status misfire on an h1
+                        // informational header.
+                        if (400..=599).contains(&c) {
                             Some(c as u16)
                         } else {
                             tracing::warn!(code = c, "Invalid HTTP status code in retry.codes, ignoring");
@@ -614,5 +620,48 @@ mod tests {
         for rule in route.spec.rules.as_ref().unwrap() {
             assert_eq!(rule.parsed_forward_raw_path, None);
         }
+    }
+
+    // =========================================================================
+    // retry.codes range validation (400..=599, matching the Gateway API CRD)
+    // =========================================================================
+
+    fn make_route_with_retry_codes(codes: Vec<i32>) -> HTTPRoute {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "test-route", "namespace": "default"},
+            "spec": {
+                "rules": [{
+                    "matches": [{"path": {"type": "PathPrefix", "value": "/api"}}],
+                    "retry": {"codes": codes}
+                }]
+            }
+        }))
+        .expect("retry route should deserialize")
+    }
+
+    #[test]
+    fn parse_retry_codes_clamped_to_400_599() {
+        // 1xx/2xx/3xx codes are outside the Gateway API HTTPRouteRetry range and
+        // must be dropped; only 400..=599 survive preparse.
+        let mut route = make_route_with_retry_codes(vec![100, 103, 204, 302, 400, 503, 599, 600]);
+        route.parse_retry();
+        let parsed = route.spec.rules.as_ref().unwrap()[0]
+            .parsed_retry
+            .as_ref()
+            .expect("parsed_retry should be set");
+        assert_eq!(parsed.codes.as_deref(), Some([400u16, 503, 599].as_slice()));
+    }
+
+    #[test]
+    fn parse_retry_codes_all_out_of_range_yields_empty() {
+        let mut route = make_route_with_retry_codes(vec![100, 200, 399]);
+        route.parse_retry();
+        let parsed = route.spec.rules.as_ref().unwrap()[0]
+            .parsed_retry
+            .as_ref()
+            .expect("parsed_retry should be set");
+        assert_eq!(parsed.codes.as_deref(), Some([].as_slice()));
     }
 }

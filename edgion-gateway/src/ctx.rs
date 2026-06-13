@@ -811,6 +811,12 @@ pub struct EdgionHttpContext {
     /// When Some, try_get_peer will route directly to this addr instead of running LB.
     pub sp_target_addr: Option<std::net::SocketAddr>,
 
+    /// Session persistence: the sticky target resolved from the affinity map,
+    /// retained across attempts so a strict-mode retry can re-pin to the same
+    /// backend (`sp_target_addr` is consumed by `take()` on the first attempt).
+    /// Plain field, no serde attribute (`EdgionHttpContext` has no serde derive).
+    pub sp_sticky_addr: Option<std::net::SocketAddr>,
+
     /// Direct evidence that an earlier attempt consumed the SP sticky target
     /// (`sp_target_addr.take()` returned `Some`). Drives the cross-attempt token
     /// refresh in `upstream_peer_http`. Plain field, no serde attribute
@@ -939,6 +945,7 @@ impl EdgionHttpContext {
             mirror_state: None,
             sp_state: SessionPersistenceState::Inactive,
             sp_target_addr: None,
+            sp_sticky_addr: None,
             sp_sticky_consumed: false,
             allow_loopback_upstream: false,
             resolved_global_plugins: None,

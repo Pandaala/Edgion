@@ -31,7 +31,7 @@ rules:
 |-------|------|---------|-------------|
 | `attempts` | Integer | `EdgionGatewayConfig.spec.maxRetries` (default `3`) | Maximum retry attempts. `0` disables retry. When omitted, the global default applies |
 | `backoff` | Duration | none | Minimum wait between retries; used as the exponential backoff base. Example: `"1s"`, `"100ms"`. When omitted, retries are issued with no delay |
-| `codes` | Array\<Integer\> | none | HTTP status codes (100–599) that trigger a retry. Out-of-range codes are ignored. When omitted, only connection errors are retried |
+| `codes` | Array\<Integer\> | none | HTTP status codes (400–599) that trigger a retry, matching the Gateway API HTTPRouteRetry range. Out-of-range codes are ignored. When omitted, only connection errors are retried |
 
 ## Retry behavior
 
@@ -112,9 +112,12 @@ Notes:
   per-try timeouts on ConsistentHash routes with the circuit-breaker
   annotation so a persistently slow endpoint gets ejected.
 - When the remaining `request`/`grpc-timeout` budget is smaller than the
-  computed `backoff` delay, the wait is skipped and the retry proceeds
-  immediately (deadline checks still apply) — under a tight deadline the
-  configured minimum backoff may not be honored.
+  computed `backoff` delay, the request is **not** retried: honoring the
+  configured minimum backoff would reach or exceed the deadline, so per
+  GEP-1731 (which forbids retrying before the configured minimum duration) the
+  gateway fails the request with the binding deadline's timeout instead of
+  issuing a sub-minimum immediate retry. Size `timeouts.request` to leave room
+  for at least one full `backoff` interval if you want the final attempt to run.
 - Each canceled-and-retried attempt records `BackendRequestTimeoutRetry`
   (504_03) in the access-log error chain, and its per-upstream entry is
   stamped with status 504 and the timeout error type.

@@ -19,6 +19,44 @@ use pingora_core::upstreams::peer::Peer;
 use pingora_core::{Error as PingoraError, ErrorType};
 use pingora_proxy::Session;
 
+/// Outcome of the retry-backoff minimum-wait decision (GEP-1731 conformance).
+#[derive(Debug, PartialEq, Eq)]
+enum BackoffAction {
+    /// The full minimum backoff fits within the remaining budget (or no
+    /// request/grpc deadline applies): sleep the computed `delay`.
+    Sleep,
+    /// `0 < remaining <= delay`: honouring the minimum backoff would reach or
+    /// exceed the deadline, so the request must not be retried before the
+    /// configured minimum duration. `prefer_request` selects the binding
+    /// deadline's error (request-deadline when true, gRPC client deadline
+    /// otherwise), mirroring the post-sleep re-check order.
+    FailBudgetTooSmall { prefer_request: bool },
+}
+
+/// Decide whether a retry may sleep the configured exponential `backoff`
+/// (`delay`) or must fail because the remaining request/grpc-timeout budget is
+/// smaller than one minimum-backoff interval. Pure function so the GEP-1731
+/// minimum-wait boundary (`remaining <= delay`) can be unit-tested without a
+/// live `Session`.
+fn backoff_action(
+    delay: std::time::Duration,
+    request_remaining: Option<std::time::Duration>,
+    grpc_remaining: Option<std::time::Duration>,
+) -> BackoffAction {
+    let deadline_remaining = [request_remaining, grpc_remaining].into_iter().flatten().min();
+    match deadline_remaining {
+        // Full minimum backoff fits with room to spare: honour it.
+        Some(r) if delay < r => BackoffAction::Sleep,
+        // No request/grpc deadline applies: nothing bounds the backoff.
+        None => BackoffAction::Sleep,
+        // 0 < remaining <= delay: prefer the request deadline when it is the
+        // (or a) binding bound; otherwise the gRPC client deadline binds.
+        Some(_) => BackoffAction::FailBudgetTooSmall {
+            prefer_request: request_remaining.is_some_and(|rr| rr <= delay),
+        },
+    }
+}
+
 #[inline]
 pub async fn upstream_peer(
     edgion_http: &EdgionHttpProxy,
@@ -67,30 +105,54 @@ pub async fn upstream_peer(
             // TODO: abort this sleep early when the client disconnects
             //
             // Bound the sleep by every deadline that applies to the request:
-            // route `request_timeout` and client `grpc-timeout`. Either
-            // remaining < delay means the caller will give up before backoff
-            // completes — skip the sleep and let the post-sleep re-check
-            // below abort the retry instead of opening a fresh upstream
-            // connection that nobody is waiting for.
+            // route `request_timeout` and client `grpc-timeout`. When the
+            // remaining budget cannot accommodate the full minimum backoff
+            // (`remaining <= delay`), GEP-1731 forbids retrying before the
+            // configured minimum duration — so instead of opening a fresh
+            // upstream connection ahead of the minimum wait, treat the budget
+            // as exhausted and fail with the binding deadline's timeout. Only
+            // sleep when the full backoff fits with budget to spare, or when no
+            // deadline applies at all.
             let now = std::time::Instant::now();
             let request_remaining =
                 request_timeout.map(|t| t.saturating_sub(now.saturating_duration_since(ctx.start_time)));
-            let deadline_remaining = [request_remaining, ctx.grpc_remaining()].into_iter().flatten().min();
-            let should_sleep = match deadline_remaining {
-                Some(r) => delay < r,
-                None => true,
-            };
-            if should_sleep {
-                tokio::time::sleep(delay).await;
+            let grpc_remaining = ctx.grpc_remaining();
+            match backoff_action(delay, request_remaining, grpc_remaining) {
+                BackoffAction::Sleep => tokio::time::sleep(delay).await,
+                // 0 < remaining <= delay: honouring the minimum backoff would
+                // reach or exceed the deadline. Per GEP-1731 the request must
+                // not be retried before the configured minimum duration, so
+                // fail now with the binding deadline's timeout rather than issue
+                // a sub-minimum immediate retry.
+                BackoffAction::FailBudgetTooSmall { prefer_request } => {
+                    if prefer_request {
+                        ctx.add_error(EdgionStatus::RequestTimeoutExceeded);
+                        if let Some(upstream) = ctx.get_current_upstream_mut() {
+                            upstream.status = Some(504);
+                        }
+                        return Err(PingoraError::explain(
+                            ErrorType::HTTPStatus(504),
+                            "Request timeout budget too small to honour retry backoff",
+                        ));
+                    }
+                    ctx.add_error(EdgionStatus::GrpcClientDeadlineExceeded);
+                    if let Some(upstream) = ctx.get_current_upstream_mut() {
+                        upstream.status = Some(504);
+                    }
+                    return Err(PingoraError::explain(
+                        ErrorType::HTTPStatus(504),
+                        "gRPC client deadline budget too small to honour retry backoff",
+                    ));
+                }
             }
 
-            // Either deadline may have just expired (or the sleep was
-            // skipped because remaining was already too tight). Re-check
-            // before letting Pingora open a new upstream connection — without
-            // this guard a tight `grpc-timeout` combined with a large backoff
-            // would let the gateway connect to a backend the caller has
-            // already abandoned, burning a circuit-breaker failure counter
-            // and an LB pick.
+            // The backoff sleep can overrun its `delay` under timer jitter, so a
+            // deadline that had room before the sleep may have just expired.
+            // Re-check before letting Pingora open a new upstream connection —
+            // without this guard a tight `grpc-timeout` combined with a large
+            // backoff would let the gateway connect to a backend the caller has
+            // already abandoned, burning a circuit-breaker failure counter and
+            // an LB pick.
             if let Some(timeout) = request_timeout {
                 let elapsed = std::time::Instant::now().saturating_duration_since(ctx.start_time);
                 if elapsed >= timeout {
@@ -211,6 +273,10 @@ pub async fn upstream_peer_http(
     begin_upstream_attempt(ctx);
 
     // 5. Get peer — common path defers to LB; the SP-affinity branch lives in its own helper.
+    // On a strict cross-attempt retry, restore the sticky target so the retry
+    // re-pins to the same backend (and fail-closes if it is now unhealthy)
+    // instead of migrating via plain LB.
+    sp_repin_on_strict_retry(ctx);
     let mut peer = if ctx.sp_target_addr.is_some() {
         get_peer_with_sp_fallback(edgion_http, session, ctx).await?
     } else {
@@ -344,6 +410,7 @@ fn sp_resolve_target(
 
     if let Some(&addr) = affinity_map.get(token) {
         ctx.sp_target_addr = Some(addr);
+        ctx.sp_sticky_addr = Some(addr);
     } else {
         ctx.sp_state = SessionPersistenceState::InjectNew;
     }
@@ -393,9 +460,14 @@ async fn get_peer_with_sp_fallback(
             ctx.sp_state = SessionPersistenceState::InjectUpdate;
             get_peer(session, ctx, false, &edgion_http.server_header_opts).await
         }
-        Err(_) => {
-            // Strict mode: no fallback to normal LB. Defer to get_peer to surface a typed error.
-            get_peer(session, ctx, false, &edgion_http.server_header_opts).await
+        Err(status) => {
+            // Strict mode: the resolved sticky target cannot serve. Fail closed
+            // with 503 instead of silently load-balancing to a different backend.
+            // end_response_503 commits the downstream response; the returned Err
+            // terminates without a pingora retry (same mechanism as the SSRF arm).
+            ctx.add_error(status); // status: typically StickyBackendUnhealthy; any non-SSRF/DNS peer error fails closed here
+            end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
+            Err(PingoraError::new(ErrorType::InternalError))
         }
     }
 }
@@ -421,6 +493,31 @@ fn sp_refresh_on_cross_attempt_retry(ctx: &mut EdgionHttpContext) {
         &ctx.sp_state,
     ) {
         ctx.sp_state = SessionPersistenceState::InjectUpdate;
+    }
+}
+
+/// On a strict cross-attempt retry whose earlier attempt consumed the sticky
+/// target, restore `sp_target_addr` from the retained mirror so the retry
+/// re-pins to the same backend (and fail-closes via `get_peer_with_sp_fallback`
+/// if it is now unhealthy) instead of migrating via plain LB. Defers the
+/// decision to the pure `sp_should_repin_on_strict_retry`.
+#[inline]
+fn sp_repin_on_strict_retry(ctx: &mut EdgionHttpContext) {
+    let sp = ctx
+        .route_unit
+        .as_ref()
+        .and_then(|ru| ru.rule.session_persistence.as_ref());
+    let sp_configured = sp.is_some();
+    let strict = sp.and_then(|sp| sp.strict).unwrap_or(false);
+
+    if sp_should_repin_on_strict_retry(
+        ctx.sp_sticky_consumed,
+        ctx.try_cnt,
+        sp_configured,
+        strict,
+        ctx.sp_sticky_addr.is_some(),
+    ) {
+        ctx.sp_target_addr = ctx.sp_sticky_addr;
     }
 }
 
@@ -896,9 +993,38 @@ fn sp_should_refresh_on_cross_attempt_retry(
     sticky_consumed && try_cnt >= 2 && sp_configured && !strict && *sp_state == SessionPersistenceState::Inactive
 }
 
+/// Decide whether a strict-mode cross-attempt retry must re-pin to the same
+/// sticky target (rather than migrate via plain LB).
+///
+/// Pure function of the five relevant inputs so the full matrix is unit-testable
+/// (mirrors `sp_should_refresh_on_cross_attempt_retry`). Returns `true` only when
+/// ALL hold:
+///
+/// - `sticky_consumed` — an earlier attempt consumed the sticky target;
+/// - `try_cnt >= 2` — `begin_upstream_attempt` already incremented, so this is a
+///   retry attempt, not the first;
+/// - `sp_configured` — the route has `session_persistence`;
+/// - `strict` — strict mode (the non-strict refresh path is the complement);
+/// - `has_sticky_addr` — the mirror retained the resolved address to re-pin to.
+///
+/// Disjoint from `sp_should_refresh_on_cross_attempt_retry` on the `strict` axis.
+#[inline]
+fn sp_should_repin_on_strict_retry(
+    sticky_consumed: bool,
+    try_cnt: u32,
+    sp_configured: bool,
+    strict: bool,
+    has_sticky_addr: bool,
+) -> bool {
+    sticky_consumed && try_cnt >= 2 && sp_configured && strict && has_sticky_addr
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{decide_want_raw, fold_peer_timeouts, sp_should_refresh_on_cross_attempt_retry};
+    use super::{
+        backoff_action, decide_want_raw, fold_peer_timeouts, sp_should_refresh_on_cross_attempt_retry,
+        sp_should_repin_on_strict_retry, BackoffAction,
+    };
     use crate::{PeerTimeoutSource, SessionPersistenceState};
     use std::time::Duration;
 
@@ -1089,6 +1215,80 @@ mod tests {
         ));
     }
 
+    // --- sp_should_repin_on_strict_retry matrix ---
+
+    #[test]
+    fn sp_repin_fires_on_consumed_strict_retry_with_addr() {
+        assert!(sp_should_repin_on_strict_retry(true, 2, true, true, true));
+    }
+
+    #[test]
+    fn sp_repin_skips_when_not_consumed() {
+        assert!(!sp_should_repin_on_strict_retry(false, 2, true, true, true));
+    }
+
+    #[test]
+    fn sp_repin_skips_on_first_attempt() {
+        assert!(!sp_should_repin_on_strict_retry(true, 1, true, true, true));
+    }
+
+    #[test]
+    fn sp_repin_skips_when_sp_not_configured() {
+        assert!(!sp_should_repin_on_strict_retry(true, 2, false, true, true));
+    }
+
+    #[test]
+    fn sp_repin_skips_in_nonstrict_mode() {
+        assert!(!sp_should_repin_on_strict_retry(true, 2, true, false, true));
+    }
+
+    #[test]
+    fn sp_repin_skips_without_sticky_addr() {
+        assert!(!sp_should_repin_on_strict_retry(true, 2, true, true, false));
+    }
+
+    #[test]
+    fn sp_repin_fires_on_later_retries() {
+        assert!(sp_should_repin_on_strict_retry(true, 3, true, true, true));
+    }
+
+    #[test]
+    fn sp_repin_and_refresh_are_mutually_exclusive() {
+        // Over the full shared input space, the two cross-attempt decisions must
+        // never both be true: re-pin requires strict, refresh requires !strict.
+        for &consumed in &[false, true] {
+            for &try_cnt in &[1u32, 2, 3] {
+                for &configured in &[false, true] {
+                    for &strict in &[false, true] {
+                        for &has_addr in &[false, true] {
+                            for state in &[
+                                SessionPersistenceState::Inactive,
+                                SessionPersistenceState::InjectNew,
+                                SessionPersistenceState::InjectUpdate,
+                            ] {
+                                let repin =
+                                    sp_should_repin_on_strict_retry(consumed, try_cnt, configured, strict, has_addr);
+                                let refresh = sp_should_refresh_on_cross_attempt_retry(
+                                    consumed, try_cnt, configured, strict, state,
+                                );
+                                assert!(
+                                    !(repin && refresh),
+                                    "both fired: consumed={} try_cnt={} configured={} strict={} has_addr={} state={:?}",
+                                    consumed,
+                                    try_cnt,
+                                    configured,
+                                    strict,
+                                    has_addr,
+                                    state
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn s(n: u64) -> Option<Duration> {
         Some(Duration::from_secs(n))
     }
@@ -1219,6 +1419,83 @@ mod tests {
         assert_eq!(
             effective_backend_bound(Some(&RouteTimeout::Unset), Duration::ZERO),
             None
+        );
+    }
+
+    // ─── route-06: retry backoff minimum-wait conformance (GEP-1731) ───
+    // Pin the `remaining <= delay` boundary that decides whether a retry may
+    // sleep the configured backoff or must fail instead of retrying before the
+    // configured minimum duration.
+
+    #[test]
+    fn backoff_sleeps_when_full_delay_fits() {
+        // remaining (3s) > delay (2s) → sleep the full minimum backoff.
+        assert_eq!(
+            backoff_action(Duration::from_secs(2), Some(Duration::from_secs(3)), None),
+            BackoffAction::Sleep
+        );
+    }
+
+    #[test]
+    fn backoff_sleeps_when_no_deadline_applies() {
+        // No request/grpc deadline bounds the backoff → sleep.
+        assert_eq!(backoff_action(Duration::from_secs(2), None, None), BackoffAction::Sleep);
+    }
+
+    #[test]
+    fn backoff_fails_when_request_budget_too_small() {
+        // 0 < remaining (1s) <= delay (2s): retrying now would precede the
+        // configured minimum backoff → fail with the request deadline.
+        assert_eq!(
+            backoff_action(Duration::from_secs(2), Some(Duration::from_secs(1)), None),
+            BackoffAction::FailBudgetTooSmall { prefer_request: true }
+        );
+    }
+
+    #[test]
+    fn backoff_fails_at_exact_equality_boundary() {
+        // remaining == delay is still too tight (the spec requires the minimum
+        // wait to complete strictly before the next attempt) → fail.
+        assert_eq!(
+            backoff_action(Duration::from_secs(2), Some(Duration::from_secs(2)), None),
+            BackoffAction::FailBudgetTooSmall { prefer_request: true }
+        );
+    }
+
+    #[test]
+    fn backoff_fails_with_grpc_deadline_when_grpc_binds() {
+        // Only the gRPC deadline is too small (request has room) → fail and
+        // report the gRPC client deadline.
+        assert_eq!(
+            backoff_action(
+                Duration::from_secs(2),
+                Some(Duration::from_secs(5)),
+                Some(Duration::from_secs(1))
+            ),
+            BackoffAction::FailBudgetTooSmall { prefer_request: false }
+        );
+    }
+
+    #[test]
+    fn backoff_prefers_request_deadline_when_both_too_small() {
+        // Both deadlines are <= delay; the request deadline is preferred to
+        // mirror the post-sleep re-check order.
+        assert_eq!(
+            backoff_action(
+                Duration::from_secs(2),
+                Some(Duration::from_millis(1500)),
+                Some(Duration::from_secs(1))
+            ),
+            BackoffAction::FailBudgetTooSmall { prefer_request: true }
+        );
+    }
+
+    #[test]
+    fn backoff_only_grpc_present_and_too_small() {
+        // No request deadline, gRPC remaining (1s) <= delay (2s) → fail via gRPC.
+        assert_eq!(
+            backoff_action(Duration::from_secs(2), None, Some(Duration::from_secs(1))),
+            BackoffAction::FailBudgetTooSmall { prefer_request: false }
         );
     }
 }
