@@ -24,6 +24,7 @@ mod http_call_tests;
 mod p3_utility_tests;
 mod property_bytecode;
 mod range_and_string_ops;
+mod redis_builtins;
 mod req_metadata_tests;
 mod request_builtins;
 mod request_mutation;
