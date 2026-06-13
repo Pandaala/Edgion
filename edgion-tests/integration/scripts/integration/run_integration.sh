@@ -912,7 +912,13 @@ run_all_tests() {
                 fi
                 ;;
             UDPRoute)
-                run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r UDPRoute -i Basic" || test_failed=true
+                if [ -z "$G_ITEM" ]; then
+                    run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r UDPRoute -i Basic" || test_failed=true
+                    run_test "UDPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/test_client -g -r UDPRoute -i StreamPlugins" || test_failed=true
+                else
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "UDPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r UDPRoute -i ${G_ITEM}" || test_failed=true
+                fi
                 ;;
             Gateway)
                 if [ -z "$G_ITEM" ]; then
@@ -1113,6 +1119,7 @@ run_all_tests() {
 
         # UDPRoute Tests
         run_test "UDPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r UDPRoute -i Basic" || test_failed=true
+        run_test "UDPRoute_StreamPlugins" "${PROJECT_ROOT}/target/debug/test_client -g -r UDPRoute -i StreamPlugins" || test_failed=true
         
         # Gateway Tests
         run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i Security" || test_failed=true

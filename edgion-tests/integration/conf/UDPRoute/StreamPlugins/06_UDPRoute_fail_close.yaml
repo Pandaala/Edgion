@@ -13,7 +13,7 @@ spec:
     - name: udp-stream-plugins-gw
       namespace: edgion-test
       sectionName: udp-fail-close
-      port: 31390
+      port: 31394
   rules:
     - backendRefs:
         - name: test-udp

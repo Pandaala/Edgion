@@ -10,10 +10,10 @@ spec:
   listeners:
     - name: udp-allow-localhost
       protocol: UDP
-      port: 31388
+      port: 31392
     - name: udp-deny-all
       protocol: UDP
-      port: 31389
+      port: 31393
     - name: udp-fail-close
       protocol: UDP
-      port: 31390
+      port: 31394

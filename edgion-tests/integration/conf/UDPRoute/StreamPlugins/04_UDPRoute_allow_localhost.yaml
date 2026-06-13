@@ -12,7 +12,7 @@ spec:
     - name: udp-stream-plugins-gw
       namespace: edgion-test
       sectionName: udp-allow-localhost
-      port: 31388
+      port: 31392
   rules:
     - backendRefs:
         - name: test-udp

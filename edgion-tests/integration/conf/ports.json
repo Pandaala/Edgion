@@ -1,5 +1,5 @@
 {
-  "current_max": 31391,
+  "current_max": 31394,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -258,6 +258,11 @@
     },
     "EdgionTls/wildcard_single_label": {
       "https": 31387
+    },
+    "UDPRoute/StreamPlugins": {
+      "udp": 31392,
+      "udp_filtered": 31393,
+      "udp_fail_close": 31394
     }
   }
 }

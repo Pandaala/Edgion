@@ -39,7 +39,7 @@ pub use tls_route::{
     TlsRouteTestSuite, TlsStreamPluginsTestSuite, TlsUnknownKindBackendTestSuite,
 };
 
-pub use udp_route::UdpTestSuite;
+pub use udp_route::{UdpStreamPluginsTestSuite, UdpTestSuite};
 
 // EdgionTls tests
 pub use edgion_tls::{

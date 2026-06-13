@@ -138,6 +138,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "security" => "Gateway/Security".to_string(),
             "stream-plugins" | "streamplugins" | "connection-filter" => "Gateway/StreamPlugins".to_string(),
             "tcp-stream-plugins" | "tcpstreamplugins" => "TCPRoute/StreamPlugins".to_string(),
+            "udp-stream-plugins" | "udpstreamplugins" => "UDPRoute/StreamPlugins".to_string(),
             "tcp-gcir" | "tcpgcir" | "tcp-global-connection-ip-restriction" => {
                 "TCPRoute/GlobalConnectionIpRestriction".to_string()
             }
@@ -259,6 +260,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "TLSRoute/UnknownKindBackend" => "TLSRoute/UnknownKindBackend",
         // UDPRoute
         "UDPRoute/Basic" | "UDPRoute" => "UDPRoute/Basic",
+        "UDPRoute/StreamPlugins" => "UDPRoute/StreamPlugins",
         // Gateway
         "Gateway/Security" | "Gateway" => "Gateway/Security",
         "Gateway/RealIP" => "Gateway/RealIP",
@@ -750,6 +752,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         }
         "udp" | "UDPRoute" | "UDPRoute/Basic" => {
             runner.add_suite(Box::new(suites::UdpTestSuite));
+        }
+        "UDPRoute/StreamPlugins" => {
+            if !gateway {
+                eprintln!("Error: UDPRoute/StreamPlugins tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::UdpStreamPluginsTestSuite));
         }
         // Gateway
         "Gateway" => {

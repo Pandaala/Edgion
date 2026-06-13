@@ -12,7 +12,7 @@ spec:
     - name: udp-stream-plugins-gw
       namespace: edgion-test
       sectionName: udp-deny-all
-      port: 31389
+      port: 31393
   rules:
     - backendRefs:
         - name: test-udp
