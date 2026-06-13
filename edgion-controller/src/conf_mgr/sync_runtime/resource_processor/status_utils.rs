@@ -110,6 +110,11 @@ pub mod condition_reasons {
     // Listener ResolvedRefs reasons (Gateway API v1.5)
     /// Listener certificate Secret ref invalid or unresolvable.
     pub const INVALID_CERTIFICATE_REF: &str = "InvalidCertificateRef";
+    /// Edgion extension · The referenced Secret's certificate content is unusable
+    /// (expired / SAN mismatch / key mismatch / unparseable). Distinct from
+    /// `INVALID_CERTIFICATE_REF`, which signals a bad *reference*; this signals
+    /// bad *content* in an otherwise-resolved reference.
+    pub const INVALID_CERTIFICATE: &str = "InvalidCertificate";
     /// Listener CA certificate ref kind unsupported.
     pub const INVALID_CA_CERTIFICATE_KIND: &str = "InvalidCACertificateKind";
 
@@ -231,6 +236,13 @@ pub enum ResolvedRefsError {
         got: String,
         allowed: &'static [&'static str],
     },
+    /// Edgion extension · The referenced Secret's certificate content is unusable
+    /// (expired / SAN mismatch / key mismatch / unparseable). `detail` comes from
+    /// `CertValidationError::status_message()` and MUST be deterministic (no
+    /// wall-clock) — a varying status message would cause an infinite status-write
+    /// loop (see the tls-06 design). The condition reason is the coarse
+    /// `INVALID_CERTIFICATE`; `detail` carries the specific human-readable cause.
+    CertContentInvalid { detail: String },
 }
 
 impl ResolvedRefsError {
@@ -244,6 +256,7 @@ impl ResolvedRefsError {
             Self::MissingKeys { .. } => condition_reasons::MISSING_KEYS,
             Self::DecodeError { .. } => condition_reasons::DECODE_ERROR,
             Self::InvalidSecretType { .. } => condition_reasons::INVALID_SECRET_TYPE,
+            Self::CertContentInvalid { .. } => condition_reasons::INVALID_CERTIFICATE,
         }
     }
 
@@ -291,6 +304,7 @@ impl ResolvedRefsError {
                     got, allowed
                 )
             }
+            Self::CertContentInvalid { detail } => detail.clone(),
         }
     }
 }
@@ -418,12 +432,13 @@ pub fn resolved_refs_condition(errors: &[ResolvedRefsError], observed_generation
 /// extensions slotted by severity; lower number = higher priority):
 /// 1. InvalidKind — fundamentally wrong backend/ref type
 /// 2. RefNotPermitted — policy denial
-/// 3. InvalidSecretType — Secret exists but wrong type (akin to InvalidKind, but for Secrets)
-/// 4. PluginMetaDataNotFound — dependent PluginMetaData missing
-/// 5. BackendNotFound — target Service missing
-/// 6. SecretNotFound — target Secret missing
-/// 7. DecodeError — Secret content unusable (parse failure)
-/// 8. MissingKeys — Secret content incomplete
+/// 3. CertContentInvalid — certificate content unusable (expired / SAN / key mismatch)
+/// 4. InvalidSecretType — Secret exists but wrong type (akin to InvalidKind, but for Secrets)
+/// 5. PluginMetaDataNotFound — dependent PluginMetaData missing
+/// 6. BackendNotFound — target Service missing
+/// 7. SecretNotFound — target Secret missing
+/// 8. DecodeError — Secret content unusable (parse failure)
+/// 9. MissingKeys — Secret content incomplete
 ///
 /// Exposed as `pub(crate)` so other handlers (e.g. `EdgionPluginsHandler`,
 /// which still maintains its own Condition construction pending R2) can use
@@ -441,12 +456,13 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
         match err {
             ResolvedRefsError::InvalidKind { .. } => 0,
             ResolvedRefsError::RefNotPermitted { .. } => 1,
-            ResolvedRefsError::InvalidSecretType { .. } => 2,
-            ResolvedRefsError::PluginMetaDataNotFound { .. } => 3,
-            ResolvedRefsError::BackendNotFound { .. } => 4,
-            ResolvedRefsError::SecretNotFound { .. } => 5,
-            ResolvedRefsError::DecodeError { .. } => 6,
-            ResolvedRefsError::MissingKeys { .. } => 7,
+            ResolvedRefsError::CertContentInvalid { .. } => 2,
+            ResolvedRefsError::InvalidSecretType { .. } => 3,
+            ResolvedRefsError::PluginMetaDataNotFound { .. } => 4,
+            ResolvedRefsError::BackendNotFound { .. } => 5,
+            ResolvedRefsError::SecretNotFound { .. } => 6,
+            ResolvedRefsError::DecodeError { .. } => 7,
+            ResolvedRefsError::MissingKeys { .. } => 8,
         }
     }
 
@@ -886,6 +902,16 @@ mod tests {
         ];
         let cond = resolved_refs_condition(&errors, Some(1));
         assert_eq!(cond.reason, "InvalidSecretType");
+    }
+
+    #[test]
+    fn cert_content_invalid_maps_to_invalid_certificate_reason() {
+        let e = ResolvedRefsError::CertContentInvalid {
+            detail: "Certificate expired or not yet valid (valid: a - b)".to_string(),
+        };
+        assert_eq!(e.reason(), condition_reasons::INVALID_CERTIFICATE);
+        assert!(e.message().contains("expired"));
+        let _ = pick_resolved_refs_reason(std::slice::from_ref(&e));
     }
 
     #[test]

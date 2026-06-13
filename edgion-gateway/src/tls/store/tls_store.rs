@@ -11,6 +11,9 @@ use std::sync::{Arc, LazyLock};
 struct TlsEntry {
     tls: Arc<EdgionTls>,
     validation: CertValidationResult,
+    /// true once a bad update was rejected for this key; used to log only on
+    /// the valid->rejected transition (cleared when a valid update lands).
+    rejected_active: bool,
 }
 
 /// Deterministic precedence for EdgionTls resources colliding on the same host.
@@ -51,6 +54,65 @@ fn warn_edgion_tls_collision(host: &str, listener_key: &ListenerKey, tls_list: &
     );
 }
 
+/// Config-load-path advisory warnings that used to live inside `validate_cert`.
+/// Kept gateway-side so they fire once per apply here (not also on the controller).
+/// Never on the handshake hot path.
+fn warn_cert_advisories(key: &str, tls: &EdgionTls) {
+    use edgion_resources::resources::edgion_tls::{RevocationMode, TlsVersion};
+    if let Some(v @ (TlsVersion::Tls10 | TlsVersion::Tls11)) = tls.spec.min_tls_version {
+        tracing::warn!(component = "tls_store", key = %key, version = ?v,
+            "EdgionTls min_tls_version is deprecated by RFC 8996; consider TLS 1.2+");
+    }
+    if let Some(extend) = &tls.spec.extend {
+        let revocation = extend
+            .revocation_check
+            .as_ref()
+            .is_some_and(|rc| rc.mode != RevocationMode::Off);
+        let stapling = extend.ocsp_stapling.as_ref().is_some_and(|s| s.enabled);
+        if revocation || stapling {
+            tracing::warn!(component = "tls_store", key = %key,
+                "EdgionTls revocationCheck/ocspStapling is configured but NOT implemented");
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct CertRejectedLog<'a> {
+    event: &'a str,
+    namespace: &'a str,
+    name: &'a str,
+    reason: &'a str,
+}
+
+/// Emit a structured rejection record to tls.log (config-sync path; not the
+/// handshake hot path). Fire-and-forget onto the current runtime since the
+/// store update path is synchronous.
+fn record_rejected(key: &str, validation: &CertValidationResult) {
+    let (ns, name) = key.split_once('/').unwrap_or(("", key));
+    let reason = validation
+        .errors
+        .first()
+        .map(|e| e.status_reason())
+        .unwrap_or("Invalid");
+    tracing::error!(component = "tls_store", key = %key, reason = %reason,
+        "Rejected invalid cert update; retaining last-known-good");
+    let entry = CertRejectedLog {
+        event: "cert_update_rejected",
+        namespace: ns,
+        name,
+        reason,
+    };
+    if let Ok(payload) = serde_json::to_string(&entry) {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                if let Some(logger) = crate::observe::logs::tls_log::get_tls_logger() {
+                    logger.send(payload).await;
+                }
+            });
+        }
+    }
+}
+
 /// TlsStore manages all TLS certificates and builds the TLS matcher
 pub struct TlsStore {
     // Key: namespace/name (or name for cluster-scoped).
@@ -65,43 +127,86 @@ impl TlsStore {
         }
     }
 
-    /// Replace all TLS certificates with the provided data
-    pub fn replace_all_tls(&self, data: HashMap<String, EdgionTls>) {
-        // Capture count before moving
-        let cert_count = data.len();
+    /// Insert `tls` under `key`, or RETAIN the existing valid entry when the new
+    /// cert fails validation (last-known-good / Envoy SDS NACK semantics).
+    fn insert_or_retain(&self, new_map: &mut HashMap<String, TlsEntry>, key: String, tls: EdgionTls) {
+        warn_cert_advisories(&key, &tls);
+        let validation = validate_cert(&tls);
+        if !validation.is_valid {
+            if let Some(existing) = new_map.get(&key) {
+                if existing.validation.is_valid {
+                    if !existing.rejected_active {
+                        record_rejected(&key, &validation);
+                    }
+                    let mut kept = existing.clone();
+                    kept.rejected_active = true;
+                    new_map.insert(key, kept);
+                    return;
+                }
+            }
+            tracing::warn!(component = "tls_store", key = %key, errors = ?validation.errors,
+                "Certificate validation failed");
+        }
+        new_map.insert(
+            key,
+            TlsEntry {
+                tls: Arc::new(tls),
+                validation,
+                rejected_active: false,
+            },
+        );
+    }
 
+    /// Replace all TLS certificates with the provided data.
+    ///
+    /// Last-known-good semantics (mirrors `insert_or_retain`, but "existing" is the
+    /// current store snapshot rather than `new_map`, because a full snapshot has no
+    /// in-flight predecessor for the same key):
+    /// - Invalid incoming cert + current store has a VALID entry for that key
+    ///   → carry the old valid entry forward, log the rejection, skip inserting bad data.
+    /// - Keys absent from `data` are intentionally removed (never carried forward).
+    pub fn replace_all_tls(&self, data: HashMap<String, EdgionTls>) {
+        let cert_count = data.len();
         tracing::info!(
             component = "tls_store",
             count = cert_count,
             "Full set of TLS certificates"
         );
 
+        // Read current snapshot ONCE before the loop so we can fall back to the
+        // last-known-good entry per key when an incoming cert is invalid.
+        let current = self.tls_data.load_full();
         let mut new_map: HashMap<String, TlsEntry> = HashMap::with_capacity(cert_count);
 
         for (key, tls) in data {
-            // Validate certificate
+            warn_cert_advisories(&key, &tls);
             let validation = validate_cert(&tls);
-
             if !validation.is_valid {
-                tracing::warn!(
-                    component = "tls_store",
-                    key = %key,
-                    errors = ?validation.errors,
-                    "Certificate validation failed"
-                );
+                if let Some(existing) = current.get(&key) {
+                    if existing.validation.is_valid {
+                        if !existing.rejected_active {
+                            record_rejected(&key, &validation);
+                        }
+                        let mut kept = existing.clone();
+                        kept.rejected_active = true;
+                        new_map.insert(key, kept);
+                        continue;
+                    }
+                }
+                tracing::warn!(component = "tls_store", key = %key, errors = ?validation.errors,
+                    "Certificate validation failed");
             }
-
             new_map.insert(
                 key,
                 TlsEntry {
                     tls: Arc::new(tls),
                     validation,
+                    rejected_active: false,
                 },
             );
         }
 
         self.rebuild_matcher_from_data(&new_map);
-
         self.tls_data.store(Arc::new(new_map));
     }
 
@@ -130,46 +235,12 @@ impl TlsStore {
 
         // Add new certificates
         for (key, tls) in add {
-            let validation = validate_cert(&tls);
-
-            if !validation.is_valid {
-                tracing::warn!(
-                    component = "tls_store",
-                    key = %key,
-                    errors = ?validation.errors,
-                    "Certificate validation failed (add)"
-                );
-            }
-
-            new_map.insert(
-                key,
-                TlsEntry {
-                    tls: Arc::new(tls),
-                    validation,
-                },
-            );
+            self.insert_or_retain(&mut new_map, key, tls);
         }
 
         // Update existing certificates
         for (key, tls) in update {
-            let validation = validate_cert(&tls);
-
-            if !validation.is_valid {
-                tracing::warn!(
-                    component = "tls_store",
-                    key = %key,
-                    errors = ?validation.errors,
-                    "Certificate validation failed (update)"
-                );
-            }
-
-            new_map.insert(
-                key,
-                TlsEntry {
-                    tls: Arc::new(tls),
-                    validation,
-                },
-            );
+            self.insert_or_retain(&mut new_map, key, tls);
         }
 
         // Remove certificates
@@ -388,6 +459,17 @@ impl Default for TlsStore {
     }
 }
 
+#[cfg(test)]
+impl TlsStore {
+    fn is_rejected_active(&self, key: &str) -> bool {
+        self.tls_data
+            .load()
+            .get(key)
+            .map(|e| e.rejected_active)
+            .unwrap_or(false)
+    }
+}
+
 /// Global TlsStore instance
 static GLOBAL_TLS_STORE: LazyLock<Arc<TlsStore>> = LazyLock::new(|| Arc::new(TlsStore::new()));
 
@@ -433,6 +515,180 @@ mod tests {
         })
     }
 
+    /// Build an EdgionTls whose secret contains a real self-signed cert+key so
+    /// that `validate_cert` returns `is_valid = true`.
+    fn make_valid_tls(ns: &str, name: &str, hosts: &[&str]) -> EdgionTls {
+        use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use rcgen::{CertificateParams, KeyPair, SanType};
+        use std::collections::BTreeMap;
+        use std::net::SocketAddr;
+
+        let host_strings: Vec<String> = hosts.iter().map(|s| s.to_string()).collect();
+        let san_types: Vec<SanType> = hosts
+            .iter()
+            .map(|h| SanType::DnsName((*h).try_into().expect("valid DNS SAN")))
+            .collect();
+
+        let key_pair = KeyPair::generate().expect("rcgen key generation failed");
+        let mut params = CertificateParams::new(vec![]).expect("rcgen params failed");
+        params.subject_alt_names = san_types;
+        let cert = params.self_signed(&key_pair).expect("rcgen self-sign failed");
+
+        let mut data = BTreeMap::new();
+        data.insert(CERT.to_string(), ByteString(cert.pem().into_bytes()));
+        data.insert(KEY.to_string(), ByteString(key_pair.serialize_pem().into_bytes()));
+
+        let addr: SocketAddr = "0.0.0.0:443".parse().unwrap();
+        let listener_key = edgion_resources::ListenerKey::new(addr, "HTTPS");
+
+        EdgionTls {
+            metadata: ObjectMeta {
+                namespace: Some(ns.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: edgion_resources::EdgionTlsSpec {
+                parent_refs: None,
+                hosts: host_strings,
+                secret_ref: edgion_resources::resources::gateway::SecretObjectReference {
+                    name: format!("{name}-cert"),
+                    namespace: Some(ns.to_string()),
+                    group: None,
+                    kind: None,
+                },
+                client_auth: None,
+                min_tls_version: None,
+                ciphers: None,
+                extend: None,
+                secret: Some(Secret {
+                    data: Some(data),
+                    ..Default::default()
+                }),
+                resolved_listeners: Some(vec![listener_key]),
+            },
+            status: None,
+        }
+    }
+
+    /// Build an EdgionTls whose secret has non-PEM bytes so that
+    /// `validate_cert` returns `is_valid = false`.
+    fn make_invalid_tls(ns: &str, name: &str, hosts: &[&str]) -> EdgionTls {
+        use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use std::collections::BTreeMap;
+        use std::net::SocketAddr;
+
+        let host_strings: Vec<String> = hosts.iter().map(|s| s.to_string()).collect();
+        let mut data = BTreeMap::new();
+        data.insert(CERT.to_string(), ByteString(b"not a pem".to_vec()));
+        data.insert(KEY.to_string(), ByteString(b"not a pem".to_vec()));
+
+        let addr: SocketAddr = "0.0.0.0:443".parse().unwrap();
+        let listener_key = edgion_resources::ListenerKey::new(addr, "HTTPS");
+
+        EdgionTls {
+            metadata: ObjectMeta {
+                namespace: Some(ns.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            spec: edgion_resources::EdgionTlsSpec {
+                parent_refs: None,
+                hosts: host_strings,
+                secret_ref: edgion_resources::resources::gateway::SecretObjectReference {
+                    name: format!("{name}-cert"),
+                    namespace: Some(ns.to_string()),
+                    group: None,
+                    kind: None,
+                },
+                client_auth: None,
+                min_tls_version: None,
+                ciphers: None,
+                extend: None,
+                secret: Some(Secret {
+                    data: Some(data),
+                    ..Default::default()
+                }),
+                resolved_listeners: Some(vec![listener_key]),
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn invalid_update_retains_last_known_good() {
+        let store = TlsStore::new();
+        let good = make_valid_tls("ns", "foo", &["foo.example.com"]);
+        store.apply_partial_update(
+            std::collections::HashMap::from([("ns/foo".to_string(), good)]),
+            std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+        );
+        assert!(store.get_validation_status("ns/foo").unwrap().is_valid);
+
+        let bad = make_invalid_tls("ns", "foo", &["foo.example.com"]);
+        store.apply_partial_update(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::from([("ns/foo".to_string(), bad)]),
+            &std::collections::HashSet::new(),
+        );
+
+        let v = store.get_validation_status("ns/foo").expect("entry must remain");
+        assert!(v.is_valid, "bad update must not overwrite the last-known-good cert");
+    }
+
+    #[test]
+    fn intentional_removal_still_removes() {
+        let store = TlsStore::new();
+        let good = make_valid_tls("ns", "bar", &["bar.example.com"]);
+        store.apply_partial_update(
+            std::collections::HashMap::from([("ns/bar".to_string(), good)]),
+            std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+        );
+        store.apply_partial_update(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            &std::collections::HashSet::from(["ns/bar".to_string()]),
+        );
+        assert!(!store.contains("ns/bar"), "removal must still delete");
+    }
+
+    #[test]
+    fn full_snapshot_retains_last_known_good_on_reconnect() {
+        let store = TlsStore::new();
+        let good = make_valid_tls("ns", "baz", &["baz.example.com"]);
+        store.replace_all_tls(std::collections::HashMap::from([("ns/baz".to_string(), good)]));
+        assert!(store.get_validation_status("ns/baz").unwrap().is_valid);
+
+        // A reconnect full snapshot carries an invalid cert for the same key
+        // (version-skew: an old controller without Part B). Must NOT drop it.
+        let bad = make_invalid_tls("ns", "baz", &["baz.example.com"]);
+        store.replace_all_tls(std::collections::HashMap::from([("ns/baz".to_string(), bad)]));
+
+        let v = store.get_validation_status("ns/baz").expect("entry must remain");
+        assert!(
+            v.is_valid,
+            "full snapshot must retain last-known-good for an invalid key"
+        );
+    }
+
+    #[test]
+    fn full_snapshot_drops_absent_keys() {
+        let store = TlsStore::new();
+        let good = make_valid_tls("ns", "gone", &["gone.example.com"]);
+        store.replace_all_tls(std::collections::HashMap::from([("ns/gone".to_string(), good)]));
+        // New snapshot omits the key entirely -> intentional removal.
+        store.replace_all_tls(std::collections::HashMap::new());
+        assert!(
+            !store.contains("ns/gone"),
+            "absent key in full snapshot must be removed"
+        );
+    }
+
     #[test]
     fn test_edgion_tls_precedence_prefers_oldest_over_name() {
         let older = Time(Utc.with_ymd_and_hms(2020, 1, 1, 0, 0, 0).unwrap());
@@ -464,5 +720,60 @@ mod tests {
         let mut list = [b, a];
         list.sort_by(edgion_tls_precedence);
         assert_eq!(list.first().unwrap().metadata.namespace.as_deref(), Some("team-a"));
+    }
+
+    #[test]
+    fn repeated_bad_update_marks_rejected_active_once() {
+        let store = TlsStore::new();
+        let good = make_valid_tls("ns", "q", &["q.example.com"]);
+        store.apply_partial_update(
+            std::collections::HashMap::from([("ns/q".to_string(), good)]),
+            std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+        );
+        assert!(!store.is_rejected_active("ns/q"));
+
+        let bad = make_invalid_tls("ns", "q", &["q.example.com"]);
+        for _ in 0..2 {
+            store.apply_partial_update(
+                std::collections::HashMap::new(),
+                std::collections::HashMap::from([("ns/q".to_string(), bad.clone())]),
+                &std::collections::HashSet::new(),
+            );
+        }
+        assert!(store.is_rejected_active("ns/q"));
+        assert!(store.get_validation_status("ns/q").unwrap().is_valid);
+    }
+
+    #[test]
+    fn valid_update_after_rejection_rearms_transition() {
+        let store = TlsStore::new();
+        let good = make_valid_tls("ns", "r", &["r.example.com"]);
+        store.apply_partial_update(
+            std::collections::HashMap::from([("ns/r".to_string(), good.clone())]),
+            std::collections::HashMap::new(),
+            &std::collections::HashSet::new(),
+        );
+
+        let bad = make_invalid_tls("ns", "r", &["r.example.com"]);
+        store.apply_partial_update(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::from([("ns/r".to_string(), bad)]),
+            &std::collections::HashSet::new(),
+        );
+        assert!(store.is_rejected_active("ns/r"), "rejection should set the flag");
+
+        // A valid update lands again -> fresh entry, flag cleared (transition re-armed).
+        let good2 = make_valid_tls("ns", "r", &["r.example.com"]);
+        store.apply_partial_update(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::from([("ns/r".to_string(), good2)]),
+            &std::collections::HashSet::new(),
+        );
+        assert!(
+            !store.is_rejected_active("ns/r"),
+            "valid update must clear rejected_active"
+        );
+        assert!(store.get_validation_status("ns/r").unwrap().is_valid);
     }
 }

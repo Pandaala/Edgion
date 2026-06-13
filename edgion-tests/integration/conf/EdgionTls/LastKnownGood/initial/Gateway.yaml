@@ -1,0 +1,14 @@
+# tls-06 last-known-good Gateway.
+# Single HTTPS listener (31201) whose per-SNI cert is supplied by the
+# EdgionTls `lkg-tls` binding for host lkg.example.com.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: lkg-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: https-lkg
+      protocol: HTTPS
+      port: 31201

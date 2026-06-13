@@ -75,7 +75,11 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             warnings.push("EdgionTls has no parent_refs, it won't be applied to any Gateway".to_string());
         }
 
-        // Check secret existence from global secret store
+        // Check secret existence from global secret store. Cert-content checks
+        // (expiry, SAN, key match) are deferred to update_status() via
+        // validate_cert() and surfaced as ResolvedRefs/InvalidCertificate so
+        // they appear on the per-parent status condition rather than as a generic
+        // Accepted/Invalid warning.
         let secret_ns = tls
             .spec
             .secret_ref
@@ -83,25 +87,12 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
             .as_ref()
             .or(tls.metadata.namespace.as_ref());
 
-        if let Some(secret) = ctx
+        if ctx
             .runtime()
             .secret_store
             .get(secret_ns.map(|s| s.as_str()), &tls.spec.secret_ref.name)
+            .is_none()
         {
-            // Secret found — check cert/key matching
-            if let Some(data) = secret.data.as_ref() {
-                use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
-
-                let cert_pem = data.get(CERT).and_then(|b| std::str::from_utf8(&b.0).ok());
-                let key_pem = data.get(KEY).and_then(|b| std::str::from_utf8(&b.0).ok());
-
-                if let (Some(cert_str), Some(key_str)) = (cert_pem, key_pem) {
-                    if let Err(e) = edgion_common::tls_validation::check_key_matches_cert(cert_str, key_str) {
-                        warnings.push(e.to_string());
-                    }
-                }
-            }
-        } else {
             let secret_key = format_secret_key(secret_ns, &tls.spec.secret_ref.name);
             warnings.push(format!("Secret '{}' not found (may arrive later)", secret_key));
         }
@@ -311,7 +302,21 @@ impl ProcessorHandler<EdgionTls> for EdgionTlsHandler {
         // parse() already resolved secret_ref -> spec.secret; reuse that result
         // instead of querying secret_store a second time.
         let resolved_refs_errors: Vec<ResolvedRefsError> = if tls.spec.secret.is_some() {
-            vec![]
+            // Secret resolved: run the SAME validation the gateway runs and surface
+            // cert-CONTENT failures on ResolvedRefs. Filter out the not-found variants
+            // (secret/cert/key absent) — those are owned by the secret-absent branch
+            // below; folding them here would double-report. status_message() is
+            // deterministic (no wall-clock) so the message is byte-stable across
+            // reconciles (avoids the status-write hot loop).
+            use edgion_common::tls_validation::CertValidationError as CVE;
+            edgion_common::tls_validation::validate_cert(tls)
+                .errors
+                .into_iter()
+                .filter(|e| !matches!(e, CVE::SecretNotFound | CVE::CertNotFound | CVE::KeyNotFound))
+                .map(|e| ResolvedRefsError::CertContentInvalid {
+                    detail: e.status_message(),
+                })
+                .collect()
         } else {
             let secret_ns = tls
                 .spec
@@ -714,8 +719,16 @@ mod tests {
 
     #[test]
     fn test_validate_detects_cert_key_mismatch() {
+        use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
         use rcgen::{CertificateParams, KeyPair};
+        use std::collections::BTreeMap;
 
+        // Cert signed with key_a but embedding key_b — a key/cert mismatch.
+        // Since validate() no longer checks cert content (deferred to update_status
+        // via validate_cert), the mismatch must surface as ResolvedRefs/InvalidCertificate
+        // on the per-parent status condition.
         let key_a = KeyPair::generate().unwrap();
         let cert_a = CertificateParams::new(vec!["example.com".to_string()])
             .unwrap()
@@ -723,15 +736,37 @@ mod tests {
             .unwrap();
         let key_b = KeyPair::generate().unwrap();
 
-        let ctx = make_ctx_with_cert_secret(&cert_a.pem(), &key_b.serialize_pem());
-        let handler = EdgionTlsHandler::default();
-        let tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+        // Build the resolved Secret (cert from key_a, private key from key_b) and set it
+        // directly on spec.secret to simulate the state after parse() has run.
+        let mut data = BTreeMap::new();
+        data.insert(CERT.to_string(), ByteString(cert_a.pem().as_bytes().to_vec()));
+        data.insert(KEY.to_string(), ByteString(key_b.serialize_pem().as_bytes().to_vec()));
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some("test-secret".to_string()),
+                namespace: Some("test-ns".to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        };
 
-        let warnings = handler.validate(&tls, &ctx);
-        assert!(
-            warnings.iter().any(|w| w.contains("does not match")),
-            "should detect cert/key mismatch, got: {:?}",
-            warnings
+        let handler = EdgionTlsHandler::default();
+        let ctx = make_ctx_with_gateways(&[("test-ns", "my-gw")]);
+        let mut tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+        tls.spec.secret = Some(secret);
+
+        handler.update_status(&mut tls, &ctx, &[]);
+
+        let conditions = &tls.status.as_ref().unwrap().parents[0].conditions;
+        let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+        assert_eq!(
+            resolved.status, "False",
+            "key/cert mismatch must set ResolvedRefs to False"
+        );
+        assert_eq!(
+            resolved.reason, "InvalidCertificate",
+            "key/cert mismatch must report reason=InvalidCertificate, not the old Accepted/Invalid warning"
         );
     }
 
@@ -879,6 +914,71 @@ mod tests {
         );
     }
 
+    /// Verify that an expired certificate surfaces as ResolvedRefs=False/InvalidCertificate
+    /// and that the condition message contains NO wall-clock timestamp — only the cert's own
+    /// validity window (deterministic per-cert, no `current` field from status_message()).
+    #[test]
+    fn expired_cert_sets_resolved_refs_false_without_clock() {
+        use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        use rcgen::{CertificateParams, KeyPair};
+        use std::collections::BTreeMap;
+
+        // Mint a cert whose validity window is entirely in the past (~2 years ago).
+        // Using offsets > 730 days ensures the cert dates fall in a different calendar
+        // year than today, so no part of the message overlaps with the current year.
+        let now = ::time::OffsetDateTime::now_utc();
+        let key = KeyPair::generate().unwrap();
+        let mut params = CertificateParams::new(vec!["example.com".to_string()]).unwrap();
+        params.not_before = now - ::time::Duration::days(800);
+        params.not_after = now - ::time::Duration::days(730);
+        let cert = params.self_signed(&key).unwrap();
+
+        let mut data = BTreeMap::new();
+        data.insert(CERT.to_string(), ByteString(cert.pem().as_bytes().to_vec()));
+        data.insert(KEY.to_string(), ByteString(key.serialize_pem().as_bytes().to_vec()));
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some("test-secret".to_string()),
+                namespace: Some("test-ns".to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        };
+
+        let handler = EdgionTlsHandler::default();
+        let ctx = make_ctx_with_gateways(&[("test-ns", "my-gateway")]);
+        let mut tls = make_tls(Some(vec![make_parent_ref("my-gateway", "test-ns")]), "test-secret");
+        tls.spec.secret = Some(secret);
+
+        handler.update_status(&mut tls, &ctx, &[]);
+
+        let conditions = &tls.status.as_ref().unwrap().parents[0].conditions;
+        let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+
+        assert_eq!(resolved.status, "False", "expired cert must set ResolvedRefs=False");
+        assert_eq!(
+            resolved.reason, "InvalidCertificate",
+            "expired cert reason must be InvalidCertificate"
+        );
+
+        // status_message() must not include the current wall-clock time (the `current` field
+        // of CertExpired is intentionally omitted — only not_before/not_after are included).
+        let current_year = now.year().to_string();
+        assert!(
+            !resolved.message.contains(&current_year),
+            "condition message must not contain the current calendar year (wall-clock leak): {}",
+            resolved.message
+        );
+        assert!(
+            !resolved.message.to_lowercase().contains("current"),
+            "condition message must not contain the word 'current': {}",
+            resolved.message
+        );
+    }
+
     #[test]
     fn test_update_status_reports_ref_not_permitted_for_cross_ns_without_grant() {
         let ctx = make_ctx_cross_ns("victim-ns", "victim-secret", None);
@@ -900,7 +1000,11 @@ mod tests {
 
     #[test]
     fn test_validate_passes_matching_cert_key() {
+        use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
         use rcgen::{CertificateParams, KeyPair};
+        use std::collections::BTreeMap;
 
         let key = KeyPair::generate().unwrap();
         let cert = CertificateParams::new(vec!["example.com".to_string()])
@@ -908,6 +1012,9 @@ mod tests {
             .self_signed(&key)
             .unwrap();
 
+        // validate() no longer checks cert content; it only warns on missing parent_refs
+        // and missing secrets. A matching cert+key must not produce any spurious warning
+        // in validate(), and the positive path in update_status must yield ResolvedRefs=True.
         let ctx = make_ctx_with_cert_secret(&cert.pem(), &key.serialize_pem());
         let handler = EdgionTlsHandler::default();
         let tls = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
@@ -917,6 +1024,33 @@ mod tests {
             !warnings.iter().any(|w| w.contains("does not match")),
             "matching cert/key should not produce mismatch warning, got: {:?}",
             warnings
+        );
+
+        // Positive path: update_status with the resolved secret must yield ResolvedRefs=True.
+        let mut data = BTreeMap::new();
+        data.insert(CERT.to_string(), ByteString(cert.pem().as_bytes().to_vec()));
+        data.insert(KEY.to_string(), ByteString(key.serialize_pem().as_bytes().to_vec()));
+        let secret = Secret {
+            metadata: ObjectMeta {
+                name: Some("test-secret".to_string()),
+                namespace: Some("test-ns".to_string()),
+                ..Default::default()
+            },
+            data: Some(data),
+            ..Default::default()
+        };
+        let ctx_gw = make_ctx_with_gateways(&[("test-ns", "my-gw")]);
+        let mut tls2 = make_tls(Some(vec![make_parent_ref("my-gw", "test-ns")]), "test-secret");
+        tls2.spec.secret = Some(secret);
+
+        handler.update_status(&mut tls2, &ctx_gw, &[]);
+
+        let conditions = &tls2.status.as_ref().unwrap().parents[0].conditions;
+        let resolved = conditions.iter().find(|c| c.type_ == "ResolvedRefs").unwrap();
+        assert_eq!(
+            resolved.status, "True",
+            "matching cert/key must set ResolvedRefs=True, got: {:?}",
+            resolved
         );
     }
 }

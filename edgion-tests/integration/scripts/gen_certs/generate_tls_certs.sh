@@ -166,6 +166,38 @@ generate_ecdsa_cert() {
     cp "$TEMP_DIR/edge-tls-ecdsa.key" "$CERTS_DIR/server-ecdsa.key"
 }
 
+# Last-known-good (tls-06) scenario certificate for host lkg.example.com.
+# lkg-valid.{crt,key}: a normal ~365-day self-signed leaf — the good cert the
+# gateway must keep serving after a bad update. The committed initial fixture
+# (conf/EdgionTls/LastKnownGood/initial/Secret_lkg-secret.yaml) carries a static
+# copy of this; this generator documents how it is produced and emits a runtime
+# Secret alongside the other generated ones. The bad-update fixture is a static
+# key/cert-mismatch Secret (a content-invalid cert that reaches the ResolvedRefs
+# cert-content path), so no expired cert needs to be generated here.
+generate_lkg_certs() {
+    log_info "Generating last-known-good (lkg.example.com) certificate..."
+
+    # Valid leaf: 365-day self-signed with SAN DNS:lkg.example.com.
+    openssl req -x509 -newkey rsa:2048 -nodes \
+      -keyout "$CERTS_DIR/lkg-valid.key" \
+      -out "$CERTS_DIR/lkg-valid.crt" \
+      -days 365 \
+      -subj "/CN=lkg.example.com" \
+      -addext "subjectAltName=DNS:lkg.example.com" \
+      2>/dev/null
+
+    # Also emit a runtime Secret for lkg-valid (parallels the other generated
+    # Secrets); the committed initial fixture carries its own static copy.
+    create_secret_yaml \
+        "lkg-secret" \
+        "edgion-test" \
+        "$CERTS_DIR/lkg-valid.crt" \
+        "$CERTS_DIR/lkg-valid.key" \
+        "$SECRET_OUTPUT_DIR/Secret_edgion-test_lkg-secret.yaml"
+
+    log_success "Last-known-good cert generated (lkg-valid)."
+}
+
 cert_matches_required_sans() {
     local cert_file=$1
     local san_text
@@ -207,6 +239,8 @@ else
     generate_ecdsa_cert
     log_success "ECDSA cert/key generated."
 fi
+
+generate_lkg_certs
 
 create_secret_yaml \
     "edge-tls" \

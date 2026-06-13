@@ -1,0 +1,20 @@
+# tls-06 last-known-good EdgionTls.
+# Binds the valid lkg-secret cert to the gateway's https-lkg listener for
+# host lkg.example.com. On a subsequent invalid (garbage) Secret update the
+# gateway keeps serving this cert and the controller reports
+# ResolvedRefs=False/InvalidCertificate on this resource.
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: lkg-tls
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: lkg-gateway
+      namespace: edgion-test
+      sectionName: https-lkg
+  hosts:
+    - lkg.example.com
+  secretRef:
+    name: lkg-secret
+    namespace: edgion-test

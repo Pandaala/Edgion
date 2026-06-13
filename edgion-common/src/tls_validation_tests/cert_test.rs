@@ -1,4 +1,4 @@
-//! Unit tests for `cert.rs` (see `super`).
+//! Unit tests for `tls_validation` (see `super`).
 use super::*;
 use edgion_resources::constants::secret_keys::tls::{CERT, KEY};
 use k8s_openapi::api::core::v1::Secret;
@@ -457,9 +457,12 @@ fn test_mismatched_key_cert_fails() {
 
     let result = check_key_matches_cert(&cert_a, &key_b);
     assert!(result.is_err(), "mismatched cert/key should fail");
+    // check_key_matches_cert returns KeyCertMatchError; the KeyMismatch variant maps
+    // to CertValidationError::KeyMismatch via From<KeyCertMatchError> when used inside
+    // validate_cert.
     assert!(
-        matches!(result, Err(CertValidationError::KeyMismatch(_))),
-        "should return KeyMismatch, got: {:?}",
+        matches!(result, Err(KeyCertMatchError::Mismatch(_))),
+        "should return KeyCertMatchError::Mismatch, got: {:?}",
         result
     );
 }
@@ -614,8 +617,8 @@ fn test_deprecated_min_tls_version_is_not_rejected() {
     use edgion_resources::resources::edgion_tls::TlsVersion;
 
     // RFC 8996 divergence: TLS 1.0/1.1 stay admissible as an operator opt-in
-    // escape hatch. Setting them must emit a warn but must NOT invalidate the
-    // resource. This test guards the "do not hard-reject" decision.
+    // escape hatch. Setting them must NOT invalidate the resource (validate_cert
+    // is now pure; the advisory warn is emitted by a gateway-side caller helper).
     let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
     let mut tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
     tls.spec.min_tls_version = Some(TlsVersion::Tls10);
@@ -635,9 +638,8 @@ fn test_unimplemented_revocation_config_is_not_rejected() {
     };
 
     // tls-07 divergence: revocationCheck/ocspStapling are reserved-but-unimplemented
-    // schema. Setting them must emit a config-time warn but must NOT invalidate the
-    // resource (hard-rejecting would take down a working TLS listener over a no-op
-    // field). This test guards the "do not hard-reject" decision.
+    // schema. Setting them must NOT invalidate the resource (validate_cert is now
+    // pure; the advisory warn is emitted by a gateway-side caller helper).
     let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
     let mut tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
     tls.spec.extend = Some(EdgionTlsExtend {
