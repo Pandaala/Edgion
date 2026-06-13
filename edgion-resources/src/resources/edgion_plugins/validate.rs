@@ -81,6 +81,7 @@ fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
         | AllEndpointStatus(_)
         | DynamicInternalUpstream(_)
         | DynamicExternalUpstream(_)
+        | FaultInjection(_)
         | RegionRoute(_)
         | TraceContext(_) => (true, false, false, false),
     };

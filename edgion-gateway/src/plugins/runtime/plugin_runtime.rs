@@ -40,6 +40,7 @@ use crate::plugins::http::direct_endpoint::DirectEndpoint;
 use crate::plugins::http::dsl::plugin::DslPlugin;
 use crate::plugins::http::dynamic_external_upstream::DynamicExternalUpstream;
 use crate::plugins::http::dynamic_internal_upstream::DynamicInternalUpstream;
+use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::forward_auth::ForwardAuth;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
 use crate::plugins::http::hmac_auth::HmacAuth;
@@ -770,6 +771,7 @@ impl PluginRuntime {
             }
             EdgionPlugin::KeyAuth(config) => CreateResult::Ok(Some(KeyAuth::create(config))),
             EdgionPlugin::LdapAuth(config) => CreateResult::Ok(Some(LdapAuth::create(config))),
+            EdgionPlugin::FaultInjection(config) => CreateResult::Ok(Some(Box::new(FaultInjection::new(config)))),
             EdgionPlugin::Mock(config) => CreateResult::Ok(Some(Box::new(Mock::new(config)))),
             EdgionPlugin::ProxyRewrite(config) => CreateResult::Ok(Some(Box::new(ProxyRewrite::new(config)))),
             EdgionPlugin::RequestRestriction(config) => CreateResult::Ok(Some(RequestRestriction::create(config))),
@@ -844,6 +846,7 @@ impl PluginRuntime {
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::DynamicInternalUpstream(_)
             | EdgionPlugin::DynamicExternalUpstream(_)
+            | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::RegionRoute(_) => CreateResult::WrongStage,
         }
     }
@@ -896,6 +899,7 @@ impl PluginRuntime {
             | EdgionPlugin::AllEndpointStatus(_)
             | EdgionPlugin::DynamicInternalUpstream(_)
             | EdgionPlugin::DynamicExternalUpstream(_)
+            | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
         }
@@ -934,6 +938,7 @@ impl PluginRuntime {
             EdgionPlugin::AllEndpointStatus(_) => "AllEndpointStatus",
             EdgionPlugin::DynamicInternalUpstream(_) => "DynamicInternalUpstream",
             EdgionPlugin::DynamicExternalUpstream(_) => "DynamicExternalUpstream",
+            EdgionPlugin::FaultInjection(_) => "FaultInjection",
             EdgionPlugin::UrlRewrite(_) => "UrlRewrite",
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
             EdgionPlugin::Dsl(_) => "Dsl",

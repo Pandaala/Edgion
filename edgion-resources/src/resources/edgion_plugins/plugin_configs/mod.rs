@@ -9,6 +9,7 @@ mod direct_endpoint;
 pub mod dsl;
 mod dynamic_external_upstream;
 mod dynamic_internal_upstream;
+mod fault_injection;
 mod forward_auth;
 mod header_cert_auth;
 mod hmac_auth;
@@ -48,6 +49,9 @@ pub use dynamic_external_upstream::{
 pub use dynamic_internal_upstream::{
     DynUpstreamExtract, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynUpstreamRule,
     DynUpstreamTarget, DynamicInternalUpstreamConfig,
+};
+pub use fault_injection::{
+    AbortConfig, DelayConfig, FaultHeaderEntry, FaultInjectionConfig, MAX_DELAY_MS as FAULT_MAX_DELAY_MS,
 };
 pub use forward_auth::ForwardAuthConfig;
 pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig, UpstreamHeaderConfig};

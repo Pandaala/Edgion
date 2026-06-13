@@ -6,9 +6,9 @@ use serde::{Deserialize, Serialize};
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
-    DynamicInternalUpstreamConfig, ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig,
-    JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig, OpenidConnectConfig,
-    ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
+    DynamicInternalUpstreamConfig, FaultInjectionConfig, ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig,
+    IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
+    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
     RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig,
 };
 use crate::resources::http_route::{
@@ -60,6 +60,8 @@ pub enum EdgionPlugin {
     LdapAuth(LdapAuthConfig),
     /// Mock filter (return predefined responses for testing/prototyping)
     Mock(MockConfig),
+    /// Fault Injection (chaos): probabilistic delay and/or abort.
+    FaultInjection(FaultInjectionConfig),
     /// Debug Access Log to Header filter (for debugging)
     DebugAccessLogToHeader(DebugAccessLogToHeaderConfig),
     /// Proxy Rewrite filter (rewrite URI, Host, Method, Headers before forwarding to upstream)
@@ -132,6 +134,7 @@ impl EdgionPlugin {
             EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",
             EdgionPlugin::CtxSet(_) => "CtxSet",
             EdgionPlugin::RealIp(_) => "RealIp",
+            EdgionPlugin::FaultInjection(_) => "FaultInjection",
             EdgionPlugin::ForwardAuth(_) => "ForwardAuth",
             EdgionPlugin::OpenidConnect(_) => "OpenidConnect",
             EdgionPlugin::BandwidthLimit(_) => "BandwidthLimit",
@@ -176,6 +179,7 @@ impl EdgionPlugin {
             EdgionPlugin::HeaderCertAuth(c) => c.validation_error(),
 
             // Bucket 4 — stateless get_validation_error
+            EdgionPlugin::FaultInjection(c) => c.validation_error(),
             EdgionPlugin::ForwardAuth(c) => c.validation_error(),
             EdgionPlugin::OpenidConnect(c) => c.validation_error(),
             EdgionPlugin::BandwidthLimit(c) => c.validation_error(),

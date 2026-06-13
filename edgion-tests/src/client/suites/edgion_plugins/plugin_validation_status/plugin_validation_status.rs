@@ -11,15 +11,17 @@
 //   05_EdgionPlugins_ep-validation-alias-invalid.yaml           — Cors entry with alias containing a space
 //   06_EdgionPlugins_ep-validation-dsl-invalid.yaml             — Dsl: uncompilable inline source
 //   07_EdgionPlugins_ep-validation-cors-regex-invalid.yaml      — Cors: allowCredentials=true + catch-all allowOriginsByRegex
+//   08_EdgionPlugins_ep-validation-fault-injection-invalid.yaml — FaultInjection: ratio out of range + mutual exclusion
 //
 // Scenarios:
-//   1. jwt_auth_invalid     → Accepted=False/Invalid, message contains "secretRef"
-//   2. cors_invalid         → Accepted=False/Invalid, message contains "allow_credentials"
-//   3. direct_ep_invalid    → Accepted=False/Invalid, message contains "regex"
-//   4. rate_limit_invalid   → Accepted=False/Invalid, message contains "rate"
-//   5. alias_invalid        → Accepted=False/Invalid, message contains "alias"
-//   6. dsl_invalid          → Accepted=False/Invalid, message contains "DSL compile errors"
-//   7. cors_regex_invalid   → Accepted=False/Invalid, message contains "allow_origins_by_regex"
+//   1. jwt_auth_invalid          → Accepted=False/Invalid, message contains "secretRef"
+//   2. cors_invalid              → Accepted=False/Invalid, message contains "allow_credentials"
+//   3. direct_ep_invalid         → Accepted=False/Invalid, message contains "regex"
+//   4. rate_limit_invalid        → Accepted=False/Invalid, message contains "rate"
+//   5. alias_invalid             → Accepted=False/Invalid, message contains "alias"
+//   6. dsl_invalid               → Accepted=False/Invalid, message contains "DSL compile errors"
+//   7. cors_regex_invalid        → Accepted=False/Invalid, message contains "allow_origins_by_regex"
+//   8. fault_injection_invalid   → Accepted=False/Invalid, message contains "delay.ratio"
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -243,6 +245,27 @@ impl PluginValidationStatusTestSuite {
             },
         )
     }
+
+    // =========================================================================
+    // Scenario 8: FaultInjection with delay.ratio out of [0.0, 1.0]
+    //             → Accepted=False/Invalid
+    //
+    // The first validation error hit is the ratio range check:
+    //   "delay.ratio must be in [0.0, 1.0], got 2"
+    // The keyword "delay.ratio" is a safe substring assertion.
+    // =========================================================================
+
+    fn fault_injection_invalid() -> TestCase {
+        TestCase::new(
+            "fault_injection_invalid",
+            "FaultInjection 'ep-validation-fault-injection-invalid': ratio out of range → Accepted=False/Invalid",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    assert_accepted_false(&ctx, "ep-validation-fault-injection-invalid", "delay.ratio").await
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for PluginValidationStatusTestSuite {
@@ -259,6 +282,7 @@ impl TestSuite for PluginValidationStatusTestSuite {
             Self::alias_invalid(),
             Self::dsl_invalid(),
             Self::cors_regex_invalid(),
+            Self::fault_injection_invalid(),
         ]
     }
 }
