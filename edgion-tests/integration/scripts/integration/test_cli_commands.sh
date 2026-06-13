@@ -204,8 +204,8 @@ start_services() {
     bash "${UTILS_DIR}/start_all_with_conf.sh" --suites "HTTPRoute/Basic"
 
     # After start_all_with_conf.sh exits, read the work dir from .current
-    if [ -f "${PROJECT_ROOT}/integration_testing/.current" ]; then
-        export EDGION_WORK_DIR="$(cat "${PROJECT_ROOT}/integration_testing/.current")"
+    if [ -f "${PROJECT_ROOT}/tmp/integration_testing/.current" ]; then
+        export EDGION_WORK_DIR="$(cat "${PROJECT_ROOT}/tmp/integration_testing/.current")"
         log_info "EDGION_WORK_DIR=$EDGION_WORK_DIR"
     fi
 

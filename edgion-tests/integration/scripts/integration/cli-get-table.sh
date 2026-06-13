@@ -29,7 +29,7 @@ CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 [[ -x "$CLI" ]]            || { log_warn "edgion-cli not built; SKIP"; exit 0; }
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="${PROJECT_ROOT}/integration_testing/cli_get_table_${TIMESTAMP}"
+WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/cli_get_table_${TIMESTAMP}"
 CONFIG_DIR="${WORK_DIR}/config"
 CONF_WATCH_DIR="${WORK_DIR}/conf"
 LOG_DIR="${WORK_DIR}/logs"

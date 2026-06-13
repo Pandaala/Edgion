@@ -68,7 +68,7 @@ These are the same `cicd/checks/*` entry points CI uses — there is no `Makefil
 ./edgion-tests/integration/scripts/integration/run_all_integration.sh --skip acme,center
 ```
 
-Each job's stdout/stderr is captured to `integration_testing/run_all_<timestamp>/<job>.log` plus a machine-readable `summary.txt`. Job names: `main`, `linksys_etcd`, `linksys_es`, `acme`, `center`, `cli`, `file_watcher`. All children share controller/gateway ports (12101/12001) so they run sequentially even when their topologies differ.
+Each job's stdout/stderr is captured to `tmp/integration_testing/run_all_<timestamp>/<job>.log` plus a machine-readable `summary.txt`. Job names: `main`, `linksys_etcd`, `linksys_es`, `acme`, `center`, `cli`, `file_watcher`. All children share controller/gateway ports (12101/12001) so they run sequentially even when their topologies differ.
 
 ## Memorize the actual directory layout
 
@@ -80,7 +80,7 @@ Each job's stdout/stderr is captured to `integration_testing/run_all_<timestamp>
 - `edgion-tests/integration/scripts/integration/run_all_integration.sh`: top-level orchestrator that sequences `run_integration.sh` plus every standalone integration script (Etcd / ES LinkSys, ACME, Center, CLI, FileWatcher) and emits a unified report
 - `edgion-tests/integration/scripts/utils/`: `prepare.sh`, `start_all_with_conf.sh`, `load_conf.sh`, `kill_all.sh`
 - `edgion-tests/integration/scripts/gen_certs/`: test certificate generation scripts
-- `integration_testing/testing_<timestamp>/`: this run's logs, PIDs, generated Secrets, and report directory
+- `tmp/integration_testing/testing_<timestamp>/`: this run's logs, PIDs, generated Secrets, and report directory
 
 Do not search for code or cert scripts using older test-directory conventions. Current code lives in `edgion-tests/src/`; cert scripts are in `edgion-tests/integration/scripts/gen_certs/`.
 
@@ -89,7 +89,7 @@ Do not search for code or cert scripts using older test-directory conventions. C
 The actual responsibilities of `run_integration.sh` are:
 
 1. Call `prepare.sh` to build `edgion-controller`, `edgion-gateway`, `edgion-cli`, `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`
-2. Call `start_all_with_conf.sh` to clean the scene and create `integration_testing/testing_<timestamp>/`
+2. Call `start_all_with_conf.sh` to clean the scene and create `tmp/integration_testing/testing_<timestamp>/`
 3. Generate runtime Secrets under `${WORK_DIR}/generated-secrets/` and load them once after the suite YAML
 4. Start `test_server`, controller, gateway, and wait for health checks
 5. First load `edgion-tests/integration/conf/base/`, then load the configuration of the target suite, and finally load runtime-generated Secrets

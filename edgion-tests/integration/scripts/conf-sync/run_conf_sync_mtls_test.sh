@@ -220,7 +220,7 @@ start_mtls_environment() {
     # ── 2. Work directory ──
     local timestamp
     timestamp=$(date +%Y%m%d_%H%M%S)
-    WORK_DIR="${PROJECT_ROOT}/integration_testing/mtls_testing_${timestamp}"
+    WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/mtls_testing_${timestamp}"
     local log_dir="${WORK_DIR}/logs"
     local pid_dir="${WORK_DIR}/pids"
     local config_dir="${WORK_DIR}/config"
@@ -519,8 +519,8 @@ EOF
     log_info "gRPC mTLS:  https://127.0.0.1:${CONTROLLER_GRPC_PORT}"
 
     # Save .current pointer
-    mkdir -p "${PROJECT_ROOT}/integration_testing"
-    echo "$WORK_DIR" > "${PROJECT_ROOT}/integration_testing/.current"
+    mkdir -p "${PROJECT_ROOT}/tmp/integration_testing"
+    echo "$WORK_DIR" > "${PROJECT_ROOT}/tmp/integration_testing/.current"
 }
 
 # =============================================================================
@@ -669,8 +669,8 @@ main() {
         start_mtls_environment
     else
         log_info "Attaching to existing environment"
-        if [ -f "${PROJECT_ROOT}/integration_testing/.current" ]; then
-            WORK_DIR=$(cat "${PROJECT_ROOT}/integration_testing/.current")
+        if [ -f "${PROJECT_ROOT}/tmp/integration_testing/.current" ]; then
+            WORK_DIR=$(cat "${PROJECT_ROOT}/tmp/integration_testing/.current")
             export EDGION_WORK_DIR="$WORK_DIR"
         else
             log_error "No .current work directory found"

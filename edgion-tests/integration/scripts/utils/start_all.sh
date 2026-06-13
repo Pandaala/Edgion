@@ -31,7 +31,7 @@ fi
 
 # Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="${PROJECT_ROOT}/integration_testing/testing_${TIMESTAMP}"
+WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/testing_${TIMESTAMP}"
 
 #  WORK_DIR scriptuse
 export EDGION_WORK_DIR="$WORK_DIR"
@@ -319,7 +319,7 @@ prepare_config() {
 # =============================================================================
 save_info() {
     # currentWorkdirectorypath
-    echo "$WORK_DIR" > "${PROJECT_ROOT}/integration_testing/.current"
+    echo "$WORK_DIR" > "${PROJECT_ROOT}/tmp/integration_testing/.current"
     
     # info
     cat > "${WORK_DIR}/info.txt" << EOF

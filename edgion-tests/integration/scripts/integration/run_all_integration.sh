@@ -23,7 +23,7 @@
 #   - Continue on failure; collect failures into a summary table
 #   - Exit 0 only if every job passed; exit 1 if any job failed
 #   - Per-job stdout/stderr captured to:
-#       integration_testing/run_all_<timestamp>/<job>.log
+#       tmp/integration_testing/run_all_<timestamp>/<job>.log
 # =============================================================================
 
 set -uo pipefail
@@ -40,7 +40,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-WORK_DIR="${PROJECT_ROOT}/integration_testing/run_all_${TIMESTAMP}"
+WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/run_all_${TIMESTAMP}"
 
 # ── Job definitions ─────────────────────────────────────────────────────────
 # Each job is "<name>|<command>". Names are stable identifiers used by

@@ -36,7 +36,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 FIXTURE_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf/Status/ResourceAbnormalMetrics"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="${PROJECT_ROOT}/integration_testing/resource_abnormal_metrics_${TIMESTAMP}"
+WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/resource_abnormal_metrics_${TIMESTAMP}"
 CONFIG_DIR="${WORK_DIR}/config"
 CONF_WATCH_DIR="${WORK_DIR}/conf"
 LOG_DIR="${WORK_DIR}/logs"

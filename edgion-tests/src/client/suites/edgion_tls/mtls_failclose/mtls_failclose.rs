@@ -9,7 +9,7 @@
 // - Secret_garbage-frontend-ca.yaml         # ca.crt = `not a pem`
 //
 // Required generated secrets (by generate_mtls_certs.sh, written to
-// integration_testing/generated_secrets_manual/):
+// tmp/integration_testing/generated_secrets_manual/):
 // - mtls-server (namespace edgion-test)     # reused server cert
 // - fv-server-cert (namespace edgion-test)  # reused server cert for frontendValidation listener
 //

@@ -35,7 +35,7 @@ fi
 
 # Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="${PROJECT_ROOT}/integration_testing/testing_${TIMESTAMP}"
+WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/testing_${TIMESTAMP}"
 GENERATED_SECRET_DIR="${WORK_DIR}/generated-secrets"
 
 #  WORK_DIR scriptuse
@@ -773,8 +773,8 @@ verify_sync() {
 # =============================================================================
 save_info() {
     # currentWorkdirectorypath
-    mkdir -p "${PROJECT_ROOT}/integration_testing"
-    echo "$WORK_DIR" > "${PROJECT_ROOT}/integration_testing/.current"
+    mkdir -p "${PROJECT_ROOT}/tmp/integration_testing"
+    echo "$WORK_DIR" > "${PROJECT_ROOT}/tmp/integration_testing/.current"
     
     # info
     cat > "${WORK_DIR}/info.txt" << EOF

@@ -68,7 +68,7 @@ cat ${WORK_DIR}/report.log
 - `edgion-tests/src/` — test code (client/server/validator)
 - `edgion-tests/integration/conf/` — test configurations (organized by resource type)
 - `edgion-tests/integration/scripts/` — test scripts
-- `integration_testing/` — runtime working directory (gitignored)
+- `tmp/integration_testing/` — runtime working directory (gitignored)
 
 ### Read on demand
 - [references/integration-suite-map.md](references/integration-suite-map.md) — suite family, conf directory, Rust suite, `--gateway` mapping

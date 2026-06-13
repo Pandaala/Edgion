@@ -36,7 +36,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="${PROJECT_ROOT}/integration_testing/file_watcher_test_${TIMESTAMP}"
+WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/file_watcher_test_${TIMESTAMP}"
 CONFIG_DIR="${WORK_DIR}/config"
 LOG_DIR="${WORK_DIR}/logs"
 PID_DIR="${WORK_DIR}/pids"

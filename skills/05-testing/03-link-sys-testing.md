@@ -38,7 +38,7 @@ run_<type>_test.sh orchestrates the full flow:
 
 Step 0: Kill old    →  pkill -9 -f edgion-* (same as kill_all.sh)
 Step 1: Build       →  cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-cli
-Step 2: Work dir    →  mkdir integration_testing/<type>_testing_YYYYMMDD_HHMMSS/
+Step 2: Work dir    →  mkdir tmp/integration_testing/<type>_testing_YYYYMMDD_HHMMSS/
 Step 3: Start Infra →  docker compose up -d (e.g. Redis)
 Step 4: Start Edgion (same args as start_all_with_conf.sh)
   ├─ 4a: Start Controller (--work-dir, --conf-dir, --test-mode) → wait /ready
@@ -402,7 +402,7 @@ grep "integration_testing" <work-dir>/logs/gateway.log
 All logs are in the timestamped work directory:
 
 ```
-integration_testing/redis_testing_YYYYMMDD_HHMMSS/
+tmp/integration_testing/redis_testing_YYYYMMDD_HHMMSS/
 ├── logs/
 │   ├── controller.log    # Controller stderr
 │   └── gateway.log       # Gateway stderr (includes LinkSys handler logs)

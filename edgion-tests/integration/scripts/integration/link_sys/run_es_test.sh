@@ -64,7 +64,7 @@ ES_URL="http://127.0.0.1:${ES_PORT}"
 
 # ── Working directory ───────────────────────────────────────────────────────
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="${PROJECT_ROOT}/integration_testing/es_testing_${TIMESTAMP}"
+WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/es_testing_${TIMESTAMP}"
 LOG_DIR="${WORK_DIR}/logs"
 PID_DIR="${WORK_DIR}/pids"
 CONFIG_DIR="${WORK_DIR}/config"

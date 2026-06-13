@@ -126,9 +126,9 @@ start_environment() {
 }
 
 resolve_work_dir() {
-    local current_file="${PROJECT_ROOT}/integration_testing/.current"
+    local current_file="${PROJECT_ROOT}/tmp/integration_testing/.current"
     if [ ! -f "$current_file" ]; then
-        log_error "integration_testing/.current not found — run start_all_with_conf.sh first"
+        log_error "tmp/integration_testing/.current not found — run start_all_with_conf.sh first"
         exit 1
     fi
     WORK_DIR=$(cat "$current_file")

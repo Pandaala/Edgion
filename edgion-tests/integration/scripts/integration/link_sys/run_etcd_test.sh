@@ -67,7 +67,7 @@ GATEWAY_PROBE_URL="${GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
 
 # ── Working directory (timestamped, same pattern as start_all_with_conf.sh) ─
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="${PROJECT_ROOT}/integration_testing/etcd_testing_${TIMESTAMP}"
+WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/etcd_testing_${TIMESTAMP}"
 LOG_DIR="${WORK_DIR}/logs"
 PID_DIR="${WORK_DIR}/pids"
 CONFIG_DIR="${WORK_DIR}/config"

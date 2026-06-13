@@ -43,7 +43,7 @@ trap "rm -rf $TEMP_DIR" EXIT
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 CERTS_DIR="$PROJECT_ROOT/edgion-tests/certs"
-SECRET_OUTPUT_ROOT="${EDGION_GENERATED_SECRET_DIR:-$PROJECT_ROOT/integration_testing/generated_secrets_manual}"
+SECRET_OUTPUT_ROOT="${EDGION_GENERATED_SECRET_DIR:-$PROJECT_ROOT/tmp/integration_testing/generated_secrets_manual}"
 SECRET_OUTPUT_DIR="$SECRET_OUTPUT_ROOT/base"
 SECRET_OUTPUT_FILE="$SECRET_OUTPUT_DIR/Secret_edgion-test_edge-tls.yaml"
 STATUS_REFGRANT_SECRET_DIR="$SECRET_OUTPUT_ROOT/Status/RefGrant"

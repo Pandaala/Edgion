@@ -1530,7 +1530,7 @@ main() {
         # Get work directory from .current file (written by start_all_with_conf.sh)
         # This is more robust than 'tail -1' which can be polluted by background
         # process output leaking into the captured stdout.
-        local current_file="${PROJECT_ROOT}/integration_testing/.current"
+        local current_file="${PROJECT_ROOT}/tmp/integration_testing/.current"
         if [ -f "$current_file" ]; then
             WORK_DIR=$(cat "$current_file")
         else
@@ -1546,8 +1546,8 @@ main() {
         log_info "Work directory: ${WORK_DIR}"
     else
         log_info "Skip start step"
-        if [ -f "${PROJECT_ROOT}/integration_testing/.current" ]; then
-            WORK_DIR=$(cat "${PROJECT_ROOT}/integration_testing/.current")
+        if [ -f "${PROJECT_ROOT}/tmp/integration_testing/.current" ]; then
+            WORK_DIR=$(cat "${PROJECT_ROOT}/tmp/integration_testing/.current")
             export EDGION_TEST_ACCESS_LOG_PATH="${WORK_DIR}/logs/edgion_access.log"
             export EDGION_WORK_DIR="${WORK_DIR}"
             log_info "Using existing work directory: ${WORK_DIR}"

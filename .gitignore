@@ -23,7 +23,7 @@ Thumbs.db
 *.lib
 
 # Integration test workspace (generated at runtime, do not commit)
-integration_testing/
+tmp/
 
 # Temporary conformance test files (copied from upstream, not tracked)
 .tmp-conformance-tests/

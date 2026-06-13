@@ -52,7 +52,7 @@ if ! curl -sf --max-time 3 "${ETCD_ENDPOINT}/health" > /dev/null 2>&1; then
 fi
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="${PROJECT_ROOT}/integration_testing/list_keys_etcd_${TIMESTAMP}"
+WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/list_keys_etcd_${TIMESTAMP}"
 CONFIG_DIR="${WORK_DIR}/config"
 LOG_DIR="${WORK_DIR}/logs"
 

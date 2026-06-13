@@ -42,7 +42,7 @@ if [[ ! -x "$CONTROLLER_BIN" ]]; then
 fi
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-WORK_DIR="${PROJECT_ROOT}/integration_testing/list_keys_fs_${TIMESTAMP}"
+WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/list_keys_fs_${TIMESTAMP}"
 CONFIG_DIR="${WORK_DIR}/config"
 CONF_WATCH_DIR="${WORK_DIR}/conf"
 LOG_DIR="${WORK_DIR}/logs"

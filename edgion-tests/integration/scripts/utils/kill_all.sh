@@ -67,7 +67,7 @@ main() {
     echo ""
     
     # ShowWorkdirectory（）
-    local current_file="${PROJECT_ROOT}/integration_testing/.current"
+    local current_file="${PROJECT_ROOT}/tmp/integration_testing/.current"
     if [ -f "$current_file" ]; then
         log_info "Workdirectory: $(cat "$current_file")"
     fi
