@@ -1,7 +1,7 @@
 //! Types for IP radix matching
 
 use super::error::IpRadixError;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::str::FromStr;
 
 /// Represents a CIDR (Classless Inter-Domain Routing) notation
@@ -110,39 +110,12 @@ impl IpCidr {
             }
         }
     }
-
-    /// Returns true if this is an IPv4 CIDR
-    pub fn is_v4(&self) -> bool {
-        matches!(self, IpCidr::V4 { .. })
-    }
-
-    /// Returns true if this is an IPv6 CIDR
-    pub fn is_v6(&self) -> bool {
-        matches!(self, IpCidr::V6 { .. })
-    }
-
-    /// Get the prefix length
-    pub fn prefix_len(&self) -> u8 {
-        match self {
-            IpCidr::V4 { prefix_len, .. } => *prefix_len,
-            IpCidr::V6 { prefix_len, .. } => *prefix_len,
-        }
-    }
-}
-
-/// Convert u32 to Ipv4Addr for display purposes
-pub fn u32_to_ipv4(addr: u32) -> Ipv4Addr {
-    Ipv4Addr::from(addr)
-}
-
-/// Convert u128 to Ipv6Addr for display purposes
-pub fn u128_to_ipv6(addr: u128) -> Ipv6Addr {
-    Ipv6Addr::from(addr)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[test]
     fn test_parse_ipv4_cidr() {
@@ -150,7 +123,7 @@ mod tests {
         match cidr {
             IpCidr::V4 { addr, prefix_len } => {
                 assert_eq!(prefix_len, 24);
-                assert_eq!(u32_to_ipv4(addr).to_string(), "192.168.1.0");
+                assert_eq!(Ipv4Addr::from(addr).to_string(), "192.168.1.0");
             }
             _ => panic!("Expected IPv4 CIDR"),
         }
@@ -162,7 +135,7 @@ mod tests {
         match cidr {
             IpCidr::V6 { addr, prefix_len } => {
                 assert_eq!(prefix_len, 32);
-                assert_eq!(u128_to_ipv6(addr).to_string(), "2001:db8::");
+                assert_eq!(Ipv6Addr::from(addr).to_string(), "2001:db8::");
             }
             _ => panic!("Expected IPv6 CIDR"),
         }
@@ -175,7 +148,7 @@ mod tests {
         match cidr {
             IpCidr::V4 { addr, prefix_len } => {
                 assert_eq!(prefix_len, 24);
-                assert_eq!(u32_to_ipv4(addr).to_string(), "192.168.1.0");
+                assert_eq!(Ipv4Addr::from(addr).to_string(), "192.168.1.0");
             }
             _ => panic!("Expected IPv4 CIDR"),
         }

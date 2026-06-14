@@ -537,7 +537,8 @@ async fn handle_center_message(
                                 request_id,
                                 status_code: 413,
                                 headers: Default::default(),
-                                body: format!("Proxy request body exceeds {} bytes", MAX_PROXY_REQUEST_BODY).into_bytes(),
+                                body: format!("Proxy request body exceeds {} bytes", MAX_PROXY_REQUEST_BODY)
+                                    .into_bytes(),
                             })),
                         })
                         .await;
@@ -1008,9 +1009,11 @@ mod tests {
 
         let tmp = tempfile::tempdir().expect("tempdir");
         let conf_mgr = Arc::new(
-            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(tmp.path().to_path_buf())))
-                .await
-                .expect("ConfMgr::create failed"),
+            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
+                tmp.path().to_path_buf(),
+            )))
+            .await
+            .expect("ConfMgr::create failed"),
         );
         let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
         let (tx, mut rx) = tokio::sync::mpsc::channel::<ControllerMessage>(8);

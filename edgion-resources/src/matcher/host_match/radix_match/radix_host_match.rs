@@ -297,17 +297,6 @@ mod tests {
     }
 
     #[test]
-    fn test_engine_tree_access() {
-        let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
-        let runtime = Arc::new(MockHostRuntime::new("test", vec!["example.com"]));
-        let host = RadixHost::new("example.com", runtime);
-        engine.initialize(vec![host]).unwrap();
-
-        let tree = engine.tree();
-        assert_eq!(tree.match_exact("com.example"), Some(&[1u32][..]));
-    }
-
-    #[test]
     fn test_engine_localhost() {
         let mut engine: RadixHostMatchEngine<MockHostRuntime> = RadixHostMatchEngine::new();
         let runtime = Arc::new(MockHostRuntime::new("test", vec!["localhost"]));

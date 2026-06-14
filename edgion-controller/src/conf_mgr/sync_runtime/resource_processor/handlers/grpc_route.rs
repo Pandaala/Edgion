@@ -459,14 +459,12 @@ mod tests {
     }
 
     #[test]
-    fn repeated_request_mirror_and_extension_ref_are_allowed() {
-        // RequestMirror and ExtensionRef are explicitly allowed to appear multiple times.
+    fn repeated_extension_ref_is_allowed() {
+        // ExtensionRef is explicitly allowed to appear multiple times.
         // ExtensionRef filters must point at a supported kind (EdgionPlugins) to be valid.
         let route = route_with_rules(json!([
             {
                 "filters": [
-                    { "type": "RequestMirror", "requestMirror": { "backendRef": { "name": "mirror-a" } } },
-                    { "type": "RequestMirror", "requestMirror": { "backendRef": { "name": "mirror-b" } } },
                     { "type": "ExtensionRef", "extensionRef": { "group": "edgion.io", "kind": "EdgionPlugins", "name": "a" } },
                     { "type": "ExtensionRef", "extensionRef": { "kind": "EdgionPlugins", "name": "b" } }
                 ]
@@ -609,7 +607,7 @@ fn collect_ref_denied_list(route: &GRPCRoute) -> Vec<Option<&RefDenied>> {
 ///
 /// Per Gateway API spec for GRPCRoute, "specifying the same filter multiple times
 /// is not supported unless explicitly indicated in the filter."
-/// `RequestMirror` and `ExtensionRef` are explicitly allowed to repeat;
+/// `ExtensionRef` is explicitly allowed to repeat;
 /// `RequestHeaderModifier` and `ResponseHeaderModifier` are not.
 fn has_duplicate_filter_conflict(filters: Option<&Vec<GRPCRouteFilter>>) -> bool {
     let Some(filters) = filters else { return false };
@@ -629,7 +627,7 @@ fn has_duplicate_filter_conflict(filters: Option<&Vec<GRPCRouteFilter>>) -> bool
                 }
                 seen_response_header = true;
             }
-            GRPCRouteFilterType::RequestMirror | GRPCRouteFilterType::ExtensionRef => {}
+            GRPCRouteFilterType::ExtensionRef => {}
         }
     }
     false

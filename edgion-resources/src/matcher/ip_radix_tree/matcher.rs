@@ -86,39 +86,6 @@ impl IpRadixMatcher {
             }
         }
     }
-
-    /// Returns whether this matcher has any IPv4 rules
-    pub fn has_ipv4_rules(&self) -> bool {
-        self.ipv4_tree.is_some()
-    }
-
-    /// Returns whether this matcher has any IPv6 rules
-    pub fn has_ipv6_rules(&self) -> bool {
-        self.ipv6_tree.is_some()
-    }
-
-    /// Returns statistics about the matcher
-    pub fn stats(&self) -> MatcherStats {
-        MatcherStats {
-            ipv4_node_count: self.ipv4_tree.as_ref().map_or(0, |t| t.node_count()),
-            ipv6_node_count: self.ipv6_tree.as_ref().map_or(0, |t| t.node_count()),
-            total_bytes: self.ipv4_tree.as_ref().map_or(0, |t| t.stats().total_bytes)
-                + self.ipv6_tree.as_ref().map_or(0, |t| t.stats().total_bytes),
-        }
-    }
-}
-
-/// Statistics about the unified matcher
-#[derive(Debug, Clone, Copy)]
-pub struct MatcherStats {
-    /// Number of IPv4 nodes
-    pub ipv4_node_count: usize,
-
-    /// Number of IPv6 nodes
-    pub ipv6_node_count: usize,
-
-    /// Total memory usage in bytes
-    pub total_bytes: usize,
 }
 
 /// Builder for constructing an IpRadixMatcher
@@ -208,16 +175,6 @@ impl IpRadixMatcherBuilder {
         err
     }
 
-    /// Returns the number of IPv4 rules added
-    pub fn ipv4_rule_count(&self) -> usize {
-        self.v4_builder.len()
-    }
-
-    /// Returns the number of IPv6 rules added
-    pub fn ipv6_rule_count(&self) -> usize {
-        self.v6_builder.len()
-    }
-
     /// Builds the IpRadixMatcher
     ///
     /// Freezes both IPv4 and IPv6 builders into optimized trees.
@@ -261,9 +218,6 @@ mod tests {
     #[test]
     fn test_empty_builder() {
         let builder = IpRadixMatcherBuilder::new();
-        assert_eq!(builder.ipv4_rule_count(), 0);
-        assert_eq!(builder.ipv6_rule_count(), 0);
-
         let result = builder.build();
         assert!(matches!(result, Err(IpRadixError::EmptyTree)));
     }
@@ -275,8 +229,6 @@ mod tests {
         builder.insert("10.0.0.0/8", "g2").unwrap();
 
         let matcher = builder.build().unwrap();
-        assert!(matcher.has_ipv4_rules());
-        assert!(!matcher.has_ipv6_rules());
 
         let ip1: IpAddr = "192.168.1.50".parse().unwrap();
         let ip2: IpAddr = "10.0.0.1".parse().unwrap();
@@ -294,8 +246,6 @@ mod tests {
         builder.insert("fe80::/10", "g2").unwrap();
 
         let matcher = builder.build().unwrap();
-        assert!(!matcher.has_ipv4_rules());
-        assert!(matcher.has_ipv6_rules());
 
         let ip1: IpAddr = "2001:db8::1".parse().unwrap();
         let ip2: IpAddr = "fe80::1".parse().unwrap();
@@ -319,8 +269,6 @@ mod tests {
         builder.insert("fe80::/10", "g2").unwrap();
 
         let matcher = builder.build().unwrap();
-        assert!(matcher.has_ipv4_rules());
-        assert!(matcher.has_ipv6_rules());
 
         // Test IPv4
         let ipv4_1: IpAddr = "192.168.1.50".parse().unwrap();
@@ -382,20 +330,6 @@ mod tests {
         assert_eq!(matcher.matched_group(&mapped_allow), Some("g1"));
         assert_eq!(matcher.matched_group(&mapped_deny), Some("g2"));
         assert_eq!(matcher.matched_group(&mapped_no_match), None);
-    }
-
-    #[test]
-    fn test_stats() {
-        let mut builder = IpRadixMatcher::builder();
-        builder.insert("192.168.0.0/16", "g1").unwrap();
-        builder.insert("2001:db8::/32", "g1").unwrap();
-
-        let matcher = builder.build().unwrap();
-        let stats = matcher.stats();
-
-        assert!(stats.ipv4_node_count > 0);
-        assert!(stats.ipv6_node_count > 0);
-        assert!(stats.total_bytes > 0);
     }
 
     #[test]

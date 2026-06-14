@@ -1560,7 +1560,6 @@ mod edgion_tls_scrub_tests {
                 }),
                 min_tls_version: None,
                 ciphers: None,
-                extend: None,
                 secret: Some(tls_secret(b"LEAF-PRIVATE-KEY")),
                 resolved_listeners: None,
             },

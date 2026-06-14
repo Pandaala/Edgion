@@ -180,13 +180,6 @@ impl<'a> PrefixMatchIter<'a> {
             }
         }
     }
-
-    /// Returns true if the entire path has been consumed and matched.
-    /// This is used to differentiate between exact matches and prefix matches.
-    #[inline]
-    fn is_fully_matched(&self) -> bool {
-        self.finished && self.remaining.is_empty()
-    }
 }
 
 impl FrozenRadixTree {
@@ -513,84 +506,6 @@ impl FrozenRadixTree {
 
         results
     }
-
-    /// Matches a route exactly (no prefix matching).
-    ///
-    /// Unlike `match_route_longest` which matches prefixes, this method only
-    /// returns values if the path matches a registered route exactly.
-    ///
-    /// # Arguments
-    /// * `path` - The path to match
-    ///
-    /// # Returns
-    /// * `Some(&[u32])` - The values if an exact match is found
-    /// * `None` - If no exact match exists
-    ///
-    /// # Example
-    /// ```
-    /// use edgion_resources::matcher::radix_tree::RadixTreeBuilder;
-    ///
-    /// let mut builder = RadixTreeBuilder::new();
-    /// builder.insert("/api/users", 1).unwrap();
-    /// builder.insert("/api/posts", 2).unwrap();
-    ///
-    /// let tree = builder.freeze().unwrap();
-    ///
-    /// // Exact matches
-    /// assert_eq!(tree.match_exact("/api/users"), Some(&[1][..]));
-    /// assert_eq!(tree.match_exact("/api/posts"), Some(&[2][..]));
-    ///
-    /// // No exact match (prefix match would work, but exact doesn't)
-    /// assert_eq!(tree.match_exact("/api/users/123"), None);
-    /// assert_eq!(tree.match_exact("/api"), None);
-    /// assert_eq!(tree.match_exact("/nonexistent"), None);
-    /// ```
-    pub fn match_exact(&self, path: &str) -> Option<&[u32]> {
-        let mut iter = PrefixMatchIter::new(self, path.as_bytes());
-        let mut last_match = None;
-
-        while let Some((node_idx, has_values)) = iter.next_match() {
-            if has_values {
-                last_match = Some(node_idx);
-            }
-        }
-
-        // Only return a match if the entire path was consumed
-        if iter.is_fully_matched() {
-            last_match.map(|idx| self.get_node_values(idx))
-        } else {
-            None
-        }
-    }
-
-    /// Returns statistics about the frozen tree for analysis.
-    pub fn stats(&self) -> TreeStats {
-        TreeStats {
-            node_count: self.nodes.len(),
-            child_entry_count: self.children.len(),
-            string_pool_bytes: self.string_pool.len(),
-            total_bytes: self.nodes.len() * std::mem::size_of::<FlatNode>()
-                + self.children.len() * std::mem::size_of::<ChildEntry>()
-                + self.string_pool.len()
-                + self.values_pool.len() * std::mem::size_of::<u32>(),
-        }
-    }
-}
-
-/// Statistics about a frozen tree.
-#[derive(Debug, Clone, Copy)]
-pub struct TreeStats {
-    /// Number of nodes in the tree
-    pub node_count: usize,
-
-    /// Number of child entries
-    pub child_entry_count: usize,
-
-    /// Bytes used by string pool
-    pub string_pool_bytes: usize,
-
-    /// Total memory usage in bytes
-    pub total_bytes: usize,
 }
 
 /// Statistics for pre-calculating tree size

@@ -106,8 +106,6 @@ fn make_es_link_sys_apikey(ns: &str, name: &str, secret_name: &str) -> LinkSys {
                 pool: None,
                 bulk: None,
                 index: None,
-                failed_cache: None,
-                compatibility: None,
             }),
         },
         status: None,

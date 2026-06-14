@@ -66,15 +66,6 @@ fn classify_v4(ip: Ipv4Addr) -> Option<BlockedBackendReason> {
     }
 }
 
-/// Check if an address is a localhost/loopback address.
-///
-/// Kept for backward compatibility; prefer [`classify_backend_addr`] when you also
-/// need to gate link-local / metadata ranges.
-#[inline]
-pub fn is_localhost(addr: &PingoraSocketAddr) -> bool {
-    matches!(classify_backend_addr(addr), Some(BlockedBackendReason::Localhost))
-}
-
 /// Resolve domain to SocketAddr using async DNS resolution.
 ///
 /// Uses tokio's async DNS resolver to avoid blocking the event loop.
@@ -160,62 +151,6 @@ mod tests {
         // single-colon guard must leave them untouched (not mangle to `2001:db8:`).
         assert_eq!(host_without_port("2001:db8::1"), "2001:db8::1");
         assert_eq!(host_without_port("::1"), "::1");
-    }
-
-    #[test]
-    fn test_is_localhost_ipv4() {
-        // Test IPv4 localhost addresses (127.0.0.0/8)
-        let addr = "127.0.0.1:8080".parse::<PingoraSocketAddr>().unwrap();
-        assert!(is_localhost(&addr), "127.0.0.1 should be detected as localhost");
-
-        let addr = "127.0.0.100:8080".parse::<PingoraSocketAddr>().unwrap();
-        assert!(is_localhost(&addr), "127.0.0.100 should be detected as localhost");
-
-        let addr = "127.255.255.255:8080".parse::<PingoraSocketAddr>().unwrap();
-        assert!(is_localhost(&addr), "127.255.255.255 should be detected as localhost");
-
-        // Test non-localhost IPv4 addresses
-        let addr = "192.168.1.1:8080".parse::<PingoraSocketAddr>().unwrap();
-        assert!(!is_localhost(&addr), "192.168.1.1 should NOT be localhost");
-
-        let addr = "10.0.0.1:8080".parse::<PingoraSocketAddr>().unwrap();
-        assert!(!is_localhost(&addr), "10.0.0.1 should NOT be localhost");
-
-        let addr = "8.8.8.8:8080".parse::<PingoraSocketAddr>().unwrap();
-        assert!(!is_localhost(&addr), "8.8.8.8 should NOT be localhost");
-    }
-
-    #[test]
-    fn test_is_localhost_ipv6() {
-        // Test IPv6 loopback address
-        let addr = "[::1]:8080".parse::<PingoraSocketAddr>().unwrap();
-        assert!(is_localhost(&addr), "::1 should be detected as localhost");
-
-        // Test non-localhost IPv6 addresses
-        let addr = "[2001:db8::1]:8080".parse::<PingoraSocketAddr>().unwrap();
-        assert!(!is_localhost(&addr), "2001:db8::1 should NOT be localhost");
-
-        let addr = "[fe80::1]:8080".parse::<PingoraSocketAddr>().unwrap();
-        assert!(!is_localhost(&addr), "fe80::1 should NOT be localhost");
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn test_is_localhost_unix_socket() {
-        use std::os::unix::net::SocketAddr as StdUnixSockAddr;
-        use std::path::Path;
-
-        // Unix domain sockets should NOT be considered localhost (they're allowed)
-        let path = Path::new("/tmp/test.sock");
-        let unix_addr = StdUnixSockAddr::from_pathname(path).unwrap();
-        let addr = PingoraSocketAddr::Unix(unix_addr);
-
-        assert!(!is_localhost(&addr), "Unix domain socket should NOT be localhost");
-        assert_eq!(
-            classify_backend_addr(&addr),
-            None,
-            "Unix domain socket should be allowed by classify_backend_addr"
-        );
     }
 
     #[test]

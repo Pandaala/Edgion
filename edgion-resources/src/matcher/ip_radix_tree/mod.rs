@@ -113,5 +113,5 @@ pub use builder_v6::IpV6RadixBuilder;
 pub use error::IpRadixError;
 pub use frozen_v4::FrozenIpV4RadixTree;
 pub use frozen_v6::FrozenIpV6RadixTree;
-pub use matcher::{IpRadixMatcher, IpRadixMatcherBuilder, MatcherStats};
+pub use matcher::{IpRadixMatcher, IpRadixMatcherBuilder};
 pub use types::IpCidr;

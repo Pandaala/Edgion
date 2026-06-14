@@ -293,8 +293,6 @@ mod tests {
             pool: None,
             bulk: None,
             index: None,
-            failed_cache: None,
-            compatibility: None,
         }
     }
 

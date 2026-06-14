@@ -28,7 +28,6 @@ fn create_test_tls(cert_pem: Option<&str>, key_pem: Option<&str>, hosts: Vec<Str
             client_auth: None,
             min_tls_version: None,
             ciphers: None,
-            extend: None,
             secret: Some(Secret {
                 data: Some(data),
                 ..Default::default()
@@ -627,41 +626,6 @@ fn test_deprecated_min_tls_version_is_not_rejected() {
     assert!(
         result.is_valid,
         "deprecated min_tls_version (TLS 1.0) must not be rejected, got: {:?}",
-        result.errors
-    );
-}
-
-#[test]
-fn test_unimplemented_revocation_config_is_not_rejected() {
-    use edgion_resources::resources::edgion_tls::{
-        EdgionTlsExtend, OcspStaplingConfig, RevocationCheckConfig, RevocationMode,
-    };
-
-    // tls-07 divergence: revocationCheck/ocspStapling are reserved-but-unimplemented
-    // schema. Setting them must NOT invalidate the resource (validate_cert is now
-    // pure; the advisory warn is emitted by a gateway-side caller helper).
-    let (cert_pem, key_pem) = make_cert_with_validity(-1, 365);
-    let mut tls = create_test_tls(Some(&cert_pem), Some(&key_pem), vec!["example.com".to_string()]);
-    tls.spec.extend = Some(EdgionTlsExtend {
-        prefer_server_ciphers: false,
-        ocsp_stapling: Some(OcspStaplingConfig {
-            enabled: true,
-            refresh_interval_seconds: None,
-            fail_open: false,
-        }),
-        session_ticket: None,
-        session_cache: None,
-        revocation_check: Some(RevocationCheckConfig {
-            mode: RevocationMode::Ocsp,
-            fail_open: false,
-        }),
-        early_data: None,
-    });
-
-    let result = validate_cert(&tls);
-    assert!(
-        result.is_valid,
-        "unimplemented revocationCheck/ocspStapling must not be rejected, got: {:?}",
         result.errors
     );
 }

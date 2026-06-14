@@ -454,7 +454,11 @@ mod tests {
 
         // Empty store resets to the disabled default.
         handler.full_set(&HashMap::new());
-        assert_eq!(get_lb_panic_default(), 0, "no load_balancing config must reset to disabled");
+        assert_eq!(
+            get_lb_panic_default(),
+            0,
+            "no load_balancing config must reset to disabled"
+        );
 
         configure_lb_panic_default(0);
     }
@@ -479,7 +483,11 @@ mod tests {
         data.insert("good".to_string(), Arc::new(good));
         data.insert("bad".to_string(), Arc::new(bad));
         handler.full_set(&data);
-        assert_eq!(get_lb_panic_default(), 70, "out-of-range threshold must not poison the max");
+        assert_eq!(
+            get_lb_panic_default(),
+            70,
+            "out-of-range threshold must not poison the max"
+        );
 
         configure_lb_panic_default(0);
     }

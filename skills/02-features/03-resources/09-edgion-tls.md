@@ -1,6 +1,6 @@
 ---
 name: edgion-tls-features
-description: Full EdgionTls CRD schema: mTLS mutual authentication, TLS version control, cipher suites, OCSP, session management.
+description: Full EdgionTls CRD schema: mTLS mutual authentication, TLS version control, cipher suites.
 ---
 
 # EdgionTls Resource
@@ -48,32 +48,6 @@ spec:
   ciphers:                                         # OpenSSL-format cipher suite list
     - "ECDHE-ECDSA-AES256-GCM-SHA384"
     - "ECDHE-RSA-AES256-GCM-SHA384"
-
-  extend:                                          # Extended/experimental TLS configuration
-    preferServerCiphers: true                      # Prefer the server-side cipher suite order
-
-    ocspStapling:                                  # OCSP Stapling
-      enabled: true
-      refreshIntervalSeconds: 3600
-      failOpen: false
-
-    sessionTicket:                                 # Session Ticket
-      enabled: true
-      lifetimeSeconds: 7200
-      rotationIntervalSeconds: 3600
-
-    sessionCache:                                  # Session Cache
-      enabled: true
-      maxEntries: 10000
-      ttlSeconds: 3600
-
-    revocationCheck:                               # Certificate revocation check
-      mode: ocsp                                   # off | ocsp | crl
-      failOpen: false
-
-    earlyData:                                     # TLS 1.3 0-RTT
-      enabled: false
-      rejectOnReplay: true
 ```
 
 ## spec Field Details
@@ -86,7 +60,7 @@ spec:
 | `hosts` | `Vec<String>` | Yes | List of applicable hostnames |
 | `secretRef` | `SecretObjectReference` | Yes | TLS certificate Secret reference |
 | `minTlsVersion` | `TlsVersion?` | No | Minimum TLS version |
-| `ciphers` | `Vec<String>?` | No | OpenSSL-format cipher suites |
+| `ciphers` | `Vec<String>?` | No | OpenSSL-format cipher suites (BoringSSL default when omitted) |
 
 ### TlsVersion Enum
 
@@ -115,46 +89,6 @@ spec:
 | `Mutual` | Mutual TLS: a valid client certificate must be provided |
 | `OptionalMutual` | Optional mutual TLS: the client certificate is optional but verified when provided |
 
-### extend — Extended TLS Configuration
-
-#### ocspStapling
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | `bool` | `false` | Enable OCSP Stapling |
-| `refreshIntervalSeconds` | `u64?` | — | OCSP response refresh interval |
-| `failOpen` | `bool` | `false` | Whether to allow when OCSP is unavailable |
-
-#### sessionTicket
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | `bool` | `false` | Enable Session Ticket |
-| `lifetimeSeconds` | `u64?` | — | Ticket lifetime |
-| `rotationIntervalSeconds` | `u64?` | — | Key rotation interval |
-
-#### sessionCache
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | `bool` | `false` | Enable Session Cache |
-| `maxEntries` | `u64?` | — | Maximum cache entries |
-| `ttlSeconds` | `u64?` | — | Entry TTL |
-
-#### revocationCheck
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `mode` | `RevocationMode` | `Off` | `Off` / `Ocsp` / `Crl` |
-| `failOpen` | `bool` | `false` | Allow when revocation data is unavailable |
-
-#### earlyData (TLS 1.3 0-RTT)
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | `bool` | `false` | Enable 0-RTT |
-| `rejectOnReplay` | `bool` | `false` | Reject when replay is detected |
-
 ## Relationship to Gateway TLS
 
 | Feature | Gateway `tls` | EdgionTls |
@@ -163,7 +97,5 @@ spec:
 | mTLS client authentication | ❌ | ✅ clientAuth |
 | TLS version control | ❌ | ✅ minTlsVersion |
 | Cipher suite control | ❌ | ✅ ciphers |
-| OCSP Stapling | ❌ | ✅ extend.ocspStapling |
-| Session management | ❌ | ✅ extend.sessionTicket/sessionCache |
 
 When using EdgionTls, set `tls.options.edgion.io/cert-provider: "edgion-tls"` on the Gateway Listener.

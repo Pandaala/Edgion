@@ -40,14 +40,6 @@ pub struct ElasticsearchClientConfig {
     /// Index naming configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<EsIndex>,
-
-    /// Failed cache configuration (for when ES is unavailable)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failed_cache: Option<EsFailedCache>,
-
-    /// Compatibility settings (ES vs OpenSearch)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compatibility: Option<EsCompatibility>,
 }
 
 /// Elasticsearch authentication configuration.
@@ -149,74 +141,6 @@ pub struct EsIndex {
     pub date_pattern: Option<String>,
 }
 
-/// Elasticsearch failed cache configuration.
-/// Defines where to buffer logs when ES is unavailable.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EsFailedCache {
-    /// Cache type: "localFile" or "redis"
-    #[serde(rename = "type")]
-    pub cache_type: EsFailedCacheType,
-
-    /// Local file cache configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub local_file: Option<EsFailedCacheLocalFile>,
-
-    /// Redis cache configuration
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub redis: Option<EsFailedCacheRedis>,
-}
-
-/// Failed cache type
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub enum EsFailedCacheType {
-    LocalFile,
-    Redis,
-}
-
-/// Local file failed cache configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EsFailedCacheLocalFile {
-    /// Directory path for failed cache files
-    pub path: String,
-}
-
-/// Redis-based failed cache configuration
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EsFailedCacheRedis {
-    /// Reference to a Redis LinkSys ("namespace/name")
-    pub link_sys_ref: String,
-
-    /// Redis list key for failed logs
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub list_key: Option<String>,
-
-    /// Maximum entries in Redis list
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max_entries: Option<u64>,
-}
-
-/// Elasticsearch compatibility settings
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct EsCompatibility {
-    /// Vendor: "elasticsearch" (default) or "opensearch"
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub vendor: Option<EsVendor>,
-}
-
-/// Elasticsearch vendor type
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
-#[serde(rename_all = "lowercase")]
-pub enum EsVendor {
-    Elasticsearch,
-    #[serde(alias = "opensearch")]
-    OpenSearch,
-}
-
 // ============================================================================
 // Default helpers (for tests)
 // ============================================================================
@@ -231,8 +155,6 @@ impl Default for ElasticsearchClientConfig {
             pool: None,
             bulk: None,
             index: None,
-            failed_cache: None,
-            compatibility: None,
         }
     }
 }
@@ -285,8 +207,6 @@ bulk:
 index:
   prefix: "edgion-logs"
   datePattern: "%Y.%m.%d"
-compatibility:
-  vendor: elasticsearch
 "#;
         let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(config.endpoints.len(), 2);
@@ -339,35 +259,6 @@ auth:
             }
             _ => panic!("Expected Bearer auth"),
         }
-    }
-
-    #[test]
-    fn test_serde_failed_cache_local() {
-        let yaml = r#"
-endpoints:
-  - "http://localhost:9200"
-failedCache:
-  type: localFile
-  localFile:
-    path: "/var/log/edgion/es-failed"
-"#;
-        let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
-        let fc = config.failed_cache.unwrap();
-        assert_eq!(fc.cache_type, EsFailedCacheType::LocalFile);
-        assert_eq!(fc.local_file.unwrap().path, "/var/log/edgion/es-failed");
-    }
-
-    #[test]
-    fn test_serde_opensearch_compat() {
-        let yaml = r#"
-endpoints:
-  - "https://opensearch:9200"
-compatibility:
-  vendor: opensearch
-"#;
-        let config: ElasticsearchClientConfig = serde_yaml::from_str(yaml).unwrap();
-        let compat = config.compatibility.unwrap();
-        assert_eq!(compat.vendor, Some(EsVendor::OpenSearch));
     }
 
     #[test]

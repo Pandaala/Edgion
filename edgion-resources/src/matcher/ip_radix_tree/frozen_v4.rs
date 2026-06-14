@@ -137,24 +137,6 @@ impl FrozenIpV4RadixTree {
     pub fn node_count(&self) -> usize {
         self.nodes.len()
     }
-
-    /// Returns statistics about the frozen tree
-    pub fn stats(&self) -> TreeStats {
-        TreeStats {
-            node_count: self.nodes.len(),
-            total_bytes: self.nodes.len() * std::mem::size_of::<FlatIpV4Node>(),
-        }
-    }
-}
-
-/// Statistics about a frozen tree
-#[derive(Debug, Clone, Copy)]
-pub struct TreeStats {
-    /// Number of nodes in the tree
-    pub node_count: usize,
-
-    /// Total memory usage in bytes
-    pub total_bytes: usize,
 }
 
 /// Recursively count nodes in the build tree

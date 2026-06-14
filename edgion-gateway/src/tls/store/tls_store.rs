@@ -58,21 +58,10 @@ fn warn_edgion_tls_collision(host: &str, listener_key: &ListenerKey, tls_list: &
 /// Kept gateway-side so they fire once per apply here (not also on the controller).
 /// Never on the handshake hot path.
 fn warn_cert_advisories(key: &str, tls: &EdgionTls) {
-    use edgion_resources::resources::edgion_tls::{RevocationMode, TlsVersion};
+    use edgion_resources::resources::edgion_tls::TlsVersion;
     if let Some(v @ (TlsVersion::Tls10 | TlsVersion::Tls11)) = tls.spec.min_tls_version {
         tracing::warn!(component = "tls_store", key = %key, version = ?v,
             "EdgionTls min_tls_version is deprecated by RFC 8996; consider TLS 1.2+");
-    }
-    if let Some(extend) = &tls.spec.extend {
-        let revocation = extend
-            .revocation_check
-            .as_ref()
-            .is_some_and(|rc| rc.mode != RevocationMode::Off);
-        let stapling = extend.ocsp_stapling.as_ref().is_some_and(|s| s.enabled);
-        if revocation || stapling {
-            tracing::warn!(component = "tls_store", key = %key,
-                "EdgionTls revocationCheck/ocspStapling is configured but NOT implemented");
-        }
     }
 }
 
@@ -507,7 +496,6 @@ mod tests {
                 client_auth: None,
                 min_tls_version: None,
                 ciphers: None,
-                extend: None,
                 secret: None,
                 resolved_listeners: None,
             },
@@ -561,7 +549,6 @@ mod tests {
                 client_auth: None,
                 min_tls_version: None,
                 ciphers: None,
-                extend: None,
                 secret: Some(Secret {
                     data: Some(data),
                     ..Default::default()
@@ -607,7 +594,6 @@ mod tests {
                 client_auth: None,
                 min_tls_version: None,
                 ciphers: None,
-                extend: None,
                 secret: Some(Secret {
                     data: Some(data),
                     ..Default::default()

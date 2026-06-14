@@ -10,8 +10,8 @@ use std::sync::Arc;
 
 use super::common::{ParentReference, RefDenied};
 use super::http_route::{
-    BackendObjectReference, Fraction, HTTPHeader, LocalObjectReference, ParsedRouteRetry,
-    ParsedRouteTimeouts as HttpParsedRouteTimeouts, RouteTimeout as HttpRouteTimeout, SessionPersistence,
+    HTTPHeader, LocalObjectReference, ParsedRouteRetry, ParsedRouteTimeouts as HttpParsedRouteTimeouts,
+    RouteTimeout as HttpRouteTimeout, SessionPersistence,
 };
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
@@ -260,10 +260,6 @@ pub struct GRPCRouteFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_header_modifier: Option<GRPCHeaderFilter>,
 
-    /// RequestMirror defines a schema for a filter that mirrors requests
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_mirror: Option<GRPCRequestMirrorFilter>,
-
     /// ExtensionRef is an optional, implementation-specific extension to the "filter" behavior
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension_ref: Option<LocalObjectReference>,
@@ -276,8 +272,6 @@ pub enum GRPCRouteFilterType {
     RequestHeaderModifier,
     /// ResponseHeaderModifier can be used to add or remove a gRPC header from a gRPC response
     ResponseHeaderModifier,
-    /// RequestMirror can be used to mirror gRPC requests to a different backend
-    RequestMirror,
     /// ExtensionRef is used for configuring custom gRPC plugins
     ExtensionRef,
 }
@@ -297,19 +291,6 @@ pub struct GRPCHeaderFilter {
     /// Remove the given header(s) from the gRPC request before forwarding
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub remove: Option<Vec<String>>,
-}
-
-/// GRPCRequestMirrorFilter defines configuration for the RequestMirror filter
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct GRPCRequestMirrorFilter {
-    /// BackendRef references a resource where mirrored requests are sent
-    pub backend_ref: BackendObjectReference,
-
-    /// Fraction represents the fraction of requests that should be mirrored to BackendRef
-    /// Support: Extended
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fraction: Option<Fraction>,
 }
 
 /// GRPCRouteTimeouts defines timeouts that can be configured for a GRPCRoute

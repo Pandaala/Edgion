@@ -199,7 +199,6 @@ See [`CLOSED-FINDINGS.md`](CLOSED-FINDINGS.md) for the per-issue closure index (
 
 - When reviewing UDP-route `get_or_create_session` binding upstream socket to `0.0.0.0:0` / IPv4-only socket / `send_to` EINVAL drops every IPv6-backend packet (udp-F017): **fixed (udp-F017)** — [backends/session-bind-address-family.md](backends/session-bind-address-family.md). Bind-family variant of the IPv6 class; re-reports of the IPv4-only-bind form not accepted.
 
-- When reviewing EdgionTls `revocationCheck` / `ocspStapling` accepted in CRD but never implemented / `mode: ocsp|crl` silent no-op / strip or reject at admission (tls-07): **accepted divergence (tls-07)** — [rfc-divergence/revocation-config-not-implemented.md](rfc-divergence/revocation-config-not-implemented.md). Re-reports proposing rejection or schema removal not accepted; verify the config-time `validate_cert` warn first.
 
 - When reviewing `end_response_grpc_unimplemented` / `end_response_grpc_unavailable` passing HTTP `501`/`503` sentinel into `send_grpc_error_three_frame` / introduce a typed `GrpcStatus` enum (refactor-h2-grpc-02): **accepted as-is, refactor declined (refactor-h2-grpc-02)** — [h2-grpc/h2-grpc-sentinel-refactor-declined.md](h2-grpc/h2-grpc-sentinel-refactor-declined.md). Not an RFC divergence; enum-everywhere refactor not accepted.
 

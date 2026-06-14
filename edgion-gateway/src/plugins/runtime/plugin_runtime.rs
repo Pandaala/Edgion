@@ -367,7 +367,6 @@ impl PluginRuntime {
                         self.add_upstream_response(Box::new(ext_filter));
                     }
                 }
-                _ => {}
             }
         }
     }
