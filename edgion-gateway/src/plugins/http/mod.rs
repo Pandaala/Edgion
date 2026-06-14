@@ -12,6 +12,7 @@ pub mod direct_endpoint;
 pub mod dsl;
 pub mod dynamic_external_upstream;
 pub mod dynamic_internal_upstream;
+pub mod ext_proc;
 pub mod fault_injection;
 pub mod forward_auth;
 pub mod header_cert_auth;

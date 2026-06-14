@@ -446,6 +446,17 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         }
     }
 
+    fn response_headers(&self) -> Vec<(String, String)> {
+        match &self.response_header {
+            Some(resp) => resp
+                .headers
+                .iter()
+                .filter_map(|(name, value)| value.to_str().ok().map(|v| (name.as_str().to_string(), v.to_string())))
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
     fn get_response_header(&self, name: &str) -> Option<String> {
         self.response_header
             .as_ref()

@@ -42,7 +42,7 @@ struct StageSet {
 ///
 /// This mirrors `edgion-gateway`'s `create_*_from_edgion` stage gating: a
 /// variant that those functions answer with `WrongStage` is `false` here. The
-/// `upstream_response` stage currently accepts no plugins.
+/// `upstream_response` (async) stage currently accepts only `ExtProc`.
 fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
     use EdgionPlugin::*;
     // Tuple order: (request, upstreamResponseFilter, upstreamResponseBodyFilter, upstreamResponse)
@@ -53,6 +53,8 @@ fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
         BandwidthLimit(_) => (false, false, true, false),
         // DSL runs in both the request and the upstream-response-filter stages.
         Dsl(_) => (true, true, false, false),
+        // ExtProc runs in the request stage and the async upstream-response stage.
+        ExtProc(_) => (true, false, false, true),
         // Everything else is request-stage-only.
         RequestHeaderModifier(_)
         | RequestRedirect(_)

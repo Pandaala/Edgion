@@ -9,6 +9,7 @@ mod direct_endpoint;
 pub mod dsl;
 mod dynamic_external_upstream;
 mod dynamic_internal_upstream;
+mod ext_proc;
 mod fault_injection;
 mod forward_auth;
 mod header_cert_auth;
@@ -50,6 +51,7 @@ pub use dynamic_internal_upstream::{
     DynUpstreamExtract, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch, DynUpstreamRule,
     DynUpstreamTarget, DynamicInternalUpstreamConfig,
 };
+pub use ext_proc::{BodySendMode, ExtProcConfig, GrpcServiceConfig, HeaderSendMode, ProcessingMode};
 pub use fault_injection::{
     AbortConfig, DelayConfig, FaultHeaderEntry, FaultInjectionConfig, MAX_DELAY_MS as FAULT_MAX_DELAY_MS,
 };

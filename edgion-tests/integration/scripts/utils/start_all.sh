@@ -212,6 +212,7 @@ start_test_server() {
         --tcp-port 30010 \
         --udp-port 30011 \
         --auth-port 30040 \
+        --ext-proc-port 30041 \
         --log-level info \
         > "${LOG_DIR}/test_server.log" 2>&1 &
     

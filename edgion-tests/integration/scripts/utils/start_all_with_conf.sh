@@ -353,6 +353,7 @@ start_test_server() {
         --udp-port 30011 \
         --tcp-pp2-port 30012 \
         --auth-port 30040 \
+        --ext-proc-port 30041 \
         --h2-trailer-malformed-port 30025 \
         --log-level info \
         $https_backend_args \

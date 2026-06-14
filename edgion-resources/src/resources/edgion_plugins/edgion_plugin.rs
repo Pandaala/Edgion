@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
-    DynamicInternalUpstreamConfig, FaultInjectionConfig, ForwardAuthConfig, HeaderCertAuthConfig, HmacAuthConfig,
-    IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
+    DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig, ForwardAuthConfig, HeaderCertAuthConfig,
+    HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
     OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
     RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig,
 };
@@ -98,6 +98,8 @@ pub enum EdgionPlugin {
     RegionRoute(RegionRouteConfig),
     /// TraceContext filter (W3C trace-context propagation)
     TraceContext(TraceContextConfig),
+    /// ExtProc filter (external processing over a bidirectional gRPC stream)
+    ExtProc(ExtProcConfig),
     // TODO: Add more custom Edgion plugins here (no `Edgion` prefix on the variant name)
     // CircuitBreaker(CircuitBreakerConfig),
     // Waf(WafConfig),
@@ -145,6 +147,7 @@ impl EdgionPlugin {
             EdgionPlugin::Dsl(_) => "Dsl",
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
             EdgionPlugin::TraceContext(_) => "TraceContext",
+            EdgionPlugin::ExtProc(_) => "ExtProc",
         }
     }
 
@@ -198,6 +201,7 @@ impl EdgionPlugin {
             EdgionPlugin::JwtAuth(c) => c.validation_error(),
             EdgionPlugin::DebugAccessLogToHeader(c) => c.validation_error(),
             EdgionPlugin::TraceContext(c) => c.validation_error(),
+            EdgionPlugin::ExtProc(c) => c.validation_error(),
 
             // Bucket 8 — Gateway API filter variants (foreign types, no trait impl)
             EdgionPlugin::RequestHeaderModifier(_)

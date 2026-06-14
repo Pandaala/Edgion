@@ -13,5 +13,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .file_descriptor_set_path(out_dir.join("config_sync_descriptor.bin"))
         .compile_protos(&[format!("{}/config_sync.proto", proto_dir)], &[proto_dir])?;
 
+    // ext_proc: Gateway -> external processing service (Envoy-compatible).
+    // The gateway only uses the client; the server stub is generated too so the
+    // integration test harness can stand up a fake processor.
+    let ext_proc_dir = "src/ext_proc/proto";
+    tonic_build::configure()
+        .file_descriptor_set_path(out_dir.join("ext_proc_descriptor.bin"))
+        .compile_protos(&[format!("{}/ext_proc.proto", ext_proc_dir)], &[ext_proc_dir])?;
+
     Ok(())
 }

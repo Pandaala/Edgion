@@ -40,6 +40,7 @@ use crate::plugins::http::direct_endpoint::DirectEndpoint;
 use crate::plugins::http::dsl::plugin::DslPlugin;
 use crate::plugins::http::dynamic_external_upstream::DynamicExternalUpstream;
 use crate::plugins::http::dynamic_internal_upstream::DynamicInternalUpstream;
+use crate::plugins::http::ext_proc::ExtProc;
 use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::forward_auth::ForwardAuth;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
@@ -293,7 +294,8 @@ impl PluginRuntime {
                         }
                         self.add_request_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_filter(Box::new(ext_filter.clone()));
-                        self.add_upstream_response_body_filter(Box::new(ext_filter));
+                        self.add_upstream_response_body_filter(Box::new(ext_filter.clone()));
+                        self.add_upstream_response(Box::new(ext_filter));
                     }
                 }
             }
@@ -361,7 +363,8 @@ impl PluginRuntime {
                         }
                         self.add_request_filter(Box::new(ext_filter.clone()));
                         self.add_upstream_response_filter(Box::new(ext_filter.clone()));
-                        self.add_upstream_response_body_filter(Box::new(ext_filter));
+                        self.add_upstream_response_body_filter(Box::new(ext_filter.clone()));
+                        self.add_upstream_response(Box::new(ext_filter));
                     }
                 }
                 _ => {}
@@ -787,6 +790,7 @@ impl PluginRuntime {
             }
             EdgionPlugin::RealIp(config) => CreateResult::Ok(Some(RealIp::create(config))),
             EdgionPlugin::TraceContext(config) => CreateResult::Ok(Some(TraceContext::create(config))),
+            EdgionPlugin::ExtProc(config) => CreateResult::Ok(ExtProc::create_request(config)),
             EdgionPlugin::ForwardAuth(config) => CreateResult::Ok(Some(Box::new(ForwardAuth::new(config)))),
             EdgionPlugin::AllEndpointStatus(config) => CreateResult::Ok(Some(Box::new(AllEndpointStatus::new(config)))),
             EdgionPlugin::OpenidConnect(config) => {
@@ -847,17 +851,21 @@ impl PluginRuntime {
             | EdgionPlugin::DynamicInternalUpstream(_)
             | EdgionPlugin::DynamicExternalUpstream(_)
             | EdgionPlugin::FaultInjection(_)
+            | EdgionPlugin::ExtProc(_)
             | EdgionPlugin::RegionRoute(_) => CreateResult::WrongStage,
         }
     }
 
     /// Create an UpstreamResponse instance from EdgionPlugin enum
     fn create_upstream_response_from_edgion(
-        _plugin: &EdgionPlugin,
+        plugin: &EdgionPlugin,
         _namespace: &str,
     ) -> CreateResult<Box<dyn UpstreamResponse>> {
-        // Currently no plugins for this stage — every variant is therefore a stage mismatch.
-        CreateResult::WrongStage
+        match plugin {
+            EdgionPlugin::ExtProc(config) => CreateResult::Ok(ExtProc::create_response(config)),
+            // Every other variant belongs to a different stage.
+            _ => CreateResult::WrongStage,
+        }
     }
 
     /// Create an UpstreamResponseBodyFilter instance from EdgionPlugin enum
@@ -900,6 +908,7 @@ impl PluginRuntime {
             | EdgionPlugin::DynamicInternalUpstream(_)
             | EdgionPlugin::DynamicExternalUpstream(_)
             | EdgionPlugin::FaultInjection(_)
+            | EdgionPlugin::ExtProc(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
         }
@@ -943,6 +952,7 @@ impl PluginRuntime {
             EdgionPlugin::RequestMirror(_) => "RequestMirror",
             EdgionPlugin::Dsl(_) => "Dsl",
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
+            EdgionPlugin::ExtProc(_) => "ExtProc",
         }
     }
 
@@ -1055,13 +1065,14 @@ impl PluginRuntime {
                         let _ = resp.insert_header("content-type", "text/plain");
                         let body_bytes = body.map(bytes::Bytes::from);
                         let len = body_bytes.as_ref().map(|b| b.len()).unwrap_or(0);
-                        let _ = resp.insert_header("content-length", len.to_string());
-                        // Apply queued ops AFTER defaults so plugin-set values
-                        // (e.g. Mock's Content-Type) override the runtime defaults.
-                        // Plugins must not queue Content-Length: the runtime computes
-                        // it from `body` above, and a queued Set("Content-Length", ...)
-                        // would silently desync framing from the actual body length.
+                        // Apply queued ops first so plugin-set values (e.g. Mock's
+                        // Content-Type) override the runtime defaults, THEN re-assert
+                        // framing so a queued Content-Length / Transfer-Encoding (now
+                        // reachable via an ext_proc ImmediateResponse's header mutation)
+                        // cannot desync the wire from the actual body length.
                         session_adapter.drain_pending_response_header_ops(&mut resp);
+                        let _ = resp.remove_header(&http::header::TRANSFER_ENCODING);
+                        let _ = resp.insert_header("content-length", len.to_string());
 
                         let _ = session_adapter
                             .write_response_header(Box::new(resp), body_bytes.is_none())

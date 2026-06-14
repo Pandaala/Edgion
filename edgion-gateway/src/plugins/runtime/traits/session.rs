@@ -99,6 +99,15 @@ pub trait PluginSession: Send + Sync {
         Vec::new()
     }
 
+    /// Get all response header (name, value) pairs, including duplicates.
+    ///
+    /// Unlike `response_header_names()` + `get_response_header()` (which yields
+    /// each name once and only its first value), this preserves multi-valued
+    /// headers such as `Set-Cookie`. Default returns empty.
+    fn response_headers(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
+
     /// Get the response status code (available in upstream_response_filter stage)
     /// Returns None if response has not been received yet (request stage)
     fn get_response_status(&self) -> Option<u16>;

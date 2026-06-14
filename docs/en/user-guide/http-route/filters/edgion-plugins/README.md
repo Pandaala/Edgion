@@ -15,6 +15,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [dsl/README.md](dsl/README.md) | DSL scripting engine |
 | [dynamic-upstream.md](dynamic-upstream.md) | Dynamic upstream selection |
 | [forward-auth.md](forward-auth.md) | External authentication delegation |
+| [ext-proc.md](ext-proc.md) | External processing over gRPC (Envoy ext_proc compatible) |
 | [header-cert-auth.md](header-cert-auth.md) | Header/certificate authentication |
 | [hmac-auth.md](hmac-auth.md) | HMAC signature verification |
 | [ip-restriction.md](ip-restriction.md) | IP allowlist/denylist |

@@ -971,6 +971,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
                     run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
                     run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
+                    run_test "EdgionPlugins_ExtProc" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ExtProc" || test_failed=true
                     run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
                     run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
                     run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true
@@ -1152,6 +1153,7 @@ run_all_tests() {
         run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
         run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
         run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
+        run_test "EdgionPlugins_ExtProc" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ExtProc" || test_failed=true
         run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
         run_test "EdgionPlugins_BandwidthLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i BandwidthLimit" || test_failed=true
         run_test "EdgionPlugins_DirectEndpoint" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DirectEndpoint" || test_failed=true

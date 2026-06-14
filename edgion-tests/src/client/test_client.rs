@@ -165,6 +165,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "header-cert-auth" | "headercertauth" => "EdgionPlugins/HeaderCertAuth".to_string(),
             "ldap-auth" | "ldapauth" => "EdgionPlugins/LdapAuth".to_string(),
             "forward-auth" | "forwardauth" => "EdgionPlugins/ForwardAuth".to_string(),
+            "ext-proc" | "extproc" => "EdgionPlugins/ExtProc".to_string(),
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "rate-limit-redis" | "ratelimitredis" | "rlr" => "EdgionPlugins/RateLimitRedis".to_string(),
@@ -299,6 +300,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
         "EdgionPlugins/FaultInjection" => "EdgionPlugins",
         "EdgionPlugins/ForwardAuth" => "EdgionPlugins",
+        "EdgionPlugins/ExtProc" => "EdgionPlugins",
         "EdgionPlugins/DirectEndpoint" => "EdgionPlugins",
         "EdgionPlugins/DynamicInternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
@@ -1050,6 +1052,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::ForwardAuthTestSuite));
+        }
+        "EdgionPlugins/ExtProc" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/ExtProc tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::ExtProcTestSuite));
         }
         "EdgionPlugins/DirectEndpoint" => {
             if !gateway {

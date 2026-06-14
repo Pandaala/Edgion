@@ -15,6 +15,7 @@ Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
 | [dsl/README.md](dsl/README.md) | DSL 脚本引擎 |
 | [dynamic-upstream.md](dynamic-upstream.md) | 动态上游选择 |
 | [forward-auth.md](forward-auth.md) | 外部认证委托 |
+| [ext-proc.md](ext-proc.md) | 经 gRPC 的外部处理（兼容 Envoy ext_proc） |
 | [header-cert-auth.md](header-cert-auth.md) | 请求头/证书认证 |
 | [hmac-auth.md](hmac-auth.md) | HMAC 签名验证 |
 | [ip-restriction.md](ip-restriction.md) | IP 黑白名单 |

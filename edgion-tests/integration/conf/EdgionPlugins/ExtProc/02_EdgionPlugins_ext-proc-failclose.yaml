@@ -1,0 +1,19 @@
+# ExtProc fail-close test: the processor target points at a dead port (nothing
+# listens on 30099), so the gRPC exchange fails. With failureModeAllow=false the
+# request is short-circuited with a 500.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-failclose
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30099"
+          timeoutMs: 500
+        processingMode:
+          requestHeaderMode: SEND
+        failureModeAllow: false

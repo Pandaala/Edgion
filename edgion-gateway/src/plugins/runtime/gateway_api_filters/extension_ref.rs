@@ -12,7 +12,7 @@ use crate::plugins::http::get_global_plugin_store;
 use crate::plugins::runtime::log::EdgionPluginsLogToken;
 use crate::plugins::runtime::log::PluginLog;
 use crate::plugins::runtime::traits::{
-    PluginSession, RequestFilter, UpstreamResponseBodyFilter, UpstreamResponseFilter,
+    PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
 use crate::plugins::runtime::PluginRuntime;
 use edgion_resources::filters::{PluginRunningResult, PluginRunningStage};
@@ -210,10 +210,23 @@ impl ExtensionRefFilter {
             // Unreachable: prepare_execution never returns Ok(None); see its doc comment.
             Ok(None) => return PluginRunningResult::GoodNext,
             Err(_) => {
-                // Without writing a response here, ErrTerminateRequest would surface
-                // as a naked 502 (no plugin name in access log, no body) — practically
-                // impossible to triage. Write a 500 + JSON body so the terminated
-                // request is diagnosable from the client side too.
+                // Response stage: a direct write + ErrTerminateRequest would be
+                // forwarded over by the upstream response (the response runner only
+                // aborts on an ErrResponse local-reply, not on ErrTerminateRequest).
+                // Return ErrResponse so `check_response_stage_terminate` builds the
+                // single replacement reply. (Normally unreachable here because
+                // `run_upstream_response` pre-resolves; this guards the TOCTOU window
+                // where the ref vanishes between the two lookups.)
+                if matches!(stage, PluginRunningStage::UpstreamResponse) {
+                    return PluginRunningResult::ErrResponse {
+                        status: 500,
+                        body: None,
+                    };
+                }
+                // Request stage: without writing a response here, ErrTerminateRequest
+                // would surface as a naked 502 (no plugin name in access log, no body)
+                // — practically impossible to triage. Write a 500 + JSON body so the
+                // terminated request is diagnosable from the client side too.
                 write_extension_ref_error_response(session).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
@@ -323,6 +336,43 @@ impl UpstreamResponseBodyFilter for ExtensionRefFilter {
         session: &mut dyn PluginSession,
     ) -> Option<std::time::Duration> {
         self.run_extension_body(body, end_of_stream, session)
+    }
+}
+
+#[async_trait]
+impl UpstreamResponse for ExtensionRefFilter {
+    fn name(&self) -> &str {
+        "ExtensionRef"
+    }
+
+    async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
+        // Resolve silently first. The async UpstreamResponse stage is rare, so
+        // most referenced bundles have zero async plugins; returning early here
+        // avoids the per-response log-token + empty-bundle-log overhead that
+        // every ExtensionRef route would otherwise pay. A dangling/unsupported
+        // ref maps to `ErrResponse` (NOT a direct write): in the response stage
+        // the runner only honors `ErrResponse` as a local-reply short-circuit,
+        // so a direct write would be forwarded over by the upstream response.
+        match self.resolve_runtime_silent(session) {
+            Some(rt) if rt.upstream_response_async_plugins_count() > 0 => {
+                self.run_extension_async(PluginRunningStage::UpstreamResponse, session, log)
+                    .await
+            }
+            // Tag the log entry as a reference so the access log records it
+            // consistently with the other stages (the runner uses `refer_to` to
+            // identify ExtensionRef entries and skip a misleading time_cost).
+            Some(_) => {
+                log.set_refer_to(self.ext_ref.name.clone());
+                PluginRunningResult::GoodNext
+            }
+            None => {
+                log.set_refer_to(self.ext_ref.name.clone());
+                PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: None,
+                }
+            }
+        }
     }
 }
 

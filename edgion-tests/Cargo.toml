@@ -50,6 +50,9 @@ path = "src/build_test_proto.rs"
 edgion-resources.workspace = true
 edgion-controller.workspace = true
 edgion-cli.workspace = true
+# `edgion-common` provides the generated ext_proc proto types/server stub used by
+# the fake external-processor in the test server.
+edgion-common.workspace = true
 
 # Async runtime / error handling
 tokio.workspace = true

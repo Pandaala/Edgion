@@ -1,0 +1,29 @@
+# ExtProc + ForwardAuth coexistence: both external-call plugins on the same
+# request chain, in order. ForwardAuth (auth server 30040) validates first; then
+# ext_proc (30041) adds its request header. Proves the two plugins coexist and
+# both apply (backend should see X-User-ID from ForwardAuth AND x-ext-proc-req
+# from ExtProc).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-coexist
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        uri: "http://127.0.0.1:30040/verify"
+        requestMethod: GET
+        timeoutMs: 5000
+        upstreamHeaders:
+          - X-User-ID
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+        failureModeAllow: false

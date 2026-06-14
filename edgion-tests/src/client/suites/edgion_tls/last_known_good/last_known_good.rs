@@ -233,9 +233,7 @@ impl LastKnownGoodInitialTestSuite {
                             Some(c) if c["status"].as_str() == Some("True") => {
                                 TestResult::passed_with_message(start.elapsed(), "ResolvedRefs=True".to_string())
                             }
-                            Some(c) => {
-                                TestResult::failed(start.elapsed(), format!("ResolvedRefs not True: {:?}", c))
-                            }
+                            Some(c) => TestResult::failed(start.elapsed(), format!("ResolvedRefs not True: {:?}", c)),
                             None => TestResult::failed(
                                 start.elapsed(),
                                 format!("ResolvedRefs condition not found: {:?}", conditions),
@@ -302,7 +300,10 @@ impl LastKnownGoodFallbackTestSuite {
                         ),
                         Err(e) => TestResult::failed(
                             start.elapsed(),
-                            format!("handshake failed after garbage update (cert dropped, not preserved): {}", e),
+                            format!(
+                                "handshake failed after garbage update (cert dropped, not preserved): {}",
+                                e
+                            ),
                         ),
                     }
                 })
@@ -364,9 +365,6 @@ impl TestSuite for LastKnownGoodFallbackTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::serves_old_cert(),
-            Self::resolved_refs_false_invalid_certificate(),
-        ]
+        vec![Self::serves_old_cert(), Self::resolved_refs_false_invalid_certificate()]
     }
 }

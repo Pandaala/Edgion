@@ -75,6 +75,7 @@ spec:
 | `ResponseRewrite` | Response rewrite (status code/headers/body) |
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
+| `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation + immediate-response short-circuit. MVP is header-only (no body); peer of `ForwardAuth`. Runs in the `RequestFilter` and async `UpstreamResponse` stages. |
 
 ### Routing/Backend
 
@@ -105,7 +106,7 @@ HTTP plugins execute across Pingora's 4 stages:
 | `RequestFilter` | After the request is received and before backend selection | Auth, RateLimit, CORS, IP restriction |
 | `UpstreamResponseFilter` | After upstream response headers are received | ResponseHeaderModifier |
 | `UpstreamResponseBodyFilter` | After upstream response body is received | ResponseRewrite (body modification) |
-| `UpstreamResponse` | After the upstream response completes | Logging |
+| `UpstreamResponse` | After the upstream response headers arrive (async) | `ExtProc` (response-header processing); logic needing async access to the response |
 
 ## Secret Dependencies
 

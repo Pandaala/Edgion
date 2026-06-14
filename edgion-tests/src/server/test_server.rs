@@ -85,6 +85,10 @@ struct Cli {
     #[arg(long)]
     auth_port: Option<u16>,
 
+    /// Fake ext_proc gRPC server port (for ExtProc plugin testing)
+    #[arg(long)]
+    ext_proc_port: Option<u16>,
+
     /// HTTPS backend server port (for Backend TLS testing)
     #[arg(long)]
     https_backend_port: Option<u16>,
@@ -207,6 +211,12 @@ async fn main() -> Result<()> {
     // Start Fake Auth server (if configured)
     if let Some(auth_port) = cli.auth_port {
         let handle = tokio::spawn(start_auth_server(auth_port));
+        handles.push(handle);
+    }
+
+    // Start Fake ext_proc server (if configured)
+    if let Some(ext_proc_port) = cli.ext_proc_port {
+        let handle = tokio::spawn(ext_proc_server::start(ext_proc_port));
         handles.push(handle);
     }
 
@@ -1201,6 +1211,145 @@ async fn start_grpc_server(port: u16) -> Result<()> {
         .await?;
 
     Ok(())
+}
+
+// ============================================================================
+// Fake ext_proc (Envoy External Processor) gRPC Server
+// ============================================================================
+//
+// Minimal `envoy.service.ext_proc.v3.ExternalProcessor` implementation for the
+// ExtProc plugin integration tests. Behavior:
+//   - RequestHeaders: if the request carries `x-ext-proc-block`, return an
+//     ImmediateResponse 403 (short-circuit); otherwise add `x-ext-proc-req`.
+//   - ResponseHeaders: add `x-ext-proc-resp`.
+mod ext_proc_server {
+    use std::net::SocketAddr;
+    use std::pin::Pin;
+
+    use anyhow::Result;
+    use edgion_common::ext_proc::proto::external_processor_server::{ExternalProcessor, ExternalProcessorServer};
+    use edgion_common::ext_proc::proto::{
+        common_response::ResponseStatus, processing_request, processing_response, CommonResponse, HeaderAppendAction,
+        HeaderMutation, HeaderValue as EpHeaderValue, HeaderValueOption, HeadersResponse, HttpStatus,
+        ImmediateResponse, ProcessingRequest, ProcessingResponse,
+    };
+    use futures::Stream;
+    use tonic::{transport::Server, Request, Response, Status};
+    use tracing::info;
+
+    const BLOCK_HEADER: &str = "x-ext-proc-block";
+    /// Trigger: make the processor emit a malformed (empty) verdict, to exercise
+    /// the gateway's fail-mode handling of an unusable answer.
+    const BAD_VERDICT_HEADER: &str = "x-ext-proc-badverdict";
+
+    #[derive(Default)]
+    struct FakeProcessor;
+
+    /// Build a single `set` (overwrite-or-add) header mutation option.
+    fn set_opt(key: &str, value: &str) -> HeaderValueOption {
+        HeaderValueOption {
+            header: Some(EpHeaderValue {
+                key: key.to_string(),
+                value: value.to_string(),
+                raw_value: Vec::new(),
+            }),
+            append_action: HeaderAppendAction::OverwriteIfExistsOrAdd as i32,
+            keep_empty_value: false,
+        }
+    }
+
+    fn headers_verdict(is_request: bool, set_key: &str) -> ProcessingResponse {
+        let common = CommonResponse {
+            status: ResponseStatus::Continue as i32,
+            header_mutation: Some(HeaderMutation {
+                set_headers: vec![set_opt(set_key, "seen")],
+                remove_headers: Vec::new(),
+            }),
+            body_mutation: None,
+            trailers: None,
+            clear_route_cache: false,
+        };
+        let hr = HeadersResponse { response: Some(common) };
+        let response = if is_request {
+            processing_response::Response::RequestHeaders(hr)
+        } else {
+            processing_response::Response::ResponseHeaders(hr)
+        };
+        ProcessingResponse {
+            response: Some(response),
+        }
+    }
+
+    fn immediate_403() -> ProcessingResponse {
+        ProcessingResponse {
+            response: Some(processing_response::Response::ImmediateResponse(ImmediateResponse {
+                status: Some(HttpStatus { code: 403 }),
+                headers: Some(HeaderMutation {
+                    set_headers: vec![set_opt("x-ext-proc-denied", "1")],
+                    remove_headers: Vec::new(),
+                }),
+                body: b"blocked by ext_proc".to_vec(),
+                details: String::new(),
+            })),
+        }
+    }
+
+    fn handle(req: ProcessingRequest) -> Option<ProcessingResponse> {
+        match req.request? {
+            processing_request::Request::RequestHeaders(h) => {
+                let has = |name: &str| {
+                    h.headers
+                        .as_ref()
+                        .map(|m| m.headers.iter().any(|hv| hv.key.eq_ignore_ascii_case(name)))
+                        .unwrap_or(false)
+                };
+                if has(BAD_VERDICT_HEADER) {
+                    // Malformed verdict: an empty ProcessingResponse (no oneof).
+                    return Some(ProcessingResponse { response: None });
+                }
+                Some(if has(BLOCK_HEADER) {
+                    immediate_403()
+                } else {
+                    headers_verdict(true, "x-ext-proc-req")
+                })
+            }
+            processing_request::Request::ResponseHeaders(_) => Some(headers_verdict(false, "x-ext-proc-resp")),
+            _ => None,
+        }
+    }
+
+    #[tonic::async_trait]
+    impl ExternalProcessor for FakeProcessor {
+        type ProcessStream = Pin<Box<dyn Stream<Item = Result<ProcessingResponse, Status>> + Send>>;
+
+        async fn process(
+            &self,
+            request: Request<tonic::Streaming<ProcessingRequest>>,
+        ) -> Result<Response<Self::ProcessStream>, Status> {
+            let mut inbound = request.into_inner();
+            let (tx, rx) = tokio::sync::mpsc::channel(4);
+            tokio::spawn(async move {
+                while let Ok(Some(req)) = inbound.message().await {
+                    if let Some(resp) = handle(req) {
+                        if tx.send(Ok(resp)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+            Ok(Response::new(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))))
+        }
+    }
+
+    pub async fn start(port: u16) -> Result<()> {
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        info!("✓ ext_proc server listening on http://{}", addr);
+        Server::builder()
+            .add_service(ExternalProcessorServer::new(FakeProcessor))
+            .serve(addr)
+            .await?;
+        Ok(())
+    }
 }
 
 // ============================================================================

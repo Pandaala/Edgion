@@ -33,7 +33,7 @@ pub use plugin_configs::{
     CertSourceMode, CompiledTemplate, ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule,
     DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid,
     DirectEndpointOnMissing, DomainTarget, DslConfig, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch,
-    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract,
+    DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract, ExtProcConfig,
     ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, FaultHeaderEntry,
     FaultInjectionConfig, ForwardAuthConfig, HashAlgorithm, HashCalcConfig, HeaderActions, HeaderCertAuthConfig,
     HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential, HttpMethod,

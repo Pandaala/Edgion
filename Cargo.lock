@@ -1594,6 +1594,7 @@ dependencies = [
  "cookie",
  "crc32fast",
  "edgion-cli",
+ "edgion-common",
  "edgion-controller",
  "edgion-resources",
  "futures",
