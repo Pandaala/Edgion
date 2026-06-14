@@ -7,6 +7,7 @@
 //! (`types::resources::link_sys`), which describes connections to external
 //! systems like Redis/Etcd. For the CRD, use `crate::{LinkSys, LinkSysSpec}`.
 
+use std::collections::HashMap;
 use std::fmt;
 
 use schemars::JsonSchema;
@@ -117,6 +118,42 @@ impl Default for LocalFileWriterCfg {
     }
 }
 
+/// OTLP transport protocol.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum OtlpProtocol {
+    /// OTLP/gRPC — default port 4317, binary protobuf, HTTP/2.
+    Grpc,
+    /// OTLP/HTTP — default port 4318, binary protobuf.
+    /// NOTE: not yet implemented at runtime; returns an error at startup.
+    HttpProto,
+}
+
+impl Default for OtlpProtocol {
+    fn default() -> Self {
+        Self::Grpc
+    }
+}
+
+/// Configuration for OTLP log output (self-contained, no LinkSys CRD needed).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OtlpOutputConfig {
+    /// OTLP receiver endpoint (e.g. "http://otel-collector:4317").
+    pub endpoint: String,
+    /// Transport protocol. Defaults to gRPC.
+    #[serde(default)]
+    pub protocol: OtlpProtocol,
+    /// Extra request headers (e.g. auth tokens).
+    /// NOTE: not yet supported at runtime in v1; logged as a warning and ignored
+    /// due to a tonic version constraint (workspace tonic 0.12 vs otlp tonic 0.14).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, String>>,
+    /// Per-request timeout in milliseconds. None = SDK default (10 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
 /// String output destination configuration
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -129,6 +166,11 @@ pub enum StringOutput {
     /// Ship to Kafka via a LinkSys resource
     #[serde(rename_all = "camelCase")]
     Kafka { link_sys_ref: LinkSysRef, topic: String },
+    /// Ship to an OpenTelemetry Collector via OTLP.
+    ///
+    /// No LinkSys CRD is required. The Collector routes to any downstream backend
+    /// (ES, Loki, ClickHouse, S3, Datadog, etc.) without further gateway changes.
+    Otlp(OtlpOutputConfig),
 }
 
 impl Default for StringOutput {
@@ -244,5 +286,71 @@ mod tests {
     fn test_string_output_local_file_default_unchanged() {
         let s = StringOutput::default();
         assert!(matches!(s, StringOutput::LocalFile(_)));
+    }
+
+    #[test]
+    fn test_string_output_otlp_grpc_serde_roundtrip() {
+        let original = StringOutput::Otlp(OtlpOutputConfig {
+            endpoint: "http://otel-collector:4317".to_string(),
+            protocol: OtlpProtocol::Grpc,
+            headers: None,
+            timeout_ms: None,
+        });
+        let json = serde_json::to_string(&original).unwrap();
+        assert_eq!(
+            json,
+            r#"{"otlp":{"endpoint":"http://otel-collector:4317","protocol":"grpc"}}"#
+        );
+        let roundtrip: StringOutput = serde_json::from_str(&json).unwrap();
+        match roundtrip {
+            StringOutput::Otlp(cfg) => {
+                assert_eq!(cfg.endpoint, "http://otel-collector:4317");
+                assert!(matches!(cfg.protocol, OtlpProtocol::Grpc));
+                assert!(cfg.headers.is_none());
+                assert!(cfg.timeout_ms.is_none());
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_string_output_otlp_http_with_timeout_serde_roundtrip() {
+        let original = StringOutput::Otlp(OtlpOutputConfig {
+            endpoint: "https://otel.example.com:4318".to_string(),
+            protocol: OtlpProtocol::HttpProto,
+            headers: None,
+            timeout_ms: Some(5000),
+        });
+        let json = serde_json::to_string(&original).unwrap();
+        let roundtrip: StringOutput = serde_json::from_str(&json).unwrap();
+        match roundtrip {
+            StringOutput::Otlp(cfg) => {
+                assert_eq!(cfg.endpoint, "https://otel.example.com:4318");
+                assert!(matches!(cfg.protocol, OtlpProtocol::HttpProto));
+                assert_eq!(cfg.timeout_ms, Some(5000));
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_string_output_otlp_with_headers_serde_roundtrip() {
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer token123".to_string());
+        let original = StringOutput::Otlp(OtlpOutputConfig {
+            endpoint: "http://otel-collector:4317".to_string(),
+            protocol: OtlpProtocol::Grpc,
+            headers: Some(headers),
+            timeout_ms: None,
+        });
+        let json = serde_json::to_string(&original).unwrap();
+        let roundtrip: StringOutput = serde_json::from_str(&json).unwrap();
+        match roundtrip {
+            StringOutput::Otlp(cfg) => {
+                let h = cfg.headers.expect("headers should round-trip");
+                assert_eq!(h.get("Authorization").map(String::as_str), Some("Bearer token123"));
+            }
+            other => panic!("unexpected variant: {:?}", other),
+        }
     }
 }

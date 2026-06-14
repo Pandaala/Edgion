@@ -131,6 +131,9 @@ zeroize.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
+opentelemetry.workspace      = true
+opentelemetry_sdk.workspace  = true
+opentelemetry-otlp.workspace = true
 http.workspace = true
 percent-encoding.workspace = true
 

@@ -7,6 +7,7 @@ use edgion_resources::{LocalFileWriterCfg, LocalFileWriterConfig, LogConfig, Str
 
 use crate::link_sys::providers::elasticsearch::EsLogSender;
 use crate::link_sys::providers::kafka::KafkaLogSender;
+use crate::link_sys::providers::otlp::OtlpLogSender;
 use crate::link_sys::{DataSender, LocalFileWriter, LogType};
 use crate::observe::logs::ssl_log::SslLogger;
 use crate::observe::AccessLogger;
@@ -71,6 +72,17 @@ pub async fn create_async_logger(config: &LogConfig, log_type: LogType) -> Resul
             logger.register(Box::new(sender));
             Ok(Some(Arc::new(logger)))
         }
+        StringOutput::Otlp(cfg) => {
+            tracing::info!(?log_type, endpoint = %cfg.endpoint, ?cfg.protocol, "Initializing logger with OTLP output");
+            let mut sender = OtlpLogSender::new(cfg.clone());
+            // init() is called eagerly here — OtlpLogSender owns its provider and does
+            // not participate in the LinkSysStore lifecycle. Do NOT call logger.init()
+            // after this point; that would call init() again.
+            sender.init().await?;
+            let mut logger = AccessLogger::new();
+            logger.register(Box::new(sender));
+            Ok(Some(Arc::new(logger)))
+        }
     }
 }
 
@@ -103,6 +115,13 @@ pub async fn create_sync_logger(config: &LogConfig) -> Result<Option<SslLogger>>
                 %link_sys_ref,
                 %topic,
                 "Kafka output is not supported for SSL logs (sync path); SSL logging disabled"
+            );
+            Ok(None)
+        }
+        StringOutput::Otlp(cfg) => {
+            tracing::warn!(
+                endpoint = %cfg.endpoint,
+                "OTLP output is not supported for SSL logs (sync path); SSL logging disabled"
             );
             Ok(None)
         }

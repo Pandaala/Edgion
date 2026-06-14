@@ -1,6 +1,7 @@
 pub mod elasticsearch;
 pub mod kafka;
 pub mod local_file;
+pub mod otlp;
 pub mod redis;
 pub mod webhook;
 
@@ -11,4 +12,5 @@ pub use edgion_common::link::providers::etcd;
 pub use elasticsearch::EsLinkClient;
 pub use etcd::EtcdLinkClient;
 pub use local_file::{LocalFileWriter, LogType};
+pub use otlp::OtlpLogSender;
 pub use redis::RedisLinkClient;

@@ -1,5 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::cli::config::{get_backend_requests_config, get_request_duration_config};
+use crate::link_sys::LogMeta;
 use crate::observe::metrics::{
     global_metrics, record_backend_request, record_request_duration, status_group, TestData, TestType,
 };
@@ -41,6 +42,15 @@ pub async fn logging(
 
     // Create access log entry
     let entry = AccessLogEntry::from_context(ctx);
+    // Extract LogMeta BEFORE serialization — typed fields needed by OTLP sender.
+    // entry.timestamp is i64 milliseconds; guard negative values before casting.
+    let meta = LogMeta {
+        timestamp_ns: entry.timestamp.max(0) as u64 * 1_000_000,
+        severity_number: LogMeta::severity_from_status(entry.request_info.status),
+        status_code: entry.request_info.status,
+        method: Some(session.req_header().method.as_str().to_string()),
+        path: Some(entry.request_info.normalized_current_path.clone()),
+    };
     let entry_json = entry.to_json();
 
     // Clone only when integration testing needs the log stored; production path is zero-copy.
@@ -61,7 +71,7 @@ pub async fn logging(
         None
     };
 
-    edgion_http.access_logger.send(entry_json).await;
+    edgion_http.access_logger.send_with_meta(entry_json, meta).await;
 
     // Defensive cleanup for mirror state. Dropping JoinHandle detaches task.
     if let Some(mirror_state) = ctx.mirror_state.take() {

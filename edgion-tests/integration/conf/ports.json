@@ -1,5 +1,5 @@
 {
-  "current_max": 31394,
+  "current_max": 31931,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -263,6 +263,12 @@
       "udp": 31392,
       "udp_filtered": 31393,
       "udp_fail_close": 31394
+    },
+    "LinkSys/Otlp": {
+      "http": 31930
+    },
+    "LinkSys/Kafka": {
+      "http": 31931
     }
   }
 }

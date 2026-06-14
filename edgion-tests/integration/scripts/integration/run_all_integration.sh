@@ -50,6 +50,8 @@ JOB_NAMES=(
     "main"
     "linksys_etcd"
     "linksys_es"
+    "linksys_otlp"
+    "linksys_kafka"
     "acme"
     "cli"
     "file_watcher"
@@ -60,6 +62,8 @@ job_command() {
         main)         echo "${SCRIPT_DIR}/run_integration.sh --no-prepare ${MAIN_FULL_FLAG}" ;;
         linksys_etcd) echo "${SCRIPT_DIR}/link_sys/run_etcd_test.sh --no-build" ;;
         linksys_es)   echo "${SCRIPT_DIR}/link_sys/run_es_test.sh --no-build" ;;
+        linksys_otlp)  echo "${SCRIPT_DIR}/link_sys/run_otlp_test.sh --no-build" ;;
+        linksys_kafka) echo "${SCRIPT_DIR}/link_sys/run_kafka_test.sh --no-build" ;;
         acme)         echo "${SCRIPT_DIR}/run_acme_test.sh" ;;
         cli)          echo "${SCRIPT_DIR}/test_cli_commands.sh" ;;
         file_watcher) echo "${SCRIPT_DIR}/test_file_watcher.sh" ;;

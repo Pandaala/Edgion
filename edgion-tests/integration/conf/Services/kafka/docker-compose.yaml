@@ -1,0 +1,27 @@
+# Redpanda broker for Kafka log output integration testing.
+# Single-container, no ZooKeeper. Kafka-compatible API on port 9092.
+# Started/stopped by run_kafka_test.sh.
+#
+# Two listeners:
+#   INTERNAL (9092) — used by rpk inside the container; advertises 127.0.0.1:9092.
+#   EXTERNAL (19092) — mapped to the host; advertises 127.0.0.1:19092 so that
+#                      rskafka on the host resolves the correct port after the
+#                      initial metadata fetch.
+services:
+  redpanda:
+    image: redpandadata/redpanda:v24.1.1
+    container_name: edgion-test-redpanda
+    command:
+      - redpanda
+      - start
+      - --overprovisioned
+      - --smp 1
+      - --memory 512M
+      - --reserve-memory 0M
+      - --node-id 0
+      - --check=false
+      - --kafka-addr INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:19092
+      - --advertise-kafka-addr INTERNAL://127.0.0.1:9092,EXTERNAL://127.0.0.1:19092
+    ports:
+      - "19092:19092"
+    restart: "no"

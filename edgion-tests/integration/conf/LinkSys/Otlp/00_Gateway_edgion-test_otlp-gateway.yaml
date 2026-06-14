@@ -1,0 +1,13 @@
+# Minimal Gateway listener for OTLP access-log integration testing.
+# The test sends HTTP requests through this listener to generate access log records.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: otlp-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31930

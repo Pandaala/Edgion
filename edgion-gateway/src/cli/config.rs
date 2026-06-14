@@ -932,4 +932,58 @@ access_log_sensitive:
         assert!(!dbg.contains("must-not-leak"), "admin_token must be redacted in Debug");
         assert!(dbg.contains("[redacted]"));
     }
+
+    #[test]
+    fn test_access_log_otlp_yaml_deserializes_via_singleton_map() {
+        // Verify the full production deserialization path (singleton_map_recursive)
+        // parses the `otlp:` YAML key into StringOutput::Otlp. Without this test,
+        // a casing mismatch silently falls back to StringOutput::LocalFile and the
+        // OTLP arm in logger_factory.rs is never reached.
+        use edgion_resources::{OtlpProtocol, StringOutput};
+
+        let yaml = r#"
+access_log:
+  enabled: true
+  output:
+    otlp:
+      endpoint: "http://127.0.0.1:14317"
+      protocol: grpc
+      timeoutMs: 5000
+"#;
+        let de = serde_yaml::Deserializer::from_str(yaml);
+        let cfg: EdgionGatewayConfig = serde_yaml::with::singleton_map_recursive::deserialize(de).unwrap();
+        assert!(cfg.access_log.enabled);
+        match cfg.access_log.output {
+            StringOutput::Otlp(o) => {
+                assert_eq!(o.endpoint, "http://127.0.0.1:14317");
+                assert!(matches!(o.protocol, OtlpProtocol::Grpc));
+                assert_eq!(o.timeout_ms, Some(5000));
+            }
+            other => panic!("expected StringOutput::Otlp, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_access_log_otlp_grpc_is_default_protocol() {
+        // `protocol` field defaults to grpc when omitted.
+        use edgion_resources::{OtlpProtocol, StringOutput};
+
+        let yaml = r#"
+access_log:
+  enabled: true
+  output:
+    otlp:
+      endpoint: "http://otel-collector:4317"
+"#;
+        let de = serde_yaml::Deserializer::from_str(yaml);
+        let cfg: EdgionGatewayConfig = serde_yaml::with::singleton_map_recursive::deserialize(de).unwrap();
+        match cfg.access_log.output {
+            StringOutput::Otlp(o) => {
+                assert!(matches!(o.protocol, OtlpProtocol::Grpc));
+                assert!(o.timeout_ms.is_none());
+                assert!(o.headers.is_none());
+            }
+            other => panic!("expected StringOutput::Otlp, got {:?}", other),
+        }
+    }
 }

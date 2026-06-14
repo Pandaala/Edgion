@@ -1,0 +1,18 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: kafka-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: kafka-gateway
+      namespace: edgion-test
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: test-backend
+          namespace: edgion-test
+          port: 30001

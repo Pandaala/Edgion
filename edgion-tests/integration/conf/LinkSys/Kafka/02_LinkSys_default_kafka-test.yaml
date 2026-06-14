@@ -1,0 +1,12 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: kafka-test
+  namespace: default
+spec:
+  type: kafka
+  config:
+    brokers:
+      - "127.0.0.1:19092"
+    lingerMs: 5
+    channelSize: 1024

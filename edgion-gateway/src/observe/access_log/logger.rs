@@ -1,6 +1,6 @@
 //! Access logger with pluggable data senders
 
-use crate::link_sys::DataSender;
+use crate::link_sys::{DataSender, LogMeta};
 use crate::observe::metrics::global_metrics;
 
 /// Access logger that dispatches log entries to registered senders
@@ -42,6 +42,23 @@ impl AccessLogger {
         for sender in &self.senders {
             if sender.healthy() {
                 let _ = sender.send(data).await;
+                return;
+            }
+        }
+        global_metrics().access_log_dropped();
+    }
+
+    /// Send log with pre-serialization metadata to the first healthy sender.
+    ///
+    /// Falls back to `send` for senders that do not override `send_with_meta`
+    /// (ES, Kafka, LocalFile). OTLP senders use `meta` to build typed LogRecords.
+    pub async fn send_with_meta(&self, data: String, meta: LogMeta) {
+        if self.senders.is_empty() {
+            return;
+        }
+        for sender in &self.senders {
+            if sender.healthy() {
+                let _ = sender.send_with_meta(data, &meta).await;
                 return;
             }
         }
