@@ -290,6 +290,12 @@ impl EdgionTlsPassthroughProxy {
 
             let mut peer = BasicPeer::new(&upstream_addr_str);
             peer.options.tcp_keepalive = unit.tcp_keepalive.as_ref().map(|k| k.to_pingora());
+            // Bound the connect (TCP handshake; the TLS handshake is end-to-end
+            // for passthrough) so an unreachable backend fails fast instead of
+            // stranding the downstream connection until the OS retransmit timeout.
+            peer.options.connection_timeout = edgion_resources::resources::edgion_gateway_config::resolve_tcp_connect_timeout(
+                self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
+            );
             match self.connector.new_stream(&peer).await {
                 Ok(stream) => {
                     if let Some(info) = ctx.current_upstream_mut() {

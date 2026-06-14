@@ -97,7 +97,6 @@ spec:
 | `clientAuth` | Object | none | mTLS client-certificate verification; see the table below |
 | `minTlsVersion` | Enum | none (BoringSSL default = TLS 1.2+) | Minimum accepted TLS version. Allowed values: `TLS1_0` \| `TLS1_1` \| `TLS1_2` \| `TLS1_3` |
 | `ciphers` | Array\<String\> | none (BoringSSL defaults) | OpenSSL-format cipher list for TLS 1.2 and below, e.g. `ECDHE-RSA-AES256-GCM-SHA384` |
-| `extend` | Object | none | Reserved / experimental handshake knobs; see [Reserved parameters](#reserved-parameters) |
 
 > There is **no** `maxTlsVersion` field, and ciphers are a flat OpenSSL-format list — there is no cipher "profile" selector. Configure only the fields listed above.
 
@@ -129,21 +128,6 @@ When `minTlsVersion` is unset, BoringSSL's default (TLS 1.2+) applies, which is 
 | `Terminate` | One-way TLS: only the server certificate is verified (default) |
 | `Mutual` | Mutual TLS: the client **must** present a valid certificate or the handshake is rejected |
 | `OptionalMutual` | The client certificate is optional, but if presented it is verified |
-
-### Reserved parameters
-
-The `extend` object holds handshake knobs that are **accepted by the schema but reserved for a future release**. They are validated and a config-time warning is logged, but they have **no runtime effect today**:
-
-| Parameter | Status |
-|-----------|--------|
-| `extend.preferServerCiphers` | Reserved — no effect |
-| `extend.ocspStapling` | **Not implemented** — no OCSP stapling occurs regardless of `enabled` (RFC 6960) |
-| `extend.sessionTicket` | Reserved — no effect |
-| `extend.sessionCache` | Reserved — no effect |
-| `extend.revocationCheck` | **Not implemented** — `mode: ocsp` / `mode: crl` do **not** enable revocation checking; revoked certificates are still accepted |
-| `extend.earlyData` | Reserved — no effect |
-
-⚠️ **Do not rely on `extend.revocationCheck` or `extend.ocspStapling` for a compliance guarantee.** Setting them does not cause Edgion to reject revoked certificates today.
 
 ## Common configuration scenarios
 
@@ -476,11 +460,7 @@ openssl x509 -in cert.pem -noout -text
 
 **A**: Set `minTlsVersion: TLS1_3`. There is no `maxTlsVersion` field — pinning the minimum to TLS 1.3 effectively makes the listener TLS-1.3-only, because no higher version exists. Clients limited to TLS 1.2 or below will receive a handshake failure.
 
-### Q6: Does the `extend` block (OCSP stapling, revocation, session tickets) do anything?
-
-**A**: Not yet. Every field under `extend` is reserved schema; the gateway logs a config-time warning and otherwise ignores them. In particular, `extend.revocationCheck` does **not** reject revoked certificates and `extend.ocspStapling` does **not** staple an OCSP response. Do not treat them as a security control today.
-
-### Q7: My mTLS handshake fails — where do I start?
+### Q6: My mTLS handshake fails — where do I start?
 
 **A**: Verify, in order: (1) the client actually sends `--cert`/`--key`; (2) the client certificate is signed by the CA in `caSecretRef` and its `ca.crt` key is present; (3) `verifyDepth` is high enough for the chain; (4) if you set `allowedSans`/`allowedCns`, the client certificate matches the allowlist.
 

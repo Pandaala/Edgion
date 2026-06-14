@@ -216,10 +216,33 @@ pub struct TcpTimeout {
     #[serde(default = "default_tcp_idle_timeout")]
     #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
     pub idle_timeout: String,
+
+    /// Upper bound for establishing the upstream TCP connection (the TCP
+    /// handshake) on an L4 route. Mirrors the *mechanism* of the HTTP path's
+    /// `backend.defaultConnectTimeout` (a per-peer connect bound); the default
+    /// value differs — 10s here vs the HTTP path's 5s, matching the Istio L4
+    /// `connectTimeout` baseline. A backend that silently drops SYNs (firewall,
+    /// not-yet-ready pod) fails fast instead of stranding the downstream
+    /// connection until the OS TCP retransmit timeout (~2m) fires.
+    /// "0" / "0s" disables it (unbounded — relies on the OS bound). Applies to
+    /// plain TCP, TLS-terminated, and TLS-passthrough relays — in all three the
+    /// upstream connect is plain TCP (TLS-terminated terminates downstream TLS
+    /// separately; TLS-passthrough carries the end-to-end TLS handshake over the
+    /// established relay), so this bounds the connect itself, not a TLS
+    /// handshake. UDP is not affected.
+    /// Format: duration string (e.g. "10s", "1m", "500ms"); a bare number is
+    /// interpreted as seconds. Default "10s".
+    #[serde(default = "default_tcp_connect_timeout")]
+    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    pub connect_timeout: String,
 }
 
 fn default_tcp_idle_timeout() -> String {
     "1h".to_string()
+}
+
+fn default_tcp_connect_timeout() -> String {
+    "10s".to_string()
 }
 
 // ============================================
@@ -260,6 +283,33 @@ pub fn resolve_tcp_idle_timeout(cfg: Option<&TcpTimeout>) -> Option<std::time::D
             Ok(d) if d.is_zero() => None,
             Ok(d) => Some(d),
             Err(_) => Some(DEFAULT_TCP_IDLE),
+        },
+    }
+}
+
+/// Secure default upstream connect timeout applied to every L4 relay when the
+/// operator configures no `tcpTimeout` section. Bounded-by-default: protection
+/// does not require config. Must stay in sync with `default_tcp_connect_timeout()`
+/// (a unit test asserts it).
+pub const DEFAULT_TCP_CONNECT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Resolve the effective L4 upstream connect timeout from the optional
+/// `tcpTimeout` section. Result maps directly onto Pingora's
+/// `BasicPeer.options.connection_timeout` (`None` = no application-level bound).
+///
+/// - section absent (`None`)                      -> `Some(DEFAULT_TCP_CONNECT)` (secure default)
+/// - explicit `"0"` / `"0s"` / any zero duration  -> `None` (operator opt-out, unbounded)
+/// - any other valid duration                     -> `Some(parsed)`
+/// - parse error (schema-validated upstream)       -> `Some(DEFAULT_TCP_CONNECT)` (fail-safe, silent)
+///
+/// Runs per connection on the data plane; intentionally emits no `tracing`.
+pub fn resolve_tcp_connect_timeout(cfg: Option<&TcpTimeout>) -> Option<std::time::Duration> {
+    match cfg {
+        None => Some(DEFAULT_TCP_CONNECT),
+        Some(t) => match crate::duration::parse_duration(&t.connect_timeout) {
+            Ok(d) if d.is_zero() => None,
+            Ok(d) => Some(d),
+            Err(_) => Some(DEFAULT_TCP_CONNECT),
         },
     }
 }
@@ -550,6 +600,7 @@ mod tcp_timeout_tests {
     fn resolve_explicit_value() {
         let t = TcpTimeout {
             idle_timeout: "300s".to_string(),
+            connect_timeout: default_tcp_connect_timeout(),
         };
         assert_eq!(resolve_tcp_idle_timeout(Some(&t)), Some(Duration::from_secs(300)));
     }
@@ -559,6 +610,7 @@ mod tcp_timeout_tests {
         for s in ["0", "0s", "0m", "0.0s"] {
             let t = TcpTimeout {
                 idle_timeout: s.to_string(),
+                connect_timeout: default_tcp_connect_timeout(),
             };
             assert_eq!(resolve_tcp_idle_timeout(Some(&t)), None, "{s} should opt out");
         }
@@ -568,6 +620,7 @@ mod tcp_timeout_tests {
     fn resolve_parse_error_fails_safe_to_default() {
         let t = TcpTimeout {
             idle_timeout: "not-a-duration".to_string(),
+            connect_timeout: default_tcp_connect_timeout(),
         };
         assert_eq!(resolve_tcp_idle_timeout(Some(&t)), Some(DEFAULT_TCP_IDLE));
     }
@@ -575,6 +628,69 @@ mod tcp_timeout_tests {
     #[test]
     fn default_const_and_serde_default_stay_in_sync() {
         assert_eq!(parse_duration(&default_tcp_idle_timeout()).unwrap(), DEFAULT_TCP_IDLE);
+    }
+
+    // --- connect_timeout (mirrors the idle_timeout cases above) ---
+
+    #[test]
+    fn tcp_timeout_connect_defaults_to_10s_when_field_omitted() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_str(r#"{"tcpTimeout": {}}"#).unwrap();
+        assert_eq!(spec.tcp_timeout.unwrap().connect_timeout, "10s");
+    }
+
+    #[test]
+    fn tcp_timeout_connect_explicit_value_round_trips() {
+        let spec: EdgionGatewayConfigSpec =
+            serde_json::from_str(r#"{"tcpTimeout": {"connectTimeout": "3s"}}"#).unwrap();
+        assert_eq!(spec.tcp_timeout.unwrap().connect_timeout, "3s");
+    }
+
+    #[test]
+    fn resolve_connect_absent_section_uses_secure_default() {
+        assert_eq!(resolve_tcp_connect_timeout(None), Some(DEFAULT_TCP_CONNECT));
+    }
+
+    #[test]
+    fn resolve_connect_omitted_field_uses_serde_default_10s() {
+        let spec: EdgionGatewayConfigSpec = serde_json::from_str(r#"{"tcpTimeout": {}}"#).unwrap();
+        assert_eq!(
+            resolve_tcp_connect_timeout(spec.tcp_timeout.as_ref()),
+            Some(Duration::from_secs(10))
+        );
+    }
+
+    #[test]
+    fn resolve_connect_explicit_value() {
+        let t = TcpTimeout {
+            idle_timeout: default_tcp_idle_timeout(),
+            connect_timeout: "3s".to_string(),
+        };
+        assert_eq!(resolve_tcp_connect_timeout(Some(&t)), Some(Duration::from_secs(3)));
+    }
+
+    #[test]
+    fn resolve_connect_zero_is_unbounded_optout() {
+        for s in ["0", "0s", "0m", "0.0s"] {
+            let t = TcpTimeout {
+                idle_timeout: default_tcp_idle_timeout(),
+                connect_timeout: s.to_string(),
+            };
+            assert_eq!(resolve_tcp_connect_timeout(Some(&t)), None, "{s} should opt out");
+        }
+    }
+
+    #[test]
+    fn resolve_connect_parse_error_fails_safe_to_default() {
+        let t = TcpTimeout {
+            idle_timeout: default_tcp_idle_timeout(),
+            connect_timeout: "not-a-duration".to_string(),
+        };
+        assert_eq!(resolve_tcp_connect_timeout(Some(&t)), Some(DEFAULT_TCP_CONNECT));
+    }
+
+    #[test]
+    fn connect_default_const_and_serde_default_stay_in_sync() {
+        assert_eq!(parse_duration(&default_tcp_connect_timeout()).unwrap(), DEFAULT_TCP_CONNECT);
     }
 }
 

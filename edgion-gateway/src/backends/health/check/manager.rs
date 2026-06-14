@@ -5,6 +5,8 @@ use super::status_store::{get_health_status_store, HealthStatusStore};
 use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
 use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::health_check::{ActiveHealthCheckConfig, HealthCheckType};
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
 use parking_lot::RwLock;
 use pingora_load_balancing::Backend;
 use std::collections::hash_map::DefaultHasher;
@@ -146,6 +148,20 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
 
     let semaphore = PROBE_SEMAPHORE.clone();
 
+    // Immutable probe parameters for this task's lifetime, shared across all
+    // backend probe futures of every cycle (config changes spawn a fresh task,
+    // so these never mutate here). Wrapped in an Arc so each future clones a
+    // pointer rather than the underlying strings/vectors.
+    let probe_params = Arc::new(ProbeParams {
+        kind: config.r#type.clone(),
+        path: http_path,
+        port: config.port,
+        host: http_host,
+        expected_statuses: http_expected_statuses,
+        grpc_service_name,
+        timeout,
+    });
+
     loop {
         ticker.tick().await;
 
@@ -153,14 +169,32 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
         let hashes: Vec<u64> = backends.iter().map(backend_hash).collect();
         health_store.register_service(&service_key, hashes);
 
+        // Best-effort: rebuild the shared HTTP client once per cycle if it could
+        // not be built earlier. Hoisting the retry here (instead of doing it
+        // mid-probe) keeps the per-backend futures free of shared mutable state.
+        if matches!(config.r#type, HealthCheckType::Http) && http_client.is_none() {
+            if let Ok(client) = build_http_probe_client(timeout) {
+                http_client = Some(client);
+            }
+        }
+
+        // Probe all backends of this service concurrently rather than one after
+        // another, so the worst-case sweep time is max(probe_i) instead of
+        // sum(probe_i). Each future independently acquires a PROBE_SEMAPHORE
+        // permit for the duration of its single probe and releases it right
+        // after, so the global MAX_CONCURRENT_PROBES cap and the per-probe
+        // acquire/release semantics (cross-service fairness, backends-F016) are
+        // preserved. Mirrors Envoy's per-host parallel active health checking.
+        let mut probes = FuturesUnordered::new();
         for backend in backends {
             let hash = backend_hash(&backend);
-            let Some(addr) = backend.addr.as_inet() else {
+            let Some(addr) = backend.addr.as_inet().copied() else {
                 tracing::debug!(
                     service = %service_key,
                     backend = %backend.addr,
                     "Skipping health check for non-IP backend address"
                 );
+                // No permit acquired and no probe issued for non-IP backends.
                 health_store.record_check(
                     &service_key,
                     hash,
@@ -171,60 +205,23 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
                 continue;
             };
 
-            // Acquire a probe permit per individual backend probe (not per cycle)
-            // so the global cap bounds total in-flight probes. The permit is held
-            // only for this single probe call and released immediately after, so a
-            // service with many backends interleaves fairly with other services
-            // instead of monopolizing one permit for its entire cycle.
-            let permit = semaphore.acquire().await.expect("probe semaphore closed");
-            let result = match config.r#type {
-                HealthCheckType::Http => {
-                    match http_client.as_ref() {
-                        Some(client) => {
-                            probe_http_with_client(
-                                client,
-                                *addr,
-                                &http_path,
-                                config.port,
-                                http_host.as_deref(),
-                                &http_expected_statuses,
-                            )
-                            .await
-                        }
-                        None => {
-                            // Best-effort retry to restore shared client.
-                            if let Ok(client) = build_http_probe_client(timeout) {
-                                let probe_result = probe_http_with_client(
-                                    &client,
-                                    *addr,
-                                    &http_path,
-                                    config.port,
-                                    http_host.as_deref(),
-                                    &http_expected_statuses,
-                                )
-                                .await;
-                                http_client = Some(client);
-                                probe_result
-                            } else {
-                                // Fallback preserves behavior.
-                                probe_http(
-                                    *addr,
-                                    &http_path,
-                                    config.port,
-                                    http_host.as_deref(),
-                                    &http_expected_statuses,
-                                    timeout,
-                                )
-                                .await
-                            }
-                        }
-                    }
-                }
-                HealthCheckType::Tcp => probe_tcp(*addr, config.port, timeout).await,
-                HealthCheckType::Grpc => probe_grpc(*addr, config.port, &grpc_service_name, timeout).await,
-            };
-            drop(permit);
+            let semaphore = semaphore.clone();
+            let params = probe_params.clone();
+            let client = http_client.clone();
+            probes.push(async move {
+                let permit = semaphore.acquire().await.expect("probe semaphore closed");
+                let result = probe_backend(&params, client.as_ref(), addr).await;
+                drop(permit);
+                (hash, addr, result)
+            });
+        }
 
+        // Apply results sequentially as each probe completes. record_check is a
+        // cheap counter update under a per-service lock; keeping it single-writer
+        // here avoids contending on the unhealthy_backends RCU in HealthStatusStore
+        // (which is not lock-protected against concurrent transitions on different
+        // backends of the same service).
+        while let Some((hash, addr, result)) = probes.next().await {
             health_store.record_check(
                 &service_key,
                 hash,
@@ -236,12 +233,62 @@ async fn health_check_loop(service_key: String, config: ActiveHealthCheckConfig,
             if let Err(err) = result {
                 tracing::debug!(
                     service = %service_key,
-                    backend = %backend.addr,
+                    backend = %addr,
                     error = ?err,
                     "Health check probe failed"
                 );
             }
         }
+    }
+}
+
+/// Immutable parameters for a single backend probe, shared (via `Arc`) across all
+/// concurrent probe futures of one service health-check cycle.
+struct ProbeParams {
+    kind: HealthCheckType,
+    path: String,
+    port: Option<u16>,
+    host: Option<String>,
+    expected_statuses: Vec<u16>,
+    grpc_service_name: String,
+    timeout: Duration,
+}
+
+/// Run one probe against `addr` for the given probe parameters. When the probe
+/// type is HTTP and a shared client is available it is reused; otherwise a
+/// per-probe client is built (preserving the original fallback behavior).
+async fn probe_backend(
+    params: &ProbeParams,
+    http_client: Option<&reqwest::Client>,
+    addr: std::net::SocketAddr,
+) -> Result<(), super::probes::ProbeError> {
+    match params.kind {
+        HealthCheckType::Http => match http_client {
+            Some(client) => {
+                probe_http_with_client(
+                    client,
+                    addr,
+                    &params.path,
+                    params.port,
+                    params.host.as_deref(),
+                    &params.expected_statuses,
+                )
+                .await
+            }
+            None => {
+                probe_http(
+                    addr,
+                    &params.path,
+                    params.port,
+                    params.host.as_deref(),
+                    &params.expected_statuses,
+                    params.timeout,
+                )
+                .await
+            }
+        },
+        HealthCheckType::Tcp => probe_tcp(addr, params.port, params.timeout).await,
+        HealthCheckType::Grpc => probe_grpc(addr, params.port, &params.grpc_service_name, params.timeout).await,
     }
 }
 

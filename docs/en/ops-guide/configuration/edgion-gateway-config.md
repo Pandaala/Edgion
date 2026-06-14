@@ -120,15 +120,16 @@ spec:
 
 ### spec.tcpTimeout
 
-Idle timeout for established L4 relays — plain TCP, TLS-terminated, and TLS-passthrough. UDP has its own session model and is not affected.
+Timeouts for L4 relays — plain TCP, TLS-terminated, and TLS-passthrough. UDP has its own session model and is not affected.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `idleTimeout` | Duration string | `1h` | Closes a relay that makes no byte progress in either direction for this window. The clock resets on any completed read or advancing partial write, so active and slow-but-draining transfers are not severed. |
+| `connectTimeout` | Duration string | `10s` | Upper bound for establishing the upstream TCP connection (the TCP handshake). In all three relay types the upstream connect is plain TCP, so this bounds the connect itself, not a TLS handshake. A backend that silently drops SYNs (firewall, not-yet-ready pod) fails fast instead of stranding the downstream connection until the OS TCP retransmit timeout (~2m) fires. |
 
-**Secure by default:** If you omit the entire `tcpTimeout` section, the `1h` idle timeout still applies — every L4 relay is bounded without configuration.
+**Secure by default:** If you omit the entire `tcpTimeout` section, the `1h` idle timeout and `10s` connect timeout still apply — every L4 relay is bounded without configuration.
 
-**Opt-out and risk:** Set `idleTimeout: "0"` (or `"0s"`) to disable the timeout (unbounded relay). This re-opens a resource-exhaustion risk: a stalled or trickle-sending peer can hold a relay — and its socket, task, and buffers — open indefinitely, with no in-process connection cap. Only disable it if a higher layer bounds connection lifetime.
+**Opt-out and risk:** Set `idleTimeout: "0"` (or `"0s"`) to disable the idle timeout (unbounded relay). This re-opens a resource-exhaustion risk: a stalled or trickle-sending peer can hold a relay — and its socket, task, and buffers — open indefinitely, with no in-process connection cap. Only disable it if a higher layer bounds connection lifetime. Setting `connectTimeout: "0"` likewise removes the application-level connect bound, falling back to the OS TCP retransmit timeout (~2m on Linux).
 
 > **Known limitation:** An idle timeout does not stop a determined trickle attacker (a byte every N seconds resets the clock, on either the read or write half). Bounding that would require a total-duration cap, which would sever legitimate long-idle connections (DB pools, message queues, long-poll, SSH) and is not a sane default.
 
@@ -136,6 +137,7 @@ Idle timeout for established L4 relays — plain TCP, TLS-terminated, and TLS-pa
 spec:
   tcpTimeout:
     idleTimeout: 1h
+    connectTimeout: 10s
 ```
 
 ### spec.maxRetries

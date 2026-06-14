@@ -97,7 +97,6 @@ spec:
 | `clientAuth` | Object | none | mTLS 客户端证书验证；见下表 |
 | `minTlsVersion` | Enum | none（BoringSSL 默认 = TLS 1.2+） | 最低接受的 TLS 版本。可选值：`TLS1_0` \| `TLS1_1` \| `TLS1_2` \| `TLS1_3` |
 | `ciphers` | Array\<String\> | none（BoringSSL 默认） | TLS 1.2 及以下的 OpenSSL 格式密码套件列表，如 `ECDHE-RSA-AES256-GCM-SHA384` |
-| `extend` | Object | none | 保留 / 实验性握手选项；见[保留参数](#保留参数) |
 
 > **没有** `maxTlsVersion` 字段，密码套件是扁平的 OpenSSL 格式列表，没有"profile"选择器。请只配置上表中列出的字段。
 
@@ -129,21 +128,6 @@ spec:
 | `Terminate` | 单向 TLS：只验证服务端证书（默认） |
 | `Mutual` | 双向 TLS：客户端**必须**提供有效证书，否则握手被拒绝 |
 | `OptionalMutual` | 客户端证书可选，但提供时会被验证 |
-
-### 保留参数
-
-`extend` 对象包含握手选项，**schema 接受但保留供未来版本使用**。这些字段会被校验并在配置时记录警告，但**今天没有运行时效果**：
-
-| 参数 | 状态 |
-|------|------|
-| `extend.preferServerCiphers` | 保留——无效果 |
-| `extend.ocspStapling` | **未实现**——无论 `enabled` 如何，都不进行 OCSP stapling（RFC 6960） |
-| `extend.sessionTicket` | 保留——无效果 |
-| `extend.sessionCache` | 保留——无效果 |
-| `extend.revocationCheck` | **未实现**——`mode: ocsp` / `mode: crl` **不**启用吊销检查；已吊销证书仍被接受 |
-| `extend.earlyData` | 保留——无效果 |
-
-⚠️ **请勿依赖 `extend.revocationCheck` 或 `extend.ocspStapling` 作为合规保证。** 今天设置这些字段不会使 Edgion 拒绝已吊销的证书。
 
 ## 常见配置场景
 
@@ -475,11 +459,7 @@ openssl x509 -in cert.pem -noout -text
 
 **A**：设置 `minTlsVersion: TLS1_3`。没有 `maxTlsVersion` 字段——将最低版本固定为 TLS 1.3 实际上使监听器仅接受 TLS 1.3，因为不存在更高版本。仅支持 TLS 1.2 或以下的客户端将收到握手失败错误。
 
-### Q6：`extend` 块（OCSP stapling、吊销检查、session ticket）有任何效果吗？
-
-**A**：尚没有。`extend` 下的所有字段都是保留的 schema；网关记录配置时的警告，否则忽略它们。特别是，`extend.revocationCheck` **不**拒绝已吊销证书，`extend.ocspStapling` **不**附加 OCSP 响应。今天不要将它们作为安全控制。
-
-### Q7：我的 mTLS 握手失败了——从哪里开始排查？
+### Q6：我的 mTLS 握手失败了——从哪里开始排查？
 
 **A**：按顺序验证：（1）客户端实际上发送了 `--cert`/`--key`；（2）客户端证书由 `caSecretRef` 中的 CA 签发，且 `ca.crt` 键存在；（3）`verifyDepth` 对证书链足够大；（4）如果设置了 `allowedSans`/`allowedCns`，客户端证书与允许列表匹配。
 

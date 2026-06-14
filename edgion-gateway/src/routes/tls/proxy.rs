@@ -293,6 +293,14 @@ impl EdgionTlsTcpProxy {
             // 4c. TCP connect
             let mut peer = BasicPeer::new(&upstream_addr_str);
             peer.options.tcp_keepalive = unit.tcp_keepalive.as_ref().map(|k| k.to_pingora());
+            // Bound the upstream TCP connect so an unreachable backend fails
+            // fast instead of stranding the downstream connection until the OS
+            // TCP retransmit timeout; mirrors the HTTP path. The upstream connect
+            // is plain TCP here (downstream TLS is terminated separately), so this
+            // bounds the connect itself, not a TLS handshake.
+            peer.options.connection_timeout = edgion_resources::resources::edgion_gateway_config::resolve_tcp_connect_timeout(
+                self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
+            );
             match self.connector.new_stream(&peer).await {
                 Ok(stream) => {
                     if let Some(info) = ctx.current_upstream_mut() {

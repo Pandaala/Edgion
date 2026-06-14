@@ -47,9 +47,13 @@ The non-IP-backend `continue` branch acquires no permit, so only real probe I/O 
 
 - "Raise `MAX_CONCURRENT_PROBES` instead of changing the acquisition granularity" — masks the
   starvation only until the cluster grows again; the root cause is the per-cycle hold, not the cap.
-- "Probe all backends of a service concurrently (spawn per backend)" — out of scope and changes the
-  load profile; the finding is about cross-service fairness, which per-probe acquisition already fixes
-  while keeping per-service probing sequential.
+- "Probe all backends of a service concurrently (spawn per backend)" — out of scope **for F016**
+  (which is about cross-service fairness, already fixed by per-probe acquisition). Note: within-service
+  parallelism was **later adopted on purpose** under lb-06 (see
+  [active-hc-probes-parallel-within-service.md](active-hc-probes-parallel-within-service.md), fixed
+  2026-06-14); the loop now drives a `FuturesUnordered` of per-backend probes. That change keeps the
+  per-probe acquire/release semantics intact, so it is **not** a regression of F016 — do not re-report
+  the parallel loop as "the permit is no longer per-probe".
 
 ## Re-evaluation Triggers
 
