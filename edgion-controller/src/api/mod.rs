@@ -322,7 +322,7 @@ async fn reload_all_resources(State(state): State<Arc<AdminState>>) -> impl Into
 /// POST /api/v1/services/acme/{namespace}/{name}/trigger
 ///
 /// This resets the retry counter and re-evaluates the resource, same as modifying the CRD.
-async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<ApiResponse<String>> {
+async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> impl IntoResponse {
     let key = format!("{}/{}", namespace, name);
     tracing::info!(
         component = "admin_api",
@@ -331,9 +331,18 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> Json<A
         "ACME trigger requested via Admin API"
     );
 
-    crate::services::acme::notify_resource_changed(key.clone());
-
-    Json(ApiResponse::ok_body(format!("ACME check triggered for {}", key)))
+    // `false` means the ACME service is not running (no sender). Reporting a
+    // `200 OK` in that case would mislead the operator into thinking the
+    // trigger took effect, so surface it as a 503 instead.
+    if crate::services::acme::notify_resource_changed(key.clone()).await {
+        Json(ApiResponse::ok_body(format!("ACME check triggered for {}", key))).into_response()
+    } else {
+        let body = Json(ApiResponse::<String>::err_body(format!(
+            "ACME service not running; trigger for {} was not queued",
+            key
+        )));
+        (StatusCode::SERVICE_UNAVAILABLE, body).into_response()
+    }
 }
 
 // ============= Router Setup =============

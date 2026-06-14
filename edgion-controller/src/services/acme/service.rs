@@ -136,7 +136,7 @@ async fn scan_all_acme_resources(client: Client) {
                 let ns = acme.metadata.namespace.as_deref().unwrap_or("default");
                 let name = acme.metadata.name.as_deref().unwrap_or_default();
                 let key = format!("{}/{}", ns, name);
-                notify_resource_changed(key);
+                notify_resource_changed(key).await;
             }
             tracing::info!(
                 component = "acme_service",
@@ -163,17 +163,35 @@ fn get_sender() -> Option<mpsc::Sender<AcmeCommand>> {
 
 /// Notify the ACME service that a resource has changed.
 ///
-/// Called from `EdgionAcmeHandler::parse()` after processing.
-/// Non-blocking: uses `try_send` to avoid blocking the processor worker.
-pub fn notify_resource_changed(key: String) {
-    if let Some(tx) = get_sender() {
-        if let Err(e) = tx.try_send(AcmeCommand::ResourceChanged { key: key.clone() }) {
+/// Called from `EdgionAcmeHandler::parse()` after processing, from the startup
+/// scan, and from the Admin API trigger endpoint.
+///
+/// Uses async `send().await` to apply back-pressure instead of dropping the
+/// event when the bounded channel is full — mirroring `Workqueue::enqueue`.
+/// A dropped `ResourceChanged` would mean the resource is never re-checked
+/// (no issuance, no renewal-timer re-establishment) until the next event,
+/// silently risking certificate expiry. `get_sender()` releases the global
+/// lock before this await (it returns a cloned `Sender`), so no sync lock is
+/// held across the suspension point. The worker drains fast (one K8s `get`
+/// plus a `tokio::spawn` per command), so awaiting here cannot stall the
+/// caller for long.
+///
+/// Returns `true` if the command was enqueued, `false` if the ACME service is
+/// not running (no sender) or the channel was closed.
+pub async fn notify_resource_changed(key: String) -> bool {
+    let Some(tx) = get_sender() else {
+        return false;
+    };
+    match tx.send(AcmeCommand::ResourceChanged { key: key.clone() }).await {
+        Ok(()) => true,
+        Err(e) => {
             tracing::warn!(
                 component = "acme_service",
                 key = %key,
                 error = %e,
-                "Failed to notify ACME service (channel full or closed)"
+                "Failed to notify ACME service (channel closed)"
             );
+            false
         }
     }
 }

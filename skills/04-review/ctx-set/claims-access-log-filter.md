@@ -5,7 +5,7 @@ description: Read when reviewing store_claims_in_ctx / store_payload_in_ctx flow
 
 # gateway-plugins-03 — JWT/JWE claims unfiltered into access log
 
-**Status / verdict**: fixed (gateway-plugins-03, 2026-05-25)
+**Status / verdict**: fixed (gateway-plugins-03, 2026-05-25; the fix was later lost from the tree and re-landed 2026-06-14 — `entry.rs` had reverted to flattening `ctx_map` verbatim, so verify the `FilteredCtx` wrapper is actually present before trusting this record)
 
 When reviewing findings of the form "`store_claims_in_ctx` / `store_payload_in_ctx` flow JWT/JWE claims unfiltered into the access log / `jwt_claims` / `oidc_claims` / `jwe_payload` keys flatten into access-log JSON via `#[serde(flatten)] ctx_map` / no allowlist or masking on `ctx_map` claim keys (gateway-plugins-03)": fixed (gateway-plugins-03, 2026-05-25).
 

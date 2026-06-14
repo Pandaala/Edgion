@@ -294,7 +294,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         if spec_changed || creds_changed {
             let ns = acme.metadata.namespace.as_deref().unwrap_or("default");
             let name = acme.metadata.name.as_deref().unwrap_or_default();
-            notify_resource_changed(format!("{}/{}", ns, name));
+            notify_resource_changed(format!("{}/{}", ns, name)).await;
         }
 
         ProcessResult::Continue(acme)
