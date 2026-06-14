@@ -36,7 +36,8 @@
 //! - **Graceful Shutdown**: Handles SIGTERM/SIGINT signals for clean shutdown
 //! - **Leader Election**: Optional leader election for HA deployments using K8s Lease
 //! - **Metrics**: Prometheus metrics for reconciliation monitoring
-//! - **Workqueue**: Go controller-runtime style deduplication and retry with backoff
+//! - **Workqueue**: Go controller-runtime style deduplication with delayed/coalesced requeue
+//!   (self-heals on watcher relist; no exponential backoff retry)
 //! - **ProcessorRegistry**: Global registry for all processors
 
 mod center;
