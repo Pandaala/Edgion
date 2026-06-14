@@ -200,6 +200,8 @@ globalPluginsRef:
 
 Changes to `linkSys` take effect immediately through EdgionGatewayConfig partial-update — no Gateway restart required.
 
+Because EdgionGatewayConfig is cluster-scoped, multiple instances may coexist. The Gateway derives a single process-global value deterministically across all instances rather than letting whichever was applied last win: `webhookMaxResponseBytes` uses the **strictest** (`min`) value. When the last instance carrying `linkSys` is deleted, the global resets to the default (`16384`). The same deterministic aggregation applies to `loadBalancing.panicThreshold`, which uses the **highest** (`max`) value across instances and resets to `0` (panic mode disabled) when none is configured.
+
 ## Common Scenarios
 
 ### Configuring Real IP Extraction

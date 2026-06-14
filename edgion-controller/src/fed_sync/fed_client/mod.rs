@@ -31,6 +31,23 @@ const MIN_STABLE_CONNECTION_SECS: u64 = 30;
 /// Maximum concurrent HttpProxy tasks forwarded from Center.
 const MAX_CONCURRENT_PROXY: usize = 16;
 
+/// Maximum request-body size accepted from a Center HttpProxy request.
+/// Mirrors the 10 MB response cap with a tighter inbound limit so an
+/// adversarial Center cannot force the Controller to buffer a huge body
+/// before any handler runs.
+const MAX_PROXY_REQUEST_BODY: usize = 1024 * 1024;
+
+/// Request headers forwarded from a Center HttpProxy request into the admin
+/// router. Everything else (hop-by-hop, `Authorization`, `Cookie`,
+/// `X-Forwarded-*`, ...) is dropped: the Center identity is established by mTLS
+/// plus the injected RBAC role, never by a Center-supplied request header.
+const ALLOWED_PROXY_HEADERS: &[&str] = &["accept", "content-type", "user-agent"];
+
+/// Path prefixes the federation proxy may reach on the admin router. Anything
+/// outside this set is rejected with 404 before it touches the router, so a
+/// compromised channel cannot probe arbitrary admin paths.
+const ALLOWED_PROXY_PATH_PREFIXES: &[&str] = &["/api/v1/", "/configserver/", "/health", "/ready", "/metrics"];
+
 /// Stats coalescing interval. Controller pushes a StatsReport at most once
 /// per `STATS_COALESCE_INTERVAL` when its resource counts change.
 const STATS_COALESCE_INTERVAL: Duration = Duration::from_secs(5);
@@ -487,11 +504,69 @@ async fn handle_center_message(
                 let _permit = permit; // held until task completes
                 let request_id = proxy_req.request_id.clone();
 
-                let method: http::Method = proxy_req.method.parse().unwrap_or(http::Method::GET);
+                // Sanitise the Center-supplied request before it reaches the admin
+                // router. The mTLS channel + injected RBAC role authenticate the peer,
+                // but the request envelope is still attacker-controlled if the channel
+                // is ever compromised or misconfigured, so apply defence-in-depth:
+                // reject malformed methods, cap the body, allowlist headers and paths.
+
+                // Reject an unparseable method instead of silently falling back to GET
+                // (a malformed payload must not become a side-effecting GET).
+                let method: http::Method = match proxy_req.method.parse() {
+                    Ok(m) => m,
+                    Err(_) => {
+                        let _ = tx
+                            .send(ControllerMessage {
+                                payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
+                                    request_id,
+                                    status_code: 400,
+                                    headers: Default::default(),
+                                    body: format!("Invalid HTTP method: {}", proxy_req.method).into_bytes(),
+                                })),
+                            })
+                            .await;
+                        return;
+                    }
+                };
+
+                // Cap the inbound body so a multi-GB payload cannot exhaust memory.
+                if proxy_req.body.len() > MAX_PROXY_REQUEST_BODY {
+                    let _ = tx
+                        .send(ControllerMessage {
+                            payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
+                                request_id,
+                                status_code: 413,
+                                headers: Default::default(),
+                                body: format!("Proxy request body exceeds {} bytes", MAX_PROXY_REQUEST_BODY).into_bytes(),
+                            })),
+                        })
+                        .await;
+                    return;
+                }
+
+                // Restrict reachable admin paths to a static prefix allowlist.
+                let path_only = proxy_req.path.split(['?', '#']).next().unwrap_or("");
+                if !ALLOWED_PROXY_PATH_PREFIXES.iter().any(|p| path_only.starts_with(p)) {
+                    let _ = tx
+                        .send(ControllerMessage {
+                            payload: Some(CtrlPayload::HttpProxyResponse(HttpProxyResponse {
+                                request_id,
+                                status_code: 404,
+                                headers: Default::default(),
+                                body: b"Proxy path not allowed".to_vec(),
+                            })),
+                        })
+                        .await;
+                    return;
+                }
+
                 let mut builder = http::Request::builder().method(method).uri(&proxy_req.path);
 
+                // Forward only allowlisted headers; drop auth/forwarding/hop-by-hop.
                 for (k, v) in &proxy_req.headers {
-                    builder = builder.header(k.as_str(), v.as_str());
+                    if ALLOWED_PROXY_HEADERS.iter().any(|h| k.eq_ignore_ascii_case(h)) {
+                        builder = builder.header(k.as_str(), v.as_str());
+                    }
                 }
 
                 let request = match builder.body(axum::body::Body::from(proxy_req.body)) {
@@ -919,5 +994,90 @@ mod tests {
             active_watch_cancel.is_none(),
             "expected active_watch_cancel to remain None after RBAC deny"
         );
+    }
+
+    /// Drive a single HttpProxy request through handle_center_message and return
+    /// the status code of the HttpProxyResponse the handler emits. The admin
+    /// router is empty: the sanitisation checks under test all reject before the
+    /// request ever reaches the router.
+    #[cfg(test)]
+    async fn run_http_proxy(req: crate::fed_sync::proto::HttpProxyRequest) -> u32 {
+        use crate::authz::{Authorizer, CenterPolicy};
+        use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig};
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let conf_mgr = Arc::new(
+            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(tmp.path().to_path_buf())))
+                .await
+                .expect("ConfMgr::create failed"),
+        );
+        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<ControllerMessage>(8);
+        let tx = Arc::new(tx);
+        let admin_router = axum::Router::new();
+        let proxy_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let mut active_watch_cancel: Option<tokio_util::sync::CancellationToken> = None;
+
+        handle_center_message(
+            CenterPayload::HttpProxy(req),
+            tx,
+            admin_router,
+            conf_mgr,
+            &mut active_watch_cancel,
+            proxy_semaphore,
+            authorizer,
+        )
+        .await
+        .expect("handle_center_message returned Err");
+
+        // The HttpProxy arm spawns a task; await the response it sends.
+        let msg = rx.recv().await.expect("expected an HttpProxyResponse");
+        match msg.payload {
+            Some(CtrlPayload::HttpProxyResponse(resp)) => resp.status_code,
+            other => panic!("expected HttpProxyResponse, got {:?}", other),
+        }
+    }
+
+    /// An oversized request body is rejected with 413 before any router work.
+    #[tokio::test]
+    async fn http_proxy_oversized_body_rejected_413() {
+        let status = run_http_proxy(crate::fed_sync::proto::HttpProxyRequest {
+            request_id: "t1".to_string(),
+            method: "POST".to_string(),
+            path: "/api/v1/reload".to_string(),
+            headers: Default::default(),
+            body: vec![0u8; MAX_PROXY_REQUEST_BODY + 1],
+        })
+        .await;
+        assert_eq!(status, 413);
+    }
+
+    /// A malformed method is rejected with 400 instead of silently becoming GET.
+    #[tokio::test]
+    async fn http_proxy_invalid_method_rejected_400() {
+        let status = run_http_proxy(crate::fed_sync::proto::HttpProxyRequest {
+            request_id: "t2".to_string(),
+            method: "BAD METHOD".to_string(),
+            path: "/api/v1/reload".to_string(),
+            headers: Default::default(),
+            body: Vec::new(),
+        })
+        .await;
+        assert_eq!(status, 400);
+    }
+
+    /// A path outside the allowlist is rejected with 404 before reaching the router.
+    #[tokio::test]
+    async fn http_proxy_disallowed_path_rejected_404() {
+        let status = run_http_proxy(crate::fed_sync::proto::HttpProxyRequest {
+            request_id: "t3".to_string(),
+            method: "GET".to_string(),
+            path: "/secret/etc/passwd".to_string(),
+            headers: Default::default(),
+            body: Vec::new(),
+        })
+        .await;
+        assert_eq!(status, 404);
     }
 }
