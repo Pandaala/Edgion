@@ -360,6 +360,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         )
         // --- Circuit-breaker endpoints (for circuit-breaker integration tests) ---
         .route("/cb-fail/{test_id}/{fail_count}", get(cb_fail_handler))
+        .route("/cb-fail/{test_id}/{fail_count}/{status}", get(cb_fail_status_handler))
         .route("/cb-reset", get(cb_reset_handler))
         .route("/{*path}", get(catch_all_handler))
         .layer(Extension(server_addr_str))
@@ -836,6 +837,17 @@ async fn stream_trickle_handler(Path((test_id, chunks, interval_ms)): Path<(Stri
 /// /cb-fail/{test_id}/{fail_count}
 /// Returns 502 for the first `fail_count` calls per test_id, then 200.
 async fn cb_fail_handler(Path((test_id, fail_count)): Path<(String, u32)>) -> impl IntoResponse {
+    cb_fail_core(test_id, fail_count, 502)
+}
+
+/// /cb-fail/{test_id}/{fail_count}/{status}
+/// Returns `status` for the first `fail_count` calls per test_id, then 200.
+/// Lets tests drive application (500) vs gateway (502/503/504) failure classes.
+async fn cb_fail_status_handler(Path((test_id, fail_count, status)): Path<(String, u32, u16)>) -> impl IntoResponse {
+    cb_fail_core(test_id, fail_count, status)
+}
+
+fn cb_fail_core(test_id: String, fail_count: u32, fail_status: u16) -> impl IntoResponse {
     use axum::http::StatusCode;
 
     let attempt = {
@@ -846,7 +858,7 @@ async fn cb_fail_handler(Path((test_id, fail_count)): Path<(String, u32)>) -> im
     };
 
     let status = if attempt <= fail_count {
-        StatusCode::BAD_GATEWAY // 502
+        StatusCode::from_u16(fail_status).unwrap_or(StatusCode::BAD_GATEWAY)
     } else {
         StatusCode::OK
     };

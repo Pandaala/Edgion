@@ -1,5 +1,5 @@
 use super::{get_global_service_store, ServiceStore};
-use crate::backends::circuit_breaker::{config::parse_circuit_breaker_annotation, get_circuit_breaker_store};
+use crate::backends::circuit_breaker::{config::parse_outlier_detection_annotation, get_circuit_breaker_store};
 use crate::backends::health::check::{
     annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
 };
@@ -42,8 +42,11 @@ impl ConfHandler<Service> for ServiceStore {
             let active_config = parse_health_check_annotation(&service.metadata);
             config_store.set_service_config(key, active_config);
             hc_manager.reconcile_service(key);
-            let cb_config = parse_circuit_breaker_annotation(&service.metadata);
-            cb_store.set_service_config(key, cb_config);
+            let parsed = parse_outlier_detection_annotation(&service.metadata);
+            if parsed.as_ref().is_some_and(|p| p.used_alias) {
+                cb_store.warn_alias_once(key);
+            }
+            cb_store.set_service_config(key, parsed.map(|p| p.config));
             panic_store.set_service_threshold(key, parse_panic_threshold_annotation(&service.metadata));
         }
     }
@@ -71,8 +74,11 @@ impl ConfHandler<Service> for ServiceStore {
             let active_config = parse_health_check_annotation(&service.metadata);
             config_store.set_service_config(key, active_config);
             hc_manager.reconcile_service(key);
-            let cb_config = parse_circuit_breaker_annotation(&service.metadata);
-            cb_store.set_service_config(key, cb_config);
+            let parsed = parse_outlier_detection_annotation(&service.metadata);
+            if parsed.as_ref().is_some_and(|p| p.used_alias) {
+                cb_store.warn_alias_once(key);
+            }
+            cb_store.set_service_config(key, parsed.map(|p| p.config));
             panic_store.set_service_threshold(key, parse_panic_threshold_annotation(&service.metadata));
         }
 

@@ -14,6 +14,8 @@ impl TestSuite for CircuitBreakerTestSuite {
             Self::test_normal_request_no_ejection(),
             Self::test_consecutive_failures_eject(),
             Self::test_recovery_after_cooldown(),
+            Self::test_gateway_and_app_counters_independent(),
+            Self::test_deprecated_alias_still_ejects(),
         ]
     }
 }
@@ -201,13 +203,19 @@ impl CircuitBreakerTestSuite {
                         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
 
-                    // Wait for ejection cooldown (ejectionSeconds=3)
-                    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+                    // Wait for ejection cooldown, then poll for recovery. The ejection
+                    // window grows with the endpoint's ejection count (backoff:
+                    // ejectionSeconds * num_ejections, capped at maxEjectionSeconds).
+                    // An earlier case in this suite already ejected this same backend
+                    // once, so its second ejection here lasts ~6s (ejectionSeconds=3 * 2)
+                    // rather than 3s — a fixed short wait is not enough. Sleep past the
+                    // base window, then poll generously until the backend serves again
+                    // (breaks early on the first 200).
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
 
-                    // After recovery, backend should be available again (returns 200 now)
                     let url = format!("{}/cb-fail/{}/3", ctx.http_url(), test_id);
                     let mut success = false;
-                    for _ in 0..3 {
+                    for _ in 0..30 {
                         match ctx
                             .http_client
                             .get(&url)
@@ -232,6 +240,128 @@ impl CircuitBreakerTestSuite {
                         )
                     } else {
                         TestResult::failed(start.elapsed(), "Backend did not recover after cooldown".to_string())
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_gateway_and_app_counters_independent() -> TestCase {
+        TestCase::new(
+            "gateway_and_app_counters_independent",
+            "502 (gateway) ejects at gateway threshold 3 while 500 (app) at threshold 10 does not",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    let host = "cb-alias.example.com";
+                    let test_id = format!(
+                        "indep-{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos()
+                    );
+                    // Reset.
+                    ctx.http_client
+                        .get(format!("{}/cb-reset", ctx.http_url()))
+                        .header("Host", host)
+                        .send()
+                        .await
+                        .ok();
+
+                    // 3 application 500s — app threshold is 10, so NO ejection yet:
+                    // the backend keeps serving (status keeps being 500, not a
+                    // local 503), i.e. requests still reach the backend.
+                    for _ in 0..3 {
+                        let url = format!("{}/cb-fail/{}/100/500", ctx.http_url(), test_id);
+                        let r = ctx.http_client.get(&url).header("Host", host).send().await;
+                        match r {
+                            Ok(resp) if resp.status().as_u16() == 500 => {}
+                            Ok(resp) => {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("app phase expected 500 (still reaching backend), got {}", resp.status()),
+                                )
+                            }
+                            Err(e) => return TestResult::failed(start.elapsed(), format!("app phase error: {}", e)),
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                    }
+
+                    // Now 3 gateway 502s on a fresh test_id — gateway threshold is 3,
+                    // so the endpoint ejects and the 4th request gets a local 502/503.
+                    let gw_id = format!("{}-gw", test_id);
+                    let mut ejected = false;
+                    for i in 0..4 {
+                        let url = format!("{}/cb-fail/{}/100/502", ctx.http_url(), gw_id);
+                        let r = ctx.http_client.get(&url).header("Host", host).send().await;
+                        if let Ok(resp) = r {
+                            let s = resp.status().as_u16();
+                            if i >= 3 && (s == 502 || s == 503) {
+                                ejected = true;
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+
+                    if ejected {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Gateway counter ejected at 3 while app counter (threshold 10) did not".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            "Gateway-class failures did not eject at threshold 3".to_string(),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_deprecated_alias_still_ejects() -> TestCase {
+        TestCase::new(
+            "deprecated_alias_still_ejects",
+            "edgion.io/circuit-breaker alias still drives ejection",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    let host = "cb-alias.example.com";
+                    let test_id = format!(
+                        "alias-{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos()
+                    );
+                    ctx.http_client
+                        .get(format!("{}/cb-reset", ctx.http_url()))
+                        .header("Host", host)
+                        .send()
+                        .await
+                        .ok();
+
+                    // gateway threshold 3 via the alias config; 502 ejects after 3.
+                    let mut ejected = false;
+                    for i in 0..4 {
+                        let url = format!("{}/cb-fail/{}/100/502", ctx.http_url(), test_id);
+                        if let Ok(resp) = ctx.http_client.get(&url).header("Host", host).send().await {
+                            let s = resp.status().as_u16();
+                            if i >= 3 && (s == 502 || s == 503) {
+                                ejected = true;
+                            }
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+
+                    if ejected {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Alias annotation ejected the backend".to_string(),
+                        )
+                    } else {
+                        TestResult::failed(start.elapsed(), "Alias annotation did not eject".to_string())
                     }
                 })
             },

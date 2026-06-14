@@ -11,7 +11,7 @@ pub mod selector;
 pub mod service_kind;
 pub mod validation;
 
-pub use circuit_breaker::{get_circuit_breaker_store, parse_circuit_breaker_annotation};
+pub use circuit_breaker::{get_circuit_breaker_store, parse_outlier_detection_annotation, FailureClass};
 pub use discovery::{
     create_ep_slice_handler, create_service_handler, get_global_service_store, get_roundrobin_store, EndpointSliceExt,
     EpSliceStore, ServiceStore,

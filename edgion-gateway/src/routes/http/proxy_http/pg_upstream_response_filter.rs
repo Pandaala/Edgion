@@ -169,14 +169,14 @@ pub fn upstream_response_filter(
         }
     }
 
-    // Record circuit breaker success/failure based on status code
+    // Record outlier-detection success/failure, classifying 5xx into gateway
+    // (502/503/504) vs application (other >=500) buckets.
     if let Some(upstream) = ctx.get_current_upstream() {
         if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
             let cb_store = crate::backends::get_circuit_breaker_store();
-            if status_code >= 500 {
-                cb_store.record_failure_by_addr(service_key, addr);
-            } else {
-                cb_store.record_success_by_addr(service_key, addr);
+            match crate::backends::FailureClass::from_http_status(status_code) {
+                Some(class) => cb_store.record_failure_by_addr(service_key, addr, class),
+                None => cb_store.record_success_by_addr(service_key, addr),
             }
         }
     }

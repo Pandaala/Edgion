@@ -200,11 +200,19 @@ impl EdgionTcpProxy {
             Ok(stream) => stream,
             Err(_) => {
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
+                crate::backends::get_circuit_breaker_store().record_failure_by_addr(
+                    &service_key,
+                    &upstream_addr,
+                    crate::backends::FailureClass::Gateway,
+                );
                 return;
             }
         };
 
         ctx.connection_established = true;
+        // A successful connect is the L4 "backend reachable" success signal; it
+        // resets the endpoint's outlier-detection failure counters.
+        crate::backends::get_circuit_breaker_store().record_success_by_addr(&service_key, &upstream_addr);
 
         // 8. Bidirectional data forwarding
         self.duplex(downstream, upstream, ctx).await;

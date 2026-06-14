@@ -16,6 +16,11 @@ pub mod edgion {
     /// Circuit breaker configuration for backend endpoints.
     /// Value format: YAML string.
     pub const CIRCUIT_BREAKER: &str = "edgion.io/circuit-breaker";
+    /// Outlier detection (passive health check) configuration for backend
+    /// endpoints. Canonical key; supersedes the deprecated `CIRCUIT_BREAKER`
+    /// alias, which is still parsed for backward compatibility.
+    /// Value format: YAML string.
+    pub const OUTLIER_DETECTION: &str = "edgion.io/outlier-detection";
 
     /// Per-service load-balancing panic threshold (percent, 0-100).
     /// When the fraction of healthy backends drops below this percent, the

@@ -301,10 +301,18 @@ impl EdgionTlsPassthroughProxy {
                         );
                         info.connection_established = true;
                     }
+                    // A successful connect is the L4 "backend reachable" success
+                    // signal; it resets the endpoint's outlier-detection counters.
+                    crate::backends::get_circuit_breaker_store().record_success_by_addr(&service_key, &upstream_addr);
                     upstream = Some((stream, upstream_addr_str));
                     break;
                 }
                 Err(e) => {
+                    crate::backends::get_circuit_breaker_store().record_failure_by_addr(
+                        &service_key,
+                        &upstream_addr,
+                        crate::backends::FailureClass::Gateway,
+                    );
                     last_err = format!("connect failed: {upstream_addr_str}: {e}");
                     if attempt + 1 < max_attempts {
                         ctx.push_log(&format!("retry {}/{max_attempts}: {last_err}", attempt + 1));

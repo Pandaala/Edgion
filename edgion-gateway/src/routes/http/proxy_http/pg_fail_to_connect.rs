@@ -38,7 +38,11 @@ pub fn fail_to_connect(
     // Record circuit breaker failure
     if let Some(upstream) = ctx.get_current_upstream() {
         if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
-            crate::backends::get_circuit_breaker_store().record_failure_by_addr(service_key, addr);
+            crate::backends::get_circuit_breaker_store().record_failure_by_addr(
+                service_key,
+                addr,
+                crate::backends::FailureClass::Gateway,
+            );
         }
     }
 

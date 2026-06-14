@@ -4,8 +4,9 @@ metadata:
   name: cb-test
   namespace: edgion-default
   annotations:
-    edgion.io/circuit-breaker: |
+    edgion.io/outlier-detection: |
       consecutiveErrors: 3
+      consecutiveGatewayErrors: 3
       ejectionSeconds: 3
       maxEjectionPercent: 0
 spec:
