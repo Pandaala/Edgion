@@ -154,10 +154,15 @@ unit tests (base-only, base+overlay, overlay-invalid→base).
 
 ## S8 — Observability: effective config dump (phase 3)
 
-- [ ] **S8.1** Admin `/configclient` shows effective = base ⊕ overlay, per-field source (base | overlay) +
-      overlay status (applied | absent | invalid→base).
+- [~] **S8.1** DEFERRED (documented). The critical overlay observability — *whether* an overlay applied /
+      missing / invalid / type-mismatch — is already shipped as Prometheus counters
+      (`region_route_overlay_events_total`, `*_conn_ip_restriction_*` events) from S3/S4. The richer
+      admin `/configclient` merged-view dump (effective = base ⊕ overlay with per-field source) is a
+      debugging enhancement, not core to the refactor; base (EdgionPlugins/EdgionStreamPlugins) and overlay
+      (EdgionData) are already individually inspectable. Deferred to avoid over-engineering — tracked as a
+      follow-up.
 
-**Verify:** `cargo check`; manual dump inspection.
+**Verify:** n/a (deferred).
 
 ---
 
@@ -183,24 +188,39 @@ unit tests (base-only, base+overlay, overlay-invalid→base).
 
 ## S10 — Tests (phase 4)
 
-- [ ] **S10.1** RegionRoute: base-only; base+overlay replace; overlay invalid → base; `active` flip; `enable` kill.
-- [ ] **S10.2** GlobalConnIpRestriction overlay (present/absent/invalid; kill switch).
-- [ ] **S10.3** `managed-by` behaviors (operator vs center placeholder).
-- [ ] **S10.4** Hot-reload: apply overlay metadata, gateway picks up without restart; revert → base.
-- [ ] **S10.5** Variant smoke: `KeyList`/`IpList` + typed overlays + `Misc` round-trip; `type`-guard mismatch
-      → fail-to-base.
+> **Unit/fixture level: DONE** — S2/S3/S4 added unit tests covering base-only, base+overlay replace,
+> overlay-invalid→base, type-mismatch→base, enable kill (gateway region_route 14, controller region 15,
+> GlobalConnIp 5, apply_override 5). Integration fixtures migrated to the new shape.
+> **Full integration run (`run_integration.sh`): NOT RUN — requires a live K8s cluster** (unavailable in this
+> autonomous run). Must run in CI / on a cluster before merge. The scenarios below map to existing fixtures.
 
-**Verify:** `./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>`,
-then a full run.
+- [x] **S10.1** RegionRoute base-only / base+overlay / overlay-invalid→base — covered by gateway unit tests.
+- [x] **S10.2** GlobalConnIp overlay present/absent/invalid + kill switch — covered by gateway unit tests.
+- [~] **S10.3** `managed-by` behaviors — only `operator` (default) is active; center/controller deferred (D7).
+- [ ] **S10.4** Hot-reload (apply/revert overlay, no restart) — **needs live cluster** (CI/manual).
+- [x] **S10.5** Variant round-trip + `type`-guard mismatch→fail-to-base — covered by apply_override unit tests.
+
+**Verify:** unit/fixture green (done). Full `run_integration.sh` pending a cluster (CI/manual before merge).
 
 ---
 
 ## S11 — Review & full validation (phase 5)
 
-- [ ] **S11.1** `cargo fmt --all` · `cargo check --all-targets` · `cargo clippy --all-targets` ·
-      `python3 cicd/checks/validate_agent_docs.py` · `cargo test --all`.
-- [ ] **S11.2** Self-review vs the five overlay guardrails + security invariant + rename completeness.
-- [ ] **S11.3** Capture reusable findings into `skills/04-review/`; open PR.
+- [x] **S11.1** Final gate green: `cargo fmt --all --check` clean · `cargo check --all-targets` 0 errors ·
+      `cargo clippy` — 3 refactor-introduced warnings fixed (rest are pre-existing workspace tech debt,
+      out of scope) · `validate_agent_docs.py` PASS (846 files) · `check_crd_coverage.sh` PASS ·
+      `cargo test --workspace --lib` **3454 passed / 0 failed**. (Full `cargo test --all` incl. the
+      cluster-dependent integration harness is a CI/manual step — see S10.)
+- [x] **S11.2** Self-review vs guardrails: (1) strict replace/no-merge ✓ (apply_override field-replace,
+      whole-collection); (2) only-data-overridable ✓ (logic stays in RegionRouteConfig base; overrides are
+      all-Optional data); (3) observable ✓ (overlay metrics counters; full merged-dump deferred S8); (4)
+      switch ✓ (envelope enable/active; GlobalConnIp enable live); (5) fail-to-base ✓ (RegionRoute +
+      GlobalConnIp missing/invalid/type-mismatch → base + metric, no data-plane tracing). Security invariant:
+      base = safe default documented. Rename completeness ✓ (validate_agent_docs green; no stale refs).
+- [~] **S11.3** Reusable findings captured in `15-edgion-data.md` + decisions D1–D7. **PR NOT opened** (per
+      run directive: temp commits only, no push). Open items for the user: I1 (EdgionCenter coordination
+      before merge), I3 (GlobalConnIp dual-path consistency decision), S8 (merged config dump), S10.4
+      (hot-reload integration on a cluster).
 
 ---
 

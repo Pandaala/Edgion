@@ -17,7 +17,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
 };
 use edgion_resources::prelude_resources::EdgionData;
-use edgion_resources::resources::data::{DataEntry, EdgionDataStatus};
+use edgion_resources::resources::data::EdgionDataStatus;
 
 /// Kind string used when an EdgionData registers a cross-EdgionData reference in the shared
 /// `plugin_metadata_refs` manager. The existing `requeue_pm_referrers` splits refs on `:`
@@ -102,7 +102,7 @@ impl ProcessorHandler<EdgionData> for DataHandler {
         ctx.runtime().plugin_metadata_refs.remove_pm(&key);
     }
 
-    fn update_status(&self, ed: &mut EdgionData, ctx: &HandlerContext, validation_errors: &[String]) {
+    fn update_status(&self, ed: &mut EdgionData, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = ed.metadata.generation;
 
         // Compute both conditions first (both need immutable access to `ed` / `ctx`),

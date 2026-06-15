@@ -204,12 +204,6 @@ mod tests {
         GlobalConnectionIpRestrictionPlugin::new(&entry, "default").expect("valid base")
     }
 
-    /// Construct a plugin with a permissive base (allow all except one CIDR).
-    fn plugin_allow_all() -> GlobalConnectionIpRestrictionPlugin {
-        let entry = make_entry("main", DefaultAction::Allow, None, Some("192.168.99.0/24"));
-        GlobalConnectionIpRestrictionPlugin::new(&entry, "default").expect("valid base")
-    }
-
     #[tokio::test]
     async fn no_overlay_base_allow_loopback() {
         let plugin = plugin_deny_nonloopback();

@@ -132,6 +132,31 @@ migration needed.
 
 ---
 
+## I3 — [DESIGN CONSISTENCY] GlobalConnIp keeps a dual path
+
+**Status:** GREEN + tested (not a bug). Decision pending.
+
+**Observation (S11):** After S4, the standalone `DataEntry::GlobalConnectionIpRestriction` variant still
+exists and is consumed:
+- `edgion-resources/src/resources/data/mod.rs:152,180` — variant declaration + `validate_pre_parse`
+- `edgion-gateway/src/plugins/runtime/data/conf_handler.rs:178` — `build_indexes` match arm
+- 4 integration-test fixtures use `type: GlobalConnectionIpRestriction` (standalone full-config entries)
+
+This means the old **full-config-in-EdgionData** path coexists with the new
+**base(EdgionStreamPlugins) + overlay(GlobalConnIpRestrictionOverride)** path introduced in S4. This is
+asymmetric with RegionRoute, which fully removed its old variants (`ClusterRegionRoute`,
+`ServiceRegionRoute`) and has no legacy path left.
+
+**Options:**
+- **(a) Keep the standalone variant** as a legitimate "full standalone config" option: document it, mark it
+  stable, and treat base+overlay as the structured alternative. No code change needed.
+- **(b) Remove it for symmetry:** migrate the 4 fixtures to the base+overlay model, drop the
+  `conf_handler` index arm, and remove the variant. Mirrors the RegionRoute cleanup in S3.
+
+**No behavior change is implied by either choice.** Leave the decision to the user; do not change behavior.
+
+---
+
 ## S7 Deviations (noted during execution)
 
 ### D-S7-A — EdgionData CRD type enum was stale (two removed variants, two missing new ones)
