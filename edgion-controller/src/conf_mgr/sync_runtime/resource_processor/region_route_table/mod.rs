@@ -1,7 +1,7 @@
 //! RegionRoute Tables
 //!
 //! Pre-built indexes for RegionRoute data maintained by the Controller.
-//! Updated incrementally by PluginMetaData and EdgionPlugins handlers on change/delete.
+//! Updated incrementally by EdgionData and EdgionPlugins handlers on change/delete.
 //! API handlers read from these tables instead of scanning all resources.
 //!
 //! ## Tables

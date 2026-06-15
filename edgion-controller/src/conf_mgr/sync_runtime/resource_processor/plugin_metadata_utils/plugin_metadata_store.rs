@@ -1,6 +1,6 @@
-//! PluginMetaData Store
+//! EdgionData controller store
 //!
-//! Provides a store for PluginMetaData resources accessible during EdgionPlugins processing.
+//! Provides a store for EdgionData resources accessible during EdgionPlugins processing.
 //!
 //! This is control-plane code with low read/write frequency,
 //! so a simple RwLock<HashMap> is sufficient.
@@ -8,13 +8,13 @@
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 
-use edgion_resources::prelude_resources::PluginMetaData;
+use edgion_resources::prelude_resources::EdgionData;
 
-/// Store for PluginMetaData resources.
+/// Store for EdgionData resources (controller-side, low-frequency access).
 ///
 /// Key format: "namespace/name" (namespaced resources only).
 pub struct PluginMetaDataStore {
-    data: RwLock<HashMap<String, PluginMetaData>>,
+    data: RwLock<HashMap<String, EdgionData>>,
 }
 
 impl PluginMetaDataStore {
@@ -24,22 +24,22 @@ impl PluginMetaDataStore {
         }
     }
 
-    /// Get a PluginMetaData by namespace and name.
-    pub fn get(&self, namespace: Option<&str>, name: &str) -> Option<PluginMetaData> {
+    /// Get an EdgionData by namespace and name.
+    pub fn get(&self, namespace: Option<&str>, name: &str) -> Option<EdgionData> {
         let key = Self::make_key(namespace, name);
         let map = self.data.read();
         map.get(&key).cloned()
     }
 
     /// Replace all entries (used during reset).
-    pub fn replace_all(&self, data: HashMap<String, PluginMetaData>) {
+    pub fn replace_all(&self, data: HashMap<String, EdgionData>) {
         let count = data.len();
         let mut map = self.data.write();
         *map = data;
         tracing::debug!(
-            component = "plugin_metadata_store",
+            component = "edgion_data_store",
             count = count,
-            "Replaced all PluginMetaData entries"
+            "Replaced all EdgionData entries"
         );
     }
 
@@ -47,15 +47,15 @@ impl PluginMetaDataStore {
     ///
     /// - `upsert`: entries to add or update
     /// - `remove`: keys of entries to remove
-    pub fn update(&self, upsert: HashMap<String, PluginMetaData>, remove: &HashSet<String>) {
+    pub fn update(&self, upsert: HashMap<String, EdgionData>, remove: &HashSet<String>) {
         let mut map = self.data.write();
         for key in remove {
             map.remove(key);
         }
-        for (key, pm) in upsert {
-            map.insert(key, pm);
+        for (key, ed) in upsert {
+            map.insert(key, ed);
         }
-        tracing::debug!(component = "plugin_metadata_store", "Updated PluginMetaData store");
+        tracing::debug!(component = "edgion_data_store", "Updated EdgionData store");
     }
 
     /// Build a "namespace/name" key.

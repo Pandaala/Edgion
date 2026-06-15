@@ -1,14 +1,14 @@
-# RegionRoute - main config using ServiceRegionRoute PluginMetaData
+# RegionRoute - main config using ServiceRegionRoute EdgionData
 #
-# All routing config comes from the ServiceRegionRoute PluginMetaData "region-route-main",
-# which in turn references the ClusterRegionRoute PluginMetaData "global-region-conf" via clusterRef.
+# All routing config comes from the ServiceRegionRoute EdgionData "region-route-main",
+# which in turn references the ClusterRegionRoute EdgionData "global-region-conf" via clusterRef.
 #
-# This tests the full PluginMetaData resolve flow:
-#   1. Controller resolves serviceRegionRouteRef → loads ServiceRegionRoute PluginMetaData
-#   2. ServiceRegionRoute PluginMetaData's clusterRef → loads ClusterRegionRoute PluginMetaData for topology + routing rules
+# This tests the full EdgionData resolve flow:
+#   1. Controller resolves serviceRegionRouteRef → loads ServiceRegionRoute EdgionData
+#   2. ServiceRegionRoute EdgionData's clusterRef → loads ClusterRegionRoute EdgionData for topology + routing rules
 #   3. Gateway receives the merged config with route rules + matchMap
 #
-# Two regions (from ClusterRegionRoute PluginMetaData):
+# Two regions (from ClusterRegionRoute EdgionData):
 #   virginia: 127.0.0.1:30001  hashRange [0, 599]  (60%)
 #   ohio:     127.0.0.1:30002  hashRange [600, 999] (40%)
 apiVersion: edgion.io/v1

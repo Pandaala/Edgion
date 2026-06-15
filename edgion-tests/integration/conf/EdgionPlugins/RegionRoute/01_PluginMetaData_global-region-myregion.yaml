@@ -1,4 +1,4 @@
-# ClusterRegionRoute PluginMetaData for region-route-myregion
+# ClusterRegionRoute EdgionData for region-route-myregion
 #
 # Three-region topology with myRegion=virginia (local pass-through).
 # europe failoverTo=ohio; ohio failoverTo=virginia.
@@ -11,12 +11,12 @@
 # routeRules only uses RouteByDirectRegion so that test requests with X-Direct-Region
 # route deterministically; no hash routing needed for myRegion tests.
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionData
 metadata:
   name: global-region-myregion
   namespace: edgion-default
 spec:
-  metadata:
+  data:
     type: ClusterRegionRoute
     config:
         myRegion: virginia

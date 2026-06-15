@@ -1,52 +1,52 @@
-// PluginMetaData Status Integration Test Suite
+// EdgionData Status Integration Test Suite
 //
-// Verifies the Accepted and ResolvedRefs status conditions on PluginMetaData resources.
+// Verifies the Accepted and ResolvedRefs status conditions on EdgionData resources.
 //
-// Required conf files (edgion-tests/integration/conf/EdgionPlugins/PluginMetaDataStatus/):
-//   01_PluginMetaData_pm-status-gcir-valid.yaml        — valid GCIR PM
-//   02_PluginMetaData_pm-status-gcir-invalid.yaml      — GCIR PM with bad activeProfile
-//   03_PluginMetaData_pm-status-cluster-valid.yaml     — valid ClusterRegionRoute PM
-//   04_PluginMetaData_pm-status-service-good-ref.yaml  — ServiceRegionRoute w/ valid clusterRef
-//   05_PluginMetaData_pm-status-service-missing-ref.yaml — ServiceRegionRoute w/ missing clusterRef
-//   06_PluginMetaData_pm-status-service-wrong-type-ref.yaml — ServiceRegionRoute w/ wrong-type ref
+// Required conf files (edgion-tests/integration/conf/EdgionPlugins/EdgionDataStatus/):
+//   01_EdgionData_pm-status-gcir-valid.yaml        — valid GCIR PM
+//   02_EdgionData_pm-status-gcir-invalid.yaml      — GCIR PM with bad activeProfile
+//   03_EdgionData_pm-status-cluster-valid.yaml     — valid ClusterRegionRoute PM
+//   04_EdgionData_pm-status-service-good-ref.yaml  — ServiceRegionRoute w/ valid clusterRef
+//   05_EdgionData_pm-status-service-missing-ref.yaml — ServiceRegionRoute w/ missing clusterRef
+//   06_EdgionData_pm-status-service-wrong-type-ref.yaml — ServiceRegionRoute w/ wrong-type ref
 //
 // Scenarios:
 //   1. valid GCIR PM          → Accepted=True, ResolvedRefs=True
 //   2. invalid GCIR PM        → Accepted=False/Invalid, message contains "activeProfile"
 //   3. ClusterRegionRoute PM  → Accepted=True, ResolvedRefs=True
 //   4. ServiceRegionRoute, valid clusterRef  → Accepted=True, ResolvedRefs=True
-//   5. ServiceRegionRoute, missing clusterRef → Accepted=True, ResolvedRefs=False/InvalidPluginMetaDataRef
-//   6. ServiceRegionRoute, wrong-type ref    → Accepted=True, ResolvedRefs=False/InvalidPluginMetaDataRef
+//   5. ServiceRegionRoute, missing clusterRef → Accepted=True, ResolvedRefs=False/InvalidEdgionDataRef
+//   6. ServiceRegionRoute, wrong-type ref    → Accepted=True, ResolvedRefs=False/InvalidEdgionDataRef
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
 
 const NS: &str = "edgion-test";
 
-pub struct PluginMetaDataStatusTestSuite;
+pub struct EdgionDataStatusTestSuite;
 
-impl PluginMetaDataStatusTestSuite {
+impl EdgionDataStatusTestSuite {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Default for PluginMetaDataStatusTestSuite {
+impl Default for EdgionDataStatusTestSuite {
     fn default() -> Self {
         Self::new()
     }
 }
 
 // ---------------------------------------------------------------------------
-// Helper: poll the configserver API for a PluginMetaData and return its status
+// Helper: poll the configserver API for a EdgionData and return its status
 // conditions, retrying up to 20 times with 500ms delay.
 // ---------------------------------------------------------------------------
 
-/// Fetch status.conditions for a PluginMetaData from the configserver API.
+/// Fetch status.conditions for a EdgionData from the configserver API.
 /// Returns Ok(conditions_array) on success or Err(last_error_message) after 20 retries.
 async fn fetch_conditions(ctx: &TestContext, name: &str) -> Result<Vec<serde_json::Value>, String> {
     let url = format!(
-        "{}/configserver/PluginMetaData?namespace={}&name={}",
+        "{}/configserver/EdgionData?namespace={}&name={}",
         ctx.admin_api_url(),
         NS,
         name
@@ -98,7 +98,7 @@ fn find_condition<'a>(conditions: &'a [serde_json::Value], type_: &str) -> Optio
     conditions.iter().find(|c| c["type"].as_str() == Some(type_))
 }
 
-impl PluginMetaDataStatusTestSuite {
+impl EdgionDataStatusTestSuite {
     // =========================================================================
     // Scenario 1: valid GCIR PM → Accepted=True, ResolvedRefs=True
     // =========================================================================
@@ -164,7 +164,7 @@ impl PluginMetaDataStatusTestSuite {
 
                     // Poll until Accepted=False appears (may take a few cycles)
                     let url = format!(
-                        "{}/configserver/PluginMetaData?namespace={}&name={}",
+                        "{}/configserver/EdgionData?namespace={}&name={}",
                         ctx.admin_api_url(),
                         NS,
                         name
@@ -346,13 +346,13 @@ impl PluginMetaDataStatusTestSuite {
 
     // =========================================================================
     // Scenario 5: ServiceRegionRoute, clusterRef points at non-existent PM
-    //             → Accepted=True, ResolvedRefs=False/InvalidPluginMetaDataRef
+    //             → Accepted=True, ResolvedRefs=False/InvalidEdgionDataRef
     // =========================================================================
 
     fn pm_status_service_missing_ref() -> TestCase {
         TestCase::new(
             "pm_status_service_missing_ref",
-            "ServiceRegionRoute PM 'pm-status-service-missing-ref': ResolvedRefs=False/InvalidPluginMetaDataRef",
+            "ServiceRegionRoute PM 'pm-status-service-missing-ref': ResolvedRefs=False/InvalidEdgionDataRef",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -378,10 +378,10 @@ impl PluginMetaDataStatusTestSuite {
                                             format!("ResolvedRefs should be False: {:?}", r),
                                         );
                                     }
-                                    if r["reason"].as_str() != Some("InvalidPluginMetaDataRef") {
+                                    if r["reason"].as_str() != Some("InvalidEdgionDataRef") {
                                         return TestResult::failed(
                                             start.elapsed(),
-                                            format!("ResolvedRefs reason should be InvalidPluginMetaDataRef: {:?}", r),
+                                            format!("ResolvedRefs reason should be InvalidEdgionDataRef: {:?}", r),
                                         );
                                     }
                                     let msg = r["message"].as_str().unwrap_or("");
@@ -393,8 +393,7 @@ impl PluginMetaDataStatusTestSuite {
                                     }
                                     TestResult::passed_with_message(
                                         start.elapsed(),
-                                        "ResolvedRefs=False/InvalidPluginMetaDataRef for missing clusterRef"
-                                            .to_string(),
+                                        "ResolvedRefs=False/InvalidEdgionDataRef for missing clusterRef".to_string(),
                                     )
                                 }
                                 _ => {
@@ -410,7 +409,7 @@ impl PluginMetaDataStatusTestSuite {
 
     // =========================================================================
     // Scenario 6: ServiceRegionRoute, clusterRef points at existing but wrong-type PM
-    //             → ResolvedRefs=False/InvalidPluginMetaDataRef
+    //             → ResolvedRefs=False/InvalidEdgionDataRef
     // =========================================================================
 
     fn pm_status_service_wrong_type_ref() -> TestCase {
@@ -435,11 +434,11 @@ impl PluginMetaDataStatusTestSuite {
                                             format!("ResolvedRefs should be False (wrong-type ref): {:?}", r),
                                         );
                                     }
-                                    if r["reason"].as_str() != Some("InvalidPluginMetaDataRef") {
+                                    if r["reason"].as_str() != Some("InvalidEdgionDataRef") {
                                         return TestResult::failed(
                                             start.elapsed(),
                                             format!(
-                                                "ResolvedRefs reason should be InvalidPluginMetaDataRef: {:?}",
+                                                "ResolvedRefs reason should be InvalidEdgionDataRef: {:?}",
                                                 r
                                             ),
                                         );
@@ -458,7 +457,7 @@ impl PluginMetaDataStatusTestSuite {
                                     }
                                     TestResult::passed_with_message(
                                         start.elapsed(),
-                                        "ResolvedRefs=False/InvalidPluginMetaDataRef for wrong-type clusterRef"
+                                        "ResolvedRefs=False/InvalidEdgionDataRef for wrong-type clusterRef"
                                             .to_string(),
                                     )
                                 }
@@ -475,9 +474,9 @@ impl PluginMetaDataStatusTestSuite {
     }
 }
 
-impl TestSuite for PluginMetaDataStatusTestSuite {
+impl TestSuite for EdgionDataStatusTestSuite {
     fn name(&self) -> &str {
-        "PluginMetaDataStatus"
+        "EdgionDataStatus"
     }
 
     fn test_cases(&self) -> Vec<TestCase> {

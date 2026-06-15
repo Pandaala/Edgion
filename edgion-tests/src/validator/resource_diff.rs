@@ -345,9 +345,9 @@ const RESOURCE_TYPES: &[(&str, &str, &str)] = &[
     ),
     ("LinkSys", "/api/v1/namespaced/LinkSys", "/configclient/linksys/list"),
     (
-        "PluginMetaData",
-        "/api/v1/namespaced/PluginMetaData",
-        "/configclient/pluginmetadata/list",
+        "EdgionData",
+        "/api/v1/namespaced/EdgionData",
+        "/configclient/edgiondata/list",
     ),
 ];
 

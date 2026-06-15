@@ -1,4 +1,4 @@
-//! GlobalConnectionIpRestriction PluginMetaData variant — L4 TCP connection-phase IP restriction.
+//! GlobalConnectionIpRestriction EdgionData variant — L4 TCP connection-phase IP restriction.
 
 use crate::matcher::ip_cidr_helpers::{build_grouped_matcher, evaluate_ip_access};
 use crate::matcher::ip_radix_tree::IpRadixMatcher;

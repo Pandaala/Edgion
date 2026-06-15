@@ -1,10 +1,10 @@
-// GlobalConnectionIpRestriction PluginMetaData Integration Test Suite
+// GlobalConnectionIpRestriction EdgionData Integration Test Suite
 //
-// Verifies that PluginMetaData resources with type=GlobalConnectionIpRestriction are correctly
+// Verifies that EdgionData resources with type=GlobalConnectionIpRestriction are correctly
 // parsed, stored, and accepted by the controller via the configserver API.
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/GlobalConnectionIpRestriction/):
-//   01_PluginMetaData_gcir-smoke.yaml — GCIR PluginMetaData with two profiles (p1 + strict)
+//   01_EdgionData_gcir-smoke.yaml — GCIR EdgionData with two profiles (p1 + strict)
 //
 // Scenarios:
 //   1. gcir_pm_exists: Verify the PM is stored via configserver API with correct metadata type
@@ -41,13 +41,13 @@ impl GlobalConnectionIpRestrictionTestSuite {
     fn gcir_pm_exists() -> TestCase {
         TestCase::new(
             "gcir_pm_exists",
-            "PluginMetaData 'gcir-smoke' exists with type=GlobalConnectionIpRestriction",
+            "EdgionData 'gcir-smoke' exists with type=GlobalConnectionIpRestriction",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
                     let url = format!(
-                        "{}/configserver/PluginMetaData?namespace={}&name={}",
+                        "{}/configserver/EdgionData?namespace={}&name={}",
                         ctx.admin_api_url(),
                         GCIR_NS,
                         GCIR_NAME
@@ -122,13 +122,13 @@ impl GlobalConnectionIpRestrictionTestSuite {
     fn gcir_pm_accepted() -> TestCase {
         TestCase::new(
             "gcir_pm_accepted",
-            "PluginMetaData 'gcir-smoke' has Accepted=True condition",
+            "EdgionData 'gcir-smoke' has Accepted=True condition",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
                     let url = format!(
-                        "{}/configserver/PluginMetaData?namespace={}&name={}",
+                        "{}/configserver/EdgionData?namespace={}&name={}",
                         ctx.admin_api_url(),
                         GCIR_NS,
                         GCIR_NAME
@@ -210,13 +210,13 @@ impl GlobalConnectionIpRestrictionTestSuite {
     fn gcir_pm_config_structure() -> TestCase {
         TestCase::new(
             "gcir_pm_config_structure",
-            "PluginMetaData 'gcir-smoke' config has expected profiles (p1=deny, strict=allow)",
+            "EdgionData 'gcir-smoke' config has expected profiles (p1=deny, strict=allow)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
                     let url = format!(
-                        "{}/configserver/PluginMetaData?namespace={}&name={}",
+                        "{}/configserver/EdgionData?namespace={}&name={}",
                         ctx.admin_api_url(),
                         GCIR_NS,
                         GCIR_NAME

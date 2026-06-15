@@ -1,11 +1,11 @@
-//! PluginMetaData gateway store and ConfHandler
+//! EdgionData gateway store and ConfHandler
 //!
 //! ArcSwap-backed store with pre-indexed typed maps for zero-clone lookups.
 //!
 //! At conf change time (low frequency):
-//!   ConfHandler receives `Arc<PluginMetaData>` → builds a new Snapshot
+//!   ConfHandler receives `Arc<EdgionData>` → builds a new Snapshot
 //!   (raw + typed indexes) and swaps it in atomically.
-//!   enum `MetaDataEntry` is resolved once here, not per request.
+//!   enum `DataEntry` is resolved once here, not per request.
 //!
 //! At request time (high frequency):
 //!   Typed getters return `Arc<Config>` — no cloning, no enum iteration.
@@ -16,49 +16,43 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::resources::plugin_metadata::{
-    ClusterRegionRouteConfig, GlobalConnectionIpRestrictionData, IpListData, KeyListData, MetaDataEntry,
-    PluginMetaData, ServiceRegionRouteConfig,
+use edgion_resources::resources::data::{
+    ClusterRegionRouteConfig, DataEntry, EdgionData, GlobalConnectionIpRestrictionData, ServiceRegionRouteConfig,
 };
 
-static GLOBAL_PLUGIN_METADATA_STORE: LazyLock<Arc<PluginMetaDataGatewayStore>> =
-    LazyLock::new(|| Arc::new(PluginMetaDataGatewayStore::new()));
+static GLOBAL_EDGION_DATA_STORE: LazyLock<Arc<EdgionDataStore>> = LazyLock::new(|| Arc::new(EdgionDataStore::new()));
 
-pub fn get_global_plugin_metadata_store() -> Arc<PluginMetaDataGatewayStore> {
-    GLOBAL_PLUGIN_METADATA_STORE.clone()
+pub fn get_global_edgion_data_store() -> Arc<EdgionDataStore> {
+    GLOBAL_EDGION_DATA_STORE.clone()
 }
 
-pub fn create_plugin_metadata_handler() -> Box<dyn ConfHandler<PluginMetaData> + Send + Sync> {
-    Box::new(get_global_plugin_metadata_store())
+pub fn create_edgion_data_handler() -> Box<dyn ConfHandler<EdgionData> + Send + Sync> {
+    Box::new(get_global_edgion_data_store())
 }
 
-/// Count PluginMetaData entries in the global store.
-pub fn count_plugin_metadata() -> usize {
-    GLOBAL_PLUGIN_METADATA_STORE.count()
+/// Count EdgionData entries in the global store.
+pub fn count_edgion_data() -> usize {
+    GLOBAL_EDGION_DATA_STORE.count()
 }
 
-/// List all keys ("namespace/name") in the global PluginMetaData store.
-#[allow(dead_code)] // Consumed by validator/sample-diagnostics (Task 15/16); allow until then.
-pub fn plugin_metadata_keys() -> Vec<String> {
-    GLOBAL_PLUGIN_METADATA_STORE.keys()
+/// List all keys ("namespace/name") in the global EdgionData store.
+#[allow(dead_code)] // Consumed by validator/sample-diagnostics; allow until then.
+pub fn edgion_data_keys() -> Vec<String> {
+    GLOBAL_EDGION_DATA_STORE.keys()
 }
 
-/// Raw PluginMetaData map. Key: "namespace/name" (e.g. "edgion-default/global-region-conf").
-type RawMap = HashMap<String, Arc<PluginMetaData>>;
+/// Raw EdgionData map. Key: "namespace/name" (e.g. "edgion-default/global-region-conf").
+type RawMap = HashMap<String, Arc<EdgionData>>;
 
-/// Type-indexed config maps. Key: same "namespace/name" as the parent PluginMetaData.
+/// Type-indexed config maps. Key: same "namespace/name" as the parent EdgionData.
 type ClusterRegionRouteConfigMap = HashMap<String, Arc<ClusterRegionRouteConfig>>;
 type ServiceRegionRouteConfigMap = HashMap<String, Arc<ServiceRegionRouteConfig>>;
-type KeyListConfigMap = HashMap<String, Arc<KeyListData>>;
-type IpListConfigMap = HashMap<String, Arc<IpListData>>;
 type GlobalConnectionIpRestrictionMap = HashMap<String, Arc<GlobalConnectionIpRestrictionData>>;
 
 /// All typed indexes bundled into a single struct so they can be swapped atomically.
 struct TypedIndexes {
     cluster_region_route_configs: ClusterRegionRouteConfigMap,
     service_region_route_configs: ServiceRegionRouteConfigMap,
-    key_list_configs: KeyListConfigMap,
-    ip_list_configs: IpListConfigMap,
     global_connection_ip_restrictions: GlobalConnectionIpRestrictionMap,
 }
 
@@ -70,8 +64,8 @@ struct Snapshot {
     indexes: TypedIndexes,
 }
 
-pub struct PluginMetaDataGatewayStore {
-    /// Single ArcSwap holding the raw PluginMetaData map together with all typed
+pub struct EdgionDataStore {
+    /// Single ArcSwap holding the raw EdgionData map together with all typed
     /// indexes derived from it. Writes (`replace_all` / `update`) build a fresh
     /// `Snapshot` and publish it with one store; readers always see a self-consistent
     /// view.
@@ -82,13 +76,13 @@ pub struct PluginMetaDataGatewayStore {
     snapshot: ArcSwap<Snapshot>,
 }
 
-impl Default for PluginMetaDataGatewayStore {
+impl Default for EdgionDataStore {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PluginMetaDataGatewayStore {
+impl EdgionDataStore {
     pub fn new() -> Self {
         Self {
             snapshot: ArcSwap::from_pointee(Snapshot {
@@ -96,8 +90,6 @@ impl PluginMetaDataGatewayStore {
                 indexes: TypedIndexes {
                     cluster_region_route_configs: HashMap::new(),
                     service_region_route_configs: HashMap::new(),
-                    key_list_configs: HashMap::new(),
-                    ip_list_configs: HashMap::new(),
                     global_connection_ip_restrictions: HashMap::new(),
                 },
             }),
@@ -106,13 +98,13 @@ impl PluginMetaDataGatewayStore {
 
     // ── Audit / stats ───────────────────────────────────────────────────────
 
-    /// Number of PluginMetaData entries currently in the store.
+    /// Number of EdgionData entries currently in the store.
     pub fn count(&self) -> usize {
         self.snapshot.load().raw.len()
     }
 
     /// Keys currently in the store (snapshot copy).
-    #[allow(dead_code)] // Consumed by validator/sample-diagnostics (Task 15/16); allow until then.
+    #[allow(dead_code)] // Consumed by validator/sample-diagnostics; allow until then.
     pub fn keys(&self) -> Vec<String> {
         self.snapshot.load().raw.keys().cloned().collect()
     }
@@ -139,22 +131,6 @@ impl PluginMetaDataGatewayStore {
         let snap = self.snapshot.load();
         snap.indexes
             .service_region_route_configs
-            .get(&format!("{}/{}", namespace, name))
-            .cloned()
-    }
-
-    pub fn get_key_list_config(&self, namespace: &str, name: &str) -> Option<Arc<KeyListData>> {
-        let snap = self.snapshot.load();
-        snap.indexes
-            .key_list_configs
-            .get(&format!("{}/{}", namespace, name))
-            .cloned()
-    }
-
-    pub fn get_ip_list_config(&self, namespace: &str, name: &str) -> Option<Arc<IpListData>> {
-        let snap = self.snapshot.load();
-        snap.indexes
-            .ip_list_configs
             .get(&format!("{}/{}", namespace, name))
             .cloned()
     }
@@ -196,25 +172,24 @@ impl PluginMetaDataGatewayStore {
     fn build_indexes(raw: &RawMap) -> TypedIndexes {
         let mut global_rr = ClusterRegionRouteConfigMap::new();
         let mut service_rr = ServiceRegionRouteConfigMap::new();
-        let mut key_lists = KeyListConfigMap::new();
-        let mut ip_lists = IpListConfigMap::new();
         let mut global_ip_restrictions = GlobalConnectionIpRestrictionMap::new();
 
-        for (key, pm) in raw {
-            match &pm.spec.metadata {
-                MetaDataEntry::ClusterRegionRoute(cfg) => {
+        for (key, ed) in raw {
+            match &ed.spec.data {
+                DataEntry::ClusterRegionRoute(cfg) => {
                     global_rr.insert(key.clone(), Arc::new(cfg.clone()));
                 }
-                MetaDataEntry::ServiceRegionRoute(cfg) => {
+                DataEntry::ServiceRegionRoute(cfg) => {
                     service_rr.insert(key.clone(), Arc::new(cfg.clone()));
                 }
-                MetaDataEntry::KeyList(cfg) => {
-                    key_lists.insert(key.clone(), Arc::new(cfg.clone()));
+                DataEntry::KeyList(_) => {
+                    // No index — KeyList/IpList are standard primitives with no live consumer yet.
+                    // Plumbing will be rebuilt when a real consumer is wired (D1).
                 }
-                MetaDataEntry::IpList(cfg) => {
-                    ip_lists.insert(key.clone(), Arc::new(cfg.clone()));
+                DataEntry::IpList(_) => {
+                    // No index — see KeyList comment above.
                 }
-                MetaDataEntry::GlobalConnectionIpRestriction(data) => {
+                DataEntry::GlobalConnectionIpRestriction(data) => {
                     let mut cloned = data.clone();
                     match cloned.validate_and_init() {
                         Ok(()) => {
@@ -222,9 +197,9 @@ impl PluginMetaDataGatewayStore {
                         }
                         Err(e) => {
                             tracing::error!(
-                                pm_key = %key,
+                                edgion_data_key = %key,
                                 error = %e,
-                                "GlobalConnectionIpRestriction PM rejected during index rebuild; skipping",
+                                "GlobalConnectionIpRestriction EdgionData rejected during index rebuild; skipping",
                             );
                         }
                     }
@@ -235,8 +210,6 @@ impl PluginMetaDataGatewayStore {
         TypedIndexes {
             cluster_region_route_configs: global_rr,
             service_region_route_configs: service_rr,
-            key_list_configs: key_lists,
-            ip_list_configs: ip_lists,
             global_connection_ip_restrictions: global_ip_restrictions,
         }
     }
@@ -262,20 +235,20 @@ impl PluginMetaDataGatewayStore {
 
 // ── ConfHandler ─────────────────────────────────────────────────────────────
 
-impl ConfHandler<PluginMetaData> for PluginMetaDataGatewayStore {
-    fn full_set(&self, data: &HashMap<String, Arc<PluginMetaData>>) {
-        tracing::info!(component = "plugin_metadata_store", cnt = data.len(), "full set");
+impl ConfHandler<EdgionData> for EdgionDataStore {
+    fn full_set(&self, data: &HashMap<String, Arc<EdgionData>>) {
+        tracing::info!(component = "edgion_data_store", cnt = data.len(), "full set");
         self.replace_all(data.clone());
     }
 
     fn partial_update(
         &self,
-        add: HashMap<String, Arc<PluginMetaData>>,
-        update: HashMap<String, Arc<PluginMetaData>>,
+        add: HashMap<String, Arc<EdgionData>>,
+        update: HashMap<String, Arc<EdgionData>>,
         remove: HashSet<String>,
     ) {
         tracing::info!(
-            component = "plugin_metadata_store",
+            component = "edgion_data_store",
             add = add.len(),
             update = update.len(),
             rm = remove.len(),
@@ -290,11 +263,11 @@ impl ConfHandler<PluginMetaData> for PluginMetaDataGatewayStore {
 #[cfg(test)]
 mod stats_tests {
     use super::*;
-    use edgion_resources::resources::plugin_metadata::{IpGroup, KeyGroup, PluginMetaDataSpec};
+    use edgion_resources::resources::data::{EdgionDataSpec, IpGroup, KeyGroup};
 
     #[test]
     fn count_returns_zero_initially() {
-        let store = PluginMetaDataGatewayStore::new();
+        let store = EdgionDataStore::new();
         assert_eq!(store.count(), 0);
         assert!(store.keys().is_empty());
     }
@@ -304,11 +277,13 @@ mod stats_tests {
     /// so a reader after replace_all sees both sides at the same generation.
     #[test]
     fn replace_all_publishes_raw_and_indexes_in_same_generation() {
-        let store = PluginMetaDataGatewayStore::new();
+        use edgion_resources::resources::data::{IpListData, KeyListData, KeyMatchMode};
 
-        let ip_pm = {
-            let spec = PluginMetaDataSpec {
-                metadata: MetaDataEntry::IpList(IpListData {
+        let store = EdgionDataStore::new();
+
+        let ip_ed = {
+            let spec = EdgionDataSpec {
+                data: DataEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "default".into(),
                         description: None,
@@ -316,19 +291,14 @@ mod stats_tests {
                     }],
                 }),
             };
-            let mut pm = PluginMetaData::new("ip-allow", spec);
-            pm.metadata.namespace = Some("ns1".to_string());
-            Arc::new(pm)
+            let mut ed = EdgionData::new("ip-allow", spec);
+            ed.metadata.namespace = Some("ns1".to_string());
+            Arc::new(ed)
         };
-        let key_pm = {
-            let spec = PluginMetaDataSpec {
-                metadata: MetaDataEntry::KeyList(KeyListData {
-                    match_mode: Default::default(),
-                    // Single empty default group preserves the original
-                    // "empty-metadata publish" semantics under the new
-                    // Vec<KeyGroup> schema. validate_pre_parse is NOT
-                    // called here (mock construct), so empty items is
-                    // accepted.
+        let key_ed = {
+            let spec = EdgionDataSpec {
+                data: DataEntry::KeyList(KeyListData {
+                    match_mode: KeyMatchMode::default(),
                     items: vec![KeyGroup {
                         name: "default".to_string(),
                         description: None,
@@ -336,20 +306,18 @@ mod stats_tests {
                     }],
                 }),
             };
-            let mut pm = PluginMetaData::new("key-list", spec);
-            pm.metadata.namespace = Some("ns2".to_string());
-            Arc::new(pm)
+            let mut ed = EdgionData::new("key-list", spec);
+            ed.metadata.namespace = Some("ns2".to_string());
+            Arc::new(ed)
         };
 
         let mut raw: RawMap = HashMap::new();
-        raw.insert("ns1/ip-allow".to_string(), ip_pm);
-        raw.insert("ns2/key-list".to_string(), key_pm);
+        raw.insert("ns1/ip-allow".to_string(), ip_ed);
+        raw.insert("ns2/key-list".to_string(), key_ed);
         store.replace_all(raw);
 
+        // IpList and KeyList are no longer indexed (D1), but raw count and keys must reflect them.
         assert_eq!(store.count(), 2);
         assert_eq!(store.keys().len(), 2);
-        assert!(store.get_ip_list_config("ns1", "ip-allow").is_some());
-        assert!(store.get_key_list_config("ns2", "key-list").is_some());
-        assert!(store.get_ip_list_config("ns2", "key-list").is_none());
     }
 }

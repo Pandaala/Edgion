@@ -1,4 +1,4 @@
-//! PluginMetaData utilities for resource processing
+//! EdgionData utilities for resource processing
 
 mod plugin_metadata_store;
 mod ref_manager;

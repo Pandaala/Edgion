@@ -1,4 +1,4 @@
-# HTTPRoute for PluginMetaDataManagedRegionRoute tests.
+# HTTPRoute for EdgionDataManagedRegionRoute tests.
 # Normal backend test-http:30001 used for pass-through tests.
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute

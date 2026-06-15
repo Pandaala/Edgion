@@ -189,7 +189,7 @@ pub async fn run_supervisor<F>(
 /// Swap the authorizer's Center policy from a config snapshot.
 ///
 /// `None` rbac => built-in default policy (read-all-except-Secret +
-/// PluginMetaData write + RegionRoute failover). `Some(r)` => operator's
+/// EdgionData write + RegionRoute failover). `Some(r)` => operator's
 /// explicit config used verbatim.
 fn swap_policy_from(authorizer: &Authorizer, cfg: &CenterClientConfig) {
     let policy = crate::fed_sync::default_policy::center_policy_from(cfg.rbac.as_ref());

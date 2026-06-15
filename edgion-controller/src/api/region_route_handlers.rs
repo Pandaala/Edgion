@@ -1,4 +1,4 @@
-//! Region Route PluginMetaData API handlers
+//! Region Route EdgionData API handlers
 //!
 //! GET /api/v1/cluster-region-routes
 //!   Lists all ClusterRegionRoute entries from the pre-built table.
@@ -7,10 +7,10 @@
 //!   Lists all ServiceRegionRoute entries from the pre-built table.
 //!
 //! POST /api/v1/cluster-region-routes/failover
-//!   Modifies a single region's failoverTo in a ClusterRegionRoute PluginMetaData.
+//!   Modifies a single region's failoverTo in a ClusterRegionRoute EdgionData.
 //!
 //! POST /api/v1/service-region-routes/failover
-//!   Modifies a single region's failoverTo in a ServiceRegionRoute PluginMetaData.
+//!   Modifies a single region's failoverTo in a ServiceRegionRoute EdgionData.
 
 use axum::{extract::State, http::StatusCode, response::Json};
 use serde::{Deserialize, Serialize};
@@ -20,11 +20,11 @@ use crate::api::ListResponse;
 
 use super::types::AdminState;
 
-// ============= ClusterRegionRoute PluginMetaData Types =============
+// ============= ClusterRegionRoute EdgionData Types =============
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ClusterRegionPluginMetadataEntry {
+pub struct ClusterRegionEdgionDataEntry {
     pub namespace: String,
     pub name: String,
     pub my_region: String,
@@ -39,11 +39,11 @@ pub struct ClusterRegionPluginMetadataEntry {
     pub route_by_key_conf_match: Option<serde_json::Value>,
 }
 
-// ============= ServiceRegionRoute PluginMetaData Types =============
+// ============= ServiceRegionRoute EdgionData Types =============
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ServiceRegionPluginMetadataEntry {
+pub struct ServiceRegionEdgionDataEntry {
     pub namespace: String,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,7 +56,7 @@ pub struct ServiceRegionPluginMetadataEntry {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PluginMetadataFailoverRequest {
+pub struct EdgionDataFailoverRequest {
     pub namespace: String,
     pub name: String,
     pub region_name: String,
@@ -68,16 +68,16 @@ pub struct PluginMetadataFailoverRequest {
 
 /// `GET /api/v1/cluster-region-routes`
 ///
-/// Lists all ClusterRegionRoute PluginMetaData entries from the pre-built table.
-pub async fn list_cluster_region_plugin_metadata(
+/// Lists all ClusterRegionRoute EdgionData entries from the pre-built table.
+pub async fn list_cluster_region_edgion_data(
     State(state): State<Arc<AdminState>>,
-) -> Result<Json<ListResponse<ClusterRegionPluginMetadataEntry>>, StatusCode> {
+) -> Result<Json<ListResponse<ClusterRegionEdgionDataEntry>>, StatusCode> {
     let runtime = state.runtime();
     let entries = runtime.cluster_region_route_table.all();
 
-    let mut result: Vec<ClusterRegionPluginMetadataEntry> = entries
+    let mut result: Vec<ClusterRegionEdgionDataEntry> = entries
         .into_iter()
-        .map(|e| ClusterRegionPluginMetadataEntry {
+        .map(|e| ClusterRegionEdgionDataEntry {
             namespace: e.pm_namespace,
             name: e.pm_name,
             my_region: e.my_region,
@@ -99,16 +99,16 @@ pub async fn list_cluster_region_plugin_metadata(
 
 /// `GET /api/v1/service-region-routes`
 ///
-/// Lists all ServiceRegionRoute PluginMetaData entries from the pre-built table.
-pub async fn list_service_region_plugin_metadata(
+/// Lists all ServiceRegionRoute EdgionData entries from the pre-built table.
+pub async fn list_service_region_edgion_data(
     State(state): State<Arc<AdminState>>,
-) -> Result<Json<ListResponse<ServiceRegionPluginMetadataEntry>>, StatusCode> {
+) -> Result<Json<ListResponse<ServiceRegionEdgionDataEntry>>, StatusCode> {
     let runtime = state.runtime();
     let entries = runtime.service_region_route_table.all();
 
-    let mut result: Vec<ServiceRegionPluginMetadataEntry> = entries
+    let mut result: Vec<ServiceRegionEdgionDataEntry> = entries
         .into_iter()
-        .map(|e| ServiceRegionPluginMetadataEntry {
+        .map(|e| ServiceRegionEdgionDataEntry {
             namespace: e.pm_namespace,
             name: e.pm_name,
             cluster_ref: e.cluster_pm_ref.as_ref().and_then(|v| serde_json::to_value(v).ok()),
@@ -123,12 +123,12 @@ pub async fn list_service_region_plugin_metadata(
 
 /// `POST /api/v1/cluster-region-routes/failover`
 ///
-/// Modifies a single region's failoverTo in a local ClusterRegionRoute PluginMetaData.
-pub async fn cluster_plugin_metadata_failover(
+/// Modifies a single region's failoverTo in a local ClusterRegionRoute EdgionData.
+pub async fn cluster_edgion_data_failover(
     State(state): State<Arc<AdminState>>,
-    Json(body): Json<PluginMetadataFailoverRequest>,
+    Json(body): Json<EdgionDataFailoverRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    match patch_plugin_metadata_failover(
+    match patch_edgion_data_failover(
         &state,
         &body.namespace,
         &body.name,
@@ -146,12 +146,12 @@ pub async fn cluster_plugin_metadata_failover(
 
 /// `POST /api/v1/service-region-routes/failover`
 ///
-/// Modifies a single region's failoverTo in a local ServiceRegionRoute PluginMetaData.
-pub async fn service_plugin_metadata_failover(
+/// Modifies a single region's failoverTo in a local ServiceRegionRoute EdgionData.
+pub async fn service_edgion_data_failover(
     State(state): State<Arc<AdminState>>,
-    Json(body): Json<PluginMetadataFailoverRequest>,
+    Json(body): Json<EdgionDataFailoverRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    match patch_plugin_metadata_failover(
+    match patch_edgion_data_failover(
         &state,
         &body.namespace,
         &body.name,
@@ -169,11 +169,11 @@ pub async fn service_plugin_metadata_failover(
 
 // ============= Helpers =============
 
-/// GET the PluginMetaData from local storage, modify the region's failoverTo, then PUT back.
-async fn patch_plugin_metadata_failover(
+/// GET the EdgionData from local storage, modify the region's failoverTo, then PUT back.
+async fn patch_edgion_data_failover(
     state: &AdminState,
     namespace: &str,
-    plugin_metadata_name: &str,
+    edgion_data_name: &str,
     plugin_type: &str,
     region_name: &str,
     failover_to: &str,
@@ -187,21 +187,20 @@ async fn patch_plugin_metadata_failover(
     // the end of this function. See `super::resource_locks` and
     // `skills/04-review/concurrency/failover-read-modify-write-per-key-lock.md`.
     let _resource_guard =
-        super::resource_locks::lock_resource(ResourceKind::PluginMetaData.as_str(), namespace, plugin_metadata_name)
-            .await;
+        super::resource_locks::lock_resource(ResourceKind::EdgionData.as_str(), namespace, edgion_data_name).await;
 
     let resource = state
-        .center_get_resource(ResourceKind::PluginMetaData, namespace, plugin_metadata_name)
+        .center_get_resource(ResourceKind::EdgionData, namespace, edgion_data_name)
         .await
-        .map_err(|e| format!("failed to get PluginMetaData: {e}"))?
-        .ok_or_else(|| format!("PluginMetaData {}/{} not found", namespace, plugin_metadata_name))?;
+        .map_err(|e| format!("failed to get EdgionData: {e}"))?
+        .ok_or_else(|| format!("EdgionData {}/{} not found", namespace, edgion_data_name))?;
 
     let mut resource = resource;
 
-    // Find the plugin entry and modify the region's failoverTo.
+    // Find the data entry and modify the region's failoverTo.
     // Support both storage formats:
     //   - spec.plugins[].type/config (processed format)
-    //   - spec.metadata.type/config  (raw file format)
+    //   - spec.data.type/config      (raw file format)
     let mut modified = false;
 
     // Try processed format: spec.plugins[]
@@ -216,11 +215,11 @@ async fn patch_plugin_metadata_failover(
         }
     }
 
-    // Try raw file format: spec.metadata
+    // Try raw file format: spec.data
     if !modified {
-        if let Some(metadata) = resource.pointer_mut("/spec/metadata") {
-            if metadata.get("type").and_then(|t| t.as_str()) == Some(plugin_type) {
-                if let Some(regions) = metadata.pointer_mut("/config/regions").and_then(|r| r.as_array_mut()) {
+        if let Some(data) = resource.pointer_mut("/spec/data") {
+            if data.get("type").and_then(|t| t.as_str()) == Some(plugin_type) {
+                if let Some(regions) = data.pointer_mut("/config/regions").and_then(|r| r.as_array_mut()) {
                     modified = patch_region_failover(regions, region_name, failover_to);
                 }
             }
@@ -235,9 +234,9 @@ async fn patch_plugin_metadata_failover(
 
     let api = state.conf_center();
     api.update_one(
-        ResourceKind::PluginMetaData.as_str(),
+        ResourceKind::EdgionData.as_str(),
         Some(namespace),
-        plugin_metadata_name,
+        edgion_data_name,
         json_content,
     )
     .await
@@ -280,7 +279,7 @@ mod tests {
             "failoverTo": "west",
             "myRegion": "evil"
         }"#;
-        let result: Result<PluginMetadataFailoverRequest, _> = serde_json::from_str(json);
+        let result: Result<EdgionDataFailoverRequest, _> = serde_json::from_str(json);
         assert!(result.is_err(), "unknown field 'myRegion' must be rejected");
     }
 
@@ -292,7 +291,7 @@ mod tests {
             "regionName": "east",
             "failoverTo": "west"
         }"#;
-        let result: Result<PluginMetadataFailoverRequest, _> = serde_json::from_str(json);
+        let result: Result<EdgionDataFailoverRequest, _> = serde_json::from_str(json);
         let req = result.expect("canonical 4-field payload must be accepted");
         // Assert field values to verify rename_all = "camelCase" maps correctly.
         assert_eq!(req.namespace, "default");
@@ -310,7 +309,7 @@ mod tests {
             "regionName": "east",
             "failoverTo": ""
         }"#;
-        let result: Result<PluginMetadataFailoverRequest, _> = serde_json::from_str(json);
+        let result: Result<EdgionDataFailoverRequest, _> = serde_json::from_str(json);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().failover_to, "");
     }

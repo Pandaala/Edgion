@@ -1,7 +1,7 @@
 # RegionRoute - broken serviceRegionRouteRef
 #
 # The RegionRoute requestPlugin's serviceRegionRouteRef points at a
-# ServiceRegionRoute PluginMetaData named "no-such-service-region-route",
+# ServiceRegionRoute EdgionData named "no-such-service-region-route",
 # which is intentionally NOT created.
 #
 # region_route's resolve_config now returns BrokenRef when the

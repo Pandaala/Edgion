@@ -1,7 +1,7 @@
-//! Key list metadata — unified StringList + RegexList
+//! Key list data — unified StringList + RegexList
 //!
-//! A grouped list of key-value metadata items with configurable match mode.
-//! Mirrors `IpListData` / `IpGroup` (sibling PluginMetaData type).
+//! A grouped list of key-value data items with configurable match mode.
+//! Mirrors `IpListData` / `IpGroup` (sibling EdgionData type).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -39,10 +39,10 @@ pub struct KeyGroup {
     pub items: Vec<MetaDataItem>,
 }
 
-/// A list of key-value metadata items, organized into named groups.
+/// A list of key-value data items, organized into named groups.
 ///
 /// Used by plugins (KeyAuth, IpRestriction, etc., future use) to reference
-/// external metadata by PluginMetaData name. The `match_mode` is plugin-level
+/// external data by EdgionData name. The `match_mode` is plugin-level
 /// only (not overridable per group; YAGNI).
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]

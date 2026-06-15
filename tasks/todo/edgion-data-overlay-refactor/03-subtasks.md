@@ -26,20 +26,20 @@ script runs clippy/build later).
 
 > Do the mechanical rename first, as an isolated, behavior-preserving change, to shrink later diffs.
 
-- [ ] **S1.1** Rename module `edgion-resources/src/resources/plugin_metadata/` → `.../data/`; struct
+- [x] **S1.1** Rename module `edgion-resources/src/resources/plugin_metadata/` → `.../data/`; struct
       `PluginMetaDataSpec` → `EdgionDataSpec`; `#[kube(kind = "PluginMetaData")]` → `"EdgionData"`.
-- [ ] **S1.2** Rename refs: `PluginMetaDataRef` / `PluginReference` → `DataRef`; consumer fields → generic
+- [x] **S1.2** Rename refs: `PluginMetaDataRef` / `PluginReference` → `DataRef`; consumer fields → generic
       `dataRef`. Rename gateway store `PluginMetaDataGatewayStore` → `EdgionDataStore` and module
       `plugins/runtime/plugin_metadata/` → `.../data/`.
-- [ ] **S1.3** Rename controller handler `handlers/plugin_metadata.rs` → `handlers/data.rs` and all
+- [x] **S1.3** Rename controller handler `handlers/plugin_metadata.rs` → `handlers/data.rs` and all
       identifiers; keep behavior identical.
-- [ ] **S1.4** Rename-only on the variant enum (`MetaDataEntry` → `DataEntry`): keep the current 5 variants
+- [x] **S1.4** Rename-only on the variant enum (`MetaDataEntry` → `DataEntry`): keep the current 5 variants
       renamed in place (`KeyList`/`IpList`/`ClusterRegionRoute`/`ServiceRegionRoute`/`GlobalConnectionIpRestriction`),
       keep wire shape `data: { type, config }` (D6). **No** schema/behavior change here — envelope
       (`enable`/`active`), `Misc`, and `overrideRef` land in **S2**; RegionRoute split in S3. Never add
       `StringList`/`RegexList`/`Switch` (D5/D3).
-- [ ] **S1.5** Remove orphaned `IpList`/`KeyList` gateway indexes + getters (D1, dead code) during the rename.
-- [ ] **S1.6** CRD YAML kind rename + new variants (`config/crd/edgion-crd/`); update the 22 test YAMLs.
+- [x] **S1.5** Remove orphaned `IpList`/`KeyList` gateway indexes + getters (D1, dead code) during the rename.
+- [x] **S1.6** CRD YAML kind rename + new variants (`config/crd/edgion-crd/`); update the 22 test YAMLs.
 
 **Verify:** `cargo fmt --all -- --check`; `cargo check --all-targets`; existing metadata tests pass under new
 names (rename should be green before any behavior change).

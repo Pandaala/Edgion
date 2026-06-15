@@ -8,12 +8,12 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
 };
-use edgion_resources::prelude_resources::{EdgionStreamPlugins, PluginMetaData};
+use edgion_resources::prelude_resources::{EdgionData, EdgionStreamPlugins};
+use edgion_resources::resources::data::DataEntry;
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::{
     EdgionStreamPlugin, EdgionStreamPluginsStatus, TlsRouteStreamPlugin,
 };
-use edgion_resources::resources::plugin_metadata::MetaDataEntry;
 
 const SELF_KIND: &str = "EdgionStreamPlugins";
 
@@ -135,7 +135,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
     }
 
     async fn parse(&self, esp: EdgionStreamPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionStreamPlugins> {
-        // Rebuild outgoing PluginMetaData refs from scratch so that an edit that removes
+        // Rebuild outgoing EdgionData refs from scratch so that an edit that removes
         // a GCIR entry correctly drops its old ref.
         let self_ref = Self::self_ref_key(&esp);
         ctx.runtime().plugin_metadata_refs.clear_refs_from(&self_ref);
@@ -184,7 +184,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         };
 
         // ResolvedRefs: each GlobalConnectionIpRestriction plugin_metadata_ref must
-        // resolve to an existing PluginMetaData of the matching variant type.
+        // resolve to an existing EdgionData of the matching variant type.
         let resolved_errors = resolve_refs(esp, ctx);
         let resolved_refs = if resolved_errors.is_empty() {
             condition_true(
@@ -235,17 +235,17 @@ async fn requeue_referencing_gateways(esp: &EdgionStreamPlugins, ctx: &HandlerCo
     }
 }
 
-/// Resolve each GCIR plugin_metadata_ref against the PluginMetaData store.
-/// Returns one `PluginMetaDataNotFound` error per unresolved / wrong-type reference.
+/// Resolve each GCIR plugin_metadata_ref against the EdgionData store.
+/// Returns one `EdgionDataNotFound` error per unresolved / wrong-type reference.
 fn resolve_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
     let mut errors = Vec::new();
     for (pm_ns, pm_name) in EdgionStreamPluginsHandler::iter_gcir_refs(esp) {
-        let target: Option<PluginMetaData> = ctx.runtime().plugin_metadata_store.get(Some(&pm_ns), &pm_name);
+        let target: Option<EdgionData> = ctx.runtime().plugin_metadata_store.get(Some(&pm_ns), &pm_name);
         let resolved = target
             .as_ref()
-            .is_some_and(|t| matches!(&t.spec.metadata, MetaDataEntry::GlobalConnectionIpRestriction(_)));
+            .is_some_and(|t| matches!(&t.spec.data, DataEntry::GlobalConnectionIpRestriction(_)));
         if !resolved {
-            errors.push(ResolvedRefsError::PluginMetaDataNotFound {
+            errors.push(ResolvedRefsError::EdgionDataNotFound {
                 namespace: pm_ns,
                 name: pm_name,
                 expected_type: "GlobalConnectionIpRestriction".to_string(),

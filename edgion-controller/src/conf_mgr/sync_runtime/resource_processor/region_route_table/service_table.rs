@@ -1,13 +1,13 @@
 //! Service RegionRoute Table
 //!
 //! Stores ServiceRegionRoute entries indexed by pm_key (namespace/name).
-//! Built from PluginMetaData containing ServiceRegionRoute plugin entries.
+//! Built from EdgionData containing ServiceRegionRoute data entries.
 //! `ref_plugins` and `cluster_pm_ref` are updated by EdgionPlugins handlers.
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
-pub use edgion_resources::resources::plugin_metadata::{RefPluginEntry, ServiceRegionRouteEntry};
+pub use edgion_resources::resources::data::{RefPluginEntry, ServiceRegionRouteEntry};
 
 pub struct RegionRouteServiceTable {
     data: RwLock<HashMap<String, ServiceRegionRouteEntry>>,
@@ -20,7 +20,7 @@ impl RegionRouteServiceTable {
         }
     }
 
-    /// Update PluginMetaData-sourced fields (including cluster_pm_ref) without touching ref_plugins.
+    /// Update EdgionData-sourced fields (including cluster_pm_ref) without touching ref_plugins.
     /// If the entry already exists, preserves ref_plugins.
     pub fn upsert_from_pm(&self, pm_key: String, entry: ServiceRegionRouteEntry) {
         let mut data = self.data.write();
@@ -46,7 +46,7 @@ impl RegionRouteServiceTable {
         self.data.read().values().cloned().collect()
     }
 
-    /// Add a ref_plugin entry. Creates a stub entry if the PluginMetaData hasn't been processed yet.
+    /// Add a ref_plugin entry. Creates a stub entry if the EdgionData hasn't been processed yet.
     pub fn add_ref_plugin(&self, pm_key: &str, ref_entry: RefPluginEntry) {
         let mut data = self.data.write();
         if let Some(existing) = data.get_mut(pm_key) {
@@ -54,7 +54,7 @@ impl RegionRouteServiceTable {
                 existing.ref_plugins.push(ref_entry);
             }
         } else {
-            // PluginMetaData hasn't been processed yet — create a stub.
+            // EdgionData hasn't been processed yet — create a stub.
             data.insert(
                 pm_key.to_string(),
                 ServiceRegionRouteEntry {

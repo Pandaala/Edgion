@@ -1,8 +1,8 @@
 # RegionRoute - ctrl-2 INCONSISTENT variant (for conflict detection testing)
 #
 # Same namespace as region-route-main so the Center groups them together.
-# All config comes from the ServiceRegionRoute PluginMetaData (which references the ClusterRegionRoute PluginMetaData via clusterRef).
-# Conflict detection relies on the ClusterRegionRoute PluginMetaData having different content on ctrl-2
+# All config comes from the ServiceRegionRoute EdgionData (which references the ClusterRegionRoute EdgionData via clusterRef).
+# Conflict detection relies on the ClusterRegionRoute EdgionData having different content on ctrl-2
 # (not in this file).
 #
 # Load into controller-2 to trigger conflict detection in the dashboard:

@@ -1,4 +1,4 @@
-# EdgionStreamPlugins referencing the GlobalConnectionIpRestriction PluginMetaData
+# EdgionStreamPlugins referencing the GlobalConnectionIpRestriction EdgionData
 # The plugin uses pluginMetadataRef to delegate IP filtering to the PM's active profile.
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins

@@ -1,50 +1,50 @@
-// PluginMetaDataManagedRegionRoute Integration Test Suite
+// EdgionDataManagedRegionRoute Integration Test Suite
 //
-// Tests the new PluginMetaData-managed architecture where ServiceRegionRoute PluginMetaDatas are pre-created by administrators.
-// The resolve chain is: EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData → ServiceRegionRoute PluginMetaData.clusterRef → ClusterRegionRoute PluginMetaData
+// Tests the new EdgionData-managed architecture where ServiceRegionRoute EdgionDatas are pre-created by administrators.
+// The resolve chain is: EP.serviceRegionRouteRef → ServiceRegionRoute EdgionData → ServiceRegionRoute EdgionData.clusterRef → ClusterRegionRoute EdgionData
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/plugin-metadata-managed/):
-//   01_PluginMetaData_pm-managed-global.yaml  — ClusterRegionRoute PluginMetaData (shared by both tests)
-//   01_PluginMetaData_pm-managed.yaml          — ServiceRegionRoute PluginMetaData for pm-managed test
-//   01_PluginMetaData_pm-validated.yaml        — ServiceRegionRoute PluginMetaData for pm-validated test
-//   01_EdgionPlugins_pm-managed.yaml           — EdgionPlugins referencing pm-managed ServiceRegionRoute PluginMetaData
-//   01_EdgionPlugins_pm-validated.yaml         — EdgionPlugins referencing pm-validated ServiceRegionRoute PluginMetaData
+//   01_EdgionData_pm-managed-global.yaml  — ClusterRegionRoute EdgionData (shared by both tests)
+//   01_EdgionData_pm-managed.yaml          — ServiceRegionRoute EdgionData for pm-managed test
+//   01_EdgionData_pm-validated.yaml        — ServiceRegionRoute EdgionData for pm-validated test
+//   01_EdgionPlugins_pm-managed.yaml           — EdgionPlugins referencing pm-managed ServiceRegionRoute EdgionData
+//   01_EdgionPlugins_pm-validated.yaml         — EdgionPlugins referencing pm-validated ServiceRegionRoute EdgionData
 //   02_HTTPRoute_pm-managed-test.yaml
 //
 // Scenarios:
-//   1. service_pm_exists: Verify that the pre-created ServiceRegionRoute PluginMetaData "pm-managed" exists
+//   1. service_pm_exists: Verify that the pre-created ServiceRegionRoute EdgionData "pm-managed" exists
 //      with correct clusterRef and regions via the configserver API.
 //   2. ep_resolves_pm_chain: Verify that EdgionPlugins "pm-managed" is processed successfully
-//      (Accepted condition) — the PluginMetaData chain (EP → ServiceRegionRoute PluginMetaData → ClusterRegionRoute PluginMetaData) resolves correctly.
+//      (Accepted condition) — the EdgionData chain (EP → ServiceRegionRoute EdgionData → ClusterRegionRoute EdgionData) resolves correctly.
 //   3. pm_validated_accepted: Verify that EdgionPlugins "pm-validated" is also accepted
-//      when its pre-created ServiceRegionRoute PluginMetaData is present.
+//      when its pre-created ServiceRegionRoute EdgionData is present.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
 
 const PM_MANAGED_NS: &str = "edgion-default";
 
-pub struct PluginMetaDataManagedTestSuite;
+pub struct EdgionDataManagedTestSuite;
 
-impl PluginMetaDataManagedTestSuite {
+impl EdgionDataManagedTestSuite {
     pub fn new() -> Self {
         Self
     }
 }
 
-impl Default for PluginMetaDataManagedTestSuite {
+impl Default for EdgionDataManagedTestSuite {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl PluginMetaDataManagedTestSuite {
+impl EdgionDataManagedTestSuite {
     // =========================================================================
     // Test 1: service_pm_exists
     // =========================================================================
 
-    /// Verify that the pre-created ServiceRegionRoute PluginMetaData "pm-managed" exists with the correct
-    /// clusterRef and regions. Administrators must create this PluginMetaData before the EP is applied.
+    /// Verify that the pre-created ServiceRegionRoute EdgionData "pm-managed" exists with the correct
+    /// clusterRef and regions. Administrators must create this EdgionData before the EP is applied.
     fn service_pm_exists() -> TestCase {
         TestCase::new(
             "service_pm_exists",
@@ -54,7 +54,7 @@ impl PluginMetaDataManagedTestSuite {
                     let start = Instant::now();
 
                     let url = format!(
-                        "{}/configserver/PluginMetaData?namespace={}&name=pm-managed",
+                        "{}/configserver/EdgionData?namespace={}&name=pm-managed",
                         ctx.admin_api_url(),
                         PM_MANAGED_NS
                     );
@@ -96,7 +96,7 @@ impl PluginMetaDataManagedTestSuite {
                                         }
                                     } else {
                                         last_err = format!(
-                                            "PluginMetaData found but metadata type is not ServiceRegionRoute: {}",
+                                            "EdgionData found but metadata type is not ServiceRegionRoute: {}",
                                             md_type
                                         );
                                     }
@@ -143,7 +143,7 @@ impl PluginMetaDataManagedTestSuite {
     // =========================================================================
 
     /// Verify that EdgionPlugins "pm-managed" is processed successfully (Accepted condition).
-    /// The PluginMetaData chain (EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData → ServiceRegionRoute PluginMetaData.clusterRef → ClusterRegionRoute PluginMetaData)
+    /// The EdgionData chain (EP.serviceRegionRouteRef → ServiceRegionRoute EdgionData → ServiceRegionRoute EdgionData.clusterRef → ClusterRegionRoute EdgionData)
     /// must resolve correctly for the EP to be accepted.
     fn ep_resolves_pm_chain() -> TestCase {
         TestCase::new(
@@ -237,7 +237,7 @@ impl PluginMetaDataManagedTestSuite {
     // =========================================================================
 
     /// Verify that EdgionPlugins "pm-validated" is also accepted when its pre-created
-    /// ServiceRegionRoute PluginMetaData "pm-validated" is present and references the shared ClusterRegionRoute PluginMetaData.
+    /// ServiceRegionRoute EdgionData "pm-validated" is present and references the shared ClusterRegionRoute EdgionData.
     fn pm_validated_accepted() -> TestCase {
         TestCase::new(
             "pm_validated_accepted",
@@ -246,9 +246,9 @@ impl PluginMetaDataManagedTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // First ensure the ServiceRegionRoute PluginMetaData "pm-validated" is visible via configserver
+                    // First ensure the ServiceRegionRoute EdgionData "pm-validated" is visible via configserver
                     let pm_url = format!(
-                        "{}/configserver/PluginMetaData?namespace={}&name=pm-validated",
+                        "{}/configserver/EdgionData?namespace={}&name=pm-validated",
                         ctx.admin_api_url(),
                         PM_MANAGED_NS
                     );
@@ -358,18 +358,18 @@ impl PluginMetaDataManagedTestSuite {
     }
 }
 
-impl TestSuite for PluginMetaDataManagedTestSuite {
+impl TestSuite for EdgionDataManagedTestSuite {
     fn name(&self) -> &str {
-        "PluginMetaDataManagedRegionRoute"
+        "EdgionDataManagedRegionRoute"
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            // Test 1: Pre-created ServiceRegionRoute PluginMetaData exists with correct structure
+            // Test 1: Pre-created ServiceRegionRoute EdgionData exists with correct structure
             Self::service_pm_exists(),
-            // Test 2: EdgionPlugins resolves the full PluginMetaData chain and is accepted
+            // Test 2: EdgionPlugins resolves the full EdgionData chain and is accepted
             Self::ep_resolves_pm_chain(),
-            // Test 3: pm-validated EdgionPlugins is also accepted with its pre-created ServiceRegionRoute PluginMetaData
+            // Test 3: pm-validated EdgionPlugins is also accepted with its pre-created ServiceRegionRoute EdgionData
             Self::pm_validated_accepted(),
         ]
     }

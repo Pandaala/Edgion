@@ -952,7 +952,7 @@ mod tests {
 
         let payload = CenterPayload::WatchRequest(FedWatchRequest {
             request_id: "t1".to_string(),
-            kind: "PluginMetaData".to_string(),
+            kind: "EdgionData".to_string(),
             from_version: 0,
         });
 

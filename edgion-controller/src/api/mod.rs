@@ -448,23 +448,23 @@ pub fn create_admin_router(
         // Special operations
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
-        // RegionRoute PluginMetaData endpoints
+        // RegionRoute EdgionData endpoints
         .route(
             "/api/v1/cluster-region-routes",
-            get(region_route_handlers::list_cluster_region_plugin_metadata),
+            get(region_route_handlers::list_cluster_region_edgion_data),
         )
         .route(
             "/api/v1/service-region-routes",
-            get(region_route_handlers::list_service_region_plugin_metadata),
+            get(region_route_handlers::list_service_region_edgion_data),
         )
         // New-URL aliases for RegionRoute failover
         .route(
             "/api/v1/cluster-region-routes/failover",
-            post(region_route_handlers::cluster_plugin_metadata_failover),
+            post(region_route_handlers::cluster_edgion_data_failover),
         )
         .route(
             "/api/v1/service-region-routes/failover",
-            post(region_route_handlers::service_plugin_metadata_failover),
+            post(region_route_handlers::service_edgion_data_failover),
         )
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
@@ -703,7 +703,7 @@ mod reload_center_tests {
     }
 
     /// Write a minimal controller config YAML that includes a [center] block
-    /// with an RBAC rule granting `get` on `PluginMetaData`.
+    /// with an RBAC rule granting `get` on `EdgionData`.
     fn write_center_config(path: &str) {
         let yaml = r#"
 center:
@@ -714,7 +714,7 @@ center:
   rbac:
     allow:
       - verbs: [get, list]
-        kinds: [PluginMetaData]
+        kinds: [EdgionData]
 "#;
         let mut f = std::fs::File::create(path).expect("create config file");
         f.write_all(yaml.as_bytes()).expect("write config");
@@ -733,7 +733,7 @@ center:
         assert!(
             !state
                 .authorizer
-                .authorize(&state.authorizer.center_role(), Verb::Get, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Get, "EdgionData")
                 .allowed(),
             "pre-condition: deny-all should deny"
         );
@@ -744,21 +744,21 @@ center:
         // Run the reload helper (the part that doesn't need ConfMgr to be live).
         apply_center_reload(&state);
 
-        // Assertion 1: policy is now swapped -- Center can GET PluginMetaData.
+        // Assertion 1: policy is now swapped -- Center can GET EdgionData.
         assert!(
             state
                 .authorizer
-                .authorize(&state.authorizer.center_role(), Verb::Get, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Get, "EdgionData")
                 .allowed(),
-            "post: authorizer must allow get/PluginMetaData after policy swap"
+            "post: authorizer must allow get/EdgionData after policy swap"
         );
         // Also ensure deny-all still applies for ungranted pairs.
         assert!(
             !state
                 .authorizer
-                .authorize(&state.authorizer.center_role(), Verb::Delete, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Delete, "EdgionData")
                 .allowed(),
-            "post: delete/PluginMetaData must remain denied"
+            "post: delete/EdgionData must remain denied"
         );
 
         // Assertion 2: center_reload_tx has a new value (supervisor notified).
@@ -783,7 +783,7 @@ center:
         assert!(
             !state
                 .authorizer
-                .authorize(&state.authorizer.center_role(), Verb::Get, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Get, "EdgionData")
                 .allowed(),
             "policy must remain deny-all when config file is missing"
         );
@@ -811,7 +811,7 @@ center:
         assert!(
             !state
                 .authorizer
-                .authorize(&state.authorizer.center_role(), Verb::Get, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Get, "EdgionData")
                 .allowed(),
             "policy must remain deny-all when no [center] section present"
         );
@@ -853,7 +853,7 @@ center:
         assert!(
             !state
                 .authorizer
-                .authorize(&state.authorizer.center_role(), Verb::Get, "PluginMetaData")
+                .authorize(&state.authorizer.center_role(), Verb::Get, "EdgionData")
                 .allowed(),
             "policy must be unchanged (deny-all) when config_file is None"
         );
@@ -887,7 +887,7 @@ cli_tokens:
     rbac:
       allow:
         - verbs: [get, list]
-          kinds: [PluginMetaData]
+          kinds: [EdgionData]
 "#,
             token_hash
         );
@@ -915,14 +915,11 @@ cli_tokens:
             .expect("after reload: cli_lookup must hit");
         assert_eq!(name, "reload-bot");
         assert!(
-            state.authorizer.authorize(&role, Verb::Get, "PluginMetaData").allowed(),
-            "after reload: get/PluginMetaData must be allowed"
+            state.authorizer.authorize(&role, Verb::Get, "EdgionData").allowed(),
+            "after reload: get/EdgionData must be allowed"
         );
         assert!(
-            !state
-                .authorizer
-                .authorize(&role, Verb::Delete, "PluginMetaData")
-                .allowed(),
+            !state.authorizer.authorize(&role, Verb::Delete, "EdgionData").allowed(),
             "after reload: delete must remain denied"
         );
         assert!(
@@ -958,13 +955,13 @@ cli_tokens:
     rbac:
       allow:
         - verbs: [get]
-          kinds: [PluginMetaData]
+          kinds: [EdgionData]
   - name: bad-bot
     token_sha256: "notahexhash"
     rbac:
       allow:
         - verbs: [get]
-          kinds: [PluginMetaData]
+          kinds: [EdgionData]
 "#,
             valid_hash
         );

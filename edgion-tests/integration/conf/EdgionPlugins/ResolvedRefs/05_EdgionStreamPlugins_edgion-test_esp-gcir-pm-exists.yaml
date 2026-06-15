@@ -1,4 +1,4 @@
-# Scenario 3: EdgionStreamPlugins referencing an EXISTING GCIR PluginMetaData → ResolvedRefs=True
+# Scenario 3: EdgionStreamPlugins referencing an EXISTING GCIR EdgionData → ResolvedRefs=True
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:

@@ -57,6 +57,32 @@ Recommendation leans (a) — same concept, keep one key — but confirm at S6.
 
 ---
 
+## S1 Deviations (noted during execution)
+
+### D-S1-A — `non_kube_common.rs` import missed in prior session
+`edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs` still imported `PluginMetadataHandler` instead
+of `DataHandler` when `cargo check` was first run. This file expands `for_each_phase2_resource!` (which embeds
+`DataHandler::new()`) but was not included in the rename sweep. Fixed by adding `DataHandler` and removing
+`PluginMetadataHandler` from its resource-processor import block.
+
+### D-S1-B — CRD shortName changed
+CRD shortName changed from `pmd` to `edata` to match the new kind name (EdgionData). The task instructions did
+not specify the old shortName, but `edata` is the natural fit and matches the plural `edgiondata`.
+
+### D-S1-C — API response structs and handler functions renamed
+The controller API layer (`api/region_route_handlers.rs`, `api/mod.rs`) exposed public struct names and
+handler function names containing `PluginMetadata`. These were renamed to use `EdgionData` (e.g.
+`ClusterRegionEdgionDataEntry`, `list_cluster_region_edgion_data`, `cluster_edgion_data_failover`) as part of
+the S1 rename sweep. URL path strings exposed via the API were not changed — only Rust identifiers.
+
+### D-S1-D — Internal controller struct names intentionally kept
+`PluginMetaDataStore` (in `plugin_metadata_utils/plugin_metadata_store.rs`) and `PluginMetaDataRefManager`
+(in `plugin_metadata_utils/ref_manager.rs`) are controller-internal and not part of the wire format or public
+API. Their names were kept as-is; only their doc comments were updated to say "EdgionData". Renaming them is
+a follow-up quality-of-life item, not a blocker.
+
+---
+
 ## Resolved flags
 - **F1 → D5** (no StringList/RegexList split). **F4 → D6** (keep `type`+`config`; type guards override).
 - **F3 → resolved:** "managed" in `plugin-metadata-managed/` is a test-scenario naming for the

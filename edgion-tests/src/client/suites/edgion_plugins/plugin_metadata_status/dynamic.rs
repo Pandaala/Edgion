@@ -4,7 +4,7 @@
 //!                → Accepted=True, ResolvedRefs=True.
 //! Invalid phase: EdgionPlugins references non-existent `pmd-flap-missing`
 //!                → Accepted=True (resource is structurally valid),
-//!                  ResolvedRefs=False (reason: InvalidPluginMetaDataRef).
+//!                  ResolvedRefs=False (reason: InvalidEdgionDataRef).
 //! Valid phase:   EdgionPlugins restored to reference `pmd-flap-good`
 //!                → Accepted=True, ResolvedRefs=True (recovered).
 
@@ -141,15 +141,15 @@ impl PmdFlapInvalidTestSuite {
         TestCase::new(
             "pmd_flap_invalid_resolved_refs_false",
             "EdgionPlugins referencing missing pmd-flap-missing PMD should be \
-             ResolvedRefs=False (reason: InvalidPluginMetaDataRef)",
+             ResolvedRefs=False (reason: InvalidEdgionDataRef)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     match fetch_ep_condition(&ctx, "ResolvedRefs").await {
-                        Ok((status, reason)) if status == "False" && reason == "InvalidPluginMetaDataRef" => {
+                        Ok((status, reason)) if status == "False" && reason == "InvalidEdgionDataRef" => {
                             TestResult::passed_with_message(
                                 start.elapsed(),
-                                "ResolvedRefs=False/InvalidPluginMetaDataRef as expected \
+                                "ResolvedRefs=False/InvalidEdgionDataRef as expected \
                                  (pmd-flap-missing PMD not found)"
                                     .to_string(),
                             )
@@ -157,7 +157,7 @@ impl PmdFlapInvalidTestSuite {
                         Ok((status, reason)) => TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "Expected ResolvedRefs=False/InvalidPluginMetaDataRef, \
+                                "Expected ResolvedRefs=False/InvalidEdgionDataRef, \
                                  got status={} reason={}",
                                 status, reason
                             ),

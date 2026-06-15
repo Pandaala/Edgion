@@ -1,12 +1,12 @@
-# ClusterRegionRoute PluginMetaData backing pmd-flap-good.
+# ClusterRegionRoute EdgionData backing pmd-flap-good.
 # Referenced via pmd-flap-good.clusterRef.
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionData
 metadata:
   name: pmd-flap-good-cluster
   namespace: edgion-test
 spec:
-  metadata:
+  data:
     type: ClusterRegionRoute
     config:
       regions:

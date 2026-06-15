@@ -1,12 +1,12 @@
-//! PluginMetaData Reference Manager
+//! EdgionData Reference Manager
 //!
-//! Tracks which EdgionPlugins/EdgionStreamPlugins resources reference a given PluginMetaData.
-//! Used by PluginMetaData handler to know which resources to requeue when a PluginMetaData changes.
+//! Tracks which EdgionPlugins/EdgionStreamPlugins resources reference a given EdgionData.
+//! Used by DataHandler to know which resources to requeue when an EdgionData changes.
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};
 
-/// Tracks which EdgionPlugins/EdgionStreamPlugins resources reference a given PluginMetaData.
+/// Tracks which EdgionPlugins/EdgionStreamPlugins resources reference a given EdgionData.
 ///
 /// Key: `"namespace/pm_name"` -> Set of `"Kind:namespace/ep_name"` referencing it.
 pub struct PluginMetaDataRefManager {

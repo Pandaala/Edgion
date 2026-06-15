@@ -1,12 +1,12 @@
 # Scenario 2: invalid GCIR PM — activeProfile 'missing' not in profiles
 # Expect: Accepted=False/Invalid, message contains "activeProfile"
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionData
 metadata:
   name: pm-status-gcir-invalid
   namespace: edgion-test
 spec:
-  metadata:
+  data:
     type: GlobalConnectionIpRestriction
     config:
       enable: true

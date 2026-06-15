@@ -2,12 +2,12 @@
 # Expect: Accepted=True, ResolvedRefs=True
 # Note: depends on fixture 03 being loaded first
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionData
 metadata:
   name: pm-status-service-good-ref
   namespace: edgion-test
 spec:
-  metadata:
+  data:
     type: ServiceRegionRoute
     config:
       clusterRef:

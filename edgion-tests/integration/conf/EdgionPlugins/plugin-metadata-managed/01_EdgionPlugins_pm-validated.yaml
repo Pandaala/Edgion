@@ -1,8 +1,8 @@
-# PluginMetaDataManagedRegionRoute - Scenario 2: PluginMetaData validation (pm-validated)
+# EdgionDataManagedRegionRoute - Scenario 2: EdgionData validation (pm-validated)
 #
-# An EdgionPlugins with serviceRegionRouteRef pointing to a pre-created ServiceRegionRoute PluginMetaData.
-# The ServiceRegionRoute PluginMetaData "pm-validated" must be created by administrators before applying this file.
-# The resolve chain is: EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData → ServiceRegionRoute PluginMetaData.clusterRef → ClusterRegionRoute PluginMetaData
+# An EdgionPlugins with serviceRegionRouteRef pointing to a pre-created ServiceRegionRoute EdgionData.
+# The ServiceRegionRoute EdgionData "pm-validated" must be created by administrators before applying this file.
+# The resolve chain is: EP.serviceRegionRouteRef → ServiceRegionRoute EdgionData → ServiceRegionRoute EdgionData.clusterRef → ClusterRegionRoute EdgionData
 #
 # Verification: GET /configserver/EdgionPlugins?namespace=edgion-default&name=pm-validated
 # should return data with status.conditions Accepted=True.

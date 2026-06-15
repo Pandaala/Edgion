@@ -1,4 +1,4 @@
-# GlobalConnectionIpRestriction PluginMetaData for L4 enforcement tests
+# GlobalConnectionIpRestriction EdgionData for L4 enforcement tests
 #
 # Two profiles:
 #   allow-local: defaultAction=deny, only 127.0.0.0/8 allowed  — loopback IS allowed
@@ -6,12 +6,12 @@
 #
 # Initial state: activeProfile=allow-local (local test connects from 127.0.0.1 → ALLOWED)
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionData
 metadata:
   name: gcir-enforce-test
   namespace: edgion-test
 spec:
-  metadata:
+  data:
     type: GlobalConnectionIpRestriction
     config:
       enable: true

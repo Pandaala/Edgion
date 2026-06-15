@@ -298,7 +298,7 @@ struct StoreStatsResponse {
     circuit_breaker_store: SimpleCountStats,
     health_check_config_store: SimpleCountStats,
     gateway_backend_tls_store: SimpleCountStats,
-    plugin_metadata_store: SimpleCountStats,
+    edgion_data_store: SimpleCountStats,
     link_sys_runtime: LinkSysRuntimeStats,
     plugin_store_v2: PluginStoreStatsV2,
     stream_plugin_store_v2: PluginStoreStatsV2,
@@ -430,8 +430,8 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     let gbt_g = crate::backends::gateway_backend_tls_store::get_global_gateway_backend_tls_store();
     let gateway_backend_tls_store = SimpleCountStats { count: gbt_g.count() };
 
-    let plugin_metadata_store = SimpleCountStats {
-        count: crate::plugins::runtime::plugin_metadata::count_plugin_metadata(),
+    let edgion_data_store = SimpleCountStats {
+        count: crate::plugins::runtime::data::count_edgion_data(),
     };
 
     let link_sys_runtime = LinkSysRuntimeStats {
@@ -473,7 +473,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         circuit_breaker_store,
         health_check_config_store,
         gateway_backend_tls_store,
-        plugin_metadata_store,
+        edgion_data_store,
         link_sys_runtime,
         plugin_store_v2,
         stream_plugin_store_v2,
@@ -1673,7 +1673,7 @@ mod store_stats_tests {
             circuit_breaker_store: SimpleCountStats { count: 0 },
             health_check_config_store: SimpleCountStats { count: 0 },
             gateway_backend_tls_store: SimpleCountStats { count: 0 },
-            plugin_metadata_store: SimpleCountStats { count: 0 },
+            edgion_data_store: SimpleCountStats { count: 0 },
             link_sys_runtime: LinkSysRuntimeStats {
                 redis_clients: 0,
                 etcd_clients: 0,

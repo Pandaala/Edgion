@@ -1,6 +1,6 @@
 # RegionRoute - no routeRules → plugin is always a no-op (passes through)
-# All config comes from the ServiceRegionRoute PluginMetaData (which references the ClusterRegionRoute PluginMetaData for topology).
-# The ServiceRegionRoute PluginMetaData for "region-route-norules" should have no routeRules → plugin no-op.
+# All config comes from the ServiceRegionRoute EdgionData (which references the ClusterRegionRoute EdgionData for topology).
+# The ServiceRegionRoute EdgionData for "region-route-norules" should have no routeRules → plugin no-op.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:

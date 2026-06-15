@@ -75,9 +75,9 @@ pub use path_normalization::{
     PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite,
 };
 pub use plugin_condition::{AllConditionsTestSuite, PluginConditionTestSuite};
-pub use plugin_metadata_managed::PluginMetaDataManagedTestSuite;
+pub use plugin_metadata_managed::EdgionDataManagedTestSuite;
 pub use plugin_metadata_status::{
-    PluginMetaDataStatusTestSuite, PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite,
+    EdgionDataStatusTestSuite, PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite,
 };
 pub use plugin_validation_status::PluginValidationStatusTestSuite;
 pub use proxy_rewrite::ProxyRewriteTestSuite;

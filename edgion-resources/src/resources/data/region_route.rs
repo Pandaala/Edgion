@@ -1,4 +1,4 @@
-//! RegionRoute-related PluginMetaData types
+//! RegionRoute-related EdgionData types
 //!
 //! ClusterRegionRouteConfig — full cluster topology, route rules, matchMap
 //! ServiceRegionRouteConfig — per-service failover overrides with clusterRef
@@ -9,12 +9,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 use crate::common::KeyGet;
-use crate::resources::edgion_plugins::plugin_configs::{HashCalcConfig, PluginMetaDataRef, RegionDef, RouteRule};
+use crate::resources::data::DataRef;
+use crate::resources::edgion_plugins::plugin_configs::{HashCalcConfig, RegionDef, RouteRule};
 
-/// Cluster RegionRoute configuration within PluginMetaData.
+/// Cluster RegionRoute configuration within EdgionData.
 ///
 /// Contains the full cluster topology, route rules, and matchMap.
-/// PluginMetaData namespace = cluster-type dimension, name = cluster identifier.
+/// EdgionData namespace = cluster-type dimension, name = cluster identifier.
 /// This is the authoritative source managed by operators / Center.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -50,33 +51,33 @@ pub struct ClusterRegionRouteConfig {
     pub route_by_key_conf_match: Option<RouteByKeyConfMatchMeta>,
 }
 
-/// Service-level RegionRoute configuration within PluginMetaData.
+/// Service-level RegionRoute configuration within EdgionData.
 ///
 /// Contains per-cluster failover state. Created by administrator.
-/// The `cluster_ref` links this ServiceRegionRoute PluginMetaData
-/// to a ClusterRegionRoute PluginMetaData.
+/// The `cluster_ref` links this ServiceRegionRoute EdgionData
+/// to a ClusterRegionRoute EdgionData.
 /// Lists all clusters (mirroring ClusterRegionRoute's cluster names);
 /// only entries with `failover_to` set have an active failover override.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceRegionRouteConfig {
-    /// Reference to the ClusterRegionRoute PluginMetaData.
-    /// Explicit linkage: namespace/name of the ClusterRegionRoute PluginMetaData
-    /// this ServiceRegionRoute PluginMetaData belongs to.
-    /// Set by the administrator when creating the ServiceRegionRoute PluginMetaData.
+    /// Reference to the ClusterRegionRoute EdgionData.
+    /// Explicit linkage: namespace/name of the ClusterRegionRoute EdgionData
+    /// this ServiceRegionRoute EdgionData belongs to.
+    /// Set by the administrator when creating the ServiceRegionRoute EdgionData.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cluster_ref: Option<PluginMetaDataRef>,
+    pub cluster_ref: Option<DataRef>,
 
-    /// Per-cluster failover state. Mirrors ClusterRegionRoute PluginMetaData's cluster names.
+    /// Per-cluster failover state. Mirrors ClusterRegionRoute EdgionData's cluster names.
     /// Only entries with `failover_to` set have an active override.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub regions: Vec<ServiceRegionDef>,
 }
 
 /// A cluster entry in ServiceRegionRoute.
-/// Mirrors the ClusterRegionRoute PluginMetaData's cluster names.
+/// Mirrors the ClusterRegionRoute EdgionData's cluster names.
 /// Only `failover_to` is service-specific; if set it overrides the
-/// ClusterRegionRoute PluginMetaData's value.
+/// ClusterRegionRoute EdgionData's value.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceRegionDef {
@@ -92,14 +93,14 @@ pub struct RouteByKeyConfMatchMeta {
     /// Key-to-cluster mapping.
     #[serde(default)]
     pub match_map: HashMap<String, String>,
-    /// Keys in this list bypass cluster matchMap override (ServiceRegionRoute PluginMetaData only).
+    /// Keys in this list bypass cluster matchMap override (ServiceRegionRoute EdgionData only).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bypass_cluster_keys: Vec<String>,
 }
 
 /// Parsed ClusterRegionRoute entry stored in the RegionRoute index.
 ///
-/// Derived from a PluginMetaData with a ClusterRegionRoute spec. Used by both
+/// Derived from an EdgionData with a ClusterRegionRoute spec. Used by both
 /// the Controller's in-memory table and the Center's aggregated store.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -115,7 +116,7 @@ pub struct ClusterRegionRouteEntry {
     pub route_by_key_conf_match: Option<RouteByKeyConfMatchMeta>,
 }
 
-/// Reference to an EdgionPlugin resource that uses a ServiceRegionRoute PluginMetaData.
+/// Reference to an EdgionPlugin resource that uses a ServiceRegionRoute EdgionData.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RefPluginEntry {
@@ -126,14 +127,14 @@ pub struct RefPluginEntry {
 
 /// Parsed ServiceRegionRoute entry stored in the RegionRoute index.
 ///
-/// Derived from a PluginMetaData with a ServiceRegionRoute spec. The `ref_plugins`
+/// Derived from an EdgionData with a ServiceRegionRoute spec. The `ref_plugins`
 /// field is only populated by the Controller (Center always leaves it empty).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceRegionRouteEntry {
     pub pm_namespace: String,
     pub pm_name: String,
-    pub cluster_pm_ref: Option<PluginMetaDataRef>,
+    pub cluster_pm_ref: Option<DataRef>,
     pub regions: Vec<ServiceRegionDef>,
     pub ref_plugins: Vec<RefPluginEntry>,
 }

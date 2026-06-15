@@ -1,7 +1,7 @@
-//! PluginMetaData resource definition
+//! EdgionData resource definition
 //!
-//! PluginMetaData defines named metadata resources referenced by EdgionPlugins.
-//! Each PluginMetaData contains exactly one `MetaDataEntry` variant:
+//! EdgionData is a general-purpose, hot-swappable metadata/overlay primitive.
+//! Each EdgionData contains exactly one `DataEntry` variant:
 //!
 //! - `KeyList`: Key-value list with exact or regex matching (for plugins like IpRestriction, KeyAuth)
 //! - `IpList`: IP address / CIDR list (for IP-based filtering)
@@ -27,45 +27,55 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Kind for PluginMetaData
-pub const PLUGIN_METADATA_KIND: &str = "PluginMetaData";
+/// Kind for EdgionData
+pub const EDGION_DATA_KIND: &str = "EdgionData";
 
-/// PluginMetaData defines named metadata resources referenced by EdgionPlugins.
+/// Reference to an EdgionData resource by name (and optional namespace).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DataRef {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+}
+
+/// EdgionData is a general-purpose, hot-swappable metadata/overlay primitive
+/// referenced by EdgionPlugins and EdgionStreamPlugins.
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "edgion.io",
     version = "v1",
-    kind = "PluginMetaData",
-    plural = "pluginmetadata",
+    kind = "EdgionData",
+    plural = "edgiondata",
     namespaced,
-    status = "PluginMetaDataStatus"
+    status = "EdgionDataStatus"
 )]
 #[serde(rename_all = "camelCase")]
-pub struct PluginMetaDataSpec {
-    /// The metadata entry. Each PluginMetaData contains exactly one entry,
+pub struct EdgionDataSpec {
+    /// The data entry. Each EdgionData contains exactly one entry,
     /// discriminated by the `type` tag.
-    pub metadata: MetaDataEntry,
+    pub data: DataEntry,
 }
 
-/// Status of PluginMetaData.
+/// Status of EdgionData.
 ///
 /// Conditions follow Gateway API conventions:
 /// - `Accepted`: spec is syntactically and semantically valid (per-variant validation passed).
 /// - `ResolvedRefs`: cross-resource references resolve. Currently only meaningful for the
 ///   `ServiceRegionRoute` variant (its `clusterRef` must point at an existing
-///   `ClusterRegionRoute` PluginMetaData). All other variants always report `True`
+///   `ClusterRegionRoute` EdgionData). All other variants always report `True`
 ///   since they carry no external references.
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
-pub struct PluginMetaDataStatus {
+pub struct EdgionDataStatus {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
 }
 
-/// A single metadata entry — the core payload of a PluginMetaData resource.
+/// A single data entry — the core payload of an EdgionData resource.
 ///
 /// Discriminated by `type` tag in serialized form:
 /// ```yaml
-/// metadata:
+/// data:
 ///   type: KeyList
 ///   config:
 ///     matchMode: exact
@@ -73,7 +83,7 @@ pub struct PluginMetaDataStatus {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "config")]
-pub enum MetaDataEntry {
+pub enum DataEntry {
     /// Key-value list with configurable match mode (exact string or regex).
     /// Merges the legacy StringList and RegexList into a single type.
     KeyList(KeyListData),
@@ -93,32 +103,32 @@ pub enum MetaDataEntry {
     GlobalConnectionIpRestriction(GlobalConnectionIpRestrictionData),
 }
 
-impl PluginMetaData {
-    /// Get the data type name of this metadata entry.
+impl EdgionData {
+    /// Get the data type name of this data entry.
     pub fn data_type(&self) -> &str {
-        match &self.spec.metadata {
-            MetaDataEntry::KeyList(_) => "KeyList",
-            MetaDataEntry::IpList(_) => "IpList",
-            MetaDataEntry::ClusterRegionRoute(_) => "ClusterRegionRoute",
-            MetaDataEntry::ServiceRegionRoute(_) => "ServiceRegionRoute",
-            MetaDataEntry::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
+        match &self.spec.data {
+            DataEntry::KeyList(_) => "KeyList",
+            DataEntry::IpList(_) => "IpList",
+            DataEntry::ClusterRegionRoute(_) => "ClusterRegionRoute",
+            DataEntry::ServiceRegionRoute(_) => "ServiceRegionRoute",
+            DataEntry::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
         }
     }
 
-    /// Validate the metadata payload and return a list of human-readable error messages.
+    /// Validate the data payload and return a list of human-readable error messages.
     ///
     /// An empty result means "no problems found". Errors are suitable for inclusion in an
     /// `Accepted=False/reason=Invalid` status condition by the Controller, and are also
     /// emitted as warnings by the data-plane `pre_parse` hook (see `impl_resource_meta!`).
     pub fn validate_pre_parse(&self) -> Vec<String> {
         let mut errors = Vec::new();
-        match &self.spec.metadata {
-            MetaDataEntry::IpList(ip_list) => {
+        match &self.spec.data {
+            DataEntry::IpList(ip_list) => {
                 if let Err(e) = crate::matcher::ip_cidr_helpers::validate_groups_structure(&ip_list.items) {
                     errors.push(format!("IpList invalid: {}", e));
                 }
             }
-            MetaDataEntry::KeyList(key_list) => {
+            DataEntry::KeyList(key_list) => {
                 if let Err(e) = crate::matcher::key_group_helpers::validate_key_groups_structure(
                     &key_list.items,
                     &key_list.match_mode,
@@ -126,17 +136,17 @@ impl PluginMetaData {
                     errors.push(format!("KeyList invalid: {}", e));
                 }
             }
-            MetaDataEntry::GlobalConnectionIpRestriction(data) => {
+            DataEntry::GlobalConnectionIpRestriction(data) => {
                 // Early validation: clone and run full validate_and_init to surface errors.
                 let mut cloned = data.clone();
                 if let Err(e) = cloned.validate_and_init() {
                     errors.push(format!("GlobalConnectionIpRestriction invalid: {}", e));
                 }
             }
-            // RegionRoute variants: no additional validation at pre-parse (cross-PM
+            // RegionRoute variants: no additional validation at pre-parse (cross-EdgionData
             // reference checks live in the Controller handler's update_status via
             // ResolvedRefs, not here).
-            MetaDataEntry::ClusterRegionRoute(_) | MetaDataEntry::ServiceRegionRoute(_) => {}
+            DataEntry::ClusterRegionRoute(_) | DataEntry::ServiceRegionRoute(_) => {}
         }
         errors
     }

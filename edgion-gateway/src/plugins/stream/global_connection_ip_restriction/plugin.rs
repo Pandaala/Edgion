@@ -3,11 +3,11 @@
 use async_trait::async_trait;
 
 use crate::observe::metrics::record_conn_ip_restriction_event;
-use crate::plugins::runtime::plugin_metadata::get_global_plugin_metadata_store;
+use crate::plugins::runtime::data::get_global_edgion_data_store;
 use crate::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
 };
-use edgion_resources::resources::edgion_gateway_config::PluginReference;
+use edgion_resources::resources::data::DataRef;
 
 const PLUGIN_NAME: &str = "GlobalConnectionIpRestriction";
 
@@ -19,9 +19,9 @@ pub struct GlobalConnectionIpRestrictionPlugin {
 }
 
 impl GlobalConnectionIpRestrictionPlugin {
-    pub fn new(plugin_metadata_ref: PluginReference, parent_namespace: String) -> Self {
-        let effective_ns = plugin_metadata_ref.namespace.as_deref().unwrap_or(&parent_namespace);
-        let metadata_key = format!("{}/{}", effective_ns, plugin_metadata_ref.name);
+    pub fn new(data_ref: DataRef, parent_namespace: String) -> Self {
+        let effective_ns = data_ref.namespace.as_deref().unwrap_or(&parent_namespace);
+        let metadata_key = format!("{}/{}", effective_ns, data_ref.name);
         Self { metadata_key }
     }
 }
@@ -33,7 +33,7 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
     }
 
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
-        let store = get_global_plugin_metadata_store();
+        let store = get_global_edgion_data_store();
         let Some(pm) = store.get_global_connection_ip_restriction_by_key(&self.metadata_key) else {
             // A configured PM reference that does not resolve is a real
             // misconfiguration (sync is gated by ConfigClient::is_ready before
@@ -68,7 +68,7 @@ mod tests {
         // The global PM store is process-wide and shared across tests, so use a
         // collision-proof name that nothing else registers.
         let plugin = GlobalConnectionIpRestrictionPlugin::new(
-            PluginReference {
+            DataRef {
                 name: "gcir-unit-test-missing-pm-do-not-register".to_string(),
                 namespace: Some("default".to_string()),
             },
@@ -77,7 +77,7 @@ mod tests {
         let ctx = StreamContext::new("10.0.0.1".parse().unwrap(), 8080);
         assert!(
             matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)),
-            "a missing referenced PluginMetaData must deny the connection"
+            "a missing referenced EdgionData must deny the connection"
         );
     }
 }

@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::edgion_gateway_config::PluginReference;
+use crate::resources::data::DataRef;
 use crate::resources::edgion_stream_plugins::connection_ip_restriction_rules::ConnectionIpRestrictionRules;
 use crate::resources::edgion_stream_plugins::connection_rate_limit_config::ConnectionRateLimitConfig;
 
@@ -24,9 +24,9 @@ pub enum EdgionStreamPlugin {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GlobalConnectionIpRestrictionEntry {
-    /// Reference to a GlobalConnectionIpRestriction PluginMetaData.
+    /// Reference to a GlobalConnectionIpRestriction EdgionData.
     /// Namespace is inherited from parent EdgionStreamPlugins if omitted.
-    pub plugin_metadata_ref: PluginReference,
+    pub plugin_metadata_ref: DataRef,
 }
 
 impl EdgionStreamPlugin {

@@ -1,4 +1,4 @@
-# Scenario 4: EdgionStreamPlugins referencing a MISSING GCIR PluginMetaData → ResolvedRefs=False/InvalidPluginMetaDataRef
+# Scenario 4: EdgionStreamPlugins referencing a MISSING GCIR EdgionData → ResolvedRefs=False/InvalidEdgionDataRef
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:

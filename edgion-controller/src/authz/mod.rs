@@ -314,19 +314,14 @@ mod tests {
     #[test]
     fn empty_policy_denies_all() {
         let az = Authorizer::new(CenterPolicy::deny_all());
-        assert!(!az.authorize(&az.center_role(), Verb::Get, "PluginMetaData").allowed());
+        assert!(!az.authorize(&az.center_role(), Verb::Get, "EdgionData").allowed());
     }
 
     #[test]
     fn center_policy_matches_exact_and_wildcard() {
-        let az = Authorizer::new(policy(vec![
-            (&["get", "list"], &["PluginMetaData"]),
-            (&["reload"], &["*"]),
-        ]));
-        assert!(az.authorize(&az.center_role(), Verb::Get, "PluginMetaData").allowed());
-        assert!(!az
-            .authorize(&az.center_role(), Verb::Delete, "PluginMetaData")
-            .allowed());
+        let az = Authorizer::new(policy(vec![(&["get", "list"], &["EdgionData"]), (&["reload"], &["*"])]));
+        assert!(az.authorize(&az.center_role(), Verb::Get, "EdgionData").allowed());
+        assert!(!az.authorize(&az.center_role(), Verb::Delete, "EdgionData").allowed());
         assert!(az.authorize(&az.center_role(), Verb::Reload, "AnythingHere").allowed());
         assert!(!az.authorize(&az.center_role(), Verb::Get, "Secret").allowed());
     }
@@ -334,16 +329,16 @@ mod tests {
     #[test]
     fn policy_hot_swaps() {
         let az = Authorizer::new(CenterPolicy::deny_all());
-        assert!(!az.authorize(&az.center_role(), Verb::Get, "PluginMetaData").allowed());
-        az.swap_policy(policy(vec![(&["get"], &["PluginMetaData"])]));
-        assert!(az.authorize(&az.center_role(), Verb::Get, "PluginMetaData").allowed());
+        assert!(!az.authorize(&az.center_role(), Verb::Get, "EdgionData").allowed());
+        az.swap_policy(policy(vec![(&["get"], &["EdgionData"])]));
+        assert!(az.authorize(&az.center_role(), Verb::Get, "EdgionData").allowed());
     }
 
     #[test]
     fn center_policy_verb_is_case_insensitive() {
-        let az = Authorizer::new(policy(vec![(&["GET", "List"], &["PluginMetaData"])]));
-        assert!(az.authorize(&az.center_role(), Verb::Get, "PluginMetaData").allowed());
-        assert!(az.authorize(&az.center_role(), Verb::List, "PluginMetaData").allowed());
+        let az = Authorizer::new(policy(vec![(&["GET", "List"], &["EdgionData"])]));
+        assert!(az.authorize(&az.center_role(), Verb::Get, "EdgionData").allowed());
+        assert!(az.authorize(&az.center_role(), Verb::List, "EdgionData").allowed());
     }
 
     #[test]
@@ -375,7 +370,7 @@ mod tests {
         let p = CenterPolicy::from_config(&FedRbacConfig {
             allow: vec![FedAllowRule {
                 verbs: vec!["get".into()],
-                kinds: vec!["PluginMetaData".into()],
+                kinds: vec!["EdgionData".into()],
             }],
         });
         let mut m = std::collections::HashMap::new();
@@ -390,7 +385,7 @@ mod tests {
         az.apply(CenterPolicy::deny_all(), m);
         let (role, name) = az.cli_lookup("tok-abc").expect("hit");
         assert_eq!(name, "bot");
-        assert!(az.authorize(&role, Verb::Get, "PluginMetaData").allowed());
+        assert!(az.authorize(&role, Verb::Get, "EdgionData").allowed());
         assert!(az.cli_lookup("wrong").is_none());
         assert!(az.cli_tokens_present());
     }
@@ -398,14 +393,14 @@ mod tests {
     #[test]
     fn center_role_snapshots_policy() {
         let az = Authorizer::new(CenterPolicy::deny_all());
-        assert!(!az.authorize(&az.center_role(), Verb::Get, "PluginMetaData").allowed());
+        assert!(!az.authorize(&az.center_role(), Verb::Get, "EdgionData").allowed());
         az.swap_policy(CenterPolicy::from_config(&FedRbacConfig {
             allow: vec![FedAllowRule {
                 verbs: vec!["get".into()],
-                kinds: vec!["PluginMetaData".into()],
+                kinds: vec!["EdgionData".into()],
             }],
         }));
-        assert!(az.authorize(&az.center_role(), Verb::Get, "PluginMetaData").allowed());
+        assert!(az.authorize(&az.center_role(), Verb::Get, "EdgionData").allowed());
     }
 
     // --- Local admin token (Istio-style) ---

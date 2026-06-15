@@ -50,14 +50,14 @@ pub struct ControllerRuntime {
     pub(crate) configmap_store: ConfigMapStore,
     pub(crate) backend_tls_policy: BackendTLSPolicyState,
     pub(crate) plugin_metadata_store: PluginMetaDataStore,
-    /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each PluginMetaData.
-    /// Used by the PluginMetaData handler to requeue referencing resources on change.
+    /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each EdgionData.
+    /// Used by the DataHandler to requeue referencing resources on change.
     pub(crate) plugin_metadata_refs: PluginMetaDataRefManager,
     /// Cluster RegionRoute table: pm_key → ClusterRegionRouteEntry.
-    /// Maintained by PluginMetaData handler on change/delete.
+    /// Maintained by DataHandler on change/delete.
     pub(crate) cluster_region_route_table: RegionRouteClusterTable,
     /// Service RegionRoute table: pm_key → ServiceRegionRouteEntry.
-    /// Maintained by PluginMetaData handler (PluginMetaData fields) and EdgionPlugins handler (ref_plugins).
+    /// Maintained by DataHandler (EdgionData fields) and EdgionPlugins handler (ref_plugins).
     pub(crate) service_region_route_table: RegionRouteServiceTable,
     /// Tracks which Gateways reference each EdgionStreamPlugins via
     /// `edgion.io/edgion-stream-plugins` annotation.
@@ -65,7 +65,7 @@ pub struct ControllerRuntime {
     /// Reverse: `Gateway ResourceRef → Set<"esp_ns/esp_name">`
     pub(crate) stream_plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
     /// Optional conf_writer injected by the ConfCenter implementation.
-    /// Used by handlers to auto-create resources (e.g., PluginMetaData for RegionRoute).
+    /// Used by handlers to auto-create resources (e.g., EdgionData for RegionRoute).
     /// None until the ConfCenter calls `set_conf_writer()`.
     pub(crate) conf_writer: RwLock<Option<Arc<dyn CenterApi + Send + Sync>>>,
 }
@@ -153,10 +153,10 @@ impl ControllerRuntime {
         self.backend_tls_policy.reset();
 
         self.plugin_metadata_store.replace_all(HashMap::new());
-        tracing::info!(component = "controller_runtime", "Cleared PluginMetaDataStore");
+        tracing::info!(component = "controller_runtime", "Cleared EdgionData store");
 
         self.plugin_metadata_refs.clear_all();
-        tracing::info!(component = "controller_runtime", "Cleared PluginMetaDataRefManager");
+        tracing::info!(component = "controller_runtime", "Cleared EdgionData ref manager");
 
         self.cluster_region_route_table.clear();
         tracing::info!(component = "controller_runtime", "Cleared RegionRouteClusterTable");

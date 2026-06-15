@@ -1,14 +1,14 @@
-# Service PluginMetaData for ctrl-2
+# Service EdgionData for ctrl-2
 #
-# In the new architecture, the ClusterRegionRoute PluginMetaData holds topology (not per-controller PluginMetaDatas).
-# This file is a ServiceRegionRoute PluginMetaData for ctrl-2, referencing the ClusterRegionRoute PluginMetaData via clusterRef.
+# In the new architecture, the ClusterRegionRoute EdgionData holds topology (not per-controller EdgionDatas).
+# This file is a ServiceRegionRoute EdgionData for ctrl-2, referencing the ClusterRegionRoute EdgionData via clusterRef.
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionData
 metadata:
   name: region-route-main
   namespace: edgion-default
 spec:
-  metadata:
+  data:
     type: ServiceRegionRoute
     config:
         clusterRef:

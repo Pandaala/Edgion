@@ -1,11 +1,11 @@
-# ServiceRegionRoute PluginMetaData for pm-validated test
+# ServiceRegionRoute EdgionData for pm-validated test
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionData
 metadata:
   name: pm-validated
   namespace: edgion-default
 spec:
-  metadata:
+  data:
     type: ServiceRegionRoute
     config:
         clusterRef:

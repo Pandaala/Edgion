@@ -15,7 +15,7 @@ pub enum ResourceKind {
     GRPCRoute = 10,
     TCPRoute = 11,
     UDPRoute = 12,
-    PluginMetaData = 13,
+    EdgionData = 13,
     TLSRoute = 14,
     LinkSys = 15,
     EdgionStreamPlugins = 16,
@@ -47,7 +47,7 @@ impl ResourceKind {
             ResourceKind::GRPCRoute => "GRPCRoute",
             ResourceKind::TCPRoute => "TCPRoute",
             ResourceKind::UDPRoute => "UDPRoute",
-            ResourceKind::PluginMetaData => "PluginMetaData",
+            ResourceKind::EdgionData => "EdgionData",
             ResourceKind::TLSRoute => "TLSRoute",
             ResourceKind::LinkSys => "LinkSys",
             ResourceKind::EdgionStreamPlugins => "EdgionStreamPlugins",
@@ -88,7 +88,7 @@ impl ResourceKind {
                 ResourceKind::GRPCRoute => {}
                 ResourceKind::TCPRoute => {}
                 ResourceKind::UDPRoute => {}
-                ResourceKind::PluginMetaData => {}
+                ResourceKind::EdgionData => {}
                 ResourceKind::TLSRoute => {}
                 ResourceKind::LinkSys => {}
                 ResourceKind::EdgionStreamPlugins => {}
@@ -148,7 +148,7 @@ impl ResourceKind {
             "grpcroute" => Some(ResourceKind::GRPCRoute),
             "tcproute" => Some(ResourceKind::TCPRoute),
             "udproute" => Some(ResourceKind::UDPRoute),
-            "pluginmetadata" => Some(ResourceKind::PluginMetaData),
+            "edgiondata" => Some(ResourceKind::EdgionData),
             "tlsroute" => Some(ResourceKind::TLSRoute),
             "linksys" => Some(ResourceKind::LinkSys),
             "edgionstreamplugins" => Some(ResourceKind::EdgionStreamPlugins),

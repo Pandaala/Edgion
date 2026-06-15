@@ -162,7 +162,7 @@ conf_sync:
 #   # ABSENT => built-in default policy applies:
 #   #   - read (get/list/watch/list-keys) on ALL resource kinds EXCEPT Secret
 #   #     (EdgionTls IS readable; only the Secret kind is excluded for credential safety)
-#   #   - write (create/update/delete) on PluginMetaData only
+#   #   - write (create/update/delete) on EdgionData only
 #   #     (drives IP-restriction sync + region-route sync; grants write to ALL plugin
 #   #     metadata, not only region/ip -- this limitation is intentional for simplicity)
 #   #   - get, list, and failover on RegionRoute (synthetic label, not a ResourceKind):
@@ -176,8 +176,8 @@ conf_sync:
 #   # than the default. See docs/en/ops-guide/federation-rbac.md for examples.
 #   #
 #   # IMPORTANT -- kind casing: kinds MUST use the canonical PascalCase resource
-#   # Kind name (e.g. PluginMetaData, HTTPRoute, RegionRoute). Lowercase or alias
-#   # spellings (e.g. pluginmetadata) silently never match any request. Verbs are
+#   # Kind name (e.g. EdgionData, HTTPRoute, RegionRoute). Lowercase or alias
+#   # spellings (e.g. edgiondata) silently never match any request. Verbs are
 #   # case-insensitive (get, GET, Get all work).
 #   #
 #   # WARNING: NEVER use kinds: ["*"] with get / list / watch.
@@ -190,7 +190,7 @@ conf_sync:
 #   rbac:
 #     allow:
 #       - verbs: [get, list, watch, create, update, delete]
-#         kinds: [PluginMetaData]
+#         kinds: [EdgionData]
 #       - verbs: [failover]
 #         kinds: [RegionRoute]
 #       - verbs: [reload]
@@ -229,7 +229,7 @@ conf_sync:
 #         # Enumerate concrete kinds; do NOT use kinds: ["*"] with read verbs.
 #         - verbs: [get, list]
 #           kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service,
-#                   EdgionGatewayConfig, EdgionTls, PluginMetaData]
+#                   EdgionGatewayConfig, EdgionTls, EdgionData]
 #
 #   # Scoped read-write token — manages plugin metadata + reload only.
 #   - name: plugin-manager
@@ -237,7 +237,7 @@ conf_sync:
 #     rbac:
 #       allow:
 #         - verbs: [get, list, watch, create, update, delete]
-#           kinds: [PluginMetaData]
+#           kinds: [EdgionData]
 #         # reload is write-only; kinds: ["*"] is safe here (no read surface).
 #         - verbs: [reload]
 #           kinds: ["*"]

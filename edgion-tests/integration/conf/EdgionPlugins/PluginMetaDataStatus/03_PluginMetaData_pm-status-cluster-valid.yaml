@@ -1,11 +1,11 @@
 # Scenario 3: valid ClusterRegionRoute PM — expect Accepted=True, ResolvedRefs=True
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionData
 metadata:
   name: pm-status-cluster-valid
   namespace: edgion-test
 spec:
-  metadata:
+  data:
     type: ClusterRegionRoute
     config:
       regions:

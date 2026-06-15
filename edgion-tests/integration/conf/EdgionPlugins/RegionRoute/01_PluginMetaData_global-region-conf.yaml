@@ -1,8 +1,8 @@
-# Global PluginMetaData for the region-route-test service group.
+# Global EdgionData for the region-route-test service group.
 #
 # This is the canonical region topology and routing configuration.
 # Center manages this resource; EdgionPlugins reference it via serviceRegionRouteRef
-# (via the ServiceRegionRoute PluginMetaData's clusterRef).
+# (via the ServiceRegionRoute EdgionData's clusterRef).
 #
 # Contains the COMPLETE routing config: regions, keyGet, hashKeyGet, hashCalc,
 # routeRules, and routeByKeyConfMatch (matchMap). The EdgionPlugins
@@ -12,12 +12,12 @@
 #   virginia: 127.0.0.1:30001  hashRange [0, 599]  (600/1000 = 60%)
 #   ohio:     127.0.0.1:30002  hashRange [600, 999] (400/1000 = 40%)
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionData
 metadata:
   name: global-region-conf
   namespace: edgion-default
 spec:
-  metadata:
+  data:
     type: ClusterRegionRoute
     config:
         regions:

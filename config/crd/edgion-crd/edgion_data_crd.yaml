@@ -1,7 +1,7 @@
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: pluginmetadata.edgion.io
+  name: edgiondata.edgion.io
 spec:
   group: edgion.io
   versions:
@@ -15,12 +15,12 @@ spec:
             spec:
               type: object
               required:
-                - metadata
-              description: "PluginMetaData defines named metadata resources referenced by EdgionPlugins / EdgionStreamPlugins. Exactly one MetaDataEntry variant, discriminated by `metadata.type`."
+                - data
+              description: "EdgionData defines named data resources referenced by EdgionPlugins / EdgionStreamPlugins. Exactly one DataEntry variant, discriminated by `data.type`."
               properties:
-                metadata:
+                data:
                   type: object
-                  description: "The single metadata entry carried by this PluginMetaData."
+                  description: "The single data entry carried by this EdgionData."
                   required:
                     - type
                     - config
@@ -48,14 +48,14 @@ spec:
                       x-kubernetes-preserve-unknown-fields: true
             status:
               type: object
-              description: "Status of PluginMetaData."
+              description: "Status of EdgionData."
               properties:
                 conditions:
                   type: array
                   description: |
                     Gateway-API-style conditions.
                     - `Accepted`: the spec passed per-variant preparse validation.
-                    - `ResolvedRefs`: cross-PM references resolve (only meaningful for
+                    - `ResolvedRefs`: cross-EdgionData references resolve (only meaningful for
                       ServiceRegionRoute.clusterRef; otherwise always True).
                   items:
                     type: object
@@ -79,8 +79,8 @@ spec:
       additionalPrinterColumns:
         - name: Type
           type: string
-          jsonPath: .spec.metadata.type
-          description: "MetaDataEntry variant"
+          jsonPath: .spec.data.type
+          description: "DataEntry variant"
         - name: Accepted
           type: string
           jsonPath: .status.conditions[?(@.type=='Accepted')].status
@@ -89,8 +89,8 @@ spec:
           jsonPath: .metadata.creationTimestamp
   scope: Namespaced
   names:
-    plural: pluginmetadata
-    singular: pluginmetadata
-    kind: PluginMetaData
+    plural: edgiondata
+    singular: edgiondata
+    kind: EdgionData
     shortNames:
-      - pmd
+      - edata

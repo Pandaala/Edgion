@@ -1,11 +1,11 @@
-//! IP list metadata
+//! IP list data
 //!
 //! A grouped list of IP addresses or CIDR ranges for IP-based filtering.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::plugin_metadata::IpGroup;
+use crate::resources::data::IpGroup;
 
 /// A grouped list of IP addresses or CIDR ranges.
 ///

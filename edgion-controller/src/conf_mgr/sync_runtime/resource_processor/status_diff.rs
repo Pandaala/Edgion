@@ -45,7 +45,7 @@ pub fn status_semantically_changed(kind: &str, old_json: &str, new_json: &str) -
         "BackendTLSPolicy" => !ancestors_status_equal(&old, &new),
         "EdgionAcme" => old != new,
         // Simple condition-only resources:
-        // GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, PluginMetaData
+        // GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionData
         _ => !conditions_only_status_equal(&old, &new),
     }
 }
@@ -106,7 +106,7 @@ fn condition_fields_equal(a: &Value, b: &Value) -> bool {
 
 // ============================================================================
 // Simple condition-only status (GatewayClass, EdgionGatewayConfig, LinkSys,
-// EdgionPlugins, EdgionStreamPlugins, PluginMetaData, etc.)
+// EdgionPlugins, EdgionStreamPlugins, EdgionData, etc.)
 // ============================================================================
 
 fn conditions_only_status_equal(old: &Value, new: &Value) -> bool {

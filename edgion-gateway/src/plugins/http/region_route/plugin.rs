@@ -4,26 +4,26 @@
 //! When a key is configured but absent from the request, the plugin passes through
 //! without modifying the upstream (fail-open, not fail-close).
 //!
-//! At request time, the plugin resolves the PluginMetaData chain from the global
-//! `PluginMetaDataGatewayStore` (ArcSwap, lock-free):
-//!   EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData
-//!     → clusterRef → ClusterRegionRoute PluginMetaData
+//! At request time, the plugin resolves the EdgionData chain from the global
+//! `EdgionDataStore` (ArcSwap, lock-free):
+//!   EP.serviceRegionRouteRef → ServiceRegionRoute EdgionData
+//!     → clusterRef → ClusterRegionRoute EdgionData
 //!
-//! No config is cached — every request sees the latest PluginMetaData.
+//! No config is cached — every request sees the latest EdgionData.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use crate::plugins::runtime::data::get_global_edgion_data_store;
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::plugin_metadata::get_global_plugin_metadata_store;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::util::net::host_without_port;
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::common::KeyGet;
 use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::data::{ClusterRegionRouteConfig, ServiceRegionRouteConfig};
 use edgion_resources::resources::edgion_plugins::{HashAlgorithm, RegionDef, RegionRouteConfig, RouteRule};
-use edgion_resources::resources::plugin_metadata::{ClusterRegionRouteConfig, ServiceRegionRouteConfig};
 
 // Hash function
 fn compute_hash(key: &str, algorithm: &HashAlgorithm, modulo: u16) -> u16 {
@@ -52,13 +52,13 @@ pub struct RegionRoute {
     name: String,
     /// Namespace of the parent EdgionPlugins resource.
     ep_namespace: String,
-    /// Name of the ServiceRegionRoute PluginMetaData to look up.
+    /// Name of the ServiceRegionRoute EdgionData to look up.
     service_ref_name: String,
     /// Pre-computed "namespace/name" key for the service lookup.
     service_lookup_key: String,
 }
 
-/// Outcome of resolving the PluginMetaData reference chain.
+/// Outcome of resolving the EdgionData reference chain.
 ///
 /// `NotConfigured` (no `serviceRegionRouteRef`) is a legitimate no-op — the
 /// plugin passes the request through. `BrokenRef` (a configured reference that
@@ -84,7 +84,7 @@ impl RegionRoute {
         })
     }
 
-    /// Resolve the PluginMetaData chain.
+    /// Resolve the EdgionData chain.
     /// Returns `NotConfigured` when no reference is set, `BrokenRef` when a
     /// configured reference does not resolve, `Resolved` on success.
     fn resolve_config(&self, log: &mut PluginLog) -> ResolveOutcome {
@@ -93,7 +93,7 @@ impl RegionRoute {
             return ResolveOutcome::NotConfigured;
         }
 
-        let store = get_global_plugin_metadata_store();
+        let store = get_global_edgion_data_store();
 
         let svc = match store.get_service_region_route_config_by_key(&self.service_lookup_key) {
             Some(s) => s,
@@ -319,7 +319,7 @@ impl RequestFilter for RegionRoute {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        // Resolve PluginMetaData chain: ServiceRegionRoute → ClusterRegionRoute
+        // Resolve EdgionData chain: ServiceRegionRoute → ClusterRegionRoute
         let (cluster, svc) = match self.resolve_config(log) {
             ResolveOutcome::Resolved(cluster, svc) => (cluster, svc),
             // No reference configured — legitimate no-op, pass through.

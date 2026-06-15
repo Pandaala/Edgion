@@ -167,7 +167,7 @@ mod tests {
         FedRbacConfig {
             allow: vec![FedAllowRule {
                 verbs: vec!["get".to_string()],
-                kinds: vec!["PluginMetaData".to_string()],
+                kinds: vec!["EdgionData".to_string()],
             }],
         }
     }
@@ -191,7 +191,7 @@ mod tests {
             rbac: FedRbacConfig {
                 allow: vec![FedAllowRule {
                     verbs: vec!["get".to_string()],
-                    kinds: vec!["PluginMetaData".to_string()],
+                    kinds: vec!["EdgionData".to_string()],
                 }],
             },
         };
@@ -215,12 +215,12 @@ mod tests {
             "the FIRST entry must be kept (no last-wins overwrite)"
         );
 
-        // The retained policy must be the first one (get/PluginMetaData).
+        // The retained policy must be the first one (get/EdgionData).
         let az = crate::authz::Authorizer::new(CenterPolicy::deny_all());
         let role = crate::authz::Role::Restricted(retained.policy.clone());
         assert!(
-            az.authorize(&role, Verb::Get, "PluginMetaData").allowed(),
-            "first entry policy (get PluginMetaData) must be active"
+            az.authorize(&role, Verb::Get, "EdgionData").allowed(),
+            "first entry policy (get EdgionData) must be active"
         );
         assert!(
             !az.authorize(&role, Verb::Delete, "Secret").allowed(),

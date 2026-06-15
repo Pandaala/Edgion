@@ -54,7 +54,7 @@ fn run(ctx: ScenarioCtx) -> Pin<Box<dyn std::future::Future<Output = Result<()>>
 
 pub static SCENARIO: &Scenario = &Scenario {
     id: "PmdRefFlap",
-    conf_path: "EdgionPlugins/PluginMetaDataStatus/RefFlap/DynamicTest",
+    conf_path: "EdgionPlugins/EdgionDataStatus/RefFlap/DynamicTest",
     run,
     phases: PHASES,
 };

@@ -1,12 +1,12 @@
 //! Cluster RegionRoute Table
 //!
 //! Stores ClusterRegionRoute entries indexed by pm_key (namespace/name).
-//! Built from PluginMetaData containing ClusterRegionRoute plugin entries.
+//! Built from EdgionData containing ClusterRegionRoute data entries.
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
-pub use edgion_resources::resources::plugin_metadata::ClusterRegionRouteEntry;
+pub use edgion_resources::resources::data::ClusterRegionRouteEntry;
 
 pub struct RegionRouteClusterTable {
     data: RwLock<HashMap<String, ClusterRegionRouteEntry>>,

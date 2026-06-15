@@ -31,7 +31,7 @@ pub struct ConfigClient {
     edgion_plugins: ClientCache<EdgionPlugins>,
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
     backend_tls_policies: ClientCache<BackendTLSPolicy>,
-    plugin_metadata: ClientCache<PluginMetaData>,
+    edgion_data: ClientCache<EdgionData>,
     edgion_acme: ClientCache<EdgionAcme>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
     /// Optional cache-field whitelist used for readiness checks.
@@ -143,11 +143,11 @@ impl ConfigClient {
             edgion_plugins: plugins_cache,
             edgion_stream_plugins: stream_plugins_cache,
             backend_tls_policies: backend_tls_policies_cache,
-            plugin_metadata: {
-                let pm_cache = ClientCache::new(client_id.clone(), client_name.clone());
-                let pm_handler = crate::plugins::runtime::plugin_metadata::create_plugin_metadata_handler();
-                pm_cache.set_conf_processor(pm_handler);
-                pm_cache
+            edgion_data: {
+                let ed_cache = ClientCache::new(client_id.clone(), client_name.clone());
+                let ed_handler = crate::plugins::runtime::data::create_edgion_data_handler();
+                ed_cache.set_conf_processor(ed_handler);
+                ed_cache
             },
             edgion_acme: edgion_acme_cache,
             required_cache_names: RwLock::new(None),
@@ -261,7 +261,7 @@ impl ConfigClient {
             ResourceKind::EdgionPlugins => Some(&self.edgion_plugins),
             ResourceKind::EdgionStreamPlugins => Some(&self.edgion_stream_plugins),
             ResourceKind::BackendTLSPolicy => Some(&self.backend_tls_policies),
-            ResourceKind::PluginMetaData => Some(&self.plugin_metadata),
+            ResourceKind::EdgionData => Some(&self.edgion_data),
             // These are intentionally not cached on Gateway side
             ResourceKind::Secret => None,
             ResourceKind::ConfigMap => None,
@@ -354,9 +354,9 @@ impl ConfigClient {
         self.edgion_plugins.list_owned()
     }
 
-    /// List plugin metadata
-    pub fn list_plugin_metadata(&self) -> ListData<PluginMetaData> {
-        self.plugin_metadata.list_owned()
+    /// List EdgionData entries
+    pub fn list_edgion_data(&self) -> ListData<EdgionData> {
+        self.edgion_data.list_owned()
     }
 
     /// List GatewayClasses
