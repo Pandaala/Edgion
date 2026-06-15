@@ -113,8 +113,12 @@ unit tests (base-only, base+overlay, overlay-invalid→base).
 
 ## S5 — Switch generalization sweep (phase 3)
 
-- [ ] **S5.1** Uniform `enable`/`active` semantics across opt-in consumers (single helper).
-- [ ] **S5.2** Audit other candidate plugins for the same switch (consistency pass).
+- [x] **S5.1** Done by audit: the only live switch consumer is GlobalConnIp (`enable` wired in S4 via the
+      shared `effective_switch` helper). RegionRoute's override `enable`/`active` stay **reserved/unwired**
+      (D-S3-A): RegionRoute has no profiles, so `active` is meaningless and `enable` has no agreed semantics —
+      not wiring speculative behavior (no over-engineering). Documented in 05-issues D-S3-A.
+- [x] **S5.2** Audit done: no other PM/EdgionData-consuming plugins exist (KeyList/IpList have no consumers
+      per D1; HTTP IpRestriction/KeyAuth are inline). Nothing else to wire.
 
 **Verify:** `cargo fmt`; `cargo check`.
 
@@ -134,10 +138,10 @@ unit tests (base-only, base+overlay, overlay-invalid→base).
 
 ## S7 — CRD YAML + schema guard (phase 3)
 
-- [ ] **S7.1** Finalize `config/crd/edgion-crd/` for EdgionPlugins (`overrideRef`, base data fields) and
+- [x] **S7.1** Finalize `config/crd/edgion-crd/` for EdgionPlugins (`overrideRef`, base data fields) and
       EdgionData (final variant set; old RegionRoute variants removed).
-- [ ] **S7.2** Audit `#[schemars(skip)]` + redact on resolved/secret/runtime fields of new structs.
-- [ ] **S7.3** Re-run `./cicd/checks/check_crd_coverage.sh` (EGC/TLS structural guard) — expect green.
+- [x] **S7.2** Audit `#[schemars(skip)]` + redact on resolved/secret/runtime fields of new structs.
+- [x] **S7.3** Re-run `./cicd/checks/check_crd_coverage.sh` (EGC/TLS structural guard) — expect green.
 
 **Verify:** `python3 cicd/checks/validate_agent_docs.py`; `./cicd/checks/check_crd_coverage.sh`.
 

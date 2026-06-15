@@ -143,3 +143,35 @@ counter with a `result` label. No `overlay_invalid` signal exists for RegionRout
 Unlike GCIR (which pre-compiles matchers), RegionDef carries no runtime-only fields. The effective region
 table is a plain `Vec<RegionDef>` computed at request time (one ArcSwap load + merge). No `#[serde(skip)]`
 migration needed.
+
+---
+
+## S7 Deviations (noted during execution)
+
+### D-S7-A — EdgionData CRD type enum was stale (two removed variants, two missing new ones)
+The `edgion_data_crd.yaml` `type` enum was not updated during S3/S4. It still listed the deleted
+`ClusterRegionRoute` and `ServiceRegionRoute` variants, and was missing the new `GlobalConnIpRestrictionOverride`
+and `RegionRouteOverride` variants added in S4 and S3 respectively. Fixed in S7.1:
+- Removed: `ClusterRegionRoute`, `ServiceRegionRoute`
+- Added: `GlobalConnIpRestrictionOverride`, `RegionRouteOverride`
+
+### D-S7-B — Status ResolvedRefs description referenced stale ServiceRegionRoute.clusterRef
+The status `conditions` description in `edgion_data_crd.yaml` mentioned `ServiceRegionRoute.clusterRef` as
+the only cross-resource ref. That variant was removed in S3. The description was updated to accurately reflect
+that no current typed variant carries external cross-resource references.
+
+### D-S7-C — EdgionPlugins and EdgionStreamPlugins CRDs need no changes
+Both CRDs use `x-kubernetes-preserve-unknown-fields: true` on their plugin `config` payloads. This means the
+new fields added in S3/S4 (`overrideRef` in `RegionRouteConfig`, `base`/`overrideRef` in
+`GlobalConnectionIpRestrictionEntry`) pass through the API server without explicit CRD field declarations —
+no pruning occurs. Confirmed correct; no CRD changes made.
+
+### D-S7-D — `#[schemars(skip)]` + redact audit: all clear
+All runtime-only fields in new/changed structs are correctly annotated:
+- `ProfileRules.allow_matcher` / `deny_matcher`: `#[serde(skip)] #[schemars(skip)]` — present in S4
+- `RegionRouteOverride`, `GlobalConnIpRestrictionOverride`, `GlobalConnectionIpRestrictionEntry`,
+  `RegionRouteConfig`: no runtime-only fields; no resolved secrets; no redact adapter needed.
+
+### D-S7-E — validate_agent_docs.py reports 8 stale skills/ refs (docs fix is S9)
+Eight stale `src/` refs in `skills/` files still point to the old `plugin_metadata/` module path (renamed to
+`data/` in S1). Per task scope, docs fixes belong in S9. Count: 8 refs across 4 skills files.

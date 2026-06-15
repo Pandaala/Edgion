@@ -16,7 +16,7 @@ spec:
               type: object
               required:
                 - data
-              description: "EdgionData defines named data resources referenced by EdgionPlugins / EdgionStreamPlugins. Exactly one DataEntry variant, discriminated by `data.type`. The envelope fields `enable` and `active` apply to any variant."
+              description: "EdgionData defines named data resources referenced by EdgionPlugins / EdgionStreamPlugins. Exactly one DataEntry variant (KeyList, IpList, GlobalConnectionIpRestriction, GlobalConnIpRestrictionOverride, RegionRouteOverride, Misc), discriminated by `data.type`. The envelope fields `enable` and `active` apply to any variant."
               properties:
                 enable:
                   type: boolean
@@ -38,9 +38,9 @@ spec:
                       enum:
                         - KeyList
                         - IpList
-                        - ClusterRegionRoute
-                        - ServiceRegionRoute
                         - GlobalConnectionIpRestriction
+                        - GlobalConnIpRestrictionOverride
+                        - RegionRouteOverride
                         - Misc
                     config:
                       type: object
@@ -48,9 +48,9 @@ spec:
                         Variant-specific configuration. Shape depends on `type`:
                           - KeyList: { matchMode?: "Exact"|"Regex", items: [{ name, description?, items: [{ key, code?, priority?, id?, behavior? }] }] }
                           - IpList: { items: [{ name, description?, cidrs: string[] }] }   (grouped CIDRs / bare IPs, v4/v6)
-                          - ClusterRegionRoute: full cluster topology + route rules + matchMap
-                          - ServiceRegionRoute: { clusterRef: {namespace, name}, regions: [{ name, failoverTo? }] }
                           - GlobalConnectionIpRestriction: { enable, activeProfile, profiles: { <name>: { defaultAction, allow?, deny? } } }
+                          - GlobalConnIpRestrictionOverride: all-Optional overlay for GlobalConnectionIpRestriction — { enable?, activeProfile?, profiles? }; referenced via overrideRef in EdgionStreamPlugins GlobalConnectionIpRestriction entries
+                          - RegionRouteOverride: all-Optional overlay for RegionRoute — { enable?, active?, regions? }; referenced via overrideRef in EdgionPlugins RegionRoute configs
                           - Misc: open payload (x-kubernetes-preserve-unknown-fields); escape hatch for third-party or unknown payloads only
                         Validation of the concrete shape is performed by the Controller
                         and surfaced via the `Accepted` status condition.
@@ -64,8 +64,8 @@ spec:
                   description: |
                     Gateway-API-style conditions.
                     - `Accepted`: the spec passed per-variant preparse validation.
-                    - `ResolvedRefs`: cross-EdgionData references resolve (only meaningful for
-                      ServiceRegionRoute.clusterRef; otherwise always True).
+                    - `ResolvedRefs`: cross-resource references resolve. Currently all typed variants
+                      report True unconditionally (no variant carries external cross-resource refs).
                   items:
                     type: object
                     properties:
