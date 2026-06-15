@@ -463,9 +463,11 @@ pub fn record_config_event_parse_error(kind: &'static str) {
 /// Record a `GlobalConnectionIpRestriction` stream plugin decision event.
 ///
 /// `result` must be one of:
-/// - `"fail_closed_pm_missing"` — referenced PluginMetadata not found; connection denied
-/// - `"fail_closed_profile_missing"` — active profile not present in PM; connection denied
-/// - `"denied"` — client IP blocked by active profile rules
+/// - `"overlay_missing"` — `overrideRef` set but EdgionData not found; base used (fail-to-base)
+/// - `"overlay_type_mismatch"` — EdgionData present but wrong variant type (D6); base used
+/// - `"overlay_invalid"` — overlay applied but merged effective config failed validation; base used
+/// - `"fail_closed_profile_missing"` — active profile not in effective config (defensive guard)
+/// - `"denied"` — client IP blocked by the active profile rules
 ///
 /// Low, fixed cardinality — safe as a label.
 pub fn record_conn_ip_restriction_event(result: &'static str) {

@@ -35,7 +35,8 @@ impl StreamPluginRuntime {
     /// Create runtime from stream plugin entries.
     ///
     /// `parent_namespace` is the namespace of the owning `EdgionStreamPlugins` resource,
-    /// used by `GlobalConnectionIpRestrictionPlugin` to resolve refs with no explicit namespace.
+    /// used by `GlobalConnectionIpRestrictionPlugin` to resolve `overrideRef` with no
+    /// explicit namespace.
     pub fn from_stream_plugins(entries: &[StreamPluginEntry], parent_namespace: &str) -> Self {
         let mut plugins: Vec<Arc<dyn StreamPlugin>> = Vec::new();
 
@@ -47,10 +48,18 @@ impl StreamPluginRuntime {
             let plugin: Arc<dyn StreamPlugin> = match &entry.plugin {
                 EdgionStreamPlugin::IpRestriction(rules) => Arc::new(StreamIpRestriction::new(rules)),
                 EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
-                    Arc::new(GlobalConnectionIpRestrictionPlugin::new(
-                        gcir.plugin_metadata_ref.clone(),
-                        parent_namespace.to_string(),
-                    ))
+                    match GlobalConnectionIpRestrictionPlugin::new(gcir, parent_namespace) {
+                        Ok(p) => Arc::new(p),
+                        Err(e) => {
+                            // Base validation failed — should not happen if controller validated
+                            // before syncing, but log and skip the plugin rather than panicking.
+                            tracing::error!(
+                                error = %e,
+                                "GlobalConnectionIpRestriction plugin skipped: base config failed validation"
+                            );
+                            continue;
+                        }
+                    }
                 }
                 EdgionStreamPlugin::ConnectionRateLimit(cfg) => Arc::new(ConnectionRateLimitPlugin::new(cfg)),
             };

@@ -1,5 +1,5 @@
-# Scenario 2: invalid GCIR PM — activeProfile 'missing' not in profiles
-# Expect: Accepted=False/Invalid, message contains "activeProfile"
+# Scenario 2: invalid GlobalConnIpRestrictionOverride EdgionData
+# activeProfile 'missing' not present in profiles — should cause Accepted=False/Invalid
 apiVersion: edgion.io/v1
 kind: EdgionData
 metadata:
@@ -7,11 +7,9 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnectionIpRestriction
+    type: GlobalConnIpRestrictionOverride
     config:
-      enable: true
       activeProfile: missing
-      description: "Status test: invalid GCIR - activeProfile not in profiles"
       profiles:
         main:
           defaultAction: deny

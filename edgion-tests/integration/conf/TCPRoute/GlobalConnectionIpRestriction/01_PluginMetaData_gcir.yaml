@@ -1,10 +1,10 @@
-# GlobalConnectionIpRestriction EdgionData for L4 enforcement tests
+# GlobalConnIpRestrictionOverride EdgionData for L4 enforcement tests
 #
-# Two profiles:
-#   allow-local: defaultAction=deny, only 127.0.0.0/8 allowed  — loopback IS allowed
-#   block-local: defaultAction=allow, 127.0.0.0/8 explicitly denied — loopback IS blocked
+# This is the OVERLAY resource referenced by the EdgionStreamPlugins via `overrideRef`.
+# The complete base config (with both profiles) lives inline in 02_EdgionStreamPlugins.yaml.
 #
-# Initial state: activeProfile=allow-local (local test connects from 127.0.0.1 → ALLOWED)
+# Initial state: activeProfile=allow-local (loopback allowed)
+# Tests switch this overlay to change the active profile or kill-switch enable.
 apiVersion: edgion.io/v1
 kind: EdgionData
 metadata:
@@ -12,20 +12,6 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnectionIpRestriction
+    type: GlobalConnIpRestrictionOverride
     config:
-      enable: true
       activeProfile: allow-local
-      profiles:
-        allow-local:
-          defaultAction: deny
-          allow:
-            - name: loopback
-              cidrs:
-                - "127.0.0.0/8"
-        block-local:
-          defaultAction: allow
-          deny:
-            - name: loopback-block
-              cidrs:
-                - "127.0.0.0/8"

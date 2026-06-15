@@ -1,4 +1,4 @@
-# Scenario 1: valid GCIR PM — expect Accepted=True, ResolvedRefs=True
+# Scenario 1: valid GlobalConnIpRestrictionOverride EdgionData — expect Accepted=True, ResolvedRefs=True
 apiVersion: edgion.io/v1
 kind: EdgionData
 metadata:
@@ -6,11 +6,10 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnectionIpRestriction
+    type: GlobalConnIpRestrictionOverride
     config:
       enable: true
       activeProfile: main
-      description: "Status test: valid GCIR"
       profiles:
         main:
           defaultAction: deny

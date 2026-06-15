@@ -1,10 +1,10 @@
-# GlobalConnectionIpRestriction EdgionData — smoke test fixture
+# GlobalConnIpRestrictionOverride EdgionData — smoke test fixture
 #
-# Verifies that the standard PM CRUD path accepts the new MetaDataEntry variant.
-# Profile p1: allow-list semantics — only 192.168.1.0/24 is allowed; all others denied.
+# Verifies that the GlobalConnIpRestrictionOverride variant is accepted by the controller.
+# Profile p1: allow-list semantics — only 192.168.1.0/24 allowed; all others denied.
 # Profile strict: deny-list semantics — explicitly deny 10.10.10.0/24; default allow.
 #
-# Integration tests (Task 25-26) will exercise the full L4 enforcement path.
+# The full GCIR overlay (all fields present) exercises all Optional fields.
 apiVersion: edgion.io/v1
 kind: EdgionData
 metadata:
@@ -12,11 +12,10 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnectionIpRestriction
+    type: GlobalConnIpRestrictionOverride
     config:
       enable: true
       activeProfile: p1
-      description: "Smoke test PM for GlobalConnectionIpRestriction"
       profiles:
         p1:
           defaultAction: deny

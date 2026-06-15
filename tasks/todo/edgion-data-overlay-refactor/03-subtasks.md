@@ -97,13 +97,13 @@ unit tests (base-only, base+overlay, overlay-invalid→base).
 
 ## S4 — GlobalConnectionIpRestriction alignment (phase 3)
 
-- [ ] **S4.1** Move default profile/`enable`/`active` into `EdgionStreamPlugins` base; add
+- [x] **S4.1** Move default profile/`enable`/`active` into `EdgionStreamPlugins` base; add
       `GlobalConnIpRestrictionOverride` as a **typed** overlay variant (D2; override `enable`/`active`/profile
       data) reusing the existing `validate_and_init` matcher pre-compile.
-- [ ] **S4.2** `stream/global_connection_ip_restriction/plugin.rs`: fail-closed (`Deny`) → **fail-to-base**
+- [x] **S4.2** `stream/global_connection_ip_restriction/plugin.rs`: fail-closed (`Deny`) → **fail-to-base**
       using base profile; `enable=false` → skip. Emit `overlay_missing`/`overlay_invalid` via metric (no tracing).
-- [ ] **S4.3** Update conf_handler matcher compilation for the overlay path; keep matcher fields skip-serialized.
-- [ ] **S4.4** Document the security caveat (base profile = safe default).
+- [x] **S4.3** Update conf_handler matcher compilation for the overlay path; keep matcher fields skip-serialized.
+- [x] **S4.4** Document the security caveat (base profile = safe default).
 
 **Verify:** `cargo fmt`; `cargo check` (3 crates); stream tests (present/absent/invalid, kill switch).
 

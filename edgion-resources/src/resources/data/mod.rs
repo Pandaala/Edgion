@@ -3,12 +3,15 @@
 //! EdgionData is a general-purpose, hot-swappable metadata/overlay primitive.
 //! Each EdgionData contains exactly one `DataEntry` variant:
 //!
-//! - `KeyList`: Key-value list with exact or regex matching (for plugins like IpRestriction, KeyAuth)
-//! - `IpList`: IP address / CIDR list (for IP-based filtering)
-//! - `ClusterRegionRoute`: Full region topology and routing rules
-//! - `ServiceRegionRoute`: Per-service failover overrides referencing a ClusterRegionRoute
-//! - `GlobalConnectionIpRestriction`: L4 TCP connection-phase IP restriction with profile switching
-//! - `Misc`: Escape hatch for third-party or unknown payloads (open `x-kubernetes-preserve-unknown-fields`)
+//! | Group | Variant | Notes |
+//! |-------|---------|-------|
+//! | Standard primitive | `KeyList` | Unified string+regex list |
+//! | Standard primitive | `IpList` | CIDR range list |
+//! | Legacy full-config | `ClusterRegionRoute` | Full region topology |
+//! | Legacy full-config | `ServiceRegionRoute` | Per-service failover |
+//! | Legacy full-config | `GlobalConnectionIpRestriction` | L4 IP restriction (standalone) |
+//! | First-party overlay | `GlobalConnIpRestrictionOverride` | All-Optional overlay via `overrideRef` |
+//! | Escape hatch | `Misc` | Third-party / unknown payloads |
 //!
 //! The top-level envelope carries `enable` (kill switch, default `true`) and
 //! `active` (profile selector, optional).  See [`effective_switch`].
@@ -19,7 +22,9 @@ pub mod key_list;
 pub mod overlay;
 pub mod region_route;
 
-pub use global_connection_ip_restriction::{GlobalConnectionIpRestrictionData, IpGroup, ProfileRules};
+pub use global_connection_ip_restriction::{
+    merge_gcir_override, GlobalConnIpRestrictionOverride, GlobalConnectionIpRestrictionData, IpGroup, ProfileRules,
+};
 pub use ip_list::IpListData;
 pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
 pub use overlay::{apply_override, OverlaySignal};
@@ -129,8 +134,15 @@ pub enum DataEntry {
     /// Created by administrator.
     ServiceRegionRoute(ServiceRegionRouteConfig),
 
-    /// L4 TCP connection-phase IP restriction with profile switching. Center-managed.
+    /// L4 TCP connection-phase IP restriction with profile switching.
+    /// Standalone full-config variant. Still valid for existing resources.
     GlobalConnectionIpRestriction(GlobalConnectionIpRestrictionData),
+
+    /// Typed overlay for `GlobalConnectionIpRestriction` (D2). All fields are
+    /// optional; only `Some` fields replace the corresponding base values.
+    /// Referenced via `overrideRef` in `GlobalConnectionIpRestrictionEntry`
+    /// (EdgionStreamPlugins). Fail-to-base applies on absent/invalid/type-mismatch.
+    GlobalConnIpRestrictionOverride(GlobalConnIpRestrictionOverride),
 
     /// Escape hatch for third-party, experimental, or unknown payloads.
     /// The `config` content is not validated — use sparingly and only when no
@@ -148,6 +160,7 @@ impl EdgionData {
             DataEntry::ClusterRegionRoute(_) => "ClusterRegionRoute",
             DataEntry::ServiceRegionRoute(_) => "ServiceRegionRoute",
             DataEntry::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
+            DataEntry::GlobalConnIpRestrictionOverride(_) => "GlobalConnIpRestrictionOverride",
             DataEntry::Misc(_) => "Misc",
         }
     }
@@ -178,6 +191,13 @@ impl EdgionData {
                 let mut cloned = data.clone();
                 if let Err(e) = cloned.validate_and_init() {
                     errors.push(format!("GlobalConnectionIpRestriction invalid: {}", e));
+                }
+            }
+            DataEntry::GlobalConnIpRestrictionOverride(overlay) => {
+                // Standalone validation of the overlay (only validates present fields).
+                let mut cloned = overlay.clone();
+                if let Err(e) = cloned.validate_and_init() {
+                    errors.push(format!("GlobalConnIpRestrictionOverride invalid: {}", e));
                 }
             }
             // RegionRoute variants: no additional validation at pre-parse (cross-EdgionData

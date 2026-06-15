@@ -1,4 +1,4 @@
-# EdgionData of type GlobalConnectionIpRestriction — must be loaded BEFORE the ESP that references it.
+# GlobalConnIpRestrictionOverride EdgionData — must be loaded BEFORE the ESP that references it.
 apiVersion: edgion.io/v1
 kind: EdgionData
 metadata:
@@ -6,11 +6,9 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnectionIpRestriction
+    type: GlobalConnIpRestrictionOverride
     config:
-      enable: true
       activeProfile: main
-      description: "ResolvedRefs test: existing GCIR PM"
       profiles:
         main:
           defaultAction: deny
