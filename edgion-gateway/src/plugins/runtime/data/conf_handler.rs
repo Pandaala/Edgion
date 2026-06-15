@@ -204,6 +204,9 @@ impl EdgionDataStore {
                         }
                     }
                 }
+                DataEntry::Misc(_) => {
+                    // Misc is an opaque escape hatch; no typed index is built for it.
+                }
             }
         }
 
@@ -283,6 +286,8 @@ mod stats_tests {
 
         let ip_ed = {
             let spec = EdgionDataSpec {
+                enable: true,
+                active: None,
                 data: DataEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "default".into(),
@@ -297,6 +302,8 @@ mod stats_tests {
         };
         let key_ed = {
             let spec = EdgionDataSpec {
+                enable: true,
+                active: None,
                 data: DataEntry::KeyList(KeyListData {
                     match_mode: KeyMatchMode::default(),
                     items: vec![KeyGroup {

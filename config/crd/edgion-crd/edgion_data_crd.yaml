@@ -16,8 +16,15 @@ spec:
               type: object
               required:
                 - data
-              description: "EdgionData defines named data resources referenced by EdgionPlugins / EdgionStreamPlugins. Exactly one DataEntry variant, discriminated by `data.type`."
+              description: "EdgionData defines named data resources referenced by EdgionPlugins / EdgionStreamPlugins. Exactly one DataEntry variant, discriminated by `data.type`. The envelope fields `enable` and `active` apply to any variant."
               properties:
+                enable:
+                  type: boolean
+                  default: true
+                  description: "Top-level kill switch. When false, consumers ignore this overlay and fall back to their own base defaults. Defaults to true."
+                active:
+                  type: string
+                  description: "Optional profile selector. When set, consumers that support preloaded profiles use this value to select the active profile from the base config. Consumers that do not support profiles ignore this field."
                 data:
                   type: object
                   description: "The single data entry carried by this EdgionData."
@@ -34,6 +41,7 @@ spec:
                         - ClusterRegionRoute
                         - ServiceRegionRoute
                         - GlobalConnectionIpRestriction
+                        - Misc
                     config:
                       type: object
                       description: |
@@ -43,6 +51,7 @@ spec:
                           - ClusterRegionRoute: full cluster topology + route rules + matchMap
                           - ServiceRegionRoute: { clusterRef: {namespace, name}, regions: [{ name, failoverTo? }] }
                           - GlobalConnectionIpRestriction: { enable, activeProfile, profiles: { <name>: { defaultAction, allow?, deny? } } }
+                          - Misc: open payload (x-kubernetes-preserve-unknown-fields); escape hatch for third-party or unknown payloads only
                         Validation of the concrete shape is performed by the Controller
                         and surfaced via the `Accepted` status condition.
                       x-kubernetes-preserve-unknown-fields: true
@@ -81,6 +90,10 @@ spec:
           type: string
           jsonPath: .spec.data.type
           description: "DataEntry variant"
+        - name: Enable
+          type: boolean
+          jsonPath: .spec.enable
+          description: "Kill switch (false = consumers fall back to base)"
         - name: Accepted
           type: string
           jsonPath: .status.conditions[?(@.type=='Accepted')].status

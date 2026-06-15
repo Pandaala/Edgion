@@ -634,6 +634,8 @@ mod tests {
             "default",
             "svc-rr",
             EdgionDataSpec {
+                enable: true,
+                active: None,
                 data: DataEntry::ServiceRegionRoute(ServiceRegionRouteConfig {
                     cluster_ref: Some(DataRef {
                         name: "global-rr".to_string(),
@@ -680,6 +682,8 @@ mod tests {
                 "default",
                 name,
                 EdgionDataSpec {
+                    enable: true,
+                    active: None,
                     data: DataEntry::ServiceRegionRoute(ServiceRegionRouteConfig {
                         cluster_ref: None,
                         regions: vec![],

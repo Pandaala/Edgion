@@ -48,15 +48,20 @@ names (rename should be green before any behavior change).
 
 ## S2 — Overlay framework in `edgion-resources` (phase 3)
 
-- [ ] **S2.1** `apply_override(base, overlay) -> effective`: **type-guard first** (D6 — overlay `type` must
+- [x] **S2.1** `apply_override(base, overlay) -> effective`: **type-guard first** (D6 — overlay `type` must
       match expected variant, else fail-to-base), then strict field-level replace; collections whole-replace.
       Unit-test present/absent/invalid/**type-mismatch**/collection-replace.
-- [ ] **S2.2** Shared switch helpers: effective `enable`/`active` across consumers.
-- [ ] **S2.3** Add `overrideRef: Option<DataRef>` to opt-in plugin base configs.
-- [ ] **S2.4** Extend `EdgionPlugins::validate_plugins` (preparse) to validate `overrideRef` shape + base
-      safety hints (warn on permissive IP base).
+- [x] **S2.2** Add the envelope to `EdgionDataSpec`: `enable: bool` (default true) + `active: Option<String>`
+      (**additive, unused yet** — behavior-preserving). Add the `Misc` variant to `DataEntry`
+      (`x-kubernetes-preserve-unknown-fields`). Add a shared helper for effective `enable`/`active`. Update
+      the EdgionData CRD for the new spec fields.
+- [ ] **S2.3** `apply_override` generic mechanism delivered + unit-tested in S2.1 via a toy Base/Override
+      fixture. **Attaching `overrideRef: Option<DataRef>` to real base configs is deferred to S3
+      (RegionRouteConfig) / S4 (GlobalConnIp base)** — there is no base config to attach to until then.
+- [ ] **S2.4** `EdgionPlugins::validate_plugins` extension for `overrideRef` shape + base safety hints is
+      **deferred to S3/S4** (needs `overrideRef` to exist first).
 
-**Verify:** `cargo fmt`; `cargo check -p edgion-resources`; new `apply_override` unit tests.
+**Verify:** `cargo fmt`; `cargo check -p edgion-resources`; new `apply_override` + envelope unit tests.
 
 ---
 

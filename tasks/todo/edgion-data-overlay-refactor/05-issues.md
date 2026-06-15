@@ -83,6 +83,27 @@ a follow-up quality-of-life item, not a blocker.
 
 ---
 
+## S2 Deviations (noted during execution)
+
+### D-S2-A — EdgionDataSpec initializers in test code required updating
+Adding `enable`/`active` to `EdgionDataSpec` broke 4 struct-initializer sites in test code (not production
+code) that used the exhaustive init syntax. Sites fixed:
+- `edgion-gateway/src/plugins/runtime/data/conf_handler.rs` (2 sites in `#[cfg(test)]`)
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs` (2 sites in `#[cfg(test)]`)
+All 4 updated to include `enable: true, active: None`. No logic changed.
+
+### D-S2-B — `DataEntry::Misc` match arm required in gateway `build_indexes`
+Adding the `Misc` variant to `DataEntry` made the existing exhaustive match in
+`edgion-gateway/src/plugins/runtime/data/conf_handler.rs::build_indexes` non-exhaustive.
+Added `DataEntry::Misc(_) => {}` (no index — opaque escape hatch). Behavior unchanged.
+
+### D-S2-C — Enable printer column added to CRD
+Added an `Enable` column to `additionalPrinterColumns` in `edgion_data_crd.yaml` so that
+`kubectl get edgiondata` surfaces the kill switch. Minimal additive change; not required by the task
+spec but improves operator visibility.
+
+---
+
 ## Resolved flags
 - **F1 → D5** (no StringList/RegexList split). **F4 → D6** (keep `type`+`config`; type guards override).
 - **F3 → resolved:** "managed" in `plugin-metadata-managed/` is a test-scenario naming for the

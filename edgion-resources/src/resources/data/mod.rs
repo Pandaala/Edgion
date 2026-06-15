@@ -8,15 +8,21 @@
 //! - `ClusterRegionRoute`: Full region topology and routing rules
 //! - `ServiceRegionRoute`: Per-service failover overrides referencing a ClusterRegionRoute
 //! - `GlobalConnectionIpRestriction`: L4 TCP connection-phase IP restriction with profile switching
+//! - `Misc`: Escape hatch for third-party or unknown payloads (open `x-kubernetes-preserve-unknown-fields`)
+//!
+//! The top-level envelope carries `enable` (kill switch, default `true`) and
+//! `active` (profile selector, optional).  See [`effective_switch`].
 
 pub mod global_connection_ip_restriction;
 pub mod ip_list;
 pub mod key_list;
+pub mod overlay;
 pub mod region_route;
 
 pub use global_connection_ip_restriction::{GlobalConnectionIpRestrictionData, IpGroup, ProfileRules};
 pub use ip_list::IpListData;
 pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
+pub use overlay::{apply_override, OverlaySignal};
 pub use region_route::{
     ClusterRegionRouteConfig, ClusterRegionRouteEntry, RefPluginEntry, RouteByKeyConfMatchMeta, ServiceRegionDef,
     ServiceRegionRouteConfig, ServiceRegionRouteEntry,
@@ -26,6 +32,10 @@ use crate::resources::common::Condition;
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+fn default_enable() -> bool {
+    true
+}
 
 /// Kind for EdgionData
 pub const EDGION_DATA_KIND: &str = "EdgionData";
@@ -52,6 +62,21 @@ pub struct DataRef {
 )]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionDataSpec {
+    /// Top-level kill switch. When `false`, consumers must ignore this EdgionData's
+    /// content and fall back to their own base defaults. Defaults to `true`.
+    ///
+    /// Additive field — no consumer reads it yet (wired in S4).
+    #[serde(default = "default_enable")]
+    pub enable: bool,
+
+    /// Optional profile selector. When set, consumers that support preloaded
+    /// profiles use this value to select the active profile from the base config.
+    /// Consumers that do not support profiles ignore this field.
+    ///
+    /// Additive field — no consumer reads it yet (wired in S4/S5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+
     /// The data entry. Each EdgionData contains exactly one entry,
     /// discriminated by the `type` tag.
     pub data: DataEntry,
@@ -81,6 +106,11 @@ pub struct EdgionDataStatus {
 ///     matchMode: exact
 ///     items: [...]
 /// ```
+///
+/// The `Misc` variant is an escape hatch for third-party, experimental, or
+/// unknown payloads whose schema is not defined here.  Its `config` is open
+/// (`x-kubernetes-preserve-unknown-fields` at the CRD level).
+/// **Use `Misc` only when no typed first-party variant fits the use-case.**
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", content = "config")]
 pub enum DataEntry {
@@ -101,6 +131,12 @@ pub enum DataEntry {
 
     /// L4 TCP connection-phase IP restriction with profile switching. Center-managed.
     GlobalConnectionIpRestriction(GlobalConnectionIpRestrictionData),
+
+    /// Escape hatch for third-party, experimental, or unknown payloads.
+    /// The `config` content is not validated — use sparingly and only when no
+    /// typed first-party variant fits.  `x-kubernetes-preserve-unknown-fields`
+    /// applies at the CRD level (no schema validation by the API server).
+    Misc(serde_json::Value),
 }
 
 impl EdgionData {
@@ -112,6 +148,7 @@ impl EdgionData {
             DataEntry::ClusterRegionRoute(_) => "ClusterRegionRoute",
             DataEntry::ServiceRegionRoute(_) => "ServiceRegionRoute",
             DataEntry::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
+            DataEntry::Misc(_) => "Misc",
         }
     }
 
@@ -147,6 +184,8 @@ impl EdgionData {
             // reference checks live in the Controller handler's update_status via
             // ResolvedRefs, not here).
             DataEntry::ClusterRegionRoute(_) | DataEntry::ServiceRegionRoute(_) => {}
+            // Misc: the payload is opaque; no schema validation is performed here.
+            DataEntry::Misc(_) => {}
         }
         errors
     }
@@ -159,4 +198,28 @@ impl EdgionData {
             self.metadata.name.as_deref().unwrap_or("").to_string()
         }
     }
+}
+
+/// Compute the effective switch values from a resolved [`EdgionDataSpec`].
+///
+/// Returns `(effective_enable, effective_active)`:
+/// - `effective_enable`: `false` means consumers must skip this overlay entirely
+///   and fall back to base defaults (the kill switch).
+/// - `effective_active`: optional profile selector; `None` means no profile override
+///   (consumers that support profiles keep their own base default).
+///
+/// Consumers should call this helper before applying any data-level overrides.
+/// If `effective_enable` is `false`, skip the overlay; do not call
+/// [`apply_override`] in that case.
+///
+/// # Example
+/// ```rust,ignore
+/// let (enable, active) = effective_switch(&edgion_data.spec);
+/// if !enable {
+///     return base_config;
+/// }
+/// // ... proceed to apply_override ...
+/// ```
+pub fn effective_switch(spec: &EdgionDataSpec) -> (bool, Option<&str>) {
+    (spec.enable, spec.active.as_deref())
 }
