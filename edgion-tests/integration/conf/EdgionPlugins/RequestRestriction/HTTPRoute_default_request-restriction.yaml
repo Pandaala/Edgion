@@ -106,3 +106,19 @@ spec:
         - name: test-http
           namespace: edgion-test
           port: 30001
+
+    # 7. AND within a group: (X-Env: prod) AND (path /admin/)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/and-group
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-and-group
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

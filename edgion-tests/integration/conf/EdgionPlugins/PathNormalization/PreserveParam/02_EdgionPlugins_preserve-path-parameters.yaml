@@ -22,15 +22,17 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        rules:
-          - name: "block-secret-normalized"
-            # Path source: compared against the current path after normalization.
-            # When preserve_path_parameters = false (default):
-            #   /admin/..;jsessionid=x/secret -> normalized to /secret -> matches deny -> 403
-            # When preserve_path_parameters = true (opt-out):
-            #   /admin/..;jsessionid=x/secret kept as-is -> /secret deny does not match -> 200
-            source: Path
-            deny:
-              - "/secret"
-            onMissing: Allow
+        mode: Blacklist
+        ruleGroups:
+          - rules:
+              # Path source: compared against the current path after normalization.
+              # When preserve_path_parameters = false (default):
+              #   /admin/..;jsessionid=x/secret -> normalized to /secret -> matches -> 403
+              # When preserve_path_parameters = true (opt-out):
+              #   /admin/..;jsessionid=x/secret kept as-is -> /secret does not match -> 200
+              - name: "block-secret-normalized"
+                source: Path
+                values:
+                  - "/secret"
+                onMissing: NoMatch
         status: 403

@@ -78,8 +78,8 @@ curl -i -H "Host: path-norm.example.com" \
 
 ### TC-2: `RequestRestriction` RequestPath source — literal `%2F` raw match
 
-The `RequestPath` deny rule targets the **entry-time raw path** (frozen, not normalized). The
-`denyRegex: ["%2[fF]"]` matches any request whose raw (un-decoded) path contains `%2F` or `%2f`.
+The `RequestPath` rule targets the **entry-time raw path** (frozen, not normalized). The
+`regex: ["%2[fF]"]` matches any request whose raw (un-decoded) path contains `%2F` or `%2f`.
 This is an audit-style rule — the regex is never normalized.
 
 ```bash
@@ -324,7 +324,7 @@ These are **not exercised** in the scenarios above because the shared `edgion-pl
 the default config (`false` for both). To test them, a separate gateway instance with the relevant
 config would be required — outside the scope of this scenario set.
 
-The `RequestPath` deny rule in TC-2 (`denyRegex: ["%2[fF]"]`) is an **application-layer**
+The `RequestPath` rule in TC-2 (`regex: ["%2[fF]"]`) is an **application-layer**
 substitute that achieves a similar audit effect for `%2F` patterns without requiring a gateway
 restart, and is testable in this shared setup.
 

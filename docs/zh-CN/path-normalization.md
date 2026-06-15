@@ -8,10 +8,10 @@ Edgion 在每个请求入口强制执行路径规范化，消除路径类访问�
 
 典型攻击示例：
 
-- 配置 `RequestRestriction` 插件 `deny: ["/admin"]`
+- 配置 `RequestRestriction` 插件拦截 `/admin`（`Path` 规则 `values: ["/admin"]`）
 - 攻击者请求 `/%61dmin`（`/admin` 的 percent-encoding 形态）
 - 未规范化时：字符串精确比较 `/%61dmin ≠ /admin` → 绕过成功
-- 规范化后：`/%61dmin` → `/admin` → 命中 deny 规则 → 拒绝
+- 规范化后：`/%61dmin` → `/admin` → 命中拦截规则 → 拒绝
 
 ---
 
@@ -124,16 +124,16 @@ path:
 
 ### 3. `RestrictionSource::Path` 配置
 
-`Path` 视图的 `deny` / `allow` 列表加载时会被规范化（与请求侧匹配同一空间）。若有 `/admin/` 之类 trailing slash，会被规范化为 `/admin`——INFO 日志会记录此转换，不静默。
+`Path` source 规则的 `values` 加载时会被规范化（与请求侧匹配同一空间）。若有 `/admin/` 之类 trailing slash，会被规范化为 `/admin`——INFO 日志会记录此转换，不静默。
 
 若需要按字面 raw 拒绝，改用 `RestrictionSource::RequestPath`。
 
-### 4. `;param` 对 allow-list 类规则的副作用
+### 4. `;param` 对白名单规则的副作用
 
 path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类绕过）。
 
-- 影响 **deny 类规则**：`/admin/..;jsessionid=x/secret` 在 ACL 视图为 `/secret`，能正确命中 `deny: /secret` ✓
-- 影响 **allow 类规则**：请求 `/api/users;v=1/data` 在 ACL 视图为 `/api/users/data`——若配置 `allow: /api/users` exact，**不命中**
+- 影响 **黑名单分组**（`mode: Blacklist`）：`/admin/..;jsessionid=x/secret` 在 ACL 视图为 `/secret`，能正确命中 `Path` 规则的 `values: ["/secret"]` ✓
+- 影响 **白名单分组**（`mode: Whitelist`）：请求 `/api/users;v=1/data` 在 ACL 视图为 `/api/users/data`——若配置 `Path` 规则 `values: ["/api/users"]` exact，**不命中**
 
 上游仍收到含 `;param` 的 raw path，依赖 `;jsessionid` 的应用不受影响。
 
@@ -146,13 +146,15 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
 ```yaml
 - type: RequestRestriction
   config:
-    rules:
-      - name: block-admin
-        source: Path                # current 视图，覆盖所有编码变体
-        deny:
-          - "/admin"
-          - "/internal"
-        onMissing: Allow
+    mode: Blacklist
+    ruleGroups:
+      - rules:
+          - name: block-admin
+            source: Path             # current 视图，覆盖所有编码变体
+            values:
+              - "/admin"
+              - "/internal"
+            onMissing: NoMatch
 ```
 
 ### 审计日志记录客户端原始 URI

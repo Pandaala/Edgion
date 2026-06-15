@@ -72,6 +72,8 @@ pub use rate_limit::{LimitHeaderNames, OnMissingKey, RateLimitConfig, RateLimitS
 pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitRedisConfig};
 pub use real_ip::RealIpConfig;
 pub use region_route::{HashAlgorithm, HashCalcConfig, PluginMetaDataRef, RegionDef, RegionRouteConfig, RouteRule};
-pub use request_restriction::{OnMissing, RequestRestrictionConfig, RestrictionRule, RestrictionSource, RuleMatchMode};
+pub use request_restriction::{
+    OnMissing, RequestRestrictionConfig, RestrictionMode, RestrictionRule, RestrictionSource, RuleGroup,
+};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
 pub use trace_context::TraceContextConfig;

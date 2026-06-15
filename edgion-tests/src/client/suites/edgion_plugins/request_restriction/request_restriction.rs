@@ -323,6 +323,107 @@ impl RequestRestrictionTestSuite {
         )
     }
 
+    // ==================== 6. AND within a group ====================
+    // Group = (X-Env: prod) AND (path matches /admin/). Both must hold to deny.
+
+    fn test_and_group_both_match_blocked() -> TestCase {
+        TestCase::new(
+            "and_group_both_match_blocked",
+            "AND group: prod header + admin path => denied (403)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/and-group/admin/users", ctx.http_url());
+                    let request = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "request-restriction.example.com")
+                        .header("X-Env", "prod");
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 403 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Both predicates matched, blocked with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_and_group_header_mismatch_allowed() -> TestCase {
+        TestCase::new(
+            "and_group_header_mismatch_allowed",
+            "AND group: admin path but non-prod header => passes (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/and-group/admin/users", ctx.http_url());
+                    // Admin path matches, but X-Env != prod => the group's AND fails => pass.
+                    let request = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "request-restriction.example.com")
+                        .header("X-Env", "dev");
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Header predicate false, passed with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_and_group_path_mismatch_allowed() -> TestCase {
+        TestCase::new(
+            "and_group_path_mismatch_allowed",
+            "AND group: prod header but non-admin path => passes (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/and-group/public/users", ctx.http_url());
+                    // X-Env matches, but path is not /admin/ => the group's AND fails => pass.
+                    let request = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", "request-restriction.example.com")
+                        .header("X-Env", "prod");
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("Path predicate false, passed with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     fn test_combined_admin_blocked() -> TestCase {
         TestCase::new("combined_admin_blocked", ": Admin  (403)", |ctx: TestContext| {
             Box::pin(async move {
@@ -376,6 +477,10 @@ impl TestSuite for RequestRestrictionTestSuite {
             Self::test_combined_admin_blocked(),
             // Query source decoded semantics (unified-query-string-cache)
             Self::test_query_deny_decoded(),
+            // AND within a group (DNF rule-groups)
+            Self::test_and_group_both_match_blocked(),
+            Self::test_and_group_header_mismatch_allowed(),
+            Self::test_and_group_path_mismatch_allowed(),
         ]
     }
 }

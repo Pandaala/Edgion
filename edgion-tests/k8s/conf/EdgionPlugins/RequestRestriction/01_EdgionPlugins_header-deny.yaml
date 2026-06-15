@@ -9,15 +9,17 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        rules:
-          - name: "block-bots"
-            source: Header
-            key: "User-Agent"
-            denyRegex:
-              - "(?i).*Bot.*"
-              - "(?i).*Spider.*"
-              - "(?i).*Crawler.*"
-            onMissing: Allow
+        mode: Blacklist
+        ruleGroups:
+          - rules:
+              - name: "block-bots"
+                source: Header
+                key: "User-Agent"
+                regex:
+                  - "(?i).*Bot.*"
+                  - "(?i).*Spider.*"
+                  - "(?i).*Crawler.*"
+                onMissing: NoMatch
         status: 403
         message: "Bot access denied"
 

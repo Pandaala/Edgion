@@ -9,13 +9,15 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        rules:
-          - name: "api-whitelist"
-            source: Path
-            allow:
-              - "/health"
-            allowRegex:
-              - "^/api/.*"
+        mode: Whitelist
+        ruleGroups:
+          - rules:
+              - name: "api-whitelist"
+                source: Path
+                values:
+                  - "/health"
+                regex:
+                  - "^/api/.*"
         status: 404
         message: "Path not allowed"
 

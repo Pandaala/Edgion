@@ -22,7 +22,7 @@ spec:
     # Rule 1: RequestRestriction path normalization tests
     # - /test/restriction/admin        → 403 (Path deny "/admin" after normalization)
     # - /test/restriction/%61dmin      → 403 (normalized to /admin, caught by Path deny)
-    # - /test/restriction/admin%2Fextra → 403 (RequestPath denyRegex "%2[fF]" hits raw)
+    # - /test/restriction/admin%2Fextra → 403 (RequestPath regex "%2[fF]" hits raw)
     # - /test/restriction/safe         → 200 (no deny match)
     - matches:
         - path:

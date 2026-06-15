@@ -8,7 +8,7 @@ Edgion enforces path normalization at every request entry, eliminating bypass ve
 
 Typical bypass attack:
 
-- Operator configures `RequestRestriction` plugin with `deny: ["/admin"]`
+- Operator configures `RequestRestriction` plugin to block `/admin` (a `Path` rule with `values: ["/admin"]`)
 - Attacker sends `/%61dmin` (percent-encoded form of `/admin`)
 - Without normalization: literal string compare `/%61dmin ≠ /admin` → bypass succeeds
 - With normalization: `/%61dmin` → `/admin` → matches deny rule → rejected
@@ -124,16 +124,16 @@ path:
 
 ### 3. `RestrictionSource::Path` configuration
 
-The `Path` view's `deny` / `allow` lists are normalized at config load time (so they live in the same normalized space as request-side matching). Things like `/admin/` (trailing slash) are normalized to `/admin` — an INFO log records the transformation, never silent.
+A `Path`-source rule's `values` are normalized at config load time (so they live in the same normalized space as request-side matching). Things like `/admin/` (trailing slash) are normalized to `/admin` — an INFO log records the transformation, never silent.
 
 If you need literal raw rejection, switch to `RestrictionSource::RequestPath`.
 
-### 4. `;param` side effect on allow-list rules
+### 4. `;param` side effect on whitelist rules
 
 Path normalization strips `;param=...` from each segment (defends against `..;/` bypass).
 
-- Affects **deny rules**: `/admin/..;jsessionid=x/secret` becomes `/secret` in the ACL view, correctly matching `deny: /secret` ✓
-- Affects **allow rules**: a request `/api/users;v=1/data` becomes `/api/users/data` in the ACL view — if you configured `allow: /api/users` (exact), it **won't match**
+- Affects **blacklist groups** (`mode: Blacklist`): `/admin/..;jsessionid=x/secret` becomes `/secret` in the ACL view, correctly matching a `Path` rule with `values: ["/secret"]` ✓
+- Affects **whitelist groups** (`mode: Whitelist`): a request `/api/users;v=1/data` becomes `/api/users/data` in the ACL view — if you configured a `Path` rule with `values: ["/api/users"]` (exact), it **won't match**
 
 The upstream still receives the raw path with `;param` intact; applications relying on `;jsessionid` are unaffected.
 
@@ -146,13 +146,15 @@ The upstream still receives the raw path with `;param` intact; applications rely
 ```yaml
 - type: RequestRestriction
   config:
-    rules:
-      - name: block-admin
-        source: Path                # current view, covers all encoding variants
-        deny:
-          - "/admin"
-          - "/internal"
-        onMissing: Allow
+    mode: Blacklist
+    ruleGroups:
+      - rules:
+          - name: block-admin
+            source: Path             # current view, covers all encoding variants
+            values:
+              - "/admin"
+              - "/internal"
+            onMissing: NoMatch
 ```
 
 ### Audit log records client raw URI

@@ -9,14 +9,21 @@ spec:
     - enable: true
       type: RequestRestriction
       config:
-        rules:
-          - name: "require-auth"
-            source: Header
-            key: "X-Auth-Token"
-            deny:
-              - "invalid"
-              - "expired"
-            onMissing: Deny
+        mode: Blacklist
+        ruleGroups:
+          - rules:
+              - name: "bad-token"
+                source: Header
+                key: "X-Auth-Token"
+                values:
+                  - "invalid"
+                  - "expired"
+                onMissing: NoMatch
+          - rules:
+              - name: "missing-token"
+                source: Header
+                key: "X-Auth-Token"
+                onMissing: Match
         status: 401
         message: "Authentication required"
 

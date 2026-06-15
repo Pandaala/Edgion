@@ -3,47 +3,56 @@
 //! This plugin restricts access based on request attributes like headers, cookies,
 //! query parameters, path, method, and referer.
 //!
-//! ## Features:
-//! - Support for Header, Cookie, Query, Path, Method, and Referer sources
-//! - Exact match (allow/deny) and regex match (allowRegex/denyRegex)
-//! - Automatic HashSet optimization for large value lists (>16)
-//! - Allow/Deny lists with deny taking precedence
-//! - Configurable missing value handling
-//! - Multiple rules with Any/All combination modes
+//! ## Model (DNF: OR-of-AND)
+//! - `ruleGroups` is OR: the policy fires if any group matches.
+//! - Each group's `rules` is AND: a group matches only when all non-skipped
+//!   predicates are true.
+//! - A global `mode` decides the polarity: `Blacklist` (match => reject) or
+//!   `Whitelist` (match => pass, otherwise reject).
+//!
+//! A rule is a pure predicate (`value ∈ values` OR `value` matches `regex`).
+//! HashSet optimization kicks in for exact lists > 16; missing values are handled
+//! per `onMissing` (`Match` / `NoMatch` / `Skip`).
 //!
 //! ## Configuration Examples:
 //!
-//! ### Block bots by User-Agent (regex):
+//! ### Blacklist: block bots OR /admin paths:
 //! ```yaml
 //! requestRestriction:
-//!   rules:
-//!     - name: "block-bots"
-//!       source: Header
-//!       key: "User-Agent"
-//!       denyRegex:
-//!         - "(?i).*Bot.*"
-//!         - "(?i).*Spider.*"
-//!       onMissing: Allow
+//!   mode: Blacklist
+//!   ruleGroups:
+//!     - rules:
+//!         - source: Header
+//!           key: "User-Agent"
+//!           regex: ["(?i).*Bot.*", "(?i).*Spider.*"]
+//!           onMissing: NoMatch
+//!     - rules:
+//!         - source: Path
+//!           values: ["/admin"]
 //!   message: "Bot access denied"
 //! ```
 //!
-//! ### Allow only specific paths:
+//! ### Whitelist: allow only specific paths:
 //! ```yaml
 //! requestRestriction:
-//!   rules:
-//!     - name: "api-only"
-//!       source: Path
-//!       allow: ["/health"]
-//!       allowRegex: ["^/api/.*"]
+//!   mode: Whitelist
+//!   ruleGroups:
+//!     - rules:
+//!         - source: Path
+//!           values: ["/health"]
+//!           regex: ["^/api/.*"]
 //! ```
 //!
-//! ### Whitelist HTTP methods (exact):
+//! ### AND within a group: deny only DELETE to /admin:
 //! ```yaml
 //! requestRestriction:
-//!   rules:
-//!     - name: "readonly"
-//!       source: Method
-//!       allow: ["GET", "HEAD", "OPTIONS"]
+//!   mode: Blacklist
+//!   ruleGroups:
+//!     - rules:
+//!         - source: Method
+//!           values: ["DELETE"]
+//!         - source: Path
+//!           regex: [".*/admin/.*"]
 //! ```
 
 use async_trait::async_trait;
@@ -53,25 +62,32 @@ use pingora_http::ResponseHeader;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{
-    RequestRestrictionConfig, RestrictionRule, RestrictionSource, RuleMatchMode,
+    RequestRestrictionConfig, RestrictionMode, RestrictionRule, RestrictionSource, RuleGroup,
 };
 
 /// Request Restriction plugin
 pub struct RequestRestriction {
     name: String,
     config: RequestRestrictionConfig,
+    /// Validity computed once at construction. `Some` means the config is
+    /// malformed (e.g. an invalid regex) and the plugin must fail closed.
+    /// The config is immutable for the plugin's lifetime (a reload builds a new
+    /// instance), so this is safe to cache and avoids re-validating per request.
+    config_error: Option<String>,
 }
 
 impl RequestRestriction {
     /// Create a new RequestRestriction plugin from configuration
     pub fn create(config: &RequestRestrictionConfig) -> Box<dyn RequestFilter> {
-        // Clone and validate the config to compile regex patterns
+        // Clone and validate the config to compile regex patterns; capture (not
+        // discard) the validity so run_request can fail closed without recompiling.
         let mut validated_config = config.clone();
-        let _ = validated_config.validate();
+        let config_error = validated_config.validate().err();
 
         let plugin = RequestRestriction {
             name: "RequestRestriction".to_string(),
             config: validated_config,
+            config_error,
         };
 
         Box::new(plugin)
@@ -99,57 +115,30 @@ impl RequestRestriction {
         }
     }
 
-    /// Evaluate all rules and determine if request should be denied
-    /// Returns: (denied: bool, denied_source: Option<RestrictionSource>)
-    fn evaluate_rules(&self, session: &dyn PluginSession) -> (bool, Option<RestrictionSource>) {
-        let mut denied_count = 0;
-        let mut denied_source = None;
-        let total_rules = self.config.rules.len();
-
-        for rule in &self.config.rules {
+    /// A group matches when every non-skipped predicate is true and at least one
+    /// predicate was considered (AND within the group).
+    fn group_matches(&self, group: &RuleGroup, session: &dyn PluginSession) -> bool {
+        let mut considered = 0usize;
+        for rule in &group.rules {
             let value = self.get_value(session, rule);
-            let result = rule.check_value(value.as_deref());
-
-            match result {
-                Some(true) => {
-                    // Rule triggered denial
-                    denied_count += 1;
-                    if denied_source.is_none() {
-                        denied_source = Some(rule.source.clone());
-                    }
-
-                    // For "Any" mode, we can short-circuit on first denial
-                    if self.config.match_mode == RuleMatchMode::Any {
-                        return (true, denied_source);
-                    }
-                }
-                Some(false) => {
-                    // Rule allowed - for "All" mode, this means we won't deny
-                    if self.config.match_mode == RuleMatchMode::All {
-                        return (false, None);
-                    }
-                }
-                None => {
-                    // Rule skipped (OnMissing::Skip)
-                    // Don't count this rule
-                }
+            match rule.evaluate(value.as_deref()) {
+                None => continue, // Skip: drop from AND
+                Some(true) => considered += 1,
+                Some(false) => return false, // AND fails
             }
         }
+        considered > 0
+    }
 
-        // Final decision based on match mode
-        match self.config.match_mode {
-            RuleMatchMode::Any => {
-                // If any rule denied, we already returned above
-                // If we're here, no rule denied
-                (false, None)
-            }
-            RuleMatchMode::All => {
-                // Deny only if ALL rules denied
-                // If any rule allowed, we already returned above
-                // If we're here, check if all (non-skipped) rules denied
-                (denied_count > 0 && denied_count == total_rules, denied_source)
+    /// Evaluate all groups (OR across groups).
+    /// Returns: (any_group_matched, matched_group_index).
+    fn evaluate_groups(&self, session: &dyn PluginSession) -> (bool, Option<usize>) {
+        for (i, group) in self.config.rule_groups.iter().enumerate() {
+            if self.group_matches(group, session) {
+                return (true, Some(i)); // short-circuit on first match
             }
         }
+        (false, None)
     }
 }
 
@@ -160,9 +149,8 @@ impl RequestFilter for RequestRestriction {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        use edgion_resources::resources::edgion_plugins::PluginValidation;
-        // Check for configuration errors
-        if self.config.validation_error().is_some() {
+        // Check for configuration errors (validity computed once at construction).
+        if self.config_error.is_some() {
             plugin_log.push_err("restriction config invalid");
             // invariant: 500 and 403 are compile-time-literal HTTP status codes; ResponseHeader::build cannot fail.
             let resp = Box::new(
@@ -179,21 +167,26 @@ impl RequestFilter for RequestRestriction {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        // Evaluate all rules
-        let (denied, denied_source) = self.evaluate_rules(session);
+        // Evaluate all groups (OR), then apply the global mode polarity.
+        let (any_matched, matched_idx) = self.evaluate_groups(session);
+        let denied = match self.config.mode {
+            RestrictionMode::Blacklist => any_matched,
+            RestrictionMode::Whitelist => !any_matched,
+        };
 
         if denied {
-            let deny_msg = match denied_source {
-                Some(RestrictionSource::Method) => "Deny method",
-                Some(RestrictionSource::Path) => "Deny path",
-                Some(RestrictionSource::RequestPath) => "Deny request path",
-                Some(RestrictionSource::Header) => "Deny header",
-                Some(RestrictionSource::Cookie) => "Deny cookie",
-                Some(RestrictionSource::Query) => "Deny query",
-                Some(RestrictionSource::Referer) => "Deny referer",
-                None => "Deny rule",
+            let deny_msg = match (&self.config.mode, matched_idx) {
+                (RestrictionMode::Blacklist, Some(i)) => {
+                    let label = self.config.rule_groups[i]
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("group[{}]", i));
+                    format!("Deny group {}", label)
+                }
+                (RestrictionMode::Whitelist, _) => "Deny (no allow group matched)".to_string(),
+                _ => "Deny".to_string(),
             };
-            plugin_log.push(deny_msg);
+            plugin_log.push(&deny_msg);
 
             let message = self
                 .config
@@ -234,69 +227,294 @@ impl RequestFilter for RequestRestriction {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
-    use edgion_resources::resources::edgion_plugins::OnMissing;
+    use edgion_resources::resources::edgion_plugins::{OnMissing, RestrictionMode, RuleGroup};
 
-    #[tokio::test]
-    async fn test_missing_header_denied_when_configured() {
-        let mut config = RequestRestrictionConfig {
-            rules: vec![RestrictionRule {
-                name: Some("require-auth".to_string()),
-                source: RestrictionSource::Header,
-                key: Some("X-Auth-Token".to_string()),
-                deny: Some(vec!["invalid".to_string()]),
-                on_missing: OnMissing::Deny,
-                ..Default::default()
-            }],
+    fn cfg(mode: RestrictionMode, groups: Vec<RuleGroup>) -> RequestRestrictionConfig {
+        let mut c = RequestRestrictionConfig {
+            mode,
+            rule_groups: groups,
             ..Default::default()
         };
-        let _ = config.validate();
+        let _ = c.validate();
+        c
+    }
 
+    #[tokio::test]
+    async fn test_blacklist_missing_header_match_denies() {
+        // onMissing: Match => absent X-Auth-Token counts as a hit => deny.
+        let config = cfg(
+            RestrictionMode::Blacklist,
+            vec![RuleGroup {
+                name: Some("missing-token".to_string()),
+                rules: vec![RestrictionRule {
+                    source: RestrictionSource::Header,
+                    key: Some("X-Auth-Token".to_string()),
+                    on_missing: OnMissing::Match,
+                    ..Default::default()
+                }],
+            }],
+        );
         let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
-
-        mock_session
-            .expect_header_value()
+        let mut s = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestRestriction");
+        s.expect_header_value()
             .withf(|k| k == "X-Auth-Token")
             .return_const(None::<String>);
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+        s.expect_write_response_header().returning(|_, _| Ok(()));
+        s.expect_write_response_body().returning(|_, _| Ok(()));
 
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
+        let result = plugin.run_request(&mut s, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny"));
+        assert!(log.contains("Deny"));
     }
 
     #[tokio::test]
     async fn test_request_path_source_uses_entry_raw() {
         // RequestPath source must call get_request_path(), not get_path().
-        // The deny list value is kept raw (/%61dmin) and must match the raw entry path.
-        let mut config = RequestRestrictionConfig {
-            rules: vec![RestrictionRule {
+        // The value is kept raw (/%61dmin) and must match the raw entry path.
+        let config = cfg(
+            RestrictionMode::Blacklist,
+            vec![RuleGroup {
                 name: Some("deny-raw-path".to_string()),
-                source: RestrictionSource::RequestPath,
-                deny: Some(vec!["/%61dmin".to_string()]),
-                ..Default::default()
+                rules: vec![RestrictionRule {
+                    source: RestrictionSource::RequestPath,
+                    values: Some(vec!["/%61dmin".to_string()]),
+                    ..Default::default()
+                }],
             }],
-            ..Default::default()
-        };
-        assert!(config.validate().is_ok());
-
+        );
         let plugin = RequestRestriction::create(&config);
-        let mut mock_session = MockPluginSession::new();
-        let mut plugin_log = PluginLog::new("RequestRestriction");
+        let mut s = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestRestriction");
+        s.expect_get_request_path().return_const("/%61dmin".to_string());
+        s.expect_write_response_header().returning(|_, _| Ok(()));
+        s.expect_write_response_body().returning(|_, _| Ok(()));
 
-        // Entry-time raw path is "/%61dmin" — should be denied
-        mock_session
-            .expect_get_request_path()
-            .return_const("/%61dmin".to_string());
-        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
-        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
-
-        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
-
+        let result = plugin.run_request(&mut s, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
-        assert!(plugin_log.contains("Deny"));
+        assert!(log.contains("Deny"));
+    }
+
+    #[tokio::test]
+    async fn test_blacklist_and_group_needs_all_predicates() {
+        // Group = (Method == DELETE) AND (Path == /admin). DELETE /other must pass.
+        let config = cfg(
+            RestrictionMode::Blacklist,
+            vec![RuleGroup {
+                name: Some("delete-admin".to_string()),
+                rules: vec![
+                    RestrictionRule {
+                        source: RestrictionSource::Method,
+                        values: Some(vec!["DELETE".to_string()]),
+                        ..Default::default()
+                    },
+                    RestrictionRule {
+                        source: RestrictionSource::Path,
+                        values: Some(vec!["/admin".to_string()]),
+                        ..Default::default()
+                    },
+                ],
+            }],
+        );
+        let plugin = RequestRestriction::create(&config);
+        let mut s = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestRestriction");
+        s.expect_get_method().return_const("DELETE".to_string());
+        s.expect_get_path().return_const("/other".to_string());
+
+        let result = plugin.run_request(&mut s, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(log.contains("Allow"));
+    }
+
+    #[tokio::test]
+    async fn test_whitelist_denies_when_no_group_matches() {
+        // Whitelist: only GET passes. POST => deny.
+        let config = cfg(
+            RestrictionMode::Whitelist,
+            vec![RuleGroup {
+                name: Some("readonly".to_string()),
+                rules: vec![RestrictionRule {
+                    source: RestrictionSource::Method,
+                    values: Some(vec!["GET".to_string()]),
+                    ..Default::default()
+                }],
+            }],
+        );
+        let plugin = RequestRestriction::create(&config);
+        let mut s = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestRestriction");
+        s.expect_get_method().return_const("POST".to_string());
+        s.expect_write_response_header().returning(|_, _| Ok(()));
+        s.expect_write_response_body().returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut s, &mut log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.contains("Deny"));
+    }
+
+    #[tokio::test]
+    async fn test_skip_predicate_dropped_then_remaining_predicates_and() {
+        // Group = (X-Opt Skip-on-missing) AND (Method DELETE).
+        // X-Opt absent => that predicate is dropped; the group still ANDs the rest.
+        let config = cfg(
+            RestrictionMode::Blacklist,
+            vec![RuleGroup {
+                name: Some("skip-then-and".to_string()),
+                rules: vec![
+                    RestrictionRule {
+                        source: RestrictionSource::Header,
+                        key: Some("X-Opt".to_string()),
+                        values: Some(vec!["v".to_string()]),
+                        on_missing: OnMissing::Skip,
+                        ..Default::default()
+                    },
+                    RestrictionRule {
+                        source: RestrictionSource::Method,
+                        values: Some(vec!["DELETE".to_string()]),
+                        ..Default::default()
+                    },
+                ],
+            }],
+        );
+        let plugin = RequestRestriction::create(&config);
+        let mut s = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestRestriction");
+        s.expect_header_value()
+            .withf(|k| k == "X-Opt")
+            .return_const(None::<String>);
+        s.expect_get_method().return_const("DELETE".to_string());
+        s.expect_write_response_header().returning(|_, _| Ok(()));
+        s.expect_write_response_body().returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut s, &mut log).await;
+        // Skip drops X-Opt; Method matches => considered=1, all true => group matches => deny.
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.contains("Deny"));
+    }
+
+    #[tokio::test]
+    async fn test_all_skip_group_blacklist_passes() {
+        // A group whose only predicate is Skip-on-missing yields considered==0 =>
+        // group does not match => Blacklist => not denied (fail-open).
+        let config = cfg(
+            RestrictionMode::Blacklist,
+            vec![RuleGroup {
+                name: Some("all-skip".to_string()),
+                rules: vec![RestrictionRule {
+                    source: RestrictionSource::Header,
+                    key: Some("X-Opt".to_string()),
+                    values: Some(vec!["v".to_string()]),
+                    on_missing: OnMissing::Skip,
+                    ..Default::default()
+                }],
+            }],
+        );
+        let plugin = RequestRestriction::create(&config);
+        let mut s = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestRestriction");
+        s.expect_header_value()
+            .withf(|k| k == "X-Opt")
+            .return_const(None::<String>);
+
+        let result = plugin.run_request(&mut s, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(log.contains("Allow"));
+    }
+
+    #[tokio::test]
+    async fn test_all_skip_group_whitelist_denies() {
+        // Same all-Skip group under Whitelist: considered==0 => no group matched =>
+        // Whitelist => deny (fail-closed). Documents the foot-gun.
+        let config = cfg(
+            RestrictionMode::Whitelist,
+            vec![RuleGroup {
+                name: Some("all-skip".to_string()),
+                rules: vec![RestrictionRule {
+                    source: RestrictionSource::Header,
+                    key: Some("X-Opt".to_string()),
+                    values: Some(vec!["v".to_string()]),
+                    on_missing: OnMissing::Skip,
+                    ..Default::default()
+                }],
+            }],
+        );
+        let plugin = RequestRestriction::create(&config);
+        let mut s = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestRestriction");
+        s.expect_header_value()
+            .withf(|k| k == "X-Opt")
+            .return_const(None::<String>);
+        s.expect_write_response_header().returning(|_, _| Ok(()));
+        s.expect_write_response_body().returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut s, &mut log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.contains("Deny"));
+    }
+
+    #[tokio::test]
+    async fn test_whitelist_multi_group_or_passes_on_second_group() {
+        // Whitelist OR across groups: (Method GET) OR (X-Tier gold). A POST with
+        // X-Tier: gold matches the second group => pass.
+        let config = cfg(
+            RestrictionMode::Whitelist,
+            vec![
+                RuleGroup {
+                    name: Some("readonly".to_string()),
+                    rules: vec![RestrictionRule {
+                        source: RestrictionSource::Method,
+                        values: Some(vec!["GET".to_string()]),
+                        ..Default::default()
+                    }],
+                },
+                RuleGroup {
+                    name: Some("gold-tier".to_string()),
+                    rules: vec![RestrictionRule {
+                        source: RestrictionSource::Header,
+                        key: Some("X-Tier".to_string()),
+                        values: Some(vec!["gold".to_string()]),
+                        ..Default::default()
+                    }],
+                },
+            ],
+        );
+        let plugin = RequestRestriction::create(&config);
+        let mut s = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestRestriction");
+        s.expect_get_method().return_const("POST".to_string());
+        s.expect_header_value()
+            .withf(|k| k == "X-Tier")
+            .return_const(Some("gold".to_string()));
+
+        let result = plugin.run_request(&mut s, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+        assert!(log.contains("Allow"));
+    }
+
+    #[tokio::test]
+    async fn test_invalid_config_fails_closed() {
+        // An invalid regex fails validation at construction; run_request must fail
+        // closed (terminate) rather than evaluate a half-compiled config.
+        let config = cfg(
+            RestrictionMode::Blacklist,
+            vec![RuleGroup {
+                name: Some("bad".to_string()),
+                rules: vec![RestrictionRule {
+                    source: RestrictionSource::Header,
+                    key: Some("X".to_string()),
+                    regex: Some(vec!["[invalid".to_string()]),
+                    ..Default::default()
+                }],
+            }],
+        );
+        let plugin = RequestRestriction::create(&config);
+        let mut s = MockPluginSession::new();
+        let mut log = PluginLog::new("RequestRestriction");
+        s.expect_write_response_header().returning(|_, _| Ok(()));
+        s.expect_write_response_body().returning(|_, _| Ok(()));
+
+        let result = plugin.run_request(&mut s, &mut log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
     }
 }
