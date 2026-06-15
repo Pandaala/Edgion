@@ -1,16 +1,7 @@
-//! RegionRoute Tables
+//! RegionRoute Tables (removed in S3)
 //!
-//! Pre-built indexes for RegionRoute data maintained by the Controller.
-//! Updated incrementally by EdgionData and EdgionPlugins handlers on change/delete.
-//! API handlers read from these tables instead of scanning all resources.
-//!
-//! ## Tables
-//!
-//! - `RegionRouteClusterTable`: serviceGroup → ClusterRegionRouteEntry
-//! - `RegionRouteServiceTable`: pm_key (ns/name) → ServiceRegionRouteEntry
-
-mod cluster_table;
-mod service_table;
-
-pub use cluster_table::{ClusterRegionRouteEntry, RegionRouteClusterTable};
-pub use service_table::{RefPluginEntry, RegionRouteServiceTable, ServiceRegionRouteEntry};
+//! This module has been emptied as part of the S3 RegionRoute decomposition.
+//! The old `ClusterRegionRouteTable` / `ServiceRegionRouteTable` concept is gone.
+//! The routing config now lives entirely in `RegionRouteConfig` (EdgionPlugins base);
+//! the overlay is `RegionRouteOverride` in EdgionData, resolved by the gateway at
+//! request time. No per-resource table is maintained in the controller.

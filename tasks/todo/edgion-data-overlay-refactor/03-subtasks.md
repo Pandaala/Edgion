@@ -67,28 +67,30 @@ names (rename should be green before any behavior change).
 
 ## S3 — RegionRoute decomposition (phase 3) — the main move
 
-> ⚠️ **BLOCKED by I1** (`05-issues.md`): RegionRoute types are shared with EdgionCenter (separate repo).
-> Resolve the cross-repo contract before starting S3. S1/S2 are unaffected.
+> ⚠️ **I1 is now PRE-MERGE COORDINATION, not a blocker** (`05-issues.md`): Edgion-side S3 proceeds; the
+> shared `edgion-resources` API + fed_sync shape change requires a coordinated EdgionCenter update before
+> merge/deploy (EdgionCenter not checked out locally — done in its repo).
 
-- [ ] **S3.1** Move logic fields (`myRegion`, `keyGet`, `hashKeyGet`, `hashCalc`, `routeRules`,
+- [x] **S3.1** Move logic fields (`myRegion`, `keyGet`, `hashKeyGet`, `hashCalc`, `routeRules`,
       `routeByKeyConfMatch`) from the metadata variant into `RegionRouteConfig` base. Add default `regions`
       table + `overrideRef`.
-- [ ] **S3.2** Add `RegionRouteOverride` as a **typed** overlay variant (D2; all-Optional: `regions?`,
+- [x] **S3.2** Add `RegionRouteOverride` as a **typed** overlay variant (D2; all-Optional: `regions?`,
       `enable?`, `active?`) with `validate_and_init` (hashRange/endpoint checks). Remove `ClusterRegionRoute`
       + `ServiceRegionRoute` variants and the `cluster_ref` / `service_region_route_ref` indirection.
-- [ ] **S3.3** Controller `handlers/data.rs`: drop Service→Cluster cross-ref registration + requeue;
+- [x] **S3.3** Controller `handlers/data.rs`: drop Service→Cluster cross-ref registration + requeue;
       add overlay validation + `ResolvedRefs` for `overrideRef`.
-- [ ] **S3.4** Controller `handlers/edgion_plugins.rs`: register `overrideRef` (EP → metadata) requeue;
+- [x] **S3.4** Controller `handlers/edgion_plugins.rs`: register `overrideRef` (EP → metadata) requeue;
       update `Accepted`/`ResolvedRefs`.
-- [ ] **S3.4b** Controller `region_route_table/` module (`mod.rs`, `cluster_table.rs`, `service_table.rs`):
+- [x] **S3.4b** Controller `region_route_table/` module (`mod.rs`, `cluster_table.rs`, `service_table.rs`):
       rework/remove the `ClusterRegionRouteEntry`/`ServiceRegionRouteEntry` build path. **⚠️ these types are
       shared with EdgionCenter (I1)** — coordinate before changing their shape.
-- [ ] **S3.5** Gateway store: replace region typed indexes with a `region_route_override` index; keep ArcSwap
+- [x] **S3.5** Gateway store: replace region typed indexes with a `region_route_override` index; keep ArcSwap
       snapshot atomicity.
-- [ ] **S3.6** Gateway `http/region_route/plugin.rs` `resolve_config`: effective = base ⊕ overlay; replace
+- [x] **S3.6** Gateway `http/region_route/plugin.rs` `resolve_config`: effective = base ⊕ overlay; replace
       `BrokenRef` fail-closed with **fail-to-base** + signal; re-resolve per request (lock-free).
-- [ ] **S3.7** Move matcher/precompute (`#[serde(skip)]` runtime fields) to the effective-config build site;
-      keep controller-side `validate_and_init` for overlay validation.
+- [x] **S3.7** Move matcher/precompute (`#[serde(skip)]` runtime fields) to the effective-config build site;
+      keep controller-side `validate_and_init` for overlay validation. (RegionRoute has no runtime-only fields;
+      effective regions are built at request time with no pre-compilation step needed.)
 
 **Verify:** `cargo fmt`; `cargo check -p edgion-resources -p edgion-controller -p edgion-gateway`; RegionRoute
 unit tests (base-only, base+overlay, overlay-invalid→base).

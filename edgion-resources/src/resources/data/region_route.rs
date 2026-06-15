@@ -1,140 +1,80 @@
-//! RegionRoute-related EdgionData types
+//! RegionRoute overlay EdgionData type
 //!
-//! ClusterRegionRouteConfig — full cluster topology, route rules, matchMap
-//! ServiceRegionRouteConfig — per-service failover overrides with clusterRef
-//! RouteByKeyConfMatchMeta — key-to-cluster mapping managed by Center
+//! `RegionRouteOverride` — all-Optional typed overlay referenced via `overrideRef`
+//! from a `RegionRouteConfig` in EdgionPlugins.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 
-use crate::common::KeyGet;
-use crate::resources::data::DataRef;
-use crate::resources::edgion_plugins::plugin_configs::{HashCalcConfig, RegionDef, RouteRule};
+use crate::resources::edgion_plugins::plugin_configs::RegionDef;
 
-/// Cluster RegionRoute configuration within EdgionData.
+/// All-Optional typed overlay for RegionRoute.
 ///
-/// Contains the full cluster topology, route rules, and matchMap.
-/// EdgionData namespace = cluster-type dimension, name = cluster identifier.
-/// This is the authoritative source managed by operators / Center.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ClusterRegionRouteConfig {
-    /// Cluster definitions.
-    #[serde(default)]
-    pub regions: Vec<RegionDef>,
-
-    /// Name of this gateway instance's own cluster.
-    /// When routed to own cluster, skips external jump (pass-through).
-    /// Empty = feature disabled.
-    #[serde(default)]
-    pub my_region: String,
-
-    /// Shared key extraction for RouteByKeyConfMatch and RouteByHashRange.
-    #[serde(default)]
-    pub key_get: Vec<KeyGet>,
-
-    /// Pre-computed hash key sources (tried before computing hash).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hash_key_get: Option<Vec<KeyGet>>,
-
-    /// Hash computation config.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hash_calc: Option<HashCalcConfig>,
-
-    /// Ordered route rules — first match wins.
-    #[serde(default)]
-    pub route_rules: Vec<RouteRule>,
-
-    /// RouteByKeyConfMatch configuration managed by Center.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub route_by_key_conf_match: Option<RouteByKeyConfMatchMeta>,
-}
-
-/// Service-level RegionRoute configuration within EdgionData.
+/// Referenced via `overrideRef` from a `RegionRouteConfig` in `EdgionPlugins`.
+/// Only `Some` fields replace the corresponding base field; `None` keeps the base value.
+/// The `regions` collection (if `Some`) is replaced **whole** — no element merge.
 ///
-/// Contains per-cluster failover state. Created by administrator.
-/// The `cluster_ref` links this ServiceRegionRoute EdgionData
-/// to a ClusterRegionRoute EdgionData.
-/// Lists all clusters (mirroring ClusterRegionRoute's cluster names);
-/// only entries with `failover_to` set have an active failover override.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ServiceRegionRouteConfig {
-    /// Reference to the ClusterRegionRoute EdgionData.
-    /// Explicit linkage: namespace/name of the ClusterRegionRoute EdgionData
-    /// this ServiceRegionRoute EdgionData belongs to.
-    /// Set by the administrator when creating the ServiceRegionRoute EdgionData.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cluster_ref: Option<DataRef>,
-
-    /// Per-cluster failover state. Mirrors ClusterRegionRoute EdgionData's cluster names.
-    /// Only entries with `failover_to` set have an active override.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub regions: Vec<ServiceRegionDef>,
-}
-
-/// A cluster entry in ServiceRegionRoute.
-/// Mirrors the ClusterRegionRoute EdgionData's cluster names.
-/// Only `failover_to` is service-specific; if set it overrides the
-/// ClusterRegionRoute EdgionData's value.
+/// Logic fields (`route_rules`, `hash_calc`, `key_get`, etc.) are **not** present here —
+/// logic is exclusively in the base `RegionRouteConfig` and cannot be overridden.
+///
+/// # Security invariant
+/// `RegionRouteConfig.regions` in `EdgionPlugins` MUST be authored as the safe default.
+/// On any overlay error, the base `regions` are used (fail-to-base).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ServiceRegionDef {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failover_to: Option<String>,
+pub struct RegionRouteOverride {
+    /// Override the kill-switch. When `Some(false)`, the plugin passes through (no routing).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enable: Option<bool>,
+
+    /// Override the active profile selector (future use; reserved for profile-based routing).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+
+    /// Whole-replace the region table. When `Some`, completely substitutes the base regions.
+    /// No element-wise merge — the entire table is replaced.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regions: Option<Vec<RegionDef>>,
 }
 
-/// RouteByKeyConfMatch configuration with bypass support.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct RouteByKeyConfMatchMeta {
-    /// Key-to-cluster mapping.
-    #[serde(default)]
-    pub match_map: HashMap<String, String>,
-    /// Keys in this list bypass cluster matchMap override (ServiceRegionRoute EdgionData only).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub bypass_cluster_keys: Vec<String>,
+impl RegionRouteOverride {
+    /// Standalone validation — checks only the fields that are present.
+    ///
+    /// Called by the controller at EdgionData ingest time (via `validate_pre_parse`).
+    pub fn validate_and_init(&self) -> Result<(), String> {
+        if let Some(regions) = &self.regions {
+            if regions.is_empty() {
+                return Err("RegionRouteOverride: regions must not be empty when specified".to_string());
+            }
+            // Validate each region's hash_range bounds [low, high] with low <= high
+            for r in regions {
+                if r.hash_range[0] > r.hash_range[1] {
+                    return Err(format!(
+                        "RegionRouteOverride: region '{}' hashRange[{}..{}] is invalid (low > high)",
+                        r.name, r.hash_range[0], r.hash_range[1]
+                    ));
+                }
+                let (host, _) = r.parse_endpoint();
+                if host.is_empty() {
+                    return Err(format!(
+                        "RegionRouteOverride: region '{}' backendEndpoint is empty",
+                        r.name
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
-/// Parsed ClusterRegionRoute entry stored in the RegionRoute index.
+/// Merge a `RegionRouteOverride` onto base `regions`, returning the effective `regions`.
 ///
-/// Derived from an EdgionData with a ClusterRegionRoute spec. Used by both
-/// the Controller's in-memory table and the Center's aggregated store.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClusterRegionRouteEntry {
-    pub pm_namespace: String,
-    pub pm_name: String,
-    pub my_region: String,
-    pub regions: Vec<RegionDef>,
-    pub key_get: Vec<KeyGet>,
-    pub hash_key_get: Option<Vec<KeyGet>>,
-    pub hash_calc: Option<HashCalcConfig>,
-    pub route_rules: Vec<RouteRule>,
-    pub route_by_key_conf_match: Option<RouteByKeyConfMatchMeta>,
-}
-
-/// Reference to an EdgionPlugin resource that uses a ServiceRegionRoute EdgionData.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RefPluginEntry {
-    pub kind: String,
-    pub namespace: String,
-    pub name: String,
-}
-
-/// Parsed ServiceRegionRoute entry stored in the RegionRoute index.
-///
-/// Derived from an EdgionData with a ServiceRegionRoute spec. The `ref_plugins`
-/// field is only populated by the Controller (Center always leaves it empty).
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServiceRegionRouteEntry {
-    pub pm_namespace: String,
-    pub pm_name: String,
-    pub cluster_pm_ref: Option<DataRef>,
-    pub regions: Vec<ServiceRegionDef>,
-    pub ref_plugins: Vec<RefPluginEntry>,
+/// - `Some(regions)` in overlay → whole-replace base regions (no element merge).
+/// - `None` → base regions unchanged.
+pub fn merge_region_route_override(base_regions: Vec<RegionDef>, overlay: &RegionRouteOverride) -> Vec<RegionDef> {
+    if let Some(override_regions) = &overlay.regions {
+        override_regions.clone()
+    } else {
+        base_regions
+    }
 }

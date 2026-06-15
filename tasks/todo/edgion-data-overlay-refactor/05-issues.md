@@ -1,8 +1,16 @@
 # 05 — Issues
 
-## I1 — [BLOCKER for S3] RegionRoute decomposition is a cross-repo (EdgionCenter) contract change
+## I1 — [PRE-MERGE COORDINATION] EdgionData refactor requires a coordinated EdgionCenter update
 
-**Severity:** blocker (for S3 only; S1/S2 unaffected).
+**Severity:** pre-merge coordination (NOT an Edgion-side implementation blocker).
+
+**Decision (autonomous run, 2026-06-16):** Edgion-side implementation proceeds through S3. Rationale: S1
+already renamed the shared `edgion-resources` public API (`PluginMetaData`→`EdgionData`, `DataRef`, module
+paths), so EdgionCenter already needs a coordinated update from S1 onward — S3 is not a *new* kind of break.
+The Edgion repo compiles/tests independently of EdgionCenter. **Required before merging this branch or
+deploying federation:** update EdgionCenter to the new shared API + the new fed_sync RegionRoute shape
+(base in EdgionPlugins + `RegionRouteOverride` EdgionData, replacing the old Cluster/ServiceRegionRoute PM
+variants and the `*Entry` types). EdgionCenter is not checked out locally, so this must be done in its repo.
 
 **What:** The RegionRoute parsed-entry types and the `ClusterRegionRoute` / `ServiceRegionRoute` PM variants
 live in the shared `edgion-resources` crate and are consumed by **EdgionCenter** (separate repo, federation
@@ -109,3 +117,29 @@ spec but improves operator visibility.
 - **F3 → resolved:** "managed" in `plugin-metadata-managed/` is a test-scenario naming for the
   admin-pre-created-PM pattern, not an ownership concept. No existing managed ownership logic on PM.
   (The only `managed-by` today is the ACME label — see I2.)
+
+---
+
+## S3 Deviations (noted during execution)
+
+### D-S3-A — `RegionRouteOverride.enable/active` fields present in struct, not wired to gateway
+The `RegionRouteOverride` struct carries `enable: Option<bool>` and `active: Option<String>` to keep the
+overlay shape consistent with the envelope design (S5 future work), but neither field is read by the
+gateway plugin yet. The gateway only applies `regions` (whole-replace). Wiring `enable`/`active` into the
+request path is deferred to S5.
+
+### D-S3-B — Deprecated legacy list endpoints kept, not removed
+The controller API routes `GET /api/v1/cluster-region-routes` and `GET /api/v1/service-region-routes` still
+exist in `region_route_handlers.rs` as no-op stubs returning `[]`. Operators calling these routes get an
+empty list (backward compatible). Removing these routes requires an API deprecation notice + coordination
+with EdgionCenter; deferred as a follow-up.
+
+### D-S3-C — `record_region_route_overlay_event` metric added to gateway registry
+`overlay_missing` and `overlay_type_mismatch` are now emitted via `edgion_region_route_overlay_events_total`
+counter with a `result` label. No `overlay_invalid` signal exists for RegionRoute because
+`merge_region_route_override` (whole-replace of regions Vec) cannot fail after the type guard passes.
+
+### D-S3-D — S3.7 is a no-op: RegionRoute has no serde-skip runtime fields
+Unlike GCIR (which pre-compiles matchers), RegionDef carries no runtime-only fields. The effective region
+table is a plain `Vec<RegionDef>` computed at request time (one ArcSwap load + merge). No `#[serde(skip)]`
+migration needed.

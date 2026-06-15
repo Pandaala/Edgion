@@ -7,10 +7,9 @@
 //! |-------|---------|-------|
 //! | Standard primitive | `KeyList` | Unified string+regex list |
 //! | Standard primitive | `IpList` | CIDR range list |
-//! | Legacy full-config | `ClusterRegionRoute` | Full region topology |
-//! | Legacy full-config | `ServiceRegionRoute` | Per-service failover |
 //! | Legacy full-config | `GlobalConnectionIpRestriction` | L4 IP restriction (standalone) |
 //! | First-party overlay | `GlobalConnIpRestrictionOverride` | All-Optional overlay via `overrideRef` |
+//! | First-party overlay | `RegionRouteOverride` | All-Optional region table overlay via `overrideRef` |
 //! | Escape hatch | `Misc` | Third-party / unknown payloads |
 //!
 //! The top-level envelope carries `enable` (kill switch, default `true`) and
@@ -28,10 +27,7 @@ pub use global_connection_ip_restriction::{
 pub use ip_list::IpListData;
 pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
 pub use overlay::{apply_override, OverlaySignal};
-pub use region_route::{
-    ClusterRegionRouteConfig, ClusterRegionRouteEntry, RefPluginEntry, RouteByKeyConfMatchMeta, ServiceRegionDef,
-    ServiceRegionRouteConfig, ServiceRegionRouteEntry,
-};
+pub use region_route::{merge_region_route_override, RegionRouteOverride};
 
 use crate::resources::common::Condition;
 use kube::CustomResource;
@@ -91,10 +87,8 @@ pub struct EdgionDataSpec {
 ///
 /// Conditions follow Gateway API conventions:
 /// - `Accepted`: spec is syntactically and semantically valid (per-variant validation passed).
-/// - `ResolvedRefs`: cross-resource references resolve. Currently only meaningful for the
-///   `ServiceRegionRoute` variant (its `clusterRef` must point at an existing
-///   `ClusterRegionRoute` EdgionData). All other variants always report `True`
-///   since they carry no external references.
+/// - `ResolvedRefs`: cross-resource references resolve. Currently all variants always report
+///   `True` since no typed variant carries external cross-resource references.
 #[derive(Default, Serialize, Deserialize, Debug, PartialEq, Clone, JsonSchema)]
 pub struct EdgionDataStatus {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -126,14 +120,6 @@ pub enum DataEntry {
     /// IP address / CIDR range list for IP-based filtering.
     IpList(IpListData),
 
-    /// Cluster RegionRoute: complete topology + route rules + matchMap.
-    /// Created by operators / Center.
-    ClusterRegionRoute(ClusterRegionRouteConfig),
-
-    /// Service-level RegionRoute: failover overrides with clusterRef.
-    /// Created by administrator.
-    ServiceRegionRoute(ServiceRegionRouteConfig),
-
     /// L4 TCP connection-phase IP restriction with profile switching.
     /// Standalone full-config variant. Still valid for existing resources.
     GlobalConnectionIpRestriction(GlobalConnectionIpRestrictionData),
@@ -143,6 +129,12 @@ pub enum DataEntry {
     /// Referenced via `overrideRef` in `GlobalConnectionIpRestrictionEntry`
     /// (EdgionStreamPlugins). Fail-to-base applies on absent/invalid/type-mismatch.
     GlobalConnIpRestrictionOverride(GlobalConnIpRestrictionOverride),
+
+    /// Typed overlay for RegionRoute. All fields are optional; `regions` (if `Some`)
+    /// whole-replaces the base region table. Logic fields are not overridable.
+    /// Referenced via `overrideRef` in `RegionRouteConfig` (EdgionPlugins).
+    /// Fail-to-base applies on absent/invalid/type-mismatch.
+    RegionRouteOverride(RegionRouteOverride),
 
     /// Escape hatch for third-party, experimental, or unknown payloads.
     /// The `config` content is not validated — use sparingly and only when no
@@ -157,10 +149,9 @@ impl EdgionData {
         match &self.spec.data {
             DataEntry::KeyList(_) => "KeyList",
             DataEntry::IpList(_) => "IpList",
-            DataEntry::ClusterRegionRoute(_) => "ClusterRegionRoute",
-            DataEntry::ServiceRegionRoute(_) => "ServiceRegionRoute",
             DataEntry::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
             DataEntry::GlobalConnIpRestrictionOverride(_) => "GlobalConnIpRestrictionOverride",
+            DataEntry::RegionRouteOverride(_) => "RegionRouteOverride",
             DataEntry::Misc(_) => "Misc",
         }
     }
@@ -200,10 +191,12 @@ impl EdgionData {
                     errors.push(format!("GlobalConnIpRestrictionOverride invalid: {}", e));
                 }
             }
-            // RegionRoute variants: no additional validation at pre-parse (cross-EdgionData
-            // reference checks live in the Controller handler's update_status via
-            // ResolvedRefs, not here).
-            DataEntry::ClusterRegionRoute(_) | DataEntry::ServiceRegionRoute(_) => {}
+            DataEntry::RegionRouteOverride(ov) => {
+                // Standalone validation of the overlay (only validates present fields).
+                if let Err(e) = ov.validate_and_init() {
+                    errors.push(format!("RegionRouteOverride invalid: {}", e));
+                }
+            }
             // Misc: the payload is opaque; no schema validation is performed here.
             DataEntry::Misc(_) => {}
         }

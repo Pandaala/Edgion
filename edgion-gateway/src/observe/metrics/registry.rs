@@ -48,6 +48,8 @@ pub mod names {
     pub const ACME_CHALLENGE_LOOKUP_TOTAL: &str = "edgion_acme_challenge_lookup_total";
     // Stream plugin: GlobalConnectionIpRestriction decision events
     pub const CONN_IP_RESTRICTION_EVENTS_TOTAL: &str = "edgion_conn_ip_restriction_events_total";
+    // HTTP plugin: RegionRoute overlay resolution events (overlay_missing / overlay_type_mismatch)
+    pub const REGION_ROUTE_OVERLAY_EVENTS_TOTAL: &str = "edgion_region_route_overlay_events_total";
     // Stream plugin: ConnectionRateLimit rejections
     pub const CONNECTION_RATE_LIMIT_REJECTED_TOTAL: &str = "edgion_connection_rate_limit_rejected_total";
     // Stream plugin: ConnectionRateLimit Redis failure (fired on both fail-open and fail-close)
@@ -458,6 +460,19 @@ pub fn record_acme_challenge_lookup(result: &'static str) {
 /// gateway (the most common real-world trigger) without relying on log scraping.
 pub fn record_config_event_parse_error(kind: &'static str) {
     counter!(names::CONFIG_EVENT_PARSE_ERRORS_TOTAL, "kind" => kind).increment(1);
+}
+
+/// Record a RegionRoute overlay resolution event.
+///
+/// `result` must be one of:
+/// - `"overlay_missing"` — `overrideRef` set but the EdgionData key is not found in the store;
+///   base regions used (fail-to-base).
+/// - `"overlay_type_mismatch"` — EdgionData found but its variant is not `RegionRouteOverride`
+///   (D6 type guard rejected it); base regions used.
+///
+/// Low, fixed cardinality — safe as a label.
+pub fn record_region_route_overlay_event(result: &'static str) {
+    counter!(names::REGION_ROUTE_OVERLAY_EVENTS_TOTAL, "result" => result).increment(1);
 }
 
 /// Record a `GlobalConnectionIpRestriction` stream plugin decision event.

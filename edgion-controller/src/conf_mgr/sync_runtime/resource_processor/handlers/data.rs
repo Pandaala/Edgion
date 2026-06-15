@@ -4,17 +4,12 @@
 //!
 //! Responsibilities:
 //! - Maintain EdgionDataStore in ControllerRuntime (parse + on_delete)
-//! - Maintain RegionRoute tables (global + service) on change/delete
-//! - Register cross-EdgionData references (ServiceRegionRoute.clusterRef → ClusterRegionRoute EdgionData)
-//!   so a change to a ClusterRegionRoute EdgionData requeues the dependent ServiceRegionRoute EdgionData.
-//! - On change: requeue referencing EdgionPlugins/EdgionStreamPlugins (and dependent
-//!   ServiceRegionRoute EdgionData) so they pick up updated failover / match_map.
+//! - Register cross-EdgionData references (override_ref for RegionRouteOverride / GlobalConnIpRestriction)
+//!   so a change to a referenced EdgionData requeues the dependent EdgionPlugins/EdgionStreamPlugins.
+//! - On change: requeue referencing EdgionPlugins/EdgionStreamPlugins so they pick up updated overlay data.
 //! - On update_status: set `Accepted` (from preparse errors) and `ResolvedRefs`
-//!   (from ServiceRegionRoute.clusterRef resolution) conditions per Gateway API conventions.
+//!   (from override_ref resolution) conditions per Gateway API conventions.
 
-use crate::conf_mgr::sync_runtime::resource_processor::region_route_table::{
-    ClusterRegionRouteEntry, ServiceRegionRouteEntry,
-};
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition, ResolvedRefsError,
 };
@@ -50,80 +45,10 @@ impl Default for DataHandler {
     }
 }
 
-/// Update the RegionRoute tables based on EdgionData content.
-fn update_region_route_tables(ed: &EdgionData, ctx: &HandlerContext) {
-    let ns = ed.metadata.namespace.as_deref().unwrap_or("");
-    let name = ed.metadata.name.as_deref().unwrap_or("");
-    let pm_key = PluginMetaDataStore::make_key(Some(ns), name);
-
-    match &ed.spec.data {
-        DataEntry::ClusterRegionRoute(cfg) => {
-            ctx.runtime().cluster_region_route_table.upsert(
-                pm_key,
-                ClusterRegionRouteEntry {
-                    pm_namespace: ns.to_string(),
-                    pm_name: name.to_string(),
-                    my_region: cfg.my_region.clone(),
-                    regions: cfg.regions.clone(),
-                    key_get: cfg.key_get.clone(),
-                    hash_key_get: cfg.hash_key_get.clone(),
-                    hash_calc: cfg.hash_calc.clone(),
-                    route_rules: cfg.route_rules.clone(),
-                    route_by_key_conf_match: cfg.route_by_key_conf_match.clone(),
-                },
-            );
-        }
-        DataEntry::ServiceRegionRoute(cfg) => {
-            ctx.runtime().service_region_route_table.upsert_from_pm(
-                pm_key,
-                ServiceRegionRouteEntry {
-                    pm_namespace: ns.to_string(),
-                    pm_name: name.to_string(),
-                    cluster_pm_ref: cfg.cluster_ref.clone(),
-                    regions: cfg.regions.clone(),
-                    ref_plugins: vec![],
-                },
-            );
-        }
-        _ => {}
-    }
-}
-
-/// Remove entries from RegionRoute tables for a deleted EdgionData.
-/// Unconditionally removes from both tables — the EdgionData's spec may have been
-/// modified before deletion, so we can't rely on its current plugin list.
-fn remove_from_region_route_tables(ed: &EdgionData, ctx: &HandlerContext) {
-    let pm_key = PluginMetaDataStore::make_key(
-        ed.metadata.namespace.as_deref(),
-        ed.metadata.name.as_deref().unwrap_or(""),
-    );
-    ctx.runtime().cluster_region_route_table.remove(&pm_key);
-    ctx.runtime().service_region_route_table.remove(&pm_key);
-}
-
-/// Register this EdgionData's cross-EdgionData references in the shared `plugin_metadata_refs` manager.
-///
-/// Currently only `ServiceRegionRoute.clusterRef → ClusterRegionRoute EdgionData` is tracked.
-/// Entry stored: `cluster_pm_key -> {"EdgionData:ns/service_pm_name", ...}`.
-/// When the cluster EdgionData changes, `requeue_pm_referrers` picks the service EdgionData back up
-/// and re-runs its `update_status`, refreshing `ResolvedRefs`.
-fn register_cross_pm_refs(ed: &EdgionData, ctx: &HandlerContext) {
-    if let DataEntry::ServiceRegionRoute(cfg) = &ed.spec.data {
-        if let Some(cref) = &cfg.cluster_ref {
-            let pm_ns = ed.metadata.namespace.as_deref().unwrap_or("");
-            let cluster_ns = cref.namespace.as_deref().unwrap_or(pm_ns);
-            let cluster_pm_key = format!("{}/{}", cluster_ns, cref.name);
-            ctx.runtime()
-                .plugin_metadata_refs
-                .add_ref(cluster_pm_key, DataHandler::self_ref_key(ed));
-        }
-    }
-}
-
 /// Requeue resources that reference this EdgionData.
 ///
-/// Historically: EdgionPlugins / EdgionStreamPlugins referencing regions, etc.
-/// Newly: other EdgionData (ServiceRegionRoute whose clusterRef points here).
+/// EdgionPlugins / EdgionStreamPlugins referencing this EdgionData via `overrideRef` or
+/// `pluginMetadataRef` are requeued so they pick up any changed overlay data.
 async fn requeue_pm_referrers(ed: &EdgionData, ctx: &HandlerContext) {
     let ns = ed.metadata.namespace.as_deref().unwrap_or("");
     let name = ed.metadata.name.as_deref().unwrap_or("");
@@ -152,15 +77,6 @@ impl ProcessorHandler<EdgionData> for DataHandler {
             .plugin_metadata_store
             .update([(key, ed.clone())].into_iter().collect(), &Default::default());
 
-        update_region_route_tables(&ed, ctx);
-
-        // Rebuild this EdgionData's outgoing cross-EdgionData refs from scratch (covers the case
-        // where a ServiceRegionRoute's clusterRef was edited between revisions).
-        ctx.runtime()
-            .plugin_metadata_refs
-            .clear_refs_from(&Self::self_ref_key(&ed));
-        register_cross_pm_refs(&ed, ctx);
-
         ProcessResult::Continue(ed)
     }
 
@@ -177,10 +93,11 @@ impl ProcessorHandler<EdgionData> for DataHandler {
             .plugin_metadata_store
             .update(Default::default(), &[key.clone()].into_iter().collect());
 
-        remove_from_region_route_tables(ed, ctx);
+        // Clear any outgoing refs this EdgionData registered (none currently for data-side),
+        // then requeue all resources that referenced this EdgionData.
         ctx.runtime()
             .plugin_metadata_refs
-            .clear_refs_from(&Self::self_ref_key(ed));
+            .clear_refs_from(&DataHandler::self_ref_key(ed));
         requeue_pm_referrers(ed, ctx).await;
         ctx.runtime().plugin_metadata_refs.remove_pm(&key);
     }
@@ -206,23 +123,15 @@ impl ProcessorHandler<EdgionData> for DataHandler {
             )
         };
 
-        let resolved_errors = resolve_refs(ed, ctx);
-        let resolved_refs = if resolved_errors.is_empty() {
-            condition_true(
-                condition_types::RESOLVED_REFS,
-                condition_reasons::RESOLVED_REFS,
-                "All references resolved",
-                generation,
-            )
-        } else {
-            let reason = resolved_errors[0].reason();
-            let message = resolved_errors
-                .iter()
-                .map(|e| e.message())
-                .collect::<Vec<_>>()
-                .join("; ");
-            condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
-        };
+        // ResolvedRefs: EdgionData resources generally carry no cross-resource refs.
+        // All variants resolve to True (no external references to validate at the EdgionData level).
+        // Consumers (EdgionPlugins/EdgionStreamPlugins) validate their `overrideRef` in their own handlers.
+        let resolved_refs = condition_true(
+            condition_types::RESOLVED_REFS,
+            condition_reasons::RESOLVED_REFS,
+            "All references resolved",
+            generation,
+        );
 
         let status = ed.status.get_or_insert_with(EdgionDataStatus::default);
         update_condition(&mut status.conditions, accepted);
@@ -230,29 +139,11 @@ impl ProcessorHandler<EdgionData> for DataHandler {
     }
 }
 
-/// Resolve cross-EdgionData references.
+/// Resolve cross-EdgionData references for update_status.
 ///
-/// Today: only `ServiceRegionRoute.clusterRef` must point at an existing
-/// `ClusterRegionRoute` EdgionData. Returns an empty vec for variants without
-/// external refs.
-fn resolve_refs(ed: &EdgionData, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    let mut errors = Vec::new();
-    if let DataEntry::ServiceRegionRoute(cfg) = &ed.spec.data {
-        if let Some(cref) = &cfg.cluster_ref {
-            let pm_ns = ed.metadata.namespace.as_deref().unwrap_or("");
-            let cluster_ns = cref.namespace.as_deref().unwrap_or(pm_ns);
-            let target = ctx.runtime().plugin_metadata_store.get(Some(cluster_ns), &cref.name);
-            let resolved = target
-                .as_ref()
-                .is_some_and(|t| matches!(&t.spec.data, DataEntry::ClusterRegionRoute(_)));
-            if !resolved {
-                errors.push(ResolvedRefsError::EdgionDataNotFound {
-                    namespace: cluster_ns.to_string(),
-                    name: cref.name.clone(),
-                    expected_type: "ClusterRegionRoute".to_string(),
-                });
-            }
-        }
-    }
-    errors
+/// After S3: EdgionData resources no longer carry external refs (the old
+/// `ServiceRegionRoute.clusterRef` chain is gone). Always returns empty.
+#[allow(dead_code)]
+fn resolve_refs(_ed: &EdgionData, _ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    vec![]
 }

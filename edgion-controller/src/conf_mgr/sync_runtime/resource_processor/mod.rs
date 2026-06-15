@@ -96,8 +96,7 @@ pub use namespace_store::NamespaceStore;
 // Re-export plugin_metadata_utils
 pub use plugin_metadata_utils::PluginMetaDataStore;
 
-// Re-export region_route_table utilities
-pub use region_route_table::{RegionRouteClusterTable, RegionRouteServiceTable};
+// region_route_table: module kept for future use; no types exported after S3.
 
 // ============================================================================
 // Utility functions (previously in old conf_mgr)

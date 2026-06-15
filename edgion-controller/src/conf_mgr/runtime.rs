@@ -25,7 +25,6 @@ use super::sync_runtime::resource_processor::{
         events::ReferenceGrantEventDispatcher,
         ReferenceGrantStore,
     },
-    region_route_table::{RegionRouteClusterTable, RegionRouteServiceTable},
     secret_utils::{new_secret_ref_manager, SecretRefManager, SecretStore},
     service_ref::{new_service_ref_manager, ServiceRefManager},
     BidirectionalRefManager, ResourceRef,
@@ -53,12 +52,6 @@ pub struct ControllerRuntime {
     /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each EdgionData.
     /// Used by the DataHandler to requeue referencing resources on change.
     pub(crate) plugin_metadata_refs: PluginMetaDataRefManager,
-    /// Cluster RegionRoute table: pm_key → ClusterRegionRouteEntry.
-    /// Maintained by DataHandler on change/delete.
-    pub(crate) cluster_region_route_table: RegionRouteClusterTable,
-    /// Service RegionRoute table: pm_key → ServiceRegionRouteEntry.
-    /// Maintained by DataHandler (EdgionData fields) and EdgionPlugins handler (ref_plugins).
-    pub(crate) service_region_route_table: RegionRouteServiceTable,
     /// Tracks which Gateways reference each EdgionStreamPlugins via
     /// `edgion.io/edgion-stream-plugins` annotation.
     /// Forward: `"esp_ns/esp_name" → Set<Gateway ResourceRef>`
@@ -88,8 +81,6 @@ impl ControllerRuntime {
             backend_tls_policy: BackendTLSPolicyState::new(),
             plugin_metadata_store: PluginMetaDataStore::new(),
             plugin_metadata_refs: PluginMetaDataRefManager::new(),
-            cluster_region_route_table: RegionRouteClusterTable::new(),
-            service_region_route_table: RegionRouteServiceTable::new(),
             stream_plugin_ref_mgr: BidirectionalRefManager::with_component("stream_plugin_ref_mgr"),
             conf_writer: RwLock::new(None),
         }
@@ -157,12 +148,6 @@ impl ControllerRuntime {
 
         self.plugin_metadata_refs.clear_all();
         tracing::info!(component = "controller_runtime", "Cleared EdgionData ref manager");
-
-        self.cluster_region_route_table.clear();
-        tracing::info!(component = "controller_runtime", "Cleared RegionRouteClusterTable");
-
-        self.service_region_route_table.clear();
-        tracing::info!(component = "controller_runtime", "Cleared RegionRouteServiceTable");
 
         self.stream_plugin_ref_mgr.clear();
         tracing::info!(component = "controller_runtime", "Cleared StreamPluginRefManager");

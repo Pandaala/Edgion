@@ -17,8 +17,7 @@ use std::sync::LazyLock;
 
 use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::resources::data::{
-    ClusterRegionRouteConfig, DataEntry, EdgionData, GlobalConnIpRestrictionOverride,
-    GlobalConnectionIpRestrictionData, ServiceRegionRouteConfig,
+    DataEntry, EdgionData, GlobalConnIpRestrictionOverride, GlobalConnectionIpRestrictionData, RegionRouteOverride,
 };
 
 static GLOBAL_EDGION_DATA_STORE: LazyLock<Arc<EdgionDataStore>> = LazyLock::new(|| Arc::new(EdgionDataStore::new()));
@@ -42,24 +41,22 @@ pub fn edgion_data_keys() -> Vec<String> {
     GLOBAL_EDGION_DATA_STORE.keys()
 }
 
-/// Raw EdgionData map. Key: "namespace/name" (e.g. "edgion-default/global-region-conf").
+/// Raw EdgionData map. Key: "namespace/name" (e.g. "edgion-default/region-override").
 type RawMap = HashMap<String, Arc<EdgionData>>;
 
-/// Type-indexed config maps. Key: same "namespace/name" as the parent EdgionData.
-type ClusterRegionRouteConfigMap = HashMap<String, Arc<ClusterRegionRouteConfig>>;
-type ServiceRegionRouteConfigMap = HashMap<String, Arc<ServiceRegionRouteConfig>>;
+/// Typed index for `GlobalConnectionIpRestrictionData` (full standalone config).
 type GlobalConnectionIpRestrictionMap = HashMap<String, Arc<GlobalConnectionIpRestrictionData>>;
 /// Typed index for `GlobalConnIpRestrictionOverride` overlay EdgionData resources.
-/// Key: "namespace/name". Values carry raw (non-compiled) overlay data;
-/// matchers are compiled by the gateway plugin at connection time when the overlay is applied.
 type GlobalConnIpRestrictionOverrideMap = HashMap<String, Arc<GlobalConnIpRestrictionOverride>>;
+/// Typed index for `RegionRouteOverride` overlay EdgionData resources.
+/// Key: "namespace/name". Values carry the overlay config; no pre-compilation needed.
+type RegionRouteOverrideMap = HashMap<String, Arc<RegionRouteOverride>>;
 
 /// All typed indexes bundled into a single struct so they can be swapped atomically.
 struct TypedIndexes {
-    cluster_region_route_configs: ClusterRegionRouteConfigMap,
-    service_region_route_configs: ServiceRegionRouteConfigMap,
     global_connection_ip_restrictions: GlobalConnectionIpRestrictionMap,
     global_conn_ip_restriction_overrides: GlobalConnIpRestrictionOverrideMap,
+    region_route_overrides: RegionRouteOverrideMap,
 }
 
 /// Atomic view of the store: raw map + derived typed indexes published together.
@@ -94,10 +91,9 @@ impl EdgionDataStore {
             snapshot: ArcSwap::from_pointee(Snapshot {
                 raw: HashMap::new(),
                 indexes: TypedIndexes {
-                    cluster_region_route_configs: HashMap::new(),
-                    service_region_route_configs: HashMap::new(),
                     global_connection_ip_restrictions: HashMap::new(),
                     global_conn_ip_restriction_overrides: HashMap::new(),
+                    region_route_overrides: HashMap::new(),
                 },
             }),
         }
@@ -117,30 +113,6 @@ impl EdgionDataStore {
     }
 
     // ── Typed getters (zero-clone, returns Arc) ─────────────────────────────
-
-    pub fn get_cluster_region_route_config(
-        &self,
-        namespace: &str,
-        name: &str,
-    ) -> Option<Arc<ClusterRegionRouteConfig>> {
-        let snap = self.snapshot.load();
-        snap.indexes
-            .cluster_region_route_configs
-            .get(&format!("{}/{}", namespace, name))
-            .cloned()
-    }
-
-    pub fn get_service_region_route_config(
-        &self,
-        namespace: &str,
-        name: &str,
-    ) -> Option<Arc<ServiceRegionRouteConfig>> {
-        let snap = self.snapshot.load();
-        snap.indexes
-            .service_region_route_configs
-            .get(&format!("{}/{}", namespace, name))
-            .cloned()
-    }
 
     pub fn get_global_connection_ip_restriction(
         &self,
@@ -173,6 +145,12 @@ impl EdgionDataStore {
         snap.indexes.global_conn_ip_restriction_overrides.get(key).cloned()
     }
 
+    /// Look up a `RegionRouteOverride` overlay entry by "namespace/name" key.
+    pub fn get_region_route_override_by_key(&self, key: &str) -> Option<Arc<RegionRouteOverride>> {
+        let snap = self.snapshot.load();
+        snap.indexes.region_route_overrides.get(key).cloned()
+    }
+
     /// Look up a raw `EdgionData` entry by "namespace/name" key.
     /// Used by the GCIR plugin to perform the type guard before overlay application.
     pub fn get_raw_by_key(&self, key: &str) -> Option<Arc<EdgionData>> {
@@ -180,40 +158,22 @@ impl EdgionDataStore {
         snap.raw.get(key).cloned()
     }
 
-    pub fn get_service_region_route_config_by_key(&self, key: &str) -> Option<Arc<ServiceRegionRouteConfig>> {
-        let snap = self.snapshot.load();
-        snap.indexes.service_region_route_configs.get(key).cloned()
-    }
-
-    pub fn get_cluster_region_route_config_by_key(&self, key: &str) -> Option<Arc<ClusterRegionRouteConfig>> {
-        let snap = self.snapshot.load();
-        snap.indexes.cluster_region_route_configs.get(key).cloned()
-    }
-
     // ── Index rebuild ───────────────────────────────────────────────────────
 
     /// Build all typed indexes from a raw map. Pure function; called at conf change
     /// time only (low frequency).
     fn build_indexes(raw: &RawMap) -> TypedIndexes {
-        let mut global_rr = ClusterRegionRouteConfigMap::new();
-        let mut service_rr = ServiceRegionRouteConfigMap::new();
         let mut global_ip_restrictions = GlobalConnectionIpRestrictionMap::new();
         let mut gcir_overrides = GlobalConnIpRestrictionOverrideMap::new();
+        let mut rr_overrides = RegionRouteOverrideMap::new();
 
         for (key, ed) in raw {
             match &ed.spec.data {
-                DataEntry::ClusterRegionRoute(cfg) => {
-                    global_rr.insert(key.clone(), Arc::new(cfg.clone()));
-                }
-                DataEntry::ServiceRegionRoute(cfg) => {
-                    service_rr.insert(key.clone(), Arc::new(cfg.clone()));
-                }
                 DataEntry::KeyList(_) => {
-                    // No index — KeyList/IpList are standard primitives with no live consumer yet.
-                    // Plumbing will be rebuilt when a real consumer is wired (D1).
+                    // Standard primitive: no index — no live consumer yet (D1).
                 }
                 DataEntry::IpList(_) => {
-                    // No index — see KeyList comment above.
+                    // Standard primitive: no index — no live consumer yet (D1).
                 }
                 DataEntry::GlobalConnectionIpRestriction(data) => {
                     // Legacy full-config variant. Still indexed for standalone consumers.
@@ -236,6 +196,11 @@ impl EdgionDataStore {
                     // matchers are compiled by the gateway plugin after merging with base.
                     gcir_overrides.insert(key.clone(), Arc::new(overlay.clone()));
                 }
+                DataEntry::RegionRouteOverride(overlay) => {
+                    // Typed overlay for RegionRoute. Stored as-is.
+                    // Gateway plugin reads this at request time and applies field-level replace.
+                    rr_overrides.insert(key.clone(), Arc::new(overlay.clone()));
+                }
                 DataEntry::Misc(_) => {
                     // Misc is an opaque escape hatch; no typed index is built for it.
                 }
@@ -243,10 +208,9 @@ impl EdgionDataStore {
         }
 
         TypedIndexes {
-            cluster_region_route_configs: global_rr,
-            service_region_route_configs: service_rr,
             global_connection_ip_restrictions: global_ip_restrictions,
             global_conn_ip_restriction_overrides: gcir_overrides,
+            region_route_overrides: rr_overrides,
         }
     }
 
@@ -359,5 +323,36 @@ mod stats_tests {
         // IpList and KeyList are no longer indexed (D1), but raw count and keys must reflect them.
         assert_eq!(store.count(), 2);
         assert_eq!(store.keys().len(), 2);
+    }
+
+    #[test]
+    fn region_route_override_is_indexed() {
+        use edgion_resources::resources::data::RegionRouteOverride;
+
+        let store = EdgionDataStore::new();
+
+        let rr_override_ed = {
+            let spec = EdgionDataSpec {
+                enable: true,
+                active: None,
+                data: DataEntry::RegionRouteOverride(RegionRouteOverride {
+                    enable: None,
+                    active: None,
+                    regions: None,
+                }),
+            };
+            let mut ed = EdgionData::new("rr-override", spec);
+            ed.metadata.namespace = Some("ns-test".to_string());
+            Arc::new(ed)
+        };
+
+        let mut raw: RawMap = HashMap::new();
+        raw.insert("ns-test/rr-override".to_string(), rr_override_ed);
+        store.replace_all(raw);
+
+        assert_eq!(store.count(), 1);
+        let found = store.get_region_route_override_by_key("ns-test/rr-override");
+        assert!(found.is_some(), "RegionRouteOverride must be indexed");
+        assert!(found.unwrap().regions.is_none());
     }
 }
