@@ -87,7 +87,7 @@ impl ParentReference {
 /// Set by Controller when a cross-namespace reference is not permitted
 /// (no matching ReferenceGrant). This info is synced to Gateway and used
 /// to reject requests and log denial details to access log.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, Default, PartialEq)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RefDenied {
     /// The target namespace that was denied

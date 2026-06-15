@@ -57,6 +57,11 @@ spec:
                       type: boolean
                       description: "Enable downstream response compression (default: false)"
                       default: false
+                    downstreamKeepaliveRequestLimit:
+                      type: integer
+                      description: "Max requests a downstream connection serves before close (default 1000; 0 disables)"
+                      format: int32
+                      default: 1000
 
                 # ============================================
                 # HTTP Timeout Configuration
@@ -138,6 +143,14 @@ spec:
                       type: string
                       description: "Header to extract real IP from (default: 'X-Forwarded-For')"
                       default: "X-Forwarded-For"
+                    recursive:
+                      type: boolean
+                      description: "Walk X-Forwarded-For right-to-left skipping trusted proxies (default true)"
+                      default: true
+                    maxTrustedHops:
+                      type: integer
+                      description: "Cap on trusted proxy hops to traverse when resolving the real IP"
+                      format: int32
 
                 # ============================================
                 # Security Protection Configuration
@@ -158,6 +171,18 @@ spec:
                     fallbackSni:
                       type: string
                       description: "Fallback SNI hostname when client doesn't provide SNI"
+                    tlsProxyLogRecord:
+                      type: boolean
+                      description: "Enable TLS proxy connection logging (default true)"
+                      default: true
+                    allowLoopbackUpstream:
+                      type: boolean
+                      description: "Allow loopback upstream addresses for this Gateway (default false)"
+                      default: false
+                    rejectDuplicateHost:
+                      type: boolean
+                      description: "Reject HTTP/1.1 requests with more than one Host header (default true)"
+                      default: true
 
                 # ============================================
                 # Global Plugins Reference
@@ -205,6 +230,41 @@ spec:
                   type: boolean
                   description: "Enable ReferenceGrant validation for cross-namespace references (default: false)"
                   default: false
+
+                tcpTimeout:
+                  type: object
+                  description: "Timeout configuration for L4 TCP-transport relays"
+                  properties:
+                    idleTimeout:
+                      type: string
+                      description: "Idle timeout for the established L4 relay (default 1h; '0'/'0s' disables)"
+                      default: "1h"
+                      pattern: "^([0-9]+(\\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\\.[0-9]+)?$"
+                    connectTimeout:
+                      type: string
+                      description: "Upper bound for establishing the upstream TCP connection (default 10s; '0'/'0s' disables)"
+                      default: "10s"
+                      pattern: "^([0-9]+(\\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\\.[0-9]+)?$"
+                loadBalancing:
+                  type: object
+                  description: "Gateway-wide load-balancing configuration"
+                  properties:
+                    panicThreshold:
+                      type: integer
+                      description: "Panic threshold percent (0-100); 0 disables panic mode"
+                      format: int32
+                      default: 0
+                      minimum: 0
+                      maximum: 100
+                linkSys:
+                  type: object
+                  description: "Global LinkSys provider configuration"
+                  properties:
+                    webhookMaxResponseBytes:
+                      type: integer
+                      description: "Global hard cap for webhook response body size in bytes (default 16384)"
+                      format: int64
+                      default: 16384
 
             status:
               type: object

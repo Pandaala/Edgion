@@ -32,7 +32,7 @@ pub struct BasicAuthSecretGroup {
 /// holds either plaintext or htpasswd-format hash as stored in the Secret;
 /// gateway's `load_users()` pre-hashes plaintext to `{SHA}<base64>` at
 /// plugin construction.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedBasicAuthUser {
     /// Password value as stored in Secret (plaintext or pre-hashed).

@@ -51,6 +51,25 @@ spec:
                       type: object
                       description: Plugin configuration
                       x-kubernetes-preserve-unknown-fields: true
+              tlsRoutePlugins:
+                type: array
+                description: List of Stage-2 TLS-route stream plugins to apply
+                items:
+                  type: object
+                  properties:
+                    enable:
+                      type: boolean
+                      description: Whether this plugin is enabled (default true)
+                      default: true
+                    type:
+                      type: string
+                      description: Plugin type
+                      enum:
+                      - IpRestriction
+                    config:
+                      type: object
+                      description: Plugin configuration
+                      x-kubernetes-preserve-unknown-fields: true
           status:
             type: object
             properties:

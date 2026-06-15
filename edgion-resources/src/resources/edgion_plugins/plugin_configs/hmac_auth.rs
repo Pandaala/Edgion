@@ -46,7 +46,7 @@ impl HmacAlgorithm {
 }
 
 /// HMAC credential loaded from K8s Secret.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HmacCredential {
     /// HMAC shared secret bytes.

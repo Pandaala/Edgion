@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 /// Resolved JWT credential data (populated by controller from Secret)
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedJwtCredential {
     /// Key identifier (kid) used to look up the credential within a group
@@ -88,7 +88,7 @@ pub struct JwtIssuerGroup {
 
 /// Snapshot-merged group (controller-populated). Always carries concrete
 /// `algorithm` and the per-kid credential map for this group.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedJwtIssuerGroup {
     /// Group name (snapshot of `JwtIssuerGroup.name`). Always set by

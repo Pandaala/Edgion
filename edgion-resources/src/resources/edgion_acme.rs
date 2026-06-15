@@ -217,9 +217,11 @@ pub struct ActiveHttpChallenge {
     pub domain: String,
 
     /// The challenge token (appears in the URL path)
+    #[serde(serialize_with = "crate::redact::redact_required::serialize")]
     pub token: String,
 
     /// The key authorization (returned as the HTTP response body)
+    #[serde(serialize_with = "crate::redact::redact_required::serialize")]
     pub key_authorization: String,
 
     /// Expiry timestamp (Unix seconds). Gateway should ignore expired challenges.

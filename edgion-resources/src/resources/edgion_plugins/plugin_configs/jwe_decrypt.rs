@@ -58,7 +58,7 @@ impl JweKeyManagement {
 }
 
 /// Resolved JWE credential from Secret (populated by controller).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedJweCredential {
     /// Symmetric key, base64-encoded.
