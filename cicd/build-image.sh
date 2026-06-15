@@ -28,7 +28,7 @@ set -eo pipefail
 # Fallback version used when HEAD has no git tag.
 # Normal release flow: git tag v0.x.y  →  script auto-detects via `git describe --tags --exact-match`
 # or pass --from-tag / --version explicitly.
-DEFAULT_VERSION="0.3.0"
+DEFAULT_VERSION="0.3.1"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.92}"
@@ -404,7 +404,7 @@ build_images() {
 
         local build_cmd=(
             docker buildx build
-            --file cicd/docker/Dockerfile.runtime
+            --file "${PROJECT_DIR}/cicd/docker/Dockerfile.runtime"
             --build-arg "BINARY=${binary}"
             --build-arg "BUILD_TYPE=bin"
             --build-arg "BINARY_PATH=${bin_path}"
@@ -469,7 +469,7 @@ build_example_images() {
 
         local build_cmd=(
             docker buildx build
-            --file cicd/docker/Dockerfile.runtime
+            --file "${PROJECT_DIR}/cicd/docker/Dockerfile.runtime"
             --build-arg "BINARY=${example}"
             --build-arg "BUILD_TYPE=example"
             --build-arg "BINARY_PATH=${bin_path}"
@@ -701,7 +701,7 @@ build_controller_gateway_image() {
 
     local build_cmd=(
         docker buildx build
-        --file cicd/docker/Dockerfile.controller-gateway
+        --file "${PROJECT_DIR}/cicd/docker/Dockerfile.controller-gateway"
         --build-arg "BINARY_PATH=${bin_path}"
         --platform "${platform}"
         --tag "${image_tag}"
