@@ -298,9 +298,10 @@ impl EdgionTlsTcpProxy {
             // TCP retransmit timeout; mirrors the HTTP path. The upstream connect
             // is plain TCP here (downstream TLS is terminated separately), so this
             // bounds the connect itself, not a TLS handshake.
-            peer.options.connection_timeout = edgion_resources::resources::edgion_gateway_config::resolve_tcp_connect_timeout(
-                self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
-            );
+            peer.options.connection_timeout =
+                edgion_resources::resources::edgion_gateway_config::resolve_tcp_connect_timeout(
+                    self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
+                );
             match self.connector.new_stream(&peer).await {
                 Ok(stream) => {
                     if let Some(info) = ctx.current_upstream_mut() {

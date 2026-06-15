@@ -199,9 +199,10 @@ impl EdgionTcpProxy {
         // Bound the connect (TCP handshake) so an unreachable backend fails fast
         // instead of stranding the downstream connection until the OS TCP
         // retransmit timeout; mirrors the HTTP path's connection_timeout.
-        peer.options.connection_timeout = edgion_resources::resources::edgion_gateway_config::resolve_tcp_connect_timeout(
-            self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
-        );
+        peer.options.connection_timeout =
+            edgion_resources::resources::edgion_gateway_config::resolve_tcp_connect_timeout(
+                self.edgion_gateway_config.spec.tcp_timeout.as_ref(),
+            );
         let upstream = match self.connector.new_stream(&peer).await {
             Ok(stream) => stream,
             Err(_) => {

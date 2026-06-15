@@ -690,7 +690,10 @@ mod tcp_timeout_tests {
 
     #[test]
     fn connect_default_const_and_serde_default_stay_in_sync() {
-        assert_eq!(parse_duration(&default_tcp_connect_timeout()).unwrap(), DEFAULT_TCP_CONNECT);
+        assert_eq!(
+            parse_duration(&default_tcp_connect_timeout()).unwrap(),
+            DEFAULT_TCP_CONNECT
+        );
     }
 }
 
