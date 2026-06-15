@@ -93,8 +93,22 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 | Label | Value | Description |
 |-------|-------|-------------|
 | `edgion.io/leader` | pod name | Leader election marker |
-| `edgion.io/managed-by` | `"acme"` | ACME management marker |
+| `edgion.io/managed-by` | see below | Lifecycle ownership of the labeled resource |
 | `edgion.io/acme-resource` | resource name | ACME resource association |
+
+### `edgion.io/managed-by` Vocabulary
+
+Applies to `EdgionData` (and `Secret`/`EdgionTls` managed by ACME). Declares who owns the resource
+lifecycle and how the controller treats the spec on reconcile.
+
+| Value | Active? | Description |
+|-------|---------|-------------|
+| `operator` | yes (default) | Git/kubectl authoritative; controller never mutates spec. This is the only active mode today. |
+| `acme` | yes | ACME service manages the certificate lifecycle (existing usage on Secrets and EdgionTls). |
+| `center` | **DESIGN-DECLARED, NOT YET IMPLEMENTED** | Placeholder; real data delivered via fed_sync from EdgionCenter. Controller does not overwrite spec from git. Refs always resolve (object exists); overlay-absent fallback yields base. Requires EdgionCenter coordination. |
+| `controller` | **DESIGN-DECLARED, NOT YET IMPLEMENTED** | Controller regenerates body from a template ref. Requires template-engine design. |
+
+Constant definitions: `edgion-resources/src/constants/labels.rs` (`managed_by` module).
 
 ## System Reserved Keys
 

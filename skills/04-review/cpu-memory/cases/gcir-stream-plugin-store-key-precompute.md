@@ -41,7 +41,7 @@ let Some(pm) = store.get_global_connection_ip_restriction_by_key(&self.metadata_
 ```
 
 `get_global_connection_ip_restriction_by_key(&str)` already exists on
-`PluginMetaDataStore` (`edgion-gateway/src/plugins/runtime/plugin_metadata/conf_handler.rs`) and
+`PluginMetaDataStore` (`edgion-gateway/src/plugins/runtime/data/conf_handler.rs`) and
 performs the same `HashMap::get` against the same map; the by-(ns, name) variant is retained
 for non-hot-path callers that don't want to build the key themselves.
 
@@ -91,4 +91,4 @@ Re-open only if:
 
 - F-008 (BadLogic/Performance, Low), fixed 2026-05-27.
 - Source: `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs`.
-- Getter: `edgion-gateway/src/plugins/runtime/plugin_metadata/conf_handler.rs::get_global_connection_ip_restriction_by_key`.
+- Getter: `edgion-gateway/src/plugins/runtime/data/conf_handler.rs::get_global_connection_ip_restriction_by_key`.

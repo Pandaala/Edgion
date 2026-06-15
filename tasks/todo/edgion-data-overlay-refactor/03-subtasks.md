@@ -126,13 +126,18 @@ unit tests (base-only, base+overlay, overlay-invalid→base).
 
 ## S6 — `managed-by` ownership model (phase 3)
 
-- [ ] **S6.1** Define `edgion.io/managed-by` values (`operator` default | `controller` | `center`) in
-      `skills/02-features/05-annotations/00-annotations-overview.md`.
-- [ ] **S6.2** Controller reconcile branch: `operator` normal; `center` → do not overwrite spec from git
-      (placeholder, accept conf_sync/fed_sync data); `controller` → regenerate body from template ref.
-- [ ] **S6.3** Ensure refs resolve when object exists but body is remote-owned (overlay-absent → base).
+- [x] **S6.1** Define `edgion.io/managed-by` values (`operator` default | `controller` | `center` | `acme`)
+      in `skills/02-features/05-annotations/00-annotations-overview.md` (extended vocabulary table added).
+      Constants defined in `edgion-resources/src/constants/labels.rs` (`managed_by` module). Decision D7
+      recorded in `06-decisions.md`. I2 resolved.
+- [x] **S6.2** Controller reconcile branch: `center` and `controller` are **DESIGN-DECLARED, NOT YET
+      IMPLEMENTED** (doc-only per conservative scope; blocked on EdgionCenter coordination I1 and
+      template-engine design). `operator` is the only active mode (current default behavior, no code change).
+      Marked clearly in annotations overview and labels constants.
+- [x] **S6.3** Ref resolution when overlay-absent → base is already wired (S3/S4). `center`/`controller`
+      object-exists-but-body-is-remote-owned scenario is deferred with I1 (doc-only here).
 
-**Verify:** `cargo fmt`; `cargo check -p edgion-controller`; controller test per branch.
+**Verify:** `cargo fmt`; `cargo check -p edgion-resources` (labels.rs constant addition).
 
 ---
 
@@ -158,11 +163,19 @@ unit tests (base-only, base+overlay, overlay-invalid→base).
 
 ## S9 — Docs & skills (phase 3)
 
-- [ ] **S9.1** Update region_route + EdgionData docs to the overlay model + EdgionData rename.
-- [ ] **S9.2** Add an overlay-model + fail-to-base + variant-taxonomy reference doc (one canonical source;
-      link from `skills/` and `docs/en/`; Chinese mirror under `docs/zh-CN/` if user-facing).
-- [ ] **S9.3** Update annotations overview for `managed-by`. Remove stale ClusterRegionRoute/ServiceRegionRoute
-      and `PluginMetaData` examples. Note EdgionData's general-purpose intent (EdgionTls future consumer).
+- [x] **S9.1** Updated region_route user-facing docs (`docs/en/` + `docs/zh-CN/`) to base+overlay model;
+      removed all stale ClusterRegionRoute/ServiceRegionRoute/PluginMetaData references.
+      Rewrote `skills/01-architecture/05-resources/15-plugin-metadata.md` → `15-edgion-data.md`
+      (renamed; now covers EdgionData resource architecture + overlay model + variant taxonomy).
+      Updated SKILL.md table entry and resource relationship diagram.
+      Fixed all 8 stale `src/` refs in 4 skills files (gate: `validate_agent_docs.py` passes).
+- [x] **S9.2** Canonical overlay reference in `skills/01-architecture/05-resources/15-edgion-data.md`
+      (Overlay Model section: roles, five guardrails, apply_override contract, fail-behavior matrix).
+      User-facing RegionRoute docs link to EdgionData overlay concept; review skills updated.
+      Chinese mirror at `docs/zh-CN/user-guide/edgion-plugins/region-route.md` updated.
+- [x] **S9.3** Annotations overview updated: managed-by extended vocabulary table (operator/acme/center/controller
+      with implementation status); labels constants pointer added. Stale PluginMetaData/ClusterRegionRoute
+      examples removed from skills. EdgionData general-purpose intent noted in `15-edgion-data.md`.
 
 **Verify:** `python3 cicd/checks/validate_agent_docs.py`.
 

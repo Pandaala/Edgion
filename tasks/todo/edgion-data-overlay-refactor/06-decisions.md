@@ -68,6 +68,25 @@ mismatch → use base.
 
 **Evidence:** wire shape `#[serde(tag = "type", content = "config")]` (`mod.rs:75`). (Flag F4.)
 
+## D7 — managed-by: reuse existing label key, extend vocabulary; center/controller deferred
+
+**Decision (S6, 2026-06-16):** Adopt **option (a)** — reuse the existing `edgion.io/managed-by` **label**
+consistently for all ownership modes. Extend the documented vocabulary to:
+`operator` (default) | `acme` (existing ACME usage) | `center` | `controller`.
+
+Rationale: one key for one concept (lifecycle ownership); label-selectable; existing ACME usage is already
+a label with value `"acme"` (`secret_io.rs:18,66`), so keeping it a label avoids a label/annotation split
+on the same key. Label charset (`[a-z0-9.-_]`) covers all four values.
+
+**Deferred (I1 dependency):**
+- `center` mode (placeholder → fed_sync push from EdgionCenter) requires EdgionCenter coordination.
+  No controller reconcile branching for `center` in this task — doc-only.
+- `controller` mode (template-engine spec regeneration) has no design or consumer yet — doc-only.
+
+**Active in this task:** only `operator` (default, current behavior) needs no code change.
+Constants added to `edgion-resources/src/constants/labels.rs` (`managed_by` module) with NOT YET
+IMPLEMENTED notices on `center` and `controller`. Documented in annotations overview.
+
 ---
 
 ## Resulting taxonomy (final)

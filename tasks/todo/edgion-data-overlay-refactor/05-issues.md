@@ -41,27 +41,13 @@ framework) first — both are local and non-breaking to the RegionRoute contract
 
 ---
 
-## I2 — [S6 decision] `edgion.io/managed-by` already exists as an ACME label
+## I2 — [RESOLVED → D7] `edgion.io/managed-by` already exists as an ACME label
 
-**Severity:** minor (S6-time naming decision; does not block earlier steps).
+**Resolved (S6, 2026-06-16):** see **D7** in `06-decisions.md`.
 
-**What:** `edgion.io/managed-by` is already defined — as a **label** with value `"acme"`, applied to
-ACME-managed Secrets and EdgionTls. Our planned ownership model (D-managed-by) wants `edgion.io/managed-by`
-as an **annotation** with values `operator|controller|center`.
-
-**Evidence:** `edgion-controller/src/services/acme/secret_io.rs:18,66-68`; `services/acme/service.rs:950,998`;
-documented in `skills/02-features/05-annotations/00-annotations-overview.md` (labels section).
-
-**Concern:** same key string, two field types (label vs annotation), two value vocabularies — confusing.
-Conceptually both express "who owns this resource's lifecycle", so they could be unified.
-
-**Options for S6 (decide then, not now):**
-- (a) Reuse `edgion.io/managed-by` as a **label** consistently; extend the vocabulary to
-  `operator|controller|center|acme`. Pro: one concept, label-selectable. Con: label charset limits (fine here).
-- (b) Use a distinct annotation key (e.g. `edgion.io/data-source` or `edgion.io/origin`) to avoid the
-  label/annotation clash. Pro: no overload. Con: two keys for a similar idea.
-
-Recommendation leans (a) — same concept, keep one key — but confirm at S6.
+**Resolution:** option (a) chosen — reuse `edgion.io/managed-by` as a **label** consistently; extend vocabulary to
+`operator` (default) | `acme` (existing) | `center` | `controller`. `center` and `controller` are
+DESIGN-DECLARED but NOT YET IMPLEMENTED (blocked on EdgionCenter coordination, I1). Only `operator` is active.
 
 ---
 
