@@ -26,6 +26,24 @@ const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
 const DEFAULT_COMMAND_TIMEOUT_MS: u64 = 5_000;
 
 // ============================================================================
+// Timeout helpers
+// ============================================================================
+
+/// Resolve an effective timeout in milliseconds from an optional CRD value.
+///
+/// `None` (unset) and `Some(0)` both fall back to `default_ms`. fred treats a
+/// zero command/connect timeout as "disabled"; an explicit `0` in the CRD is a
+/// common "use the default" misreading that would otherwise disable fred's
+/// timeout and let a connected-but-hung Redis hang requests forever. Any
+/// positive value is capped at `max_ms`.
+fn effective_timeout_ms(configured: Option<u64>, default_ms: u64, max_ms: u64) -> u64 {
+    match configured {
+        None | Some(0) => default_ms,
+        Some(ms) => ms.min(max_ms),
+    }
+}
+
+// ============================================================================
 // Config mapping (CRD → fred Config)
 // ============================================================================
 
@@ -133,12 +151,11 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
     ));
 
     // Connection config (timeouts, TCP settings)
-    let connect_timeout = crd
-        .timeout
-        .as_ref()
-        .and_then(|t| t.connect)
-        .map(|ms| ms.min(MAX_CONNECT_TIMEOUT_MS))
-        .unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS);
+    let connect_timeout = effective_timeout_ms(
+        crd.timeout.as_ref().and_then(|t| t.connect),
+        DEFAULT_CONNECT_TIMEOUT_MS,
+        MAX_CONNECT_TIMEOUT_MS,
+    );
 
     builder.with_connection_config(|conn| {
         conn.connection_timeout = Duration::from_millis(connect_timeout);
@@ -149,12 +166,11 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
     });
 
     // Performance config (command timeout)
-    let cmd_timeout = crd
-        .timeout
-        .as_ref()
-        .and_then(|t| t.read.or(t.write))
-        .map(|ms| ms.min(MAX_COMMAND_TIMEOUT_MS))
-        .unwrap_or(DEFAULT_COMMAND_TIMEOUT_MS);
+    let cmd_timeout = effective_timeout_ms(
+        crd.timeout.as_ref().and_then(|t| t.read.or(t.write)),
+        DEFAULT_COMMAND_TIMEOUT_MS,
+        MAX_COMMAND_TIMEOUT_MS,
+    );
 
     builder.with_performance_config(|perf| {
         perf.default_command_timeout = Duration::from_millis(cmd_timeout);
@@ -472,5 +488,13 @@ mod tests {
         let config = build_fred_config(&crd, &no_auth()).unwrap();
         let (_builder, pool_size) = build_fred_pool(&crd, config).unwrap();
         assert_eq!(pool_size, DEFAULT_POOL_SIZE);
+    }
+
+    #[test]
+    fn effective_timeout_treats_zero_and_none_as_default() {
+        assert_eq!(effective_timeout_ms(None, 5_000, 30_000), 5_000);
+        assert_eq!(effective_timeout_ms(Some(0), 5_000, 30_000), 5_000);
+        assert_eq!(effective_timeout_ms(Some(1_000), 5_000, 30_000), 1_000);
+        assert_eq!(effective_timeout_ms(Some(99_999), 5_000, 30_000), 30_000);
     }
 }

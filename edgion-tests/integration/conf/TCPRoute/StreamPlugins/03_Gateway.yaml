@@ -21,3 +21,6 @@ spec:
     - name: tcp-conn-rate
       protocol: TCP
       port: 31277
+    - name: tcp-conn-rate-redis
+      protocol: TCP
+      port: 31278

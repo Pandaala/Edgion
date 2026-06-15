@@ -22,3 +22,4 @@ spec:
         rejectMessage: "Redis rate limit exceeded"
         showLimitHeaders: true
         keyPrefix: "edgion:it:rlr:main:"
+        requestTimeout: "2s"

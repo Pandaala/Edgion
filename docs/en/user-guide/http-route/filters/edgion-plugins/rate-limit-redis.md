@@ -101,7 +101,8 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `onRedisFailure` | Enum | `Allow` | Behavior when Redis is unavailable. Values: `Allow` (fail-open) \| `Deny` (fail-close) |
+| `onRedisFailure` | Enum | `Allow` | Policy applied when Redis is unavailable **or** when `requestTimeout` elapses. Covers both (a) Redis detectably down — fast-eject with zero I/O, and (b) Redis healthy but slow/erroring — bounded wait then give up. Both cases route through this single policy. Values: `Allow` (fail-open) \| `Deny` (fail-close) |
+| `requestTimeout` | String | unset | Optional wall-clock deadline for the complete multi-policy Redis check (e.g. `"500ms"`). When unset, no aggregate timeout is applied; the per-command timeout from the LinkSys Redis CRD still applies. When set and the deadline elapses, `onRedisFailure` applies |
 | `keyPrefix` | String | `"edgion:rl:"` | Redis key prefix. Must end with `:` and contain only printable ASCII characters |
 | `maxKeyLen` | Integer | `4096` | Maximum byte length of the key portion in Redis keys (64–65536). Prevents Redis OOM from maliciously long key values |
 

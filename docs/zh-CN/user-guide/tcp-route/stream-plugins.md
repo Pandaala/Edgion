@@ -24,6 +24,7 @@ metadata:
 |------|----------|------|
 | `IpRestriction` | 内联规则 | IP 允许/拒绝分组，直接嵌入插件中。 |
 | `GlobalConnectionIpRestriction` | `pluginMetadataRef` | 引用 `GlobalConnectionIpRestriction` PluginMetaData；由 Center 管理并同步到各 Controller。 |
+| `ConnectionRateLimit` | `config` 对象 | 在 pre-TLS 接入路径上，基于 Redis 的按源 IP 连接限流。详见下文 [ConnectionRateLimit 小节](#connectionratelimit-pre-tls-连接限流)。 |
 
 `spec.plugins` 下的每个条目都有可选的 `enable` 标志（默认 `true`）、一个 `type` 和一个 `config` 对象。
 
@@ -229,6 +230,92 @@ spec:
             cidrs:
               - "10.6.6.6/32"        # 尽管在 10.0.0.0/8 内，仍被拒绝
         defaultAction: deny
+```
+
+## ConnectionRateLimit: pre-TLS 连接限流
+
+`ConnectionRateLimit` 按源 IP 限制新建入站连接的速率。Redis 检查在 TLS 握手**之前**（Pingora 的 `ConnectionFilter` 阶段）执行，因此可以在分配任何 TLS 资源之前丢弃连接。
+
+### 为什么 `redisTimeout` 被硬上限封顶为 1s
+
+限流检查运行在入站 pre-TLS 接入路径上，会在 Redis 往返期间一直持有已接受的文件描述符（以及持有它的 Pingora 任务）。**Redis 连接池并不能消除这种背压**：连接池是*出站*的（Gateway → Redis），而堆积的是*入站*连接（在等待 Redis 响应期间被持有的客户端 fd）。在 Redis brownout 期间，每个新入站连接最多会阻塞 `redisTimeout`，之后才由 `onRedisFailure` 接管。1s 硬上限限制了被阻塞的入站 fd 能堆积多久。
+
+> **`perSourceIp` 没有本地兜底。** 与 `perListener` 维度（即使 Redis 不可达，本地令牌桶仍然有效）不同，`perSourceIp` 没有进程内回退——每个被接受的连接都必须到达 Redis。如果需要 fail-close 行为，请显式设置 `onRedisFailure`。
+
+### 配置字段
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `redisRef` | String | **必填** | Redis LinkSys 引用，格式 `"namespace/name"`。 |
+| `algorithm` | Enum | `SlidingWindow` | 限流算法：`SlidingWindow` \| `FixedWindow` \| `TokenBucket`。 |
+| `redisTimeout` | String | `"100ms"` | 接入路径 Redis 调用的总耗时上限。硬上限 `1s`。超时后执行 `onRedisFailure`。 |
+| `perListener` | Object | 无 | 按监听器限流，带本地令牌桶兜底（即使 Redis 不可达也可用）。 |
+| `perSourceIp` | Object | 无 | 按源 IP 限流。需要 Redis——无本地兜底。见上文提示。 |
+
+#### `perSourceIp` / `perListener` 子字段
+
+| 字段 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `rate` | Integer | **必填** | 每个时间窗口内的最大新建连接数。 |
+| `interval` | String | **必填** | 时间窗口，例如 `"1s"`、`"1m"`。 |
+| `redisDistributed` | Boolean | `false` | （仅 `perListener`）为 `true` 时，在本地门控之外再通过 Redis 进行全集群范围的限额。 |
+| `onRedisFailure` | Enum | `Allow`（`perSourceIp`）/ `Deny`（`perListener`） | Redis 不可用或 `redisTimeout` 超时时的行为。`Allow` = 放行；`Deny` = 拒绝。 |
+
+### 可观测性
+
+指标 `edgion_connection_rate_limit_redis_failure_total`（标签 `dimension`：`listener` 或 `source_ip`；`cause`：`unavailable` 或 `runtime`）在每次 L4 Redis 失败时递增，无论 `onRedisFailure` 设置为何。这样 fail-open 行为在 Prometheus 中始终可见。
+
+PromQL 告警示例：
+
+```promql
+rate(edgion_connection_rate_limit_redis_failure_total{dimension="source_ip"}[5m]) > 0
+# L4 限流器正在静默 fail-open
+```
+
+### 示例
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: conn-rate-limit
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: ConnectionRateLimit
+      config:
+        redisRef: "default/shared-redis"
+        algorithm: SlidingWindow
+        redisTimeout: "200ms"     # 默认 100ms；硬上限 1s
+        perListener:
+          rate: 10000
+          interval: "1s"
+          redisDistributed: false
+          # onRedisFailure: Deny  # perListener 的默认值
+        perSourceIp:
+          rate: 50
+          interval: "1s"
+          # onRedisFailure: Allow # perSourceIp 的默认值
+```
+
+像其它 stream 插件一样附加到路由上：
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: rate-limited-route
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "edgion-test/conn-rate-limit"
+spec:
+  parentRefs:
+    - name: stream-gateway
+      sectionName: tcp-app
+  rules:
+    - backendRefs:
+        - name: app-service
+          port: 8080
 ```
 
 ## 故障排除

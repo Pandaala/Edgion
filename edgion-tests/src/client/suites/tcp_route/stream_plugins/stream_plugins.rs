@@ -310,6 +310,63 @@ impl TcpStreamPluginsTestSuite {
         )
     }
 
+    /// Test: ConnectionRateLimit Redis-backed perSourceIp dimension limits
+    /// connections from one source IP across the fleet via Redis. perSourceIp
+    /// has no local backstop, so every connection goes through the Redis sliding
+    /// window. Config: perSourceIp { rate: 3, interval: "5s" } on a real Redis.
+    /// We open 6 connections from localhost (one source key) within the window;
+    /// assert admitted <= 3 AND rejected >= 1. The 5s window keeps the 6
+    /// sequential connects safely inside one window even on a slow-but-healthy Redis.
+    fn test_conn_rate_limit_redis() -> TestCase {
+        TestCase::new(
+            "tcp_stream_plugin_conn_rate_limit_redis",
+            "ConnectionRateLimit (Redis perSourceIp): at most 3 connections admitted per 5s window",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let addr = format!("{}:{}", ctx.target_host, 31278);
+                    let total = 6;
+                    let mut admitted = 0usize;
+                    let mut rejected = 0usize;
+
+                    for _ in 0..total {
+                        match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
+                            Ok(Ok(mut stream)) => {
+                                let test_data = b"Hello";
+                                let _ = stream.write_all(test_data).await;
+                                let mut buf = vec![0u8; 1024];
+                                match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
+                                    Ok(Ok(0)) | Ok(Err(_)) => rejected += 1,
+                                    Ok(Ok(_n)) => admitted += 1,
+                                    Err(_) => {}
+                                }
+                            }
+                            Ok(Err(_)) | Err(_) => rejected += 1,
+                        }
+                    }
+
+                    if admitted <= 3 && rejected >= 1 {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            format!(
+                                "ConnectionRateLimit Redis perSourceIp working: admitted={} (≤3), rejected={} (≥1)",
+                                admitted, rejected
+                            ),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "ConnectionRateLimit Redis perSourceIp misbehaving: admitted={} rejected={} (expected admitted<=3, rejected>=1)",
+                                admitted, rejected
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
     /// Test: TCPRoute referencing a non-existent EdgionStreamPlugins must
     /// fail-close (reject the connection) rather than silently admit traffic.
     /// Locks in the fail-close contract introduced in the gateway TCP path.
@@ -376,6 +433,7 @@ impl TestSuite for TcpStreamPluginsTestSuite {
             Self::test_short_name_annotation(),
             Self::test_missing_esp_fail_close(),
             Self::test_conn_rate_limit_local(),
+            Self::test_conn_rate_limit_redis(),
         ]
     }
 }

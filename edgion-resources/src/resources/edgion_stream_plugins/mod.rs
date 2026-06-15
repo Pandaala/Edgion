@@ -20,7 +20,9 @@ pub mod tls_route_plugins;
 // Re-exports from edgion_plugins
 pub use crate::resources::edgion_plugins::PluginEntry;
 pub use connection_ip_restriction_rules::ConnectionIpRestrictionRules;
-pub use connection_rate_limit_config::{ConnectionRateLimitConfig, PerListenerLimit, PerSourceIpLimit};
+pub use connection_rate_limit_config::{
+    ConnectionRateLimitConfig, PerListenerLimit, PerSourceIpLimit, MAX_REDIS_ACCEPT_TIMEOUT_MS,
+};
 pub use stream_plugins::{EdgionStreamPlugin, GlobalConnectionIpRestrictionEntry};
 pub use tls_route_plugins::TlsRouteStreamPlugin;
 

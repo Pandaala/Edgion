@@ -21,6 +21,15 @@ fn default_on_redis_failure_allow() -> OnRedisFailure {
     OnRedisFailure::Allow
 }
 
+/// Maximum allowed L4 accept-path Redis timeout. The check runs pre-TLS on the
+/// inbound accept path; a large value holds inbound fds/tasks during a Redis
+/// brownout, so the configurable value is hard-capped here.
+pub const MAX_REDIS_ACCEPT_TIMEOUT_MS: u64 = 1_000;
+
+fn default_redis_timeout() -> String {
+    "100ms".to_string()
+}
+
 /// Per-listener connection-rate limit: enforced by a local in-process gate, and
 /// optionally also as a fleet-wide cap in Redis when `redisDistributed` is set.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -81,6 +90,12 @@ pub struct ConnectionRateLimitConfig {
     /// Per-source-IP limiter (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub per_source_ip: Option<PerSourceIpLimit>,
+    /// Accept-path timeout for the Redis rate-limit check (duration string,
+    /// e.g. "100ms"). Default "100ms"; clamped to 1s at runtime. Kept tight
+    /// because the check runs on the pre-TLS accept path — a large value holds
+    /// inbound connections during a Redis brownout. See the plugin docs.
+    #[serde(default = "default_redis_timeout")]
+    pub redis_timeout: String,
 }
 
 impl ConnectionRateLimitConfig {
@@ -146,6 +161,14 @@ impl PluginValidation for ConnectionRateLimitConfig {
         if self.key_prefix.is_empty() || !self.key_prefix.ends_with(':') {
             return Some("key_prefix must be non-empty and end with ':'".to_string());
         }
+        match parse_duration(&self.redis_timeout) {
+            Err(e) => return Some(format!("redisTimeout: {e}")),
+            // A zero accept-path timeout would make every Redis check elapse
+            // immediately, silently turning the dimension into its onRedisFailure
+            // policy. Reject it (symmetry with the HTTP requestTimeout guard).
+            Ok(d) if d.is_zero() => return Some("redisTimeout must be > 0".to_string()),
+            Ok(_) => {}
+        }
         None
     }
 }
@@ -171,6 +194,7 @@ mod tests {
             key_prefix: "edgion:crl:".to_string(),
             per_listener: None,
             per_source_ip: None,
+            redis_timeout: default_redis_timeout(),
         };
         assert_eq!(
             cfg.validation_error(),
@@ -186,6 +210,7 @@ mod tests {
             key_prefix: "edgion:crl:".to_string(),
             per_listener: None,
             per_source_ip: Some(ip_dim(0, "1s")),
+            redis_timeout: default_redis_timeout(),
         };
         assert!(cfg.validation_error().unwrap().contains("rate must be > 0"));
     }
@@ -198,6 +223,7 @@ mod tests {
             key_prefix: "edgion:crl:".to_string(),
             per_listener: None,
             per_source_ip: Some(ip_dim(10, "50ms")),
+            redis_timeout: default_redis_timeout(),
         };
         assert!(cfg.validation_error().unwrap().contains("< 100ms"));
     }
@@ -210,6 +236,7 @@ mod tests {
             key_prefix: "edgion:crl:".to_string(),
             per_listener: None,
             per_source_ip: Some(ip_dim(10, "1s")),
+            redis_timeout: default_redis_timeout(),
         };
         assert!(cfg.validation_error().unwrap().contains("redisRef is required"));
     }
@@ -222,6 +249,7 @@ mod tests {
             key_prefix: "edgion:crl:".to_string(),
             per_listener: None,
             per_source_ip: Some(ip_dim(10, "1s")),
+            redis_timeout: default_redis_timeout(),
         };
         assert!(cfg.validation_error().unwrap().contains("must be 'namespace/name'"));
     }
@@ -240,6 +268,7 @@ mod tests {
                 interval_duration: None,
             }),
             per_source_ip: None,
+            redis_timeout: default_redis_timeout(),
         };
         assert_eq!(cfg.validation_error(), None);
     }
@@ -259,5 +288,43 @@ perSourceIp:
         let cfg: ConnectionRateLimitConfig = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(cfg.per_listener.unwrap().on_redis_failure, OnRedisFailure::Deny);
         assert_eq!(cfg.per_source_ip.unwrap().on_redis_failure, OnRedisFailure::Allow);
+    }
+
+    #[test]
+    fn redis_timeout_defaults_to_100ms() {
+        let yaml = r#"
+redisRef: "default/redis"
+perSourceIp:
+  rate: 50
+  interval: "1s"
+"#;
+        let cfg: ConnectionRateLimitConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(cfg.redis_timeout, "100ms");
+    }
+
+    #[test]
+    fn rejects_unparseable_redis_timeout() {
+        let cfg = ConnectionRateLimitConfig {
+            redis_ref: Some("default/redis".to_string()),
+            algorithm: RateLimitAlgorithm::SlidingWindow,
+            key_prefix: "edgion:crl:".to_string(),
+            per_listener: None,
+            per_source_ip: Some(ip_dim(10, "1s")),
+            redis_timeout: "garbage".to_string(),
+        };
+        assert!(cfg.validation_error().unwrap().contains("redisTimeout"));
+    }
+
+    #[test]
+    fn rejects_zero_redis_timeout() {
+        let cfg = ConnectionRateLimitConfig {
+            redis_ref: Some("default/redis".to_string()),
+            algorithm: RateLimitAlgorithm::SlidingWindow,
+            key_prefix: "edgion:crl:".to_string(),
+            per_listener: None,
+            per_source_ip: Some(ip_dim(10, "1s")),
+            redis_timeout: "0ms".to_string(),
+        };
+        assert!(cfg.validation_error().unwrap().contains("redisTimeout must be > 0"));
     }
 }

@@ -4,26 +4,29 @@
 //!   Stage 1 — local per-listener token-bucket gate (no Redis); always enforced
 //!             when `perListener` is configured. Flood-robust backstop.
 //!   Stage 2 — optional Redis windowed check (perSourceIp always; perListener
-//!             only when redisDistributed), bounded by a 100ms accept-path
-//!             timeout. On Redis error/timeout the per-dimension onRedisFailure
+//!             only when redisDistributed), bounded by the configured
+//!             redis_timeout (default 100ms, capped at 1s). On Redis error/timeout the per-dimension onRedisFailure
 //!             policy applies (perListener default Deny, perSourceIp default Allow).
 //!
 //! Evaluation order: perListener before perSourceIp; deny on first deny.
-//! NO tracing on this data path — observability is the rejection metric only.
+//! NO tracing on this data path. Observability: the rejection metric
+//! (`record_connection_rate_limit_reject`) on Deny, plus the Redis-failure
+//! metric (`record_connection_rate_limit_redis_failure`) on every Redis failure
+//! (so fail-open is alertable).
 
 use async_trait::async_trait;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::local_gate::get_or_update_local_gate;
 use crate::link_sys::get_redis_client;
-use crate::observe::metrics::record_connection_rate_limit_reject;
+use crate::observe::metrics::{record_connection_rate_limit_redis_failure, record_connection_rate_limit_reject};
 use crate::plugins::common::redis_rate_limiter::RedisRateLimiter;
 use crate::plugins::stream::stream_plugin_trait::{StreamContext, StreamPlugin, StreamPluginResult};
+use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::edgion_plugins::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy};
 use edgion_resources::resources::edgion_stream_plugins::ConnectionRateLimitConfig;
 
 const PLUGIN_NAME: &str = "ConnectionRateLimit";
-const REDIS_TIMEOUT: Duration = Duration::from_millis(100);
 
 pub struct ConnectionRateLimitPlugin {
     algorithm: RateLimitAlgorithm,
@@ -38,6 +41,7 @@ pub struct ConnectionRateLimitPlugin {
     ip_rate: Option<u64>,
     ip_interval_ms: u64,
     ip_on_redis_failure: OnRedisFailure,
+    redis_timeout: Duration,
     core: RedisRateLimiter,
 }
 
@@ -62,6 +66,11 @@ impl ConnectionRateLimitPlugin {
             Some(s) => (Some(s.rate), parse_ms(&s.interval), s.on_redis_failure.clone()),
             None => (None, 1000, OnRedisFailure::Allow),
         };
+        let redis_timeout_ms = parse_duration(&cfg.redis_timeout)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(100)
+            .min(edgion_resources::resources::edgion_stream_plugins::MAX_REDIS_ACCEPT_TIMEOUT_MS)
+            .max(1);
         Self {
             algorithm: cfg.algorithm.clone(),
             key_prefix: cfg.key_prefix.clone(),
@@ -73,6 +82,7 @@ impl ConnectionRateLimitPlugin {
             ip_rate,
             ip_interval_ms,
             ip_on_redis_failure: ip_fail,
+            redis_timeout: Duration::from_millis(redis_timeout_ms),
             core: RedisRateLimiter::new(),
         }
     }
@@ -86,22 +96,40 @@ impl ConnectionRateLimitPlugin {
         }
     }
 
-    /// Run one Redis dimension with the 100ms accept-path timeout.
-    /// Returns true=allow, false=deny. On error/timeout applies `on_failure`.
-    async fn redis_dimension(&self, limit_key: &str, rate: u64, interval_ms: u64, on_failure: &OnRedisFailure) -> bool {
+    /// Run one Redis dimension with the configured accept-path timeout.
+    /// Returns true=allow, false=deny. On any Redis failure it records the
+    /// failure metric (so fail-open is observable) and applies `on_failure`.
+    async fn redis_dimension(
+        &self,
+        dimension: &'static str,
+        limit_key: &str,
+        rate: u64,
+        interval_ms: u64,
+        on_failure: &OnRedisFailure,
+    ) -> bool {
         let Some(redis_ref) = &self.redis_ref else {
+            record_connection_rate_limit_redis_failure(dimension, "unavailable");
             return matches!(on_failure, OnRedisFailure::Allow);
         };
+        // Bind the client Arc once; reuse it for the pre-check and the check.
         let Some(client) = get_redis_client(redis_ref) else {
+            record_connection_rate_limit_redis_failure(dimension, "unavailable");
             return matches!(on_failure, OnRedisFailure::Allow);
         };
+        // Fast-eject + classify: a known-down client never issues a command.
+        if !client.healthy() {
+            record_connection_rate_limit_redis_failure(dimension, "unavailable");
+            return matches!(on_failure, OnRedisFailure::Allow);
+        }
         let policies = [self.one_policy(rate, interval_ms)];
         let prefix = format!("{}conn:", self.key_prefix);
         let fut = self.core.check(&client, &policies, &prefix, 1, 4096, limit_key);
-        match tokio::time::timeout(REDIS_TIMEOUT, fut).await {
+        match tokio::time::timeout(self.redis_timeout, fut).await {
             Ok(Ok(result)) => result.allowed,
-            // Redis error or 100ms timeout -> failure policy
-            _ => matches!(on_failure, OnRedisFailure::Allow),
+            _ => {
+                record_connection_rate_limit_redis_failure(dimension, "runtime");
+                matches!(on_failure, OnRedisFailure::Allow)
+            }
         }
     }
 }
@@ -129,7 +157,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
             if self.pl_redis_distributed {
                 let key = format!("lst:{port}");
                 let allowed = self
-                    .redis_dimension(&key, rate, self.pl_interval_ms, &self.pl_on_redis_failure)
+                    .redis_dimension("listener", &key, rate, self.pl_interval_ms, &self.pl_on_redis_failure)
                     .await;
                 if !allowed {
                     record_connection_rate_limit_reject("listener", "redis");
@@ -142,7 +170,7 @@ impl StreamPlugin for ConnectionRateLimitPlugin {
         if let Some(rate) = self.ip_rate {
             let key = format!("ip:{}:{}", port, ctx.client_ip);
             let allowed = self
-                .redis_dimension(&key, rate, self.ip_interval_ms, &self.ip_on_redis_failure)
+                .redis_dimension("source_ip", &key, rate, self.ip_interval_ms, &self.ip_on_redis_failure)
                 .await;
             if !allowed {
                 record_connection_rate_limit_reject("source_ip", "redis");
@@ -173,7 +201,24 @@ mod tests {
                 interval_duration: None,
             }),
             per_source_ip: None,
+            redis_timeout: "100ms".to_string(),
         }
+    }
+
+    #[test]
+    fn redis_timeout_is_parsed_from_config() {
+        let mut cfg = cfg_local_only(10);
+        cfg.redis_timeout = "750ms".to_string();
+        let plugin = ConnectionRateLimitPlugin::new(&cfg);
+        assert_eq!(plugin.redis_timeout, std::time::Duration::from_millis(750));
+    }
+
+    #[test]
+    fn redis_timeout_is_clamped_to_cap() {
+        let mut cfg = cfg_local_only(10);
+        cfg.redis_timeout = "30s".to_string();
+        let plugin = ConnectionRateLimitPlugin::new(&cfg);
+        assert_eq!(plugin.redis_timeout, std::time::Duration::from_millis(1000));
     }
 
     #[tokio::test]

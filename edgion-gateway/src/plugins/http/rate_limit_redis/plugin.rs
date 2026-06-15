@@ -218,17 +218,29 @@ impl RequestFilter for RateLimitRedis {
 
         let kl = limit_key.len();
 
-        // 3. Get Redis client
+        // 3. Get Redis client (bind once) and fast-eject if unavailable.
         let client: Arc<RedisLinkClient> = match get_redis_client(&self.config.redis_ref) {
             Some(c) => c,
             None => {
-                plugin_log.push_err("redis ref load fail");
+                plugin_log.push_err("redis unavail");
                 return self.apply_redis_failure_policy(session).await;
             }
         };
+        if !client.healthy() {
+            plugin_log.push_err("redis unavail");
+            return self.apply_redis_failure_policy(session).await;
+        }
 
-        // 4. Execute rate limit check
-        match self.check_rate_limit(&client, &limit_key).await {
+        // 4. Execute rate limit check (optionally bounded by request_timeout).
+        let check_result = match self.config.request_timeout_duration {
+            Some(timeout) => match tokio::time::timeout(timeout, self.check_rate_limit(&client, &limit_key)).await {
+                Ok(r) => r,
+                Err(_elapsed) => Err(anyhow::anyhow!("request_timeout elapsed")),
+            },
+            None => self.check_rate_limit(&client, &limit_key).await,
+        };
+
+        match check_result {
             Ok(result) if result.allowed => {
                 self.add_headers(session, result.remaining, result.limit);
                 plugin_log.push_fmt(
@@ -246,7 +258,7 @@ impl RequestFilter for RateLimitRedis {
                 self.reject_request(session, retry_after, Some(&result)).await
             }
             Err(_e) => {
-                plugin_log.push_err("redis call fail");
+                plugin_log.push_err("redis rt fail");
                 self.apply_redis_failure_policy(session).await
             }
         }

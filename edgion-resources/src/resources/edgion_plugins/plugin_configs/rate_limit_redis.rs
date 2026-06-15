@@ -220,6 +220,19 @@ pub struct RateLimitRedisConfig {
     #[serde(default = "default_max_key_len")]
     #[schemars(range(min = 64, max = 65536))]
     pub max_key_len: usize,
+
+    /// Optional aggregate timeout for the whole Redis check (duration string,
+    /// e.g. "500ms"). Default unset = no wall-clock bound (the per-command
+    /// timeout from the LinkSys Redis CRD still applies). When set, caps the
+    /// total latency of a multi-policy check; on elapse the configured
+    /// `on_redis_failure` policy applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_timeout: Option<String>,
+
+    /// Parsed `request_timeout` (runtime only).
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub request_timeout_duration: Option<Duration>,
 }
 
 // ========== Default Functions ==========
@@ -262,6 +275,8 @@ impl Default for RateLimitRedisConfig {
             on_redis_failure: OnRedisFailure::default(),
             cost: default_cost(),
             max_key_len: default_max_key_len(),
+            request_timeout: None,
+            request_timeout_duration: None,
         }
     }
 }
@@ -362,6 +377,17 @@ impl RateLimitRedisConfig {
             return Some(format!("max_key_len {} too large (max 65536 = 64KB)", self.max_key_len));
         }
 
+        if let Some(rt) = &self.request_timeout {
+            match parse_duration(rt) {
+                Err(e) => return Some(format!("request_timeout: {}", e)),
+                // A zero timeout would make tokio::time::timeout elapse immediately
+                // on every request, silently bypassing the Redis check (always
+                // routing to on_redis_failure). Reject it.
+                Ok(d) if d.is_zero() => return Some("request_timeout must be > 0".to_string()),
+                Ok(_) => {}
+            }
+        }
+
         None
     }
 
@@ -375,6 +401,11 @@ impl RateLimitRedisConfig {
             let dur = parse_duration(&policy.interval).expect("interval pre-validated by check_fields");
             policy.interval_duration = Some(dur);
         }
+
+        self.request_timeout_duration = match &self.request_timeout {
+            Some(rt) => Some(parse_duration(rt).expect("request_timeout pre-validated by check_fields")),
+            None => None,
+        };
 
         Ok(())
     }
@@ -692,5 +723,54 @@ keyPrefix: "myapp:rl:"
                 "valid config with unset interval_duration must return None"
             );
         }
+    }
+
+    #[test]
+    fn request_timeout_parsed_into_duration() {
+        let mut cfg = RateLimitRedisConfig {
+            redis_ref: "default/redis".to_string(),
+            policies: vec![RateLimitPolicy {
+                rate: 10,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::SlidingWindow,
+                interval_duration: None,
+            }],
+            request_timeout: Some("500ms".to_string()),
+            ..Default::default()
+        };
+        cfg.validate().unwrap();
+        assert_eq!(cfg.request_timeout_duration, Some(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn rejects_unparseable_request_timeout() {
+        let mut cfg = RateLimitRedisConfig {
+            redis_ref: "default/redis".to_string(),
+            policies: vec![RateLimitPolicy {
+                rate: 10,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::SlidingWindow,
+                interval_duration: None,
+            }],
+            request_timeout: Some("nope".to_string()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().unwrap_err().contains("request_timeout"));
+    }
+
+    #[test]
+    fn rejects_zero_request_timeout() {
+        let mut cfg = RateLimitRedisConfig {
+            redis_ref: "default/redis".to_string(),
+            policies: vec![RateLimitPolicy {
+                rate: 10,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::SlidingWindow,
+                interval_duration: None,
+            }],
+            request_timeout: Some("0ms".to_string()),
+            ..Default::default()
+        };
+        assert!(cfg.validate().unwrap_err().contains("request_timeout must be > 0"));
     }
 }

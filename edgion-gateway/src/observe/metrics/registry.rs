@@ -50,6 +50,8 @@ pub mod names {
     pub const CONN_IP_RESTRICTION_EVENTS_TOTAL: &str = "edgion_conn_ip_restriction_events_total";
     // Stream plugin: ConnectionRateLimit rejections
     pub const CONNECTION_RATE_LIMIT_REJECTED_TOTAL: &str = "edgion_connection_rate_limit_rejected_total";
+    // Stream plugin: ConnectionRateLimit Redis failure (fired on both fail-open and fail-close)
+    pub const CONNECTION_RATE_LIMIT_REDIS_FAILURE_TOTAL: &str = "edgion_connection_rate_limit_redis_failure_total";
     // RoundRobin selector: backend count > u16::MAX truncation
     pub const RR_SELECTOR_TRUNCATED_TOTAL: &str = "edgion_rr_selector_truncated_total";
     // Elasticsearch bulk producer: increments each time the producer→bulk-loop
@@ -480,6 +482,23 @@ pub fn record_connection_rate_limit_reject(dimension: &'static str, stage: &'sta
         names::CONNECTION_RATE_LIMIT_REJECTED_TOTAL,
         "dimension" => dimension,
         "stage" => stage
+    )
+    .increment(1);
+}
+
+/// Record a Redis failure encountered by the ConnectionRateLimit stream plugin,
+/// fired regardless of the resulting Allow/Deny outcome so that fail-open is
+/// observable (unlike the rejection counter, which only fires on Deny).
+///
+/// `dimension` must be `"listener"` or `"source_ip"`.
+/// `cause` must be `"unavailable"` (client missing / not healthy) or `"runtime"`
+/// (command error or accept-path timeout). Both are fixed, low-cardinality
+/// `&'static str` — safe as labels.
+pub fn record_connection_rate_limit_redis_failure(dimension: &'static str, cause: &'static str) {
+    counter!(
+        names::CONNECTION_RATE_LIMIT_REDIS_FAILURE_TOTAL,
+        "dimension" => dimension,
+        "cause" => cause
     )
     .increment(1);
 }

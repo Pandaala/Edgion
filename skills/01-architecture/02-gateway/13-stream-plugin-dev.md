@@ -222,8 +222,11 @@ TCP/TLS connections. Two-stage admission per accepted connection (pre-TLS):
    stays available under flood when Redis is the first thing to fall over.
 2. **Stage 2 — optional Redis** (sliding/fixed/token-bucket via the shared
    `RedisRateLimiter` core) for `perSourceIp` and, when `redisDistributed: true`,
-   a fleet-wide `perListener` cap. Accept-path Redis calls are capped by a
-   **100 ms timeout** so a slow Redis cannot pin downstream fds.
+   a fleet-wide `perListener` cap. Accept-path Redis calls are capped by the
+   configurable **`redisTimeout`** (default `100ms`, hard-capped at `1s`) so a
+   slow Redis cannot pin downstream fds. `perSourceIp` has no local backstop, so
+   every accepted connection on that dimension must reach Redis within
+   `redisTimeout`.
 
 Per-dimension `onRedisFailure` defaults differ on purpose:
 `perListener` defaults to `Deny` (fail-close — the process backstop must not
@@ -242,6 +245,7 @@ spec:
         # (perSourceIp, or perListener with redisDistributed: true).
         redisRef: "default/shared-redis"
         algorithm: SlidingWindow            # default
+        redisTimeout: "200ms"               # default 100ms; hard-capped at 1s
         perListener:
           rate: 10000
           interval: "1s"
@@ -274,7 +278,19 @@ spec:
 
 Reject metric: `edgion_connection_rate_limit_rejected_total` with labels
 `dimension={listener|source_ip}` and `stage={local|redis}` (fixed, low
-cardinality).
+cardinality) — fires only on **Deny**.
+
+Redis-failure metric: `edgion_connection_rate_limit_redis_failure_total` with
+labels `dimension={listener|source_ip}` and `cause={unavailable|runtime}` —
+fires on **every** Redis failure regardless of the Allow/Deny outcome, so
+fail-open is observable (`unavailable` = client missing / not healthy, classified
+via an explicit `client.healthy()` pre-check before the core check; `runtime` =
+command error or `redisTimeout` elapse).
+
+User-facing config reference (canonical): see
+`docs/en/user-guide/tcp-route/stream-plugins.md` — "ConnectionRateLimit"
+(`redisTimeout`, the inbound-fd vs outbound-pool rationale, the `perSourceIp`
+no-backstop caveat, and the PromQL alert example).
 
 ## Key differences from HTTP plugins
 

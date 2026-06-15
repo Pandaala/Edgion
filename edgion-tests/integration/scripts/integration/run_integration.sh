@@ -558,8 +558,14 @@ is_redis_service_required() {
         fi
     fi
 
+    if [ "$G_RESOURCE" = "TCPRoute" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "StreamPlugins" ]; then
+            return 0
+        fi
+    fi
+
     case ",${explicit_suites}," in
-        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,LinkSys/Redis,*)
+        *,EdgionPlugins/Dsl,*|*,EdgionPlugins/RateLimitRedis,*|*,LinkSys/Redis,*|*,TCPRoute/StreamPlugins,*)
             return 0
             ;;
     esac
@@ -1342,6 +1348,11 @@ main() {
                 suites="${base_suites},HTTPRoute/Backend/BackendTLS"
             elif [ "$G_RESOURCE" = "Gateway" ] && [ "$G_ITEM" = "TLS/BackendTLSSAN" ]; then
                 suites="${base_suites},HTTPRoute/Backend/BackendTLSSAN,HTTPRoute/Backend/BackendTLS"
+            elif [ "$G_RESOURCE" = "TCPRoute" ] && [ "$G_ITEM" = "StreamPlugins" ]; then
+                # The ConnectionRateLimit Redis scenario (09_*) references the
+                # default/redis-test LinkSys CRD, which only the LinkSys/Redis
+                # suite defines — load it so targeted runs have the Redis client.
+                suites="${base_suites},LinkSys/Redis,${G_RESOURCE}/${G_ITEM}"
             else
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             fi

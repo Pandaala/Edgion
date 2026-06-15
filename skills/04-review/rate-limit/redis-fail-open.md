@@ -9,6 +9,8 @@ description: Decision rule for findings about the Redis rate-limiting fail-open 
 
 `onRedisFailure` defaulting to `Allow` (fail-open) is classified as NOT-AN-ISSUE. Fix suggestions of the form "change default to `Deny`" or "fail-open is a security vulnerability" are not accepted.
 
+> Note: both failure modes — (a) Redis detectably down (fast-eject, zero I/O via the `client.healthy()` pre-check) and (b) Redis healthy but slow/erroring (bounded wait, then give up) — route through the **single** `onRedisFailure` policy. There is no separate down-vs-slow policy knob (the classification boundary is racy, so a split would flap); the `unavailable`/`runtime` distinction exists only as a telemetry label, not a config decision.
+
 ## Core Rationale
 
 **1. The configuration option exists; the operator can choose**
