@@ -204,8 +204,11 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_hash = log_str.contains("key=hdr:X-Account-Id");
-                                    let has_wb = log_str.contains("wb→res_hdr:X-Region-Hash");
+                                    // Plugin emits: "hash key=<key> src=hdr:X-Account-Id val=<n>"
+                                    // and "hash_wb→res_hdr:X-Region-Hash".
+                                    let has_hash =
+                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
+                                    let has_wb = log_str.contains("hash_wb→res_hdr:X-Region-Hash");
                                     if has_hash && has_wb {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -262,10 +265,11 @@ impl RegionRouteTestSuite {
                     let log1 = send_and_get_region(ctx.clone(), trace1).await;
                     let log2 = send_and_get_region(ctx.clone(), trace2).await;
 
-                    // Extract "hash=N" value from log entry like "key=hdr:X-Account-Id hash=N"
-                    // The value ends at the first non-digit (quote/comma in JSON serialized form).
+                    // Extract the hash value from a log entry like
+                    // `hash key=<key> src=hdr:X-Account-Id val=<N>`. The value ends at the
+                    // first non-digit (quote/comma in JSON serialized form).
                     let extract_hash = |log: &str| -> Option<String> {
-                        let start = log.find("hash=")? + 5;
+                        let start = log.find("val=")? + 4;
                         let rest = &log[start..];
                         let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
                         if end == 0 {
@@ -419,14 +423,14 @@ impl RegionRouteTestSuite {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
                                     // Verify: unknown direct region falls through, RouteByKeyConfMatch
-                                    // misses, then RouteByHashRange routes.
-                                    // LogBuffer is 100 bytes. After fallthrough(38B) + match-miss(31B)
-                                    // + key(31B) = 100B exactly, the wb→ entry (26B) doesn't fit.
-                                    // So we verify hash computation via "key=hdr:X-Account-Id hash="
-                                    // rather than "wb→res_hdr:X-Region-Hash" which is truncated.
+                                    // misses, then RouteByHashRange routes. Plugin emits:
+                                    //   `direct=<r> unknown, fallthrough`
+                                    //   `conf_match key=<v> src=hdr:X-Account-Id no_entry, fallthrough`
+                                    //   `hash key=<k> src=hdr:X-Account-Id val=<n>`
                                     let fell_through = log_str.contains("fallthrough");
-                                    let match_miss = log_str.contains("match=hdr:X-Account-Id no conf");
-                                    let hash_computed = log_str.contains("key=hdr:X-Account-Id hash=");
+                                    let match_miss = log_str.contains("src=hdr:X-Account-Id no_entry, fallthrough");
+                                    let hash_computed =
+                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
                                     if fell_through && match_miss && hash_computed {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -478,7 +482,10 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_match = log_str.contains("match=hdr:X-Account-Id→virginia");
+                                    // Plugin emits `conf_match key=<v> src=hdr:X-Account-Id →virginia`
+                                    // (note the space before the arrow).
+                                    let has_match = log_str.contains("conf_match key=")
+                                        && log_str.contains("src=hdr:X-Account-Id →virginia");
                                     let has_jump = log_str.contains("→virginia");
                                     if has_match && has_jump {
                                         TestResult::passed(start.elapsed())
@@ -527,7 +534,9 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_match = log_str.contains("match=hdr:X-Account-Id→ohio");
+                                    // Plugin emits `conf_match key=<v> src=hdr:X-Account-Id →ohio`.
+                                    let has_match = log_str.contains("conf_match key=")
+                                        && log_str.contains("src=hdr:X-Account-Id →ohio");
                                     let has_jump = log_str.contains("→ohio");
                                     if has_match && has_jump {
                                         TestResult::passed(start.elapsed())
@@ -576,8 +585,11 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_no_conf = log_str.contains("match=hdr:X-Account-Id no conf");
-                                    let has_hash = log_str.contains("key=hdr:X-Account-Id hash=");
+                                    // Plugin: `conf_match key=<v> src=hdr:X-Account-Id no_entry, fallthrough`
+                                    // then `hash key=<k> src=hdr:X-Account-Id val=<n>`.
+                                    let has_no_conf = log_str.contains("src=hdr:X-Account-Id no_entry, fallthrough");
+                                    let has_hash =
+                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
                                     if has_no_conf && has_hash {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -721,8 +733,11 @@ impl RegionRouteTestSuite {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
                                     // Should NOT use passthrough; should compute hash from X-Account-Id
+                                    // Plugin: `hash_pass=<v> src=...` only fires on in-range passthrough;
+                                    // fallback emits `hash key=<k> src=hdr:X-Account-Id val=<n>`.
                                     let used_passthrough = log_str.contains("hash_pass=1001");
-                                    let used_key = log_str.contains("key=hdr:X-Account-Id");
+                                    let used_key =
+                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
                                     if !used_passthrough && used_key {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -813,15 +828,16 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_redirect = log_str.contains("redirect ohio→virginia");
-                                    let has_local = log_str.contains("local, pass");
+                                    // Plugin emits `failover <region>→<target>` then `local_region, pass`.
+                                    let has_redirect = log_str.contains("failover ohio→virginia");
+                                    let has_local = log_str.contains("local_region, pass");
                                     if has_redirect && has_local {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
                                             format!(
-                                                "Expected 'redirect ohio→virginia' and 'local, pass'. has_redirect={}, has_local={}. log: {}",
+                                                "Expected 'failover ohio→virginia' and 'local_region, pass'. has_redirect={}, has_local={}. log: {}",
                                                 has_redirect, has_local, log_str
                                             ),
                                         )
@@ -870,7 +886,8 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_redirect = log_str.contains("redirect europe→ohio");
+                                    // Plugin emits `failover europe→ohio` then external jump `→ohio`.
+                                    let has_redirect = log_str.contains("failover europe→ohio");
                                     let has_jump = log_str.contains("→ohio");
                                     if has_redirect && has_jump {
                                         TestResult::passed(start.elapsed())
@@ -878,7 +895,7 @@ impl RegionRouteTestSuite {
                                         TestResult::failed(
                                             start.elapsed(),
                                             format!(
-                                                "Expected 'redirect europe→ohio' and '→ohio'. has_redirect={}, has_jump={}. log: {}",
+                                                "Expected 'failover europe→ohio' and '→ohio'. has_redirect={}, has_jump={}. log: {}",
                                                 has_redirect, has_jump, log_str
                                             ),
                                         )

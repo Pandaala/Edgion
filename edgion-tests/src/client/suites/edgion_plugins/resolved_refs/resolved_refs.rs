@@ -267,11 +267,14 @@ impl ResolvedRefsTestSuite {
                                         ),
                                     );
                                 }
-                                if !msg.contains("GlobalConnectionIpRestriction") {
+                                // Post-overlay refactor: the resolver message now names the expected
+                                // variant `GlobalConnIpRestrictionOverride` (the overlay EdgionData
+                                // variant referenced via overrideRef), not the inline base type.
+                                if !msg.contains("GlobalConnIpRestrictionOverride") {
                                     return TestResult::failed(
                                         start.elapsed(),
                                         format!(
-                                            "ResolvedRefs message should contain 'GlobalConnectionIpRestriction': '{}'",
+                                            "ResolvedRefs message should contain 'GlobalConnIpRestrictionOverride': '{}'",
                                             msg
                                         ),
                                     );
