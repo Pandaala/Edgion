@@ -1,23 +1,21 @@
 // EdgionDataManagedRegionRoute Integration Test Suite
 //
-// Tests the new EdgionData-managed architecture where ServiceRegionRoute EdgionDatas are pre-created by administrators.
-// The resolve chain is: EP.serviceRegionRouteRef → ServiceRegionRoute EdgionData → ServiceRegionRoute EdgionData.clusterRef → ClusterRegionRoute EdgionData
+// Tests the EdgionData overlay architecture where RegionRouteOverride EdgionDatas are pre-created
+// by administrators and referenced via EdgionPlugins.overrideRef.
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/plugin-metadata-managed/):
-//   01_EdgionData_pm-managed-global.yaml  — ClusterRegionRoute EdgionData (shared by both tests)
-//   01_EdgionData_pm-managed.yaml          — ServiceRegionRoute EdgionData for pm-managed test
-//   01_EdgionData_pm-validated.yaml        — ServiceRegionRoute EdgionData for pm-validated test
-//   01_EdgionPlugins_pm-managed.yaml           — EdgionPlugins referencing pm-managed ServiceRegionRoute EdgionData
-//   01_EdgionPlugins_pm-validated.yaml         — EdgionPlugins referencing pm-validated ServiceRegionRoute EdgionData
+//   01_EdgionData_pm-managed.yaml          — RegionRouteOverride EdgionData for pm-managed test
+//   01_EdgionData_pm-validated.yaml        — RegionRouteOverride EdgionData for pm-validated test
+//   01_EdgionPlugins_pm-managed.yaml           — EdgionPlugins with overrideRef → pm-managed
+//   01_EdgionPlugins_pm-validated.yaml         — EdgionPlugins with overrideRef → pm-validated
 //   02_HTTPRoute_pm-managed-test.yaml
 //
 // Scenarios:
-//   1. service_pm_exists: Verify that the pre-created ServiceRegionRoute EdgionData "pm-managed" exists
-//      with correct clusterRef and regions via the configserver API.
-//   2. ep_resolves_pm_chain: Verify that EdgionPlugins "pm-managed" is processed successfully
-//      (Accepted condition) — the EdgionData chain (EP → ServiceRegionRoute EdgionData → ClusterRegionRoute EdgionData) resolves correctly.
+//   1. override_data_exists: Verify that the pre-created RegionRouteOverride EdgionData "pm-managed"
+//      exists with correct regions via the configserver API.
+//   2. ep_resolves_pm_chain: Verify that EdgionPlugins "pm-managed" is Accepted (overrideRef resolves).
 //   3. pm_validated_accepted: Verify that EdgionPlugins "pm-validated" is also accepted
-//      when its pre-created ServiceRegionRoute EdgionData is present.
+//      when its pre-created RegionRouteOverride EdgionData is present.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -40,15 +38,15 @@ impl Default for EdgionDataManagedTestSuite {
 
 impl EdgionDataManagedTestSuite {
     // =========================================================================
-    // Test 1: service_pm_exists
+    // Test 1: override_data_exists
     // =========================================================================
 
-    /// Verify that the pre-created ServiceRegionRoute EdgionData "pm-managed" exists with the correct
-    /// clusterRef and regions. Administrators must create this EdgionData before the EP is applied.
-    fn service_pm_exists() -> TestCase {
+    /// Verify that the pre-created RegionRouteOverride EdgionData "pm-managed" exists with the correct
+    /// regions. Administrators must create this EdgionData before the EP is applied.
+    fn override_data_exists() -> TestCase {
         TestCase::new(
-            "service_pm_exists",
-            "Pre-created ServiceRegionRoute PM 'pm-managed' exists with correct clusterRef and regions",
+            "override_data_exists",
+            "Pre-created RegionRouteOverride EdgionData 'pm-managed' exists with correct regions",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -72,32 +70,24 @@ impl EdgionDataManagedTestSuite {
                             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
                                     let data = &body["data"];
-                                    let metadata = &data["spec"]["metadata"];
-                                    let md_type = metadata["type"].as_str().unwrap_or("");
-                                    if md_type == "ServiceRegionRoute" {
-                                        let config = &metadata["config"];
-                                        let cluster_ref = &config["clusterRef"];
-                                        let cluster_name = cluster_ref["name"].as_str().unwrap_or("");
-                                        let cluster_ns = cluster_ref["namespace"].as_str().unwrap_or("");
+                                    let ed_data = &data["spec"]["data"];
+                                    let ed_type = ed_data["type"].as_str().unwrap_or("");
+                                    if ed_type == "RegionRouteOverride" {
+                                        let config = &ed_data["config"];
                                         let regions = &config["regions"];
                                         let has_regions = regions.as_array().map(|r| !r.is_empty()).unwrap_or(false);
 
-                                        if cluster_name == "pm-managed-global"
-                                            && cluster_ns == PM_MANAGED_NS
-                                            && has_regions
-                                        {
+                                        if has_regions {
                                             found = true;
                                             break;
                                         } else {
-                                            last_err = format!(
-                                                    "ServiceRegionRoute found but clusterRef or regions mismatch: clusterRef.name={}, clusterRef.namespace={}, has_regions={}",
-                                                    cluster_name, cluster_ns, has_regions
-                                                );
+                                            last_err =
+                                                "RegionRouteOverride found but regions list is empty".to_string();
                                         }
                                     } else {
                                         last_err = format!(
-                                            "EdgionData found but metadata type is not ServiceRegionRoute: {}",
-                                            md_type
+                                            "EdgionData found but data type is not RegionRouteOverride: {}",
+                                            ed_type
                                         );
                                     }
                                 }
@@ -122,13 +112,13 @@ impl EdgionDataManagedTestSuite {
                     if found {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "ServiceRegionRoute PM 'pm-managed' exists with correct clusterRef and regions".to_string(),
+                            "RegionRouteOverride EdgionData 'pm-managed' exists with correct regions".to_string(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "ServiceRegionRoute PM 'pm-managed' not found or invalid within timeout. Last error: {}",
+                                "RegionRouteOverride EdgionData 'pm-managed' not found or invalid within timeout. Last error: {}",
                                 last_err
                             ),
                         )
@@ -143,12 +133,11 @@ impl EdgionDataManagedTestSuite {
     // =========================================================================
 
     /// Verify that EdgionPlugins "pm-managed" is processed successfully (Accepted condition).
-    /// The EdgionData chain (EP.serviceRegionRouteRef → ServiceRegionRoute EdgionData → ServiceRegionRoute EdgionData.clusterRef → ClusterRegionRoute EdgionData)
-    /// must resolve correctly for the EP to be accepted.
+    /// The overrideRef must resolve to the pre-created RegionRouteOverride EdgionData for the EP to be accepted.
     fn ep_resolves_pm_chain() -> TestCase {
         TestCase::new(
             "ep_resolves_pm_chain",
-            "EdgionPlugins 'pm-managed' is Accepted after resolving the Service PM → Cluster PM chain",
+            "EdgionPlugins 'pm-managed' is Accepted after resolving overrideRef to RegionRouteOverride EdgionData",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -216,7 +205,7 @@ impl EdgionDataManagedTestSuite {
                     if accepted {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "EdgionPlugins 'pm-managed' accepted — PM chain resolved correctly".to_string(),
+                            "EdgionPlugins 'pm-managed' accepted — overrideRef resolved correctly".to_string(),
                         )
                     } else {
                         TestResult::failed(
@@ -237,7 +226,7 @@ impl EdgionDataManagedTestSuite {
     // =========================================================================
 
     /// Verify that EdgionPlugins "pm-validated" is also accepted when its pre-created
-    /// ServiceRegionRoute EdgionData "pm-validated" is present and references the shared ClusterRegionRoute EdgionData.
+    /// RegionRouteOverride EdgionData "pm-validated" is present.
     fn pm_validated_accepted() -> TestCase {
         TestCase::new(
             "pm_validated_accepted",
@@ -246,7 +235,7 @@ impl EdgionDataManagedTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // First ensure the ServiceRegionRoute EdgionData "pm-validated" is visible via configserver
+                    // First ensure the RegionRouteOverride EdgionData "pm-validated" is visible via configserver
                     let pm_url = format!(
                         "{}/configserver/EdgionData?namespace={}&name=pm-validated",
                         ctx.admin_api_url(),
@@ -262,8 +251,7 @@ impl EdgionDataManagedTestSuite {
                             if resp.status().is_success() {
                                 if let Ok(body) = resp.json::<serde_json::Value>().await {
                                     if body["success"].as_bool().unwrap_or(false)
-                                        && body["data"]["spec"]["metadata"]["type"].as_str()
-                                            == Some("ServiceRegionRoute")
+                                        && body["data"]["spec"]["data"]["type"].as_str() == Some("RegionRouteOverride")
                                     {
                                         pm_exists = true;
                                         break;
@@ -276,7 +264,7 @@ impl EdgionDataManagedTestSuite {
                     if !pm_exists {
                         return TestResult::failed(
                             start.elapsed(),
-                            "Pre-created Service PM 'pm-validated' not found via configserver within timeout"
+                            "Pre-created RegionRouteOverride EdgionData 'pm-validated' not found via configserver within timeout"
                                 .to_string(),
                         );
                     }
@@ -341,7 +329,8 @@ impl EdgionDataManagedTestSuite {
                     if accepted {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "EdgionPlugins 'pm-validated' accepted with pre-created Service PM".to_string(),
+                            "EdgionPlugins 'pm-validated' accepted with pre-created RegionRouteOverride EdgionData"
+                                .to_string(),
                         )
                     } else {
                         TestResult::failed(
@@ -365,11 +354,11 @@ impl TestSuite for EdgionDataManagedTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            // Test 1: Pre-created ServiceRegionRoute EdgionData exists with correct structure
-            Self::service_pm_exists(),
-            // Test 2: EdgionPlugins resolves the full EdgionData chain and is accepted
+            // Test 1: Pre-created RegionRouteOverride EdgionData exists with correct structure
+            Self::override_data_exists(),
+            // Test 2: EdgionPlugins resolves overrideRef and is accepted
             Self::ep_resolves_pm_chain(),
-            // Test 3: pm-validated EdgionPlugins is also accepted with its pre-created ServiceRegionRoute EdgionData
+            // Test 3: pm-validated EdgionPlugins is also accepted with its pre-created RegionRouteOverride EdgionData
             Self::pm_validated_accepted(),
         ]
     }

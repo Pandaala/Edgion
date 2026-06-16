@@ -3,20 +3,17 @@
 // Verifies the Accepted and ResolvedRefs status conditions on EdgionData resources.
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/EdgionDataStatus/):
-//   01_EdgionData_pm-status-gcir-valid.yaml        — valid GCIR PM
-//   02_EdgionData_pm-status-gcir-invalid.yaml      — GCIR PM with bad activeProfile
-//   03_EdgionData_pm-status-cluster-valid.yaml     — valid ClusterRegionRoute PM
-//   04_EdgionData_pm-status-service-good-ref.yaml  — ServiceRegionRoute w/ valid clusterRef
-//   05_EdgionData_pm-status-service-missing-ref.yaml — ServiceRegionRoute w/ missing clusterRef
-//   06_EdgionData_pm-status-service-wrong-type-ref.yaml — ServiceRegionRoute w/ wrong-type ref
+//   01_EdgionData_pm-status-gcir-valid.yaml   — valid GlobalConnIpRestrictionOverride EdgionData
+//   02_EdgionData_pm-status-gcir-invalid.yaml — GCIR overlay with bad activeProfile
 //
 // Scenarios:
-//   1. valid GCIR PM          → Accepted=True, ResolvedRefs=True
-//   2. invalid GCIR PM        → Accepted=False/Invalid, message contains "activeProfile"
-//   3. ClusterRegionRoute PM  → Accepted=True, ResolvedRefs=True
-//   4. ServiceRegionRoute, valid clusterRef  → Accepted=True, ResolvedRefs=True
-//   5. ServiceRegionRoute, missing clusterRef → Accepted=True, ResolvedRefs=False/InvalidEdgionDataRef
-//   6. ServiceRegionRoute, wrong-type ref    → Accepted=True, ResolvedRefs=False/InvalidEdgionDataRef
+//   1. valid GCIR overlay   -> Accepted=True, ResolvedRefs=True
+//   2. invalid GCIR overlay -> Accepted=False/Invalid, message contains "activeProfile"
+//
+// NOTE: Scenarios 3-6 (ClusterRegionRoute, ServiceRegionRoute, clusterRef chain) were removed
+// in the EdgionData overlay refactor (H3). The ClusterRegionRoute and ServiceRegionRoute
+// EdgionData variants no longer exist; overrideRef resolution is tracked via EdgionPlugins
+// ResolvedRefs conditions, not via EdgionData cross-resource refs.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -244,234 +241,6 @@ impl EdgionDataStatusTestSuite {
             },
         )
     }
-
-    // =========================================================================
-    // Scenario 3: ClusterRegionRoute PM → Accepted=True, ResolvedRefs=True
-    // =========================================================================
-
-    fn pm_status_cluster_valid() -> TestCase {
-        TestCase::new(
-            "pm_status_cluster_valid",
-            "ClusterRegionRoute PM 'pm-status-cluster-valid': Accepted=True and ResolvedRefs=True",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let name = "pm-status-cluster-valid";
-
-                    match fetch_conditions(&ctx, name).await {
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                        Ok(conditions) => {
-                            let accepted = find_condition(&conditions, "Accepted");
-                            let resolved = find_condition(&conditions, "ResolvedRefs");
-
-                            match (accepted, resolved) {
-                                (Some(a), Some(r)) => {
-                                    if a["status"].as_str() != Some("True") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("Accepted not True: {:?}", a),
-                                        );
-                                    }
-                                    if r["status"].as_str() != Some("True") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("ResolvedRefs not True: {:?}", r),
-                                        );
-                                    }
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        "ClusterRegionRoute: Accepted=True, ResolvedRefs=True".to_string(),
-                                    )
-                                }
-                                _ => {
-                                    TestResult::failed(start.elapsed(), format!("Missing conditions: {:?}", conditions))
-                                }
-                            }
-                        }
-                    }
-                })
-            },
-        )
-    }
-
-    // =========================================================================
-    // Scenario 4: ServiceRegionRoute with valid clusterRef → Accepted=True, ResolvedRefs=True
-    // =========================================================================
-
-    fn pm_status_service_good_ref() -> TestCase {
-        TestCase::new(
-            "pm_status_service_good_ref",
-            "ServiceRegionRoute PM 'pm-status-service-good-ref': ResolvedRefs=True (valid clusterRef)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let name = "pm-status-service-good-ref";
-
-                    match fetch_conditions(&ctx, name).await {
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                        Ok(conditions) => {
-                            let accepted = find_condition(&conditions, "Accepted");
-                            let resolved = find_condition(&conditions, "ResolvedRefs");
-
-                            match (accepted, resolved) {
-                                (Some(a), Some(r)) => {
-                                    if a["status"].as_str() != Some("True") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("Accepted not True: {:?}", a),
-                                        );
-                                    }
-                                    if r["status"].as_str() != Some("True") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("ResolvedRefs not True (valid clusterRef): {:?}", r),
-                                        );
-                                    }
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        "ServiceRegionRoute with valid clusterRef: Accepted=True, ResolvedRefs=True"
-                                            .to_string(),
-                                    )
-                                }
-                                _ => {
-                                    TestResult::failed(start.elapsed(), format!("Missing conditions: {:?}", conditions))
-                                }
-                            }
-                        }
-                    }
-                })
-            },
-        )
-    }
-
-    // =========================================================================
-    // Scenario 5: ServiceRegionRoute, clusterRef points at non-existent PM
-    //             → Accepted=True, ResolvedRefs=False/InvalidEdgionDataRef
-    // =========================================================================
-
-    fn pm_status_service_missing_ref() -> TestCase {
-        TestCase::new(
-            "pm_status_service_missing_ref",
-            "ServiceRegionRoute PM 'pm-status-service-missing-ref': ResolvedRefs=False/InvalidEdgionDataRef",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let name = "pm-status-service-missing-ref";
-
-                    match fetch_conditions(&ctx, name).await {
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                        Ok(conditions) => {
-                            let accepted = find_condition(&conditions, "Accepted");
-                            let resolved = find_condition(&conditions, "ResolvedRefs");
-
-                            match (accepted, resolved) {
-                                (Some(a), Some(r)) => {
-                                    if a["status"].as_str() != Some("True") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("Accepted should be True: {:?}", a),
-                                        );
-                                    }
-                                    if r["status"].as_str() != Some("False") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("ResolvedRefs should be False: {:?}", r),
-                                        );
-                                    }
-                                    if r["reason"].as_str() != Some("InvalidEdgionDataRef") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("ResolvedRefs reason should be InvalidEdgionDataRef: {:?}", r),
-                                        );
-                                    }
-                                    let msg = r["message"].as_str().unwrap_or("");
-                                    if !msg.contains("pm-status-does-not-exist") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("ResolvedRefs message should contain PM name: '{}'", msg),
-                                        );
-                                    }
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        "ResolvedRefs=False/InvalidEdgionDataRef for missing clusterRef".to_string(),
-                                    )
-                                }
-                                _ => {
-                                    TestResult::failed(start.elapsed(), format!("Missing conditions: {:?}", conditions))
-                                }
-                            }
-                        }
-                    }
-                })
-            },
-        )
-    }
-
-    // =========================================================================
-    // Scenario 6: ServiceRegionRoute, clusterRef points at existing but wrong-type PM
-    //             → ResolvedRefs=False/InvalidEdgionDataRef
-    // =========================================================================
-
-    fn pm_status_service_wrong_type_ref() -> TestCase {
-        TestCase::new(
-            "pm_status_service_wrong_type_ref",
-            "ServiceRegionRoute PM 'pm-status-service-wrong-type-ref': ResolvedRefs=False when ref points at wrong type",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let name = "pm-status-service-wrong-type-ref";
-
-                    match fetch_conditions(&ctx, name).await {
-                        Err(e) => TestResult::failed(start.elapsed(), e),
-                        Ok(conditions) => {
-                            let resolved = find_condition(&conditions, "ResolvedRefs");
-
-                            match resolved {
-                                Some(r) => {
-                                    if r["status"].as_str() != Some("False") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!("ResolvedRefs should be False (wrong-type ref): {:?}", r),
-                                        );
-                                    }
-                                    if r["reason"].as_str() != Some("InvalidEdgionDataRef") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!(
-                                                "ResolvedRefs reason should be InvalidEdgionDataRef: {:?}",
-                                                r
-                                            ),
-                                        );
-                                    }
-                                    let msg = r["message"].as_str().unwrap_or("");
-                                    // Fixture points at pm-status-gcir-valid (a GCIR) so the
-                                    // message must identify the target PM and the expected type.
-                                    if !msg.contains("pm-status-gcir-valid") || !msg.contains("ClusterRegionRoute") {
-                                        return TestResult::failed(
-                                            start.elapsed(),
-                                            format!(
-                                                "ResolvedRefs message should identify wrong-type ref target: '{}'",
-                                                msg
-                                            ),
-                                        );
-                                    }
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        "ResolvedRefs=False/InvalidEdgionDataRef for wrong-type clusterRef"
-                                            .to_string(),
-                                    )
-                                }
-                                None => TestResult::failed(
-                                    start.elapsed(),
-                                    format!("ResolvedRefs condition not found: {:?}", conditions),
-                                ),
-                            }
-                        }
-                    }
-                })
-            },
-        )
-    }
 }
 
 impl TestSuite for EdgionDataStatusTestSuite {
@@ -480,13 +249,6 @@ impl TestSuite for EdgionDataStatusTestSuite {
     }
 
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![
-            Self::pm_status_gcir_valid(),
-            Self::pm_status_gcir_invalid(),
-            Self::pm_status_cluster_valid(),
-            Self::pm_status_service_good_ref(),
-            Self::pm_status_service_missing_ref(),
-            Self::pm_status_service_wrong_type_ref(),
-        ]
+        vec![Self::pm_status_gcir_valid(), Self::pm_status_gcir_invalid()]
     }
 }

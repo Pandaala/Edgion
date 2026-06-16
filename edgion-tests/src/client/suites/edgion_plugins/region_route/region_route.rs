@@ -1,27 +1,20 @@
 // RegionRoute Integration Test Suite
 //
-// Tests the ServiceRegionRoute EdgionData → ClusterRegionRoute EdgionData → EdgionPlugins resolve flow.
+// Tests the base + overlay model: EdgionPlugins holds all routing logic + default region table;
+// an optional overrideRef points to a RegionRouteOverride EdgionData (fail-to-base on error).
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/RegionRoute/):
-//   01_EdgionPlugins_region-route-main.yaml      — ref-only: serviceRegionRouteRef
-//   01_EdgionPlugins_region-route-norules.yaml    — ref-only: serviceRegionRouteRef
-//   01_EdgionPlugins_region-route-myregion.yaml   — ref-only: serviceRegionRouteRef
-//   01_EdgionData_global-region-conf.yaml     — ClusterRegionRoute EdgionData with complete config:
-//                                                   regions, keyGet, hashKeyGet, hashCalc, routeRules,
-//                                                   routeByKeyConfMatch.matchMap (vip-va→virginia, vip-oh→ohio)
-//   01_EdgionData_region-route-main.yaml      — ServiceRegionRoute EdgionData with clusterRef + regions
+//   01_EdgionPlugins_region-route-main.yaml      — full inline config: regions, keyGet,
+//                                                   hashKeyGet, hashCalc, routeRules,
+//                                                   routeByKeyConfMatch (vip-va/vip-oh)
+//   01_EdgionPlugins_region-route-norules.yaml    — inline config with no routeRules (no-op)
+//   01_EdgionPlugins_region-route-myregion.yaml   — inline config: myRegion + failoverTo per region
+//   01_EdgionPlugins_region-route-broken-ref.yaml — inline base + overrideRef to nonexistent
+//                                                   EdgionData (overlay_missing -> fail-to-base)
 //   02_HTTPRoute_region-route-main-test.yaml
 //   02_HTTPRoute_region-route-norules-test.yaml
 //   02_HTTPRoute_region-route-myregion-test.yaml
-//
-// EdgionData resolve flow:
-//   1. Controller processes EdgionPlugins "region-route-main"
-//   2. Resolves serviceRegionRouteRef → loads ServiceRegionRoute EdgionData "region-route-main"
-//   3. Follows ServiceRegionRoute EdgionData's clusterRef → loads ClusterRegionRoute EdgionData "global-region-conf"
-//   4. Copies ALL config from ClusterRegionRoute EdgionData: regions, keyGet, hashCalc, routeRules
-//   5. Injects routeByKeyConfMatch.matchMap into RouteByKeyConfMatch route rules
-//   6. Overlays per-region failoverTo from ServiceRegionRoute EdgionData (none in this test)
-//   7. Gateway receives the fully merged config
+//   02_HTTPRoute_region-route-broken-ref-test.yaml
 //
 // Test strategy:
 //   Backend endpoints 127.0.0.1:30001 (virginia) and 127.0.0.1:30002 (ohio) are
@@ -83,23 +76,56 @@ impl RegionRouteTestSuite {
         )
     }
 
-    /// serviceRegionRouteRef points at a EdgionData that does not resolve →
-    /// region_route's resolve_config returns BrokenRef → data plane responds 500.
-    fn broken_ref_returns_500() -> TestCase {
+    /// overrideRef points at a nonexistent EdgionData -> overlay_missing -> fail-to-base.
+    /// Base regions are used; a routed request reaches a loopback backend -> 502.
+    /// Access log must contain "overlay_missing" confirming the signal was recorded.
+    fn broken_overlay_ref_uses_base() -> TestCase {
         TestCase::new(
-            "broken_ref_returns_500",
-            "Broken serviceRegionRouteRef: resolve_config returns BrokenRef, request gets 500",
+            "broken_overlay_ref_uses_base",
+            "Broken overrideRef (nonexistent EdgionData): overlay_missing -> fail-to-base; \
+             base routes request to loopback -> 502; access log contains overlay_missing",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    let trace_id = format!("rr-broken-ref-{}", uuid::Uuid::new_v4());
                     let url = format!("{}/echo", ctx.edgion_plugins_url());
-                    match ctx.http_client.get(&url).header("host", BROKEN_REF_HOST).send().await {
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", BROKEN_REF_HOST)
+                        .header("X-Direct-Region", "virginia")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await
+                    {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            if status == 500 {
-                                TestResult::passed(start.elapsed())
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 500 (BrokenRef), got {}", status))
+                            // Base regions route to loopback -> 502 (not 500: no gateway error,
+                            // the overlay is simply absent and the base is used as fallback).
+                            if status != 502 && status != 500 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 502 (routed via base to loopback) or 500, got {}", status),
+                                );
+                            }
+                            let al_client = ctx.access_log_client();
+                            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(entry) => {
+                                    let log_str = entry.data.to_string();
+                                    if log_str.contains("overlay_missing") {
+                                        TestResult::passed_with_message(
+                                            start.elapsed(),
+                                            format!("overlay_missing logged as expected; status={}", status),
+                                        )
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!("Expected 'overlay_missing' in access log. log: {}", log_str),
+                                        )
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Access log error: {}", e)),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -930,8 +956,8 @@ impl TestSuite for RegionRouteTestSuite {
             // Pass-through (200)
             Self::no_route_rules_passes_through(),
             Self::missing_key_passes_through(),
-            // Broken ref (500)
-            Self::broken_ref_returns_500(),
+            // Broken overrideRef -> overlay_missing -> fail-to-base (502 + access log)
+            Self::broken_overlay_ref_uses_base(),
             // Hash routing (502 + access log)
             Self::hash_routing_logged(),
             Self::hash_routing_deterministic(),

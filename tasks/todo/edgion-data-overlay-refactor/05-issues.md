@@ -163,32 +163,6 @@ tests pass; crd_coverage 6 pass; workspace lib 3454 pass; validate_agent_docs pa
 
 ---
 
----
-
-## H1 — [RESOLVED] Envelope `spec.enable` was dead code — overlay applied even when disabled
-
-**Status:** RESOLVED (2026-06-16).
-
-Both `compute_effective_regions` (RegionRoute) and `compute_effective` (GlobalConnectionIpRestriction)
-now check `raw_ed.spec.enable` immediately after the store lookup, before calling `apply_override`.
-When `spec.enable == false`, the function short-circuits: returns base clone and emits
-`overlay_disabled` counter. Tests: `overlay_envelope_disabled_falls_back_to_base` (RegionRoute),
-`envelope_disabled_falls_back_to_base` (GCIR).
-
----
-
-## H2 — [RESOLVED] RegionRoute did not validate merged effective regions
-
-**Status:** RESOLVED (2026-06-16).
-
-`validate_regions(&[RegionDef]) -> Result<(), String>` added to
-`edgion-resources/src/resources/data/region_route.rs` and exported via `mod.rs`.
-On `OverlaySignal::Applied`, `compute_effective_regions` now calls `validate_regions` on the
-merged result; failure emits `overlay_invalid` counter and returns base regions.
-Tests: `overlay_invalid_regions_falls_back_to_base` (RegionRoute).
-
----
-
 ## S7 Deviations (noted during execution)
 
 ### D-S7-A — EdgionData CRD type enum was stale (two removed variants, two missing new ones)
@@ -218,3 +192,47 @@ All runtime-only fields in new/changed structs are correctly annotated:
 ### D-S7-E — validate_agent_docs.py reports 8 stale skills/ refs (docs fix is S9)
 Eight stale `src/` refs in `skills/` files still point to the old `plugin_metadata/` module path (renamed to
 `data/` in S1). Per task scope, docs fixes belong in S9. Count: 8 refs across 4 skills files.
+
+---
+
+## H3 — [RESOLVED] Integration-test fixtures still referenced removed PM variants and fields
+
+**Status:** RESOLVED (2026-06-16).
+
+**Finding:** After the S3 decomposition, three integration-test fixture groups in
+`edgion-tests/integration/conf/EdgionPlugins/` still referenced removed `DataEntry` variants
+(`ClusterRegionRoute`, `ServiceRegionRoute`) and removed `EdgionPlugins` fields
+(`serviceRegionRouteRef`, `clusterRef`). The Rust test suites (`plugin_metadata_status.rs`,
+`plugin_metadata_managed.rs`, `dynamic.rs`, `pmd_ref_flap.rs`) also had stale test cases and
+comments tied to the old chain.
+
+**Groups affected:**
+- `RegionRoute/` — 6 ClusterRegionRoute PMs + 4 ServiceRegionRoute PMs + 5 EdgionPlugins using
+  `serviceRegionRouteRef`; plus `broken_ref_returns_500` expecting 500 (old BrokenRef path).
+- `EdgionDataStatus/RefFlap/DynamicTest/` — EdgionPlugins files using `serviceRegionRouteRef`;
+  PluginMetaData fixture using `type: ServiceRegionRoute` with `clusterRef`. Also: directory was
+  named `PluginMetaDataStatus` but `pmd_ref_flap.rs` expected `EdgionDataStatus`.
+- `plugin-metadata-managed/` — EdgionPlugins using `serviceRegionRouteRef`; PluginMetaData fixtures
+  using `type: ServiceRegionRoute`/`ClusterRegionRoute` with `clusterRef`.
+
+**Resolution (this session):**
+1. **Deleted** all 10 stale ClusterRegionRoute/ServiceRegionRoute fixture files; renamed the
+   `PluginMetaDataStatus` directory to `EdgionDataStatus` to match the `conf_path` in `pmd_ref_flap.rs`.
+2. **Migrated** EdgionPlugins fixtures: replaced `serviceRegionRouteRef` with full inline base configs
+   (regions + routing logic) + `overrideRef` where overlay resolution is needed.
+3. **Created** new `EdgionData` overlay fixtures (`type: RegionRouteOverride`) for the managed and
+   RefFlap scenarios.
+4. **Updated** Rust test suites:
+   - `region_route.rs`: renamed `broken_ref_returns_500` → `broken_overlay_ref_uses_base` (expects
+     502 + access log `overlay_missing` instead of 500).
+   - `plugin_metadata_status.rs`: removed 4 stale test functions (scenarios 3-6) and their `test_cases()`
+     entries; updated header comment.
+   - `plugin_metadata_managed.rs`: renamed `service_pm_exists` → `override_data_exists`; changed
+     `spec.metadata` → `spec.data`, `ServiceRegionRoute` → `RegionRouteOverride`; removed `clusterRef`
+     check; updated all doc comments and test descriptions.
+   - `dynamic.rs`: updated module-level comment and test case description strings (PMD → EdgionData).
+   - `pmd_ref_flap.rs`: updated scenario comment (removed `serviceRegionRouteRef` reference).
+5. **Cleaned** stale comment in `02_HTTPRoute_region-route-broken-ref-test.yaml`.
+
+**Verification:** `cargo fmt --all` clean; `cargo check --all-targets` 0 errors;
+`cargo test -p edgion-tests --no-run` compiles clean.

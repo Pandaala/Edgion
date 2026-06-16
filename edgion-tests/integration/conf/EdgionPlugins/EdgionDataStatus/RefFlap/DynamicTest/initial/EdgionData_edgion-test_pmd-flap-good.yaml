@@ -1,0 +1,20 @@
+# RegionRouteOverride EdgionData — the "good" overlay referenced by pmd-flap-plugin via overrideRef.
+# When this resource exists, the EdgionPlugins overrideRef resolves -> ResolvedRefs=True.
+apiVersion: edgion.io/v1
+kind: EdgionData
+metadata:
+  name: pmd-flap-good
+  namespace: edgion-test
+spec:
+  data:
+    type: RegionRouteOverride
+    config:
+      regions:
+        - name: east
+          hashRange: [0, 499]
+          backendEndpoint: "127.0.0.1:30001"
+          tls: false
+        - name: west
+          hashRange: [500, 999]
+          backendEndpoint: "127.0.0.1:30002"
+          tls: false

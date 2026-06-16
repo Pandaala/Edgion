@@ -1,9 +1,9 @@
 // PmdRefFlap dynamic scenario.
 //
-// Applies an EdgionPlugins resource that switches its serviceRegionRouteRef:
-//   initial:  references existing PMD pmd-flap-good  → Accepted=True
-//   invalid:  references missing pmd-flap-missing    → Accepted=False (reason: Invalid)
-//   valid:    restored to pmd-flap-good               → Accepted=True
+// Applies an EdgionPlugins resource that switches its overrideRef (RegionRouteOverride EdgionData):
+//   initial:  overrideRef → existing EdgionData pmd-flap-good   → Accepted=True, ResolvedRefs=True
+//   invalid:  overrideRef → missing EdgionData pmd-flap-missing  → ResolvedRefs=False (InvalidEdgionDataRef)
+//   valid:    restored to pmd-flap-good                          → Accepted=True, ResolvedRefs=True
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario};
 use crate::dynamic::ScenarioCtx;

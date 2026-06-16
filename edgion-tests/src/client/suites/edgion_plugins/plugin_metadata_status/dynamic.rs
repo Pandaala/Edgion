@@ -1,11 +1,11 @@
-//! PMD RefFlap scenario phase suites.
+//! RefFlap scenario phase suites.
 //!
-//! Initial phase: EdgionPlugins references existing ServiceRegionRoute PMD `pmd-flap-good`
+//! Initial phase: EdgionPlugins has overrideRef pointing at existing RegionRouteOverride `pmd-flap-good`
 //!                → Accepted=True, ResolvedRefs=True.
-//! Invalid phase: EdgionPlugins references non-existent `pmd-flap-missing`
+//! Invalid phase: EdgionPlugins overrideRef switches to non-existent `pmd-flap-missing`
 //!                → Accepted=True (resource is structurally valid),
 //!                  ResolvedRefs=False (reason: InvalidEdgionDataRef).
-//! Valid phase:   EdgionPlugins restored to reference `pmd-flap-good`
+//! Valid phase:   EdgionPlugins restored to overrideRef `pmd-flap-good`
 //!                → Accepted=True, ResolvedRefs=True (recovered).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -71,14 +71,14 @@ impl PmdFlapInitialTestSuite {
     fn test_accepted_true() -> TestCase {
         TestCase::new(
             "pmd_flap_initial_accepted_true",
-            "EdgionPlugins referencing existing pmd-flap-good PMD should be Accepted=True",
+            "EdgionPlugins with overrideRef to existing pmd-flap-good EdgionData should be Accepted=True",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     match fetch_ep_condition(&ctx, "Accepted").await {
                         Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
                             start.elapsed(),
-                            "Accepted=True as expected (pmd-flap-good PMD present)".to_string(),
+                            "Accepted=True as expected (pmd-flap-good EdgionData present)".to_string(),
                         ),
                         Ok((status, reason)) => TestResult::failed(
                             start.elapsed(),
@@ -94,14 +94,14 @@ impl PmdFlapInitialTestSuite {
     fn test_resolved_refs_true() -> TestCase {
         TestCase::new(
             "pmd_flap_initial_resolved_refs_true",
-            "EdgionPlugins referencing existing pmd-flap-good PMD should be ResolvedRefs=True",
+            "EdgionPlugins with overrideRef to existing pmd-flap-good EdgionData should be ResolvedRefs=True",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     match fetch_ep_condition(&ctx, "ResolvedRefs").await {
                         Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
                             start.elapsed(),
-                            "ResolvedRefs=True as expected (pmd-flap-good PMD resolved)".to_string(),
+                            "ResolvedRefs=True as expected (pmd-flap-good EdgionData resolved)".to_string(),
                         ),
                         Ok((status, reason)) => TestResult::failed(
                             start.elapsed(),
@@ -140,7 +140,7 @@ impl PmdFlapInvalidTestSuite {
     fn test_resolved_refs_false() -> TestCase {
         TestCase::new(
             "pmd_flap_invalid_resolved_refs_false",
-            "EdgionPlugins referencing missing pmd-flap-missing PMD should be \
+            "EdgionPlugins with overrideRef to missing pmd-flap-missing EdgionData should be \
              ResolvedRefs=False (reason: InvalidEdgionDataRef)",
             |ctx: TestContext| {
                 Box::pin(async move {
@@ -150,7 +150,7 @@ impl PmdFlapInvalidTestSuite {
                             TestResult::passed_with_message(
                                 start.elapsed(),
                                 "ResolvedRefs=False/InvalidEdgionDataRef as expected \
-                                 (pmd-flap-missing PMD not found)"
+                                 (pmd-flap-missing EdgionData not found)"
                                     .to_string(),
                             )
                         }
@@ -172,7 +172,7 @@ impl PmdFlapInvalidTestSuite {
     fn test_accepted_still_true() -> TestCase {
         TestCase::new(
             "pmd_flap_invalid_accepted_true",
-            "EdgionPlugins is structurally valid even when its PMD ref is missing — \
+            "EdgionPlugins is structurally valid even when its overrideRef is missing — \
              Accepted should remain True; the missing ref surfaces only via ResolvedRefs",
             |ctx: TestContext| {
                 Box::pin(async move {
