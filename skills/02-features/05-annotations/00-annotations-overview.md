@@ -34,6 +34,15 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
   - `"true"` forces raw, `"false"` forces normalized (overrides region_route); absent falls back to the default flow.
   - See the [metadata reference](references/annotations-metadata.md) for details.
 
+- `edgion.io/retry-non-idempotent` (HTTPRoute / GRPCRoute) — opt-in to retrying non-idempotent
+  methods on the reused-connection retry path. By default a reused keepalive connection that is
+  reset mid-request is **not** retried for non-idempotent methods (POST/PATCH/CONNECT, and all
+  gRPC since it is POST at the HTTP layer), because replaying the buffered request body risks a
+  silent duplicate mutation. Idempotent methods (GET/HEAD/PUT/DELETE/OPTIONS/TRACE) are always
+  retried. Set `"true"` to restore the pre-guard behavior for this route. The knob lives in an
+  annotation because the standard Gateway API `HTTPRouteRetry` CRD is structural and prunes
+  unknown fields. See the [metadata reference](references/annotations-metadata.md) for details.
+
 ### TCPRoute / TLSRoute / UDPRoute
 
 | Annotation | Value | Description |

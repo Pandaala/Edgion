@@ -149,8 +149,33 @@ impl HTTPRoute {
                 }
             });
 
+        // Parse `edgion.io/retry-non-idempotent` annotation. Opt-in: "true"
+        // re-enables replaying non-idempotent request bodies on the
+        // reused-connection retry path; any other value (or absence) keeps the
+        // safe default where non-idempotent methods are not retried there.
+        let parsed_allow_non_idempotent_retry: Option<bool> = self
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(crate::constants::annotations::edgion::RETRY_NON_IDEMPOTENT))
+            .and_then(|v| match v.as_str() {
+                "true" => Some(true),
+                "false" => Some(false),
+                other => {
+                    tracing::info!(
+                        route_namespace = %self.metadata.namespace.as_deref().unwrap_or("default"),
+                        route_name = %self.metadata.name.as_deref().unwrap_or(""),
+                        annotation = %crate::constants::annotations::edgion::RETRY_NON_IDEMPOTENT,
+                        value = %other,
+                        "ignored: expected \"true\" or \"false\""
+                    );
+                    None
+                }
+            });
+
         for rule in rules.iter_mut() {
             rule.parsed_forward_raw_path = parsed_forward_raw_path;
+            rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
 
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
                 continue;
@@ -545,6 +570,48 @@ mod tests {
         route.preparse();
         for rule in route.spec.rules.as_ref().unwrap() {
             assert_eq!(rule.parsed_forward_raw_path, Some(false));
+        }
+    }
+
+    #[test]
+    fn parses_retry_non_idempotent_true() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::constants::annotations::edgion::RETRY_NON_IDEMPOTENT.to_string(),
+            "true".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_allow_non_idempotent_retry, Some(true));
+        }
+    }
+
+    #[test]
+    fn parses_retry_non_idempotent_absent_is_none() {
+        let mut route = make_test_http_route();
+        route.metadata.annotations = None;
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_allow_non_idempotent_retry, None);
+        }
+    }
+
+    #[test]
+    fn parses_retry_non_idempotent_invalid_is_none() {
+        // Only lowercase "true"/"false" are recognized; anything else falls
+        // back to the safe default (None → not opted in).
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::constants::annotations::edgion::RETRY_NON_IDEMPOTENT.to_string(),
+            "yes".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert_eq!(rule.parsed_allow_non_idempotent_retry, None);
         }
     }
 

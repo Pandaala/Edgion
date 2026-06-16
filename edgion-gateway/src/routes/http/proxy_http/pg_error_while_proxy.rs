@@ -98,7 +98,20 @@ pub fn error_while_proxy(
     // expired disqualifies further retries.
     let deadline_exceeded = ctx.request_timeout_exceeded() || ctx.grpc_deadline_exceeded();
 
-    let can_retry = client_reused && buffer_ok && ctx.try_cnt <= max_retries && !deadline_exceeded;
+    // Method-safety guard (route-01): a reused keepalive connection reset
+    // mid-request replays the buffered request body on a fresh connection. For
+    // non-idempotent methods (POST/PATCH/CONNECT, and all gRPC since it is POST
+    // at the HTTP layer) that replay risks a silent duplicate mutation, so it is
+    // suppressed by default. Idempotent methods (GET/HEAD/PUT/DELETE/OPTIONS/
+    // TRACE) are always safe to replay. A route may opt back in via the
+    // `edgion.io/retry-non-idempotent: "true"` annotation. Only the
+    // reused-connection path needs this: `fail_to_connect` never wrote any
+    // request bytes upstream and is therefore always safe to retry.
+    let method_retry_ok =
+        session.req_header().method.is_idempotent() || ctx.retry_allow_non_idempotent();
+
+    let can_retry =
+        client_reused && buffer_ok && method_retry_ok && ctx.try_cnt <= max_retries && !deadline_exceeded;
 
     // Capture whether the retry decision is ours to make: errors that arrive
     // already Decided(true) (e.g. h2 GOAWAY / REFUSED_STREAM decided inside

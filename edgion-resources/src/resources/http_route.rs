@@ -120,6 +120,18 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_forward_raw_path: Option<bool>,
+
+    /// Pre-parsed `edgion.io/retry-non-idempotent` annotation from parent
+    /// HTTPRoute.metadata. `Some(true)` opts this route's reused-connection
+    /// retry into replaying non-idempotent request bodies; `None` (annotation
+    /// absent or invalid) keeps the safe default where non-idempotent methods
+    /// are not retried on a reused-connection reset.
+    ///
+    /// Parsed in `http_route_preparse.rs` at HTTPRoute load time and copied to
+    /// every rule under that route.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_allow_non_idempotent_retry: Option<bool>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -135,6 +147,7 @@ impl Clone for HTTPRouteRule {
             parsed_timeouts: self.parsed_timeouts.clone(),
             parsed_retry: self.parsed_retry.clone(),
             parsed_forward_raw_path: self.parsed_forward_raw_path,
+            parsed_allow_non_idempotent_retry: self.parsed_allow_non_idempotent_retry,
         }
     }
 }
@@ -150,6 +163,10 @@ impl fmt::Debug for HTTPRouteRule {
             .field("retry", &self.retry)
             .field("session_persistence", &self.session_persistence)
             .field("parsed_forward_raw_path", &self.parsed_forward_raw_path)
+            .field(
+                "parsed_allow_non_idempotent_retry",
+                &self.parsed_allow_non_idempotent_retry,
+            )
             .finish()
     }
 }

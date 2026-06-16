@@ -466,6 +466,7 @@ mod tests {
             session_persistence: None,
             parsed_timeouts: None,
             parsed_retry: None,
+            parsed_allow_non_idempotent_retry: None,
         });
         Arc::new(GrpcRouteRuleUnit {
             resource_key: format!("default/{}", name),
@@ -707,6 +708,7 @@ mod tests {
             session_persistence: None,
             parsed_timeouts: None,
             parsed_retry: None,
+            parsed_allow_non_idempotent_retry: None,
         });
         Arc::new(GrpcRouteRuleUnit {
             resource_key: format!("default/{}", name),

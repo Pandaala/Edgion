@@ -45,6 +45,22 @@ pub mod edgion {
     /// Gateway API TLSRoute has no retry spec, so this is Edgion-specific.
     pub const MAX_CONNECT_RETRIES: &str = "edgion.io/max-connect-retries";
 
+    /// Per-route opt-in to retry non-idempotent methods (POST/PATCH/CONNECT,
+    /// and all gRPC since it is POST at the HTTP layer) on the reused-connection
+    /// retry path. Two-state on HTTPRoute/GRPCRoute.metadata.annotations:
+    ///   "true"  — allow the reused-connection retry to replay a non-idempotent
+    ///             request body (matches the pre-guard behavior).
+    ///   absent / other — keep the safe default: a reused keepalive connection
+    ///             reset mid-request is NOT retried for non-idempotent methods,
+    ///             because replaying the buffered body risks a silent duplicate
+    ///             mutation. Idempotent methods (GET/HEAD/PUT/DELETE/OPTIONS/
+    ///             TRACE) are unaffected and still retried.
+    /// Invalid values are logged at INFO and treated as absent (safe default).
+    /// The Gateway API HTTPRouteRetry CRD is a standard structural schema that
+    /// prunes unknown fields, so this knob lives in an annotation rather than a
+    /// new spec field.
+    pub const RETRY_NON_IDEMPOTENT: &str = "edgion.io/retry-non-idempotent";
+
     /// Idle seconds before the first TCP keepalive probe on L4 upstream
     /// connections. Presence of this annotation (parsed to a positive integer)
     /// is the enablement trigger for upstream keepalive; absent = disabled.
