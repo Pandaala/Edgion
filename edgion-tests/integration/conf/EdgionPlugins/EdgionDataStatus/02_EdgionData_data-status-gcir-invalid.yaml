@@ -3,7 +3,7 @@
 apiVersion: edgion.io/v1
 kind: EdgionData
 metadata:
-  name: pm-status-gcir-invalid
+  name: data-status-gcir-invalid
   namespace: edgion-test
 spec:
   data:

@@ -1,9 +1,10 @@
-# Scenario 3: EdgionStreamPlugins with GCIR base + overrideRef pointing to an EXISTING
-# GlobalConnIpRestrictionOverride EdgionData → ResolvedRefs=True
+# Scenario 4: EdgionStreamPlugins with GCIR base + overrideRef pointing to a MISSING
+# GlobalConnIpRestrictionOverride EdgionData → ResolvedRefs=False/InvalidEdgionDataRef
+# (Base is still valid and will be used at runtime as fail-to-base.)
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
-  name: esp-gcir-pm-exists
+  name: esp-gcir-data-missing
   namespace: edgion-test
 spec:
   plugins:
@@ -20,5 +21,5 @@ spec:
                   cidrs:
                     - "10.0.0.0/8"
         overrideRef:
-          name: esp-gcir-pm-exists
+          name: esp-gcir-data-nonexistent
           namespace: edgion-test

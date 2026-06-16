@@ -3,8 +3,8 @@
 // Verifies the Accepted and ResolvedRefs status conditions on EdgionData resources.
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/EdgionDataStatus/):
-//   01_EdgionData_pm-status-gcir-valid.yaml   — valid GlobalConnIpRestrictionOverride EdgionData
-//   02_EdgionData_pm-status-gcir-invalid.yaml — GCIR overlay with bad activeProfile
+//   01_EdgionData_data-status-gcir-valid.yaml   — valid GlobalConnIpRestrictionOverride EdgionData
+//   02_EdgionData_data-status-gcir-invalid.yaml — GCIR overlay with bad activeProfile
 //
 // Scenarios:
 //   1. valid GCIR overlay   -> Accepted=True, ResolvedRefs=True
@@ -103,11 +103,11 @@ impl EdgionDataStatusTestSuite {
     fn pm_status_gcir_valid() -> TestCase {
         TestCase::new(
             "pm_status_gcir_valid",
-            "GCIR PM 'pm-status-gcir-valid': Accepted=True and ResolvedRefs=True",
+            "GCIR PM 'data-status-gcir-valid': Accepted=True and ResolvedRefs=True",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let name = "pm-status-gcir-valid";
+                    let name = "data-status-gcir-valid";
 
                     match fetch_conditions(&ctx, name).await {
                         Err(e) => TestResult::failed(start.elapsed(), e),
@@ -153,11 +153,11 @@ impl EdgionDataStatusTestSuite {
     fn pm_status_gcir_invalid() -> TestCase {
         TestCase::new(
             "pm_status_gcir_invalid",
-            "GCIR PM 'pm-status-gcir-invalid': Accepted=False/Invalid with message about activeProfile",
+            "GCIR PM 'data-status-gcir-invalid': Accepted=False/Invalid with message about activeProfile",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let name = "pm-status-gcir-invalid";
+                    let name = "data-status-gcir-invalid";
 
                     // Poll until Accepted=False appears (may take a few cycles)
                     let url = format!(

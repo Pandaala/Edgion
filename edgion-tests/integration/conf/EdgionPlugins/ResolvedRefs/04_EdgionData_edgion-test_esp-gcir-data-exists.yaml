@@ -1,14 +1,13 @@
-# Scenario 1: valid GlobalConnIpRestrictionOverride EdgionData — expect Accepted=True, ResolvedRefs=True
+# GlobalConnIpRestrictionOverride EdgionData — must be loaded BEFORE the ESP that references it.
 apiVersion: edgion.io/v1
 kind: EdgionData
 metadata:
-  name: pm-status-gcir-valid
+  name: esp-gcir-data-exists
   namespace: edgion-test
 spec:
   data:
     type: GlobalConnIpRestrictionOverride
     config:
-      enable: true
       activeProfile: main
       profiles:
         main:

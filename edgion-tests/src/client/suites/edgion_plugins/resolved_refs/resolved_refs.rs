@@ -6,9 +6,9 @@
 //   01_Secret_edgion-test_ep-resolved-refs-test-secret.yaml         — real Secret
 //   02_EdgionPlugins_edgion-test_ep-secret-exists.yaml              — EP refs existing Secret
 //   03_EdgionPlugins_edgion-test_ep-secret-missing.yaml             — EP refs missing Secret
-//   04_EdgionData_edgion-test_esp-gcir-pm-exists.yaml           — GCIR PM (loaded first)
-//   05_EdgionStreamPlugins_edgion-test_esp-gcir-pm-exists.yaml      — ESP refs existing PM
-//   06_EdgionStreamPlugins_edgion-test_esp-gcir-pm-missing.yaml     — ESP refs missing PM
+//   04_EdgionData_edgion-test_esp-gcir-data-exists.yaml           — GCIR PM (loaded first)
+//   05_EdgionStreamPlugins_edgion-test_esp-gcir-data-exists.yaml      — ESP refs existing PM
+//   06_EdgionStreamPlugins_edgion-test_esp-gcir-data-missing.yaml     — ESP refs missing PM
 //
 // Scenarios:
 //   1. ep_resolved_refs_true_when_secret_exists   — EP + existing Secret → ResolvedRefs=True
@@ -200,11 +200,11 @@ impl ResolvedRefsTestSuite {
     fn esp_resolved_refs_true_when_gcir_pm_exists() -> TestCase {
         TestCase::new(
             "esp_resolved_refs_true_when_gcir_pm_exists",
-            "EdgionStreamPlugins 'esp-gcir-pm-exists': ResolvedRefs=True when GCIR PM exists",
+            "EdgionStreamPlugins 'esp-gcir-data-exists': ResolvedRefs=True when GCIR PM exists",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let name = "esp-gcir-pm-exists";
+                    let name = "esp-gcir-data-exists";
 
                     match fetch_esp_conditions(&ctx, name).await {
                         Err(e) => TestResult::failed(start.elapsed(), e),
@@ -234,12 +234,12 @@ impl ResolvedRefsTestSuite {
     fn esp_resolved_refs_false_when_gcir_pm_missing() -> TestCase {
         TestCase::new(
             "esp_resolved_refs_false_when_gcir_pm_missing",
-            "EdgionStreamPlugins 'esp-gcir-pm-missing': ResolvedRefs=False/InvalidEdgionDataRef when PM absent",
+            "EdgionStreamPlugins 'esp-gcir-data-missing': ResolvedRefs=False/InvalidEdgionDataRef when PM absent",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let name = "esp-gcir-pm-missing";
-                    let expected_pm_name = "esp-gcir-pm-nonexistent";
+                    let name = "esp-gcir-data-missing";
+                    let expected_pm_name = "esp-gcir-data-nonexistent";
 
                     match fetch_esp_conditions(&ctx, name).await {
                         Err(e) => TestResult::failed(start.elapsed(), e),

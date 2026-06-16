@@ -1,11 +1,11 @@
-# RegionRouteOverride EdgionData for pm-validated test
+# RegionRouteOverride EdgionData for data-validated test
 #
-# Pre-created by administrators before applying the EdgionPlugins pm-validated resource.
+# Pre-created by administrators before applying the EdgionPlugins data-validated resource.
 # The EdgionPlugins overrideRef points here; when this resource exists, ResolvedRefs=True.
 apiVersion: edgion.io/v1
 kind: EdgionData
 metadata:
-  name: pm-validated
+  name: data-validated
   namespace: edgion-default
 spec:
   data:

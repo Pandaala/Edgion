@@ -1,14 +1,14 @@
-# EdgionDataManagedRegionRoute - Scenario 2: pre-created RegionRouteOverride overlay (pm-validated)
+# EdgionDataManagedRegionRoute - Scenario 1: pre-created RegionRouteOverride overlay
 #
 # An EdgionPlugins with overrideRef pointing to a pre-created RegionRouteOverride EdgionData.
-# The EdgionData "pm-validated" must be created by administrators before applying this file.
+# The EdgionData "data-managed" must be created by administrators before applying this file.
 #
-# Verification: GET /configserver/EdgionPlugins?namespace=edgion-default&name=pm-validated
+# Verification: GET /configserver/EdgionPlugins?namespace=edgion-default&name=data-managed
 # should return data with status.conditions Accepted=True and ResolvedRefs=True.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: pm-validated
+  name: data-managed
   namespace: edgion-default
 spec:
   requestPlugins:
@@ -32,5 +32,5 @@ spec:
         routeRules:
           - type: RouteByHashRange
         overrideRef:
-          name: "pm-validated"
+          name: "data-managed"
           namespace: edgion-default

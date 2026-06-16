@@ -140,6 +140,14 @@ check "Legacy kebab fixture dir 'plugin-metadata-managed' / 'pmd-flap-*' name pr
     'plugin-metadata-managed|pmd-flap-' \
     --include='*.yaml' --include='*.yml' --include='*.rs'
 
+check "Legacy resource-name prefix 'pm-managed' / 'pm-validated' / 'pm-status-' / 'esp-gcir-pm-' (use 'data-*' / 'esp-gcir-data-')" \
+    '\bpm-(managed|validated|status-)|esp-gcir-pm-' \
+    --include='*.yaml' --include='*.yml' --include='*.rs'
+
+check "Legacy fixture file-name component 'PluginMetaData_' (use 'EdgionData_')" \
+    'PluginMetaData_' \
+    --include='*.yaml' --include='*.yml' --include='*.rs'
+
 check "Legacy DataEntry::ClusterRegionRoute / ::ServiceRegionRoute / standalone ::GlobalConnectionIpRestriction" \
     '\bDataEntry::(ClusterRegionRoute|ServiceRegionRoute|GlobalConnectionIpRestriction)\b' \
     --include='*.rs'

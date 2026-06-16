@@ -170,7 +170,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "rate-limit-redis" | "ratelimitredis" | "rlr" => "EdgionPlugins/RateLimitRedis".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
-            "EdgionDataManaged" | "edgiondatamanaged" | "pm-managed" => "EdgionPlugins/EdgionDataManaged".to_string(),
+            "EdgionDataManaged" | "edgiondatamanaged" | "data-managed" => "EdgionPlugins/EdgionDataManaged".to_string(),
             "global-connection-ip-restriction" | "globalconnectioniprestriction" | "gcir" => {
                 "EdgionPlugins/GlobalConnectionIpRestriction".to_string()
             }

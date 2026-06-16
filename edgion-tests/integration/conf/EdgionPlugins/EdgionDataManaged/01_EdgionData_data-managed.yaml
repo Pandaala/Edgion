@@ -1,11 +1,11 @@
-# RegionRouteOverride EdgionData for pm-managed test
+# RegionRouteOverride EdgionData for data-managed test
 #
-# Pre-created by administrators before applying the EdgionPlugins pm-managed resource.
+# Pre-created by administrators before applying the EdgionPlugins data-managed resource.
 # The EdgionPlugins overrideRef points here; when this resource exists, ResolvedRefs=True.
 apiVersion: edgion.io/v1
 kind: EdgionData
 metadata:
-  name: pm-managed
+  name: data-managed
   namespace: edgion-default
 spec:
   data:

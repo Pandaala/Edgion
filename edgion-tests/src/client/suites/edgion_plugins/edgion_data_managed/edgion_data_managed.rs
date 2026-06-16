@@ -4,17 +4,17 @@
 // by administrators and referenced via EdgionPlugins.overrideRef.
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/EdgionDataManaged/):
-//   01_EdgionData_pm-managed.yaml          — RegionRouteOverride EdgionData for pm-managed test
-//   01_EdgionData_pm-validated.yaml        — RegionRouteOverride EdgionData for pm-validated test
-//   01_EdgionPlugins_pm-managed.yaml           — EdgionPlugins with overrideRef → pm-managed
-//   01_EdgionPlugins_pm-validated.yaml         — EdgionPlugins with overrideRef → pm-validated
-//   02_HTTPRoute_pm-managed-test.yaml
+//   01_EdgionData_data-managed.yaml          — RegionRouteOverride EdgionData for data-managed test
+//   01_EdgionData_data-validated.yaml        — RegionRouteOverride EdgionData for data-validated test
+//   01_EdgionPlugins_data-managed.yaml           — EdgionPlugins with overrideRef → data-managed
+//   01_EdgionPlugins_data-validated.yaml         — EdgionPlugins with overrideRef → data-validated
+//   02_HTTPRoute_data-managed-test.yaml
 //
 // Scenarios:
-//   1. override_data_exists: Verify that the pre-created RegionRouteOverride EdgionData "pm-managed"
+//   1. override_data_exists: Verify that the pre-created RegionRouteOverride EdgionData "data-managed"
 //      exists with correct regions via the configserver API.
-//   2. ep_resolves_pm_chain: Verify that EdgionPlugins "pm-managed" is Accepted (overrideRef resolves).
-//   3. pm_validated_accepted: Verify that EdgionPlugins "pm-validated" is also accepted
+//   2. ep_resolves_pm_chain: Verify that EdgionPlugins "data-managed" is Accepted (overrideRef resolves).
+//   3. pm_validated_accepted: Verify that EdgionPlugins "data-validated" is also accepted
 //      when its pre-created RegionRouteOverride EdgionData is present.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -41,18 +41,18 @@ impl EdgionDataManagedTestSuite {
     // Test 1: override_data_exists
     // =========================================================================
 
-    /// Verify that the pre-created RegionRouteOverride EdgionData "pm-managed" exists with the correct
+    /// Verify that the pre-created RegionRouteOverride EdgionData "data-managed" exists with the correct
     /// regions. Administrators must create this EdgionData before the EP is applied.
     fn override_data_exists() -> TestCase {
         TestCase::new(
             "override_data_exists",
-            "Pre-created RegionRouteOverride EdgionData 'pm-managed' exists with correct regions",
+            "Pre-created RegionRouteOverride EdgionData 'data-managed' exists with correct regions",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
                     let url = format!(
-                        "{}/configserver/EdgionData?namespace={}&name=pm-managed",
+                        "{}/configserver/EdgionData?namespace={}&name=data-managed",
                         ctx.admin_api_url(),
                         PM_MANAGED_NS
                     );
@@ -112,13 +112,13 @@ impl EdgionDataManagedTestSuite {
                     if found {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "RegionRouteOverride EdgionData 'pm-managed' exists with correct regions".to_string(),
+                            "RegionRouteOverride EdgionData 'data-managed' exists with correct regions".to_string(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "RegionRouteOverride EdgionData 'pm-managed' not found or invalid within timeout. Last error: {}",
+                                "RegionRouteOverride EdgionData 'data-managed' not found or invalid within timeout. Last error: {}",
                                 last_err
                             ),
                         )
@@ -132,18 +132,18 @@ impl EdgionDataManagedTestSuite {
     // Test 2: ep_resolves_pm_chain
     // =========================================================================
 
-    /// Verify that EdgionPlugins "pm-managed" is processed successfully (Accepted condition).
+    /// Verify that EdgionPlugins "data-managed" is processed successfully (Accepted condition).
     /// The overrideRef must resolve to the pre-created RegionRouteOverride EdgionData for the EP to be accepted.
     fn ep_resolves_pm_chain() -> TestCase {
         TestCase::new(
             "ep_resolves_pm_chain",
-            "EdgionPlugins 'pm-managed' is Accepted after resolving overrideRef to RegionRouteOverride EdgionData",
+            "EdgionPlugins 'data-managed' is Accepted after resolving overrideRef to RegionRouteOverride EdgionData",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
                     let ep_url = format!(
-                        "{}/configserver/EdgionPlugins?namespace={}&name=pm-managed",
+                        "{}/configserver/EdgionPlugins?namespace={}&name=data-managed",
                         ctx.admin_api_url(),
                         PM_MANAGED_NS
                     );
@@ -205,13 +205,13 @@ impl EdgionDataManagedTestSuite {
                     if accepted {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "EdgionPlugins 'pm-managed' accepted — overrideRef resolved correctly".to_string(),
+                            "EdgionPlugins 'data-managed' accepted — overrideRef resolved correctly".to_string(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "EdgionPlugins 'pm-managed' not Accepted within timeout. Last error: {}",
+                                "EdgionPlugins 'data-managed' not Accepted within timeout. Last error: {}",
                                 last_err
                             ),
                         )
@@ -225,19 +225,19 @@ impl EdgionDataManagedTestSuite {
     // Test 3: pm_validated_accepted
     // =========================================================================
 
-    /// Verify that EdgionPlugins "pm-validated" is also accepted when its pre-created
-    /// RegionRouteOverride EdgionData "pm-validated" is present.
+    /// Verify that EdgionPlugins "data-validated" is also accepted when its pre-created
+    /// RegionRouteOverride EdgionData "data-validated" is present.
     fn pm_validated_accepted() -> TestCase {
         TestCase::new(
             "pm_validated_accepted",
-            "EdgionPlugins 'pm-validated' is Accepted with pre-created Service PM present",
+            "EdgionPlugins 'data-validated' is Accepted with pre-created Service PM present",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // First ensure the RegionRouteOverride EdgionData "pm-validated" is visible via configserver
+                    // First ensure the RegionRouteOverride EdgionData "data-validated" is visible via configserver
                     let pm_url = format!(
-                        "{}/configserver/EdgionData?namespace={}&name=pm-validated",
+                        "{}/configserver/EdgionData?namespace={}&name=data-validated",
                         ctx.admin_api_url(),
                         PM_MANAGED_NS
                     );
@@ -264,14 +264,14 @@ impl EdgionDataManagedTestSuite {
                     if !pm_exists {
                         return TestResult::failed(
                             start.elapsed(),
-                            "Pre-created RegionRouteOverride EdgionData 'pm-validated' not found via configserver within timeout"
+                            "Pre-created RegionRouteOverride EdgionData 'data-validated' not found via configserver within timeout"
                                 .to_string(),
                         );
                     }
 
-                    // Now verify EdgionPlugins "pm-validated" is accepted
+                    // Now verify EdgionPlugins "data-validated" is accepted
                     let ep_url = format!(
-                        "{}/configserver/EdgionPlugins?namespace={}&name=pm-validated",
+                        "{}/configserver/EdgionPlugins?namespace={}&name=data-validated",
                         ctx.admin_api_url(),
                         PM_MANAGED_NS
                     );
@@ -329,14 +329,14 @@ impl EdgionDataManagedTestSuite {
                     if accepted {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "EdgionPlugins 'pm-validated' accepted with pre-created RegionRouteOverride EdgionData"
+                            "EdgionPlugins 'data-validated' accepted with pre-created RegionRouteOverride EdgionData"
                                 .to_string(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "EdgionPlugins 'pm-validated' not Accepted within timeout. Last error: {}",
+                                "EdgionPlugins 'data-validated' not Accepted within timeout. Last error: {}",
                                 last_err
                             ),
                         )
@@ -358,7 +358,7 @@ impl TestSuite for EdgionDataManagedTestSuite {
             Self::override_data_exists(),
             // Test 2: EdgionPlugins resolves overrideRef and is accepted
             Self::ep_resolves_pm_chain(),
-            // Test 3: pm-validated EdgionPlugins is also accepted with its pre-created RegionRouteOverride EdgionData
+            // Test 3: data-validated EdgionPlugins is also accepted with its pre-created RegionRouteOverride EdgionData
             Self::pm_validated_accepted(),
         ]
     }
