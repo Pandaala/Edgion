@@ -1,16 +1,17 @@
 # 05 — Issues
 
-## I1 — [PRE-MERGE COORDINATION] EdgionData refactor requires a coordinated EdgionCenter update
+## I1 — [OFFLOADED] EdgionCenter adoption tracked as a separate task
+
+**Status:** OFFLOADED to `tasks/todo/edgion-center-edgion-data-sync/` (2026-06-16). That standalone task
+file carries the full coordination plan, surface area, and merge order. Summary kept here for context only;
+do not edit the working items on this file — work them in the new task.
 
 **Severity:** pre-merge coordination (NOT an Edgion-side implementation blocker).
 
-**Decision (autonomous run, 2026-06-16):** Edgion-side implementation proceeds through S3. Rationale: S1
-already renamed the shared `edgion-resources` public API (`PluginMetaData`→`EdgionData`, `DataRef`, module
-paths), so EdgionCenter already needs a coordinated update from S1 onward — S3 is not a *new* kind of break.
-The Edgion repo compiles/tests independently of EdgionCenter. **Required before merging this branch or
-deploying federation:** update EdgionCenter to the new shared API + the new fed_sync RegionRoute shape
-(base in EdgionPlugins + `RegionRouteOverride` EdgionData, replacing the old Cluster/ServiceRegionRoute PM
-variants and the `*Entry` types). EdgionCenter is not checked out locally, so this must be done in its repo.
+**Decision (autonomous run, 2026-06-16):** Edgion-side implementation proceeded through S3 because S1
+already renamed the shared `edgion-resources` public API; S3 was not a *new* kind of break. The Edgion repo
+compiles/tests independently. **Required before merging this branch or deploying federation:** the
+EdgionCenter-side adoption captured in `tasks/todo/edgion-center-edgion-data-sync/`.
 
 **What:** The RegionRoute parsed-entry types and the `ClusterRegionRoute` / `ServiceRegionRoute` PM variants
 live in the shared `edgion-resources` crate and are consumed by **EdgionCenter** (separate repo, federation
