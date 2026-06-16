@@ -15,6 +15,7 @@ use etcd_client::{
 };
 
 use super::client::EtcdLinkClient;
+use super::config_mapping::health_probe_timeout;
 use crate::link::LinkSysHealth;
 
 // ============================================================================
@@ -484,11 +485,12 @@ impl EtcdLinkClient {
             .await
             .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
 
-        client
-            .status()
-            .await
-            .map_err(|e| anyhow::anyhow!("Etcd STATUS: {:?}", e))?;
-        Ok(std::time::Instant::now().saturating_duration_since(start).as_millis() as u64)
+        let d = health_probe_timeout(self.config());
+        match tokio::time::timeout(d, client.status()).await {
+            Ok(Ok(_)) => Ok(start.elapsed().as_millis() as u64),
+            Ok(Err(e)) => Err(anyhow::anyhow!("Etcd STATUS: {:?}", e)),
+            Err(_) => Err(anyhow::anyhow!("Etcd STATUS timeout after {:?}", d)),
+        }
     }
 
     /// Get detailed health status for admin API exposure.

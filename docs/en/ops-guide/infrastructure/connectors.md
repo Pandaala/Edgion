@@ -188,11 +188,12 @@ spec:
 | `topology.cluster` | Object | none | Cluster configuration. **Required when `mode=cluster`.** |
 | `topology.sentinel.masterName` | String | **Required** | Master name monitored by Sentinel. |
 | `topology.sentinel.sentinels` | Array\<String\> | **Required** | Sentinel addresses (`host:port`). |
-| `topology.sentinel.password` | String | none | Sentinel's own password, independent of Redis node auth. |
 | `topology.cluster.readFromReplicas` | Boolean | none | Allow reads to be served from replica nodes. |
 | `topology.cluster.maxRedirects` | Integer | none | Maximum cluster redirects to follow. |
 
 When `topology` is omitted, the connector runs in standalone mode. When `mode=sentinel` but `sentinel` is missing (or `mode=cluster` but `cluster` is missing), the status reports `Accepted=False/Invalid`.
+
+> **Note**: `topology.sentinel.password` (a Sentinel-specific password separate from Redis node auth) has been removed — it was a runtime no-op and was never consumed by the connector. If you have an existing CR that includes a `password:` field under `topology.sentinel`, the Kubernetes API server will silently prune it on re-apply; it does not cause a parse error.
 
 #### Example: Sentinel high availability
 
@@ -367,6 +368,12 @@ Multiple endpoints are used for round-robin load balancing. This connector is al
 | `bulk.channelSize` | Integer | `10000` | Producer-to-bulk-loop channel capacity. Ceiling 100000. |
 
 ### Failed-document cache
+
+> **Status: planned — not yet implemented.** The `failedCache` schema and example
+> below describe the intended design only. The gateway does **not** currently honor
+> a `failedCache` block (unknown CRD fields are pruned, so setting it has no effect).
+> Until it ships, register a `localFile` sink as a fallback so logs are not lost
+> during an Elasticsearch outage. Tracking: `edgion-gateway/src/link_sys/readme`.
 
 When indexing fails, documents can be buffered for later retry.
 

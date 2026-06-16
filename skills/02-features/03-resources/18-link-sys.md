@@ -103,7 +103,6 @@ spec:
       sentinel:
         masterName: mymaster
         sentinels: ["sentinel-1:26379", "sentinel-2:26379"]
-        password: "..."           # The Sentinel's own password, independent of Redis node auth
       # cluster:
       #   readFromReplicas: true
       #   maxRedirects: 6
@@ -189,7 +188,7 @@ spec:
     index:
       prefix: "edgion-logs"
       datePattern: "%Y.%m.%d"
-    failedCache:
+    failedCache:                  # PLANNED, not yet implemented — pruned by the API server, no effect today
       type: localFile             # localFile | redis
       localFile:
         path: "/var/log/edgion/es-failed"
@@ -203,6 +202,7 @@ spec:
 
 - Auth tagged-enum: `type: basic` → `BasicAuthResolver`, `type: apiKey` → `EsApiKeyResolver`, `type: bearer` → `BearerResolver`.
 - At runtime, requests are issued via reqwest directly over HTTP, without depending on the official `elasticsearch` crate; OpenSearch-compatible.
+- `failedCache` (spill-on-outage + replay-on-recovery) is **planned, not yet implemented** — the field shown above is a design placeholder and is pruned by the API server today (it has no effect). See `edgion-gateway/src/link_sys/readme`.
 
 ### `type: webhook`
 

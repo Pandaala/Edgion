@@ -25,6 +25,7 @@ const SAFE_METHODS: &[&str] = &["GET", "HEAD", "OPTIONS"];
 pub struct Csrf {
     name: String,
     config: CsrfConfig,
+    key: String,
 }
 
 impl Csrf {
@@ -33,6 +34,9 @@ impl Csrf {
         Csrf {
             name: "Csrf".to_string(),
             config: config.clone(),
+            // Guaranteed non-empty by the plugin_validation_error gate before the
+            // plugin goes live; unwrap_or_default is a defensive fallback.
+            key: config.resolved_key.clone().unwrap_or_default(),
         }
     }
 
@@ -55,7 +59,7 @@ impl Csrf {
     /// Generate and set CSRF token cookie in response
     /// Enforces rigorous security practices for the cookie.
     fn set_csrf_cookie(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) {
-        let token = CsrfToken::generate(&self.config.key);
+        let token = CsrfToken::generate(&self.key);
         match token.encode() {
             Ok(encoded_token) => {
                 // Build the cookie.
@@ -139,7 +143,7 @@ impl RequestFilter for Csrf {
         // 4. Verify token SIGNATURE and EXPIRATION (Stateless checking)
         match CsrfToken::decode(&cookie_token) {
             Ok(token) => {
-                if token.verify(&self.config.key, self.config.expires) {
+                if token.verify(&self.key, self.config.expires) {
                     plugin_log.push("OK");
                     PluginRunningResult::GoodNext
                 } else {
@@ -169,7 +173,8 @@ mod tests {
     fn create_csrf_config() -> CsrfConfig {
         CsrfConfig {
             name: "X-CSRF-Token".to_string(),
-            key: "test-secret-key-32-bytes-long!".to_string(),
+            secret_ref: None,
+            resolved_key: Some("test-secret-key-32-bytes-long!".to_string()),
             expires: 7200,
             cookie_secure: true,
         }

@@ -111,6 +111,15 @@ pub struct GRPCRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_retry: Option<ParsedRouteRetry>,
+
+    /// Pre-parsed `edgion.io/retry-non-idempotent` annotation from parent
+    /// GRPCRoute.metadata. gRPC is always POST at the HTTP layer, so by default
+    /// it is treated as non-idempotent and not retried on a reused-connection
+    /// reset; `Some(true)` opts back into that retry. Parsed once at load time
+    /// and copied to every rule under that route.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_allow_non_idempotent_retry: Option<bool>,
 }
 
 impl Clone for GRPCRouteRule {
@@ -125,6 +134,7 @@ impl Clone for GRPCRouteRule {
             session_persistence: self.session_persistence.clone(),
             parsed_timeouts: self.parsed_timeouts.clone(),
             parsed_retry: self.parsed_retry.clone(),
+            parsed_allow_non_idempotent_retry: self.parsed_allow_non_idempotent_retry,
         }
     }
 }
@@ -139,6 +149,10 @@ impl fmt::Debug for GRPCRouteRule {
             .field("timeouts", &self.timeouts)
             .field("retry", &self.retry)
             .field("session_persistence", &self.session_persistence)
+            .field(
+                "parsed_allow_non_idempotent_retry",
+                &self.parsed_allow_non_idempotent_retry,
+            )
             .finish()
     }
 }
@@ -365,11 +379,37 @@ impl GRPCRoute {
     /// all three. Prefer `pre_parse()` over calling `preparse()` directly unless
     /// you intentionally want only the subset above.
     pub fn preparse(&mut self) {
+        // Parse `edgion.io/retry-non-idempotent` annotation. Opt-in: "true"
+        // re-enables replaying the request body on the reused-connection retry
+        // path. gRPC is always POST at the HTTP layer, so the safe default
+        // treats it as non-idempotent and suppresses that retry unless opted in.
+        let parsed_allow_non_idempotent_retry: Option<bool> = self
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(crate::constants::annotations::edgion::RETRY_NON_IDEMPOTENT))
+            .and_then(|v| match v.as_str() {
+                "true" => Some(true),
+                "false" => Some(false),
+                other => {
+                    tracing::info!(
+                        route_namespace = %self.metadata.namespace.as_deref().unwrap_or("default"),
+                        route_name = %self.metadata.name.as_deref().unwrap_or(""),
+                        annotation = %crate::constants::annotations::edgion::RETRY_NON_IDEMPOTENT,
+                        value = %other,
+                        "ignored: expected \"true\" or \"false\""
+                    );
+                    None
+                }
+            });
+
         let Some(rules) = self.spec.rules.as_mut() else {
             return;
         };
 
         for rule in rules.iter_mut() {
+            rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
+
             let Some(backend_refs) = rule.backend_refs.as_mut() else {
                 continue;
             };

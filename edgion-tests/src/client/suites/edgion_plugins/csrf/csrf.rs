@@ -9,8 +9,11 @@
 //   4. Token signature is valid and not expired
 //
 // Required config files (in edgion-tests/integration/conf/EdgionPlugins/Csrf/):
-//   - EdgionPlugins_default_csrf-test.yaml   # Csrf plugin with key/name config
-//   - HTTPRoute_default_csrf-test.yaml        # Route: csrf-test.example.com
+//   - 01_Secret_default_csrf-key.yaml                    # Secret holding the CSRF signing key
+//   - EdgionPlugins_default_csrf-test.yaml               # Csrf plugin with secretRef/name config
+//   - HTTPRoute_default_csrf-test.yaml                   # Route: csrf-test.example.com
+//   - EdgionPlugins_default_csrf-missing-secret.yaml     # Csrf plugin whose secretRef Secret is never created
+//   - HTTPRoute_default_csrf-missing-secret.yaml         # Route: csrf-missing-secret.example.com (fail-closed)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 
@@ -18,6 +21,10 @@ pub struct CsrfTestSuite;
 
 const HOST: &str = "csrf-test.example.com";
 const TOKEN_HEADER: &str = "X-CSRF-Token";
+/// Host routed to a Csrf plugin whose `secretRef` names a Secret that no
+/// fixture creates. The gateway must seal the plugin fail-closed (reject with
+/// 500) rather than serve CSRF with an empty key.
+const MISSING_SECRET_HOST: &str = "csrf-missing-secret.example.com";
 
 /// Extract the CSRF token value from a Set-Cookie header string.
 /// The cookie looks like: X-CSRF-Token=<value>; Path=/; ...
@@ -366,6 +373,53 @@ impl CsrfTestSuite {
             },
         )
     }
+
+    /// A Csrf plugin whose secretRef points at a Secret that is never created
+    /// must be sealed fail-closed: any request to the route is rejected with
+    /// 500, NOT served with an empty signing key. This exercises the gateway
+    /// gate in plugin_runtime.rs::plugin_validation_error (CSRF with no
+    /// resolved_key → seal_fail_closed → RejectFilter → 500).
+    fn test_missing_secret_fails_closed() -> TestCase {
+        TestCase::new(
+            "missing_secret_fails_closed",
+            "Csrf plugin with an unresolvable secretRef is sealed fail-closed (500), not served with an empty key",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = std::time::Instant::now();
+                    // GET is a safe method that normally sets a CSRF cookie; if the
+                    // plugin were served with an empty key it would return 200 here.
+                    let url = format!("{}/health", ctx.http_url());
+
+                    let resp = match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", MISSING_SECRET_HOST)
+                        .send()
+                        .await
+                    {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    };
+
+                    let status = resp.status().as_u16();
+                    if status == 500 {
+                        TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Csrf plugin with missing Secret correctly returned 500 (fail-closed)".into(),
+                        )
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected 500 (fail-closed) for unresolvable CSRF secretRef, got {}",
+                                status
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for CsrfTestSuite {
@@ -382,6 +436,7 @@ impl TestSuite for CsrfTestSuite {
             Self::test_missing_cookie_returns_401(),
             Self::test_mismatched_tokens_returns_401(),
             Self::test_invalid_signature_returns_401(),
+            Self::test_missing_secret_fails_closed(),
         ]
     }
 }

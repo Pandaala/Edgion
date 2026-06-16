@@ -1,9 +1,9 @@
 //! Kafka LinkSys runtime client.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use arc_swap::ArcSwapOption;
@@ -26,6 +26,60 @@ const DEFAULT_CHANNEL_SIZE: usize = 4096;
 const DEFAULT_LINGER_MS: u64 = 5;
 const MAX_BATCH_SIZE: usize = 1_000_000;
 
+/// Fold a single produce result into the shared `healthy` flag.
+///
+/// Returns `true` iff the flag actually flipped, so the caller emits metrics + a
+/// (rate-limited) log only on a real transition. `compare_exchange` means that when
+/// multiple per-topic tasks share one flag, only the task that wins a flip acts.
+/// `Relaxed` is sufficient: this is a single independent advisory flag with no
+/// happens-before relationship to `inner_client` (which carries its own sync via
+/// `ArcSwapOption`). The flag is read only as a routing hint and does not protect
+/// any other shared state. A stale failure CAS can spuriously flip an
+/// already-recovered flag back to unhealthy; this is acceptable because the flag is
+/// corrected on the next successful produce.
+fn record_produce_result(healthy: &AtomicBool, ok: bool) -> bool {
+    if ok {
+        healthy
+            .compare_exchange(false, true, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    } else {
+        healthy
+            .compare_exchange(true, false, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    }
+}
+
+const FLIP_LOG_MIN_INTERVAL_MS: u64 = 5_000;
+
+/// Process-start monotonic base for flip-log rate limiting.
+static FLIP_CLOCK_BASE: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// Pure rate-limit core (clock-injected, unit-testable without sleeping).
+///
+/// Returns `true` (and stamps `last`) iff this is the first flip (`last == 0` sentinel)
+/// or at least `interval_ms` has passed since the last allowed flip. Shared across both
+/// directions, so total flip-log rate is bounded to <=1 line per window per client even
+/// under partial-outage ping-pong.
+///
+/// Best-effort throttle: the load/store pair is non-atomic, so concurrent first callers
+/// may both return `true` (a one-off double-log). This is acceptable — the gate only
+/// limits log volume, it is not a correctness barrier.
+fn flip_log_allowed_at(last: &AtomicU64, now_ms: u64, interval_ms: u64) -> bool {
+    let prev = last.load(Ordering::Relaxed);
+    if prev != 0 && now_ms.saturating_sub(prev) < interval_ms {
+        return false;
+    }
+    // Never store 0, so the "first flip" sentinel stays meaningful.
+    last.store(now_ms.max(1), Ordering::Relaxed);
+    true
+}
+
+/// Thin wrapper supplying the real monotonic clock and configured interval.
+fn flip_log_allowed(last: &AtomicU64) -> bool {
+    let now_ms = FLIP_CLOCK_BASE.elapsed().as_millis() as u64;
+    flip_log_allowed_at(last, now_ms, FLIP_LOG_MIN_INTERVAL_MS)
+}
+
 pub struct KafkaLinkClient {
     name: String,
     config: KafkaClientConfig,
@@ -35,6 +89,8 @@ pub struct KafkaLinkClient {
     inner_client: ArcSwapOption<rskafka::client::Client>,
     topics: DashMap<String, mpsc::Sender<String>>,
     healthy: Arc<AtomicBool>,
+    /// Monotonic-ms timestamp of the last emitted flip log; gate for log rate limiting.
+    last_flip_log_ms: Arc<AtomicU64>,
 }
 
 impl KafkaLinkClient {
@@ -55,6 +111,7 @@ impl KafkaLinkClient {
             inner_client: ArcSwapOption::empty(),
             topics: DashMap::new(),
             healthy: Arc::new(AtomicBool::new(false)),
+            last_flip_log_ms: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -93,8 +150,9 @@ impl KafkaLinkClient {
                 let linger_ms = self.linger_ms;
                 let name = self.name.clone();
                 let healthy = Arc::clone(&self.healthy);
+                let last_flip_log_ms = Arc::clone(&self.last_flip_log_ms);
                 tokio::spawn(async move {
-                    Self::run_producer_task(client, topic_owned, rx, linger_ms, name, healthy).await;
+                    Self::run_producer_task(client, topic_owned, rx, linger_ms, name, healthy, last_flip_log_ms).await;
                 });
                 tx
             })
@@ -112,6 +170,7 @@ impl KafkaLinkClient {
         linger_ms: u64,
         name: String,
         healthy: Arc<AtomicBool>,
+        last_flip_log_ms: Arc<AtomicU64>,
     ) {
         let Some(client) = client else {
             tracing::error!(kafka = %name, %topic, "producer task started with no client");
@@ -125,6 +184,14 @@ impl KafkaLinkClient {
             Err(e) => {
                 tracing::error!(kafka = %name, %topic, "PartitionClient init failed: {}", e);
                 healthy.store(false, Ordering::Relaxed);
+                // Keep the gauge in sync with the flag: the task exits below and would
+                // otherwise leave the gauge stuck at the init() baseline of 1.
+                crate::observe::metrics::registry::record_link_sys_health(&name, false);
+                // TODO(task-05): the producer task exits here and the topic entry is never
+                // respawned, so this topic cannot self-recover. Task 05's background probe owns
+                // rebuild/liveness — it must respawn this task, not merely flip the flag. Note
+                // this path updates the gauge but not `record_link_sys_health_flip`; task 05
+                // should also emit the flip counter once it gives this path real recovery.
                 return;
             }
         };
@@ -139,9 +206,25 @@ impl KafkaLinkClient {
                 headers: BTreeMap::new(),
                 timestamp: Utc::now(),
             };
-            if let Err(e) = producer.produce(record).await {
-                tracing::warn!(kafka = %name, %topic, "produce failed: {}", e);
-                healthy.store(false, Ordering::Relaxed);
+            match producer.produce(record).await {
+                Ok(_) => {
+                    if record_produce_result(&healthy, true) {
+                        crate::observe::metrics::registry::record_link_sys_health(&name, true);
+                        crate::observe::metrics::registry::record_link_sys_health_flip(&name, true);
+                        if flip_log_allowed(&last_flip_log_ms) {
+                            tracing::info!(kafka = %name, %topic, "Kafka recovered: produce succeeded");
+                        }
+                    }
+                }
+                Err(e) => {
+                    if record_produce_result(&healthy, false) {
+                        crate::observe::metrics::registry::record_link_sys_health(&name, false);
+                        crate::observe::metrics::registry::record_link_sys_health_flip(&name, false);
+                        if flip_log_allowed(&last_flip_log_ms) {
+                            tracing::warn!(kafka = %name, %topic, "Kafka degraded: produce failed: {}", e);
+                        }
+                    }
+                }
             }
         }
     }
@@ -182,6 +265,7 @@ impl LinkSysLifecycle for KafkaLinkClient {
         let client = builder.build().await?;
         self.inner_client.store(Some(Arc::new(client)));
         self.healthy.store(true, Ordering::Relaxed);
+        crate::observe::metrics::registry::record_link_sys_health(&self.name, true);
         Ok(())
     }
 
@@ -231,5 +315,60 @@ mod tests {
         assert!(!client.healthy()); // not initialized yet
         assert_eq!(client.channel_size, 4096);
         assert_eq!(client.linger_ms, 5);
+    }
+
+    #[test]
+    fn record_produce_result_flips_only_on_change() {
+        let flag = AtomicBool::new(false);
+        // false -> success -> flips to true
+        assert!(record_produce_result(&flag, true));
+        assert!(flag.load(Ordering::Relaxed));
+        // already true + success -> no flip
+        assert!(!record_produce_result(&flag, true));
+        // true -> failure -> flips to false
+        assert!(record_produce_result(&flag, false));
+        assert!(!flag.load(Ordering::Relaxed));
+        // already false + failure -> no flip
+        assert!(!record_produce_result(&flag, false));
+    }
+
+    #[test]
+    fn record_produce_result_single_winner_under_contention() {
+        use std::sync::Arc;
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut handles = Vec::new();
+        for _ in 0..16 {
+            let f = Arc::clone(&flag);
+            handles.push(std::thread::spawn(move || record_produce_result(&f, true)));
+        }
+        let winners = handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .filter(|&won| won)
+            .count();
+        assert_eq!(winners, 1, "exactly one task may win the false->true flip");
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn flip_log_allowed_at_rate_limits_within_window() {
+        let last = AtomicU64::new(0);
+        // first flip (sentinel 0) always logs
+        assert!(flip_log_allowed_at(&last, 1_000, 5_000));
+        // within the window -> suppressed
+        assert!(!flip_log_allowed_at(&last, 2_000, 5_000));
+        // window elapsed -> allowed again
+        assert!(flip_log_allowed_at(&last, 6_000, 5_000));
+        // never stores the 0 sentinel
+        assert_ne!(last.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn flip_log_allowed_at_first_call_logs_even_at_time_zero() {
+        let last = AtomicU64::new(0);
+        // now_ms == 0 right after process start must still log (sentinel handling)
+        assert!(flip_log_allowed_at(&last, 0, 5_000));
+        // `now_ms.max(1)` must have stored 1, not the forbidden 0 sentinel
+        assert_eq!(last.load(Ordering::Relaxed), 1);
     }
 }

@@ -128,6 +128,26 @@ pub fn default_connect_options() -> ConnectOptions {
     ConnectOptions::new().with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS))
 }
 
+/// Default ceiling for live health-probe `status()` calls when the CRD does not
+/// set an explicit per-request timeout. 5s matches the Redis provider's
+/// DEFAULT_COMMAND_TIMEOUT_MS, keeping cross-provider health semantics aligned.
+const DEFAULT_HEALTH_PROBE_TIMEOUT_MS: u64 = 5_000;
+
+/// Resolve the per-call timeout for a health-probe `status()`: prefer the
+/// operator-configured request timeout, else the 5s default. Clamped to
+/// `MAX_REQUEST_TIMEOUT_MS` so a misconfiguration cannot disable the ceiling.
+///
+/// etcd-client already honors a configured request timeout internally; this
+/// wrap is a hard backstop whose real value is protecting the *unconfigured*
+/// case (where a stuck etcd would otherwise hang the call forever).
+pub fn health_probe_timeout(crd: &EtcdClientConfig) -> Duration {
+    crd.timeout
+        .as_ref()
+        .and_then(|t| t.request)
+        .map(|ms| Duration::from_millis(ms.min(MAX_REQUEST_TIMEOUT_MS)))
+        .unwrap_or_else(|| Duration::from_millis(DEFAULT_HEALTH_PROBE_TIMEOUT_MS))
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -349,5 +369,48 @@ mod tests {
         };
         let options = build_connect_options(&crd, &no_auth()).unwrap();
         assert!(options.is_none());
+    }
+
+    #[test]
+    fn test_health_probe_timeout_uses_configured_request() {
+        let crd = EtcdClientConfig {
+            timeout: Some(EtcdTimeout {
+                dial: None,
+                request: Some(10_000),
+                keep_alive: None,
+            }),
+            ..minimal_config(vec!["http://localhost:2379".to_string()])
+        };
+        assert_eq!(health_probe_timeout(&crd), Duration::from_millis(10_000));
+    }
+
+    #[test]
+    fn test_health_probe_timeout_clamps_to_max() {
+        let crd = EtcdClientConfig {
+            timeout: Some(EtcdTimeout {
+                dial: None,
+                request: Some(999_999),
+                keep_alive: None,
+            }),
+            ..minimal_config(vec!["http://localhost:2379".to_string()])
+        };
+        // MAX_REQUEST_TIMEOUT_MS = 60_000
+        assert_eq!(health_probe_timeout(&crd), Duration::from_millis(60_000));
+    }
+
+    #[test]
+    fn test_health_probe_timeout_defaults_when_unset() {
+        let crd = minimal_config(vec!["http://localhost:2379".to_string()]);
+        assert_eq!(health_probe_timeout(&crd), Duration::from_millis(5_000));
+
+        let crd2 = EtcdClientConfig {
+            timeout: Some(EtcdTimeout {
+                dial: Some(3_000),
+                request: None,
+                keep_alive: None,
+            }),
+            ..minimal_config(vec!["http://localhost:2379".to_string()])
+        };
+        assert_eq!(health_probe_timeout(&crd2), Duration::from_millis(5_000));
     }
 }

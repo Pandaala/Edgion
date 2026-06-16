@@ -129,7 +129,23 @@ Some ACME providers (for example ZeroSSL) require an External Account Binding (E
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `externalAccountBinding.keyId` | String | **Required (when present)** | EAB key identifier from the provider |
-| `externalAccountBinding.hmacKey` | String | **Required (when present)** | base64url-encoded HMAC key from the provider |
+| `externalAccountBinding.keySecretRef` | Object | **Required (when present)** | Reference to a Kubernetes Secret whose `hmacKey` data entry holds the base64url-encoded HMAC key from the provider |
+
+To create the Secret:
+
+```bash
+kubectl create secret generic eab-hmac-key \
+  --from-literal=hmacKey="<base64url-encoded-hmac-key-from-provider>" \
+  -n production
+```
+
+```yaml
+externalAccountBinding:
+  keyId: "your-eab-key-id"
+  keySecretRef:
+    name: eab-hmac-key
+    namespace: production
+```
 
 Omit `externalAccountBinding` entirely for Let's Encrypt, which does not require it.
 

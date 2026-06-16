@@ -39,11 +39,23 @@ Important:
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
 | `edgion.io/hostname-resolution` | controller-generated string | system-managed | Diagnostic annotation describing effective hostname resolution. The controller writes it during parse. Do not hand-author it. |
+| `edgion.io/retry-non-idempotent` | `"true"` / `"false"` | `false` (safe) | Opt-in to retrying non-idempotent methods on the reused-connection retry path. Applies to all rules under this HTTPRoute/GRPCRoute. |
 
 Notes:
 
 - Retry configuration uses the standard Gateway API `spec.rules[*].retry` field (see HTTPRoute/GRPCRoute resource docs). Runtime precedence: `rule.retry.attempts > EdgionGatewayConfig.spec.maxRetries`.
 - `edgion.io/hostname-resolution` is currently injected on `HTTPRoute` and `GRPCRoute`.
+
+### `edgion.io/retry-non-idempotent`
+
+- **Granularity**: HTTPRoute / GRPCRoute (applied to all rules under the route).
+- **Valid values**:
+  - `"true"` — allow the reused-connection retry to replay a non-idempotent request body (restores the pre-guard behavior).
+  - `"false"` / absent / any other value — keep the safe default.
+- **Default behavior (annotation absent)**: when a reused keepalive connection is reset mid-request, the buffered request body is replayed on a fresh connection only for idempotent methods (GET/HEAD/PUT/DELETE/OPTIONS/TRACE). Non-idempotent methods (POST/PATCH/CONNECT, and all gRPC since it is POST at the HTTP layer) are **not** retried there, to avoid a silent duplicate mutation.
+- **Scope**: only the reused-connection retry path (`error_while_proxy` Case 2). The connect-failure path (`fail_to_connect`) never wrote request bytes upstream and is always retried regardless of method. The status-code retry (`retry.codes`) and per-try-timeout paths are explicitly operator-configured and are unaffected by this guard.
+- **Why an annotation, not a CRD field**: the standard Gateway API `HTTPRouteRetry` CRD is a structural schema that prunes unknown fields, so a new `spec.rules[*].retry` field would be silently dropped by the API server.
+- **Idempotency definition**: uses `http::Method::is_idempotent()` (RFC 9110), matching nginx's default `proxy_next_upstream` exclusion of non-idempotent methods.
 
 ### `edgion.io/forward-raw-path`
 

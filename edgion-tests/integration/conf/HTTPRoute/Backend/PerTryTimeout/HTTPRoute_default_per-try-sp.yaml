@@ -1,0 +1,36 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: per-try-sp
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: per-try-timeout-gateway
+      namespace: edgion-test
+  hostnames:
+    - "per-try-sp.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      retry:
+        # codes drive the status-retry test (503 -> 200); attempts cover both the
+        # per-try (backendRequest) cancel-and-retry and the status retry.
+        attempts: 3
+        codes: [502, 503]
+      sessionPersistence:
+        sessionName: "edgion-sp-ptt"
+        type: Cookie
+        absoluteTimeout: "1h"
+        cookieConfig:
+          lifetimeType: Permanent
+        # Non-strict (default): on a cross-attempt retry the gateway re-picks via
+        # plain LB and refreshes the cookie to the serving backend.
+      timeouts:
+        request: "10s"
+        backendRequest: "1s"
+      backendRefs:
+        - name: per-try-sp
+          namespace: edgion-test
+          port: 30001

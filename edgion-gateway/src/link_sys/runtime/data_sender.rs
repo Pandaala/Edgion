@@ -2,9 +2,11 @@
 //!
 //! Implementations:
 //! - [x] LocalFileWriter - file-based with rotation
-//! - [x] Elasticsearch sender with FailedCache support
+//! - [x] Elasticsearch sender (bulk indexing)
 //! - [x] Kafka async producer
 //! - [x] OTLP gRPC exporter (via opentelemetry-otlp)
+//! - [ ] FailedCache (spill-on-outage + replay-on-recovery) — planned, not yet
+//!   implemented; see `link_sys/readme` for the original design.
 
 use anyhow::Result;
 use async_trait::async_trait;

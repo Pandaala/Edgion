@@ -952,6 +952,7 @@ run_all_tests() {
             EdgionPlugins)
                 if [ -z "$G_ITEM" ]; then
                     run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
+                    run_test "EdgionPlugins_Csrf" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Csrf" || test_failed=true
                     run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
                     run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
                     run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
@@ -976,6 +977,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
                     run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
                     run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
+                    run_test "EdgionPlugins_FaultInjection" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i FaultInjection" || test_failed=true
                     run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
                     run_test "EdgionPlugins_ExtProc" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ExtProc" || test_failed=true
                     run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true
@@ -1134,6 +1136,7 @@ run_all_tests() {
         run_test "Gateway_TLS_BackendTLS" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i TLS/BackendTLS" || test_failed=true
         # EdgionPlugins Tests
         run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
+        run_test "EdgionPlugins_Csrf" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Csrf" || test_failed=true
         run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
         run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
         run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
@@ -1158,6 +1161,7 @@ run_all_tests() {
         run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
         run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
         run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
+        run_test "EdgionPlugins_FaultInjection" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i FaultInjection" || test_failed=true
         run_test "EdgionPlugins_ForwardAuth" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ForwardAuth" || test_failed=true
         run_test "EdgionPlugins_ExtProc" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ExtProc" || test_failed=true
         run_test "EdgionPlugins_OpenidConnect" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i OpenidConnect" || test_failed=true

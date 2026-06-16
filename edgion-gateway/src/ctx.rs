@@ -1067,6 +1067,24 @@ impl EdgionHttpContext {
             })
     }
 
+    /// True when the matched route opted into retrying non-idempotent methods
+    /// on the reused-connection retry path via the
+    /// `edgion.io/retry-non-idempotent: "true"` annotation. Defaults to `false`
+    /// (the safe default: a reused keepalive reset is not retried for
+    /// non-idempotent methods, to avoid a silent duplicate mutation).
+    #[inline]
+    pub fn retry_allow_non_idempotent(&self) -> bool {
+        self.route_unit
+            .as_ref()
+            .and_then(|u| u.rule.parsed_allow_non_idempotent_retry)
+            .or_else(|| {
+                self.grpc_route_unit
+                    .as_ref()
+                    .and_then(|u| u.rule.parsed_allow_non_idempotent_retry)
+            })
+            .unwrap_or(false)
+    }
+
     /// True when the matched rule (HTTP or gRPC route unit) carries a retry
     /// policy — i.e. `rules[].retry` was present with at least one recognized field.
     #[inline]

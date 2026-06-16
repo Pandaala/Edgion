@@ -23,11 +23,30 @@ CSRF (Cross-Site Request Forgery，跨站请求伪造) 是一种攻击方式，�
 
 ### 最简单的配置
 
+首先，创建存储签名密钥的 Kubernetes Secret：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: csrf-signing-key
+  namespace: default
+type: Opaque
+data:
+  # base64 编码的签名密钥
+  # 生成命令：openssl rand -base64 32 | tr -d '\n' | base64
+  key: <base64-encoded-signing-key>
+```
+
+然后在插件配置中引用：
+
 ```yaml
 filters:
   - type: Csrf
     config:
-      key: "your-32-char-secret-key-here!!"
+      secretRef:
+        name: csrf-signing-key
+        namespace: default
 ```
 
 ### 工作流程
@@ -53,7 +72,7 @@ filters:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `key` | String | 无 | **必填**。用于签名 token 的密钥。建议 32 字符以上，使用强随机值 |
+| `secretRef` | Object | 无 | **必填**。引用一个 Kubernetes Secret，其 `key` 数据条目存储 CSRF 签名密钥。 |
 | `expires` | Integer | `7200` (2小时) | Token 过期时间（秒）。建议与会话过期时间一致 |
 | `name` | String | `"apisix-csrf-token"` | Token 名称，用于 cookie 和 header |
 | `cookieSecure` | Boolean | `true` | 是否为 token cookie 设置 `Secure` 属性。客户端通过 HTTPS 访问 Edgion 时保持 `true`。对于 HTTP-only 部署模型（上游 LB/sidecar 终结 TLS、mesh 内部纯 HTTP、本地开发）设为 `false`——否则浏览器会丢弃 HTTP 上收到的 `Secure` cookie，导致每个修改型请求都因 `no csrf cookie` 失败 |
@@ -68,7 +87,9 @@ filters:
 filters:
   - type: Csrf
     config:
-      key: "9Kx8mV2nP5qR7tY3zB6cF1gH4jL0wX"
+      secretRef:
+        name: csrf-signing-key
+        namespace: production
       expires: 7200  # 2 hours
 ```
 
@@ -78,7 +99,9 @@ filters:
 filters:
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
+        namespace: production
       name: "x-csrf-token"  # 自定义名称
       expires: 3600  # 1 hour
 ```
@@ -89,7 +112,9 @@ filters:
 filters:
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
+        namespace: production
       expires: 86400  # 24 hours
 ```
 
@@ -281,27 +306,22 @@ export default {
 
 ### ✅ 推荐做法
 
-1. **使用强密钥**
-   ```yaml
-   # ✅ 好：32+ 字符，强随机
-   key: "9Kx8mV2nP5qR7tY3zB6cF1gH4jL0wX8dR2fT9pN5mQ"
-   
-   # ❌ 差：短且可预测
-   key: "secret123"
-   ```
-
-2. **生成随机密钥**
+1. **将签名密钥存储在 Kubernetes Secret 中**
    ```bash
-   # Linux/macOS
-   openssl rand -base64 32
-   
-   # 或
-   head -c 32 /dev/urandom | base64
+   # 生成强随机密钥并创建 Secret
+   kubectl create secret generic csrf-signing-key \
+     --from-literal=key="$(openssl rand -base64 32)" \
+     -n production
    ```
 
-3. **定期轮换密钥**
-   - 建议每 30-90 天更换一次密钥
-   - 更换后旧 token 会失效
+2. **通过 Secret 轮换签名密钥**
+   - 每 30-90 天更新一次 Secret 的 `key` 数据条目
+   - 轮换后旧 CSRF token 会失效
+   - 使用 `kubectl create secret generic ... --dry-run=client -o yaml | kubectl apply -f -` 进行原地轮换
+
+3. **用 RBAC 限制 Secret 访问权限**
+   - 仅向需要访问的服务账号授予对签名密钥 Secret 的读权限
+   - 通过 Kubernetes 审计日志审计 Secret 访问记录
 
 4. **与会话管理配合**
    ```yaml
@@ -314,17 +334,15 @@ export default {
 
 ### ❌ 避免做法
 
-1. **不要使用弱密钥**
-   ```yaml
-   # ❌ 危险
-   key: "123456"
-   key: "password"
-   key: "secret"
+1. **不要在 Secret 中存储弱密钥内容**
+   ```bash
+   # ❌ 危险——密钥值过短或可预测
+   kubectl create secret generic csrf-signing-key --from-literal=key="123456"
    ```
 
-2. **不要在客户端暴露密钥**
-   - 密钥只在服务端使用
-   - 客户端只需要知道 token 值
+2. **不要暴露签名密钥**
+   - 签名密钥存储在 Kubernetes Secret 中，只在服务端使用
+   - 客户端只需要知道 CSRF token 值，不需要知道签名密钥
 
 3. **不要禁用 CSRF 保护**
    ```yaml
@@ -447,7 +465,9 @@ filters:
   
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
+        namespace: default
 ```
 
 ### 问题 2：移动应用集成
@@ -467,7 +487,9 @@ filters:
 filters:
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
+        namespace: default
       expires: 14400  # 延长到 4 小时
 ```
 
@@ -489,7 +511,8 @@ filters:
   # 再进行 CSRF 验证
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
 ```
 
 **重要**：
@@ -509,7 +532,8 @@ filters:
   # 再进行 CSRF 验证
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
 ```
 
 ---
@@ -558,7 +582,9 @@ spec:
         maxAge: 86400
     - type: Csrf
       config:
-        key: "9Kx8mV2nP5qR7tY3zB6cF1gH4jL0wX8d"
+        secretRef:
+          name: csrf-signing-key
+          namespace: default
         expires: 7200
         name: "apisix-csrf-token"
 ```

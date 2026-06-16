@@ -47,7 +47,9 @@ spec:
 
   # externalAccountBinding:                                    # EAB (optional)
   #   keyId: "kid123"
-  #   hmacKey: "base64url-encoded-key"
+  #   keySecretRef:                                            # Secret.data.hmacKey = base64url HMAC key
+  #     name: eab-hmac-key
+  #     namespace: default
 
   storage:
     secretName: "my-acme-cert"                                 # Secret name for storing the certificate

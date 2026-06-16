@@ -23,11 +23,30 @@ CSRF (Cross-Site Request Forgery) is an attack method where an attacker tricks a
 
 ### Simplest Configuration
 
+Create a Kubernetes Secret holding the signing key:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: csrf-signing-key
+  namespace: default
+type: Opaque
+data:
+  # base64-encoded signing key
+  # Generate: openssl rand -base64 32 | tr -d '\n' | base64
+  key: <base64-encoded-signing-key>
+```
+
+Reference it in the plugin config:
+
 ```yaml
 filters:
   - type: Csrf
     config:
-      key: "your-32-char-secret-key-here!!"
+      secretRef:
+        name: csrf-signing-key
+        namespace: default
 ```
 
 ### Workflow
@@ -53,7 +72,7 @@ filters:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `key` | String | none | **Required**. Secret key used to sign tokens. Recommended 32+ characters, using a strong random value |
+| `secretRef` | Object | none | **Required**. Reference to a Kubernetes Secret whose `key` data entry holds the CSRF signing key. |
 | `expires` | Integer | `7200` (2 hours) | Token expiration time (seconds). Recommended to match the session expiration time |
 | `name` | String | `"apisix-csrf-token"` | Token name, used for cookie and header |
 | `cookieSecure` | Boolean | `true` | Whether to set the `Secure` attribute on the token cookie. Keep `true` when clients reach Edgion over HTTPS. Set `false` for HTTP-only deployment models (TLS terminated upstream at an LB/sidecar, mesh-internal plain HTTP, local development) — otherwise browsers drop the `Secure` cookie over HTTP and every state-mutating request fails with `no csrf cookie` |
@@ -68,7 +87,9 @@ filters:
 filters:
   - type: Csrf
     config:
-      key: "9Kx8mV2nP5qR7tY3zB6cF1gH4jL0wX"
+      secretRef:
+        name: csrf-signing-key
+        namespace: production
       expires: 7200  # 2 hours
 ```
 
@@ -78,7 +99,9 @@ filters:
 filters:
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
+        namespace: production
       name: "x-csrf-token"  # Custom name
       expires: 3600  # 1 hour
 ```
@@ -89,7 +112,9 @@ filters:
 filters:
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
+        namespace: production
       expires: 86400  # 24 hours
 ```
 
@@ -281,27 +306,22 @@ export default {
 
 ### ✅ Recommended
 
-1. **Use a strong key**
-   ```yaml
-   # ✅ Good: 32+ characters, strong random
-   key: "9Kx8mV2nP5qR7tY3zB6cF1gH4jL0wX8dR2fT9pN5mQ"
-   
-   # ❌ Bad: short and predictable
-   key: "secret123"
-   ```
-
-2. **Generate a random key**
+1. **Store the signing key in a Kubernetes Secret**
    ```bash
-   # Linux/macOS
-   openssl rand -base64 32
-   
-   # Or
-   head -c 32 /dev/urandom | base64
+   # Generate a strong random key and create the Secret
+   kubectl create secret generic csrf-signing-key \
+     --from-literal=key="$(openssl rand -base64 32)" \
+     -n production
    ```
 
-3. **Rotate keys regularly**
-   - Recommended every 30-90 days
-   - Old tokens will become invalid after rotation
+2. **Rotate the signing key via the Secret**
+   - Update the Secret's `key` data entry every 30-90 days
+   - Old CSRF tokens will become invalid after rotation
+   - Use `kubectl create secret generic ... --dry-run=client -o yaml | kubectl apply -f -` for in-place rotation
+
+3. **Restrict Secret access with RBAC**
+   - Grant read access to the signing-key Secret only to the service accounts that require it
+   - Audit Secret access via Kubernetes audit logs
 
 4. **Coordinate with session management**
    ```yaml
@@ -314,17 +334,15 @@ export default {
 
 ### ❌ Avoid
 
-1. **Do not use weak keys**
-   ```yaml
-   # ❌ Dangerous
-   key: "123456"
-   key: "password"
-   key: "secret"
+1. **Do not put weak content in the signing-key Secret**
+   ```bash
+   # ❌ Dangerous — key value is too short or predictable
+   kubectl create secret generic csrf-signing-key --from-literal=key="123456"
    ```
 
-2. **Do not expose the key on the client side**
-   - The key is only used server-side
-   - The client only needs to know the token value
+2. **Do not expose the signing key**
+   - The signing key is stored in a Kubernetes Secret and accessed only server-side
+   - The client only needs to know the CSRF token value, not the signing key
 
 3. **Do not disable CSRF protection**
    ```yaml
@@ -447,7 +465,9 @@ filters:
   
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
+        namespace: default
 ```
 
 ### Issue 2: Mobile App Integration
@@ -467,7 +487,9 @@ filters:
 filters:
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
+        namespace: default
       expires: 14400  # Extend to 4 hours
 ```
 
@@ -489,7 +511,8 @@ filters:
   # Then validate CSRF
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
 ```
 
 **Important**:
@@ -511,7 +534,8 @@ filters:
   # Then validate CSRF
   - type: Csrf
     config:
-      key: "your-secret-key"
+      secretRef:
+        name: csrf-signing-key
 ```
 
 ---
@@ -560,7 +584,9 @@ spec:
         maxAge: 86400
     - type: Csrf
       config:
-        key: "9Kx8mV2nP5qR7tY3zB6cF1gH4jL0wX8d"
+        secretRef:
+          name: csrf-signing-key
+          namespace: production
         expires: 7200
         name: "apisix-csrf-token"
 ```

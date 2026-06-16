@@ -59,6 +59,10 @@ pub mod names {
     // Elasticsearch bulk producer: increments each time the producer→bulk-loop
     // mpsc channel is full at submit time (signal to raise `bulk.channelSize`).
     pub const LINK_SYS_ES_BULK_CHANNEL_FULL_TOTAL: &str = "edgion_link_sys_es_bulk_channel_full_total";
+    // Link-sys provider health gauge: 1=healthy, 0=unhealthy, per provider.
+    pub const LINK_SYS_HEALTH: &str = "edgion_link_sys_health";
+    // Link-sys health flip counter (monotonic): exposes sub-scrape flapping the gauge cannot.
+    pub const LINK_SYS_HEALTH_FLIPS_TOTAL: &str = "edgion_link_sys_health_flips_total";
     // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail)
     pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
     // Webhook key resolver: per-resolve failure counter by reason
@@ -439,6 +443,28 @@ pub fn record_lb_panic_mode(service_key: &str, engaged: bool) {
     gauge!(names::LB_PANIC_MODE, "service" => service_key.to_string()).set(if engaged { 1.0 } else { 0.0 });
 }
 
+/// Set the link-sys provider health gauge: 1.0 = healthy, 0.0 = unhealthy.
+///
+/// Called on a healthy<->unhealthy transition and once at init() to establish a
+/// `=1` baseline. Free-function `gauge!` (like `record_lb_panic_mode`) keeps the
+/// series absent from `/metrics` until first emit. `link` cardinality = provider count.
+pub fn record_link_sys_health(name: &str, healthy: bool) {
+    gauge!(names::LINK_SYS_HEALTH, "link" => name.to_string()).set(if healthy { 1.0 } else { 0.0 });
+}
+
+/// Increment the link-sys health flip counter, labelled by provider and direction.
+///
+/// A level gauge cannot represent sub-scrape flapping (it only shows the last value
+/// at scrape time); this monotonic counter does. `direction` is a fixed 2-value set.
+pub fn record_link_sys_health_flip(name: &str, to_healthy: bool) {
+    counter!(
+        names::LINK_SYS_HEALTH_FLIPS_TOTAL,
+        "link" => name.to_string(),
+        "direction" => if to_healthy { "recovered" } else { "degraded" }
+    )
+    .increment(1);
+}
+
 /// Record an ACME HTTP-01 challenge token lookup event.
 ///
 /// `result` must be one of: `"hit"`, `"expired"`, `"domain_mismatch"`, `"not_found"`, `"empty_host"`.
@@ -676,5 +702,43 @@ mod lb_panic_metric_tests {
         // Smoke test: the gauge set path is callable for engaged/cleared.
         record_lb_panic_mode("default/svc", true);
         record_lb_panic_mode("default/svc", false);
+    }
+}
+
+#[cfg(test)]
+mod link_sys_health_metric_tests {
+    use super::*;
+    use metrics_util::debugging::DebuggingRecorder;
+
+    #[test]
+    fn record_link_sys_health_sets_gauge_and_does_not_panic() {
+        // Smoke: gauge set path is callable for both states (mirrors lb_panic smoke test).
+        record_link_sys_health("default/kafka-main", true);
+        record_link_sys_health("default/kafka-main", false);
+    }
+
+    #[test]
+    fn record_link_sys_health_flip_emits_direction_label() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        metrics::with_local_recorder(&recorder, || {
+            record_link_sys_health_flip("default/kafka-main", true);
+            record_link_sys_health_flip("default/kafka-main", false);
+        });
+        let snap = snapshotter.snapshot().into_vec();
+        let key = snap
+            .iter()
+            .find(|(k, _, _, _)| k.key().name() == names::LINK_SYS_HEALTH_FLIPS_TOTAL)
+            .expect("flip counter registered");
+        let labels: Vec<(&str, &str)> = key.0.key().labels().map(|l| (l.key(), l.value())).collect();
+        assert!(labels.contains(&("link", "default/kafka-main")));
+        assert!(labels.contains(&("direction", "recovered")));
+        let degraded = snap.iter().any(|(k, _, _, _)| {
+            k.key().name() == names::LINK_SYS_HEALTH_FLIPS_TOTAL
+                && k.key()
+                    .labels()
+                    .any(|l| l.key() == "direction" && l.value() == "degraded")
+        });
+        assert!(degraded, "degraded flip counter must be registered");
     }
 }

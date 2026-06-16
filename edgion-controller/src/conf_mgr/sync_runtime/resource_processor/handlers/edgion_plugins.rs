@@ -103,6 +103,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_hmac(&mut ep, &resource_ref, ctx);
         cred::resolve_key_auth(&mut ep, &resource_ref, ctx);
         cred::resolve_openid_connect(&mut ep, &resource_ref, ctx);
+        cred::resolve_csrf(&mut ep, &resource_ref, ctx);
 
         // Clear existing EdgionData override refs for this EP, then re-register from scratch.
         Self::clear_override_refs(&ep, ctx);

@@ -772,6 +772,27 @@ async fn fetch_dns_credentials(
     Ok(credentials)
 }
 
+/// Fetch the EAB HMAC key from `external_account_binding.key_secret_ref`.
+/// Returns `Ok(None)` when no EAB is configured, `Ok(Some(key))` when present,
+/// and `Err` when configured but the Secret / `hmacKey` entry is missing or
+/// malformed (which blocks registration — EAB is a CA-side precondition).
+async fn fetch_eab_hmac(client: &Client, acme: &EdgionAcme, owner_ns: &str) -> Result<Option<String>> {
+    let Some(eab) = acme.spec.external_account_binding.as_ref() else {
+        return Ok(None);
+    };
+    let sref = &eab.key_secret_ref;
+    let ns = sref.effective_namespace(owner_ns);
+    let api: Api<Secret> = Api::namespaced(client.clone(), ns);
+    let secret = api
+        .get(&sref.name)
+        .await
+        .with_context(|| format!("Failed to fetch EAB key Secret {}/{}", ns, sref.name))?;
+    let data = secret.data.as_ref().context("EAB key Secret has no data")?;
+    let bytes = data.get("hmacKey").context("EAB key Secret missing 'hmacKey' entry")?;
+    let hmac = String::from_utf8(bytes.0.clone()).context("EAB hmacKey is not valid UTF-8")?;
+    Ok(Some(hmac))
+}
+
 // ============================================================================
 // ACME Account Management
 // ============================================================================
@@ -795,7 +816,6 @@ async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Resul
     let secret_api: Api<Secret> = Api::namespaced(client.clone(), secret_ns);
 
     let eab_kid = acme.spec.external_account_binding.as_ref().map(|e| e.key_id.as_str());
-    let eab_hmac = acme.spec.external_account_binding.as_ref().map(|e| e.hmac_key.as_str());
 
     match secret_api.get(secret_name).await {
         Ok(secret) => {
@@ -812,9 +832,11 @@ async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Resul
                 }
             }
             // Secret object exists, but no account key yet — pre-created empty (self-managed)
-            let (acme_client, credentials) = AcmeClient::new(&acme.spec.server, &acme.spec.email, eab_kid, eab_hmac)
-                .await
-                .context("Failed to create ACME account")?;
+            let eab_hmac = fetch_eab_hmac(client, acme, owner_ns).await?;
+            let (acme_client, credentials) =
+                AcmeClient::new(&acme.spec.server, &acme.spec.email, eab_kid, eab_hmac.as_deref())
+                    .await
+                    .context("Failed to create ACME account")?;
 
             let creds_json =
                 Zeroizing::new(serde_json::to_string(&credentials).context("Failed to serialize account credentials")?);
@@ -834,9 +856,11 @@ async fn get_or_create_acme_account(client: &Client, acme: &EdgionAcme) -> Resul
                 name = %acme_name,
                 "No account Secret yet; creating ACME account and Secret"
             );
-            let (acme_client, credentials) = AcmeClient::new(&acme.spec.server, &acme.spec.email, eab_kid, eab_hmac)
-                .await
-                .context("Failed to create ACME account")?;
+            let eab_hmac = fetch_eab_hmac(client, acme, owner_ns).await?;
+            let (acme_client, credentials) =
+                AcmeClient::new(&acme.spec.server, &acme.spec.email, eab_kid, eab_hmac.as_deref())
+                    .await
+                    .context("Failed to create ACME account")?;
 
             let creds_json =
                 Zeroizing::new(serde_json::to_string(&credentials).context("Failed to serialize account credentials")?);

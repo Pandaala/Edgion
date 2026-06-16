@@ -157,14 +157,6 @@ pub struct RedisSentinel {
 
     /// Sentinel endpoints
     pub sentinels: Vec<String>,
-
-    /// Sentinel password
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::redact::redact_opt::serialize"
-    )]
-    pub password: Option<String>,
 }
 
 /// Redis Cluster configuration
@@ -290,5 +282,15 @@ secretRef:
         let yaml = "secretRef:\n  name: x\nbogus: 1";
         let r: Result<super::RedisAuth, _> = serde_yaml::from_str(yaml);
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn redis_sentinel_ignores_stale_password() {
+        // No deny_unknown_fields on RedisSentinel: a legacy `password:` from a
+        // pre-upgrade CR must be silently ignored, not rejected (graceful upgrade).
+        let yaml = "masterName: mymaster\nsentinels:\n  - redis://h:26379\npassword: legacy-no-op";
+        let s: super::RedisSentinel = serde_yaml::from_str(yaml).expect("stale password must be ignored");
+        assert_eq!(s.master_name, "mymaster");
+        assert_eq!(s.sentinels.len(), 1);
     }
 }
