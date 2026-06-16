@@ -369,6 +369,12 @@ Multiple endpoints are used for round-robin load balancing. This connector is al
 
 ### Failed-document cache
 
+> **Status: planned — not yet implemented.** The `failedCache` schema and example
+> below describe the intended design only. The gateway does **not** currently honor
+> a `failedCache` block (unknown CRD fields are pruned, so setting it has no effect).
+> Until it ships, register a `localFile` sink as a fallback so logs are not lost
+> during an Elasticsearch outage. Tracking: `edgion-gateway/src/link_sys/readme`.
+
 When indexing fails, documents can be buffered for later retry.
 
 | Parameter | Type | Default | Description |

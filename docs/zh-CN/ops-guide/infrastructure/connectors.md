@@ -369,6 +369,11 @@ spec:
 
 ### 失败文档缓存
 
+> **状态：规划中 —— 尚未实现。** 下文的 `failedCache` 配置与示例仅描述设计意图。
+> 网关当前**不会**处理 `failedCache` 配置块（未知 CRD 字段会被裁剪，设置后不生效）。
+> 在其落地前，请额外注册一个 `localFile` sink 作为兜底，以免 Elasticsearch 故障期间丢日志。
+> 跟踪：`edgion-gateway/src/link_sys/readme`。
+
 索引失败时，可以将文档缓存以便后续重试。
 
 | 参数 | 类型 | 默认值 | 说明 |

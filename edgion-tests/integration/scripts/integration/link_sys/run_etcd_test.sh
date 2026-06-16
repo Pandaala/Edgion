@@ -60,9 +60,11 @@ ETCD_PORT=12379
 CONTROLLER_URL="http://127.0.0.1:${CONTROLLER_ADMIN_PORT}"
 CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
 GATEWAY_URL="http://127.0.0.1:${GATEWAY_ADMIN_PORT}"
-# Gateway admin API requires a bearer token. Inherited from start_all_with_conf.sh
-# in normal runs; default here for standalone invocation.
-: "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
+# Gateway admin API requires a bearer token. Must be EXPORTED so the gateway
+# child process (started below) inherits it and configures its admin token —
+# otherwise the gateway fails closed (503) on every business route. Mirrors
+# start_all_with_conf.sh; honors an inherited value for standalone invocation.
+export EDGION_GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
 GATEWAY_PROBE_URL="${GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
 
 # ── Working directory (timestamped, same pattern as start_all_with_conf.sh) ─
@@ -255,6 +257,12 @@ ETCD_NS_CLIENT="default_etcd-ns-test"
 # Cleanup (trap on EXIT, same pattern as run_es_test.sh)
 # =============================================================================
 cleanup() {
+    # Always undo a possible `docker pause` from the degradation/recovery
+    # section first — if an unexpected abort lands between pause and unpause
+    # (set -euo pipefail), a frozen container would otherwise survive and break
+    # the next run's `docker compose up`. Idempotent: a no-op if not paused.
+    docker unpause edgion-test-etcd > /dev/null 2>&1 || true
+
     if [ "$DO_CLEANUP" = true ]; then
         log_section "Cleanup"
 
@@ -721,6 +729,77 @@ assert_json_failure "Health non-existent client returns error" "$RESP"
 
 RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/nons_noname/get/anykey")
 assert_json_failure "GET on non-existent client returns error" "$RESP"
+
+# ── 11.5 Degradation & Recovery (per-call timeout + auto-recovery) ──────────
+# Validates the fix for the etcd health monitor: a hung etcd must NOT hang the
+# health probe — the per-call timeout bounds it — and the background monitor
+# must auto-recover once etcd resumes. Uses the no-timeout client so the 5s
+# default ceiling is the ONLY bound (etcd-test configures request:10000, whose
+# etcd-client-internal timeout would mask the wrap).
+log_info "─── 11.5 Degradation & Recovery ───"
+
+ETCD_NOTIMEOUT_CLIENT="default_etcd-notimeout-test"
+
+# Sanity: the no-timeout client is registered and healthy before we pause etcd.
+RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/${ETCD_NOTIMEOUT_CLIENT}/health")
+assert_json_success "no-timeout client health reachable" "$RESP"
+assert_eq "no-timeout client healthy before pause" "true" "$(echo "$RESP" | jq -r '.data.connected // false')"
+
+# Freeze etcd: an in-flight status() RPC can no longer complete.
+log_info "Pausing etcd container to simulate a hung backend..."
+docker pause edgion-test-etcd > /dev/null
+
+# The /ping call MUST return (bounded by the 5s default), not hang. Use an
+# explicit curl --max-time so a regression fails the assertion instead of
+# hanging the whole suite. SECONDS is integer wall-time (portable; no %N).
+SECONDS=0
+PING_RESP=$(curl -s --max-time 20 -X GET \
+    "${GATEWAY_URL}/api/v1/testing/link-sys/etcd/${ETCD_NOTIMEOUT_CLIENT}/ping" \
+    -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" 2>/dev/null \
+    || echo '{"success":false,"error":"curl max-time elapsed (probe hung)"}')
+PING_ELAPSED=$SECONDS
+
+assert_json_failure "ping on hung etcd returns error (not hang)" "$PING_RESP"
+assert_contains "ping error mentions timeout" "$PING_RESP" "timeout"
+# 5s default + generous margin for scheduling/HTTP. An unbounded hang would be
+# cut off by --max-time 20 and land here at ~20s, failing the bound.
+TESTS_TOTAL=$((TESTS_TOTAL + 1))
+if [ "$PING_ELAPSED" -lt 12 ]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    log_success "ping returned in bounded time (${PING_ELAPSED}s < 12s)"
+else
+    TESTS_FAILED=$((TESTS_FAILED + 1))
+    log_error "ping took ${PING_ELAPSED}s — expected < 12s (timeout not firing?)"
+fi
+
+# Informational only (NOT asserted): /health also calls health_status()->ping().
+# Empirically its value here is non-deterministic across runs (observed true,
+# null, and false) — it races the background monitor's reconnect cycle (a lazy
+# reconnect to the paused container plus probe timing). The deterministic proof
+# of the per-call timeout is the /ping trio above; health_status() delegates to
+# the same ping(), so nothing is lost by not asserting it.
+RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/${ETCD_NOTIMEOUT_CLIENT}/health")
+log_info "health while hung: connected=$(echo "$RESP" | jq -r '.data.connected // "n/a"') (informational, not asserted)"
+
+# Resume etcd: the live probe (and background monitor) must recover (I2).
+log_info "Unpausing etcd; waiting for auto-recovery..."
+docker unpause edgion-test-etcd > /dev/null 2>&1 || true
+
+RECOVERED=false
+for i in $(seq 1 45); do
+    RESP=$(gw_api GET "/api/v1/testing/link-sys/etcd/${ETCD_NOTIMEOUT_CLIENT}/health")
+    if [ "$(echo "$RESP" | jq -r '.data.connected // false')" = "true" ]; then
+        RECOVERED=true
+        log_info "Recovered after ~${i}s"
+        break
+    fi
+    sleep 1
+done
+assert_eq "client auto-recovered after etcd resumed" "true" "$RECOVERED"
+
+# Tidy up the degradation-test client (etcd container is torn down in cleanup
+# regardless, but keep the run symmetric).
+"$EDGION_CLI" --server "$CONTROLLER_URL" delete LinkSys etcd-notimeout-test -n default 2>&1 || true
 
 # ── 12. Lifecycle: delete → client removed ─────────────────────────────────
 log_info "─── 12. Lifecycle: Delete LinkSys ───"

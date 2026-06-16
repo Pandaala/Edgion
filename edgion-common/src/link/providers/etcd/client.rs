@@ -25,7 +25,7 @@ use crate::link::lifecycle::LinkSysLifecycle;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 
-use super::config_mapping::{build_connect_options, default_connect_options};
+use super::config_mapping::{build_connect_options, default_connect_options, health_probe_timeout};
 
 /// Runtime Etcd client wrapper.
 ///
@@ -171,6 +171,8 @@ impl EtcdLinkClient {
             let mut check_interval = base_interval;
             let mut backoff = Duration::from_millis(500);
             let max_backoff = Duration::from_secs(30);
+            // Resolved once: `config` is immutable for the life of the task.
+            let probe_timeout = health_probe_timeout(&config);
 
             loop {
                 tokio::select! {
@@ -181,14 +183,18 @@ impl EtcdLinkClient {
                     }
                 }
 
-                // Try a simple status call as health check
+                // Try a simple status call as health check. Clone the client
+                // INSIDE the read lock, then drop the guard BEFORE awaiting so a
+                // stuck etcd never holds the lock across `status()`. The call is
+                // bounded by `probe_timeout`; a timeout counts as unhealthy.
                 let is_healthy = {
-                    let guard = client.read().await;
-                    if let Some(c) = guard.as_ref() {
-                        let mut mc = c.clone();
-                        mc.status().await.is_ok()
-                    } else {
-                        false
+                    let maybe_client = {
+                        let guard = client.read().await;
+                        guard.as_ref().cloned()
+                    };
+                    match maybe_client {
+                        Some(mut mc) => matches!(tokio::time::timeout(probe_timeout, mc.status()).await, Ok(Ok(_))),
+                        None => false,
                     }
                 };
 
@@ -251,6 +257,13 @@ impl EtcdLinkClient {
     #[inline]
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Borrow the original CRD config (used by the ops module for
+    /// health-probe timeout resolution; the field itself is module-private).
+    #[inline]
+    pub(crate) fn config(&self) -> &EtcdClientConfig {
+        &self.config
     }
 
     /// Get namespace prefix (if configured).

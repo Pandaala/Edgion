@@ -48,9 +48,11 @@ Three deployment modes are supported:
 
 ### Etcd
 
+> Unlike the other providers, Etcd lives in `edgion-common/src/link/providers/etcd/` (re-exported by the gateway), so it can also be used by the controller.
+
 ```
-providers/etcd/
-├── client.rs          # EtcdLinkClient (etcd-client wrapper)
+edgion-common/src/link/providers/etcd/
+├── client.rs          # EtcdLinkClient (etcd-client wrapper, background health monitor)
 ├── config_mapping.rs  # configuration mapping
 ├── ops.rs             # Etcd operation wrappers
 └── mod.rs
@@ -138,7 +140,7 @@ pub trait DataSender<T>: Send + Sync where T: Send + 'static {
 ```
 
 - `DataSender<String>` — text logs (LocalFile, ES, Redis).
-- Supports the FailedCache pattern: when ES is unavailable, cache to LocalFile / Redis and replay after recovery.
+- The FailedCache pattern (spill to LocalFile / Redis when ES is unavailable, replay after recovery) is **planned, not yet implemented** — see `edgion-gateway/src/link_sys/readme`. Today a failed/unhealthy sink is handled only by the `AccessLogger` first-healthy fallback (drop + `access_log_dropped` metric when all senders are unhealthy).
 
 ## ConfHandler
 
@@ -162,16 +164,15 @@ impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
 
 ## Directory layout
 
+After the crate split, the LinkSys **core framework** (credential / health / lifecycle / TLS) and the **Etcd provider** live in `edgion-common`; the gateway re-exports them via `edgion-gateway/src/link_sys/mod.rs` (`pub use edgion_common::link::{credential, health, lifecycle, tls, LinkSysHealth}`). The gateway crate itself holds the sink/connector providers and the runtime framework.
+
 ```
 edgion-gateway/src/link_sys/
-├── mod.rs                    # module exports
-├── credential.rs             # materialise credentials from the embedded Secret in LinkSys.spec.*Auth
-├── health.rs                 # LinkSysHealth status DTO shared by all providers
-├── lifecycle.rs              # unified provider lifecycle (init/shutdown, dispatch)
-├── tls.rs                    # unified TLS material resolution for provider connections
-├── providers/                # implementations of 5 providers
+├── mod.rs                    # module exports; re-exports core + LinkSysHealth from edgion-common
+├── providers/                # gateway-side sink / connector providers
 │   ├── elasticsearch/        # ES bulk indexing
-│   ├── etcd/                 # Etcd v3 client
+│   ├── kafka/                # Kafka async producer
+│   ├── otlp/                 # OTLP gRPC log exporter
 │   ├── redis/                # Redis multi-mode client
 │   ├── webhook/              # HTTP webhook
 │   ├── local_file/           # local-file writes + rotation
@@ -181,4 +182,12 @@ edgion-gateway/src/link_sys/
     ├── data_sender.rs        # DataSender trait definition
     ├── conf_handler.rs       # ConfHandler<LinkSys> implementation
     └── mod.rs
+
+edgion-common/src/link/       # core framework + Etcd provider (re-exported by the gateway)
+├── credential.rs             # materialise credentials from the embedded Secret in LinkSys.spec.*Auth
+├── health.rs                 # LinkSysHealth status DTO shared by all providers
+├── lifecycle.rs              # unified provider lifecycle (init/shutdown, dispatch)
+├── tls.rs                    # unified TLS material resolution for provider connections
+├── mod.rs
+└── providers/etcd/           # Etcd v3 client (KV / lease / lock + background health monitor)
 ```
