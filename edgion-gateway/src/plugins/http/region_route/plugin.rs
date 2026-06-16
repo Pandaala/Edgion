@@ -113,7 +113,7 @@ impl RegionRoute {
                 _ => None,
             },
             // Merge: whole-replace `regions` if Some; keep base otherwise.
-            |base, ov| merge_region_route_override(base, ov),
+            merge_region_route_override,
         );
 
         match signal {

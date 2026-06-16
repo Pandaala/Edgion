@@ -93,7 +93,7 @@ impl GlobalConnectionIpRestrictionPlugin {
                 _ => None,
             },
             // Merge function: field-level replace; collections whole-replace.
-            |base, ov| merge_gcir_override(base, ov),
+            merge_gcir_override,
         );
 
         match signal {
