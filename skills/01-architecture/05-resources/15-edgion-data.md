@@ -16,15 +16,15 @@ and others later) may reference it via a generic `dataRef`.
 
 ## Source Code Locations
 
-- Type definitions: `edgion-resources/src/resources/data/mod.rs` (main module, `DataEntry` enum, `EdgionDataSpec`)
-- `KeyList` shape: `edgion-resources/src/resources/data/key_list.rs`
-- `IpList` shape: `edgion-resources/src/resources/data/ip_list.rs`
-- First-party overlay shapes: `edgion-resources/src/resources/data/region_route.rs` (`RegionRouteOverride`),
-  `edgion-resources/src/resources/data/global_connection_ip_restriction.rs` (`GlobalConnIpRestrictionOverride`)
-- Overlay framework: `edgion-resources/src/resources/data/overlay.rs` (`apply_override`)
-- Controller handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/data.rs`
-- Gateway store + index: `edgion-gateway/src/plugins/runtime/data/conf_handler.rs`
-- Gateway store module: `edgion-gateway/src/plugins/runtime/data/mod.rs`
+- Type definitions: `edgion-resources/src/resources/edgion_data/mod.rs` (main module, `DataEntry` enum, `EdgionDataSpec`)
+- `KeyList` shape: `edgion-resources/src/resources/edgion_data/key_list.rs`
+- `IpList` shape: `edgion-resources/src/resources/edgion_data/ip_list.rs`
+- First-party overlay shapes: `edgion-resources/src/resources/edgion_data/region_route.rs` (`RegionRouteOverride`),
+  `edgion-resources/src/resources/edgion_data/global_connection_ip_restriction.rs` (`GlobalConnIpRestrictionOverride`)
+- Overlay framework: `edgion-resources/src/resources/edgion_data/overlay.rs` (`apply_override`)
+- Controller handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_data.rs`
+- Gateway store + index: `edgion-gateway/src/plugins/runtime/edgion_data/conf_handler.rs`
+- Gateway store module: `edgion-gateway/src/plugins/runtime/edgion_data/mod.rs`
 
 ## Overlay Model
 

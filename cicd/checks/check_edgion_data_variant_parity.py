@@ -27,7 +27,7 @@ import sys
 from typing import Set
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-RUST_FILE = os.path.join(REPO_ROOT, "edgion-resources/src/resources/data/mod.rs")
+RUST_FILE = os.path.join(REPO_ROOT, "edgion-resources/src/resources/edgion_data/mod.rs")
 CRD_FILE = os.path.join(REPO_ROOT, "config/crd/edgion-crd/edgion_data_crd.yaml")
 
 

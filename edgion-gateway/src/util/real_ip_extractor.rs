@@ -28,7 +28,7 @@
 //! ```
 
 use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
-use edgion_resources::resources::data::IpGroup;
+use edgion_resources::resources::edgion_data::IpGroup;
 use pingora_http::RequestHeader;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;

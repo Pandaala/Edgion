@@ -9,7 +9,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
 };
 use edgion_resources::prelude_resources::{EdgionData, EdgionStreamPlugins};
-use edgion_resources::resources::data::DataEntry;
+use edgion_resources::resources::edgion_data::DataEntry;
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::{
     EdgionStreamPlugin, EdgionStreamPluginsStatus, TlsRouteStreamPlugin,

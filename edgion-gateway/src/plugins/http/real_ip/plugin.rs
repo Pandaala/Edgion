@@ -120,7 +120,7 @@ mod tests {
     use super::*;
 
     fn create_test_config() -> RealIpConfig {
-        use edgion_resources::resources::data::IpGroup;
+        use edgion_resources::resources::edgion_data::IpGroup;
         RealIpConfig {
             trusted_ips: vec![IpGroup {
                 name: "private".to_string(),

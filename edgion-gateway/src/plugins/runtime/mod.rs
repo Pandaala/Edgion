@@ -2,7 +2,7 @@
 
 pub mod conditional_filter;
 pub mod conditions;
-pub mod data;
+pub mod edgion_data;
 pub mod gateway_api_filters;
 pub mod log;
 mod plugin_runtime;

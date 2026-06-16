@@ -7,7 +7,7 @@
 use std::collections::HashSet;
 
 use crate::resources::common::group_name::validate_group_name;
-use crate::resources::data::{KeyGroup, KeyMatchMode};
+use crate::resources::edgion_data::{KeyGroup, KeyMatchMode};
 
 /// Validate a `Vec<KeyGroup>` for:
 /// - groups list non-empty

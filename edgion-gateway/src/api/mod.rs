@@ -431,7 +431,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
     let gateway_backend_tls_store = SimpleCountStats { count: gbt_g.count() };
 
     let edgion_data_store = SimpleCountStats {
-        count: crate::plugins::runtime::data::count_edgion_data(),
+        count: crate::plugins::runtime::edgion_data::count_edgion_data(),
     };
 
     let link_sys_runtime = LinkSysRuntimeStats {

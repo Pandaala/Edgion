@@ -36,8 +36,8 @@ mirrors `IpListData::IpGroup`'s name/description/cidrs structure.
 
 ## Related
 
-- `edgion-resources/src/resources/data/key_list.rs` (KeyListData/KeyGroup)
+- `edgion-resources/src/resources/edgion_data/key_list.rs` (KeyListData/KeyGroup)
 - `edgion-resources/src/matcher/key_group_helpers.rs::validate_key_groups_structure`
-- `edgion-resources/src/resources/data/mod.rs` (validate_pre_parse KeyList branch)
-- `edgion-resources/src/resources/data/ip_list.rs` (mirror reference)
+- `edgion-resources/src/resources/edgion_data/mod.rs` (validate_pre_parse KeyList branch)
+- `edgion-resources/src/resources/edgion_data/ip_list.rs` (mirror reference)
 - `tasks/todo/plugin-grouping/04-keylist-metadata-spec.md` (design record)

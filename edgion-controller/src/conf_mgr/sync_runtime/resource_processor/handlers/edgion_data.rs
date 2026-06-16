@@ -17,7 +17,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
 };
 use edgion_resources::prelude_resources::EdgionData;
-use edgion_resources::resources::data::EdgionDataStatus;
+use edgion_resources::resources::edgion_data::EdgionDataStatus;
 
 /// Kind string used when an EdgionData registers a cross-EdgionData reference in the shared
 /// `plugin_metadata_refs` manager. The existing `requeue_pm_referrers` splits refs on `:`
@@ -25,9 +25,9 @@ use edgion_resources::resources::data::EdgionDataStatus;
 /// processor registered in the processor registry.
 const SELF_KIND: &str = "EdgionData";
 
-pub struct DataHandler;
+pub struct EdgionDataHandler;
 
-impl DataHandler {
+impl EdgionDataHandler {
     pub fn new() -> Self {
         Self
     }
@@ -39,7 +39,7 @@ impl DataHandler {
     }
 }
 
-impl Default for DataHandler {
+impl Default for EdgionDataHandler {
     fn default() -> Self {
         Self::new()
     }
@@ -63,7 +63,7 @@ async fn requeue_pm_referrers(ed: &EdgionData, ctx: &HandlerContext) {
 }
 
 #[async_trait::async_trait]
-impl ProcessorHandler<EdgionData> for DataHandler {
+impl ProcessorHandler<EdgionData> for EdgionDataHandler {
     fn preparse(&self, ed: &mut EdgionData, _ctx: &HandlerContext) -> Vec<String> {
         ed.validate_pre_parse()
     }
@@ -97,7 +97,7 @@ impl ProcessorHandler<EdgionData> for DataHandler {
         // then requeue all resources that referenced this EdgionData.
         ctx.runtime()
             .plugin_metadata_refs
-            .clear_refs_from(&DataHandler::self_ref_key(ed));
+            .clear_refs_from(&EdgionDataHandler::self_ref_key(ed));
         requeue_pm_referrers(ed, ctx).await;
         ctx.runtime().plugin_metadata_refs.remove_pm(&key);
     }

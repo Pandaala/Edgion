@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::data::{DataRef, GlobalConnectionIpRestrictionData};
+use crate::resources::edgion_data::{EdgionDataRef, GlobalConnectionIpRestrictionData};
 use crate::resources::edgion_stream_plugins::connection_ip_restriction_rules::ConnectionIpRestrictionRules;
 use crate::resources::edgion_stream_plugins::connection_rate_limit_config::ConnectionRateLimitConfig;
 
@@ -50,7 +50,7 @@ pub struct GlobalConnectionIpRestrictionEntry {
     /// When set, the effective config at connection time is `base ⊕ overlay`;
     /// overlay errors degrade to `base`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub override_ref: Option<DataRef>,
+    pub override_ref: Option<EdgionDataRef>,
 }
 
 impl EdgionStreamPlugin {

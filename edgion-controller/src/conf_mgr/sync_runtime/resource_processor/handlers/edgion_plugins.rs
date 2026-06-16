@@ -16,7 +16,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use edgion_resources::prelude_resources::EdgionPlugins;
-use edgion_resources::resources::data::DataEntry;
+use edgion_resources::resources::edgion_data::DataEntry;
 use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
 use edgion_resources::ResourceKind;
 
@@ -112,7 +112,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         let ep_key = format!("{}:{}/{}", ResourceKind::EdgionPlugins.as_str(), ns, ep_name);
 
         // Register requeue watcher: EP → EdgionData(overrideRef).
-        // When the referenced EdgionData changes, the DataHandler requeues this EP.
+        // When the referenced EdgionData changes, the EdgionDataHandler requeues this EP.
         for override_key in Self::get_region_route_override_keys(&ep) {
             ctx.runtime().plugin_metadata_refs.add_ref(override_key, ep_key.clone());
         }
@@ -261,7 +261,7 @@ mod tests {
     use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::prelude_resources::EdgionData;
-    use edgion_resources::resources::data::{DataEntry, DataRef, EdgionDataSpec, RegionRouteOverride};
+    use edgion_resources::resources::edgion_data::{DataEntry, EdgionDataRef, EdgionDataSpec, RegionRouteOverride};
     use edgion_resources::resources::edgion_plugins::{
         BasicAuthConfig, BasicAuthSecretGroup, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec,
         HeaderCertAuthConfig, HmacAuthConfig, HmacAuthSecretGroup, JweDecryptConfig, OpenidConnectConfig,
@@ -638,7 +638,7 @@ mod tests {
         ep.metadata.namespace = Some("default".to_string());
         ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
             RegionRouteConfig {
-                override_ref: Some(DataRef {
+                override_ref: Some(EdgionDataRef {
                     name: "rr-override".to_string(),
                     namespace: None,
                 }),
@@ -687,14 +687,14 @@ mod tests {
         ep.metadata.namespace = Some("default".to_string());
         ep.spec.request_plugins = Some(vec![
             RequestFilterEntry::new(EdgionPlugin::RegionRoute(RegionRouteConfig {
-                override_ref: Some(DataRef {
+                override_ref: Some(EdgionDataRef {
                     name: "override-a".to_string(),
                     namespace: None,
                 }),
                 ..Default::default()
             })),
             RequestFilterEntry::new(EdgionPlugin::RegionRoute(RegionRouteConfig {
-                override_ref: Some(DataRef {
+                override_ref: Some(EdgionDataRef {
                     name: "override-b".to_string(),
                     namespace: None,
                 }),
@@ -732,7 +732,7 @@ mod tests {
         ep.metadata.namespace = Some("default".to_string());
         ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
             RegionRouteConfig {
-                override_ref: Some(DataRef {
+                override_ref: Some(EdgionDataRef {
                     name: "missing-override".to_string(),
                     namespace: None,
                 }),
@@ -779,8 +779,8 @@ mod tests {
             EdgionDataSpec {
                 enable: true,
                 active: None,
-                data: DataEntry::KeyList(edgion_resources::resources::data::KeyListData {
-                    match_mode: edgion_resources::resources::data::KeyMatchMode::default(),
+                data: DataEntry::KeyList(edgion_resources::resources::edgion_data::KeyListData {
+                    match_mode: edgion_resources::resources::edgion_data::KeyMatchMode::default(),
                     items: vec![],
                 }),
             },
@@ -795,7 +795,7 @@ mod tests {
         ep.metadata.namespace = Some("default".to_string());
         ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
             RegionRouteConfig {
-                override_ref: Some(DataRef {
+                override_ref: Some(EdgionDataRef {
                     name: "not-a-rr-override".to_string(),
                     namespace: None,
                 }),

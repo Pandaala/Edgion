@@ -98,7 +98,7 @@ impl_resource_meta!(LinkSys, LinkSys, "LinkSys", |self| {
 impl_resource_meta!(EdgionData, EdgionData, "EdgionData", |self| {
     // Data-plane side: log validation problems but don't fail the pre_parse step.
     // The Controller records the same errors in the Accepted status condition
-    // (see DataHandler::preparse + update_status).
+    // (see EdgionDataHandler::preparse + update_status).
     let errors = self.validate_pre_parse();
     if !errors.is_empty() {
         let key = self.key_name_str();

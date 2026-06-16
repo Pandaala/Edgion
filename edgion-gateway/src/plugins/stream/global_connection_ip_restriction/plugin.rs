@@ -20,11 +20,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::observe::metrics::record_conn_ip_restriction_event;
-use crate::plugins::runtime::data::get_global_edgion_data_store;
+use crate::plugins::runtime::edgion_data::get_global_edgion_data_store;
 use crate::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
 };
-use edgion_resources::resources::data::{
+use edgion_resources::resources::edgion_data::{
     apply_override, merge_gcir_override, DataEntry, GlobalConnectionIpRestrictionData, OverlaySignal,
 };
 use edgion_resources::resources::edgion_stream_plugins::GlobalConnectionIpRestrictionEntry;
@@ -164,7 +164,7 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::data::{IpGroup, ProfileRules};
+    use edgion_resources::resources::edgion_data::{IpGroup, ProfileRules};
     use edgion_resources::resources::edgion_plugins::DefaultAction;
     use edgion_resources::resources::edgion_stream_plugins::GlobalConnectionIpRestrictionEntry;
     use std::collections::HashMap;
@@ -241,7 +241,7 @@ mod tests {
         // Build a plugin that points at a non-existent override EdgionData.
         let mut entry = make_entry("main", DefaultAction::Deny, Some("127.0.0.0/8"), None);
         // Point at an override that does NOT exist in the store.
-        entry.override_ref = Some(edgion_resources::resources::data::DataRef {
+        entry.override_ref = Some(edgion_resources::resources::edgion_data::EdgionDataRef {
             name: "gcir-unit-test-absent-overlay-do-not-register".to_string(),
             namespace: Some("default".to_string()),
         });
@@ -283,8 +283,8 @@ mod tests {
     /// the entire overlay is skipped and the base (deny non-loopback) is used instead.
     #[tokio::test]
     async fn envelope_disabled_falls_back_to_base() {
-        use crate::plugins::runtime::data::get_global_edgion_data_store;
-        use edgion_resources::resources::data::{
+        use crate::plugins::runtime::edgion_data::get_global_edgion_data_store;
+        use edgion_resources::resources::edgion_data::{
             DataEntry, EdgionData, EdgionDataSpec, GlobalConnIpRestrictionOverride,
         };
         use std::sync::Arc;
@@ -312,7 +312,7 @@ mod tests {
 
         // Base: deny all except loopback.
         let mut entry = make_entry("main", DefaultAction::Deny, Some("127.0.0.0/8"), None);
-        entry.override_ref = Some(edgion_resources::resources::data::DataRef {
+        entry.override_ref = Some(edgion_resources::resources::edgion_data::EdgionDataRef {
             name: "gcir-overlay-envelope-disabled-h1-test".to_string(),
             namespace: Some("unit-test-ns".to_string()),
         });

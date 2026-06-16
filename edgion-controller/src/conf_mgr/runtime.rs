@@ -50,7 +50,7 @@ pub struct ControllerRuntime {
     pub(crate) backend_tls_policy: BackendTLSPolicyState,
     pub(crate) plugin_metadata_store: PluginMetaDataStore,
     /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each EdgionData.
-    /// Used by the DataHandler to requeue referencing resources on change.
+    /// Used by the EdgionDataHandler to requeue referencing resources on change.
     pub(crate) plugin_metadata_refs: PluginMetaDataRefManager,
     /// Tracks which Gateways reference each EdgionStreamPlugins via
     /// `edgion.io/edgion-stream-plugins` annotation.

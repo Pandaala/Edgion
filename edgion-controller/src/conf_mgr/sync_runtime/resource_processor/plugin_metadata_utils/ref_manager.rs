@@ -1,7 +1,7 @@
 //! EdgionData Reference Manager
 //!
 //! Tracks which EdgionPlugins/EdgionStreamPlugins resources reference a given EdgionData.
-//! Used by DataHandler to know which resources to requeue when an EdgionData changes.
+//! Used by EdgionDataHandler to know which resources to requeue when an EdgionData changes.
 
 use parking_lot::RwLock;
 use std::collections::{HashMap, HashSet};

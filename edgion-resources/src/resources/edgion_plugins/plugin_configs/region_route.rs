@@ -14,7 +14,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::common::{KeyGet, KeySet};
-use crate::resources::data::DataRef;
+use crate::resources::edgion_data::EdgionDataRef;
 
 /// RegionRoute plugin: flat base configuration.
 ///
@@ -55,7 +55,7 @@ pub struct RegionRouteConfig {
     /// Optional overlay reference. When set, the gateway looks up this EdgionData at
     /// request time and applies a `RegionRouteOverride` on top of the base `regions`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub override_ref: Option<DataRef>,
+    pub override_ref: Option<EdgionDataRef>,
 }
 
 /// RouteByKeyConfMatch configuration with bypass support.

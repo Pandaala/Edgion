@@ -145,7 +145,7 @@ impl ConfigClient {
             backend_tls_policies: backend_tls_policies_cache,
             edgion_data: {
                 let ed_cache = ClientCache::new(client_id.clone(), client_name.clone());
-                let ed_handler = crate::plugins::runtime::data::create_edgion_data_handler();
+                let ed_handler = crate::plugins::runtime::edgion_data::create_edgion_data_handler();
                 ed_cache.set_conf_processor(ed_handler);
                 ed_cache
             },

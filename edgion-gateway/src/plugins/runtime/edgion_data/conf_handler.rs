@@ -16,7 +16,9 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::resources::data::{DataEntry, EdgionData, GlobalConnIpRestrictionOverride, RegionRouteOverride};
+use edgion_resources::resources::edgion_data::{
+    DataEntry, EdgionData, GlobalConnIpRestrictionOverride, RegionRouteOverride,
+};
 
 static GLOBAL_EDGION_DATA_STORE: LazyLock<Arc<EdgionDataStore>> = LazyLock::new(|| Arc::new(EdgionDataStore::new()));
 
@@ -232,7 +234,7 @@ impl ConfHandler<EdgionData> for EdgionDataStore {
 #[cfg(test)]
 mod stats_tests {
     use super::*;
-    use edgion_resources::resources::data::{EdgionDataSpec, IpGroup, KeyGroup};
+    use edgion_resources::resources::edgion_data::{EdgionDataSpec, IpGroup, KeyGroup};
 
     #[test]
     fn count_returns_zero_initially() {
@@ -246,7 +248,7 @@ mod stats_tests {
     /// so a reader after replace_all sees both sides at the same generation.
     #[test]
     fn replace_all_publishes_raw_and_indexes_in_same_generation() {
-        use edgion_resources::resources::data::{IpListData, KeyListData, KeyMatchMode};
+        use edgion_resources::resources::edgion_data::{IpListData, KeyListData, KeyMatchMode};
 
         let store = EdgionDataStore::new();
 
@@ -296,7 +298,7 @@ mod stats_tests {
 
     #[test]
     fn region_route_override_is_indexed() {
-        use edgion_resources::resources::data::RegionRouteOverride;
+        use edgion_resources::resources::edgion_data::RegionRouteOverride;
 
         let store = EdgionDataStore::new();
 

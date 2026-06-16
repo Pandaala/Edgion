@@ -43,7 +43,7 @@ pub const EDGION_DATA_KIND: &str = "EdgionData";
 /// Reference to an EdgionData resource by name (and optional namespace).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct DataRef {
+pub struct EdgionDataRef {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,

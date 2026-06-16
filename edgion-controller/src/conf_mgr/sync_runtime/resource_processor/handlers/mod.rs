@@ -7,8 +7,8 @@
 pub mod auth_spec;
 mod backend_tls_policy;
 mod configmap;
-mod data;
 mod edgion_acme;
+mod edgion_data;
 mod edgion_gateway_config;
 mod edgion_plugins;
 mod edgion_stream_plugins;
@@ -31,8 +31,8 @@ mod udp_route;
 
 pub use backend_tls_policy::{BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler};
 pub use configmap::ConfigMapHandler;
-pub use data::DataHandler;
 pub use edgion_acme::EdgionAcmeHandler;
+pub use edgion_data::EdgionDataHandler;
 pub use edgion_gateway_config::EdgionGatewayConfigHandler;
 pub use edgion_plugins::EdgionPluginsHandler;
 pub use edgion_stream_plugins::EdgionStreamPluginsHandler;

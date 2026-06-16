@@ -22,12 +22,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::observe::metrics::record_region_route_overlay_event;
-use crate::plugins::runtime::data::get_global_edgion_data_store;
+use crate::plugins::runtime::edgion_data::get_global_edgion_data_store;
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::data::{
+use edgion_resources::resources::edgion_data::{
     apply_override, merge_region_route_override, validate_regions, DataEntry, OverlaySignal,
 };
 use edgion_resources::resources::edgion_plugins::{HashAlgorithm, RegionDef, RegionRouteConfig, RouteRule};
@@ -642,8 +642,8 @@ mod tests {
     /// the base regions would be replaced. Asserting base regions verifies H1.
     #[test]
     fn overlay_envelope_disabled_falls_back_to_base() {
-        use crate::plugins::runtime::data::get_global_edgion_data_store;
-        use edgion_resources::resources::data::{DataEntry, EdgionData, EdgionDataSpec, RegionRouteOverride};
+        use crate::plugins::runtime::edgion_data::get_global_edgion_data_store;
+        use edgion_resources::resources::edgion_data::{DataEntry, EdgionData, EdgionDataSpec, RegionRouteOverride};
         use std::sync::Arc;
 
         // Unique key — no other test inserts or depends on this key.
@@ -692,8 +692,8 @@ mod tests {
     /// (duplicate region names), the plugin must fall back to base regions.
     #[test]
     fn overlay_invalid_regions_falls_back_to_base() {
-        use crate::plugins::runtime::data::get_global_edgion_data_store;
-        use edgion_resources::resources::data::{DataEntry, EdgionData, EdgionDataSpec, RegionRouteOverride};
+        use crate::plugins::runtime::edgion_data::get_global_edgion_data_store;
+        use edgion_resources::resources::edgion_data::{DataEntry, EdgionData, EdgionDataSpec, RegionRouteOverride};
         use std::sync::Arc;
 
         let test_key = "unit-test-ns/rr-overlay-invalid-dup-names-h2-test";

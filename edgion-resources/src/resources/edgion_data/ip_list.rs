@@ -5,7 +5,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::data::IpGroup;
+use crate::resources::edgion_data::IpGroup;
 
 /// A grouped list of IP addresses or CIDR ranges.
 ///

@@ -61,7 +61,7 @@ use edgion_resources::ResourceMeta;
 
 // Import handlers from conf_mgr
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, DataHandler, EdgionAcmeHandler,
+    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionDataHandler,
     EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler,
     EndpointSliceHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler,
     ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler,
@@ -750,7 +750,12 @@ impl KubernetesController {
             ));
         }
         if self.should_watch("EdgionData") {
-            h.push(spawn::<EdgionData, _>(self, "EdgionData", DataHandler::new(), &ctx));
+            h.push(spawn::<EdgionData, _>(
+                self,
+                "EdgionData",
+                EdgionDataHandler::new(),
+                &ctx,
+            ));
         }
         if self.should_watch("LinkSys") {
             h.push(spawn::<LinkSys, _>(self, "LinkSys", LinkSysHandler::new(), &ctx));
