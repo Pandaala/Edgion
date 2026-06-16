@@ -11,7 +11,7 @@
 //! Unlike Redis/Etcd, ES uses plain HTTP REST — reqwest provides built-in
 //! connection pooling and keep-alive, so no additional pool management is needed.
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -44,7 +44,8 @@ pub struct EsLinkClient {
     endpoint_index: AtomicUsize,
     /// Human-readable name ("namespace/name")
     name: String,
-    /// Atomic health flag, updated by health check and bulk operations
+    /// Atomic health flag driven by the background probe (upgrade-only recovery)
+    /// and the bulk path (both directions); also written at init().
     healthy: Arc<AtomicBool>,
     /// Bulk ingest configuration
     bulk_config: EsBulkConfig,
@@ -55,6 +56,10 @@ pub struct EsLinkClient {
     /// Handle to the spawned bulk ingest task (populated after init), awaited in `shutdown()`
     /// to drain buffered docs before returning.
     bulk_task: parking_lot::Mutex<Option<JoinHandle<()>>>,
+    /// Shared flip-log rate-limit clock for the bulk path (CAS emission dedup).
+    last_flip_log_ms: Arc<AtomicU64>,
+    /// Handle to the background health probe (task 05); aborted in `shutdown()`.
+    probe_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
 }
 
 impl EsLinkClient {
@@ -81,6 +86,8 @@ impl EsLinkClient {
             bulk_sender: parking_lot::Mutex::new(None),
             shutdown_tx: parking_lot::Mutex::new(None),
             bulk_task: parking_lot::Mutex::new(None),
+            last_flip_log_ms: Arc::new(AtomicU64::new(0)),
+            probe_handle: parking_lot::Mutex::new(None),
         })
     }
 
@@ -104,6 +111,9 @@ impl EsLinkClient {
         }
 
         self.healthy.store(health.is_ok(), Ordering::Relaxed);
+        // Emit the baseline health gauge so the series appears even if the
+        // provider is healthy from startup and never flips (matches Kafka init).
+        crate::observe::metrics::registry::record_link_sys_health(&self.name, health.is_ok());
 
         // Spawn background bulk ingest task. Channel capacity is operator-tunable
         // via `bulk.channelSize` (defaults to 10k, ceiling 100k); see EsBulkConfig.
@@ -114,15 +124,65 @@ impl EsLinkClient {
         let endpoints = self.endpoints.clone();
         let bulk_config = self.bulk_config.clone();
         let healthy = self.healthy.clone();
+        let last_flip_log = self.last_flip_log_ms.clone();
         let name = self.name.clone();
 
         let handle = tokio::spawn(async move {
-            bulk_ingest_loop(client, endpoints, bulk_config, healthy, name, rx, shutdown_rx).await;
+            bulk_ingest_loop(
+                client,
+                endpoints,
+                bulk_config,
+                healthy,
+                last_flip_log,
+                name,
+                rx,
+                shutdown_rx,
+            )
+            .await;
         });
+
+        // Background health probe (task 05): actively RECOVER `healthy` during
+        // idle (upgrade_only). The bulk path owns downgrade. Rotates across all
+        // endpoints using a probe-local index (NOT the shared round-robin), so a
+        // multi-endpoint ES recovers as soon as ANY endpoint is reachable — never
+        // stuck false because endpoints[0] alone is down. Upgrade-only, so
+        // probing a down endpoint never spuriously downgrades.
+        let probe_handle = crate::link_sys::runtime::health_probe::spawn_health_probe(
+            crate::link_sys::runtime::health_probe::ProbeConfig {
+                name: self.name.clone(),
+                system_type: "elasticsearch",
+                base_interval: Duration::from_secs(10),
+                max_backoff: Duration::from_secs(30),
+                probe_timeout: Duration::from_secs(5),
+                upgrade_only: true,
+            },
+            self.healthy.clone(),
+            shutdown_sender.subscribe(),
+            {
+                let client = self.client.clone();
+                let endpoints = self.endpoints.clone();
+                let probe_idx = Arc::new(AtomicUsize::new(0));
+                move || {
+                    let client = client.clone();
+                    let endpoints = endpoints.clone();
+                    let probe_idx = probe_idx.clone();
+                    async move {
+                        // Rotate across all endpoints with a probe-local index (NOT the
+                        // shared round-robin), so a multi-endpoint ES recovers as soon as
+                        // ANY endpoint is reachable — never stuck false because endpoints[0]
+                        // alone is down. Upgrade-only, so probing a down endpoint never
+                        // spuriously downgrades.
+                        let i = probe_idx.fetch_add(1, Ordering::Relaxed) % endpoints.len();
+                        super::ops::probe_cluster_health(&client, &endpoints[i]).await
+                    }
+                }
+            },
+        );
 
         *self.bulk_sender.lock() = Some(tx);
         *self.shutdown_tx.lock() = Some(shutdown_sender);
         *self.bulk_task.lock() = Some(handle);
+        *self.probe_handle.lock() = Some(probe_handle);
 
         tracing::info!("ES [{}] initialized, bulk ingest task started", self.name);
         Ok(())
@@ -210,6 +270,15 @@ impl EsLinkClient {
 
         // Drop the bulk sender to unblock the receiver
         *self.bulk_sender.lock() = None;
+
+        // Abort the probe before clearing healthy. abort() is not synchronous;
+        // an in-flight probe request may still complete and briefly flip healthy
+        // back to true before the task is descheduled, but the client is removed
+        // from the store before any caller can observe this stale state.
+        if let Some(handle) = self.probe_handle.lock().take() {
+            handle.abort();
+        }
+
         self.healthy.store(false, Ordering::Relaxed);
 
         // Await the bulk task so buffered docs get flushed before we return.
@@ -247,11 +316,6 @@ impl EsLinkClient {
     #[inline]
     pub fn inner(&self) -> &Client {
         &self.client
-    }
-
-    /// Set the healthy flag (used by health check operations).
-    pub(crate) fn set_healthy(&self, val: bool) {
-        self.healthy.store(val, Ordering::Relaxed);
     }
 }
 

@@ -15,31 +15,32 @@ use crate::link_sys::LinkSysHealth;
 // ============================================================================
 
 impl EsLinkClient {
-    /// GET /_cluster/health — returns cluster status ("green"/"yellow"/"red").
-    pub async fn cluster_health(&self) -> Result<String> {
-        let endpoint = self.next_endpoint();
+    /// GET {endpoint}/_cluster/health against a SPECIFIC endpoint. Side-effect-free.
+    pub async fn cluster_health_at(&self, endpoint: &str) -> Result<String> {
         let url = format!("{}/_cluster/health", endpoint);
-
         let resp = self
             .inner()
             .get(&url)
             .send()
             .await
             .map_err(|e| anyhow::anyhow!("ES cluster health request failed: {:?}", e))?;
-
         if !resp.status().is_success() {
             anyhow::bail!("ES cluster health returned status {}", resp.status());
         }
-
         let body: Value = resp
             .json()
             .await
             .map_err(|e| anyhow::anyhow!("ES cluster health parse error: {:?}", e))?;
-
         body["status"]
             .as_str()
             .map(|s| s.to_string())
             .ok_or_else(|| anyhow::anyhow!("ES cluster health: missing 'status' field"))
+    }
+
+    /// GET /_cluster/health using the round-robin endpoint (admin/ping path).
+    pub async fn cluster_health(&self) -> Result<String> {
+        let endpoint = self.next_endpoint().to_string();
+        self.cluster_health_at(&endpoint).await
     }
 
     /// GET /_cat/health?format=json — verbose health info.
@@ -366,13 +367,12 @@ pub struct EsSearchHit {
 // ============================================================================
 
 impl EsLinkClient {
-    /// Active health check via cluster health API.
-    /// Returns latency in milliseconds.
+    /// Active health check via cluster health API. Returns latency in ms.
+    /// Does NOT mutate the routing `healthy` flag (the probe + bulk path own it).
     pub async fn ping(&self) -> Result<u64> {
         let start = std::time::Instant::now();
         let status = self.cluster_health().await?;
         let latency = std::time::Instant::now().saturating_duration_since(start).as_millis() as u64;
-        self.set_healthy(true);
         tracing::debug!("ES [{}] ping: status={}, latency={}ms", self.name(), status, latency);
         Ok(latency)
     }
@@ -387,16 +387,46 @@ impl EsLinkClient {
                 latency_ms: Some(latency_ms),
                 error: None,
             },
-            Err(e) => {
-                self.set_healthy(false);
-                LinkSysHealth {
-                    name: self.name().to_string(),
-                    system_type: "elasticsearch".to_string(),
-                    connected: false,
-                    latency_ms: None,
-                    error: Some(e.to_string()),
-                }
-            }
+            Err(e) => LinkSysHealth {
+                name: self.name().to_string(),
+                system_type: "elasticsearch".to_string(),
+                connected: false,
+                latency_ms: None,
+                error: Some(e.to_string()),
+            },
         }
+    }
+}
+
+// ============================================================================
+// Background Probe Helper
+// ============================================================================
+
+/// Connection-level + status-line cluster-health check for the background probe.
+///
+/// A free function (no `&self`) so it runs in a detached `'static` probe task.
+/// Targets a fixed endpoint (the caller passes `endpoints[0]`) to avoid
+/// perturbing the shared round-robin index used by other ops.
+pub(crate) async fn probe_cluster_health(client: &reqwest::Client, endpoint: &str) -> bool {
+    let url = format!("{}/_cluster/health", endpoint);
+    matches!(client.get(&url).send().await, Ok(resp) if resp.status().is_success())
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn probe_cluster_health_false_on_unreachable() {
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_millis(200))
+            .build()
+            .unwrap();
+        // Port 1 is unreachable -> the probe must report false, never panic.
+        assert!(!probe_cluster_health(&client, "http://127.0.0.1:1").await);
     }
 }

@@ -1,7 +1,7 @@
 //! Kafka LinkSys runtime client.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
@@ -25,6 +25,18 @@ use edgion_resources::resources::link_sys::kafka::KafkaClientConfig;
 const DEFAULT_CHANNEL_SIZE: usize = 4096;
 const DEFAULT_LINGER_MS: u64 = 5;
 const MAX_BATCH_SIZE: usize = 1_000_000;
+/// Consecutive probe failures before the probe rebuilds `inner_client` from the
+/// configured bootstrap brokers (rskafka otherwise only reconnects to the
+/// discovered topology, which never recovers a pod-IP/StatefulSet restart).
+const KAFKA_REBUILD_THRESHOLD: u32 = 3;
+
+/// Per-produce wedge detector. rskafka's default backoff has no deadline, so a
+/// dead/old-IP broker makes `produce().await` hang forever; this timeout forces
+/// the task to exit (closing its channel) so the self-heal + rebuild can respawn
+/// it on the current client. Generous relative to `linger_ms`.
+/// Assumes `linger_ms << 30_000`; a pathological linger near/above this ceiling would
+/// make every produce exceed the timeout and force a respawn loop.
+const PRODUCE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Fold a single produce result into the shared `healthy` flag.
 ///
@@ -86,11 +98,15 @@ pub struct KafkaLinkClient {
     auth: CredentialState<ResolvedCredential>,
     channel_size: usize,
     linger_ms: u64,
-    inner_client: ArcSwapOption<rskafka::client::Client>,
+    inner_client: Arc<ArcSwapOption<rskafka::client::Client>>,
     topics: DashMap<String, mpsc::Sender<String>>,
     healthy: Arc<AtomicBool>,
     /// Monotonic-ms timestamp of the last emitted flip log; gate for log rate limiting.
     last_flip_log_ms: Arc<AtomicU64>,
+    /// Probe shutdown signal (populated in init, fired in shutdown).
+    shutdown_tx: parking_lot::Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+    /// Background health probe handle; aborted in shutdown so a probe flip can't race the healthy=false write.
+    probe_handle: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl KafkaLinkClient {
@@ -108,11 +124,55 @@ impl KafkaLinkClient {
             auth: auth.clone(),
             channel_size: config.channel_size.unwrap_or(DEFAULT_CHANNEL_SIZE),
             linger_ms: config.linger_ms.unwrap_or(DEFAULT_LINGER_MS),
-            inner_client: ArcSwapOption::empty(),
+            inner_client: Arc::new(ArcSwapOption::empty()),
             topics: DashMap::new(),
             healthy: Arc::new(AtomicBool::new(false)),
             last_flip_log_ms: Arc::new(AtomicU64::new(0)),
+            shutdown_tx: parking_lot::Mutex::new(None),
+            probe_handle: parking_lot::Mutex::new(None),
         })
+    }
+
+    /// Build a connected rskafka client from brokers + resolved auth. Shared by
+    /// `init()` and the background-probe rebuild so the two cannot diverge.
+    async fn build_kafka_client(
+        brokers: &[String],
+        auth: &CredentialState<ResolvedCredential>,
+        config: &KafkaClientConfig,
+    ) -> Result<rskafka::client::Client> {
+        let mut builder = ClientBuilder::new(brokers.to_vec());
+
+        // TLS — TODO: rskafka 0.5 depends on rustls 0.21, while the rest of this
+        // project uses rustls 0.23.  The two `ClientConfig` types are not compatible
+        // across crate versions, so we cannot call
+        // `crate::link_sys::tls::build_rustls_client_config` (which returns a 0.23
+        // value) and pass it to `ClientBuilder::tls_config` (which expects 0.21).
+        // Once rskafka ships a release that targets rustls 0.23 this section should be
+        // replaced with:
+        //   if let Some(client_config) =
+        //       crate::link_sys::tls::build_rustls_client_config(tls_config)?
+        //   {
+        //       builder = builder.tls_config(Arc::new(client_config));
+        //   }
+        if let Some(tls_config) = &config.tls {
+            let _ = tls_config; // suppress unused-variable warning
+        }
+
+        // SASL/PLAIN — the resolved credential carries the password from the K8s Secret;
+        // the username lives directly in the CRD spec.
+        if let Some(sasl) = &config.sasl {
+            if let CredentialState::Resolved(ResolvedCredential::Basic(basic)) = auth {
+                builder = builder.sasl_config(SaslConfig::Plain {
+                    username: sasl.username.clone(),
+                    password: basic.password.clone(),
+                });
+            }
+        }
+
+        builder
+            .build()
+            .await
+            .map_err(|e| anyhow::anyhow!("Kafka client build failed: {}", e))
     }
 
     pub fn healthy(&self) -> bool {
@@ -158,9 +218,22 @@ impl KafkaLinkClient {
             })
             .clone();
 
-        sender
-            .try_send(data)
-            .map_err(|e| anyhow::anyhow!("Kafka [{}] topic {}: {}", self.name, topic, e))
+        match sender.try_send(data) {
+            Ok(()) => Ok(()),
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                // The producer task exited (PartitionClient init failure, or a
+                // PRODUCE_TIMEOUT wedge). Evict the dead entry by value so a
+                // concurrent healthy respawn is never removed; the next produce
+                // re-spawns on the current (possibly rebuilt) inner_client.
+                self.topics.remove_if(topic, |_, tx| tx.is_closed());
+                anyhow::bail!(
+                    "Kafka [{}] topic {}: producer task closed; evicted for respawn",
+                    self.name,
+                    topic
+                )
+            }
+            Err(e) => Err(anyhow::anyhow!("Kafka [{}] topic {}: {}", self.name, topic, e)),
+        }
     }
 
     async fn run_producer_task(
@@ -187,11 +260,9 @@ impl KafkaLinkClient {
                 // Keep the gauge in sync with the flag: the task exits below and would
                 // otherwise leave the gauge stuck at the init() baseline of 1.
                 crate::observe::metrics::registry::record_link_sys_health(&name, false);
-                // TODO(task-05): the producer task exits here and the topic entry is never
-                // respawned, so this topic cannot self-recover. Task 05's background probe owns
-                // rebuild/liveness — it must respawn this task, not merely flip the flag. Note
-                // this path updates the gauge but not `record_link_sys_health_flip`; task 05
-                // should also emit the flip counter once it gives this path real recovery.
+                // The task exits here, closing its channel; `try_produce`'s
+                // self-heal evicts the dead entry so the next produce respawns
+                // (Task 05). Broker-level recovery is owned by the background probe.
                 return;
             }
         };
@@ -206,8 +277,8 @@ impl KafkaLinkClient {
                 headers: BTreeMap::new(),
                 timestamp: Utc::now(),
             };
-            match producer.produce(record).await {
-                Ok(_) => {
+            match tokio::time::timeout(PRODUCE_TIMEOUT, producer.produce(record)).await {
+                Ok(Ok(_)) => {
                     if record_produce_result(&healthy, true) {
                         crate::observe::metrics::registry::record_link_sys_health(&name, true);
                         crate::observe::metrics::registry::record_link_sys_health_flip(&name, true);
@@ -216,7 +287,7 @@ impl KafkaLinkClient {
                         }
                     }
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     if record_produce_result(&healthy, false) {
                         crate::observe::metrics::registry::record_link_sys_health(&name, false);
                         crate::observe::metrics::registry::record_link_sys_health_flip(&name, false);
@@ -224,6 +295,23 @@ impl KafkaLinkClient {
                             tracing::warn!(kafka = %name, %topic, "Kafka degraded: produce failed: {}", e);
                         }
                     }
+                }
+                Err(_elapsed) => {
+                    // Produce wedged (stale/dead client). Exit so the channel closes
+                    // and the next produce respawns this topic on the current
+                    // inner_client (picks up a probe rebuild).
+                    // The in-flight record and any messages still buffered in rx are lost
+                    // when the task exits (degraded behavior, acceptable for a fire-and-forget sink).
+                    if record_produce_result(&healthy, false) {
+                        crate::observe::metrics::registry::record_link_sys_health(&name, false);
+                        crate::observe::metrics::registry::record_link_sys_health_flip(&name, false);
+                    }
+                    tracing::warn!(
+                        kafka = %name, %topic,
+                        "Kafka produce wedged > {}s; exiting producer task to force respawn",
+                        PRODUCE_TIMEOUT.as_secs()
+                    );
+                    return;
                 }
             }
         }
@@ -233,43 +321,92 @@ impl KafkaLinkClient {
 #[async_trait]
 impl LinkSysLifecycle for KafkaLinkClient {
     async fn init(&self) -> Result<()> {
-        let mut builder = ClientBuilder::new(self.config.brokers.clone());
-
-        // TLS — TODO: rskafka 0.5 depends on rustls 0.21, while the rest of this
-        // project uses rustls 0.23.  The two `ClientConfig` types are not compatible
-        // across crate versions, so we cannot call
-        // `crate::link_sys::tls::build_rustls_client_config` (which returns a 0.23
-        // value) and pass it to `ClientBuilder::tls_config` (which expects 0.21).
-        // Once rskafka ships a release that targets rustls 0.23 this section should be
-        // replaced with:
-        //   if let Some(client_config) =
-        //       crate::link_sys::tls::build_rustls_client_config(tls_config)?
-        //   {
-        //       builder = builder.tls_config(Arc::new(client_config));
-        //   }
-        if let Some(tls_config) = &self.config.tls {
-            let _ = tls_config; // suppress unused-variable warning
-        }
-
-        // SASL/PLAIN — the resolved credential carries the password from the K8s Secret;
-        // the username lives directly in the CRD spec.
-        if let Some(sasl) = &self.config.sasl {
-            if let CredentialState::Resolved(ResolvedCredential::Basic(basic)) = &self.auth {
-                builder = builder.sasl_config(SaslConfig::Plain {
-                    username: sasl.username.clone(),
-                    password: basic.password.clone(),
-                });
-            }
-        }
-
-        let client = builder.build().await?;
+        let client = Self::build_kafka_client(&self.config.brokers, &self.auth, &self.config).await?;
         self.inner_client.store(Some(Arc::new(client)));
         self.healthy.store(true, Ordering::Relaxed);
         crate::observe::metrics::registry::record_link_sys_health(&self.name, true);
+
+        // Background health probe (task 05): broker liveness via list_topics,
+        // and after N consecutive failures, rebuild inner_client from config
+        // (the per-produce timeout in run_producer_task propagates the new client).
+        let (shutdown_sender, shutdown_rx) = tokio::sync::watch::channel(false);
+        let probe_handle = crate::link_sys::runtime::health_probe::spawn_health_probe(
+            crate::link_sys::runtime::health_probe::ProbeConfig {
+                name: self.name.clone(),
+                system_type: "kafka",
+                base_interval: Duration::from_secs(10),
+                max_backoff: Duration::from_secs(30),
+                probe_timeout: Duration::from_secs(5),
+                upgrade_only: false,
+            },
+            Arc::clone(&self.healthy),
+            shutdown_rx,
+            {
+                let inner = Arc::clone(&self.inner_client);
+                let brokers = self.config.brokers.clone();
+                let auth = self.auth.clone();
+                let config = self.config.clone();
+                let name = self.name.clone();
+                let fail_count = Arc::new(AtomicU32::new(0));
+                move || {
+                    let inner = Arc::clone(&inner);
+                    let brokers = brokers.clone();
+                    let auth = auth.clone();
+                    let config = config.clone();
+                    let name = name.clone();
+                    let fail_count = Arc::clone(&fail_count);
+                    async move {
+                        // Pre-increment BEFORE any await so a driver-timeout cancellation at the
+                        // list_topics().await below still counts as a failure: rskafka's metadata
+                        // call can hang indefinitely on dead brokers, and the driver cancels the
+                        // future at the await, skipping any post-await bookkeeping.
+                        let n = fail_count.fetch_add(1, Ordering::Relaxed) + 1;
+
+                        // Once over the threshold, REBUILD FIRST — do not re-probe the (possibly
+                        // wedged) current client, whose list_topics() would hang and be cancelled
+                        // before we ever reach the rebuild. build_kafka_client reconnects from the
+                        // configured bootstrap brokers (fresh DNS), recovering pod-IP churn.
+                        if n >= KAFKA_REBUILD_THRESHOLD {
+                            match Self::build_kafka_client(&brokers, &auth, &config).await {
+                                Ok(c) => {
+                                    let c = Arc::new(c);
+                                    inner.store(Some(Arc::clone(&c)));
+                                    fail_count.store(0, Ordering::Relaxed);
+                                    return c.list_topics().await.is_ok();
+                                }
+                                Err(e) => {
+                                    tracing::warn!(kafka = %name, "probe rebuild failed: {}", e);
+                                    // Leave fail_count over threshold so the next cycle retries the rebuild.
+                                    return false;
+                                }
+                            }
+                        }
+
+                        // Below threshold: normal liveness probe on the current client.
+                        if let Some(client) = inner.load_full() {
+                            if client.list_topics().await.is_ok() {
+                                fail_count.store(0, Ordering::Relaxed);
+                                return true;
+                            }
+                        }
+                        false
+                    }
+                }
+            },
+        );
+        *self.shutdown_tx.lock() = Some(shutdown_sender);
+        *self.probe_handle.lock() = Some(probe_handle);
+
         Ok(())
     }
 
     async fn shutdown(&self) -> Result<()> {
+        if let Some(tx) = self.shutdown_tx.lock().take() {
+            let _ = tx.send(true);
+        }
+        if let Some(handle) = self.probe_handle.lock().take() {
+            handle.abort();
+        }
         self.topics.clear();
         self.inner_client.store(None);
         self.healthy.store(false, Ordering::Relaxed);

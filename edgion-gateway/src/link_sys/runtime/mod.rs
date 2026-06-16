@@ -1,5 +1,6 @@
 mod conf_handler;
 mod data_sender;
+pub(crate) mod health_probe;
 pub mod store;
 
 pub use conf_handler::create_link_sys_handler;

@@ -11,10 +11,48 @@ use opentelemetry_sdk::logs::SdkLoggerProvider;
 use crate::link_sys::{DataSender, LogMeta};
 use edgion_resources::output::{OtlpOutputConfig, OtlpProtocol};
 
+/// Parse an OTLP endpoint URL into (host, port). v1 is gRPC-only (`init` rejects
+/// every non-Grpc protocol), so there is a single supported port; default 4317
+/// when absent. Uses `http::Uri` to handle scheme, IPv6 brackets, and paths.
+fn parse_otlp_host_port(endpoint: &str) -> Option<(String, u16)> {
+    // Require "://" so that bare "host:port" strings (where http::Uri would treat
+    // the host as the scheme name) are rejected before parsing.
+    if !endpoint.contains("://") {
+        return None;
+    }
+    let uri: http::Uri = endpoint.parse().ok()?;
+    let raw_host = uri.host()?;
+    // http 1.x returns IPv6 addresses with surrounding brackets (e.g. "[::1]");
+    // strip them so callers receive the bare address for TcpStream::connect.
+    let host = raw_host.trim_matches(|c| c == '[' || c == ']').to_string();
+    let port = uri.port_u16().unwrap_or(4317);
+    Some((host, port))
+}
+
+/// Connection-level liveness probe for OTLP (task 05).
+///
+/// CONNECTION-LEVEL ONLY: `emit()` is fire-and-forget, so the SDK exposes no
+/// export result. A successful TCP connect proves the port is open, NOT that TLS
+/// (for an `https` endpoint) or the OTLP/gRPC export pipeline works. The driver
+/// bounds this call with `probe_timeout`.
+async fn probe_otlp_endpoint(endpoint: &str) -> bool {
+    let Some((host, port)) = parse_otlp_host_port(endpoint) else {
+        tracing::warn!(otlp = %endpoint, "OTLP probe: cannot parse endpoint (must include a scheme, e.g. http://host:4317); marking unhealthy");
+        return false;
+    };
+    tokio::net::TcpStream::connect((host.as_str(), port)).await.is_ok()
+}
+
 pub struct OtlpLogSender {
     config: OtlpOutputConfig,
     provider: OnceLock<SdkLoggerProvider>,
     healthy: Arc<AtomicBool>,
+    /// Probe shutdown sender. Dropping it (on struct Drop) stops the probe via
+    /// the driver's `changed() == Err` path. NOTE: this sender is effectively
+    /// process-lifetime today — `OtlpLogSender` lives in a global `OnceLock`
+    /// AccessLogger that is never dropped/hot-reloaded; this wiring is a latent
+    /// safety net for if OTLP ever becomes reloadable.
+    probe_shutdown: Option<tokio::sync::watch::Sender<bool>>,
 }
 
 impl OtlpLogSender {
@@ -23,6 +61,7 @@ impl OtlpLogSender {
             config,
             provider: OnceLock::new(),
             healthy: Arc::new(AtomicBool::new(false)),
+            probe_shutdown: None,
         }
     }
 
@@ -33,10 +72,10 @@ impl OtlpLogSender {
     /// be unreachable. Capture this `Arc` at registration time instead and hand
     /// it to the background probe.
     ///
-    /// TODO(task 05): `emit` is fire-and-forget and cannot observe export
-    /// success, so until the background endpoint probe lands the flag stays
-    /// `true` after a successful `init` (current behavior, no regression). The
-    /// probe will drive it via this handle.
+    /// A background probe (task 05) drives this flag via TCP connect to the
+    /// endpoint. Connection-level only: a successful connect does NOT prove TLS
+    /// or OTLP export works, and the probe task is process-lifetime (see
+    /// `probe_shutdown`).
     pub fn health_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.healthy)
     }
@@ -97,6 +136,32 @@ impl DataSender<String> for OtlpLogSender {
 
         self.provider.set(provider).ok();
         self.healthy.store(true, Ordering::Relaxed);
+        // Baseline health gauge so the series appears even when healthy from startup.
+        crate::observe::metrics::registry::record_link_sys_health(&self.config.endpoint, true);
+
+        // Background connection-level health probe (task 05).
+        let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+        let endpoint = self.config.endpoint.clone();
+        // drop() makes the intent explicit: the JoinHandle detaches (Tokio does NOT
+        // abort on drop), and the watch-sender in `probe_shutdown` is the shutdown path.
+        drop(crate::link_sys::runtime::health_probe::spawn_health_probe(
+            crate::link_sys::runtime::health_probe::ProbeConfig {
+                name: endpoint.clone(),
+                system_type: "otlp",
+                base_interval: std::time::Duration::from_secs(10),
+                max_backoff: std::time::Duration::from_secs(30),
+                probe_timeout: std::time::Duration::from_secs(3),
+                upgrade_only: false,
+            },
+            self.health_handle(),
+            shutdown_rx,
+            move || {
+                let endpoint = endpoint.clone();
+                async move { probe_otlp_endpoint(&endpoint).await }
+            },
+        ));
+        self.probe_shutdown = Some(shutdown_tx);
+
         Ok(())
     }
 
@@ -226,5 +291,39 @@ mod tests {
         let err = sender.init().await.unwrap_err();
         assert!(err.to_string().contains("not yet supported"), "unexpected error: {err}");
         assert!(!sender.healthy(), "sender must not be marked healthy after failed init");
+    }
+
+    #[test]
+    fn parse_endpoint_variants() {
+        assert_eq!(parse_otlp_host_port("http://h:4317"), Some(("h".to_string(), 4317)));
+        assert_eq!(parse_otlp_host_port("http://h"), Some(("h".to_string(), 4317))); // default port
+        assert_eq!(parse_otlp_host_port("https://c:4317"), Some(("c".to_string(), 4317)));
+        assert_eq!(
+            parse_otlp_host_port("http://[::1]:4317"),
+            Some(("::1".to_string(), 4317))
+        );
+        assert_eq!(
+            parse_otlp_host_port("http://h:4317/v1/logs"),
+            Some(("h".to_string(), 4317))
+        );
+        // Bare host:port has no scheme; http::Uri parses "localhost" as the path
+        // component, leaving host() = None, so we correctly return None.
+        assert_eq!(parse_otlp_host_port("localhost:4317"), None);
+    }
+
+    #[tokio::test]
+    async fn probe_true_when_port_open_false_when_closed() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let ok_endpoint = format!("http://{}", addr);
+        assert!(probe_otlp_endpoint(&ok_endpoint).await);
+        // A guaranteed-closed port: bind an ephemeral listener, capture its port, drop it.
+        let closed_port = {
+            let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            l.local_addr().unwrap().port()
+        };
+        assert!(!probe_otlp_endpoint(&format!("http://127.0.0.1:{}", closed_port)).await);
+        // Unparseable -> false, never panic.
+        assert!(!probe_otlp_endpoint("").await);
     }
 }

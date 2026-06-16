@@ -4,13 +4,14 @@
 //! batches them, and sends to ES via the `_bulk` API.
 //! Handles retries with exponential backoff.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 
 use reqwest::Client;
 use tokio::sync::{mpsc, watch};
 
 use super::config_mapping::EsBulkConfig;
+use crate::link_sys::runtime::health_probe::apply_health_result;
 
 // ============================================================================
 // Bulk API response types
@@ -49,11 +50,13 @@ pub struct BulkItemResult {
 ///
 /// Receives docs via channel, batches them, and sends to ES via Bulk API.
 /// Flushes on `batch_size` threshold or `flush_interval`, whichever comes first.
+#[allow(clippy::too_many_arguments)]
 pub async fn bulk_ingest_loop(
     client: Client,
     endpoints: Vec<String>,
     config: EsBulkConfig,
     healthy: Arc<AtomicBool>,
+    last_flip_log: Arc<AtomicU64>,
     name: String,
     mut rx: mpsc::Receiver<String>,
     mut shutdown: watch::Receiver<bool>,
@@ -78,7 +81,7 @@ pub async fn bulk_ingest_loop(
                             let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                             endpoint_idx = endpoint_idx.wrapping_add(1);
                             flush_batch(
-                                &client, endpoint, &config, &healthy, &name, batch, &shutdown,
+                                &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown,
                             ).await;
                         }
                     }
@@ -88,7 +91,7 @@ pub async fn bulk_ingest_loop(
                             let batch = std::mem::take(&mut buffer);
                             let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                             flush_batch(
-                                &client, endpoint, &config, &healthy, &name, batch, &shutdown,
+                                &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown,
                             ).await;
                         }
                         tracing::info!("ES [{}] bulk ingest loop exiting (channel closed)", name);
@@ -106,7 +109,7 @@ pub async fn bulk_ingest_loop(
                     let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                     endpoint_idx = endpoint_idx.wrapping_add(1);
                     flush_batch(
-                        &client, endpoint, &config, &healthy, &name, batch, &shutdown,
+                        &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown,
                     ).await;
                 }
             }
@@ -117,7 +120,7 @@ pub async fn bulk_ingest_loop(
                         let batch = std::mem::take(&mut buffer);
                         let endpoint = &endpoints[endpoint_idx % endpoints.len().max(1)];
                         flush_batch(
-                            &client, endpoint, &config, &healthy, &name, batch, &shutdown,
+                            &client, endpoint, &config, &healthy, &last_flip_log, &name, batch, &shutdown,
                         ).await;
                     }
                     tracing::info!("ES [{}] bulk ingest loop exiting (shutdown)", name);
@@ -138,11 +141,13 @@ pub async fn bulk_ingest_loop(
 /// exceeds the limit can never be batched safely and is dropped with a warning.
 /// In the common case (batch already within the limit) this produces exactly
 /// one sub-batch, byte-identical to the unpartitioned path.
+#[allow(clippy::too_many_arguments)]
 async fn flush_batch(
     client: &Client,
     endpoint: &str,
     config: &EsBulkConfig,
     healthy: &Arc<AtomicBool>,
+    last_flip_log: &AtomicU64,
     name: &str,
     docs: Vec<String>,
     shutdown: &watch::Receiver<bool>,
@@ -178,6 +183,7 @@ async fn flush_batch(
             body,
             config,
             healthy,
+            last_flip_log,
             name,
             sub_batch.len(),
             shutdown,
@@ -237,6 +243,7 @@ async fn send_bulk_request(
     body: String,
     config: &EsBulkConfig,
     healthy: &Arc<AtomicBool>,
+    last_flip_log: &AtomicU64,
     name: &str,
     doc_count: usize,
     shutdown: &watch::Receiver<bool>,
@@ -267,19 +274,19 @@ async fn send_bulk_request(
                             } else {
                                 tracing::debug!("ES [{}] bulk: {} items indexed successfully", name, doc_count);
                             }
-                            healthy.store(true, Ordering::Relaxed);
+                            apply_health_result(healthy, name, "elasticsearch", last_flip_log, true, false);
                             return;
                         }
                         Err(e) => {
                             tracing::warn!("ES [{}] bulk response parse error: {:?}", name, e);
                             // Treat as success if HTTP status was 200 — items likely indexed
-                            healthy.store(true, Ordering::Relaxed);
+                            apply_health_result(healthy, name, "elasticsearch", last_flip_log, true, false);
                             return;
                         }
                     }
                 } else if status.is_server_error() {
                     tracing::warn!("ES [{}] bulk: server error {}", name, status);
-                    healthy.store(false, Ordering::Relaxed);
+                    apply_health_result(healthy, name, "elasticsearch", last_flip_log, false, false);
                     // Fall through to retry
                 } else {
                     // 4xx: client error, don't retry
@@ -289,7 +296,7 @@ async fn send_bulk_request(
             }
             Err(e) => {
                 tracing::warn!("ES [{}] bulk: network error: {:?}", name, e);
-                healthy.store(false, Ordering::Relaxed);
+                apply_health_result(healthy, name, "elasticsearch", last_flip_log, false, false);
                 // Fall through to retry
             }
         }
@@ -516,12 +523,14 @@ mod tests {
 
         // Port 1 is unreachable: the first request fails fast, after which the
         // shutdown check must return before the 5s backoff sleep.
+        let last_flip = std::sync::atomic::AtomicU64::new(0);
         let fut = send_bulk_request(
             &client,
             "http://127.0.0.1:1/_bulk",
             body,
             &config,
             &healthy,
+            &last_flip,
             "test",
             1,
             &shutdown_rx,
