@@ -156,8 +156,7 @@ spec:
                           - RequestHeaderModifier
                           - ResponseHeaderModifier
                           - RequestRedirect
-                          - ExtensionRef
-                          - ForwardAuth
+                          - UrlRewrite
                           - DebugAccessLogToHeader
                           - DirectEndpoint
                           - DynamicInternalUpstream
@@ -166,7 +165,7 @@ spec:
                           - Dsl
                           - RegionRoute
                           - RequestMirror
-                          - WebhookKeyGet
+                          - FaultInjection
                           - TraceContext
                           - ExtProc
                       config:
@@ -367,7 +366,6 @@ spec:
                           - ResponseHeaderModifier
                           - ResponseRewrite
                           - DebugAccessLogToHeader
-                          - ExtensionRef
                           - Dsl
                       config:
                         type: object
