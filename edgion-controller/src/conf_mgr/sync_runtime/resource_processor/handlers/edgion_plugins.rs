@@ -5,9 +5,10 @@
 //!
 //! Features:
 //! - parse: Resolve Secret references and register to SecretRefManager for cascading updates
-//! - on_delete: Clear SecretRefManager references
+//! - parse: Register `overrideRef` EdgionData → EP in `edgion_data_refs` for requeue on change
+//! - on_delete: Clear SecretRefManager references + EdgionData refs
+//! - update_status: Validate `overrideRef` resolves to a `RegionRouteOverride` EdgionData
 
-use crate::conf_mgr::sync_runtime::resource_processor::region_route_table::RefPluginEntry;
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, pick_resolved_refs_reason, update_condition, ResolvedRefsError,
 };
@@ -15,8 +16,8 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
 use edgion_resources::prelude_resources::EdgionPlugins;
+use edgion_resources::resources::edgion_data::DataEntry;
 use edgion_resources::resources::edgion_plugins::{EdgionPlugin, EdgionPluginsStatus};
-use edgion_resources::resources::plugin_metadata::MetaDataEntry;
 use edgion_resources::ResourceKind;
 
 use super::plugins::resolve_credential as cred;
@@ -36,25 +37,22 @@ impl Default for EdgionPluginsHandler {
 }
 
 // ============================================================================
-// RegionRoute + PluginMetaData helpers
+// RegionRoute overrideRef helpers
 // ============================================================================
 
 impl EdgionPluginsHandler {
-    /// Clear all PluginMetaData refs and service table ref_plugins for this EdgionPlugins.
-    fn clear_region_route_refs(ep: &EdgionPlugins, ctx: &HandlerContext) {
+    /// Clear all EdgionData refs registered by this EdgionPlugins in `edgion_data_refs`.
+    fn clear_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) {
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
         let ep_name = ep.metadata.name.as_deref().unwrap_or("");
         let ep_key = format!("{}:{}/{}", ResourceKind::EdgionPlugins.as_str(), ns, ep_name);
-        ctx.runtime().plugin_metadata_refs.clear_refs_from(&ep_key);
-        ctx.runtime().service_region_route_table.clear_ref_plugins_from(
-            ResourceKind::EdgionPlugins.as_str(),
-            ns,
-            ep_name,
-        );
+        ctx.runtime().edgion_data_refs.clear_refs_from(&ep_key);
     }
 
-    /// Extract all `service_region_route_ref` names from every RegionRoute plugin.
-    fn get_service_region_route_refs(ep: &EdgionPlugins) -> Vec<String> {
+    /// Collect all `overrideRef` EdgionData keys from RegionRoute plugins.
+    /// Returns "namespace/name" keys (namespace defaults to EP's namespace when absent).
+    fn get_region_route_override_keys(ep: &EdgionPlugins) -> Vec<String> {
+        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
         let Some(plugins) = &ep.spec.request_plugins else {
             return vec![];
         };
@@ -62,7 +60,10 @@ impl EdgionPluginsHandler {
             .iter()
             .filter_map(|e| {
                 if let EdgionPlugin::RegionRoute(ref config) = e.plugin {
-                    config.service_region_route_ref.clone()
+                    config.override_ref.as_ref().map(|r| {
+                        let override_ns = r.namespace.as_deref().unwrap_or(ns);
+                        format!("{}/{}", override_ns, r.name)
+                    })
                 } else {
                     None
                 }
@@ -104,38 +105,17 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_openid_connect(&mut ep, &resource_ref, ctx);
         cred::resolve_csrf(&mut ep, &resource_ref, ctx);
 
-        Self::clear_region_route_refs(&ep, ctx);
+        // Clear existing EdgionData override refs for this EP, then re-register from scratch.
+        Self::clear_override_refs(&ep, ctx);
 
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let ep_name = ep.metadata.name.as_deref().unwrap_or("").to_string();
         let ep_key = format!("{}:{}/{}", ResourceKind::EdgionPlugins.as_str(), ns, ep_name);
 
-        // Register PluginMetaData refs and service table entries for each RegionRoute plugin
-        for pm_name in Self::get_service_region_route_refs(&ep) {
-            let pm_key = format!("{}/{}", ns, pm_name);
-            ctx.runtime()
-                .plugin_metadata_refs
-                .add_ref(pm_key.clone(), ep_key.clone());
-            ctx.runtime().service_region_route_table.add_ref_plugin(
-                &pm_key,
-                RefPluginEntry {
-                    kind: ResourceKind::EdgionPlugins.as_str().to_string(),
-                    namespace: ns.clone(),
-                    name: ep_name.clone(),
-                },
-            );
-
-            // Also register ref to the ClusterRegionRoute PluginMetaData
-            // (via ServiceRegionRoute PluginMetaData's clusterRef) for requeue
-            if let Some(svc_entry) = ctx.runtime().service_region_route_table.get(&pm_key) {
-                if let Some(ref cref) = svc_entry.cluster_pm_ref {
-                    let c_ns = cref.namespace.as_deref().unwrap_or(&ns);
-                    let cluster_plugin_metadata_key = format!("{}/{}", c_ns, cref.name);
-                    ctx.runtime()
-                        .plugin_metadata_refs
-                        .add_ref(cluster_plugin_metadata_key, ep_key.clone());
-                }
-            }
+        // Register requeue watcher: EP → EdgionData(overrideRef).
+        // When the referenced EdgionData changes, the EdgionDataHandler requeues this EP.
+        for override_key in Self::get_region_route_override_keys(&ep) {
+            ctx.runtime().edgion_data_refs.add_ref(override_key, ep_key.clone());
         }
 
         ProcessResult::Continue(ep)
@@ -148,11 +128,11 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ep.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        Self::clear_region_route_refs(ep, ctx);
+        Self::clear_override_refs(ep, ctx);
 
         tracing::debug!(
             edgion_plugins = %resource_ref.key(),
-            "Cleared secret and PluginMetaData references on EdgionPlugins delete"
+            "Cleared secret and EdgionData references on EdgionPlugins delete"
         );
     }
 
@@ -177,7 +157,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         };
 
         let mut resolved_errors = Self::resolve_secret_refs(ep, ctx);
-        resolved_errors.extend(resolve_pm_refs(ep, ctx));
+        resolved_errors.extend(resolve_override_refs(ep, ctx));
         let resolved_refs = if resolved_errors.is_empty() {
             condition_true(
                 condition_types::RESOLVED_REFS,
@@ -243,9 +223,10 @@ impl EdgionPluginsHandler {
     }
 }
 
-/// Check each RegionRoute plugin's `serviceRegionRouteRef` against the PluginMetaData store.
-/// Returns one `PluginMetaDataNotFound` error per missing or wrong-type reference.
-fn resolve_pm_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+/// Check each RegionRoute plugin's `overrideRef` against the EdgionData store.
+/// Returns one `EdgionDataNotFound` error per missing or wrong-type reference.
+/// A type mismatch (ref exists but is not `RegionRouteOverride`) is also reported.
+pub fn resolve_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
     let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
     let Some(plugins) = &ep.spec.request_plugins else {
         return vec![];
@@ -253,16 +234,20 @@ fn resolve_pm_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefs
     let mut errors = Vec::new();
     for entry in plugins {
         if let EdgionPlugin::RegionRoute(ref config) = entry.plugin {
-            if let Some(ref svc_name) = config.service_region_route_ref {
-                let target = ctx.runtime().plugin_metadata_store.get(Some(ns), svc_name);
+            if let Some(ref override_ref) = config.override_ref {
+                let override_ns = override_ref.namespace.as_deref().unwrap_or(ns);
+                let target = ctx
+                    .runtime()
+                    .edgion_data_store
+                    .get(Some(override_ns), &override_ref.name);
                 let resolved = target
                     .as_ref()
-                    .is_some_and(|t| matches!(&t.spec.metadata, MetaDataEntry::ServiceRegionRoute(_)));
+                    .is_some_and(|t| matches!(&t.spec.data, DataEntry::RegionRouteOverride(_)));
                 if !resolved {
-                    errors.push(ResolvedRefsError::PluginMetaDataNotFound {
-                        namespace: ns.to_string(),
-                        name: svc_name.clone(),
-                        expected_type: "ServiceRegionRoute".to_string(),
+                    errors.push(ResolvedRefsError::EdgionDataNotFound {
+                        namespace: override_ns.to_string(),
+                        name: override_ref.name.clone(),
+                        expected_type: "RegionRouteOverride".to_string(),
                     });
                 }
             }
@@ -276,16 +261,14 @@ mod tests {
     use super::EdgionPluginsHandler;
     use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
     use crate::conf_mgr::ControllerRuntime;
-    use edgion_resources::resources::edgion_plugins::plugin_configs::PluginMetaDataRef;
+    use edgion_resources::prelude_resources::EdgionData;
+    use edgion_resources::resources::edgion_data::{DataEntry, EdgionDataRef, EdgionDataSpec, RegionRouteOverride};
     use edgion_resources::resources::edgion_plugins::{
         BasicAuthConfig, BasicAuthSecretGroup, CertSourceMode, EdgionPlugin, EdgionPlugins, EdgionPluginsSpec,
         HeaderCertAuthConfig, HmacAuthConfig, HmacAuthSecretGroup, JweDecryptConfig, OpenidConnectConfig,
         RegionRouteConfig, RequestFilterEntry,
     };
     use edgion_resources::resources::gateway::SecretObjectReference;
-    use edgion_resources::resources::plugin_metadata::{
-        MetaDataEntry, PluginMetaData, PluginMetaDataSpec, ServiceRegionRouteConfig,
-    };
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use kube::api::ObjectMeta;
@@ -621,42 +604,45 @@ mod tests {
         assert_eq!(ctx.secret_ref_manager().get_refs("default/header-cert-ca").len(), 1);
     }
 
-    // ── RegionRoute + PluginMetaData resolution tests ────────────────────────
+    // ── RegionRoute + overrideRef resolution tests ────────────────────────
 
-    /// Helper: build a PluginMetaData with namespace and name set.
-    fn build_plugin_metadata(namespace: &str, name: &str, spec: PluginMetaDataSpec) -> PluginMetaData {
-        let mut pm = PluginMetaData::new(name, spec);
-        pm.metadata.namespace = Some(namespace.to_string());
-        pm
+    /// Helper: build an EdgionData with namespace and name set.
+    fn build_edgion_data(namespace: &str, name: &str, spec: EdgionDataSpec) -> EdgionData {
+        let mut ed = EdgionData::new(name, spec);
+        ed.metadata.namespace = Some(namespace.to_string());
+        ed
     }
 
     #[tokio::test]
-    async fn test_validate_region_route_refs_ok() {
-        // ServiceRegionRoute PluginMetaData exists → no validation_error
-        let service_pm = build_plugin_metadata(
+    async fn test_validate_region_route_override_ref_ok() {
+        // RegionRouteOverride EdgionData exists → resolve_override_refs returns no error
+        let override_ed = build_edgion_data(
             "default",
-            "svc-rr",
-            PluginMetaDataSpec {
-                metadata: MetaDataEntry::ServiceRegionRoute(ServiceRegionRouteConfig {
-                    cluster_ref: Some(PluginMetaDataRef {
-                        name: "global-rr".to_string(),
-                        namespace: None,
-                    }),
-                    regions: vec![],
+            "rr-override",
+            EdgionDataSpec {
+                enable: true,
+                active: None,
+                data: DataEntry::RegionRouteOverride(RegionRouteOverride {
+                    enable: None,
+                    active: None,
+                    regions: None,
                 }),
             },
         );
 
         let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
-        let mut pm_map = HashMap::new();
-        pm_map.insert("default/svc-rr".to_string(), service_pm);
-        runtime.plugin_metadata_store.replace_all(pm_map);
+        let mut ed_map = HashMap::new();
+        ed_map.insert("default/rr-override".to_string(), override_ed);
+        runtime.edgion_data_store.replace_all(ed_map);
 
         let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
         ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
             RegionRouteConfig {
-                service_region_route_ref: Some("svc-rr".to_string()),
+                override_ref: Some(EdgionDataRef {
+                    name: "rr-override".to_string(),
+                    namespace: None,
+                }),
                 ..Default::default()
             },
         ))]);
@@ -667,45 +653,52 @@ mod tests {
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
 
-        let _config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
-            EdgionPlugin::RegionRoute(c) => c,
-            _ => panic!("unexpected plugin type"),
-        };
+        let ref_errors = super::resolve_override_refs(&parsed, &ctx);
+        assert!(ref_errors.is_empty(), "expected no errors; got: {:?}", ref_errors);
     }
 
     #[tokio::test]
-    async fn test_parse_registers_all_region_route_pm_refs() {
-        // Two RegionRoute plugins referencing different PluginMetaData resources.
-        // Both must be registered in plugin_metadata_refs so that an update to
-        // either one triggers a requeue of this EdgionPlugins.
-        let make_svc_pm = |name: &str| {
-            build_plugin_metadata(
+    async fn test_parse_registers_override_ref_for_requeue() {
+        // Two RegionRoute plugins each with a different overrideRef.
+        // Both must be registered in edgion_data_refs so that an update to
+        // either EdgionData triggers a requeue of this EdgionPlugins.
+        let make_override_ed = |name: &str| {
+            build_edgion_data(
                 "default",
                 name,
-                PluginMetaDataSpec {
-                    metadata: MetaDataEntry::ServiceRegionRoute(ServiceRegionRouteConfig {
-                        cluster_ref: None,
-                        regions: vec![],
+                EdgionDataSpec {
+                    enable: true,
+                    active: None,
+                    data: DataEntry::RegionRouteOverride(RegionRouteOverride {
+                        enable: None,
+                        active: None,
+                        regions: None,
                     }),
                 },
             )
         };
 
         let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
-        let mut pm_map = HashMap::new();
-        pm_map.insert("default/svc-a".to_string(), make_svc_pm("svc-a"));
-        pm_map.insert("default/svc-b".to_string(), make_svc_pm("svc-b"));
-        runtime.plugin_metadata_store.replace_all(pm_map);
+        let mut ed_map = HashMap::new();
+        ed_map.insert("default/override-a".to_string(), make_override_ed("override-a"));
+        ed_map.insert("default/override-b".to_string(), make_override_ed("override-b"));
+        runtime.edgion_data_store.replace_all(ed_map);
 
         let mut ep = EdgionPlugins::new("dual-rr-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
         ep.spec.request_plugins = Some(vec![
             RequestFilterEntry::new(EdgionPlugin::RegionRoute(RegionRouteConfig {
-                service_region_route_ref: Some("svc-a".to_string()),
+                override_ref: Some(EdgionDataRef {
+                    name: "override-a".to_string(),
+                    namespace: None,
+                }),
                 ..Default::default()
             })),
             RequestFilterEntry::new(EdgionPlugin::RegionRoute(RegionRouteConfig {
-                service_region_route_ref: Some("svc-b".to_string()),
+                override_ref: Some(EdgionDataRef {
+                    name: "override-b".to_string(),
+                    namespace: None,
+                }),
                 ..Default::default()
             })),
         ]);
@@ -717,92 +710,114 @@ mod tests {
         };
 
         let ep_key = "EdgionPlugins:default/dual-rr-ep";
-        let svc_a_refs = runtime.plugin_metadata_refs.get_refs("default/svc-a");
-        let svc_b_refs = runtime.plugin_metadata_refs.get_refs("default/svc-b");
+        let override_a_refs = runtime.edgion_data_refs.get_refs("default/override-a");
+        let override_b_refs = runtime.edgion_data_refs.get_refs("default/override-b");
         assert!(
-            svc_a_refs.contains(&ep_key.to_string()),
-            "svc-a must reference ep; got: {:?}",
-            svc_a_refs
+            override_a_refs.contains(&ep_key.to_string()),
+            "override-a must reference ep; got: {:?}",
+            override_a_refs
         );
         assert!(
-            svc_b_refs.contains(&ep_key.to_string()),
-            "svc-b must reference ep; got: {:?}",
-            svc_b_refs
-        );
-
-        // Assert service_region_route_table.ref_plugins also got both EP entries.
-        // The fix loop touches both data structures together; divergence between them
-        // would silently regress, so both must be asserted.
-        use crate::conf_mgr::sync_runtime::resource_processor::region_route_table::RefPluginEntry;
-        let expected = RefPluginEntry {
-            kind: "EdgionPlugins".to_string(),
-            namespace: "default".to_string(),
-            name: "dual-rr-ep".to_string(),
-        };
-        let svc_a_entry = runtime
-            .service_region_route_table
-            .get("default/svc-a")
-            .expect("svc-a entry must exist");
-        let svc_b_entry = runtime
-            .service_region_route_table
-            .get("default/svc-b")
-            .expect("svc-b entry must exist");
-        assert!(
-            svc_a_entry.ref_plugins.contains(&expected),
-            "svc-a service table must list ep as ref_plugin; got: {:?}",
-            svc_a_entry.ref_plugins
-        );
-        assert!(
-            svc_b_entry.ref_plugins.contains(&expected),
-            "svc-b service table must list ep as ref_plugin; got: {:?}",
-            svc_b_entry.ref_plugins
+            override_b_refs.contains(&ep_key.to_string()),
+            "override-b must reference ep; got: {:?}",
+            override_b_refs
         );
     }
 
     #[tokio::test]
-    async fn test_validate_region_route_refs_missing() {
-        // Empty PluginMetaData store → resolve_pm_refs() reports the missing reference
-        // as a ResolvedRefsError::PluginMetaDataNotFound. Preparse no longer touches
-        // PluginMetaData refs (they aren't structural validation of the EP itself —
-        // they're a ref-resolution concern, surfaced via the ResolvedRefs condition).
+    async fn test_validate_region_route_override_ref_missing() {
+        // Empty EdgionData store → resolve_override_refs() reports the missing reference.
         let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
 
         let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
         ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
             RegionRouteConfig {
-                service_region_route_ref: Some("missing-pm".to_string()),
+                override_ref: Some(EdgionDataRef {
+                    name: "missing-override".to_string(),
+                    namespace: None,
+                }),
                 ..Default::default()
             },
         ))]);
 
         let handler = EdgionPluginsHandler::new();
 
-        // preparse() should NOT report missing PM as a structural error
+        // preparse() must NOT report missing EdgionData as a structural error (it's a ref-resolution concern).
         let preparse_errors = handler.preparse(&mut ep, &ctx);
         assert!(
             preparse_errors.is_empty(),
-            "preparse should not flag missing PM (handled by ResolvedRefs), got: {:?}",
+            "preparse should not flag missing EdgionData (handled by ResolvedRefs), got: {:?}",
             preparse_errors
         );
 
-        // parse() must succeed — missing PM is a ref-resolution concern, not a parse error.
+        // parse() must succeed — missing EdgionData is a ref-resolution concern, not a parse error.
         let parsed = match handler.parse(ep, &ctx).await {
             ProcessResult::Continue(v) => v,
             ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
         };
 
-        // resolve_pm_refs() is the path that surfaces the missing PluginMetaData.
-        let ref_errors = super::resolve_pm_refs(&parsed, &ctx);
-        assert_eq!(ref_errors.len(), 1, "expected one PluginMetaDataNotFound error");
+        // resolve_override_refs() is the path that surfaces the missing EdgionData.
+        let ref_errors = super::resolve_override_refs(&parsed, &ctx);
+        assert_eq!(ref_errors.len(), 1, "expected one EdgionDataNotFound error");
         match &ref_errors[0] {
             crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::
-                PluginMetaDataNotFound { namespace, name, expected_type } => {
+                EdgionDataNotFound { namespace, name, expected_type } => {
                 assert_eq!(namespace, "default");
-                assert_eq!(name, "missing-pm");
-                assert_eq!(expected_type, "ServiceRegionRoute");
+                assert_eq!(name, "missing-override");
+                assert_eq!(expected_type, "RegionRouteOverride");
             }
-            other => panic!("expected PluginMetaDataNotFound, got: {:?}", other),
+            other => panic!("expected EdgionDataNotFound, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_region_route_override_ref_type_mismatch() {
+        // EdgionData exists but has wrong type → resolve_override_refs reports error.
+        let wrong_type_ed = build_edgion_data(
+            "default",
+            "not-a-rr-override",
+            EdgionDataSpec {
+                enable: true,
+                active: None,
+                data: DataEntry::KeyList(edgion_resources::resources::edgion_data::KeyListData {
+                    match_mode: edgion_resources::resources::edgion_data::KeyMatchMode::default(),
+                    items: vec![],
+                }),
+            },
+        );
+
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ed_map = HashMap::new();
+        ed_map.insert("default/not-a-rr-override".to_string(), wrong_type_ed);
+        runtime.edgion_data_store.replace_all(ed_map);
+
+        let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::RegionRoute(
+            RegionRouteConfig {
+                override_ref: Some(EdgionDataRef {
+                    name: "not-a-rr-override".to_string(),
+                    namespace: None,
+                }),
+                ..Default::default()
+            },
+        ))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let ref_errors = super::resolve_override_refs(&parsed, &ctx);
+        assert_eq!(ref_errors.len(), 1, "expected one EdgionDataNotFound for type mismatch");
+        match &ref_errors[0] {
+            crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::
+                EdgionDataNotFound { expected_type, .. } => {
+                assert_eq!(expected_type, "RegionRouteOverride");
+            }
+            other => panic!("expected EdgionDataNotFound, got: {:?}", other),
         }
     }
 }

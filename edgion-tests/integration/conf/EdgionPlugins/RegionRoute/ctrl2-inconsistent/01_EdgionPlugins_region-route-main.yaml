@@ -1,14 +1,13 @@
 # RegionRoute - ctrl-2 INCONSISTENT variant (for conflict detection testing)
 #
 # Same namespace as region-route-main so the Center groups them together.
-# All config comes from the ServiceRegionRoute PluginMetaData (which references the ClusterRegionRoute PluginMetaData via clusterRef).
-# Conflict detection relies on the ClusterRegionRoute PluginMetaData having different content on ctrl-2
-# (not in this file).
+# Conflict detection relies on the base region config having different content on ctrl-2
+# (e.g. different backendEndpoints) compared to the main controller.
 #
 # Load into controller-2 to trigger conflict detection in the dashboard:
 #
 #   kubectl -n edgion-test port-forward controller-2 5802:12101 &
-#   edgion-cli --server http://localhost:5802 login -u admin -p <your-password>
+#   edgion-cli --server http://localhost:5802 login --token <your-token>
 #   edgion-cli --server http://localhost:5802 apply -f \
 #     edgion-tests/integration/conf/EdgionPlugins/RegionRoute/ctrl2-inconsistent/
 apiVersion: edgion.io/v1
@@ -20,4 +19,40 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        serviceRegionRouteRef: "region-route-main"
+        regions:
+          - name: virginia
+            hashRange: [0, 599]
+            backendEndpoint: "127.0.0.1:30001"
+            tls: false
+          - name: ohio
+            hashRange: [600, 999]
+            backendEndpoint: "127.0.0.1:30002"
+            tls: false
+        keyGet:
+          - type: header
+            name: X-Account-Id
+          - type: cookie
+            name: account_id
+        hashKeyGet:
+          - type: cookie
+            name: x_region_hash
+        hashCalc:
+          algorithm: crc32
+          modulo: 1000
+          writeBack:
+            - type: responseHeader
+              name: X-Region-Hash
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Direct-Region
+          - type: RouteByKeyConfMatch
+            matchMap:
+              "vip-va": virginia
+              "vip-oh": ohio
+          - type: RouteByHashRange
+        routeByKeyConfMatch:
+          matchMap:
+            "vip-va": "virginia"
+            "vip-oh": "ohio"

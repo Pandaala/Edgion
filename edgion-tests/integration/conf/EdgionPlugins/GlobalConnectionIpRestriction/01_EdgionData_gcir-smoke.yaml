@@ -1,0 +1,33 @@
+# GlobalConnIpRestrictionOverride EdgionData — integration test fixture
+#
+# Verifies that EdgionData with type=GlobalConnIpRestrictionOverride is correctly
+# parsed, stored, and accepted by the controller via the configserver API.
+# Profile p1: allow-list semantics — only 192.168.1.0/24 is allowed; all others denied.
+# Profile strict: deny-list semantics — explicitly deny 10.10.10.0/24; default allow.
+#
+# This fixture is loaded by the EdgionPlugins/GlobalConnectionIpRestriction integration test
+# and verified via the configserver API (accepted condition + data type check).
+apiVersion: edgion.io/v1
+kind: EdgionData
+metadata:
+  name: gcir-smoke
+  namespace: edgion-test
+spec:
+  data:
+    type: GlobalConnIpRestrictionOverride
+    config:
+      enable: true
+      activeProfile: p1
+      profiles:
+        p1:
+          defaultAction: deny
+          allow:
+            - name: office
+              cidrs:
+                - "192.168.1.0/24"
+        strict:
+          defaultAction: allow
+          deny:
+            - name: blocked-range
+              cidrs:
+                - "10.10.10.0/24"

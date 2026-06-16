@@ -1,0 +1,19 @@
+# Scenario 2: invalid GlobalConnIpRestrictionOverride EdgionData
+# activeProfile 'missing' not present in profiles — should cause Accepted=False/Invalid
+apiVersion: edgion.io/v1
+kind: EdgionData
+metadata:
+  name: data-status-gcir-invalid
+  namespace: edgion-test
+spec:
+  data:
+    type: GlobalConnIpRestrictionOverride
+    config:
+      activeProfile: missing
+      profiles:
+        main:
+          defaultAction: deny
+          allow:
+            - name: office
+              cidrs:
+                - "10.0.0.0/8"

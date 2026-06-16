@@ -89,7 +89,7 @@ async fn collect_conf_center_counts(state: &AdminState) -> BTreeMap<String, usiz
         ResourceKind::GatewayClass,
         ResourceKind::EdgionGatewayConfig,
         ResourceKind::EdgionTls,
-        ResourceKind::PluginMetaData,
+        ResourceKind::EdgionData,
         ResourceKind::LinkSys,
         ResourceKind::ReferenceGrant,
         ResourceKind::Service,

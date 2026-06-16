@@ -60,3 +60,6 @@ docs/superpowers/
 node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
+
+# Claude Code agent worktrees (transient)
+.claude/worktrees/

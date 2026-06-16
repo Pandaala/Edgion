@@ -93,7 +93,7 @@ macro_rules! for_each_phase2_resource {
         // Plugins
         $cb!(EdgionPlugins, EdgionPluginsHandler::new());
         $cb!(EdgionStreamPlugins, EdgionStreamPluginsHandler::new());
-        $cb!(PluginMetaData, PluginMetadataHandler::new());
+        $cb!(EdgionData, EdgionDataHandler::new());
         $cb!(LinkSys, LinkSysHandler::new());
         // ACME
         $cb!(EdgionAcme, EdgionAcmeHandler::new());

@@ -68,7 +68,7 @@ impl CenterLifeCycle for EtcdCenter {
     async fn start(&self, shutdown_handle: ShutdownHandle) -> Result<()> {
         tracing::info!(component = "etcd_center", mode = "etcd", "Starting Etcd lifecycle");
 
-        // Inject conf_writer into runtime so handlers can auto-create resources (e.g. PluginMetaData).
+        // Inject conf_writer into runtime so handlers can auto-create resources (e.g. EdgionData).
         let writer_arc: Arc<dyn CenterApi + Send + Sync> =
             Arc::new(EtcdStorage::new(self.client.clone(), self.config.key_prefix.clone()));
         self.base.runtime().set_conf_writer(writer_arc);

@@ -116,16 +116,16 @@ mod tests {
         let (v, k) = classify(
             "GET",
             Some("/api/v1/namespaced/{kind}/{namespace}/{name}"),
-            Some("pluginmetadata"),
+            Some("edgiondata"),
         )
         .unwrap();
         assert_eq!(v, Verb::Get);
-        assert_eq!(k, "PluginMetaData");
+        assert_eq!(k, "EdgionData");
     }
 
     #[test]
     fn namespaced_collection_get_is_list() {
-        let (v, _) = classify("GET", Some("/api/v1/namespaced/{kind}"), Some("pluginmetadata")).unwrap();
+        let (v, _) = classify("GET", Some("/api/v1/namespaced/{kind}"), Some("edgiondata")).unwrap();
         assert_eq!(v, Verb::List);
     }
 
@@ -134,11 +134,11 @@ mod tests {
         let (v, k) = classify(
             "POST",
             Some("/api/v1/namespaced/{kind}/{namespace}"),
-            Some("pluginmetadata"),
+            Some("edgiondata"),
         )
         .unwrap();
         assert_eq!(v, Verb::Create);
-        assert_eq!(k, "PluginMetaData");
+        assert_eq!(k, "EdgionData");
     }
 
     #[test]
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn wrong_method_on_valid_template_denies() {
         // DELETE on a collection/list template is not a real route -> deny
-        assert!(classify("DELETE", Some("/api/v1/namespaced/{kind}"), Some("pluginmetadata")).is_none());
+        assert!(classify("DELETE", Some("/api/v1/namespaced/{kind}"), Some("edgiondata")).is_none());
     }
 
     #[test]
@@ -285,12 +285,12 @@ mod tests {
         assert_eq!(bounded_kind_label("zzz_unknown_kind"), "unknown");
         assert_eq!(bounded_kind_label("*"), "*");
         assert_eq!(bounded_kind_label("RegionRoute"), "RegionRoute");
-        assert_eq!(bounded_kind_label("PluginMetaData"), "PluginMetaData");
+        assert_eq!(bounded_kind_label("EdgionData"), "EdgionData");
     }
 
     #[test]
     fn normalize_kind_known_and_unknown() {
-        assert_eq!(normalize_kind("pluginmetadata"), "PluginMetaData");
+        assert_eq!(normalize_kind("edgiondata"), "EdgionData");
         assert_eq!(normalize_kind("HTTPRoute"), "HTTPRoute");
         assert_eq!(normalize_kind("zzz"), "zzz");
     }

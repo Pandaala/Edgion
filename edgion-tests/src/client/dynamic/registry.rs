@@ -12,7 +12,7 @@ pub fn all() -> Vec<&'static Scenario> {
         crate::dynamic::scenarios::rate_limit_dynamic::SCENARIO,
         crate::dynamic::scenarios::observed_gen_high_freq::SCENARIO,
         crate::dynamic::scenarios::btlsp_ref_flap::SCENARIO,
-        crate::dynamic::scenarios::pmd_ref_flap::SCENARIO,
+        crate::dynamic::scenarios::edgion_data_ref_flap::SCENARIO,
         crate::dynamic::scenarios::sp_backend_change::SCENARIO,
         crate::dynamic::scenarios::tcp_esp_reload::SCENARIO,
         crate::dynamic::scenarios::gateway_class_params_flap::SCENARIO,

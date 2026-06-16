@@ -6,14 +6,14 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, update_condition, ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    condition_types, HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
+    condition_types, EdgionDataStore, HandlerContext, ProcessResult, ProcessorHandler,
 };
-use edgion_resources::prelude_resources::{EdgionStreamPlugins, PluginMetaData};
+use edgion_resources::prelude_resources::{EdgionData, EdgionStreamPlugins};
+use edgion_resources::resources::edgion_data::DataEntry;
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::{
     EdgionStreamPlugin, EdgionStreamPluginsStatus, TlsRouteStreamPlugin,
 };
-use edgion_resources::resources::plugin_metadata::MetaDataEntry;
 
 const SELF_KIND: &str = "EdgionStreamPlugins";
 
@@ -44,7 +44,8 @@ impl EdgionStreamPluginsHandler {
         format!("{}:{}/{}", SELF_KIND, ns, name)
     }
 
-    /// Iterate each GlobalConnectionIpRestriction plugin and yield (pm_namespace, pm_name).
+    /// Iterate each GlobalConnectionIpRestriction plugin that has an `overrideRef`
+    /// and yield `(override_namespace, override_name)`.
     fn iter_gcir_refs<'a>(esp: &'a EdgionStreamPlugins) -> impl Iterator<Item = (String, String)> + 'a {
         let esp_ns = esp.metadata.namespace.as_deref().unwrap_or("").to_string();
         esp.spec
@@ -54,12 +55,11 @@ impl EdgionStreamPluginsHandler {
             .flat_map(|v| v.iter())
             .filter_map(move |entry| match &entry.plugin {
                 EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
-                    let pm_ns = gcir
-                        .plugin_metadata_ref
-                        .namespace
-                        .clone()
-                        .unwrap_or_else(|| esp_ns.clone());
-                    Some((pm_ns, gcir.plugin_metadata_ref.name.clone()))
+                    // Only register a ref when overrideRef is set; base is inline.
+                    gcir.override_ref.as_ref().map(|r| {
+                        let ns = r.namespace.clone().unwrap_or_else(|| esp_ns.clone());
+                        (ns, r.name.clone())
+                    })
                 }
                 EdgionStreamPlugin::IpRestriction(_) => None,
                 EdgionStreamPlugin::ConnectionRateLimit(_) => None,
@@ -115,6 +115,15 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                     errors.push(format!("plugins[{idx}] (ConnectionRateLimit): {e}"));
                 }
             }
+            // Validate GlobalConnectionIpRestriction inline base config (S4 / S2.4).
+            if let EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) = &entry.plugin {
+                let mut base = gcir.base.clone();
+                if let Err(e) = base.validate_and_init() {
+                    errors.push(format!(
+                        "plugins[{idx}] (GlobalConnectionIpRestriction): base config invalid: {e}"
+                    ));
+                }
+            }
         }
 
         // Stage 2: TlsRoute plugins (post-handshake, HTTP-layer `IpRestrictionConfig`).
@@ -135,13 +144,13 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
     }
 
     async fn parse(&self, esp: EdgionStreamPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionStreamPlugins> {
-        // Rebuild outgoing PluginMetaData refs from scratch so that an edit that removes
+        // Rebuild outgoing EdgionData refs from scratch so that an edit that removes
         // a GCIR entry correctly drops its old ref.
         let self_ref = Self::self_ref_key(&esp);
-        ctx.runtime().plugin_metadata_refs.clear_refs_from(&self_ref);
-        for (pm_ns, pm_name) in Self::iter_gcir_refs(&esp) {
-            let pm_key = PluginMetaDataStore::make_key(Some(&pm_ns), &pm_name);
-            ctx.runtime().plugin_metadata_refs.add_ref(pm_key, self_ref.clone());
+        ctx.runtime().edgion_data_refs.clear_refs_from(&self_ref);
+        for (ed_ns, ed_name) in Self::iter_gcir_refs(&esp) {
+            let ed_key = EdgionDataStore::make_key(Some(&ed_ns), &ed_name);
+            ctx.runtime().edgion_data_refs.add_ref(ed_key, self_ref.clone());
         }
         ProcessResult::Continue(esp)
     }
@@ -151,9 +160,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
     }
 
     async fn on_delete(&self, esp: &EdgionStreamPlugins, ctx: &HandlerContext) {
-        ctx.runtime()
-            .plugin_metadata_refs
-            .clear_refs_from(&Self::self_ref_key(esp));
+        ctx.runtime().edgion_data_refs.clear_refs_from(&Self::self_ref_key(esp));
         requeue_referencing_gateways(esp, ctx).await;
     }
 
@@ -183,8 +190,8 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             condition_false(condition_types::ACCEPTED, reason, message, generation)
         };
 
-        // ResolvedRefs: each GlobalConnectionIpRestriction plugin_metadata_ref must
-        // resolve to an existing PluginMetaData of the matching variant type.
+        // ResolvedRefs: each GlobalConnectionIpRestriction overrideRef must
+        // resolve to an existing EdgionData of the matching variant type.
         let resolved_errors = resolve_refs(esp, ctx);
         let resolved_refs = if resolved_errors.is_empty() {
             condition_true(
@@ -235,20 +242,21 @@ async fn requeue_referencing_gateways(esp: &EdgionStreamPlugins, ctx: &HandlerCo
     }
 }
 
-/// Resolve each GCIR plugin_metadata_ref against the PluginMetaData store.
-/// Returns one `PluginMetaDataNotFound` error per unresolved / wrong-type reference.
+/// Resolve each GCIR `overrideRef` against the EdgionData store.
+/// Returns one error per unresolved or wrong-type reference.
+/// Only entries that have `overrideRef` set are checked (base is always inline).
 fn resolve_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
     let mut errors = Vec::new();
-    for (pm_ns, pm_name) in EdgionStreamPluginsHandler::iter_gcir_refs(esp) {
-        let target: Option<PluginMetaData> = ctx.runtime().plugin_metadata_store.get(Some(&pm_ns), &pm_name);
+    for (ns, name) in EdgionStreamPluginsHandler::iter_gcir_refs(esp) {
+        let target: Option<EdgionData> = ctx.runtime().edgion_data_store.get(Some(&ns), &name);
         let resolved = target
             .as_ref()
-            .is_some_and(|t| matches!(&t.spec.metadata, MetaDataEntry::GlobalConnectionIpRestriction(_)));
+            .is_some_and(|t| matches!(&t.spec.data, DataEntry::GlobalConnIpRestrictionOverride(_)));
         if !resolved {
-            errors.push(ResolvedRefsError::PluginMetaDataNotFound {
-                namespace: pm_ns,
-                name: pm_name,
-                expected_type: "GlobalConnectionIpRestriction".to_string(),
+            errors.push(ResolvedRefsError::EdgionDataNotFound {
+                namespace: ns,
+                name,
+                expected_type: "GlobalConnIpRestrictionOverride".to_string(),
             });
         }
     }

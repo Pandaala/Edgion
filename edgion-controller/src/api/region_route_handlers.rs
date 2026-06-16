@@ -1,62 +1,25 @@
-//! Region Route PluginMetaData API handlers
+//! Region Route API handlers
 //!
-//! GET /api/v1/cluster-region-routes
-//!   Lists all ClusterRegionRoute entries from the pre-built table.
+//! POST /api/v1/region-routes/failover
+//!   Patches a single region's `failoverTo` in a `RegionRouteOverride` EdgionData.
 //!
-//! GET /api/v1/service-region-routes
-//!   Lists all ServiceRegionRoute entries from the pre-built table.
-//!
-//! POST /api/v1/cluster-region-routes/failover
-//!   Modifies a single region's failoverTo in a ClusterRegionRoute PluginMetaData.
-//!
-//! POST /api/v1/service-region-routes/failover
-//!   Modifies a single region's failoverTo in a ServiceRegionRoute PluginMetaData.
+//! NOTE: The old `/api/v1/cluster-region-routes` and `/api/v1/service-region-routes`
+//! list endpoints are removed as part of the S3 RegionRoute decomposition.
+//! The routing config (logic + default regions) now lives entirely in EdgionPlugins
+//! (`RegionRouteConfig.regions`). Dynamic region overrides are `RegionRouteOverride`
+//! EdgionData, which can be listed via the standard EdgionData configserver API.
 
 use axum::{extract::State, http::StatusCode, response::Json};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
-
-use crate::api::ListResponse;
 
 use super::types::AdminState;
 
-// ============= ClusterRegionRoute PluginMetaData Types =============
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ClusterRegionPluginMetadataEntry {
-    pub namespace: String,
-    pub name: String,
-    pub my_region: String,
-    pub regions: serde_json::Value,
-    pub key_get: serde_json::Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash_key_get: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hash_calc: Option<serde_json::Value>,
-    pub route_rules: serde_json::Value,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub route_by_key_conf_match: Option<serde_json::Value>,
-}
-
-// ============= ServiceRegionRoute PluginMetaData Types =============
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServiceRegionPluginMetadataEntry {
-    pub namespace: String,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cluster_ref: Option<serde_json::Value>,
-    pub regions: serde_json::Value,
-    pub ref_plugins: serde_json::Value,
-}
-
-// ============= Failover Types =============
+// ============= Types =============
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct PluginMetadataFailoverRequest {
+pub struct EdgionDataFailoverRequest {
     pub namespace: String,
     pub name: String,
     pub region_name: String,
@@ -66,73 +29,41 @@ pub struct PluginMetadataFailoverRequest {
 
 // ============= Handlers =============
 
-/// `GET /api/v1/cluster-region-routes`
+/// `GET /api/v1/cluster-region-routes` — deprecated; returns an empty list.
 ///
-/// Lists all ClusterRegionRoute PluginMetaData entries from the pre-built table.
-pub async fn list_cluster_region_plugin_metadata(
-    State(state): State<Arc<AdminState>>,
-) -> Result<Json<ListResponse<ClusterRegionPluginMetadataEntry>>, StatusCode> {
-    let runtime = state.runtime();
-    let entries = runtime.cluster_region_route_table.all();
-
-    let mut result: Vec<ClusterRegionPluginMetadataEntry> = entries
-        .into_iter()
-        .map(|e| ClusterRegionPluginMetadataEntry {
-            namespace: e.pm_namespace,
-            name: e.pm_name,
-            my_region: e.my_region,
-            regions: serde_json::to_value(&e.regions).unwrap_or_default(),
-            key_get: serde_json::to_value(&e.key_get).unwrap_or_default(),
-            hash_key_get: e.hash_key_get.as_ref().and_then(|v| serde_json::to_value(v).ok()),
-            hash_calc: e.hash_calc.as_ref().and_then(|v| serde_json::to_value(v).ok()),
-            route_rules: serde_json::to_value(&e.route_rules).unwrap_or_default(),
-            route_by_key_conf_match: e
-                .route_by_key_conf_match
-                .as_ref()
-                .and_then(|v| serde_json::to_value(v).ok()),
-        })
-        .collect();
-
-    result.sort_by(|a, b| (&a.namespace, &a.name).cmp(&(&b.namespace, &b.name)));
-    Ok(Json(ListResponse::success(result)))
+/// After S3 the ClusterRegionRoute EdgionData variant is removed. Region topology
+/// now lives inline in EdgionPlugins `RegionRouteConfig.regions`. Dynamic overrides
+/// are `RegionRouteOverride` EdgionData, listable via the configserver API.
+pub async fn list_cluster_region_edgion_data(
+    State(_state): State<Arc<AdminState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    Ok(Json(serde_json::json!({ "success": true, "data": [] })))
 }
 
-/// `GET /api/v1/service-region-routes`
+/// `GET /api/v1/service-region-routes` — deprecated; returns an empty list.
 ///
-/// Lists all ServiceRegionRoute PluginMetaData entries from the pre-built table.
-pub async fn list_service_region_plugin_metadata(
-    State(state): State<Arc<AdminState>>,
-) -> Result<Json<ListResponse<ServiceRegionPluginMetadataEntry>>, StatusCode> {
-    let runtime = state.runtime();
-    let entries = runtime.service_region_route_table.all();
-
-    let mut result: Vec<ServiceRegionPluginMetadataEntry> = entries
-        .into_iter()
-        .map(|e| ServiceRegionPluginMetadataEntry {
-            namespace: e.pm_namespace,
-            name: e.pm_name,
-            cluster_ref: e.cluster_pm_ref.as_ref().and_then(|v| serde_json::to_value(v).ok()),
-            regions: serde_json::to_value(&e.regions).unwrap_or_default(),
-            ref_plugins: serde_json::to_value(&e.ref_plugins).unwrap_or_default(),
-        })
-        .collect();
-
-    result.sort_by(|a, b| (&a.namespace, &a.name).cmp(&(&b.namespace, &b.name)));
-    Ok(Json(ListResponse::success(result)))
+/// After S3 the ServiceRegionRoute EdgionData variant is removed. Per-service failover
+/// is now expressed via `RegionRouteOverride.regions[].failoverTo` in an EdgionData.
+pub async fn list_service_region_edgion_data(
+    State(_state): State<Arc<AdminState>>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    Ok(Json(serde_json::json!({ "success": true, "data": [] })))
 }
 
 /// `POST /api/v1/cluster-region-routes/failover`
 ///
-/// Modifies a single region's failoverTo in a local ClusterRegionRoute PluginMetaData.
-pub async fn cluster_plugin_metadata_failover(
+/// Patches a single region's `failoverTo` in a `RegionRouteOverride` EdgionData.
+/// The `name` field should refer to a `RegionRouteOverride` EdgionData (not the old
+/// ClusterRegionRoute — that variant no longer exists).
+pub async fn cluster_edgion_data_failover(
     State(state): State<Arc<AdminState>>,
-    Json(body): Json<PluginMetadataFailoverRequest>,
+    Json(body): Json<EdgionDataFailoverRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    match patch_plugin_metadata_failover(
+    match patch_edgion_data_failover(
         &state,
         &body.namespace,
         &body.name,
-        "ClusterRegionRoute",
+        "RegionRouteOverride",
         &body.region_name,
         &body.failover_to,
     )
@@ -146,16 +77,17 @@ pub async fn cluster_plugin_metadata_failover(
 
 /// `POST /api/v1/service-region-routes/failover`
 ///
-/// Modifies a single region's failoverTo in a local ServiceRegionRoute PluginMetaData.
-pub async fn service_plugin_metadata_failover(
+/// Deprecated. After S3, per-service failover is managed via `RegionRouteOverride` EdgionData.
+/// This endpoint now delegates to the same `RegionRouteOverride` patch path.
+pub async fn service_edgion_data_failover(
     State(state): State<Arc<AdminState>>,
-    Json(body): Json<PluginMetadataFailoverRequest>,
+    Json(body): Json<EdgionDataFailoverRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    match patch_plugin_metadata_failover(
+    match patch_edgion_data_failover(
         &state,
         &body.namespace,
         &body.name,
-        "ServiceRegionRoute",
+        "RegionRouteOverride",
         &body.region_name,
         &body.failover_to,
     )
@@ -169,11 +101,11 @@ pub async fn service_plugin_metadata_failover(
 
 // ============= Helpers =============
 
-/// GET the PluginMetaData from local storage, modify the region's failoverTo, then PUT back.
-async fn patch_plugin_metadata_failover(
+/// GET the EdgionData from local storage, modify the region's failoverTo, then PUT back.
+async fn patch_edgion_data_failover(
     state: &AdminState,
     namespace: &str,
-    plugin_metadata_name: &str,
+    edgion_data_name: &str,
     plugin_type: &str,
     region_name: &str,
     failover_to: &str,
@@ -181,30 +113,22 @@ async fn patch_plugin_metadata_failover(
     use edgion_resources::ResourceKind;
 
     // Serialize the whole get -> patch -> write below against other writers to the
-    // same resource so concurrent failover requests, and a concurrent generic
-    // `update_namespaced` PUT (which the Center region-route sync routes through),
-    // cannot interleave and silently lose an update. Held until the guard drops at
-    // the end of this function. See `super::resource_locks` and
-    // `skills/04-review/concurrency/failover-read-modify-write-per-key-lock.md`.
+    // same resource so concurrent failover requests and a concurrent generic
+    // `update_namespaced` PUT cannot interleave and silently lose an update.
     let _resource_guard =
-        super::resource_locks::lock_resource(ResourceKind::PluginMetaData.as_str(), namespace, plugin_metadata_name)
-            .await;
+        super::resource_locks::lock_resource(ResourceKind::EdgionData.as_str(), namespace, edgion_data_name).await;
 
     let resource = state
-        .center_get_resource(ResourceKind::PluginMetaData, namespace, plugin_metadata_name)
+        .center_get_resource(ResourceKind::EdgionData, namespace, edgion_data_name)
         .await
-        .map_err(|e| format!("failed to get PluginMetaData: {e}"))?
-        .ok_or_else(|| format!("PluginMetaData {}/{} not found", namespace, plugin_metadata_name))?;
+        .map_err(|e| format!("failed to get EdgionData: {e}"))?
+        .ok_or_else(|| format!("EdgionData {}/{} not found", namespace, edgion_data_name))?;
 
     let mut resource = resource;
 
-    // Find the plugin entry and modify the region's failoverTo.
-    // Support both storage formats:
-    //   - spec.plugins[].type/config (processed format)
-    //   - spec.metadata.type/config  (raw file format)
     let mut modified = false;
 
-    // Try processed format: spec.plugins[]
+    // Try processed format: spec.plugins[].type/config
     if let Some(plugins) = resource.pointer_mut("/spec/plugins").and_then(|p| p.as_array_mut()) {
         for plugin in plugins.iter_mut() {
             if plugin.get("type").and_then(|t| t.as_str()) != Some(plugin_type) {
@@ -216,11 +140,11 @@ async fn patch_plugin_metadata_failover(
         }
     }
 
-    // Try raw file format: spec.metadata
+    // Try raw file format: spec.data.config.regions
     if !modified {
-        if let Some(metadata) = resource.pointer_mut("/spec/metadata") {
-            if metadata.get("type").and_then(|t| t.as_str()) == Some(plugin_type) {
-                if let Some(regions) = metadata.pointer_mut("/config/regions").and_then(|r| r.as_array_mut()) {
+        if let Some(data) = resource.pointer_mut("/spec/data") {
+            if data.get("type").and_then(|t| t.as_str()) == Some(plugin_type) {
+                if let Some(regions) = data.pointer_mut("/config/regions").and_then(|r| r.as_array_mut()) {
                     modified = patch_region_failover(regions, region_name, failover_to);
                 }
             }
@@ -235,9 +159,9 @@ async fn patch_plugin_metadata_failover(
 
     let api = state.conf_center();
     api.update_one(
-        ResourceKind::PluginMetaData.as_str(),
+        ResourceKind::EdgionData.as_str(),
         Some(namespace),
-        plugin_metadata_name,
+        edgion_data_name,
         json_content,
     )
     .await
@@ -275,12 +199,12 @@ mod tests {
         // "failover endpoint can only change failoverTo".
         let json = r#"{
             "namespace": "default",
-            "name": "test-cluster-route",
+            "name": "test-override-route",
             "regionName": "east",
             "failoverTo": "west",
             "myRegion": "evil"
         }"#;
-        let result: Result<PluginMetadataFailoverRequest, _> = serde_json::from_str(json);
+        let result: Result<EdgionDataFailoverRequest, _> = serde_json::from_str(json);
         assert!(result.is_err(), "unknown field 'myRegion' must be rejected");
     }
 
@@ -288,37 +212,31 @@ mod tests {
     fn failover_request_accepts_canonical_payload() {
         let json = r#"{
             "namespace": "default",
-            "name": "test-cluster-route",
+            "name": "test-override-route",
             "regionName": "east",
             "failoverTo": "west"
         }"#;
-        let result: Result<PluginMetadataFailoverRequest, _> = serde_json::from_str(json);
+        let result: Result<EdgionDataFailoverRequest, _> = serde_json::from_str(json);
         let req = result.expect("canonical 4-field payload must be accepted");
-        // Assert field values to verify rename_all = "camelCase" maps correctly.
         assert_eq!(req.namespace, "default");
-        assert_eq!(req.name, "test-cluster-route");
+        assert_eq!(req.name, "test-override-route");
         assert_eq!(req.region_name, "east");
         assert_eq!(req.failover_to, "west");
     }
 
     #[test]
     fn failover_request_accepts_empty_failover_to() {
-        // Empty string semantics = "clear failover".
         let json = r#"{
             "namespace": "default",
-            "name": "test-cluster-route",
+            "name": "test-override-route",
             "regionName": "east",
             "failoverTo": ""
         }"#;
-        let result: Result<PluginMetadataFailoverRequest, _> = serde_json::from_str(json);
+        let result: Result<EdgionDataFailoverRequest, _> = serde_json::from_str(json);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().failover_to, "");
     }
 
-    /// Locked invariant: `patch_region_failover` mutates ONLY the targeted region's
-    /// `failoverTo` field. Every other byte of the surrounding region object and other
-    /// regions stays identical. This is the runtime guarantee behind the contract
-    /// "the failover endpoint cannot modify anything other than failoverTo".
     #[test]
     fn patch_region_failover_only_changes_target_failover_to() {
         let original = serde_json::json!([
@@ -340,13 +258,10 @@ mod tests {
         let modified = patch_region_failover(&mut regions, "east", "west");
         assert!(modified, "should report modified");
 
-        // Target region: only failoverTo changed
         assert_eq!(regions[0]["failoverTo"], serde_json::Value::String("west".into()));
         assert_eq!(regions[0]["name"], original[0]["name"]);
         assert_eq!(regions[0]["weight"], original[0]["weight"]);
         assert_eq!(regions[0]["endpoints"], original[0]["endpoints"]);
-
-        // Non-target region: byte-for-byte identical
         assert_eq!(regions[1], original[1]);
     }
 
@@ -369,12 +284,9 @@ mod tests {
         let modified = patch_region_failover(&mut regions, "east", "");
         assert!(modified);
 
-        // Target region: failoverTo removed, other fields untouched
         assert!(regions[0].as_object().unwrap().get("failoverTo").is_none());
         assert_eq!(regions[0]["name"], original[0]["name"]);
         assert_eq!(regions[0]["weight"], original[0]["weight"]);
-
-        // Non-target region: identical
         assert_eq!(regions[1], original[1]);
     }
 
@@ -383,7 +295,6 @@ mod tests {
         let mut regions = vec![serde_json::json!({"name": "east", "failoverTo": "x"})];
         let modified = patch_region_failover(&mut regions, "nonexistent", "y");
         assert!(!modified);
-        // Untouched
         assert_eq!(regions[0]["failoverTo"], serde_json::Value::String("x".into()));
     }
 }

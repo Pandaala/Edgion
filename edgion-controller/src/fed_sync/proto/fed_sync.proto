@@ -6,7 +6,7 @@ package fed_sync;
 
 message FedWatchRequest {
     string request_id    = 1;  // UUID for correlating responses
-    string kind          = 2;  // Resource kind, e.g. "PluginMetaData"
+    string kind          = 2;  // Resource kind, e.g. "EdgionData"
     uint64 from_version  = 3;  // 0 = full list + watch; >0 = resume watch
 }
 

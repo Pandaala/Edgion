@@ -210,8 +210,8 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        edgion_resources::ResourceKind::PluginMetaData => {
-            let metadata: PluginMetaData = parse_resource_and_update_version(&content, !is_k8s)?;
+        edgion_resources::ResourceKind::EdgionData => {
+            let metadata: EdgionData = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &metadata, is_k8s)?;
             let json_content = serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
@@ -431,12 +431,12 @@ pub async fn update_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
-        edgion_resources::ResourceKind::PluginMetaData => {
-            let metadata: PluginMetaData = parse_resource_and_update_version(&content, !is_k8s)?;
+        edgion_resources::ResourceKind::EdgionData => {
+            let metadata: EdgionData = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &metadata, is_k8s)?;
             let json_content = serde_json::to_string(&metadata).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             // Serialize this whole-resource replace against the failover
-            // read-modify-write on the same PluginMetaData, which would otherwise
+            // read-modify-write on the same EdgionData, which would otherwise
             // interleave and silently lose an update. Held across the write below.
             // See `super::resource_locks` and
             // `skills/04-review/concurrency/failover-read-modify-write-per-key-lock.md`.

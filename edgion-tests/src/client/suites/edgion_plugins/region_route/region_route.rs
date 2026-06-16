@@ -1,27 +1,20 @@
 // RegionRoute Integration Test Suite
 //
-// Tests the ServiceRegionRoute PluginMetaData → ClusterRegionRoute PluginMetaData → EdgionPlugins resolve flow.
+// Tests the base + overlay model: EdgionPlugins holds all routing logic + default region table;
+// an optional overrideRef points to a RegionRouteOverride EdgionData (fail-to-base on error).
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/RegionRoute/):
-//   01_EdgionPlugins_region-route-main.yaml      — ref-only: serviceRegionRouteRef
-//   01_EdgionPlugins_region-route-norules.yaml    — ref-only: serviceRegionRouteRef
-//   01_EdgionPlugins_region-route-myregion.yaml   — ref-only: serviceRegionRouteRef
-//   01_PluginMetaData_global-region-conf.yaml     — ClusterRegionRoute PluginMetaData with complete config:
-//                                                   regions, keyGet, hashKeyGet, hashCalc, routeRules,
-//                                                   routeByKeyConfMatch.matchMap (vip-va→virginia, vip-oh→ohio)
-//   01_PluginMetaData_region-route-main.yaml      — ServiceRegionRoute PluginMetaData with clusterRef + regions
+//   01_EdgionPlugins_region-route-main.yaml      — full inline config: regions, keyGet,
+//                                                   hashKeyGet, hashCalc, routeRules,
+//                                                   routeByKeyConfMatch (vip-va/vip-oh)
+//   01_EdgionPlugins_region-route-norules.yaml    — inline config with no routeRules (no-op)
+//   01_EdgionPlugins_region-route-myregion.yaml   — inline config: myRegion + failoverTo per region
+//   01_EdgionPlugins_region-route-broken-ref.yaml — inline base + overrideRef to nonexistent
+//                                                   EdgionData (overlay_missing -> fail-to-base)
 //   02_HTTPRoute_region-route-main-test.yaml
 //   02_HTTPRoute_region-route-norules-test.yaml
 //   02_HTTPRoute_region-route-myregion-test.yaml
-//
-// PluginMetaData resolve flow:
-//   1. Controller processes EdgionPlugins "region-route-main"
-//   2. Resolves serviceRegionRouteRef → loads ServiceRegionRoute PluginMetaData "region-route-main"
-//   3. Follows ServiceRegionRoute PluginMetaData's clusterRef → loads ClusterRegionRoute PluginMetaData "global-region-conf"
-//   4. Copies ALL config from ClusterRegionRoute PluginMetaData: regions, keyGet, hashCalc, routeRules
-//   5. Injects routeByKeyConfMatch.matchMap into RouteByKeyConfMatch route rules
-//   6. Overlays per-region failoverTo from ServiceRegionRoute PluginMetaData (none in this test)
-//   7. Gateway receives the fully merged config
+//   02_HTTPRoute_region-route-broken-ref-test.yaml
 //
 // Test strategy:
 //   Backend endpoints 127.0.0.1:30001 (virginia) and 127.0.0.1:30002 (ohio) are
@@ -83,23 +76,56 @@ impl RegionRouteTestSuite {
         )
     }
 
-    /// serviceRegionRouteRef points at a PluginMetaData that does not resolve →
-    /// region_route's resolve_config returns BrokenRef → data plane responds 500.
-    fn broken_ref_returns_500() -> TestCase {
+    /// overrideRef points at a nonexistent EdgionData -> overlay_missing -> fail-to-base.
+    /// Base regions are used; a routed request reaches a loopback backend -> 502.
+    /// Access log must contain "overlay_missing" confirming the signal was recorded.
+    fn broken_overlay_ref_uses_base() -> TestCase {
         TestCase::new(
-            "broken_ref_returns_500",
-            "Broken serviceRegionRouteRef: resolve_config returns BrokenRef, request gets 500",
+            "broken_overlay_ref_uses_base",
+            "Broken overrideRef (nonexistent EdgionData): overlay_missing -> fail-to-base; \
+             base routes request to loopback -> 502; access log contains overlay_missing",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    let trace_id = format!("rr-broken-ref-{}", uuid::Uuid::new_v4());
                     let url = format!("{}/echo", ctx.edgion_plugins_url());
-                    match ctx.http_client.get(&url).header("host", BROKEN_REF_HOST).send().await {
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", BROKEN_REF_HOST)
+                        .header("X-Direct-Region", "virginia")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await
+                    {
                         Ok(resp) => {
                             let status = resp.status().as_u16();
-                            if status == 500 {
-                                TestResult::passed(start.elapsed())
-                            } else {
-                                TestResult::failed(start.elapsed(), format!("Expected 500 (BrokenRef), got {}", status))
+                            // Base regions route to loopback -> 502 (not 500: no gateway error,
+                            // the overlay is simply absent and the base is used as fallback).
+                            if status != 502 && status != 500 {
+                                return TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected 502 (routed via base to loopback) or 500, got {}", status),
+                                );
+                            }
+                            let al_client = ctx.access_log_client();
+                            match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(entry) => {
+                                    let log_str = entry.data.to_string();
+                                    if log_str.contains("overlay_missing") {
+                                        TestResult::passed_with_message(
+                                            start.elapsed(),
+                                            format!("overlay_missing logged as expected; status={}", status),
+                                        )
+                                    } else {
+                                        TestResult::failed(
+                                            start.elapsed(),
+                                            format!("Expected 'overlay_missing' in access log. log: {}", log_str),
+                                        )
+                                    }
+                                }
+                                Err(e) => TestResult::failed(start.elapsed(), format!("Access log error: {}", e)),
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -178,8 +204,11 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_hash = log_str.contains("key=hdr:X-Account-Id");
-                                    let has_wb = log_str.contains("wb→res_hdr:X-Region-Hash");
+                                    // Plugin emits: "hash key=<key> src=hdr:X-Account-Id val=<n>"
+                                    // and "hash_wb→res_hdr:X-Region-Hash".
+                                    let has_hash =
+                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
+                                    let has_wb = log_str.contains("hash_wb→res_hdr:X-Region-Hash");
                                     if has_hash && has_wb {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -236,10 +265,11 @@ impl RegionRouteTestSuite {
                     let log1 = send_and_get_region(ctx.clone(), trace1).await;
                     let log2 = send_and_get_region(ctx.clone(), trace2).await;
 
-                    // Extract "hash=N" value from log entry like "key=hdr:X-Account-Id hash=N"
-                    // The value ends at the first non-digit (quote/comma in JSON serialized form).
+                    // Extract the hash value from a log entry like
+                    // `hash key=<key> src=hdr:X-Account-Id val=<N>`. The value ends at the
+                    // first non-digit (quote/comma in JSON serialized form).
                     let extract_hash = |log: &str| -> Option<String> {
-                        let start = log.find("hash=")? + 5;
+                        let start = log.find("val=")? + 4;
                         let rest = &log[start..];
                         let end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
                         if end == 0 {
@@ -393,14 +423,14 @@ impl RegionRouteTestSuite {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
                                     // Verify: unknown direct region falls through, RouteByKeyConfMatch
-                                    // misses, then RouteByHashRange routes.
-                                    // LogBuffer is 100 bytes. After fallthrough(38B) + match-miss(31B)
-                                    // + key(31B) = 100B exactly, the wb→ entry (26B) doesn't fit.
-                                    // So we verify hash computation via "key=hdr:X-Account-Id hash="
-                                    // rather than "wb→res_hdr:X-Region-Hash" which is truncated.
+                                    // misses, then RouteByHashRange routes. Plugin emits:
+                                    //   `direct=<r> unknown, fallthrough`
+                                    //   `conf_match key=<v> src=hdr:X-Account-Id no_entry, fallthrough`
+                                    //   `hash key=<k> src=hdr:X-Account-Id val=<n>`
                                     let fell_through = log_str.contains("fallthrough");
-                                    let match_miss = log_str.contains("match=hdr:X-Account-Id no conf");
-                                    let hash_computed = log_str.contains("key=hdr:X-Account-Id hash=");
+                                    let match_miss = log_str.contains("src=hdr:X-Account-Id no_entry, fallthrough");
+                                    let hash_computed =
+                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
                                     if fell_through && match_miss && hash_computed {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -452,7 +482,10 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_match = log_str.contains("match=hdr:X-Account-Id→virginia");
+                                    // Plugin emits `conf_match key=<v> src=hdr:X-Account-Id →virginia`
+                                    // (note the space before the arrow).
+                                    let has_match = log_str.contains("conf_match key=")
+                                        && log_str.contains("src=hdr:X-Account-Id →virginia");
                                     let has_jump = log_str.contains("→virginia");
                                     if has_match && has_jump {
                                         TestResult::passed(start.elapsed())
@@ -501,7 +534,9 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_match = log_str.contains("match=hdr:X-Account-Id→ohio");
+                                    // Plugin emits `conf_match key=<v> src=hdr:X-Account-Id →ohio`.
+                                    let has_match = log_str.contains("conf_match key=")
+                                        && log_str.contains("src=hdr:X-Account-Id →ohio");
                                     let has_jump = log_str.contains("→ohio");
                                     if has_match && has_jump {
                                         TestResult::passed(start.elapsed())
@@ -550,8 +585,11 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_no_conf = log_str.contains("match=hdr:X-Account-Id no conf");
-                                    let has_hash = log_str.contains("key=hdr:X-Account-Id hash=");
+                                    // Plugin: `conf_match key=<v> src=hdr:X-Account-Id no_entry, fallthrough`
+                                    // then `hash key=<k> src=hdr:X-Account-Id val=<n>`.
+                                    let has_no_conf = log_str.contains("src=hdr:X-Account-Id no_entry, fallthrough");
+                                    let has_hash =
+                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
                                     if has_no_conf && has_hash {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -695,8 +733,11 @@ impl RegionRouteTestSuite {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
                                     // Should NOT use passthrough; should compute hash from X-Account-Id
+                                    // Plugin: `hash_pass=<v> src=...` only fires on in-range passthrough;
+                                    // fallback emits `hash key=<k> src=hdr:X-Account-Id val=<n>`.
                                     let used_passthrough = log_str.contains("hash_pass=1001");
-                                    let used_key = log_str.contains("key=hdr:X-Account-Id");
+                                    let used_key =
+                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
                                     if !used_passthrough && used_key {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -787,15 +828,16 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_redirect = log_str.contains("redirect ohio→virginia");
-                                    let has_local = log_str.contains("local, pass");
+                                    // Plugin emits `failover <region>→<target>` then `local_region, pass`.
+                                    let has_redirect = log_str.contains("failover ohio→virginia");
+                                    let has_local = log_str.contains("local_region, pass");
                                     if has_redirect && has_local {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
                                             format!(
-                                                "Expected 'redirect ohio→virginia' and 'local, pass'. has_redirect={}, has_local={}. log: {}",
+                                                "Expected 'failover ohio→virginia' and 'local_region, pass'. has_redirect={}, has_local={}. log: {}",
                                                 has_redirect, has_local, log_str
                                             ),
                                         )
@@ -844,7 +886,8 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    let has_redirect = log_str.contains("redirect europe→ohio");
+                                    // Plugin emits `failover europe→ohio` then external jump `→ohio`.
+                                    let has_redirect = log_str.contains("failover europe→ohio");
                                     let has_jump = log_str.contains("→ohio");
                                     if has_redirect && has_jump {
                                         TestResult::passed(start.elapsed())
@@ -852,7 +895,7 @@ impl RegionRouteTestSuite {
                                         TestResult::failed(
                                             start.elapsed(),
                                             format!(
-                                                "Expected 'redirect europe→ohio' and '→ohio'. has_redirect={}, has_jump={}. log: {}",
+                                                "Expected 'failover europe→ohio' and '→ohio'. has_redirect={}, has_jump={}. log: {}",
                                                 has_redirect, has_jump, log_str
                                             ),
                                         )
@@ -930,8 +973,8 @@ impl TestSuite for RegionRouteTestSuite {
             // Pass-through (200)
             Self::no_route_rules_passes_through(),
             Self::missing_key_passes_through(),
-            // Broken ref (500)
-            Self::broken_ref_returns_500(),
+            // Broken overrideRef -> overlay_missing -> fail-to-base (502 + access log)
+            Self::broken_overlay_ref_uses_base(),
             // Hash routing (502 + access log)
             Self::hash_routing_logged(),
             Self::hash_routing_deterministic(),

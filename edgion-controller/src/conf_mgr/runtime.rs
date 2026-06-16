@@ -16,16 +16,15 @@ use super::sync_runtime::resource_processor::{
     attached_route_tracker::AttachedRouteTracker,
     backend_tls_policy_ref::BackendTLSPolicyState,
     configmap_utils::ConfigMapStore,
+    edgion_data_utils::{EdgionDataRefManager, EdgionDataStore},
     gateway_route_index::GatewayRouteIndex,
     listener_port_manager::ListenerPortManager,
     namespace_store::NamespaceStore,
-    plugin_metadata_utils::{PluginMetaDataRefManager, PluginMetaDataStore},
     ref_grant::{
         cross_ns_ref_manager::{new_cross_ns_ref_manager, CrossNamespaceRefManager},
         events::ReferenceGrantEventDispatcher,
         ReferenceGrantStore,
     },
-    region_route_table::{RegionRouteClusterTable, RegionRouteServiceTable},
     secret_utils::{new_secret_ref_manager, SecretRefManager, SecretStore},
     service_ref::{new_service_ref_manager, ServiceRefManager},
     BidirectionalRefManager, ResourceRef,
@@ -49,23 +48,17 @@ pub struct ControllerRuntime {
     pub(crate) listener_port_manager: ListenerPortManager,
     pub(crate) configmap_store: ConfigMapStore,
     pub(crate) backend_tls_policy: BackendTLSPolicyState,
-    pub(crate) plugin_metadata_store: PluginMetaDataStore,
-    /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each PluginMetaData.
-    /// Used by the PluginMetaData handler to requeue referencing resources on change.
-    pub(crate) plugin_metadata_refs: PluginMetaDataRefManager,
-    /// Cluster RegionRoute table: pm_key → ClusterRegionRouteEntry.
-    /// Maintained by PluginMetaData handler on change/delete.
-    pub(crate) cluster_region_route_table: RegionRouteClusterTable,
-    /// Service RegionRoute table: pm_key → ServiceRegionRouteEntry.
-    /// Maintained by PluginMetaData handler (PluginMetaData fields) and EdgionPlugins handler (ref_plugins).
-    pub(crate) service_region_route_table: RegionRouteServiceTable,
+    pub(crate) edgion_data_store: EdgionDataStore,
+    /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each EdgionData.
+    /// Used by the EdgionDataHandler to requeue referencing resources on change.
+    pub(crate) edgion_data_refs: EdgionDataRefManager,
     /// Tracks which Gateways reference each EdgionStreamPlugins via
     /// `edgion.io/edgion-stream-plugins` annotation.
     /// Forward: `"esp_ns/esp_name" → Set<Gateway ResourceRef>`
     /// Reverse: `Gateway ResourceRef → Set<"esp_ns/esp_name">`
     pub(crate) stream_plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
     /// Optional conf_writer injected by the ConfCenter implementation.
-    /// Used by handlers to auto-create resources (e.g., PluginMetaData for RegionRoute).
+    /// Used by handlers to auto-create resources (e.g., EdgionData for RegionRoute).
     /// None until the ConfCenter calls `set_conf_writer()`.
     pub(crate) conf_writer: RwLock<Option<Arc<dyn CenterApi + Send + Sync>>>,
 }
@@ -86,10 +79,8 @@ impl ControllerRuntime {
             listener_port_manager: ListenerPortManager::new(),
             configmap_store: ConfigMapStore::new(),
             backend_tls_policy: BackendTLSPolicyState::new(),
-            plugin_metadata_store: PluginMetaDataStore::new(),
-            plugin_metadata_refs: PluginMetaDataRefManager::new(),
-            cluster_region_route_table: RegionRouteClusterTable::new(),
-            service_region_route_table: RegionRouteServiceTable::new(),
+            edgion_data_store: EdgionDataStore::new(),
+            edgion_data_refs: EdgionDataRefManager::new(),
             stream_plugin_ref_mgr: BidirectionalRefManager::with_component("stream_plugin_ref_mgr"),
             conf_writer: RwLock::new(None),
         }
@@ -152,17 +143,11 @@ impl ControllerRuntime {
 
         self.backend_tls_policy.reset();
 
-        self.plugin_metadata_store.replace_all(HashMap::new());
-        tracing::info!(component = "controller_runtime", "Cleared PluginMetaDataStore");
+        self.edgion_data_store.replace_all(HashMap::new());
+        tracing::info!(component = "controller_runtime", "Cleared EdgionData store");
 
-        self.plugin_metadata_refs.clear_all();
-        tracing::info!(component = "controller_runtime", "Cleared PluginMetaDataRefManager");
-
-        self.cluster_region_route_table.clear();
-        tracing::info!(component = "controller_runtime", "Cleared RegionRouteClusterTable");
-
-        self.service_region_route_table.clear();
-        tracing::info!(component = "controller_runtime", "Cleared RegionRouteServiceTable");
+        self.edgion_data_refs.clear_all();
+        tracing::info!(component = "controller_runtime", "Cleared EdgionData ref manager");
 
         self.stream_plugin_ref_mgr.clear();
         tracing::info!(component = "controller_runtime", "Cleared StreamPluginRefManager");

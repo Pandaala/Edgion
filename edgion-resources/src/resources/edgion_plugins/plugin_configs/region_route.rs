@@ -4,8 +4,9 @@
 //! Supports direct region override, key-to-region conf match, consistent hash-range routing,
 //! and pre-computed hash passthrough.
 //!
-//! EP only holds a `serviceRegionRouteRef` — all routing config lives in
-//! PluginMetaData (ClusterRegionRoute / ServiceRegionRoute).
+//! `RegionRouteConfig` in EdgionPlugins holds ALL routing logic plus the default region table.
+//! An optional `override_ref` points to a `RegionRouteOverride` EdgionData which can
+//! whole-replace the `regions` at request time (fail-to-base on any overlay error).
 
 use std::collections::HashMap;
 
@@ -13,25 +14,60 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::common::{KeyGet, KeySet};
+use crate::resources::edgion_data::EdgionDataRef;
 
-/// RegionRoute plugin: multi-region traffic routing.
+/// RegionRoute plugin: flat base configuration.
 ///
-/// EP only holds `serviceRegionRouteRef`. All routing config lives in
-/// PluginMetaData (ClusterRegionRoute / ServiceRegionRoute).
-///
-/// Gateway resolves the PluginMetaData chain at plugin-build time via the global
-/// `PluginMetaDataGatewayStore`:
-///   `EP.serviceRegionRouteRef → ServiceRegionRoute PluginMetaData
-///     → ServiceRegionRoute PluginMetaData.clusterRef → ClusterRegionRoute PluginMetaData`
+/// Holds ALL routing logic and the default region table.
+/// An optional `override_ref` points to a `RegionRouteOverride` EdgionData that can
+/// whole-replace the `regions` at request time (fail-to-base on any overlay error).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RegionRouteConfig {
-    /// Reference to a ServiceRegionRoute PluginMetaData by name.
-    /// Namespace is inherited from the parent EdgionPlugins.
-    /// The ServiceRegionRoute PluginMetaData must be pre-created by the administrator;
-    /// it in turn references the ClusterRegionRoute PluginMetaData via its clusterRef.
+    /// Name of this gateway instance's own region.
+    #[serde(default)]
+    pub my_region: String,
+
+    /// Shared key extraction for RouteByKeyConfMatch and RouteByHashRange.
+    #[serde(default)]
+    pub key_get: Vec<KeyGet>,
+
+    /// Pre-computed hash key sources (tried before computing hash).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub service_region_route_ref: Option<String>,
+    pub hash_key_get: Option<Vec<KeyGet>>,
+
+    /// Hash computation config.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash_calc: Option<HashCalcConfig>,
+
+    /// Ordered route rules — first match wins.
+    #[serde(default)]
+    pub route_rules: Vec<RouteRule>,
+
+    /// RouteByKeyConfMatch configuration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_by_key_conf_match: Option<RouteByKeyConfMatchMeta>,
+
+    /// Default region table (safe default). Applied directly when no overlay is set.
+    #[serde(default)]
+    pub regions: Vec<RegionDef>,
+
+    /// Optional overlay reference. When set, the gateway looks up this EdgionData at
+    /// request time and applies a `RegionRouteOverride` on top of the base `regions`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub override_ref: Option<EdgionDataRef>,
+}
+
+/// RouteByKeyConfMatch configuration with bypass support.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RouteByKeyConfMatchMeta {
+    /// Key-to-region mapping.
+    #[serde(default)]
+    pub match_map: HashMap<String, String>,
+    /// Keys in this list bypass the region matchMap override.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bypass_cluster_keys: Vec<String>,
 }
 
 /// Cluster definition
@@ -56,10 +92,9 @@ pub struct RegionDef {
     #[serde(default = "default_true")]
     pub tls: bool,
 
-    /// Failover target: if set, traffic routed to this cluster is redirected
-    /// to the named cluster. Set by Center (ClusterRegionRoute PluginMetaData) or
-    /// overridden by ServiceRegionRoute PluginMetaData.
-    /// Must be a valid cluster name in the same clusters list. Cannot be self.
+    /// Failover target: if set, traffic routed to this region is redirected
+    /// to the named region.
+    /// Must be a valid region name in the same regions list. Cannot be self.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failover_to: Option<String>,
 }
@@ -131,15 +166,6 @@ pub enum RouteRule {
     RouteByHashRange,
 }
 
-/// Reference to a PluginMetaData resource by name (and optional namespace).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginMetaDataRef {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-}
-
 // ── Default helpers ──────────────────────────────────────────────────────────
 
 fn default_true() -> bool {
@@ -171,17 +197,15 @@ impl RegionDef {
 impl RegionRouteConfig {
     /// Validate config. Called in preparse.
     ///
-    /// This is a no-op for RegionRoute: the EP holds only `serviceRegionRouteRef` and
-    /// all routing config lives in PluginMetaData. PluginMetaData existence is checked
-    /// by the Controller's `preparse()` (reported via status conditions) and by the
-    /// Gateway at plugin-build time via `resolve_config()`.
+    /// No local validation is needed: all field correctness is enforced at build time
+    /// by the Gateway's plugin-build phase. `override_ref` resolution is done at
+    /// request time (fail-to-base).
     pub fn validate(&mut self) {
-        // No local validation needed — PluginMetaData chain resolution handles all checks.
+        // No local validation needed.
     }
 
-    /// Stateless field-level validation.
-    /// Returns None — region_route validation is handled by
-    /// PluginMetaData chain resolution at preparse time.
+    /// Stateless field-level validation. Returns None — all checks are deferred to
+    /// plugin-build time or request-time overlay resolution.
     fn check_fields(&self) -> Option<String> {
         None
     }
@@ -202,7 +226,7 @@ mod validation_trait_tests {
 
     #[test]
     fn validation_error_returns_none_for_default_config() {
-        // region_route relies on PluginMetaData chain resolution for all checks;
+        // region_route relies on EdgionData chain resolution for all checks;
         // the trait method must return None and must not panic.
         let config = RegionRouteConfig::default();
         assert_eq!(config.validation_error(), None);

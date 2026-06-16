@@ -6,7 +6,7 @@
 //! normal Center workflows:
 //!
 //!  - Read (get / list / watch / list-keys) on every ResourceKind except Secret.
-//!  - Write (create / update / delete) on PluginMetaData only
+//!  - Write (create / update / delete) on EdgionData only
 //!    (region-route and ip-restriction handlers drive this).
 //!  - Get, list, and failover on RegionRoute (synthetic classifier label, not a
 //!    ResourceKind): get/list allow the aggregate read endpoints
@@ -55,7 +55,7 @@ const fn is_default_readable(kind: ResourceKind) -> bool {
         ResourceKind::GRPCRoute => true,
         ResourceKind::TCPRoute => true,
         ResourceKind::UDPRoute => true,
-        ResourceKind::PluginMetaData => true,
+        ResourceKind::EdgionData => true,
         ResourceKind::TLSRoute => true,
         ResourceKind::LinkSys => true,
         ResourceKind::EdgionStreamPlugins => true,
@@ -91,7 +91,7 @@ const DEFAULT_READ_KINDS: &[&str] = &[
     ResourceKind::GRPCRoute.as_str(),
     ResourceKind::TCPRoute.as_str(),
     ResourceKind::UDPRoute.as_str(),
-    ResourceKind::PluginMetaData.as_str(),
+    ResourceKind::EdgionData.as_str(),
     ResourceKind::TLSRoute.as_str(),
     ResourceKind::LinkSys.as_str(),
     ResourceKind::EdgionStreamPlugins.as_str(),
@@ -105,7 +105,7 @@ const DEFAULT_READ_KINDS: &[&str] = &[
 ///
 /// Rules:
 ///   1. read (get, list, watch, list-keys) on all ResourceKinds except Secret.
-///   2. write (create, update, delete) on PluginMetaData.
+///   2. write (create, update, delete) on EdgionData.
 ///   3. get, list, failover on RegionRoute (synthetic label -- not a ResourceKind).
 ///      `get` and `list` cover the aggregate read endpoints
 ///      (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes)
@@ -129,10 +129,10 @@ pub(crate) fn default_center_policy() -> CenterPolicy {
                 ],
                 kinds: read_kinds,
             },
-            // Rule 2: write verbs on PluginMetaData only.
+            // Rule 2: write verbs on EdgionData only.
             FedAllowRule {
                 verbs: vec!["create".to_string(), "update".to_string(), "delete".to_string()],
-                kinds: vec![ResourceKind::PluginMetaData.as_str().to_string()],
+                kinds: vec![ResourceKind::EdgionData.as_str().to_string()],
             },
             // Rule 3: get, list, and failover on RegionRoute (synthetic label).
             // get / list cover the aggregate region-route read endpoints;
@@ -185,8 +185,8 @@ mod tests {
     }
 
     #[test]
-    fn default_allows_watch_pluginmetadata() {
-        assert!(allows(&az(), Verb::Watch, "PluginMetaData"));
+    fn default_allows_watch_edgiondata() {
+        assert!(allows(&az(), Verb::Watch, "EdgionData"));
     }
 
     #[test]
@@ -199,21 +199,21 @@ mod tests {
         assert!(allows(&az(), Verb::ListKeys, "HTTPRoute"));
     }
 
-    // -- write on PluginMetaData --
+    // -- write on EdgionData --
 
     #[test]
-    fn default_allows_create_pluginmetadata() {
-        assert!(allows(&az(), Verb::Create, "PluginMetaData"));
+    fn default_allows_create_edgiondata() {
+        assert!(allows(&az(), Verb::Create, "EdgionData"));
     }
 
     #[test]
-    fn default_allows_update_pluginmetadata() {
-        assert!(allows(&az(), Verb::Update, "PluginMetaData"));
+    fn default_allows_update_edgiondata() {
+        assert!(allows(&az(), Verb::Update, "EdgionData"));
     }
 
     #[test]
-    fn default_allows_delete_pluginmetadata() {
-        assert!(allows(&az(), Verb::Delete, "PluginMetaData"));
+    fn default_allows_delete_edgiondata() {
+        assert!(allows(&az(), Verb::Delete, "EdgionData"));
     }
 
     // -- RegionRoute: get, list, and failover are all allowed --
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn default_denies_create_httproute() {
-        // write is PluginMetaData-only; HTTPRoute must be denied for create.
+        // write is EdgionData-only; HTTPRoute must be denied for create.
         assert!(!allows(&az(), Verb::Create, "HTTPRoute"));
     }
 
@@ -333,7 +333,7 @@ mod tests {
             ResourceKind::GRPCRoute,
             ResourceKind::TCPRoute,
             ResourceKind::UDPRoute,
-            ResourceKind::PluginMetaData,
+            ResourceKind::EdgionData,
             ResourceKind::TLSRoute,
             ResourceKind::LinkSys,
             ResourceKind::EdgionStreamPlugins,
@@ -369,7 +369,7 @@ mod tests {
             ResourceKind::HTTPRoute.as_str(),
             ResourceKind::Gateway.as_str(),
             ResourceKind::EdgionTls.as_str(),
-            ResourceKind::PluginMetaData.as_str(),
+            ResourceKind::EdgionData.as_str(),
         ] {
             assert!(
                 DEFAULT_READ_KINDS.contains(kind),

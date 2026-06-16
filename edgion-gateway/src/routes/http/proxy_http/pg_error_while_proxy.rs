@@ -107,11 +107,9 @@ pub fn error_while_proxy(
     // `edgion.io/retry-non-idempotent: "true"` annotation. Only the
     // reused-connection path needs this: `fail_to_connect` never wrote any
     // request bytes upstream and is therefore always safe to retry.
-    let method_retry_ok =
-        session.req_header().method.is_idempotent() || ctx.retry_allow_non_idempotent();
+    let method_retry_ok = session.req_header().method.is_idempotent() || ctx.retry_allow_non_idempotent();
 
-    let can_retry =
-        client_reused && buffer_ok && method_retry_ok && ctx.try_cnt <= max_retries && !deadline_exceeded;
+    let can_retry = client_reused && buffer_ok && method_retry_ok && ctx.try_cnt <= max_retries && !deadline_exceeded;
 
     // Capture whether the retry decision is ours to make: errors that arrive
     // already Decided(true) (e.g. h2 GOAWAY / REFUSED_STREAM decided inside

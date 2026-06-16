@@ -86,10 +86,7 @@ fn stages_for(variant: &str) -> BTreeSet<&'static str> {
 /// `oneOf` branches of `schema_for!(EdgionPlugin)` (each branch carries
 /// `properties.type.const = "<VariantName>"`).
 fn rust_variant_type_names() -> BTreeSet<String> {
-    let schema = serde_json::to_value(schema_for!(
-        edgion_resources::resources::edgion_plugins::EdgionPlugin
-    ))
-    .unwrap();
+    let schema = serde_json::to_value(schema_for!(edgion_resources::resources::edgion_plugins::EdgionPlugin)).unwrap();
     let branches = schema
         .get("oneOf")
         .and_then(Value::as_array)

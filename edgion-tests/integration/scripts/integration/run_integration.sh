@@ -987,7 +987,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
                     run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
                     run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
-                    run_test "EdgionPlugins_PluginMetaDataStatus" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginMetaDataStatus" || test_failed=true
+                    run_test "EdgionPlugins_EdgionDataStatus" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i EdgionDataStatus" || test_failed=true
                     run_test "EdgionPlugins_ResolvedRefs" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
                     run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
                     run_test "EdgionPlugins_Cors" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Cors" || test_failed=true
@@ -1171,7 +1171,7 @@ run_all_tests() {
         run_test "EdgionPlugins_DynamicExternalUpstream" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DynamicExternalUpstream" || test_failed=true
         run_test "EdgionPlugins_RegionRoute" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RegionRoute" || test_failed=true
         run_test "EdgionPlugins_GlobalConnectionIpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i GlobalConnectionIpRestriction" || test_failed=true
-        run_test "EdgionPlugins_PluginMetaDataStatus" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginMetaDataStatus" || test_failed=true
+        run_test "EdgionPlugins_EdgionDataStatus" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i EdgionDataStatus" || test_failed=true
         run_test "EdgionPlugins_ResolvedRefs" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ResolvedRefs" || test_failed=true
         run_test "EdgionPlugins_WebhookKeyGet" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
         run_test "EdgionPlugins_Dsl" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Dsl" || test_failed=true

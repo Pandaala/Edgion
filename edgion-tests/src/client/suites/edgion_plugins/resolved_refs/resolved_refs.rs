@@ -6,15 +6,15 @@
 //   01_Secret_edgion-test_ep-resolved-refs-test-secret.yaml         — real Secret
 //   02_EdgionPlugins_edgion-test_ep-secret-exists.yaml              — EP refs existing Secret
 //   03_EdgionPlugins_edgion-test_ep-secret-missing.yaml             — EP refs missing Secret
-//   04_PluginMetaData_edgion-test_esp-gcir-pm-exists.yaml           — GCIR PM (loaded first)
-//   05_EdgionStreamPlugins_edgion-test_esp-gcir-pm-exists.yaml      — ESP refs existing PM
-//   06_EdgionStreamPlugins_edgion-test_esp-gcir-pm-missing.yaml     — ESP refs missing PM
+//   04_EdgionData_edgion-test_esp-gcir-data-exists.yaml           — GCIR PM (loaded first)
+//   05_EdgionStreamPlugins_edgion-test_esp-gcir-data-exists.yaml      — ESP refs existing PM
+//   06_EdgionStreamPlugins_edgion-test_esp-gcir-data-missing.yaml     — ESP refs missing PM
 //
 // Scenarios:
 //   1. ep_resolved_refs_true_when_secret_exists   — EP + existing Secret → ResolvedRefs=True
 //   2. ep_resolved_refs_false_when_secret_missing — EP + missing Secret  → ResolvedRefs=False/SecretNotFound
 //   3. esp_resolved_refs_true_when_gcir_pm_exists — ESP + existing GCIR PM → ResolvedRefs=True
-//   4. esp_resolved_refs_false_when_gcir_pm_missing — ESP + missing PM → ResolvedRefs=False/InvalidPluginMetaDataRef
+//   4. esp_resolved_refs_false_when_gcir_pm_missing — ESP + missing PM → ResolvedRefs=False/InvalidEdgionDataRef
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -200,11 +200,11 @@ impl ResolvedRefsTestSuite {
     fn esp_resolved_refs_true_when_gcir_pm_exists() -> TestCase {
         TestCase::new(
             "esp_resolved_refs_true_when_gcir_pm_exists",
-            "EdgionStreamPlugins 'esp-gcir-pm-exists': ResolvedRefs=True when GCIR PM exists",
+            "EdgionStreamPlugins 'esp-gcir-data-exists': ResolvedRefs=True when GCIR PM exists",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let name = "esp-gcir-pm-exists";
+                    let name = "esp-gcir-data-exists";
 
                     match fetch_esp_conditions(&ctx, name).await {
                         Err(e) => TestResult::failed(start.elapsed(), e),
@@ -228,18 +228,18 @@ impl ResolvedRefsTestSuite {
     }
 
     // =========================================================================
-    // Scenario 4: ESP referencing a missing GCIR PM → ResolvedRefs=False/InvalidPluginMetaDataRef
+    // Scenario 4: ESP referencing a missing GCIR PM → ResolvedRefs=False/InvalidEdgionDataRef
     // =========================================================================
 
     fn esp_resolved_refs_false_when_gcir_pm_missing() -> TestCase {
         TestCase::new(
             "esp_resolved_refs_false_when_gcir_pm_missing",
-            "EdgionStreamPlugins 'esp-gcir-pm-missing': ResolvedRefs=False/InvalidPluginMetaDataRef when PM absent",
+            "EdgionStreamPlugins 'esp-gcir-data-missing': ResolvedRefs=False/InvalidEdgionDataRef when PM absent",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
-                    let name = "esp-gcir-pm-missing";
-                    let expected_pm_name = "esp-gcir-pm-nonexistent";
+                    let name = "esp-gcir-data-missing";
+                    let expected_pm_name = "esp-gcir-data-nonexistent";
 
                     match fetch_esp_conditions(&ctx, name).await {
                         Err(e) => TestResult::failed(start.elapsed(), e),
@@ -251,10 +251,10 @@ impl ResolvedRefsTestSuite {
                                         format!("ResolvedRefs should be False: {:?}", c),
                                     );
                                 }
-                                if c["reason"].as_str() != Some("InvalidPluginMetaDataRef") {
+                                if c["reason"].as_str() != Some("InvalidEdgionDataRef") {
                                     return TestResult::failed(
                                         start.elapsed(),
-                                        format!("ResolvedRefs reason should be InvalidPluginMetaDataRef: {:?}", c),
+                                        format!("ResolvedRefs reason should be InvalidEdgionDataRef: {:?}", c),
                                     );
                                 }
                                 let msg = c["message"].as_str().unwrap_or("");
@@ -267,11 +267,14 @@ impl ResolvedRefsTestSuite {
                                         ),
                                     );
                                 }
-                                if !msg.contains("GlobalConnectionIpRestriction") {
+                                // Post-overlay refactor: the resolver message now names the expected
+                                // variant `GlobalConnIpRestrictionOverride` (the overlay EdgionData
+                                // variant referenced via overrideRef), not the inline base type.
+                                if !msg.contains("GlobalConnIpRestrictionOverride") {
                                     return TestResult::failed(
                                         start.elapsed(),
                                         format!(
-                                            "ResolvedRefs message should contain 'GlobalConnectionIpRestriction': '{}'",
+                                            "ResolvedRefs message should contain 'GlobalConnIpRestrictionOverride': '{}'",
                                             msg
                                         ),
                                     );
@@ -279,7 +282,7 @@ impl ResolvedRefsTestSuite {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
                                     format!(
-                                        "ResolvedRefs=False/InvalidPluginMetaDataRef with '{}' in message",
+                                        "ResolvedRefs=False/InvalidEdgionDataRef with '{}' in message",
                                         expected_pm_name
                                     ),
                                 )

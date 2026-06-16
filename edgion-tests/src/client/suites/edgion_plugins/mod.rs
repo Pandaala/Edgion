@@ -14,6 +14,8 @@ mod direct_endpoint;
 mod dsl;
 mod dynamic_external_upstream;
 mod dynamic_internal_upstream;
+mod edgion_data_managed;
+mod edgion_data_status;
 mod ext_proc;
 mod fault_injection;
 mod forward_auth;
@@ -29,8 +31,6 @@ mod ldap_auth;
 mod openid_connect;
 mod path_normalization;
 mod plugin_condition;
-mod plugin_metadata_managed;
-mod plugin_metadata_status;
 mod plugin_validation_status;
 mod proxy_rewrite;
 mod rate_limit;
@@ -58,6 +58,11 @@ pub use direct_endpoint::DirectEndpointTestSuite;
 pub use dsl::{DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite, DslTestSuite};
 pub use dynamic_external_upstream::DynamicExternalUpstreamTestSuite;
 pub use dynamic_internal_upstream::DynamicInternalUpstreamTestSuite;
+pub use edgion_data_managed::EdgionDataManagedTestSuite;
+pub use edgion_data_status::{
+    EdgionDataFlapInitialTestSuite, EdgionDataFlapInvalidTestSuite, EdgionDataFlapValidTestSuite,
+    EdgionDataStatusTestSuite,
+};
 pub use ext_proc::ExtProcTestSuite;
 pub use fault_injection::FaultInjectionTestSuite;
 pub use forward_auth::ForwardAuthTestSuite;
@@ -75,10 +80,6 @@ pub use path_normalization::{
     PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite,
 };
 pub use plugin_condition::{AllConditionsTestSuite, PluginConditionTestSuite};
-pub use plugin_metadata_managed::PluginMetaDataManagedTestSuite;
-pub use plugin_metadata_status::{
-    PluginMetaDataStatusTestSuite, PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite,
-};
 pub use plugin_validation_status::PluginValidationStatusTestSuite;
 pub use proxy_rewrite::ProxyRewriteTestSuite;
 pub use rate_limit::{RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitTestSuite};

@@ -181,8 +181,8 @@ impl RequestFilter for IpRestriction {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_resources::resources::edgion_data::IpGroup;
     use edgion_resources::resources::edgion_plugins::DefaultAction;
-    use edgion_resources::resources::plugin_metadata::IpGroup;
 
     fn create_ip_config_allow_list() -> IpRestrictionConfig {
         let config = IpRestrictionConfig {

@@ -1,0 +1,107 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: edgiondata.edgion.io
+spec:
+  group: edgion.io
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              required:
+                - data
+              description: "EdgionData defines named data resources referenced by EdgionPlugins / EdgionStreamPlugins. Exactly one DataEntry variant (KeyList, IpList, GlobalConnIpRestrictionOverride, RegionRouteOverride, Misc), discriminated by `data.type`. The envelope fields `enable` and `active` apply to any variant."
+              properties:
+                enable:
+                  type: boolean
+                  default: true
+                  description: "Top-level kill switch. When false, consumers ignore this overlay and fall back to their own base defaults. Defaults to true."
+                active:
+                  type: string
+                  description: "Optional profile selector. When set, consumers that support preloaded profiles use this value to select the active profile from the base config. Consumers that do not support profiles ignore this field."
+                data:
+                  type: object
+                  description: "The single data entry carried by this EdgionData."
+                  required:
+                    - type
+                    - config
+                  properties:
+                    type:
+                      type: string
+                      description: "Variant tag. Determines the shape of `config`."
+                      enum:
+                        - KeyList
+                        - IpList
+                        - GlobalConnIpRestrictionOverride
+                        - RegionRouteOverride
+                        - Misc
+                    config:
+                      type: object
+                      description: |
+                        Variant-specific configuration. Shape depends on `type`:
+                          - KeyList: { matchMode?: "Exact"|"Regex", items: [{ name, description?, items: [{ key, code?, priority?, id?, behavior? }] }] }
+                          - IpList: { items: [{ name, description?, cidrs: string[] }] }   (grouped CIDRs / bare IPs, v4/v6)
+                          - GlobalConnIpRestrictionOverride: all-Optional overlay for the GlobalConnectionIpRestriction base — { enable?, activeProfile?, profiles? }; referenced via overrideRef in EdgionStreamPlugins GlobalConnectionIpRestriction entries (the base config lives inline in EdgionStreamPlugins)
+                          - RegionRouteOverride: all-Optional overlay for RegionRoute — { enable?, active?, regions? }; referenced via overrideRef in EdgionPlugins RegionRoute configs
+                          - Misc: open payload (x-kubernetes-preserve-unknown-fields); escape hatch for third-party or unknown payloads only
+                        Validation of the concrete shape is performed by the Controller
+                        and surfaced via the `Accepted` status condition.
+                      x-kubernetes-preserve-unknown-fields: true
+            status:
+              type: object
+              description: "Status of EdgionData."
+              properties:
+                conditions:
+                  type: array
+                  description: |
+                    Gateway-API-style conditions.
+                    - `Accepted`: the spec passed per-variant preparse validation.
+                    - `ResolvedRefs`: cross-resource references resolve. Currently all typed variants
+                      report True unconditionally (no variant carries external cross-resource refs).
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Type
+          type: string
+          jsonPath: .spec.data.type
+          description: "DataEntry variant"
+        - name: Enable
+          type: boolean
+          jsonPath: .spec.enable
+          description: "Kill switch (false = consumers fall back to base)"
+        - name: Accepted
+          type: string
+          jsonPath: .status.conditions[?(@.type=='Accepted')].status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: edgiondata
+    singular: edgiondata
+    kind: EdgionData
+    shortNames:
+      - edata

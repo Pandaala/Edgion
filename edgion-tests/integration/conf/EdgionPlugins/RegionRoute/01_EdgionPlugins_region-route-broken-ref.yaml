@@ -1,12 +1,12 @@
-# RegionRoute - broken serviceRegionRouteRef
+# RegionRoute - broken overrideRef (overlay model)
 #
-# The RegionRoute requestPlugin's serviceRegionRouteRef points at a
-# ServiceRegionRoute PluginMetaData named "no-such-service-region-route",
+# The RegionRoute plugin has a valid base config (regions + routeRules) but its
+# overrideRef points at a RegionRouteOverride EdgionData named "no-such-region-route-overlay"
 # which is intentionally NOT created.
 #
-# region_route's resolve_config now returns BrokenRef when the
-# serviceRegionRouteRef does not resolve, which the data plane surfaces as
-# an HTTP 500 instead of silently passing through.
+# Fail-to-base semantics: overlay absent -> base regions are used directly; the plugin
+# records an overlay_missing counter and logs "overlay_missing" in the access log.
+# Traffic is still routed using the base region table (not a 500 error).
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -16,4 +16,24 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        serviceRegionRouteRef: "no-such-service-region-route"
+        regions:
+          - name: virginia
+            hashRange: [0, 599]
+            backendEndpoint: "127.0.0.1:30001"
+            tls: false
+          - name: ohio
+            hashRange: [600, 999]
+            backendEndpoint: "127.0.0.1:30002"
+            tls: false
+        keyGet:
+          - type: header
+            name: X-Account-Id
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Direct-Region
+          - type: RouteByHashRange
+        overrideRef:
+          name: "no-such-region-route-overlay"
+          namespace: edgion-default
