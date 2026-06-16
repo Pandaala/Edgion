@@ -86,9 +86,11 @@ and others later) may reference it via a generic `dataRef`.
 | EdgionData present, **type mismatch** | **Base** + `overlay_type_mismatch` signal |
 | EdgionData present, invalid (controller) | `Accepted=False`, not pushed; gateway uses **base** |
 | EdgionData present, valid | `base ⊕ overlay` (field-level replace) |
-| `enable=false` effective | Plugin skipped entirely |
+| `enable=false` effective (envelope `spec.enable` or variant `enable`) | **Base** + `overlay_disabled` signal (envelope kill switch) |
 
 Signals: gateway uses access-log `EdgionStatus` + Prometheus counter. No `tracing::error!` on the data plane.
+
+> Three CI gates guard this contract — see [`skills/09-misc/cicd/02-github-workflow.md`](../../../09-misc/cicd/02-github-workflow.md) "EdgionData overlay gates". In short: forbidden-legacy-refs grep, CRD `type` ↔ Rust `DataEntry` parity, and overlay-consumer signal completeness (all four signals above).
 
 ## Variant Taxonomy
 

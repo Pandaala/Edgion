@@ -100,7 +100,7 @@ pub fn record_connection_duration(role: &'static str, seconds: f64) {
 /// Record a watch event crossing the federation link.
 ///
 /// `kind` must come from a bounded set of resource kinds (e.g.
-/// "PluginMetaData"). Never pass raw user input.
+/// "EdgionData"). Never pass raw user input.
 #[inline]
 pub fn record_watch_event(kind: &str, direction: &'static str) {
     counter!(names::WATCH_EVENTS_TOTAL, "kind" => kind.to_string(), "direction" => direction).increment(1);
@@ -285,7 +285,7 @@ mod tests {
         super::set_connections_active(role::CONTROLLER, 0);
         super::record_connection_event(role::CONTROLLER, event::CONNECTED);
         super::record_connection_duration(role::CONTROLLER, 1.5);
-        super::record_watch_event("PluginMetaData", direction::RECV);
+        super::record_watch_event("EdgionData", direction::RECV);
         super::record_ready_gate_wait(0.25);
     }
 }
@@ -341,7 +341,7 @@ mod rbac_metric_tests {
             "unknown",
         ];
         // Bounded kind values: known kinds, synthetic labels, "unknown".
-        let kinds = ["Secret", "PluginMetaData", "HTTPRoute", "RegionRoute", "*", "unknown"];
+        let kinds = ["Secret", "EdgionData", "HTTPRoute", "RegionRoute", "*", "unknown"];
         // Bounded source values from labels::rbac_source.
         let sources = [
             labels::rbac_source::CENTER,
@@ -374,7 +374,7 @@ mod rbac_metric_tests {
         use super::labels::rbac_source;
         // The canonical case: a cli token denied on Secret.
         record_rbac_denied("get", "Secret", rbac_source::CLI_TOKEN);
-        record_rbac_denied("list", "PluginMetaData", rbac_source::CENTER);
+        record_rbac_denied("list", "EdgionData", rbac_source::CENTER);
         record_rbac_denied("unknown", "unknown", rbac_source::UNKNOWN);
         // All three bounded source values work.
         for source in [rbac_source::CENTER, rbac_source::CLI_TOKEN, rbac_source::UNKNOWN] {
