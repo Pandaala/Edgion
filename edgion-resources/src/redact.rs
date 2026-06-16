@@ -77,7 +77,7 @@ pub mod redact_opt {
     }
 }
 
-/// serde adapter for bare (non-`Option`) secret fields, e.g. a `String` key in `KeyListConfig`.
+/// serde adapter for bare (non-`Option`) secret fields, e.g. `ActiveHttpChallenge.key_authorization`.
 /// `#[serde(serialize_with = "crate::redact::redact_required::serialize")]`
 pub mod redact_required {
     use super::{redact_active, Serialize, Serializer};

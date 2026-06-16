@@ -59,8 +59,11 @@ pub struct KeyListData {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MetaDataItem {
-    /// Key value (string literal or regex pattern, depending on match_mode)
-    #[serde(serialize_with = "crate::redact::redact_required::serialize")]
+    /// The value to match against (string literal or regex pattern, depending
+    /// on `match_mode`). This is a MATCH TARGET, not a credential: it is NOT
+    /// redacted on the admin API. Do not store secrets here — real credentials
+    /// (e.g. KeyAuth API keys) belong in a Secret referenced via the consuming
+    /// plugin's `secret_refs`.
     pub key: String,
 
     /// Numeric code associated with this item
@@ -96,22 +99,24 @@ mod tests {
     }
 
     #[test]
-    fn metadata_item_key_redacted_under_guard() {
+    fn metadata_item_key_not_redacted_under_guard() {
+        // `key` is a match target, not a secret: it must serialize plainly
+        // even under the admin redaction guard.
         let item = MetaDataItem {
-            key: "API-KEY-123".to_string(),
+            key: "user-allow-list-entry".to_string(),
             code: None,
             priority: None,
             id: None,
             behavior: None,
         };
-        let redacted = {
+        let under_guard = {
             let _g = crate::redact::AdminRedactGuard::new();
             serde_json::to_value(&item).unwrap()
         };
-        assert_eq!(redacted["key"], "[redacted]");
+        assert_eq!(under_guard["key"], "user-allow-list-entry");
 
         let plain = serde_json::to_value(&item).unwrap();
-        assert_eq!(plain["key"], "API-KEY-123");
+        assert_eq!(plain["key"], "user-allow-list-entry");
     }
 
     #[test]
