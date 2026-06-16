@@ -96,11 +96,34 @@ check "Legacy Rust enum 'MetaDataEntry' (use 'DataEntry')" \
     --include='*.rs'
 
 # Note: `PluginReference` is NOT forbidden -- there are two unrelated structs
-# with that name. The PluginMetaData-side one was renamed to `DataRef` in S1.
+# with that name. The PluginMetaData-side one was renamed to `EdgionDataRef`.
 # The other (in edgion-resources/.../edgion_gateway_config.rs) is for EdgionPlugins
 # global-plugin refs and is unrelated to the EdgionData refactor.
-check "Legacy Rust type 'PluginMetaDataRef' (use 'DataRef')" \
-    '\bPluginMetaDataRef\b' \
+check "Legacy Rust type 'PluginMetaDataRef' / 'DataRef' (use 'EdgionDataRef')" \
+    '\b(PluginMetaDataRef|DataRef)\b' \
+    --include='*.rs'
+
+check "Legacy Rust type 'PluginMetaDataStore' / 'DataHandler' / 'PluginMetaDataRefManager' (use Edgion-prefixed)" \
+    '\b(PluginMetaDataStore|DataHandler|PluginMetaDataRefManager)\b' \
+    --include='*.rs'
+
+# 4b. Module path naming: bare 'data'/'plugin_metadata_*' under Edgion crates
+#     violates the project's `edgion_<name>` convention (matching
+#     edgion_acme/edgion_plugins/edgion_stream_plugins/edgion_tls).
+check "Legacy module path 'plugin_metadata_utils' (use 'edgion_data_utils')" \
+    'plugin_metadata_utils' \
+    --include='*.rs'
+
+check "Legacy bare-name 'mod data;' under resources/ runtime/ handlers/ (use 'mod edgion_data;')" \
+    '^(pub )?mod data;' \
+    --include='*.rs'
+
+check "Legacy bare path '::data::' (use '::edgion_data::')" \
+    '::data::' \
+    --include='*.rs'
+
+check "Legacy field/var 'plugin_metadata_refs' / 'pm_key' / 'pm_ns' / 'pm_name' / 'remove_pm' / 'requeue_pm_referrers' (use ed_*/edgion_data_*)" \
+    '\b(plugin_metadata_refs|pm_key|pm_ns|pm_name|remove_pm|requeue_pm_referrers)\b' \
     --include='*.rs'
 
 check "Legacy DataEntry::ClusterRegionRoute / ::ServiceRegionRoute / standalone ::GlobalConnectionIpRestriction" \

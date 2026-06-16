@@ -16,10 +16,10 @@ use super::sync_runtime::resource_processor::{
     attached_route_tracker::AttachedRouteTracker,
     backend_tls_policy_ref::BackendTLSPolicyState,
     configmap_utils::ConfigMapStore,
+    edgion_data_utils::{EdgionDataRefManager, EdgionDataStore},
     gateway_route_index::GatewayRouteIndex,
     listener_port_manager::ListenerPortManager,
     namespace_store::NamespaceStore,
-    plugin_metadata_utils::{PluginMetaDataRefManager, PluginMetaDataStore},
     ref_grant::{
         cross_ns_ref_manager::{new_cross_ns_ref_manager, CrossNamespaceRefManager},
         events::ReferenceGrantEventDispatcher,
@@ -48,10 +48,10 @@ pub struct ControllerRuntime {
     pub(crate) listener_port_manager: ListenerPortManager,
     pub(crate) configmap_store: ConfigMapStore,
     pub(crate) backend_tls_policy: BackendTLSPolicyState,
-    pub(crate) plugin_metadata_store: PluginMetaDataStore,
+    pub(crate) edgion_data_store: EdgionDataStore,
     /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each EdgionData.
     /// Used by the EdgionDataHandler to requeue referencing resources on change.
-    pub(crate) plugin_metadata_refs: PluginMetaDataRefManager,
+    pub(crate) edgion_data_refs: EdgionDataRefManager,
     /// Tracks which Gateways reference each EdgionStreamPlugins via
     /// `edgion.io/edgion-stream-plugins` annotation.
     /// Forward: `"esp_ns/esp_name" → Set<Gateway ResourceRef>`
@@ -79,8 +79,8 @@ impl ControllerRuntime {
             listener_port_manager: ListenerPortManager::new(),
             configmap_store: ConfigMapStore::new(),
             backend_tls_policy: BackendTLSPolicyState::new(),
-            plugin_metadata_store: PluginMetaDataStore::new(),
-            plugin_metadata_refs: PluginMetaDataRefManager::new(),
+            edgion_data_store: EdgionDataStore::new(),
+            edgion_data_refs: EdgionDataRefManager::new(),
             stream_plugin_ref_mgr: BidirectionalRefManager::with_component("stream_plugin_ref_mgr"),
             conf_writer: RwLock::new(None),
         }
@@ -143,10 +143,10 @@ impl ControllerRuntime {
 
         self.backend_tls_policy.reset();
 
-        self.plugin_metadata_store.replace_all(HashMap::new());
+        self.edgion_data_store.replace_all(HashMap::new());
         tracing::info!(component = "controller_runtime", "Cleared EdgionData store");
 
-        self.plugin_metadata_refs.clear_all();
+        self.edgion_data_refs.clear_all();
         tracing::info!(component = "controller_runtime", "Cleared EdgionData ref manager");
 
         self.stream_plugin_ref_mgr.clear();

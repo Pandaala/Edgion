@@ -5,7 +5,7 @@
 //!
 //! Features:
 //! - parse: Resolve Secret references and register to SecretRefManager for cascading updates
-//! - parse: Register `overrideRef` EdgionData → EP in `plugin_metadata_refs` for requeue on change
+//! - parse: Register `overrideRef` EdgionData → EP in `edgion_data_refs` for requeue on change
 //! - on_delete: Clear SecretRefManager references + EdgionData refs
 //! - update_status: Validate `overrideRef` resolves to a `RegionRouteOverride` EdgionData
 
@@ -41,12 +41,12 @@ impl Default for EdgionPluginsHandler {
 // ============================================================================
 
 impl EdgionPluginsHandler {
-    /// Clear all EdgionData refs registered by this EdgionPlugins in `plugin_metadata_refs`.
+    /// Clear all EdgionData refs registered by this EdgionPlugins in `edgion_data_refs`.
     fn clear_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) {
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
         let ep_name = ep.metadata.name.as_deref().unwrap_or("");
         let ep_key = format!("{}:{}/{}", ResourceKind::EdgionPlugins.as_str(), ns, ep_name);
-        ctx.runtime().plugin_metadata_refs.clear_refs_from(&ep_key);
+        ctx.runtime().edgion_data_refs.clear_refs_from(&ep_key);
     }
 
     /// Collect all `overrideRef` EdgionData keys from RegionRoute plugins.
@@ -114,7 +114,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // Register requeue watcher: EP → EdgionData(overrideRef).
         // When the referenced EdgionData changes, the EdgionDataHandler requeues this EP.
         for override_key in Self::get_region_route_override_keys(&ep) {
-            ctx.runtime().plugin_metadata_refs.add_ref(override_key, ep_key.clone());
+            ctx.runtime().edgion_data_refs.add_ref(override_key, ep_key.clone());
         }
 
         ProcessResult::Continue(ep)
@@ -237,7 +237,7 @@ pub fn resolve_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Re
                 let override_ns = override_ref.namespace.as_deref().unwrap_or(ns);
                 let target = ctx
                     .runtime()
-                    .plugin_metadata_store
+                    .edgion_data_store
                     .get(Some(override_ns), &override_ref.name);
                 let resolved = target
                     .as_ref()
@@ -632,7 +632,7 @@ mod tests {
         let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
         let mut ed_map = HashMap::new();
         ed_map.insert("default/rr-override".to_string(), override_ed);
-        runtime.plugin_metadata_store.replace_all(ed_map);
+        runtime.edgion_data_store.replace_all(ed_map);
 
         let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
@@ -659,7 +659,7 @@ mod tests {
     #[tokio::test]
     async fn test_parse_registers_override_ref_for_requeue() {
         // Two RegionRoute plugins each with a different overrideRef.
-        // Both must be registered in plugin_metadata_refs so that an update to
+        // Both must be registered in edgion_data_refs so that an update to
         // either EdgionData triggers a requeue of this EdgionPlugins.
         let make_override_ed = |name: &str| {
             build_edgion_data(
@@ -681,7 +681,7 @@ mod tests {
         let mut ed_map = HashMap::new();
         ed_map.insert("default/override-a".to_string(), make_override_ed("override-a"));
         ed_map.insert("default/override-b".to_string(), make_override_ed("override-b"));
-        runtime.plugin_metadata_store.replace_all(ed_map);
+        runtime.edgion_data_store.replace_all(ed_map);
 
         let mut ep = EdgionPlugins::new("dual-rr-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
@@ -709,8 +709,8 @@ mod tests {
         };
 
         let ep_key = "EdgionPlugins:default/dual-rr-ep";
-        let override_a_refs = runtime.plugin_metadata_refs.get_refs("default/override-a");
-        let override_b_refs = runtime.plugin_metadata_refs.get_refs("default/override-b");
+        let override_a_refs = runtime.edgion_data_refs.get_refs("default/override-a");
+        let override_b_refs = runtime.edgion_data_refs.get_refs("default/override-b");
         assert!(
             override_a_refs.contains(&ep_key.to_string()),
             "override-a must reference ep; got: {:?}",
@@ -789,7 +789,7 @@ mod tests {
         let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
         let mut ed_map = HashMap::new();
         ed_map.insert("default/not-a-rr-override".to_string(), wrong_type_ed);
-        runtime.plugin_metadata_store.replace_all(ed_map);
+        runtime.edgion_data_store.replace_all(ed_map);
 
         let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());

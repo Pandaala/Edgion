@@ -6,7 +6,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, update_condition, ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    condition_types, HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
+    condition_types, EdgionDataStore, HandlerContext, ProcessResult, ProcessorHandler,
 };
 use edgion_resources::prelude_resources::{EdgionData, EdgionStreamPlugins};
 use edgion_resources::resources::edgion_data::DataEntry;
@@ -147,10 +147,10 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         // Rebuild outgoing EdgionData refs from scratch so that an edit that removes
         // a GCIR entry correctly drops its old ref.
         let self_ref = Self::self_ref_key(&esp);
-        ctx.runtime().plugin_metadata_refs.clear_refs_from(&self_ref);
-        for (pm_ns, pm_name) in Self::iter_gcir_refs(&esp) {
-            let pm_key = PluginMetaDataStore::make_key(Some(&pm_ns), &pm_name);
-            ctx.runtime().plugin_metadata_refs.add_ref(pm_key, self_ref.clone());
+        ctx.runtime().edgion_data_refs.clear_refs_from(&self_ref);
+        for (ed_ns, ed_name) in Self::iter_gcir_refs(&esp) {
+            let ed_key = EdgionDataStore::make_key(Some(&ed_ns), &ed_name);
+            ctx.runtime().edgion_data_refs.add_ref(ed_key, self_ref.clone());
         }
         ProcessResult::Continue(esp)
     }
@@ -160,9 +160,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
     }
 
     async fn on_delete(&self, esp: &EdgionStreamPlugins, ctx: &HandlerContext) {
-        ctx.runtime()
-            .plugin_metadata_refs
-            .clear_refs_from(&Self::self_ref_key(esp));
+        ctx.runtime().edgion_data_refs.clear_refs_from(&Self::self_ref_key(esp));
         requeue_referencing_gateways(esp, ctx).await;
     }
 
@@ -250,7 +248,7 @@ async fn requeue_referencing_gateways(esp: &EdgionStreamPlugins, ctx: &HandlerCo
 fn resolve_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
     let mut errors = Vec::new();
     for (ns, name) in EdgionStreamPluginsHandler::iter_gcir_refs(esp) {
-        let target: Option<EdgionData> = ctx.runtime().plugin_metadata_store.get(Some(&ns), &name);
+        let target: Option<EdgionData> = ctx.runtime().edgion_data_store.get(Some(&ns), &name);
         let resolved = target
             .as_ref()
             .is_some_and(|t| matches!(&t.spec.data, DataEntry::GlobalConnIpRestrictionOverride(_)));

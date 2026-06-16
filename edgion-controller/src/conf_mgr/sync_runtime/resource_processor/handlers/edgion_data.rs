@@ -14,13 +14,13 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition, ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    HandlerContext, PluginMetaDataStore, ProcessResult, ProcessorHandler,
+    EdgionDataStore, HandlerContext, ProcessResult, ProcessorHandler,
 };
 use edgion_resources::prelude_resources::EdgionData;
 use edgion_resources::resources::edgion_data::EdgionDataStatus;
 
 /// Kind string used when an EdgionData registers a cross-EdgionData reference in the shared
-/// `plugin_metadata_refs` manager. The existing `requeue_pm_referrers` splits refs on `:`
+/// `edgion_data_refs` manager. The existing `requeue_edgion_data_referrers` splits refs on `:`
 /// and uses the prefix as the kind for `ctx.requeue`, which matches the EdgionData
 /// processor registered in the processor registry.
 const SELF_KIND: &str = "EdgionData";
@@ -48,13 +48,13 @@ impl Default for EdgionDataHandler {
 /// Requeue resources that reference this EdgionData.
 ///
 /// EdgionPlugins / EdgionStreamPlugins referencing this EdgionData via `overrideRef` or
-/// `pluginMetadataRef` are requeued so they pick up any changed overlay data.
-async fn requeue_pm_referrers(ed: &EdgionData, ctx: &HandlerContext) {
+/// `overrideRef` are requeued so they pick up any changed overlay data.
+async fn requeue_edgion_data_referrers(ed: &EdgionData, ctx: &HandlerContext) {
     let ns = ed.metadata.namespace.as_deref().unwrap_or("");
     let name = ed.metadata.name.as_deref().unwrap_or("");
-    let pm_key = PluginMetaDataStore::make_key(Some(ns), name);
+    let ed_key = EdgionDataStore::make_key(Some(ns), name);
 
-    let refs = ctx.runtime().plugin_metadata_refs.get_refs(&pm_key);
+    let refs = ctx.runtime().edgion_data_refs.get_refs(&ed_key);
     for ep_key in refs {
         if let Some((kind_str, key)) = ep_key.split_once(':') {
             ctx.requeue(kind_str, key.to_string()).await;
@@ -69,37 +69,37 @@ impl ProcessorHandler<EdgionData> for EdgionDataHandler {
     }
 
     async fn parse(&self, ed: EdgionData, ctx: &HandlerContext) -> ProcessResult<EdgionData> {
-        let key = PluginMetaDataStore::make_key(
+        let key = EdgionDataStore::make_key(
             ed.metadata.namespace.as_deref(),
             ed.metadata.name.as_deref().unwrap_or(""),
         );
         ctx.runtime()
-            .plugin_metadata_store
+            .edgion_data_store
             .update([(key, ed.clone())].into_iter().collect(), &Default::default());
 
         ProcessResult::Continue(ed)
     }
 
     async fn on_change(&self, ed: &EdgionData, ctx: &HandlerContext) {
-        requeue_pm_referrers(ed, ctx).await;
+        requeue_edgion_data_referrers(ed, ctx).await;
     }
 
     async fn on_delete(&self, ed: &EdgionData, ctx: &HandlerContext) {
-        let key = PluginMetaDataStore::make_key(
+        let key = EdgionDataStore::make_key(
             ed.metadata.namespace.as_deref(),
             ed.metadata.name.as_deref().unwrap_or(""),
         );
         ctx.runtime()
-            .plugin_metadata_store
+            .edgion_data_store
             .update(Default::default(), &[key.clone()].into_iter().collect());
 
         // Clear any outgoing refs this EdgionData registered (none currently for data-side),
         // then requeue all resources that referenced this EdgionData.
         ctx.runtime()
-            .plugin_metadata_refs
+            .edgion_data_refs
             .clear_refs_from(&EdgionDataHandler::self_ref_key(ed));
-        requeue_pm_referrers(ed, ctx).await;
-        ctx.runtime().plugin_metadata_refs.remove_pm(&key);
+        requeue_edgion_data_referrers(ed, ctx).await;
+        ctx.runtime().edgion_data_refs.remove_edgion_data(&key);
     }
 
     fn update_status(&self, ed: &mut EdgionData, _ctx: &HandlerContext, validation_errors: &[String]) {

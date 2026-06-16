@@ -8,12 +8,12 @@ use std::collections::{HashMap, HashSet};
 
 /// Tracks which EdgionPlugins/EdgionStreamPlugins resources reference a given EdgionData.
 ///
-/// Key: `"namespace/pm_name"` -> Set of `"Kind:namespace/ep_name"` referencing it.
-pub struct PluginMetaDataRefManager {
+/// Key: `"namespace/ed_name"` -> Set of `"Kind:namespace/ep_name"` referencing it.
+pub struct EdgionDataRefManager {
     refs: RwLock<HashMap<String, HashSet<String>>>,
 }
 
-impl PluginMetaDataRefManager {
+impl EdgionDataRefManager {
     pub fn new() -> Self {
         Self {
             refs: RwLock::new(HashMap::new()),
@@ -21,9 +21,9 @@ impl PluginMetaDataRefManager {
     }
 
     /// Register that `ep_key` (e.g., `"EdgionPlugins:default/my-plugin"`) references
-    /// `pm_key` (e.g., `"default/my-pm"`).
-    pub fn add_ref(&self, pm_key: String, ep_key: String) {
-        self.refs.write().entry(pm_key).or_default().insert(ep_key);
+    /// `ed_key` (e.g., `"default/my-pm"`).
+    pub fn add_ref(&self, ed_key: String, ep_key: String) {
+        self.refs.write().entry(ed_key).or_default().insert(ep_key);
     }
 
     /// Remove all references from a given `ep_key` (call on EdgionPlugins delete or update).
@@ -34,11 +34,11 @@ impl PluginMetaDataRefManager {
         }
     }
 
-    /// Get all `ep_key`s that reference a given `pm_key`.
-    pub fn get_refs(&self, pm_key: &str) -> Vec<String> {
+    /// Get all `ep_key`s that reference a given `ed_key`.
+    pub fn get_refs(&self, ed_key: &str) -> Vec<String> {
         self.refs
             .read()
-            .get(pm_key)
+            .get(ed_key)
             .map(|s| s.iter().cloned().collect())
             .unwrap_or_default()
     }
@@ -47,8 +47,8 @@ impl PluginMetaDataRefManager {
     ///
     /// Call this when the PM itself is deleted so stale ep_keys do not linger
     /// and get spuriously requeued if the PM key is later reused.
-    pub fn remove_pm(&self, pm_key: &str) {
-        self.refs.write().remove(pm_key);
+    pub fn remove_edgion_data(&self, ed_key: &str) {
+        self.refs.write().remove(ed_key);
     }
 
     /// Clear all refs (for reset).
@@ -57,7 +57,7 @@ impl PluginMetaDataRefManager {
     }
 }
 
-impl Default for PluginMetaDataRefManager {
+impl Default for EdgionDataRefManager {
     fn default() -> Self {
         Self::new()
     }

@@ -13,11 +13,11 @@ use edgion_resources::prelude_resources::EdgionData;
 /// Store for EdgionData resources (controller-side, low-frequency access).
 ///
 /// Key format: "namespace/name" (namespaced resources only).
-pub struct PluginMetaDataStore {
+pub struct EdgionDataStore {
     data: RwLock<HashMap<String, EdgionData>>,
 }
 
-impl PluginMetaDataStore {
+impl EdgionDataStore {
     pub fn new() -> Self {
         Self {
             data: RwLock::new(HashMap::new()),
@@ -67,7 +67,7 @@ impl PluginMetaDataStore {
     }
 }
 
-impl Default for PluginMetaDataStore {
+impl Default for EdgionDataStore {
     fn default() -> Self {
         Self::new()
     }
