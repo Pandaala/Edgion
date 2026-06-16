@@ -467,8 +467,12 @@ pub fn record_config_event_parse_error(kind: &'static str) {
 /// `result` must be one of:
 /// - `"overlay_missing"` — `overrideRef` set but the EdgionData key is not found in the store;
 ///   base regions used (fail-to-base).
+/// - `"overlay_disabled"` — EdgionData found but `spec.enable=false` (envelope kill-switch);
+///   base regions used without consulting the overlay variant (H1).
 /// - `"overlay_type_mismatch"` — EdgionData found but its variant is not `RegionRouteOverride`
 ///   (D6 type guard rejected it); base regions used.
+/// - `"overlay_invalid"` — overlay applied but the merged effective region table failed
+///   `validate_regions` (e.g. duplicate name, reversed hash range); base regions used (H2).
 ///
 /// Low, fixed cardinality — safe as a label.
 pub fn record_region_route_overlay_event(result: &'static str) {
@@ -479,6 +483,8 @@ pub fn record_region_route_overlay_event(result: &'static str) {
 ///
 /// `result` must be one of:
 /// - `"overlay_missing"` — `overrideRef` set but EdgionData not found; base used (fail-to-base)
+/// - `"overlay_disabled"` — EdgionData found but `spec.enable=false` (envelope kill-switch);
+///   base used without consulting the overlay variant (H1)
 /// - `"overlay_type_mismatch"` — EdgionData present but wrong variant type (D6); base used
 /// - `"overlay_invalid"` — overlay applied but merged effective config failed validation; base used
 /// - `"fail_closed_profile_missing"` — active profile not in effective config (defensive guard)

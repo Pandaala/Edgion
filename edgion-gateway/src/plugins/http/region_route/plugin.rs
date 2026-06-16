@@ -27,7 +27,9 @@ use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::data::{apply_override, merge_region_route_override, DataEntry, OverlaySignal};
+use edgion_resources::resources::data::{
+    apply_override, merge_region_route_override, validate_regions, DataEntry, OverlaySignal,
+};
 use edgion_resources::resources::edgion_plugins::{HashAlgorithm, RegionDef, RegionRouteConfig, RouteRule};
 
 // ── Hash helpers ──────────────────────────────────────────────────────────────
@@ -89,11 +91,15 @@ impl RegionRoute {
 
     /// Resolve the effective region table for this request (per-request, lock-free).
     ///
-    /// Fast path (no overlay): returns the base region table directly.
-    /// Slow path (overlay configured): looks up the EdgionData store, runs `apply_override` with
-    /// the D6 type guard, and merges (or falls back to base) based on the overlay signal.
+    /// Control flow:
+    /// 1. **No overlay configured** (`override_key` is `None`) → return base regions directly.
+    /// 2. **Envelope kill-switch** (`spec.enable == false`) → emit `overlay_disabled`, return base.
+    /// 3. **Type guard (D6)** → `apply_override` rejects wrong `DataEntry` variants.
+    /// 4. **`apply_override`** merges overlay onto base (whole-replace if `regions` is `Some`).
+    /// 5. **Post-merge validation** (H2) → `validate_regions` on the merged result; on failure
+    ///    emit `overlay_invalid` and return base.
     ///
-    /// On `Absent` or `TypeMismatch`, emits a metric counter and returns the base regions.
+    /// All non-`Applied` paths emit a Prometheus counter; no `tracing::warn!/error!`.
     fn compute_effective_regions(&self, log: &mut PluginLog) -> Vec<RegionDef> {
         let Some(ref key) = self.override_key else {
             // No overlay configured — base regions used as-is.
@@ -102,6 +108,15 @@ impl RegionRoute {
 
         let store = get_global_edgion_data_store();
         let raw_ed = store.get_raw_by_key(key);
+
+        // H1 — Envelope kill-switch: spec.enable=false means the operator has disabled
+        // this EdgionData entirely. Treat as no overlay: use base, emit overlay_disabled.
+        if raw_ed.as_ref().map(|ed| !ed.spec.enable).unwrap_or(false) {
+            log.push_fmt("overlay_disabled (key={}), using base", la![sensitive(key)]);
+            record_region_route_overlay_event("overlay_disabled");
+            return self.base.regions.clone();
+        }
+
         let overlay_entry = raw_ed.as_deref().map(|ed| &ed.spec.data);
 
         let (effective, signal) = apply_override(
@@ -126,7 +141,14 @@ impl RegionRoute {
                 record_region_route_overlay_event("overlay_type_mismatch");
             }
             OverlaySignal::Applied => {
-                // Overlay applied successfully — no error signal needed.
+                // H2 — Validate the merged effective region table. Guards against malformed
+                // overlays that slipped past controller validation (race / fed_sync /
+                // disabled controller validation).
+                if validate_regions(&effective).is_err() {
+                    log.push_fmt("overlay_invalid (key={}), using base", la![sensitive(key)]);
+                    record_region_route_overlay_event("overlay_invalid");
+                    return self.base.regions.clone();
+                }
             }
         }
 
@@ -611,5 +633,108 @@ mod tests {
         let mut log = PluginLog::new("RegionRoute");
         let (_, r) = RegionRoute::apply_failover_redirect(&regions, 0, &regions[0], &mut log);
         assert_eq!(r.name, "a");
+    }
+
+    /// H1: When the referenced EdgionData has `spec.enable=false` (envelope kill-switch),
+    /// the overlay must NOT be applied — base regions must be returned.
+    ///
+    /// The overlay contains regions that differ from base; if the kill-switch were ignored,
+    /// the base regions would be replaced. Asserting base regions verifies H1.
+    #[test]
+    fn overlay_envelope_disabled_falls_back_to_base() {
+        use crate::plugins::runtime::data::get_global_edgion_data_store;
+        use edgion_resources::resources::data::{DataEntry, EdgionData, EdgionDataSpec, RegionRouteOverride};
+        use std::sync::Arc;
+
+        // Unique key — no other test inserts or depends on this key.
+        let test_key = "unit-test-ns/rr-overlay-envelope-disabled-h1-test";
+
+        // Build an EdgionData with spec.enable=false and regions that DIFFER from base.
+        // If the kill-switch is honoured, these regions must NOT replace base.
+        let override_regions = vec![make_region("override-only", 0, 999, "override-ep:9090")];
+        let mut ed = EdgionData::new(
+            "rr-overlay-envelope-disabled-h1-test",
+            EdgionDataSpec {
+                enable: false, // envelope kill-switch
+                active: None,
+                data: DataEntry::RegionRouteOverride(RegionRouteOverride {
+                    enable: None,
+                    active: None,
+                    regions: Some(override_regions),
+                }),
+            },
+        );
+        ed.metadata.namespace = Some("unit-test-ns".to_string());
+        get_global_edgion_data_store().insert_raw_for_test(test_key, Arc::new(ed));
+
+        // Base: single region distinct from the override.
+        let config = RegionRouteConfig {
+            regions: vec![make_region("base-region", 0, 999, "base-ep:8080")],
+            ..Default::default()
+        };
+        let plugin = RegionRoute {
+            name: "RegionRoute".to_string(),
+            base: Arc::new(config),
+            override_key: Some(test_key.to_string()),
+        };
+
+        let mut log = PluginLog::new("RegionRoute");
+        let regions = plugin.compute_effective_regions(&mut log);
+
+        assert_eq!(regions.len(), 1, "base has exactly 1 region");
+        assert_eq!(
+            regions[0].name, "base-region",
+            "envelope disabled: must return base regions, not override"
+        );
+    }
+
+    /// H2: When the overlay is applied but the merged effective regions are invalid
+    /// (duplicate region names), the plugin must fall back to base regions.
+    #[test]
+    fn overlay_invalid_regions_falls_back_to_base() {
+        use crate::plugins::runtime::data::get_global_edgion_data_store;
+        use edgion_resources::resources::data::{DataEntry, EdgionData, EdgionDataSpec, RegionRouteOverride};
+        use std::sync::Arc;
+
+        let test_key = "unit-test-ns/rr-overlay-invalid-dup-names-h2-test";
+
+        // Build an EdgionData whose overlay has duplicate region names (invalid).
+        let dup_regions = vec![
+            make_region("dup-name", 0, 499, "ep-a:8080"),
+            make_region("dup-name", 500, 999, "ep-b:8080"), // duplicate — must trigger overlay_invalid
+        ];
+        let mut ed = EdgionData::new(
+            "rr-overlay-invalid-dup-names-h2-test",
+            EdgionDataSpec {
+                enable: true, // envelope enabled — the validation must catch the bad regions
+                active: None,
+                data: DataEntry::RegionRouteOverride(RegionRouteOverride {
+                    enable: None,
+                    active: None,
+                    regions: Some(dup_regions),
+                }),
+            },
+        );
+        ed.metadata.namespace = Some("unit-test-ns".to_string());
+        get_global_edgion_data_store().insert_raw_for_test(test_key, Arc::new(ed));
+
+        let config = RegionRouteConfig {
+            regions: vec![make_region("valid-base", 0, 999, "base:8080")],
+            ..Default::default()
+        };
+        let plugin = RegionRoute {
+            name: "RegionRoute".to_string(),
+            base: Arc::new(config),
+            override_key: Some(test_key.to_string()),
+        };
+
+        let mut log = PluginLog::new("RegionRoute");
+        let regions = plugin.compute_effective_regions(&mut log);
+
+        assert_eq!(regions.len(), 1, "base has exactly 1 region");
+        assert_eq!(
+            regions[0].name, "valid-base",
+            "invalid overlay: must fall back to base regions"
+        );
     }
 }

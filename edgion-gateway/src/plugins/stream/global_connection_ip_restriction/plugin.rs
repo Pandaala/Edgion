@@ -66,12 +66,16 @@ impl GlobalConnectionIpRestrictionPlugin {
 
     /// Compute the effective config for this connection.
     ///
-    /// Fast path (no overlay): clones and returns base with pre-compiled matchers.
-    /// Slow path (overlay configured): looks up the EdgionData store, applies the
-    /// typed overlay via `apply_override`, then calls `validate_and_init` on the
-    /// merged result to compile matchers for any overlay-supplied profiles.
+    /// Control flow:
+    /// 1. **No overlay configured** (`override_key` is `None`) → clone and return base.
+    /// 2. **Envelope kill-switch** (`spec.enable == false`) → emit `overlay_disabled`, return base.
+    /// 3. **Type guard (D6)** → `apply_override` rejects wrong `DataEntry` variants.
+    /// 4. **`apply_override`** merges overlay onto base; then `validate_and_init` compiles matchers.
+    /// 5. If `validate_and_init` fails → emit `overlay_invalid`, return pre-compiled base clone.
     ///
-    /// On any overlay error, emits a metric signal and falls back to the base.
+    /// All non-`Applied` paths emit a Prometheus counter; no `tracing::warn!/error!`.
+    /// Note: the `if !effective.enable` check in `on_connection` is the VARIANT-INNER enable
+    /// (base config's own kill-switch); that check is independent and must coexist.
     fn compute_effective(&self) -> GlobalConnectionIpRestrictionData {
         let Some(ref key) = self.override_key else {
             // No overlay configured — use base directly (already has compiled matchers).
@@ -80,6 +84,14 @@ impl GlobalConnectionIpRestrictionPlugin {
 
         let store = get_global_edgion_data_store();
         let raw_ed = store.get_raw_by_key(key);
+
+        // H1 — Envelope kill-switch: spec.enable=false means the operator has disabled
+        // this EdgionData entirely. Treat as no overlay: use base, emit overlay_disabled.
+        if raw_ed.as_ref().map(|ed| !ed.spec.enable).unwrap_or(false) {
+            record_conn_ip_restriction_event("overlay_disabled");
+            return (*self.base).clone();
+        }
+
         // The overlay entry is the `DataEntry` inside the raw EdgionData (if found).
         let overlay_data_entry = raw_ed.as_deref().map(|ed| &ed.spec.data);
 
@@ -260,6 +272,68 @@ mod tests {
         assert!(
             matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Allow),
             "enable=false must allow all connections regardless of profile rules"
+        );
+    }
+
+    /// H1: When the referenced EdgionData has `spec.enable=false` (envelope kill-switch),
+    /// the overlay must NOT be applied — the base config (with its restrictive profile) is used.
+    ///
+    /// The overlay carries `enable: Some(false)` (inner variant field), which would disable IP
+    /// restriction and allow all connections. Because the EdgionData envelope `spec.enable=false`,
+    /// the entire overlay is skipped and the base (deny non-loopback) is used instead.
+    #[tokio::test]
+    async fn envelope_disabled_falls_back_to_base() {
+        use crate::plugins::runtime::data::get_global_edgion_data_store;
+        use edgion_resources::resources::data::{
+            DataEntry, EdgionData, EdgionDataSpec, GlobalConnIpRestrictionOverride,
+        };
+        use std::sync::Arc;
+
+        // Unique key — no other test inserts or depends on this key.
+        let test_key = "unit-test-ns/gcir-overlay-envelope-disabled-h1-test";
+
+        // Build an EdgionData with spec.enable=false and an override that WOULD allow
+        // all connections (inner enable: Some(false) → effective.enable=false → Allow all).
+        // Because the envelope spec.enable=false, this override must never be applied.
+        let mut ed = EdgionData::new(
+            "gcir-overlay-envelope-disabled-h1-test",
+            EdgionDataSpec {
+                enable: false, // envelope kill-switch — this is what H1 fixes
+                active: None,
+                data: DataEntry::GlobalConnIpRestrictionOverride(GlobalConnIpRestrictionOverride {
+                    enable: Some(false), // would disable IP checks entirely (allow all)
+                    active_profile: None,
+                    profiles: None,
+                }),
+            },
+        );
+        ed.metadata.namespace = Some("unit-test-ns".to_string());
+        get_global_edgion_data_store().insert_raw_for_test(test_key, Arc::new(ed));
+
+        // Base: deny all except loopback.
+        let mut entry = make_entry("main", DefaultAction::Deny, Some("127.0.0.0/8"), None);
+        entry.override_ref = Some(edgion_resources::resources::data::DataRef {
+            name: "gcir-overlay-envelope-disabled-h1-test".to_string(),
+            namespace: Some("unit-test-ns".to_string()),
+        });
+        let plugin = GlobalConnectionIpRestrictionPlugin::new(&entry, "unit-test-ns").expect("valid base");
+
+        // 8.8.8.8: if the overlay were applied (enable: Some(false)), effective.enable=false
+        // and all connections would be allowed. With the envelope disabled, base is used: deny.
+        let ctx_nonloopback = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        assert!(
+            matches!(
+                plugin.on_connection(&ctx_nonloopback).await,
+                StreamPluginResult::Deny(_)
+            ),
+            "envelope spec.enable=false must skip overlay; base denies 8.8.8.8"
+        );
+
+        // Loopback: base allows it (unaffected by the disabled overlay).
+        let ctx_loopback = StreamContext::new("127.0.0.1".parse().unwrap(), 8080);
+        assert!(
+            matches!(plugin.on_connection(&ctx_loopback).await, StreamPluginResult::Allow),
+            "loopback must still be allowed by base when overlay is envelope-disabled"
         );
     }
 

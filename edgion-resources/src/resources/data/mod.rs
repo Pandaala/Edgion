@@ -26,7 +26,7 @@ pub use global_connection_ip_restriction::{
 pub use ip_list::IpListData;
 pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
 pub use overlay::{apply_override, OverlaySignal};
-pub use region_route::{merge_region_route_override, RegionRouteOverride};
+pub use region_route::{merge_region_route_override, validate_regions, RegionRouteOverride};
 
 use crate::resources::common::Condition;
 use kube::CustomResource;

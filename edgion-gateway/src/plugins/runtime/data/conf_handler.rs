@@ -170,6 +170,19 @@ impl EdgionDataStore {
         }
     }
 
+    /// Insert or overwrite a single [`EdgionData`] entry in the store.
+    ///
+    /// This method is only available in `#[cfg(test)]` builds. It uses the same
+    /// non-atomic load-clone-modify-store path as `update`, so tests using the
+    /// **global** store must use unique keys to avoid interference between
+    /// parallel test threads.
+    #[cfg(test)]
+    pub fn insert_raw_for_test(&self, key: impl Into<String>, data: Arc<EdgionData>) {
+        let mut add: RawMap = HashMap::new();
+        add.insert(key.into(), data);
+        self.update(add, &HashSet::new());
+    }
+
     fn replace_all(&self, data: RawMap) {
         let indexes = Self::build_indexes(&data);
         self.snapshot.store(Arc::new(Snapshot { raw: data, indexes }));

@@ -106,6 +106,7 @@ overlay via `overrideRef`. ServiceRegionRoute's only payload (per-service `failo
 |-----------|-------|-----|
 | No `overrideRef` | base (RegionRoute) / N/A | base used |
 | `overrideRef` set, metadata absent | RegionRoute BrokenRef / GlobalConnIp Deny (fail closed) | **base** + `overlay_missing` signal |
+| overlay present, `spec.enable=false` | n/a | **base** + `overlay_disabled` signal (envelope kill-switch, H1) |
 | metadata present, **type mismatch** (D6) | n/a | **base** + `overlay_type_mismatch` signal |
 | metadata present, invalid | rejected/var | controller `Accepted=False` (not pushed); gateway **base** + `overlay_invalid` signal |
 | metadata present, valid | overlay applied | overlay applied (field-level replace) |

@@ -163,6 +163,32 @@ tests pass; crd_coverage 6 pass; workspace lib 3454 pass; validate_agent_docs pa
 
 ---
 
+---
+
+## H1 — [RESOLVED] Envelope `spec.enable` was dead code — overlay applied even when disabled
+
+**Status:** RESOLVED (2026-06-16).
+
+Both `compute_effective_regions` (RegionRoute) and `compute_effective` (GlobalConnectionIpRestriction)
+now check `raw_ed.spec.enable` immediately after the store lookup, before calling `apply_override`.
+When `spec.enable == false`, the function short-circuits: returns base clone and emits
+`overlay_disabled` counter. Tests: `overlay_envelope_disabled_falls_back_to_base` (RegionRoute),
+`envelope_disabled_falls_back_to_base` (GCIR).
+
+---
+
+## H2 — [RESOLVED] RegionRoute did not validate merged effective regions
+
+**Status:** RESOLVED (2026-06-16).
+
+`validate_regions(&[RegionDef]) -> Result<(), String>` added to
+`edgion-resources/src/resources/data/region_route.rs` and exported via `mod.rs`.
+On `OverlaySignal::Applied`, `compute_effective_regions` now calls `validate_regions` on the
+merged result; failure emits `overlay_invalid` counter and returns base regions.
+Tests: `overlay_invalid_regions_falls_back_to_base` (RegionRoute).
+
+---
+
 ## S7 Deviations (noted during execution)
 
 ### D-S7-A — EdgionData CRD type enum was stale (two removed variants, two missing new ones)
