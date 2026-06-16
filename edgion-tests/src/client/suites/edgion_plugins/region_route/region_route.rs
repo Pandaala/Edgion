@@ -25,6 +25,7 @@
 // Tests that expect 502 verify the plugin correctly set ExternalJumpPreset (access log check).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
+use edgion_gateway::plugins::http::region_route::log_tokens as log_t;
 use std::time::Instant;
 
 const MAIN_HOST: &str = "region-route-main.example.com";
@@ -113,7 +114,7 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    if log_str.contains("overlay_missing") {
+                                    if log_str.contains(log_t::OVERLAY_MISSING) {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
                                             format!("overlay_missing logged as expected; status={}", status),
@@ -206,9 +207,10 @@ impl RegionRouteTestSuite {
                                     let log_str = entry.data.to_string();
                                     // Plugin emits: "hash key=<key> src=hdr:X-Account-Id val=<n>"
                                     // and "hash_wb→res_hdr:X-Region-Hash".
-                                    let has_hash =
-                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
-                                    let has_wb = log_str.contains("hash_wb→res_hdr:X-Region-Hash");
+                                    let has_hash = log_str.contains(log_t::HASH_KEY)
+                                        && log_str.contains("src=hdr:X-Account-Id val=");
+                                    let has_wb =
+                                        log_str.contains(log_t::HASH_WB) && log_str.contains("res_hdr:X-Region-Hash");
                                     if has_hash && has_wb {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -332,7 +334,7 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    if log_str.contains("direct=virginia") && log_str.contains("→virginia") {
+                                    if log_str.contains(log_t::DIRECT) && log_str.contains("→virginia") {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
@@ -376,7 +378,7 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    if log_str.contains("direct=ohio") && log_str.contains("→ohio") {
+                                    if log_str.contains(log_t::DIRECT) && log_str.contains("→ohio") {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
@@ -428,9 +430,10 @@ impl RegionRouteTestSuite {
                                     //   `conf_match key=<v> src=hdr:X-Account-Id no_entry, fallthrough`
                                     //   `hash key=<k> src=hdr:X-Account-Id val=<n>`
                                     let fell_through = log_str.contains("fallthrough");
-                                    let match_miss = log_str.contains("src=hdr:X-Account-Id no_entry, fallthrough");
-                                    let hash_computed =
-                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
+                                    let match_miss = log_str.contains("src=hdr:X-Account-Id")
+                                        && log_str.contains(log_t::CONF_MATCH_NO_ENTRY);
+                                    let hash_computed = log_str.contains(log_t::HASH_KEY)
+                                        && log_str.contains("src=hdr:X-Account-Id val=");
                                     if fell_through && match_miss && hash_computed {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -484,18 +487,14 @@ impl RegionRouteTestSuite {
                                     let log_str = entry.data.to_string();
                                     // Plugin emits `conf_match key=<v> src=hdr:X-Account-Id →virginia`
                                     // (note the space before the arrow).
-                                    let has_match = log_str.contains("conf_match key=")
+                                    let has_match = log_str.contains(log_t::CONF_MATCH_KEY)
                                         && log_str.contains("src=hdr:X-Account-Id →virginia");
-                                    let has_jump = log_str.contains("→virginia");
-                                    if has_match && has_jump {
+                                    if has_match {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Expected match→virginia and →virginia. has_match={}, has_jump={}. log: {}",
-                                                has_match, has_jump, log_str
-                                            ),
+                                            format!("Expected conf_match key=...→virginia. log: {}", log_str),
                                         )
                                     }
                                 }
@@ -535,18 +534,14 @@ impl RegionRouteTestSuite {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
                                     // Plugin emits `conf_match key=<v> src=hdr:X-Account-Id →ohio`.
-                                    let has_match = log_str.contains("conf_match key=")
+                                    let has_match = log_str.contains(log_t::CONF_MATCH_KEY)
                                         && log_str.contains("src=hdr:X-Account-Id →ohio");
-                                    let has_jump = log_str.contains("→ohio");
-                                    if has_match && has_jump {
+                                    if has_match {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
                                             start.elapsed(),
-                                            format!(
-                                                "Expected match→ohio and →ohio. has_match={}, has_jump={}. log: {}",
-                                                has_match, has_jump, log_str
-                                            ),
+                                            format!("Expected conf_match key=...→ohio. log: {}", log_str),
                                         )
                                     }
                                 }
@@ -587,9 +582,10 @@ impl RegionRouteTestSuite {
                                     let log_str = entry.data.to_string();
                                     // Plugin: `conf_match key=<v> src=hdr:X-Account-Id no_entry, fallthrough`
                                     // then `hash key=<k> src=hdr:X-Account-Id val=<n>`.
-                                    let has_no_conf = log_str.contains("src=hdr:X-Account-Id no_entry, fallthrough");
-                                    let has_hash =
-                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
+                                    let has_no_conf = log_str.contains("src=hdr:X-Account-Id")
+                                        && log_str.contains(log_t::CONF_MATCH_NO_ENTRY);
+                                    let has_hash = log_str.contains(log_t::HASH_KEY)
+                                        && log_str.contains("src=hdr:X-Account-Id val=");
                                     if has_no_conf && has_hash {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -642,7 +638,9 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    if log_str.contains("hash_pass=100") && log_str.contains("→virginia") {
+                                    if log_str.contains(&format!("{}100", log_t::HASH_PASS))
+                                        && log_str.contains("→virginia")
+                                    {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
@@ -687,7 +685,9 @@ impl RegionRouteTestSuite {
                             match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
-                                    if log_str.contains("hash_pass=800") && log_str.contains("→ohio") {
+                                    if log_str.contains(&format!("{}800", log_t::HASH_PASS))
+                                        && log_str.contains("→ohio")
+                                    {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(
@@ -735,9 +735,9 @@ impl RegionRouteTestSuite {
                                     // Should NOT use passthrough; should compute hash from X-Account-Id
                                     // Plugin: `hash_pass=<v> src=...` only fires on in-range passthrough;
                                     // fallback emits `hash key=<k> src=hdr:X-Account-Id val=<n>`.
-                                    let used_passthrough = log_str.contains("hash_pass=1001");
-                                    let used_key =
-                                        log_str.contains("hash key=") && log_str.contains("src=hdr:X-Account-Id val=");
+                                    let used_passthrough = log_str.contains(&format!("{}1001", log_t::HASH_PASS));
+                                    let used_key = log_str.contains(log_t::HASH_KEY)
+                                        && log_str.contains("src=hdr:X-Account-Id val=");
                                     if !used_passthrough && used_key {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -829,8 +829,9 @@ impl RegionRouteTestSuite {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
                                     // Plugin emits `failover <region>→<target>` then `local_region, pass`.
-                                    let has_redirect = log_str.contains("failover ohio→virginia");
-                                    let has_local = log_str.contains("local_region, pass");
+                                    let has_redirect =
+                                        log_str.contains(log_t::FAILOVER_REDIRECT) && log_str.contains("ohio→virginia");
+                                    let has_local = log_str.contains(log_t::LOCAL_REGION_PASS);
                                     if has_redirect && has_local {
                                         TestResult::passed(start.elapsed())
                                     } else {
@@ -887,7 +888,8 @@ impl RegionRouteTestSuite {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
                                     // Plugin emits `failover europe→ohio` then external jump `→ohio`.
-                                    let has_redirect = log_str.contains("failover europe→ohio");
+                                    let has_redirect =
+                                        log_str.contains(log_t::FAILOVER_REDIRECT) && log_str.contains("europe→ohio");
                                     let has_jump = log_str.contains("→ohio");
                                     if has_redirect && has_jump {
                                         TestResult::passed(start.elapsed())
@@ -943,7 +945,7 @@ impl RegionRouteTestSuite {
                                 Ok(entry) => {
                                     let log_str = entry.data.to_string();
                                     // Plugin logs "wb→res_hdr:X-Region-Hash; " after computing hash
-                                    if log_str.contains("wb→res_hdr:X-Region-Hash") {
+                                    if log_str.contains(log_t::HASH_WB) && log_str.contains("res_hdr:X-Region-Hash") {
                                         TestResult::passed(start.elapsed())
                                     } else {
                                         TestResult::failed(

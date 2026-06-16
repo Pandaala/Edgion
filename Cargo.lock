@@ -1600,6 +1600,7 @@ dependencies = [
  "edgion-cli",
  "edgion-common",
  "edgion-controller",
+ "edgion-gateway",
  "edgion-resources",
  "futures",
  "h2",

@@ -417,3 +417,19 @@ Within the per-request call chain (filter-entry synchronous call stack):
 
 Locations where tracing::*! may stay: plugin constructors / new() / config load / background tasks
 (JWKS rotation, cache refresh timer, Redis reconnect) / module initialization.
+
+---
+
+## Plugin access-log token contract
+
+When integration tests assert on access-log substrings of a plugin and the format is non-trivial, mirror those substrings into a sibling `log_tokens.rs` module with a `#[cfg(test)] include_str!`-based guard. Reference implementation: `edgion-gateway/src/plugins/http/region_route/log_tokens.rs`.
+
+**Apply this when:**
+- An integration test broke because the plugin's log format changed under the assertion (drift incident).
+- Adding a new plugin whose access log is part of the integration contract.
+
+**Do NOT pre-apply** to stable plugins that have never drifted — the convention is reactive.
+
+**Rule for what becomes a token:** const-ize a substring iff some integration test asserts it today, AND the substring is plugin-contract (not fixture-controlled and not a single high-collision character like `→` or `=`). The plugin source keeps literal fmt strings; the const layer is purely a test-side contract anchored by an `include_str!` source-grep test.
+
+Spec: `docs/superpowers/specs/2026-06-16-plugin-log-tokens-design.md`.
