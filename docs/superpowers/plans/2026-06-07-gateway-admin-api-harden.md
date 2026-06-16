@@ -31,7 +31,7 @@
 - `edgion-resources/src/resources/edgion_plugins/plugin_configs/{jwe_decrypt,jwt_auth,basic_auth,hmac_auth,openid_connect,key_auth,header_cert_auth,csrf}.rs`
 - `edgion-resources/src/resources/link_sys/redis.rs`
 - `edgion-resources/src/resources/edgion_acme.rs`
-- `edgion-resources/src/resources/plugin_metadata/key_list.rs`
+- `edgion-resources/src/resources/edgion_config_data/key_list.rs`
 
 **Modify (docs/cleanup, final task):**
 - doc comments in `api/mod.rs`, `conf_sync/conf_client/config_client.rs`, `conf_sync/cache_client/cache.rs`
@@ -554,7 +554,7 @@ Then add this test to the existing `#[cfg(test)] mod` in `csrf.rs` (the module t
 
 - [ ] **Step 2: Annotate `MetaDataItem.key` and add a test**
 
-In `edgion-resources/src/resources/plugin_metadata/key_list.rs`, the field (line 63) is:
+In `edgion-resources/src/resources/edgion_config_data/key_list.rs`, the field (line 63) is:
 
 ```rust
     pub key: String,
@@ -602,7 +602,7 @@ Expected: all csrf tests pass.
 Run: `cargo fmt --all`
 
 ```bash
-git add edgion-resources/src/resources/edgion_plugins/plugin_configs/csrf.rs edgion-resources/src/resources/plugin_metadata/key_list.rs
+git add edgion-resources/src/resources/edgion_plugins/plugin_configs/csrf.rs edgion-resources/src/resources/edgion_config_data/key_list.rs
 git commit -m "feat(gateway): redact CsrfConfig.key and KeyList MetaDataItem.key"
 ```
 

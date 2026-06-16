@@ -234,7 +234,7 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 | `tag` | `Vec<String>` | `[]` | Arbitrary extension tags reported to Center. |
 | `ping_interval_secs` | `u64` | `30` | Heartbeat interval in seconds for the federation keep-alive ping. |
 | `security` | `ConfSyncSecurityConfig` | — | mTLS certificates for the gRPC channel (same format as `conf_sync_security`). Required -- federation fails closed without it. |
-| `rbac` | `FedRbacConfig?` | `null` | RBAC for Center operations. **Absent => built-in default policy applies (read `get`/`list`/`watch`/`list-keys` on all ResourceKinds except `Secret`; write `create`/`update`/`delete` on `PluginMetaData`; `get`/`list`/`failover` on the synthetic `RegionRoute`). Present => the explicit rules fully override the default.** |
+| `rbac` | `FedRbacConfig?` | `null` | RBAC for Center operations. **Absent => built-in default policy applies (read `get`/`list`/`watch`/`list-keys` on all ResourceKinds except `Secret`; write `create`/`update`/`delete` on `EdgionConfigData`; `get`/`list`/`failover` on the synthetic `RegionRoute`). Present => the explicit rules fully override the default.** |
 
 ### `[center.rbac]` -- Federation RBAC
 
@@ -243,7 +243,7 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 | What | Allowed |
 |------|---------|
 | Read (`get`, `list`, `watch`, `list-keys`) | All resource kinds **except** `Secret` (EdgionTls IS readable; only the Secret kind is excluded for credential safety) |
-| Write (`create`, `update`, `delete`) | `PluginMetaData` only (drives IP-restriction sync + region-route sync; grants write to ALL plugin metadata) |
+| Write (`create`, `update`, `delete`) | `EdgionConfigData` only (drives IP-restriction sync + region-route sync; grants write to ALL plugin metadata) |
 | `get`, `list`, `failover` | `RegionRoute` (synthetic label): get/list allow the aggregate read endpoints; failover covers the POST failover endpoint |
 | Everything else (`reload`, `server-info`, `diagnostics`, etc.) | Denied |
 
@@ -269,7 +269,7 @@ center:
   rbac:
     allow:
       - verbs: [get, list, watch, create, update, delete]
-        kinds: [PluginMetaData]
+        kinds: [EdgionConfigData]
       - verbs: [failover]
         kinds: [RegionRoute]
       - verbs: [reload]
@@ -278,7 +278,7 @@ center:
 
 | Rule | Covers |
 |------|--------|
-| `get/list/watch/create/update/delete` on `PluginMetaData` | IP-restriction plugin sync + region-route sync; `list` also serves Center blind-proxy UI list pages |
+| `get/list/watch/create/update/delete` on `EdgionConfigData` | IP-restriction plugin sync + region-route sync; `list` also serves Center blind-proxy UI list pages |
 | `failover` on `RegionRoute` | Regional failover endpoint |
 | `reload` on `*` | Config reload (non-resource, wildcard kind is safe for write verbs) |
 
@@ -290,7 +290,7 @@ center:
 
 `FedAllowRule.verbs` accepts: `get`, `list`, `list-keys`, `watch`, `create`, `update`, `delete`, `failover`, `acme-trigger`, `reload`, `server-info`, `diagnostics`, `wipe-all`, `debug`.
 
-> **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `PluginMetaData`, `HTTPRoute`, `RegionRoute`). Lowercase or alias spellings (e.g. `pluginmetadata`) are matched case-sensitively against the normalized request kind and will silently never match. Verbs are case-insensitive.
+> **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `EdgionConfigData`, `HTTPRoute`, `RegionRoute`). Lowercase or alias spellings (e.g. `edgionconfigdata`) are matched case-sensitively against the normalized request kind and will silently never match. Verbs are case-insensitive.
 
 ## `[cli_tokens]` — Static CLI Tokens (Admin API Access)
 
@@ -328,13 +328,13 @@ cli_tokens:
     rbac:
       allow:
         - verbs: [get, list, watch, create, update, delete]
-          kinds: [PluginMetaData]
+          kinds: [EdgionConfigData]
         # reload is a write-only verb; kinds: ["*"] is safe here (no read surface)
         - verbs: [reload]
           kinds: ["*"]
 ```
 
-> **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `PluginMetaData`, `HTTPRoute`). Lowercase spellings silently never match.
+> **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `EdgionConfigData`, `HTTPRoute`). Lowercase spellings silently never match.
 >
 > **Full operator guide:** see `docs/en/ops-guide/federation-rbac.md#cli-token-rbac` for the gen-token workflow, security notes, and rotation instructions.
 

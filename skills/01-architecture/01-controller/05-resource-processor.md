@@ -135,7 +135,7 @@ There are 20 Handler implementations covering all resource types:
 | `EdgionStreamPluginsHandler` | EdgionStreamPlugins | Stream-plugin configuration validation |
 | `EdgionTlsHandler` | EdgionTls | TLS configuration, Secret reference registration, gateway_route_index |
 | `EdgionAcmeHandler` | EdgionAcme | ACME certificate configuration, Secret references |
-| `PluginMetadataHandler` | PluginMetadata | Plugin metadata |
+| `EdgionConfigDataHandler` | EdgionConfigData | Plugin metadata |
 | `LinkSysHandler` | LinkSys | LinkSys configuration |
 
 ### Shared Utility Modules

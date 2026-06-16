@@ -12,7 +12,7 @@ description: Use when reviewing findings that flag `GlobalConnectionIpRestrictio
 **Confirmed-real, now fixed (F-008, 2026-05-27).** `GlobalConnectionIpRestrictionPlugin::on_connection`
 in `edgion-gateway/src/plugins/stream/global_connection_ip_restriction/plugin.rs` runs on the L4
 listener accept path (one call per inbound TCP connection). It used to call the by-(ns, name)
-getter `PluginMetaDataStore::get_global_connection_ip_restriction(ns, name)`, which internally
+getter `EdgionConfigDataStore::get_global_connection_ip_restriction(ns, name)`, which internally
 executed `format!("{}/{}", namespace, name)` to build the `HashMap` lookup key, producing one
 short-String allocation per connection. The effective namespace resolution
 (`ref.namespace.unwrap_or(parent_namespace)`) is a pure constructor-time decision; the lookup
@@ -26,12 +26,12 @@ pub struct GlobalConnectionIpRestrictionPlugin {
 }
 
 impl GlobalConnectionIpRestrictionPlugin {
-    pub fn new(plugin_metadata_ref: PluginReference, parent_namespace: String) -> Self {
-        let effective_ns = plugin_metadata_ref
+    pub fn new(edgion_config_data_ref: PluginReference, parent_namespace: String) -> Self {
+        let effective_ns = edgion_config_data_ref
             .namespace
             .as_deref()
             .unwrap_or(&parent_namespace);
-        let metadata_key = format!("{}/{}", effective_ns, plugin_metadata_ref.name);
+        let metadata_key = format!("{}/{}", effective_ns, edgion_config_data_ref.name);
         Self { metadata_key }
     }
 }
@@ -41,7 +41,7 @@ let Some(pm) = store.get_global_connection_ip_restriction_by_key(&self.metadata_
 ```
 
 `get_global_connection_ip_restriction_by_key(&str)` already exists on
-`PluginMetaDataStore` (`edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs`) and
+`EdgionConfigDataStore` (`edgion-gateway/src/plugins/runtime/edgion_config_data/conf_handler.rs`) and
 performs the same `HashMap::get` against the same map; the by-(ns, name) variant is retained
 for non-hot-path callers that don't want to build the key themselves.
 
@@ -71,7 +71,7 @@ allocation — bounded by plugin-instance count, which only changes on config re
 
 **3. The `_by_key` getter is the intended hot-path API.**
 
-`PluginMetaDataStore` already exposes `get_*_by_key(&str)` variants alongside the
+`EdgionConfigDataStore` already exposes `get_*_by_key(&str)` variants alongside the
 `(namespace, name)` convenience methods for exactly this case: callers that have a
 precomputed key skip the `format!`. Adopting it preserves the existing dispatch shape with
 zero new abstractions.

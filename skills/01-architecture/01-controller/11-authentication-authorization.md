@@ -89,7 +89,7 @@ permits(verb, kind) = any rule where
 Module: `edgion-controller/src/fed_sync/default_policy.rs`. Applied **only when `center.rbac` is absent** (if the operator supplies `center.rbac`, it is used verbatim and the default is not applied). The default is a minimal, useful-out-of-the-box allow set:
 
 - **Read** (`get` / `list` / `watch` / `list-keys`) on **every ResourceKind except `Secret`**. `Secret` is excluded so the default policy never exposes credentials to federation clients. (`EdgionTls` is *not* excluded — it is a link reference, not raw key material.)
-- **Write** (`create` / `update` / `delete`) on **`PluginMetaData` only** (the region-route and ip-restriction handlers drive this kind).
+- **Write** (`create` / `update` / `delete`) on **`EdgionConfigData` only** (the region-route and ip-restriction handlers drive this kind).
 - **`get` / `list` / `failover`** on the synthetic **`RegionRoute`** label (aggregate read endpoints + the POST failover endpoint).
 - **Nothing else**: no `reload`, `server-info`, `diagnostics`, `wipe-all`, `debug`.
 

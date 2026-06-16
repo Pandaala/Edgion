@@ -80,7 +80,7 @@ On `UDPRoute` the binding runs only the Stage-1 ConnectionFilter (`spec.plugins`
 | Type | Stage | Description |
 |------|-------|-------------|
 | `IpRestriction` | Stage 1 + Stage 2 | Inline IP allow/deny list (CIDR supported); rules embedded directly in the plugin config |
-| `GlobalConnectionIpRestriction` | Stage 1 + Stage 2 | PluginMetaData-referenced IP restriction. The plugin config only holds `pluginMetadataRef` (namespace inherited from the parent EdgionStreamPlugins if omitted); the actual rules live in a `GlobalConnectionIpRestriction` PluginMetaData. Center-managed and synced across multiple Controllers. |
+| `GlobalConnectionIpRestriction` | Stage 1 + Stage 2 | EdgionConfigData-referenced IP restriction. The plugin config only holds `overrideRef` (namespace inherited from the parent EdgionStreamPlugins if omitted); the actual rules live in a `GlobalConnectionIpRestriction` EdgionConfigData. Center-managed and synced across multiple Controllers. |
 
 ## Differences from HTTP Plugins
 

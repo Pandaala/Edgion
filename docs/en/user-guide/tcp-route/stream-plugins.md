@@ -31,7 +31,7 @@ Gateway listener level. On `UDPRoute` only the Stage-1 ConnectionFilter
 | Type | Config object | Description |
 |------|---------------|-------------|
 | `IpRestriction` | inline rules | IP allow/deny groups embedded directly in the plugin. |
-| `GlobalConnectionIpRestriction` | `pluginMetadataRef` | References a `GlobalConnectionIpRestriction` PluginMetaData; Center-managed and synced across Controllers. |
+| `GlobalConnectionIpRestriction` | `overrideRef` | References a `GlobalConnectionIpRestriction` EdgionConfigData; Center-managed and synced across Controllers. |
 | `ConnectionRateLimit` | `config` object | Redis-backed per-source-IP connection rate limiting at the pre-TLS accept path. See the [ConnectionRateLimit section](#connectionratelimit-pre-tls-connection-rate-limiting) below. |
 
 Each entry under `spec.plugins` has an optional `enable` flag (default `true`),
@@ -62,10 +62,10 @@ a denied connection is simply closed (no protocol-level response exists at L4).
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `pluginMetadataRef.name` | String | **Required** | Name of the `GlobalConnectionIpRestriction` PluginMetaData. |
-| `pluginMetadataRef.namespace` | String | parent ESP namespace | Namespace of the PluginMetaData; inherited from the parent `EdgionStreamPlugins` if omitted. |
+| `overrideRef.name` | String | **Required** | Name of the `GlobalConnectionIpRestriction` EdgionConfigData. |
+| `overrideRef.namespace` | String | parent ESP namespace | Namespace of the EdgionConfigData; inherited from the parent `EdgionStreamPlugins` if omitted. |
 
-The referenced PluginMetaData stores the rules centrally under
+The referenced EdgionConfigData stores the rules centrally under
 `spec.metadata.config`, with a kill switch (`enable`), a selected `activeProfile`,
 and named `profiles` so you can swap rule sets instantly. This lets multiple
 Controllers share one policy.
@@ -122,13 +122,13 @@ Only clients in `10.0.0.0/8` can now reach the Redis service.
 
 ## Center-managed restriction (GlobalConnectionIpRestriction)
 
-Store the rules once in a `GlobalConnectionIpRestriction` PluginMetaData (which
+Store the rules once in a `GlobalConnectionIpRestriction` EdgionConfigData (which
 supports named `profiles` and a kill switch) and reference it from a stream
 plugin. This is the form Center syncs to multiple Controllers.
 
 ```yaml
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionConfigData
 metadata:
   name: gcir-policy
   namespace: edgion-test
@@ -155,7 +155,7 @@ spec:
   plugins:
     - type: GlobalConnectionIpRestriction
       config:
-        pluginMetadataRef:
+        overrideRef:
           name: gcir-policy
           # namespace omitted: inherits parent ESP namespace (edgion-test)
 ---

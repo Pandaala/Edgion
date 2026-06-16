@@ -80,7 +80,7 @@ start(shutdown_handle)
     │   ├── wait_kinds_ready(phase1_kinds, 15s)
     │   ├── Phase 2: spawn dependent resource controllers
     │   │   (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, EdgionTls,
-    │   │    BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, PluginMetaData,
+    │   │    BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData,
     │   │    LinkSys, EdgionAcme, EdgionGatewayConfig)
     │   └── FileSystemWatcher.run()
     │       ├── init_phase: scan directory → group by kind → Init/InitApply/InitDone
@@ -153,7 +153,7 @@ Like KubernetesCenter, FileSystemCenter uses a two-phase initialization:
 | Phase | Resources | Description |
 |-------|-----------|-------------|
 | Phase 1 (base) | GatewayClass, Gateway, Secret, ReferenceGrant, Service, EndpointSlice | Other resources need to query these base resources during `parse()` |
-| Phase 2 (dependent) | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls, BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, PluginMetaData, LinkSys, EdgionAcme, EdgionGatewayConfig | Started after Phase 1 completes |
+| Phase 2 (dependent) | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls, BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData, LinkSys, EdgionAcme, EdgionGatewayConfig | Started after Phase 1 completes |
 
 Phase 2 waits for all Phase 1 kinds to be marked ready in `PROCESSOR_REGISTRY` (after a 15-second timeout, it falls back to parallel initialization).
 

@@ -213,7 +213,7 @@ Endpoints intentionally not gated:
 
 **Known gaps** (write paths that touch `ConfCenter` but are not yet covered by this gate, tracked separately):
 
-- `POST /api/v1/cluster-region-routes/failover` and `POST /api/v1/service-region-routes/failover` — `region_route_handlers::patch_plugin_metadata_failover` calls `ConfCenter::update_one` on `PluginMetaData` but does not flow through `parse_resource_and_update_version`. Shares the same init-race risk; out of scope for the initial fix.
+- `POST /api/v1/cluster-region-routes/failover` and `POST /api/v1/service-region-routes/failover` — `region_route_handlers::patch_edgion_config_data_failover` calls `ConfCenter::update_one` on `EdgionConfigData` but does not flow through `parse_resource_and_update_version`. Shares the same init-race risk; out of scope for the initial fix.
 - `POST /api/v1/admin/wipe-all` — test-mode-only (gated by `is_test_mode()`), calls `delete_one` per kind. No production exposure.
 
 ## Interaction with edgion-cli

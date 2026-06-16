@@ -31,7 +31,7 @@ status `reason`" are **not accepted** as a narrow review fix.
 **1. The machine-readable taxonomy already exists — as the Gateway API condition `reason`**
 
 `status_utils.rs` defines a `condition_reasons` module with ~30 typed reason
-constants: `SecretNotFound`, `BackendNotFound`, `PluginMetaDataNotFound`,
+constants: `SecretNotFound`, `BackendNotFound`, `EdgionConfigDataNotFound`,
 `RefNotPermitted`, `InvalidKind`, `Invalid`, `InvalidCACertificateRef`,
 `DecodeError`, `MissingKeys`, `UnsupportedValue`, etc. The `.status.conditions[].reason`
 field is *the* canonical machine-readable error code in the Kubernetes ecosystem —
@@ -45,7 +45,7 @@ reconstructed from a data-plane round trip.
 
 - `MissingDependency { kind, key }` → already a typed `ResolvedRefsError` enum
   (`status_utils.rs:197`) surfaced as `ResolvedRefs=False` with a deterministic
-  typed reason (`SecretNotFound` / `PluginMetaDataNotFound`) chosen by
+  typed reason (`SecretNotFound` / `EdgionConfigDataNotFound`) chosen by
   `pick_resolved_refs_reason` (`edgion_plugins.rs:178-200`).
 - `SchemaViolation` / `PreparseFailure` → already `Accepted=False` with reason
   `Invalid` (`edgion_plugins.rs:170-176`); `edgion_stream_plugins.rs:172-183` even
@@ -55,7 +55,7 @@ reconstructed from a data-plane round trip.
   `update_status_uses_invalid_reason_for_non_legacy_errors`.
 - `InvalidDependency { kind, key, reason }` → already covered by the `Invalid*Ref`
   reason family (`InvalidCertificateRef`, `InvalidCACertificateRef`,
-  `InvalidPluginMetaDataRef`, `InvalidStreamPluginsRef`).
+  `InvalidEdgionConfigDataRef`, `InvalidStreamPluginsRef`).
 
 Internalizing a parallel `ResourceErrorKind` into the `validate()`/`preparse()`
 return type would **duplicate** this existing reason taxonomy across the core

@@ -25,13 +25,13 @@ description: Feature and configuration schema reference for all Kubernetes resou
 | 12 | BackendTLSPolicy | `05-resources/12-backend-tls-policy.md` | [12-backend-tls-policy.md](12-backend-tls-policy.md) |
 | 13 | EdgionPlugins | `05-resources/13-edgion-plugins.md` | [13-edgion-plugins.md](13-edgion-plugins.md) |
 | 14 | EdgionStreamPlugins | `05-resources/14-edgion-stream-plugins.md` | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) |
-| 15 | PluginMetaData | `05-resources/15-plugin-metadata.md` | Plugin metadata, including the RegionRoute state-management variant |
+| 15 | EdgionConfigData | `05-resources/15-edgion-config-data.md` | Plugin metadata, including the RegionRoute state-management variant |
 | 16 | Service/Endpoints | `05-resources/16-service-endpoints.md` | [16-service-backends.md](16-service-backends.md) |
 | 17 | EdgionAcme | `05-resources/17-edgion-acme.md` | [17-acme.md](17-acme.md) |
 | 18 | LinkSys | `05-resources/18-link-sys.md` | [18-link-sys.md](18-link-sys.md) |
 
 > The feature documentation for #03 (EdgionGatewayConfig) lives under `02-config/` because it is essentially a configuration-layer resource.
-> #10 (Secret), #11 (ReferenceGrant), and #15 (PluginMetaData) currently have no standalone feature documentation; see the architecture documentation.
+> #10 (Secret), #11 (ReferenceGrant), and #15 (EdgionConfigData) currently have no standalone feature documentation; see the architecture documentation.
 
 ## Browse by Category
 

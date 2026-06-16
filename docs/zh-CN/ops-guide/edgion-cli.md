@@ -109,7 +109,7 @@ edgion-cli get service backend-svc -n default -o json
 | edgiontls | Edgion TLS 配置 |
 | edgionplugins | Edgion HTTP 插件配置 |
 | edgionstreamplugins | Edgion Stream 插件配置 |
-| pluginmetadata | 插件元数据 |
+| edgionconfigdata | 插件元数据 |
 | linksys | LinkSys 配置 |
 | referencegrant | ReferenceGrant |
 | backendtlspolicy | BackendTLSPolicy |

@@ -157,7 +157,7 @@ resource.pre_parse()                        # event_dispatch.rs
 | DynamicExternalUpstream | `dynamic_external_upstream` | Dynamic external upstream (specify external address at runtime) |
 | DynamicInternalUpstream | `dynamic_internal_upstream` | Dynamic internal upstream (select K8s Service at runtime) |
 | DirectEndpoint | `direct_endpoint` | Specify a backend endpoint address directly |
-| RegionRoute | `region_route` | Multi-region traffic routing: references a ServiceRegionRoute PluginMetaData (`serviceRegionRouteRef`) → clusterRef → ClusterRegionRoute PluginMetaData. The Gateway queries PluginMetaDataGatewayStore at runtime; uses ordered routeRules (RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange) + hashKeyGet passthrough + hashCalc writeBack + failoverTo (static redirect). No baseInfo, no auto failover. |
+| RegionRoute | `region_route` | Multi-region traffic routing: references a ServiceRegionRoute EdgionConfigData (`serviceRegionRouteRef`) → clusterRef → ClusterRegionRoute EdgionConfigData. The Gateway queries EdgionConfigDataGatewayStore at runtime; uses ordered routeRules (RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange) + hashKeyGet passthrough + hashCalc writeBack + failoverTo (static redirect). No baseInfo, no auto failover. |
 
 ### Other (8)
 

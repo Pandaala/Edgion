@@ -8,15 +8,15 @@
 
 RegionRoute 使用有序路由规则将流量分发到多个区域（集群）：直接区域覆盖、key 到区域的映射，以及带可选故障转移的一致性哈希范围路由。
 
-在 `EdgionPlugins` CR 中，插件配置只持有一个 `serviceRegionRouteRef`。所有路由规则——集群、哈希范围和故障转移状态——均位于 `PluginMetaData` 资源中。插件构建时，Gateway 解析以下链路：
+在 `EdgionPlugins` CR 中，插件配置只持有一个 `serviceRegionRouteRef`。所有路由规则——集群、哈希范围和故障转移状态——均位于 `EdgionConfigData` 资源中。插件构建时，Gateway 解析以下链路：
 
 ```text
 EdgionPlugins.serviceRegionRouteRef
-  → ServiceRegionRoute（PluginMetaData）
-    → ServiceRegionRoute.clusterRef → ClusterRegionRoute（PluginMetaData）
+  → ServiceRegionRoute（EdgionConfigData）
+    → ServiceRegionRoute.clusterRef → ClusterRegionRoute（EdgionConfigData）
 ```
 
-`ServiceRegionRoute` 和 `ClusterRegionRoute` PluginMetaData 资源必须由管理员预先创建（`ClusterRegionRoute` 通常由 Center 管理，Center 同时写入各集群的故障转移状态）。
+`ServiceRegionRoute` 和 `ClusterRegionRoute` EdgionConfigData 资源必须由管理员预先创建（`ClusterRegionRoute` 通常由 Center 管理，Center 同时写入各集群的故障转移状态）。
 
 ## 快速开始
 
@@ -53,7 +53,7 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        # 引用同命名空间下的 ServiceRegionRoute PluginMetaData
+        # 引用同命名空间下的 ServiceRegionRoute EdgionConfigData
         serviceRegionRouteRef: my-svc-region-route
 ```
 
@@ -65,13 +65,13 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `serviceRegionRouteRef` | String | 无 | 与 `EdgionPlugins` 资源同命名空间的 `ServiceRegionRoute` PluginMetaData 名称。所有路由规则均从此引用解析 |
+| `serviceRegionRouteRef` | String | 无 | 与 `EdgionPlugins` 资源同命名空间的 `ServiceRegionRoute` EdgionConfigData 名称。所有路由规则均从此引用解析 |
 
-插件不进行本地字段校验——被引用的 PluginMetaData 是否存在由 Controller 的 `preparse()`（通过 status conditions 暴露）和 Gateway 在插件构建时检查。
+插件不进行本地字段校验——被引用的 EdgionConfigData 是否存在由 Controller 的 `preparse()`（通过 status conditions 暴露）和 Gateway 在插件构建时检查。
 
-### 路由模型（PluginMetaData）
+### 路由模型（EdgionConfigData）
 
-被引用的 PluginMetaData 定义路由规则，按**顺序求值——先匹配者优先**：
+被引用的 EdgionConfigData 定义路由规则，按**顺序求值——先匹配者优先**：
 
 | 规则类型 | 行为 |
 |----------|------|
@@ -103,7 +103,7 @@ spec:
 
 ### 1. 将特定租户固定到区域（直接映射）
 
-PluginMetaData 使用 `RouteByKeyConfMatch` 规则，将请求头的值映射到区域，使命名租户始终落在同一集群。`EdgionPlugins` 配置保持最简：
+EdgionConfigData 使用 `RouteByKeyConfMatch` 规则，将请求头的值映射到区域，使命名租户始终落在同一集群。`EdgionPlugins` 配置保持最简：
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -120,11 +120,11 @@ spec:
 
 ### 2. 一致性哈希范围分配
 
-PluginMetaData 定义 `RouteByHashRange`，为各集群配置 `hashRange` 切片（例如 50/50 分配为 `0–499` 和 `500–999`）。请求的计算哈希值落在某集群范围内时，路由到该集群。因为 `RouteByHashRange` 是终止性的，请将其放在最后。
+EdgionConfigData 定义 `RouteByHashRange`，为各集群配置 `hashRange` 切片（例如 50/50 分配为 `0–499` 和 `500–999`）。请求的计算哈希值落在某集群范围内时，路由到该集群。因为 `RouteByHashRange` 是终止性的，请将其放在最后。
 
 ### 3. 区域故障转移
 
-在 `ClusterRegionRoute` PluginMetaData 中为集群设置 `failoverTo`（通常由 Center 驱动）。目标为降级集群的流量将被透明地重定向到指定的健康集群——`EdgionPlugins` 和 HTTPRoute 无需改变。
+在 `ClusterRegionRoute` EdgionConfigData 中为集群设置 `failoverTo`（通常由 Center 驱动）。目标为降级集群的流量将被透明地重定向到指定的健康集群——`EdgionPlugins` 和 HTTPRoute 无需改变。
 
 ---
 
@@ -132,7 +132,7 @@ PluginMetaData 定义 `RouteByHashRange`，为各集群配置 `hashRange` 切片
 
 ### Q1：为什么 EdgionPlugins 资源中没有路由配置？
 
-**A**：这是设计如此。`EdgionPlugins` 配置只持有 `serviceRegionRouteRef`。将集群、哈希范围和故障转移状态保存在 PluginMetaData 中，允许运维人员（和 Center）集中更新路由而无需编辑每条路由，同时允许多条路由共享同一个 `ServiceRegionRoute`。
+**A**：这是设计如此。`EdgionPlugins` 配置只持有 `serviceRegionRouteRef`。将集群、哈希范围和故障转移状态保存在 EdgionConfigData 中，允许运维人员（和 Center）集中更新路由而无需编辑每条路由，同时允许多条路由共享同一个 `ServiceRegionRoute`。
 
 ### Q2：规则的求值顺序是什么？
 
@@ -140,7 +140,7 @@ PluginMetaData 定义 `RouteByHashRange`，为各集群配置 `hashRange` 切片
 
 ### Q3：路由总是回退，但我配置了 RegionRoute，为什么？
 
-**A**：最常见的原因是 PluginMetaData 链（`ServiceRegionRoute` → `ClusterRegionRoute`）缺失或无法解析。请检查 HTTPRoute / EdgionPlugins 的 status conditions 和网关日志——Controller 会在那里报告缺失的引用。
+**A**：最常见的原因是 EdgionConfigData 链（`ServiceRegionRoute` → `ClusterRegionRoute`）缺失或无法解析。请检查 HTTPRoute / EdgionPlugins 的 status conditions 和网关日志——Controller 会在那里报告缺失的引用。
 
 ---
 

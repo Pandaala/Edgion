@@ -68,4 +68,4 @@ Edgion extension resources (API group: `edgion.io`):
 | EdgionStreamPlugins | `edgion.io/v1` | TCP/TLS layer plugin configuration |
 | EdgionAcme | `edgion.io/v1` | ACME automatic certificate management |
 | LinkSys | `edgion.io/v1` | External system connector |
-| PluginMetaData | `edgion.io/v1` | Plugin metadata |
+| EdgionConfigData | `edgion.io/v1` | Plugin metadata |

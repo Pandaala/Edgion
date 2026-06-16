@@ -22,19 +22,19 @@ Scan the Stage 1 `plugins` array and detect legacy HTTP fields written into the 
 
 ### parse
 
-- **Cross-PM ref registration**: first `clear_refs_from` clears this resource's old refs in `plugin_metadata_refs`, then iterate each Stage 1 `EdgionStreamPlugin::GlobalConnectionIpRestriction` entry, registering `plugin_metadata_ref.namespace/name` as the cluster_pm_key with value `"EdgionStreamPlugins:<this_ns>/<this_name>"`
+- **Cross-PM ref registration**: first `clear_refs_from` clears this resource's old refs in `edgion_config_data_refs`, then iterate each Stage 1 `EdgionStreamPlugin::GlobalConnectionIpRestriction` entry, registering `edgion_config_data_ref.namespace/name` as the cluster_pm_key with value `"EdgionStreamPlugins:<this_ns>/<this_name>"`
 - This way, when the referenced GCIR PM changes, the PM handler's `requeue_pm_referrers` will requeue this ESP and refresh ResolvedRefs
 
 ### on_delete
 
-- `clear_refs_from` clears all registrations of this resource in `plugin_metadata_refs`
+- `clear_refs_from` clears all registrations of this resource in `edgion_config_data_refs`
 
 ### update_status
 
 Uses `k8s_openapi::Condition`, writing two conditions:
 
 - **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False/`LegacySchemaDeprecated` for legacy-schema errors; False/`Invalid` for other errors
-- **`ResolvedRefs`**: iterate each Stage 1 `GlobalConnectionIpRestriction` entry, requiring the PM referenced by `plugin_metadata_ref` to exist with `spec.metadata.type = GlobalConnectionIpRestriction`. Any failure → `ResolvedRefsError::PluginMetaDataNotFound`, reason `InvalidPluginMetaDataRef`. Stage 2 `tls_route_plugins` are currently all inline configurations with no external refs
+- **`ResolvedRefs`**: iterate each Stage 1 `GlobalConnectionIpRestriction` entry, requiring the PM referenced by `edgion_config_data_ref` to exist with `spec.metadata.type = GlobalConnectionIpRestriction`. Any failure → `ResolvedRefsError::EdgionConfigDataNotFound`, reason `InvalidEdgionConfigDataRef`. Stage 2 `tls_route_plugins` are currently all inline configurations with no external refs
 
 ## Gateway-side processing
 
@@ -50,4 +50,4 @@ These plugins run at the TCP-connection level and do not require HTTP protocol p
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
 | EdgionStreamPlugins ← Route resources | HTTPRoute/GRPCRoute/TCPRoute/TLSRoute | association reference | Route resources may reference Stream plugins |
-| EdgionStreamPlugins → PluginMetaData | PluginMetaData | `GlobalConnectionIpRestriction.pluginMetadataRef` | References a GCIR PM; a reverse-requeue index is built via `plugin_metadata_refs`, so PM changes re-process ESP |
+| EdgionStreamPlugins → EdgionConfigData | EdgionConfigData | `GlobalConnectionIpRestriction.overrideRef` | References a GCIR PM; a reverse-requeue index is built via `edgion_config_data_refs`, so PM changes re-process ESP |

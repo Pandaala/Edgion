@@ -134,7 +134,7 @@ For resource Schema (field definitions, default values) see [02-features/03-reso
 | Core configuration | Gateway, GatewayClass, EdgionGatewayConfig |
 | Routes | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute |
 | Security / policy | EdgionTls, Secret, ReferenceGrant, BackendTLSPolicy |
-| Plugins / extensions | EdgionPlugins, EdgionStreamPlugins, PluginMetaData |
+| Plugins / extensions | EdgionPlugins, EdgionStreamPlugins, EdgionConfigData |
 | Backends / services | Service, EndpointSlice |
 | Automation | EdgionAcme |
 | Infrastructure | LinkSys |

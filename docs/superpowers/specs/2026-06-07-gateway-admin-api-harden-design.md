@@ -255,7 +255,7 @@ EdgionAcme **is** gateway-synced (`config_client.rs:263`,
 name) is synced — so no further field is needed. `ActiveHttpChallenge.token` / `key_authorization` in
 status are the publicly-served HTTP-01 response, not secrets.)
 
-**PluginMetaData** (`edgion-resources/src/resources/plugin_metadata/`) — review-added. The resource carries a
+**EdgionConfigData** (`edgion-resources/src/resources/edgion_config_data/`) — review-added. The resource carries a
 `MetaDataEntry` enum (`mod.rs`) with, among others, two relevant variants:
 - **`KeyList(KeyListData)`** → `MetaDataItem.key: String` (`key_list.rs:63`) — key values / regex used
   by **KeyAuth**, i.e. the set of valid **API keys**. This is credential material of the same class as
@@ -266,7 +266,7 @@ status are the publicly-served HTTP-01 response, not secrets.)
 
 Residual cost: a KeyList used for non-credential string matching would also render its match values as
 `"[redacted]"` — accepted, since KeyList's primary use is API keys and credential-safe-by-default is
-the right call. Both are gateway admin `/configclient/PluginMetaData` config output and are unrelated
+the right call. Both are gateway admin `/configclient/EdgionConfigData` config output and are unrelated
 to the access-log subsystem. (`MetaDataEntry`'s other three variants — `ClusterRegionRoute`,
 `ServiceRegionRoute`, `GlobalConnectionIpRestriction` — carry routing topology / CIDR data only, no
 credentials, so they need no annotation.)

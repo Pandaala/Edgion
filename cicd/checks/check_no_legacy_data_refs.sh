@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Forbid references to legacy types/kinds/fields removed by the EdgionConfigData
-# overlay refactor (commit 79b7de8e..a390b2d8 on refactor/edgion-config-data-overlay).
+# overlay refactor (commit 79b7de8e..a390b2d8 on refactor/edgion-config-data-overlay),
+# AND the now-legacy intermediate name 'EdgionData'/'DataEntry' (renamed to
+# 'EdgionConfigData'/'ConfigEntry' on 2026-06-16 -- see section 6 below). The full
+# rename chain of this resource is: PluginMetaData -> EdgionData -> EdgionConfigData.
 #
 # Catches a class of regression where someone copies an old example, fixture, or
 # CRD snippet back in, or where a new branch built on a stale checkpoint
@@ -157,6 +160,37 @@ if [ -f "config/crd/edgion-crd/plugin_metadata_crd.yaml" ]; then
     echo "ERROR: Legacy CRD file 'config/crd/edgion-crd/plugin_metadata_crd.yaml' still exists (use 'edgion_config_data_crd.yaml')" >&2
     violations=$((violations + 1))
 fi
+if [ -f "config/crd/edgion-crd/edgion_data_crd.yaml" ]; then
+    echo "ERROR: Legacy CRD file 'config/crd/edgion-crd/edgion_data_crd.yaml' still exists (use 'edgion_config_data_crd.yaml')" >&2
+    violations=$((violations + 1))
+fi
+
+# 6. Now-legacy INTERMEDIATE name 'EdgionData' / 'DataEntry' -- renamed to
+#    'EdgionConfigData' / 'ConfigEntry' on 2026-06-16 (second rename of this resource;
+#    chain: PluginMetaData -> EdgionData -> EdgionConfigData). None of these tokens
+#    appear inside the new names (`EdgionConfigData`, `edgion_config_data`,
+#    `edgionconfigdata`, `ConfigEntry`), so forbidding them is false-positive-free.
+#    Mapping-definition docs that still reference 'EdgionData' live under tasks/ and
+#    docs/ (.md), neither scanned by the .rs/.yaml includes below.
+check "Legacy Rust identifier 'EdgionData*' (use 'EdgionConfigData*'; renamed 2026-06-16)" \
+    '\bEdgionData[A-Za-z]*\b' \
+    --include='*.rs'
+
+check "Legacy Rust enum 'DataEntry' (use 'ConfigEntry'; renamed 2026-06-16)" \
+    '\bDataEntry\b' \
+    --include='*.rs'
+
+check "Legacy SCREAMING_SNAKE 'EDGION_DATA_*' identifier (use 'EDGION_CONFIG_DATA_*')" \
+    '\bEDGION_DATA_[A-Z]' \
+    --include='*.rs'
+
+check "Legacy kind 'EdgionData' (use 'EdgionConfigData'; renamed 2026-06-16)" \
+    'kind:[[:space:]]*EdgionData([[:space:]]|$)' \
+    --include='*.yaml' --include='*.yml'
+
+check "Legacy lowercase resource/plural 'edgiondata' or 'pluginmetadata' in K8s manifests (use 'edgionconfigdata')" \
+    '\b(edgiondata|pluginmetadata)\b' \
+    --include='*.yaml' --include='*.yml'
 
 if [ "$violations" -gt 0 ]; then
     echo "Found $violations class(es) of legacy data references. See above." >&2

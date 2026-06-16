@@ -67,7 +67,7 @@ deliberately omits the token authn layer and the 503 token gate.
 - Wrap the fed_client admin router with the local admin token authn — not needed and would require a protocol change (a pre-shared Bearer token over the HttpProxy wire); the RBAC `route_layer` + `inject_center_identity` is the correct mechanism.
 - Add a `allow_plaintext` / `allow_insecure_federation` opt-out on either side -- explicitly rejected by the operator; both the Controller and the Center insist on mTLS with no escape hatch.
 - "`connect_and_run` still has a `skip_tls` plaintext branch" -- `run()` fails closed before `connect_and_run` is ever reached, so that branch is unreachable defensive code; verify the `resolve_mtls_or_refuse` gate in `run()` before re-reporting.
-- "Center can read Secrets via the blind proxy" -- the RBAC layer is default-deny and the starter allowlist enumerates only `PluginMetaData`; wildcard-read rules are explicitly prohibited by operator policy and documented in `skills/02-features/02-config/00-controller-config.md`.
+- "Center can read Secrets via the blind proxy" -- the RBAC layer is default-deny and the starter allowlist enumerates only `EdgionConfigData`; wildcard-read rules are explicitly prohibited by operator policy and documented in `skills/02-features/02-config/00-controller-config.md`.
 
 ## Re-evaluation Triggers
 

@@ -43,7 +43,7 @@ Edgion extension CRDs are installed via Edgion's own deployment manifest.
 | **EdgionPlugins** | edgion.io/v1alpha1 | HTTP plugin collection: referenceable via the ExtensionRef of HTTPRoute/GRPCRoute |
 | **EdgionStreamPlugins** | edgion.io/v1alpha1 | TCP/UDP stream plugin collection: connection-level filters (IP allow/deny lists, etc.) |
 | **EdgionTls** | edgion.io/v1alpha1 | TLS certificate and key resource: an alternative to standard Secret, supports file path references and inline certificates |
-| **PluginMetaData** | edgion.io/v1alpha1 | Plugin metadata: describes plugin capabilities, parameter schema, and version information |
+| **EdgionConfigData** | edgion.io/v1alpha1 | Plugin metadata: describes plugin capabilities, parameter schema, and version information |
 | **LinkSys** | edgion.io/v1alpha1 | External system integration: connection configuration for ES, Redis, Etcd, Webhook, File, and other data sources |
 | **EdgionAcme** | edgion.io/v1alpha1 | ACME automatic certificate issuance configuration: Let's Encrypt integration, executed only on the Leader Controller |
 

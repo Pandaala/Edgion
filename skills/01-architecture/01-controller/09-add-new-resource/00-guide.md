@@ -37,7 +37,7 @@ Useful templates:
 
 - Route-like resources: `HTTPRoute`, `GRPCRoute`, `TLSRoute`
 - TLS / Secret dependent resources: `EdgionTls`, `EdgionAcme`
-- Plugin-like resources: `EdgionPlugins`, `EdgionStreamPlugins`, `PluginMetaData`
+- Plugin-like resources: `EdgionPlugins`, `EdgionStreamPlugins`, `EdgionConfigData`
 - Controller-only / no-sync resources: `ReferenceGrant`, `Secret`
 - Cluster-scoped base config resources: `GatewayClass`, `EdgionGatewayConfig`
 

@@ -85,7 +85,7 @@ spec:
 | `DynamicInternalUpstream` | Dynamic internal upstream |
 | `DynamicExternalUpstream` | Dynamic external upstream |
 | `AllEndpointStatus` | All-endpoint status query |
-| `RegionRoute` | Multi-region traffic routing. The EdgionPlugins config only holds a `serviceRegionRouteRef`; all routing rules live in PluginMetaData (ServiceRegionRoute → ClusterRegionRoute), resolved at plugin-build time. See `05-resources/15-plugin-metadata.md`. |
+| `RegionRoute` | Multi-region traffic routing. The EdgionPlugins config only holds a `serviceRegionRouteRef`; all routing rules live in EdgionConfigData (ServiceRegionRoute → ClusterRegionRoute), resolved at plugin-build time. See `05-resources/15-edgion-config-data.md`. |
 
 > Note: `EdgionPlugin::ExtensionRef` (the nested form) has been removed. Multi-plugin reuse is achieved via an aggregate EdgionPlugins resource or by listing multiple ExtensionRef entries side-by-side in the HTTPRoute filter list. See `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
 

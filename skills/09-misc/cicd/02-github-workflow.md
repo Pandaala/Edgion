@@ -27,7 +27,7 @@ The repo currently has the following workflows under `.github/workflows/`:
 ### EdgionConfigData overlay gates
 `check-edgion-config-data-overlay.yml` runs three structural checks (each in its own job for clean failure reporting):
 
-1. `cicd/checks/check_no_legacy_data_refs.sh` — forbids reintroduction of removed types/kinds/fields (`PluginMetaData` kind, `ClusterRegionRoute` / `ServiceRegionRoute` discriminators, `serviceRegionRouteRef` / `clusterRef` fields, removed Rust identifiers). Exclusions: `tasks/`, `cicd/`, `tmp/`. Counterpart to D1 / D4 / I3 in the refactor task.
+1. `cicd/checks/check_no_legacy_data_refs.sh` — forbids reintroduction of removed types/kinds/fields (`EdgionConfigData` kind, `ClusterRegionRoute` / `ServiceRegionRoute` discriminators, `serviceRegionRouteRef` / `clusterRef` fields, removed Rust identifiers). Exclusions: `tasks/`, `cicd/`, `tmp/`. Counterpart to D1 / D4 / I3 in the refactor task.
 2. `cicd/checks/check_edgion_config_data_variant_parity.py` — diffs the EdgionConfigData CRD `type:` enum against the Rust `ConfigEntry` variant set. Catches the S3-style drift where Rust variants are added/removed but the CRD enum is forgotten.
 3. `cicd/checks/check_overlay_signal_completeness.sh` — every overlay-consumer plugin must emit the full four-signal set (`overlay_missing`, `overlay_type_mismatch`, `overlay_invalid`, `overlay_disabled`) via its Prometheus counter. Catches the H1-style omission where one signal is silently missing.
 

@@ -17,12 +17,12 @@ Authorization is decided per `(verb, kind)`:
 
 - **verb** — the operation type: `get`, `list`, `list-keys`, `watch`, `create`,
   `update`, `delete`, `failover`, `reload`, `server-info`, `diagnostics`, etc.
-- **kind** — the PascalCase resource Kind (e.g., `PluginMetaData`, `HTTPRoute`,
+- **kind** — the PascalCase resource Kind (e.g., `EdgionConfigData`, `HTTPRoute`,
   `RegionRoute`). Kind matching is **case-sensitive**; use the canonical PascalCase
   spelling. Verbs are case-insensitive.
 
-Authorization is **not per-object**: a `PluginMetaData` write grant covers all
-PluginMetaData objects, not specific named ones.
+Authorization is **not per-object**: a `EdgionConfigData` write grant covers all
+EdgionConfigData objects, not specific named ones.
 
 ## Built-in default (when `rbac` is omitted)
 
@@ -33,7 +33,7 @@ default policy applies automatically:
 |---------|-------|---------|
 | `get`, `list`, `watch`, `list-keys` | All resource kinds **except** `Secret` | Yes |
 | `get`, `list`, `watch`, `list-keys` | `Secret` | **No** — credential safety |
-| `create`, `update`, `delete` | `PluginMetaData` | Yes |
+| `create`, `update`, `delete` | `EdgionConfigData` | Yes |
 | `create`, `update`, `delete` | Any other kind | No |
 | `get`, `list`, `failover` | `RegionRoute` (synthetic label, not a resource kind) | Yes |
 | `reload`, `server-info`, `diagnostics`, and everything else | Any | No |
@@ -42,7 +42,7 @@ Key notes:
 
 - `EdgionTls` **is** readable under the default (TLS configuration, not raw key
   material exposed via Secret). Only the `Secret` kind is excluded.
-- The `PluginMetaData` write grant covers **all** plugin metadata, not only
+- The `EdgionConfigData` write grant covers **all** plugin metadata, not only
   region-route or IP-restriction records. This is a known limitation of the
   kind-level granularity.
 - `RegionRoute` is a synthetic classifier label (not a `ResourceKind` variant).
@@ -113,7 +113,7 @@ center:
   rbac:
     allow:
       - verbs: [get, list, watch]
-        kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service, PluginMetaData,
+        kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service, EdgionConfigData,
                 EdgionGatewayConfig, EdgionTls]
       - verbs: [get, list]
         kinds: [RegionRoute]
@@ -142,7 +142,7 @@ center:
   rbac:
     allow:
       - verbs: [get, list, watch, create, update, delete]
-        kinds: [PluginMetaData]
+        kinds: [EdgionConfigData]
       - verbs: [failover]
         kinds: [RegionRoute]
 ```
@@ -196,7 +196,7 @@ center:
     allow:
       # Center sync: read and write plugin metadata
       - verbs: [get, list, watch, create, update, delete]
-        kinds: [PluginMetaData]
+        kinds: [EdgionConfigData]
       # Regional failover
       - verbs: [failover]
         kinds: [RegionRoute]
@@ -230,7 +230,7 @@ template rather than `kinds: ["*"]`.
   Center **cannot** modify the on-disk YAML (no config-writing route exists), so
   the worst case is forcing re-application of the operator's own file.
 - Write grants (`create`, `update`, `delete`) let Center mutate resources of the
-  granted kinds. A `PluginMetaData` write grant covers **all** plugin metadata
+  granted kinds. A `EdgionConfigData` write grant covers **all** plugin metadata
   objects, not only specific ones.
 - `server-info` and `diagnostics` expose process and configuration details.
 
@@ -238,15 +238,15 @@ template rather than `kinds: ["*"]`.
 
 The `(verb, kind)` model bounds which operations on which resource types are
 allowed. It does **not** restrict which named objects within a kind can be
-accessed. A grant of `update:PluginMetaData` allows updating any PluginMetaData
+accessed. A grant of `update:EdgionConfigData` allows updating any EdgionConfigData
 object, not only specific ones.
 
 ### Canonical kind casing
 
 Kind names in the `rbac` block are matched **case-sensitively** against the
 canonical PascalCase Kind name. Lowercase or alias spellings (e.g.,
-`pluginmetadata`, `httpRoute`) silently never match. Always use the canonical
-form: `PluginMetaData`, `HTTPRoute`, `GRPCRoute`, `RegionRoute`, `Service`,
+`edgionconfigdata`, `httpRoute`) silently never match. Always use the canonical
+form: `EdgionConfigData`, `HTTPRoute`, `GRPCRoute`, `RegionRoute`, `Service`,
 `EdgionTls`, etc.
 
 ---
@@ -300,7 +300,7 @@ cli_tokens:
         # Enumerate concrete kinds; NEVER use kinds: ["*"] with read verbs.
         - verbs: [get, list]
           kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service,
-                  EdgionGatewayConfig, EdgionTls, PluginMetaData]
+                  EdgionGatewayConfig, EdgionTls, EdgionConfigData]
 
   # Scoped read-write — manages plugin metadata and triggers reload
   - name: plugin-manager
@@ -308,7 +308,7 @@ cli_tokens:
     rbac:
       allow:
         - verbs: [get, list, watch, create, update, delete]
-          kinds: [PluginMetaData]
+          kinds: [EdgionConfigData]
         # reload is write-only; kinds: ["*"] is safe here (no read surface)
         - verbs: [reload]
           kinds: ["*"]
@@ -356,8 +356,8 @@ concrete kinds for any read grant. See the [wildcard-read security note](#wildca
 **3. Verb and kind strings are canonical-cased.**
 Verb strings are matched case-insensitively (`get`, `GET`, and `Get` all work).
 Kind strings are matched **case-sensitively** against the canonical PascalCase
-Kind name. A miscased kind (e.g. `pluginmetadata`) silently never matches any
-request. Always use canonical PascalCase: `PluginMetaData`, `HTTPRoute`, `Service`, etc.
+Kind name. A miscased kind (e.g. `edgionconfigdata`) silently never matches any
+request. Always use canonical PascalCase: `EdgionConfigData`, `HTTPRoute`, `Service`, etc.
 
 **4. Token rotation.**
 Replace `token_sha256` in the config and apply via `POST /api/v1/reload`. The

@@ -37,7 +37,7 @@ disruption is already expected.
 Every `ConfHandler<T>` implementation in the gateway (13+ of them across HTTPRoute,
 TCPRoute, TLSRoute, gRPCRoute, UDPRoute, EdgionPlugins, EdgionStreamPlugins, EndpointSlice,
 BackendTLSPolicy, Service, Gateway, EdgionTls, EdgionAcme, LinkSys, GatewayClass,
-EdgionGatewayConfig, PluginMetaData, ...) is written assuming `full_set` and
+EdgionGatewayConfig, EdgionConfigData, ...) is written assuming `full_set` and
 `partial_update` are **never invoked concurrently on the same handler**. The `cache_data`
 write lock is what enforces that invariant:
 

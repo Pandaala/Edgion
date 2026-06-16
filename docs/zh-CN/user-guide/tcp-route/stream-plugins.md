@@ -23,7 +23,7 @@ metadata:
 | 类型 | 配置对象 | 说明 |
 |------|----------|------|
 | `IpRestriction` | 内联规则 | IP 允许/拒绝分组，直接嵌入插件中。 |
-| `GlobalConnectionIpRestriction` | `pluginMetadataRef` | 引用 `GlobalConnectionIpRestriction` PluginMetaData；由 Center 管理并同步到各 Controller。 |
+| `GlobalConnectionIpRestriction` | `overrideRef` | 引用 `GlobalConnectionIpRestriction` EdgionConfigData；由 Center 管理并同步到各 Controller。 |
 | `ConnectionRateLimit` | `config` 对象 | 在 pre-TLS 接入路径上，基于 Redis 的按源 IP 连接限流。详见下文 [ConnectionRateLimit 小节](#connectionratelimit-pre-tls-连接限流)。 |
 
 `spec.plugins` 下的每个条目都有可选的 `enable` 标志（默认 `true`）、一个 `type` 和一个 `config` 对象。
@@ -52,10 +52,10 @@ metadata:
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `pluginMetadataRef.name` | String | **必填** | `GlobalConnectionIpRestriction` PluginMetaData 的名称。 |
-| `pluginMetadataRef.namespace` | String | 父 ESP 命名空间 | PluginMetaData 的命名空间；省略时继承父 `EdgionStreamPlugins` 的命名空间。 |
+| `overrideRef.name` | String | **必填** | `GlobalConnectionIpRestriction` EdgionConfigData 的名称。 |
+| `overrideRef.namespace` | String | 父 ESP 命名空间 | EdgionConfigData 的命名空间；省略时继承父 `EdgionStreamPlugins` 的命名空间。 |
 
-被引用的 PluginMetaData 在 `spec.metadata.config` 中集中存储规则，带有总开关（`enable`）、当前激活的 `activeProfile` 以及命名的 `profiles`，可即时切换规则集。这使多个 Controller 可以共享同一个策略。
+被引用的 EdgionConfigData 在 `spec.metadata.config` 中集中存储规则，带有总开关（`enable`）、当前激活的 `activeProfile` 以及命名的 `profiles`，可即时切换规则集。这使多个 Controller 可以共享同一个策略。
 
 ## 快速开始（内联 IpRestriction）
 
@@ -109,11 +109,11 @@ kubectl apply -f tcp-route.yaml
 
 ## Center 管理的限制（GlobalConnectionIpRestriction）
 
-将规则集中存储在一个 `GlobalConnectionIpRestriction` PluginMetaData 中（支持命名 `profiles` 和总开关），并从 Stream 插件引用它。Center 将这种形式同步到多个 Controller。
+将规则集中存储在一个 `GlobalConnectionIpRestriction` EdgionConfigData 中（支持命名 `profiles` 和总开关），并从 Stream 插件引用它。Center 将这种形式同步到多个 Controller。
 
 ```yaml
 apiVersion: edgion.io/v1
-kind: PluginMetaData
+kind: EdgionConfigData
 metadata:
   name: gcir-policy
   namespace: edgion-test
@@ -140,7 +140,7 @@ spec:
   plugins:
     - type: GlobalConnectionIpRestriction
       config:
-        pluginMetadataRef:
+        overrideRef:
           name: gcir-policy
           # namespace 省略：继承父 ESP 命名空间（edgion-test）
 ---

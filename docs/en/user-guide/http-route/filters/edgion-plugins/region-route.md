@@ -8,15 +8,15 @@
 
 RegionRoute routes traffic across multiple regions (clusters) using ordered route rules: direct region override, key-to-region mapping, and consistent hash-range routing with optional failover.
 
-In the `EdgionPlugins` CR the plugin config holds **only** a `serviceRegionRouteRef`. All routing rules — clusters, hash ranges, and failover state — live in `PluginMetaData` resources. At plugin-build time the Gateway resolves the chain:
+In the `EdgionPlugins` CR the plugin config holds **only** a `serviceRegionRouteRef`. All routing rules — clusters, hash ranges, and failover state — live in `EdgionConfigData` resources. At plugin-build time the Gateway resolves the chain:
 
 ```text
 EdgionPlugins.serviceRegionRouteRef
-  → ServiceRegionRoute (PluginMetaData)
-    → ServiceRegionRoute.clusterRef → ClusterRegionRoute (PluginMetaData)
+  → ServiceRegionRoute (EdgionConfigData)
+    → ServiceRegionRoute.clusterRef → ClusterRegionRoute (EdgionConfigData)
 ```
 
-The `ServiceRegionRoute` and `ClusterRegionRoute` PluginMetaData resources must be pre-created by an administrator (the `ClusterRegionRoute` is typically managed by Center, which also writes per-cluster failover state).
+The `ServiceRegionRoute` and `ClusterRegionRoute` EdgionConfigData resources must be pre-created by an administrator (the `ClusterRegionRoute` is typically managed by Center, which also writes per-cluster failover state).
 
 ## Quick Start
 
@@ -53,7 +53,7 @@ spec:
   requestPlugins:
     - type: RegionRoute
       config:
-        # Reference a ServiceRegionRoute PluginMetaData in the same namespace
+        # Reference a ServiceRegionRoute EdgionConfigData in the same namespace
         serviceRegionRouteRef: my-svc-region-route
 ```
 
@@ -65,13 +65,13 @@ spec:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `serviceRegionRouteRef` | String | none | Name of a `ServiceRegionRoute` PluginMetaData in the same namespace as the `EdgionPlugins` resource. All routing rules are resolved from this reference |
+| `serviceRegionRouteRef` | String | none | Name of a `ServiceRegionRoute` EdgionConfigData in the same namespace as the `EdgionPlugins` resource. All routing rules are resolved from this reference |
 
-The plugin performs no local field validation — existence of the referenced PluginMetaData is checked by the Controller's `preparse()` (surfaced via status conditions) and by the Gateway at plugin-build time.
+The plugin performs no local field validation — existence of the referenced EdgionConfigData is checked by the Controller's `preparse()` (surfaced via status conditions) and by the Gateway at plugin-build time.
 
-### Routing model (PluginMetaData)
+### Routing model (EdgionConfigData)
 
-The referenced PluginMetaData defines the route rules, evaluated **in order — first match wins**:
+The referenced EdgionConfigData defines the route rules, evaluated **in order — first match wins**:
 
 | Rule type | Behavior |
 |-----------|----------|
@@ -103,7 +103,7 @@ Hash computation:
 
 ### 1. Pin Specific Tenants to a Region (direct mapping)
 
-The PluginMetaData uses a `RouteByKeyConfMatch` rule that maps a header value to a region, so named tenants always land in the same cluster. The `EdgionPlugins` config stays minimal:
+The EdgionConfigData uses a `RouteByKeyConfMatch` rule that maps a header value to a region, so named tenants always land in the same cluster. The `EdgionPlugins` config stays minimal:
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -120,11 +120,11 @@ spec:
 
 ### 2. Consistent Hash-Range Distribution
 
-The PluginMetaData defines `RouteByHashRange` with per-cluster `hashRange` slices over `modulo` (e.g. `0–499` and `500–999` for a 50/50 split). A request whose computed hash falls in a cluster's range is routed there. Because `RouteByHashRange` is terminal, place it last.
+The EdgionConfigData defines `RouteByHashRange` with per-cluster `hashRange` slices over `modulo` (e.g. `0–499` and `500–999` for a 50/50 split). A request whose computed hash falls in a cluster's range is routed there. Because `RouteByHashRange` is terminal, place it last.
 
 ### 3. Region Failover
 
-Set `failoverTo` on a cluster in the `ClusterRegionRoute` PluginMetaData (typically driven by Center). Traffic destined for a degraded cluster is transparently redirected to the named healthy cluster — the `EdgionPlugins` and HTTPRoute do not change.
+Set `failoverTo` on a cluster in the `ClusterRegionRoute` EdgionConfigData (typically driven by Center). Traffic destined for a degraded cluster is transparently redirected to the named healthy cluster — the `EdgionPlugins` and HTTPRoute do not change.
 
 ---
 
@@ -132,7 +132,7 @@ Set `failoverTo` on a cluster in the `ClusterRegionRoute` PluginMetaData (typica
 
 ### Q1: Why is there no routing configuration in the EdgionPlugins resource?
 
-**A**: By design. The `EdgionPlugins` config holds only `serviceRegionRouteRef`. Keeping clusters, hash ranges, and failover state in PluginMetaData lets operators (and Center) update routing centrally without editing every route, and lets multiple routes share one `ServiceRegionRoute`.
+**A**: By design. The `EdgionPlugins` config holds only `serviceRegionRouteRef`. Keeping clusters, hash ranges, and failover state in EdgionConfigData lets operators (and Center) update routing centrally without editing every route, and lets multiple routes share one `ServiceRegionRoute`.
 
 ### Q2: What is the order of rule evaluation?
 
@@ -140,7 +140,7 @@ Set `failoverTo` on a cluster in the `ClusterRegionRoute` PluginMetaData (typica
 
 ### Q3: My route falls back even though I configured RegionRoute. Why?
 
-**A**: The most common cause is a missing or unresolved PluginMetaData chain (`ServiceRegionRoute` → `ClusterRegionRoute`). Check the HTTPRoute / EdgionPlugins status conditions and the gateway logs — the Controller reports a missing reference there.
+**A**: The most common cause is a missing or unresolved EdgionConfigData chain (`ServiceRegionRoute` → `ClusterRegionRoute`). Check the HTTPRoute / EdgionPlugins status conditions and the gateway logs — the Controller reports a missing reference there.
 
 ---
 

@@ -45,7 +45,7 @@ pub trait ResourceMeta {
 
 The auto-generated enum contains all 20 resource types:
 
-`GatewayClass`, `EdgionGatewayConfig`, `Gateway`, `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `TLSRoute`, `UDPRoute`, `Service`, `EndpointSlice`, `Secret`, `EdgionTls`, `EdgionPlugins`, `EdgionStreamPlugins`, `PluginMetaData`, `LinkSys`, `ReferenceGrant`, `BackendTLSPolicy`, `EdgionAcme`, `ConfigMap`
+`GatewayClass`, `EdgionGatewayConfig`, `Gateway`, `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `TLSRoute`, `UDPRoute`, `Service`, `EndpointSlice`, `Secret`, `EdgionTls`, `EdgionPlugins`, `EdgionStreamPlugins`, `EdgionConfigData`, `LinkSys`, `ReferenceGrant`, `BackendTLSPolicy`, `EdgionAcme`, `ConfigMap`
 
 ## Full resource type table
 
@@ -67,7 +67,7 @@ The auto-generated enum contains all 20 resource types:
 | | BackendTLSPolicy | ✗ | ✓ | Backend TLS policy |
 | **Plugins / extensions** | EdgionPlugins | ✗ | ✓ | HTTP-layer plugin definitions |
 | | EdgionStreamPlugins | ✗ | ✓ | Stream-layer plugin definitions |
-| | PluginMetaData | ✗ | ✓ | Plugin metadata |
+| | EdgionConfigData | ✗ | ✓ | Plugin metadata |
 | **ACME** | EdgionAcme | ✗ | ✓ | ACME automated certificates |
 | **Infrastructure** | LinkSys | ✗ | ✓ | External system connectors |
 | | ConfigMap | ✗ | ✗ | Kubernetes ConfigMap (not synced to Gateway) |

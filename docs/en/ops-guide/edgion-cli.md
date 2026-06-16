@@ -113,7 +113,7 @@ edgion-cli get service backend-svc -n default -o json
 | edgiontls | Edgion TLS configuration |
 | edgionplugins | Edgion HTTP plugin configuration |
 | edgionstreamplugins | Edgion Stream plugin configuration |
-| pluginmetadata | Plugin metadata |
+| edgionconfigdata | Plugin metadata |
 | linksys | LinkSys configuration |
 | referencegrant | ReferenceGrant |
 | backendtlspolicy | BackendTLSPolicy |

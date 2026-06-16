@@ -23,7 +23,7 @@ is bounded by the closed set of 17 ClientCache<T> instantiations in
 `conf_sync/conf_client/config_client.rs` (GatewayClass, Gateway,
 EdgionGatewayConfig, HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute,
 LinkSys, Service, EndpointSlice, EdgionTls, EdgionPlugins,
-EdgionStreamPlugins, BackendTLSPolicy, PluginMetaData, EdgionAcme), so
+EdgionStreamPlugins, BackendTLSPolicy, EdgionConfigData, EdgionAcme), so
 worst-case cardinality is 17 series.
 
 ## Core rationale (why metric only, not metric+relist)

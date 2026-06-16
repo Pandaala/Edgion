@@ -186,7 +186,7 @@ ConfigClient
   ├── ClientCache<EdgionTls>
   ├── ClientCache<EdgionPlugins>
   ├── ClientCache<EdgionStreamPlugins>
-  ├── ClientCache<PluginMetaData>
+  ├── ClientCache<EdgionConfigData>
   ├── ClientCache<BackendTLSPolicy>
   ├── ClientCache<EdgionGatewayConfig>
   ├── ClientCache<LinkSys>
