@@ -48,7 +48,7 @@ path = "src/build_test_proto.rs"
 # (option A — drives the controller's ACME client directly); `edgion-cli` drives
 # config via the CLI client; `edgion-resources` provides shared schema types.
 # `edgion-gateway` is pulled in only for its stable log-token constants
-# (region_route::log_tokens); default-features disabled so we do not activate
+# (region_route::log_consts); default-features disabled so we do not activate
 # boringssl — rustls is selected here to keep it consistent with the rest of
 # this crate which already depends on rustls directly.
 edgion-resources.workspace = true

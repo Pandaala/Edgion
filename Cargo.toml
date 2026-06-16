@@ -34,7 +34,7 @@ authors = ["pandalaa"]
 edgion-resources  = { path = "edgion-resources" }
 edgion-common     = { path = "edgion-common" }
 # default-features = false so that a crate depending on this workspace dep
-# (e.g. edgion-tests, which needs only log_tokens) can select a single TLS
+# (e.g. edgion-tests, which needs only log_consts) can select a single TLS
 # backend without also activating boringssl. The gateway binary itself still
 # selects its own defaults via its own [features] default list.
 edgion-gateway    = { path = "edgion-gateway", default-features = false }

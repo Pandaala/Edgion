@@ -422,7 +422,7 @@ Locations where tracing::*! may stay: plugin constructors / new() / config load 
 
 ## Plugin access-log token contract
 
-When integration tests assert on access-log substrings of a plugin and the format is non-trivial, mirror those substrings into a sibling `log_tokens.rs` module with a `#[cfg(test)] include_str!`-based guard. Reference implementation: `edgion-gateway/src/plugins/http/region_route/log_tokens.rs`.
+When integration tests assert on access-log substrings of a plugin and the format is non-trivial, mirror those substrings into a sibling `log_consts.rs` module with a `#[cfg(test)] include_str!`-based guard. Reference implementation: `edgion-gateway/src/plugins/http/region_route/log_consts.rs`.
 
 **Apply this when:**
 - An integration test broke because the plugin's log format changed under the assertion (drift incident).

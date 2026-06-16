@@ -53,7 +53,7 @@ mod tests {
             assert!(
                 PLUGIN_SRC.contains(value),
                 "token {} (`{}`) not present in region_route/plugin.rs — \
-                 the plugin source changed without updating log_tokens.rs, \
+                 the plugin source changed without updating log_consts.rs, \
                  or vice versa",
                 name,
                 value,

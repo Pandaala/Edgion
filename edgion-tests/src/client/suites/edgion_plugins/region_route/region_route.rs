@@ -25,7 +25,7 @@
 // Tests that expect 502 verify the plugin correctly set ExternalJumpPreset (access log check).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use edgion_gateway::plugins::http::region_route::log_tokens as log_t;
+use edgion_gateway::plugins::http::region_route::log_consts as log_t;
 use std::time::Instant;
 
 const MAIN_HOST: &str = "region-route-main.example.com";
