@@ -16,9 +16,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::resources::data::{
-    DataEntry, EdgionData, GlobalConnIpRestrictionOverride, GlobalConnectionIpRestrictionData, RegionRouteOverride,
-};
+use edgion_resources::resources::data::{DataEntry, EdgionData, GlobalConnIpRestrictionOverride, RegionRouteOverride};
 
 static GLOBAL_EDGION_DATA_STORE: LazyLock<Arc<EdgionDataStore>> = LazyLock::new(|| Arc::new(EdgionDataStore::new()));
 
@@ -44,8 +42,6 @@ pub fn edgion_data_keys() -> Vec<String> {
 /// Raw EdgionData map. Key: "namespace/name" (e.g. "edgion-default/region-override").
 type RawMap = HashMap<String, Arc<EdgionData>>;
 
-/// Typed index for `GlobalConnectionIpRestrictionData` (full standalone config).
-type GlobalConnectionIpRestrictionMap = HashMap<String, Arc<GlobalConnectionIpRestrictionData>>;
 /// Typed index for `GlobalConnIpRestrictionOverride` overlay EdgionData resources.
 type GlobalConnIpRestrictionOverrideMap = HashMap<String, Arc<GlobalConnIpRestrictionOverride>>;
 /// Typed index for `RegionRouteOverride` overlay EdgionData resources.
@@ -54,7 +50,6 @@ type RegionRouteOverrideMap = HashMap<String, Arc<RegionRouteOverride>>;
 
 /// All typed indexes bundled into a single struct so they can be swapped atomically.
 struct TypedIndexes {
-    global_connection_ip_restrictions: GlobalConnectionIpRestrictionMap,
     global_conn_ip_restriction_overrides: GlobalConnIpRestrictionOverrideMap,
     region_route_overrides: RegionRouteOverrideMap,
 }
@@ -91,7 +86,6 @@ impl EdgionDataStore {
             snapshot: ArcSwap::from_pointee(Snapshot {
                 raw: HashMap::new(),
                 indexes: TypedIndexes {
-                    global_connection_ip_restrictions: HashMap::new(),
                     global_conn_ip_restriction_overrides: HashMap::new(),
                     region_route_overrides: HashMap::new(),
                 },
@@ -113,26 +107,6 @@ impl EdgionDataStore {
     }
 
     // ── Typed getters (zero-clone, returns Arc) ─────────────────────────────
-
-    pub fn get_global_connection_ip_restriction(
-        &self,
-        namespace: &str,
-        name: &str,
-    ) -> Option<Arc<GlobalConnectionIpRestrictionData>> {
-        let snap = self.snapshot.load();
-        snap.indexes
-            .global_connection_ip_restrictions
-            .get(&format!("{}/{}", namespace, name))
-            .cloned()
-    }
-
-    pub fn get_global_connection_ip_restriction_by_key(
-        &self,
-        key: &str,
-    ) -> Option<Arc<GlobalConnectionIpRestrictionData>> {
-        let snap = self.snapshot.load();
-        snap.indexes.global_connection_ip_restrictions.get(key).cloned()
-    }
 
     /// Look up a `GlobalConnIpRestrictionOverride` overlay entry by "namespace/name" key.
     /// Returns the raw (non-compiled) overlay data; matchers are compiled by the plugin at
@@ -163,7 +137,6 @@ impl EdgionDataStore {
     /// Build all typed indexes from a raw map. Pure function; called at conf change
     /// time only (low frequency).
     fn build_indexes(raw: &RawMap) -> TypedIndexes {
-        let mut global_ip_restrictions = GlobalConnectionIpRestrictionMap::new();
         let mut gcir_overrides = GlobalConnIpRestrictionOverrideMap::new();
         let mut rr_overrides = RegionRouteOverrideMap::new();
 
@@ -174,22 +147,6 @@ impl EdgionDataStore {
                 }
                 DataEntry::IpList(_) => {
                     // Standard primitive: no index — no live consumer yet (D1).
-                }
-                DataEntry::GlobalConnectionIpRestriction(data) => {
-                    // Legacy full-config variant. Still indexed for standalone consumers.
-                    let mut cloned = data.clone();
-                    match cloned.validate_and_init() {
-                        Ok(()) => {
-                            global_ip_restrictions.insert(key.clone(), Arc::new(cloned));
-                        }
-                        Err(e) => {
-                            tracing::error!(
-                                edgion_data_key = %key,
-                                error = %e,
-                                "GlobalConnectionIpRestriction EdgionData rejected during index rebuild; skipping",
-                            );
-                        }
-                    }
                 }
                 DataEntry::GlobalConnIpRestrictionOverride(overlay) => {
                     // Typed overlay. Stored as-is (no matcher compilation here);
@@ -208,7 +165,6 @@ impl EdgionDataStore {
         }
 
         TypedIndexes {
-            global_connection_ip_restrictions: global_ip_restrictions,
             global_conn_ip_restriction_overrides: gcir_overrides,
             region_route_overrides: rr_overrides,
         }

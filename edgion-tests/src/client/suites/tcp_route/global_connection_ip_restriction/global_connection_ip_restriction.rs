@@ -24,8 +24,11 @@ use tokio::net::TcpStream;
 
 pub struct GcirEnforcementTestSuite;
 
-/// Build a EdgionData YAML with the given activeProfile and enable flag.
-/// Used to re-apply the PM with a different state at runtime.
+/// Build a `GlobalConnIpRestrictionOverride` EdgionData YAML that hot-swaps the
+/// `enable` / `activeProfile` of the base config defined inline in the
+/// `gcir-stream-plugins` EdgionStreamPlugins (which holds both profiles). The base
+/// is referenced via `overrideRef: gcir-enforce-test`; re-applying this overlay at
+/// runtime flips the active profile / kill switch without touching the base.
 fn pm_yaml_with(active_profile: &str, enable: bool) -> String {
     format!(
         r#"apiVersion: edgion.io/v1
@@ -35,21 +38,10 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnectionIpRestriction
+    type: GlobalConnIpRestrictionOverride
     config:
       enable: {enable}
       activeProfile: {active_profile}
-      profiles:
-        allow-local:
-          defaultAction: deny
-          allow:
-            - name: loopback
-              cidrs: ["127.0.0.0/8"]
-        block-local:
-          defaultAction: allow
-          deny:
-            - name: loopback-block
-              cidrs: ["127.0.0.0/8"]
 "#,
         enable = enable,
         active_profile = active_profile,

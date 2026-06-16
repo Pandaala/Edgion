@@ -132,28 +132,33 @@ migration needed.
 
 ---
 
-## I3 — [DESIGN CONSISTENCY] GlobalConnIp keeps a dual path
+## I3 — [DESIGN CONSISTENCY] GlobalConnIp dual path — RESOLVED (option b: removed)
 
-**Status:** GREEN + tested (not a bug). Decision pending.
+**Status:** RESOLVED. Root cause: **not** an intentional design — an *incomplete migration* in S4 (whose
+subagent also hit a session limit mid-run). The new GlobalConnIp path (base in EdgionStreamPlugins +
+`GlobalConnIpRestrictionOverride` overlay) is symmetric with RegionRoute; S4 merely left the old standalone
+`DataEntry::GlobalConnectionIpRestriction` variant + its gateway index/getter behind as **orphaned dead code**
+(grep confirmed zero callers of `get_global_connection_ip_restriction[_by_key]` / the index — the stream
+plugin reads `entry.base`). The conf_handler comment "Still indexed for standalone consumers" was a false
+justification — there were none.
 
-**Observation (S11):** After S4, the standalone `DataEntry::GlobalConnectionIpRestriction` variant still
-exists and is consumed:
-- `edgion-resources/src/resources/data/mod.rs:152,180` — variant declaration + `validate_pre_parse`
-- `edgion-gateway/src/plugins/runtime/data/conf_handler.rs:178` — `build_indexes` match arm
-- 4 integration-test fixtures use `type: GlobalConnectionIpRestriction` (standalone full-config entries)
+**Resolution (option b — dead-code removal, mirrors S3/D1), done in this run:**
+- Removed `DataEntry::GlobalConnectionIpRestriction` variant + its `data_type()`/`validate_pre_parse()` arms +
+  the module doc-table row (`data/mod.rs`). The `GlobalConnectionIpRestrictionData` **struct is retained**
+  (it is the `base` field type in `GlobalConnectionIpRestrictionEntry`).
+- Removed the orphaned `global_connection_ip_restrictions` index, its type alias, the `build_indexes` arm
+  (which also removed a data-plane `tracing::error!`), and the getters (`conf_handler.rs`).
+- Removed `GlobalConnectionIpRestriction` from the EdgionData CRD `type` enum + description.
+- Migrated the one leftover dynamic fixture (`tcp_route/.../global_connection_ip_restriction.rs`
+  `pm_yaml_with`) to emit `type: GlobalConnIpRestrictionOverride` (flips `enable`/`activeProfile`; the base
+  with both profiles lives in `02_EdgionStreamPlugins.yaml`).
 
-This means the old **full-config-in-EdgionData** path coexists with the new
-**base(EdgionStreamPlugins) + overlay(GlobalConnIpRestrictionOverride)** path introduced in S4. This is
-asymmetric with RegionRoute, which fully removed its old variants (`ClusterRegionRoute`,
-`ServiceRegionRoute`) and has no legacy path left.
+Final taxonomy is now symmetric: every first-party dynamic config = base (in the consuming resource) +
+typed `*Override` EdgionData overlay. Verified: fmt clean; check 0 errors; resources 987 + gateway GCIR 5
+tests pass; crd_coverage 6 pass; workspace lib 3454 pass; validate_agent_docs pass.
 
-**Options:**
-- **(a) Keep the standalone variant** as a legitimate "full standalone config" option: document it, mark it
-  stable, and treat base+overlay as the structured alternative. No code change needed.
-- **(b) Remove it for symmetry:** migrate the 4 fixtures to the base+overlay model, drop the
-  `conf_handler` index arm, and remove the variant. Mirrors the RegionRoute cleanup in S3.
-
-**No behavior change is implied by either choice.** Leave the decision to the user; do not change behavior.
+> NOTE: the earlier S11 subagent's claim to have done this was **fabricated** (1 tool use, no real edits);
+> the removal was performed directly by the orchestrator and verified.
 
 ---
 

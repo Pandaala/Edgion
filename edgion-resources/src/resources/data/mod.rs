@@ -7,7 +7,6 @@
 //! |-------|---------|-------|
 //! | Standard primitive | `KeyList` | Unified string+regex list |
 //! | Standard primitive | `IpList` | CIDR range list |
-//! | Legacy full-config | `GlobalConnectionIpRestriction` | L4 IP restriction (standalone) |
 //! | First-party overlay | `GlobalConnIpRestrictionOverride` | All-Optional overlay via `overrideRef` |
 //! | First-party overlay | `RegionRouteOverride` | All-Optional region table overlay via `overrideRef` |
 //! | Escape hatch | `Misc` | Third-party / unknown payloads |
@@ -120,10 +119,6 @@ pub enum DataEntry {
     /// IP address / CIDR range list for IP-based filtering.
     IpList(IpListData),
 
-    /// L4 TCP connection-phase IP restriction with profile switching.
-    /// Standalone full-config variant. Still valid for existing resources.
-    GlobalConnectionIpRestriction(GlobalConnectionIpRestrictionData),
-
     /// Typed overlay for `GlobalConnectionIpRestriction` (D2). All fields are
     /// optional; only `Some` fields replace the corresponding base values.
     /// Referenced via `overrideRef` in `GlobalConnectionIpRestrictionEntry`
@@ -149,7 +144,6 @@ impl EdgionData {
         match &self.spec.data {
             DataEntry::KeyList(_) => "KeyList",
             DataEntry::IpList(_) => "IpList",
-            DataEntry::GlobalConnectionIpRestriction(_) => "GlobalConnectionIpRestriction",
             DataEntry::GlobalConnIpRestrictionOverride(_) => "GlobalConnIpRestrictionOverride",
             DataEntry::RegionRouteOverride(_) => "RegionRouteOverride",
             DataEntry::Misc(_) => "Misc",
@@ -175,13 +169,6 @@ impl EdgionData {
                     &key_list.match_mode,
                 ) {
                     errors.push(format!("KeyList invalid: {}", e));
-                }
-            }
-            DataEntry::GlobalConnectionIpRestriction(data) => {
-                // Early validation: clone and run full validate_and_init to surface errors.
-                let mut cloned = data.clone();
-                if let Err(e) = cloned.validate_and_init() {
-                    errors.push(format!("GlobalConnectionIpRestriction invalid: {}", e));
                 }
             }
             DataEntry::GlobalConnIpRestrictionOverride(overlay) => {
