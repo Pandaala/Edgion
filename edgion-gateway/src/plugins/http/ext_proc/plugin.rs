@@ -62,12 +62,28 @@ impl ExtProc {
     /// chain (`GoodNext`), fail-close short-circuits with a 500. Used for BOTH
     /// transport/gRPC errors AND malformed/wrong-phase verdicts — a buggy
     /// processor must not silently bypass a configured fail-close.
-    fn fail_mode(&self, log: &mut PluginLog, reason: &str) -> PluginRunningResult {
+    ///
+    /// `detail` carries an optional sub-tag (e.g. the gRPC status code's static
+    /// description for transport failures) so the access-log PluginLog entry
+    /// preserves the failure category without resorting to data-plane tracing.
+    fn fail_mode(&self, log: &mut PluginLog, reason: &str, detail: Option<&str>) -> PluginRunningResult {
+        match detail {
+            Some(d) if self.failure_mode_allow => {
+                log.push_fmt("ext_proc {}:{}:fail-open", la![reason, d]);
+            }
+            Some(d) => {
+                log.push_fmt("ext_proc {}:{}:fail-close", la![reason, d]);
+            }
+            None if self.failure_mode_allow => {
+                log.push_fmt("ext_proc {}:fail-open", la![reason]);
+            }
+            None => {
+                log.push_fmt("ext_proc {}:fail-close", la![reason]);
+            }
+        }
         if self.failure_mode_allow {
-            log.push_fmt("ext_proc {}:fail-open", la![reason]);
             PluginRunningResult::GoodNext
         } else {
-            log.push_fmt("ext_proc {}:fail-close", la![reason]);
             PluginRunningResult::ErrResponse {
                 status: 500,
                 body: Some("ext_proc unavailable".to_string()),
@@ -138,8 +154,7 @@ impl RequestFilter for ExtProc {
         let resp = match self.client.exchange(request).await {
             Ok(resp) => resp,
             Err(status) => {
-                tracing::debug!(grpc_status = %status, "ext_proc request exchange failed");
-                return self.fail_mode(log, "unreachable");
+                return self.fail_mode(log, "unreachable", Some(status.code().description()));
             }
         };
 
@@ -155,10 +170,7 @@ impl RequestFilter for ExtProc {
             // Wrong phase or empty verdict: a malformed answer must honor the
             // configured fail mode, not silently continue (which would defeat
             // fail-close).
-            _ => {
-                tracing::warn!("ext_proc returned an unexpected verdict for the request phase");
-                self.fail_mode(log, "bad verdict")
-            }
+            _ => self.fail_mode(log, "bad verdict", None),
         }
     }
 }
@@ -184,8 +196,7 @@ impl UpstreamResponse for ExtProc {
         let resp = match self.client.exchange(request).await {
             Ok(resp) => resp,
             Err(status) => {
-                tracing::debug!(grpc_status = %status, "ext_proc response exchange failed");
-                return self.fail_mode(log, "unreachable");
+                return self.fail_mode(log, "unreachable", Some(status.code().description()));
             }
         };
 
@@ -198,10 +209,7 @@ impl UpstreamResponse for ExtProc {
                 PluginRunningResult::GoodNext
             }
             Some(processing_response::Response::ImmediateResponse(imm)) => immediate_reply(session, log, imm),
-            _ => {
-                tracing::warn!("ext_proc returned an unexpected verdict for the response phase");
-                self.fail_mode(log, "bad verdict")
-            }
+            _ => self.fail_mode(log, "bad verdict", None),
         }
     }
 }
