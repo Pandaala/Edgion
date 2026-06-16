@@ -126,6 +126,20 @@ check "Legacy field/var 'plugin_metadata_refs' / 'pm_key' / 'pm_ns' / 'pm_name' 
     '\b(plugin_metadata_refs|pm_key|pm_ns|pm_name|remove_pm|requeue_pm_referrers)\b' \
     --include='*.rs'
 
+# 5. Test suite naming -- the integration test scaffolding got renamed alongside the
+#    data refactor so AI agents don't search the old names by accident.
+check "Legacy test module 'plugin_metadata_status' / 'plugin_metadata_managed' / 'pmd_ref_flap' (use 'edgion_data_*')" \
+    'plugin_metadata_(status|managed)|pmd_ref_flap' \
+    --include='*.rs'
+
+check "Legacy test struct 'PmdFlap*TestSuite' (use 'EdgionDataFlap*TestSuite')" \
+    'PmdFlap[A-Z]\w*TestSuite' \
+    --include='*.rs'
+
+check "Legacy kebab fixture dir 'plugin-metadata-managed' / 'pmd-flap-*' name prefix (use 'EdgionDataManaged' / 'data-flap-*')" \
+    'plugin-metadata-managed|pmd-flap-' \
+    --include='*.yaml' --include='*.yml' --include='*.rs'
+
 check "Legacy DataEntry::ClusterRegionRoute / ::ServiceRegionRoute / standalone ::GlobalConnectionIpRestriction" \
     '\bDataEntry::(ClusterRegionRoute|ServiceRegionRoute|GlobalConnectionIpRestriction)\b' \
     --include='*.rs'

@@ -1,9 +1,9 @@
-# EdgionPlugins resource with overrideRef -> non-existent pmd-flap-missing EdgionData.
+# EdgionPlugins resource with overrideRef -> non-existent data-flap-missing EdgionData.
 # Update 1 (to_invalid): EdgionData does not exist -> overrideRef missing -> ResolvedRefs=False.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: pmd-flap-plugin
+  name: data-flap-plugin
   namespace: edgion-test
 spec:
   requestPlugins:
@@ -27,5 +27,5 @@ spec:
         routeRules:
           - type: RouteByHashRange
         overrideRef:
-          name: "pmd-flap-missing"
+          name: "data-flap-missing"
           namespace: edgion-test

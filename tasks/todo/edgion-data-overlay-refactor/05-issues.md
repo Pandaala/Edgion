@@ -101,7 +101,7 @@ spec but improves operator visibility.
 
 ## Resolved flags
 - **F1 → D5** (no StringList/RegexList split). **F4 → D6** (keep `type`+`config`; type guards override).
-- **F3 → resolved:** "managed" in `plugin-metadata-managed/` is a test-scenario naming for the
+- **F3 → resolved:** "managed" in `EdgionDataManaged/` is a test-scenario naming for the
   admin-pre-created-PM pattern, not an ownership concept. No existing managed ownership logic on PM.
   (The only `managed-by` today is the ACME label — see I2.)
 
@@ -202,8 +202,8 @@ Eight stale `src/` refs in `skills/` files still point to the old `plugin_metada
 **Finding:** After the S3 decomposition, three integration-test fixture groups in
 `edgion-tests/integration/conf/EdgionPlugins/` still referenced removed `DataEntry` variants
 (`ClusterRegionRoute`, `ServiceRegionRoute`) and removed `EdgionPlugins` fields
-(`serviceRegionRouteRef`, `clusterRef`). The Rust test suites (`plugin_metadata_status.rs`,
-`plugin_metadata_managed.rs`, `dynamic.rs`, `pmd_ref_flap.rs`) also had stale test cases and
+(`serviceRegionRouteRef`, `clusterRef`). The Rust test suites (`edgion_data_status.rs`,
+`edgion_data_managed.rs`, `dynamic.rs`, `edgion_data_ref_flap.rs`) also had stale test cases and
 comments tied to the old chain.
 
 **Groups affected:**
@@ -211,13 +211,13 @@ comments tied to the old chain.
   `serviceRegionRouteRef`; plus `broken_ref_returns_500` expecting 500 (old BrokenRef path).
 - `EdgionDataStatus/RefFlap/DynamicTest/` — EdgionPlugins files using `serviceRegionRouteRef`;
   PluginMetaData fixture using `type: ServiceRegionRoute` with `clusterRef`. Also: directory was
-  named `PluginMetaDataStatus` but `pmd_ref_flap.rs` expected `EdgionDataStatus`.
-- `plugin-metadata-managed/` — EdgionPlugins using `serviceRegionRouteRef`; PluginMetaData fixtures
+  named `PluginMetaDataStatus` but `edgion_data_ref_flap.rs` expected `EdgionDataStatus`.
+- `EdgionDataManaged/` — EdgionPlugins using `serviceRegionRouteRef`; PluginMetaData fixtures
   using `type: ServiceRegionRoute`/`ClusterRegionRoute` with `clusterRef`.
 
 **Resolution (this session):**
 1. **Deleted** all 10 stale ClusterRegionRoute/ServiceRegionRoute fixture files; renamed the
-   `PluginMetaDataStatus` directory to `EdgionDataStatus` to match the `conf_path` in `pmd_ref_flap.rs`.
+   `PluginMetaDataStatus` directory to `EdgionDataStatus` to match the `conf_path` in `edgion_data_ref_flap.rs`.
 2. **Migrated** EdgionPlugins fixtures: replaced `serviceRegionRouteRef` with full inline base configs
    (regions + routing logic) + `overrideRef` where overlay resolution is needed.
 3. **Created** new `EdgionData` overlay fixtures (`type: RegionRouteOverride`) for the managed and
@@ -225,13 +225,13 @@ comments tied to the old chain.
 4. **Updated** Rust test suites:
    - `region_route.rs`: renamed `broken_ref_returns_500` → `broken_overlay_ref_uses_base` (expects
      502 + access log `overlay_missing` instead of 500).
-   - `plugin_metadata_status.rs`: removed 4 stale test functions (scenarios 3-6) and their `test_cases()`
+   - `edgion_data_status.rs`: removed 4 stale test functions (scenarios 3-6) and their `test_cases()`
      entries; updated header comment.
-   - `plugin_metadata_managed.rs`: renamed `service_pm_exists` → `override_data_exists`; changed
+   - `edgion_data_managed.rs`: renamed `service_pm_exists` → `override_data_exists`; changed
      `spec.metadata` → `spec.data`, `ServiceRegionRoute` → `RegionRouteOverride`; removed `clusterRef`
      check; updated all doc comments and test descriptions.
    - `dynamic.rs`: updated module-level comment and test case description strings (PMD → EdgionData).
-   - `pmd_ref_flap.rs`: updated scenario comment (removed `serviceRegionRouteRef` reference).
+   - `edgion_data_ref_flap.rs`: updated scenario comment (removed `serviceRegionRouteRef` reference).
 5. **Cleaned** stale comment in `02_HTTPRoute_region-route-broken-ref-test.yaml`.
 
 **Verification:** `cargo fmt --all` clean; `cargo check --all-targets` 0 errors;

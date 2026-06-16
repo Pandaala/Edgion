@@ -3,7 +3,7 @@
 // Tests the EdgionData overlay architecture where RegionRouteOverride EdgionDatas are pre-created
 // by administrators and referenced via EdgionPlugins.overrideRef.
 //
-// Required conf files (edgion-tests/integration/conf/EdgionPlugins/plugin-metadata-managed/):
+// Required conf files (edgion-tests/integration/conf/EdgionPlugins/EdgionDataManaged/):
 //   01_EdgionData_pm-managed.yaml          — RegionRouteOverride EdgionData for pm-managed test
 //   01_EdgionData_pm-validated.yaml        — RegionRouteOverride EdgionData for pm-validated test
 //   01_EdgionPlugins_pm-managed.yaml           — EdgionPlugins with overrideRef → pm-managed

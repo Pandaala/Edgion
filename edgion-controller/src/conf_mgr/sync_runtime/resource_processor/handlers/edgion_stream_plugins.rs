@@ -190,7 +190,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             condition_false(condition_types::ACCEPTED, reason, message, generation)
         };
 
-        // ResolvedRefs: each GlobalConnectionIpRestriction plugin_metadata_ref must
+        // ResolvedRefs: each GlobalConnectionIpRestriction overrideRef must
         // resolve to an existing EdgionData of the matching variant type.
         let resolved_errors = resolve_refs(esp, ctx);
         let resolved_refs = if resolved_errors.is_empty() {

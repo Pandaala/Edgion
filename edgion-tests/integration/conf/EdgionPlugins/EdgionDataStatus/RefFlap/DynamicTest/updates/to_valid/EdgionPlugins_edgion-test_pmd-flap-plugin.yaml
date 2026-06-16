@@ -1,9 +1,9 @@
-# EdgionPlugins resource restored to reference pmd-flap-good EdgionData.
+# EdgionPlugins resource restored to reference data-flap-good EdgionData.
 # Update 2 (to_valid): EdgionData exists again -> overrideRef resolves -> ResolvedRefs=True.
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
-  name: pmd-flap-plugin
+  name: data-flap-plugin
   namespace: edgion-test
 spec:
   requestPlugins:
@@ -27,5 +27,5 @@ spec:
         routeRules:
           - type: RouteByHashRange
         overrideRef:
-          name: "pmd-flap-good"
+          name: "data-flap-good"
           namespace: edgion-test

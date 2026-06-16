@@ -64,16 +64,17 @@ pub use edgion_plugins::{
     BasicAuthDynamicGroupedInitialTestSuite, BasicAuthDynamicGroupedUpdateTestSuite, BasicAuthDynamicInitialTestSuite,
     BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite, CorsPluginTestSuite, CsrfTestSuite, CtxSetTestSuite,
     DirectEndpointTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite,
-    DslTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite, EdgionDataManagedTestSuite,
+    DslTestSuite, DynamicExternalUpstreamTestSuite, DynamicInternalUpstreamTestSuite, EdgionDataFlapInitialTestSuite,
+    EdgionDataFlapInvalidTestSuite, EdgionDataFlapValidTestSuite, EdgionDataManagedTestSuite,
     EdgionDataStatusTestSuite, ExtProcTestSuite, FaultInjectionTestSuite, ForwardAuthTestSuite,
     GlobalConnectionIpRestrictionTestSuite, GlobalPluginsSnapshotTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite,
     IpRestrictionPluginTestSuite, JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite,
     OpenidConnectTestSuite, PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite,
     PathNormalizationTestSuite, PluginConditionTestSuite, PluginLogsTestSuite, PluginValidationStatusTestSuite,
-    PmdFlapInitialTestSuite, PmdFlapInvalidTestSuite, PmdFlapValidTestSuite, ProxyRewriteTestSuite,
-    RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite, RateLimitTestSuite,
-    RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite,
-    ResolvedRefsTestSuite, ResponseRewriteTestSuite, TraceContextPluginTestSuite, WebhookKeyGetTestSuite,
+    ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite,
+    RateLimitTestSuite, RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite,
+    RequestRestrictionTestSuite, ResolvedRefsTestSuite, ResponseRewriteTestSuite, TraceContextPluginTestSuite,
+    WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests

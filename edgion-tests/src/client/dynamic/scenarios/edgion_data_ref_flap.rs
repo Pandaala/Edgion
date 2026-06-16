@@ -1,9 +1,9 @@
 // PmdRefFlap dynamic scenario.
 //
 // Applies an EdgionPlugins resource that switches its overrideRef (RegionRouteOverride EdgionData):
-//   initial:  overrideRef → existing EdgionData pmd-flap-good   → Accepted=True, ResolvedRefs=True
-//   invalid:  overrideRef → missing EdgionData pmd-flap-missing  → ResolvedRefs=False (InvalidEdgionDataRef)
-//   valid:    restored to pmd-flap-good                          → Accepted=True, ResolvedRefs=True
+//   initial:  overrideRef → existing EdgionData data-flap-good   → Accepted=True, ResolvedRefs=True
+//   invalid:  overrideRef → missing EdgionData data-flap-missing  → ResolvedRefs=False (InvalidEdgionDataRef)
+//   valid:    restored to data-flap-good                          → Accepted=True, ResolvedRefs=True
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario};
 use crate::dynamic::ScenarioCtx;
@@ -14,15 +14,15 @@ use std::pin::Pin;
 use std::time::Duration;
 
 fn initial() -> Box<dyn TestSuite> {
-    Box::new(suites::PmdFlapInitialTestSuite)
+    Box::new(suites::EdgionDataFlapInitialTestSuite)
 }
 
 fn invalid() -> Box<dyn TestSuite> {
-    Box::new(suites::PmdFlapInvalidTestSuite)
+    Box::new(suites::EdgionDataFlapInvalidTestSuite)
 }
 
 fn valid() -> Box<dyn TestSuite> {
-    Box::new(suites::PmdFlapValidTestSuite)
+    Box::new(suites::EdgionDataFlapValidTestSuite)
 }
 
 static PHASES: &[PhaseSuite] = &[

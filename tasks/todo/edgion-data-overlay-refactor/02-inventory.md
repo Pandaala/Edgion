@@ -94,7 +94,7 @@ KeyList / IpList ──► (no live consumer; orphan gateway indexes + getters, 
 23 files total: 1 CRD (`config/crd/edgion-crd/plugin_metadata_crd.yaml`) + 22 integration fixtures under
 `edgion-tests/integration/conf/` + 1 Rust test suite (`tcp_route/global_connection_ip_restriction.rs`).
 By variant: ClusterRegionRoute 6, ServiceRegionRoute 10, GlobalConnectionIpRestriction 10, IpList/KeyList 0.
-Notable dirs: `PluginMetaDataStatus/` (+ `RefFlap/DynamicTest`), `plugin-metadata-managed/` (see flag F3).
+Notable dirs: `PluginMetaDataStatus/` (+ `RefFlap/DynamicTest`), `EdgionDataManaged/` (see flag F3).
 
 ## Flags (impact prior decisions)
 

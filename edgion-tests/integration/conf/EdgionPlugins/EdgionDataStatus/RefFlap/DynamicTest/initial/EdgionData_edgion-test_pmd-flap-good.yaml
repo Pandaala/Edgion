@@ -1,9 +1,9 @@
-# RegionRouteOverride EdgionData — the "good" overlay referenced by pmd-flap-plugin via overrideRef.
+# RegionRouteOverride EdgionData — the "good" overlay referenced by data-flap-plugin via overrideRef.
 # When this resource exists, the EdgionPlugins overrideRef resolves -> ResolvedRefs=True.
 apiVersion: edgion.io/v1
 kind: EdgionData
 metadata:
-  name: pmd-flap-good
+  name: data-flap-good
   namespace: edgion-test
 spec:
   data:

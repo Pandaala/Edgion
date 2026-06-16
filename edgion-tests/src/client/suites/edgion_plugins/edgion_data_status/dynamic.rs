@@ -1,11 +1,11 @@
 //! RefFlap scenario phase suites.
 //!
-//! Initial phase: EdgionPlugins has overrideRef pointing at existing RegionRouteOverride `pmd-flap-good`
+//! Initial phase: EdgionPlugins has overrideRef pointing at existing RegionRouteOverride `data-flap-good`
 //!                → Accepted=True, ResolvedRefs=True.
-//! Invalid phase: EdgionPlugins overrideRef switches to non-existent `pmd-flap-missing`
+//! Invalid phase: EdgionPlugins overrideRef switches to non-existent `data-flap-missing`
 //!                → Accepted=True (resource is structurally valid),
 //!                  ResolvedRefs=False (reason: InvalidEdgionDataRef).
-//! Valid phase:   EdgionPlugins restored to overrideRef `pmd-flap-good`
+//! Valid phase:   EdgionPlugins restored to overrideRef `data-flap-good`
 //!                → Accepted=True, ResolvedRefs=True (recovered).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use std::time::Instant;
 
 const NS: &str = "edgion-test";
-const EP: &str = "pmd-flap-plugin";
+const EP: &str = "data-flap-plugin";
 
 // ---------------------------------------------------------------------------
 // Helper: fetch a single condition (status, reason) for the EdgionPlugins
@@ -65,20 +65,20 @@ async fn fetch_ep_condition(ctx: &TestContext, condition_type: &str) -> Result<(
 // Initial phase suite
 // ---------------------------------------------------------------------------
 
-pub struct PmdFlapInitialTestSuite;
+pub struct EdgionDataFlapInitialTestSuite;
 
-impl PmdFlapInitialTestSuite {
+impl EdgionDataFlapInitialTestSuite {
     fn test_accepted_true() -> TestCase {
         TestCase::new(
             "pmd_flap_initial_accepted_true",
-            "EdgionPlugins with overrideRef to existing pmd-flap-good EdgionData should be Accepted=True",
+            "EdgionPlugins with overrideRef to existing data-flap-good EdgionData should be Accepted=True",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     match fetch_ep_condition(&ctx, "Accepted").await {
                         Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
                             start.elapsed(),
-                            "Accepted=True as expected (pmd-flap-good EdgionData present)".to_string(),
+                            "Accepted=True as expected (data-flap-good EdgionData present)".to_string(),
                         ),
                         Ok((status, reason)) => TestResult::failed(
                             start.elapsed(),
@@ -94,14 +94,14 @@ impl PmdFlapInitialTestSuite {
     fn test_resolved_refs_true() -> TestCase {
         TestCase::new(
             "pmd_flap_initial_resolved_refs_true",
-            "EdgionPlugins with overrideRef to existing pmd-flap-good EdgionData should be ResolvedRefs=True",
+            "EdgionPlugins with overrideRef to existing data-flap-good EdgionData should be ResolvedRefs=True",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     match fetch_ep_condition(&ctx, "ResolvedRefs").await {
                         Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
                             start.elapsed(),
-                            "ResolvedRefs=True as expected (pmd-flap-good EdgionData resolved)".to_string(),
+                            "ResolvedRefs=True as expected (data-flap-good EdgionData resolved)".to_string(),
                         ),
                         Ok((status, reason)) => TestResult::failed(
                             start.elapsed(),
@@ -116,9 +116,9 @@ impl PmdFlapInitialTestSuite {
 }
 
 #[async_trait]
-impl TestSuite for PmdFlapInitialTestSuite {
+impl TestSuite for EdgionDataFlapInitialTestSuite {
     fn name(&self) -> &str {
-        "PmdFlapInitial"
+        "EdgionDataFlapInitial"
     }
 
     fn port_key(&self) -> Option<&str> {
@@ -134,13 +134,13 @@ impl TestSuite for PmdFlapInitialTestSuite {
 // Invalid phase suite (polled by wait_phase)
 // ---------------------------------------------------------------------------
 
-pub struct PmdFlapInvalidTestSuite;
+pub struct EdgionDataFlapInvalidTestSuite;
 
-impl PmdFlapInvalidTestSuite {
+impl EdgionDataFlapInvalidTestSuite {
     fn test_resolved_refs_false() -> TestCase {
         TestCase::new(
             "pmd_flap_invalid_resolved_refs_false",
-            "EdgionPlugins with overrideRef to missing pmd-flap-missing EdgionData should be \
+            "EdgionPlugins with overrideRef to missing data-flap-missing EdgionData should be \
              ResolvedRefs=False (reason: InvalidEdgionDataRef)",
             |ctx: TestContext| {
                 Box::pin(async move {
@@ -150,7 +150,7 @@ impl PmdFlapInvalidTestSuite {
                             TestResult::passed_with_message(
                                 start.elapsed(),
                                 "ResolvedRefs=False/InvalidEdgionDataRef as expected \
-                                 (pmd-flap-missing EdgionData not found)"
+                                 (data-flap-missing EdgionData not found)"
                                     .to_string(),
                             )
                         }
@@ -195,9 +195,9 @@ impl PmdFlapInvalidTestSuite {
 }
 
 #[async_trait]
-impl TestSuite for PmdFlapInvalidTestSuite {
+impl TestSuite for EdgionDataFlapInvalidTestSuite {
     fn name(&self) -> &str {
-        "PmdFlapInvalid"
+        "EdgionDataFlapInvalid"
     }
 
     fn port_key(&self) -> Option<&str> {
@@ -213,20 +213,20 @@ impl TestSuite for PmdFlapInvalidTestSuite {
 // Valid (recovered) phase suite (polled by wait_phase)
 // ---------------------------------------------------------------------------
 
-pub struct PmdFlapValidTestSuite;
+pub struct EdgionDataFlapValidTestSuite;
 
-impl PmdFlapValidTestSuite {
+impl EdgionDataFlapValidTestSuite {
     fn test_accepted_true_recovered() -> TestCase {
         TestCase::new(
             "pmd_flap_valid_accepted_true_recovered",
-            "EdgionPlugins restored to pmd-flap-good PMD should be Accepted=True again",
+            "EdgionPlugins restored to data-flap-good PMD should be Accepted=True again",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     match fetch_ep_condition(&ctx, "Accepted").await {
                         Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
                             start.elapsed(),
-                            "Accepted=True as expected (recovered to pmd-flap-good)".to_string(),
+                            "Accepted=True as expected (recovered to data-flap-good)".to_string(),
                         ),
                         Ok((status, reason)) => TestResult::failed(
                             start.elapsed(),
@@ -245,14 +245,14 @@ impl PmdFlapValidTestSuite {
     fn test_resolved_refs_true_recovered() -> TestCase {
         TestCase::new(
             "pmd_flap_valid_resolved_refs_true_recovered",
-            "EdgionPlugins restored to pmd-flap-good PMD should be ResolvedRefs=True again",
+            "EdgionPlugins restored to data-flap-good PMD should be ResolvedRefs=True again",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
                     match fetch_ep_condition(&ctx, "ResolvedRefs").await {
                         Ok((status, _reason)) if status == "True" => TestResult::passed_with_message(
                             start.elapsed(),
-                            "ResolvedRefs=True as expected (recovered to pmd-flap-good)".to_string(),
+                            "ResolvedRefs=True as expected (recovered to data-flap-good)".to_string(),
                         ),
                         Ok((status, reason)) => TestResult::failed(
                             start.elapsed(),
@@ -270,9 +270,9 @@ impl PmdFlapValidTestSuite {
 }
 
 #[async_trait]
-impl TestSuite for PmdFlapValidTestSuite {
+impl TestSuite for EdgionDataFlapValidTestSuite {
     fn name(&self) -> &str {
-        "PmdFlapValid"
+        "EdgionDataFlapValid"
     }
 
     fn port_key(&self) -> Option<&str> {

@@ -170,9 +170,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "rate-limit-redis" | "ratelimitredis" | "rlr" => "EdgionPlugins/RateLimitRedis".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
-            "plugin-metadata-managed" | "edgiondatamanaged" | "pm-managed" => {
-                "EdgionPlugins/EdgionDataManaged".to_string()
-            }
+            "EdgionDataManaged" | "edgiondatamanaged" | "pm-managed" => "EdgionPlugins/EdgionDataManaged".to_string(),
             "global-connection-ip-restriction" | "globalconnectioniprestriction" | "gcir" => {
                 "EdgionPlugins/GlobalConnectionIpRestriction".to_string()
             }
@@ -305,7 +303,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DynamicInternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/RegionRoute" => "EdgionPlugins",
-        "EdgionPlugins/EdgionDataManaged" | "EdgionPlugins/plugin-metadata-managed" => "EdgionPlugins",
+        "EdgionPlugins/EdgionDataManaged" => "EdgionPlugins",
         "EdgionPlugins/GlobalConnectionIpRestriction" => "EdgionPlugins",
         "EdgionPlugins/GlobalPluginsSnapshot" => "EdgionPlugins",
         "EdgionPlugins/EdgionDataStatus" => "EdgionPlugins",
@@ -1088,7 +1086,7 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::RegionRouteTestSuite));
         }
-        "EdgionPlugins/EdgionDataManaged" | "EdgionPlugins/plugin-metadata-managed" => {
+        "EdgionPlugins/EdgionDataManaged" => {
             if !gateway {
                 eprintln!("Error: EdgionPlugins/EdgionDataManaged tests require --gateway flag");
                 std::process::exit(1);
@@ -1123,18 +1121,18 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             match phase {
                 Some("initial") => {
-                    runner.add_suite(Box::new(suites::PmdFlapInitialTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionDataFlapInitialTestSuite));
                 }
                 Some("invalid") => {
-                    runner.add_suite(Box::new(suites::PmdFlapInvalidTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionDataFlapInvalidTestSuite));
                 }
                 Some("valid") => {
-                    runner.add_suite(Box::new(suites::PmdFlapValidTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionDataFlapValidTestSuite));
                 }
                 _ => {
-                    runner.add_suite(Box::new(suites::PmdFlapInitialTestSuite));
-                    runner.add_suite(Box::new(suites::PmdFlapInvalidTestSuite));
-                    runner.add_suite(Box::new(suites::PmdFlapValidTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionDataFlapInitialTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionDataFlapInvalidTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionDataFlapValidTestSuite));
                 }
             }
         }
