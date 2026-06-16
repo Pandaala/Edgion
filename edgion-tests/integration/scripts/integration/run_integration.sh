@@ -952,6 +952,7 @@ run_all_tests() {
             EdgionPlugins)
                 if [ -z "$G_ITEM" ]; then
                     run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
+                    run_test "EdgionPlugins_Csrf" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Csrf" || test_failed=true
                     run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
                     run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
                     run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true
@@ -1134,6 +1135,7 @@ run_all_tests() {
         run_test "Gateway_TLS_BackendTLS" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i TLS/BackendTLS" || test_failed=true
         # EdgionPlugins Tests
         run_test "EdgionPlugins_DebugAccessLog" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i DebugAccessLog" || test_failed=true
+        run_test "EdgionPlugins_Csrf" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Csrf" || test_failed=true
         run_test "EdgionPlugins_PluginCondition" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition" || test_failed=true
         run_test "EdgionPlugins_AllConditions" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PluginCondition/AllConditions" || test_failed=true
         run_test "EdgionPlugins_CtxSet" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i CtxSet" || test_failed=true

@@ -103,7 +103,6 @@ spec:
       sentinel:
         masterName: mymaster
         sentinels: ["sentinel-1:26379", "sentinel-2:26379"]
-        password: "..."           # The Sentinel's own password, independent of Redis node auth
       # cluster:
       #   readFromReplicas: true
       #   maxRedirects: 6

@@ -1,6 +1,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::resources::gateway::SecretObjectReference;
+
 /// CSRF (Cross-Site Request Forgery) protection plugin configuration
 ///
 /// This plugin protects against CSRF attacks by validating tokens in requests
@@ -13,41 +15,40 @@ use serde::{Deserialize, Serialize};
 /// ## Usage Example:
 /// ```yaml
 /// csrf:
-///   key: "my-secret-key-32-chars-long!!"
+///   secretRef:
+///     name: csrf-key
 ///   expires: 7200  # 2 hours
 ///   name: "apisix-csrf-token"
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CsrfConfig {
-    /// Secret key used for signing CSRF tokens (required)
-    ///
-    /// This key is used to generate and verify token signatures.
-    /// Keep this secret and use a strong random value.
-    #[serde(serialize_with = "crate::redact::redact_required::serialize")]
-    pub key: String,
+    /// Reference to a K8s Secret whose `key` data entry holds the CSRF signing key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_ref: Option<SecretObjectReference>,
 
     /// Token expiration time in seconds (default: 7200 = 2 hours)
-    ///
-    /// After this time, tokens will be considered expired and rejected.
     #[serde(default = "default_expires")]
     pub expires: i64,
 
     /// Token name used in both cookie and header (default: "apisix-csrf-token")
-    ///
-    /// The client must send the token value in a request header with this name.
     #[serde(default = "default_name")]
     pub name: String,
 
     /// Whether to set the `Secure` attribute on the CSRF cookie (default: true)
-    ///
-    /// Browsers only return `Secure` cookies over HTTPS, so a hardcoded `true`
-    /// breaks the double-submit check for HTTP-only deployment models (TLS
-    /// terminated upstream at an LB/sidecar, mesh-internal plain HTTP, local
-    /// development). Set this to `false` for those models. The default stays
-    /// `true` to preserve the secure-by-default behavior.
     #[serde(default = "default_cookie_secure")]
     pub cookie_secure: bool,
+
+    /// Resolved signing key (filled by controller from `secret_ref`; never from
+    /// user YAML). Serialized to the gateway via conf_sync; hidden from CRD schema
+    /// and redacted in admin output.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_key: Option<String>,
 }
 
 fn default_expires() -> i64 {
@@ -65,32 +66,11 @@ fn default_cookie_secure() -> bool {
 impl Default for CsrfConfig {
     fn default() -> Self {
         CsrfConfig {
-            key: String::new(),
+            secret_ref: None,
             expires: default_expires(),
             name: default_name(),
             cookie_secure: default_cookie_secure(),
-        }
-    }
-}
-
-impl CsrfConfig {
-    /// Validate the configuration
-    ///
-    /// Returns an error if the key is empty (required field).
-    pub fn validate(&self) -> Result<(), String> {
-        if self.key.is_empty() {
-            return Err("CSRF config validation failed: 'key' is required and cannot be empty".to_string());
-        }
-        Ok(())
-    }
-
-    /// Create a new CsrfConfig with the given key
-    pub fn new(key: String) -> Self {
-        CsrfConfig {
-            key,
-            expires: default_expires(),
-            name: default_name(),
-            cookie_secure: default_cookie_secure(),
+            resolved_key: None,
         }
     }
 }
@@ -99,7 +79,15 @@ use crate::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for CsrfConfig {
     fn validation_error(&self) -> Option<String> {
-        self.validate().err()
+        // Require a Secret reference OR an already-resolved key. Mirrors jwe_decrypt:
+        // does NOT error in the secret_ref-present / resolved-absent window, so the
+        // controller never rejects a CSRF plugin whose Secret hasn't resolved yet.
+        // The gateway-only check that the key is actually present before the plugin
+        // goes live lives in plugin_runtime.rs::plugin_validation_error.
+        if self.secret_ref.is_none() && self.resolved_key.is_none() {
+            return Some("CSRF config: 'secretRef' is required".to_string());
+        }
+        None
     }
 }
 
@@ -108,87 +96,55 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_config() {
-        let config = CsrfConfig::default();
-        assert_eq!(config.key, "");
-        assert_eq!(config.expires, 7200);
-        assert_eq!(config.name, "apisix-csrf-token");
-        assert!(config.cookie_secure);
+    fn csrf_deserializes_secret_ref() {
+        let json = r#"{"secretRef":{"name":"csrf-key"}}"#;
+        let c: CsrfConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(c.secret_ref.as_ref().unwrap().name, "csrf-key");
+        assert!(c.resolved_key.is_none());
+        assert_eq!(c.expires, 7200);
+        assert_eq!(c.name, "apisix-csrf-token");
     }
 
     #[test]
-    fn test_new_config() {
-        let config = CsrfConfig::new("test-secret-key".to_string());
-        assert_eq!(config.key, "test-secret-key");
-        assert_eq!(config.expires, 7200);
-        assert_eq!(config.name, "apisix-csrf-token");
+    fn csrf_rejects_inline_key() {
+        let json = r#"{"key":"leaked"}"#;
+        assert!(serde_json::from_str::<CsrfConfig>(json).is_err());
     }
 
     #[test]
-    fn test_validate_success() {
-        let config = CsrfConfig::new("valid-key".to_string());
-        assert!(config.validate().is_ok());
-    }
-
-    #[test]
-    fn test_validate_empty_key() {
-        let config = CsrfConfig::default();
-        assert!(config.validate().is_err());
-        assert!(config.validate().unwrap_err().contains("key"));
-    }
-
-    #[test]
-    fn test_serde_serialization() {
-        let config = CsrfConfig {
-            key: "my-secret".to_string(),
-            expires: 3600,
-            name: "my-csrf-token".to_string(),
-            cookie_secure: false,
+    fn csrf_validation_requires_secret_ref_or_resolved() {
+        use crate::resources::edgion_plugins::PluginValidation;
+        let empty = CsrfConfig::default();
+        assert!(empty.validation_error().is_some());
+        let with_ref = CsrfConfig {
+            secret_ref: Some(crate::resources::gateway::SecretObjectReference {
+                group: None,
+                kind: None,
+                name: "k".into(),
+                namespace: None,
+            }),
+            ..Default::default()
         };
-
-        let json = serde_json::to_string(&config).unwrap();
-        assert!(json.contains("my-secret"));
-        assert!(json.contains("3600"));
-        assert!(json.contains("my-csrf-token"));
-        assert!(json.contains("\"cookieSecure\":false"));
+        assert!(with_ref.validation_error().is_none());
+        let with_resolved = CsrfConfig {
+            resolved_key: Some("k".into()),
+            ..Default::default()
+        };
+        assert!(with_resolved.validation_error().is_none());
     }
 
     #[test]
-    fn test_serde_deserialization() {
-        let json = r#"{"key":"test-key","expires":1800,"name":"custom-token"}"#;
-        let config: CsrfConfig = serde_json::from_str(json).unwrap();
-
-        assert_eq!(config.key, "test-key");
-        assert_eq!(config.expires, 1800);
-        assert_eq!(config.name, "custom-token");
-    }
-
-    #[test]
-    fn csrf_key_redacted_under_guard() {
+    fn csrf_resolved_key_redacted_under_guard() {
         let cfg = CsrfConfig {
-            key: "SUPER-SECRET-KEY".to_string(),
-            expires: default_expires(),
-            name: default_name(),
-            cookie_secure: default_cookie_secure(),
+            resolved_key: Some("SUPER-SECRET".to_string()),
+            ..Default::default()
         };
         let redacted = {
             let _g = crate::redact::AdminRedactGuard::new();
             serde_json::to_value(&cfg).unwrap()
         };
-        assert_eq!(redacted["key"], "[redacted]");
-
+        assert_eq!(redacted["resolvedKey"], "[redacted]");
         let plain = serde_json::to_value(&cfg).unwrap();
-        assert_eq!(plain["key"], "SUPER-SECRET-KEY");
-    }
-
-    #[test]
-    fn test_serde_deserialization_with_defaults() {
-        let json = r#"{"key":"test-key"}"#;
-        let config: CsrfConfig = serde_json::from_str(json).unwrap();
-
-        assert_eq!(config.key, "test-key");
-        assert_eq!(config.expires, 7200); // default
-        assert_eq!(config.name, "apisix-csrf-token"); // default
-        assert!(config.cookie_secure); // default
+        assert_eq!(plain["resolvedKey"], "SUPER-SECRET");
     }
 }

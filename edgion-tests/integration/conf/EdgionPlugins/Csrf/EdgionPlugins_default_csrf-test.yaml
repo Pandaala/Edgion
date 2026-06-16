@@ -8,6 +8,8 @@ spec:
     - enable: true
       type: Csrf
       config:
-        key: "csrf-integration-test-key-32bytes"
+        secretRef:
+          name: csrf-key
+          namespace: edgion-default
         expires: 7200
         name: "X-CSRF-Token"

@@ -188,11 +188,12 @@ spec:
 | `topology.cluster` | Object | none | Cluster configuration. **Required when `mode=cluster`.** |
 | `topology.sentinel.masterName` | String | **Required** | Master name monitored by Sentinel. |
 | `topology.sentinel.sentinels` | Array\<String\> | **Required** | Sentinel addresses (`host:port`). |
-| `topology.sentinel.password` | String | none | Sentinel's own password, independent of Redis node auth. |
 | `topology.cluster.readFromReplicas` | Boolean | none | Allow reads to be served from replica nodes. |
 | `topology.cluster.maxRedirects` | Integer | none | Maximum cluster redirects to follow. |
 
 When `topology` is omitted, the connector runs in standalone mode. When `mode=sentinel` but `sentinel` is missing (or `mode=cluster` but `cluster` is missing), the status reports `Accepted=False/Invalid`.
+
+> **Note**: `topology.sentinel.password` (a Sentinel-specific password separate from Redis node auth) has been removed — it was a runtime no-op and was never consumed by the connector. If you have an existing CR that includes a `password:` field under `topology.sentinel`, the Kubernetes API server will silently prune it on re-apply; it does not cause a parse error.
 
 #### Example: Sentinel high availability
 

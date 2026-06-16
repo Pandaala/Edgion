@@ -147,12 +147,14 @@ fn default_fail_backoff() -> u64 {
 
 /// External Account Binding for ACME providers that require it (e.g., ZeroSSL)
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AcmeExternalAccountBinding {
-    /// Key identifier
+    /// Key identifier (public; not a secret)
     pub key_id: String,
-    /// HMAC key (base64url-encoded)
-    pub hmac_key: String,
+    /// Reference to a K8s Secret whose `hmacKey` data entry holds the
+    /// base64url-encoded EAB HMAC key. The controller fetches it at
+    /// account-registration time; it never enters the stored CR.
+    pub key_secret_ref: SecretObjectReference,
 }
 
 // ============================================================================
@@ -279,10 +281,7 @@ pub struct EdgionAcmeSpec {
     pub renewal: AcmeRenewalConfig,
 
     /// External Account Binding (required by some ACME providers like ZeroSSL)
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::redact::redact_opt::serialize"
-    )]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_account_binding: Option<AcmeExternalAccountBinding>,
 
     /// Certificate storage configuration
@@ -638,6 +637,20 @@ spec:
 "#;
         let result: Result<EdgionAcme, _> = serde_yaml::from_str(yaml);
         assert!(result.is_err(), "privateKeySecretRef should be required");
+    }
+
+    #[test]
+    fn eab_deserializes_key_secret_ref() {
+        let yaml = "keyId: kid-123\nkeySecretRef:\n  name: eab-secret";
+        let eab: AcmeExternalAccountBinding = serde_yaml::from_str(yaml).expect("should deserialize");
+        assert_eq!(eab.key_id, "kid-123");
+        assert_eq!(eab.key_secret_ref.name, "eab-secret");
+    }
+
+    #[test]
+    fn eab_rejects_inline_hmac_key() {
+        let yaml = "keyId: kid\nkeySecretRef:\n  name: s\nhmacKey: leaked";
+        assert!(serde_yaml::from_str::<AcmeExternalAccountBinding>(yaml).is_err());
     }
 
     #[test]

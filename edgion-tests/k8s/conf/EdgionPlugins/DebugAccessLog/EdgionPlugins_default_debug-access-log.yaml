@@ -14,7 +14,9 @@ spec:
     - enable: true
       type: Csrf
       config:
-        key: "test-secret-key-32-chars-long!!"
+        secretRef:
+          name: csrf-key
+          namespace: edgion-default
         name: "X-CSRF-Token"
         expires: 7200
   upstreamResponseFilterPlugins:

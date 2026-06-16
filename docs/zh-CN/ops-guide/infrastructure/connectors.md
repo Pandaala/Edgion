@@ -188,11 +188,12 @@ spec:
 | `topology.cluster` | Object | none | 集群配置。**`mode=cluster` 时必填。** |
 | `topology.sentinel.masterName` | String | **必填** | Sentinel 监控的主节点名称。 |
 | `topology.sentinel.sentinels` | Array\<String\> | **必填** | Sentinel 地址（`host:port`）。 |
-| `topology.sentinel.password` | String | none | Sentinel 自身的密码，独立于 Redis 节点认证。 |
 | `topology.cluster.readFromReplicas` | Boolean | none | 允许从副本节点读取。 |
 | `topology.cluster.maxRedirects` | Integer | none | 最大集群重定向跳数。 |
 
 省略 `topology` 时连接器以 standalone 模式运行。`mode=sentinel` 但缺少 `sentinel` 块（或 `mode=cluster` 但缺少 `cluster` 块）时，状态报告 `Accepted=False/Invalid`。
+
+> **说明**：`topology.sentinel.password`（独立于 Redis 节点认证的 Sentinel 自身密码）字段已被移除——该字段在运行时从未被消费（no-op）。如果现有 CR 的 `topology.sentinel` 下包含 `password:` 字段，Kubernetes API server 在重新 apply 时会静默裁剪该字段，不会导致解析错误。
 
 #### 示例：Sentinel 高可用
 

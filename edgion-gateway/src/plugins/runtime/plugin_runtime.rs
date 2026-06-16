@@ -733,6 +733,14 @@ impl PluginRuntime {
                 return Some(e);
             }
         }
+        if let EdgionPlugin::Csrf(cfg) = plugin {
+            // A CSRF plugin cannot sign/verify without a key. If the secretRef
+            // never resolved, refuse to bring it live (seal_fail_closed -> 500)
+            // rather than mint forgeable tokens with an empty key.
+            if cfg.resolved_key.as_deref().unwrap_or("").is_empty() {
+                return Some("CSRF: signing key not resolved (secretRef missing or unresolved Secret)".to_string());
+            }
+        }
         None
     }
 
@@ -1310,6 +1318,26 @@ mod tests {
         assert_eq!(first.alias(), None, "bad alias must be dropped (validation refused)");
         let second = iter.next().expect("second wrapper");
         assert_eq!(second.alias(), Some("auth-internal"));
+    }
+
+    #[test]
+    fn csrf_without_resolved_key_fails_validation() {
+        use edgion_resources::resources::edgion_plugins::{CsrfConfig, EdgionPlugin};
+        // No secret_ref + no resolved_key → rejected.
+        let plugin = EdgionPlugin::Csrf(CsrfConfig::default());
+        assert!(PluginRuntime::plugin_validation_error(&plugin).is_some());
+        // Empty resolved_key → still rejected (the gate is stronger than the shared check).
+        let empty_key = EdgionPlugin::Csrf(CsrfConfig {
+            resolved_key: Some(String::new()),
+            ..Default::default()
+        });
+        assert!(PluginRuntime::plugin_validation_error(&empty_key).is_some());
+        // Non-empty resolved_key → accepted.
+        let resolved = EdgionPlugin::Csrf(CsrfConfig {
+            resolved_key: Some("k".to_string()),
+            ..Default::default()
+        });
+        assert!(PluginRuntime::plugin_validation_error(&resolved).is_none());
     }
 
     #[test]

@@ -87,11 +87,23 @@ spec:
                 externalAccountBinding:
                   type: object
                   description: "External Account Binding for ACME providers that require it"
+                  required:
+                    - keyId
+                    - keySecretRef
+                  additionalProperties: false
                   properties:
                     keyId:
                       type: string
-                    hmacKey:
-                      type: string
+                    keySecretRef:
+                      type: object
+                      required:
+                        - name
+                      additionalProperties: false
+                      properties:
+                        name:
+                          type: string
+                        namespace:
+                          type: string
                 storage:
                   type: object
                   description: "Certificate storage configuration"

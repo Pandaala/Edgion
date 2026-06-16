@@ -342,7 +342,6 @@ mod tests {
                 sentinel: Some(RedisSentinel {
                     master_name: "mymaster".to_string(),
                     sentinels: vec!["sentinel-1:26379".to_string()],
-                    password: None,
                 }),
                 cluster: None,
             }),

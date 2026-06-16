@@ -129,7 +129,23 @@ Controller 通过提供商 API 创建 `_acme-challenge.<domain>` TXT 记录，�
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `externalAccountBinding.keyId` | String | **必填（存在时）** | 提供商的 EAB 密钥标识符 |
-| `externalAccountBinding.hmacKey` | String | **必填（存在时）** | 提供商的 base64url 编码 HMAC 密钥 |
+| `externalAccountBinding.keySecretRef` | Object | **必填（存在时）** | 引用一个 Kubernetes Secret，其 `hmacKey` 数据条目存储提供商提供的 base64url 编码 HMAC 密钥 |
+
+创建 Secret：
+
+```bash
+kubectl create secret generic eab-hmac-key \
+  --from-literal=hmacKey="<提供商提供的-base64url-编码-hmac-密钥>" \
+  -n production
+```
+
+```yaml
+externalAccountBinding:
+  keyId: "your-eab-key-id"
+  keySecretRef:
+    name: eab-hmac-key
+    namespace: production
+```
 
 Let's Encrypt 不需要 EAB，完全省略 `externalAccountBinding` 即可。
 
