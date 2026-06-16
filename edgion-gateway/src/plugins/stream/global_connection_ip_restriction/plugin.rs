@@ -11,7 +11,7 @@
 //! In all error cases the base is used (fail-to-base), NOT a deny. The base MUST therefore
 //! be authored as the conservative/safe value (e.g. `defaultAction: Deny` + explicit allowlist).
 //!
-//! # No `tracing::warn!/error!` in this module
+//! # No data-plane tracing (warn/error) in this module
 //! This module is on the per-connection data plane. All observability goes through
 //! `record_conn_ip_restriction_event` (Prometheus counter).
 

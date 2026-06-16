@@ -10,8 +10,8 @@
 //! - **`overlay_missing`**: key not found in the EdgionData store → base regions used.
 //! - **`overlay_type_mismatch`**: entry found but wrong `DataEntry` variant → base regions used.
 //!
-//! Both cases are recorded via `record_region_route_overlay_event`. No `tracing::warn!/error!`
-//! on the data-plane path — all signals go through Prometheus counters.
+//! Both cases are recorded via `record_region_route_overlay_event`. No data-plane tracing
+//! (warn/error) is used — all signals go through Prometheus counters.
 //!
 //! # Request-time resolution
 //! `compute_effective_regions` is called per request: one ArcSwap load + one hashmap lookup.
