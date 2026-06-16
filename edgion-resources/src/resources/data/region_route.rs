@@ -41,27 +41,12 @@ impl RegionRouteOverride {
     /// Standalone validation — checks only the fields that are present.
     ///
     /// Called by the controller at EdgionData ingest time (via `validate_pre_parse`).
+    /// Delegates to [`validate_regions`] when `regions: Some` so controller and gateway
+    /// share the exact same rule set (empty list, empty name, empty endpoint, reversed
+    /// hash range, duplicate name).
     pub fn validate_and_init(&self) -> Result<(), String> {
         if let Some(regions) = &self.regions {
-            if regions.is_empty() {
-                return Err("RegionRouteOverride: regions must not be empty when specified".to_string());
-            }
-            // Validate each region's hash_range bounds [low, high] with low <= high
-            for r in regions {
-                if r.hash_range[0] > r.hash_range[1] {
-                    return Err(format!(
-                        "RegionRouteOverride: region '{}' hashRange[{}..{}] is invalid (low > high)",
-                        r.name, r.hash_range[0], r.hash_range[1]
-                    ));
-                }
-                let (host, _) = r.parse_endpoint();
-                if host.is_empty() {
-                    return Err(format!(
-                        "RegionRouteOverride: region '{}' backendEndpoint is empty",
-                        r.name
-                    ));
-                }
-            }
+            validate_regions(regions).map_err(|e| format!("RegionRouteOverride: {}", e))?;
         }
         Ok(())
     }
@@ -167,5 +152,29 @@ mod tests {
         let regions = vec![make_region("r1", 0, 999, "")]; // empty backendEndpoint
         let err = validate_regions(&regions).unwrap_err();
         assert!(err.contains("backendEndpoint") && err.contains("r1"), "{}", err);
+    }
+
+    #[test]
+    fn validate_regions_empty_name_is_err() {
+        let regions = vec![make_region("", 0, 999, "ep:443")]; // empty name
+        let err = validate_regions(&regions).unwrap_err();
+        assert!(err.contains("empty name"), "{}", err);
+    }
+
+    #[test]
+    fn override_validate_and_init_delegates_to_validate_regions() {
+        // Regression: RegionRouteOverride::validate_and_init must catch the SAME
+        // rules as validate_regions (controller/gateway symmetry).
+        let ov = RegionRouteOverride {
+            enable: None,
+            active: None,
+            regions: Some(vec![
+                make_region("cn", 0, 499, "ep-a:443"),
+                make_region("cn", 500, 999, "ep-b:443"), // duplicate name — was missed pre-fix
+            ]),
+        };
+        let err = ov.validate_and_init().unwrap_err();
+        assert!(err.starts_with("RegionRouteOverride: "), "{}", err);
+        assert!(err.contains("duplicate") && err.contains("cn"), "{}", err);
     }
 }

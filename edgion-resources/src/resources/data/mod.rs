@@ -65,7 +65,9 @@ pub struct EdgionDataSpec {
     /// Top-level kill switch. When `false`, consumers must ignore this EdgionData's
     /// content and fall back to their own base defaults. Defaults to `true`.
     ///
-    /// Additive field — no consumer reads it yet (wired in S4).
+    /// Wired by the H1 envelope kill-switch — both the RegionRoute and the
+    /// GlobalConnIp gateway plugins short-circuit to base + emit an
+    /// `overlay_disabled` Prometheus counter when this is `false`.
     #[serde(default = "default_enable")]
     pub enable: bool,
 
@@ -73,7 +75,8 @@ pub struct EdgionDataSpec {
     /// profiles use this value to select the active profile from the base config.
     /// Consumers that do not support profiles ignore this field.
     ///
-    /// Additive field — no consumer reads it yet (wired in S4/S5).
+    /// Not yet wired: RegionRoute has no profile concept (reserved per D-S3-A);
+    /// GlobalConnIp uses its own variant-inner `activeProfile` field, not this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<String>,
 
