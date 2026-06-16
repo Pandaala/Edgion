@@ -102,10 +102,31 @@ pub struct LocalFileWriterCfg {
     /// Rotation configuration (optional)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rotation: Option<RotationConfig>,
+
+    /// Mark the sink unhealthy when filesystem usage reaches this percent
+    /// (0-100). Drives `DataSender::healthy()` so `AccessLogger` first-healthy
+    /// fallback can shed to another sink *before* writes start failing.
+    ///
+    /// Default 90. Set `0` (or omit programmatically) to disable the disk check
+    /// entirely. WARNING: if LocalFile is the LAST sink in the first-healthy
+    /// chain, crossing this threshold makes it unhealthy and access log entries
+    /// are dropped (counted in `edgion_*_log_dropped_total`). To keep writing a
+    /// near-full disk to the last drop, raise this or set it to `0`. The probe
+    /// is sampled on the rotation-check cadence (default 30s); it is
+    /// bounded-stale, not real-time. Recovery is automatic and traffic-free: the
+    /// writer wakes on that same cadence even when idle, so once the disk drops
+    /// back below the threshold the sink returns to healthy without needing new
+    /// log traffic.
+    #[serde(default = "default_disk_usage_threshold_percent")]
+    pub disk_usage_threshold_percent: Option<u8>,
 }
 
 fn default_access_log_path() -> String {
     "logs/edgion_access.log".to_string()
+}
+
+fn default_disk_usage_threshold_percent() -> Option<u8> {
+    Some(90)
 }
 
 impl Default for LocalFileWriterCfg {
@@ -114,6 +135,7 @@ impl Default for LocalFileWriterCfg {
             path: default_access_log_path(),
             queue_size: None,
             rotation: None,
+            disk_usage_threshold_percent: default_disk_usage_threshold_percent(),
         }
     }
 }
@@ -189,6 +211,8 @@ pub struct LocalFileWriterConfig {
     pub queue_size: Option<usize>,
     /// Rotation configuration
     pub rotation: RotationConfig,
+    /// Disk-usage health threshold (percent). `None`/`Some(0)` = disabled.
+    pub disk_usage_threshold_percent: Option<u8>,
 }
 
 impl LocalFileWriterConfig {
@@ -197,6 +221,7 @@ impl LocalFileWriterConfig {
             path: path.into(),
             queue_size: None,
             rotation: RotationConfig::default(),
+            disk_usage_threshold_percent: None,
         }
     }
 
@@ -209,6 +234,11 @@ impl LocalFileWriterConfig {
         self.rotation = rotation;
         self
     }
+
+    pub fn with_disk_threshold(mut self, threshold: Option<u8>) -> Self {
+        self.disk_usage_threshold_percent = threshold;
+        self
+    }
 }
 
 impl From<LocalFileWriterCfg> for LocalFileWriterConfig {
@@ -217,6 +247,7 @@ impl From<LocalFileWriterCfg> for LocalFileWriterConfig {
             path: cfg.path,
             queue_size: cfg.queue_size,
             rotation: cfg.rotation.unwrap_or_default(),
+            disk_usage_threshold_percent: cfg.disk_usage_threshold_percent,
         }
     }
 }
@@ -331,6 +362,22 @@ mod tests {
             }
             other => panic!("unexpected variant: {:?}", other),
         }
+    }
+
+    #[test]
+    fn test_local_file_cfg_disk_threshold_default_and_roundtrip() {
+        // Default is enabled at 90%.
+        let def = LocalFileWriterCfg::default();
+        assert_eq!(def.disk_usage_threshold_percent, Some(90));
+
+        // Explicit 0 (disabled) survives a round-trip.
+        let cfg = LocalFileWriterCfg {
+            disk_usage_threshold_percent: Some(0),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: LocalFileWriterCfg = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.disk_usage_threshold_percent, Some(0));
     }
 
     #[test]

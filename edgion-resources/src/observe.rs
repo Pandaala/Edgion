@@ -28,8 +28,7 @@ impl LogConfig {
             enabled,
             output: StringOutput::LocalFile(crate::output::LocalFileWriterCfg {
                 path: path.into(),
-                queue_size: None,
-                rotation: None,
+                ..Default::default()
             }),
         }
     }

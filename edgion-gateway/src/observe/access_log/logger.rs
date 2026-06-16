@@ -71,3 +71,101 @@ impl Default for AccessLogger {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::link_sys::DataSender;
+    use async_trait::async_trait;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    struct FakeSender {
+        name: String,
+        healthy: Arc<AtomicBool>,
+        received: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl DataSender<String> for FakeSender {
+        async fn init(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn healthy(&self) -> bool {
+            self.healthy.load(Ordering::Relaxed)
+        }
+        async fn send(&self, _data: String) -> anyhow::Result<()> {
+            self.received.fetch_add(1, Ordering::Relaxed);
+            Ok(())
+        }
+        fn name(&self) -> &str {
+            &self.name
+        }
+    }
+
+    fn fake(name: &str, healthy: bool) -> (FakeSender, Arc<AtomicUsize>) {
+        let received = Arc::new(AtomicUsize::new(0));
+        let sender = FakeSender {
+            name: name.to_string(),
+            healthy: Arc::new(AtomicBool::new(healthy)),
+            received: Arc::clone(&received),
+        };
+        (sender, received)
+    }
+
+    #[tokio::test]
+    async fn send_skips_unhealthy_and_falls_through_to_next() {
+        let (first, first_rx) = fake("first", false);
+        let (second, second_rx) = fake("second", true);
+        let mut logger = AccessLogger::new();
+        logger.register(Box::new(first));
+        logger.register(Box::new(second));
+
+        logger.send("hello".to_string()).await;
+
+        assert_eq!(
+            first_rx.load(Ordering::Relaxed),
+            0,
+            "unhealthy first sender must be skipped"
+        );
+        assert_eq!(
+            second_rx.load(Ordering::Relaxed),
+            1,
+            "healthy second sender must receive"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_picks_first_when_it_is_healthy() {
+        let (first, first_rx) = fake("first", true);
+        let (second, second_rx) = fake("second", true);
+        let mut logger = AccessLogger::new();
+        logger.register(Box::new(first));
+        logger.register(Box::new(second));
+
+        logger.send("hello".to_string()).await;
+
+        assert_eq!(
+            first_rx.load(Ordering::Relaxed),
+            1,
+            "healthy first sender wins (priority = order)"
+        );
+        assert_eq!(second_rx.load(Ordering::Relaxed), 0, "second sender must not be used");
+    }
+
+    #[tokio::test]
+    async fn send_drops_when_all_unhealthy() {
+        let (first, first_rx) = fake("first", false);
+        let (second, second_rx) = fake("second", false);
+        let mut logger = AccessLogger::new();
+        logger.register(Box::new(first));
+        logger.register(Box::new(second));
+
+        // No panic, no delivery (the dropped metric is incremented; not asserted
+        // here since there is no metrics recorder installed in this unit test).
+        logger.send("hello".to_string()).await;
+
+        assert_eq!(first_rx.load(Ordering::Relaxed), 0);
+        assert_eq!(second_rx.load(Ordering::Relaxed), 0);
+    }
+}

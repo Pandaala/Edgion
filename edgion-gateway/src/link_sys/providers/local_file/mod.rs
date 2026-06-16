@@ -4,7 +4,9 @@ mod data_sender_impl;
 mod rotation;
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::SyncSender;
+use std::sync::Arc;
 
 use edgion_resources::output::{LocalFileWriterConfig, RotationConfig};
 use edgion_resources::work_dir;
@@ -33,7 +35,9 @@ pub struct LocalFileWriter {
     /// Log type for metrics differentiation
     pub(super) log_type: LogType,
     pub(super) sender: Option<SyncSender<String>>,
-    pub(super) healthy: bool,
+    pub(super) healthy: Arc<AtomicBool>,
+    /// Disk-usage health threshold (percent). `None`/`Some(0)` = disabled.
+    pub(super) disk_usage_threshold_percent: Option<u8>,
 }
 
 impl LocalFileWriter {
@@ -45,7 +49,8 @@ impl LocalFileWriter {
             rotation: config.rotation,
             log_type: LogType::Access, // Default to Access
             sender: None,
-            healthy: false,
+            healthy: Arc::new(AtomicBool::new(false)),
+            disk_usage_threshold_percent: config.disk_usage_threshold_percent,
         }
     }
 
@@ -57,7 +62,8 @@ impl LocalFileWriter {
             rotation: RotationConfig::default(),
             log_type: LogType::Access,
             sender: None,
-            healthy: false,
+            healthy: Arc::new(AtomicBool::new(false)),
+            disk_usage_threshold_percent: None,
         }
     }
 

@@ -156,6 +156,10 @@ pingora-ketama.workspace = true
 tower.workspace = true
 
 
+[target.'cfg(unix)'.dependencies]
+# Disk-usage probe for LocalFile log sink health (statvfs).
+rustix = { version = "1.1", features = ["fs"] }
+
 [dev-dependencies]
 edgion-common = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true

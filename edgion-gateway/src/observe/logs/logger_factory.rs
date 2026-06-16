@@ -34,6 +34,8 @@ fn build_writer_config(file_cfg: &LocalFileWriterCfg, log_type: LogType) -> Loca
         writer_config = writer_config.with_rotation(rotation.clone());
     }
 
+    writer_config = writer_config.with_disk_threshold(file_cfg.disk_usage_threshold_percent);
+
     writer_config
 }
 

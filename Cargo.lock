@@ -1519,6 +1519,7 @@ dependencies = [
  "rpassword",
  "rskafka",
  "rusqlite",
+ "rustix",
  "rustls 0.23.37",
  "rustls-native-certs 0.8.3",
  "schemars",

@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
@@ -14,7 +14,7 @@ use edgion_resources::output::{OtlpOutputConfig, OtlpProtocol};
 pub struct OtlpLogSender {
     config: OtlpOutputConfig,
     provider: OnceLock<SdkLoggerProvider>,
-    healthy: AtomicBool,
+    healthy: Arc<AtomicBool>,
 }
 
 impl OtlpLogSender {
@@ -22,8 +22,23 @@ impl OtlpLogSender {
         Self {
             config,
             provider: OnceLock::new(),
-            healthy: AtomicBool::new(false),
+            healthy: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Shared handle to this sender's health flag.
+    ///
+    /// `OtlpLogSender` is stored as a `Box<dyn DataSender>` in `AccessLogger`,
+    /// which erases the concrete type, so an inherent `set_healthy(&self)` would
+    /// be unreachable. Capture this `Arc` at registration time instead and hand
+    /// it to the background probe.
+    ///
+    /// TODO(task 05): `emit` is fire-and-forget and cannot observe export
+    /// success, so until the background endpoint probe lands the flag stays
+    /// `true` after a successful `init` (current behavior, no regression). The
+    /// probe will drive it via this handle.
+    pub fn health_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.healthy)
     }
 }
 
@@ -174,6 +189,19 @@ mod tests {
     #[test]
     fn test_otlp_log_sender_healthy_before_init() {
         let sender = OtlpLogSender::new(make_grpc_config());
+        assert!(!sender.healthy());
+    }
+
+    #[test]
+    fn health_handle_reflects_and_drives_flag() {
+        let sender = OtlpLogSender::new(make_grpc_config());
+        let handle = sender.health_handle();
+        // Starts unhealthy before init.
+        assert!(!sender.healthy());
+        // The probe drives the same flag the sender reads.
+        handle.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(sender.healthy());
+        handle.store(false, std::sync::atomic::Ordering::Relaxed);
         assert!(!sender.healthy());
     }
 

@@ -59,7 +59,28 @@ where
     /// Initialize the sender connection
     async fn init(&mut self) -> Result<()>;
 
-    /// Check if the sender is healthy
+    /// Whether this sender can currently deliver successfully.
+    ///
+    /// Contract (all implementations MUST follow this):
+    /// - Reflects the most recent delivery outcome or health probe — it is a
+    ///   *live* signal, never a constant frozen at `init` time.
+    /// - Must turn `false` when the sink knows delivery itself is broken: a
+    ///   write/flush failure, a dropped connection, or a dead background worker.
+    /// - Two cases intentionally do NOT flip health: transient queue saturation
+    ///   is backpressure (a bounded buffer is full), so a sink may stay `true`
+    ///   and drop with a metric (see I5); and a fire-and-forget transport that
+    ///   cannot observe delivery locally (e.g. OTLP export) is driven by a
+    ///   background probe rather than the send path (see task 05).
+    /// - Must return to `true` automatically once recovery is observed, driven
+    ///   by a later successful delivery or a background probe (see task 05).
+    /// - "Best-effort recent state": bounded staleness (probe interval / TTL) is
+    ///   allowed; permanent untruth is not.
+    ///
+    /// `AccessLogger::send` dispatches to the first sender whose `healthy()` is
+    /// `true` (registration order = priority), so an inaccurate value silently
+    /// breaks the degradation fallback. On every `healthy <-> unhealthy`
+    /// transition an implementation should emit one rate-limited structured log
+    /// (and update a metric where one exists).
     fn healthy(&self) -> bool;
 
     /// Send data to the external system (takes ownership to avoid copy)
