@@ -98,12 +98,12 @@ pub mod condition_reasons {
     /// CACertificateRef cannot be resolved (resource not found or misconfigured).
     pub const INVALID_CA_CERTIFICATE_REF: &str = "InvalidCACertificateRef";
 
-    /// Edgion extension · Referenced EdgionData not found or has an
+    /// Edgion extension · Referenced EdgionConfigData not found or has an
     /// unexpected variant type (e.g. `ServiceRegionRoute.clusterRef` pointing
-    /// at a non-existent or non-`ClusterRegionRoute` EdgionData). Not a
+    /// at a non-existent or non-`ClusterRegionRoute` EdgionConfigData). Not a
     /// Gateway API upstream reason — see the "Edgion extension" note above
     /// the Secret-focused reasons for the general caveat.
-    pub const INVALID_EDGION_DATA_REF: &str = "InvalidEdgionDataRef";
+    pub const INVALID_EDGION_CONFIG_DATA_REF: &str = "InvalidEdgionConfigDataRef";
     /// Gateway-level: edgion.io/edgion-stream-plugins annotation references a missing resource.
     pub const INVALID_STREAM_PLUGINS_REF: &str = "InvalidStreamPluginsRef";
 
@@ -215,10 +215,10 @@ pub enum ResolvedRefsError {
         target_namespace: String,
         target_name: String,
     },
-    /// Referenced EdgionData not found, or found but its data variant
+    /// Referenced EdgionConfigData not found, or found but its data variant
     /// type doesn't match what the referrer requires (e.g. ServiceRegionRoute.clusterRef
-    /// expects an EdgionData of type ClusterRegionRoute).
-    EdgionDataNotFound {
+    /// expects an EdgionConfigData of type ClusterRegionRoute).
+    EdgionConfigDataNotFound {
         namespace: String,
         name: String,
         expected_type: String,
@@ -252,7 +252,7 @@ impl ResolvedRefsError {
             Self::BackendNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
             Self::SecretNotFound { .. } => condition_reasons::SECRET_NOT_FOUND,
             Self::RefNotPermitted { .. } => condition_reasons::REF_NOT_PERMITTED,
-            Self::EdgionDataNotFound { .. } => condition_reasons::INVALID_EDGION_DATA_REF,
+            Self::EdgionConfigDataNotFound { .. } => condition_reasons::INVALID_EDGION_CONFIG_DATA_REF,
             Self::MissingKeys { .. } => condition_reasons::MISSING_KEYS,
             Self::DecodeError { .. } => condition_reasons::DECODE_ERROR,
             Self::InvalidSecretType { .. } => condition_reasons::INVALID_SECRET_TYPE,
@@ -282,13 +282,13 @@ impl ResolvedRefsError {
                     from_namespace, from_kind, target_namespace, target_name
                 )
             }
-            Self::EdgionDataNotFound {
+            Self::EdgionConfigDataNotFound {
                 namespace,
                 name,
                 expected_type,
             } => {
                 format!(
-                    "EdgionData '{}/{}' (expected type={}) not found",
+                    "EdgionConfigData '{}/{}' (expected type={}) not found",
                     namespace, name, expected_type
                 )
             }
@@ -434,7 +434,7 @@ pub fn resolved_refs_condition(errors: &[ResolvedRefsError], observed_generation
 /// 2. RefNotPermitted — policy denial
 /// 3. CertContentInvalid — certificate content unusable (expired / SAN / key mismatch)
 /// 4. InvalidSecretType — Secret exists but wrong type (akin to InvalidKind, but for Secrets)
-/// 5. EdgionDataNotFound — dependent EdgionData missing
+/// 5. EdgionConfigDataNotFound — dependent EdgionConfigData missing
 /// 6. BackendNotFound — target Service missing
 /// 7. SecretNotFound — target Secret missing
 /// 8. DecodeError — Secret content unusable (parse failure)
@@ -458,7 +458,7 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
             ResolvedRefsError::RefNotPermitted { .. } => 1,
             ResolvedRefsError::CertContentInvalid { .. } => 2,
             ResolvedRefsError::InvalidSecretType { .. } => 3,
-            ResolvedRefsError::EdgionDataNotFound { .. } => 4,
+            ResolvedRefsError::EdgionConfigDataNotFound { .. } => 4,
             ResolvedRefsError::BackendNotFound { .. } => 5,
             ResolvedRefsError::SecretNotFound { .. } => 6,
             ResolvedRefsError::DecodeError { .. } => 7,

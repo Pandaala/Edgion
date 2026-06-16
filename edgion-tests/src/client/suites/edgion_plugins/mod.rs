@@ -14,8 +14,8 @@ mod direct_endpoint;
 mod dsl;
 mod dynamic_external_upstream;
 mod dynamic_internal_upstream;
-mod edgion_data_managed;
-mod edgion_data_status;
+mod edgion_config_data_managed;
+mod edgion_config_data_status;
 mod ext_proc;
 mod fault_injection;
 mod forward_auth;
@@ -58,10 +58,10 @@ pub use direct_endpoint::DirectEndpointTestSuite;
 pub use dsl::{DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite, DslTestSuite};
 pub use dynamic_external_upstream::DynamicExternalUpstreamTestSuite;
 pub use dynamic_internal_upstream::DynamicInternalUpstreamTestSuite;
-pub use edgion_data_managed::EdgionDataManagedTestSuite;
-pub use edgion_data_status::{
-    EdgionDataFlapInitialTestSuite, EdgionDataFlapInvalidTestSuite, EdgionDataFlapValidTestSuite,
-    EdgionDataStatusTestSuite,
+pub use edgion_config_data_managed::EdgionConfigDataManagedTestSuite;
+pub use edgion_config_data_status::{
+    EdgionConfigDataFlapInitialTestSuite, EdgionConfigDataFlapInvalidTestSuite, EdgionConfigDataFlapValidTestSuite,
+    EdgionConfigDataStatusTestSuite,
 };
 pub use ext_proc::ExtProcTestSuite;
 pub use fault_injection::FaultInjectionTestSuite;

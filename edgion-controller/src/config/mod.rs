@@ -927,7 +927,7 @@ metrics:
     #[test]
     fn cli_tokens_parse_and_validate() {
         let cfg: EdgionControllerConfig = serde_yaml::from_str(
-            "cli_tokens:\n  - name: bot\n    token_sha256: \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n    rbac:\n      allow:\n        - verbs: [get, list]\n          kinds: [EdgionData]\n",
+            "cli_tokens:\n  - name: bot\n    token_sha256: \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\"\n    rbac:\n      allow:\n        - verbs: [get, list]\n          kinds: [EdgionConfigData]\n",
         )
         .unwrap();
         assert_eq!(cfg.cli_tokens.len(), 1);
@@ -1010,7 +1010,7 @@ enabled: false
 rbac:
   allow:
     - verbs: [get, list]
-      kinds: [EdgionData]
+      kinds: [EdgionConfigData]
     - verbs: [reload]
       kinds: ["*"]
 "#,
@@ -1028,7 +1028,7 @@ rbac:
         let rbac = FedRbacConfig {
             allow: vec![FedAllowRule {
                 verbs: vec![],
-                kinds: vec!["EdgionData".into()],
+                kinds: vec!["EdgionConfigData".into()],
             }],
         };
         assert!(rbac.validate().is_err(), "a rule with no verbs is malformed");

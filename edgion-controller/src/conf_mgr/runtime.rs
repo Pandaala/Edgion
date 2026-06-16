@@ -16,7 +16,7 @@ use super::sync_runtime::resource_processor::{
     attached_route_tracker::AttachedRouteTracker,
     backend_tls_policy_ref::BackendTLSPolicyState,
     configmap_utils::ConfigMapStore,
-    edgion_data_utils::{EdgionDataRefManager, EdgionDataStore},
+    edgion_config_data_utils::{EdgionConfigDataRefManager, EdgionConfigDataStore},
     gateway_route_index::GatewayRouteIndex,
     listener_port_manager::ListenerPortManager,
     namespace_store::NamespaceStore,
@@ -48,17 +48,17 @@ pub struct ControllerRuntime {
     pub(crate) listener_port_manager: ListenerPortManager,
     pub(crate) configmap_store: ConfigMapStore,
     pub(crate) backend_tls_policy: BackendTLSPolicyState,
-    pub(crate) edgion_data_store: EdgionDataStore,
-    /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each EdgionData.
-    /// Used by the EdgionDataHandler to requeue referencing resources on change.
-    pub(crate) edgion_data_refs: EdgionDataRefManager,
+    pub(crate) edgion_config_data_store: EdgionConfigDataStore,
+    /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each EdgionConfigData.
+    /// Used by the EdgionConfigDataHandler to requeue referencing resources on change.
+    pub(crate) edgion_config_data_refs: EdgionConfigDataRefManager,
     /// Tracks which Gateways reference each EdgionStreamPlugins via
     /// `edgion.io/edgion-stream-plugins` annotation.
     /// Forward: `"esp_ns/esp_name" → Set<Gateway ResourceRef>`
     /// Reverse: `Gateway ResourceRef → Set<"esp_ns/esp_name">`
     pub(crate) stream_plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
     /// Optional conf_writer injected by the ConfCenter implementation.
-    /// Used by handlers to auto-create resources (e.g., EdgionData for RegionRoute).
+    /// Used by handlers to auto-create resources (e.g., EdgionConfigData for RegionRoute).
     /// None until the ConfCenter calls `set_conf_writer()`.
     pub(crate) conf_writer: RwLock<Option<Arc<dyn CenterApi + Send + Sync>>>,
 }
@@ -79,8 +79,8 @@ impl ControllerRuntime {
             listener_port_manager: ListenerPortManager::new(),
             configmap_store: ConfigMapStore::new(),
             backend_tls_policy: BackendTLSPolicyState::new(),
-            edgion_data_store: EdgionDataStore::new(),
-            edgion_data_refs: EdgionDataRefManager::new(),
+            edgion_config_data_store: EdgionConfigDataStore::new(),
+            edgion_config_data_refs: EdgionConfigDataRefManager::new(),
             stream_plugin_ref_mgr: BidirectionalRefManager::with_component("stream_plugin_ref_mgr"),
             conf_writer: RwLock::new(None),
         }
@@ -143,11 +143,11 @@ impl ControllerRuntime {
 
         self.backend_tls_policy.reset();
 
-        self.edgion_data_store.replace_all(HashMap::new());
-        tracing::info!(component = "controller_runtime", "Cleared EdgionData store");
+        self.edgion_config_data_store.replace_all(HashMap::new());
+        tracing::info!(component = "controller_runtime", "Cleared EdgionConfigData store");
 
-        self.edgion_data_refs.clear_all();
-        tracing::info!(component = "controller_runtime", "Cleared EdgionData ref manager");
+        self.edgion_config_data_refs.clear_all();
+        tracing::info!(component = "controller_runtime", "Cleared EdgionConfigData ref manager");
 
         self.stream_plugin_ref_mgr.clear();
         tracing::info!(component = "controller_runtime", "Cleared StreamPluginRefManager");

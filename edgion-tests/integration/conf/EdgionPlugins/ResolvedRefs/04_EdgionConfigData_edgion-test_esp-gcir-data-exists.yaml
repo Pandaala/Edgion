@@ -1,0 +1,18 @@
+# GlobalConnIpRestrictionOverride EdgionConfigData — must be loaded BEFORE the ESP that references it.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: esp-gcir-data-exists
+  namespace: edgion-test
+spec:
+  data:
+    type: GlobalConnIpRestrictionOverride
+    config:
+      activeProfile: main
+      profiles:
+        main:
+          defaultAction: deny
+          allow:
+            - name: office
+              cidrs:
+                - "10.0.0.0/8"

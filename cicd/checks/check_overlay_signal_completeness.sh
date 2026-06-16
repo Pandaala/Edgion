@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Ensure every overlay-consumer plugin emits the full fail-to-base signal set.
 #
-# Background: the EdgionData overlay design (01-design.md §4 fail matrix)
+# Background: the EdgionConfigData overlay design (01-design.md §4 fail matrix)
 # defines four signals every consumer plugin must emit via its Prometheus
 # overlay-event counter:
 #
-#   overlay_missing         overrideRef set but EdgionData not in store
-#   overlay_type_mismatch   EdgionData present but wrong DataEntry variant
+#   overlay_missing         overrideRef set but EdgionConfigData not in store
+#   overlay_type_mismatch   EdgionConfigData present but wrong ConfigEntry variant
 #   overlay_invalid         overlay applied but effective config fails validation
 #   overlay_disabled        envelope spec.enable=false (H1 top kill switch)
 #
@@ -22,8 +22,8 @@
 # fail_closed_*); we only require the four overlay labels to be present.
 #
 # Policy source:
-#   tasks/todo/edgion-data-overlay-refactor/01-design.md  -> §4 fail matrix
-#   tasks/todo/edgion-data-overlay-refactor/05-issues.md  -> H1 RESOLVED
+#   tasks/todo/edgion-config-data-overlay-refactor/01-design.md  -> §4 fail matrix
+#   tasks/todo/edgion-config-data-overlay-refactor/05-issues.md  -> H1 RESOLVED
 #
 # Exit 0 on clean; exit 1 with the missing-signal list.
 

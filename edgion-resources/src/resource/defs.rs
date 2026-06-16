@@ -168,12 +168,12 @@ define_resources! {
         capacity_field: edgion_stream_plugins_capacity,
         default_capacity: normal,
     },
-    EdgionData {
+    EdgionConfigData {
         enum_value: 13,
-        kind_name: "edgiondata",
+        kind_name: "edgionconfigdata",
         kind_aliases: [],
-        cache_field: edgion_data,
-        capacity_field: edgion_data_capacity,
+        cache_field: edgion_config_data,
+        capacity_field: edgion_config_data_capacity,
         default_capacity: normal,
     },
 
@@ -346,7 +346,7 @@ mod tests {
             "grpcroute",
             "tcproute",
             "udproute",
-            "edgiondata",
+            "edgionconfigdata",
             "tlsroute",
             "linksys",
             "edgionstreamplugins",

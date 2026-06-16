@@ -11,7 +11,7 @@ The byte-identical body that walked `deny_matcher` → `allow_matcher` → `defa
 
 - `IpRestrictionConfig::check_ip_access` (`edgion-resources/src/resources/edgion_plugins/plugin_configs/ip_restriction.rs`) — HTTP layer
 - `ConnectionIpRestrictionRules::check_ip` (`edgion-resources/src/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs`) — L4 stream layer
-- `ProfileRules::check_ip` (`edgion-resources/src/resources/edgion_data/global_connection_ip_restriction.rs`) — cluster-scope `GlobalConnectionIpRestriction` profile
+- `ProfileRules::check_ip` (`edgion-resources/src/resources/edgion_config_data/global_connection_ip_restriction.rs`) — cluster-scope `GlobalConnectionIpRestriction` profile
 
 All three accept `&IpAddr` and operate on the same `Option<IpRadixMatcher>` matchers and `DefaultAction` type. Consolidated into a single free function `evaluate_ip_access(deny, allow, default_action, ip) -> AccessDecision` in `edgion-resources/src/matcher/ip_cidr_helpers.rs`. Each of the three call sites is now a 5-line delegation. Closed as `plugins-stream-F012`, 2026-05-27.
 

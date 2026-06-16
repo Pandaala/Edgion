@@ -17,7 +17,7 @@ pub mod backend_tls_policy_ref;
 pub mod configmap_utils;
 mod context;
 pub mod credential;
-pub mod edgion_data_utils;
+pub mod edgion_config_data_utils;
 pub mod gateway_route_index;
 mod handler;
 pub mod handlers;
@@ -51,10 +51,10 @@ pub use status_utils::{
 
 // Re-export handlers
 pub use handlers::{
-    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler, EdgionDataHandler,
-    EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler, EdgionTlsHandler,
-    EndpointSliceHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler, LinkSysHandler,
-    ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler,
+    BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
+    EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler,
+    EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
+    LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler,
     TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
 };
 
@@ -93,8 +93,8 @@ pub use backend_tls_policy_ref::{make_target_conflict_key, BackendTLSPolicyState
 // Re-export namespace_store utilities
 pub use namespace_store::NamespaceStore;
 
-// Re-export edgion_data_utils
-pub use edgion_data_utils::EdgionDataStore;
+// Re-export edgion_config_data_utils
+pub use edgion_config_data_utils::EdgionConfigDataStore;
 
 // region_route_table: module kept for future use; no types exported after S3.
 

@@ -1,13 +1,13 @@
 //! KeyList group structure validation.
 //!
 //! Parallel to `ip_cidr_helpers::validate_groups_structure` but for
-//! `EdgionData::KeyList`'s `Vec<KeyGroup>`. Validates structural
+//! `EdgionConfigData::KeyList`'s `Vec<KeyGroup>`. Validates structural
 //! invariants only; does NOT build any matcher.
 
 use std::collections::HashSet;
 
 use crate::resources::common::group_name::validate_group_name;
-use crate::resources::edgion_data::{KeyGroup, KeyMatchMode};
+use crate::resources::edgion_config_data::{KeyGroup, KeyMatchMode};
 
 /// Validate a `Vec<KeyGroup>` for:
 /// - groups list non-empty

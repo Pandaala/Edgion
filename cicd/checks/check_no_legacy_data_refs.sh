@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Forbid references to legacy types/kinds/fields removed by the EdgionData
-# overlay refactor (commit 79b7de8e..a390b2d8 on refactor/edgion-data-overlay).
+# Forbid references to legacy types/kinds/fields removed by the EdgionConfigData
+# overlay refactor (commit 79b7de8e..a390b2d8 on refactor/edgion-config-data-overlay).
 #
 # Catches a class of regression where someone copies an old example, fixture, or
 # CRD snippet back in, or where a new branch built on a stale checkpoint
@@ -18,8 +18,8 @@
 #   - 05-issues.md            (issues file by definition references closed-state names)
 #
 # Policy source:
-#   tasks/todo/edgion-data-overlay-refactor/06-decisions.md  -> D1, D4
-#   tasks/todo/edgion-data-overlay-refactor/05-issues.md     -> I3
+#   tasks/todo/edgion-config-data-overlay-refactor/06-decisions.md  -> D1, D4
+#   tasks/todo/edgion-config-data-overlay-refactor/05-issues.md     -> I3
 #
 # Exit 0 on clean; exit 1 with violation list otherwise.
 
@@ -57,25 +57,25 @@ check() {
     fi
 }
 
-# 1. Removed kind: PluginMetaData (renamed to EdgionData in S1).
-check "Legacy kind 'PluginMetaData' (use 'EdgionData')" \
+# 1. Removed kind: PluginMetaData (renamed to EdgionConfigData in S1).
+check "Legacy kind 'PluginMetaData' (use 'EdgionConfigData')" \
     'kind:[[:space:]]*PluginMetaData([[:space:]]|$)' \
     --include='*.yaml' --include='*.yml'
 
-# 2. Removed DataEntry variants (ClusterRegionRoute / ServiceRegionRoute / standalone
+# 2. Removed ConfigEntry variants (ClusterRegionRoute / ServiceRegionRoute / standalone
 #    GlobalConnectionIpRestriction) -- removed in S3 and I3.
-check "Legacy DataEntry 'type: ClusterRegionRoute' (folded into EdgionPlugins RegionRouteConfig base, S3)" \
+check "Legacy ConfigEntry 'type: ClusterRegionRoute' (folded into EdgionPlugins RegionRouteConfig base, S3)" \
     'type:[[:space:]]*ClusterRegionRoute([[:space:]]|$)' \
     --include='*.yaml' --include='*.yml'
 
-check "Legacy DataEntry 'type: ServiceRegionRoute' (folded into RegionRouteOverride overlay, S3)" \
+check "Legacy ConfigEntry 'type: ServiceRegionRoute' (folded into RegionRouteOverride overlay, S3)" \
     'type:[[:space:]]*ServiceRegionRoute([[:space:]]|$)' \
     --include='*.yaml' --include='*.yml'
 
 # Note: the discriminator 'type: GlobalConnectionIpRestriction' is STILL VALID
 # inside EdgionStreamPlugins entries (it is the stream-plugin tag, not a
-# DataEntry variant). We only forbid it as a DataEntry variant under
-# `kind: EdgionData` / `data:` — caught by the parity gate (Gate 2), not here.
+# ConfigEntry variant). We only forbid it as a ConfigEntry variant under
+# `kind: EdgionConfigData` / `data:` — caught by the parity gate (Gate 2), not here.
 
 # 3. Removed spec fields.
 check "Legacy field 'serviceRegionRouteRef' (use 'overrideRef' on RegionRouteConfig, S3)" \
@@ -87,19 +87,19 @@ check "Legacy field 'clusterRef' from the removed cluster_ref chain (S3)" \
     --include='*.yaml' --include='*.yml'
 
 # 4. Removed Rust identifiers.
-check "Legacy Rust kind 'PluginMetaData' / spec / status (use 'EdgionData' / 'EdgionDataSpec' / 'EdgionDataStatus')" \
+check "Legacy Rust kind 'PluginMetaData' / spec / status (use 'EdgionConfigData' / 'EdgionConfigDataSpec' / 'EdgionConfigDataStatus')" \
     '\bPluginMetaData(Spec|Status)?\b' \
     --include='*.rs'
 
-check "Legacy Rust enum 'MetaDataEntry' (use 'DataEntry')" \
-    '\bMetaDataEntry\b' \
+check "Legacy Rust enum 'MetaConfigEntry' (use 'ConfigEntry')" \
+    '\bMetaConfigEntry\b' \
     --include='*.rs'
 
 # Note: `PluginReference` is NOT forbidden -- there are two unrelated structs
-# with that name. The PluginMetaData-side one was renamed to `EdgionDataRef`.
+# with that name. The PluginMetaData-side one was renamed to `EdgionConfigDataRef`.
 # The other (in edgion-resources/.../edgion_gateway_config.rs) is for EdgionPlugins
-# global-plugin refs and is unrelated to the EdgionData refactor.
-check "Legacy Rust type 'PluginMetaDataRef' / 'DataRef' (use 'EdgionDataRef')" \
+# global-plugin refs and is unrelated to the EdgionConfigData refactor.
+check "Legacy Rust type 'PluginMetaDataRef' / 'DataRef' (use 'EdgionConfigDataRef')" \
     '\b(PluginMetaDataRef|DataRef)\b' \
     --include='*.rs'
 
@@ -110,33 +110,33 @@ check "Legacy Rust type 'PluginMetaDataStore' / 'DataHandler' / 'PluginMetaDataR
 # 4b. Module path naming: bare 'data'/'plugin_metadata_*' under Edgion crates
 #     violates the project's `edgion_<name>` convention (matching
 #     edgion_acme/edgion_plugins/edgion_stream_plugins/edgion_tls).
-check "Legacy module path 'plugin_metadata_utils' (use 'edgion_data_utils')" \
+check "Legacy module path 'plugin_metadata_utils' (use 'edgion_config_data_utils')" \
     'plugin_metadata_utils' \
     --include='*.rs'
 
-check "Legacy bare-name 'mod data;' under resources/ runtime/ handlers/ (use 'mod edgion_data;')" \
+check "Legacy bare-name 'mod data;' under resources/ runtime/ handlers/ (use 'mod edgion_config_data;')" \
     '^(pub )?mod data;' \
     --include='*.rs'
 
-check "Legacy bare path '::data::' (use '::edgion_data::')" \
+check "Legacy bare path '::data::' (use '::edgion_config_data::')" \
     '::data::' \
     --include='*.rs'
 
-check "Legacy field/var 'plugin_metadata_refs' / 'pm_key' / 'pm_ns' / 'pm_name' / 'remove_pm' / 'requeue_pm_referrers' (use ed_*/edgion_data_*)" \
+check "Legacy field/var 'plugin_metadata_refs' / 'pm_key' / 'pm_ns' / 'pm_name' / 'remove_pm' / 'requeue_pm_referrers' (use ed_*/edgion_config_data_*)" \
     '\b(plugin_metadata_refs|pm_key|pm_ns|pm_name|remove_pm|requeue_pm_referrers)\b' \
     --include='*.rs'
 
 # 5. Test suite naming -- the integration test scaffolding got renamed alongside the
 #    data refactor so AI agents don't search the old names by accident.
-check "Legacy test module 'plugin_metadata_status' / 'plugin_metadata_managed' / 'pmd_ref_flap' (use 'edgion_data_*')" \
+check "Legacy test module 'plugin_metadata_status' / 'plugin_metadata_managed' / 'pmd_ref_flap' (use 'edgion_config_data_*')" \
     'plugin_metadata_(status|managed)|pmd_ref_flap' \
     --include='*.rs'
 
-check "Legacy test struct 'PmdFlap*TestSuite' (use 'EdgionDataFlap*TestSuite')" \
+check "Legacy test struct 'PmdFlap*TestSuite' (use 'EdgionConfigDataFlap*TestSuite')" \
     'PmdFlap[A-Z]\w*TestSuite' \
     --include='*.rs'
 
-check "Legacy kebab fixture dir 'plugin-metadata-managed' / 'pmd-flap-*' name prefix (use 'EdgionDataManaged' / 'data-flap-*')" \
+check "Legacy kebab fixture dir 'plugin-metadata-managed' / 'pmd-flap-*' name prefix (use 'EdgionConfigDataManaged' / 'data-flap-*')" \
     'plugin-metadata-managed|pmd-flap-' \
     --include='*.yaml' --include='*.yml' --include='*.rs'
 
@@ -144,17 +144,17 @@ check "Legacy resource-name prefix 'pm-managed' / 'pm-validated' / 'pm-status-' 
     '\bpm-(managed|validated|status-)|esp-gcir-pm-' \
     --include='*.yaml' --include='*.yml' --include='*.rs'
 
-check "Legacy fixture file-name component 'PluginMetaData_' (use 'EdgionData_')" \
+check "Legacy fixture file-name component 'PluginMetaData_' (use 'EdgionConfigData_')" \
     'PluginMetaData_' \
     --include='*.yaml' --include='*.yml' --include='*.rs'
 
-check "Legacy DataEntry::ClusterRegionRoute / ::ServiceRegionRoute / standalone ::GlobalConnectionIpRestriction" \
-    '\bDataEntry::(ClusterRegionRoute|ServiceRegionRoute|GlobalConnectionIpRestriction)\b' \
+check "Legacy ConfigEntry::ClusterRegionRoute / ::ServiceRegionRoute / standalone ::GlobalConnectionIpRestriction" \
+    '\bConfigEntry::(ClusterRegionRoute|ServiceRegionRoute|GlobalConnectionIpRestriction)\b' \
     --include='*.rs'
 
 # 5. Removed CRD file (the old kebab-name).
 if [ -f "config/crd/edgion-crd/plugin_metadata_crd.yaml" ]; then
-    echo "ERROR: Legacy CRD file 'config/crd/edgion-crd/plugin_metadata_crd.yaml' still exists (use 'edgion_data_crd.yaml')" >&2
+    echo "ERROR: Legacy CRD file 'config/crd/edgion-crd/plugin_metadata_crd.yaml' still exists (use 'edgion_config_data_crd.yaml')" >&2
     violations=$((violations + 1))
 fi
 

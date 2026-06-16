@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::edgion_data::{EdgionDataRef, GlobalConnectionIpRestrictionData};
+use crate::resources::edgion_config_data::{EdgionConfigDataRef, GlobalConnectionIpRestrictionData};
 use crate::resources::edgion_stream_plugins::connection_ip_restriction_rules::ConnectionIpRestrictionRules;
 use crate::resources::edgion_stream_plugins::connection_rate_limit_config::ConnectionRateLimitConfig;
 
@@ -18,7 +18,7 @@ pub enum EdgionStreamPlugin {
     ///
     /// The `base` holds the complete, safe-default config (always present).
     /// The optional `overrideRef` points to a `GlobalConnIpRestrictionOverride`
-    /// EdgionData that can hot-swap `enable`, `activeProfile`, or `profiles`.
+    /// EdgionConfigData that can hot-swap `enable`, `activeProfile`, or `profiles`.
     /// On any overlay error (absent / invalid / type-mismatch), the gateway
     /// falls back to `base` (fail-to-base) and emits a metric signal.
     GlobalConnectionIpRestriction(GlobalConnectionIpRestrictionEntry),
@@ -45,12 +45,12 @@ pub struct GlobalConnectionIpRestrictionEntry {
     /// overlay resolution fails (fail-to-base).
     pub base: GlobalConnectionIpRestrictionData,
 
-    /// Optional reference to a `GlobalConnIpRestrictionOverride` EdgionData.
+    /// Optional reference to a `GlobalConnIpRestrictionOverride` EdgionConfigData.
     /// Namespace defaults to the parent `EdgionStreamPlugins` namespace if omitted.
     /// When set, the effective config at connection time is `base ⊕ overlay`;
     /// overlay errors degrade to `base`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub override_ref: Option<EdgionDataRef>,
+    pub override_ref: Option<EdgionConfigDataRef>,
 }
 
 impl EdgionStreamPlugin {

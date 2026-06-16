@@ -1,9 +1,9 @@
 ---
 name: keylist-group-structure
-description: Use when reviewing PluginMetaData::KeyList schema or validate_pre_parse changes; documents the KeyGroup grouping contract (mirrors IpListData/IpGroup) and that any regression to flat Vec<MetaDataItem> must be rejected.
+description: Use when reviewing EdgionConfigData::KeyList schema or validate_pre_parse changes; documents the KeyGroup grouping contract (mirrors IpListData/IpGroup) and that any regression to flat Vec<MetaDataItem> must be rejected.
 ---
 
-# PluginMetaData::KeyList uses KeyGroup (mirrors IpListData/IpGroup)
+# EdgionConfigData::KeyList uses KeyGroup (mirrors IpListData/IpGroup)
 
 After the 04-keylist-metadata pilot (2026-05-18), `KeyListData.items` is
 `Vec<KeyGroup>` — NOT the historical flat `Vec<MetaDataItem>`. Each
@@ -36,8 +36,8 @@ mirrors `IpListData::IpGroup`'s name/description/cidrs structure.
 
 ## Related
 
-- `edgion-resources/src/resources/edgion_data/key_list.rs` (KeyListData/KeyGroup)
+- `edgion-resources/src/resources/edgion_config_data/key_list.rs` (KeyListData/KeyGroup)
 - `edgion-resources/src/matcher/key_group_helpers.rs::validate_key_groups_structure`
-- `edgion-resources/src/resources/edgion_data/mod.rs` (validate_pre_parse KeyList branch)
-- `edgion-resources/src/resources/edgion_data/ip_list.rs` (mirror reference)
+- `edgion-resources/src/resources/edgion_config_data/mod.rs` (validate_pre_parse KeyList branch)
+- `edgion-resources/src/resources/edgion_config_data/ip_list.rs` (mirror reference)
 - `tasks/todo/plugin-grouping/04-keylist-metadata-spec.md` (design record)

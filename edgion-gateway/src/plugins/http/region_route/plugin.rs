@@ -3,12 +3,12 @@
 //! # Base + overlay model (S3)
 //! `RegionRouteConfig` (in EdgionPlugins) holds ALL routing logic plus the default region table.
 //! At request time, if `override_ref` is set, the plugin looks up a `RegionRouteOverride`
-//! EdgionData from the global `EdgionDataStore` (ArcSwap, lock-free) and applies a typed
+//! EdgionConfigData from the global `EdgionConfigDataStore` (ArcSwap, lock-free) and applies a typed
 //! overlay on top of the base `regions` via `apply_override` (D6 type guard + whole-replace).
 //!
 //! # Fail-to-base semantics
-//! - **`overlay_missing`**: key not found in the EdgionData store → base regions used.
-//! - **`overlay_type_mismatch`**: entry found but wrong `DataEntry` variant → base regions used.
+//! - **`overlay_missing`**: key not found in the EdgionConfigData store → base regions used.
+//! - **`overlay_type_mismatch`**: entry found but wrong `ConfigEntry` variant → base regions used.
 //!
 //! Both cases are recorded via `record_region_route_overlay_event`. No data-plane tracing
 //! (warn/error) is used — all signals go through Prometheus counters.
@@ -22,13 +22,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::observe::metrics::record_region_route_overlay_event;
-use crate::plugins::runtime::edgion_data::get_global_edgion_data_store;
+use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_data::{
-    apply_override, merge_region_route_override, validate_regions, DataEntry, OverlaySignal,
+use edgion_resources::resources::edgion_config_data::{
+    apply_override, merge_region_route_override, validate_regions, ConfigEntry, OverlaySignal,
 };
 use edgion_resources::resources::edgion_plugins::{HashAlgorithm, RegionDef, RegionRouteConfig, RouteRule};
 
@@ -60,13 +60,13 @@ fn compute_hash(key: &str, algorithm: &HashAlgorithm, modulo: u16) -> u16 {
 /// HTTP plugin: routes requests to a region based on ordered route rules.
 ///
 /// Holds a clone of the base `RegionRouteConfig` from EdgionPlugins, plus an optional
-/// EdgionData store key ("namespace/name") for a `RegionRouteOverride` overlay.
+/// EdgionConfigData store key ("namespace/name") for a `RegionRouteOverride` overlay.
 pub struct RegionRoute {
     name: String,
     /// Full base config: all routing logic + default region table.
     /// `Arc` avoids a clone per request; the config is read-only after creation.
     base: Arc<RegionRouteConfig>,
-    /// Optional EdgionData store key ("namespace/name") for a `RegionRouteOverride`.
+    /// Optional EdgionConfigData store key ("namespace/name") for a `RegionRouteOverride`.
     /// `None` means no overlay is configured; base regions are used directly.
     override_key: Option<String>,
 }
@@ -94,7 +94,7 @@ impl RegionRoute {
     /// Control flow:
     /// 1. **No overlay configured** (`override_key` is `None`) → return base regions directly.
     /// 2. **Envelope kill-switch** (`spec.enable == false`) → emit `overlay_disabled`, return base.
-    /// 3. **Type guard (D6)** → `apply_override` rejects wrong `DataEntry` variants.
+    /// 3. **Type guard (D6)** → `apply_override` rejects wrong `ConfigEntry` variants.
     /// 4. **`apply_override`** merges overlay onto base (whole-replace if `regions` is `Some`).
     /// 5. **Post-merge validation** (H2) → `validate_regions` on the merged result; on failure
     ///    emit `overlay_invalid` and return base.
@@ -106,11 +106,11 @@ impl RegionRoute {
             return self.base.regions.clone();
         };
 
-        let store = get_global_edgion_data_store();
+        let store = get_global_edgion_config_data_store();
         let raw_ed = store.get_raw_by_key(key);
 
         // H1 — Envelope kill-switch: spec.enable=false means the operator has disabled
-        // this EdgionData entirely. Treat as no overlay: use base, emit overlay_disabled.
+        // this EdgionConfigData entirely. Treat as no overlay: use base, emit overlay_disabled.
         if raw_ed.as_ref().map(|ed| !ed.spec.enable).unwrap_or(false) {
             log.push_fmt("overlay_disabled (key={}), using base", la![sensitive(key)]);
             record_region_route_overlay_event("overlay_disabled");
@@ -123,8 +123,8 @@ impl RegionRoute {
             self.base.regions.clone(),
             overlay_entry,
             // D6 type guard: only accept `RegionRouteOverride` variant.
-            |entry: &DataEntry| match entry {
-                DataEntry::RegionRouteOverride(o) => Some(o),
+            |entry: &ConfigEntry| match entry {
+                ConfigEntry::RegionRouteOverride(o) => Some(o),
                 _ => None,
             },
             // Merge: whole-replace `regions` if Some; keep base otherwise.
@@ -635,29 +635,31 @@ mod tests {
         assert_eq!(r.name, "a");
     }
 
-    /// H1: When the referenced EdgionData has `spec.enable=false` (envelope kill-switch),
+    /// H1: When the referenced EdgionConfigData has `spec.enable=false` (envelope kill-switch),
     /// the overlay must NOT be applied — base regions must be returned.
     ///
     /// The overlay contains regions that differ from base; if the kill-switch were ignored,
     /// the base regions would be replaced. Asserting base regions verifies H1.
     #[test]
     fn overlay_envelope_disabled_falls_back_to_base() {
-        use crate::plugins::runtime::edgion_data::get_global_edgion_data_store;
-        use edgion_resources::resources::edgion_data::{DataEntry, EdgionData, EdgionDataSpec, RegionRouteOverride};
+        use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+        use edgion_resources::resources::edgion_config_data::{
+            ConfigEntry, EdgionConfigData, EdgionConfigDataSpec, RegionRouteOverride,
+        };
         use std::sync::Arc;
 
         // Unique key — no other test inserts or depends on this key.
         let test_key = "unit-test-ns/rr-overlay-envelope-disabled-h1-test";
 
-        // Build an EdgionData with spec.enable=false and regions that DIFFER from base.
+        // Build an EdgionConfigData with spec.enable=false and regions that DIFFER from base.
         // If the kill-switch is honoured, these regions must NOT replace base.
         let override_regions = vec![make_region("override-only", 0, 999, "override-ep:9090")];
-        let mut ed = EdgionData::new(
+        let mut ed = EdgionConfigData::new(
             "rr-overlay-envelope-disabled-h1-test",
-            EdgionDataSpec {
+            EdgionConfigDataSpec {
                 enable: false, // envelope kill-switch
                 active: None,
-                data: DataEntry::RegionRouteOverride(RegionRouteOverride {
+                data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
                     enable: None,
                     active: None,
                     regions: Some(override_regions),
@@ -665,7 +667,7 @@ mod tests {
             },
         );
         ed.metadata.namespace = Some("unit-test-ns".to_string());
-        get_global_edgion_data_store().insert_raw_for_test(test_key, Arc::new(ed));
+        get_global_edgion_config_data_store().insert_raw_for_test(test_key, Arc::new(ed));
 
         // Base: single region distinct from the override.
         let config = RegionRouteConfig {
@@ -692,23 +694,25 @@ mod tests {
     /// (duplicate region names), the plugin must fall back to base regions.
     #[test]
     fn overlay_invalid_regions_falls_back_to_base() {
-        use crate::plugins::runtime::edgion_data::get_global_edgion_data_store;
-        use edgion_resources::resources::edgion_data::{DataEntry, EdgionData, EdgionDataSpec, RegionRouteOverride};
+        use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+        use edgion_resources::resources::edgion_config_data::{
+            ConfigEntry, EdgionConfigData, EdgionConfigDataSpec, RegionRouteOverride,
+        };
         use std::sync::Arc;
 
         let test_key = "unit-test-ns/rr-overlay-invalid-dup-names-h2-test";
 
-        // Build an EdgionData whose overlay has duplicate region names (invalid).
+        // Build an EdgionConfigData whose overlay has duplicate region names (invalid).
         let dup_regions = vec![
             make_region("dup-name", 0, 499, "ep-a:8080"),
             make_region("dup-name", 500, 999, "ep-b:8080"), // duplicate — must trigger overlay_invalid
         ];
-        let mut ed = EdgionData::new(
+        let mut ed = EdgionConfigData::new(
             "rr-overlay-invalid-dup-names-h2-test",
-            EdgionDataSpec {
+            EdgionConfigDataSpec {
                 enable: true, // envelope enabled — the validation must catch the bad regions
                 active: None,
-                data: DataEntry::RegionRouteOverride(RegionRouteOverride {
+                data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
                     enable: None,
                     active: None,
                     regions: Some(dup_regions),
@@ -716,7 +720,7 @@ mod tests {
             },
         );
         ed.metadata.namespace = Some("unit-test-ns".to_string());
-        get_global_edgion_data_store().insert_raw_for_test(test_key, Arc::new(ed));
+        get_global_edgion_config_data_store().insert_raw_for_test(test_key, Arc::new(ed));
 
         let config = RegionRouteConfig {
             regions: vec![make_region("valid-base", 0, 999, "base:8080")],

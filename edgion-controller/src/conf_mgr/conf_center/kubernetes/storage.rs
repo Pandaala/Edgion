@@ -180,8 +180,8 @@ impl KubernetesStorage {
                 ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionStreamPlugins")),
                 Scope::Namespaced,
             ),
-            "EdgionData" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionData")),
+            "EdgionConfigData" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionConfigData")),
                 Scope::Namespaced,
             ),
             "LinkSys" => (
@@ -510,7 +510,7 @@ impl CenterApi for KubernetesStorage {
             "EdgionPlugins",
             "EdgionStreamPlugins",
             "BackendTLSPolicy",
-            "EdgionData",
+            "EdgionConfigData",
             "LinkSys",
         ];
 

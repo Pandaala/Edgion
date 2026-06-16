@@ -60,7 +60,7 @@ impl_resource_meta!(TLSRouteAlpha3, TLSRoute, "TLSRoute");
 // =============================================================================
 
 use crate::resources::{
-    EdgionAcme, EdgionData, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionTls, LinkSys,
+    EdgionAcme, EdgionConfigData, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionTls, LinkSys,
 };
 
 // Cluster-scoped
@@ -95,15 +95,15 @@ impl_resource_meta!(LinkSys, LinkSys, "LinkSys", |self| {
     }
 });
 
-impl_resource_meta!(EdgionData, EdgionData, "EdgionData", |self| {
+impl_resource_meta!(EdgionConfigData, EdgionConfigData, "EdgionConfigData", |self| {
     // Data-plane side: log validation problems but don't fail the pre_parse step.
     // The Controller records the same errors in the Accepted status condition
-    // (see EdgionDataHandler::preparse + update_status).
+    // (see EdgionConfigDataHandler::preparse + update_status).
     let errors = self.validate_pre_parse();
     if !errors.is_empty() {
         let key = self.key_name_str();
         for err in &errors {
-            tracing::warn!(edgion_data = %key, error = %err, "EdgionData validation error");
+            tracing::warn!(edgion_config_data = %key, error = %err, "EdgionConfigData validation error");
         }
     }
 });

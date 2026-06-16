@@ -34,7 +34,7 @@
 //! recursive: false
 //! ```
 
-use crate::resources::edgion_data::IpGroup;
+use crate::resources::edgion_config_data::IpGroup;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 

@@ -1,7 +1,7 @@
 # RegionRoute - broken overrideRef (overlay model)
 #
 # The RegionRoute plugin has a valid base config (regions + routeRules) but its
-# overrideRef points at a RegionRouteOverride EdgionData named "no-such-region-route-overlay"
+# overrideRef points at a RegionRouteOverride EdgionConfigData named "no-such-region-route-overlay"
 # which is intentionally NOT created.
 #
 # Fail-to-base semantics: overlay absent -> base regions are used directly; the plugin

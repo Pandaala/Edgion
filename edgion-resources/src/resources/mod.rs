@@ -5,7 +5,7 @@
 pub mod backend_tls_policy;
 pub mod common;
 pub mod edgion_acme;
-pub mod edgion_data;
+pub mod edgion_config_data;
 pub mod edgion_gateway_config;
 pub mod edgion_plugins;
 pub mod edgion_stream_plugins;
@@ -26,7 +26,7 @@ pub mod udp_route;
 pub use self::backend_tls_policy::*;
 pub use self::common::*;
 pub use self::edgion_acme::*;
-pub use self::edgion_data::*;
+pub use self::edgion_config_data::*;
 pub use self::edgion_gateway_config::*;
 pub use self::edgion_plugins::*;
 pub use self::edgion_stream_plugins::*;

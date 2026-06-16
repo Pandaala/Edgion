@@ -1,14 +1,14 @@
-// GlobalConnectionIpRestriction EdgionData Integration Test Suite
+// GlobalConnectionIpRestriction EdgionConfigData Integration Test Suite
 //
-// Verifies that EdgionData resources with type=GlobalConnIpRestrictionOverride are correctly
+// Verifies that EdgionConfigData resources with type=GlobalConnIpRestrictionOverride are correctly
 // parsed, stored, and accepted by the controller via the configserver API.
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/GlobalConnectionIpRestriction/):
-//   01_EdgionData_gcir-smoke.yaml — GlobalConnIpRestrictionOverride EdgionData with two profiles
+//   01_EdgionConfigData_gcir-smoke.yaml — GlobalConnIpRestrictionOverride EdgionConfigData with two profiles
 //
 // Scenarios:
-//   1. gcir_pm_exists: Verify the EdgionData is stored with correct type=GlobalConnIpRestrictionOverride
-//   2. gcir_pm_accepted: Verify the EdgionData has Accepted=True condition
+//   1. gcir_pm_exists: Verify the EdgionConfigData is stored with correct type=GlobalConnIpRestrictionOverride
+//   2. gcir_pm_accepted: Verify the EdgionConfigData has Accepted=True condition
 //   3. gcir_pm_config_structure: Verify the stored config has expected profiles and fields
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -36,18 +36,18 @@ impl GlobalConnectionIpRestrictionTestSuite {
     // Test 1: gcir_pm_exists
     // =========================================================================
 
-    /// Verify the GlobalConnIpRestrictionOverride EdgionData is stored via configserver API
+    /// Verify the GlobalConnIpRestrictionOverride EdgionConfigData is stored via configserver API
     /// with the correct type discriminator.
     fn gcir_pm_exists() -> TestCase {
         TestCase::new(
             "gcir_pm_exists",
-            "EdgionData 'gcir-smoke' exists with type=GlobalConnIpRestrictionOverride",
+            "EdgionConfigData 'gcir-smoke' exists with type=GlobalConnIpRestrictionOverride",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
                     let url = format!(
-                        "{}/configserver/EdgionData?namespace={}&name={}",
+                        "{}/configserver/EdgionConfigData?namespace={}&name={}",
                         ctx.admin_api_url(),
                         GCIR_NS,
                         GCIR_NAME
@@ -72,7 +72,7 @@ impl GlobalConnectionIpRestrictionTestSuite {
                                         break;
                                     } else {
                                         last_err = format!(
-                                            "EdgionData found but type is '{}', expected 'GlobalConnIpRestrictionOverride'",
+                                            "EdgionConfigData found but type is '{}', expected 'GlobalConnIpRestrictionOverride'",
                                             data_type
                                         );
                                     }
@@ -98,13 +98,14 @@ impl GlobalConnectionIpRestrictionTestSuite {
                     if found {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "GlobalConnIpRestrictionOverride EdgionData stored correctly in configserver".to_string(),
+                            "GlobalConnIpRestrictionOverride EdgionConfigData stored correctly in configserver"
+                                .to_string(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "EdgionData '{}' not found or wrong type within timeout. Last error: {}",
+                                "EdgionConfigData '{}' not found or wrong type within timeout. Last error: {}",
                                 GCIR_NAME, last_err
                             ),
                         )
@@ -118,17 +119,17 @@ impl GlobalConnectionIpRestrictionTestSuite {
     // Test 2: gcir_pm_accepted
     // =========================================================================
 
-    /// Verify the EdgionData has Accepted=True condition from the controller.
+    /// Verify the EdgionConfigData has Accepted=True condition from the controller.
     fn gcir_pm_accepted() -> TestCase {
         TestCase::new(
             "gcir_pm_accepted",
-            "EdgionData 'gcir-smoke' has Accepted=True condition",
+            "EdgionConfigData 'gcir-smoke' has Accepted=True condition",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
                     let url = format!(
-                        "{}/configserver/EdgionData?namespace={}&name={}",
+                        "{}/configserver/EdgionConfigData?namespace={}&name={}",
                         ctx.admin_api_url(),
                         GCIR_NS,
                         GCIR_NAME
@@ -156,11 +157,14 @@ impl GlobalConnectionIpRestrictionTestSuite {
                                             accepted = true;
                                             break;
                                         } else {
-                                            last_err =
-                                                format!("EdgionData found but Accepted condition not True: {:?}", arr);
+                                            last_err = format!(
+                                                "EdgionConfigData found but Accepted condition not True: {:?}",
+                                                arr
+                                            );
                                         }
                                     } else {
-                                        last_err = "EdgionData found but status.conditions not present yet".to_string();
+                                        last_err =
+                                            "EdgionConfigData found but status.conditions not present yet".to_string();
                                     }
                                 }
                                 Ok(body) => {
@@ -184,13 +188,13 @@ impl GlobalConnectionIpRestrictionTestSuite {
                     if accepted {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "GlobalConnIpRestrictionOverride EdgionData accepted by controller".to_string(),
+                            "GlobalConnIpRestrictionOverride EdgionConfigData accepted by controller".to_string(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "EdgionData '{}' not Accepted within timeout. Last error: {}",
+                                "EdgionConfigData '{}' not Accepted within timeout. Last error: {}",
                                 GCIR_NAME, last_err
                             ),
                         )
@@ -211,13 +215,13 @@ impl GlobalConnectionIpRestrictionTestSuite {
     fn gcir_pm_config_structure() -> TestCase {
         TestCase::new(
             "gcir_pm_config_structure",
-            "EdgionData 'gcir-smoke' override config has expected profiles (p1=deny, strict=allow)",
+            "EdgionConfigData 'gcir-smoke' override config has expected profiles (p1=deny, strict=allow)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
                     let url = format!(
-                        "{}/configserver/EdgionData?namespace={}&name={}",
+                        "{}/configserver/EdgionConfigData?namespace={}&name={}",
                         ctx.admin_api_url(),
                         GCIR_NS,
                         GCIR_NAME

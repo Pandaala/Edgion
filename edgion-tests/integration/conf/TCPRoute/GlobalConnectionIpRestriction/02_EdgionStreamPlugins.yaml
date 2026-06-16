@@ -1,7 +1,7 @@
 # EdgionStreamPlugins with GlobalConnectionIpRestriction using base + overrideRef model.
 #
 # The base holds all profiles (safe default = allow-local, which permits loopback only).
-# The overrideRef points to gcir-enforce-test EdgionData (overlay) which can hot-swap
+# The overrideRef points to gcir-enforce-test EdgionConfigData (overlay) which can hot-swap
 # activeProfile or enable without touching this resource.
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins

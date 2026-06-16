@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
-use crate::resources::edgion_data::IpGroup;
+use crate::resources::edgion_config_data::IpGroup;
 use crate::resources::edgion_plugins::{AccessDecision, DefaultAction};
 
 pub use crate::resources::common::group_name::validate_group_name;
@@ -139,7 +139,7 @@ pub fn evaluate_ip_access(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resources::edgion_data::IpGroup;
+    use crate::resources::edgion_config_data::IpGroup;
 
     #[test]
     fn validate_ipv4_single_ok() {

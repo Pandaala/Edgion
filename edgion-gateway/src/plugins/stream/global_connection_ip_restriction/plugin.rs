@@ -2,10 +2,10 @@
 //!
 //! # Fail-to-base semantics
 //! The plugin holds an inline pre-compiled `base` config (from `GlobalConnectionIpRestrictionEntry`).
-//! When `override_key` is set, the plugin looks up a `GlobalConnIpRestrictionOverride` EdgionData
+//! When `override_key` is set, the plugin looks up a `GlobalConnIpRestrictionOverride` EdgionConfigData
 //! at connection time and merges it on top of the base. On any overlay error:
-//! - **`overlay_missing`**: EdgionData not found in the store → use base.
-//! - **`overlay_type_mismatch`**: EdgionData present but wrong variant type → use base.
+//! - **`overlay_missing`**: EdgionConfigData not found in the store → use base.
+//! - **`overlay_type_mismatch`**: EdgionConfigData present but wrong variant type → use base.
 //! - **`overlay_invalid`**: overlay applied but merged effective config fails validation → use base.
 //!
 //! In all error cases the base is used (fail-to-base), NOT a deny. The base MUST therefore
@@ -20,12 +20,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::observe::metrics::record_conn_ip_restriction_event;
-use crate::plugins::runtime::edgion_data::get_global_edgion_data_store;
+use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
 };
-use edgion_resources::resources::edgion_data::{
-    apply_override, merge_gcir_override, DataEntry, GlobalConnectionIpRestrictionData, OverlaySignal,
+use edgion_resources::resources::edgion_config_data::{
+    apply_override, merge_gcir_override, ConfigEntry, GlobalConnectionIpRestrictionData, OverlaySignal,
 };
 use edgion_resources::resources::edgion_stream_plugins::GlobalConnectionIpRestrictionEntry;
 
@@ -36,7 +36,7 @@ pub struct GlobalConnectionIpRestrictionPlugin {
     /// `validate_and_init`. Used directly when no overlay is set, and as the
     /// fail-to-base fallback on any overlay error.
     base: Arc<GlobalConnectionIpRestrictionData>,
-    /// Optional EdgionData store key ("namespace/name") for a
+    /// Optional EdgionConfigData store key ("namespace/name") for a
     /// `GlobalConnIpRestrictionOverride` to apply on top of `base` at connection
     /// time. `None` means no overlay is configured.
     override_key: Option<String>,
@@ -69,7 +69,7 @@ impl GlobalConnectionIpRestrictionPlugin {
     /// Control flow:
     /// 1. **No overlay configured** (`override_key` is `None`) → clone and return base.
     /// 2. **Envelope kill-switch** (`spec.enable == false`) → emit `overlay_disabled`, return base.
-    /// 3. **Type guard (D6)** → `apply_override` rejects wrong `DataEntry` variants.
+    /// 3. **Type guard (D6)** → `apply_override` rejects wrong `ConfigEntry` variants.
     /// 4. **`apply_override`** merges overlay onto base; then `validate_and_init` compiles matchers.
     /// 5. If `validate_and_init` fails → emit `overlay_invalid`, return pre-compiled base clone.
     ///
@@ -82,17 +82,17 @@ impl GlobalConnectionIpRestrictionPlugin {
             return (*self.base).clone();
         };
 
-        let store = get_global_edgion_data_store();
+        let store = get_global_edgion_config_data_store();
         let raw_ed = store.get_raw_by_key(key);
 
         // H1 — Envelope kill-switch: spec.enable=false means the operator has disabled
-        // this EdgionData entirely. Treat as no overlay: use base, emit overlay_disabled.
+        // this EdgionConfigData entirely. Treat as no overlay: use base, emit overlay_disabled.
         if raw_ed.as_ref().map(|ed| !ed.spec.enable).unwrap_or(false) {
             record_conn_ip_restriction_event("overlay_disabled");
             return (*self.base).clone();
         }
 
-        // The overlay entry is the `DataEntry` inside the raw EdgionData (if found).
+        // The overlay entry is the `ConfigEntry` inside the raw EdgionConfigData (if found).
         let overlay_data_entry = raw_ed.as_deref().map(|ed| &ed.spec.data);
 
         let base_clone = (*self.base).clone();
@@ -100,8 +100,8 @@ impl GlobalConnectionIpRestrictionPlugin {
             base_clone,
             overlay_data_entry,
             // Type guard (D6): only accept `GlobalConnIpRestrictionOverride` variant.
-            |entry: &DataEntry| match entry {
-                DataEntry::GlobalConnIpRestrictionOverride(o) => Some(o),
+            |entry: &ConfigEntry| match entry {
+                ConfigEntry::GlobalConnIpRestrictionOverride(o) => Some(o),
                 _ => None,
             },
             // Merge function: field-level replace; collections whole-replace.
@@ -110,12 +110,12 @@ impl GlobalConnectionIpRestrictionPlugin {
 
         match signal {
             OverlaySignal::Absent => {
-                // overrideRef set but EdgionData not found in store.
+                // overrideRef set but EdgionConfigData not found in store.
                 record_conn_ip_restriction_event("overlay_missing");
                 merged // apply_override returns base unchanged; has compiled matchers
             }
             OverlaySignal::TypeMismatch => {
-                // EdgionData found but variant is not GlobalConnIpRestrictionOverride.
+                // EdgionConfigData found but variant is not GlobalConnIpRestrictionOverride.
                 record_conn_ip_restriction_event("overlay_type_mismatch");
                 merged // apply_override returns base unchanged; has compiled matchers
             }
@@ -164,7 +164,7 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::edgion_data::{IpGroup, ProfileRules};
+    use edgion_resources::resources::edgion_config_data::{IpGroup, ProfileRules};
     use edgion_resources::resources::edgion_plugins::DefaultAction;
     use edgion_resources::resources::edgion_stream_plugins::GlobalConnectionIpRestrictionEntry;
     use std::collections::HashMap;
@@ -238,10 +238,10 @@ mod tests {
 
     #[tokio::test]
     async fn absent_overlay_falls_back_to_base() {
-        // Build a plugin that points at a non-existent override EdgionData.
+        // Build a plugin that points at a non-existent override EdgionConfigData.
         let mut entry = make_entry("main", DefaultAction::Deny, Some("127.0.0.0/8"), None);
         // Point at an override that does NOT exist in the store.
-        entry.override_ref = Some(edgion_resources::resources::edgion_data::EdgionDataRef {
+        entry.override_ref = Some(edgion_resources::resources::edgion_config_data::EdgionConfigDataRef {
             name: "gcir-unit-test-absent-overlay-do-not-register".to_string(),
             namespace: Some("default".to_string()),
         });
@@ -275,32 +275,32 @@ mod tests {
         );
     }
 
-    /// H1: When the referenced EdgionData has `spec.enable=false` (envelope kill-switch),
+    /// H1: When the referenced EdgionConfigData has `spec.enable=false` (envelope kill-switch),
     /// the overlay must NOT be applied — the base config (with its restrictive profile) is used.
     ///
     /// The overlay carries `enable: Some(false)` (inner variant field), which would disable IP
-    /// restriction and allow all connections. Because the EdgionData envelope `spec.enable=false`,
+    /// restriction and allow all connections. Because the EdgionConfigData envelope `spec.enable=false`,
     /// the entire overlay is skipped and the base (deny non-loopback) is used instead.
     #[tokio::test]
     async fn envelope_disabled_falls_back_to_base() {
-        use crate::plugins::runtime::edgion_data::get_global_edgion_data_store;
-        use edgion_resources::resources::edgion_data::{
-            DataEntry, EdgionData, EdgionDataSpec, GlobalConnIpRestrictionOverride,
+        use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+        use edgion_resources::resources::edgion_config_data::{
+            ConfigEntry, EdgionConfigData, EdgionConfigDataSpec, GlobalConnIpRestrictionOverride,
         };
         use std::sync::Arc;
 
         // Unique key — no other test inserts or depends on this key.
         let test_key = "unit-test-ns/gcir-overlay-envelope-disabled-h1-test";
 
-        // Build an EdgionData with spec.enable=false and an override that WOULD allow
+        // Build an EdgionConfigData with spec.enable=false and an override that WOULD allow
         // all connections (inner enable: Some(false) → effective.enable=false → Allow all).
         // Because the envelope spec.enable=false, this override must never be applied.
-        let mut ed = EdgionData::new(
+        let mut ed = EdgionConfigData::new(
             "gcir-overlay-envelope-disabled-h1-test",
-            EdgionDataSpec {
+            EdgionConfigDataSpec {
                 enable: false, // envelope kill-switch — this is what H1 fixes
                 active: None,
-                data: DataEntry::GlobalConnIpRestrictionOverride(GlobalConnIpRestrictionOverride {
+                data: ConfigEntry::GlobalConnIpRestrictionOverride(GlobalConnIpRestrictionOverride {
                     enable: Some(false), // would disable IP checks entirely (allow all)
                     active_profile: None,
                     profiles: None,
@@ -308,11 +308,11 @@ mod tests {
             },
         );
         ed.metadata.namespace = Some("unit-test-ns".to_string());
-        get_global_edgion_data_store().insert_raw_for_test(test_key, Arc::new(ed));
+        get_global_edgion_config_data_store().insert_raw_for_test(test_key, Arc::new(ed));
 
         // Base: deny all except loopback.
         let mut entry = make_entry("main", DefaultAction::Deny, Some("127.0.0.0/8"), None);
-        entry.override_ref = Some(edgion_resources::resources::edgion_data::EdgionDataRef {
+        entry.override_ref = Some(edgion_resources::resources::edgion_config_data::EdgionConfigDataRef {
             name: "gcir-overlay-envelope-disabled-h1-test".to_string(),
             namespace: Some("unit-test-ns".to_string()),
         });

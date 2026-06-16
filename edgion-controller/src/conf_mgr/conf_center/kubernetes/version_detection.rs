@@ -268,7 +268,7 @@ pub fn validate_no_watch_kinds(no_watch_kinds: &[String]) {
         "EdgionTls",
         "EdgionPlugins",
         "EdgionStreamPlugins",
-        "EdgionData",
+        "EdgionConfigData",
         "LinkSys",
         "EdgionAcme",
         "EdgionGatewayConfig",

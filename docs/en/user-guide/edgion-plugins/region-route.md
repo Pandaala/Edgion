@@ -31,15 +31,15 @@ Three rule types are available:
 
 ## Architecture: Base + Overlay Model
 
-RegionRoute configuration follows the **EdgionData overlay model**:
+RegionRoute configuration follows the **EdgionConfigData overlay model**:
 
 | Layer | Resource | Owner | Description |
 |-------|----------|-------|-------------|
 | Base | `EdgionPlugins` RegionRoute config | git/operator | Logic + default region table. Always present, complete, and safe. |
-| Overlay (optional) | `RegionRouteOverride` `EdgionData` | operator / Center | Hot-swappable region table; replaces the base table whole when applied. |
+| Overlay (optional) | `RegionRouteOverride` `EdgionConfigData` | operator / Center | Hot-swappable region table; replaces the base table whole when applied. |
 
 The plugin base config (`EdgionPlugins`) carries all routing logic **and** a default `regions` table. An
-optional `overrideRef` points to an `EdgionData` object carrying a `RegionRouteOverride` variant for dynamic,
+optional `overrideRef` points to an `EdgionConfigData` object carrying a `RegionRouteOverride` variant for dynamic,
 hot-swappable region table updates.
 
 **Fail-to-base:** if the overlay is absent, invalid, or the wrong type, the gateway uses the default `regions`
@@ -60,7 +60,7 @@ All routing logic lives here. The `overrideRef` field is optional.
 | `hashCalc` | Object | none | Hash computation config; absent = RouteByHashRange is passthrough-only |
 | `routeRules` | Array | `[]` | Ordered route rules list; empty = plugin no-op |
 | `routeByKeyConfMatch` | Object | none | RouteByKeyConfMatch matchMap config |
-| `overrideRef` | Object | none | Optional reference to a `RegionRouteOverride` EdgionData |
+| `overrideRef` | Object | none | Optional reference to a `RegionRouteOverride` EdgionConfigData |
 
 ### `regions[]` (RegionDef) Sub-fields
 
@@ -80,7 +80,7 @@ All routing logic lives here. The `overrideRef` field is optional.
 | `modulo` | Integer | `1000` | Hash value domain `[0, modulo-1]`, must be >= 2 |
 | `writeBack` | Array | `[]` | Targets to write the computed hash to |
 
-### EdgionData RegionRouteOverride Config (overlay)
+### EdgionConfigData RegionRouteOverride Config (overlay)
 
 All fields are optional — only the fields present in the overlay replace the base value.
 
@@ -151,14 +151,14 @@ spec:
           namespace: edgion-system
 ```
 
-### Step 2 (Optional): Create a RegionRouteOverride EdgionData
+### Step 2 (Optional): Create a RegionRouteOverride EdgionConfigData
 
-Create an EdgionData with `type: RegionRouteOverride` to hot-swap the region table without a config
+Create an EdgionConfigData with `type: RegionRouteOverride` to hot-swap the region table without a config
 redeploy:
 
 ```yaml
 apiVersion: edgion.io/v1
-kind: EdgionData
+kind: EdgionConfigData
 metadata:
   name: region-overlay
   namespace: edgion-system
@@ -233,8 +233,8 @@ The plugin writes entries to the request's plugin log:
 | `err: failover to invalid` | failoverTo target misconfigured |
 | `→virginia 127.0.0.1:30001` | Jump target (region, host:port) |
 | `key missing, pass` | No key found, passed through |
-| `overlay_missing` | overrideRef set but EdgionData not found; using base |
-| `overlay_type_mismatch` | EdgionData type does not match RegionRouteOverride; using base |
+| `overlay_missing` | overrideRef set but EdgionConfigData not found; using base |
+| `overlay_type_mismatch` | EdgionConfigData type does not match RegionRouteOverride; using base |
 
 ## myRegion and failoverTo
 
@@ -259,7 +259,7 @@ ignored with `err: failover to invalid` in access log).
   internal DNS name backed by your region's load balancer.
 - The plugin does **not** change the `Host` header or SNI.
 - Setting `routeRules: []` turns the plugin into a no-op — useful for staged rollout.
-- The `RegionRouteOverride` EdgionData can be in any namespace (specified via `overrideRef.namespace`).
+- The `RegionRouteOverride` EdgionConfigData can be in any namespace (specified via `overrideRef.namespace`).
 
 ## Related Documentation
 

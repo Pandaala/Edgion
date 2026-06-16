@@ -436,7 +436,7 @@ impl EdgionControllerCli {
 
         // 6b. Construct the shared Authorizer and center-reload watch channel ONCE.
         // The Authorizer is initialized from `[center].rbac` if present, else the built-in
-        // default policy (read-all-except-Secret + EdgionData write + RegionRoute failover)
+        // default policy (read-all-except-Secret + EdgionConfigData write + RegionRoute failover)
         // via `center_policy_from`.
         // Both are cloned into every create_admin_router call site and into the fed path.
         let initial_center_cfg = config.center.clone().unwrap_or_default();

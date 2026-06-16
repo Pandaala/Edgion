@@ -10,7 +10,7 @@ use std::net::IpAddr;
 
 use crate::matcher::ip_cidr_helpers::{build_grouped_matcher, evaluate_ip_access, validate_groups_structure};
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
-use crate::resources::edgion_data::IpGroup;
+use crate::resources::edgion_config_data::IpGroup;
 use crate::resources::edgion_plugins::{AccessDecision, DefaultAction, PluginValidation};
 
 /// Legacy HTTP-layer field names that must be flagged when found on L4 configs.

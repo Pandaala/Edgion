@@ -1,7 +1,7 @@
 // RegionRoute Integration Test Suite
 //
 // Tests the base + overlay model: EdgionPlugins holds all routing logic + default region table;
-// an optional overrideRef points to a RegionRouteOverride EdgionData (fail-to-base on error).
+// an optional overrideRef points to a RegionRouteOverride EdgionConfigData (fail-to-base on error).
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/RegionRoute/):
 //   01_EdgionPlugins_region-route-main.yaml      — full inline config: regions, keyGet,
@@ -10,7 +10,7 @@
 //   01_EdgionPlugins_region-route-norules.yaml    — inline config with no routeRules (no-op)
 //   01_EdgionPlugins_region-route-myregion.yaml   — inline config: myRegion + failoverTo per region
 //   01_EdgionPlugins_region-route-broken-ref.yaml — inline base + overrideRef to nonexistent
-//                                                   EdgionData (overlay_missing -> fail-to-base)
+//                                                   EdgionConfigData (overlay_missing -> fail-to-base)
 //   02_HTTPRoute_region-route-main-test.yaml
 //   02_HTTPRoute_region-route-norules-test.yaml
 //   02_HTTPRoute_region-route-myregion-test.yaml
@@ -77,13 +77,13 @@ impl RegionRouteTestSuite {
         )
     }
 
-    /// overrideRef points at a nonexistent EdgionData -> overlay_missing -> fail-to-base.
+    /// overrideRef points at a nonexistent EdgionConfigData -> overlay_missing -> fail-to-base.
     /// Base regions are used; a routed request reaches a loopback backend -> 502.
     /// Access log must contain "overlay_missing" confirming the signal was recorded.
     fn broken_overlay_ref_uses_base() -> TestCase {
         TestCase::new(
             "broken_overlay_ref_uses_base",
-            "Broken overrideRef (nonexistent EdgionData): overlay_missing -> fail-to-base; \
+            "Broken overrideRef (nonexistent EdgionConfigData): overlay_missing -> fail-to-base; \
              base routes request to loopback -> 502; access log contains overlay_missing",
             |ctx: TestContext| {
                 Box::pin(async move {

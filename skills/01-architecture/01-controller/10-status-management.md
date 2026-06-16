@@ -183,7 +183,7 @@ EdgionAcme has both a Gateway API-style `Accepted` condition and ACME-specific l
 
 These use `DefaultHandler` or a handler with empty `update_status()`.
 
-(EdgionData was previously in this list as `PluginMetaData`; it has been moved to 4.1 — Gateway API-style Accepted + ResolvedRefs; see the `update_status` section in [05-resources/15-edgion-data.md](../05-resources/15-edgion-data.md).)
+(EdgionConfigData was previously in this list as `PluginMetaData`; it has been moved to 4.1 — Gateway API-style Accepted + ResolvedRefs; see the `update_status` section in [05-resources/15-edgion-config-data.md](../05-resources/15-edgion-config-data.md).)
 
 ### 4.6 Cross-resource reference resolution (new)
 
@@ -192,11 +192,11 @@ Several simple resources register outbound references during `parse` via indices
 | Handler | Reference type | resolved via | Reason when unresolved |
 |---------|---------------|--------------|-------------------------|
 | EdgionPlugins | Secret | `SecretRefManager::get_dependencies(ep_key)` | `BackendNotFound` (`ResolvedRefsError::SecretNotFound`) |
-| EdgionStreamPlugins | EdgionData (GlobalConnIpRestrictionOverride) | iterate GCIR entries in spec → `plugin_metadata_store.get(ns, name)` with matching type | `InvalidPluginMetaDataRef` |
-| EdgionPlugins | EdgionData (RegionRouteOverride) | `plugin_metadata_store.get` via `overrideRef` with type guard | `InvalidPluginMetaDataRef` |
+| EdgionStreamPlugins | EdgionConfigData (GlobalConnIpRestrictionOverride) | iterate GCIR entries in spec → `plugin_metadata_store.get(ns, name)` with matching type | `InvalidPluginMetaDataRef` |
+| EdgionPlugins | EdgionConfigData (RegionRouteOverride) | `plugin_metadata_store.get` via `overrideRef` with type guard | `InvalidPluginMetaDataRef` |
 | EdgionTls | Secret | `secret_store.get` | `BackendNotFound` (`ResolvedRefsError::SecretNotFound`) |
 
-When the referenced object changes, a reverse requeue is performed via `plugin_metadata_refs` / `SecretRefManager`, allowing the consumer's ResolvedRefs to self-heal. The reverse requeue encodes the kind in the `ep_key` format `"<Kind>:<ns>/<name>"`; `requeue_pm_referrers` uses `split_once(':')` to dispatch to the corresponding processor. (The old PM→PM cross-ref chain — ServiceRegionRoute → ClusterRegionRoute — was removed in the EdgionData refactor; `overrideRef` is now a direct EdgionPlugins → EdgionData reference.)
+When the referenced object changes, a reverse requeue is performed via `plugin_metadata_refs` / `SecretRefManager`, allowing the consumer's ResolvedRefs to self-heal. The reverse requeue encodes the kind in the `ep_key` format `"<Kind>:<ns>/<name>"`; `requeue_pm_referrers` uses `split_once(':')` to dispatch to the corresponding processor. (The old PM→PM cross-ref chain — ServiceRegionRoute → ClusterRegionRoute — was removed in the EdgionConfigData refactor; `overrideRef` is now a direct EdgionPlugins → EdgionConfigData reference.)
 
 ## 5. The set_parent_conditions_full Contract
 

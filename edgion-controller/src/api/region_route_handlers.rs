@@ -1,13 +1,13 @@
 //! Region Route API handlers
 //!
 //! POST /api/v1/region-routes/failover
-//!   Patches a single region's `failoverTo` in a `RegionRouteOverride` EdgionData.
+//!   Patches a single region's `failoverTo` in a `RegionRouteOverride` EdgionConfigData.
 //!
 //! NOTE: The old `/api/v1/cluster-region-routes` and `/api/v1/service-region-routes`
 //! list endpoints are removed as part of the S3 RegionRoute decomposition.
 //! The routing config (logic + default regions) now lives entirely in EdgionPlugins
 //! (`RegionRouteConfig.regions`). Dynamic region overrides are `RegionRouteOverride`
-//! EdgionData, which can be listed via the standard EdgionData configserver API.
+//! EdgionConfigData, which can be listed via the standard EdgionConfigData configserver API.
 
 use axum::{extract::State, http::StatusCode, response::Json};
 use serde::Deserialize;
@@ -19,7 +19,7 @@ use super::types::AdminState;
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct EdgionDataFailoverRequest {
+pub struct EdgionConfigDataFailoverRequest {
     pub namespace: String,
     pub name: String,
     pub region_name: String,
@@ -31,10 +31,10 @@ pub struct EdgionDataFailoverRequest {
 
 /// `GET /api/v1/cluster-region-routes` — deprecated; returns an empty list.
 ///
-/// After S3 the ClusterRegionRoute EdgionData variant is removed. Region topology
+/// After S3 the ClusterRegionRoute EdgionConfigData variant is removed. Region topology
 /// now lives inline in EdgionPlugins `RegionRouteConfig.regions`. Dynamic overrides
-/// are `RegionRouteOverride` EdgionData, listable via the configserver API.
-pub async fn list_cluster_region_edgion_data(
+/// are `RegionRouteOverride` EdgionConfigData, listable via the configserver API.
+pub async fn list_cluster_region_edgion_config_data(
     State(_state): State<Arc<AdminState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(serde_json::json!({ "success": true, "data": [] })))
@@ -42,9 +42,9 @@ pub async fn list_cluster_region_edgion_data(
 
 /// `GET /api/v1/service-region-routes` — deprecated; returns an empty list.
 ///
-/// After S3 the ServiceRegionRoute EdgionData variant is removed. Per-service failover
-/// is now expressed via `RegionRouteOverride.regions[].failoverTo` in an EdgionData.
-pub async fn list_service_region_edgion_data(
+/// After S3 the ServiceRegionRoute EdgionConfigData variant is removed. Per-service failover
+/// is now expressed via `RegionRouteOverride.regions[].failoverTo` in an EdgionConfigData.
+pub async fn list_service_region_edgion_config_data(
     State(_state): State<Arc<AdminState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(serde_json::json!({ "success": true, "data": [] })))
@@ -52,14 +52,14 @@ pub async fn list_service_region_edgion_data(
 
 /// `POST /api/v1/cluster-region-routes/failover`
 ///
-/// Patches a single region's `failoverTo` in a `RegionRouteOverride` EdgionData.
-/// The `name` field should refer to a `RegionRouteOverride` EdgionData (not the old
+/// Patches a single region's `failoverTo` in a `RegionRouteOverride` EdgionConfigData.
+/// The `name` field should refer to a `RegionRouteOverride` EdgionConfigData (not the old
 /// ClusterRegionRoute — that variant no longer exists).
-pub async fn cluster_edgion_data_failover(
+pub async fn cluster_edgion_config_data_failover(
     State(state): State<Arc<AdminState>>,
-    Json(body): Json<EdgionDataFailoverRequest>,
+    Json(body): Json<EdgionConfigDataFailoverRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    match patch_edgion_data_failover(
+    match patch_edgion_config_data_failover(
         &state,
         &body.namespace,
         &body.name,
@@ -77,13 +77,13 @@ pub async fn cluster_edgion_data_failover(
 
 /// `POST /api/v1/service-region-routes/failover`
 ///
-/// Deprecated. After S3, per-service failover is managed via `RegionRouteOverride` EdgionData.
+/// Deprecated. After S3, per-service failover is managed via `RegionRouteOverride` EdgionConfigData.
 /// This endpoint now delegates to the same `RegionRouteOverride` patch path.
-pub async fn service_edgion_data_failover(
+pub async fn service_edgion_config_data_failover(
     State(state): State<Arc<AdminState>>,
-    Json(body): Json<EdgionDataFailoverRequest>,
+    Json(body): Json<EdgionConfigDataFailoverRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    match patch_edgion_data_failover(
+    match patch_edgion_config_data_failover(
         &state,
         &body.namespace,
         &body.name,
@@ -101,11 +101,11 @@ pub async fn service_edgion_data_failover(
 
 // ============= Helpers =============
 
-/// GET the EdgionData from local storage, modify the region's failoverTo, then PUT back.
-async fn patch_edgion_data_failover(
+/// GET the EdgionConfigData from local storage, modify the region's failoverTo, then PUT back.
+async fn patch_edgion_config_data_failover(
     state: &AdminState,
     namespace: &str,
-    edgion_data_name: &str,
+    edgion_config_data_name: &str,
     plugin_type: &str,
     region_name: &str,
     failover_to: &str,
@@ -115,14 +115,18 @@ async fn patch_edgion_data_failover(
     // Serialize the whole get -> patch -> write below against other writers to the
     // same resource so concurrent failover requests and a concurrent generic
     // `update_namespaced` PUT cannot interleave and silently lose an update.
-    let _resource_guard =
-        super::resource_locks::lock_resource(ResourceKind::EdgionData.as_str(), namespace, edgion_data_name).await;
+    let _resource_guard = super::resource_locks::lock_resource(
+        ResourceKind::EdgionConfigData.as_str(),
+        namespace,
+        edgion_config_data_name,
+    )
+    .await;
 
     let resource = state
-        .center_get_resource(ResourceKind::EdgionData, namespace, edgion_data_name)
+        .center_get_resource(ResourceKind::EdgionConfigData, namespace, edgion_config_data_name)
         .await
-        .map_err(|e| format!("failed to get EdgionData: {e}"))?
-        .ok_or_else(|| format!("EdgionData {}/{} not found", namespace, edgion_data_name))?;
+        .map_err(|e| format!("failed to get EdgionConfigData: {e}"))?
+        .ok_or_else(|| format!("EdgionConfigData {}/{} not found", namespace, edgion_config_data_name))?;
 
     let mut resource = resource;
 
@@ -159,9 +163,9 @@ async fn patch_edgion_data_failover(
 
     let api = state.conf_center();
     api.update_one(
-        ResourceKind::EdgionData.as_str(),
+        ResourceKind::EdgionConfigData.as_str(),
         Some(namespace),
-        edgion_data_name,
+        edgion_config_data_name,
         json_content,
     )
     .await
@@ -204,7 +208,7 @@ mod tests {
             "failoverTo": "west",
             "myRegion": "evil"
         }"#;
-        let result: Result<EdgionDataFailoverRequest, _> = serde_json::from_str(json);
+        let result: Result<EdgionConfigDataFailoverRequest, _> = serde_json::from_str(json);
         assert!(result.is_err(), "unknown field 'myRegion' must be rejected");
     }
 
@@ -216,7 +220,7 @@ mod tests {
             "regionName": "east",
             "failoverTo": "west"
         }"#;
-        let result: Result<EdgionDataFailoverRequest, _> = serde_json::from_str(json);
+        let result: Result<EdgionConfigDataFailoverRequest, _> = serde_json::from_str(json);
         let req = result.expect("canonical 4-field payload must be accepted");
         assert_eq!(req.namespace, "default");
         assert_eq!(req.name, "test-override-route");
@@ -232,7 +236,7 @@ mod tests {
             "regionName": "east",
             "failoverTo": ""
         }"#;
-        let result: Result<EdgionDataFailoverRequest, _> = serde_json::from_str(json);
+        let result: Result<EdgionConfigDataFailoverRequest, _> = serde_json::from_str(json);
         assert!(result.is_ok());
         assert_eq!(result.unwrap().failover_to, "");
     }

@@ -28,15 +28,15 @@ account/user 等维度做确定性粘性路由的场景。
 
 ## 架构：Base + Overlay 模型
 
-RegionRoute 配置遵循 **EdgionData overlay 模型**：
+RegionRoute 配置遵循 **EdgionConfigData overlay 模型**：
 
 | 层次 | 资源 | 管理者 | 说明 |
 |------|------|--------|------|
 | Base（基础配置） | `EdgionPlugins` RegionRoute 配置 | git/operator | 路由逻辑 + 默认 region 表，始终存在且安全 |
-| Overlay（覆盖层，可选） | `RegionRouteOverride` `EdgionData` | operator / Center | 热更新 region 表；应用时整体替换 base 中的 region 表 |
+| Overlay（覆盖层，可选） | `RegionRouteOverride` `EdgionConfigData` | operator / Center | 热更新 region 表；应用时整体替换 base 中的 region 表 |
 
 Base 配置（`EdgionPlugins`）包含所有路由逻辑**和**一个默认 `regions` 表。可选的 `overrideRef` 指向一个
-`RegionRouteOverride` 类型的 `EdgionData` 对象，用于动态热更新 region 表。
+`RegionRouteOverride` 类型的 `EdgionConfigData` 对象，用于动态热更新 region 表。
 
 **Fail-to-base（降级到 Base）：** 若 overlay 不存在、无效或类型不匹配，网关自动使用 base 中的默认 `regions`
 表——流量持续正常，不会因 overlay 缺失而中断。
@@ -56,7 +56,7 @@ Base 配置（`EdgionPlugins`）包含所有路由逻辑**和**一个默认 `reg
 | `hashCalc` | Object | 无 | 哈希计算配置；缺省则 RouteByHashRange 仅透传 |
 | `routeRules` | Array | `[]` | 有序路由规则列表；空列表 = 插件 no-op |
 | `routeByKeyConfMatch` | Object | 无 | RouteByKeyConfMatch matchMap 配置 |
-| `overrideRef` | Object | 无 | 可选，指向 `RegionRouteOverride` EdgionData |
+| `overrideRef` | Object | 无 | 可选，指向 `RegionRouteOverride` EdgionConfigData |
 
 ### `regions[]`（RegionDef）子字段
 
@@ -76,7 +76,7 @@ Base 配置（`EdgionPlugins`）包含所有路由逻辑**和**一个默认 `reg
 | `modulo` | Integer | `1000` | 哈希值域 `[0, modulo-1]`，必须 >= 2 |
 | `writeBack` | Array | `[]` | 将计算出的哈希写入的目标 |
 
-### EdgionData RegionRouteOverride 配置（Overlay）
+### EdgionConfigData RegionRouteOverride 配置（Overlay）
 
 所有字段均为可选，只有 overlay 中存在的字段才会替换 base 中的对应值。
 
@@ -147,13 +147,13 @@ spec:
           namespace: edgion-system
 ```
 
-### 第二步（可选）：创建 RegionRouteOverride EdgionData
+### 第二步（可选）：创建 RegionRouteOverride EdgionConfigData
 
-创建一个 `type: RegionRouteOverride` 的 EdgionData，用于在不修改 `EdgionPlugins` 配置的情况下热更新 region 表：
+创建一个 `type: RegionRouteOverride` 的 EdgionConfigData，用于在不修改 `EdgionPlugins` 配置的情况下热更新 region 表：
 
 ```yaml
 apiVersion: edgion.io/v1
-kind: EdgionData
+kind: EdgionConfigData
 metadata:
   name: region-overlay
   namespace: edgion-system
@@ -227,8 +227,8 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 须与配置一�
 | `err: failover to invalid` | failoverTo 目标配置错误 |
 | `→virginia 127.0.0.1:30001` | 跳转目标（region，host:port） |
 | `key missing, pass` | 未找到 key，直接放行 |
-| `overlay_missing` | overrideRef 已配置但 EdgionData 不存在；使用 base |
-| `overlay_type_mismatch` | EdgionData 类型不符合 RegionRouteOverride；使用 base |
+| `overlay_missing` | overrideRef 已配置但 EdgionConfigData 不存在；使用 base |
+| `overlay_type_mismatch` | EdgionConfigData 类型不符合 RegionRouteOverride；使用 base |
 
 ## myRegion 与 failoverTo
 
@@ -249,7 +249,7 @@ region_hash = zlib.crc32(account_id.encode()) % 1000  # modulo 须与配置一�
 - `backendEndpoint` 在每次请求时进行 DNS 解析（Pingora `ExternalJumpPreset`）。建议使用稳定的内部 DNS 名称。
 - 插件**不修改** Host header 或 SNI。
 - `routeRules: []`（空列表）将使插件变为 no-op，适用于分阶段上线。
-- `RegionRouteOverride` EdgionData 可在任意命名空间（通过 `overrideRef.namespace` 指定）。
+- `RegionRouteOverride` EdgionConfigData 可在任意命名空间（通过 `overrideRef.namespace` 指定）。
 
 ## 相关文档
 

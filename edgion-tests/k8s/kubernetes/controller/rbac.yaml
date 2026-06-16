@@ -38,7 +38,7 @@ rules:
   resources: ["endpointslices"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["edgion.io"]
-  resources: ["edgiontls", "edgiongatewayclassconfigs", "edgionstreamplugins", "edgionplugins", "edgiondata", "linksys", "edgionacmes"]
+  resources: ["edgiontls", "edgiongatewayclassconfigs", "edgionstreamplugins", "edgionplugins", "edgionconfigdata", "linksys", "edgionacmes"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["edgion.io"]
   resources: ["edgiontls/status", "edgiongatewayclassconfigs/status", "edgionstreamplugins/status", "edgionplugins/status", "edgionacmes/status"]

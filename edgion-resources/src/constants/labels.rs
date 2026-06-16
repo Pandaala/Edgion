@@ -9,7 +9,7 @@ pub mod k8s {
 
 /// `edgion.io/managed-by` label — declares the lifecycle owner of a resource.
 ///
-/// Used on `EdgionData` (and `Secret`/`EdgionTls` managed by ACME).
+/// Used on `EdgionConfigData` (and `Secret`/`EdgionTls` managed by ACME).
 /// The label controls how the controller treats the spec on reconcile:
 /// - `operator` (default): git/kubectl authoritative; controller never mutates spec.
 /// - `acme`: ACME service manages the certificate lifecycle (existing usage).

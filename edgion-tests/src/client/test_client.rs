@@ -170,7 +170,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "rate-limit-redis" | "ratelimitredis" | "rlr" => "EdgionPlugins/RateLimitRedis".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
-            "EdgionDataManaged" | "edgiondatamanaged" | "data-managed" => "EdgionPlugins/EdgionDataManaged".to_string(),
+            "EdgionConfigDataManaged" | "edgionconfigdatamanaged" | "data-managed" => {
+                "EdgionPlugins/EdgionConfigDataManaged".to_string()
+            }
             "global-connection-ip-restriction" | "globalconnectioniprestriction" | "gcir" => {
                 "EdgionPlugins/GlobalConnectionIpRestriction".to_string()
             }
@@ -303,11 +305,11 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DynamicInternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/RegionRoute" => "EdgionPlugins",
-        "EdgionPlugins/EdgionDataManaged" => "EdgionPlugins",
+        "EdgionPlugins/EdgionConfigDataManaged" => "EdgionPlugins",
         "EdgionPlugins/GlobalConnectionIpRestriction" => "EdgionPlugins",
         "EdgionPlugins/GlobalPluginsSnapshot" => "EdgionPlugins",
-        "EdgionPlugins/EdgionDataStatus" => "EdgionPlugins",
-        "EdgionPlugins/EdgionDataStatus/RefFlap" => "EdgionPlugins",
+        "EdgionPlugins/EdgionConfigDataStatus" => "EdgionPlugins",
+        "EdgionPlugins/EdgionConfigDataStatus/RefFlap" => "EdgionPlugins",
         "EdgionPlugins/PluginValidationStatus" => "EdgionPlugins",
         "EdgionPlugins/ResolvedRefs" => "EdgionPlugins",
         "EdgionPlugins/AllEndpointStatus" => "EdgionPlugins",
@@ -1086,12 +1088,12 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::RegionRouteTestSuite));
         }
-        "EdgionPlugins/EdgionDataManaged" => {
+        "EdgionPlugins/EdgionConfigDataManaged" => {
             if !gateway {
-                eprintln!("Error: EdgionPlugins/EdgionDataManaged tests require --gateway flag");
+                eprintln!("Error: EdgionPlugins/EdgionConfigDataManaged tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::EdgionDataManagedTestSuite));
+            runner.add_suite(Box::new(suites::EdgionConfigDataManagedTestSuite));
         }
         "EdgionPlugins/GlobalConnectionIpRestriction" => {
             if !gateway {
@@ -1100,12 +1102,12 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::GlobalConnectionIpRestrictionTestSuite));
         }
-        "EdgionPlugins/EdgionDataStatus" => {
+        "EdgionPlugins/EdgionConfigDataStatus" => {
             if !gateway {
-                eprintln!("Error: EdgionPlugins/EdgionDataStatus tests require --gateway flag");
+                eprintln!("Error: EdgionPlugins/EdgionConfigDataStatus tests require --gateway flag");
                 std::process::exit(1);
             }
-            runner.add_suite(Box::new(suites::EdgionDataStatusTestSuite));
+            runner.add_suite(Box::new(suites::EdgionConfigDataStatusTestSuite));
         }
         "EdgionPlugins/PluginValidationStatus" => {
             if !gateway {
@@ -1114,25 +1116,25 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::PluginValidationStatusTestSuite));
         }
-        "EdgionPlugins/EdgionDataStatus/RefFlap" => {
+        "EdgionPlugins/EdgionConfigDataStatus/RefFlap" => {
             if !gateway {
-                eprintln!("Error: EdgionPlugins/EdgionDataStatus/RefFlap tests require --gateway flag");
+                eprintln!("Error: EdgionPlugins/EdgionConfigDataStatus/RefFlap tests require --gateway flag");
                 std::process::exit(1);
             }
             match phase {
                 Some("initial") => {
-                    runner.add_suite(Box::new(suites::EdgionDataFlapInitialTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionConfigDataFlapInitialTestSuite));
                 }
                 Some("invalid") => {
-                    runner.add_suite(Box::new(suites::EdgionDataFlapInvalidTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionConfigDataFlapInvalidTestSuite));
                 }
                 Some("valid") => {
-                    runner.add_suite(Box::new(suites::EdgionDataFlapValidTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionConfigDataFlapValidTestSuite));
                 }
                 _ => {
-                    runner.add_suite(Box::new(suites::EdgionDataFlapInitialTestSuite));
-                    runner.add_suite(Box::new(suites::EdgionDataFlapInvalidTestSuite));
-                    runner.add_suite(Box::new(suites::EdgionDataFlapValidTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionConfigDataFlapInitialTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionConfigDataFlapInvalidTestSuite));
+                    runner.add_suite(Box::new(suites::EdgionConfigDataFlapValidTestSuite));
                 }
             }
         }

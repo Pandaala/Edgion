@@ -99,7 +99,7 @@ impl CenterLifeCycle for FileSystemCenter {
             "Starting FileSystem lifecycle"
         );
 
-        // Inject conf_writer into runtime so handlers can auto-create resources (e.g. EdgionData).
+        // Inject conf_writer into runtime so handlers can auto-create resources (e.g. EdgionConfigData).
         let writer_arc: Arc<dyn CenterApi + Send + Sync> =
             Arc::new(FileSystemStorage::new(self.config.conf_dir()).with_registry(self.registry.clone()));
         self.base.runtime().set_conf_writer(writer_arc);

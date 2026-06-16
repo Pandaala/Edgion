@@ -107,7 +107,7 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 
 ### `edgion.io/managed-by` Vocabulary
 
-Applies to `EdgionData` (and `Secret`/`EdgionTls` managed by ACME). Declares who owns the resource
+Applies to `EdgionConfigData` (and `Secret`/`EdgionTls` managed by ACME). Declares who owns the resource
 lifecycle and how the controller treats the spec on reconcile.
 
 | Value | Active? | Description |

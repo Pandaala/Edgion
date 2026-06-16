@@ -1,0 +1,19 @@
+# Scenario 1: valid GlobalConnIpRestrictionOverride EdgionConfigData — expect Accepted=True, ResolvedRefs=True
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: data-status-gcir-valid
+  namespace: edgion-test
+spec:
+  data:
+    type: GlobalConnIpRestrictionOverride
+    config:
+      enable: true
+      activeProfile: main
+      profiles:
+        main:
+          defaultAction: deny
+          allow:
+            - name: office
+              cidrs:
+                - "10.0.0.0/8"

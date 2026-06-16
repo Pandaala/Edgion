@@ -20,15 +20,15 @@ The repo currently has the following workflows under `.github/workflows/`:
 | `ci.yml` | `push` / `pull_request` to `main` / `master` | Rust check / fmt / clippy / test + agent-docs gate |
 | `check-english-only.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_english_only.sh` — the English-only gate the project relies on |
 | `check-gateway-no-tracing.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_gateway_no_tracing.py` — forbids `tracing::warn!/error!` on data-plane hot paths (function-level) |
-| `check-edgion-data-overlay.yml` | `pull_request` + `push` to `main` | Three gates guarding the EdgionData overlay refactor — see "EdgionData overlay gates" below |
+| `check-edgion-config-data-overlay.yml` | `pull_request` + `push` to `main` | Three gates guarding the EdgionConfigData overlay refactor — see "EdgionConfigData overlay gates" below |
 | `docs.yml` | `push` to `main` touching `docs/**` (or `workflow_dispatch`) | VitePress build + GitHub Pages deploy |
 | `build-image.yml` | `workflow_dispatch` (manual only) | Cross-compile binaries, build/push runtime images, merge manifests, create release |
 
-### EdgionData overlay gates
-`check-edgion-data-overlay.yml` runs three structural checks (each in its own job for clean failure reporting):
+### EdgionConfigData overlay gates
+`check-edgion-config-data-overlay.yml` runs three structural checks (each in its own job for clean failure reporting):
 
 1. `cicd/checks/check_no_legacy_data_refs.sh` — forbids reintroduction of removed types/kinds/fields (`PluginMetaData` kind, `ClusterRegionRoute` / `ServiceRegionRoute` discriminators, `serviceRegionRouteRef` / `clusterRef` fields, removed Rust identifiers). Exclusions: `tasks/`, `cicd/`, `tmp/`. Counterpart to D1 / D4 / I3 in the refactor task.
-2. `cicd/checks/check_edgion_data_variant_parity.py` — diffs the EdgionData CRD `type:` enum against the Rust `DataEntry` variant set. Catches the S3-style drift where Rust variants are added/removed but the CRD enum is forgotten.
+2. `cicd/checks/check_edgion_config_data_variant_parity.py` — diffs the EdgionConfigData CRD `type:` enum against the Rust `ConfigEntry` variant set. Catches the S3-style drift where Rust variants are added/removed but the CRD enum is forgotten.
 3. `cicd/checks/check_overlay_signal_completeness.sh` — every overlay-consumer plugin must emit the full four-signal set (`overlay_missing`, `overlay_type_mismatch`, `overlay_invalid`, `overlay_disabled`) via its Prometheus counter. Catches the H1-style omission where one signal is silently missing.
 
 ## Read these real entry points first

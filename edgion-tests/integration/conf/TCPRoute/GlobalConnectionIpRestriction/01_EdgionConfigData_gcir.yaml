@@ -1,0 +1,17 @@
+# GlobalConnIpRestrictionOverride EdgionConfigData for L4 enforcement tests
+#
+# This is the OVERLAY resource referenced by the EdgionStreamPlugins via `overrideRef`.
+# The complete base config (with both profiles) lives inline in 02_EdgionStreamPlugins.yaml.
+#
+# Initial state: activeProfile=allow-local (loopback allowed)
+# Tests switch this overlay to change the active profile or kill-switch enable.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gcir-enforce-test
+  namespace: edgion-test
+spec:
+  data:
+    type: GlobalConnIpRestrictionOverride
+    config:
+      activeProfile: allow-local

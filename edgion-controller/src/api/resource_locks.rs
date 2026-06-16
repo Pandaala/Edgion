@@ -10,8 +10,8 @@
 //! `lock_resource` hands out a per-`kind/namespace/name` async mutex that such
 //! writers hold for the duration of their read-modify-write / replace, so writes
 //! to the same resource run one at a time. Current users:
-//!   - `region_route_handlers::patch_edgion_data_failover` (failover RMW)
-//!   - `namespaced_handlers::update_namespaced` (generic EdgionData PUT,
+//!   - `region_route_handlers::patch_edgion_config_data_failover` (failover RMW)
+//!   - `namespaced_handlers::update_namespaced` (generic EdgionConfigData PUT,
 //!     which the Center region-route sync also routes through)
 //! See `skills/04-review/concurrency/failover-read-modify-write-per-key-lock.md`.
 //!
@@ -62,22 +62,22 @@ mod tests {
         // Use unique identities so this test is insensitive to entries left in the
         // process-global map by other tests, and deterministic regardless of the
         // test runtime flavor (no wall-clock timeouts).
-        let g1 = lock_resource("EdgionData", "ns-rl-test", "pm").await;
+        let g1 = lock_resource("EdgionConfigData", "ns-rl-test", "pm").await;
 
         // Same kind/ns/name must serialize: while g1 is held, a second acquisition
         // for the same identity must fail (None).
         assert!(
-            try_acquire("EdgionData", "ns-rl-test", "pm").is_none(),
+            try_acquire("EdgionConfigData", "ns-rl-test", "pm").is_none(),
             "second lock on the same identity must be contended while the first is held"
         );
 
         // A different name, namespace, or kind must NOT contend (acquires immediately).
         assert!(
-            try_acquire("EdgionData", "ns-rl-test", "other").is_some(),
+            try_acquire("EdgionConfigData", "ns-rl-test", "other").is_some(),
             "distinct name must not contend"
         );
         assert!(
-            try_acquire("EdgionData", "other-ns-rl-test", "pm").is_some(),
+            try_acquire("EdgionConfigData", "other-ns-rl-test", "pm").is_some(),
             "distinct namespace must not contend"
         );
         assert!(
@@ -88,7 +88,7 @@ mod tests {
         drop(g1);
         // Once released, the identity is acquirable again.
         assert!(
-            try_acquire("EdgionData", "ns-rl-test", "pm").is_some(),
+            try_acquire("EdgionConfigData", "ns-rl-test", "pm").is_some(),
             "lock must be reacquirable after release"
         );
     }

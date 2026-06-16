@@ -929,7 +929,7 @@ impl CenterLifeCycle for KubernetesCenter {
     async fn start(&self, shutdown_handle: ShutdownHandle) -> Result<()> {
         self.set_shutdown_handle(shutdown_handle.clone());
 
-        // Inject conf_writer into runtime so handlers can auto-create resources (e.g. EdgionData).
+        // Inject conf_writer into runtime so handlers can auto-create resources (e.g. EdgionConfigData).
         let writer_arc: Arc<dyn CenterApi + Send + Sync> = Arc::new(KubernetesStorage::new().await?);
         self.runtime.set_conf_writer(writer_arc);
 

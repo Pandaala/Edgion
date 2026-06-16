@@ -1,10 +1,10 @@
 // TCPRoute GlobalConnectionIpRestriction Enforcement Test Suite
 //
 // Tests that GlobalConnectionIpRestriction stream plugin correctly allows/denies
-// L4 TCP connections based on the active profile in the referenced EdgionData.
+// L4 TCP connections based on the active profile in the referenced EdgionConfigData.
 //
 // Required config files (in edgion-tests/integration/conf/TCPRoute/GlobalConnectionIpRestriction/):
-// - 01_EdgionData_gcir.yaml            # PM with allow-local + block-local profiles
+// - 01_EdgionConfigData_gcir.yaml            # PM with allow-local + block-local profiles
 // - 02_EdgionStreamPlugins.yaml            # Stream plugin referencing the PM
 // - 03_Gateway.yaml                        # Gateway with single TCP listener on 31296
 // - 04_TCPRoute.yaml                       # Route proxying to test-tcp echo backend
@@ -24,7 +24,7 @@ use tokio::net::TcpStream;
 
 pub struct GcirEnforcementTestSuite;
 
-/// Build a `GlobalConnIpRestrictionOverride` EdgionData YAML that hot-swaps the
+/// Build a `GlobalConnIpRestrictionOverride` EdgionConfigData YAML that hot-swaps the
 /// `enable` / `activeProfile` of the base config defined inline in the
 /// `gcir-stream-plugins` EdgionStreamPlugins (which holds both profiles). The base
 /// is referenced via `overrideRef: gcir-enforce-test`; re-applying this overlay at
@@ -32,7 +32,7 @@ pub struct GcirEnforcementTestSuite;
 fn pm_yaml_with(active_profile: &str, enable: bool) -> String {
     format!(
         r#"apiVersion: edgion.io/v1
-kind: EdgionData
+kind: EdgionConfigData
 metadata:
   name: gcir-enforce-test
   namespace: edgion-test
@@ -250,7 +250,7 @@ impl GcirEnforcementTestSuite {
     }
     /// Test 4: PM missing → fail-closed
     ///
-    /// Delete the EdgionData that the GCIR stream plugin references.
+    /// Delete the EdgionConfigData that the GCIR stream plugin references.
     /// `on_connection` cannot resolve the PM → records "fail_closed_pm_missing"
     /// and returns `Deny("ip:deny:pm-missing")`. The connection must be closed.
     fn gcir_fail_closed_pm_missing() -> TestCase {
@@ -269,7 +269,7 @@ impl GcirEnforcementTestSuite {
 
                     // Delete the PM the GCIR plugin references.
                     if let Err(e) = ctx
-                        .delete_resource("EdgionData", "edgion-test", "gcir-enforce-test")
+                        .delete_resource("EdgionConfigData", "edgion-test", "gcir-enforce-test")
                         .await
                     {
                         return TestResult::failed(start.elapsed(), format!("Failed to delete PM: {}", e));

@@ -5,7 +5,7 @@
 //! and pre-computed hash passthrough.
 //!
 //! `RegionRouteConfig` in EdgionPlugins holds ALL routing logic plus the default region table.
-//! An optional `override_ref` points to a `RegionRouteOverride` EdgionData which can
+//! An optional `override_ref` points to a `RegionRouteOverride` EdgionConfigData which can
 //! whole-replace the `regions` at request time (fail-to-base on any overlay error).
 
 use std::collections::HashMap;
@@ -14,12 +14,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::common::{KeyGet, KeySet};
-use crate::resources::edgion_data::EdgionDataRef;
+use crate::resources::edgion_config_data::EdgionConfigDataRef;
 
 /// RegionRoute plugin: flat base configuration.
 ///
 /// Holds ALL routing logic and the default region table.
-/// An optional `override_ref` points to a `RegionRouteOverride` EdgionData that can
+/// An optional `override_ref` points to a `RegionRouteOverride` EdgionConfigData that can
 /// whole-replace the `regions` at request time (fail-to-base on any overlay error).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -52,10 +52,10 @@ pub struct RegionRouteConfig {
     #[serde(default)]
     pub regions: Vec<RegionDef>,
 
-    /// Optional overlay reference. When set, the gateway looks up this EdgionData at
+    /// Optional overlay reference. When set, the gateway looks up this EdgionConfigData at
     /// request time and applies a `RegionRouteOverride` on top of the base `regions`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub override_ref: Option<EdgionDataRef>,
+    pub override_ref: Option<EdgionConfigDataRef>,
 }
 
 /// RouteByKeyConfMatch configuration with bypass support.
@@ -226,7 +226,7 @@ mod validation_trait_tests {
 
     #[test]
     fn validation_error_returns_none_for_default_config() {
-        // region_route relies on EdgionData chain resolution for all checks;
+        // region_route relies on EdgionConfigData chain resolution for all checks;
         // the trait method must return None and must not panic.
         let config = RegionRouteConfig::default();
         assert_eq!(config.validation_error(), None);

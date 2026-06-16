@@ -1,5 +1,5 @@
 # Scenario 3: EdgionStreamPlugins with GCIR base + overrideRef pointing to an EXISTING
-# GlobalConnIpRestrictionOverride EdgionData → ResolvedRefs=True
+# GlobalConnIpRestrictionOverride EdgionConfigData → ResolvedRefs=True
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:

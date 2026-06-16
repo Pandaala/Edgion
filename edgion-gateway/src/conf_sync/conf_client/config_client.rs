@@ -31,7 +31,7 @@ pub struct ConfigClient {
     edgion_plugins: ClientCache<EdgionPlugins>,
     edgion_stream_plugins: ClientCache<EdgionStreamPlugins>,
     backend_tls_policies: ClientCache<BackendTLSPolicy>,
-    edgion_data: ClientCache<EdgionData>,
+    edgion_config_data: ClientCache<EdgionConfigData>,
     edgion_acme: ClientCache<EdgionAcme>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
     /// Optional cache-field whitelist used for readiness checks.
@@ -143,9 +143,9 @@ impl ConfigClient {
             edgion_plugins: plugins_cache,
             edgion_stream_plugins: stream_plugins_cache,
             backend_tls_policies: backend_tls_policies_cache,
-            edgion_data: {
+            edgion_config_data: {
                 let ed_cache = ClientCache::new(client_id.clone(), client_name.clone());
-                let ed_handler = crate::plugins::runtime::edgion_data::create_edgion_data_handler();
+                let ed_handler = crate::plugins::runtime::edgion_config_data::create_edgion_config_data_handler();
                 ed_cache.set_conf_processor(ed_handler);
                 ed_cache
             },
@@ -261,7 +261,7 @@ impl ConfigClient {
             ResourceKind::EdgionPlugins => Some(&self.edgion_plugins),
             ResourceKind::EdgionStreamPlugins => Some(&self.edgion_stream_plugins),
             ResourceKind::BackendTLSPolicy => Some(&self.backend_tls_policies),
-            ResourceKind::EdgionData => Some(&self.edgion_data),
+            ResourceKind::EdgionConfigData => Some(&self.edgion_config_data),
             // These are intentionally not cached on Gateway side
             ResourceKind::Secret => None,
             ResourceKind::ConfigMap => None,
@@ -354,9 +354,9 @@ impl ConfigClient {
         self.edgion_plugins.list_owned()
     }
 
-    /// List EdgionData entries
-    pub fn list_edgion_data(&self) -> ListData<EdgionData> {
-        self.edgion_data.list_owned()
+    /// List EdgionConfigData entries
+    pub fn list_edgion_config_data(&self) -> ListData<EdgionConfigData> {
+        self.edgion_config_data.list_owned()
     }
 
     /// List GatewayClasses

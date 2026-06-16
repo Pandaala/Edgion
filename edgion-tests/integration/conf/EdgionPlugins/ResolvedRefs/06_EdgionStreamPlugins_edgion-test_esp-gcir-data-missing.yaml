@@ -1,5 +1,5 @@
 # Scenario 4: EdgionStreamPlugins with GCIR base + overrideRef pointing to a MISSING
-# GlobalConnIpRestrictionOverride EdgionData → ResolvedRefs=False/InvalidEdgionDataRef
+# GlobalConnIpRestrictionOverride EdgionConfigData → ResolvedRefs=False/InvalidEdgionConfigDataRef
 # (Base is still valid and will be used at runtime as fail-to-base.)
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
