@@ -1,8 +1,9 @@
-# EdgionStreamPlugins with GlobalConnectionIpRestriction using base + overrideRef model.
+# EdgionStreamPlugins with GlobalConnectionIpRestriction using the flattened config model.
 #
-# The base holds all profiles (safe default = allow-local, which permits loopback only).
-# The overrideRef points to gcir-enforce-test EdgionConfigData (overlay) which can hot-swap
-# activeProfile or enable without touching this resource.
+# The plugin config holds all profiles inline (safe default = allow-local, which permits
+# loopback only). The optional activeProfileRef points at the gcir-enforce-test Selector
+# EdgionConfigData, which can hot-swap the active profile (among the inline profiles)
+# without touching this resource. A missing/unknown selector falls back to activeProfile.
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -12,22 +13,21 @@ spec:
   plugins:
     - type: GlobalConnectionIpRestriction
       config:
-        base:
-          enable: true
-          activeProfile: allow-local
-          profiles:
-            allow-local:
-              defaultAction: deny
-              allow:
-                - name: loopback
-                  cidrs:
-                    - "127.0.0.0/8"
-            block-local:
-              defaultAction: allow
-              deny:
-                - name: loopback-block
-                  cidrs:
-                    - "127.0.0.0/8"
-        overrideRef:
+        enable: true
+        activeProfile: allow-local
+        profiles:
+          allow-local:
+            defaultAction: deny
+            allow:
+              - name: loopback
+                cidrs:
+                  - "127.0.0.0/8"
+          block-local:
+            defaultAction: allow
+            deny:
+              - name: loopback-block
+                cidrs:
+                  - "127.0.0.0/8"
+        activeProfileRef:
           namespace: edgion-test
           name: gcir-enforce-test

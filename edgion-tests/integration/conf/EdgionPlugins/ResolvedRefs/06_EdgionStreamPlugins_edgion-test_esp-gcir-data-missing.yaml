@@ -1,6 +1,6 @@
-# Scenario 4: EdgionStreamPlugins with GCIR base + overrideRef pointing to a MISSING
-# GlobalConnIpRestrictionOverride EdgionConfigData → ResolvedRefs=False/InvalidEdgionConfigDataRef
-# (Base is still valid and will be used at runtime as fail-to-base.)
+# Scenario 4: EdgionStreamPlugins with inline GCIR config + activeProfileRef pointing to a
+# MISSING Selector EdgionConfigData → ResolvedRefs=False/InvalidEdgionConfigDataRef
+# (The inline config is still valid and is used at runtime as fail-to-base.)
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -10,16 +10,15 @@ spec:
   plugins:
     - type: GlobalConnectionIpRestriction
       config:
-        base:
-          enable: true
-          activeProfile: main
-          profiles:
-            main:
-              defaultAction: deny
-              allow:
-                - name: office
-                  cidrs:
-                    - "10.0.0.0/8"
-        overrideRef:
+        enable: true
+        activeProfile: main
+        profiles:
+          main:
+            defaultAction: deny
+            allow:
+              - name: office
+                cidrs:
+                  - "10.0.0.0/8"
+        activeProfileRef:
           name: esp-gcir-data-nonexistent
           namespace: edgion-test

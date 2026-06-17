@@ -4,11 +4,12 @@
 //!
 //! Responsibilities:
 //! - Maintain EdgionConfigDataStore in ControllerRuntime (parse + on_delete)
-//! - Register cross-EdgionConfigData references (override_ref for RegionRouteOverride / GlobalConnIpRestriction)
+//! - Register cross-EdgionConfigData references (overrideRef → RegionRouteOverride for EdgionPlugins;
+//!   activeProfileRef → Selector for EdgionStreamPlugins GlobalConnectionIpRestriction)
 //!   so a change to a referenced EdgionConfigData requeues the dependent EdgionPlugins/EdgionStreamPlugins.
-//! - On change: requeue referencing EdgionPlugins/EdgionStreamPlugins so they pick up updated overlay data.
+//! - On change: requeue referencing EdgionPlugins/EdgionStreamPlugins so they pick up updated data.
 //! - On update_status: set `Accepted` (from preparse errors) and `ResolvedRefs`
-//!   (from override_ref resolution) conditions per Gateway API conventions.
+//!   (from ref resolution) conditions per Gateway API conventions.
 
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition, ResolvedRefsError,
@@ -47,8 +48,8 @@ impl Default for EdgionConfigDataHandler {
 
 /// Requeue resources that reference this EdgionConfigData.
 ///
-/// EdgionPlugins / EdgionStreamPlugins referencing this EdgionConfigData via `overrideRef` or
-/// `overrideRef` are requeued so they pick up any changed overlay data.
+/// EdgionPlugins (via `overrideRef`) / EdgionStreamPlugins (via `activeProfileRef`) referencing this
+/// EdgionConfigData are requeued so they pick up any changed data.
 async fn requeue_edgion_config_data_referrers(ed: &EdgionConfigData, ctx: &HandlerContext) {
     let ns = ed.metadata.namespace.as_deref().unwrap_or("");
     let name = ed.metadata.name.as_deref().unwrap_or("");

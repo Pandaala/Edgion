@@ -16,7 +16,7 @@ spec:
               type: object
               required:
                 - data
-              description: "EdgionConfigData defines named data resources referenced by EdgionPlugins / EdgionStreamPlugins. Exactly one ConfigEntry variant (KeyList, IpList, GlobalConnIpRestrictionOverride, RegionRouteOverride, Misc), discriminated by `data.type`. The envelope fields `enable` and `active` apply to any variant."
+              description: "EdgionConfigData defines named data resources referenced by EdgionPlugins / EdgionStreamPlugins. Exactly one ConfigEntry variant (KeyList, IpList, Selector, RegionRouteOverride, Misc), discriminated by `data.type`. The envelope fields `enable` and `active` apply to any variant."
               properties:
                 enable:
                   type: boolean
@@ -38,7 +38,7 @@ spec:
                       enum:
                         - KeyList
                         - IpList
-                        - GlobalConnIpRestrictionOverride
+                        - Selector
                         - RegionRouteOverride
                         - Misc
                     config:
@@ -47,7 +47,7 @@ spec:
                         Variant-specific configuration. Shape depends on `type`:
                           - KeyList: { matchMode?: "Exact"|"Regex", items: [{ name, description?, items: [{ key, code?, priority?, id?, behavior? }] }] }
                           - IpList: { items: [{ name, description?, cidrs: string[] }] }   (grouped CIDRs / bare IPs, v4/v6)
-                          - GlobalConnIpRestrictionOverride: all-Optional overlay for the GlobalConnectionIpRestriction base — { enable?, activeProfile?, profiles? }; referenced via overrideRef in EdgionStreamPlugins GlobalConnectionIpRestriction entries (the base config lives inline in EdgionStreamPlugins)
+                          - Selector: active-profile selector — { active?: string, description?: string }; referenced via activeProfileRef in EdgionStreamPlugins GlobalConnectionIpRestriction configs. `active` names one of the plugin's git-owned profiles; `active: null`/absent is a no-op (base default). Switches among profiles only — never disables filtering
                           - RegionRouteOverride: all-Optional overlay for RegionRoute — { enable?, active?, regions? }; referenced via overrideRef in EdgionPlugins RegionRoute configs
                           - Misc: open payload (x-kubernetes-preserve-unknown-fields); escape hatch for third-party or unknown payloads only
                         Validation of the concrete shape is performed by the Controller

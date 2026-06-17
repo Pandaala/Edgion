@@ -267,16 +267,13 @@ impl ResolvedRefsTestSuite {
                                         ),
                                     );
                                 }
-                                // Post-overlay refactor: the resolver message now names the expected
-                                // variant `GlobalConnIpRestrictionOverride` (the overlay EdgionConfigData
-                                // variant referenced via overrideRef), not the inline base type.
-                                if !msg.contains("GlobalConnIpRestrictionOverride") {
+                                // The GCIR activeProfileRef must resolve to a `Selector`
+                                // EdgionConfigData, so the resolver message names the expected
+                                // variant `Selector` (expected type=Selector) on a miss.
+                                if !msg.contains("Selector") {
                                     return TestResult::failed(
                                         start.elapsed(),
-                                        format!(
-                                            "ResolvedRefs message should contain 'GlobalConnIpRestrictionOverride': '{}'",
-                                            msg
-                                        ),
+                                        format!("ResolvedRefs message should contain 'Selector': '{}'", msg),
                                     );
                                 }
                                 TestResult::passed_with_message(

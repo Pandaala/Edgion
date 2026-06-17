@@ -76,9 +76,9 @@ where
 
 // ===== Unit tests =====
 //
-// Uses a self-contained toy Base/Override/Entry fixture so no real EdgionConfigData
-// variant needs to exist yet.  The real variants (RegionRouteOverride /
-// GlobalConnIpRestrictionOverride) are added in S3 / S4.
+// Uses a self-contained toy Base/Override/Entry fixture so the overlay framework can be
+// exercised independently of any real EdgionConfigData variant. `RegionRouteOverride` is
+// the remaining production user of this framework.
 
 #[cfg(test)]
 mod tests {

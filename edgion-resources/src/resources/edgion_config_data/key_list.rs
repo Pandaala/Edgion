@@ -22,7 +22,7 @@ pub enum KeyMatchMode {
 /// enforced at preparse; the group name surfaces in audit/log when a
 /// consumer plugin (future) routes a match back to its origin.
 ///
-/// Mirrors `IpGroup` (`global_connection_ip_restriction.rs`).
+/// Mirrors `IpGroup` (`ip_group.rs`).
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyGroup {

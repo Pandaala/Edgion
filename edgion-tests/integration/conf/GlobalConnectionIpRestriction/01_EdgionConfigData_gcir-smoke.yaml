@@ -1,10 +1,9 @@
-# GlobalConnIpRestrictionOverride EdgionConfigData — smoke test fixture
+# Selector EdgionConfigData — smoke test fixture
 #
-# Verifies that the GlobalConnIpRestrictionOverride variant is accepted by the controller.
-# Profile p1: allow-list semantics — only 192.168.1.0/24 allowed; all others denied.
-# Profile strict: deny-list semantics — explicitly deny 10.10.10.0/24; default allow.
-#
-# The full GCIR overlay (all fields present) exercises all Optional fields.
+# Verifies that the Selector variant (the EdgionConfigData type used by the
+# GlobalConnectionIpRestriction stream plugin's activeProfileRef) is accepted by the
+# controller. A Selector only names the active profile; the rule data (profiles) lives
+# inline in the plugin config, never in the EdgionConfigData.
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
@@ -12,20 +11,7 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnIpRestrictionOverride
+    type: Selector
     config:
-      enable: true
-      activeProfile: p1
-      profiles:
-        p1:
-          defaultAction: deny
-          allow:
-            - name: office
-              cidrs:
-                - "192.168.1.0/24"
-        strict:
-          defaultAction: allow
-          deny:
-            - name: blocked-range
-              cidrs:
-                - "10.10.10.0/24"
+      active: p1
+      description: "smoke-test selector for GlobalConnectionIpRestriction"

@@ -23,7 +23,7 @@ metadata:
 | 类型 | 配置对象 | 说明 |
 |------|----------|------|
 | `IpRestriction` | 内联规则 | IP 允许/拒绝分组，直接嵌入插件中。 |
-| `GlobalConnectionIpRestriction` | `overrideRef` | 引用 `GlobalConnectionIpRestriction` EdgionConfigData；由 Center 管理并同步到各 Controller。 |
+| `GlobalConnectionIpRestriction` | 内联配置 + 可选 `activeProfileRef` | 完整 IP 规则集（命名 `profiles`）内联在插件中；可选的 `Selector` EdgionConfigData 用于热切换**当前激活哪个 profile**。由 Center 管理并同步到各 Controller。 |
 | `ConnectionRateLimit` | `config` 对象 | 在 pre-TLS 接入路径上，基于 Redis 的按源 IP 连接限流。详见下文 [ConnectionRateLimit 小节](#connectionratelimit-pre-tls-连接限流)。 |
 
 `spec.plugins` 下的每个条目都有可选的 `enable` 标志（默认 `true`）、一个 `type` 和一个 `config` 对象。
@@ -50,12 +50,24 @@ metadata:
 
 ### `GlobalConnectionIpRestriction` 配置
 
+该插件将**完整**的 IP 规则集内联携带（由 git 管理）。唯一可热切换的输入是
+*当前激活哪个 profile*，由通过 `activeProfileRef` 引用的可选 `Selector`
+EdgionConfigData 提供。
+
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `overrideRef.name` | String | **必填** | `GlobalConnectionIpRestriction` EdgionConfigData 的名称。 |
-| `overrideRef.namespace` | String | 父 ESP 命名空间 | EdgionConfigData 的命名空间；省略时继承父 `EdgionStreamPlugins` 的命名空间。 |
+| `enable` | Boolean | **必填** | 总开关。`false` 时禁用插件（放行所有连接）。 |
+| `activeProfile` | String | **必填** | 默认激活的 profile 名；必须存在于 `profiles` 中。 |
+| `profiles` | Map\<String, Object\> | **必填** | 命名规则集。每个 profile 为 `{ defaultAction, allow?, deny? }`（分组结构同 `IpRestriction`）。 |
+| `description` | String | 无 | 可选的可读说明。 |
+| `activeProfileRef.name` | String | 无 | 可选。一个 `Selector` EdgionConfigData 的名称，用于覆盖当前激活的 profile。 |
+| `activeProfileRef.namespace` | String | 父 ESP 命名空间 | Selector 的命名空间；省略时继承父 `EdgionStreamPlugins` 的命名空间。 |
 
-被引用的 EdgionConfigData 在 `spec.metadata.config` 中集中存储规则，带有总开关（`enable`）、当前激活的 `activeProfile` 以及命名的 `profiles`，可即时切换规则集。这使多个 Controller 可以共享同一个策略。
+被引用的 `Selector` 只携带 `active: <profileName>`（外加可选的 `description`）。
+连接时，若 `active` 命名了插件 `profiles` 中的某个 profile，则生效该 profile；
+否则——selector 缺失、被禁用、类型不匹配、`active: null`、或名称不存在——插件回退到
+内联的 `activeProfile`（**fail-to-base**）。selector 只能在 git 管理的 profile 之间
+切换，永远无法注入规则或禁用插件。
 
 ## 快速开始（内联 IpRestriction）
 
@@ -107,30 +119,13 @@ kubectl apply -f tcp-route.yaml
 
 现在只有 `10.0.0.0/8` 内的客户端可以访问 Redis 服务。
 
-## Center 管理的限制（GlobalConnectionIpRestriction）
+## Center 管理的激活 profile（GlobalConnectionIpRestriction）
 
-将规则集中存储在一个 `GlobalConnectionIpRestriction` EdgionConfigData 中（支持命名 `profiles` 和总开关），并从 Stream 插件引用它。Center 将这种形式同步到多个 Controller。
+把**完整**的规则集一次性内联写在插件里（由 git 管理、经过评审）。然后让 Center
+同步一个很小的 `Selector` EdgionConfigData，用来在多个 Controller 之间选择
+**当前激活哪个 profile**——而完全不需要下发规则本身。
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: EdgionConfigData
-metadata:
-  name: gcir-policy
-  namespace: edgion-test
-spec:
-  metadata:
-    type: GlobalConnectionIpRestriction
-    config:
-      enable: true                    # 总开关；false 时禁用策略
-      activeProfile: main             # 当前激活的 profile
-      profiles:
-        main:
-          defaultAction: deny
-          allow:
-            - name: office
-              cidrs:
-                - "10.0.0.0/8"
----
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -140,9 +135,35 @@ spec:
   plugins:
     - type: GlobalConnectionIpRestriction
       config:
-        overrideRef:
-          name: gcir-policy
+        enable: true                    # 总开关（false 时禁用插件）
+        activeProfile: locked           # git 默认 profile（安全）
+        profiles:
+          locked:
+            defaultAction: deny
+            allow:
+              - name: office
+                cidrs: ["10.0.0.0/8"]
+          open:
+            defaultAction: deny
+            allow:
+              - name: any
+                cidrs: ["0.0.0.0/0"]
+        activeProfileRef:               # 可选：热切换激活的 profile
+          name: gcir-active
           # namespace 省略：继承父 ESP 命名空间（edgion-test）
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gcir-active
+  namespace: edgion-test
+spec:
+  enable: true
+  data:
+    type: Selector
+    config:
+      active: open                      # 切换到 "open"；null/缺省 → base 默认（locked）
+      description: "临时放宽访问"
 ---
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
@@ -160,6 +181,10 @@ spec:
         - name: redis-primary
           port: 6379
 ```
+
+要放宽或收紧访问，把 `active` 切换到另一个**预先授权**的 profile；selector 无法注入
+新规则、也无法一键全开——那必须是 git 中经过评审的 profile。若 Selector 被删除或
+指向不存在的 profile，插件回退到内联的 `activeProfile`（`locked`）。
 
 ## 跨命名空间引用
 

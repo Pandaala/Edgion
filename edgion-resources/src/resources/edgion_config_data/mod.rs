@@ -7,26 +7,26 @@
 //! |-------|---------|-------|
 //! | Standard primitive | `KeyList` | Unified string+regex list |
 //! | Standard primitive | `IpList` | CIDR range list |
-//! | First-party overlay | `GlobalConnIpRestrictionOverride` | All-Optional overlay via `overrideRef` |
+//! | Selector | `Selector` | Active-profile selector via `activeProfileRef` (GlobalConnectionIpRestriction) |
 //! | First-party overlay | `RegionRouteOverride` | All-Optional region table overlay via `overrideRef` |
 //! | Escape hatch | `Misc` | Third-party / unknown payloads |
 //!
 //! The top-level envelope carries `enable` (kill switch, default `true`) and
 //! `active` (profile selector, optional).  See [`effective_switch`].
 
-pub mod global_connection_ip_restriction;
+pub mod ip_group;
 pub mod ip_list;
 pub mod key_list;
 pub mod overlay;
 pub mod region_route;
+pub mod selector;
 
-pub use global_connection_ip_restriction::{
-    merge_gcir_override, GlobalConnIpRestrictionOverride, GlobalConnectionIpRestrictionData, IpGroup, ProfileRules,
-};
+pub use ip_group::IpGroup;
 pub use ip_list::IpListData;
 pub use key_list::{KeyGroup, KeyListData, KeyMatchMode, MetaDataItem};
 pub use overlay::{apply_override, OverlaySignal};
 pub use region_route::{merge_region_route_override, validate_regions, RegionRouteOverride};
+pub use selector::Selector;
 
 use crate::resources::common::Condition;
 use kube::CustomResource;
@@ -122,11 +122,12 @@ pub enum ConfigEntry {
     /// IP address / CIDR range list for IP-based filtering.
     IpList(IpListData),
 
-    /// Typed overlay for `GlobalConnectionIpRestriction` (D2). All fields are
-    /// optional; only `Some` fields replace the corresponding base values.
-    /// Referenced via `overrideRef` in `GlobalConnectionIpRestrictionEntry`
-    /// (EdgionStreamPlugins). Fail-to-base applies on absent/invalid/type-mismatch.
-    GlobalConnIpRestrictionOverride(GlobalConnIpRestrictionOverride),
+    /// Generic active-profile selector. Carries only `active` (the profile name to
+    /// activate) + an optional `description`. Referenced via `activeProfileRef` from a
+    /// `GlobalConnectionIpRestriction` stream plugin (and reusable by other
+    /// profile-based consumers later). Switches among the consumer's git-owned
+    /// profiles; fail-to-base on absent/unknown/type-mismatch.
+    Selector(Selector),
 
     /// Typed overlay for RegionRoute. All fields are optional; `regions` (if `Some`)
     /// whole-replaces the base region table. Logic fields are not overridable.
@@ -147,7 +148,7 @@ impl EdgionConfigData {
         match &self.spec.data {
             ConfigEntry::KeyList(_) => "KeyList",
             ConfigEntry::IpList(_) => "IpList",
-            ConfigEntry::GlobalConnIpRestrictionOverride(_) => "GlobalConnIpRestrictionOverride",
+            ConfigEntry::Selector(_) => "Selector",
             ConfigEntry::RegionRouteOverride(_) => "RegionRouteOverride",
             ConfigEntry::Misc(_) => "Misc",
         }
@@ -174,13 +175,9 @@ impl EdgionConfigData {
                     errors.push(format!("KeyList invalid: {}", e));
                 }
             }
-            ConfigEntry::GlobalConnIpRestrictionOverride(overlay) => {
-                // Standalone validation of the overlay (only validates present fields).
-                let mut cloned = overlay.clone();
-                if let Err(e) = cloned.validate_and_init() {
-                    errors.push(format!("GlobalConnIpRestrictionOverride invalid: {}", e));
-                }
-            }
+            // Selector is always structurally valid; the active-name ↔ profile check is a
+            // consumer-side concern (done at connection time against the plugin's profiles).
+            ConfigEntry::Selector(_) => {}
             ConfigEntry::RegionRouteOverride(ov) => {
                 // Standalone validation of the overlay (only validates present fields).
                 if let Err(e) = ov.validate_and_init() {

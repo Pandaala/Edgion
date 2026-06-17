@@ -1,4 +1,6 @@
-# Scenario 1: valid GlobalConnIpRestrictionOverride EdgionConfigData — expect Accepted=True, ResolvedRefs=True
+# Scenario 1: valid Selector EdgionConfigData — expect Accepted=True, ResolvedRefs=True
+# A Selector is always structurally valid; it only names an active profile that the
+# referencing GlobalConnectionIpRestriction plugin already owns inline.
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
@@ -6,14 +8,6 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnIpRestrictionOverride
+    type: Selector
     config:
-      enable: true
-      activeProfile: main
-      profiles:
-        main:
-          defaultAction: deny
-          allow:
-            - name: office
-              cidrs:
-                - "10.0.0.0/8"
+      active: main

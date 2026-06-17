@@ -192,7 +192,7 @@ Several simple resources register outbound references during `parse` via indices
 | Handler | Reference type | resolved via | Reason when unresolved |
 |---------|---------------|--------------|-------------------------|
 | EdgionPlugins | Secret | `SecretRefManager::get_dependencies(ep_key)` | `BackendNotFound` (`ResolvedRefsError::SecretNotFound`) |
-| EdgionStreamPlugins | EdgionConfigData (GlobalConnIpRestrictionOverride) | iterate GCIR entries in spec → `edgion_config_data_store.get(ns, name)` with matching type | `InvalidEdgionConfigDataRef` |
+| EdgionStreamPlugins | EdgionConfigData (Selector) | iterate GCIR entries' `activeProfileRef` → `edgion_config_data_store.get(ns, name)` with matching `Selector` type | `InvalidEdgionConfigDataRef` |
 | EdgionPlugins | EdgionConfigData (RegionRouteOverride) | `edgion_config_data_store.get` via `overrideRef` with type guard | `InvalidEdgionConfigDataRef` |
 | EdgionTls | Secret | `secret_store.get` | `BackendNotFound` (`ResolvedRefsError::SecretNotFound`) |
 

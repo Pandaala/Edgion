@@ -1,5 +1,5 @@
-# Scenario 3: EdgionStreamPlugins with GCIR base + overrideRef pointing to an EXISTING
-# GlobalConnIpRestrictionOverride EdgionConfigData → ResolvedRefs=True
+# Scenario 3: EdgionStreamPlugins with inline GCIR config + activeProfileRef pointing to an
+# EXISTING Selector EdgionConfigData → ResolvedRefs=True
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -9,16 +9,15 @@ spec:
   plugins:
     - type: GlobalConnectionIpRestriction
       config:
-        base:
-          enable: true
-          activeProfile: main
-          profiles:
-            main:
-              defaultAction: deny
-              allow:
-                - name: office
-                  cidrs:
-                    - "10.0.0.0/8"
-        overrideRef:
+        enable: true
+        activeProfile: main
+        profiles:
+          main:
+            defaultAction: deny
+            allow:
+              - name: office
+                cidrs:
+                  - "10.0.0.0/8"
+        activeProfileRef:
           name: esp-gcir-data-exists
           namespace: edgion-test

@@ -16,9 +16,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::resources::edgion_config_data::{
-    ConfigEntry, EdgionConfigData, GlobalConnIpRestrictionOverride, RegionRouteOverride,
-};
+use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigData, RegionRouteOverride};
 
 static GLOBAL_EDGION_CONFIG_DATA_STORE: LazyLock<Arc<EdgionConfigDataStore>> =
     LazyLock::new(|| Arc::new(EdgionConfigDataStore::new()));
@@ -45,15 +43,16 @@ pub fn edgion_config_data_keys() -> Vec<String> {
 /// Raw EdgionConfigData map. Key: "namespace/name" (e.g. "edgion-default/region-override").
 type RawMap = HashMap<String, Arc<EdgionConfigData>>;
 
-/// Typed index for `GlobalConnIpRestrictionOverride` overlay EdgionConfigData resources.
-type GlobalConnIpRestrictionOverrideMap = HashMap<String, Arc<GlobalConnIpRestrictionOverride>>;
 /// Typed index for `RegionRouteOverride` overlay EdgionConfigData resources.
 /// Key: "namespace/name". Values carry the overlay config; no pre-compilation needed.
 type RegionRouteOverrideMap = HashMap<String, Arc<RegionRouteOverride>>;
 
 /// All typed indexes bundled into a single struct so they can be swapped atomically.
+///
+/// Note: `Selector` (GlobalConnectionIpRestriction's active-profile selector) is NOT
+/// indexed here — its consumer reads the raw entry via `get_raw_by_key` and type-guards
+/// inline, so a typed index would be unused. Add one only if a typed consumer appears.
 struct TypedIndexes {
-    global_conn_ip_restriction_overrides: GlobalConnIpRestrictionOverrideMap,
     region_route_overrides: RegionRouteOverrideMap,
 }
 
@@ -89,7 +88,6 @@ impl EdgionConfigDataStore {
             snapshot: ArcSwap::from_pointee(Snapshot {
                 raw: HashMap::new(),
                 indexes: TypedIndexes {
-                    global_conn_ip_restriction_overrides: HashMap::new(),
                     region_route_overrides: HashMap::new(),
                 },
             }),
@@ -111,17 +109,6 @@ impl EdgionConfigDataStore {
 
     // ── Typed getters (zero-clone, returns Arc) ─────────────────────────────
 
-    /// Look up a `GlobalConnIpRestrictionOverride` overlay entry by "namespace/name" key.
-    /// Returns the raw (non-compiled) overlay data; matchers are compiled by the plugin at
-    /// connection time after merging with the base.
-    pub fn get_global_conn_ip_restriction_override_by_key(
-        &self,
-        key: &str,
-    ) -> Option<Arc<GlobalConnIpRestrictionOverride>> {
-        let snap = self.snapshot.load();
-        snap.indexes.global_conn_ip_restriction_overrides.get(key).cloned()
-    }
-
     /// Look up a `RegionRouteOverride` overlay entry by "namespace/name" key.
     pub fn get_region_route_override_by_key(&self, key: &str) -> Option<Arc<RegionRouteOverride>> {
         let snap = self.snapshot.load();
@@ -140,7 +127,6 @@ impl EdgionConfigDataStore {
     /// Build all typed indexes from a raw map. Pure function; called at conf change
     /// time only (low frequency).
     fn build_indexes(raw: &RawMap) -> TypedIndexes {
-        let mut gcir_overrides = GlobalConnIpRestrictionOverrideMap::new();
         let mut rr_overrides = RegionRouteOverrideMap::new();
 
         for (key, ed) in raw {
@@ -151,10 +137,9 @@ impl EdgionConfigDataStore {
                 ConfigEntry::IpList(_) => {
                     // Standard primitive: no index — no live consumer yet (D1).
                 }
-                ConfigEntry::GlobalConnIpRestrictionOverride(overlay) => {
-                    // Typed overlay. Stored as-is (no matcher compilation here);
-                    // matchers are compiled by the gateway plugin after merging with base.
-                    gcir_overrides.insert(key.clone(), Arc::new(overlay.clone()));
+                ConfigEntry::Selector(_) => {
+                    // Active-profile selector. Not indexed — the GlobalConnectionIpRestriction
+                    // plugin reads it via `get_raw_by_key` and type-guards inline.
                 }
                 ConfigEntry::RegionRouteOverride(overlay) => {
                     // Typed overlay for RegionRoute. Stored as-is.
@@ -168,22 +153,26 @@ impl EdgionConfigDataStore {
         }
 
         TypedIndexes {
-            global_conn_ip_restriction_overrides: gcir_overrides,
             region_route_overrides: rr_overrides,
         }
     }
 
     /// Insert or overwrite a single [`EdgionConfigData`] entry in the store.
     ///
-    /// This method is only available in `#[cfg(test)]` builds. It uses the same
-    /// non-atomic load-clone-modify-store path as `update`, so tests using the
-    /// **global** store must use unique keys to avoid interference between
-    /// parallel test threads.
+    /// This method is only available in `#[cfg(test)]` builds. It uses an **atomic**
+    /// `rcu` (compare-and-swap with retry) rather than a plain load-store, so concurrent
+    /// inserts from parallel test threads — including tests in *other* files sharing the
+    /// process-global store — accumulate instead of clobbering each other (no lost update).
+    /// Tests must still use unique keys to avoid overwriting each other's intended values.
     #[cfg(test)]
     pub fn insert_raw_for_test(&self, key: impl Into<String>, data: Arc<EdgionConfigData>) {
-        let mut add: RawMap = HashMap::new();
-        add.insert(key.into(), data);
-        self.update(add, &HashSet::new());
+        let key = key.into();
+        self.snapshot.rcu(|cur| {
+            let mut new_map: RawMap = cur.raw.clone();
+            new_map.insert(key.clone(), Arc::clone(&data));
+            let indexes = Self::build_indexes(&new_map);
+            Arc::new(Snapshot { raw: new_map, indexes })
+        });
     }
 
     fn replace_all(&self, data: RawMap) {

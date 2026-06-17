@@ -1,15 +1,17 @@
-// GlobalConnectionIpRestriction EdgionConfigData Integration Test Suite
+// GlobalConnectionIpRestriction Selector EdgionConfigData Integration Test Suite
 //
-// Verifies that EdgionConfigData resources with type=GlobalConnIpRestrictionOverride are correctly
-// parsed, stored, and accepted by the controller via the configserver API.
+// Verifies that EdgionConfigData resources with type=Selector — the variant referenced by
+// the GlobalConnectionIpRestriction stream plugin's activeProfileRef — are correctly parsed,
+// stored, and accepted by the controller via the configserver API. The rule data (profiles)
+// lives inline in the plugin config; the Selector only names the active profile.
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/GlobalConnectionIpRestriction/):
-//   01_EdgionConfigData_gcir-smoke.yaml — GlobalConnIpRestrictionOverride EdgionConfigData with two profiles
+//   01_EdgionConfigData_gcir-smoke.yaml — Selector EdgionConfigData (active=p1)
 //
 // Scenarios:
-//   1. gcir_pm_exists: Verify the EdgionConfigData is stored with correct type=GlobalConnIpRestrictionOverride
+//   1. gcir_pm_exists: Verify the EdgionConfigData is stored with correct type=Selector
 //   2. gcir_pm_accepted: Verify the EdgionConfigData has Accepted=True condition
-//   3. gcir_pm_config_structure: Verify the stored config has expected profiles and fields
+//   3. gcir_pm_config_structure: Verify the stored Selector config has the expected active profile
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -36,12 +38,12 @@ impl GlobalConnectionIpRestrictionTestSuite {
     // Test 1: gcir_pm_exists
     // =========================================================================
 
-    /// Verify the GlobalConnIpRestrictionOverride EdgionConfigData is stored via configserver API
+    /// Verify the Selector EdgionConfigData is stored via configserver API
     /// with the correct type discriminator.
     fn gcir_pm_exists() -> TestCase {
         TestCase::new(
             "gcir_pm_exists",
-            "EdgionConfigData 'gcir-smoke' exists with type=GlobalConnIpRestrictionOverride",
+            "EdgionConfigData 'gcir-smoke' exists with type=Selector",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -67,12 +69,12 @@ impl GlobalConnectionIpRestrictionTestSuite {
                                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
                                     // After S1/S4 rename: spec field is `data`, not `metadata`.
                                     let data_type = body["data"]["spec"]["data"]["type"].as_str().unwrap_or("");
-                                    if data_type == "GlobalConnIpRestrictionOverride" {
+                                    if data_type == "Selector" {
                                         found = true;
                                         break;
                                     } else {
                                         last_err = format!(
-                                            "EdgionConfigData found but type is '{}', expected 'GlobalConnIpRestrictionOverride'",
+                                            "EdgionConfigData found but type is '{}', expected 'Selector'",
                                             data_type
                                         );
                                     }
@@ -98,8 +100,7 @@ impl GlobalConnectionIpRestrictionTestSuite {
                     if found {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "GlobalConnIpRestrictionOverride EdgionConfigData stored correctly in configserver"
-                                .to_string(),
+                            "Selector EdgionConfigData stored correctly in configserver".to_string(),
                         )
                     } else {
                         TestResult::failed(
@@ -188,7 +189,7 @@ impl GlobalConnectionIpRestrictionTestSuite {
                     if accepted {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "GlobalConnIpRestrictionOverride EdgionConfigData accepted by controller".to_string(),
+                            "Selector EdgionConfigData accepted by controller".to_string(),
                         )
                     } else {
                         TestResult::failed(
@@ -208,14 +209,13 @@ impl GlobalConnectionIpRestrictionTestSuite {
     // Test 3: gcir_pm_config_structure
     // =========================================================================
 
-    /// Verify the stored config has the expected override profile structure:
-    /// - activeProfile = "p1"
-    /// - profiles.p1.defaultAction = "deny", has allow list with one entry
-    /// - profiles.strict.defaultAction = "allow", has deny list with one entry
+    /// Verify the stored Selector config has the expected structure:
+    /// - active = "p1"
+    /// - description present (informational, non-empty)
     fn gcir_pm_config_structure() -> TestCase {
         TestCase::new(
             "gcir_pm_config_structure",
-            "EdgionConfigData 'gcir-smoke' override config has expected profiles (p1=deny, strict=allow)",
+            "EdgionConfigData 'gcir-smoke' Selector config has expected active profile (active=p1)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -240,37 +240,20 @@ impl GlobalConnectionIpRestrictionTestSuite {
                             Ok(resp) if resp.status().is_success() => {
                                 match resp.json::<serde_json::Value>().await {
                                     Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                                        // After S1/S4: spec.data.config holds the override payload.
+                                        // spec.data.config holds the Selector payload.
                                         let config = &body["data"]["spec"]["data"]["config"];
 
-                                        // Check activeProfile
-                                        let active = config["activeProfile"].as_str().unwrap_or("");
+                                        // Check active profile name.
+                                        let active = config["active"].as_str().unwrap_or("");
                                         if active != "p1" {
-                                            last_err = format!("activeProfile='{}', expected 'p1'", active);
+                                            last_err = format!("active='{}', expected 'p1'", active);
                                             break;
                                         }
 
-                                        // Check profile p1: defaultAction=deny, has allow list
-                                        let p1 = &config["profiles"]["p1"];
-                                        let p1_action = p1["defaultAction"].as_str().unwrap_or("");
-                                        let p1_allow_len = p1["allow"].as_array().map(|a| a.len()).unwrap_or(0);
-                                        if p1_action != "deny" || p1_allow_len == 0 {
-                                            last_err = format!(
-                                                "p1: defaultAction='{}' allow_len={} (expected deny/1+)",
-                                                p1_action, p1_allow_len
-                                            );
-                                            break;
-                                        }
-
-                                        // Check profile strict: defaultAction=allow, has deny list
-                                        let strict = &config["profiles"]["strict"];
-                                        let strict_action = strict["defaultAction"].as_str().unwrap_or("");
-                                        let strict_deny_len = strict["deny"].as_array().map(|a| a.len()).unwrap_or(0);
-                                        if strict_action != "allow" || strict_deny_len == 0 {
-                                            last_err = format!(
-                                                "strict: defaultAction='{}' deny_len={} (expected allow/1+)",
-                                                strict_action, strict_deny_len
-                                            );
+                                        // Check the informational description survived round-trip.
+                                        let description = config["description"].as_str().unwrap_or("");
+                                        if description.is_empty() {
+                                            last_err = "description missing or empty (expected non-empty)".to_string();
                                             break;
                                         }
 
@@ -300,13 +283,12 @@ impl GlobalConnectionIpRestrictionTestSuite {
                     if valid {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "GCIR override config structure correct: p1=deny+allow-list, strict=allow+deny-list"
-                                .to_string(),
+                            "GCIR Selector config structure correct: active=p1 with description".to_string(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
-                            format!("GCIR override config structure invalid. Last error: {}", last_err),
+                            format!("GCIR Selector config structure invalid. Last error: {}", last_err),
                         )
                     }
                 })

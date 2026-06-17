@@ -508,12 +508,12 @@ pub fn record_region_route_overlay_event(result: &'static str) {
 /// Record a `GlobalConnectionIpRestriction` stream plugin decision event.
 ///
 /// `result` must be one of:
-/// - `"overlay_missing"` — `overrideRef` set but EdgionConfigData not found; base used (fail-to-base)
+/// - `"overlay_missing"` — `activeProfileRef` set but EdgionConfigData not found; base used (fail-to-base)
 /// - `"overlay_disabled"` — EdgionConfigData found but `spec.enable=false` (envelope kill-switch);
-///   base used without consulting the overlay variant (H1)
-/// - `"overlay_type_mismatch"` — EdgionConfigData present but wrong variant type (D6); base used
-/// - `"overlay_invalid"` — overlay applied but merged effective config failed validation; base used
-/// - `"fail_closed_profile_missing"` — active profile not in effective config (defensive guard)
+///   base used without consulting the selector (H1)
+/// - `"overlay_type_mismatch"` — EdgionConfigData present but not a `Selector` variant (D6); base used
+/// - `"overlay_invalid"` — Selector names a profile not in the config's `profiles`; base used
+/// - `"fail_closed_profile_missing"` — resolved active profile not in `profiles` (defensive guard)
 /// - `"denied"` — client IP blocked by the active profile rules
 ///
 /// Low, fixed cardinality — safe as a label.

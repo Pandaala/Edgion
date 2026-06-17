@@ -3,12 +3,18 @@
 // Verifies the Accepted and ResolvedRefs status conditions on EdgionConfigData resources.
 //
 // Required conf files (edgion-tests/integration/conf/EdgionPlugins/EdgionConfigDataStatus/):
-//   01_EdgionConfigData_data-status-gcir-valid.yaml   — valid GlobalConnIpRestrictionOverride EdgionConfigData
-//   02_EdgionConfigData_data-status-gcir-invalid.yaml — GCIR overlay with bad activeProfile
+//   01_EdgionConfigData_data-status-gcir-valid.yaml   — valid Selector EdgionConfigData
+//   02_EdgionConfigData_data-status-gcir-invalid.yaml — EdgionStreamPlugins with an invalid
+//                                                        inline GCIR config (bad activeProfile)
 //
 // Scenarios:
-//   1. valid GCIR overlay   -> Accepted=True, ResolvedRefs=True
-//   2. invalid GCIR overlay -> Accepted=False/Invalid, message contains "activeProfile"
+//   1. valid Selector EdgionConfigData -> Accepted=True, ResolvedRefs=True
+//   2. invalid inline GCIR config (EdgionStreamPlugins) -> Accepted=False/Invalid, message
+//      contains "activeProfile"
+//
+// NOTE: a Selector EdgionConfigData is always structurally valid, so the "invalid" case can no
+// longer be an EdgionConfigData. The GCIR rule data now lives inline in the plugin config, so
+// an invalid activeProfile is rejected during EdgionStreamPlugins preparse instead.
 //
 // NOTE: Scenarios 3-6 (ClusterRegionRoute, ServiceRegionRoute, clusterRef chain) were removed
 // in the EdgionConfigData overlay refactor (H3). The ClusterRegionRoute and ServiceRegionRoute
@@ -97,13 +103,13 @@ fn find_condition<'a>(conditions: &'a [serde_json::Value], type_: &str) -> Optio
 
 impl EdgionConfigDataStatusTestSuite {
     // =========================================================================
-    // Scenario 1: valid GCIR PM → Accepted=True, ResolvedRefs=True
+    // Scenario 1: valid Selector EdgionConfigData → Accepted=True, ResolvedRefs=True
     // =========================================================================
 
     fn pm_status_gcir_valid() -> TestCase {
         TestCase::new(
             "pm_status_gcir_valid",
-            "GCIR PM 'data-status-gcir-valid': Accepted=True and ResolvedRefs=True",
+            "Selector EdgionConfigData 'data-status-gcir-valid': Accepted=True and ResolvedRefs=True",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -147,13 +153,16 @@ impl EdgionConfigDataStatusTestSuite {
     }
 
     // =========================================================================
-    // Scenario 2: invalid GCIR PM (activeProfile not in profiles) → Accepted=False/Invalid
+    // Scenario 2: invalid inline GCIR config (activeProfile not in profiles) → Accepted=False/Invalid
+    //
+    // The invalid config lives in an EdgionStreamPlugins (the GCIR rule data is inline on the
+    // plugin now, not on an EdgionConfigData), so this scenario queries EdgionStreamPlugins.
     // =========================================================================
 
     fn pm_status_gcir_invalid() -> TestCase {
         TestCase::new(
             "pm_status_gcir_invalid",
-            "GCIR PM 'data-status-gcir-invalid': Accepted=False/Invalid with message about activeProfile",
+            "EdgionStreamPlugins 'data-status-gcir-invalid': Accepted=False/Invalid with message about activeProfile",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -161,7 +170,7 @@ impl EdgionConfigDataStatusTestSuite {
 
                     // Poll until Accepted=False appears (may take a few cycles)
                     let url = format!(
-                        "{}/configserver/EdgionConfigData?namespace={}&name={}",
+                        "{}/configserver/EdgionStreamPlugins?namespace={}&name={}",
                         ctx.admin_api_url(),
                         NS,
                         name
@@ -232,7 +241,7 @@ impl EdgionConfigDataStatusTestSuite {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "Expected Accepted=False/Invalid for invalid GCIR PM. Last: {}",
+                                "Expected Accepted=False/Invalid for invalid GCIR EdgionStreamPlugins. Last: {}",
                                 last_err
                             ),
                         )

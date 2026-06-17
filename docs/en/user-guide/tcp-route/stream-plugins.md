@@ -31,7 +31,7 @@ Gateway listener level. On `UDPRoute` only the Stage-1 ConnectionFilter
 | Type | Config object | Description |
 |------|---------------|-------------|
 | `IpRestriction` | inline rules | IP allow/deny groups embedded directly in the plugin. |
-| `GlobalConnectionIpRestriction` | `overrideRef` | References a `GlobalConnectionIpRestriction` EdgionConfigData; Center-managed and synced across Controllers. |
+| `GlobalConnectionIpRestriction` | inline config + optional `activeProfileRef` | Full IP rule set (named `profiles`) inline in the plugin; an optional `Selector` EdgionConfigData hot-swaps **which profile is active**. Center-managed and synced across Controllers. |
 | `ConnectionRateLimit` | `config` object | Redis-backed per-source-IP connection rate limiting at the pre-TLS accept path. See the [ConnectionRateLimit section](#connectionratelimit-pre-tls-connection-rate-limiting) below. |
 
 Each entry under `spec.plugins` has an optional `enable` flag (default `true`),
@@ -60,15 +60,25 @@ a denied connection is simply closed (no protocol-level response exists at L4).
 
 ### `GlobalConnectionIpRestriction` config
 
+This plugin carries its **complete** IP rule set inline (git-owned). The only
+hot-swappable input is *which profile is active*, supplied by an optional
+`Selector` EdgionConfigData referenced via `activeProfileRef`.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `overrideRef.name` | String | **Required** | Name of the `GlobalConnectionIpRestriction` EdgionConfigData. |
-| `overrideRef.namespace` | String | parent ESP namespace | Namespace of the EdgionConfigData; inherited from the parent `EdgionStreamPlugins` if omitted. |
+| `enable` | Boolean | **Required** | Kill switch. `false` disables the plugin (all connections allowed). |
+| `activeProfile` | String | **Required** | Default active profile name; must exist in `profiles`. |
+| `profiles` | Map\<String, Object\> | **Required** | Named rule sets. Each profile is `{ defaultAction, allow?, deny? }` (same group shape as `IpRestriction`). |
+| `description` | String | none | Optional human-readable note. |
+| `activeProfileRef.name` | String | none | Optional. Name of a `Selector` EdgionConfigData that overrides which profile is active. |
+| `activeProfileRef.namespace` | String | parent ESP namespace | Namespace of the Selector; inherited from the parent `EdgionStreamPlugins` if omitted. |
 
-The referenced EdgionConfigData stores the rules centrally under
-`spec.metadata.config`, with a kill switch (`enable`), a selected `activeProfile`,
-and named `profiles` so you can swap rule sets instantly. This lets multiple
-Controllers share one policy.
+The referenced `Selector` carries only `active: <profileName>` (plus an optional
+`description`). At connection time the effective profile is the selector's `active`
+when it names one of the plugin's `profiles`; otherwise — selector absent, disabled,
+wrong type, `active: null`, or an unknown profile name — the plugin falls back to the
+inline `activeProfile` (**fail-to-base**). A selector can only switch among the
+git-owned profiles; it can never inject rules or disable the plugin.
 
 ## Quick start (inline IpRestriction)
 
@@ -120,32 +130,13 @@ kubectl apply -f tcp-route.yaml
 
 Only clients in `10.0.0.0/8` can now reach the Redis service.
 
-## Center-managed restriction (GlobalConnectionIpRestriction)
+## Center-managed active profile (GlobalConnectionIpRestriction)
 
-Store the rules once in a `GlobalConnectionIpRestriction` EdgionConfigData (which
-supports named `profiles` and a kill switch) and reference it from a stream
-plugin. This is the form Center syncs to multiple Controllers.
+Author the **full** rule set once, inline in the plugin (git-owned, reviewed). Then
+let Center sync a small `Selector` EdgionConfigData that picks **which profile is
+active** across multiple Controllers — without ever shipping the rules themselves.
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: EdgionConfigData
-metadata:
-  name: gcir-policy
-  namespace: edgion-test
-spec:
-  metadata:
-    type: GlobalConnectionIpRestriction
-    config:
-      enable: true                    # kill switch; false disables the policy
-      activeProfile: main             # which profile is live
-      profiles:
-        main:
-          defaultAction: deny
-          allow:
-            - name: office
-              cidrs:
-                - "10.0.0.0/8"
----
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -155,9 +146,35 @@ spec:
   plugins:
     - type: GlobalConnectionIpRestriction
       config:
-        overrideRef:
-          name: gcir-policy
+        enable: true                    # kill switch (false disables the plugin)
+        activeProfile: locked           # git-default profile (safe)
+        profiles:
+          locked:
+            defaultAction: deny
+            allow:
+              - name: office
+                cidrs: ["10.0.0.0/8"]
+          open:
+            defaultAction: deny
+            allow:
+              - name: any
+                cidrs: ["0.0.0.0/0"]
+        activeProfileRef:               # optional: hot-swap the active profile
+          name: gcir-active
           # namespace omitted: inherits parent ESP namespace (edgion-test)
+---
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gcir-active
+  namespace: edgion-test
+spec:
+  enable: true
+  data:
+    type: Selector
+    config:
+      active: open                      # switch to "open"; null/absent → base default (locked)
+      description: "temporarily widen access"
 ---
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
@@ -175,6 +192,11 @@ spec:
         - name: redis-primary
           port: 6379
 ```
+
+To widen or tighten access you switch `active` to a different **pre-authored**
+profile; the selector cannot inject new rules or open everything — that must be a
+reviewed profile in git. If the Selector is removed or names an unknown profile,
+the plugin falls back to the inline `activeProfile` (`locked`).
 
 ## Cross-namespace reference
 

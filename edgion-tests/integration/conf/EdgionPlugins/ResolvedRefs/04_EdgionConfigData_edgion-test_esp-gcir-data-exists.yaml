@@ -1,4 +1,5 @@
-# GlobalConnIpRestrictionOverride EdgionConfigData — must be loaded BEFORE the ESP that references it.
+# Selector EdgionConfigData — must be loaded BEFORE the ESP that references it.
+# The GlobalConnectionIpRestriction plugin's activeProfileRef must resolve to a Selector.
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
@@ -6,13 +7,6 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnIpRestrictionOverride
+    type: Selector
     config:
-      activeProfile: main
-      profiles:
-        main:
-          defaultAction: deny
-          allow:
-            - name: office
-              cidrs:
-                - "10.0.0.0/8"
+      active: main

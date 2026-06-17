@@ -1,21 +1,32 @@
 // TCPRoute GlobalConnectionIpRestriction Enforcement Test Suite
 //
-// Tests that GlobalConnectionIpRestriction stream plugin correctly allows/denies
-// L4 TCP connections based on the active profile in the referenced EdgionConfigData.
+// Tests that the GlobalConnectionIpRestriction stream plugin correctly allows/denies
+// L4 TCP connections based on the active profile, which is hot-swapped by a Selector
+// EdgionConfigData referenced via `activeProfileRef`.
+//
+// Model: the plugin config holds all profiles inline (git-owned). A Selector EdgionConfigData
+// only names which inline profile is active. A Selector can switch among the inline profiles,
+// but can never disable the plugin; on any selector error (unknown profile / missing
+// EdgionConfigData) the plugin falls back to the inline `activeProfile` (fail-to-base).
 //
 // Required config files (in edgion-tests/integration/conf/TCPRoute/GlobalConnectionIpRestriction/):
-// - 01_EdgionConfigData_gcir.yaml            # PM with allow-local + block-local profiles
-// - 02_EdgionStreamPlugins.yaml            # Stream plugin referencing the PM
+// - 01_EdgionConfigData_gcir.yaml          # Selector (initial active=allow-local)
+// - 02_EdgionStreamPlugins.yaml            # Stream plugin with inline allow-local + block-local profiles
 // - 03_Gateway.yaml                        # Gateway with single TCP listener on 31296
 // - 04_TCPRoute.yaml                       # Route proxying to test-tcp echo backend
 //
+// Inline profiles (base activeProfile = allow-local):
+// - allow-local: defaultAction=deny, allow 127.0.0.0/8  → loopback ALLOWED
+// - block-local: defaultAction=allow, deny  127.0.0.0/8  → loopback DENIED
+//
 // Port allocation (from ports.json "TCPRoute/GlobalConnectionIpRestriction"):
-// - 31296 (tcp): single listener, behavior toggles via PM activeProfile
+// - 31296 (tcp): single listener, behavior toggles via the Selector's active profile
 //
 // Test scenarios:
-// 1. gcir_allow_localhost      — initial state (allow-local): loopback ALLOWED, echo succeeds
-// 2. gcir_deny_after_switch    — switch to block-local: loopback DENIED, connection closed
-// 3. gcir_fail_open_disabled   — disable plugin (enable=false): fail-open, echo succeeds again
+// 1. gcir_allow_localhost          — selector active=allow-local: loopback ALLOWED, echo succeeds
+// 2. gcir_deny_after_switch        — selector active=block-local: loopback DENIED, connection closed
+// 3. gcir_fallback_unknown_profile — selector active=<unknown>: fall back to base (allow-local) → ALLOWED
+// 4. gcir_fallback_selector_missing — Selector deleted: fall back to base (allow-local) → ALLOWED
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::{Duration, Instant};
@@ -24,12 +35,13 @@ use tokio::net::TcpStream;
 
 pub struct GcirEnforcementTestSuite;
 
-/// Build a `GlobalConnIpRestrictionOverride` EdgionConfigData YAML that hot-swaps the
-/// `enable` / `activeProfile` of the base config defined inline in the
-/// `gcir-stream-plugins` EdgionStreamPlugins (which holds both profiles). The base
-/// is referenced via `overrideRef: gcir-enforce-test`; re-applying this overlay at
-/// runtime flips the active profile / kill switch without touching the base.
-fn pm_yaml_with(active_profile: &str, enable: bool) -> String {
+/// Build a `Selector` EdgionConfigData YAML that hot-swaps the *active profile* of the
+/// inline GlobalConnectionIpRestriction config in the `gcir-stream-plugins`
+/// EdgionStreamPlugins (which owns both profiles). The selector is referenced via
+/// `activeProfileRef: gcir-enforce-test`; re-applying it switches the active profile
+/// among the inline profiles without touching the plugin config. An `active` that names
+/// no inline profile makes the plugin fall back to its inline `activeProfile`.
+fn selector_yaml_with(active_profile: &str) -> String {
     format!(
         r#"apiVersion: edgion.io/v1
 kind: EdgionConfigData
@@ -38,33 +50,34 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnIpRestrictionOverride
+    type: Selector
     config:
-      enable: {enable}
-      activeProfile: {active_profile}
+      active: {active_profile}
 "#,
-        enable = enable,
         active_profile = active_profile,
     )
 }
 
 impl GcirEnforcementTestSuite {
-    /// Test 1: initial state (activeProfile=allow-local)
+    /// Test 1: selector active=allow-local
     ///
-    /// The PM starts with activeProfile=allow-local:
+    /// The selector selects the inline allow-local profile:
     ///   defaultAction: deny, allow: [127.0.0.0/8]
     /// Connection from 127.0.0.1 should be ALLOWED → echo data round-trip succeeds.
     fn gcir_allow_localhost() -> TestCase {
         TestCase::new(
             "gcir_allow_localhost",
-            "GCIR allow-local profile: connection from 127.0.0.1 should be allowed and echo data",
+            "GCIR selector active=allow-local: connection from 127.0.0.1 should be allowed and echo data",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Ensure PM is in allow-local state
-                    if let Err(e) = ctx.apply_yaml(&pm_yaml_with("allow-local", true)).await {
-                        return TestResult::failed(start.elapsed(), format!("Failed to apply PM (allow-local): {}", e));
+                    // Ensure the selector points at the allow-local profile.
+                    if let Err(e) = ctx.apply_yaml(&selector_yaml_with("allow-local")).await {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Failed to apply Selector (allow-local): {}", e),
+                        );
                     }
 
                     // Brief pause for the Gateway to pick up the updated configuration
@@ -117,22 +130,25 @@ impl GcirEnforcementTestSuite {
         )
     }
 
-    /// Test 2: switch activeProfile to block-local
+    /// Test 2: switch the selector to the block-local profile
     ///
-    /// Re-apply the PM with activeProfile=block-local:
+    /// Re-apply the selector with active=block-local:
     ///   defaultAction: allow, deny: [127.0.0.0/8]
     /// Connection from 127.0.0.1 should be DENIED → EOF or connection closed.
     fn gcir_deny_after_switch() -> TestCase {
         TestCase::new(
             "gcir_deny_after_switch",
-            "GCIR block-local profile: connection from 127.0.0.1 should be denied after profile switch",
+            "GCIR selector active=block-local: connection from 127.0.0.1 should be denied after profile switch",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Switch PM to block-local
-                    if let Err(e) = ctx.apply_yaml(&pm_yaml_with("block-local", true)).await {
-                        return TestResult::failed(start.elapsed(), format!("Failed to apply PM (block-local): {}", e));
+                    // Switch the selector to block-local
+                    if let Err(e) = ctx.apply_yaml(&selector_yaml_with("block-local")).await {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Failed to apply Selector (block-local): {}", e),
+                        );
                     }
 
                     // Wait for the config sync to propagate to the Gateway
@@ -181,24 +197,24 @@ impl GcirEnforcementTestSuite {
         )
     }
 
-    /// Test 3: disable the plugin (enable=false) — fail-open
+    /// Test 3: selector names an unknown profile → fall back to base
     ///
-    /// Re-apply the PM with enable=false.
-    /// The plugin should fail-open: all connections pass through → echo succeeds.
-    /// Also resets the PM back to a clean state for subsequent test runs.
-    fn gcir_fail_open_disabled() -> TestCase {
+    /// Re-apply the selector with active=<unknown profile>. The name is not one of the
+    /// inline profiles, so the plugin falls back to its inline `activeProfile`
+    /// (allow-local) → connection from 127.0.0.1 ALLOWED, echo succeeds.
+    fn gcir_fallback_unknown_profile() -> TestCase {
         TestCase::new(
-            "gcir_fail_open_disabled",
-            "GCIR with enable=false should fail-open: connection from 127.0.0.1 allowed regardless of profile",
+            "gcir_fallback_unknown_profile",
+            "GCIR selector with unknown profile name: falls back to inline activeProfile (allow-local) → allowed",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Disable the plugin — any activeProfile while disabled should allow all
-                    if let Err(e) = ctx.apply_yaml(&pm_yaml_with("block-local", false)).await {
+                    // Selector names a profile that does not exist inline → fail-to-base.
+                    if let Err(e) = ctx.apply_yaml(&selector_yaml_with("no-such-profile")).await {
                         return TestResult::failed(
                             start.elapsed(),
-                            format!("Failed to apply PM (enable=false): {}", e),
+                            format!("Failed to apply Selector (unknown profile): {}", e),
                         );
                     }
 
@@ -206,9 +222,9 @@ impl GcirEnforcementTestSuite {
                     tokio::time::sleep(Duration::from_secs(1)).await;
 
                     let addr = ctx.tcp_addr();
-                    let test_data = b"Hello GCIR disabled";
+                    let test_data = b"Hello GCIR unknown-profile";
 
-                    match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
+                    let result = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
                         Ok(Ok(mut stream)) => {
                             if let Err(e) = stream.write_all(test_data).await {
                                 return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
@@ -218,103 +234,130 @@ impl GcirEnforcementTestSuite {
                             match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
                                 Ok(Ok(n)) if n > 0 => TestResult::passed_with_message(
                                     start.elapsed(),
-                                    format!("TCP echo succeeded ({} bytes) — disabled GCIR correctly fails open", n),
+                                    format!(
+                                        "TCP echo succeeded ({} bytes) — unknown selector profile fell back to base allow-local",
+                                        n
+                                    ),
                                 ),
                                 Ok(Ok(_)) => TestResult::failed(
                                     start.elapsed(),
-                                    "Connection closed immediately (0 bytes) — disabled GCIR should fail open"
+                                    "Connection closed immediately (0 bytes) — unknown profile should fall back to base allow-local"
                                         .to_string(),
                                 ),
                                 Ok(Err(e)) => TestResult::failed(
                                     start.elapsed(),
-                                    format!("Read failed: {} — disabled GCIR should fail open", e),
+                                    format!("Read failed: {} — unknown profile should fall back to base allow-local", e),
                                 ),
                                 Err(_) => TestResult::failed(
                                     start.elapsed(),
-                                    "Read timed out — disabled GCIR should fail open".to_string(),
+                                    "Read timed out — unknown profile should fall back to base allow-local".to_string(),
                                 ),
                             }
                         }
                         Ok(Err(e)) => TestResult::failed(
                             start.elapsed(),
-                            format!("Connection refused (disabled GCIR should fail open): {}", e),
+                            format!(
+                                "Connection refused (unknown profile should fall back to base allow-local): {}",
+                                e
+                            ),
                         ),
                         Err(_) => TestResult::failed(
                             start.elapsed(),
-                            "Connection timed out (disabled GCIR should fail open)".to_string(),
+                            "Connection timed out (unknown profile should fall back to base allow-local)".to_string(),
                         ),
-                    }
+                    };
+
+                    // Restore the selector to allow-local for a known-good baseline.
+                    let _ = ctx.apply_yaml(&selector_yaml_with("allow-local")).await;
+
+                    result
                 })
             },
         )
     }
-    /// Test 4: PM missing → fail-closed
+
+    /// Test 4: Selector EdgionConfigData missing → fall back to base
     ///
-    /// Delete the EdgionConfigData that the GCIR stream plugin references.
-    /// `on_connection` cannot resolve the PM → records "fail_closed_pm_missing"
-    /// and returns `Deny("ip:deny:pm-missing")`. The connection must be closed.
-    fn gcir_fail_closed_pm_missing() -> TestCase {
+    /// Delete the Selector EdgionConfigData that the GCIR plugin references via
+    /// `activeProfileRef`. With no selector, the plugin uses its inline `activeProfile`
+    /// (allow-local) → connection from 127.0.0.1 ALLOWED. The inline config is git-owned,
+    /// so a missing selector is fail-to-base, NOT fail-closed.
+    fn gcir_fallback_selector_missing() -> TestCase {
         TestCase::new(
-            "gcir_fail_closed_pm_missing",
-            "GCIR with missing PM: connection must be denied (fail-closed), not passed through",
+            "gcir_fallback_selector_missing",
+            "GCIR with missing Selector EdgionConfigData: falls back to inline activeProfile (allow-local) → allowed",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // First ensure the PM exists so delete has a known baseline.
-                    if let Err(e) = ctx.apply_yaml(&pm_yaml_with("allow-local", true)).await {
-                        return TestResult::failed(start.elapsed(), format!("Failed to apply PM before delete: {}", e));
+                    // First ensure the selector exists so delete has a known baseline.
+                    if let Err(e) = ctx.apply_yaml(&selector_yaml_with("allow-local")).await {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Failed to apply Selector before delete: {}", e),
+                        );
                     }
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
-                    // Delete the PM the GCIR plugin references.
+                    // Delete the Selector the GCIR plugin references.
                     if let Err(e) = ctx
                         .delete_resource("EdgionConfigData", "edgion-test", "gcir-enforce-test")
                         .await
                     {
-                        return TestResult::failed(start.elapsed(), format!("Failed to delete PM: {}", e));
+                        return TestResult::failed(start.elapsed(), format!("Failed to delete Selector: {}", e));
                     }
 
                     // Wait for deletion to propagate to the Gateway.
                     tokio::time::sleep(Duration::from_millis(1500)).await;
 
                     let addr = ctx.tcp_addr();
+                    let test_data = b"Hello GCIR no-selector";
 
-                    let result = match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
+                    let result = match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
                         Ok(Ok(mut stream)) => {
-                            let _ = stream.write_all(b"Hello GCIR no-PM").await;
+                            if let Err(e) = stream.write_all(test_data).await {
+                                return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
+                            }
+
                             let mut buf = vec![0u8; 1024];
-                            match tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await {
-                                Ok(Ok(0)) => TestResult::passed_with_message(
+                            match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
+                                Ok(Ok(n)) if n > 0 => TestResult::passed_with_message(
                                     start.elapsed(),
-                                    "Connection closed by GCIR (PM missing → fail-closed, EOF)".to_string(),
+                                    format!(
+                                        "TCP echo succeeded ({} bytes) — missing selector fell back to base allow-local",
+                                        n
+                                    ),
                                 ),
-                                Ok(Ok(n)) => TestResult::failed(
+                                Ok(Ok(_)) => TestResult::failed(
                                     start.elapsed(),
-                                    format!("Expected denial (PM missing) but received {} bytes — fail-open leak", n),
+                                    "Connection closed immediately (0 bytes) — missing selector should fall back to base allow-local"
+                                        .to_string(),
                                 ),
-                                Ok(Err(_)) => TestResult::passed_with_message(
+                                Ok(Err(e)) => TestResult::failed(
                                     start.elapsed(),
-                                    "Connection rejected by GCIR (PM missing → fail-closed, read error)".to_string(),
+                                    format!("Read failed: {} — missing selector should fall back to base allow-local", e),
                                 ),
                                 Err(_) => TestResult::failed(
                                     start.elapsed(),
-                                    "Read timed out — GCIR PM-missing did not deny the connection".to_string(),
+                                    "Read timed out — missing selector should fall back to base allow-local".to_string(),
                                 ),
                             }
                         }
-                        Ok(Err(_)) => TestResult::passed_with_message(
+                        Ok(Err(e)) => TestResult::failed(
                             start.elapsed(),
-                            "Connection refused by GCIR (PM missing → fail-closed)".to_string(),
+                            format!(
+                                "Connection refused (missing selector should fall back to base allow-local): {}",
+                                e
+                            ),
                         ),
-                        Err(_) => TestResult::passed_with_message(
+                        Err(_) => TestResult::failed(
                             start.elapsed(),
-                            "Connection dropped by GCIR (PM missing → fail-closed, timeout)".to_string(),
+                            "Connection timed out (missing selector should fall back to base allow-local)".to_string(),
                         ),
                     };
 
-                    // Restore PM so subsequent test runs start in a known-good state.
-                    let _ = ctx.apply_yaml(&pm_yaml_with("allow-local", true)).await;
+                    // Restore the selector so subsequent test runs start in a known-good state.
+                    let _ = ctx.apply_yaml(&selector_yaml_with("allow-local")).await;
 
                     result
                 })
@@ -332,8 +375,8 @@ impl TestSuite for GcirEnforcementTestSuite {
         vec![
             Self::gcir_allow_localhost(),
             Self::gcir_deny_after_switch(),
-            Self::gcir_fail_open_disabled(),
-            Self::gcir_fail_closed_pm_missing(),
+            Self::gcir_fallback_unknown_profile(),
+            Self::gcir_fallback_selector_missing(),
         ]
     }
 }

@@ -155,6 +155,19 @@ check "Legacy ConfigEntry::ClusterRegionRoute / ::ServiceRegionRoute / standalon
     '\bConfigEntry::(ClusterRegionRoute|ServiceRegionRoute|GlobalConnectionIpRestriction)\b' \
     --include='*.rs'
 
+# Removed in the GCIR selector refactor (2026-06-16): the whole-profiles overlay
+# `GlobalConnIpRestrictionOverride` + `merge_gcir_override`, and the old base+overrideRef wrapper
+# `GlobalConnectionIpRestrictionEntry` / type `GlobalConnectionIpRestrictionData`. GlobalConnectionIp-
+# Restriction now carries its config inline (`GlobalConnectionIpRestrictionConfig`) and consumes a
+# `Selector` EdgionConfigData via `activeProfileRef`.
+check "Removed GCIR overlay symbols 'GlobalConnIpRestrictionOverride' / 'merge_gcir_override' (use 'Selector' + activeProfileRef)" \
+    '\b(GlobalConnIpRestrictionOverride|merge_gcir_override)\b' \
+    --include='*.rs' --include='*.yaml' --include='*.yml'
+
+check "Removed GCIR wrapper 'GlobalConnectionIpRestrictionEntry' / 'GlobalConnectionIpRestrictionData' (use 'GlobalConnectionIpRestrictionConfig')" \
+    '\bGlobalConnectionIpRestriction(Entry|Data)\b' \
+    --include='*.rs'
+
 # 5. Removed CRD file (the old kebab-name).
 if [ -f "config/crd/edgion-crd/plugin_metadata_crd.yaml" ]; then
     echo "ERROR: Legacy CRD file 'config/crd/edgion-crd/plugin_metadata_crd.yaml' still exists (use 'edgion_config_data_crd.yaml')" >&2

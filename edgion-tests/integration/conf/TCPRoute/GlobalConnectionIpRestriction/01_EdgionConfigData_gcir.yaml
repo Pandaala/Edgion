@@ -1,10 +1,11 @@
-# GlobalConnIpRestrictionOverride EdgionConfigData for L4 enforcement tests
+# Selector EdgionConfigData for L4 enforcement tests
 #
-# This is the OVERLAY resource referenced by the EdgionStreamPlugins via `overrideRef`.
-# The complete base config (with both profiles) lives inline in 02_EdgionStreamPlugins.yaml.
+# This is the Selector resource referenced by the EdgionStreamPlugins via `activeProfileRef`.
+# The complete plugin config (with both profiles) lives inline in 02_EdgionStreamPlugins.yaml;
+# this Selector only chooses which of those git-owned profiles is active.
 #
-# Initial state: activeProfile=allow-local (loopback allowed)
-# Tests switch this overlay to change the active profile or kill-switch enable.
+# Initial state: active=allow-local (loopback allowed)
+# Tests re-apply this selector to switch the active profile between the inline profiles.
 apiVersion: edgion.io/v1
 kind: EdgionConfigData
 metadata:
@@ -12,6 +13,6 @@ metadata:
   namespace: edgion-test
 spec:
   data:
-    type: GlobalConnIpRestrictionOverride
+    type: Selector
     config:
-      activeProfile: allow-local
+      active: allow-local
