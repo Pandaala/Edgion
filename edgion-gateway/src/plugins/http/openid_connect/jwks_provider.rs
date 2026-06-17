@@ -312,10 +312,16 @@ mod tests {
                     let mut req = [0u8; 1024];
                     let n = sock.read(&mut req).await.unwrap_or(0);
                     let req_str = String::from_utf8_lossy(&req[..n]).to_string();
+                    // This mock serves exactly one request per connection and then
+                    // shuts the socket down, so every response must advertise
+                    // `Connection: close`. Without it the HTTP/1.1 default (keep-alive)
+                    // would let the reqwest pool reuse a socket the server has already
+                    // closed, surfacing intermittent "error sending request" failures
+                    // under parallel test load.
                     if req_str.contains("/.well-known/openid-configuration") {
                         let body = format!(r#"{{"issuer":"{0}","jwks_uri":"{0}/jwks"}}"#, addr_owned);
                         let resp = format!(
-                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
                             body.len(),
                             body
                         );
@@ -324,7 +330,9 @@ mod tests {
                         request_count.fetch_add(1, Ordering::SeqCst);
                         if fail.load(Ordering::SeqCst) {
                             let _ = sock
-                                .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+                                .write_all(
+                                    b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n",
+                                )
                                 .await;
                         } else {
                             let n = count.load(Ordering::SeqCst);
@@ -334,7 +342,7 @@ mod tests {
                                 .join(",");
                             let body = format!(r#"{{"keys":[{}]}}"#, keys);
                             let resp = format!(
-                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
                                 body.len(),
                                 body
                             );
