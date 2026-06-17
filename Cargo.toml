@@ -25,6 +25,29 @@ version = "0.1.0"
 edition = "2021"
 authors = ["pandalaa"]
 
+# Centralized lint policy. Members opt in with `[lints] workspace = true`.
+# Unlike `cargo clippy --all-targets` (a CLI invocation), these levels apply on
+# every `cargo build`/`check` and in the IDE, so the bar is enforced uniformly
+# without anyone having to remember a flag. CI does not pass `-D warnings`, so
+# these are advisory warnings, not hard build failures.
+#
+# Deliberately NOT setting `unsafe_code`: the gateway/common crates carry
+# legitimate `unsafe` (BoringSSL FFI, allocator hooks), so a global deny/warn
+# would only generate false positives.
+# `unreachable_pub` and `unused_qualifications` were evaluated and dropped: they
+# fired ~583 times across the existing code (tidiness-only, low bug value) and
+# cleaning them up was not worth the churn. Only zero-noise lints are kept.
+[workspace.lints.rust]
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+# A curated, high-signal / low-false-positive tier above clippy's defaults.
+await_holding_lock    = "warn"  # holding a lock across `.await` — deadlock-prone in a proxy
+rc_buffer             = "warn"
+inefficient_to_string = "warn"
+implicit_clone        = "warn"
+manual_let_else       = "warn"
+
 # Single source of truth for dependency versions. Members opt in with
 # `<dep>.workspace = true`; member-specific features are additive on top, and
 # `optional` is set at the member (workspace deps cannot carry `optional`).
@@ -176,3 +199,19 @@ wiremock = "0.6"
 mockall = "0.14.0"
 proptest = "1"
 expect-test = "1.5"
+
+# Dedicated profile for shipped/release artifacts. Plain `release` stays lean so
+# day-to-day dev, CI, and profiling iterate fast; only the final binaries built
+# for distribution pay the LTO + single-codegen-unit cost. Build with
+# `cargo build --profile production` (point the Dockerfile/release pipeline at it).
+#
+# `lto = "thin"`: cross-crate inlining (edgion ↔ pingora hot paths) at a fraction
+#   of `fat` LTO's link time/memory.
+# `codegen-units = 1`: whole-crate optimization (no intra-crate parallelism).
+# `debug = 1`: keep line tables so production flamegraphs/perf still map to
+#   source — note LTO inlining still merges frames; this only preserves symbols.
+[profile.production]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+debug = 1

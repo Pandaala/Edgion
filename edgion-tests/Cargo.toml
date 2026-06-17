@@ -13,6 +13,9 @@ publish = false
 name = "edgion_tests"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 # Executable entrypoints. They live next to the shared framework modules under
 # `src/` and consume them via the `edgion_tests` library crate.
 [[bin]]

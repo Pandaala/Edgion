@@ -8,6 +8,9 @@ authors.workspace = true
 name = "edgion_common"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 # TLS backend selection is driven by the workspace: `pingora-core` is unified
 # across the dependency graph (resolver 2), so the binary crates' `boringssl` /
 # `rustls` feature flows into this crate's `pingora-core` automatically — the

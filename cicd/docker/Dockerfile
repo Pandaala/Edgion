@@ -94,7 +94,15 @@ ARG PROFILE
 # deps belong to the product crate and are already cooked).
 #   - example: the edgion-tests harness crate (defines no TLS feature).
 #   - bin:     the product crate carrying the TLS backend feature.
-RUN PROFILE_FLAG=$([ "${PROFILE}" = "release" ] && echo "--release" || echo ""); \
+# Map PROFILE to a cargo flag. `release` uses the legacy `--release`; the special
+# `dev`/`debug` profile takes no flag; any other name (e.g. `production`) maps to
+# `--profile <name>`. Without this, an unknown PROFILE would silently fall back to
+# a debug build.
+RUN case "${PROFILE}" in \
+      release)   PROFILE_FLAG="--release" ;; \
+      dev|debug) PROFILE_FLAG="" ;; \
+      *)         PROFILE_FLAG="--profile ${PROFILE}" ;; \
+    esac; \
     if [ "$BUILD_TYPE" = "example" ]; then \
       cargo chef cook ${PROFILE_FLAG} -p edgion-tests --recipe-path recipe.json; \
     else \
@@ -108,8 +116,11 @@ COPY . .
 RUN mkdir -p /app/config && touch /app/config/.placeholder
 
 # Build based on BUILD_TYPE and PROFILE
-RUN PROFILE_FLAG=$([ "${PROFILE}" = "release" ] && echo "--release" || echo ""); \
-    OUT_DIR=$([ "${PROFILE}" = "release" ] && echo "release" || echo "debug"); \
+RUN case "${PROFILE}" in \
+      release)   PROFILE_FLAG="--release"; OUT_DIR="release" ;; \
+      dev|debug) PROFILE_FLAG="";          OUT_DIR="debug" ;; \
+      *)         PROFILE_FLAG="--profile ${PROFILE}"; OUT_DIR="${PROFILE}" ;; \
+    esac; \
     if [ "$BUILD_TYPE" = "example" ]; then \
       echo "Building edgion-tests bin: ${BINARY} (${PROFILE})"; \
       cargo build ${PROFILE_FLAG} -p edgion-tests --bin "${BINARY}"; \

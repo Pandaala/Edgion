@@ -12,6 +12,9 @@ path = "src/lib.rs"
 name = "edgion-controller"
 path = "src/bin/edgion_controller.rs"
 
+[lints]
+workspace = true
+
 [features]
 default = ["allocator-jemalloc", "boringssl"]
 
@@ -146,6 +149,5 @@ edgion-common = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 mockall.workspace = true
 expect-test.workspace = true
-tower.workspace = true
 wiremock.workspace = true
 proptest.workspace = true

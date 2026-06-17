@@ -12,6 +12,9 @@ path = "src/lib.rs"
 name = "edgion-cli"
 path = "src/bin/edgion_ctl.rs"
 
+[lints]
+workspace = true
+
 [features]
 # Default features: jemalloc allocator (selected in the binary).
 default = ["allocator-jemalloc"]

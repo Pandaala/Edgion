@@ -8,6 +8,9 @@ authors.workspace = true
 name = "edgion_resources"
 path = "src/lib.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 # Serialization / schema
 serde.workspace = true
