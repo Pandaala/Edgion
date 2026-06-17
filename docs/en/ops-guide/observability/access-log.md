@@ -58,11 +58,94 @@ access_log:
 | `output.localFile.queue_size` | Integer | none | In-memory queue size before backpressure applies |
 | `output.localFile.rotation.strategy` | Enum | none | Rotation strategy. Example value: `daily` |
 | `output.localFile.rotation.max_files` | Integer | none | Maximum rotated files to keep |
-| `output.elasticsearch` | Object | none | Ship the access log to Elasticsearch (via `link_sys`) instead of, or in addition to, a local file |
+| `output.es` | Object | none | Ship the access log to Elasticsearch (via `link_sys`). Set `linkSysRef.namespace` and `linkSysRef.name` to reference the target LinkSys resource |
 
 The raw client-entry URI (`request_uri`) is controlled by a separate top-level `access_log_options` section, not by the `access_log` block — see [Special fields](#special-fields).
 
-> The `output` block also accepts an `elasticsearch` sink. When the Elasticsearch producer→bulk-loop channel fills up, the `edgion_link_sys_es_bulk_channel_full_total` counter increments — watch it as a backpressure signal. See [Metrics](./metrics.md).
+> The `output` block also accepts an `es` sink. When the Elasticsearch producer→bulk-loop channel fills up, the `edgion_link_sys_es_bulk_channel_full_total` counter increments — watch it as a backpressure signal. See [Metrics](./metrics.md).
+
+## Degradation: fallback sink and backfill
+
+### Fallback sink
+
+The `access_log` block accepts an optional `fallback` field alongside `output`. When the primary sink's `healthy()` check returns false (for example during an Elasticsearch or Kafka outage), new entries are routed to the fallback instead. One log entry lands in **at most one sink** — there is no fan-out.
+
+The typical pattern is an Elasticsearch primary with a bounded LocalFile fallback so access logs survive an outage without extra infrastructure:
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    es:
+      linkSysRef:
+        namespace: default
+        name: es-main
+  fallback:
+    localFile:
+      path: logs/es_access_fallback.log
+      rotation:
+        strategy: { size: 104857600 }   # 100 MB per file
+        maxFiles: 5                       # hard cap ~500 MB
+      diskUsageThresholdPercent: 90
+```
+
+**Bounding the fallback disk usage (recommended).** An unrotated fallback file can fill the disk during a long outage. Limit growth with `rotation.strategy: { size: <bytes> }` combined with `rotation.maxFiles` (total cap ≈ size × maxFiles). `diskUsageThresholdPercent` (default 90) causes the sink to mark itself unhealthy — and shed entries — when the host volume crosses that percentage. This acts as a last-resort disk guard when the fallback is the final sink in the chain. To disable the disk check entirely, set `diskUsageThresholdPercent: 0`.
+
+### Fallback does not auto-backfill
+
+Entries that land in the fallback LocalFile during an outage stay there. When the primary recovers, the gateway resumes writing new entries to it automatically, but the fallback file is **not** replayed. To recover the missed records after an outage, trigger a manual backfill.
+
+### Backfill endpoint
+
+```
+POST /api/v1/access-log/backfill
+Authorization: Bearer <admin-token>
+```
+
+This endpoint requires the same admin bearer token as all other `/api/v1/` admin routes.
+
+**Preconditions** — the endpoint returns an error immediately if any condition is not met:
+
+| HTTP status | Condition |
+|-------------|-----------|
+| `400` | The primary sink is not Elasticsearch |
+| `400` | No LocalFile fallback is configured |
+| `409` | Elasticsearch is not currently healthy — retry after recovery |
+| `503` | The access logger is not initialized |
+
+**Success response (`200`)**
+
+```json
+{
+  "success": true,
+  "data": {
+    "summary": {
+      "files_processed": 2,
+      "lines_backfilled": 41,
+      "lines_failed": 0,
+      "files_remaining": 0,
+      "stopped_reason": null
+    }
+  }
+}
+```
+
+**Behavior details**
+
+- Reads each fallback file line by line (one ES document per line) and re-ingests into Elasticsearch via the normal bulk channel.
+- After processing a file, renames it to `<name>.backfilled-<epoch_secs>`. Subsequent triggers skip already-renamed files, making the operation **idempotent at file granularity**.
+- **At-least-once delivery warning**: the batch that was in progress when the outage started may appear duplicated in Elasticsearch — no stable document ID is used and no deduplication is performed. Access logs tolerate this level of duplication, but be aware when querying aggregate counts.
+- **Index placement**: backfilled documents are indexed under the **current date's** index (`<prefix>-<today>`), not the date the request occurred — re-ingest uses the same bulk path as live traffic, which derives the index from the current time. Each document still carries its own `@timestamp`, so a time-range query over the `<prefix>-*` index pattern finds them; only date-specific index queries or per-daily-index retention/ILM are affected.
+- The endpoint feeds the existing ES bulk channel and applies natural back-pressure. Trigger it **off-peak** to avoid adding bulk-ingest load on top of live traffic.
+
+### Backfill metrics
+
+Two counters track backfill progress alongside the existing `edgion_link_sys_es_bulk_channel_full_total` back-pressure signal:
+
+| Metric | Description |
+|--------|-------------|
+| `edgion_access_log_backfill_ingested_total` | Lines re-queued into the Elasticsearch bulk channel during a backfill (final ES indexing happens asynchronously in the bulk loop) |
+| `edgion_access_log_backfill_failed_total` | Lines that could not be enqueued to the bulk channel (channel closed); the fallback file is kept for a later retry |
 
 ## Log format
 

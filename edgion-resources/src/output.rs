@@ -42,13 +42,21 @@ pub struct RotationConfig {
     #[serde(default)]
     pub strategy: RotationStrategy,
 
-    /// Maximum number of rotated files to keep (0 = unlimited)
-    #[serde(default)]
+    /// Maximum number of rotated files to keep. Set `0` explicitly for unlimited
+    /// retention. Defaults to 10 — note this is a *named* serde default so a
+    /// partially-specified `rotation` block (e.g. only `strategy`) still gets the
+    /// bounded 10, matching the struct `Default`, rather than serde's bare-`usize`
+    /// `0` (which would silently disable cleanup and grow without bound).
+    #[serde(default = "default_max_files")]
     pub max_files: usize,
 
     /// Interval in seconds to check for rotation (default: 30)
     #[serde(default = "default_check_interval_secs")]
     pub check_interval_secs: u64,
+}
+
+fn default_max_files() -> usize {
+    10
 }
 
 fn default_check_interval_secs() -> u64 {

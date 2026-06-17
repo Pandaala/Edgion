@@ -58,11 +58,94 @@ access_log:
 | `output.localFile.queue_size` | Integer | none | 反压生效前的内存队列大小 |
 | `output.localFile.rotation.strategy` | Enum | none | 轮转策略。示例值：`daily` |
 | `output.localFile.rotation.max_files` | Integer | none | 保留的轮转文件最大数量 |
-| `output.elasticsearch` | Object | none | 将 access log 发送到 Elasticsearch（通过 `link_sys`），可替代或补充本地文件 |
+| `output.es` | Object | none | 将 access log 发送到 Elasticsearch（通过 `link_sys`）。设置 `linkSysRef.namespace` 和 `linkSysRef.name` 以引用目标 LinkSys 资源 |
 
 原始客户端入口 URI（`request_uri`）由单独的顶层 `access_log_options` 段控制，而非 `access_log` 块——见[特殊字段](#特殊字段)。
 
-> `output` 块也接受 `elasticsearch` sink。当 Elasticsearch 生产者→批量循环通道被填满时，`edgion_link_sys_es_bulk_channel_full_total` 计数器递增——将其作为反压信号监控。见[监控指标](./metrics.md)。
+> `output` 块也接受 `es` sink。当 Elasticsearch 生产者→批量循环通道被填满时，`edgion_link_sys_es_bulk_channel_full_total` 计数器递增——将其作为反压信号监控。见[监控指标](./metrics.md)。
+
+## 降级：fallback sink 与手动回填
+
+### Fallback sink
+
+`access_log` 块在 `output` 之外支持可选的 `fallback` 字段。当主 sink 的 `healthy()` 检查返回 false（例如 Elasticsearch 或 Kafka 故障期间），新条目将被路由到 fallback。每条日志**最多落入一个 sink**——不存在扇出分发。
+
+典型模式：Elasticsearch 作为主 sink，有界 LocalFile 作为 fallback，无需额外基础设施即可在故障期间保留 access log：
+
+```yaml
+access_log:
+  enabled: true
+  output:
+    es:
+      linkSysRef:
+        namespace: default
+        name: es-main
+  fallback:
+    localFile:
+      path: logs/es_access_fallback.log
+      rotation:
+        strategy: { size: 104857600 }   # 每文件 100 MB
+        maxFiles: 5                       # 硬上限约 500 MB
+      diskUsageThresholdPercent: 90
+```
+
+**限制 fallback 磁盘用量（推荐）。** 长时间故障期间无限制的 fallback 文件可能撑满磁盘。结合 `rotation.strategy: { size: <字节数> }` 和 `rotation.maxFiles`（硬上限 ≈ size × maxFiles）限制增长。`diskUsageThresholdPercent`（默认 90）会在宿主卷用量超过该百分比时，让 sink 将自身标记为不健康并丢弃条目——当 fallback 本身是链路中最后一个 sink 时，此为最后防线。如需禁用磁盘检查，设置 `diskUsageThresholdPercent: 0`。
+
+### Fallback 不会自动回填
+
+故障期间落入 fallback LocalFile 的条目会保留在文件中。主 sink 恢复后，网关自动将新条目路由回它，但 fallback 文件**不会**自动重放。如需恢复遗漏的记录，需手动触发回填。
+
+### 回填接口
+
+```
+POST /api/v1/access-log/backfill
+Authorization: Bearer <admin-token>
+```
+
+此接口与其他 `/api/v1/` 管理接口一样，需要 admin bearer token。
+
+**前置条件** — 任意条件不满足时接口立即返回错误：
+
+| HTTP 状态码 | 条件 |
+|-------------|------|
+| `400` | 主 sink 不是 Elasticsearch |
+| `400` | 未配置 LocalFile fallback |
+| `409` | Elasticsearch 当前不健康——等待恢复后重试 |
+| `503` | Access logger 未初始化 |
+
+**成功响应（`200`）**
+
+```json
+{
+  "success": true,
+  "data": {
+    "summary": {
+      "files_processed": 2,
+      "lines_backfilled": 41,
+      "lines_failed": 0,
+      "files_remaining": 0,
+      "stopped_reason": null
+    }
+  }
+}
+```
+
+**行为详情**
+
+- 逐行读取每个 fallback 文件（每行为一条 ES 文档），通过常规 bulk 通道重新写入 Elasticsearch。
+- 处理完一个文件后，将其重命名为 `<name>.backfilled-<epoch_secs>`。后续触发会跳过已重命名的文件，使操作在**文件粒度上幂等**。
+- **至少一次投递（重要警告）**：故障边界处正在处理的批次可能在 Elasticsearch 中出现重复——不使用稳定的文档 ID，不执行去重。Access log 可以容忍此级别的重复，但在查询聚合计数时需注意。
+- **索引归属**：回填的文档会写入**当前日期**的索引（`<prefix>-<今天>`），而不是请求实际发生的日期——回填走与实时流量相同的 bulk 路径，索引名由当前时间推导。每个文档仍带有自己的 `@timestamp`，因此用 `<prefix>-*` 索引模式做时间范围查询仍能查到；只有按具体日期索引查询、或按日索引做保留/ILM 的场景会受影响。
+- 接口通过现有 ES bulk 通道写入，具有自然背压。建议在**业务低峰期**触发，避免在实时流量之上叠加额外的批量写入压力。
+
+### 回填指标
+
+两个计数器用于跟踪回填进度，补充现有的 `edgion_link_sys_es_bulk_channel_full_total` 背压指标：
+
+| 指标 | 说明 |
+|------|------|
+| `edgion_access_log_backfill_ingested_total` | 回填时重新写入 Elasticsearch bulk 通道的行数（最终落库由后台 bulk loop 异步完成） |
+| `edgion_access_log_backfill_failed_total` | 无法写入 bulk 通道的行数（通道已关闭）；该 fallback 文件会保留以便后续重试 |
 
 ## 日志格式
 

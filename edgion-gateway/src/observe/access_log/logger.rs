@@ -18,6 +18,12 @@ impl AccessLogger {
         self.senders.push(sender);
     }
 
+    /// Number of registered senders (primary + optional fallback).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn sender_count(&self) -> usize {
+        self.senders.len()
+    }
+
     /// Initialize all senders
     pub async fn init(&mut self) -> anyhow::Result<()> {
         for sender in &mut self.senders {
@@ -26,7 +32,13 @@ impl AccessLogger {
         Ok(())
     }
 
-    /// Send log to first healthy sender
+    /// Send log to first healthy sender.
+    ///
+    /// Routes to the first healthy sender only (Tier-1). If that sender's
+    /// `send` fails (e.g. ES bulk channel momentarily full), the entry is
+    /// dropped and `edgion_access_log_dropped_total` is incremented (I4) —
+    /// the logger does NOT fall through to the next sender on a send error
+    /// (that would be tier-2 send-fallback, intentionally out of scope).
     ///
     /// When all senders report unhealthy (e.g., writer task died, sender init
     /// failed), the entry is dropped and `edgion_access_log_dropped_total` is
@@ -41,7 +53,13 @@ impl AccessLogger {
         }
         for sender in &self.senders {
             if sender.healthy() {
-                let _ = sender.send(data).await;
+                // Tier-1: route to the first healthy sender only. If its send
+                // fails (e.g. ES bulk channel momentarily full), count the drop
+                // (I4) — do NOT fall through to the next sender (that would be
+                // tier-2 send-fallback, intentionally out of scope).
+                if sender.send(data).await.is_err() {
+                    global_metrics().access_log_dropped();
+                }
                 return;
             }
         }
@@ -49,6 +67,11 @@ impl AccessLogger {
     }
 
     /// Send log with pre-serialization metadata to the first healthy sender.
+    ///
+    /// Routes to the first healthy sender only (Tier-1). If that sender's
+    /// `send_with_meta` fails, the entry is dropped and
+    /// `edgion_access_log_dropped_total` is incremented (I4) — the logger
+    /// does NOT fall through to the next sender on a send error.
     ///
     /// Falls back to `send` for senders that do not override `send_with_meta`
     /// (ES, Kafka, LocalFile). OTLP senders use `meta` to build typed LogRecords.
@@ -58,7 +81,12 @@ impl AccessLogger {
         }
         for sender in &self.senders {
             if sender.healthy() {
-                let _ = sender.send_with_meta(data, &meta).await;
+                // Tier-1: route to the first healthy sender only. If its send
+                // fails (e.g. OTLP export channel full), count the drop (I4)
+                // — do NOT fall through to the next sender.
+                if sender.send_with_meta(data, &meta).await.is_err() {
+                    global_metrics().access_log_dropped();
+                }
                 return;
             }
         }
@@ -84,6 +112,7 @@ mod tests {
         name: String,
         healthy: Arc<AtomicBool>,
         received: Arc<AtomicUsize>,
+        fail: Arc<AtomicBool>,
     }
 
     #[async_trait]
@@ -95,6 +124,9 @@ mod tests {
             self.healthy.load(Ordering::Relaxed)
         }
         async fn send(&self, _data: String) -> anyhow::Result<()> {
+            if self.fail.load(Ordering::Relaxed) {
+                anyhow::bail!("simulated send failure");
+            }
             self.received.fetch_add(1, Ordering::Relaxed);
             Ok(())
         }
@@ -103,20 +135,22 @@ mod tests {
         }
     }
 
-    fn fake(name: &str, healthy: bool) -> (FakeSender, Arc<AtomicUsize>) {
+    fn fake(name: &str, healthy: bool) -> (FakeSender, Arc<AtomicUsize>, Arc<AtomicBool>) {
         let received = Arc::new(AtomicUsize::new(0));
+        let fail = Arc::new(AtomicBool::new(false));
         let sender = FakeSender {
             name: name.to_string(),
             healthy: Arc::new(AtomicBool::new(healthy)),
             received: Arc::clone(&received),
+            fail: Arc::clone(&fail),
         };
-        (sender, received)
+        (sender, received, fail)
     }
 
     #[tokio::test]
     async fn send_skips_unhealthy_and_falls_through_to_next() {
-        let (first, first_rx) = fake("first", false);
-        let (second, second_rx) = fake("second", true);
+        let (first, first_rx, _) = fake("first", false);
+        let (second, second_rx, _) = fake("second", true);
         let mut logger = AccessLogger::new();
         logger.register(Box::new(first));
         logger.register(Box::new(second));
@@ -137,8 +171,8 @@ mod tests {
 
     #[tokio::test]
     async fn send_picks_first_when_it_is_healthy() {
-        let (first, first_rx) = fake("first", true);
-        let (second, second_rx) = fake("second", true);
+        let (first, first_rx, _) = fake("first", true);
+        let (second, second_rx, _) = fake("second", true);
         let mut logger = AccessLogger::new();
         logger.register(Box::new(first));
         logger.register(Box::new(second));
@@ -155,8 +189,8 @@ mod tests {
 
     #[tokio::test]
     async fn send_drops_when_all_unhealthy() {
-        let (first, first_rx) = fake("first", false);
-        let (second, second_rx) = fake("second", false);
+        let (first, first_rx, _) = fake("first", false);
+        let (second, second_rx, _) = fake("second", false);
         let mut logger = AccessLogger::new();
         logger.register(Box::new(first));
         logger.register(Box::new(second));
@@ -167,5 +201,45 @@ mod tests {
 
         assert_eq!(first_rx.load(Ordering::Relaxed), 0);
         assert_eq!(second_rx.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn send_does_not_fall_through_when_chosen_sender_errors() {
+        let (first, first_rx, first_fail) = fake("first", true);
+        let (second, second_rx, _) = fake("second", true);
+        first_fail.store(true, Ordering::Relaxed);
+        let mut logger = AccessLogger::new();
+        logger.register(Box::new(first));
+        logger.register(Box::new(second));
+
+        logger.send("hello".to_string()).await;
+
+        assert_eq!(first_rx.load(Ordering::Relaxed), 0, "first errored, nothing recorded");
+        assert_eq!(
+            second_rx.load(Ordering::Relaxed),
+            0,
+            "no fall-through to the second sender"
+        );
+    }
+
+    // send_with_meta shares send's no-fall-through-on-error contract; FakeSender
+    // does not override send_with_meta, so it defaults to send().
+    #[tokio::test]
+    async fn send_with_meta_does_not_fall_through_when_chosen_sender_errors() {
+        let (first, first_rx, first_fail) = fake("first", true);
+        let (second, second_rx, _) = fake("second", true);
+        first_fail.store(true, Ordering::Relaxed);
+        let mut logger = AccessLogger::new();
+        logger.register(Box::new(first));
+        logger.register(Box::new(second));
+
+        logger.send_with_meta("hello".to_string(), LogMeta::default()).await;
+
+        assert_eq!(first_rx.load(Ordering::Relaxed), 0, "first errored, nothing recorded");
+        assert_eq!(
+            second_rx.load(Ordering::Relaxed),
+            0,
+            "no fall-through to the second sender"
+        );
     }
 }

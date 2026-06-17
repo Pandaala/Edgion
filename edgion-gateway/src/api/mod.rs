@@ -2,7 +2,7 @@ use crate::conf_sync::ConfigClient;
 use axum::{
     extract::{Path, Query, State},
     response::Json,
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use edgion_resources::ResourceKind;
@@ -95,6 +95,105 @@ async fn get_server_info(State(client): State<Arc<ConfigClient>>) -> Json<ApiRes
     Json(ApiResponse::ok_body(ServerInfoResponse { server_id, ready }))
 }
 
+/// Backfill response payload.
+#[derive(Serialize)]
+struct BackfillResponse {
+    summary: crate::observe::access_log::BackfillSummary,
+}
+
+/// Single-flight guard for the backfill endpoint: two concurrent runs would
+/// double-ingest every line and race on the `.backfilled-` rename. A second
+/// concurrent trigger is rejected with 409.
+static BACKFILL_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Clears `BACKFILL_RUNNING` on drop, so the flag is released even on an early
+/// return or a panic in the handler.
+struct BackfillRunningGuard;
+impl Drop for BackfillRunningGuard {
+    fn drop(&mut self) {
+        BACKFILL_RUNNING.store(false, std::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Trigger access-log backfill: re-ingest the bounded LocalFile fallback into
+/// the configured ES primary. ES-only; requires ES healthy. Idempotent at file
+/// granularity (already-backfilled files are skipped). At-least-once semantics.
+/// Single-flight: a concurrent trigger returns 409.
+async fn access_log_backfill() -> (axum::http::StatusCode, Json<ApiResponse<BackfillResponse>>) {
+    use axum::http::StatusCode;
+
+    let Some(cfg) = crate::observe::access_log::get_backfill_config() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(ApiResponse::err_body("access logger not initialized".into())),
+        );
+    };
+    let Some(es_key) = cfg.es_key.clone() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::err_body(
+                "backfill applies only when the access-log primary is Elasticsearch".into(),
+            )),
+        );
+    };
+    let Some(base) = cfg.fallback_base_path.clone() else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::err_body(
+                "no LocalFile fallback configured for access log".into(),
+            )),
+        );
+    };
+
+    // Health gate: refuse while ES is still down.
+    match crate::link_sys::get_es_client(&es_key) {
+        Some(client) if client.healthy() => {}
+        Some(_) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(ApiResponse::err_body(
+                    "ES is not healthy yet; retry after recovery".into(),
+                )),
+            );
+        }
+        None => {
+            return (
+                StatusCode::CONFLICT,
+                Json(ApiResponse::err_body(format!("ES client '{es_key}' not found"))),
+            );
+        }
+    }
+
+    // Single-flight: refuse a concurrent backfill (it would double-ingest every
+    // line and race on the `.backfilled-` rename). The guard releases the flag
+    // on drop, covering early returns and panics.
+    if BACKFILL_RUNNING
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return (
+            StatusCode::CONFLICT,
+            Json(ApiResponse::err_body("a backfill is already in progress".into())),
+        );
+    }
+    let _running = BackfillRunningGuard;
+
+    // Epoch-seconds rename stamp. SystemTime is read here (the API edge), not in
+    // the engine, so the engine stays unit-testable.
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let summary = crate::observe::access_log::run_backfill(&es_key, &base, ts).await;
+    (StatusCode::OK, Json(ApiResponse::ok_body(BackfillResponse { summary })))
+}
+
 /// List all resources of `kind` from ConfigClient as JSON, with secret fields
 /// redacted for admin output.
 ///
@@ -178,6 +277,7 @@ pub fn create_admin_router(config_client: Arc<ConfigClient>, admin_token: Option
         // AdminRedactGuard inside list_client_resources).
         .route("/configclient/{kind}", get(get_resource))
         .route("/configclient/{kind}/list", get(list_resources))
+        .route("/api/v1/access-log/backfill", post(access_log_backfill))
         .with_state(config_client.clone());
 
     // Add testing endpoints (incl. /api/v1/server-info) only in integration testing mode.

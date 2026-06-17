@@ -1,0 +1,32 @@
+# LinkSys Elasticsearch resource for the access-log backfill integration test.
+# Connects to the Docker Elasticsearch instance started by run_es_backfill_test.sh.
+#
+# IMPORTANT: unlike the LinkSys/Elasticsearch/01_LinkSys_default_es-test.yaml
+# fixture (which sets a deliberately tiny maxBodyBytes=256 to exercise bulk
+# partitioning), this one uses the default 10MB body limit. Access-log entries
+# are full JSON docs larger than 256 bytes; a tiny limit would drop them all at
+# the bulk layer and ES would never receive any access-log traffic.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: es-test
+  namespace: default
+spec:
+  type: elasticsearch
+  config:
+    endpoints:
+      - "http://127.0.0.1:19200"
+    timeout:
+      connect: 5000
+      request: 30000
+    bulk:
+      batchSize: 100
+      # Short flush interval so a failed flush downgrades ES health quickly
+      # once Elasticsearch is stopped during the outage phase.
+      flushInterval: 2000
+      maxRetries: 3
+      # Default 10MB ceiling — large enough for any access-log doc.
+      maxBodyBytes: 10485760
+    index:
+      prefix: "edgion-test"
+      datePattern: "%Y.%m.%d"

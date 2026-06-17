@@ -39,6 +39,41 @@ fn build_writer_config(file_cfg: &LocalFileWriterCfg, log_type: LogType) -> Loca
     writer_config
 }
 
+/// Build one initialized sender from a `StringOutput`. Mirrors the per-variant
+/// init differences: LocalFile/OTLP need `init()` here; ES/Kafka are lifecycle-
+/// managed elsewhere and are not init'd here. Returns `None` for a disabled
+/// LocalFile (empty path), matching the primary-path behavior.
+async fn build_sender(output: &StringOutput, log_type: LogType) -> Result<Option<Box<dyn DataSender<String>>>> {
+    match output {
+        StringOutput::LocalFile(file_cfg) => {
+            if file_cfg.path.is_empty() {
+                tracing::info!(?log_type, "Sender disabled (empty path)");
+                return Ok(None);
+            }
+            let writer_config = build_writer_config(file_cfg, log_type);
+            let mut writer = LocalFileWriter::new(writer_config).with_log_type(log_type);
+            writer.init().await?;
+            Ok(Some(Box::new(writer)))
+        }
+        StringOutput::Es { link_sys_ref } => {
+            tracing::info!(?log_type, %link_sys_ref, "Sender: ES output");
+            Ok(Some(Box::new(EsLogSender::new(link_sys_ref.clone()))))
+        }
+        StringOutput::Kafka { link_sys_ref, topic } => {
+            tracing::info!(?log_type, %link_sys_ref, %topic, "Sender: Kafka output");
+            Ok(Some(Box::new(KafkaLogSender::new(link_sys_ref.clone(), topic.clone()))))
+        }
+        StringOutput::Otlp(cfg) => {
+            tracing::info!(?log_type, endpoint = %cfg.endpoint, ?cfg.protocol, "Sender: OTLP output");
+            // init() is called eagerly here — OtlpLogSender owns its provider and does
+            // not participate in the LinkSysStore lifecycle.
+            let mut sender = OtlpLogSender::new(cfg.clone());
+            sender.init().await?;
+            Ok(Some(Box::new(sender)))
+        }
+    }
+}
+
 /// Create an async logger (for Access, TCP, UDP, TLS logs).
 /// Returns `None` if the log is disabled or the output is not supported.
 pub async fn create_async_logger(config: &LogConfig, log_type: LogType) -> Result<Option<Arc<AccessLogger>>> {
@@ -47,45 +82,29 @@ pub async fn create_async_logger(config: &LogConfig, log_type: LogType) -> Resul
         return Ok(None);
     }
 
-    match &config.output {
-        StringOutput::LocalFile(file_cfg) => {
-            if file_cfg.path.is_empty() {
-                tracing::info!(?log_type, "Logger disabled (empty path)");
-                return Ok(None);
+    let Some(primary) = build_sender(&config.output, log_type).await? else {
+        // Primary disabled (empty LocalFile path) — no logger.
+        return Ok(None);
+    };
+
+    let mut logger = AccessLogger::new();
+    logger.register(primary);
+
+    // Optional fallback sender (first-healthy standby). A disabled fallback
+    // (empty LocalFile path) is simply skipped — the primary still works.
+    // An init failure from the fallback is not fatal: log a WARN and continue
+    // with the primary rather than abandoning it.
+    if let Some(fallback_cfg) = &config.fallback {
+        match build_sender(fallback_cfg, log_type).await {
+            Ok(Some(fallback)) => logger.register(fallback),
+            Ok(None) => {} // disabled fallback (empty LocalFile path)
+            Err(e) => {
+                tracing::warn!(?log_type, error = %e, "Fallback sender init failed; continuing with primary only");
             }
-            let writer_config = build_writer_config(file_cfg, log_type);
-            let mut writer = LocalFileWriter::new(writer_config).with_log_type(log_type);
-            writer.init().await?;
-            let mut logger = AccessLogger::new();
-            logger.register(Box::new(writer));
-            Ok(Some(Arc::new(logger)))
-        }
-        StringOutput::Es { link_sys_ref } => {
-            tracing::info!(?log_type, %link_sys_ref, "Initializing logger with ES output");
-            let sender = EsLogSender::new(link_sys_ref.clone());
-            let mut logger = AccessLogger::new();
-            logger.register(Box::new(sender));
-            Ok(Some(Arc::new(logger)))
-        }
-        StringOutput::Kafka { link_sys_ref, topic } => {
-            tracing::info!(?log_type, %link_sys_ref, %topic, "Initializing logger with Kafka output");
-            let sender = KafkaLogSender::new(link_sys_ref.clone(), topic.clone());
-            let mut logger = AccessLogger::new();
-            logger.register(Box::new(sender));
-            Ok(Some(Arc::new(logger)))
-        }
-        StringOutput::Otlp(cfg) => {
-            tracing::info!(?log_type, endpoint = %cfg.endpoint, ?cfg.protocol, "Initializing logger with OTLP output");
-            let mut sender = OtlpLogSender::new(cfg.clone());
-            // init() is called eagerly here — OtlpLogSender owns its provider and does
-            // not participate in the LinkSysStore lifecycle. Do NOT call logger.init()
-            // after this point; that would call init() again.
-            sender.init().await?;
-            let mut logger = AccessLogger::new();
-            logger.register(Box::new(sender));
-            Ok(Some(Arc::new(logger)))
         }
     }
+
+    Ok(Some(Arc::new(logger)))
 }
 
 /// Create a sync logger (for SSL log which needs sync API for TLS callbacks).
@@ -127,5 +146,59 @@ pub async fn create_sync_logger(config: &LogConfig) -> Result<Option<SslLogger>>
             );
             Ok(None)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // `use super::*` pulls in the parent module's imports — including `LogConfig`,
+    // `StringOutput`, `LocalFileWriterCfg`, and the gateway `LogType` that
+    // `create_async_logger` actually takes. Do NOT import edgion_resources'
+    // `observe::LogType` — it is a different type than the function signature.
+    use super::*;
+    use edgion_resources::LinkSysRef;
+
+    // A primary ES + LocalFile fallback must register TWO senders.
+    #[tokio::test]
+    async fn async_logger_registers_primary_then_fallback() {
+        let tmp = std::env::temp_dir().join("edgion_test_fallback.log");
+        let cfg = LogConfig {
+            enabled: true,
+            output: StringOutput::Es {
+                link_sys_ref: LinkSysRef {
+                    namespace: "default".into(),
+                    name: "es-main".into(),
+                },
+            },
+            fallback: Some(StringOutput::LocalFile(LocalFileWriterCfg {
+                path: tmp.to_string_lossy().into_owned(),
+                ..Default::default()
+            })),
+        };
+        let logger = create_async_logger(&cfg, LogType::Access).await.unwrap().unwrap();
+        assert_eq!(logger.sender_count(), 2, "primary + fallback both registered");
+    }
+
+    #[tokio::test]
+    async fn async_logger_skips_disabled_fallback() {
+        let tmp = std::env::temp_dir().join("edgion_test_primary_only.log");
+        let cfg = LogConfig {
+            enabled: true,
+            output: StringOutput::LocalFile(LocalFileWriterCfg {
+                path: tmp.to_string_lossy().into_owned(),
+                ..Default::default()
+            }),
+            // Empty path => disabled fallback => skipped, primary still registered.
+            fallback: Some(StringOutput::LocalFile(LocalFileWriterCfg {
+                path: String::new(),
+                ..Default::default()
+            })),
+        };
+        let logger = create_async_logger(&cfg, LogType::Access).await.unwrap().unwrap();
+        assert_eq!(
+            logger.sender_count(),
+            1,
+            "disabled fallback is skipped; primary remains"
+        );
     }
 }

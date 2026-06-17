@@ -72,6 +72,30 @@ fn disk_ok(path: &Path, threshold_percent: Option<u8>) -> bool {
     }
 }
 
+/// If `base_path` no longer exists — it was renamed/removed out from under the
+/// writer, e.g. by the access-log backfill (which renames the active fallback
+/// file to `*.backfilled-<ts>`), or by `logrotate` in `create` mode — open a
+/// fresh file at `base_path` and return it so the caller can swap its writer.
+///
+/// Without this, the writer keeps appending through its still-open fd into the
+/// renamed inode. For a backfilled fallback file that is fatal: the renamed file
+/// is excluded from all future backfills, so post-rename entries are silently
+/// lost (permanently under `Never`/`Size` rotation, which only reopens on a size
+/// threshold). Returns `None` in the common case where the active file is intact.
+fn reopen_if_renamed(base_path: &Path) -> Option<std::fs::File> {
+    if base_path.exists() {
+        return None;
+    }
+    match open_log_file(base_path) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            tracing::error!(error = %e, path = %base_path.display(),
+                "Failed to reopen active log file after it was renamed away");
+            None
+        }
+    }
+}
+
 /// Per-thread sink state for the LocalFile writer.
 ///
 /// Owns the buffered writer and drives the shared `healthy` flag from REAL
@@ -246,6 +270,18 @@ impl DataSender<String> for LocalFileWriter {
         let log_type = self.log_type;
         let disk_threshold = self.disk_usage_threshold_percent;
 
+        // Warn on an unbounded configuration: Never rotation with the disk-usage
+        // guard disabled lets the file grow without limit during a sustained
+        // outage (the access-log fallback is the prime example). Bound it with a
+        // size/time rotation + maxFiles, or a diskUsageThresholdPercent.
+        if matches!(rotation.strategy, RotationStrategy::Never) && disk_threshold.is_none_or(|t| t == 0) {
+            tracing::warn!(
+                path = %base_path.display(),
+                ?log_type,
+                "LocalFile sink has rotation=Never and no disk-usage threshold; the file can grow unbounded. Set rotation (size/daily/hourly) + maxFiles, or diskUsageThresholdPercent."
+            );
+        }
+
         // Publish optimistic health BEFORE spawning so the spawned thread can
         // only ever correct it downward (open failure / write failure / disk).
         // This avoids a race where a late init store clobbers the thread's false.
@@ -303,13 +339,33 @@ impl DataSender<String> for LocalFileWriter {
                 let first_line = match rx.recv_timeout(idle_tick) {
                     Ok(line) => line,
                     Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                        // No traffic this interval: drive recovery without it.
+                        // No traffic this interval: drive recovery without it, and
+                        // reclaim the active file if it was renamed away (e.g. by a
+                        // backfill) so a future degrade writes to a fresh file.
+                        if let Some(f) = reopen_if_renamed(&base_path) {
+                            sink.file = BufWriter::new(f);
+                            sink.current_size = 0;
+                            current_path = base_path.clone();
+                            tracing::info!(path = %base_path.display(), "Active log file reopened after external rename");
+                        }
                         sink.set_disk_ok(disk_ok(&base_path, disk_threshold));
                         sink.retry_flush_for_recovery();
                         continue;
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
                 };
+
+                // Before writing this batch, reclaim the active file if it was
+                // renamed out from under us (backfill / logrotate `create`). The
+                // previous batch was already flushed, so the buffer is empty and
+                // nothing is lost; the first post-rename entry lands in a fresh file.
+                if let Some(f) = reopen_if_renamed(&base_path) {
+                    let _ = sink.file.flush();
+                    sink.file = BufWriter::new(f);
+                    sink.current_size = 0;
+                    current_path = base_path.clone();
+                    tracing::info!(path = %base_path.display(), "Active log file reopened after external rename");
+                }
                 // Periodic rotation/disk check (most batches skip this block); the
                 // disk signal also refreshes on idle ticks above, so the signal
                 // stays fresh whether or not traffic flows.
@@ -465,6 +521,35 @@ mod tests {
         assert!(compute_healthy(2, true)); // below threshold (3)
         assert!(!compute_healthy(3, true)); // at threshold
         assert!(!compute_healthy(0, false)); // disk over limit
+    }
+
+    #[test]
+    fn reopen_if_renamed_recreates_after_external_rename() {
+        // Models the backfill scenario: the active fallback file is renamed to
+        // `*.backfilled-<ts>` out from under the writer. The writer must reclaim
+        // a fresh active file so the next ES degrade does not write into the
+        // already-backfilled (and forever-skipped) file.
+        let dir = std::env::temp_dir().join("edgion_reopen_renamed_test");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let base = dir.join("es_fallback.log");
+        fs::File::create(&base).unwrap();
+
+        // Intact active file: no reopen needed.
+        assert!(reopen_if_renamed(&base).is_none(), "intact file must not be reopened");
+
+        // Backfill renames the active file away.
+        fs::rename(&base, dir.join("es_fallback.log.backfilled-1")).unwrap();
+        assert!(!base.exists());
+
+        // The writer reclaims a fresh active file at base_path.
+        assert!(
+            reopen_if_renamed(&base).is_some(),
+            "a renamed-away active file must be reopened"
+        );
+        assert!(base.exists(), "base path is recreated as a fresh active file");
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

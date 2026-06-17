@@ -67,6 +67,10 @@ pub mod names {
     pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
     // Webhook key resolver: per-resolve failure counter by reason
     pub const WEBHOOK_RESOLVE_ERRORS_TOTAL: &str = "edgion_webhook_resolve_errors_total";
+    // Access-log backfill: docs re-ingested into ES from the fallback file,
+    // and lines that failed to backfill (kept for retry). Cold/failure-path.
+    pub const ACCESS_LOG_BACKFILL_INGESTED_TOTAL: &str = "edgion_access_log_backfill_ingested_total";
+    pub const ACCESS_LOG_BACKFILL_FAILED_TOTAL: &str = "edgion_access_log_backfill_failed_total";
 }
 
 /// Global metrics singleton
@@ -106,6 +110,8 @@ pub struct GatewayMetrics {
     tcp_log_dropped: OnceLock<Counter>,
     tls_log_dropped: OnceLock<Counter>,
     udp_log_dropped: OnceLock<Counter>,
+    access_log_backfill_ingested: OnceLock<Counter>,
+    access_log_backfill_failed: OnceLock<Counter>,
     status_update_total: OnceLock<Counter>,
     status_update_failed: OnceLock<Counter>,
     status_update_skipped: OnceLock<Counter>,
@@ -143,6 +149,8 @@ impl GatewayMetrics {
             tcp_log_dropped: OnceLock::new(),
             tls_log_dropped: OnceLock::new(),
             udp_log_dropped: OnceLock::new(),
+            access_log_backfill_ingested: OnceLock::new(),
+            access_log_backfill_failed: OnceLock::new(),
             status_update_total: OnceLock::new(),
             status_update_failed: OnceLock::new(),
             status_update_skipped: OnceLock::new(),
@@ -170,6 +178,24 @@ impl GatewayMetrics {
     #[inline]
     pub fn access_log_dropped(&self) {
         get_or_register_counter(&self.access_log_dropped, names::ACCESS_LOG_DROPPED).increment(1);
+    }
+
+    /// Count documents successfully re-ingested into ES during a backfill run.
+    pub fn access_log_backfill_ingested(&self, n: u64) {
+        get_or_register_counter(
+            &self.access_log_backfill_ingested,
+            names::ACCESS_LOG_BACKFILL_INGESTED_TOTAL,
+        )
+        .increment(n);
+    }
+
+    /// Count lines that failed to backfill (the file is kept for a later retry).
+    pub fn access_log_backfill_failed(&self, n: u64) {
+        get_or_register_counter(
+            &self.access_log_backfill_failed,
+            names::ACCESS_LOG_BACKFILL_FAILED_TOTAL,
+        )
+        .increment(n);
     }
 
     /// Record a dropped SSL log entry
