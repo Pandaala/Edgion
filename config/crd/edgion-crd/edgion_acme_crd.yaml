@@ -44,7 +44,6 @@ spec:
                     namespace:
                       type: string
                       description: "Namespace of the Secret (defaults to EdgionAcme namespace)"
-                  additionalProperties: false
                 domains:
                   type: array
                   description: "Domain names to obtain certificates for"
@@ -90,7 +89,6 @@ spec:
                   required:
                     - keyId
                     - keySecretRef
-                  additionalProperties: false
                   properties:
                     keyId:
                       type: string
@@ -98,7 +96,6 @@ spec:
                       type: object
                       required:
                         - name
-                      additionalProperties: false
                       properties:
                         name:
                           type: string

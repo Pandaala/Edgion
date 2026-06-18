@@ -38,56 +38,43 @@ spec:
                     auth:
                       type: object
                       description: "Authentication configuration"
+                      # Structural schema: every field is declared once here; the
+                      # oneOf below only narrows via required/not. Logical branches
+                      # must not re-declare type/description, and a node cannot carry
+                      # additionalProperties alongside properties.
+                      properties:
+                        type:
+                          type: string
+                          description: "Authentication type (elasticsearch/webhook style); omit for redis/etcd simple secretRef auth"
+                          enum: ["basic", "apiKey", "bearer", "hmac"]
+                        secretRef:
+                          type: object
+                          description: "Secret reference for credentials (required)"
+                          required: ["name"]
+                          properties:
+                            name:
+                              type: string
+                              description: "Name of the secret"
+                            namespace:
+                              type: string
+                              description: "Namespace of the secret"
+                        in:
+                          type: string
+                          description: "Injection location for apiKey auth"
+                          enum: ["header", "query"]
+                        headerName:
+                          type: string
+                          description: "Header name for apiKey header injection"
+                        queryParam:
+                          type: string
+                          description: "Query parameter name for apiKey query injection"
                       oneOf:
-                        # Redis/Etcd style (simple secretRef)
+                        # Redis/Etcd style: secretRef only, no `type` discriminator
                         - required: ["secretRef"]
-                          properties:
-                            secretRef:
-                              type: object
-                              description: "Secret reference for credentials (required)"
-                              required: ["name"]
-                              properties:
-                                name:
-                                  type: string
-                                  description: "Name of the secret"
-                                namespace:
-                                  type: string
-                                  description: "Namespace of the secret"
-                              additionalProperties: false
-                          additionalProperties: false
-                        # Elasticsearch/Webhook style (tagged enum with type)
+                          not:
+                            required: ["type"]
+                        # Elasticsearch/Webhook style: tagged by `type`
                         - required: ["type", "secretRef"]
-                          properties:
-                            type:
-                              type: string
-                              description: "Authentication type"
-                              enum: ["basic", "apiKey", "bearer", "hmac"]
-                            secretRef:
-                              type: object
-                              description: "Secret reference for credentials"
-                              required: ["name"]
-                              properties:
-                                name:
-                                  type: string
-                                  description: "Name of the secret"
-                                namespace:
-                                  type: string
-                                  description: "Namespace of the secret"
-                              additionalProperties: false
-                            # apiKey-specific: where to inject the key ("header" or "query")
-                            in:
-                              type: string
-                              description: "Injection location for apiKey auth"
-                              enum: ["header", "query"]
-                            # apiKey header injection
-                            headerName:
-                              type: string
-                              description: "Header name for apiKey header injection"
-                            # apiKey query injection
-                            queryParam:
-                              type: string
-                              description: "Query parameter name for apiKey query injection"
-                          additionalProperties: false
                     tls:
                       type: object
                       description: "TLS/SSL configuration"
@@ -118,8 +105,6 @@ spec:
                                   type: string
                                 namespace:
                                   type: string
-                              additionalProperties: false
-                          additionalProperties: false
                     timeout:
                       type: object
                       description: "Timeout configuration (milliseconds)"

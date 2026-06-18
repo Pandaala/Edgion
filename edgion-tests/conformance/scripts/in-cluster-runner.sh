@@ -410,8 +410,15 @@ wait_controller_gateway_sync() {
 
   while (( elapsed < timeout )); do
     local stored
+    # `grep -c` prints "0" and exits 1 when there are no matches, and prints
+    # nothing when the log file does not exist yet (gateway still starting). Run
+    # `|| true` inside the pod shell so the outer command substitution captures a
+    # single clean value, then strip whitespace and default empty to 0 — avoids
+    # the "0\n0" arithmetic-syntax error from a naive `... || echo 0`.
     stored=$(kubectl exec -n "$NAMESPACE" "$gw_pod" -- \
-      grep -c '"Gateway stored"' /usr/local/edgion/logs/edgion-gateway.log 2>/dev/null || echo "0")
+      sh -c 'grep -c "Gateway stored" /usr/local/edgion/logs/edgion-gateway.log 2>/dev/null || true')
+    stored=$(printf '%s' "$stored" | tr -d '[:space:]')
+    [[ -z "$stored" ]] && stored=0
     if (( stored >= gw_count )); then
       echo "    Gateway received $stored Gateway sync event(s) (need $gw_count). Sync complete."
       return

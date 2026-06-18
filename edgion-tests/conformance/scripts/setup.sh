@@ -97,6 +97,14 @@ fi
 echo "[3/8] Apply controller"
 kubectl apply -f "$K8S_DEPLOY_ROOT/controller/rbac.yaml"
 kubectl apply -f "$K8S_DEPLOY_ROOT/controller/service.yaml"
+# Leader Service: the 0.3.x gateway connects to the controller gRPC endpoint via
+# edgion-controller-leader (selector edgion.io/leader=true). Apply it here so the
+# data plane can reach the elected leader. A pre-existing Service with an
+# incompatible port set (older layouts) cannot be merged, so recreate on failure.
+kubectl apply -f "$K8S_DEPLOY_ROOT/controller/leader-service.yaml" 2>/dev/null || {
+  kubectl delete svc edgion-controller-leader -n edgion-system --ignore-not-found
+  kubectl apply -f "$K8S_DEPLOY_ROOT/controller/leader-service.yaml"
+}
 kubectl apply -f "$MANIFESTS_DIR/controller-configmap.yaml"
 kubectl apply -f "$K8S_DEPLOY_ROOT/controller/deployment.yaml"
 if [[ -n "${CONTROLLER_IMAGE}" ]]; then
@@ -145,6 +153,13 @@ sleep 3
 # 6. Gateway data plane
 # ------------------------------------------------------------------
 echo "[6/8] Apply gateway"
+# The 0.3.x gateway requires a mandatory admin API token (EDGION_GATEWAY_ADMIN_TOKEN
+# from the edgion-gateway-admin-credentials Secret via secretKeyRef). Without it the
+# Pod is stuck in CreateContainerConfigError. Generate one by default; idempotent so
+# an existing token is preserved across re-runs rather than rotated.
+kubectl -n edgion-system get secret edgion-gateway-admin-credentials >/dev/null 2>&1 || \
+  kubectl -n edgion-system create secret generic edgion-gateway-admin-credentials \
+    --from-literal=token="$(openssl rand -hex 32)"
 kubectl apply -f "$K8S_DEPLOY_ROOT/gateway/service.yaml"
 kubectl apply -f "$K8S_DEPLOY_ROOT/gateway/configmap.yaml"
 kubectl apply -f "$K8S_DEPLOY_ROOT/gateway/deployment.yaml"

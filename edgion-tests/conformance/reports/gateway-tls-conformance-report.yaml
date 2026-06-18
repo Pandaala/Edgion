@@ -1,5 +1,5 @@
 apiVersion: gateway.networking.k8s.io/v1
-date: "2026-05-23T01:28:26Z"
+date: "2026-06-18T02:57:19Z"
 gatewayAPIChannel: UNDEFINED
 gatewayAPIVersion: UNDEFINED
 implementation:

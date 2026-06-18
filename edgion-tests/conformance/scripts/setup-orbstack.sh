@@ -179,6 +179,13 @@ sleep 3
 # 6. Gateway data plane
 # ------------------------------------------------------------------
 echo "[6] Deploy gateway"
+# The 0.3.x gateway requires a mandatory admin API token (EDGION_GATEWAY_ADMIN_TOKEN
+# from the edgion-gateway-admin-credentials Secret via secretKeyRef). Without it the
+# Pod is stuck in CreateContainerConfigError. Generate one by default; idempotent so
+# an existing token is preserved across re-runs rather than rotated.
+kubectl -n edgion-system get secret edgion-gateway-admin-credentials >/dev/null 2>&1 || \
+  kubectl -n edgion-system create secret generic edgion-gateway-admin-credentials \
+    --from-literal=token="$(openssl rand -hex 32)"
 kubectl apply -f "$K8S_DEPLOY_ROOT/gateway/service.yaml"
 kubectl apply -f "$K8S_DEPLOY_ROOT/gateway/configmap.yaml"
 kubectl apply -f "$K8S_DEPLOY_ROOT/gateway/deployment.yaml"
