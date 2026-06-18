@@ -8,7 +8,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     ProcessResult, ProcessorHandler,
 };
 use edgion_resources::prelude_resources::GatewayClass;
-use edgion_resources::resources::gateway_class::{GatewayClassStatus, SupportedFeature};
+use edgion_resources::resources::gateway_class::{GatewayClassStatus, SupportedFeature, SUPPORTED_FEATURES};
 
 /// Outcome of resolving `GatewayClass.spec.parametersRef`.
 enum ParamsRefState {
@@ -149,43 +149,17 @@ impl ProcessorHandler<GatewayClass> for GatewayClassHandler {
             ),
         );
 
-        // Gateway API v1.5 requires supportedFeatures as objects with `name` field.
-        // List MUST be sorted in ascending alphabetical order by name.
-        let mut features: Vec<&str> = vec![
-            "Gateway",
-            "GRPCRoute",
-            "GatewayFrontendClientCertificateValidation",
-            "GatewayHTTPListenerIsolation",
-            "GatewayPort8080",
-            "HTTPRoute",
-            "HTTPRouteBackendProtocolH2C",
-            "HTTPRouteBackendProtocolWebSocket",
-            "HTTPRouteBackendRequestHeaderModification",
-            "HTTPRouteBackendTimeout",
-            "HTTPRouteHostRewrite",
-            "HTTPRouteMethodMatching",
-            "HTTPRouteNamedRouteRule",
-            "HTTPRouteParentRefPort",
-            "HTTPRoutePathRedirect",
-            "HTTPRoutePathRewrite",
-            "HTTPRoutePortRedirect",
-            "HTTPRouteQueryParamMatching",
-            "HTTPRouteRequestMirror",
-            "HTTPRouteRequestMultipleMirrors",
-            "HTTPRouteRequestPercentageMirror",
-            "HTTPRouteRequestTimeout",
-            "HTTPRouteResponseHeaderModification",
-            "HTTPRouteSchemeRedirect",
-            "ReferenceGrant",
-            "TCPRoute",
-            "TLSRoute",
-            "UDPRoute",
-        ];
-        features.sort();
+        // Gateway API v1.5 requires supportedFeatures as objects with a `name`
+        // field, sorted ascending. The canonical list lives in edgion-resources
+        // (SUPPORTED_FEATURES) so the controller status and the Go conformance
+        // suite derive from a single source and cannot silently drift; it is
+        // already sorted and de-duplicated (guarded by unit tests there).
         status.supported_features = Some(
-            features
-                .into_iter()
-                .map(|name| SupportedFeature { name: name.to_string() })
+            SUPPORTED_FEATURES
+                .iter()
+                .map(|name| SupportedFeature {
+                    name: (*name).to_string(),
+                })
                 .collect(),
         );
     }

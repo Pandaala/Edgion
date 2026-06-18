@@ -45,7 +45,7 @@ func TestEnsureSupportedFeaturesFiltersToSelectedProfile(t *testing.T) {
 		ConformanceProfiles: sets.New[suite.ConformanceProfileName](suite.GatewayGRPCConformanceProfileName),
 	}
 
-	ensureSupportedFeatures(&opts)
+	ensureSupportedFeatures(t, &opts)
 
 	if !opts.SupportedFeatures.Has(features.SupportGRPCRoute) {
 		t.Fatalf("expected gRPC feature to remain enabled")
@@ -65,7 +65,7 @@ func TestEnsureSupportedFeaturesPreservesExplicitFeatures(t *testing.T) {
 		SupportedFeatures:   want.Clone(),
 	}
 
-	ensureSupportedFeatures(&opts)
+	ensureSupportedFeatures(t, &opts)
 
 	if !opts.SupportedFeatures.Equal(want) {
 		t.Fatalf("explicit supported features should be preserved: got %v want %v", opts.SupportedFeatures.UnsortedList(), want.UnsortedList())

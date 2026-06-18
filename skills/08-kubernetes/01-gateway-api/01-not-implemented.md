@@ -7,6 +7,14 @@ description: List of Gateway API spec features that Edgion explicitly does not i
 
 This file records Gateway API spec features that Edgion has evaluated and decided not to implement.
 
+> **Authoritative source:** the declared vs. skipped feature *lists* live in the
+> `SUPPORTED_FEATURES` / `UNSUPPORTED_OR_SKIPPED_FEATURES` constants in
+> `edgion-resources/src/resources/gateway_class.rs`. The controller writes them
+> into `GatewayClass.status.supportedFeatures`, and the Go conformance suite
+> reads the same list via `edgion-tests/conformance/supported_features.txt`
+> (kept byte-equal by a Rust unit test). This document only records *why* a
+> feature is skipped; do not treat it as the list of record.
+
 ## Programmed / Ready status conditions
 
 **Decision: simplified implementation (completed)**
@@ -127,7 +135,11 @@ Edgion's Gateway process binds all ports via `configure_listeners` **at startup*
 
 ## BackendTLSPolicy Conformance
 
-**Decision: implemented (declares `SupportBackendTLSPolicy`; does not yet declare `SupportBackendTLSPolicySANValidation`)**
+**Decision: implemented (declares `SupportBackendTLSPolicy` and `SupportBackendTLSPolicySANValidation`)**
+
+SAN validation is implemented in `edgion-gateway/src/tls/validation/backend_san.rs`
+and is now advertised. (Earlier revisions of this note said SANValidation was
+"not yet declared"; that was stale.)
 
 Both data-plane and control-plane status are implemented:
 - `ancestorRef` correctly points to the associated Gateway (via the three-step Service → Route → Gateway lookup)
@@ -160,9 +172,21 @@ Edgion has implemented these features in a distributed manner via annotations (`
 - The current annotation-based approach is usable by users and does not affect actual functionality
 - A related tracking item has not yet been filed under `tasks/` (file a new task to drive this).
 
-## ~~frontendValidation standardization~~ ✅ done
+## GatewayFrontendClientCertificateValidation (frontendValidation)
+
+**Decision: status conforms, data-plane enforcement does NOT yet — not declared**
 
 The Controller parses `frontend_validation` CA references (Secret/ConfigMap), merges per listener, and sets listener status conditions. The Gateway data plane's `configure_gateway_frontend_mtls()` loads the CA and configures the SSL verify mode: AllowValidOnly uses `PEER | FAIL_IF_NO_PEER_CERT`, and AllowInsecureFallback uses a custom verify callback that always accepts (boringssl FFI). Fully independent from EdgionTls `client_auth`.
+
+However, in-cluster conformance (image 0.3.2, 2026-06-18) shows the **enforcement** path does not yet conform:
+
+- `GatewayInvalidFrontendClientCertificateValidation` (status for invalid config) — **PASS**
+- `GatewayFrontendClientCertificateValidation` (default + per-port enforcement) — **FAIL** (default returns 404 instead of failing the connection; per-port times out)
+- `GatewayFrontendInvalidDefaultClientCertificateValidation` (invalid default must impact the HTTPS listener) — **FAIL** (request to the HTTPS listener succeeded with 404 instead of being rejected)
+
+Because the data plane does not actually enforce the (invalid) default / per-port client-cert validation, `GatewayFrontendClientCertificateValidation` is **not declared** in `SUPPORTED_FEATURES`. Status reporting is correct; the missing piece is enforcement. Re-add it to the supported list only once the two enforcement tests pass.
+
+- File a tracking task under `tasks/` to fix frontend client-cert enforcement (default + per-port), then re-declare the feature.
 
 ## GRPCRoute retry.codes
 

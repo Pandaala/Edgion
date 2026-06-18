@@ -1,8 +1,10 @@
 package conformance_test
 
 import (
+	_ "embed"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +18,34 @@ import (
 	"edgion.com/gateway-api-conformance/tal"
 )
 
+// supportedFeaturesFile is the canonical, cross-language feature list. The
+// single source of truth lives in edgion-resources (SUPPORTED_FEATURES); a Rust
+// unit test (shared_list_file_matches_supported_features) keeps this file
+// byte-equal to it so the controller status and the conformance declaration
+// cannot silently drift. See the file's header comment for details.
+const supportedFeaturesFile = "supported_features.txt"
+
+// supportedFeaturesData embeds the canonical list at compile time so the test
+// binary needs no runtime file dependency (it runs inside a pod for in-cluster
+// conformance, where the source tree is not present).
+//
+//go:embed supported_features.txt
+var supportedFeaturesData string
+
+// nonConformanceFeatures lists feature names Edgion advertises in
+// GatewayClass.status.supportedFeatures that are NOT part of any Gateway API
+// conformance profile (they are absent from features.AllFeatures), so they are
+// intentionally not declared to the conformance suite:
+//   - TCPRoute has no Gateway API feature constant at all.
+//   - UDPRoute has a feature constant but is not aggregated into AllFeatures
+//     and no conformance profile covers it.
+// Any other unrecognized name is treated as a typo and fails the test, which is
+// what keeps the shared list honest.
+var nonConformanceFeatures = map[string]struct{}{
+	"TCPRoute": {},
+	"UDPRoute": {},
+}
+
 func defaultConformanceProfiles() sets.Set[suite.ConformanceProfileName] {
 	return sets.New[suite.ConformanceProfileName](
 		suite.GatewayHTTPConformanceProfileName,
@@ -24,73 +54,38 @@ func defaultConformanceProfiles() sets.Set[suite.ConformanceProfileName] {
 	)
 }
 
-func declaredSupportedFeatures() sets.Set[features.FeatureName] {
+// declaredSupportedFeatures derives the conformance feature set from the
+// canonical shared list (supported_features.txt) instead of a hand-maintained
+// list, so it cannot drift from what the controller advertises. Names that are
+// not part of any conformance profile are either tolerated
+// (nonConformanceFeatures) or fail the test as a typo.
+func declaredSupportedFeatures(t *testing.T) sets.Set[features.FeatureName] {
+	t.Helper()
+
+	validNames := features.SetsToNamesSet(features.AllFeatures)
 	supported := sets.New[features.FeatureName]()
-
-	// Core features (required for all tests)
-	supported.Insert(features.SupportGateway)
-	supported.Insert(features.SupportHTTPRoute)
-	supported.Insert(features.SupportReferenceGrant)
-
-	// A-class: HTTPRoute matching enhancements
-	supported.Insert(features.SupportHTTPRouteQueryParamMatching)
-	supported.Insert(features.SupportHTTPRouteMethodMatching)
-
-	// A-class: HTTPRoute filters (response header, rewrite, mirror, timeout)
-	supported.Insert(features.SupportHTTPRouteResponseHeaderModification)
-	supported.Insert(features.SupportHTTPRouteHostRewrite)
-	supported.Insert(features.SupportHTTPRoutePathRewrite)
-	supported.Insert(features.SupportHTTPRouteRequestMirror)
-	supported.Insert(features.SupportHTTPRouteRequestTimeout)
-	supported.Insert(features.SupportHTTPRouteBackendTimeout)
-
-	// A-class: HTTPRoute backend-level filters and protocol
-	supported.Insert(features.SupportHTTPRouteBackendRequestHeaderModification)
-	supported.Insert(features.SupportHTTPRouteBackendProtocolH2C)
-	supported.Insert(features.SupportHTTPRouteBackendProtocolWebSocket)
-	supported.Insert(features.SupportHTTPRouteNamedRouteRule)
-
-	// A-class: Gateway features
-	supported.Insert(features.SupportGatewayHTTPListenerIsolation)
-
-	// B-class: HTTPRoute redirect (path/port/scheme)
-	supported.Insert(features.SupportHTTPRoutePathRedirect)
-	supported.Insert(features.SupportHTTPRoutePortRedirect)
-	supported.Insert(features.SupportHTTPRouteSchemeRedirect)
-
-	// B-class: HTTPRoute redirect status codes (303/307/308)
-	supported.Insert(features.SupportHTTPRoute303RedirectStatusCode)
-	supported.Insert(features.SupportHTTPRoute307RedirectStatusCode)
-	supported.Insert(features.SupportHTTPRoute308RedirectStatusCode)
-
-	// B-class: HTTPRoute percentage mirror + multiple mirrors
-	supported.Insert(features.SupportHTTPRouteRequestPercentageMirror)
-	supported.Insert(features.SupportHTTPRouteRequestMultipleMirrors)
-
-	// B-class: HTTPRoute destination port matching (status-only tests)
-	supported.Insert(features.SupportHTTPRouteDestinationPortMatching)
-
-	// TLSRoute support (needed for HTTPRouteDisallowedKind status test)
-	supported.Insert(features.SupportTLSRoute)
-
-	// TLS Terminate: gateway terminates TLS, forwards plaintext TCP to backends.
-	// Mixed mode (Terminate + Passthrough on same port) is NOT supported.
-	supported.Insert(features.SupportTLSRouteModeTerminate)
-
-	// HTTP 421 Misdirected Request detection (Gateway API spec)
-	supported.Insert(features.SupportGatewayHTTPSListenerDetectMisdirectedRequests)
-
-	// CORS support (preflight + simple requests)
-	supported.Insert(features.SupportHTTPRouteCORS)
-
-	// BackendTLSPolicy: CA certificate validation for backend TLS re-encryption.
-	supported.Insert(features.SupportBackendTLSPolicy)
-	supported.Insert(features.SupportBackendTLSPolicySANValidation)
-
-	// GRPCRoute core feature — required for GATEWAY-GRPC conformance profile.
-	supported.Insert(features.SupportGRPCRoute)
-
+	for _, line := range strings.Split(supportedFeaturesData, "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" || strings.HasPrefix(name, "#") {
+			continue
+		}
+		fn := features.FeatureName(name)
+		switch {
+		case validNames.Has(fn):
+			supported.Insert(fn)
+		case isNonConformanceFeature(name):
+			// Advertised in GatewayClass status but not part of any conformance
+			// profile; intentionally not declared to the suite.
+		default:
+			t.Fatalf("supported feature %q in %s is not a known Gateway API conformance feature; fix the typo or add it to nonConformanceFeatures", name, supportedFeaturesFile)
+		}
+	}
 	return supported
+}
+
+func isNonConformanceFeature(name string) bool {
+	_, ok := nonConformanceFeatures[name]
+	return ok
 }
 
 func ensureConformanceProfiles(opts *suite.ConformanceOptions) {
@@ -148,12 +143,12 @@ func filterSupportedFeaturesForProfiles(
 	return filtered
 }
 
-func ensureSupportedFeatures(opts *suite.ConformanceOptions) {
+func ensureSupportedFeatures(t *testing.T, opts *suite.ConformanceOptions) {
 	if opts.SupportedFeatures != nil && opts.SupportedFeatures.Len() > 0 {
 		return
 	}
 
-	declared := declaredSupportedFeatures()
+	declared := declaredSupportedFeatures(t)
 	opts.SupportedFeatures = filterSupportedFeaturesForProfiles(declared, opts.ConformanceProfiles)
 }
 
@@ -167,7 +162,7 @@ func TestConformance(t *testing.T) {
 	// GATEWAY-GRPC: declared, core features implemented (exact/header/hostname/weight matching).
 	// GATEWAY-TLS:  declared for testing. TLS Passthrough implemented; status condition work may be needed.
 	ensureConformanceProfiles(&opts)
-	ensureSupportedFeatures(&opts)
+	ensureSupportedFeatures(t, &opts)
 
 	opts.AllowCRDsMismatch = true
 

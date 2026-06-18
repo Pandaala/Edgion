@@ -1,5 +1,5 @@
 apiVersion: gateway.networking.k8s.io/v1
-date: "2026-06-18T02:49:59Z"
+date: "2026-06-18T13:54:50Z"
 gatewayAPIChannel: UNDEFINED
 gatewayAPIVersion: UNDEFINED
 implementation:
@@ -22,7 +22,7 @@ profiles:
     result: success
     statistics:
       Failed: 0
-      Passed: 32
+      Passed: 31
       Skipped: 0
     supportedFeatures:
     - BackendTLSPolicy
@@ -46,7 +46,6 @@ profiles:
     - HTTPRoutePortRedirect
     - HTTPRouteQueryParamMatching
     - HTTPRouteRequestMirror
-    - HTTPRouteRequestMultipleMirrors
     - HTTPRouteRequestPercentageMirror
     - HTTPRouteRequestTimeout
     - HTTPRouteResponseHeaderModification
@@ -60,6 +59,7 @@ profiles:
     - GatewayPort8080
     - GatewayStaticAddresses
     - HTTPRouteParentRefPort
+    - HTTPRouteRequestMultipleMirrors
     - ListenerSet
   name: GATEWAY-HTTP
   summary: Core tests succeeded. Extended tests succeeded.

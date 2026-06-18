@@ -11,7 +11,7 @@ Use this note when changing Gateway API behavior in Edgion and you need to under
 
 | File | Content |
 |------|---------|
-| [01-not-implemented.md](01-not-implemented.md) | Gateway API features not implemented or postponed: addresses reporting, cross-type Hostname conflict detection, infrastructure, `ListenerSet`, `HTTPRouteRequestMultipleMirrors`, BackendTLSPolicy conformance (implemented; SANValidation not yet declared), BackendTrafficPolicy, `TLSRouteModeMixed`, TLS profile; completed items: ~~frontendValidation~~ ✅ |
+| [01-not-implemented.md](01-not-implemented.md) | Gateway API features not implemented or postponed: addresses reporting, cross-type Hostname conflict detection, infrastructure, `ListenerSet`, `HTTPRouteRequestMultipleMirrors`, `GatewayFrontendClientCertificateValidation` (status OK, enforcement not conformant), BackendTrafficPolicy, `TLSRouteModeMixed`, TLS profile; completed items: ~~BackendTLSPolicy incl. SANValidation~~ ✅. The authoritative declared/skipped feature lists are the `SUPPORTED_FEATURES` / `UNSUPPORTED_OR_SKIPPED_FEATURES` constants in `edgion-resources/src/resources/gateway_class.rs` (this file only records rationale). |
 | [02-conformance-testing.md](02-conformance-testing.md) | How to run, debug, and incrementally validate Gateway API conformance tests: script usage, granularity control, port-forward, debugging tips |
 | [03-conformance-workflow.md](03-conformance-workflow.md) | Cross-session workflow: drive conformance tests one item at a time (environment check → feature analysis → run → diagnose → record) |
 | [05-batch-conformance-debugging.md](05-batch-conformance-debugging.md) | Log collection, timeline correlation, and root-cause localization for batch conformance failures (Batch 7 specific) |

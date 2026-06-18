@@ -1,5 +1,5 @@
 apiVersion: gateway.networking.k8s.io/v1
-date: "2026-06-18T02:57:19Z"
+date: "2026-06-18T13:17:59Z"
 gatewayAPIChannel: UNDEFINED
 gatewayAPIVersion: UNDEFINED
 implementation:
@@ -25,13 +25,13 @@ profiles:
       Passed: 3
       Skipped: 0
     supportedFeatures:
+    - GatewayFrontendClientCertificateValidation
     - GatewayHTTPListenerIsolation
     - GatewayHTTPSListenerDetectMisdirectedRequests
     - TLSRouteModeTerminate
     unsupportedFeatures:
     - GatewayAddressEmpty
     - GatewayBackendClientCertificate
-    - GatewayFrontendClientCertificateValidation
     - GatewayFrontendClientCertificateValidationInsecureFallback
     - GatewayInfrastructurePropagation
     - GatewayPort8080
