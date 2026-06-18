@@ -73,6 +73,3 @@ LICENSE-*
 *.bak
 *.backup
 *.old
-
-# All-in-one cloned dashboard repo (only cicd/docker/.all-in-one-dist is needed in context)
-cicd/docker/.all-in-one-dashboard/
