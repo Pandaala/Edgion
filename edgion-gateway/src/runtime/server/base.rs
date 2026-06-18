@@ -3,7 +3,7 @@ use crate::observe::access_log::get_access_logger_unchecked;
 use crate::observe::AccessLogger;
 use crate::runtime::server::listener_builder;
 use crate::runtime::store::listener_gateway_info::is_listener_conflicted;
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use edgion_resources::listener_key::{resolve_listener_addr, ListenerKey};
 use edgion_resources::resources::edgion_gateway_config::{EdgionGatewayConfig, EdgionGatewayConfigSpec};
 use edgion_resources::{Gateway, ResourceMeta};
@@ -65,13 +65,12 @@ impl GatewayBase {
             // matched its class/namespace scope".
             let gateway_class_count = self.config_client.list_gateway_classes().data.len();
             let edgion_gateway_config_count = self.config_client.list_edgion_gateway_configs().data.len();
-            return Err(anyhow!(
-                "No Gateway resources synced from controller (gateways=0, gateway_classes={}, edgion_gateway_configs={}); \
-                 check the controller's gateway_class_name, watched namespace, and RBAC scope, \
-                 then verify Gateway CRs exist in the cluster",
-                gateway_class_count,
-                edgion_gateway_config_count
-            ));
+            tracing::warn!(
+                gateway_classes = gateway_class_count,
+                edgion_gateway_configs = edgion_gateway_config_count,
+                "No Gateway resources synced from controller; starting without data-plane listeners"
+            );
+            return Ok(());
         }
 
         tracing::info!("Configuring {} Gateway resources", gateways.len());

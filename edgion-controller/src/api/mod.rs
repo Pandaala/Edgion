@@ -451,6 +451,10 @@ pub fn create_admin_router(
         .route("/api/v1/reload", post(reload_all_resources))
         // RegionRoute EdgionConfigData endpoints
         .route(
+            "/api/v1/region-routes/effective",
+            get(region_route_handlers::list_region_routes_effective),
+        )
+        .route(
             "/api/v1/cluster-region-routes",
             get(region_route_handlers::list_cluster_region_edgion_config_data),
         )

@@ -10,7 +10,9 @@
 //! EdgionConfigData, which can be listed via the standard EdgionConfigData configserver API.
 
 use axum::{extract::State, http::StatusCode, response::Json};
+use edgion_resources::ResourceKind;
 use serde::Deserialize;
+use serde_json::Value;
 use std::sync::Arc;
 
 use super::types::AdminState;
@@ -48,6 +50,81 @@ pub async fn list_service_region_edgion_config_data(
     State(_state): State<Arc<AdminState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     Ok(Json(serde_json::json!({ "success": true, "data": [] })))
+}
+
+/// `GET /api/v1/region-routes/effective`
+///
+/// Returns the local controller's effective RegionRoute view for Center's
+/// background poller. S3 moved the RegionRoute base table into EdgionPlugins, so
+/// this view is derived from every enabled `requestPlugins[].RegionRoute` entry.
+pub async fn list_region_routes_effective(State(state): State<Arc<AdminState>>) -> Result<Json<Value>, StatusCode> {
+    let (plugins, _) = state.center_list_resources(ResourceKind::EdgionPlugins, None).await?;
+    let plugins = if plugins.is_empty() {
+        let plugins = load_edgion_plugins_from_file_system_registry(&state);
+        if plugins.is_empty() {
+            load_edgion_plugins_from_seed_dir()
+        } else {
+            plugins
+        }
+    } else {
+        plugins
+    };
+    let mut data = Vec::new();
+
+    for plugin_resource in plugins {
+        let namespace = plugin_resource
+            .pointer("/metadata/namespace")
+            .and_then(Value::as_str)
+            .unwrap_or("default");
+        let plugin_name = plugin_resource
+            .pointer("/metadata/name")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if plugin_name.is_empty() {
+            continue;
+        }
+
+        let Some(entries) = plugin_resource
+            .pointer("/spec/requestPlugins")
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+
+        for entry in entries {
+            let enabled = entry.get("enable").and_then(Value::as_bool).unwrap_or(true);
+            if !enabled || entry.get("type").and_then(Value::as_str) != Some("RegionRoute") {
+                continue;
+            }
+            let Some(config) = entry.get("config") else {
+                continue;
+            };
+
+            let regions = config
+                .get("regions")
+                .or_else(|| config.pointer("/baseInfo/regions"))
+                .cloned()
+                .unwrap_or_else(|| Value::Array(Vec::new()));
+            let my_region = config
+                .get("myRegion")
+                .or_else(|| config.pointer("/baseInfo/myRegion"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let override_ref = config.get("overrideRef").and_then(format_override_ref);
+
+            data.push(serde_json::json!({
+                "namespace": namespace,
+                "pluginName": plugin_name,
+                "alias": entry.get("alias").and_then(Value::as_str),
+                "myRegion": my_region,
+                "regions": regions,
+                "overrideRef": override_ref,
+                "overrideApplied": false,
+            }));
+        }
+    }
+
+    Ok(Json(serde_json::json!({ "success": true, "data": data })))
 }
 
 /// `POST /api/v1/cluster-region-routes/failover`
@@ -100,6 +177,58 @@ pub async fn service_edgion_config_data_failover(
 }
 
 // ============= Helpers =============
+
+fn load_edgion_plugins_from_file_system_registry(state: &AdminState) -> Vec<Value> {
+    let Some(registry) = state.conf_dir_registry() else {
+        return Vec::new();
+    };
+
+    registry
+        .snapshot_winners()
+        .into_iter()
+        .filter_map(|(key, path)| {
+            if key.kind != ResourceKind::EdgionPlugins.as_str() {
+                return None;
+            }
+            let content = std::fs::read_to_string(&path).ok()?;
+            serde_yaml::from_str(&content)
+                .or_else(|_| serde_json::from_str(&content))
+                .ok()
+        })
+        .collect()
+}
+
+fn load_edgion_plugins_from_seed_dir() -> Vec<Value> {
+    let Ok(entries) = std::fs::read_dir("/edgion/data/EdgionPlugins") else {
+        return Vec::new();
+    };
+
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("yaml") {
+                return None;
+            }
+            let content = std::fs::read_to_string(path).ok()?;
+            serde_yaml::from_str(&content)
+                .or_else(|_| serde_json::from_str(&content))
+                .ok()
+        })
+        .collect()
+}
+
+fn format_override_ref(value: &Value) -> Option<String> {
+    if let Some(s) = value.as_str() {
+        return Some(s.to_string());
+    }
+    let name = value.get("name").and_then(Value::as_str)?;
+    let namespace = value.get("namespace").and_then(Value::as_str);
+    Some(match namespace {
+        Some(ns) if !ns.is_empty() => format!("{ns}/{name}"),
+        _ => name.to_string(),
+    })
+}
 
 /// GET the EdgionConfigData from local storage, modify the region's failoverTo, then PUT back.
 async fn patch_edgion_config_data_failover(

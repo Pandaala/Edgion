@@ -50,6 +50,7 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
         ("POST", "/api/v1/cluster-region-routes/failover") | ("POST", "/api/v1/service-region-routes/failover") => {
             return Some((Verb::Failover, "RegionRoute".into()))
         }
+        ("GET", "/api/v1/region-routes/effective") => return Some((Verb::List, "RegionRoute".into())),
         ("GET", "/api/v1/cluster-region-routes") | ("GET", "/api/v1/service-region-routes") => {
             return Some((Verb::List, "RegionRoute".into()))
         }
