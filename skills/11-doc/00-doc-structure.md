@@ -5,7 +5,7 @@
 ```
 docs/
 ├── README.md              # Project-level README (language entry point)
-├── DIRECTORY.md           # Full directory-tree index (shared by AI and humans)
+├── .vitepress/            # VitePress site config, nav, and sidebars
 ├── en/                    # English documentation
 ├── zh-CN/                 # Chinese documentation
 │                          # (ja/ Japanese is reserved but not yet created — see 03-i18n-rules.md)
@@ -70,9 +70,11 @@ Requirements:
 - The table lists every document in the directory with a one-sentence description
 - If subdirectories exist, list them too and mark them as "directory"
 
-## DIRECTORY.md sync rules
+## Navigation sync rules
 
-`docs/DIRECTORY.md` is the full index of the entire documentation tree.
+Directory-level `README.md` files are the local navigation source for each
+documentation directory. `docs/.vitepress/config.ts` is the site navigation
+source for VitePress nav bars and sidebars.
 
 **Triggers an update**:
 - Adding a documentation file
@@ -83,7 +85,9 @@ Requirements:
 **Does not trigger an update**:
 - Modifying only file content (paths unchanged)
 
-**How to update**: Maintained manually. PRs that change documentation structure must update DIRECTORY.md in sync.
+**How to update**: PRs that change documentation structure must update the
+containing directory's `README.md` and, when the page is user-facing navigation,
+the matching VitePress sidebar/nav entry.
 
 ## Placement decision tree for new documents
 

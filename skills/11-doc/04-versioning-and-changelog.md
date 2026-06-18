@@ -120,4 +120,4 @@ For code PRs that introduce user-visible changes, confirm before submitting:
 - [ ] YAML examples still work
 - [ ] zh-CN and en are both updated (or marked `[i18n-sync-needed]`)
 - [ ] If there is a Breaking Change, the alert callout has been added
-- [ ] DIRECTORY.md is updated (if documents were added / removed / moved)
+- [ ] Directory README and VitePress navigation are updated if documents were added / removed / moved

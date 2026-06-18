@@ -2,7 +2,7 @@
 
 本文档面向维护 GitHub Actions、发布 Docker 镜像、或需要在本地复现 CI 行为的贡献者，说明当前 Edgion 的 CI / release 结构、共享 action、命令边界和常见改动风险。
 
-> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/09-misc/cicd/02-github-workflow.md](../../../skills/09-misc/cicd/02-github-workflow.md)。
+> 面向 AI / Agent 的主 workflow 入口现在是 [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md)。
 > 本文档保留给人看的背景说明、发布流程解读和人工审查清单。
 
 ## 当前有哪两条主线
@@ -186,13 +186,13 @@ cargo test --all
 
 直接从 skill 入口开始最稳：
 
-- [../../../skills/09-misc/cicd/02-github-workflow.md](../../../skills/09-misc/cicd/02-github-workflow.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md)
 
 如果任务还涉及 feature 组合或构建依赖，再补看：
 
-- [../../../skills/02-features/01-binary-and-deployment/02-feature-flags.md](../../../skills/02-features/01-binary-and-deployment/02-feature-flags.md)
-- [../../../skills/09-misc/cicd/00-local-build.md](../../../skills/09-misc/cicd/00-local-build.md)
-- [../../../skills/09-misc/cicd/01-docker-build.md](../../../skills/09-misc/cicd/01-docker-build.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/02-features/01-binary-and-deployment/02-feature-flags.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/01-binary-and-deployment/02-feature-flags.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/00-local-build.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/00-local-build.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/01-docker-build.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/01-docker-build.md)
 
 ## 相关文档
 

@@ -21,7 +21,7 @@ description: User-documentation writing standards. Use this skill when writing o
 
 | # | File | Topic |
 |---|------|-------|
-| 00 | [00-doc-structure.md](00-doc-structure.md) | Documentation directory structure: four-layer system, directory naming, README.md conventions, DIRECTORY.md sync, placement decisions for new documents |
+| 00 | [00-doc-structure.md](00-doc-structure.md) | Documentation directory structure: four-layer system, directory naming, README.md conventions, VitePress navigation sync, placement decisions for new documents |
 | 01 | [01-writing-style.md](01-writing-style.md) | Writing style + YAML examples + cross-references: heading rules, person and tone, Edgion-extension callouts, YAML completeness and placeholders, link conventions |
 | 02 | [02-page-template.md](02-page-template.md) | Page templates + parameter tables + FAQ conventions: section structure for plugin pages, Route pages, ops pages, Getting Started pages; four-column parameter-table format; FAQ Q/A format |
 | 03 | [03-i18n-rules.md](03-i18n-rules.md) | Internationalization: en/zh-CN symmetry rules, source-language convention, glossary, sync workflow, Chinese typography |

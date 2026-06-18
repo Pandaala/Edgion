@@ -83,7 +83,7 @@ spec:
         allowOrigins: "https://app.example.com"
 ```
 
-The full plugin catalog lives under [Edgion extension plugins](./edgion-plugins/).
+The full plugin catalog lives under [Edgion extension plugins](./edgion-plugins/README.md).
 
 ## Filter scope
 
@@ -115,4 +115,4 @@ When a request picks up filters from global config, the route rule, and a backen
 - [Plugin Composition and Execution Order](./plugin-composition.md)
 - [HTTPRoute Overview](../overview.md)
 - [RequestHeaderModifier](./gateway-api/request-header-modifier.md)
-- [Edgion extension plugins](./edgion-plugins/)
+- [Edgion extension plugins](./edgion-plugins/README.md)

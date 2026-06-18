@@ -123,7 +123,7 @@ The following terms remain in English (untranslated) in Chinese documentation:
 1. Create the document under zh-CN/ (source language)
 2. Translate to en/
 3. Update the README.md in both directories (if any)
-4. Update `docs/DIRECTORY.md`
+4. Update the VitePress sidebar/nav entry if the page should appear in site navigation
 
 ### Modifying an existing document
 

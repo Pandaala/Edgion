@@ -155,4 +155,4 @@ filters:
 - [过滤器总览](./overview.md)
 - [HTTPRoute 总览](../overview.md)
 - [Gateway API 标准过滤器](./gateway-api/request-header-modifier.md)
-- [Edgion 扩展插件](./edgion-plugins/)
+- [Edgion 扩展插件](./edgion-plugins/README.md)

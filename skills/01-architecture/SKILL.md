@@ -50,7 +50,7 @@ flowchart TD
 
 | What you want to learn | Start here |
 |-----------|-----------|
-| Project at a glance, code organization, conventions shared by the four binaries | [00-common/](00-common/SKILL.md) |
+| Project at a glance, code organization, conventions shared by the in-repo binaries | [00-common/](00-common/SKILL.md) |
 | How the Controller processes resources internally | [01-controller/](01-controller/SKILL.md) |
 | Controller authentication & authorization (admin login, cli tokens, RBAC, 401/403 debugging) | [01-controller/11-authentication-authorization.md](01-controller/11-authentication-authorization.md) |
 | How the Gateway processes requests | [02-gateway/](02-gateway/SKILL.md) |
@@ -73,7 +73,7 @@ flowchart TD
 
 ### [00-common/](00-common/SKILL.md) — Common conventions
 
-Foundational conventions shared by all four binaries: project overview, command line / directory / config-path conventions, Core module layering, and the resource system (`define_resources!` macro).
+Foundational conventions shared by the in-repo binaries: project overview, command line / directory / config-path conventions, crate layering, and the resource system (`define_resources!` macro).
 
 ### [01-controller/](01-controller/SKILL.md) — edgion-controller architecture
 

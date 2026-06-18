@@ -171,7 +171,7 @@ conf_sync_security:
       ca: certs/grpc/new-ca/ca.crt
 ```
 
-**Center federation channel (Center server side, `config/edgion-center.yaml`):**
+**Center federation channel (Center server side, configured in the separate EdgionCenter repository):**
 ```yaml
 grpc_security:
   active: primary

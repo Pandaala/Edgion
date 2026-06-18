@@ -1,6 +1,6 @@
 # Edgion Technical Whitepaper
 
-> This document is intended for architects and technical decision-makers. It covers the core architecture design, the rationale behind key technology choices (Rust / Pingora / Gateway API), and the implementation principles of each subsystem. For a product feature overview, see the [GitHub README](../../../README.md).
+> This document is intended for architects and technical decision-makers. It covers the core architecture design, the rationale behind key technology choices (Rust / Pingora / Gateway API), and the implementation principles of each subsystem. For a product feature overview, see the [GitHub README](https://github.com/Pandaala/Edgion/blob/main/README.md).
 
 ---
 
@@ -626,4 +626,4 @@ Edgion is under active development. The following are key priorities for the nea
 
 Edgion is a continuously evolving open-source project. We believe that Rust's memory-safety guarantees, Pingora's production-grade networking engine, the Gateway API's standardized configuration model, and the safe programmability of the self-developed DSL engine together position Edgion to deliver an answer to cloud-native API gateway requirements that is secure, performant, and flexible.
 
-Return to [Edgion Promotion Home](./README.md) | [Project Home](../../../README.md)
+Return to [Edgion Promotion Home](./README.md) | [Project Home](https://github.com/Pandaala/Edgion/blob/main/README.md)

@@ -2,7 +2,7 @@
 
 本文档记录如何在 Edgion 中添加一个新的 Kubernetes 资源类型。利用统一的宏系统，添加新资源变得更加简单。
 
-> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md](../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md)。
+> 面向 AI / Agent 的主 workflow 入口现在是 [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/09-add-new-resource/00-guide.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/09-add-new-resource/00-guide.md)。
 > 本文档保留给人看的背景说明和手工检查点。
 > 如果要按资源类型套模板，优先看该 workflow 下面的分类参考：`route-like`、`controller-only`、`plugin-like`、`cluster-scoped`。
 
@@ -309,7 +309,7 @@ A: 不是“什么都不用做”，而是要显式让 Gateway 跳过它，并�
 - [Kubernetes Custom Resources](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/)
 - [kube-rs Documentation](https://docs.rs/kube/latest/kube/)
 - [Gateway API Specification](https://gateway-api.sigs.k8s.io/)
-- [../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md](../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/09-add-new-resource/00-guide.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/09-add-new-resource/00-guide.md)
 
 ---
 

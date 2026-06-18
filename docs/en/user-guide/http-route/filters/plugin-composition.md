@@ -155,4 +155,4 @@ If any plugin in a route has an invalid configuration, Edgion does **not** build
 - [Filters Overview](./overview.md)
 - [HTTPRoute Overview](../overview.md)
 - [Gateway API standard filters](./gateway-api/request-header-modifier.md)
-- [Edgion extension plugins](./edgion-plugins/)
+- [Edgion extension plugins](./edgion-plugins/README.md)

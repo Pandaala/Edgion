@@ -55,7 +55,54 @@ pub struct GenCertsArgs {
     pub force: bool,
 }
 
+/// Validate the `--cert-name` value before it is used to build filesystem
+/// paths or Kubernetes Secret names. The value must be a single DNS-1123
+/// label, which structurally cannot contain path separators, relative
+/// components (`.` / `..`), whitespace, or control characters. This blocks
+/// path-traversal writes in file mode (e.g. `--cert-name ../../outside`) and
+/// guarantees the value is a valid Kubernetes Secret name suffix in k8s mode.
+fn validate_cert_name(name: &str) -> Result<()> {
+    // DNS-1123 label length limit; also keeps composed Secret names well under
+    // the 253-character DNS subdomain cap.
+    const MAX_LEN: usize = 63;
+
+    if name.is_empty() {
+        anyhow::bail!("--cert-name must not be empty");
+    }
+    if name.len() > MAX_LEN {
+        anyhow::bail!("--cert-name must be at most {} characters", MAX_LEN);
+    }
+
+    let bytes = name.as_bytes();
+    let is_alnum = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+
+    // Must start and end with a lowercase alphanumeric (DNS-1123 label rule).
+    if !is_alnum(bytes[0]) || !is_alnum(bytes[bytes.len() - 1]) {
+        anyhow::bail!(
+            "--cert-name must start and end with a lowercase letter or digit (got {:?})",
+            name
+        );
+    }
+
+    // Interior characters: lowercase alphanumerics and '-' only.
+    if let Some(&bad) = bytes.iter().find(|&&b| !(is_alnum(b) || b == b'-')) {
+        anyhow::bail!(
+            "--cert-name may only contain lowercase letters, digits, and '-' \
+             (invalid character {:?} in {:?})",
+            bad as char,
+            name
+        );
+    }
+
+    Ok(())
+}
+
 pub async fn execute(args: &GenCertsArgs) -> Result<()> {
+    // Validate cert_name before it is used to build any filesystem path or
+    // Kubernetes Secret name (path-traversal / invalid-name guard).
+    validate_cert_name(&args.cert_name)
+        .with_context(|| format!("Invalid --cert-name {:?}", args.cert_name))?;
+
     // Resolve namespace for SAN generation (and k8s mode)
     let namespace = match &args.namespace {
         Some(ns) => Some(ns.clone()),
@@ -78,6 +125,16 @@ pub async fn execute(args: &GenCertsArgs) -> Result<()> {
     match args.output {
         OutputMode::File => {
             let out_dir = args.output_dir.join(&args.cert_name);
+            // Defense-in-depth: the validated single-label cert_name must
+            // resolve to a direct child of output_dir. Anything that escaped
+            // validation and introduced extra components is rejected here.
+            if out_dir.parent() != Some(args.output_dir.as_path()) {
+                anyhow::bail!(
+                    "Resolved certificate directory {:?} is not directly under output directory {:?}",
+                    out_dir,
+                    args.output_dir
+                );
+            }
             write_to_files(&bundle, &out_dir, args.force).await?;
         }
         OutputMode::K8s => {
@@ -339,6 +396,44 @@ mod tests {
     fn cert_days_accepts_custom_value() {
         let cli = parse(&["gen-certs-test", "--cert-days", "30"]).expect("parse should succeed");
         assert_eq!(cli.args.cert_days, 30);
+    }
+
+    #[test]
+    fn validate_cert_name_accepts_valid_rotation_names() {
+        for name in ["primary", "secondary", "rotation-2", "ca0"] {
+            assert!(validate_cert_name(name).is_ok(), "{name:?} should be accepted");
+        }
+    }
+
+    #[test]
+    fn validate_cert_name_rejects_path_traversal() {
+        for name in ["..", "../x", "../../outside", "a/b", "a\\b", "./x"] {
+            assert!(validate_cert_name(name).is_err(), "{name:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn validate_cert_name_rejects_empty_and_control_chars() {
+        assert!(validate_cert_name("").is_err());
+        assert!(validate_cert_name("a b").is_err());
+        assert!(validate_cert_name("a\tb").is_err());
+        assert!(validate_cert_name("name\n").is_err());
+    }
+
+    #[test]
+    fn validate_cert_name_rejects_bad_boundaries_and_uppercase() {
+        // Leading/trailing hyphen and uppercase are not valid DNS-1123 labels.
+        assert!(validate_cert_name("-primary").is_err());
+        assert!(validate_cert_name("primary-").is_err());
+        assert!(validate_cert_name("Primary").is_err());
+    }
+
+    #[test]
+    fn validate_cert_name_rejects_overlong_value() {
+        let long = "a".repeat(64);
+        assert!(validate_cert_name(&long).is_err());
+        let ok = "a".repeat(63);
+        assert!(validate_cert_name(&ok).is_ok());
     }
 
     #[test]

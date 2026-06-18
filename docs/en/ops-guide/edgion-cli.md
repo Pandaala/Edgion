@@ -293,9 +293,9 @@ Based on the target type, `edgion-cli` uses the following default connections:
 
 | Target | Default Address |
 |--------|----------------|
-| center | http://localhost:12101 |
-| server | http://localhost:12101 |
-| client | http://localhost:12001 |
+| center | `http://localhost:12101` |
+| server | `http://localhost:12101` |
+| client | `http://localhost:12001` |
 
 ### Custom Connections
 

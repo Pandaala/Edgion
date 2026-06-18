@@ -1,6 +1,6 @@
 # Edgion
 
-中文 | [English](../../README.md)
+中文 | [English](../en/README.md)
 
 ## Edgion 是什么？
 
@@ -218,4 +218,4 @@ requestPlugins:
 
 ## 许可证
 
-Edgion 采用 [Apache License, Version 2.0](../../LICENSE) 许可。
+Edgion 采用 [Apache License, Version 2.0](https://github.com/Pandaala/Edgion/blob/main/LICENSE) 许可。

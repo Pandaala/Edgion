@@ -1,6 +1,6 @@
 ---
 name: project-overview
-description: Edgion project high-level architecture diagram, Crate structure, four binary definitions, code organization, EdgionHttpContext, testing infrastructure, key dependencies.
+description: Edgion project high-level architecture diagram, workspace crate structure, in-repo binary definitions, code organization, EdgionHttpContext, testing infrastructure, key dependencies.
 ---
 
 # Project overview
@@ -44,7 +44,7 @@ flowchart TD
 
 ## Crate structure
 
-A single Crate (not a workspace) with three `[[bin]]` targets:
+Cargo workspace with crate-owned binary entry points:
 
 | Binary | Entry file | Runtime model | Role |
 |--------|---------|-----------|------|
@@ -61,53 +61,18 @@ Default features: `allocator-jemalloc` + `boringssl`.
 ## Code directory organization
 
 ```
-src/
-├── bin/                         # Thin entry wrappers
-│   ├── edgion_gateway.rs        #   → EdgionGatewayCli::run()
-│   ├── edgion_controller.rs     #   → EdgionControllerCli::run()
-│   └── edgion_ctl.rs            #   → Cli::run() (edgion-cli)
-├── lib.rs                       # Crate root: pub mod core, pub mod types
-├── core/                        # All business logic
-│   ├── controller/              # Code belonging to edgion-controller
-│   │   ├── api/                 #   Admin API
-│   │   ├── cli/                 #   CLI entry and startup
-│   │   ├── conf_mgr/            #   ConfigCenter / Workqueue / ResourceProcessor
-│   │   ├── conf_sync/           #   gRPC server + ServerCache
-│   │   ├── observe/             #   Logging facade
-│   │   └── services/            #   ACME and other services
-│   ├── gateway/                 # Code belonging to edgion-gateway
-│   │   ├── api/                 #   Admin API
-│   │   ├── backends/            #   Backend discovery / health checks / BackendTLSPolicy
-│   │   ├── cli/                 #   CLI entry and Pingora startup
-│   │   ├── config/              #   GatewayClass / EdgionGatewayConfig
-│   │   ├── conf_sync/           #   gRPC client + ClientCache
-│   │   ├── lb/                  #   Load-balancing algorithms
-│   │   ├── link_sys/            #   External systems (Redis/Etcd/ES/Webhook/File)
-│   │   ├── observe/             #   AccessLog / Metrics / protocol logs
-│   │   ├── plugins/             #   Plugin system (http / stream / runtime)
-│   │   ├── routes/              #   HTTP / gRPC / TCP / TLS / UDP routes
-│   │   ├── runtime/             #   Pingora runtime (server / matching / store)
-│   │   ├── services/            #   ACME challenge service
-│   │   └── tls/                 #   TLS runtime / certificate store / validation
-│   ├── ctl/                     # Code belonging to edgion-cli
-│   │   └── cli/                 #   commands / output / client
-│   └── common/                  # Cross-bin shared modules
-│       ├── config/              #   Shared startup configuration (test mode, cache config)
-│       ├── conf_sync/           #   gRPC proto / traits / shared types
-│       ├── matcher/             #   Domain matching, IP Radix tree
-│       └── utils/               #   metadata / net / duration / real_ip and other utilities
-└── types/                       # Pure data definitions (no business logic)
-    ├── resource/                # Resource system (define_resources!, ResourceKind, ResourceMeta)
-    ├── resources/               # Per-kind resource structs (Gateway, HTTPRoute, EdgionPlugins, ...)
-    ├── common/                  # KeyGet/KeySet unified accessors
-    ├── constants/               # Annotations, labels, headers, Secret keys
-    ├── ctx.rs                   # EdgionHttpContext (per-request state)
-    ├── filters.rs               # PluginRunningResult, PluginRunningStage
-    ├── schema.rs                # JSON Schema validation
-    └── err.rs                   # Error types
+edgion-resources/                # Shared resource/config schemas and validation helpers
+edgion-common/                   # Shared infra: config, observability, secret store, link system, proto codegen
+edgion-controller/               # Control plane binary and library
+edgion-gateway/                  # Data plane binary and library
+edgion-cli/                      # CLI binary and library
+edgion-tests/                    # Integration test assets, scripts, and validators
 ```
 
-**Design principles**: `types/` only holds pure data definitions; `core/` holds all logic. `core/` is layered by bin ownership (controller / gateway / ctl / common); no top-level shim modules are used.
+**Design principles**: `edgion-resources` is the schema leaf crate;
+`edgion-common` holds backend-agnostic shared infrastructure; controller,
+gateway, and CLI code stay in their owning crates. The in-repo dependency graph
+remains a DAG (`resources → common → {controller, gateway, cli}`).
 
 ## EdgionHttpContext — per-request state container
 

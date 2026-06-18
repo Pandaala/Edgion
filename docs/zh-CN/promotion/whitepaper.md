@@ -1,6 +1,6 @@
 # Edgion 技术白皮书
 
-> 本文档面向架构师和技术决策者，深入阐述 Edgion 的核心架构设计、关键技术选型（Rust / Pingora / Gateway API）的决策依据，以及各子系统的实现原理。如需产品功能概览，请参见 [GitHub README](../../../README.md)。
+> 本文档面向架构师和技术决策者，深入阐述 Edgion 的核心架构设计、关键技术选型（Rust / Pingora / Gateway API）的决策依据，以及各子系统的实现原理。如需产品功能概览，请参见 [GitHub README](https://github.com/Pandaala/Edgion/blob/main/README.md)。
 
 ---
 
@@ -632,4 +632,4 @@ Edgion 正在积极演进，以下是近期和中期的重点方向：
 
 Edgion 是一个持续演进的开源项目。我们相信，基于 Rust 的内存安全保证、Pingora 的生产级网络引擎、Gateway API 的标准化配置模型，以及自研 DSL 引擎的安全可编程能力，Edgion 能够为云原生时代的 API 网关需求提供一个兼具安全性、性能和灵活性的答案。
 
-返回 [Edgion 推广首页](./README.md) | [项目主页](../../../README.md)
+返回 [Edgion 推广首页](./README.md) | [项目主页](https://github.com/Pandaala/Edgion/blob/main/README.md)

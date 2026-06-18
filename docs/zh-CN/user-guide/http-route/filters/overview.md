@@ -83,7 +83,7 @@ spec:
         allowOrigins: "https://app.example.com"
 ```
 
-完整插件目录请见 [Edgion 扩展插件](./edgion-plugins/)。
+完整插件目录请见 [Edgion 扩展插件](./edgion-plugins/README.md)。
 
 ## 过滤器作用域
 
@@ -115,4 +115,4 @@ BackendRef 级过滤器适合金丝雀发布场景——例如只在发往金丝
 - [插件组合与执行顺序](./plugin-composition.md)
 - [HTTPRoute 总览](../overview.md)
 - [RequestHeaderModifier](./gateway-api/request-header-modifier.md)
-- [Edgion 扩展插件](./edgion-plugins/)
+- [Edgion 扩展插件](./edgion-plugins/README.md)

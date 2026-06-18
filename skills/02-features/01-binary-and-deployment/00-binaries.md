@@ -1,6 +1,6 @@
 ---
 name: binaries
-description: Entry points of the four binaries, full CLI argument reference, work_dir priority rules.
+description: Entry points of the in-repo binaries, full CLI argument reference, work_dir priority rules.
 ---
 
 # Binary Entry Points and CLI Arguments

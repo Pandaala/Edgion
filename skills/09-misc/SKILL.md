@@ -1,12 +1,12 @@
 ---
 name: 09-misc
-description: Use for pre-commit/local checks, CI/CD workflows, Docker builds, release automation, Center hot-replace deployment, or TLS troubleshooting.
+description: Use for pre-commit/local checks, CI/CD workflows, Docker builds, release automation, dev hot-replace deployment, or TLS troubleshooting.
 ---
 
 # 09 Miscellaneous
 
-> Edgion build and release workflow. Single-crate project; Rust toolchain is pinned by CI / `rust-toolchain.toml` (currently `1.92`, channel `stable`). Default features: `allocator-jemalloc` + `boringssl`.
-> Four binaries: `edgion-gateway` (data plane), `edgion-controller` (control plane), `edgion-cli` (CLI), `edgion-center` (federation center).
+> Edgion build and release workflow. Cargo workspace; Rust toolchain is pinned by CI / `rust-toolchain.toml` (currently `1.92`, channel `stable`). Default features: `allocator-jemalloc` + `boringssl`.
+> In-repo binaries: `edgion-gateway` (data plane), `edgion-controller` (control plane), and `edgion-cli` (CLI). The federation Center lives in the separate EdgionCenter repository.
 
 ## File list
 

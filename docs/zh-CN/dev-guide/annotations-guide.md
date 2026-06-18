@@ -4,13 +4,13 @@
 
 如果你是在改代码、排查问题或更新文档，建议先看 agent 侧入口：
 
-- [05-annotations-reference.md](../../../skills/02-features/05-annotations/00-annotations-overview.md)
+- [05-annotations-reference.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/00-annotations-overview.md)
 
 详细键表拆在这些 reference 里：
 
-- [annotations-metadata.md](../../../skills/02-features/05-annotations/references/annotations-metadata.md)
-- [annotations-options-and-labels.md](../../../skills/02-features/05-annotations/references/annotations-options-and-labels.md)
-- [annotations-system-and-test-keys.md](../../../skills/02-features/05-annotations/references/annotations-system-and-test-keys.md)
+- [annotations-metadata.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/references/annotations-metadata.md)
+- [annotations-options-and-labels.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/references/annotations-options-and-labels.md)
+- [annotations-system-and-test-keys.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/references/annotations-system-and-test-keys.md)
 
 ## 先看“放在哪”，再看“叫什么”
 

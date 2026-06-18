@@ -478,13 +478,6 @@ export default defineConfig({
   description: 'High-performance Kubernetes Gateway built on Pingora and Gateway API',
   base: '/Edgion/',
 
-  // Suppress build failure from pre-existing dead links across the docs:
-  // categories include links to skills/, examples/, localhost dev endpoints,
-  // incorrect relative paths between http-route/filters/ and user-guide/edgion-plugins/,
-  // and /index suffixes on directory README links.
-  // TODO: fix these broken links incrementally as docs are reviewed.
-  ignoreDeadLinks: true,
-
   // Exclude internal / non-public directories from being processed
   srcExclude: [
     '**/refactoring/**',

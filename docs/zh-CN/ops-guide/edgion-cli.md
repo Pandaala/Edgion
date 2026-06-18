@@ -277,9 +277,9 @@ kubectl -n edgion-system get secret edgion-admin-credentials \
 
 | Target | 默认地址 |
 |--------|----------|
-| center | http://localhost:12101 |
-| server | http://localhost:12101 |
-| client | http://localhost:12001 |
+| center | `http://localhost:12101` |
+| server | `http://localhost:12101` |
+| client | `http://localhost:12001` |
 
 ### 自定义连接
 

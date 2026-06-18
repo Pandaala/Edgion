@@ -16,7 +16,7 @@ single-crate `src/core/` layout is gone):
 edgion-resources/    # Shared resource/config schema (leaf)
 edgion-common/       # Code shared across bins (depends on edgion-resources)
 edgion-gateway/      # Data plane + `edgion-gateway` binary
-edgion-controller/   # Control plane + `edgion-controller` binary (depends on edgion-gateway for compile_plugins)
+edgion-controller/   # Control plane + `edgion-controller` binary
 edgion-cli/          # CLI lib + `edgion-cli` binary
 .  (root `edgion`)   # Thin umbrella — only hosts integration-test examples + cache_residue bin
 ```
@@ -234,11 +234,11 @@ Avoid reintroducing the following patterns:
 
 | Anti-pattern | Correct approach |
 |---------|---------|
-| Top-level `src/core/api`, `src/core/cli`, `src/core/conf_sync` | Place under the corresponding bin group |
+| Top-level `src/core/api`, `src/core/cli`, `src/core/conf_sync` | Place under the owning crate |
 | Flat gateway buckets such as `gateway/http_routes`, `gateway/health_check` | Organize by subsystem |
 | New compatibility shims that hide the real ownership | Place directly in the correct bin group |
-| Putting execution logic in `types/` | types only holds data definitions |
-| `common` or `center` importing internal `controller` modules | Lift shared types into `types/`, have each side depend on types |
+| Putting execution logic in `edgion-resources/` | resources only holds schema/data definitions and schema-layer validation |
+| Shared code importing internal `controller` modules | Lift shared types into `edgion-resources` or backend-agnostic helpers into `edgion-common` |
 | Calling kube-rs API directly inside the gateway | Sync from the Controller via ConfigClient |
 | Plugins accessing databases / external systems directly | Go through the client in LinkSysStore |
 

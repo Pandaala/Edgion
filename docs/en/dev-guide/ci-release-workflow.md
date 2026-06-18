@@ -2,7 +2,7 @@
 
 This document is for contributors who maintain GitHub Actions, publish Docker images, or need to reproduce CI behavior locally. It explains the current Edgion CI / release structure, the shared local action, command boundaries, and the highest-risk change points.
 
-> The primary AI / agent workflow now lives in [../../../skills/09-misc/cicd/02-github-workflow.md](../../../skills/09-misc/cicd/02-github-workflow.md).
+> The primary AI / agent workflow now lives in [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md).
 > This document remains the human-facing background guide, release-flow explanation, and manual review checklist.
 
 ## The Two Main Workflow Families
@@ -184,13 +184,13 @@ Local debugging commands can be more flexible. CI commands should stay stable, c
 
 Start from the skill entry:
 
-- [../../../skills/09-misc/cicd/02-github-workflow.md](../../../skills/09-misc/cicd/02-github-workflow.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md)
 
 If the task also touches feature combinations or build dependencies, continue with:
 
-- [../../../skills/02-features/01-binary-and-deployment/02-feature-flags.md](../../../skills/02-features/01-binary-and-deployment/02-feature-flags.md)
-- [../../../skills/09-misc/cicd/00-local-build.md](../../../skills/09-misc/cicd/00-local-build.md)
-- [../../../skills/09-misc/cicd/01-docker-build.md](../../../skills/09-misc/cicd/01-docker-build.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/02-features/01-binary-and-deployment/02-feature-flags.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/01-binary-and-deployment/02-feature-flags.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/00-local-build.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/00-local-build.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/01-docker-build.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/01-docker-build.md)
 
 ## Related Docs
 

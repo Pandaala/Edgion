@@ -114,6 +114,7 @@ See [`07-tasks/SKILL.md`](07-tasks/SKILL.md) for the full lifecycle phase table 
 
 ## User documentation
 
-Located under `docs/`, organized by language (en, zh-CN, ja). The complete directory tree is in [docs/DIRECTORY.md](../docs/DIRECTORY.md).
+Located under `docs/`, organized by language (en, zh-CN). Directory-level `README.md`
+files and `docs/.vitepress/config.ts` are the maintained navigation sources.
 
 When authoring or reviewing user documentation, follow the writing conventions in [11-doc/SKILL.md](11-doc/SKILL.md).
