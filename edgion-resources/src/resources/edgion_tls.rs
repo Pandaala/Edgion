@@ -153,6 +153,16 @@ pub struct EdgionTlsSpec {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     #[schemars(skip)]
     pub resolved_listeners: Option<Vec<ListenerKey>>,
+
+    /// Operator log labels resolved from `metadata` (annotations / labels) at
+    /// `pre_parse` time, attached to `rsc.labels` in `ssl.log`. Pure in-process
+    /// cache derived from metadata the gateway already holds: never part of the
+    /// CRD (`schemars(skip)`) nor the conf_sync payload (`serde(skip)`), and
+    /// re-derived on every gateway ingest. Caching here keeps the TLS handshake
+    /// callback off the metadata-parsing path.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub resolved_log_labels: Option<std::sync::Arc<std::collections::BTreeMap<String, String>>>,
 }
 
 /// EdgionTlsStatus describes the status of the EdgionTls resource

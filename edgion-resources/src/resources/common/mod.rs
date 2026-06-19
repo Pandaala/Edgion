@@ -1,11 +1,13 @@
 //! Common reusable types for Edgion custom resources.
 
 pub mod group_name;
+pub mod log_labels;
 pub mod secret_object_ref;
 pub mod secret_slot;
 pub mod service_kind;
 pub mod tls;
 
+pub use log_labels::resolve_log_labels;
 pub use secret_object_ref::SecretObjectReference;
 pub use secret_slot::SecretSlot;
 pub use service_kind::EdgionService;

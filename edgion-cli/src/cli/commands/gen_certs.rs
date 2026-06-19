@@ -100,8 +100,7 @@ fn validate_cert_name(name: &str) -> Result<()> {
 pub async fn execute(args: &GenCertsArgs) -> Result<()> {
     // Validate cert_name before it is used to build any filesystem path or
     // Kubernetes Secret name (path-traversal / invalid-name guard).
-    validate_cert_name(&args.cert_name)
-        .with_context(|| format!("Invalid --cert-name {:?}", args.cert_name))?;
+    validate_cert_name(&args.cert_name).with_context(|| format!("Invalid --cert-name {:?}", args.cert_name))?;
 
     // Resolve namespace for SAN generation (and k8s mode)
     let namespace = match &args.namespace {

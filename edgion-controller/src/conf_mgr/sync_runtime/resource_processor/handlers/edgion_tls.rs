@@ -501,6 +501,7 @@ mod tests {
                 ciphers: None,
                 secret: None,
                 resolved_listeners: None,
+                resolved_log_labels: None,
             },
             status: None,
         }

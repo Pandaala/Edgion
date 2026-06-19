@@ -19,6 +19,7 @@
 
 use parking_lot::{Mutex, RwLock};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -48,9 +49,18 @@ use edgion_resources::resources::edgion_acme::{
 
 static ACME_SERVICE: Mutex<Option<AcmeServiceHandle>> = Mutex::new(None);
 
+/// Monotonic generation counter. Each `start_acme_service()` allocates a fresh
+/// generation so that detached timers and the startup scan spawned by an older
+/// generation can detect a service restart and no-op instead of injecting stale
+/// work into (or holding resources for) the new generation. Starts at 0; the
+/// first running generation is 1, so a value of 0 never identifies a live timer.
+static ACME_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 /// Handle to send commands to the ACME service
 struct AcmeServiceHandle {
     tx: mpsc::Sender<AcmeCommand>,
+    /// Generation that owns this handle (see `ACME_GENERATION`).
+    generation: u64,
 }
 
 /// Commands that can be sent to the ACME service
@@ -79,11 +89,15 @@ pub fn start_acme_service(client: Client) {
         return;
     }
 
+    // Allocate a fresh generation for this service instance so detached timers
+    // and the startup scan can recognize a later restart and no-op.
+    let generation = ACME_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+
     let (tx, rx) = mpsc::channel::<AcmeCommand>(256);
-    *guard = Some(AcmeServiceHandle { tx });
+    *guard = Some(AcmeServiceHandle { tx, generation });
     drop(guard); // Release lock before spawning tasks
 
-    let service = AcmeServiceWorker::new(client.clone());
+    let service = AcmeServiceWorker::new(client.clone(), generation);
     tokio::spawn(async move {
         service.run(rx).await;
     });
@@ -94,10 +108,24 @@ pub fn start_acme_service(client: Client) {
     tokio::spawn(async move {
         // Wait a bit for processors to finish initial sync
         tokio::time::sleep(Duration::from_secs(10)).await;
+        // Skip if this generation's service has already been stopped/replaced,
+        // so a stale startup scan cannot enqueue into a later generation.
+        if current_generation() != generation {
+            tracing::debug!(
+                component = "acme_service",
+                generation = generation,
+                "Skipping startup scan: ACME service generation changed"
+            );
+            return;
+        }
         scan_all_acme_resources(startup_client).await;
     });
 
-    tracing::info!(component = "acme_service", "ACME service started");
+    tracing::info!(
+        component = "acme_service",
+        generation = generation,
+        "ACME service started"
+    );
 }
 
 /// Stop the global ACME service.
@@ -105,6 +133,11 @@ pub fn start_acme_service(client: Client) {
 /// Called alongside `ControllerRuntime::reset()` when the controller
 /// shuts down or loses leadership. Dropping the `Sender` causes the worker's
 /// `recv()` to return `None`, making it exit its event loop cleanly.
+///
+/// Detached renewal/retry timers and the delayed startup scan are not aborted
+/// here; instead each carries the generation that scheduled it and no-ops when
+/// it fires after this call (see `ACME_GENERATION` / `get_sender_for_generation`),
+/// so stale timers cannot enqueue into a later service generation.
 ///
 /// After this call, `start_acme_service()` can be called again on re-election.
 pub fn stop_acme_service() {
@@ -161,6 +194,23 @@ fn get_sender() -> Option<mpsc::Sender<AcmeCommand>> {
     guard.as_ref().map(|h| h.tx.clone())
 }
 
+/// Clone the current sender only if the running service still belongs to
+/// `generation`. Detached timers capture the generation that scheduled them and
+/// use this so a timer left over from an older service instance cannot enqueue
+/// into a newer one after a stop/start (leadership flap, shutdown, re-election).
+fn get_sender_for_generation(generation: u64) -> Option<mpsc::Sender<AcmeCommand>> {
+    let guard = ACME_SERVICE.lock();
+    guard
+        .as_ref()
+        .filter(|h| h.generation == generation)
+        .map(|h| h.tx.clone())
+}
+
+/// Generation of the currently running service, or 0 when none is running.
+fn current_generation() -> u64 {
+    ACME_SERVICE.lock().as_ref().map(|h| h.generation).unwrap_or(0)
+}
+
 /// Notify the ACME service that a resource has changed.
 ///
 /// Called from `EdgionAcmeHandler::parse()` after processing, from the startup
@@ -197,10 +247,15 @@ pub async fn notify_resource_changed(key: String) -> bool {
 }
 
 /// Schedule a renewal check for a resource.
-fn schedule_renewal_check(key: String, delay: Duration) {
+///
+/// `generation` is the ACME service generation that scheduled this timer. When
+/// the timer fires it only enqueues if that generation is still the running one,
+/// so timers outliving a `stop_acme_service()`/`start_acme_service()` cycle
+/// no-op instead of injecting stale work into a later generation.
+fn schedule_renewal_check(generation: u64, key: String, delay: Duration) {
     tokio::spawn(async move {
         tokio::time::sleep(delay).await;
-        if let Some(tx) = get_sender() {
+        if let Some(tx) = get_sender_for_generation(generation) {
             let _ = tx.send(AcmeCommand::RenewalCheck { key }).await;
         }
     });
@@ -238,6 +293,8 @@ fn exponential_backoff(base_secs: u64, attempt: u32) -> Duration {
 /// The background worker that processes ACME commands
 struct AcmeServiceWorker {
     client: Client,
+    /// Generation this worker belongs to; stamped onto timers it schedules.
+    generation: u64,
     /// Keys of resources currently being processed (prevents duplicate work)
     processing: Arc<RwLock<HashSet<String>>>,
     /// Consecutive failure count per resource key (for exponential backoff).
@@ -246,9 +303,10 @@ struct AcmeServiceWorker {
 }
 
 impl AcmeServiceWorker {
-    fn new(client: Client) -> Self {
+    fn new(client: Client, generation: u64) -> Self {
         Self {
             client,
+            generation,
             processing: Arc::new(RwLock::new(HashSet::new())),
             retry_tracker: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -319,7 +377,7 @@ impl AcmeServiceWorker {
                 if !self.needs_renewal(&acme) {
                     // Not time to renew yet — schedule next check
                     let check_interval = acme.spec.renewal.check_interval;
-                    schedule_renewal_check(key.to_string(), Duration::from_secs(check_interval));
+                    schedule_renewal_check(self.generation, key.to_string(), Duration::from_secs(check_interval));
                     return;
                 }
                 // Fall through to start renewal
@@ -369,9 +427,10 @@ impl AcmeServiceWorker {
         let key_owned = key.to_string();
         let is_renewal = *phase == AcmeCertPhase::Ready;
         let fail_backoff_base = acme.spec.renewal.fail_backoff;
+        let generation = self.generation;
 
         tokio::spawn(async move {
-            let result = process_acme_resource(client.clone(), &acme, is_renewal).await;
+            let result = process_acme_resource(client.clone(), &acme, is_renewal, generation).await;
 
             match result {
                 Ok(()) => {
@@ -430,7 +489,7 @@ impl AcmeServiceWorker {
                             backoff_secs = backoff.as_secs(),
                             "Scheduling retry with exponential backoff"
                         );
-                        schedule_renewal_check(key_owned.clone(), backoff);
+                        schedule_renewal_check(generation, key_owned.clone(), backoff);
                     } else {
                         tracing::error!(
                             component = "acme_service",
@@ -476,7 +535,7 @@ impl AcmeServiceWorker {
 // ============================================================================
 
 /// Process a single EdgionAcme resource through the full ACME flow
-async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bool) -> Result<()> {
+async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bool, generation: u64) -> Result<()> {
     let namespace = acme.metadata.namespace.as_deref().unwrap_or("default");
     let name = acme.metadata.name.as_deref().context("EdgionAcme has no name")?;
     let key = format!("{}/{}", namespace, name);
@@ -529,7 +588,11 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
 
     // 8. Schedule renewal check
     let check_interval = acme.spec.renewal.check_interval;
-    schedule_renewal_check(format!("{}/{}", namespace, name), Duration::from_secs(check_interval));
+    schedule_renewal_check(
+        generation,
+        format!("{}/{}", namespace, name),
+        Duration::from_secs(check_interval),
+    );
 
     tracing::info!(
         component = "acme_service",
@@ -1160,6 +1223,64 @@ mod tests {
     // ================================================================
     // parse_cert_info
     // ================================================================
+
+    // ================================================================
+    // timer generation isolation
+    // ================================================================
+
+    /// A timer scheduled by one ACME service generation must not enqueue into a
+    /// later generation after a stop/restart. All assertions live in a single
+    /// test because they mutate the `ACME_SERVICE` global; splitting them would
+    /// let the cases race against each other.
+    #[tokio::test]
+    async fn test_timer_generation_isolation() {
+        // --- Generation 1 starts ---
+        let (tx1, _rx1) = mpsc::channel::<AcmeCommand>(8);
+        let gen1 = ACME_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        *ACME_SERVICE.lock() = Some(AcmeServiceHandle {
+            tx: tx1,
+            generation: gen1,
+        });
+
+        // A timer stamped with gen1 can enqueue while gen1 is running.
+        assert!(get_sender_for_generation(gen1).is_some());
+        assert_eq!(current_generation(), gen1);
+
+        // --- Service stops (drops the handle) ---
+        ACME_SERVICE.lock().take();
+        assert!(get_sender_for_generation(gen1).is_none());
+        assert_eq!(current_generation(), 0);
+
+        // --- Generation 2 starts (re-election) ---
+        let (tx2, mut rx2) = mpsc::channel::<AcmeCommand>(8);
+        let gen2 = ACME_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+        assert!(gen2 > gen1, "generations must be strictly increasing");
+        *ACME_SERVICE.lock() = Some(AcmeServiceHandle {
+            tx: tx2,
+            generation: gen2,
+        });
+
+        // A stale gen1 timer must NOT see gen2's sender.
+        assert!(get_sender_for_generation(gen1).is_none());
+        // The current generation's timer still works.
+        assert!(get_sender_for_generation(gen2).is_some());
+
+        // End to end through schedule_renewal_check: a stale-generation timer
+        // fires but never enqueues into the running generation.
+        schedule_renewal_check(gen1, "default/stale".to_string(), Duration::from_millis(10));
+        let stale = tokio::time::timeout(Duration::from_millis(200), rx2.recv()).await;
+        assert!(stale.is_err(), "stale-generation timer must not enqueue");
+
+        // A current-generation timer does enqueue.
+        schedule_renewal_check(gen2, "default/live".to_string(), Duration::from_millis(10));
+        let live = tokio::time::timeout(Duration::from_secs(1), rx2.recv())
+            .await
+            .expect("current-generation timer should enqueue before timeout");
+        assert!(matches!(live, Some(AcmeCommand::RenewalCheck { key }) if key == "default/live"));
+
+        // Cleanup global state.
+        ACME_SERVICE.lock().take();
+    }
 
     #[test]
     fn test_parse_cert_info_invalid_pem() {

@@ -97,4 +97,11 @@ pub mod edgion {
     /// When global `requireSniHostMatch` is false, set this to "true" on a Gateway
     /// to enable listener-level 421 detection for that Gateway's HTTPS listeners.
     pub const REQUIRE_SNI_HOST_MATCH: &str = "edgion.io/require-sni-host-match";
+
+    /// Prefix for operator-defined log labels. Any `metadata.annotations` or
+    /// `metadata.labels` entry whose key starts with this prefix contributes
+    /// `<suffix> = <value>` to the resource's `rsc.labels` in access / TLS logs.
+    /// Example: `edgion.io/log-label.tenant: internal` -> label `tenant=internal`.
+    /// Supported on HTTPRoute, GRPCRoute, EdgionTls, and TLSRoute.
+    pub const LOG_LABEL_PREFIX: &str = "edgion.io/log-label.";
 }

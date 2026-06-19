@@ -18,6 +18,7 @@ fn create_tls(hosts: Vec<&str>) -> EdgionTls {
             ciphers: None,
             secret: None,
             resolved_listeners: None,
+            resolved_log_labels: None,
         },
         status: None,
     }
@@ -98,6 +99,7 @@ fn test_yaml_serialization_produces_camel_case() {
             ciphers: None,
             secret: None,
             resolved_listeners: None,
+            resolved_log_labels: None,
         },
         status: None,
     };
@@ -586,4 +588,50 @@ spec:
     assert!(tls.spec.client_auth.is_none());
     assert_eq!(tls.client_auth_mode(), ClientAuthMode::Terminate);
     assert!(!tls.is_mtls_enabled());
+}
+
+#[test]
+fn test_pre_parse_populates_resolved_log_labels() {
+    use crate::constants::annotations::edgion::LOG_LABEL_PREFIX;
+
+    let mut tls = create_tls(vec!["example.com"]);
+    // Operator log-label annotation/label sources resolved at pre_parse time so
+    // the TLS handshake callback (ssl.log) reads a cached Arc, not metadata.
+    tls.metadata.annotations = Some(
+        [(format!("{LOG_LABEL_PREFIX}tenant"), "internal".to_string())]
+            .into_iter()
+            .collect(),
+    );
+    tls.metadata.labels = Some(
+        [(format!("{LOG_LABEL_PREFIX}env"), "prod".to_string())]
+            .into_iter()
+            .collect(),
+    );
+
+    assert!(tls.spec.resolved_log_labels.is_none(), "cache empty before pre_parse");
+
+    // Trait method must be wired in `resource/meta/impls.rs`; this guards against
+    // a future edit dropping the EdgionTls pre_parse override (labels would then
+    // silently vanish from ssl.log with no error).
+    <EdgionTls as crate::ResourceMeta>::pre_parse(&mut tls);
+
+    let resolved = tls.spec.resolved_log_labels.expect("pre_parse populates labels");
+    assert_eq!(resolved.get("tenant").map(String::as_str), Some("internal"));
+    assert_eq!(resolved.get("env").map(String::as_str), Some("prod"));
+    assert_eq!(resolved.len(), 2);
+}
+
+#[test]
+fn test_resolved_log_labels_skipped_in_serialization() {
+    // The cache is a pure in-process field: it must never leak into the
+    // conf_sync payload or the CRD (serde(skip) + schemars(skip)).
+    let mut tls = create_tls(vec!["example.com"]);
+    tls.spec.resolved_log_labels = Some(std::sync::Arc::new(
+        [("env".to_string(), "prod".to_string())].into_iter().collect(),
+    ));
+    let json = serde_json::to_string(&tls.spec).expect("serialize spec");
+    assert!(
+        !json.contains("resolvedLogLabels") && !json.contains("resolved_log_labels"),
+        "resolved_log_labels must be serde(skip): {json}"
+    );
 }

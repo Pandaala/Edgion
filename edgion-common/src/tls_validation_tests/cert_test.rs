@@ -33,6 +33,7 @@ fn create_test_tls(cert_pem: Option<&str>, key_pem: Option<&str>, hosts: Vec<Str
                 ..Default::default()
             }),
             resolved_listeners: None,
+            resolved_log_labels: None,
         },
         status: None,
     }

@@ -72,7 +72,11 @@ impl_resource_meta!(
 );
 
 // Namespaced
-impl_resource_meta!(EdgionTls, EdgionTls, "EdgionTls");
+impl_resource_meta!(EdgionTls, EdgionTls, "EdgionTls", |self| {
+    // Resolve operator log labels once at ingest so the TLS handshake callback
+    // (ssl.log) reads a cached Arc instead of re-scanning metadata per handshake.
+    self.spec.resolved_log_labels = crate::resources::common::resolve_log_labels(&self.metadata);
+});
 
 // Runtime (PluginRuntime) is now built gateway-side via `compile_plugins`; the
 // schema needs no pre_parse step.
