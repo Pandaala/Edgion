@@ -12,77 +12,13 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::Json;
 
-use edgion_resources::prelude_resources::{EdgionPlugins, EdgionStreamPlugins};
-use edgion_resources::resources::edgion_config_data::{
-    merge_region_route_override, ConfigEntry, RegionRouteOverride, Selector,
-};
-use edgion_resources::resources::edgion_plugins::{EdgionPlugin, RegionDef};
+use edgion_resources::prelude_resources::EdgionStreamPlugins;
+use edgion_resources::resources::edgion_config_data::{ConfigEntry, Selector};
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugin, ProfileRules};
 use edgion_resources::ResourceKind;
 use serde::Serialize;
 
 use super::types::AdminState;
-
-/// One resolved RegionRoute plugin instance, after applying any overlay.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EffectiveRegionRoute {
-    pub namespace: String,
-    /// Owning EdgionPlugins resource name.
-    pub plugin_name: String,
-    /// Per-instance discriminator (RequestFilterEntry.alias); None if unset.
-    pub alias: Option<String>,
-    pub my_region: String,
-    /// Effective region table after overlay merge (fail-to-base on absent/wrong-type).
-    pub regions: Vec<RegionDef>,
-    /// Name of the RegionRouteOverride EdgionConfigData applied, if any.
-    pub override_ref: Option<String>,
-    /// True if an overlay was found and applied.
-    pub override_applied: bool,
-}
-
-/// Resolve effective region routes from a set of EdgionPlugins.
-/// `lookup(namespace, name)` returns the RegionRouteOverride overlay if it exists
-/// and is of the right type; otherwise None (=> fail-to-base).
-pub fn resolve_region_effective(
-    plugins: &[EdgionPlugins],
-    lookup: &dyn Fn(&str, &str) -> Option<RegionRouteOverride>,
-) -> Vec<EffectiveRegionRoute> {
-    let mut out = Vec::new();
-    for ep in plugins {
-        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
-        let plugin_name = ep.metadata.name.clone().unwrap_or_default();
-        for entry in ep.spec.request_plugins.iter().flatten() {
-            if !entry.enable {
-                continue;
-            }
-            if let EdgionPlugin::RegionRoute(ref config) = entry.plugin {
-                let alias = entry.alias.clone();
-                let mut regions = config.regions.clone();
-                let mut override_ref_name = None;
-                let mut applied = false;
-                if let Some(ref oref) = config.override_ref {
-                    let oref_ns = oref.namespace.as_deref().unwrap_or(ns);
-                    override_ref_name = Some(oref.name.clone());
-                    if let Some(overlay) = lookup(oref_ns, &oref.name) {
-                        regions = merge_region_route_override(regions, &overlay);
-                        applied = true;
-                    }
-                }
-                out.push(EffectiveRegionRoute {
-                    namespace: ns.to_string(),
-                    plugin_name: plugin_name.clone(),
-                    alias,
-                    my_region: config.my_region.clone(),
-                    regions,
-                    override_ref: override_ref_name,
-                    override_applied: applied,
-                });
-            }
-        }
-    }
-    out
-}
 
 /// One resolved GlobalConnectionIpRestriction plugin instance, after Selector resolution.
 #[derive(Debug, Clone, Serialize)]
@@ -146,32 +82,6 @@ pub fn resolve_gir_effective(
     out
 }
 
-/// GET /api/v1/region-routes/effective
-///
-/// Returns the merged effective region routes by combining each `EdgionPlugins`
-/// resource's base config with its `RegionRouteOverride` EdgionConfigData overlay
-/// (fail-to-base on missing or wrong-type overlay).
-pub async fn region_routes_effective(
-    State(state): State<Arc<AdminState>>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    let (items, _) = state.center_list_resources(ResourceKind::EdgionPlugins, None).await?;
-    let plugins: Vec<EdgionPlugins> = items
-        .into_iter()
-        .filter_map(|v| serde_json::from_value(v).ok())
-        .collect();
-    let rt = state.runtime();
-    let lookup = |ns: &str, name: &str| -> Option<RegionRouteOverride> {
-        rt.edgion_config_data_store
-            .get(Some(ns), name)
-            .and_then(|cd| match cd.spec.data {
-                ConfigEntry::RegionRouteOverride(ov) => Some(ov),
-                _ => None,
-            })
-    };
-    let effective = resolve_region_effective(&plugins, &lookup);
-    Ok(Json(serde_json::json!({ "success": true, "data": effective })))
-}
-
 /// GET /api/v1/global-ip-restrictions/effective
 ///
 /// Returns the effective GlobalConnectionIpRestriction view by combining each
@@ -203,80 +113,6 @@ pub async fn global_ip_restrictions_effective(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
-    use edgion_resources::resources::edgion_plugins::{EdgionPluginsSpec, RegionRouteConfig, RequestFilterEntry};
-
-    fn region_def(name: &str) -> RegionDef {
-        RegionDef {
-            name: name.to_string(),
-            hash_range: [0, 100],
-            backend_endpoint: format!("{name}.svc:8080"),
-            tls: false,
-            failover_to: None,
-        }
-    }
-
-    fn ep_with_region(name: &str, override_name: Option<&str>) -> EdgionPlugins {
-        let mut ep = EdgionPlugins::new(name, EdgionPluginsSpec::default());
-        ep.metadata.namespace = Some("default".to_string());
-        let config = RegionRouteConfig {
-            my_region: "east".to_string(),
-            regions: vec![region_def("east"), region_def("west")],
-            override_ref: override_name.map(|n| EdgionConfigDataRef {
-                name: n.to_string(),
-                namespace: None,
-            }),
-            ..Default::default()
-        };
-        ep.spec.request_plugins = Some(vec![RequestFilterEntry {
-            enable: true,
-            conditions: None,
-            alias: Some("rr1".to_string()),
-            plugin: EdgionPlugin::RegionRoute(config),
-        }]);
-        ep
-    }
-
-    #[test]
-    fn no_override_yields_base() {
-        let eps = vec![ep_with_region("a", None)];
-        let result = resolve_region_effective(&eps, &|_, _| None);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].regions.len(), 2);
-        assert!(!result[0].override_applied);
-        assert_eq!(result[0].alias.as_deref(), Some("rr1"));
-    }
-
-    #[test]
-    fn override_whole_replaces_regions() {
-        let eps = vec![ep_with_region("a", Some("ov"))];
-        let overlay = RegionRouteOverride {
-            enable: None,
-            active: None,
-            regions: Some(vec![region_def("north")]),
-        };
-        let result = resolve_region_effective(&eps, &|_, name| {
-            if name == "ov" {
-                Some(overlay.clone())
-            } else {
-                None
-            }
-        });
-        assert!(result[0].override_applied);
-        assert_eq!(result[0].regions.len(), 1);
-        assert_eq!(result[0].regions[0].name, "north");
-    }
-
-    #[test]
-    fn missing_override_falls_back_to_base() {
-        let eps = vec![ep_with_region("a", Some("ghost"))];
-        let result = resolve_region_effective(&eps, &|_, _| None);
-        assert!(!result[0].override_applied);
-        assert_eq!(result[0].regions.len(), 2);
-        assert_eq!(result[0].override_ref.as_deref(), Some("ghost"));
-    }
-
-    // --- GIR tests ---
 
     use edgion_resources::resources::edgion_stream_plugins::{
         DefaultAction, EdgionStreamPluginsSpec, GlobalConnectionIpRestrictionConfig, ProfileRules as PR,
