@@ -15,13 +15,60 @@ use edgion_resources::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+
+/// Operator-defined log labels, resolved once per resource and shared by
+/// reference across `Rsc` clones (so the per-request path never re-allocates).
+///
+/// Serializes as a flat JSON object, e.g. `{"env":"prod","tenant":"internal"}`.
+/// Backed by a `BTreeMap` so the output ordering is deterministic across reloads
+/// and route-table rebuilds. The resolution logic and guardrails live in
+/// `edgion_resources::resources::common::resolve_log_labels` (the single source
+/// of truth, applied at resource-parse time); this newtype only wraps the
+/// resolved map for the data-plane log path.
+#[derive(Debug, Clone)]
+pub struct LogLabels(Arc<BTreeMap<String, String>>);
+
+impl LogLabels {
+    /// Wrap a map resolved at parse time (e.g. a `pre_parse` cache field) into a
+    /// `LogLabels`. Cheap: shares the `Arc`, performs no scanning.
+    pub fn from_resolved(map: Arc<BTreeMap<String, String>>) -> Self {
+        LogLabels(map)
+    }
+}
+
+impl Serialize for LogLabels {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        // Delegate to the inner map; serde's `rc` feature is not enabled, so the
+        // `Arc` wrapper must be unwrapped manually here.
+        self.0.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for LogLabels {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let map = BTreeMap::<String, String>::deserialize(deserializer)?;
+        Ok(LogLabels(Arc::new(map)))
+    }
+}
+
+/// Resolve operator-defined log labels from a resource's `metadata`.
+///
+/// Thin gateway-side wrapper over
+/// [`edgion_resources::resources::common::resolve_log_labels`] (the single
+/// implementation of the prefix scan + guardrails). Call this at route
+/// conf-handler build time (HTTP/gRPC/TLSRoute); resources that cache the
+/// resolved map in `pre_parse` (e.g. EdgionTls) should instead wrap the cached
+/// `Arc` via [`LogLabels::from_resolved`] to avoid re-scanning.
+pub fn extract_log_labels(meta: &kube::api::ObjectMeta) -> Option<LogLabels> {
+    edgion_resources::resources::common::resolve_log_labels(meta).map(LogLabels)
+}
 
 /// Unified resource identifier for access log.
 /// Provides consistent `kind`/`ns`/`name` across all resource types.
@@ -30,6 +77,30 @@ pub struct Rsc {
     pub kind: String,
     pub ns: String,
     pub name: String,
+
+    /// Operator-defined log labels for this resource (see [`extract_log_labels`]).
+    /// Omitted from the serialized log entry when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub labels: Option<LogLabels>,
+}
+
+impl Rsc {
+    /// Build a resource identifier with no labels (the common case for backend /
+    /// internally-derived resources that carry no operator log labels).
+    pub fn new(kind: impl Into<String>, ns: impl Into<String>, name: impl Into<String>) -> Self {
+        Self {
+            kind: kind.into(),
+            ns: ns.into(),
+            name: name.into(),
+            labels: None,
+        }
+    }
+
+    /// Attach resolved operator log labels, consuming and returning `self`.
+    pub fn with_labels(mut self, labels: Option<LogLabels>) -> Self {
+        self.labels = labels;
+        self
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -56,12 +127,21 @@ pub fn is_zero(v: &u64) -> bool {
 }
 
 impl MatchInfo {
-    pub fn new(ns: String, name: String, rule_id: usize, match_id: usize, m: HTTPRouteMatch, sv: u64) -> Self {
+    pub fn new(
+        ns: String,
+        name: String,
+        rule_id: usize,
+        match_id: usize,
+        m: HTTPRouteMatch,
+        sv: u64,
+        labels: Option<LogLabels>,
+    ) -> Self {
         Self {
             rsc: Rsc {
                 kind: "HTTPRoute".to_string(),
                 ns,
                 name,
+                labels,
             },
             m,
             rule_id,
@@ -1257,6 +1337,68 @@ fn compose_uri(path: &str, query: Option<&str>) -> String {
     match query {
         Some(q) if !q.is_empty() => format!("{}?{}", path, q),
         _ => path.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod log_label_tests {
+    use super::*;
+    use edgion_resources::constants::annotations::edgion::LOG_LABEL_PREFIX;
+    use kube::api::ObjectMeta;
+
+    fn json_of(labels: &Option<LogLabels>) -> String {
+        let rsc = Rsc::new("HTTPRoute", "ns", "name").with_labels(labels.clone());
+        serde_json::to_string(&rsc).unwrap()
+    }
+
+    // Resolution semantics (prefix strip, precedence, guardrails, cap) are
+    // covered by `edgion_resources::resources::common::log_labels`. These tests
+    // pin the gateway-side serialization shape and the delegating wrapper.
+
+    #[test]
+    fn extract_serializes_sorted_object_with_prefix_stripped() {
+        let meta = ObjectMeta {
+            annotations: Some(
+                [(format!("{LOG_LABEL_PREFIX}tenant"), "internal".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            labels: Some(
+                [(format!("{LOG_LABEL_PREFIX}env"), "prod".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            ..Default::default()
+        };
+        let out = extract_log_labels(&meta).expect("labels");
+        assert_eq!(
+            json_of(&Some(out)),
+            r#"{"kind":"HTTPRoute","ns":"ns","name":"name","labels":{"env":"prod","tenant":"internal"}}"#
+        );
+    }
+
+    #[test]
+    fn extract_returns_none_without_prefixed_entries() {
+        let meta = ObjectMeta {
+            annotations: Some([("unrelated".to_string(), "x".to_string())].into_iter().collect()),
+            ..Default::default()
+        };
+        assert!(extract_log_labels(&meta).is_none());
+    }
+
+    #[test]
+    fn from_resolved_wraps_cached_arc_without_rescanning() {
+        let map = Arc::new([("env".to_string(), "prod".to_string())].into_iter().collect());
+        let out = LogLabels::from_resolved(Arc::clone(&map));
+        assert_eq!(
+            json_of(&Some(out)),
+            r#"{"kind":"HTTPRoute","ns":"ns","name":"name","labels":{"env":"prod"}}"#
+        );
+    }
+
+    #[test]
+    fn labels_field_omitted_when_absent() {
+        assert_eq!(json_of(&None), r#"{"kind":"HTTPRoute","ns":"ns","name":"name"}"#);
     }
 }
 

@@ -74,6 +74,7 @@ mod tests {
                 ciphers: None,
                 secret,
                 resolved_listeners: None,
+                resolved_log_labels: None,
             },
             status: None,
         }

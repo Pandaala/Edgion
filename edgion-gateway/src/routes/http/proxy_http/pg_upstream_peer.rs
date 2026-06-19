@@ -864,11 +864,7 @@ fn init_backend_context_if_needed(ctx: &mut EdgionHttpContext) -> pingora_core::
     };
 
     let service_key = format!("{}/{}", namespace, name);
-    let rsc = crate::Rsc {
-        kind: "Service".to_string(),
-        ns: namespace,
-        name,
-    };
+    let rsc = crate::Rsc::new("Service", namespace, name);
     let service_kind = EdgionService::from_kind(kind_str.as_ref());
     ctx.init_backend_context(rsc, service_key, service_kind, backend_ref_idx);
     Ok(())

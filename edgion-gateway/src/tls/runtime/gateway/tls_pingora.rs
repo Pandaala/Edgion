@@ -537,11 +537,20 @@ impl TlsCallback {
     fn apply_edgion_tls_cert(&self, ssl: &mut SslRef, edgion_tls: &Arc<EdgionTls>, ssl_ctx: &mut SslCtx) {
         let ns = edgion_tls.metadata.namespace.as_deref().unwrap_or("-");
         let name = edgion_tls.metadata.name.as_deref().unwrap_or("-");
+        // Read the operator log labels resolved once at `pre_parse` (ingest time)
+        // and cached on the spec, so the handshake callback only Arc-clones — no
+        // metadata scan on the per-connection path.
+        let labels = edgion_tls
+            .spec
+            .resolved_log_labels
+            .clone()
+            .map(crate::LogLabels::from_resolved);
         ssl_ctx.meta.matched = Some(MatchedInfo {
             rsc: Rsc {
                 kind: "EdgionTls".to_string(),
                 ns: ns.to_string(),
                 name: name.to_string(),
+                labels,
             },
             section: None,
             sv: edgion_tls.get_sync_version(),
@@ -668,6 +677,9 @@ impl TlsCallback {
                 kind: "Gateway".to_string(),
                 ns: gateway_tls.gateway_namespace.clone(),
                 name: gateway_tls.gateway_name.clone(),
+                // GatewayTlsEntry is a derived listener struct without the full
+                // Gateway metadata, so no operator log labels are available here.
+                labels: None,
             },
             section: Some(gateway_tls.listener_name.clone()),
             sv: 0,

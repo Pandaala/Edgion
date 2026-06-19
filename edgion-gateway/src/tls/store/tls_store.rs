@@ -498,6 +498,7 @@ mod tests {
                 ciphers: None,
                 secret: None,
                 resolved_listeners: None,
+                resolved_log_labels: None,
             },
             status: None,
         })
@@ -554,6 +555,7 @@ mod tests {
                     ..Default::default()
                 }),
                 resolved_listeners: Some(vec![listener_key]),
+                resolved_log_labels: None,
             },
             status: None,
         }
@@ -599,6 +601,7 @@ mod tests {
                     ..Default::default()
                 }),
                 resolved_listeners: Some(vec![listener_key]),
+                resolved_log_labels: None,
             },
             status: None,
         }

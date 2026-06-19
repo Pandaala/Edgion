@@ -32,6 +32,10 @@ pub struct TlsRouteUnit {
     pub max_connect_retries: u32,
     /// Resolved upstream TCP keepalive config (from route annotations).
     pub tcp_keepalive: Option<TcpKeepaliveConfig>,
+    /// Operator log labels resolved once from the route metadata (annotations /
+    /// labels) at build time, attached to `rsc.labels` in the TLS access log.
+    /// Resolving here keeps the per-connection match path off the metadata scan.
+    pub log_labels: Option<crate::LogLabels>,
 }
 
 impl TlsRouteUnit {
@@ -71,6 +75,7 @@ impl TlsRouteUnit {
         }
 
         let tcp_keepalive = resolve_tcp_keepalive(annotations, &route_key);
+        let log_labels = crate::extract_log_labels(&route.metadata);
         let backend_finder = build_backend_selector(&route);
 
         TlsRouteUnit {
@@ -80,6 +85,7 @@ impl TlsRouteUnit {
             proxy_protocol_version,
             max_connect_retries,
             tcp_keepalive,
+            log_labels,
         }
     }
 

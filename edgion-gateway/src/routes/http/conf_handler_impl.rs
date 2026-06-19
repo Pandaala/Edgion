@@ -30,6 +30,9 @@ struct ValidatedHttpRoute<'a> {
     rules: &'a Vec<edgion_resources::HTTPRouteRule>,
     namespace: String,
     name: String,
+    /// Operator-defined log labels, resolved once per route at build time and
+    /// shared (Arc) into every match-item unit's `MatchInfo`.
+    labels: Option<crate::LogLabels>,
 }
 
 /// Sentinel hostname used when an HTTPRoute has no spec.hostnames.
@@ -226,6 +229,9 @@ struct RouteUnitCtx<'a> {
     backend_finder: Arc<BackendSelector<CompiledBackend>>,
     /// Per-rule compiled backends (Arc-shared), for by-name lookup.
     backends: Arc<Vec<CompiledBackend>>,
+    /// Operator-defined log labels, resolved once per route, Arc-shared into
+    /// each match-item unit's `MatchInfo`.
+    labels: Option<crate::LogLabels>,
 }
 
 fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, String> {
@@ -261,6 +267,7 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
             ctx.match_id,
             ctx.match_item.clone(),
             ctx.route_sv,
+            ctx.labels.clone(),
         ),
         rule: ctx.rule.clone(),
         path_regex: Some(regex),
@@ -302,6 +309,7 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
             ctx.match_id,
             ctx.match_item.clone(),
             ctx.route_sv,
+            ctx.labels.clone(),
         ),
         rule: ctx.rule.clone(),
         path_regex: None,
@@ -393,6 +401,7 @@ fn append_route_to_hostname(
                     plugin_runtime: rule_rt.plugin_runtime.clone(),
                     backend_finder: backend_finder.clone(),
                     backends: rule_rt.backends.clone(),
+                    labels: validated.labels.clone(),
                 },
             );
         }
@@ -502,10 +511,13 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
         }
     };
 
+    let labels = crate::extract_log_labels(&route.metadata);
+
     Some(ValidatedHttpRoute {
         rules,
         namespace: route_namespace,
         name: route_name,
+        labels,
     })
 }
 

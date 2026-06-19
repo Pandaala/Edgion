@@ -1662,6 +1662,7 @@ mod edgion_tls_scrub_tests {
                 ciphers: None,
                 secret: Some(tls_secret(b"LEAF-PRIVATE-KEY")),
                 resolved_listeners: None,
+                resolved_log_labels: None,
             },
             status: None,
         }

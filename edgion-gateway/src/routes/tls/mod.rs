@@ -134,11 +134,7 @@ pub(super) async fn run_tls_route_plugins(
                 .matched
                 .as_ref()
                 .map(|m| m.rsc.clone())
-                .unwrap_or_else(|| crate::Rsc {
-                    kind: "TLSRoute".to_string(),
-                    ns: String::new(),
-                    name: String::new(),
-                }),
+                .unwrap_or_else(|| crate::Rsc::new("TLSRoute", "", "")),
             is_mtls,
             log: crate::observe::logs::LogBuffer::new(),
         };

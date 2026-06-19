@@ -128,6 +128,7 @@ pub struct GrpcMatchInfo {
 }
 
 impl GrpcMatchInfo {
+    #[allow(clippy::too_many_arguments)] // mirrors the resource fields needed to build a gRPC match unit
     pub fn new(
         route_ns: String,
         route_name: String,
@@ -136,6 +137,7 @@ impl GrpcMatchInfo {
         matched: GRPCRouteMatch,
         sv: u64,
         rule_name: Option<String>,
+        labels: Option<crate::LogLabels>,
     ) -> Self {
         // Pre-compile regex patterns for header matching
         let compiled_header_regexes = if let Some(ref headers) = matched.headers {
@@ -205,6 +207,7 @@ impl GrpcMatchInfo {
                 kind: "GRPCRoute".to_string(),
                 ns: route_ns,
                 name: route_name,
+                labels,
             },
             rule_id,
             rule_name,

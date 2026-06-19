@@ -44,9 +44,10 @@ pub mod tls;
 pub mod util;
 
 pub use ctx::{
-    BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset, InternalJumpPreset,
-    MatchInfo, MatchedInfo, MirrorConfig, MirrorState, PeerTimeoutSource, PendingHeaderOp, RequestInfo, Rsc,
-    SessionPersistenceState, SetJumpOutcome, TlsConnId, TlsConnMeta, UpstreamInfo, UpstreamJumpTarget,
+    extract_log_labels, BackendContext, BackendTlsInfo, DirectEndpointPreset, EdgionHttpContext, ExternalJumpPreset,
+    InternalJumpPreset, LogLabels, MatchInfo, MatchedInfo, MirrorConfig, MirrorState, PeerTimeoutSource,
+    PendingHeaderOp, RequestInfo, Rsc, SessionPersistenceState, SetJumpOutcome, TlsConnId, TlsConnMeta, UpstreamInfo,
+    UpstreamJumpTarget,
 };
 
 pub use cli::EdgionGatewayCli;

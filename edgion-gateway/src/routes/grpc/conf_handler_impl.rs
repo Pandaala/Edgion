@@ -131,6 +131,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
     let attached_gateways = gateways_from_parent_refs(&accepted_refs, route_namespace);
 
     let route_sv = route.get_sync_version();
+    let route_labels = crate::extract_log_labels(&route.metadata);
     let creation_ts_ms = route
         .metadata
         .creation_timestamp
@@ -194,6 +195,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                         },
                         route_sv,
                         rule.name.clone(),
+                        route_labels.clone(),
                     ),
                     rule: rule_arc.clone(),
                     route_info: route_info.clone(),
@@ -227,6 +229,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                             match_item.clone(),
                             route_sv,
                             rule.name.clone(),
+                            route_labels.clone(),
                         ),
                         rule: rule_arc.clone(),
                         route_info: route_info.clone(),
