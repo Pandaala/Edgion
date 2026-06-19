@@ -121,14 +121,11 @@ pub struct HttpRouteRuleUnit {
     pub has_query_matchers: bool,
     /// Pre-computed match specificity for Gateway API precedence ordering.
     pub specificity: MatchSpecificity,
-    /// Pre-resolved Counter/Histogram handles for the request-end metric
-    /// path. The hot path indexes by
-    /// `lookup(gw_ns, gw_name).counters[backend_ref_idx][ps_index(...)]`.
-    /// Invariants: `BackendRequestsLabels` / `RequestDurationConfig.labels`
-    /// are read once at build time (init-once globals — see
-    /// `docs/superpowers/specs/2026-06-10-observe-f002-route-unit-metric-handles-design.md`
-    /// §6); `backend_refs` is never mutated in place, so indices stay valid
-    /// for the lifetime of this `Arc<HttpRouteRuleUnit>`.
+    /// Pre-resolved Counter/Histogram handles for the request-end metric path.
+    /// The hot path indexes by `lookup(gw_ns, gw_name).counters[backend_ref_idx][ps_index(...)]`.
+    /// Invariants: label configs are read once at build time (init-once globals);
+    /// `backend_refs` is never mutated in place, so indices stay valid for the
+    /// lifetime of this `Arc<HttpRouteRuleUnit>`.
     pub metric_handles: Arc<crate::observe::metrics::route_handles::RouteMetricHandles>,
     /// Compiled rule-level plugin chain (built from `rule.filters`). Lives here,
     /// not on the `HTTPRouteRule` schema (two-type split).
@@ -141,8 +138,7 @@ pub struct HttpRouteRuleUnit {
     pub backend_finder: Arc<BackendSelector<CompiledBackend>>,
 }
 
-/// Per-rule compiled runtime, built ONCE per rule (mirroring today's `preparse`,
-/// which builds `rule.plugin_runtime` once per rule). The `Arc<PluginRuntime>` and
+/// Per-rule compiled runtime, built ONCE per rule. The `Arc<PluginRuntime>` and
 /// the per-backend `plugin_runtime`s MUST be shared across all of a rule's
 /// match-item units — some plugins (in-memory RateLimit) own per-rule mutable
 /// state, so a fresh runtime per match-item would split that state. See
@@ -161,8 +157,7 @@ impl HttpRouteRuleUnit {
     /// the rule/backend `filters`. Call once per rule (above the hostname/match
     /// fan-out) and share the resulting `Arc`s into every unit — some plugins
     /// (in-memory RateLimit) own per-rule state, so the runtime must NOT be rebuilt
-    /// per match-item/hostname. Replaces the runtime-building that used to live in
-    /// `HTTPRoute::preparse()`.
+    /// per match-item/hostname.
     pub fn compile_http_rule(rule: &HTTPRouteRule, namespace: &str) -> HttpRuleRuntime {
         let plugin_runtime = Arc::new(match &rule.filters {
             Some(filters) => PluginRuntime::from_httproute_filters_for_rule(filters, namespace),
@@ -189,9 +184,7 @@ impl HttpRouteRuleUnit {
     }
 
     /// Build a per-(rule,hostname) LB selector over a rule's compiled backends.
-    /// Mirrors today's per-hostname `backend_finder` (each `rule.clone()` per
-    /// hostname gets a fresh selector). The compiled backends are Arc-shared, so
-    /// only the WRR cursor is per-hostname.
+    /// Compiled backends are Arc-shared; only the WRR cursor is per-hostname.
     pub fn build_backend_selector(backends: &[CompiledBackend]) -> Arc<BackendSelector<CompiledBackend>> {
         let selector = BackendSelector::new();
         if !backends.is_empty() {
@@ -250,7 +243,6 @@ impl HttpRouteRuleUnit {
         (header_regexes, query_regexes)
     }
 
-    /// Check if this is a regex route
     pub fn is_regex_route(&self) -> bool {
         self.path_regex.is_some()
     }
@@ -291,7 +283,6 @@ impl HttpRouteRuleUnit {
         )
     }
 
-    /// Get route identifier
     pub fn identifier(&self) -> String {
         format!("{}/{}", self.matched_info.rsc.ns, self.matched_info.rsc.name)
     }
@@ -414,8 +405,7 @@ impl HttpRouteRuleUnit {
         Ok(Some(matched_gi))
     }
 
-    /// Extract all path patterns from this route with their match types
-    /// Returns Vec<(path, is_prefix)>
+    /// Extract all path patterns from this route with their match types.
     pub fn extract_paths(&self) -> Vec<(String, bool)> {
         let mut paths = Vec::new();
 

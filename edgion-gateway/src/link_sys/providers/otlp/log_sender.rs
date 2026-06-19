@@ -29,7 +29,7 @@ fn parse_otlp_host_port(endpoint: &str) -> Option<(String, u16)> {
     Some((host, port))
 }
 
-/// Connection-level liveness probe for OTLP (task 05).
+/// Connection-level liveness probe for OTLP.
 ///
 /// CONNECTION-LEVEL ONLY: `emit()` is fire-and-forget, so the SDK exposes no
 /// export result. A successful TCP connect proves the port is open, NOT that TLS
@@ -72,10 +72,9 @@ impl OtlpLogSender {
     /// be unreachable. Capture this `Arc` at registration time instead and hand
     /// it to the background probe.
     ///
-    /// A background probe (task 05) drives this flag via TCP connect to the
-    /// endpoint. Connection-level only: a successful connect does NOT prove TLS
-    /// or OTLP export works, and the probe task is process-lifetime (see
-    /// `probe_shutdown`).
+    /// A background probe drives this flag via TCP connect to the endpoint.
+    /// Connection-level only: a successful connect does NOT prove TLS or OTLP
+    /// export works. See `probe_shutdown` for task lifetime.
     pub fn health_handle(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.healthy)
     }
@@ -139,7 +138,7 @@ impl DataSender<String> for OtlpLogSender {
         // Baseline health gauge so the series appears even when healthy from startup.
         crate::observe::metrics::registry::record_link_sys_health(&self.config.endpoint, true);
 
-        // Background connection-level health probe (task 05).
+        // Background connection-level health probe.
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let endpoint = self.config.endpoint.clone();
         // drop() makes the intent explicit: the JoinHandle detaches (Tokio does NOT

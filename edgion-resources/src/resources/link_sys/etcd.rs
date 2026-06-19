@@ -60,8 +60,7 @@ pub struct EtcdClientConfig {
 
 /// Etcd authentication configuration.
 ///
-/// All credentials MUST be stored in a Kubernetes Secret and referenced via `secretRef`.
-/// Inline username/password fields have been removed (breaking change).
+/// Credentials must be stored in a Kubernetes Secret and referenced via `secretRef`.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EtcdAuth {

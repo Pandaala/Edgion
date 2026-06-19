@@ -26,7 +26,7 @@ pub struct TlsRouteTable {
     host_map: HashHost<Vec<Arc<TlsRouteUnit>>>,
 
     /// Routes with no hostname specified.
-    /// Reserved for future use; not populated in phase 1.
+    /// Reserved for future use; not currently populated.
     catch_all_routes: Option<Vec<Arc<TlsRouteUnit>>>,
 }
 

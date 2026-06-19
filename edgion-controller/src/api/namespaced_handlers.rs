@@ -544,7 +544,7 @@ pub async fn delete_namespaced(
     let is_k8s = state.is_k8s_mode();
     let writer = state.conf_center();
 
-    // Delete from backend - delete_one will return NotFound if resource doesn't exist
+    // delete_one returns NotFound if the resource does not exist.
     writer
         .delete_one(kind.as_str(), Some(&ns), &name)
         .await

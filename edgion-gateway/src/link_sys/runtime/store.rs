@@ -435,11 +435,9 @@ fn preserve_if_not_ready<C>(
 /// **Key invariant**: reading `old` (`runtime.get(key)`) is read-only;
 /// afterwards `runtime.insert` performs a single atomic `ArcSwap` swap of the
 /// new map (where that key already points to the new client). This way
-/// `get_*_client(key)` always sees
-/// either the old or the new client -- **there is never a window where it
-/// is None**. If we instead did `remove` followed by `insert`, the
-/// intermediate store would temporarily drop the key -- exactly the
-/// invariant that the pre-refactor code explicitly avoided.
+/// `get_*_client(key)` always sees either the old or the new client —
+/// **there is never a window where it is None**. If we instead did `remove`
+/// followed by `insert`, the intermediate store would temporarily drop the key.
 fn spawn_and_swap_partial<C, F>(key: &str, label: &'static str, build: F, runtime: &ProviderRuntimeStore<C>)
 where
     C: LinkSysLifecycle,
@@ -568,7 +566,7 @@ fn swap_and_shutdown_olds<C: LinkSysLifecycle>(
 /// Dispatch a full set of LinkSys resources to sub-module managers.
 async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
     // Snapshot current runtime maps so that we can carry over clients for
-    // resources whose credentials are not yet resolved (I5).
+    // resources whose credentials are not yet resolved.
     let old_webhook_snapshot = WEBHOOK_RUNTIME.load_full();
     let old_redis_snapshot = REDIS_RUNTIME.load_full();
     let old_etcd_snapshot = ETCD_RUNTIME.load_full();
@@ -925,7 +923,7 @@ mod tests {
     }
 
     // ============================================================
-    // I5: credential-readiness-gated dispatch
+    // Credential-readiness-gated dispatch tests
     //
     // These tests mutate the process-global REDIS_RUNTIME. A full-set test
     // running concurrently with a partial-update test would wipe the map the
@@ -1012,8 +1010,8 @@ mod tests {
         }
     }
 
-    /// I5 regression: full-set dispatch must not build a client for a LinkSys
-    /// whose credential Secret has not been injected yet.
+    /// Full-set dispatch must not build a client for a LinkSys whose credential
+    /// Secret has not been injected yet.
     #[tokio::test]
     async fn dispatch_full_set_skips_build_when_credential_not_ready() {
         let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1030,10 +1028,9 @@ mod tests {
         );
     }
 
-    /// I5 regression: when a previously-built client exists and a subsequent
-    /// full-set carries the same resource with pending credentials (Secret
-    /// temporarily gone), the existing client is preserved rather than torn
-    /// down — Option A in I5.
+    /// When a previously-built client exists and a subsequent full-set carries
+    /// the same resource with pending credentials (Secret temporarily gone),
+    /// the existing client is preserved rather than torn down.
     #[tokio::test]
     async fn dispatch_full_set_preserves_existing_client_on_pending_update() {
         let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1062,8 +1059,8 @@ mod tests {
         let _ = REDIS_RUNTIME.remove(&key);
     }
 
-    /// I5 regression: partial-update dispatch must not build a client on an
-    /// add with pending credentials.
+    /// Partial-update dispatch must not build a client on an add with pending
+    /// credentials.
     #[tokio::test]
     async fn dispatch_partial_update_skips_build_when_credential_not_ready() {
         let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1080,8 +1077,8 @@ mod tests {
         );
     }
 
-    /// I5 regression: partial-update on an existing key that turns pending
-    /// preserves the old client (Option A).
+    /// Partial-update on an existing key that turns pending preserves the old
+    /// client.
     #[tokio::test]
     async fn dispatch_partial_update_preserves_existing_client_on_pending_update() {
         let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1109,11 +1106,10 @@ mod tests {
         let _ = REDIS_RUNTIME.remove(&key);
     }
 
-    /// M4 regression (dispatch side): an `Invalid` credential state must also
-    /// block client builds, symmetric to the `Pending` case. `Pending` and
-    /// `Invalid` share the same `is_buildable() == false` arm, but keeping a
-    /// separate test here defends against any future refactor that
-    /// accidentally treats them differently at the dispatch layer.
+    /// An `Invalid` credential state must also block client builds, symmetric
+    /// to the `Pending` case. Both share `is_buildable() == false`, but a
+    /// separate test defends against a future refactor that accidentally treats
+    /// them differently at the dispatch layer.
     #[tokio::test]
     async fn dispatch_full_set_skips_build_when_credential_invalid() {
         let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1130,8 +1126,8 @@ mod tests {
         );
     }
 
-    /// M4 regression (dispatch side): partial-update add with `Invalid` state
-    /// must also be filtered out.
+    /// Partial-update add with `Invalid` credential state must also be filtered
+    /// out.
     #[tokio::test]
     async fn dispatch_partial_update_skips_build_when_credential_invalid() {
         let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1153,10 +1149,10 @@ mod tests {
         use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
         use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
-        // Share a global lock with other tests that call dispatch_* directly
-        // (I5/M4 series) to serialize. Without holding the lock, their
-        // `dispatch_full_set` calls would wipe the key inserted by this test
-        // via an empty new_webhook_map through `WEBHOOK_RUNTIME.replace_all`.
+        // Share a global lock with other dispatch tests to serialize. Without
+        // holding the lock, their `dispatch_full_set` calls would wipe the key
+        // inserted by this test via an empty new_webhook_map through
+        // `WEBHOOK_RUNTIME.replace_all`.
         let _guard = I5_DISPATCH_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         // Use a unique key to also avoid interference with other tests' add/remove paths.

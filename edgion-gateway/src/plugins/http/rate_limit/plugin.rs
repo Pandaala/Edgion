@@ -48,8 +48,7 @@ use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::RateLimitConfig;
 
-// CMS estimator configuration
-// HASHES is fixed at 4 (4 hash functions for CMS)
+// Fixed at 4 hash functions for the CMS estimator.
 const CMS_HASHES: usize = 4;
 
 // ========== RateLimit Plugin ==========
@@ -113,7 +112,6 @@ impl RateLimit {
             .map(|d| d.as_secs() + reset_after.as_secs())
             .unwrap_or(0);
 
-        // Ensure remaining is not negative
         let remaining = remaining.max(0) as u64;
 
         if let Some(headers) = self.config.get_header_names() {
@@ -153,8 +151,7 @@ impl RateLimit {
         // RFC 7231 §7.1.3: Retry-After is a delta-seconds integer; "0" tells
         // RFC-compliant clients to retry immediately and risks a hot-loop under
         // pressure. Omit the header for Duration::ZERO (OnMissingKey::Deny path)
-        // and ceil any positive sub-second value to 1. Mirrors the sibling
-        // rate_limit_redis guard (g4-005).
+        // and ceil any positive sub-second value to 1.
         if !retry_after.is_zero() {
             let secs = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
             resp.insert_header("Retry-After", secs.to_string()).ok();
@@ -236,26 +233,21 @@ impl RequestFilter for RateLimit {
         let interval = self.config.get_interval_duration();
         let rate_limit = self.config.get_effective_rate();
 
-        // Get the Rate instance (lazily initialized on first access)
         let rate = self.get_rate();
 
-        // Record the request and get current window count
-        // The limit_key is passed to Rate.observe() for per-key counting within the CMS
+        // The limit_key is passed to Rate.observe() for per-key counting within the CMS.
         let curr_count = rate.observe(&limit_key, 1);
 
-        // Calculate remaining quota
         let remaining = rate_limit - curr_count;
 
         let kl = limit_key.len();
 
-        // Check if rate limit exceeded
         if curr_count > rate_limit {
             plugin_log.push_fmt("Deny rate limit kl={}", la![kl.to_string().as_str()]);
-            // Use interval as retry_after since the window will reset after interval
+            // Use interval as retry_after since the window resets after interval.
             return self.reject_request(session, interval).await;
         }
 
-        // Add rate limit headers
         self.add_headers(session, remaining, interval);
         plugin_log.push_fmt(
             "Allow kl={} r={}",

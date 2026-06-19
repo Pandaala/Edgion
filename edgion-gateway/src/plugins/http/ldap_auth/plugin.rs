@@ -142,10 +142,9 @@ impl LdapAuth {
     }
 
     fn build_bind_dn(&self, username: &str) -> Result<String, &'static str> {
-        // Escape per RFC 4514 (DN attribute value) instead of rejecting characters.
-        // The previous allowlist was safer than required for injection prevention but
-        // broke legitimate enterprise LDAP usernames (spaces in AD sAMAccountName,
-        // unicode CN values, '+' in gmail-style aliases, etc.).
+        // Escape per RFC 4514 (DN attribute value): handles injection-relevant
+        // metacharacters while accepting legitimate enterprise LDAP usernames
+        // (spaces in AD sAMAccountName, unicode CN values, aliases with '+', etc.).
         if username.is_empty() {
             return Err("empty username");
         }

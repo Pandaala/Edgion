@@ -39,8 +39,7 @@ pub struct ConditionEvalResult<'a> {
 // `PluginLog`, `EvaluationResult`), so the evaluation methods cannot be inherent
 // impls on the foreign types — the orphan rule forbids it across the crate
 // boundary. They are provided here as gateway-local extension traits instead;
-// call sites get the methods by importing the trait. Behavior is byte-identical
-// to the previous inherent impls.
+// call sites get the methods by importing the trait.
 
 #[allow(async_fn_in_trait)]
 pub(crate) trait PluginConditionsExt {

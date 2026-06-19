@@ -11,18 +11,14 @@ use std::sync::Arc;
 
 /// Lazily hydrate `cell` from the EndpointSlice data layer when it is empty.
 ///
-/// The control plane only pushes backends into a cell via
-/// `update_affected_lbs` / `update_all_existing_lbs`, both of which iterate
-/// `service_lbs` (legacy LB cache), not the data layer. Under the lazy-LB
-/// design that legacy cache is empty until a request triggers
-/// `get_or_create_with_provider`, so on a cold cell the very first
-/// pre-request push never happens — the cell would stay empty forever and
-/// every selection returns `not_found`.
+/// `update_affected_lbs` / `update_all_existing_lbs` populate cells reactively
+/// as EP updates arrive, but a freshly created cell (from `get_or_create_cell`
+/// on first access) is empty until one of those updates fires for its service
+/// key. Without this fallback, a request that arrives before the first EP push
+/// for a service would always return `not_found`.
 ///
-/// We mirror the legacy `get_backends_for_service_key` path: read whatever
-/// the EndpointSlice store currently has and seed the cell with it.
-/// Subsequent partial updates run through `replace_backends` and stay
-/// authoritative.
+/// Reads the current EndpointSlice store and seeds the cell. Subsequent EP
+/// updates call `replace_backends` and remain authoritative.
 ///
 /// Returns `true` if the cell ended up non-empty after this call.
 fn hydrate_cell_if_empty(cell: &compiled_selector::ServiceSelectorCell, service_key: &str) -> bool {

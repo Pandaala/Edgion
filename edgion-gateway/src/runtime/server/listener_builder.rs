@@ -96,7 +96,6 @@ pub fn add_http_listener(
             .map(|v| v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
 
-    // If redirect is enabled, use the simple redirect handler
     if http_to_https_redirect {
         let https_port: u16 = context
             .gateway_annotations
@@ -129,7 +128,6 @@ pub fn add_http_listener(
     // Pre-parse timeout configurations once at initialization
     let parsed_timeouts = crate::routes::http::proxy_http::ParsedTimeouts::from_config(&context.edgion_gateway_config);
 
-    // Initialize RealIpExtractor from configuration
     let real_ip_extractor = if let Some(real_ip_config) = &context.edgion_gateway_config.spec.real_ip {
         match crate::util::RealIpExtractor::new(
             &real_ip_config.trusted_ips,
@@ -152,7 +150,6 @@ pub fn add_http_listener(
         None
     };
 
-    // Create preflight handler from gateway config
     let preflight_handler = crate::routes::http::proxy_http::PreflightHandler::new(
         context.edgion_gateway_config.spec.preflight_policy.clone(),
     );
@@ -219,10 +216,8 @@ pub fn add_http_listener(
         .server_options(opts)
         .build();
 
-    // Apply connection filter if configured via annotation
     apply_connection_filter(&mut http_service, context);
 
-    // Add listener with or without TLS
     if enable_tls {
         #[cfg(feature = "boringssl")]
         {
@@ -270,7 +265,6 @@ pub fn add_http_listener(
         );
     }
 
-    // Add service to server
     server.add_service(http_service);
 
     Ok(())
@@ -294,13 +288,10 @@ pub fn add_tcp_listener(server: &mut Server, context: &ListenerContext) -> Resul
     };
 
     probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
-    // Create TCP service
     let mut tcp_service = Service::with_listeners(format!("TCP-{}", listener_name), Listeners::tcp(&addr), edgion_tcp);
 
-    // Apply connection filter if configured via annotation
     apply_connection_filter(&mut tcp_service, context);
 
-    // Add to server
     server.add_service(tcp_service);
 
     tracing::info!(
@@ -389,7 +380,6 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
 
     let mut tls_service = Service::new(format!("TLS-TCP-{}", listener_name), edgion_tls);
 
-    // Apply connection filter if configured via annotation
     apply_connection_filter(&mut tls_service, context);
 
     probe_tcp_bind(&addr, &context.gateway_key, &listener_name)?;
@@ -397,7 +387,6 @@ pub fn add_tls_terminate_to_tcp_listener(server: &mut Server, context: &Listener
     // on the same port, causing EEXIST when add_tls_with_settings tries to bind again.
     tls_service.add_tls_with_settings(&addr, None, tls_settings);
 
-    // Add to server
     server.add_service(tls_service);
 
     tracing::info!(

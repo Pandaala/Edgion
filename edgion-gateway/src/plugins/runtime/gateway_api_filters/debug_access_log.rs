@@ -17,18 +17,10 @@ impl DebugAccessLogToHeaderFilter {
     }
 
     fn add_debug_header(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
-        // Get EdgionHttpContext from session
         let ctx = session.ctx();
-
-        // Create access log entry from context
         let entry = AccessLogEntry::from_context(ctx);
-
-        // Convert to JSON
         let json = entry.to_json();
-
-        // Set the debug header
         let _ = session.set_response_header("X-Debug-Access-Log", &json);
-
         PluginRunningResult::GoodNext
     }
 }

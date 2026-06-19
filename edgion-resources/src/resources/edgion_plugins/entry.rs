@@ -40,27 +40,28 @@ pub(super) fn validate_alias_str(alias: &str) -> Option<String> {
 /// ```yaml
 /// plugins:
 ///   - enable: true                    # optional, defaults to true
-///     type: requestHeaderModifier
+///     type: RequestHeaderModifier
 ///     config:
 ///       set:
 ///         - name: X-Test
 ///           value: test-value
 ///   - enable: false                   # disabled plugin
-///     type: responseHeaderModifier
+///     type: ResponseHeaderModifier
 ///     config:
 ///       add:
 ///         - name: X-Response
 ///           value: added
 ///   - conditions:                     # conditional execution
 ///       skip:
-///         - keyExist:
-///             source: header
-///             key: "X-Internal"
+///         - type: keyExist
+///           key:
+///             type: header
+///             name: "X-Internal"
 ///       run:
-///         - timeRange:
-///             startTime: "2024-01-01T00:00:00Z"
-///             endTime: "2024-12-31T23:59:59Z"
-///     type: ipRestriction
+///         - type: timeRange
+///           after: "2024-01-01T00:00:00Z"
+///           before: "2024-12-31T23:59:59Z"
+///     type: IpRestriction
 ///     config:
 ///       allow: ["10.0.0.0/8"]
 /// ```
@@ -72,7 +73,6 @@ pub struct PluginEntry {
     pub enable: bool,
 
     /// Plugin conditions for conditional execution
-    /// Supports skip/run conditions with various matchers
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conditions: Option<PluginConditions>,
 
@@ -148,11 +148,7 @@ impl PluginEntry {
     }
 }
 
-/// RequestFilterEntry - for request stage plugins (async)
-///
-/// Supports plugins:
-/// - BasicAuth, Cors, Csrf, IpRestriction, JwtAuth, Mock (from edgion_plugins)
-/// - RequestHeaderModifier, RequestRedirect (from gapi_filters)
+/// Plugin entry for the request filter stage (async).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestFilterEntry {
@@ -234,10 +230,7 @@ impl RequestFilterEntry {
     }
 }
 
-/// UpstreamResponseFilterEntry - for upstream response filter stage plugins (sync)
-///
-/// Supports plugins:
-/// - ResponseHeaderModifier (from gapi_filters)
+/// Plugin entry for the upstream response filter stage (sync).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpstreamResponseFilterEntry {
@@ -319,13 +312,7 @@ impl UpstreamResponseFilterEntry {
     }
 }
 
-/// UpstreamResponseBodyFilterEntry - for upstream response body filter stage plugins (sync)
-///
-/// Supports plugins:
-/// - BandwidthLimit (from edgion_plugins)
-///
-/// These plugins run during the upstream_response_body_filter hook for each body chunk.
-/// They return an optional Duration to control bandwidth throttling.
+/// Plugin entry for the upstream response body filter stage (sync, per body chunk).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpstreamResponseBodyFilterEntry {
@@ -407,9 +394,7 @@ impl UpstreamResponseBodyFilterEntry {
     }
 }
 
-/// UpstreamResponseEntry - for upstream response stage plugins (async)
-///
-/// Currently no plugins, reserved for future expansion
+/// Plugin entry for the upstream response stage (async). Reserved for future use.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct UpstreamResponseEntry {

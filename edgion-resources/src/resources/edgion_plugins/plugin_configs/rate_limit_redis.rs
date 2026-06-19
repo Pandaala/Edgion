@@ -33,7 +33,7 @@ pub enum RateLimitAlgorithm {
     /// Sliding window counter (default) — best accuracy/performance balance.
     ///
     /// Uses weighted average of current + previous fixed window.
-    /// Like APISIX's default algorithm. Prevents boundary burst.
+    /// Prevents boundary burst.
     /// Redis: 1 HASH key per policy (stores cur, prev, cur_ts fields).
     #[default]
     SlidingWindow,
@@ -47,7 +47,6 @@ pub enum RateLimitAlgorithm {
     /// Token bucket — allows controlled bursts up to bucket capacity.
     ///
     /// `rate` = refill rate per interval. Bucket capacity = rate.
-    /// Like Kong's default algorithm.
     /// Redis: 1 HASH key per policy (tokens + timestamp fields).
     TokenBucket,
 }

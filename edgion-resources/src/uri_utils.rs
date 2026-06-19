@@ -1,7 +1,7 @@
 //! Generic URI utilities shared between the routing layer and other
-//! consumers (request context, backend selector). Kept in `types/` so that
-//! lower layers don't have to reach into `core::gateway::routes::http`
-//! internals just to decode a query string.
+//! consumers (request context, backend selector). Kept in `edgion-resources`
+//! so that lower layers don't have to depend on gateway internals just to
+//! decode a query string.
 //!
 //! Decoding semantics match `application/x-www-form-urlencoded`:
 //! `%XX` percent-decoded, `+` translated to space, invalid escapes

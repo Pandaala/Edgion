@@ -151,10 +151,8 @@ impl RequestFilter for RequestRedirectFilter {
         let status_code = self.config.status_code.unwrap_or(302) as u16;
         let status = StatusCode::from_u16(status_code).unwrap_or(StatusCode::FOUND);
 
-        // Log redirect operation (key point)
         plugin_log.push_fmt("redirect {}", la![status.as_u16().to_string().as_str()]);
 
-        // Build redirect response
         let mut resp = match ResponseHeader::build(status, None) {
             Ok(r) => r,
             Err(_) => {
@@ -168,7 +166,6 @@ impl RequestFilter for RequestRedirectFilter {
 
         let _ = resp.insert_header("Content-Length", "0");
 
-        // Send response and terminate request
         if session.write_response_header(Box::new(resp), true).await.is_err() {
             return PluginRunningResult::ErrTerminateRequest;
         }

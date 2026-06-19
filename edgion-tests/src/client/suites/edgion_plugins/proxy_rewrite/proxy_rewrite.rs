@@ -1,11 +1,11 @@
 // ProxyRewrite Plugin Test Suite
 //
-// ：
-// - URI ：（）
-// - ：Host + Method + Headers
-// - Path ： $uid
+// Covers:
+// - URI rewrite: simple, $uri variable, $arg_xxx query variable, regex
+// - Combined rewrite: Host + Headers (add/set/remove)
+// - Path parameter extraction via $uid
 //
-// test_server ：
+// test_server echo response format:
 // Server: 0.0.0.0:30001
 // Client: 127.0.0.1:xxxxx
 // Method: GET
@@ -20,7 +20,7 @@ use std::time::Instant;
 
 pub struct ProxyRewriteTestSuite;
 
-///  test_server
+/// Parse the plain-text echo response returned by test_server.
 fn parse_echo_response(text: &str) -> EchoInfo {
     let mut info = EchoInfo::default();
     let mut in_headers = false;
@@ -37,14 +37,14 @@ fn parse_echo_response(text: &str) -> EchoInfo {
         }
 
         if in_headers {
-            //  Header: "  Name: Value"
+            // Inside the Headers block, each line has two-space indent: "  Name: Value"
             if let Some(pos) = line.find(':') {
                 let name = line[..pos].trim().to_lowercase();
                 let value = line[pos + 1..].trim().to_string();
                 info.headers.insert(name, value);
             }
         } else {
-            // : "Field: Value"
+            // Before the Headers block, each line is "Field: Value"
             if let Some(pos) = line.find(':') {
                 let field = line[..pos].trim();
                 let value = line[pos + 1..].trim();
@@ -68,7 +68,7 @@ struct EchoInfo {
 }
 
 impl ProxyRewriteTestSuite {
-    // ==================== 1. URI  ====================
+    // ==================== 1. URI simple rewrite ====================
     fn test_uri_simple() -> TestCase {
         TestCase::new(
             "uri_simple",
@@ -112,7 +112,7 @@ impl ProxyRewriteTestSuite {
         )
     }
 
-    // ==================== 2. URI + $uri  ====================
+    // ==================== 2. URI with $uri variable ====================
     fn test_uri_var() -> TestCase {
         TestCase::new(
             "uri_var",
@@ -157,7 +157,7 @@ impl ProxyRewriteTestSuite {
         )
     }
 
-    // ==================== 3. URI + $arg_xxx  ====================
+    // ==================== 3. URI with $arg_xxx query variable ====================
     fn test_uri_arg() -> TestCase {
         TestCase::new(
             "uri_arg",
@@ -179,7 +179,7 @@ impl ProxyRewriteTestSuite {
                             match response.text().await {
                                 Ok(text) => {
                                     let echo = parse_echo_response(&text);
-                                    // : /search/hello/en ( query string  path )
+                                    // Path starts with /search/hello/en (query string consumed into the path)
                                     if echo.path.starts_with("/search/hello/en") {
                                         TestResult::passed_with_message(
                                             start.elapsed(),
@@ -265,7 +265,7 @@ impl ProxyRewriteTestSuite {
         )
     }
 
-    // ==================== 4. Regex URI  ====================
+    // ==================== 4. Regex URI rewrite ====================
     fn test_regex_uri() -> TestCase {
         TestCase::new(
             "regex_uri",
@@ -309,7 +309,7 @@ impl ProxyRewriteTestSuite {
         )
     }
 
-    // ==================== 5.  ====================
+    // ==================== 5. Combined rewrite (Host + Headers) ====================
     fn test_combined() -> TestCase {
         TestCase::new("combined", ": Host + Headers(add/set/remove)", |ctx: TestContext| {
             Box::pin(async move {
@@ -334,7 +334,7 @@ impl ProxyRewriteTestSuite {
                                 let echo = parse_echo_response(&text);
                                 let mut errors = Vec::new();
 
-                                //  Host
+                                // Host rewrite
                                 if let Some(host) = echo.headers.get("host") {
                                     if host != "backend.internal.svc" {
                                         errors.push(format!("Host: expected backend.internal.svc, got {}", host));
@@ -343,7 +343,7 @@ impl ProxyRewriteTestSuite {
                                     errors.push("Host header not found".to_string());
                                 }
 
-                                //  Headers add
+                                // Headers add
                                 if echo.headers.get("x-gateway") != Some(&"edgion".to_string()) {
                                     errors.push(format!(
                                         "X-Gateway: expected edgion, got {:?}",
@@ -351,7 +351,7 @@ impl ProxyRewriteTestSuite {
                                     ));
                                 }
 
-                                //  Headers set
+                                // Headers set
                                 if let Some(path) = echo.headers.get("x-original-path") {
                                     if !path.contains("/combined") {
                                         errors.push(format!("X-Original-Path: wrong value {}", path));
@@ -360,7 +360,7 @@ impl ProxyRewriteTestSuite {
                                     errors.push("X-Original-Path not set".to_string());
                                 }
 
-                                //  Headers remove
+                                // Headers remove
                                 if echo.headers.contains_key("x-debug") {
                                     errors.push("X-Debug not removed".to_string());
                                 }
@@ -390,7 +390,7 @@ impl ProxyRewriteTestSuite {
         })
     }
 
-    // ==================== 6b. Path-param × Header — always url-encoded (this PR) ====================
+    // ==================== 6b. Path-param × Header — always url-encoded ====================
 
     /// ProxyRewrite path-param ($<name>) header rewrite always url-encodes the
     /// decoded path-param value in Header context, mirroring $arg_<name>'s rule.
@@ -416,16 +416,15 @@ impl ProxyRewriteTestSuite {
                                     let echo = parse_echo_response(&text);
                                     let mut errors = Vec::new();
 
-                                    // URI context: $uid was already url-encoded before this PR;
-                                    // regression-pin only.
+                                    // URI context: $uid is always url-encoded in URI templates.
                                     if echo.path != "/user-service/foo%2Bbar/profile" {
                                         errors.push(format!(
                                             "URI: expected /user-service/foo%2Bbar/profile, got {}",
                                             echo.path
                                         ));
                                     }
-                                    // Header context: THIS PR's behavior fix — $<name> must
-                                    // url-encode the decoded path-param value, same as $arg_<name>.
+                                    // Header context: $<name> must url-encode the decoded
+                                    // path-param value, same as $arg_<name>.
                                     if echo.headers.get("x-user-id") != Some(&"foo%2Bbar".to_string()) {
                                         errors.push(format!(
                                             "X-User-Id: expected foo%2Bbar, got {:?}",
@@ -589,7 +588,7 @@ impl ProxyRewriteTestSuite {
         )
     }
 
-    // ==================== 6. Path  ====================
+    // ==================== 6. Path parameter extraction ====================
     fn test_path_param() -> TestCase {
         TestCase::new(
             "path_param",
@@ -613,7 +612,7 @@ impl ProxyRewriteTestSuite {
                                     let echo = parse_echo_response(&text);
                                     let mut errors = Vec::new();
 
-                                    //  URI  $uid
+                                    // URI rewrite with $uid
                                     if echo.path != "/user-service/789/profile" {
                                         errors.push(format!(
                                             "URI: expected /user-service/789/profile, got {}",
@@ -621,7 +620,7 @@ impl ProxyRewriteTestSuite {
                                         ));
                                     }
 
-                                    //  Header  $uid
+                                    // Header rewrite with $uid
                                     if echo.headers.get("x-user-id") != Some(&"789".to_string()) {
                                         errors.push(format!(
                                             "X-User-Id: expected 789, got {:?}",
@@ -659,7 +658,7 @@ impl TestSuite for ProxyRewriteTestSuite {
             Self::test_uri_simple(),
             Self::test_uri_var(),
             Self::test_uri_arg(),
-            // Percent-encoded $arg: verify no double-encoding (unified-query-string-cache Fix 1)
+            // Percent-encoded $arg: verify no double-encoding
             Self::test_uri_arg_percent_encoded(),
             Self::test_regex_uri(),
             // Path parameter extraction via `:uid` route syntax.
@@ -667,14 +666,12 @@ impl TestSuite for ProxyRewriteTestSuite {
             // matcher records `uid` in `ctx.path_params`, which ProxyRewrite then
             // substitutes into URI / header templates as `$uid`.
             Self::test_path_param(),
-            // Same fixture/route as test_path_param, but with a non-ASCII-identity
-            // input (`foo+bar`) to verify that $<name> in Header context is
-            // url-encoded (this PR's behavior fix). URI context is also regression-pinned.
+            // Same fixture but with a non-ASCII input (foo+bar) to verify that
+            // $<name> in Header context is url-encoded. URI context is also pinned.
             Self::test_path_param_header_url_encoded(),
-            // Header $arg_<name> always url-encoded (unified-query-string-cache Fix 3)
+            // Header $arg_<name> always url-encoded
             Self::test_header_arg_always_encoded(),
             // Header $1 (regex capture) always url-encoded
-            // (proxy-rewrite-header-encode-capture-pathparam follow-up).
             Self::test_header_capture_always_encoded(),
         ]
     }

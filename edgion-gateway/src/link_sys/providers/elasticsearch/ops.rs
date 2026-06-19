@@ -405,8 +405,8 @@ impl EsLinkClient {
 /// Connection-level + status-line cluster-health check for the background probe.
 ///
 /// A free function (no `&self`) so it runs in a detached `'static` probe task.
-/// Targets a fixed endpoint (the caller passes `endpoints[0]`) to avoid
-/// perturbing the shared round-robin index used by other ops.
+/// Takes a caller-selected endpoint rather than the shared round-robin index,
+/// so probing never perturbs other ops.
 pub(crate) async fn probe_cluster_health(client: &reqwest::Client, endpoint: &str) -> bool {
     let url = format!("{}/_cluster/health", endpoint);
     matches!(client.get(&url).send().await, Ok(resp) if resp.status().is_success())

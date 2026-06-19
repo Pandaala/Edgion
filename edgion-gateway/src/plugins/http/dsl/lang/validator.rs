@@ -391,8 +391,7 @@ mod tests {
 
     #[test]
     fn test_compile_without_source_leaves_field_none() {
-        // Existing call sites using Compiler::compile (e.g. compiler/* unit tests)
-        // must continue to produce CompiledScript::source = None.
+        // Compiler::compile must not embed source text; source must be None.
         let program = parse_program("let x = 42").unwrap();
         let script = Compiler::new().compile(&program).unwrap();
         assert!(script.source.is_none());

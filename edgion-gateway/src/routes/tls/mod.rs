@@ -150,7 +150,7 @@ pub(super) async fn run_tls_route_plugins(
         };
     }
 
-    // Backward compat: fall back to Stage 1 (ConnectionFilter) runtime
+    // Fall back to Stage 1 (ConnectionFilter) runtime
     let stream_runtime = &resource.stream_plugin_runtime;
     if !stream_runtime.is_empty() {
         let stream_ctx = StreamContext::new(client_ip, listener_port);
@@ -172,7 +172,6 @@ pub(super) async fn run_tls_route_plugins(
 pub use gateway_tls_routes::TlsRouteTable;
 pub use route_unit::TlsRouteUnit;
 
-// Export TLS proxy types
 pub use passthrough_proxy::EdgionTlsPassthroughProxy;
 pub use proxy::EdgionTlsTcpProxy;
 

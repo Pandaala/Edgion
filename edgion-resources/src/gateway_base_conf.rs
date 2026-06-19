@@ -76,12 +76,10 @@ impl GatewayBaseConf {
     pub fn add_gateway(&mut self, gateway: Gateway) {
         let key = gateway.key_name();
 
-        // Check if gateway already exists
         if !self.gateway_map.contains_key(&key) {
             self.gateway_map.insert(key.clone(), ());
             self.gateways.push(gateway);
         } else {
-            // Update existing gateway
             if let Some(existing) = self.gateways.iter_mut().find(|g| g.key_name() == key) {
                 *existing = gateway;
             }

@@ -33,9 +33,8 @@ impl JwtIssuerGroupStore {
     }
 }
 
-/// Build a `DecodingKey` from the credential + algorithm. Used per request
-/// (no caching -- parity with pre-grouping behavior; PEM-caching is a
-/// future perf optimization outside this pilot's scope, see spec §11).
+/// Build a `DecodingKey` from the credential + algorithm. Called per request;
+/// PEM-caching is a future performance optimization.
 ///
 /// Returns `Err(&'static str)` with a short reason if the key material is
 /// missing or malformed. The caller maps this to `Deny invalid credentials`.

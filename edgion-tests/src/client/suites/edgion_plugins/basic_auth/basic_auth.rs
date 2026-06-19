@@ -645,7 +645,7 @@ impl TestSuite for BasicAuthTestSuite {
             Self::test_auth_failure_delay_on_missing_credentials(),
             Self::test_auth_failure_delay_on_wrong_password(),
             Self::test_no_delay_on_success(),
-            // access log regression
+            // stage_logs: verify basic_auth appears in access log
             Self::test_stage_logs_contain_basic_auth(),
             // grouped secret_groups
             Self::test_grouped_partner_a_returns_200(),

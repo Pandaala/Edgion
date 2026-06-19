@@ -239,19 +239,9 @@ impl RequestFilter for OpenidConnect {
             Ok(claims) => {
                 let userinfo_json = self.fetch_userinfo_json(&token).await;
                 self.apply_upstream_headers(session, &token, None, userinfo_json.as_deref(), &claims);
-                // hide_credentials: remove the original Authorization header from the upstream
-                // request. Note: apply_upstream_headers may have already set a *new*
-                // Authorization header (if access_token_in_authorization_header=true), but we
-                // must call hide_credentials_if_needed BEFORE that step would overwrite it.
-                // The current ordering is: apply_upstream_headers first (sets new Bearer header
-                // when configured), then we remove the original – but since
-                // apply_upstream_headers uses set_request_header which overwrites, the new
-                // Bearer value is already set before we remove.
-                // Actually: the original token was already in Authorization before this block.
-                // apply_upstream_headers may overwrite Authorization if
-                // access_token_in_authorization_header=true. In that case removing Authorization
-                // afterwards would undo the overwrite. To avoid that conflict, we only remove
-                // if access_token_in_authorization_header is false.
+                // Skip credential hiding when access_token_in_authorization_header is true:
+                // apply_upstream_headers already wrote a fresh "Bearer <token>" into
+                // Authorization; removing it afterward would erase the intended upstream header.
                 if !self.config.access_token_in_authorization_header {
                     self.hide_credentials_if_needed(session);
                 }

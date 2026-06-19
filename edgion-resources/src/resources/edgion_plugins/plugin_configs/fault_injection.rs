@@ -134,7 +134,6 @@ fn is_valid_header_value(value: &str) -> bool {
 
 impl FaultInjectionConfig {
     pub fn validate(&self) -> Result<(), String> {
-        // Rule 1: at least one block.
         if self.delay.is_none() && self.abort.is_none() {
             return Err("fault_injection: at least one of `delay` / `abort` must be set".into());
         }
@@ -150,21 +149,18 @@ impl FaultInjectionConfig {
 
 impl DelayConfig {
     pub fn validate(&self) -> Result<(), String> {
-        // Rule 5
         if !(0.0..=1.0).contains(&self.ratio) {
             return Err(format!("delay.ratio must be in [0.0, 1.0], got {}", self.ratio));
         }
         let has_fixed = self.fixed_ms.is_some();
         let has_min = self.min_ms.is_some();
         let has_max = self.max_ms.is_some();
-        // Rule 2
         if has_fixed && (has_min || has_max) {
             return Err("delay.fixedMs is mutually exclusive with delay.minMs/maxMs".into());
         }
         if !has_fixed && !has_min && !has_max {
             return Err("delay must set either delay.fixedMs or both delay.minMs and delay.maxMs".into());
         }
-        // Rule 3
         if has_min ^ has_max {
             return Err("delay.minMs and delay.maxMs must be set together".into());
         }
@@ -176,7 +172,6 @@ impl DelayConfig {
                 return Err(format!("delay.maxMs ({max}) must be <= {MAX_DELAY_MS}"));
             }
         }
-        // Rule 4
         if let Some(fixed) = self.fixed_ms {
             if fixed > MAX_DELAY_MS {
                 return Err(format!("delay.fixedMs ({fixed}) must be <= {MAX_DELAY_MS}"));
@@ -188,15 +183,12 @@ impl DelayConfig {
 
 impl AbortConfig {
     pub fn validate(&self) -> Result<(), String> {
-        // Rule 6
         if !(0.0..=1.0).contains(&self.ratio) {
             return Err(format!("abort.ratio must be in [0.0, 1.0], got {}", self.ratio));
         }
-        // Rule 7
         if !(100..=599).contains(&self.status_code) {
             return Err(format!("abort.statusCode ({}) must be in [100, 599]", self.status_code));
         }
-        // Rules 8 + 9
         if let Some(hs) = &self.headers {
             for h in hs {
                 if h.name.eq_ignore_ascii_case("content-length") {

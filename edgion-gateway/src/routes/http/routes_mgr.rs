@@ -31,7 +31,7 @@ pub struct RouteRules {
     /// Regex match routes (handled separately)
     /// Uses HttpRouteRuleUnit with path_regex field set
     /// Stored as Arc to avoid cloning when returning from match_route
-    /// Kept for backward compatibility and debugging, but matching uses regex_routes_engine
+    /// Kept for debugging; matching uses regex_routes_engine
     pub(crate) regex_routes: Vec<Arc<HttpRouteRuleUnit>>,
     /// Regex routes engine for lock-free matching. None if there are no regex routes
     pub(crate) regex_routes_engine: Option<Arc<RegexRoutesEngine>>,
@@ -420,11 +420,9 @@ impl GlobalHttpRouteManagers {
             listener_buckets.insert(key.clone(), HashMap::new());
         }
 
-        // Single pass over route_cache: bucket affected routes into
-        // listener_buckets and collect all listener keys referenced by any
-        // current route into route_referenced (consumed by the orphan sweep
-        // below). Merging the two scans avoids a second full iteration plus
-        // a per-entry slice→Vec allocation that the previous flat_map needed.
+        // Single pass over route_cache: bucket affected routes into listener_buckets
+        // and collect all referenced listener keys into route_referenced (used by
+        // the orphan sweep below).
         let mut route_referenced: HashSet<ListenerKey> = HashSet::new();
         for entry in self.route_cache.iter() {
             let route = entry.value();
@@ -559,7 +557,7 @@ pub fn get_global_http_route_managers() -> &'static GlobalHttpRouteManagers {
     GLOBAL_HTTP_ROUTE_MANAGERS.get_or_init(GlobalHttpRouteManagers::new)
 }
 
-// Legacy aliases for backward compatibility during migration
+// Legacy type aliases for backward compatibility.
 pub type RouteManager = GlobalHttpRouteManagers;
 
 pub fn get_global_route_manager() -> &'static GlobalHttpRouteManagers {

@@ -154,11 +154,7 @@ impl ForwardAuth {
         }
     }
 
-    /// Send an error response directly to the client and return ErrTerminateRequest.
-    ///
-    /// This follows the same pattern as other plugins (RateLimit, KeyAuth, etc.)
-    /// which write response header + body directly via PluginSession and return
-    /// ErrTerminateRequest to stop the request pipeline.
+    /// Write an error response directly to the client and return ErrTerminateRequest.
     async fn send_error_response(
         &self,
         session: &mut dyn PluginSession,
@@ -339,7 +335,6 @@ mod tests {
 
         let mut mock_session = MockPluginSession::new();
 
-        // Setup mock expectations
         mock_session
             .expect_header_value()
             .withf(|name| name == "Authorization")

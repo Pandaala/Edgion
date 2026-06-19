@@ -103,7 +103,6 @@ async fn apply_doc(
         String::new()
     };
 
-    // Extract metadata
     let metadata = extract_resource_metadata(content)
         .with_context(|| format!("Failed to parse metadata from {}{}", file.display(), suffix))?;
 
@@ -124,7 +123,6 @@ async fn apply_doc(
         return Ok(());
     }
 
-    // Check if resource exists
     let exists = match client.get(kind, namespace, name).await {
         Ok(resp) => resp.status().is_success(),
         Err(_) => false,
@@ -137,7 +135,6 @@ async fn apply_doc(
         (client.create(kind, namespace, content).await?, "created")
     };
 
-    // Handle response
     match handle_response(resp).await {
         Ok(_) => {
             let ns_str = namespace.map(|n| format!(" in namespace {}", n)).unwrap_or_default();

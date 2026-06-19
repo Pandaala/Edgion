@@ -11,7 +11,6 @@
 //   - AcmeClient account creation & credential restore
 //   - DNS-01 full certificate issuance flow
 //   - DNS-01 multi-domain (SAN) certificates
-//   - HTTP-01 flow (when container-to-host connectivity is available)
 
 mod acme;
 

@@ -56,8 +56,8 @@ pub enum WebhookAuth {
 /// Webhook target backend.
 ///
 /// Selects where the webhook request is sent. Use `Uri` for external HTTP/HTTPS
-/// endpoints (existing behavior) or `Service` to target a Kubernetes Service
-/// whose endpoints are injected by the Controller.
+/// endpoints or `Service` to target a Kubernetes Service whose endpoints are
+/// injected by the Controller.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum WebhookTarget {

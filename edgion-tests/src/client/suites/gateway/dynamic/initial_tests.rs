@@ -26,10 +26,9 @@ impl InitialPhaseTestSuite {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-                    //  hostname
                     let resp = client
                         .get(format!("http://{}:31250/match", ctx.target_host))
-                        .header("Host", "other.example.com") //  api.example.com
+                        .header("Host", "other.example.com") // listener hostname is api.example.com
                         .send()
                         .await;
 
@@ -64,7 +63,6 @@ impl InitialPhaseTestSuite {
                     let start = Instant::now();
                     let client = reqwest::Client::builder().no_proxy().build().unwrap();
 
-                    // GET （ Host header）
                     let resp = client
                         .get(format!("http://{}:31251/api/v1", ctx.target_host))
                         .header("Host", "method-test.example.com")
@@ -74,7 +72,7 @@ impl InitialPhaseTestSuite {
                     match resp {
                         Ok(resp) => {
                             let status = resp.status();
-                            //  200502  503 (backend )
+                            // 200, 502, or 503 all acceptable (backend may be unreachable)
                             if status.is_success() || status == 502 || status == 503 {
                                 TestResult::passed_with_message(
                                     start.elapsed(),

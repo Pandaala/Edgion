@@ -34,7 +34,7 @@ pub struct ListDataSimple {
 /// This server only holds watch objects registered by ResourceProcessors.
 /// It does NOT create or manage ServerCache<T> instances - that's done by processors.
 pub struct ConfigSyncServer {
-    /// Server instance ID, generated at startup
+    /// Server instance ID; regenerated on each relink.
     server_id: RwLock<String>,
 
     /// Watch objects by kind (registered by processors)
@@ -47,7 +47,6 @@ pub struct ConfigSyncServer {
 static LAST_SERVER_ID_MS: AtomicU64 = AtomicU64::new(0);
 
 impl ConfigSyncServer {
-    /// Create a new ConfigSyncServer
     pub fn new() -> Self {
         let server_id = Self::generate_server_id();
 
@@ -86,7 +85,6 @@ impl ConfigSyncServer {
         }
     }
 
-    /// Get the current server ID
     pub fn server_id(&self) -> String {
         self.server_id.read().clone()
     }
@@ -135,7 +133,6 @@ impl ConfigSyncServer {
         self.watch_objects.read().get(kind).cloned()
     }
 
-    /// Get all registered kind names
     pub fn all_kinds(&self) -> Vec<String> {
         self.watch_objects.read().keys().cloned().collect()
     }
@@ -152,7 +149,6 @@ impl ConfigSyncServer {
         let obj = map.get(kind).ok_or_else(|| format!("Unknown kind: {}", kind))?;
 
         let (data, sync_version) = obj.list_json()?;
-
         if data.len() > MAX_LIST_BYTES {
             tracing::warn!(
                 component = "config_sync_server",
@@ -248,13 +244,11 @@ impl ConfigSyncServer {
 
     // ==================== State Management ====================
 
-    /// Check if all registered watch objects are ready
     pub fn is_all_ready(&self) -> bool {
         let map = self.watch_objects.read();
         map.values().all(|obj| obj.is_ready())
     }
 
-    /// Get list of kinds that are not ready
     pub fn not_ready_kinds(&self) -> Vec<String> {
         let map = self.watch_objects.read();
         map.iter()
@@ -278,7 +272,6 @@ impl ConfigSyncServer {
         }
     }
 
-    /// Set all watch objects to not ready state
     pub fn set_all_not_ready(&self) {
         let map = self.watch_objects.read();
         for obj in map.values() {
@@ -286,7 +279,6 @@ impl ConfigSyncServer {
         }
     }
 
-    /// Clear all watch objects
     pub fn clear_all(&self) {
         let map = self.watch_objects.read();
         for obj in map.values() {

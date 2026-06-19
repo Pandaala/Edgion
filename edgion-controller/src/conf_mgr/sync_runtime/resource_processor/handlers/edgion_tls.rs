@@ -726,9 +726,9 @@ mod tests {
         use std::collections::BTreeMap;
 
         // Cert signed with key_a but embedding key_b — a key/cert mismatch.
-        // Since validate() no longer checks cert content (deferred to update_status
-        // via validate_cert), the mismatch must surface as ResolvedRefs/InvalidCertificate
-        // on the per-parent status condition.
+        // Cert-content validation runs in update_status() via validate_cert(),
+        // so the mismatch surfaces as ResolvedRefs/InvalidCertificate on the
+        // per-parent status condition.
         let key_a = KeyPair::generate().unwrap();
         let cert_a = CertificateParams::new(vec!["example.com".to_string()])
             .unwrap()

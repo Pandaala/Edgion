@@ -126,7 +126,6 @@ const LEGACY_CIPHERS: &[&str] = &["AES128-SHA", "AES256-SHA", "ECDHE-RSA-AES128-
 const MODERN_CIPHERS: &[&str] = &["ECDHE-RSA-AES256-GCM-SHA384", "ECDHE-RSA-AES128-GCM-SHA256"];
 
 impl CipherTestSuite {
-    // Test 1: TLS 1.2 with legacy ciphers - verify connection and cipher negotiation
     fn test_tls12_legacy_cipher() -> TestCase {
         TestCase::new(
             "cipher_tls12_legacy",
@@ -136,8 +135,7 @@ impl CipherTestSuite {
                     let start = Instant::now();
 
                     let hostname = "cipher-legacy.example.com";
-                    // Use cipher test port (31195 for legacy)
-                    let port = ctx.https_port; // Use configured https_port
+                    let port = ctx.https_port;
 
                     match get_tls_info(&ctx.target_host, port, hostname, "-tls1_2") {
                         Ok(info) => {
@@ -175,7 +173,6 @@ impl CipherTestSuite {
         )
     }
 
-    // Test 2: TLS 1.2 with modern ciphers - verify connection and cipher negotiation
     fn test_tls12_modern_cipher() -> TestCase {
         TestCase::new(
             "cipher_tls12_modern",
@@ -185,7 +182,6 @@ impl CipherTestSuite {
                     let start = Instant::now();
 
                     let hostname = "cipher-modern.example.com";
-                    // Use cipher test port (31196 for modern)
                     let port = ctx.https_port + 1;
 
                     match get_tls_info(&ctx.target_host, port, hostname, "-tls1_2") {
@@ -225,7 +221,6 @@ impl CipherTestSuite {
         )
     }
 
-    // Test 3: Verify specific legacy cipher is accepted by legacy endpoint
     fn test_legacy_cipher_accepted() -> TestCase {
         TestCase::new(
             "cipher_legacy_accepted",
@@ -259,7 +254,6 @@ impl CipherTestSuite {
         )
     }
 
-    // Test 4: Verify modern cipher is accepted by modern endpoint
     fn test_modern_cipher_accepted() -> TestCase {
         TestCase::new(
             "cipher_modern_accepted",
@@ -293,8 +287,7 @@ impl CipherTestSuite {
         )
     }
 
-    // Test 5: ClientCipherMismatch — Gateway requires TLS 1.3, client forces TLS 1.2 → handshake fails.
-    // This is the original 04#7 case from todo-test-cover/04-integration-gaps-gateway.md.
+    // ClientCipherMismatch: Gateway requires TLS 1.3, client forces TLS 1.2 → handshake fails.
     fn test_client_cipher_mismatch() -> TestCase {
         TestCase::new(
             "cipher_client_cipher_mismatch",
@@ -337,12 +330,8 @@ impl CipherTestSuite {
         )
     }
 
-    // Test 6: BadCipherName — operator configures a cipher name BoringSSL doesn't
-    // recognize. SSL_set_strict_cipher_list returns 0 and the cipher branch in
-    // apply_edgion_tls_cert must fail-closed so the handshake aborts (tls-F002).
-    // Before the fix BoringSSL silently retained its default suite and handshake
-    // completed; after the fix err_log is set and certificate_callback skips
-    // finalize_ssl_ctx so handshake_truly_completed must be false here.
+    // BadCipherName: unrecognized cipher name causes SSL_set_strict_cipher_list to return 0,
+    // so the cipher branch in apply_edgion_tls_cert must fail-closed (handshake aborts).
     fn test_bad_cipher_name_failclosed() -> TestCase {
         TestCase::new(
             "cipher_bad_name_failclosed",
@@ -382,8 +371,8 @@ impl CipherTestSuite {
         )
     }
 
-    // Test 7: MultiSniDifferentPolicy — same port, different SNI, different minVersion.
-    // Proves the per-SNI policy enforcement that this fix exists for.
+    // MultiSniDifferentPolicy: same port, different SNI, different minVersion.
+    // Verifies per-SNI TLS policy enforcement on a shared listener port.
     fn test_multi_sni_different_policy() -> TestCase {
         TestCase::new(
             "cipher_multi_sni_different_policy",

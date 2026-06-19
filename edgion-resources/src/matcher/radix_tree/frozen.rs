@@ -1,7 +1,7 @@
 //! Cache-friendly frozen radix tree implementation
 //!
 //! This module provides the flattened, cache-optimized tree structure for fast lookups.
-//! Now supports parameter segments (`:param`) for dynamic route matching.
+//! Supports parameter segments (`:param`) for dynamic route matching.
 
 use crate::matcher::radix_tree::builder::{BuildNode, NodeType};
 use crate::matcher::radix_tree::error::RouterError;
@@ -28,7 +28,7 @@ const NO_PARAM_CHILD: u32 = u32::MAX;
 /// - 1-2 values: stored inline in values_data, values_flags = 0
 /// - 3+ values: stored in values_pool, values_data[0] = offset, values_flags = 1
 ///
-/// Now also supports parameter nodes for dynamic route matching.
+/// Supports parameter nodes for dynamic route matching.
 ///
 /// Fields are carefully ordered to minimize padding while maintaining 8-byte alignment.
 #[repr(C, align(8))]

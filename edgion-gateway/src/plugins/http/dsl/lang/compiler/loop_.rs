@@ -345,11 +345,10 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Regression: nested loops mixing all three loop forms (for-range,
-    /// for-in, while) must keep the break/continue patch stacks balanced
-    /// (push at entry, pop at exit). A future refactor that imbalances the
-    /// stacks would surface here as a `CompileError` instead of a panic —
-    /// see F-013 / F-006.
+    /// Nested loops mixing all three loop forms (for-range, for-in, while) must
+    /// keep the break/continue patch stacks balanced (push at entry, pop at exit).
+    /// A future refactor that imbalances the stacks would surface here as a
+    /// `CompileError` instead of a panic.
     #[test]
     fn test_compile_nested_loops_patch_stacks_balanced() {
         let source = r#"

@@ -292,7 +292,7 @@ pub trait CenterApi: Send + Sync {
     /// Delete a single configuration
     async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError>;
 
-    /// List all configurations (for initialization)
+    /// List all configurations across all kinds.
     ///
     /// # Arguments
     /// * `opts` - Pagination options. `None` returns all items, `Some(opts)` applies pagination.

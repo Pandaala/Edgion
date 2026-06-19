@@ -15,9 +15,9 @@ use kube::ResourceExt;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// ConfHandler implementation for Gateway
-/// Stores Gateway resources in cache for dynamic lookup during bootstrap
+/// ConfHandler implementation for Gateway.
 ///
+/// Handles both initial full-set sync and incremental updates (add/update/remove).
 /// This handler manages two stores:
 /// 1. GatewayStore: Raw Gateway resources
 /// 2. GatewayTlsMatcher: Port-based TLS certificate matching
@@ -79,9 +79,9 @@ impl ConfHandler<Gateway> for GatewayHandler {
         // Rebuild per-listener route managers (HTTP/gRPC/TCP/TLS/UDP) only when
         // the listener set changed (listeners added or removed). Without rebuilding
         // TCP/TLS/UDP here, their per-listener entries leak when a Gateway is
-        // removed: route delete only checks active_listeners (PGIS) while Gateway
-        // still exists, so empty buckets are not removed; once Gateway disappears
-        // there is no other trigger to clean up the now-orphan listener entries.
+        // removed: route delete only checks active_listeners (ListenerGatewayInfoStore)
+        // while Gateway still exists, so empty buckets are not removed; once Gateway
+        // disappears there is no other trigger to clean up the now-orphan listener entries.
         if listeners_changed(&keys_before, &keys_after) {
             get_global_http_route_managers().rebuild_all_listener_managers();
             get_global_grpc_route_managers().rebuild_all_listener_managers();
@@ -206,8 +206,8 @@ impl ConfHandler<Gateway> for GatewayHandler {
             rebuild_gateway_tls_matcher(&gateways);
 
             // KNOWN LIMITATION: this rebuilds only the routing data structures
-            // (PGIS + per-listener route managers). The OS-level listener sockets
-            // are bound once during startup Phase 1 (create_and_configure_server ->
+            // (ListenerGatewayInfoStore + per-listener route managers). The OS-level listener sockets
+            // are bound once during startup (create_and_configure_server ->
             // configure_listeners) and the Server is then consumed by
             // run_forever() (cli/pingora.rs), so we hold no handle to bind/drain
             // sockets here. Adding a new listener port to a live Gateway updates
@@ -261,7 +261,6 @@ fn listeners_changed(before: &[ListenerKey], after: &[ListenerKey]) -> bool {
     a != b
 }
 
-/// Create Gateway handler
 pub fn create_gateway_handler() -> Box<dyn ConfHandler<Gateway> + Send + Sync> {
     Box::new(GatewayHandler::new())
 }

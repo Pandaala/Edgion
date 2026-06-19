@@ -1,5 +1,3 @@
-// EdgionTls BothAbsentParentRef Test Suite
-//
 // Validates that an EdgionTls resource with parentRefs containing ONLY
 // name + namespace (no sectionName, no port) correctly attaches its
 // certificate to all listeners of the referenced Gateway.

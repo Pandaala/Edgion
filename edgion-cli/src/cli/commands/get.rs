@@ -91,10 +91,7 @@ fn filter_by_namespace(data: &mut Value, namespace: &str) {
 /// - server/client: get returns wrapped format `{"success": true, "data": {...}}`
 fn extract_resource_data(data: Value, target: TargetType) -> Value {
     match target {
-        TargetType::Center => {
-            // Center returns raw resource for get single resource
-            data
-        }
+        TargetType::Center => data,
         TargetType::Server | TargetType::Client => {
             // Server/Client returns wrapped format, extract from "data" field
             if let Some(inner_data) = data.get("data") {
@@ -180,7 +177,6 @@ async fn get_resource(
     }
 
     let data = parse_json_response(resp).await?;
-    // Handle different response formats based on target
     let resource_data = extract_resource_data(data, client.target());
     print_resource(&resource_data, output)?;
 

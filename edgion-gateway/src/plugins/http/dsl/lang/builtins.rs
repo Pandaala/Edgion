@@ -65,8 +65,8 @@ fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
 /// externally-controlled Redis values. We *truncate* rather than raise
 /// `StringTooLong` because the redis dispatcher carries the documented "never
 /// raises a runtime error" contract (errors surface as a `redis_err` Map value,
-/// not a propagated `RuntimeError`); this mirrors the `http.call` body cap
-/// (FB-03). Without it an oversized Redis value (up to 512 MB) would flow into
+/// not a propagated `RuntimeError`); this mirrors the `http.call` body cap.
+/// Without it an oversized Redis value (up to 512 MB) would flow into
 /// `req.set_header` / `ctx.set` / `log` without further size gating.
 fn truncate_to_max_string_len(mut s: String, limit: usize) -> String {
     if s.len() > limit {
@@ -217,7 +217,7 @@ impl Vm {
                 Ok(Value::Bool(session.get_response_header(&name).is_some()))
             }
 
-            // ===== req.* metadata (P1) =====
+            // ===== req.* metadata =====
             BuiltinId::ReqProtocol => checked_value_str(session.discover_protocol(), self.limits.max_string_len),
             BuiltinId::ReqGrpcService => checked_value_opt_str(session.grpc_service(), self.limits.max_string_len),
             BuiltinId::ReqGrpcMethod => checked_value_opt_str(session.grpc_method(), self.limits.max_string_len),
@@ -237,13 +237,8 @@ impl Vm {
                 checked_value_opt_str(fp, self.limits.max_string_len)
             }
 
-            // ===== resp.* read (P2) =====
+            // ===== resp.* read (additional) =====
             BuiltinId::RespHeaderNames => {
-                // Collect response header names — requires response_header to be available
-                // Uses get_response_header pattern: if response_header is None, returns empty list
-                // We don't have a dedicated method, so we check known standard headers
-                // Actually, we need a new PluginSession method for this.
-                // For now, return empty list if response headers are not accessible.
                 let names = session.response_header_names();
                 const MAX_HEADER_NAMES: usize = 256;
                 let mut result: Vec<Arc<str>> = Vec::new();
@@ -616,7 +611,7 @@ impl Vm {
                 Ok(Value::List(list))
             }
 
-            // ===== P3 Utility Functions =====
+            // ===== Additional utilities =====
             BuiltinId::HmacSha256 => {
                 use hmac::{Hmac, Mac};
                 type HmacSha256 = Hmac<sha2::Sha256>;
@@ -966,7 +961,7 @@ impl Vm {
         };
 
         // When block_private_ips is set, select the guarded client whose redirect
-        // policy re-applies is_ssrf_blocked_ip_literal to every hop (F-012).
+        // policy re-applies is_ssrf_blocked_ip_literal to every hop.
         let client = dsl_http_client(runtime.block_private_ips);
         let mut builder = client
             .request(method, &url_str)
@@ -1436,7 +1431,7 @@ impl Vm {
 ///
 /// Exposed `pub(crate)` so the guarded DSL HTTP client's redirect policy
 /// (`runtime::dsl_http_client(true)`) re-applies the same IP-literal check to
-/// every redirect hop — F-012's per-hop SSRF guard.
+/// every redirect hop.
 pub(crate) fn is_ssrf_blocked_ip_literal(host: &str) -> bool {
     use std::net::IpAddr;
     // Strip IPv6 zone IDs (RFC 6874: "::1%eth0")

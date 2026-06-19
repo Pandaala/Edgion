@@ -83,7 +83,6 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         }
     }
 
-    /// Check if cache is ready
     pub fn is_ready(&self) -> bool {
         let cache = self.cache_data.read();
         cache.is_ready()
@@ -95,7 +94,6 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         *guard = Some(client);
     }
 
-    /// Set the configuration processor for this cache
     pub fn set_conf_processor(&self, processor: Box<dyn edgion_common::conf_sync::traits::ConfHandler<T> + Send + Sync>)
     where
         T: Clone + ResourceMeta,
@@ -104,21 +102,17 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         cache.set_conf_processor(processor, self.cache_data.clone());
     }
 
-    /// Get current sync version
     pub fn get_sync_version(&self) -> u64 {
         let cache = self.cache_data.read();
         cache.sync_version()
     }
 
-    /// Set current sync version
     pub fn set_sync_version(&self, version: u64) {
         let mut cache = self.cache_data.write();
         cache.set_sync_version(version);
     }
 
-    /// Reset cache with a complete set of resources
-    /// This clears existing cache and rebuilds it with the provided resources
-    /// Uses resource.key_name() (namespace/name) as the key for each resource
+    /// Replace all cached resources; keys are `resource.key_name()` (namespace/name).
     pub fn reset(&self, resources: Vec<T>, sync_version: u64)
     where
         T: ResourceMeta,
@@ -127,7 +121,6 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         cache.reset(resources, sync_version);
     }
 
-    /// List all data - returns all resources in the cache with sync version
     pub fn list(&self) -> ListData<T>
     where
         T: Clone,
@@ -146,7 +139,6 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         ListData::new(data, sync_version)
     }
 
-    /// Get a resource by key
     pub fn get(&self, key: &str) -> Option<T>
     where
         T: Clone,
@@ -155,26 +147,22 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
         cache.get(key).map(|arc| (**arc).clone())
     }
 
-    /// Get all keys
     pub fn keys(&self) -> Vec<String> {
         let cache = self.cache_data.read();
         cache.keys().cloned().collect()
     }
 
-    /// Check if cache is empty
     pub fn is_empty(&self) -> bool {
         let cache = self.cache_data.read();
         cache.is_empty()
     }
 
-    /// Get the number of resources in the cache
     pub fn len(&self) -> usize {
         let cache = self.cache_data.read();
         cache.len()
     }
 
     pub fn trigger_update_event_by_key(&self, key: &str) {
-        // Add compress event to trigger partial_update
         let mut cache = self.cache_data.write();
         cache.add_compress_event(
             key.to_string(),
@@ -189,7 +177,6 @@ impl<T: ResourceMeta + Resource> ClientCache<T> {
     }
 }
 
-// Implement DynClientCache for all ClientCache<T> with appropriate bounds
 #[async_trait::async_trait]
 impl<T> DynClientCache for ClientCache<T>
 where

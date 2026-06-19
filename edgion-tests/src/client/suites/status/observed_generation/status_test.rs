@@ -30,7 +30,6 @@ fn extract_observed_generations(conditions: &[Value]) -> Vec<(String, Option<i64
 }
 
 impl ObservedGenerationStatusTestSuite {
-    /// Gateway conditions should all have observedGeneration == metadata.generation
     fn test_gateway_conditions_observed_generation() -> TestCase {
         TestCase::new(
             "gateway_conditions_observed_generation",
@@ -93,7 +92,6 @@ impl ObservedGenerationStatusTestSuite {
         )
     }
 
-    /// Gateway listener conditions should all have observedGeneration == metadata.generation
     fn test_gateway_listener_conditions_observed_generation() -> TestCase {
         TestCase::new(
             "gateway_listener_conditions_observed_generation",
@@ -151,7 +149,6 @@ impl ObservedGenerationStatusTestSuite {
         )
     }
 
-    /// GatewayClass conditions should have observedGeneration matching its metadata.generation.
     fn test_gateway_class_conditions_observed_generation() -> TestCase {
         TestCase::new(
             "gateway_class_conditions_observed_generation",

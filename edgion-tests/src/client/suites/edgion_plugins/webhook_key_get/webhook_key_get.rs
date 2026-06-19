@@ -353,7 +353,7 @@ impl WebhookKeyGetTestSuite {
         )
     }
 
-    // ==================== 5. Webhook pathSuffix appended to LinkSys uri ====================
+    // ==================== 7. Webhook pathSuffix appended to LinkSys uri ====================
     fn test_webhook_path_suffix_extract() -> TestCase {
         TestCase::new(
             "webhook_path_suffix_extract",
@@ -420,7 +420,7 @@ impl WebhookKeyGetTestSuite {
         )
     }
 
-    // ==================== 7. Webhook apiKey auth injects key into outbound request ====================
+    // ==================== 8. Webhook apiKey auth injects key into outbound request ====================
     fn test_webhook_apikey_auth() -> TestCase {
         TestCase::new(
             "webhook_apikey_auth",

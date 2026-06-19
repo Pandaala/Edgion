@@ -521,25 +521,7 @@ fn analyze_latency(metrics: &[BackendMetric]) -> Result<LatencyAnalysis> {
     for metric in metrics {
         if let Some(ref test_data) = metric.test_data {
             if let Some(latency) = test_data.latency_ms {
-                // If count > 1, we assume all requests in this bucket had similar latency?
-                // Or simply add it `count` times?
-                // Prometheus metrics are counters.
-                // But `edgion_backend_requests_total` is a Counter. The value is total requests ever made.
-                // Wait, if I fetch metrics, I get the current value of the counter.
-                // If I made 5 requests, the counter is 5.
-                // How does `test_data` work with counters?
-                // If `test_data` varies per request (e.g. latency), then each request MUST produce a unique metric line?
-                // Unless the labels are identical.
-                // If `latency_ms` is in `test_data` label, then for every unique latency, a new time series is created!
-                // This would be high cardinality.
-                // But for a test with 1 request, it's fine.
-                // For multiple requests, if latencies differ, we get multiple lines.
-                // So we shout iterate and add `latency` to samples `metric.count` times?
-                // No, metric.count is the value of the counter.
-                // If the metric line is for latency=100ms and count=1, we have 1 request.
-                // If latency=101ms and count=1, we have another.
-                // So yes, we should add `latency` `metric.count` times.
-
+                // Each unique latency value creates a separate time series; expand by count to reconstruct the sample distribution.
                 for _ in 0..metric.count {
                     samples.push(latency);
                 }

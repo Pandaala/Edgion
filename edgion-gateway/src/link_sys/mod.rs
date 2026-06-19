@@ -14,10 +14,7 @@
 pub mod providers;
 pub mod runtime;
 
-// Link-system core now lives in `common::link`. Re-export the modules and the
-// `LinkSysHealth` type from their original paths so existing
-// `gateway::link_sys::{credential, tls, health, lifecycle, LinkSysHealth}` call
-// sites keep resolving without churn.
+// Re-exports from `edgion_common::link` so gateway crate paths remain stable.
 pub use edgion_common::link::{credential, health, lifecycle, tls, LinkSysHealth};
 
 pub use providers::webhook::{

@@ -283,7 +283,7 @@ mod tests {
         assert_eq!(parse_duration("1d12h").unwrap(), Duration::from_secs(129600));
         // 2d6h = 54 hours = 194400 seconds
         assert_eq!(parse_duration("2d6h").unwrap(), Duration::from_secs(194400));
-        // 2d12h = 60 hours = 216000 seconds (covers the example shown in user docs)
+        // 2d12h = 60 hours = 216000 seconds
         assert_eq!(parse_duration("2d12h").unwrap(), Duration::from_secs(216000));
     }
 

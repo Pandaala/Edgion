@@ -149,7 +149,6 @@ impl RequestFilter for RequestRestriction {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Check for configuration errors (validity computed once at construction).
         if self.config_error.is_some() {
             plugin_log.push_err("restriction config invalid");
             // invariant: 500 and 403 are compile-time-literal HTTP status codes; ResponseHeader::build cannot fail.
@@ -194,7 +193,6 @@ impl RequestFilter for RequestRestriction {
                 .as_deref()
                 .unwrap_or("Access denied by restriction policy");
 
-            // Build error response.
             // invariant: 403 is a compile-time-literal HTTP status code; ResponseHeader::build cannot fail.
             let mut resp = Box::new(
                 ResponseHeader::build(self.config.status, None)
@@ -204,7 +202,6 @@ impl RequestFilter for RequestRestriction {
 
             let body = Bytes::from(serde_json::json!({"message": message}).to_string());
 
-            // Write response
             if let Err(_e) = session.write_response_header(resp, false).await {
                 plugin_log.push_err("write response header failed");
                 return PluginRunningResult::ErrTerminateRequest;

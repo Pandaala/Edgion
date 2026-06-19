@@ -3,7 +3,7 @@
 // Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-udp.yaml          # UDP backend service discovery
 // - Service_edge_test-udp.yaml                # UDP service definition
-// - UDPRoute_edge_test-udp.yaml               # UDP routing rules（listening port）
+// - UDPRoute_edge_test-udp.yaml               # UDP routing rules (listening port)
 // - Gateway_edge_example-gateway.yaml         # Gateway config
 // - GatewayClass__public-gateway.yaml         # GatewayClass config
 

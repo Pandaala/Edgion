@@ -16,9 +16,9 @@ pub struct GatewayBase {
     config_client: Arc<ConfigClient>,
 }
 
-/// Parse HTTP/2 enable flag from Gateway annotations
-/// Returns true if annotation is not set or set to "true"
-/// Returns false if annotation is set to "false"
+/// Parse HTTP/2 enable flag from Gateway annotation.
+/// Returns `true` if the annotation is absent or any value other than "false", "0", "no", "off".
+/// Returns `false` for those falsy values (case-insensitive).
 fn parse_enable_http2_annotation(gateway: &Gateway) -> bool {
     gateway
         .metadata
@@ -83,9 +83,9 @@ impl GatewayBase {
         // Track bound listeners to avoid duplicate physical bindings
         let mut bound_listeners: HashSet<ListenerKey> = HashSet::new();
 
-        // 3. Process each Gateway and configure listeners
+        // Process each Gateway and configure listeners
         for gateway in gateways.iter() {
-            // 3.1 Get GatewayClass for this Gateway
+            // Get GatewayClass for this Gateway
             let gateway_class_name = &gateway.spec.gateway_class_name;
             let gateway_class = match self.config_client.get_gateway_class(gateway_class_name) {
                 Some(gc) => gc,
@@ -99,7 +99,7 @@ impl GatewayBase {
                 }
             };
 
-            // 3.2 Get EdgionGatewayConfig for this Gateway
+            // Get EdgionGatewayConfig for this Gateway
             let edgion_gateway_config = match gateway_class.spec.parameters_ref.as_ref() {
                 Some(params_ref) => match self.config_client.get_edgion_gateway_config(&params_ref.name) {
                     Some(egwc) => egwc,
@@ -122,7 +122,7 @@ impl GatewayBase {
                 }
             };
 
-            // 3.3 Process listeners for this Gateway
+            // Process listeners for this Gateway
             if let Some(listeners) = &gateway.spec.listeners {
                 tracing::info!(
                     "Processing gateway {} with {} listeners",
@@ -205,7 +205,7 @@ impl GatewayBase {
             }
         }
 
-        // 4. Print summary
+        // Print summary
         tracing::info!("Gateway listeners configured. Summary:");
         for gateway in gateways.iter() {
             if let Some(listeners) = &gateway.spec.listeners {

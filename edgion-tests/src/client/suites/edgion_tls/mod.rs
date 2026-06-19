@@ -1,7 +1,3 @@
-// EdgionTls Test suite
-// Contains: https, grpctls, mTLS, mtls_failclose, cipher, port_only,
-//           both_absent_parent_ref, fallback_sni, wildcard_single_label tests
-
 mod both_absent_parent_ref;
 mod cipher;
 mod fallback_sni;

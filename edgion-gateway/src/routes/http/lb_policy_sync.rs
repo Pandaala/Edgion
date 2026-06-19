@@ -7,23 +7,14 @@ use crate::lb::lb_policy::{get_global_policy_store, LbPolicy};
 use edgion_resources::{HTTPRoute, ParsedLBPolicy};
 use std::collections::{HashMap, HashSet};
 
-/// Extract load balancing policies from HTTPRoute and update the global policy store
+/// Extract LB policies from HTTPRoute backend refs and update the global policy store.
 ///
-/// This function iterates through all rules and backend_refs in the HTTPRoute,
-/// extracts pre-parsed LB policy from extension_info, and updates the global policy store.
-///
-/// The extension_info.lb_policy is already parsed during pre_parse() stage,
-/// supporting formats:
-/// - kind: LBPolicyConsistentHash, name: header.xxx / cookie.xxx / arg.xxx
-/// - kind: LBPolicyLeastConn, name: default
-///
-/// # Arguments
-/// * `routes` - HashMap of HTTPRoute resources (key: resource_key, value: HTTPRoute)
+/// Reads `extension_info.lb_policy` (pre-parsed during `pre_parse()`) from each
+/// `HTTPBackendRef` and batch-inserts the results into the policy store.
 pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
     let policy_store = get_global_policy_store();
 
-    // Track which routes reference which services
-    // Format: HashMap<route_key, HashMap<service_key, Vec<LbPolicy>>>
+    // route_key -> service_key -> Vec<LbPolicy>
     let mut route_service_policies: HashMap<String, HashMap<String, Vec<LbPolicy>>> = HashMap::new();
 
     for (route_key, route) in routes {
@@ -40,14 +31,11 @@ pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
                 continue;
             };
 
-            // Iterate through backend_refs and check pre-parsed extension_info
             for backend_ref in backend_refs {
-                // Check if this backend_ref has LB policy configured
                 let Some(parsed_policy) = &backend_ref.extension_info.lb_policy else {
                     continue;
                 };
 
-                // Convert ParsedLBPolicy to LbPolicy
                 let lb_policy = match parsed_policy {
                     ParsedLBPolicy::ConsistentHash(_) => LbPolicy::Consistent,
                     ParsedLBPolicy::LeastConn => LbPolicy::LeastConnection,
@@ -57,7 +45,6 @@ pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
                 let ns = backend_ref.namespace.as_deref().unwrap_or(route_namespace);
                 let service_key = format!("{}/{}", ns, backend_ref.name);
 
-                // Add to route_service_policies map
                 route_service_policies
                     .entry(route_key.clone())
                     .or_default()
@@ -75,7 +62,6 @@ pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
         }
     }
 
-    // Update the global policy store with all extracted policies
     for (route_key, service_policies) in route_service_policies {
         policy_store.batch_add(route_key, service_policies);
     }
@@ -83,23 +69,7 @@ pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
     tracing::info!(routes_processed = routes.len(), "LB policy extraction completed");
 }
 
-/// Clean up LB policies for removed HTTPRoutes
-///
-/// This function removes all policy references for the specified routes
-/// from the global policy store.
-///
-/// # Arguments
-/// * `removed_routes` - Set of HTTPRoute resource keys that were removed
-///
-/// # Example
-/// ```
-/// use std::collections::HashSet;
-/// use edgion::core::gateway::routes::http::lb_policy_sync::cleanup_lb_policies_for_routes;
-///
-/// let mut removed = HashSet::new();
-/// removed.insert("default/my-route".to_string());
-/// cleanup_lb_policies_for_routes(&removed);
-/// ```
+/// Remove all LB policy references for the given HTTPRoute resource keys from the global store.
 pub fn cleanup_lb_policies_for_routes(removed_routes: &HashSet<String>) {
     if removed_routes.is_empty() {
         return;
@@ -121,8 +91,7 @@ mod tests {
     use edgion_resources::ResourceMeta;
     use std::collections::HashMap;
 
-    /// Helper function to create a test HTTPRoute with LB policy
-    /// Uses new extensionRef format: kind=LBPolicyConsistentHash/LBPolicyLeastConn
+    /// Build a test HTTPRoute with an LB policy extensionRef on the backend.
     fn create_test_route_with_lb_policy(
         namespace: &str,
         name: &str,
@@ -163,7 +132,6 @@ mod tests {
         });
 
         let mut route: HTTPRoute = serde_json::from_value(json).expect("Failed to create test HTTPRoute");
-        // Call pre_parse to populate extension_info
         route.pre_parse();
         route
     }
@@ -189,7 +157,6 @@ mod tests {
         assert!(!policies.is_empty());
         assert!(policies.contains(&LbPolicy::Consistent));
 
-        // Cleanup only our test data
         policy_store.delete_lb_policies_by_resource_key("test-sync/route1");
     }
 
@@ -247,7 +214,6 @@ mod tests {
         assert!(policies1.contains(&LbPolicy::Consistent));
         assert!(policies2.contains(&LbPolicy::LeastConnection));
 
-        // Cleanup only our test data
         policy_store.delete_lb_policies_by_resource_key("test-multi/route1");
         policy_store.delete_lb_policies_by_resource_key("test-multi/route2");
     }

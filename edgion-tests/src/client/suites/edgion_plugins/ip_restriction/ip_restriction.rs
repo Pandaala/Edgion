@@ -1,10 +1,5 @@
 // HTTP-layer IpRestriction Plugin Test Suite
 //
-// Regression coverage for fr-types-01: IpRestriction::create must compile the
-// allow/deny matchers (via validate_and_init). Before the fix the matchers were
-// never built, so evaluate_ip_access fell through to Default(Allow) and a whitelist
-// silently allowed every IP (fail-open ACL).
-//
 // All cases use ipSource: remoteAddr so the checked IP is the deterministic TCP
 // peer of the test client (127.0.0.1), independent of RealIp / XFF processing.
 
@@ -14,8 +9,7 @@ use std::time::Instant;
 pub struct IpRestrictionPluginTestSuite;
 
 impl IpRestrictionPluginTestSuite {
-    // 1. Whitelist miss — the key fr-types-01 regression: client IP (127.0.0.1) is
-    //    not in the allow list, so it must be denied. Pre-fix this returned 200.
+    // 1. Whitelist miss — client IP (127.0.0.1) is not in the allow list → denied.
     fn test_allow_list_denies_ip_not_in_list() -> TestCase {
         TestCase::new(
             "allow_list_denies_ip_not_in_list",

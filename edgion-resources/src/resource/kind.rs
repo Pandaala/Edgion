@@ -97,7 +97,7 @@ impl ResourceKind {
                 ResourceKind::EdgionAcme => {}
                 ResourceKind::ConfigMap => {} // NOTE: When adding a new ResourceKind variant:
                                               // 1. Add it to this match
-                                              // 2. Add corresponding entry in src/types/resource_defs.rs
+                                              // 2. Add corresponding entry in src/resource/defs.rs
                                               // The compiler will ensure both are in sync.
             }
         }

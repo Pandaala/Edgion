@@ -1,8 +1,7 @@
-//! Client certificate extraction utilities
+//! Client certificate extraction utilities.
 //!
-//! Extracts client certificate information from SSL connections after TLS handshake
-//!
-//! **Note**: This module requires BoringSSL or OpenSSL for X.509 certificate access.
+//! Extracts client certificate information from SSL connections after TLS handshake.
+//! Requires BoringSSL for X.509 certificate access.
 
 use crate::ctx::ClientCertInfo;
 use pingora_core::tls::ssl::SslRef;
@@ -11,10 +10,9 @@ use pingora_core::tls::x509::X509Ref;
 /// Extract client certificate information from SSL connection
 /// Returns None if no client certificate is present
 pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
-    // Get peer certificate (client certificate in mTLS)
     let cert = ssl.peer_certificate()?;
 
-    // Extract subject DN with efficient string building
+    // Extract subject DN.
     let mut subject = String::with_capacity(128);
     let mut first = true;
     for entry in cert.subject_name().entries() {
@@ -33,17 +31,14 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
         }
     }
 
-    // Extract Common Name (CN) from subject
     let cn = cert
         .subject_name()
         .entries()
         .find(|entry| entry.object().nid().short_name().map(|s| s == "CN").unwrap_or(false))
         .and_then(|entry| entry.data().as_utf8().map(|s| s.to_string()).ok());
 
-    // Extract Subject Alternative Names (SANs)
     let sans = extract_sans(&cert);
 
-    // Calculate certificate fingerprint (SHA256)
     let fingerprint = cert
         .digest(pingora_core::tls::hash::MessageDigest::sha256())
         .map(|digest| {
@@ -64,7 +59,6 @@ pub fn extract_client_cert_info(ssl: &SslRef) -> Option<ClientCertInfo> {
 fn extract_sans(cert: &X509Ref) -> Vec<String> {
     let mut sans = Vec::new();
 
-    // Get Subject Alternative Names extension
     if let Some(san_ext) = cert.subject_alt_names() {
         for san in san_ext {
             // DNS names
@@ -75,13 +69,10 @@ fn extract_sans(cert: &X509Ref) -> Vec<String> {
             if let Some(ip_bytes) = san.ipaddress() {
                 let ip_str = match ip_bytes.len() {
                     4 => {
-                        // IPv4: 4 bytes
-                        // SAFETY: We've verified length is 4, so indexing [0..3] is safe
                         format!("{}.{}.{}.{}", ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3])
                     }
                     16 => {
-                        // IPv6: 16 bytes - use std::net::Ipv6Addr for RFC-compliant formatting
-                        // SAFETY: We've verified length is 16 before converting to array
+                        // Use Ipv6Addr for RFC-compliant compressed IPv6 formatting.
                         let octets: [u8; 16] = match ip_bytes.try_into() {
                             Ok(arr) => arr,
                             Err(_) => continue,

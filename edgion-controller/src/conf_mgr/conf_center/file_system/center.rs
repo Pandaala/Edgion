@@ -157,6 +157,3 @@ impl CenterLifeCycle for FileSystemCenter {
         Some(self.registry.clone())
     }
 }
-
-// FileSystemCenter automatically implements ConfCenter via blanket impl
-// because it implements both CenterApi and CenterLifeCycle

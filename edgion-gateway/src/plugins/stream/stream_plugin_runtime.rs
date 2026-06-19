@@ -75,17 +75,13 @@ impl StreamPluginRuntime {
     pub async fn run(&self, ctx: &StreamContext) -> StreamPluginResult {
         for plugin in &self.plugins {
             match plugin.on_connection(ctx).await {
-                StreamPluginResult::Allow => {
-                    // Continue to next plugin
-                    continue;
-                }
+                StreamPluginResult::Allow => continue,
                 StreamPluginResult::Deny(reason) => {
                     return StreamPluginResult::Deny(reason);
                 }
             }
         }
 
-        // All plugins passed
         StreamPluginResult::Allow
     }
 

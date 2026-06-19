@@ -1,10 +1,8 @@
 //! Shared credential parsing layer (used by both Controller and Gateway).
 //!
-//! Historically this module lived under the Controller's credential
-//! pipeline. It was moved to the types layer so that the Gateway can
-//! re-parse `Secret` bytes attached to `LinkSys`/`EdgionAcme` specs and
-//! derive its own `Material` values on demand, without depending on any
-//! Controller-side wiring.
+//! Lives at the types layer so the Gateway can re-parse `Secret` bytes
+//! attached to `LinkSys`/`EdgionAcme` specs on demand, without depending
+//! on Controller-side wiring.
 //!
 //! Layout:
 //! - [`materials`] — strongly-typed credential material structs

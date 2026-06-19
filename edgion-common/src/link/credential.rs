@@ -1,7 +1,7 @@
 //! Materialise credentials on the Gateway from the embedded `Secret` carried
 //! inside `LinkSys.spec.*Auth.secret`.
 //!
-//! # Tri-state credential model
+//! # Four-state credential model
 //!
 //! Auth credentials go through four states on the Gateway side:
 //!
@@ -504,8 +504,8 @@ mod tests {
         }
     }
 
-    /// Regression test for C1: when a LinkSys with embedded secret is JSON-
-    /// round-tripped (simulating conf_sync), Gateway can still materialise.
+    /// When a LinkSys with embedded secret is JSON-round-tripped (simulating
+    /// conf_sync), Gateway can still materialise.
     #[test]
     fn basic_state_survives_conf_sync_roundtrip() {
         let ls = mk_redis_linksys(Some(mk_redis_auth(Some(mk_secret(&[("password", b"hunter2")])))));
@@ -603,10 +603,10 @@ mod tests {
     // ------------------------------------------------------------
     // resolved_state + dispatch gate — Webhook variants
     //
-    // Regression coverage for link-sys-F003: Webhook dispatch must gate on
-    // `resolved_state(ls).is_buildable()` (same as Elasticsearch) so a webhook
-    // whose `auth.secretRef` Secret is Pending / Invalid is not registered and
-    // cannot silently send an unauthenticated request.
+    // Webhook dispatch must gate on `resolved_state(ls).is_buildable()`
+    // (same as Elasticsearch) so a webhook whose `auth.secretRef` Secret is
+    // Pending / Invalid is not registered and cannot silently send an
+    // unauthenticated request.
     // ------------------------------------------------------------
 
     fn mk_webhook_linksys(auth: Option<WebhookAuth>) -> LinkSys {

@@ -58,8 +58,8 @@ fn effective_timeout_ms(configured: Option<u64>, default_ms: u64, max_ms: u64) -
 ///
 /// The caller passes the resolved [`CredentialState`] produced by
 /// [`credential::basic_state`](crate::link_sys::credential::basic_state).
-/// `Pending` / `Invalid` produce a fail-fast `bail!` (see I4 + M4) — dispatch
-/// is expected to filter these out up-front by checking
+/// `Pending` / `Invalid` produce a fail-fast `bail!` — dispatch is expected
+/// to filter these out up-front by checking
 /// `auth_state.is_buildable() && credential::tls_ready(ls)`.
 pub fn build_fred_config(crd: &RedisClientConfig, auth: &CredentialState<BasicAuthMaterial>) -> Result<Config> {
     let server = build_server_config(crd)?;
@@ -176,7 +176,6 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
         perf.default_command_timeout = Duration::from_millis(cmd_timeout);
     });
 
-    // TLS configuration
     if let Some(tls) = &crd.tls {
         if tls.enabled {
             if tls.insecure_skip_verify.unwrap_or(false) {
@@ -201,7 +200,6 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
         }
     }
 
-    // Connection pool size
     let pool_size = crd
         .pool
         .as_ref()
@@ -401,7 +399,7 @@ mod tests {
         assert_eq!(config.password, Some("p".to_string()));
     }
 
-    /// I4 / M4 regression: auth configured in CRD but state is `Pending` must
+    /// Regression guard: auth configured in CRD but state is `Pending` must
     /// fail-fast instead of silently falling back to empty credentials.
     #[test]
     fn test_config_auth_pending_fails_fast() {
@@ -413,7 +411,7 @@ mod tests {
         );
     }
 
-    /// M4 regression: auth configured in CRD, state is `Invalid` → fail-fast
+    /// Regression guard: auth configured in CRD, state is `Invalid` → fail-fast
     /// with a distinct message carrying the reason.
     #[test]
     fn test_config_auth_invalid_fails_fast() {

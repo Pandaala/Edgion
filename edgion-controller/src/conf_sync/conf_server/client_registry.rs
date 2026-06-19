@@ -7,10 +7,6 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use tokio::sync::Notify;
 
-/// Lightweight registry for tracking connected gateway instances.
-///
-/// Thread-safe: RwLock for client map, Notify for change signaling.
-/// Designed for low write frequency (only on gateway connect/disconnect).
 pub struct ClientRegistry {
     /// client_id -> client metadata
     clients: RwLock<HashMap<String, ClientMeta>>,

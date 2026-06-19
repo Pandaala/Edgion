@@ -10,29 +10,23 @@ use std::sync::Arc;
 
 /// Create Pingora ServerConf from local YAML configuration
 fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
-    // Number of worker threads (default: number of CPU cores)
     let threads = config
         .server
         .threads
         .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1));
 
-    // Enable work stealing (default: true)
     let work_stealing = config.server.work_stealing.unwrap_or(true);
 
-    // Grace period for shutdown (default: 30 seconds)
     let grace_period_seconds = Some(config.server.grace_period_seconds.unwrap_or(30));
 
-    // Graceful shutdown timeout (default: 10 seconds)
     let graceful_shutdown_timeout_seconds = Some(config.server.graceful_shutdown_timeout_seconds.unwrap_or(10));
 
-    // Upstream keepalive pool size (default: 128)
     let upstream_keepalive_pool_size = config.server.upstream_keepalive_pool_size.unwrap_or(128);
 
-    // Error log file path (optional)
     let error_log = config.server.error_log.clone();
 
     let conf = ServerConf {
-        daemon: false, // Ensure daemon mode is disabled (we don't run as daemon)
+        daemon: false,
         threads,
         work_stealing,
         grace_period_seconds,
@@ -54,17 +48,16 @@ fn create_server_conf(config: &EdgionGatewayConfig) -> ServerConf {
     conf
 }
 
-/// Phase 1: Create and configure Pingora server with listeners
+/// Create and configure the Pingora server with listeners.
 ///
-/// This function:
-/// 1. Creates Pingora ServerConf from local YAML configuration
-/// 2. Creates and bootstraps Pingora Server
-/// 3. Fetches all Gateway resources from ConfigClient
-/// 4. Delegates to GatewayBase to configure listeners for each Gateway
+/// 1. Builds `ServerConf` from local YAML configuration
+/// 2. Creates and bootstraps the Pingora server
+/// 3. Fetches all Gateway resources from `ConfigClient`
+/// 4. Delegates to `GatewayBase` to configure listeners for each Gateway
 ///
 /// # Requirements
-/// - AccessLogger must be initialized (via `init_access_logger()`)
-/// - ConfigClient must be ready with Gateway/GatewayClass/EdgionGatewayConfig
+/// - Access logger must be initialized (via `init_access_logger()`)
+/// - `ConfigClient` must be ready with Gateway/GatewayClass/EdgionGatewayConfig
 pub fn create_and_configure_server(
     config_client: Arc<ConfigClient>,
     gateway_config: &EdgionGatewayConfig,
@@ -90,10 +83,9 @@ pub fn create_and_configure_server(
     Ok(pingora_server)
 }
 
-/// Phase 2: Run Pingora server (synchronous, blocks until shutdown)
+/// Run the Pingora server (synchronous, blocks until shutdown).
 ///
-/// This function starts the Pingora server and blocks until shutdown.
-/// It should be called after the Tokio runtime has been moved to a background thread.
+/// Call this after the Tokio runtime has been moved to a background thread.
 pub fn run_server(server: Server) {
     tracing::info!("Starting Pingora server");
     server.run_forever();

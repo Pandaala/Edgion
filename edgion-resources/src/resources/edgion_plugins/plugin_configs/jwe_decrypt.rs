@@ -137,7 +137,6 @@ pub struct JweDecryptConfig {
     #[schemars(range(min = 1))]
     pub max_total_header_bytes: usize,
 
-    // === Runtime fields (controller populated) ===
     #[serde(
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"

@@ -33,7 +33,7 @@ impl TcpRouteUnit {
     /// Resolves the stream-plugin store key and keepalive config from the
     /// route's metadata/annotations (single source of truth shared with the
     /// HTTP/TLS conf-handlers) and builds the WRR selector from the first
-    /// rule's backend refs. None of this state lives on the schema anymore.
+    /// rule's backend refs. None of this state lives on the schema.
     pub fn from_route(route: Arc<TCPRoute>) -> Self {
         let route_key = route.key_name();
         let stream_plugin_store_key = resolve_stream_plugin_store_key(&route.metadata);
@@ -54,9 +54,6 @@ impl TcpRouteUnit {
 }
 
 /// Build a WRR selector over the first rule's core-service backend refs.
-///
-/// Mirrors the previous `conf_handler_impl::initialize_route` logic so the
-/// selector contents are unchanged by the decoupling.
 fn build_backend_selector(route: &TCPRoute) -> Arc<BackendSelector<TCPBackendRef>> {
     let selector = BackendSelector::new();
     if let Some(rule) = route.spec.rules.as_ref().and_then(|r| r.first()) {

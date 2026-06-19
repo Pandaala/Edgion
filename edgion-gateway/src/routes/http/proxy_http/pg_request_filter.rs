@@ -125,7 +125,6 @@ pub async fn request_filter(
     }
 
     // Step 1.5: Handle preflight requests (before plugin execution)
-    // Check if this is a preflight request and handle it early
     if edgion_http.preflight_handler.is_preflight(session) {
         // If route has a native CORS filter (type: CORS), skip this preflight handler.
         // GapiCorsFilter in Step 3 already has full preflight support and will handle it.
@@ -167,9 +166,8 @@ pub async fn request_filter(
         }
     }
 
-    // === Per-request resolve (Phase 4 of unified plugin snapshot) ===
-    // Resolve once at request_filter entry; later stages read directly from
-    // ctx without paying any format!() / store-lookup cost.
+    // Per-request resolve: populate ctx.resolved_* once here; later stages read
+    // directly without paying any format!() / store-lookup cost.
     // Fetch the global plugin store once and share &PluginStore across both
     // resolve calls to avoid redundant Arc::clone on the hot path.
     if ctx.resolved_global_plugins.is_none() || ctx.resolved_route_ext_refs.is_none() {
@@ -316,10 +314,7 @@ async fn build_request_metadata(
         .get("x-trace-id")
         .and_then(|h| h.to_str().ok())
         .map(|s| s.to_string())
-        .or_else(|| {
-            // Generate new trace_id if not present
-            Some(uuid::Uuid::new_v4().to_string())
-        });
+        .or_else(|| Some(uuid::Uuid::new_v4().to_string()));
 
     // RFC 9110 §7.2: reject HTTP/1.1 requests carrying more than one Host header
     // line. Host smuggling defense — gated by `SecurityProtectConfig.reject_duplicate_host`
@@ -422,7 +417,6 @@ async fn build_request_metadata(
         if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
             let xff_len = existing_xff.len();
             if xff_len > security_config.x_forwarded_for_limit {
-                // XFF header too long, send 400 response directly
                 ctx.add_error(EdgionStatus::XffHeaderTooLong);
                 end_response_400(session, ctx, &edgion_http.server_header_opts).await?;
                 return Ok(true); // Response sent
@@ -520,17 +514,14 @@ fn append_x_forwarded_for(session: &mut Session, ctx: &EdgionHttpContext) {
     // client_addr is already IP only (without port)
     let client_ip = &ctx.request_info.client_addr;
 
-    // Append client IP to X-Forwarded-For (using pre-extracted value)
     let req_header_mut = session.req_header_mut();
     if let Some(ref existing_xff) = ctx.request_info.x_forwarded_for {
-        // X-Forwarded-For exists, append client IP
         let mut new_xff = String::with_capacity(existing_xff.len() + 2 + client_ip.len());
         new_xff.push_str(existing_xff);
         new_xff.push_str(", ");
         new_xff.push_str(client_ip);
         let _ = req_header_mut.insert_header("X-Forwarded-For", &new_xff);
     } else {
-        // X-Forwarded-For doesn't exist, create new
         let _ = req_header_mut.insert_header("X-Forwarded-For", client_ip);
     }
 }

@@ -15,13 +15,6 @@ use super::traits::{
 use crate::plugins::runtime::conditions::{ConditionExt, EvaluationResult, PluginConditions, PluginConditionsExt};
 use edgion_resources::filters::PluginRunningResult;
 
-// ==================== PluginSession Integration ====================
-//
-// NOTE: PluginConditions.evaluate() now accepts &dyn PluginSession directly.
-// PluginSession also has key_get() and key_set() methods for unified value access.
-
-// ==================== ConditionalRequestFilter ====================
-
 /// Wrapper that adds condition evaluation to a RequestFilter
 ///
 /// Before running the inner filter, conditions are evaluated:
@@ -75,7 +68,6 @@ impl RequestFilter for ConditionalRequestFilter {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
                 let eval = conditions.evaluate_detail(session, log).await;
@@ -87,13 +79,9 @@ impl RequestFilter for ConditionalRequestFilter {
                 }
             }
         }
-
-        // Conditions satisfied or none defined, run the inner filter
         self.inner.run_request(session, log).await
     }
 }
-
-// ==================== ConditionalUpstreamResponseFilter ====================
 
 /// Wrapper that adds condition evaluation to an UpstreamResponseFilter (sync)
 pub struct ConditionalUpstreamResponseFilter {
@@ -146,7 +134,6 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
     ) -> PluginRunningResult {
-        // Check conditions before running (sync version for sync filter context)
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
                 let eval = conditions.evaluate_detail_sync(session, log);
@@ -158,13 +145,9 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
                 }
             }
         }
-
-        // Conditions satisfied or none defined, run the inner filter
         self.inner.run_upstream_response_filter(session, log)
     }
 }
-
-// ==================== ConditionalUpstreamResponseBodyFilter ====================
 
 /// Wrapper that adds condition evaluation to an UpstreamResponseBodyFilter (sync)
 ///
@@ -237,8 +220,6 @@ impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
     }
 }
 
-// ==================== ConditionalUpstreamResponse ====================
-
 /// Wrapper that adds condition evaluation to an UpstreamResponse (async)
 pub struct ConditionalUpstreamResponse {
     inner: Box<dyn UpstreamResponse>,
@@ -287,7 +268,6 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
     }
 
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        // Check conditions before running
         if let Some(conditions) = &self.conditions {
             if conditions.should_evaluate() {
                 let eval = conditions.evaluate_detail(session, log).await;
@@ -299,8 +279,6 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
                 }
             }
         }
-
-        // Conditions satisfied or none defined, run the inner filter
         self.inner.run_upstream_response(session, log).await
     }
 }
@@ -313,8 +291,6 @@ mod tests {
     use edgion_resources::common::KeyGet;
     use mockall::predicate::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-
-    // ==================== Mock Request Filter ====================
 
     struct MockRequestFilter {
         name: String,
@@ -346,8 +322,6 @@ mod tests {
             PluginRunningResult::Nothing
         }
     }
-
-    // ==================== Tests ====================
 
     #[test]
     fn test_conditional_filter_no_conditions() {

@@ -12,13 +12,10 @@ use edgion_resources::EdgionStatus;
 use pingora_proxy::Session;
 use std::sync::Arc;
 
-/// Check if the request is a gRPC request (based on context)
+/// Returns `true` when `ctx.request_info.discover_protocol` is `"grpc"` or `"grpc-web"`.
 ///
-/// This is the preferred method. The protocol was already identified in
-/// early_request_filter and stored in ctx.request_info.discover_protocol.
-///
-/// Note: In most cases, you should check ctx.request_info.discover_protocol directly
-/// rather than calling this helper function.
+/// The protocol is identified in `early_request_filter` and stored on `ctx` before
+/// this helper is called.
 #[inline]
 pub fn is_grpc_protocol(ctx: &EdgionHttpContext) -> bool {
     ctx.request_info
@@ -28,17 +25,9 @@ pub fn is_grpc_protocol(ctx: &EdgionHttpContext) -> bool {
         .unwrap_or(false)
 }
 
-/// Try to match gRPC route against the global gRPC route table.
+/// Try to match a gRPC route against the global gRPC route table.
 ///
-/// Returns: Ok(true) - matched successfully and handled
-///          Ok(false) - not matched, should fallback to HTTP routes
-///          Err - error occurred
-///
-/// # Parameters
-/// - `grpc_routes`: Domain gRPC route rules (global table)
-/// - `session`: The HTTP session
-/// - `ctx`: Request context
-/// - `index`: Pre-built gateway/listener index for this port
+/// Returns `Ok(true)` on a match, `Ok(false)` to fall back to HTTP routing, or `Err` on error.
 #[inline]
 pub async fn try_match_grpc_route(
     grpc_routes: &Arc<crate::routes::grpc::DomainGrpcRouteRules>,
@@ -62,25 +51,20 @@ pub async fn try_match_grpc_route(
     }
 }
 
-/// Handle gRPC upstream peer selection
+/// Select a gRPC upstream backend and populate `ctx.selected_grpc_backend`.
 ///
-/// Should be called in upstream_peer.
-/// Returns: Ok(Some(())) - gRPC backend handled
-///          Ok(None) - no gRPC backend, should use HTTP logic
-///          Err - error occurred
+/// Called from `upstream_peer`. Returns `Ok(Some(()))` when the backend is selected,
+/// `Ok(None)` when no gRPC route is active (fall through to HTTP logic), or `Err` on error.
 pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpContext) -> Result<Option<()>, EdError> {
-    // Check if backend is already selected
     if ctx.selected_grpc_backend.is_some() {
-        return Ok(Some(())); // Already handled
+        return Ok(Some(()));
     }
 
-    // Get reference to grpc_route_unit without cloning
     let grpc_route_unit = match ctx.grpc_route_unit.as_ref() {
         Some(unit) => unit,
         None => return Ok(None), // No gRPC route
     };
 
-    // Select gRPC backend from the compiled unit's pre-built selector.
     let mut backend_ref = grpc_route_unit
         .backend_finder
         .select()
@@ -103,7 +87,6 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
 
     // Query BackendTLSPolicy using route namespace for proper namespace inheritance
     let service_name = &backend_ref.name;
-    // If backend_ref.namespace is None, inherit from route namespace
     let service_namespace = backend_ref
         .namespace
         .as_deref()
@@ -112,8 +95,8 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     backend_ref.schema.backend_tls_policy =
         crate::backends::query_backend_tls_policy_for_service(service_name, service_namespace, backend_ref.port);
 
-    // Run backend-level request edgion_plugins
-    // todo need keep here or change to run before route plugin run?
+    // Run backend-level request plugins.
+    // TODO: evaluate whether backend plugins should run before route-level plugins
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
 
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
@@ -123,8 +106,7 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         return Err(EdError::PluginTerminated());
     }
 
-    // Backend context initialization is now handled by init_backend_context_if_needed
-    // in upstream_peer_grpc to avoid duplication
+    // Backend context is initialized in upstream_peer_grpc by init_backend_context_if_needed
     ctx.selected_grpc_backend = Some(backend_ref);
 
     Ok(Some(())) // Handled

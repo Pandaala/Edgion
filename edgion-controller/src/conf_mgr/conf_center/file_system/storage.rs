@@ -63,7 +63,7 @@ impl FileSystemStorage {
         }
     }
 
-    /// Attach a shared path registry (optional; used by future conflict-aware CRUD)
+    /// Attach a shared path registry; used by `resolve_path` and `create_one` to locate the canonical spec path.
     pub fn with_registry(mut self, registry: Arc<PathRegistry>) -> Self {
         self.registry = Some(registry);
         self
@@ -608,8 +608,7 @@ mod path_tests {
 
     #[test]
     fn validate_path_components_rejects_traversal_namespace() {
-        // A bare ".." namespace would resolve `root.join("..")` one level above
-        // the conf root — this is the fr-csync-01 path-traversal vector.
+        // A bare ".." namespace would resolve `root.join("..")` one level above the conf root.
         assert!(validate_path_components("HTTPRoute", Some(".."), "x").is_err());
         assert!(validate_path_components("HTTPRoute", Some("a/b"), "x").is_err());
         assert!(validate_path_components("HTTPRoute", Some("a\\b"), "x").is_err());

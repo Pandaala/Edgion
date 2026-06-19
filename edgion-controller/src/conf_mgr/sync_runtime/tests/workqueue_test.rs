@@ -179,10 +179,10 @@ async fn test_concurrent_enqueue_after_and_enqueue() {
 
 #[tokio::test]
 async fn test_delay_fire_collision_preserves_chain() {
-    // Reproduces c3a-008: when enqueue_after's delay fires and the key is already
-    // pending from a concurrent immediate enqueue, the trigger chain must be
-    // merged into the pending entry, not silently dropped. Otherwise the cycle
-    // detector loses cascade history and `max_trigger_cycles` cannot fire.
+    // When enqueue_after's delay fires and the key is already pending from a
+    // concurrent immediate enqueue, the trigger chain must be merged into the
+    // pending entry, not silently dropped. Otherwise the cycle detector loses
+    // cascade history and `max_trigger_cycles` cannot fire.
     let queue = Workqueue::with_defaults("test");
     let chain = TriggerChain::new().extend("HTTPRoute", "default/route-x");
     assert_eq!(chain.depth(), 1);
@@ -219,10 +219,6 @@ async fn test_delay_fire_collision_preserves_chain() {
 /// High-water depth tracking: latch must flip exactly on the entry edge
 /// (depth >= 80% of capacity), stay latched while above, recover below
 /// the 70% recovery threshold, and re-trigger on a fresh entry.
-///
-/// Replaces the broken `depth % 500 == 0` rate-limiter (`c3a-014`) which
-/// would miss most high-load events because the warn only fired when
-/// depth happened to land on a 500-multiple.
 #[tokio::test]
 async fn test_high_water_edge_trigger_and_recovery() {
     let queue = Workqueue::new(

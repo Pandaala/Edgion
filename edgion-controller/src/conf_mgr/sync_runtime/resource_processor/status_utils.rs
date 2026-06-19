@@ -64,7 +64,7 @@ pub mod condition_reasons {
     pub const SECRET_NOT_FOUND: &str = "SecretNotFound";
     // NOTE: There is intentionally *no* `REFERENCE_GRANT_MISSING` /
     // `CROSS_NS_REF_NOT_PERMITTED` / similar reason here. Cross-namespace
-    // denial uses the upstream `REF_NOT_PERMITTED` (see M6/F): the pipeline
+    // denial uses the upstream `REF_NOT_PERMITTED`: the pipeline
     // cannot distinguish "no grant yet" from "grant denies", so advertising a
     // distinction via a dedicated reason would mislead operators.
     /// Edgion extension · The Secret exists but is missing one or more required `data` keys.
@@ -441,7 +441,7 @@ pub fn resolved_refs_condition(errors: &[ResolvedRefsError], observed_generation
 /// 9. MissingKeys — Secret content incomplete
 ///
 /// Exposed as `pub(crate)` so other handlers (e.g. `EdgionPluginsHandler`,
-/// which still maintains its own Condition construction pending R2) can use
+/// which still maintains its own Condition construction) can use
 /// the same deterministic priority instead of `errors[0].reason()`.
 ///
 /// **Empty slice** returns a sentinel — callers guarantee non-empty at the
@@ -841,9 +841,9 @@ mod tests {
 
     #[test]
     fn test_resolved_refs_error_secret_not_found_reason_is_secret_not_found() {
-        // Regression for M6/E: SecretNotFound used to map to BACKEND_NOT_FOUND,
-        // which was misleading for Secret-backed CRDs (LinkSys / EdgionPlugins /
-        // EdgionTls). It must now map to SECRET_NOT_FOUND.
+        // SecretNotFound must map to SECRET_NOT_FOUND, not BACKEND_NOT_FOUND —
+        // using BackendNotFound would mislead operators of Secret-backed CRDs
+        // (LinkSys / EdgionPlugins / EdgionTls) into looking for a missing Service.
         let err = ResolvedRefsError::SecretNotFound {
             namespace: "ns".to_string(),
             name: "missing".to_string(),

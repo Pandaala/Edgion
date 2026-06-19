@@ -1,11 +1,10 @@
-//! New simplified conf_server module
+//! conf_server: gRPC list/watch service for configuration synchronization.
 //!
-//! This module provides a simplified ConfigSyncServer that only handles gRPC list/watch.
-//! The ServerCache<T> instances are managed by ResourceProcessor in conf_mgr.
+//! `ServerCache<T>` instances are managed by `ResourceProcessor` in `conf_mgr`.
 //!
 //! Key components:
 //! - `WatchObj` trait: Object-safe interface for list/watch operations
-//! - `ConfigSyncServer`: Simplified server that holds HashMap<kind, Arc<dyn WatchObj>>
+//! - `ConfigSyncServer`: Holds `HashMap<kind, Arc<dyn WatchObj>>`; registered by processors
 //! - `ConfigSyncGrpcServer`: gRPC service implementation
 
 mod client_registry;

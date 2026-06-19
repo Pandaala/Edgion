@@ -340,7 +340,7 @@ impl EdgionControllerCli {
     /// 1. Initialize environment
     /// 2. Create shutdown handler for graceful shutdown
     /// 3. Create ConfMgr
-    /// 4. Spawn ConfMgr.start() (manages lifecycle: leader election, link, relink)
+    /// 4. Spawn ConfMgr.start_with_shutdown() (manages lifecycle: leader election, link, relink)
     /// 5. Load CRD schemas (before federation client so router can be created)
     /// 6. Start federation client with admin router (HTTP-over-gRPC proxy)
     /// 7. Start gRPC and Admin services with shutdown support

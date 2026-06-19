@@ -339,7 +339,7 @@ impl EdgionTlsPassthroughProxy {
             }
         };
 
-        // 4. Send Proxy Protocol v2 if configured
+        // 5. Send Proxy Protocol v2 if configured
         if let Some(2) = unit.proxy_protocol_version {
             if let Ok(src_ip) = ctx.client_addr.parse::<IpAddr>() {
                 // Use the already-bracketed upstream_addr_str (SocketAddr Display) for the PP2
@@ -369,7 +369,7 @@ impl EdgionTlsPassthroughProxy {
             }
         }
 
-        // 5. Forward the initial ClientHello bytes that we already read
+        // 6. Forward the initial ClientHello bytes already read from downstream
         if let Err(e) = upstream_stream.write_all(initial_bytes).await {
             ctx.err_log = Some(format!("upstream write initial bytes failed: {e}"));
             return;
@@ -382,7 +382,7 @@ impl EdgionTlsPassthroughProxy {
             info.bytes_sent += initial_bytes.len() as u64;
         }
 
-        // 6. Bidirectional relay of raw TLS traffic
+        // 7. Bidirectional relay of raw TLS traffic
         self.duplex(downstream, upstream_stream, ctx).await;
     }
 

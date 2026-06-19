@@ -54,12 +54,10 @@ async fn delete_from_file(client: &EdgionClient, file_path: &str) -> Result<()> 
         anyhow::bail!("File not found: {}", file_path);
     }
 
-    // Read file content
     let content = fs::read_to_string(path)
         .await
         .with_context(|| format!("Failed to read file: {}", file_path))?;
 
-    // Extract metadata
     let metadata =
         extract_resource_metadata(&content).with_context(|| format!("Failed to parse metadata from {}", file_path))?;
 
@@ -70,7 +68,6 @@ async fn delete_from_file(client: &EdgionClient, file_path: &str) -> Result<()> 
         .context("Missing 'metadata.name' field in resource")?;
     let namespace = metadata.namespace.as_deref();
 
-    // Delete the resource
     delete_resource(client, kind, namespace, name).await
 }
 

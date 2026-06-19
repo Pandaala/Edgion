@@ -935,7 +935,7 @@ pub struct EdgionHttpContext {
     /// Outer `None` = resolve has not run yet.
     ///
     /// Populated by `pg_request_filter`, read by `ExtensionRefFilter::prepare_execution`
-    /// via `PluginSession::resolved_route_ext_ref(index)` (added in Task 4).
+    /// via `PluginSession::resolved_route_ext_ref(index)`.
     pub resolved_route_ext_refs: Option<Arc<Vec<Option<Arc<PluginRuntime>>>>>,
 
     /// Response-phase local-reply body, set by a response-phase plugin that
@@ -943,10 +943,10 @@ pub struct EdgionHttpContext {
     /// and consumed by `upstream_response_body_filter` (Phase 8). `Some` until
     /// the body filter injects it on the first chunk; the replacement response
     /// header (status + framing) was already rewritten in place during the
-    /// plugin phase. See `tasks/todo/filter-04-response-local-reply.md`.
+    /// plugin phase.
     pub local_reply_body: Option<bytes::Bytes>,
 
-    /// Stashed response-phase local-reply header (filter-04b). `Some` means a
+    /// Stashed response-phase local-reply header. `Some` means a
     /// reply is pending; `response_filter` writes it downstream and aborts the
     /// pump. The gateway Server header is applied at write time.
     pub local_reply_header: Option<Box<ResponseHeader>>,

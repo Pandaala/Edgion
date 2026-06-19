@@ -91,8 +91,8 @@ impl GlobalTcpRouteManagers {
     /// Built ONCE per route here (in the conf-handler), then cached and reused
     /// across listener rebuilds, so a sibling route change on the same listener
     /// never resets this route's `backend_finder` WRR cursor. The compiled
-    /// runtime (BackendSelector, stream-plugin store key, keepalive config) no
-    /// longer lives on the schema — see [`TcpRouteUnit::from_route`].
+    /// runtime (BackendSelector, stream-plugin store key, keepalive config) lives
+    /// on the unit, not on the schema — see [`TcpRouteUnit::from_route`].
     fn initialize_route(&self, route: TCPRoute) -> Result<Arc<TcpRouteUnit>, String> {
         Ok(Arc::new(TcpRouteUnit::from_route(Arc::new(route))))
     }
@@ -182,9 +182,9 @@ mod tests {
     #[test]
     fn test_misclassified_add_rebuilds_old_listener() {
         // Simulates upstream misclassification: an existing key is sent in
-        // the `add` bucket instead of `update`. Bug 2: pre-collection of
-        // affected listeners must include add.keys() so the old listener
-        // is scheduled for rebuild when the route migrates to a new listener.
+        // the `add` bucket instead of `update`. Pre-collection of affected
+        // listeners must include add.keys() so the old listener is scheduled
+        // for rebuild when the route migrates to a new listener.
         let managers = GlobalTcpRouteManagers::new();
         let key9000 = make_listener_key(9000, "TCP");
         let key9001 = make_listener_key(9001, "TCP");

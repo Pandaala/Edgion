@@ -124,7 +124,7 @@ impl RequestMirrorPlugin {
         if self.config.backend_ref.name.is_empty() {
             return Err("backend_ref.name is required for RequestMirror".to_string());
         }
-        // TODO(Phase 2): Use BackendTLSPolicy to determine TLS instead of port heuristic.
+        // TODO: Use BackendTLSPolicy to determine TLS instead of port heuristic.
         let scheme = if port == 443 { "https" } else { "http" };
 
         // namespace is always Some here: filled in from default_namespace at construction time.

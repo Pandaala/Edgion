@@ -445,7 +445,7 @@ impl EdgionTlsTcpProxy {
         );
         log_tls(ctx).await;
 
-        // Also send to the per-listener access logger for backward compatibility
+        // Also emit to the per-listener access logger
         let log_entry = serde_json::json!({
             "ts": ctx.ts,
             "listener_port": ctx.listener_port,

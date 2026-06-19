@@ -261,8 +261,8 @@ impl KafkaLinkClient {
                 // otherwise leave the gauge stuck at the init() baseline of 1.
                 crate::observe::metrics::registry::record_link_sys_health(&name, false);
                 // The task exits here, closing its channel; `try_produce`'s
-                // self-heal evicts the dead entry so the next produce respawns
-                // (Task 05). Broker-level recovery is owned by the background probe.
+                // self-heal evicts the dead entry so the next produce respawns.
+                // Broker-level recovery is owned by the background probe.
                 return;
             }
         };
@@ -326,9 +326,9 @@ impl LinkSysLifecycle for KafkaLinkClient {
         self.healthy.store(true, Ordering::Relaxed);
         crate::observe::metrics::registry::record_link_sys_health(&self.name, true);
 
-        // Background health probe (task 05): broker liveness via list_topics,
-        // and after N consecutive failures, rebuild inner_client from config
-        // (the per-produce timeout in run_producer_task propagates the new client).
+        // Background health probe: broker liveness via list_topics; after N consecutive
+        // failures, rebuild inner_client from config so the per-produce timeout in
+        // run_producer_task picks up a fresh client.
         let (shutdown_sender, shutdown_rx) = tokio::sync::watch::channel(false);
         let probe_handle = crate::link_sys::runtime::health_probe::spawn_health_probe(
             crate::link_sys::runtime::health_probe::ProbeConfig {

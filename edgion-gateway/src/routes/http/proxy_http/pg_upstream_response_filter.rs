@@ -41,7 +41,6 @@ pub fn upstream_response_filter(
     ctx.local_reply_body = None;
     ctx.local_reply_written = false;
 
-    // Record status code
     let status_code = upstream_response.status.as_u16();
     ctx.request_info.status = Some(status_code);
 
@@ -50,7 +49,6 @@ pub fn upstream_response_filter(
     // discarded for retry does not consume the inject state or carry a pointless
     // Set-Cookie.
 
-    // Apply custom server headers (including Server header)
     edgion_http.server_header_opts.apply_to_response(upstream_response);
 
     // Record header time (time from this upstream's start_time to receiving response header)
@@ -107,12 +105,9 @@ pub fn upstream_response_filter(
     // Inject session persistence cookie/header if needed. Runs here, AFTER the
     // retry-on-status decision, so a response about to be discarded for retry
     // neither consumes the inject state nor carries a pointless Set-Cookie.
-    // The `!is_informational()` guard now filters exactly one case: a terminal
-    // 101 Switching Protocols (the only 1xx reaching this point — true interim
-    // 100/102/103 early-return at the top). This deliberately changes the
-    // pre-1xx-guard behavior, which DID inject on a 101: a protocol-upgrade
-    // response (e.g. WebSocket) no longer receives a sticky Set-Cookie. Injecting
-    // on the final (non-1xx) response is the normal sticky-session path.
+    // 101 Switching Protocols is terminal (true interim 1xx early-return at the
+    // top); the `!is_informational()` guard excludes it from SP injection —
+    // a protocol-upgrade response does not need a sticky Set-Cookie.
     if !upstream_response.status.is_informational() {
         match ctx.sp_state {
             SessionPersistenceState::InjectNew | SessionPersistenceState::InjectUpdate => {
@@ -182,12 +177,10 @@ pub fn upstream_response_filter(
     }
 
     // filter-04c: apply request-stage-queued response-header ops onto the
-    // upstream header NON-DESTRUCTIVELY (queue kept intact). On the normal
-    // forward path this is the single application point, replacing the former
-    // per-runner pre-drain. Placed before the sync runners so response-stage
-    // plugins still observe the merged headers. If a response-phase plugin then
-    // replaces the response with a local reply, the still-intact queue is
-    // re-applied onto the fresh reply by build_response_local_reply.
+    // upstream header NON-DESTRUCTIVELY (queue kept intact). Placed before the
+    // sync runners so response-stage plugins observe the merged headers. If a
+    // response-phase plugin replaces the response with a local reply, the
+    // still-intact queue is re-applied by build_response_local_reply.
     ctx.apply_pending_response_header_ops(upstream_response);
 
     // Run rule-level upstream_response edgion_plugins (sync)
@@ -206,8 +199,7 @@ pub fn upstream_response_filter(
         }
     }
 
-    // Run global plugins (D3-A gap fill from unified snapshot Phase 2).
-    // Order: route → backend → global (onion: response stages go inner → outer).
+    // Run global plugins last (onion: response stages go inner → outer).
     if ctx.local_reply_header.is_none() {
         if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(std::sync::Arc::clone) {
             for runtime in plugins.iter() {

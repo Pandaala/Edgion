@@ -18,10 +18,7 @@ pub struct AdminState {
 }
 
 impl AdminState {
-    /// Get the ConfigSyncServer from ConfMgr (may be None if not ready)
-    ///
-    /// Returns Ok(Arc<ConfigSyncServer>) if ready, Err(StatusCode) if not ready.
-    /// Callers should use this method and handle the error appropriately.
+    /// Returns `Ok(Arc<ConfigSyncServer>)` if ready, `Err(503)` if not ready.
     pub fn config_sync_server(&self) -> Result<Arc<ConfigSyncServer>, StatusCode> {
         self.conf_mgr
             .config_sync_server()

@@ -3,11 +3,9 @@
 pub mod backend_api;
 pub mod cert_extractor;
 
-// Keep a facade for code that still imports backend::tls_pingora while the
-// canonical implementation now lives under runtime/gateway.
+// Alias: re-exports tls_pingora from runtime/gateway for callers importing via backend::tls_pingora.
 pub mod tls_pingora {
     pub use crate::tls::runtime::gateway::tls_pingora::*;
 }
 
-// Re-export for convenience
 pub use backend_api::set_mtls_verify_callback;

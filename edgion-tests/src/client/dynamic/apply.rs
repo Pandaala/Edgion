@@ -40,8 +40,8 @@ pub fn build_client(controller_url: &str) -> Result<EdgionClient> {
 
 /// Apply a file or directory (directories are walked for *.yaml / *.yml).
 ///
-/// **NOTE:** When `path` is a directory, `apply_directory` only print_error's on per-file failures
-/// and continues, returning `Ok(())` overall (see `src/core/ctl/cli/commands/apply.rs:38`).
+/// **NOTE:** When `path` is a directory, the underlying `apply` command only logs per-file failures
+/// and continues, returning `Ok(())` overall.
 /// Therefore individual YAML failures in directory mode do not propagate as errors; after apply,
 /// scenarios should verify gateway state explicitly via `wait_phase` (retrying business assertions)
 /// or a phase assertion.

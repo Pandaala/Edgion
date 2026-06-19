@@ -282,7 +282,7 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("IpRestriction");
 
-        // An IP outside the allow list must be denied (pre-fix: silently allowed).
+        // An IP outside the allow list must be denied.
         mock_session.expect_remote_addr().return_const("10.0.0.1".to_string());
         mock_session.expect_write_response_header().returning(|_, _| Ok(()));
         mock_session.expect_write_response_body().returning(|_, _| Ok(()));

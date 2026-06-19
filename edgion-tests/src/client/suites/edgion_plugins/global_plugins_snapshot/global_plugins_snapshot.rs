@@ -11,17 +11,13 @@
 //   03 HTTPRoute /headers -> test-http:30001 (no route-level filters)
 //
 // Cases implemented:
-//   * D3-A response header injection - the new sync upstream_response_filter
-//     invocation actually runs and headers land on the wire.
-//   * Dangling global ref tolerated - 200 still served, X-Global-Plugin still
-//     applied; the missing "ghost" ref is logged once via tracing::warn! by
-//     the resolver (verified via gateway logs externally; this case asserts
-//     graceful behavior end-to-end).
+//   * Response header injection - upstream_response_filter runs and headers land on the wire.
+//   * Dangling global ref tolerated - 200 still served, X-Global-Plugin still applied;
+//     the missing "ghost" ref is logged once via tracing::warn! by the resolver
+//     (verified via gateway logs externally).
 //
-// Not yet covered (deferred): big-body invariance and onion ordering across
-// route + global plugins. Adding those would require additional EdgionPlugins
-// resources and a route-level ExtensionRef wired up; out of scope for this
-// minimum-viable scenario.
+// Not yet covered: big-body invariance and onion ordering across route + global plugins
+// (would require an additional EdgionPlugins resource with a route-level ExtensionRef).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -46,9 +42,7 @@ fn assert_header_eq(resp: &reqwest::Response, name: &str, expected: &str) -> Res
 }
 
 impl GlobalPluginsSnapshotTestSuite {
-    // D3-A: global EdgionPlugins.upstreamResponseFilterPlugins runs and sets
-    // a response header. Pre-fix this header was silently dropped because
-    // pg_upstream_response_filter never invoked global plugins at all.
+    // Verify that global upstreamResponseFilterPlugins runs and the response header is set.
     fn test_global_response_header_injected() -> TestCase {
         TestCase::new(
             "global_plugins_snapshot_response_header_injected",
@@ -83,10 +77,9 @@ impl GlobalPluginsSnapshotTestSuite {
         )
     }
 
-    // Task 14: dangling globalPluginsRef entry. The "ghost" plugin name does
-    // not exist; the resolver should warn once and continue. The valid
-    // "gp-resp-header-modifier" ref must still take effect, so we assert both
-    // 200 and the X-Global-Plugin header present.
+    // Dangling globalPluginsRef entry: the "ghost" plugin name does not exist;
+    // the resolver warns and continues. The valid "gp-resp-header-modifier" ref
+    // must still take effect (200 + X-Global-Plugin present).
     fn test_dangling_global_ref_tolerated() -> TestCase {
         TestCase::new(
             "global_plugins_snapshot_dangling_ref_tolerated",

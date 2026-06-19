@@ -63,8 +63,8 @@ fn test_split_empty_delim_exceeds_limit() {
     );
 }
 
-// split("abc", "") produces 3+2=5 actual parts; old estimate was 3 (bypass).
-// With the correct estimate of 5, max_list_len=4 must reject it.
+// split("abc", "") produces 5 parts (3 chars + 2 boundary tokens);
+// max_list_len=4 must reject it.
 #[test]
 fn test_split_empty_delim_bypass_is_closed() {
     let source = r#"split("abc", "")"#;

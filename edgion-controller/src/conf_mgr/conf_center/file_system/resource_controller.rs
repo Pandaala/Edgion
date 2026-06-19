@@ -128,7 +128,7 @@ where
                     match event {
                         FileSystemEvent::Init => {
                             if init_done {
-                                // Already initialized, this might be a re-init
+                                // Spurious Init after InitDone — log and ignore.
                                 tracing::warn!(
                                     component = "fs_resource_controller",
                                     kind = kind,

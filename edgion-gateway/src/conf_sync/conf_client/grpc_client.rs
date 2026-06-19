@@ -93,7 +93,7 @@ impl ConfigSyncClient {
         })
     }
 
-    /// Get a reference to the ConfigHub
+    /// Get a reference to the `ConfigClient`.
     pub fn get_config_client(&self) -> Arc<ConfigClient> {
         self.config_client.clone()
     }
@@ -256,7 +256,6 @@ impl ConfigSyncClient {
                 }
             };
 
-            // Dispatch via get_dyn_cache (exhaustive ResourceKind match)
             match self.config_client.get_dyn_cache(kind) {
                 Some(cache) => match cache.start_watch_dyn().await {
                     Ok(_) => {
@@ -296,10 +295,8 @@ mod tests {
     //!
     //! `ConfigSyncClient::new`, `start_watch_server_meta` and
     //! `start_watch_kinds` all require a live tonic Channel / gRPC server to
-    //! exercise meaningfully — those paths are deferred to integration
-    //! coverage (see `tasks/todo-test-cover/05-integration-gaps-controller.md`
-    //! #3 conf_sync relist storm and #4 server_id failover). Here we cover
-    //! only the URI scheme builder, which has no I/O dependencies.
+    //! exercise meaningfully — those paths are deferred to integration coverage.
+    //! Here we cover only the URI scheme builder, which has no I/O dependencies.
     use super::build_grpc_uri;
 
     #[test]

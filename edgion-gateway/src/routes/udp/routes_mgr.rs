@@ -333,8 +333,8 @@ mod tests {
         );
     }
 
-    /// Regression for F-007: `rebuild_all` must clear the route table of an
-    /// active listener that previously had routes but now has none.
+    /// Invariant: `rebuild_all` must clear the route table of an active listener
+    /// that previously had routes but now has none.
     #[test]
     fn test_rebuild_all_clears_active_listener_with_no_routes() {
         let managers = GlobalUdpRouteManagers::new();

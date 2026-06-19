@@ -8,7 +8,6 @@ pub mod tcp;
 pub mod tls;
 pub mod udp;
 
-// Re-export commonly used types for convenience
 pub use http::{
     create_route_manager_handler, get_global_http_route_managers, get_global_route_manager, DomainRouteRules,
     EdgionHttpProxy, GlobalHttpRouteManagers, HttpRouteRuleUnit, RouteManager,

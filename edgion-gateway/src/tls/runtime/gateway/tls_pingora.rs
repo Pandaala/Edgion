@@ -259,7 +259,7 @@ pub struct TlsCallback {
 impl TlsAccept for TlsCallback {
     async fn certificate_callback(&self, ssl: &mut TlsRef) {
         // select_cb is the single point of SNI resolution + Layer 1/2 matching
-        // and now also fail-closes on store_ssl_ctx failure. So if cert_cb
+        // and fail-closes on store_ssl_ctx failure. So if cert_cb
         // runs at all, the snapshot must exist with a recorded match.
         //
         // take_ssl_ctx returning None here means BoringSSL violated its state
@@ -981,7 +981,6 @@ impl TlsCallback {
         ssl.set_verify_cert_store(store)
             .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
 
-        // Determine verify mode based on frontend validation mode
         let mode = gateway_tls
             .frontend_validation
             .as_ref()
@@ -1026,7 +1025,7 @@ impl TlsCallback {
         Ok(true)
     }
 
-    /// Configure mTLS (mutual TLS) client certificate verification
+    /// Configure mTLS client certificate verification.
     fn configure_mtls(
         &self,
         ssl: &mut SslRef,
@@ -1063,8 +1062,7 @@ impl TlsCallback {
         ssl.set_verify_cert_store(store)
             .map_err(|e| PingoraError::explain(ErrorType::InvalidCert, format!("Failed to set CA store: {}", e)))?;
 
-        // SAFETY: verify_depth is validated to be in range 1-9 by cert_validator
-        // u8 (1-9) can always be safely converted to u32
+        // verify_depth is validated to be in range 1–9 by the schema; u8 → u32 is lossless.
         #[cfg(feature = "boringssl")]
         {
             ssl.set_verify_depth(client_auth.verify_depth as u32);

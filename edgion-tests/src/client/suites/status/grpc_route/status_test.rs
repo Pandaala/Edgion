@@ -31,7 +31,6 @@ impl GrpcRouteStatusTestSuite {
         false
     }
 
-    /// Test: Basic GRPCRoute with valid backend should have Accepted=True and ResolvedRefs=True
     fn test_basic_route_accepted() -> TestCase {
         TestCase::new(
             "basic_route_accepted",
@@ -74,7 +73,6 @@ impl GrpcRouteStatusTestSuite {
         )
     }
 
-    /// Test: GRPCRoute with non-existent backend should have ResolvedRefs=False(BackendNotFound)
     fn test_nonexistent_backend() -> TestCase {
         TestCase::new(
             "nonexistent_backend",
@@ -110,7 +108,6 @@ impl GrpcRouteStatusTestSuite {
         )
     }
 
-    /// Test: GRPCRoute with invalid backend kind should have ResolvedRefs=False(InvalidKind)
     fn test_invalid_backend_kind() -> TestCase {
         TestCase::new(
             "invalid_backend_kind",
@@ -145,7 +142,6 @@ impl GrpcRouteStatusTestSuite {
         )
     }
 
-    /// Test: GRPCRoute status.parents should be populated (non-empty)
     fn test_parents_populated() -> TestCase {
         TestCase::new(
             "parents_populated",

@@ -143,8 +143,3 @@ fn test_edgion_plugin_type_name() {
         panic!("Expected RequestHeaderModifier variant");
     }
 }
-
-// NOTE: the stage-mismatch preparse_error tests moved to the gateway plugin
-// store module, alongside `compile_plugins` (which now builds the runtime and
-// surfaces these errors): see its `compile_plugins_flags_stage_mismatch` /
-// `compile_plugins_no_false_positive_on_valid_stages` tests.

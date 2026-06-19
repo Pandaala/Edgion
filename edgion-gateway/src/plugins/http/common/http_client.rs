@@ -31,8 +31,7 @@ use std::time::Duration;
 
 /// Global shared HTTP client with connection pooling.
 ///
-/// Uses OnceLock for lazy initialization (consistent with RateLimit plugin pattern).
-/// reqwest::Client is designed to be shared — it maintains an internal connection pool.
+/// Uses OnceLock for lazy initialization; reqwest::Client is designed to be shared.
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 static INSECURE_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 

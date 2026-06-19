@@ -9,8 +9,8 @@ use zeroize::Zeroizing;
 ///
 /// Empty values are treated as absent at every level. Returns the token wrapped
 /// in `Zeroizing` so its buffer is wiped on drop. There is no username/password
-/// detection or login exchange anymore — the controller authenticates requests
-/// by a pre-shared bearer token only.
+/// or login exchange; the controller authenticates requests by a pre-shared
+/// bearer token only.
 pub fn resolve_token(flag: Option<&str>) -> Option<Zeroizing<String>> {
     // 1. --token flag
     if let Some(t) = flag {

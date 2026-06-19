@@ -12,7 +12,7 @@
 // - Service_test-tcp.yaml / EndpointSlice_test-tcp.yaml
 //
 // Port allocation (from ports.json "TCPRoute/StreamPlugins"):
-// - 31274 (tcp): allow-localhost filter (regression test for IP extraction)
+// - 31274 (tcp): allow-localhost filter (guards real client IP extraction)
 // - 31275 (tcp_filtered): deny-all filter
 // - 31273 (tcp_fail_close): TCPRoute references missing ESP (fail-close contract)
 
@@ -24,11 +24,11 @@ use tokio::net::TcpStream;
 pub struct TcpStreamPluginsTestSuite;
 
 impl TcpStreamPluginsTestSuite {
-    /// Regression test: allow-localhost plugin should allow connections from 127.0.0.1
+    /// Tests allow-localhost plugin: verifies the real client IP (127.0.0.1) is
+    /// extracted and correctly matched against the allowList.
     ///
-    /// The EdgionStreamPlugins resource has: defaultAction=deny, allowList=[127.0.0.0/8]
-    /// - With old code (0.0.0.0): 0.0.0.0 NOT in 127.0.0.0/8 → DENY (bug)
-    /// - With fixed code (127.0.0.1): 127.0.0.1 IS in 127.0.0.0/8 → ALLOW (correct)
+    /// Config: defaultAction=deny, allowList=[127.0.0.0/8]
+    /// 127.0.0.1 IS in 127.0.0.0/8 — connection must be ALLOWED.
     fn test_allow_localhost_echo() -> TestCase {
         TestCase::new(
             "tcp_stream_plugin_allow_localhost",
@@ -41,12 +41,10 @@ impl TcpStreamPluginsTestSuite {
 
                     match tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await {
                         Ok(Ok(mut stream)) => {
-                            // Send data
                             if let Err(e) = stream.write_all(test_data).await {
                                 return TestResult::failed(start.elapsed(), format!("Write failed: {}", e));
                             }
 
-                            // Read echo response
                             let mut buf = vec![0u8; 1024];
                             match tokio::time::timeout(Duration::from_secs(3), stream.read(&mut buf)).await {
                                 Ok(Ok(n)) if n > 0 => {
@@ -195,9 +193,9 @@ impl TcpStreamPluginsTestSuite {
         )
     }
 
-    /// Test: short name annotation format (no namespace prefix) should work
-    /// The deny TCPRoute uses "tcp-deny-all" (without "edgion-test/" prefix)
-    /// and namespace should be inferred from the TCPRoute's own namespace
+    /// Test: short name annotation format (no namespace prefix) should work.
+    /// The deny TCPRoute uses "tcp-deny-all" (without "edgion-test/" prefix);
+    /// namespace is inferred from the TCPRoute's own namespace.
     fn test_short_name_annotation() -> TestCase {
         TestCase::new(
             "tcp_stream_plugin_short_name_annotation",
@@ -207,7 +205,6 @@ impl TcpStreamPluginsTestSuite {
                     let start = Instant::now();
                     let addr = ctx.tcp_filtered_addr();
 
-                    // The deny TCPRoute uses short name format "tcp-deny-all"
                     // If annotation parsing works, connection should be denied
                     match tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(&addr)).await {
                         Ok(Ok(mut stream)) => {

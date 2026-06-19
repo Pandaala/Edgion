@@ -147,9 +147,8 @@ impl TestSuite for HighFreqInitialTestSuite {
 
 pub struct HighFreqFinalTestSuite;
 
-/// Final generation expected after the scenario applies iter1..=iter10.
-/// initial gen=1, each iter bumps by 1 → final gen=11. Keep in sync with the
-/// scenario loop in `dynamic/scenarios/observed_gen_high_freq.rs`.
+/// Final generation after 10 rapid updates (initial gen=1). Keep in sync with
+/// the scenario loop in `dynamic/scenarios/observed_gen_high_freq.rs`.
 const FINAL_GEN: i64 = 11;
 
 impl HighFreqFinalTestSuite {

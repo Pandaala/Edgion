@@ -3,7 +3,7 @@
 // Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-tcp.yaml          # TCP backend service discovery
 // - Service_edge_test-tcp.yaml                # TCP service definition
-// - TCPRoute_edge_test-tcp.yaml               # TCP routing rules（listening port）
+// - TCPRoute_edge_test-tcp.yaml               # TCP routing rules (listening port)
 // - Gateway_edge_example-gateway.yaml         # Gateway config
 // - GatewayClass__public-gateway.yaml         # GatewayClass config
 

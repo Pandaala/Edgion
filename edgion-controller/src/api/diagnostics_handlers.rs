@@ -1,18 +1,14 @@
-//! Diagnostics endpoints for advancing the ExtensionRef → Envoy alignment roadmap.
+//! Diagnostics endpoints for operational inspection.
 //!
-//! Currently exposes one endpoint:
+//! * `GET /api/v1/diagnostics/nested_ext_ref_usage` — counts `EdgionPlugins`
+//!   resources that still embed `type: ExtensionRef` inside a stage list
+//!   (`requestPlugins` / `upstreamResponseFilterPlugins` /
+//!   `upstreamResponseBodyFilterPlugins` / `upstreamResponsePlugins`).
 //!
-//! * `GET /api/v1/diagnostics/nested_ext_ref_usage` — counts how many
-//!   `EdgionPlugins` resources still embed `type: ExtensionRef` inside one of
-//!   the four stage lists (`requestPlugins` / `upstreamResponseFilterPlugins`
-//!   / `upstreamResponseBodyFilterPlugins` / `upstreamResponsePlugins`).
+//! * `GET /api/v1/diagnostics/conf-conflicts` — reports `(kind, key)` collisions
+//!   from the FileSystem backend's recursive scan.
 //!
-//! This is the data condition gating Phase 2 / Phase 3 of
-//! `tasks/todo/extension-ref-envoy-alignment.md`. Operators run it once per
-//! cluster to decide whether the deprecation window can be closed.
-//!
-//! Live-read against `ConfCenter`; cheap because `EdgionPlugins` count is
-//! small. No snapshot infrastructure, no background task.
+//! Both are live-reads against `ConfCenter`; no background tasks or snapshots.
 
 use crate::api::types::AdminState;
 use crate::api::ApiResponse;

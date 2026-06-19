@@ -1,5 +1,5 @@
 // ============================================================================
-// LB EWMA Test Suite — regression for lb/attempt.rs LbCommit::Ewma lifecycle
+// LB EWMA Test Suite — validates LbCommit::Ewma commit/finalize lifecycle
 // ============================================================================
 //
 // Validates that LBPolicyEwma routes requests across multiple endpoints and

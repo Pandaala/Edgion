@@ -6,7 +6,7 @@
 // - Credentials mode (echo origin + Access-Control-Allow-Credentials)
 // - Max-Age (preflight only)
 // - Expose-Headers
-// - Runtime-compiled origin matchers (fr-types-02): comma-separated list,
+// - Runtime-compiled origin matchers: comma-separated list,
 //   HTTPS subdomain wildcard, and allow_origins_by_regex
 //
 // Configs defined in edgion-tests/integration/conf/EdgionPlugins/Cors/:
@@ -460,8 +460,8 @@ impl CorsPluginTestSuite {
     }
 
     // 11. Regex preflight (cors-regex) → 204 + echoed origin.
-    //     Exercises the global preflight handler's cached Arc<CorsConfig>
-    //     (fr-types-02 fix #2): the compiled regex must match.
+    //     Exercises the cached Arc<CorsConfig> in the global preflight handler;
+    //     the compiled regex must match.
     fn test_regex_preflight_matching() -> TestCase {
         TestCase::new(
             "cors_regex_preflight_matching",
@@ -501,7 +501,7 @@ impl CorsPluginTestSuite {
     }
 
     // 12. Regex simple GET (cors-regex) → 200 + echoed origin.
-    //     Exercises the per-route request-filter Cors::new path (fr-types-02 fix #1).
+    //     Exercises the per-route request-filter Cors::new path.
     fn test_regex_simple_matching() -> TestCase {
         TestCase::new(
             "cors_regex_simple_matching",

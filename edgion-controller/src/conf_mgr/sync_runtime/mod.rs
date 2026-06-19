@@ -12,7 +12,6 @@ pub mod resource_version;
 pub mod shutdown;
 pub mod workqueue;
 
-// Re-export from local modules
 pub use metrics::{
     controller_metrics, record_status_write, record_status_write_error, record_status_write_skipped, ControllerMetrics,
     InitSyncTimer, ResourceMetrics,
@@ -20,5 +19,4 @@ pub use metrics::{
 pub use shutdown::{ShutdownController, ShutdownHandle, ShutdownSignal};
 pub use workqueue::{WorkItem, Workqueue, WorkqueueConfig, WorkqueueMetrics};
 
-// Re-export from resource_processor
 pub use resource_processor::{HandlerContext, ProcessResult, ProcessorHandler, ProcessorObj, ResourceProcessor};

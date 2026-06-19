@@ -58,10 +58,8 @@ impl<T> EventStore<T> {
     where
         T: Clone + Resource,
     {
-        // Stage A: Stale event guard.
-        // If the incoming sync_version is strictly older than the current store version,
-        // drop the event immediately to prevent out-of-order async tasks from
-        // overwriting newer state with stale data.
+        // Stale event guard: if the incoming sync_version is older than the current store
+        // version, drop the event to prevent out-of-order writes from overwriting newer state.
         if sync_version < self.sync_version {
             tracing::warn!(
                 kind = std::any::type_name::<T>(),
@@ -457,12 +455,10 @@ mod tests {
         let (snapshot, version) = store.snapshot_owned();
         assert_eq!(version, 2);
         assert_eq!(snapshot.len(), 1);
-        // The key should be "default/test-route", so only one entry exists
         assert_eq!(snapshot[0].name, "test-route");
     }
 
-    /// Stage A regression: a stale event (lower sync_version) must not
-    /// overwrite state that was written by a newer event.
+    /// A stale event (lower sync_version) must not overwrite state written by a newer event.
     #[test]
     fn stale_event_does_not_overwrite_newer_state() {
         let mut store = make_store();
@@ -496,9 +492,8 @@ mod tests {
         assert_eq!(events[0].data.name, "new-value");
     }
 
-    /// Stage A regression: when events arrive in a reordered sequence (v2 before v1),
-    /// the resulting data snapshot and version must always reflect the latest (highest-versioned)
-    /// write, not the last write in wall-clock time.
+    /// When events arrive out of order (v2 before v1), the snapshot and version must
+    /// reflect the highest-versioned write, not the last wall-clock write.
     #[test]
     fn out_of_order_apply_sequence_preserves_latest_data() {
         let mut store = make_store();

@@ -294,22 +294,14 @@ where
     }
 }
 
-/// A small process-local TTL/LRU cache for gateway-side short-lived results.
+/// A process-local TTL/LRU cache with a fixed entry capacity and ordinary
+/// in-process locking.
 ///
-/// This cache is intentionally scoped to the "OpenResty-style local cache" use
-/// case we discussed:
-/// - process-local shared cache
-/// - short TTL result caching
-/// - fixed entry capacity
-/// - ordinary in-process locking
-///
-/// The implementation keeps a fixed-capacity node pool plus a doubly-linked LRU
-/// list under one mutex. That gives us predictable metadata allocation and keeps
-/// lock-held work to O(1) for touch/insert/remove, without pulling in a heavier
-/// cache dependency yet.
+/// Keeps a fixed-capacity node pool plus a doubly-linked LRU list under one
+/// mutex: O(1) touch/insert/remove with predictable metadata allocation.
 ///
 /// `V` is fully caller-defined. If cloning values is expensive, callers can
-/// store `Arc<T>` as the value type and keep cache hits cheap.
+/// store `Arc<T>` as the value type to keep cache hits cheap.
 #[derive(Debug)]
 pub struct LocalLruCache<K, V> {
     inner: Mutex<LocalLruCacheInner<K, V>>,

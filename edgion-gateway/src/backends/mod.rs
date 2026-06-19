@@ -142,7 +142,6 @@ pub(crate) async fn try_get_peer(
                 .and_then(|spec| spec.cluster_ip.as_ref())
                 .ok_or(EdgionStatus::BackendClusterIpNotFound)?;
 
-            // Get port from br_port or service
             let port = match br_port {
                 Some(p) => p as u16,
                 None => service
@@ -189,7 +188,6 @@ pub(crate) async fn try_get_peer(
                 .and_then(|spec| spec.external_name.as_ref())
                 .ok_or(EdgionStatus::BackendExternalNameNotFound)?;
 
-            // Get port from br_port or service
             let port = match br_port {
                 Some(p) => p as u16,
                 None => service

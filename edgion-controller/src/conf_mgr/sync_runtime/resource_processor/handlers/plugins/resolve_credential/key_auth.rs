@@ -159,7 +159,6 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     resource_ref: &ResourceRef,
     ctx: &HandlerContext,
 ) {
-    // Process request plugins
     if let Some(ref mut plugins) = ep.spec.request_plugins {
         for entry in plugins.iter_mut() {
             if let EdgionPlugin::KeyAuth(ref mut config) = entry.plugin {

@@ -1,8 +1,7 @@
 // HTTPRoute scenario: dangling ExtensionRef filter.
 //
-// Locks in the per-route ExtensionRef "not found" semantics introduced by the
-// unified plugin snapshot work (Tasks 1-12). The route's filter list contains
-// an `ExtensionRef` pointing to a non-existent EdgionPlugins
+// Locks in the per-route ExtensionRef "not found" semantics. The route's filter
+// list contains an `ExtensionRef` pointing to a non-existent EdgionPlugins
 // (`no-such-plugin`). At route build time, the resolved slot for this filter
 // is None.
 //

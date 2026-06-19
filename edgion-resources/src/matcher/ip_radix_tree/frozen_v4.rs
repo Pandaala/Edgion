@@ -195,7 +195,6 @@ impl FlatTreeBuilder {
             _padding: [0; 1],
         });
 
-        // Recursively flatten children
         let left_idx = if let Some(ref left) = node.left {
             self.flatten_node(left)?
         } else {

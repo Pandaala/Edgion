@@ -1,11 +1,11 @@
 // RequestRestriction Plugin Test Suite
 //
-// ：
-// - Header  (User-Agent Bot )
-// - Path  ()
-// - Method  ( API)
-// - Header  ( Token)
-// -
+// Covers:
+// - Header deny by value (User-Agent Bot blocking)
+// - Path deny (admin path blocking)
+// - Method allow (GET-only API)
+// - Header required (must carry Token)
+// - Combined rules
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -13,7 +13,7 @@ use std::time::Instant;
 pub struct RequestRestrictionTestSuite;
 
 impl RequestRestrictionTestSuite {
-    // ==================== 1. Header  ====================
+    // ==================== 1. Header deny by value ====================
     fn test_header_deny_blocks_bot() -> TestCase {
         TestCase::new(
             "header_deny_blocks_bot",
@@ -82,7 +82,7 @@ impl RequestRestrictionTestSuite {
         )
     }
 
-    // ==================== 2. Method  ====================
+    // ==================== 2. Method allow ====================
     fn test_method_allow_get() -> TestCase {
         TestCase::new("method_allow_get", "Method : GET  (200)", |ctx: TestContext| {
             Box::pin(async move {
@@ -144,7 +144,7 @@ impl RequestRestrictionTestSuite {
         )
     }
 
-    // ==================== 3. Header  ====================
+    // ==================== 3. Header required ====================
     fn test_header_required_with_token() -> TestCase {
         TestCase::new(
             "header_required_with_token",
@@ -190,7 +190,7 @@ impl RequestRestrictionTestSuite {
                     let url = format!("{}/test/header-required/api", ctx.http_url());
 
                     let request = client.get(&url).header("host", "request-restriction.example.com");
-                    //  X-Auth-Token
+                    // No X-Auth-Token header sent.
 
                     match request.send().await {
                         Ok(response) => {
@@ -211,7 +211,7 @@ impl RequestRestrictionTestSuite {
         )
     }
 
-    // ==================== 4.  ====================
+    // ==================== 4. Combined rules ====================
     fn test_combined_normal() -> TestCase {
         TestCase::new("combined_normal", ":  (200)", |ctx: TestContext| {
             Box::pin(async move {
@@ -462,16 +462,16 @@ impl TestSuite for RequestRestrictionTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            // Header
+            // Header deny by value
             Self::test_header_deny_blocks_bot(),
             Self::test_header_deny_allows_normal(),
-            // Method
+            // Method allow
             Self::test_method_allow_get(),
             Self::test_method_allow_blocks_post(),
-            // Header
+            // Header required
             Self::test_header_required_with_token(),
             Self::test_header_required_missing(),
-            //
+            // Combined rules
             Self::test_combined_normal(),
             Self::test_combined_bot_blocked(),
             Self::test_combined_admin_blocked(),

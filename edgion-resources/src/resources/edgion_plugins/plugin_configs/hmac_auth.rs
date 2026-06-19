@@ -59,8 +59,7 @@ pub struct HmacCredential {
     /// Group this credential originated from. Always set by controller in
     /// current versions; `#[serde(default)]` provides a fallback so that
     /// Gateway-new / Controller-old rolling upgrades don't break
-    /// deserialization of `resolved_credentials` payloads predating this field
-    /// (lesson L2).
+    /// deserialization of `resolved_credentials` payloads predating this field.
     #[serde(default = "default_group_name")]
     pub group: String,
 }
@@ -109,7 +108,7 @@ pub struct HmacAuthConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enforce_headers: Option<Vec<String>>,
 
-    /// Validate request body digest (Phase 2 capability).
+    /// Validate request body digest. Currently unsupported (returns a validation error if enabled).
     #[serde(default)]
     pub validate_request_body: bool,
 

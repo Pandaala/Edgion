@@ -1,13 +1,9 @@
-//! Region Route API handlers
+//! Region Route API handlers.
 //!
-//! POST /api/v1/region-routes/failover
-//!   Patches a single region's `failoverTo` in a `RegionRouteOverride` EdgionConfigData.
-//!
-//! NOTE: The old `/api/v1/cluster-region-routes` and `/api/v1/service-region-routes`
-//! list endpoints are removed as part of the S3 RegionRoute decomposition.
-//! The routing config (logic + default regions) now lives entirely in EdgionPlugins
-//! (`RegionRouteConfig.regions`). Dynamic region overrides are `RegionRouteOverride`
-//! EdgionConfigData, which can be listed via the standard EdgionConfigData configserver API.
+//! The region-route base table lives in `EdgionPlugins.RegionRouteConfig.regions`; the
+//! `GET /api/v1/cluster-region-routes` and `GET /api/v1/service-region-routes` endpoints
+//! are deprecated stubs that return empty lists. Dynamic overrides use
+//! `RegionRouteOverride` EdgionConfigData.
 
 use axum::{extract::State, http::StatusCode, response::Json};
 use edgion_resources::ResourceKind;
@@ -31,10 +27,9 @@ pub struct EdgionConfigDataFailoverRequest {
 
 // ============= Handlers =============
 
-/// `GET /api/v1/cluster-region-routes` — deprecated; returns an empty list.
+/// `GET /api/v1/cluster-region-routes` — deprecated stub; returns an empty list.
 ///
-/// After S3 the ClusterRegionRoute EdgionConfigData variant is removed. Region topology
-/// now lives inline in EdgionPlugins `RegionRouteConfig.regions`. Dynamic overrides
+/// Region topology lives in `EdgionPlugins.RegionRouteConfig.regions`. Dynamic overrides
 /// are `RegionRouteOverride` EdgionConfigData, listable via the configserver API.
 pub async fn list_cluster_region_edgion_config_data(
     State(_state): State<Arc<AdminState>>,
@@ -42,10 +37,10 @@ pub async fn list_cluster_region_edgion_config_data(
     Ok(Json(serde_json::json!({ "success": true, "data": [] })))
 }
 
-/// `GET /api/v1/service-region-routes` — deprecated; returns an empty list.
+/// `GET /api/v1/service-region-routes` — deprecated stub; returns an empty list.
 ///
-/// After S3 the ServiceRegionRoute EdgionConfigData variant is removed. Per-service failover
-/// is now expressed via `RegionRouteOverride.regions[].failoverTo` in an EdgionConfigData.
+/// Per-service failover is expressed via `RegionRouteOverride.regions[].failoverTo` in an
+/// EdgionConfigData.
 pub async fn list_service_region_edgion_config_data(
     State(_state): State<Arc<AdminState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
@@ -130,8 +125,7 @@ pub async fn list_region_routes_effective(State(state): State<Arc<AdminState>>) 
 /// `POST /api/v1/cluster-region-routes/failover`
 ///
 /// Patches a single region's `failoverTo` in a `RegionRouteOverride` EdgionConfigData.
-/// The `name` field should refer to a `RegionRouteOverride` EdgionConfigData (not the old
-/// ClusterRegionRoute — that variant no longer exists).
+/// The `name` field must refer to a `RegionRouteOverride` EdgionConfigData.
 pub async fn cluster_edgion_config_data_failover(
     State(state): State<Arc<AdminState>>,
     Json(body): Json<EdgionConfigDataFailoverRequest>,
@@ -154,8 +148,8 @@ pub async fn cluster_edgion_config_data_failover(
 
 /// `POST /api/v1/service-region-routes/failover`
 ///
-/// Deprecated. After S3, per-service failover is managed via `RegionRouteOverride` EdgionConfigData.
-/// This endpoint now delegates to the same `RegionRouteOverride` patch path.
+/// Deprecated; delegates to the same `RegionRouteOverride` patch path as
+/// `cluster_edgion_config_data_failover`.
 pub async fn service_edgion_config_data_failover(
     State(state): State<Arc<AdminState>>,
     Json(body): Json<EdgionConfigDataFailoverRequest>,

@@ -245,8 +245,7 @@ fn resolved_endpoint_from_backend(
     })
 }
 
-/// Resolve all endpoint addresses for a backend reference.
-/// Resolves backend endpoints from the EndpointSlice store.
+/// Resolve backend endpoints for a named service from the EndpointSlice store.
 fn resolve_endpoints(
     backend_name: &str,
     backend_namespace: &str,
@@ -703,7 +702,6 @@ impl RequestFilter for AllEndpointStatus {
             ep_offset += count;
         }
 
-        // Update last execution timestamp
         LAST_EXECUTION_MS.store(elapsed_ms(), Ordering::Relaxed);
 
         let total_latency = Instant::now().saturating_duration_since(start).as_millis() as u64;

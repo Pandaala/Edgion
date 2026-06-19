@@ -59,7 +59,6 @@ impl<T: ResourceMeta + Resource + Clone + Send + 'static> CacheEventDispatch<T> 
     }
 }
 
-// Additional methods for ResourceMeta types
 impl<T> ClientCache<T>
 where
     T: ResourceMeta + Resource + Clone + Send + 'static,
@@ -75,7 +74,7 @@ where
     ) -> Result<ListResult, tonic::Status> {
         let list_request = tonic::Request::new(edgion_common::conf_sync::proto::ListRequest {
             key: gateway_class_key.to_string(),
-            kind: T::kind_name().to_string(), // Use string kind name instead of enum
+            kind: T::kind_name().to_string(),
             expected_server_id: expected_server_id.to_string(),
         });
 
@@ -91,7 +90,6 @@ where
             "Listing resources"
         );
 
-        // Parse JSON array directly to concrete type
         let mut resources: Vec<T> = serde_json::from_str(&list_data.data).map_err(|e| {
             tracing::error!(kind = T::kind_name(), error = %e, context = log_context, "Failed to parse list response");
             tonic::Status::internal(format!("Failed to parse list response: {}", e))
@@ -104,7 +102,6 @@ where
 
         tracing::info!(kind = T::kind_name(), count = resources.len(), "Parsed resources");
 
-        // Debug: print all resource keys and sync_version
         let resource_keys: Vec<String> = resources.iter().map(|r| r.key_name()).collect();
         tracing::debug!(
             kind = T::kind_name(),
@@ -113,7 +110,6 @@ where
             "Resetting cache with resources"
         );
 
-        // Use reset method to rebuild cache with fresh data
         {
             let mut cache = cache_data.write();
             cache.reset(resources, list_data.sync_version);
@@ -125,7 +121,7 @@ where
         })
     }
 
-    /// Start watching resources from gRPC conf_server_old
+    /// Start watching resources from the gRPC conf server.
     pub async fn start_watch(&self) -> Result<(), tonic::Status> {
         let grpc_client = self.grpc_client.clone();
         let cache_data = self.cache_data.clone();
@@ -140,7 +136,6 @@ where
             const BACKOFF_MAX_SECS: u64 = 32;
             let mut backoff_secs = BACKOFF_INIT_SECS;
 
-            // Outer loop: perform list operation
             let mut is_first_iteration = true;
             loop {
                 // === Backoff before list ===
@@ -186,7 +181,6 @@ where
                             // Reset backoff on success
                             backoff_secs = BACKOFF_INIT_SECS;
 
-                            // Record relist metric
                             global_metrics().config_relist();
 
                             let count = {
@@ -201,7 +195,6 @@ where
                                 "List completed, starting watch"
                             );
 
-                            // Update global ConfigClient's server_id
                             if let Some(client) = crate::conf_sync::get_global_config_client() {
                                 client.set_current_server_id(list_result.server_id.clone());
                             }
@@ -249,7 +242,7 @@ where
 
                     let request = tonic::Request::new(edgion_common::conf_sync::proto::WatchRequest {
                         key: String::new(),
-                        kind: T::kind_name().to_string(), // Use string kind name instead of enum
+                        kind: T::kind_name().to_string(),
                         client_id: client_id.as_ref().clone(),
                         client_name: client_name.as_ref().clone(),
                         from_version,
@@ -267,7 +260,6 @@ where
                         }
                     };
 
-                    // Process watch stream messages
                     loop {
                         match stream.message().await {
                             Ok(Some(watch_response)) => {
@@ -278,7 +270,6 @@ where
                                         error = watch_response.err,
                                         "Received error signal from server, re-listing"
                                     );
-                                    // Record metric if this is a reload signal
                                     if watch_response.err.contains(WATCH_ERR_SERVER_RELOAD) {
                                         global_metrics().config_reload_signal();
                                     }
@@ -336,18 +327,16 @@ where
                                                         _ => continue,
                                                     };
 
-                                                    let resource_key = resource.key_name(); // Use namespace/name as key
+                                                    let resource_key = resource.key_name();
                                                     match change {
                                                         ResourceChange::InitAdd
                                                         | ResourceChange::EventAdd
                                                         | ResourceChange::EventUpdate => {
                                                             cache.insert(resource_key.clone(), resource);
-                                                            // Add compress event to trigger partial_update
                                                             cache.add_compress_event(resource_key, change);
                                                         }
                                                         ResourceChange::EventDelete => {
                                                             cache.remove(&resource_key);
-                                                            // Add compress event to trigger partial_update
                                                             cache.add_compress_event(resource_key, change);
                                                         }
                                                         ResourceChange::InitStart | ResourceChange::InitDone => {
@@ -399,9 +388,7 @@ mod tests {
     //! `apply_change` and `set_ready` — the change kind dispatched against a
     //! freshly constructed `ClientCache` (without a configured processor or
     //! gRPC channel). The full watch/relist/backoff loop in `start_watch` is
-    //! deferred to integration coverage — see
-    //! `tasks/todo-test-cover/05-integration-gaps-controller.md` #3 (relist
-    //! storm) and #4 (server_id failover).
+    //! deferred to integration coverage.
     use super::*;
     use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
     use k8s_openapi::api::core::v1::ConfigMap;

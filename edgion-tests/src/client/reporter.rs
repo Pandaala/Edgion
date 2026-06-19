@@ -73,7 +73,7 @@ impl ConsoleReporter {
     }
 }
 
-/// JSON
+/// JSON test report serializer.
 pub struct JsonReporter;
 
 impl JsonReporter {

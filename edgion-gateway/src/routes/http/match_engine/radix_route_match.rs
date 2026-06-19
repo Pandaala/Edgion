@@ -22,7 +22,6 @@ use std::sync::Arc;
 /// **Lock-free concurrent reads**: the tree is immutable after initialization.
 pub struct RadixRouteMatchEngine {
     tree: RadixTree,
-    /// Routes stored as concrete HttpRouteRuleUnit type
     routes: Vec<Arc<HttpRouteRuleUnit>>,
     /// All RadixPath instances (flattened from all routes)
     radix_paths: Vec<RadixPath>,
@@ -52,7 +51,7 @@ impl RadixRouteMatchEngine {
         self.routes.len()
     }
 
-    /// Get direct access to the underlying radix tree for advanced usage
+    /// Returns the underlying radix tree.
     pub fn tree(&self) -> &RadixTree {
         &self.tree
     }
@@ -208,7 +207,6 @@ impl RadixRouteMatchEngine {
 
 impl Default for RadixRouteMatchEngine {
     fn default() -> Self {
-        // Create an empty frozen tree
         let builder = RadixTreeBuilder::new();
         let tree = builder.freeze().expect("Failed to create empty radix tree");
 

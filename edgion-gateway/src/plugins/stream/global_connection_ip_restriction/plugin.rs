@@ -105,7 +105,7 @@ impl GlobalConnectionIpRestrictionPlugin {
                 }
             },
             Some(_) => {
-                // EdgionConfigData found but it is not a Selector variant (D6 type guard).
+                // EdgionConfigData found but it is not a Selector variant.
                 record_conn_ip_restriction_event("overlay_type_mismatch");
                 self.base.active_profile.clone()
             }

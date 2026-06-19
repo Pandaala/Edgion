@@ -28,7 +28,7 @@ impl GrpcTestSuite {
                 // Build connection URL
                 let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
 
-                // Create gRPC client，Passed origin  :authority
+                // Create gRPC client with origin header for :authority control
                 let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                     Ok(mut ep) => {
                         // Gateway Mode: set origin to control :authority pseudo-header
@@ -229,19 +229,13 @@ impl GrpcTestSuite {
                     let mut request = tonic::Request::new(HelloRequest {
                         name: "Edgion".to_string(),
                     });
-                    // Inserting `grpc-timeout: 1n` into the request metadata is
-                    // equivalent to calling `Request::set_timeout` — both paths
-                    // write the same header and tonic's client `GrpcTimeout`
-                    // middleware parses it and installs a local `tokio::time::sleep`.
-                    // Whichever fires first wins: if the local timer trips first,
-                    // tonic surfaces `Code::Cancelled` (TimeoutExpired); if the
-                    // gateway's early-abort + 504 → grpc-status 4 trailer reaches
-                    // the client first, the code is `Code::DeadlineExceeded`. Both
-                    // outcomes confirm the wire-level `grpc-timeout` is being
-                    // exercised end-to-end. The unit tests in
-                    // `src/core/gateway/routes/grpc/grpc_timeout.rs` and the code
-                    // review verify the gateway-side parsing and short-circuit logic
-                    // independently of this smoke check.
+                    // `grpc-timeout: 1n` is equivalent to `Request::set_timeout` — tonic's
+                    // GrpcTimeout middleware parses the header and installs a local sleep.
+                    // Whichever fires first wins: local timer → Code::Cancelled;
+                    // gateway early-abort (504 → grpc-status 4) → Code::DeadlineExceeded.
+                    // Both outcomes confirm the wire-level grpc-timeout is exercised end-to-end.
+                    // The unit tests in `src/core/gateway/routes/grpc/grpc_timeout.rs`
+                    // verify gateway-side parsing and short-circuit logic independently.
                     let timeout_value = match "1n".parse::<tonic::metadata::AsciiMetadataValue>() {
                         Ok(v) => v,
                         Err(e) => {

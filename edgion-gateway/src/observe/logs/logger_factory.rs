@@ -151,10 +151,9 @@ pub async fn create_sync_logger(config: &LogConfig) -> Result<Option<SslLogger>>
 
 #[cfg(test)]
 mod tests {
-    // `use super::*` pulls in the parent module's imports — including `LogConfig`,
-    // `StringOutput`, `LocalFileWriterCfg`, and the gateway `LogType` that
-    // `create_async_logger` actually takes. Do NOT import edgion_resources'
-    // `observe::LogType` — it is a different type than the function signature.
+    // Do NOT add a bare `use edgion_resources::observe::LogType` — that is a
+    // different type than the gateway `LogType` `create_async_logger` takes.
+    // `use super::*` already brings in the correct one.
     use super::*;
     use edgion_resources::LinkSysRef;
 

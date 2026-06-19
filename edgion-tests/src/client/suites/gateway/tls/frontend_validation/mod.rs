@@ -23,9 +23,8 @@ use std::time::Instant;
 
 const PORT: u16 = 31312;
 const PORT_INSECURE: u16 = 31336;
-/// Port for the invalid-ca-cert-gw: valid TLS cert but nonexistent CA ref → Programmed=False.
-/// After the listener-status filter fix, no TLS entry is registered for this port,
-/// so all TLS connections must fail.
+/// Port for the invalid-ca-cert-gw: nonexistent CA ref causes Programmed=False on the listener,
+/// so no TLS entry is registered for this port and all TLS connections must fail.
 const PORT_INVALID_CA: u16 = 31338;
 const HOSTNAME: &str = "fv-mtls.example.com";
 
@@ -83,7 +82,6 @@ fn create_mtls_client(
 }
 
 impl FrontendValidationTestSuite {
-    // Test 1: With valid client certificate - should succeed (200 OK)
     fn test_valid_cert() -> TestCase {
         TestCase::new(
             "fv_mtls_valid_cert",
@@ -124,7 +122,6 @@ impl FrontendValidationTestSuite {
         )
     }
 
-    // Test 2: Without client certificate - should fail (TLS handshake failure)
     fn test_no_cert() -> TestCase {
         TestCase::new(
             "fv_mtls_no_cert",
@@ -168,7 +165,6 @@ impl FrontendValidationTestSuite {
         )
     }
 
-    // Test 3: With invalid (untrusted) client certificate - should fail (AllowValidOnly)
     fn test_invalid_cert() -> TestCase {
         TestCase::new(
             "fv_mtls_invalid_cert",
@@ -211,7 +207,6 @@ impl FrontendValidationTestSuite {
         )
     }
 
-    // Test 4: InsecureFallback + valid client certificate → 200 OK
     fn test_insecure_valid_cert() -> TestCase {
         TestCase::new(
             "fv_insecure_valid_cert",
@@ -256,7 +251,6 @@ impl FrontendValidationTestSuite {
         )
     }
 
-    // Test 5: InsecureFallback + no client certificate → 200 OK
     fn test_insecure_no_cert() -> TestCase {
         TestCase::new(
             "fv_insecure_no_cert",
@@ -294,15 +288,12 @@ impl FrontendValidationTestSuite {
         )
     }
 
-    // Test 7: Listener with Programmed=False (invalid CA cert ref) must not serve TLS.
+    // Listener with Programmed=False (nonexistent CA cert ref) must not serve TLS.
     //
     // Gateway `invalid-ca-cert-gw` has `frontendValidation.caCertificateRefs` pointing to
-    // a nonexistent Secret (`does-not-exist`).  The Controller sets Programmed=False on its
-    // HTTPS listener.  After the data-plane listener-status filter fix, that listener is not
-    // registered in the TLS matcher, so any TLS connection to PORT_INVALID_CA must fail.
-    //
-    // Without the fix the listener's valid TLS cert (`fv-server-cert`) would still be served
-    // and the connection would succeed — proving the fix is exercised.
+    // a nonexistent Secret (`does-not-exist`). The Controller sets Programmed=False on its
+    // HTTPS listener, which must not be registered in the TLS matcher. Any TLS connection
+    // to PORT_INVALID_CA must therefore fail.
     fn test_invalid_ca_ref_listener_not_served() -> TestCase {
         TestCase::new(
             "fv_invalid_ca_ref_not_served",
@@ -340,7 +331,6 @@ impl FrontendValidationTestSuite {
         )
     }
 
-    // Test 6: InsecureFallback + invalid client certificate → 200 OK
     fn test_insecure_invalid_cert() -> TestCase {
         TestCase::new(
             "fv_insecure_invalid_cert",

@@ -1,12 +1,12 @@
 // HTTP Security Test suite
 //
-// Test HTTP request security validation，including:
+// Test HTTP request security validation, including:
 // - Hostname validation (missing/empty)
 //
 // Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
 // - Service_edge_test-http.yaml               # HTTP service definition
-// - httproute_default_example-route.yaml      # HTTP routing rules（Host: test.example.com）
+// - httproute_default_example-route.yaml      # HTTP routing rules (Host: test.example.com)
 // - Gateway_edge_example-gateway.yaml         # Gateway config
 // - GatewayClass__public-gateway.yaml         # GatewayClass config
 

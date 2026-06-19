@@ -339,7 +339,7 @@ mod cli_token_precedence_tests {
     }
 
     /// When neither `--token` nor `EDGION_TOKEN` is set, resolved token is None
-    /// (the session-auth path is taken).
+    /// and the `ensure_auth` pre-flight path is taken.
     #[test]
     fn no_token_resolved_is_none() {
         let flag: Option<String> = None;

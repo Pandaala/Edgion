@@ -83,8 +83,7 @@ impl CsrfTestSuite {
 
     /// GET an upstream path that returns two Set-Cookie headers; the CSRF plugin
     /// (safe method) appends its own. All three Set-Cookie values must survive.
-    /// Regression for the insert_header-clobbers-upstream-Set-Cookie bug, where
-    /// the queued CSRF cookie replaced every upstream Set-Cookie.
+    /// The CSRF cookie must not clobber upstream Set-Cookie values.
     fn test_upstream_cookies_preserved() -> TestCase {
         TestCase::new(
             "upstream_set_cookies_preserved",

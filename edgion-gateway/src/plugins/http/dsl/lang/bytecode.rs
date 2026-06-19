@@ -151,7 +151,7 @@ pub enum BuiltinId {
     RespHeader,    // resp.header(name) → str|nil
     RespHasHeader, // resp.has_header(name) → bool
 
-    // req.* metadata (P1)
+    // req.* metadata
     ReqProtocol,
     ReqGrpcService,
     ReqGrpcMethod,
@@ -159,7 +159,7 @@ pub enum BuiltinId {
     ReqClientCertCn,
     ReqClientCertFingerprint,
 
-    // resp.* read (P2)
+    // resp.* read (additional)
     RespHeaderNames,
     RespContentType,
 
@@ -171,7 +171,7 @@ pub enum BuiltinId {
     CtxSet,
     CtxRemove,
 
-    // Utilities (existing)
+    // Utilities
     Log,
     Len,
     Substr,
@@ -190,7 +190,7 @@ pub enum BuiltinId {
     Trim,
     Split,
 
-    // Utilities (P3)
+    // Additional utilities
     HmacSha256,
     JsonGet,
     Uuid,
@@ -288,8 +288,7 @@ pub struct CompiledScript {
     pub source: Option<String>,
     /// Run-length encoded mapping from instruction PC to source line.
     /// Each entry `(count, line)` means the next `count` opcodes originate from `line`.
-    /// Absent for legacy v=1 payloads that were compiled before this field existed —
-    /// in that case `line_of()` returns `None` and callers degrade to no line info.
+    /// May be absent; when absent, `line_of()` returns `None` and callers degrade to no line info.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_map: Option<Vec<(u16, u32)>>,
 }

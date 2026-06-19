@@ -12,7 +12,6 @@ mod filters;
 mod r#match;
 mod protocol;
 
-// basic tests
 pub use basic::HttpTestSuite;
 pub use dangling_extension_ref::DanglingExtensionRefTestSuite;
 pub use multi_port::MultiPortTestSuite;

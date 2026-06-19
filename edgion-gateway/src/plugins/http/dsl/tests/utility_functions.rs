@@ -283,7 +283,7 @@ fn test_url_encode() {
     assert_sets_request_header(r#"req.set_header("X-Out", url_encode("a b+c"))"#, "X-Out", "a%20b%2Bc");
 }
 
-// url_encode result exceeding max_string_len → runtime error (FB-02).
+// url_encode result exceeding max_string_len → runtime error.
 // Encoder builds incrementally and bails inside the per-char loop as soon as
 // `encoded.len() > max_string_len`, instead of `collect()`-then-check.
 #[test]
@@ -299,11 +299,10 @@ fn test_url_encode_result_too_long() {
     assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
 }
 
-// FB-02 follow-up: the coarse `s.len() * 3 > max_string_len` pre-guard proposed in
-// the original issue would false-reject this case. Encoded output equals input (all
-// safe ASCII), so it MUST succeed even though `input.len() * 3 = 12 > limit = 8`.
-// Locks the in-loop bail semantics against future "optimizations" to a length-only
-// pre-check.
+// A coarse `s.len() * 3 > max_string_len` pre-guard would false-reject this case.
+// Encoded output equals input (all safe ASCII), so it MUST succeed even though
+// `input.len() * 3 = 12 > limit = 8`. Locks the in-loop bail semantics against
+// future "optimizations" to a length-only pre-check.
 #[test]
 fn test_url_encode_safe_ascii_within_limit_succeeds() {
     let limits = VmLimits {

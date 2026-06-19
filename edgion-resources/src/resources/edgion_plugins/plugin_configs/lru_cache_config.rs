@@ -26,7 +26,7 @@ pub struct LruCacheConfig {
     pub capacity: usize,
 
     /// Number of cache shards to reduce lock contention under high concurrency.
-    /// Default: 0 (uses global `lru_cache.default_shards`; 0 = single shard, no sharding).
+    /// Default: 0 (uses global `lru_cache.default_shards`).
     #[serde(default)]
     pub shards: usize,
 }

@@ -806,9 +806,9 @@ spec:
             .find(|c| c.type_ == "PartiallyInvalid")
             .expect("PartiallyInvalid set");
         // Note: Accepted may be False here because the parent Gateway 'gw' doesn't
-        // exist in the test runtime (NoMatchingParent). What matters for this fix
-        // is that the bad-CORS rule did NOT push the route into Accepted=False
-        // via reason=Invalid — it should be marked as a rule-level problem.
+        // exist in the test runtime (NoMatchingParent). What matters is that the
+        // bad-CORS rule did NOT push the route into Accepted=False via reason=Invalid —
+        // it should be marked as a rule-level problem via PartiallyInvalid.
         assert_ne!(
             accepted.reason, "Invalid",
             "bad CORS must not produce Accepted=False with reason=Invalid (would drop whole route); got: {accepted:?}"

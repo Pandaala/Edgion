@@ -168,7 +168,7 @@ impl IpRestrictionConfig {
     /// Check IP and return the full access decision including matched
     /// group name.
     ///
-    /// Priority: deny > allow > default. See spec §4.6 truth table.
+    /// Priority: deny > allow > default.
     /// Delegates to the shared `evaluate_ip_access` so the HTTP, L4, and
     /// global-connection IP-restriction paths cannot drift.
     pub fn check_ip_access(&self, ip: &IpAddr) -> AccessDecision {

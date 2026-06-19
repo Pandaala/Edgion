@@ -16,7 +16,6 @@ pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
     // wait for init complete
     ready: RwLock<bool>,
 
-    // Event storage
     store: Arc<RwLock<EventStore<T>>>,
 
     // shared notify for broadcasting events to all watchers
@@ -73,8 +72,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         self.notify.notify_waiters();
     }
 
-    /// List all data - returns all resources in the cache with resource version
-    /// This is typically called by clients to get the full snapshot of data
+    /// List all resources in the cache with their sync version.
     pub fn list(&self) -> ListData<T>
     where
         T: Clone,
@@ -82,8 +80,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         self.list_owned()
     }
 
-    /// List all data as owned values (cloned)
-    /// Useful when clients need owned data instead of references
+    /// List all resources as owned (cloned) values with their sync version.
     pub fn list_owned(&self) -> ListData<T>
     where
         T: Clone,
@@ -93,9 +90,8 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         ListData::new(data, sync_version)
     }
 
-    /// Get a single resource by key
-    /// Key format: "namespace/name" for namespaced resources, or just "name" for cluster-scoped
-    /// Used by Worker to get "previous state" from conf_server_old cache
+    /// Get a single resource by key.
+    /// Key format: `"namespace/name"` for namespaced resources, or just `"name"` for cluster-scoped.
     pub fn get_by_key(&self, key: &str) -> Option<T>
     where
         T: Clone,
@@ -226,7 +222,6 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
         // Use bounded channel for data to provide backpressure
         let (data_tx, data_rx) = mpsc::channel(100);
 
-        // Get the shared notify and store
         let notify = self.get_notify();
         let store = self.get_store();
 
@@ -246,7 +241,6 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
             "Watcher registered"
         );
 
-        // Start the watcher task - only needs store
         Self::start_watcher_task(store, notify, watcher);
 
         data_rx
@@ -254,8 +248,8 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
 
     /// Add event to the circular queue.
     ///
-    /// Stage B: Apply the event inline (synchronously) instead of spawning a new task.
-    /// This guarantees that write order follows the caller's invocation order,
+    /// Applies the event inline (synchronously) instead of spawning a new task,
+    /// guaranteeing that write order follows the caller's invocation order and
     /// eliminating the tokio-scheduler-induced reordering window that could cause
     /// stale state to overwrite newer state in the EventStore.
     fn push_event(&self, event_type: EventType, resource: T, sync_version: u64)
@@ -276,8 +270,7 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     }
 }
 
-/// Implementation of WatchObj trait for ServerCache<T>
-/// This allows using ServerCache with the new ConfigSyncServer
+/// WatchObj impl for `ServerCache<T>`.
 impl<T> WatchObj for ServerCache<T>
 where
     T: ResourceMeta + Resource + Clone + Send + Sync + Serialize + 'static,
@@ -367,7 +360,6 @@ impl<T: ResourceMeta + Resource + Clone + Send + Sync + 'static> CacheEventDispa
     where
         T: Resource + Send + 'static,
     {
-        // Use provided sync_version or generate one
         let sync_version = sv.unwrap_or_else(resource_version::next_resource_version);
 
         tracing::info!(
@@ -513,7 +505,7 @@ mod tests {
         let snapshot = cache.list_owned();
         assert_eq!(snapshot.data.len(), 1);
         assert_eq!(snapshot.data[0], resource);
-        // sync_version is now independently generated, just check it's non-zero
+        // sync_version is independently generated; verify it's set.
         assert!(snapshot.sync_version > 0);
     }
 
@@ -523,7 +515,6 @@ mod tests {
         let original = make_resource("foo", 1);
         let updated = make_resource("foo-updated", 2);
 
-        // Set cache as ready before applying changes
         CacheEventDispatch::set_ready(&cache);
 
         cache.apply_change(ResourceChange::EventAdd, original.clone(), None);
@@ -532,7 +523,7 @@ mod tests {
         let snapshot = cache.list_owned();
         assert_eq!(snapshot.data.len(), 1);
         assert_eq!(snapshot.data[0], updated);
-        // sync_version is now independently generated, just check it's non-zero
+        // sync_version is independently generated; verify it's set.
         assert!(snapshot.sync_version > 0);
     }
 
@@ -542,7 +533,6 @@ mod tests {
         let resource = make_resource("foo", 42);
         let resource_delete = make_resource("foo", 43);
 
-        // Set cache as ready before applying changes
         CacheEventDispatch::set_ready(&cache);
 
         cache.apply_change(ResourceChange::EventAdd, resource.clone(), None);
@@ -550,19 +540,18 @@ mod tests {
 
         let snapshot = cache.list_owned();
         assert!(snapshot.data.is_empty());
-        // sync_version is now independently generated, just check it's non-zero
+        // sync_version is independently generated; verify it's set.
         assert!(snapshot.sync_version > 0);
     }
 
-    /// Stage B regression: rapid sequential apply_change calls must leave the cache
-    /// in the state of the LAST call, not some arbitrary scheduler-determined order.
-    /// With the synchronous inline write path, this must now hold deterministically.
+    /// Rapid sequential apply_change calls must leave the cache in the state of the
+    /// LAST call, not some arbitrary scheduler-determined order.
     #[tokio::test]
     async fn rapid_updates_preserve_latest_state() {
         let cache = ServerCache::<TestResource>::new(200);
         CacheEventDispatch::set_ready(&cache);
 
-        // Issue 50 rapid updates - all synchronous after Stage B
+        // Issue 50 rapid updates sequentially.
         let n: u64 = 50;
         for i in 1..=n {
             let r = make_resource(&format!("state-{}", i), i);

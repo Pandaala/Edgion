@@ -37,7 +37,6 @@ impl Default for LogConfig {
 }
 
 pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
-    // Create log directory if it doesn't exist
     tokio::fs::create_dir_all(&config.log_dir).await?;
 
     // Fixed-name file appender (nginx-style: fixed name, no date in active file).
@@ -113,14 +112,12 @@ mod tests {
 
         let _guard = init_logging(config).await.unwrap();
 
-        // Test from Tokio task
         tokio::spawn(async {
             tracing::info!("Log from tokio task");
         })
         .await
         .unwrap();
 
-        // Test from regular thread
         std::thread::spawn(|| {
             tracing::info!("Log from regular thread");
         })

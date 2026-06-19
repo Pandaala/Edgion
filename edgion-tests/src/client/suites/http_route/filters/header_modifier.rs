@@ -110,10 +110,10 @@ impl HeaderModifierTestSuite {
     }
 
     /// Test RequestHeaderModifier add onto a header the client already sent with
-    /// multiple same-name values. Regression for F-001: append must preserve every
-    /// existing field line (RFC 7230 §3.2.2 list semantics), not collapse to the
-    /// first value plus the appended one. The client sends two X-Multi-Append
-    /// values; the route appends a third. The echoed body must contain all three.
+    /// multiple same-name values. Append must preserve every existing field line
+    /// (RFC 7230 §3.2.2 list semantics), not collapse to the first value plus the
+    /// appended one. The client sends two X-Multi-Append values; the route appends
+    /// a third; the echoed body must contain all three.
     fn test_request_header_append_preserves_multi_value() -> TestCase {
         TestCase::new(
             "request_header_append_preserves_multi_value",

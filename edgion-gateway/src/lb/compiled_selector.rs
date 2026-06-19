@@ -1,5 +1,4 @@
-//! `CompiledSelector` + `ServiceSelectorCell` — Stage 3 of the lb-precompile
-//! refactor.
+//! `CompiledSelector` + `ServiceSelectorCell` — precompiled per-service selectors.
 //!
 //! A `ServiceSelectorCell` holds the canonical `Arc<Vec<Arc<EdgionBackend>>>`
 //! for a service, plus four lazily compiled per-policy selector slots stored
@@ -12,13 +11,11 @@
 //! backend list. That atomically swaps the snapshot and clears all four
 //! policy slots so the next request rebuilds them from fresh data.
 //!
-//! Stage 3 changes:
-//!   * Backends stored as `Arc<EdgionBackend>` so selectors return the live
-//!     object (with its atomics) rather than a freshly-wrapped copy.
-//!   * `RrCore` / `ChCore` resolve `pingora::Backend` → `Arc<EdgionBackend>`
-//!     via an addr-keyed map built at compile time. No per-request allocation.
-//!   * `MetricCore` (LeastConn / EWMA) now drives P2C over per-backend atomics
-//!     instead of the legacy `runtime_state` DashMap lookups.
+//! Backends are stored as `Arc<EdgionBackend>` so selectors return the live
+//! object (with its metric atomics). `RrCore` / `ChCore` resolve
+//! `pingora::Backend` → `Arc<EdgionBackend>` via an addr-keyed map built at
+//! compile time, with no per-request allocation. `MetricCore` (LeastConn /
+//! EWMA) drives P2C over per-backend atomic counters.
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 use dashmap::DashMap;
@@ -245,11 +242,9 @@ impl CompiledSelector {
         match self {
             CompiledSelector::RoundRobin(core) => core.select(health_filter),
             CompiledSelector::ConsistentHash(core) => {
-                // Empty hash key → behave as round-robin. Mirrors the old
-                // `select_from_backends` branch where an empty key produced an
-                // RR selection (with its own not-found error code mapped by
-                // the caller). Reuses the pre-built `rr_fallback` so an
-                // unauthenticated/keyless request does not allocate per pick.
+                // Empty hash key → fall back to round-robin (e.g. missing
+                // cookie / unauthenticated traffic). Reuses the pre-built
+                // `rr_fallback` to avoid per-pick allocation.
                 match hash_key {
                     Some(k) if !k.is_empty() => core.select(k, health_filter),
                     _ => core.rr_fallback.select(health_filter),

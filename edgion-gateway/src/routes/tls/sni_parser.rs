@@ -319,20 +319,12 @@ mod tests {
 
     #[test]
     fn test_extract_sni_refuses_truncated_record_with_parseable_prefix() {
-        // Regression test for the pre-fix clamping behavior. Take a valid
-        // ClientHello, then inflate the declared record length by +500 bytes
-        // without changing the buffer contents — so the buffer still holds
-        // an end-to-end parseable SNI extension, but the record header now
-        // claims the record continues past the buffer end.
-        //
-        // Pre-fix behavior: the parser clamped to `buf.len()` and parsed
-        // the slice. Because the buffer DOES contain a complete SNI
-        // extension (only the declared length is a lie), the old code
-        // returned `Some("example.com")` — a wrong answer derived from
-        // a record that hadn't fully arrived on the wire.
-        //
-        // Post-fix behavior: extract_sni refuses the record as truncated
-        // (RFC 8446 §5.1, RFC 6066 §3) and returns None.
+        // Inflate the declared record length by +500 bytes without changing the
+        // buffer contents — the buffer still holds an end-to-end parseable SNI
+        // extension, but the record header claims the record extends past the
+        // buffer end. The parser must refuse this as a truncated record per
+        // RFC 8446 §5.1 and RFC 6066 §3 and return None rather than parsing
+        // from the incomplete record.
         let mut buf = build_client_hello("example.com");
         let original_len = u16::from_be_bytes([buf[3], buf[4]]);
         let inflated = original_len + 500;

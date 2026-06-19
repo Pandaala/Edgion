@@ -21,7 +21,7 @@ pub const NON_RESOURCE_KIND: &str = "NonResource";
 
 /// Normalize a wire kind param to the canonical kind string, falling back to the
 /// raw value (which the policy will not match) for unknown kinds.
-/// `pub`: also consumed by the authz middleware (Task 5) and the fed watch check (Task 6).
+/// `pub`: also consumed by the authz middleware and the fed watch check.
 pub fn normalize_kind(raw: &str) -> String {
     match ResourceKind::from_kind_name(raw) {
         Some(k) => k.as_str().to_string(),
@@ -32,7 +32,7 @@ pub fn normalize_kind(raw: &str) -> String {
 /// Map a (possibly already-normalized) kind to a BOUNDED metric label: a known
 /// ResourceKind, the synthetic `RegionRoute`/`*` labels, or `"unknown"`. Never
 /// emit raw attacker-supplied kind values as labels (cardinality protection).
-/// `pub`: also consumed by the authz middleware (Task 5) and the fed watch check (Task 6).
+/// `pub`: also consumed by the authz middleware and the fed watch check.
 pub fn bounded_kind_label(kind: &str) -> &'static str {
     if kind == "*" {
         return "*";

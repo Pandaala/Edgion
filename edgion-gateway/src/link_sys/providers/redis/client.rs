@@ -43,9 +43,6 @@ pub struct RedisLinkClient {
 
 impl RedisLinkClient {
     /// Create from CRD config. Does NOT connect — call `init()` next.
-    ///
-    /// Maps CRD config → fred Config + Builder, then builds a connection pool.
-    /// The pool is not yet connected; call `init()` to establish connections.
     pub fn from_config(
         name: &str,
         config: &RedisClientConfig,

@@ -1,23 +1,17 @@
 // ============================================================================
-// LB LeastConn + retry-on-status Test Suite — regression for P1 g1-007
+// LB LeastConn + retry-on-status Test Suite
 // ============================================================================
 //
 // Setup: retry attempts=3, codes=[503], LeastConn LB, 2 reachable endpoints.
 // All endpoints point at the same test_server (bound to 0.0.0.0:30001) but use
 // 127.0.0.1 / 127.0.0.2 so the LeastConn picker sees two independent backends.
 //
-// Post-fix paths exercised:
+// Paths exercised:
 //   1. 503 retry triggers begin_upstream_attempt cleanup (take
 //      leastconn_incremented_backend) and the final logging cleanup; count is
 //      neither over- nor under-decremented.
-//   2. Happy-path traffic immediately after the retry storm still distributes
-//      across both endpoints, proving the ledger was not biased toward a
-//      single endpoint by the retry path.
-//
-// Pre-fix path: pg_logging used current_upstream.lb_backend_addr to decrement,
-// which does not correspond to any specific increment — particularly visible
-// under repeated retries where multi-attempt in-flight bookkeeping does not
-// match a single trailing decrement.
+//   2. Happy-path traffic after a retry storm still distributes across both
+//      endpoints, proving the LeastConn ledger was not biased by the retry path.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use crate::metrics_helper::MetricsClient;

@@ -93,7 +93,7 @@ pub struct JwtIssuerGroup {
 pub struct ResolvedJwtIssuerGroup {
     /// Group name (snapshot of `JwtIssuerGroup.name`). Always set by
     /// controller; `#[serde(default)]` provides a fallback for
-    /// Gateway-new / Controller-old rolling upgrades (lesson L2).
+    /// Gateway-new / Controller-old rolling upgrades.
     #[serde(default = "default_group_name")]
     pub group: String,
 

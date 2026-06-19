@@ -51,7 +51,6 @@ pub async fn connected_to_upstream(
             let mut entry = AccessLogEntry::from_context(ctx);
             entry.set_conn_est();
 
-            // Send to access logger
             edgion_http.access_logger.send(entry.to_json()).await;
         }
     }

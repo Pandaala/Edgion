@@ -43,9 +43,7 @@ pub fn validate_resource<T: serde::Serialize>(
     Ok(())
 }
 
-/// Map ConfWriterError to HTTP StatusCode
-///
-/// Provides fine-grained error mapping for both K8s and non-K8s modes
+/// Map ConfWriterError to HTTP StatusCode.
 pub fn map_writer_error(e: ConfWriterError) -> StatusCode {
     match e {
         ConfWriterError::NotFound(msg) => {

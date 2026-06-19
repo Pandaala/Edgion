@@ -25,8 +25,7 @@ impl Cors {
     /// `#[serde(skip)]`, so they are `None` after gRPC/YAML deserialization. Compile
     /// them here via `validate_and_init`; without this `is_origin_allowed` skips the
     /// cache and regex branches, silently breaking comma-separated, `*.domain`
-    /// subdomain-wildcard, and `allow_origins_by_regex` origins. Mirrors the
-    /// `IpRestriction::create` fix (fr-types-01). Construction runs at plugin build
+    /// subdomain-wildcard, and `allow_origins_by_regex` origins. Construction runs at plugin build
     /// (config-apply / hot-reload), off the request path, so `tracing` is permitted
     /// here. On failure keep the uncompiled (deny-safe) config: regex/cache origins
     /// are skipped rather than wrongly allowed. In practice this path is unreachable
@@ -56,7 +55,6 @@ impl Cors {
 
     /// Check if this is a CORS preflight request
     fn is_preflight_request(&self, session: &mut dyn PluginSession) -> bool {
-        // Preflight must be OPTIONS with Origin and Access-Control-Request-Method headers
         if session.get_method() != "OPTIONS" {
             return false;
         }
@@ -102,26 +100,21 @@ impl Cors {
     ) -> Vec<(&'static str, String)> {
         let mut headers = Vec::new();
 
-        // Access-Control-Allow-Origin (required)
         headers.push(("Access-Control-Allow-Origin", allowed_origin.to_string()));
 
-        // Access-Control-Allow-Methods
         headers.push(("Access-Control-Allow-Methods", self.config.get_allow_methods()));
 
-        // Access-Control-Allow-Headers
         let requested_headers = session.header_value("access-control-request-headers");
         headers.push((
             "Access-Control-Allow-Headers",
             self.config.get_allow_headers(requested_headers.as_deref()),
         ));
 
-        // Access-Control-Expose-Headers
         let expose = self.config.get_expose_headers();
         if !expose.is_empty() {
             headers.push(("Access-Control-Expose-Headers", expose.to_string()));
         }
 
-        // Access-Control-Allow-Credentials
         if self.config.allow_credentials {
             headers.push(("Access-Control-Allow-Credentials", "true".to_string()));
         }
@@ -133,7 +126,6 @@ impl Cors {
             }
         }
 
-        // Timing-Allow-Origin
         if let Some(origin) = session.header_value("origin") {
             if self.config.is_timing_origin_allowed(&origin) {
                 let timing_value = if let Some(ref timing_origins) = self.config.timing_allow_origins {
@@ -218,7 +210,6 @@ impl Cors {
         Ok(())
     }
 
-    /// Handle normal CORS request (non-preflight)
     fn handle_normal_request(&self, session: &mut dyn PluginSession, allowed_origin: &str) -> CorsResult<()> {
         self.set_cors_headers_via_session(session, allowed_origin, false)
     }
@@ -231,13 +222,11 @@ impl RequestFilter for Cors {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Check if there's an Origin header (CORS indicator)
         if session.header_value("origin").is_none() {
             // No Origin header means same-origin request, skip CORS
             return PluginRunningResult::GoodNext;
         }
 
-        // Validate origin
         let allowed_origin = match self.get_validated_origin(session) {
             Some(origin) => origin,
             None => {
@@ -257,7 +246,6 @@ impl RequestFilter for Cors {
             }
         };
 
-        // Check if this is a preflight request
         if self.is_preflight_request(session) {
             plugin_log.push("cors preflight");
             if let Err(_e) = self.handle_preflight(session, &allowed_origin).await {
@@ -267,7 +255,6 @@ impl RequestFilter for Cors {
 
             plugin_log.push("origin match:allow");
 
-            // If preflight_continue is true, continue to upstream
             if self.config.preflight_continue {
                 return PluginRunningResult::GoodNext;
             }
@@ -276,7 +263,6 @@ impl RequestFilter for Cors {
             return PluginRunningResult::ErrTerminateRequest;
         }
 
-        // Normal CORS request - set response headers
         plugin_log.push("cors actual");
         if let Err(_e) = self.handle_normal_request(session, &allowed_origin) {
             plugin_log.push("origin match:deny");
@@ -284,7 +270,6 @@ impl RequestFilter for Cors {
             plugin_log.push("origin match:allow");
         }
 
-        // Continue processing
         PluginRunningResult::GoodNext
     }
 }
@@ -389,10 +374,10 @@ mod tests {
         plugin_log.contains("origin match:allow")
     }
 
-    // Regression for fr-types-02: `Cors::new` must call `validate_and_init` so the
-    // `#[serde(skip)]` matchers are compiled. Each config below is built the way
-    // deserialization yields it (compiled fields `None`); a config routed through
-    // `CorsConfig::new` would pre-build the matchers and mask the bug.
+    // Regression: `Cors::new` must call `validate_and_init` so the `#[serde(skip)]`
+    // matchers are compiled. Each config below is built as deserialization yields it
+    // (compiled fields `None`); using `CorsConfig::new` would pre-build the matchers
+    // and mask the bug.
 
     #[tokio::test]
     async fn test_new_compiles_regex_origin_allowed() {

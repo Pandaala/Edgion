@@ -82,7 +82,6 @@ impl KeyAuth {
     /// Supports all KeyGet variants including Webhook for remote key resolution.
     async fn extract_key(&self, session: &dyn PluginSession) -> Option<(String, &KeyGet)> {
         for source in &self.config.key_sources {
-            // Allow supported key sources for API key extraction
             match source {
                 KeyGet::Header { .. }
                 | KeyGet::Query { .. }

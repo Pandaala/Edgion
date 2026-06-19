@@ -631,11 +631,11 @@ impl TestSuite for JwtAuthTestSuite {
             Self::test_jwt_in_query(),
             Self::test_jwt_in_cookie(),
             Self::test_token_extraction_priority(),
-            // P0: WWW-Authenticate header
+            // WWW-Authenticate header
             Self::test_www_authenticate_header(),
-            // P2: Username extraction (sub claim)
+            // Username extraction from sub claim
             Self::test_jwt_with_sub_claim(),
-            // access log regression
+            // Access log: stage_logs includes JwtAuth entry
             Self::test_stage_logs_contain_jwt_auth(),
             // Grouped issuer tests
             Self::test_grouped_partner_a_returns_200(),

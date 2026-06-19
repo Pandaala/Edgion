@@ -107,7 +107,6 @@ pub mod frozen_v6;
 pub mod matcher;
 pub mod types;
 
-// Re-export main types for convenience
 pub use builder_v4::IpV4RadixBuilder;
 pub use builder_v6::IpV6RadixBuilder;
 pub use error::IpRadixError;

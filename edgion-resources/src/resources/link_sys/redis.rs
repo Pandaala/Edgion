@@ -48,8 +48,7 @@ pub struct RedisClientConfig {
 
 /// Redis authentication configuration.
 ///
-/// All credentials MUST be stored in a Kubernetes Secret and referenced via `secretRef`.
-/// Inline username/password fields have been removed (breaking change).
+/// Credentials must be stored in a Kubernetes Secret and referenced via `secretRef`.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RedisAuth {
@@ -269,7 +268,7 @@ secretRef:
 
     #[test]
     fn redis_auth_yaml_roundtrip_unchanged() {
-        // YAML shape must remain identical before and after refactoring (#[serde(flatten)] verification)
+        // Verify #[serde(flatten)] preserves the YAML shape at the parent level.
         let yaml = "secretRef:\n  name: redis-creds\n  namespace: default";
         let auth: super::RedisAuth = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(auth.slot.secret_ref.name, "redis-creds");

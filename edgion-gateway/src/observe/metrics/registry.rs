@@ -371,16 +371,11 @@ pub fn status_group(status: Option<u16>) -> &'static str {
 
 /// Record a mirror request outcome.
 ///
-/// Per-request latency used to be captured here as a `MIRROR_DURATION_MS`
-/// histogram, but the histogram was broken since the initial commit
-/// (record path recorded milliseconds into Prometheus's default
-/// second-range buckets → every sample landed in `+Inf`). It has been
-/// removed on the grounds that (a) mirror is fire-and-forget and its
-/// tail latency does not affect user traffic; (b) the `channel_full`
-/// and `timeout` statuses on this counter are a sharper "mirror
-/// falling behind" signal than a latency percentile; (c) per-request
-/// latency is still recorded in the mirror access log (`et` field) when
-/// `mirror_log` is enabled, for any finer-grained investigation.
+/// No latency histogram: mirror is fire-and-forget so its tail latency does
+/// not affect user traffic; the `channel_full` / `timeout` statuses on this
+/// counter are a sharper "mirror falling behind" signal than a percentile.
+/// Per-request latency is in the mirror access log `et` field when
+/// `mirror_log` is enabled.
 #[inline]
 pub fn record_mirror_metric(status: &'static str) {
     counter!(

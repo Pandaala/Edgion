@@ -4,13 +4,7 @@
 //! Controller's point of view: connection lifecycle, watch events it serves,
 //! ready-gate wait, admin-API RBAC denials, and kill-switch state. See
 //! `docs/superpowers/specs/2026-04-19-fix-24-fed-metrics-baseline-design.md`
-//! for the full design and the rationale for dropping the original
-//! ticket's histograms and high-cardinality labels.
-//!
-//! The Center-only metrics (aggregator controller counts, watch list/error
-//! outcomes, mark-offline / evict-stale / session-reentry / session-takeover /
-//! peer-identity / consistency / fan-out) moved with Center to the standalone
-//! EdgionCenter repository.
+//! for the full design.
 //!
 //! **Label value discipline:** every label value emitted here must come
 //! from a bounded enum (the `labels` submodule) or from a well-known

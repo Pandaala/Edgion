@@ -9,16 +9,15 @@
 //!
 //! The authorization skip-set is the **static base ONLY** — probes plus the
 //! single public auth endpoint (`/api/v1/auth/status`). There is no
-//! operator-configurable skip list (the browser-login layer that owned it was
-//! removed), so a business route can never be made public by configuration.
+//! operator-configurable skip list, so a business route can never be made
+//! public by configuration.
 
 /// Public liveness/readiness/metrics probes. Unauthenticated by convention
 /// (K8s controller-manager style). Exact-match.
 pub const PUBLIC_PROBE_PATHS: &[&str] = &["/health", "/ready", "/metrics"];
 
-/// Public auth endpoints that must stay reachable regardless of token
-/// readiness: `status` surfaces whether auth is ready. Login/logout/me were
-/// removed with the browser-login layer. Exact-match.
+/// Public auth endpoint reachable regardless of token readiness:
+/// `status` surfaces whether auth is ready. Exact-match.
 pub const PUBLIC_AUTH_ENDPOINTS: &[&str] = &["/api/v1/auth/status"];
 
 /// True if `path` is a public probe (`/health`, `/ready`, `/metrics`).
@@ -54,7 +53,6 @@ mod tests {
     fn status_is_the_only_public_auth_endpoint() {
         assert!(is_public_auth_endpoint("/api/v1/auth/status"));
         assert!(is_static_public("/api/v1/auth/status"));
-        // login/logout/me no longer exist and are not public.
         assert!(!is_public_auth_endpoint("/api/v1/auth/login"));
         assert!(!is_static_public("/api/v1/auth/me"));
     }

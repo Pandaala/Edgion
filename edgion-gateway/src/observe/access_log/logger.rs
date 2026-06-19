@@ -53,10 +53,6 @@ impl AccessLogger {
         }
         for sender in &self.senders {
             if sender.healthy() {
-                // Tier-1: route to the first healthy sender only. If its send
-                // fails (e.g. ES bulk channel momentarily full), count the drop
-                // (I4) — do NOT fall through to the next sender (that would be
-                // tier-2 send-fallback, intentionally out of scope).
                 if sender.send(data).await.is_err() {
                     global_metrics().access_log_dropped();
                 }
@@ -81,9 +77,6 @@ impl AccessLogger {
         }
         for sender in &self.senders {
             if sender.healthy() {
-                // Tier-1: route to the first healthy sender only. If its send
-                // fails (e.g. OTLP export channel full), count the drop (I4)
-                // — do NOT fall through to the next sender.
                 if sender.send_with_meta(data, &meta).await.is_err() {
                     global_metrics().access_log_dropped();
                 }

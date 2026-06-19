@@ -103,7 +103,7 @@ async fn test_store_claims_in_ctx() {
 
 #[tokio::test]
 async fn test_username_from_sub() {
-    // Username is always extracted from "sub" claim in the new issuer-group model.
+    // Username is extracted from the "sub" claim.
     let auth = jwt_auth_with_credential(TEST_SECRET, JwtAlgorithm::HS256, None);
 
     let claims = json!({

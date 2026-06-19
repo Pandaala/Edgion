@@ -10,11 +10,11 @@ use edgion_resources::ResourceMeta;
 
 /// Gateway-side compiled companion for a TLSRoute.
 ///
-/// Holds the route schema plus the compiled runtime that cannot live in
-/// `src/types` (BackendSelector, proxy-protocol version, connect-retry budget,
-/// keepalive config, stream-plugin store key). Built ONCE per route and shared
-/// (Arc-cloned) across every SNI hostname bucket the route serves, so the WRR
-/// selector cursor and per-rule state are not split per hostname.
+/// Holds the route schema plus the gateway-side compiled runtime (BackendSelector,
+/// proxy-protocol version, connect-retry budget, keepalive config,
+/// stream-plugin store key). Built ONCE per route and shared (Arc-cloned) across
+/// every SNI hostname bucket the route serves, so the WRR selector cursor and
+/// per-rule state are not split per hostname.
 ///
 /// Per-protocol note: TLS routes fan out across SNI hostnames but a single
 /// route shares one rule set, so the compiled runtime is built from the first
@@ -44,8 +44,7 @@ impl TlsRouteUnit {
     /// Resolves the proxy-protocol version, stream-plugin store key, connect
     /// retry budget and keepalive config from the route's metadata/annotations
     /// (single source of truth shared with the HTTP/TCP conf-handlers) and
-    /// builds the WRR selector from the first rule's backend refs. None of this
-    /// state lives on the schema anymore.
+    /// builds the WRR selector from the first rule's backend refs.
     pub fn from_route(route: Arc<TLSRoute>) -> Self {
         let route_key = route.key_name();
         let annotations = route.metadata.annotations.as_ref();

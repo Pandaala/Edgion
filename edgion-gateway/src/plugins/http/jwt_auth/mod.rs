@@ -1,7 +1,4 @@
 //! JWT Authentication plugin (HTTP).
-//!
-//! See `docs/superpowers/specs/2026-04-25-P0-08-jwt-auth-plugin-split-design.md`
-//! for module split rationale.
 
 mod credentials;
 mod plugin;

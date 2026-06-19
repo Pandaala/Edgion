@@ -18,34 +18,28 @@ impl EndpointSliceExt for EndpointSlice {
     fn build_backends(&self, port: u16) -> BTreeSet<Backend> {
         let mut backends = BTreeSet::new();
 
-        // Check if this is an IPv6 EndpointSlice
         let is_ipv6 = self.address_type == "IPv6";
 
-        // Iterate through all endpoints in the slice
         for endpoint in &self.endpoints {
-            // Check if endpoint is ready
             let is_ready = endpoint.conditions.as_ref().and_then(|c| c.ready).unwrap_or(false);
 
             if !is_ready {
                 continue;
             }
 
-            // Add all addresses from this endpoint
             for address in &endpoint.addresses {
-                // Format address with port, IPv6 addresses need brackets
+                // IPv6 addresses require brackets: `[addr]:port`
                 let addr_with_port = if is_ipv6 {
-                    // IPv6 address - wrap in brackets
                     format!("[{}]:{}", address, port)
                 } else {
-                    // IPv4 or FQDN address
                     format!("{}:{}", address, port)
                 };
 
                 if let Ok(socket_addr) = addr_with_port.parse::<SocketAddr>() {
                     let backend = Backend {
                         addr: socket_addr,
-                        weight: 1,               // Default weight
-                        ext: Default::default(), // Extension data
+                        weight: 1,
+                        ext: Default::default(),
                     };
                     backends.insert(backend);
 

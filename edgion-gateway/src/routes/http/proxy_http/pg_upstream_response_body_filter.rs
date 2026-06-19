@@ -18,8 +18,7 @@ pub fn upstream_response_body_filter(
     end_of_stream: bool,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Option<Duration>> {
-    // Record body time (time from start_time to receiving first body chunk)
-    // Only set once when bt is None (first chunk)
+    // Record body time (ms from this upstream attempt's start_time to the first response chunk).
     if let Some(upstream) = ctx.get_current_upstream_mut() {
         if upstream.bt.is_none() {
             let bt = Instant::now()

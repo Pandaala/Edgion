@@ -750,7 +750,7 @@ mod tests {
     }
 
     // ----------------------------------------------------------------------
-    // Trailing-slash preservation (regression for Issue 1)
+    // Trailing-slash preservation
     // ----------------------------------------------------------------------
     // Operator may distinguish `/admin/` from `/admin` semantically. The
     // normalization layer must NOT strip a trailing `/` that came from

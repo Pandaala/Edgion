@@ -1,8 +1,6 @@
 //! JWE Decrypt plugin implementation.
 //!
-//! Phase 1 supports compact JWE:
-//! - alg=dir
-//! - enc=A256GCM
+//! Supports compact JWE (alg=dir, enc=A256GCM).
 
 use parking_lot::RwLock;
 use std::sync::Arc;

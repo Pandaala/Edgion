@@ -57,7 +57,6 @@ pub fn make_conflict_key(addr: std::net::SocketAddr) -> ConflictKey {
     addr.to_string() // e.g. "0.0.0.0:443"
 }
 
-// Keep PortKey as a type alias for backward compatibility
 pub type PortKey = ConflictKey;
 
 /// Check if two listener hostnames are identical (i.e. truly conflict).
@@ -79,8 +78,8 @@ fn hostnames_conflict(a: Option<&str>, b: Option<&str>) -> bool {
 ///
 /// Tracks which listeners are using which ports across all Gateways,
 /// but only reports conflicts within the same Gateway.
-/// Conflict detection is hostname-aware: wildcard listeners conflict
-/// with any hostname-specific listener on the same port.
+/// Two listeners conflict only when their hostnames are identical
+/// (both wildcard, or the same concrete hostname string).
 pub struct ListenerPortManager {
     /// Forward index: conflict_key → listeners using this socket address
     port_to_listeners: RwLock<HashMap<ConflictKey, HashSet<ListenerRef>>>,
@@ -171,10 +170,11 @@ impl ListenerPortManager {
 
     /// Detect intra-gateway port conflicts for a specific gateway.
     ///
-    /// Two listeners on the same port conflict if their hostnames intersect:
-    /// - None (wildcard) conflicts with any hostname
-    /// - `*.example.com` conflicts with `foo.example.com`
-    /// - `api.example.com` does NOT conflict with `web.example.com`
+    /// Two listeners sharing a socket address conflict only if their hostnames are
+    /// identical: both wildcard (`None`), or the same concrete string. Overlapping
+    /// but distinct hostnames (wildcard vs concrete, or two different concrete
+    /// values) are not conflicts — routing priority resolves the overlap per
+    /// GatewayHTTPListenerIsolation semantics.
     ///
     /// # Lock Order
     /// Always acquires locks in order: gateway_to_ports -> port_to_listeners

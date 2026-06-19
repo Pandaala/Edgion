@@ -66,8 +66,6 @@ impl Default for ReferenceGrantHandler {
 #[async_trait::async_trait]
 impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
     async fn parse(&self, rg: ReferenceGrant, _ctx: &HandlerContext) -> ProcessResult<ReferenceGrant> {
-        // Parse is called during both add and update.
-        //
         // Bug guard: if a ReferenceGrant's `spec.from[*].namespace` (or
         // `spec.to.namespace` via metadata.namespace) changes, routes that
         // were permitted by the OLD grant must also be revalidated. The
@@ -88,9 +86,9 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
         // the FileSystemResourceController processing one ReferenceGrant key at a
         // time on its receive loop, so no other parse() runs against the same
         // key concurrently. `ControllerRuntime::reset()` (rare, leader-change
-        // only) is the only other writer; if it interleaves we fall back to the
-        // previous behaviour (orphan namespaces possibly missed) which is no
-        // worse than before this fix.
+        // only) is the only other writer; if it interleaves, some orphaned
+        // namespaces may be missed on this pass — they will be re-dispatched
+        // when the next reset reprocesses all ReferenceGrants.
         let new_affected = Self::identify_affected_namespaces(&rg);
         let orphaned_namespaces: HashSet<String> = match store.get(&key) {
             Some(old) => Self::identify_affected_namespaces(&old)
@@ -100,7 +98,6 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
             None => HashSet::new(),
         };
 
-        // Update the store
         store.upsert(key.clone(), Arc::new(rg.clone()));
 
         tracing::debug!(
@@ -137,7 +134,6 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
             "ReferenceGrant changed, dispatching event"
         );
 
-        // Dispatch change event to trigger revalidation of affected resources
         Self::dispatch_change_event(affected_namespaces, _ctx).await;
     }
 
@@ -145,10 +141,7 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
         let key = Self::build_key(rg);
         let store = &_ctx.runtime().ref_grant_store;
 
-        // Collect affected namespaces before removing
         let affected_namespaces = Self::identify_affected_namespaces(rg);
-
-        // Remove from store
         store.remove(&key);
 
         tracing::info!(
@@ -158,7 +151,6 @@ impl ProcessorHandler<ReferenceGrant> for ReferenceGrantHandler {
             "ReferenceGrant deleted, dispatching event"
         );
 
-        // Dispatch change event to trigger revalidation
         Self::dispatch_change_event(affected_namespaces, _ctx).await;
     }
 }
@@ -377,8 +369,8 @@ mod tests {
 
     /// Regression: when a ReferenceGrant changes its `spec.from[*].namespace`,
     /// the OLD `from` namespace must be re-dispatched so its routes get
-    /// revalidated. Previously, only the NEW grant's namespaces were sent
-    /// (because `parse()` overwrites the cache before `on_change()` fires).
+    /// revalidated. Since `parse()` overwrites the cache before `on_change()`
+    /// fires, the orphan dispatch must happen inside `parse()` itself.
     #[tokio::test]
     async fn parse_dispatches_orphaned_from_namespace_on_update() {
         let runtime = Arc::new(ControllerRuntime::default());
@@ -403,7 +395,6 @@ mod tests {
         }
 
         let events = listener.snapshot();
-        // Expect at least: initial change + (orphan from parse + new from on_change)
         assert!(
             events.len() >= 3,
             "expected at least 3 dispatches (initial + orphan-of-update + new-of-update), got {}: {:?}",
@@ -486,7 +477,6 @@ mod tests {
             ProcessResult::Skip { .. } => panic!("unexpected skip"),
         }
 
-        // Exactly one dispatch (the on_change).
         assert_eq!(listener.snapshot().len(), 1);
     }
 

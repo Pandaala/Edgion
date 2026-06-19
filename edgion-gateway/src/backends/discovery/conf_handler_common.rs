@@ -31,10 +31,6 @@ where
 /// Uses the cell's pre-replace snapshot to look up the live `Arc<EdgionBackend>`
 /// for each removed address; if the backend still has in-flight connections
 /// (`conn() > 0`) it is marked draining rather than removed immediately.
-///
-/// The `added` variable that appeared in both original handlers was a dead
-/// variable and has been removed; the cache is invalidated whenever the two
-/// sets differ.
 pub(in crate::backends::discovery) fn cleanup_removed_backends(
     service_key: &str,
     old: &HashSet<SocketAddr>,
@@ -79,9 +75,7 @@ pub(in crate::backends::discovery) fn cleanup_removed_backends(
 /// knows about. Called after `full_set` to ensure all known services are warm.
 ///
 /// Always calls `replace_backends` even when the new list is empty — this
-/// correctly clears stale backends on scale-to-zero. The previous guard
-/// (`if !new_backends.is_empty()`) left cells holding invalid backends when
-/// all pods terminated.
+/// correctly clears stale backends on scale-to-zero.
 ///
 /// Also runs `cleanup_removed_backends` to register draining for any backends
 /// with in-flight connections, matching the behaviour of `update_affected_lbs`.

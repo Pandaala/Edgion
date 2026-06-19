@@ -1,16 +1,15 @@
-// EdgionTls SNI collision test suite (tls-F007 end-to-end).
+// EdgionTls SNI collision test suite.
 //
 // Scenario: one HTTPS listener with TWO EdgionTls resources colliding on the
-// same hostname (gateway-tls.test.com — the only SAN that BOTH reused certs carry,
-// so neither resource is dropped by cert SAN validation before it can collide):
+// same hostname (gateway-tls.test.com — the only SAN both reused certs carry,
+// so neither is dropped by SAN validation before the collision):
 //   - older (creationTimestamp 2020-01-01) -> RSA edge-tls, CN=test.example.com
 //   - newer (creationTimestamp 2024-01-01) -> ECDSA edge-tls-ecdsa, CN=ecdsa-dualcert.example.com
 //
-// Per the tls-F007 precedence rule, the resource with the OLDER creationTimestamp
-// wins the collision. This proves creationTimestamp survives the config-sync
-// pipeline and that the edgion_tls_precedence sort selects the older cert in a
-// running gateway (FileSystem mode): a TLS handshake with SNI
-// gateway-tls.test.com must be served the OLDER (RSA) cert.
+// Collision rule: the resource with the OLDER creationTimestamp wins. This verifies
+// that creationTimestamp survives the config-sync pipeline and that the
+// edgion_tls_precedence sort selects the older cert: SNI gateway-tls.test.com
+// must be served the RSA cert.
 //
 // Required config files (in edgion-tests/integration/conf/EdgionTls/sni_collision/):
 //   - Gateway.yaml            # HTTPS listener "https" (port 31390)

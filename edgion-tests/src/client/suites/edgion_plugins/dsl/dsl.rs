@@ -1492,7 +1492,7 @@ impl DslTestSuite {
     // ==================== Test 20b: resp replace body ====================
 
     /// Test: upstream returns 502 → DSL response plugin replaces the body with a
-    /// normalized JSON envelope (filter-04 sendLocalReply equivalent).
+    /// normalized JSON envelope.
     fn test_resp_replace_body() -> TestCase {
         TestCase::new(
             "dsl_resp_replace_body",
@@ -1534,7 +1534,7 @@ impl DslTestSuite {
         )
     }
 
-    /// filter-04b: upstream returns a BODY-LESS 502 (Content-Length: 0); the DSL
+    /// Upstream returns a body-less 502 (Content-Length: 0); the DSL
     /// response plugin must still deliver the full normalized envelope.
     fn test_resp_replace_bodyless() -> TestCase {
         TestCase::new(
@@ -1580,7 +1580,7 @@ impl DslTestSuite {
 
     // ==================== Test 21: Utility Combo ====================
 
-    /// Test: multiple P3 utility functions in one DSL script
+    /// Test: multiple utility functions combined in one DSL script
     fn test_utility_combo() -> TestCase {
         TestCase::new(
             "dsl_utility_combo",
@@ -2149,7 +2149,7 @@ impl DslTestSuite {
     /// matcher must still bind `:item=book-7` (not `book-7/extra`), and the
     /// route must still match (i.e. PathPrefix allows further suffix segments
     /// beyond the template).
-    // ==================== Scenario 27: cached_query freeze (unified-query-string-cache) ====================
+    // ==================== Scenario 27: cached_query frozen at entry time ====================
 
     /// Verify cached_query is frozen at entry: even if a DSL set_uri rewrites
     /// the URI to a different query, req.query("name") read afterwards must
@@ -2394,7 +2394,7 @@ impl TestSuite for DslTestSuite {
             Self::test_terminate_normal_pass(),
             // Scenario 20: resp.set_status
             Self::test_resp_set_status_rewrite(),
-            // Scenario 20b: resp replace body (filter-04 sendLocalReply equivalent)
+            // Scenario 20b: resp replace body
             Self::test_resp_replace_body(),
             Self::test_resp_replace_bodyless(),
             // Scenario 21: Utility combo (hex, json_get, uuid, ip_in_cidr, join, protocol)
@@ -2413,7 +2413,7 @@ impl TestSuite for DslTestSuite {
             // Scenario 26: Path parameter extraction (`:uid`, `:item`)
             Self::test_dsl_path_param_extracts_values(),
             Self::test_dsl_path_param_prefix_extension(),
-            // Scenario 27: cached_query freeze (unified-query-string-cache)
+            // Scenario 27: cached_query frozen at entry time
             Self::test_freeze_query_param(),
             // Scenario 28: time_format ApiError path — deny vs ignore error policy
             Self::test_time_format_deny_returns_500(),

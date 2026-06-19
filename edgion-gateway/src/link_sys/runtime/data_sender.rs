@@ -6,7 +6,7 @@
 //! - [x] Kafka async producer
 //! - [x] OTLP gRPC exporter (via opentelemetry-otlp)
 //! - [ ] FailedCache (spill-on-outage + replay-on-recovery) — planned, not yet
-//!   implemented; see `link_sys/readme` for the original design.
+//!   implemented.
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -68,11 +68,11 @@ where
     ///   write/flush failure, a dropped connection, or a dead background worker.
     /// - Two cases intentionally do NOT flip health: transient queue saturation
     ///   is backpressure (a bounded buffer is full), so a sink may stay `true`
-    ///   and drop with a metric (see I5); and a fire-and-forget transport that
-    ///   cannot observe delivery locally (e.g. OTLP export) is driven by a
-    ///   background probe rather than the send path (see task 05).
+    ///   and drop with a metric; and a fire-and-forget transport that cannot
+    ///   observe delivery locally (e.g. OTLP export) is driven by a background
+    ///   probe rather than the send path.
     /// - Must return to `true` automatically once recovery is observed, driven
-    ///   by a later successful delivery or a background probe (see task 05).
+    ///   by a later successful delivery or a background probe.
     /// - "Best-effort recent state": bounded staleness (probe interval / TTL) is
     ///   allowed; permanent untruth is not.
     ///

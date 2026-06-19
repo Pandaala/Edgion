@@ -38,7 +38,6 @@ mod pg_upstream_request_filter;
 mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
 
-// Re-exports
 pub use content_type::{is_grpc_content_type, is_grpc_web_content_type};
 pub use global_plugins_resolve::{resolve_global_plugins, resolve_route_ext_refs};
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
@@ -153,7 +152,6 @@ impl ProxyHttp for EdgionHttpProxy {
         pg_upstream_response_filter::upstream_response_filter(self, session, upstream_response, ctx)
     }
 
-    /// response_filter - async hook
     async fn response_filter(
         &self,
         session: &mut Session,
@@ -166,8 +164,7 @@ impl ProxyHttp for EdgionHttpProxy {
         pg_response_filter::response_filter(self, session, upstream_response, ctx).await
     }
 
-    /// upstream_response_body_filter - called when receiving body chunks from upstream
-    /// Returns Ok(None) to continue, Ok(Some(duration)) to rate limit for the given duration
+    /// Returns `Ok(None)` to continue, `Ok(Some(duration))` to rate-limit for the given duration.
     fn upstream_response_body_filter(
         &self,
         session: &mut Session,
@@ -196,7 +193,6 @@ impl ProxyHttp for EdgionHttpProxy {
         pg_error_while_proxy::error_while_proxy(self, peer, session, e, ctx, client_reused)
     }
 
-    /// fail_to_connect - called when connection to upstream fails
     fn fail_to_connect(
         &self,
         session: &mut Session,
@@ -252,8 +248,7 @@ impl ProxyHttp for EdgionHttpProxy {
     where
         Self::CTX: Send + Sync,
     {
-        // Allow subrequests if explicitly enabled via context variable
-        // This allows plugins (like Mirror plugin) to enable it on demand
+        // Allow subrequests only when a plugin opts in (e.g. the Mirror plugin).
         ctx.get_ctx_var("_enable_subrequest") == Some("true")
     }
 }

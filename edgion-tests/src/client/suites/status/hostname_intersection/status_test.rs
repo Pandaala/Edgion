@@ -16,7 +16,6 @@ const GATEWAY_NAMESPACE: &str = "edgion-test";
 const GATEWAY_NAME: &str = "hostname-intersection";
 
 impl HostnameIntersectionStatusTestSuite {
-    /// Diagnostic: fetch and print full Gateway listeners status (always passes)
     fn test_print_gateway_listeners_status() -> TestCase {
         TestCase::new(
             "print_gateway_listeners_status",
@@ -42,7 +41,6 @@ impl HostnameIntersectionStatusTestSuite {
         )
     }
 
-    /// Assert attachedRoutes count per listener
     fn test_attached_routes_count() -> TestCase {
         TestCase::new(
             "attached_routes_count",
@@ -109,7 +107,6 @@ impl HostnameIntersectionStatusTestSuite {
         )
     }
 
-    /// Assert Gateway has exactly 3 listeners in status
     fn test_listener_count() -> TestCase {
         TestCase::new(
             "listener_count",
@@ -156,7 +153,6 @@ impl HostnameIntersectionStatusTestSuite {
         )
     }
 
-    /// Assert each listener has HTTPRoute in supportedKinds
     fn test_supported_kinds() -> TestCase {
         TestCase::new(
             "supported_kinds_httproute",
@@ -213,7 +209,6 @@ impl HostnameIntersectionStatusTestSuite {
         )
     }
 
-    /// Assert Gateway-level conditions: Accepted=True and Programmed=True
     fn test_gateway_conditions() -> TestCase {
         TestCase::new(
             "gateway_conditions",
@@ -271,7 +266,6 @@ impl HostnameIntersectionStatusTestSuite {
         )
     }
 
-    /// Assert each listener has Accepted=True and ResolvedRefs=True conditions
     fn test_listener_conditions() -> TestCase {
         TestCase::new(
             "listener_conditions",
@@ -335,12 +329,6 @@ impl HostnameIntersectionStatusTestSuite {
         )
     }
 
-    /// Diagnose observedGeneration in gateway-level conditions.
-    ///
-    /// This test diagnoses whether conditions carry the correct observedGeneration value.
-    /// Expected: observedGeneration matches metadata.generation (or is non-null if generation is absent in file-based mode).
-    ///
-    /// The result is always logged (pass or fail) so we can see the actual values.
     fn test_gateway_observed_generation() -> TestCase {
         TestCase::new(
             "gateway_observed_generation",
@@ -397,7 +385,6 @@ impl HostnameIntersectionStatusTestSuite {
         )
     }
 
-    /// Assert no-intersecting-hosts route has Accepted=False
     fn test_no_intersection_route_not_accepted() -> TestCase {
         TestCase::new(
             "no_intersection_route_not_accepted",

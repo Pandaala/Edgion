@@ -122,7 +122,6 @@ impl RadixRouter {
     pub fn insert(&mut self, path: &str, value: usize) -> Result<(), RouterError> {
         let path_bytes = path.as_bytes();
 
-        // Check path is not empty
         if path_bytes.is_empty() {
             return Err(RouterError::EmptyPath);
         }
@@ -135,10 +134,7 @@ impl RadixRouter {
             });
         }
 
-        // Parse path into segments
         let segments = Self::parse_path(path_bytes);
-
-        // Insert segments into tree
         Self::insert_segments(&mut self.root, &segments, value, path)?;
         self.route_count += 1;
         Ok(())
@@ -194,7 +190,6 @@ impl RadixRouter {
                         i += 1; // skip parameter name
                     }
 
-                    // Add parameter segment
                     segments.push(PathSegment::Param);
                     static_start = i;
                 }
@@ -266,7 +261,6 @@ impl RadixRouter {
             if let Some(child) = node.children.get_mut(&first_byte) {
                 return Self::insert_static_segment(child, prefix, remaining_segments, value, original_path);
             } else {
-                // Create new static child
                 if node.children.len() >= u16::MAX as usize {
                     return Err(RouterError::TooManyChildren {
                         count: node.children.len() + 1,

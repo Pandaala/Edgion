@@ -18,9 +18,7 @@ pub struct RegexRoutesEngine {
     /// None if routes list is empty
     regex_set: Option<RegexSet>,
 
-    /// Regex routes sorted by pattern length (longest first)
-    /// This ensures more specific patterns are matched before general ones
-    /// Uses HttpRouteRuleUnit with path_regex field set
+    /// Regex routes sorted by pattern length (longest first) for priority matching.
     routes: Vec<Arc<HttpRouteRuleUnit>>,
 }
 
@@ -53,7 +51,6 @@ impl RegexRoutesEngine {
             a.specificity.cmp_precedence(&b.specificity)
         });
 
-        // Extract patterns and build RegexSet for fast batch matching
         let patterns: Vec<&str> = routes
             .iter()
             .filter_map(|r| r.path_regex.as_ref().map(|re| re.as_str()))

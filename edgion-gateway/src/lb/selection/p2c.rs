@@ -1,17 +1,15 @@
 //! Power of Two Choices (P2C) selection over `Arc<EdgionBackend>`.
 //!
-//! Used by LeastConn / EWMA to pick a backend without scanning the full list
-//! and without the addr-keyed DashMap lookup that the legacy
-//! `select_by_min_metric` performed. Two random backends are sampled, the one
-//! with the smaller metric is preferred; if it fails the health filter the
-//! other is tried; on repeated rejection the search restarts up to
-//! `max_retries` times before falling back to a linear scan as a last-resort
-//! liveness guarantee.
+//! Used by LeastConn / EWMA to pick a backend without scanning the full list.
+//! Two random backends are sampled; the one with the smaller metric is
+//! preferred. If it fails the health filter the other is tried; on repeated
+//! rejection the search restarts up to `max_retries` times, then falls back to
+//! a linear scan as a last-resort liveness guarantee.
 //
-// TODO(lb-precompile D1): evaluate strict O(log N) min-metric selection
-// (lazy-deletion heap with metric versioning) if production data shows P2C
-// underperforms on highly skewed services. P2C is the same approach used
-// by Envoy / Linkerd2 / Pingora; it should suffice for the common case.
+// TODO: evaluate strict O(log N) min-metric selection (lazy-deletion heap with
+// metric versioning) if production data shows P2C underperforms on highly
+// skewed services. P2C is the same approach used by Envoy / Linkerd2 / Pingora;
+// it should suffice for the common case.
 
 use crate::lb::edgion_backend::EdgionBackend;
 use rand::Rng;

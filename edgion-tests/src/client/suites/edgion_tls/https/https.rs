@@ -1,11 +1,11 @@
 // HTTPS Test suite
-// Only tested in Gateway mode，uses /secure/ path prefix
+// Only tested in Gateway mode, uses /secure/ path prefix
 //
 // Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-http.yaml         # HTTPS backend service (reuse HTTP backend)
 // - Service_edge_test-http.yaml               # HTTPS service definition
-// - HTTPRoute_edge_test-http.yaml             # HTTPS routing rules（Host: test.example.com, path: /secure/）
-// - Gateway_edge_tls-terminate-gateway.yaml   # TLS termination Gateway config (listening port）
+// - HTTPRoute_edge_test-http.yaml             # HTTPS routing rules (Host: test.example.com, path: /secure/)
+// - Gateway_edge_tls-terminate-gateway.yaml   # TLS termination Gateway config (listening port)
 // - EdgionTls_edge_edge-tls.yaml              # TLS certificate config
 // - Secret_edgion-test_edge-tls.yaml          # TLS certificate Secret
 // - GatewayClass__public-gateway.yaml         # GatewayClass config
@@ -78,7 +78,6 @@ impl HttpsTestSuite {
                     let host = ctx.http_host.as_deref().unwrap_or(&ctx.target_host);
                     let url = format!("https://{}:{}/secure/echo", host, ctx.https_port);
 
-                    // Use GET request as test server returns request info
                     let request = ctx.http_client.get(&url);
 
                     match request.send().await {

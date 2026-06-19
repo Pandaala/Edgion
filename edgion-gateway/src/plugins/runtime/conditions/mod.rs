@@ -6,11 +6,10 @@
 mod evaluator;
 
 pub use evaluator::{ConditionEvalResult, EvaluationResult};
-// Gateway-internal evaluation extension traits (crate-private, like the methods
-// they replaced).
+// Gateway-internal evaluation extension traits (crate-private).
 pub(crate) use evaluator::{ConditionExt, PluginConditionsExt};
-// Condition config types now live in the `types` schema layer (leaf crate).
-// Re-export them here so existing `runtime::conditions::*` consumers are unaffected.
+// Condition config types live in the `edgion-resources` schema crate.
+// Re-exported here so `runtime::conditions::*` consumers need no import change.
 pub use edgion_resources::resources::edgion_plugins::conditions::{
     Condition, ExcludeCondition, IncludeCondition, KeyExistCondition, KeyMatchCondition, PluginConditions,
     ProbabilityCondition, TimeRangeCondition,

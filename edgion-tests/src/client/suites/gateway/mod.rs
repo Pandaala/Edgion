@@ -1,8 +1,5 @@
 // Gateway Test suite
-// Note: mTLS moved to EdgionTls module
-// Note: EdgionPlugins tests moved to edgion_plugins module
 
-// Sub-modules - by function
 mod allowed_routes;
 mod combined;
 mod dynamic;

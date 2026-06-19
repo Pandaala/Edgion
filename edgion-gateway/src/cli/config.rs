@@ -659,12 +659,6 @@ impl EdgionGatewayConfig {
         if cli.logging.json_format.is_some() {
             base.logging.json_format = cli.logging.json_format;
         }
-
-        // Access log config (CLI doesn't support overriding, only from file)
-        // No merge needed as there are no CLI args for access_log
-
-        // SSL log config (CLI doesn't support overriding, only from file)
-        // No merge needed as there are no CLI args for ssl_log
     }
 
     /// Get server_addr

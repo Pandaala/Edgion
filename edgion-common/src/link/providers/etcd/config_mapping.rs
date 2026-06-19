@@ -34,7 +34,7 @@ const DEFAULT_DIAL_TIMEOUT_MS: u64 = 5_000;
 ///
 /// `auth` is the [`CredentialState`] produced by
 /// [`credential::basic_state`](crate::link::credential::basic_state).
-/// `Pending` / `Invalid` produce a fail-fast `bail!` (see I4 / M4).
+/// `Pending` / `Invalid` produce a fail-fast `bail!`.
 pub fn build_connect_options(
     crd: &EtcdClientConfig,
     auth: &CredentialState<BasicAuthMaterial>,
@@ -206,7 +206,7 @@ mod tests {
         assert!(options.is_none());
     }
 
-    /// I4 / M4 regression: `Pending` state → fail-fast.
+    /// `Pending` state → fail-fast.
     #[test]
     fn test_with_auth_pending_fails_fast() {
         let crd = crd_with_secret_ref();
@@ -217,7 +217,7 @@ mod tests {
         );
     }
 
-    /// M4 regression: `Invalid` state → fail-fast, with reason surfaced.
+    /// `Invalid` state → fail-fast, with reason surfaced.
     #[test]
     fn test_with_auth_invalid_fails_fast() {
         let crd = crd_with_secret_ref();
@@ -336,10 +336,10 @@ mod tests {
         assert!(options.is_some());
     }
 
-    /// P1-02: aligning with Redis, `insecure_skip_verify: true` must fail
-    /// fast rather than silently being ignored — etcd-client cannot honour
-    /// the flag and an operator who set it (e.g. for self-signed dev certs)
-    /// would otherwise get strict verification with no signal.
+    /// `insecure_skip_verify: true` must fail fast rather than silently being
+    /// ignored — etcd-client cannot honour the flag and an operator who set it
+    /// (e.g. for self-signed dev certs) would otherwise get strict verification
+    /// with no signal.
     #[test]
     fn test_insecure_skip_verify_bails() {
         let crd = EtcdClientConfig {

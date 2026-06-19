@@ -1,8 +1,6 @@
 //! Gateway-side TLS material resolution for `LinkSys` resources.
 //!
-//! Each provider (Redis / Etcd / Elasticsearch / Webhook) used to build its own
-//! TLS config from the per-resource `*Tls` struct. After R1 these are all
-//! unified behind [`edgion_resources::resources::common::TlsConfig`]; this module
+//! Unified behind [`edgion_resources::resources::common::TlsConfig`], this module
 //! centralizes the lookup / merge logic so every provider consumes the same
 //! [`TlsMaterial`] shape. It also houses the reqwest-specific helpers
 //! ([`apply_insecure_skip_verify`], [`apply_to_reqwest_builder`]) so all
@@ -247,11 +245,9 @@ pub fn apply_insecure_skip_verify(
             provider
         );
     }
-    // TODO(g9a-003-followup): once `edgion_system_error_state` (skip-list #12) is
-    // wired into the gateway crate, increment a labelled counter / set a gauge
-    // here so an operator can alert on "TLS verification disabled" outside of
-    // log scrapers. The deferral is intentional — the gauge is not yet defined
-    // anywhere in the codebase and wiring it would explode the safety-fix scope.
+    // TODO: once a system error-state gauge is wired into the gateway crate,
+    // increment it here so operators can alert on "TLS verification disabled"
+    // without scraping logs.
     tracing::warn!(
         provider = provider,
         "TLS certificate verification disabled — insecure! Not allowed when EDGION_ENV=production",
@@ -299,7 +295,6 @@ mod tests {
         }
 
         let cases = vec![
-            // Case 1 (was: returns_none_without_certs)
             // certs field absent → None
             BuildMaterialCase {
                 name: "returns_none_without_certs",
@@ -310,7 +305,6 @@ mod tests {
                 },
                 expected: None,
             },
-            // Case 2 (was: extracts_from_secret_only)
             // All three fields sourced from secret; no inline overrides present
             BuildMaterialCase {
                 name: "extracts_from_secret_only",
@@ -330,7 +324,6 @@ mod tests {
                 },
                 expected: Some((Some(b"CA"), Some(b"CERT"), Some(b"KEY"))),
             },
-            // Case 3 (was: inline_overrides_secret_for_public_material)
             // Inline ca/cert override their secret counterparts; the key is NOT
             // overridable by inline — it always comes from the secret.
             BuildMaterialCase {
@@ -352,7 +345,6 @@ mod tests {
                 // ca and cert come from inline; key still from secret (invariant)
                 expected: Some((Some(b"INLINE_CA"), Some(b"INLINE_CERT"), Some(b"KEY"))),
             },
-            // Case 4 (was: inline_only_ca)
             // Only inline ca provided; no secret → cert and key are absent
             BuildMaterialCase {
                 name: "inline_only_ca",
@@ -368,7 +360,6 @@ mod tests {
                 },
                 expected: Some((Some(b"CA"), None, None)),
             },
-            // Case 5 (was: empty_certs_returns_none)
             // TlsCerts present but all fields None → None
             BuildMaterialCase {
                 name: "empty_certs_returns_none",

@@ -4,7 +4,6 @@ use edgion_resources::resources::BackendTLSPolicy;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Implement ConfHandler directly for BackendTLSPolicyStore
 impl ConfHandler<BackendTLSPolicy> for BackendTLSPolicyStore {
     fn full_set(&self, data: &HashMap<String, Arc<BackendTLSPolicy>>) {
         tracing::info!(component = "backend_tls_policy_store", cnt = data.len(), "full set");
@@ -118,7 +117,6 @@ mod tests {
     fn test_partial_update_update() {
         let store = BackendTLSPolicyStore::new();
 
-        // First add a policy
         let mut data = HashMap::new();
         data.insert(
             "default/policy1".to_string(),
@@ -126,7 +124,6 @@ mod tests {
         );
         store.full_set(&data);
 
-        // Then update it
         let mut update = HashMap::new();
         update.insert(
             "default/policy1".to_string(),
@@ -142,7 +139,6 @@ mod tests {
     fn test_partial_update_remove() {
         let store = BackendTLSPolicyStore::new();
 
-        // First add a policy
         let mut data = HashMap::new();
         data.insert(
             "default/policy1".to_string(),
@@ -150,7 +146,6 @@ mod tests {
         );
         store.full_set(&data);
 
-        // Then remove it
         let mut remove = HashSet::new();
         remove.insert("default/policy1".to_string());
         store.partial_update(HashMap::new(), HashMap::new(), remove);
@@ -174,7 +169,6 @@ mod tests {
 
         store.full_set(&data);
 
-        // Should find both policies for svc1
         let policies = store.get_policies_for_target("svc1", Some("default"));
         assert_eq!(policies.len(), 2);
     }

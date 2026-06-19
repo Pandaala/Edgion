@@ -30,7 +30,7 @@ struct Cli {
     #[arg(short = 'i', long = "item")]
     item: Option<String>,
 
-    ///  Gateway Mode（Passed Gateway ）
+    /// Enable gateway mode (tests target the running Edgion gateway).
     #[arg(short = 'g', long = "gateway")]
     gateway: bool,
 
@@ -82,14 +82,13 @@ struct Cli {
     #[arg(long = "dynamic-scenario")]
     dynamic_scenario: Option<String>,
 
-    /// ：
+    /// Legacy positional command (use -r/-i instead).
     #[arg(value_name = "COMMAND")]
     legacy_command: Option<String>,
 }
 
-/// sub-item， suite
+/// Resolve the test suite name from resource/item flags or a legacy command.
 fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str>) -> String {
-    //
     if let Some(cmd) = legacy {
         return match cmd.to_lowercase().as_str() {
             "http" => "HTTPRoute/Basic".to_string(),
@@ -202,7 +201,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
     }
 }
 
-///  suite Port config key
+/// Return the port-config key for the given suite name.
 fn suite_to_port_key(suite: &str) -> &str {
     match suite {
         // HTTPRoute
@@ -342,7 +341,7 @@ fn suite_to_port_key(suite: &str) -> &str {
     }
 }
 
-///  suite Add test suite runner
+/// Register test suites matching the given suite name into the runner.
 fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>) {
     match suite {
         // HTTPRoute
@@ -635,7 +634,6 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         }
         // GRPCRoute
         "GRPCRoute" => {
-            //  GRPCRoute
             runner.add_suite(Box::new(suites::GrpcTestSuite));
             if gateway {
                 runner.add_suite(Box::new(suites::GrpcMatchTestSuite));
@@ -1346,7 +1344,6 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                     runner.add_suite(Box::new(suites::UpdatePhaseTestSuite));
                 }
                 None => {
-                    //
                     runner.add_suite(Box::new(suites::InitialPhaseTestSuite));
                     runner.add_suite(Box::new(suites::UpdatePhaseTestSuite));
                 }
@@ -1542,7 +1539,6 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         "Services/acme" => {
             runner.add_suite(Box::new(suites::AcmeTestSuite));
         }
-        //
         "all" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
             runner.add_suite(Box::new(suites::GrpcTestSuite));
@@ -1698,7 +1694,7 @@ async fn main() -> Result<()> {
         return run_dynamic_scenario(&cli, sid).await;
     }
 
-    //  suite
+    // Resolve suite name.
     let suite = resolve_suite(
         cli.resource.as_deref(),
         cli.item.as_deref(),
@@ -1828,7 +1824,6 @@ async fn main() -> Result<()> {
         runner.set_port_resolver(Box::new(move |key: &str| port_config.get_ports(key).http));
     }
 
-    // Add test suite
     add_suites_for_suite(&mut runner, &suite, cli.gateway, cli.phase.as_deref());
 
     let start_time = Instant::now();

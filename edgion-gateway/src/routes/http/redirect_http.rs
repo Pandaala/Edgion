@@ -116,7 +116,6 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
 
     /// This should never be called since we always return early in request_filter
     async fn upstream_peer(&self, _session: &mut Session, _ctx: &mut Self::CTX) -> pingora_core::Result<Box<HttpPeer>> {
-        // This should never be reached as request_filter always returns true (early response)
         Err(pingora_core::Error::new(pingora_core::ErrorType::InternalError)
             .more_context("Redirect handler should not reach upstream_peer"))
     }
@@ -126,7 +125,6 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
     where
         Self::CTX: Send + Sync,
     {
-        // Populate context for access logging
         ctx.client_addr = session.client_addr().map(|a| a.to_string()).unwrap_or_default();
 
         let req_header = session.req_header();
@@ -169,7 +167,6 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
 
         ctx.redirect_url = redirect_url.clone();
 
-        // Build 301 response
         let mut resp = ResponseHeader::build(StatusCode::MOVED_PERMANENTLY, Some(3))?;
         resp.insert_header("Location", &redirect_url)?;
         resp.insert_header("Content-Length", "0")?;

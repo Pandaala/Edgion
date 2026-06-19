@@ -315,8 +315,8 @@ impl DataSender<String> for LocalFileWriter {
                     // Writer thread is dead before it started — report unhealthy
                     // so first-healthy fallback skips this sink.
                     healthy.store(false, Ordering::Relaxed);
-                    // Count any entries already queued before the open failed, so
-                    // the loss is observable rather than silent (N2).
+                    // Count any entries already queued before the open failed so
+                    // the loss is observable.
                     while rx.try_recv().is_ok() {
                         record_drop(log_type);
                     }
@@ -472,12 +472,12 @@ impl DataSender<String> for LocalFileWriter {
 
     async fn send(&self, data: String) -> Result<()> {
         if let Some(sender) = &self.sender {
-            // Non-blocking; fire-and-forget (I5).
+            // Non-blocking; fire-and-forget.
             match sender.try_send(data) {
                 Ok(()) => {}
                 Err(std::sync::mpsc::TrySendError::Full(_)) => {
-                    // Queue saturation is backpressure (task 06), NOT a health
-                    // fault: count the drop but keep the sink healthy.
+                    // Queue saturation is backpressure, NOT a health fault:
+                    // count the drop but keep the sink healthy.
                     record_drop(self.log_type);
                 }
                 Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
@@ -745,8 +745,8 @@ mod tests {
 
     #[tokio::test]
     async fn send_stays_healthy_when_queue_is_full() {
-        // A full bounded queue is backpressure (task 06), NOT a health fault:
-        // the entry is dropped but the sink stays healthy (I5).
+        // A full bounded queue is backpressure, NOT a health fault:
+        // the entry is dropped but the sink stays healthy.
         let mut writer = LocalFileWriter::with_path("unused.log");
         // Capacity 1, receiver kept alive but never drained -> next send is Full.
         let (tx, _rx) = std::sync::mpsc::sync_channel::<String>(1);

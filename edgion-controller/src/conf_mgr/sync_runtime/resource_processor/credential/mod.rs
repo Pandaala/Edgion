@@ -15,9 +15,8 @@ pub use pipeline::{
     ResolveOutcome,
 };
 
-// Re-export the credential parsing layer for call sites that still use the
-// old path. Keeping them here avoids churn while making the new location
-// discoverable.
+// Re-export the credential parsing layer from its canonical location in
+// edgion_resources; discoverable here for controller call sites.
 pub use edgion_resources::credentials::{
     materials, resolver, resolvers, AcmeAccountMaterial, AcmeAccountResolver, BasicAuthMaterial, BasicAuthResolver,
     BearerMaterial, BearerResolver, EsApiKeyMaterial, EsApiKeyResolver, HmacMaterial, HmacResolver, ResolveError,

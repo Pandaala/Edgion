@@ -1,5 +1,3 @@
-// EdgionTls cipher test module
-
 #[allow(clippy::module_inception)]
 mod cipher;
 

@@ -170,7 +170,7 @@ mod tests {
             active: None,
             regions: Some(vec![
                 make_region("cn", 0, 499, "ep-a:443"),
-                make_region("cn", 500, 999, "ep-b:443"), // duplicate name — was missed pre-fix
+                make_region("cn", 500, 999, "ep-b:443"), // duplicate name
             ]),
         };
         let err = ov.validate_and_init().unwrap_err();

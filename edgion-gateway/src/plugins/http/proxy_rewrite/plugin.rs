@@ -197,7 +197,6 @@ impl ProxyRewrite {
     fn build_uri_with_query(&self, new_path: &str, original_query: Option<&str>) -> String {
         match original_query {
             Some(q) if !q.is_empty() => {
-                // Check if new_path already has query string
                 if new_path.contains('?') {
                     format!("{}&{}", new_path, q)
                 } else {
@@ -219,9 +218,7 @@ impl ProxyRewrite {
     ) {
         // uri takes priority over regex_uri
         if let Some(ref new_uri) = self.config.uri {
-            // Resolve variables in URI template (encode values for safety)
             let resolved = self.resolve_variables(new_uri, original_path, session, captures, TemplateContext::Uri);
-            // Preserve original query string
             let final_uri = self.build_uri_with_query(&resolved, original_query);
 
             if let Err(_e) = session.set_upstream_uri(&final_uri) {
@@ -240,9 +237,7 @@ impl ProxyRewrite {
                         result = result.replace(&format!("${}", i), &Self::escape_dollar(m.as_str()));
                     }
                 }
-                // Resolve remaining variables ($uri, $arg_name, etc.) with proper encoding
                 let result = self.resolve_variables(&result, original_path, session, None, TemplateContext::Uri);
-                // Preserve original query string
                 let final_uri = self.build_uri_with_query(&result, original_query);
 
                 if let Err(_e) = session.set_upstream_uri(&final_uri) {
@@ -351,7 +346,6 @@ impl RequestFilter for ProxyRewrite {
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         use edgion_resources::resources::edgion_plugins::PluginValidation;
-        // Check if configuration is valid
         if self.config.validation_error().is_some() {
             plugin_log.push_err("config invalid");
             return PluginRunningResult::GoodNext;
@@ -386,7 +380,6 @@ impl RequestFilter for ProxyRewrite {
         // 4. Headers modification (supports variable substitution)
         self.modify_headers(session, plugin_log, &original_path, captures.as_ref());
 
-        // Continue request chain
         PluginRunningResult::GoodNext
     }
 }
@@ -429,12 +422,9 @@ mod tests {
         let mut mock_session = MockPluginSession::new();
         let mut plugin_log = PluginLog::new("ProxyRewrite");
 
-        // With invalid config, the plugin should skip processing but not fail
         // No mock expectations needed as it returns early
-
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
 
-        // Should gracefully continue without error
         assert_eq!(result, PluginRunningResult::GoodNext);
     }
 
@@ -458,7 +448,7 @@ mod tests {
     fn test_arg_substitution_always_url_encodes() {
         let plugin = ProxyRewrite::new(&ProxyRewriteConfig::default());
 
-        // Mock returns decoded values (matches the new PluginSession contract).
+        // Mock returns decoded values.
         let mut mock_session = MockPluginSession::new();
         mock_session.expect_get_query_param().returning(|name| match name {
             "user" => Some("user-123".to_string()),      // ordinary ASCII

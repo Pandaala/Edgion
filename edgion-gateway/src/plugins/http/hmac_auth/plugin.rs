@@ -604,10 +604,6 @@ mod tests {
         );
     }
 
-    // Note: failure-branch "no group=" contract is enforced by review note
-    // `skills/04-review/hmac-auth/group-in-ok-log.md`, not by a unit test —
-    // a runtime test would require driving `run_request` through every
-    // failure branch (9 branches), and a literal-string-only test is a
-    // tautology (hardcoded strings can never fail the assertion). Treat the
-    // review note as the contract source of truth.
+    // The "group=" tag in the OK log path is enforced by code review, not by a
+    // unit test: driving all failure branches here would be pure tautology.
 }

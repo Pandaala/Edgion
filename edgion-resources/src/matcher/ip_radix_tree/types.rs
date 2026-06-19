@@ -38,7 +38,6 @@ impl IpCidr {
     /// let cidr_v6 = IpCidr::parse("2001:db8::/32").unwrap();
     /// ```
     pub fn parse(cidr_str: &str) -> Result<Self, IpRadixError> {
-        // Split by '/'
         let parts: Vec<&str> = cidr_str.split('/').collect();
 
         if parts.len() != 2 {
@@ -51,13 +50,11 @@ impl IpCidr {
         let ip_str = parts[0];
         let prefix_str = parts[1];
 
-        // Parse prefix length
         let prefix_len = prefix_str.parse::<u8>().map_err(|e| IpRadixError::InvalidCidr {
             input: cidr_str.to_string(),
             reason: format!("invalid prefix length: {}", e),
         })?;
 
-        // Parse IP address
         let ip = IpAddr::from_str(ip_str).map_err(|e| IpRadixError::InvalidIpAddress {
             input: ip_str.to_string(),
             error: e.to_string(),

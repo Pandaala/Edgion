@@ -185,8 +185,8 @@ impl EdgionUdpProxy {
         // Stream plugin enforcement (dynamic lookup from StreamPluginStore, fail-close).
         // Mirrors the TCPRoute path: a packet whose rule references an
         // EdgionStreamPlugins resource is dropped unless the policy admits it.
-        // Only packets that reach the pipeline are checked — the F-016 fast-path
-        // above returns first for established sessions, so the check runs once at
+        // Only packets that reach the pipeline are checked — the fast path above
+        // returns first for established sessions, so the check runs once at
         // session creation (like TCP's per-connection check). A denied client is
         // dropped before get_or_create_session and therefore never establishes a
         // session. A rule with no annotation has store_key None, so the check
@@ -525,7 +525,7 @@ mod tests {
 
     #[test]
     fn test_upstream_bind_addr_matches_family() {
-        // IPv4 upstream → IPv4 wildcard bind (unchanged behavior).
+        // IPv4 upstream → IPv4 wildcard bind.
         let v4: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         assert!(upstream_bind_addr(v4).is_ipv4());
         // IPv6 upstream → IPv6 wildcard bind, so send_to does not fail with EINVAL.

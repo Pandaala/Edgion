@@ -78,12 +78,10 @@ impl_resource_meta!(EdgionTls, EdgionTls, "EdgionTls", |self| {
     self.spec.resolved_log_labels = crate::resources::common::resolve_log_labels(&self.metadata);
 });
 
-// Runtime (PluginRuntime) is now built gateway-side via `compile_plugins`; the
-// schema needs no pre_parse step.
+// PluginRuntime is built gateway-side via `compile_plugins`; no pre_parse needed.
 impl_resource_meta!(EdgionPlugins, EdgionPlugins, "EdgionPlugins");
 
-// Stream runtimes are now built gateway-side via `compile_stream_plugins`; the
-// schema needs no pre_parse step.
+// Stream runtimes are built gateway-side via `compile_stream_plugins`; no pre_parse needed.
 impl_resource_meta!(EdgionStreamPlugins, EdgionStreamPlugins, "EdgionStreamPlugins");
 
 impl_resource_meta!(LinkSys, LinkSys, "LinkSys", |self| {

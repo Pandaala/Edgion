@@ -1,7 +1,7 @@
 //! EWMA alpha (smoothing factor) configuration.
 //!
-//! Service-scoped EWMA latency tracking now lives in `runtime_state`.
-//! This module only owns the global alpha parameter shared by all services.
+//! Per-backend EWMA latency tracking lives on `EdgionBackend`.
+//! This module owns only the global alpha parameter shared by all services.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 

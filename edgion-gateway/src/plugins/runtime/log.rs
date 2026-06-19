@@ -2,8 +2,6 @@ use crate::observe::logs::{LogBuffer, ULogBuffer};
 use serde::Serialize;
 use smallvec::SmallVec;
 
-// LocalObjectReference no longer needed - refer_to is now just a String
-
 /// Default capacity for plugin name string.
 pub const NAME_CAPACITY: usize = 36;
 
@@ -447,8 +445,7 @@ impl EdgionPluginsLogToken {
     }
 }
 
-/// Stage logs structure (renamed from PluginLogs)
-/// Contains logs for a specific execution stage
+/// Stage logs for a specific execution stage
 #[derive(Debug, Clone, Serialize)]
 pub struct StageLogs {
     /// Stage name (e.g., "request_filters", "upstream_response_filters")
@@ -819,7 +816,6 @@ mod tests {
             stage: "request_filters",
             filters: vec![{
                 let mut log = PluginLog::new("ExtensionRef");
-                // refer_to is now simplified to just the name string
                 log.set_refer_to("auth-plugins".to_string());
                 log
             }],
@@ -837,7 +833,7 @@ mod tests {
         let json = serde_json::to_string(&stage).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
 
-        // Check filters - refer_to is now just a string
+        // Check filters
         assert_eq!(parsed["filters"][0]["name"], "ExtensionRef");
         assert_eq!(parsed["filters"][0]["refer_to"], "auth-plugins");
         // ExtensionRef should not have time_cost

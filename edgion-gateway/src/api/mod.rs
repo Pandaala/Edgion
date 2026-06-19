@@ -390,7 +390,6 @@ struct StoreStatsResponse {
     backend_tls_policy: crate::backends::policy::BackendTLSPolicyStoreStats,
     gateway_class_store: SimpleCountStats,
     edgion_gateway_config_store: SimpleCountStats,
-    // New sections (Tasks 1-10)
     client_caches: ClientCachesStats,
     service_store: SimpleCountStats,
     ep_slice_store: EpSliceStoreStats,

@@ -1,7 +1,7 @@
-// HTTP match rulesTest suite
+// HTTP Match Rules Test suite
 //
 // Required config files (in edgion-tests/integration/conf/):
-// - HTTPRoute_default_match-test.yaml    # match rules test route（contains 8 rules）
+// - HTTPRoute_default_match-test.yaml    # match rules test route (contains 8 rules)
 // - HTTPRoute_default_section-test.yaml  # SectionName test route
 // - EndpointSlice_edge_test-http.yaml    # HTTP backend service discovery
 // - Service_edge_test-http.yaml          # HTTP service definition
@@ -113,7 +113,7 @@ impl HttpMatchTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
 
-                    // Negative test: should not match（digits）
+                    // Negative: letters do not match the digits-only regex
                     let mut request = ctx.http_client.get(format!("{}/users/abc", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
 
@@ -144,7 +144,7 @@ impl HttpMatchTestSuite {
             Box::pin(async move {
                 let start = Instant::now();
 
-                // Positive test:with correct header
+                // Positive: with correct header value
                 let mut request = ctx.http_client.get(format!("{}/header-test", ctx.http_url()));
                 request = request.header("Host", "match-test.example.com");
                 request = request.header("X-Custom-Header", "CustomValue");
@@ -161,7 +161,7 @@ impl HttpMatchTestSuite {
                     Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                 }
 
-                // Negative test:header value mismatch
+                // Negative: header value mismatch
                 let mut request = ctx.http_client.get(format!("{}/header-test", ctx.http_url()));
                 request = request.header("Host", "match-test.example.com");
                 request = request.header("X-Custom-Header", "WrongValue");
@@ -193,7 +193,7 @@ impl HttpMatchTestSuite {
             Box::pin(async move {
                 let start = Instant::now();
 
-                // Positive test:header value matches regex ^v[0-9]+\.[0-9]+$
+                // Positive: header value matches regex ^v[0-9]+\.[0-9]+$
                 let mut request = ctx.http_client.get(format!("{}/header-regex", ctx.http_url()));
                 request = request.header("Host", "match-test.example.com");
                 request = request.header("X-Version", "v1.2");
@@ -210,7 +210,7 @@ impl HttpMatchTestSuite {
                     Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                 }
 
-                // Negative test:header value mismatchregex
+                // Negative: header value does not match regex
                 let mut request = ctx.http_client.get(format!("{}/header-regex", ctx.http_url()));
                 request = request.header("Host", "match-test.example.com");
                 request = request.header("X-Version", "invalid");
@@ -241,7 +241,7 @@ impl HttpMatchTestSuite {
             Box::pin(async move {
                 let start = Instant::now();
 
-                // Positive test:both query params match
+                // Positive: both query params match
                 let mut request = ctx
                     .http_client
                     .get(format!("{}/query-test?apikey=secret123&version=10", ctx.http_url()));
@@ -259,7 +259,7 @@ impl HttpMatchTestSuite {
                     Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                 }
 
-                // Negative test:version param mismatches regex（digits）
+                // Negative: version param does not match the digits-only regex
                 let mut request = ctx
                     .http_client
                     .get(format!("{}/query-test?apikey=secret123&version=abc", ctx.http_url()));
@@ -359,7 +359,7 @@ impl HttpMatchTestSuite {
             Box::pin(async move {
                 let start = Instant::now();
 
-                // Positive test:POST /echo should match（test_server supports POST /echo）
+                // Positive: POST /echo should match
                 let mut request = ctx.http_client.post(format!("{}/echo", ctx.http_url()));
                 request = request.header("Host", "match-test.example.com");
                 request = request.body("test"); // Add body for POST request
@@ -376,9 +376,7 @@ impl HttpMatchTestSuite {
                     Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                 }
 
-                // Negative test: should not matchthis rule（because rule requires method: POST）
-                // Note: GET /echo will match other rules（rules without method restriction）
-                // So we need to test another scenario: use different path
+                // No clean negative path: GET /echo matches other rules without a method constraint.
                 TestResult::passed_with_message(
                     start.elapsed(),
                     "HTTP method match works correctly (POST /echo matched)".to_string(),
@@ -387,7 +385,7 @@ impl HttpMatchTestSuite {
         })
     }
 
-    /// Test combined match（all rules combined）
+    /// Test combined match (path + method + headers + query params)
     fn test_combined_match() -> TestCase {
         TestCase::new(
             "combined_match",
@@ -396,7 +394,7 @@ impl HttpMatchTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Positive test:POST /echo?action=update with specific headers
+                    // Positive: POST /echo?action=update with specific headers
                     let mut request = ctx.http_client.post(format!("{}/echo?action=update", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
                     request = request.header("Content-Type", "application/json");
@@ -415,7 +413,7 @@ impl HttpMatchTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
                     }
 
-                    // Negative test:missing query param，should not match this rule
+                    // Negative: without ?action=update the query constraint on rule 8 is unmet
                     let mut request = ctx.http_client.post(format!("{}/echo", ctx.http_url()));
                     request = request.header("Host", "match-test.example.com");
                     request = request.header("Content-Type", "application/json");
@@ -424,10 +422,8 @@ impl HttpMatchTestSuite {
 
                     match request.send().await {
                         Ok(response) => {
-                            // no query param，match rule 8
-                            // match rule 7 (POST /echo without query params)
-                            //  200 (match rule 7)
-                            // This verifies rule priority and match logic
+                            // Rule 8 requires ?action=update; without it, rule 7 (POST /echo, no
+                            // query constraint) matches instead, returning 200.
                             if response.status().is_success() {
                                 TestResult::passed_with_message(
                                 start.elapsed(),
@@ -447,7 +443,7 @@ impl HttpMatchTestSuite {
         )
     }
 
-    /// Test SectionName match（parent_refs sectionName ）
+    /// Test SectionName match (parentRefs with sectionName binding)
     fn test_section_name_match() -> TestCase {
         TestCase::new(
             "section_name_match",
@@ -456,8 +452,7 @@ impl HttpMatchTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Positive test:via HTTP listener access (sectionName: http）
-                    // HTTPRoute configured sectionName: http， HTTP listener
+                    // Positive: access via HTTP listener (sectionName: http)
                     let mut request = ctx.http_client.get(format!("{}/health", ctx.http_url()));
                     request = request.header("Host", "section-test.example.com");
 
@@ -473,15 +468,9 @@ impl HttpMatchTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), format!("HTTP request failed: {}", e)),
                     }
 
-                    // Negative test validation:
-                    // 1. Confirm HTTPS listener works for other domains（verify service is running）
-                    // 2. section-test.example.com configured sectionName: http，Passed HTTP
-                    //    via HTTPS  sectionName mismatch causes routing failure
-                    //
-                    // Note: Since no TLS cert configured，
-                    // HTTPS request fails at TLS handshake，not returns 404
-                    // This also verifies sectionName feature：route does not match HTTPS listener，
-                    // so cert not loaded for this domain
+                    // Negative case not exercised here: this domain is bound to sectionName: http,
+                    // so the HTTPS listener does not serve it. Without a cert loaded for the domain,
+                    // TLS handshake fails rather than returning 404, confirming listener isolation.
 
                     TestResult::passed_with_message(
                         start.elapsed(),

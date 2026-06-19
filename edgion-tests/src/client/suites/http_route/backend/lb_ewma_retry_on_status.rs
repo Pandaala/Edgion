@@ -1,15 +1,14 @@
 // ============================================================================
-// LB EWMA + retry-on-status Test Suite — regression for FinalizeMode::Discard
+// LB EWMA + retry-on-status Test Suite — validates FinalizeMode::Discard behavior
 // ============================================================================
 //
 // Setup: retry attempts=3, codes=[503], EWMA LB, 2 reachable endpoints.
 //
-// Regression: finalize_attempt(Discard) on LbCommit::Ewma must NOT call
-// update_ewma on the abandoned backend. If it did, retried-away backends would
-// accumulate inflated latency samples from partial connections, skewing
-// subsequent EWMA selection. The test does not measure EWMA values directly;
-// instead it verifies that after a retry storm healthy traffic still reaches
-// both endpoints (no score collapse to a single point).
+// finalize_attempt(Discard) on LbCommit::Ewma must NOT call update_ewma on
+// the abandoned backend. If it did, retried-away backends would accumulate
+// inflated latency samples from partial connections, skewing subsequent EWMA
+// selection. The test verifies that after a retry storm healthy traffic still
+// reaches both endpoints (no score collapse to a single point).
 //
 // Gateway annotations enable test-mode metrics:
 //   edgion.io/metrics-test-key: "lb-ewma-rs"

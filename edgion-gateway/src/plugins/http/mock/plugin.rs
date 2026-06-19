@@ -39,19 +39,16 @@ impl RequestFilter for Mock {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Apply delay if configured
         if let Some(delay_ms) = self.config.delay {
             sleep(Duration::from_millis(delay_ms)).await;
         }
 
-        // Set custom response headers
         if let Some(ref headers) = self.config.headers {
             for (name, value) in headers {
                 let _ = session.set_response_header(name, value);
             }
         }
 
-        // Set Content-Type header
         let _ = session.set_response_header("Content-Type", &self.config.content_type);
 
         if self.config.terminate {

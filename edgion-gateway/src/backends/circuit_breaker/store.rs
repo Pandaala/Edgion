@@ -97,10 +97,9 @@ impl CircuitBreakerStore {
     pub fn set_service_config(&self, service_key: &str, config: Option<CircuitBreakerConfig>) {
         match config {
             // Use a single DashMap `entry` so the check-and-swap runs under one shard write
-            // lock. This makes the config update atomic: there is no window where the key is
-            // absent (the old `get`+`remove`+`insert` form briefly removed the entry, which
-            // let concurrent data-plane readers bypass the breaker), and concurrent writers
-            // for the same key cannot lose an update — the last writer holding the lock wins.
+            // lock: no window where the key is absent (which would let data-plane readers
+            // bypass the breaker), and concurrent writers for the same key cannot lose an
+            // update — the last writer holding the lock wins.
             Some(cfg) => match self.services.entry(service_key.to_string()) {
                 dashmap::mapref::entry::Entry::Occupied(mut occ) => {
                     let existing_cfg = &occ.get().config;
@@ -471,8 +470,8 @@ mod tests {
 
     #[test]
     fn test_record_success_on_ejected_does_not_leak_gauge() {
-        // Regression for g7-006 Issue A: record_success on an ejected entry must
-        // fire record_cb_recovery so the CB_EJECTED_ENDPOINTS gauge stays balanced.
+        // record_success on an ejected entry must fire record_cb_recovery so the
+        // CB_EJECTED_ENDPOINTS gauge stays balanced.
         let store = CircuitBreakerStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 0)));
 
@@ -488,10 +487,9 @@ mod tests {
 
     #[test]
     fn test_percent_cap_applies_concurrently_when_total_endpoints_is_zero() {
-        // Regression for g7-006 Issue B under concurrency: 4 backends report failures
-        // simultaneously while the selector snapshot is empty (total_endpoints == 0).
-        // With the fallback to observed endpoint count, the percent cap must still
-        // bound the number of ejected backends.
+        // With total_endpoints == 0 (empty selector snapshot) and concurrent failures,
+        // the percent cap must still bound ejected backends via the observed endpoint
+        // count fallback.
         use std::sync::{Arc, Barrier};
 
         let store = Arc::new(CircuitBreakerStore::new());
@@ -533,9 +531,8 @@ mod tests {
 
     #[test]
     fn test_percent_cap_applies_when_total_endpoints_is_zero() {
-        // Regression for g7-006 Issue B: when the selector snapshot is momentarily empty
-        // (total_endpoints == 0), the percent guard must still apply using the observed
-        // endpoint count as a fallback, otherwise concurrent failures would over-eject.
+        // When the selector snapshot is momentarily empty (total_endpoints == 0), the
+        // percent guard must still apply using the observed endpoint count as a fallback.
         let store = CircuitBreakerStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 50)));
 
@@ -551,9 +548,9 @@ mod tests {
 
     #[test]
     fn test_config_change_resets_state_unchanged_preserves() {
-        // Regression for backends-F004: the atomic entry() swap must preserve the original
-        // semantics — a *changed* config rebuilds the service (clearing ejection state),
-        // while an *unchanged* config is a no-op that keeps the existing ejection state.
+        // The atomic entry() swap must preserve these semantics: a *changed* config
+        // rebuilds the service (clearing ejection state), while an *unchanged* config
+        // is a no-op that keeps the existing ejection state.
         let store = CircuitBreakerStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 0)));
         store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
@@ -570,9 +567,8 @@ mod tests {
 
     #[test]
     fn test_concurrent_config_update_no_panic_and_key_present() {
-        // Regression for backends-F004: concurrent set_service_config calls for the same key
-        // must never panic and must never leave the key absent (the old remove+insert form had
-        // a window where the entry was missing). After the storm one config must be installed.
+        // Concurrent set_service_config calls for the same key must never panic and
+        // must never leave the key absent. After the storm, one config must be installed.
         use std::sync::{Arc, Barrier};
 
         let store = Arc::new(CircuitBreakerStore::new());

@@ -18,9 +18,9 @@ use edgion_resources::ResourceKind;
 /// Secret handler
 ///
 /// Features:
-/// - parse: No special processing
-/// - on_change: Update global SecretStore + trigger cascading requeue via ProcessorRegistry
-/// - on_delete: Update global SecretStore (delete) + trigger cascading requeue
+/// - parse: Normalize stringData→data, update SecretStore, validate OIDC secret shape
+/// - on_change: Trigger cascading requeue for dependent resources
+/// - on_delete: Remove from SecretStore + trigger cascading requeue
 ///
 /// Accumulates secrets during init LIST phase, then performs an authoritative
 /// `replace_all_secrets` on init_done to purge stale entries from previous sessions.
@@ -187,8 +187,7 @@ impl ProcessorHandler<Secret> for SecretHandler {
 
         self.validate_oidc_secret_shape(secret, &secret_key, ctx);
 
-        // SecretStore is already updated in parse(), so we only trigger cascading requeue here
-        // Trigger cascading requeue for dependent resources
+        // SecretStore is already updated in parse(); only trigger cascading requeue here.
         self.trigger_cascading_requeue(&secret_key, "updated", ctx).await;
     }
 

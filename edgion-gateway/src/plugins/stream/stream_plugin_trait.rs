@@ -79,7 +79,6 @@ pub trait StreamPlugin: Send + Sync {
     /// Get the plugin name
     fn name(&self) -> &str;
 
-    /// Execute plugin logic on new connection
-    /// Called when a new TCP/UDP connection is established
+    /// Execute plugin logic for a new TCP/UDP connection.
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult;
 }

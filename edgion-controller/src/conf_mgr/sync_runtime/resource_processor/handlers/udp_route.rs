@@ -73,7 +73,6 @@ impl UdpRouteHandler {
         // Clear old references first (handles updates)
         manager.clear_resource_refs(&resource_ref);
 
-        // Collect cross-namespace references from rules
         if let Some(rules) = &route.spec.rules {
             for rule in rules {
                 if let Some(backend_refs) = &rule.backend_refs {

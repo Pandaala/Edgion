@@ -1,8 +1,8 @@
 // UDPRoute StreamPlugins Test Suite
 //
 // Tests that stream plugins on UDPRoute annotations are enforced per session at
-// session creation (fail-close), mirroring the TCPRoute/StreamPlugins suite for
-// the UDP path fixed by udp-F012.
+// session creation (fail-close), mirroring the TCPRoute/StreamPlugins suite
+// for the UDP path.
 //
 // Required config files (in edgion-tests/integration/conf/UDPRoute/StreamPlugins/):
 // - 01_EdgionStreamPlugins_deny.yaml          # deny-all resource
@@ -29,9 +29,8 @@ pub struct UdpStreamPluginsTestSuite;
 impl UdpStreamPluginsTestSuite {
     /// Positive path: allow-localhost plugin should forward packets from 127.0.0.1.
     ///
-    /// The EdgionStreamPlugins resource has: defaultAction=deny, allowList=[127.0.0.0/8]
-    /// - Regression: old code extracted "0.0.0.0" → 0.0.0.0 NOT in 127.0.0.0/8 → DENY
-    /// - Fixed (udp-F012): real source 127.0.0.1 IS in 127.0.0.0/8 → ALLOW
+    /// Config: defaultAction=deny, allowList=[127.0.0.0/8]
+    /// 127.0.0.1 IS in 127.0.0.0/8 — packet must be forwarded (echoed back).
     fn test_allow_localhost_echo() -> TestCase {
         TestCase::new(
             "udp_stream_plugin_allow_localhost",
@@ -155,7 +154,7 @@ impl UdpStreamPluginsTestSuite {
     }
 
     /// Fail-close: UDPRoute referencing a non-existent ESP must drop packets rather
-    /// than silently forwarding them. Locks in the fail-close contract from udp-F012.
+    /// than silently forwarding them.
     fn test_missing_esp_fail_close() -> TestCase {
         TestCase::new(
             "udp_stream_plugin_missing_esp_fail_close",

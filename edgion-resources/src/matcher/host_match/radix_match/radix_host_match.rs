@@ -16,7 +16,6 @@ use std::sync::Arc;
 /// with wildcard_count tracking.
 pub struct RadixHostMatchEngine<T> {
     tree: RadixTree,
-    /// All RadixHost instances
     hosts: Vec<RadixHost<T>>,
     /// Mapping from tree value to list of host_idx
     /// tree_value -> Vec<host_idx> (indices in hosts)
@@ -25,7 +24,6 @@ pub struct RadixHostMatchEngine<T> {
 
 impl<T> RadixHostMatchEngine<T> {
     pub fn new() -> Self {
-        // Create an empty frozen tree
         let builder = RadixTreeBuilder::new();
         let tree = builder.freeze().expect("Failed to create empty radix tree");
 
@@ -132,7 +130,6 @@ impl<T> RadixHostMatchEngine<T> {
                 new_value
             };
 
-            // Add RadixHost to the list
             let host_idx = self.hosts.len();
             self.hosts.push(radix_host);
 
@@ -143,7 +140,6 @@ impl<T> RadixHostMatchEngine<T> {
                 .push(host_idx);
         }
 
-        // Freeze the builder to create the immutable tree
         tracing::debug!("Freezing radix tree...");
         self.tree = builder
             .freeze()
@@ -328,12 +324,12 @@ mod tests {
         assert_eq!(engine.host_count(), 4);
         assert_eq!(engine.tree_value_to_host_idx.len(), 3); // example.com and *.example.com share same radix_key
 
-        // Test exact match_engine for example.com (should match_engine runtime1, not wildcard runtime4)
+        // Test exact match for example.com (runtime1, not wildcard runtime4)
         let r1 = engine.match_host("example.com");
         assert!(r1.is_some());
         assert_eq!(r1.unwrap().identifier(), "runtime1");
 
-        // Test wildcard match_engine for *.example.com (should match_engine runtime4)
+        // Test wildcard match for *.example.com (runtime4)
         let r4 = engine.match_host("api.example.com");
         assert!(r4.is_some());
         assert_eq!(r4.unwrap().identifier(), "runtime4");
@@ -348,7 +344,7 @@ mod tests {
         assert!(r2.is_some());
         assert_eq!(r2.unwrap().identifier(), "runtime2");
 
-        // Test exact match_engine for test.com
+        // Test exact match for test.com
         let r3 = engine.match_host("test.com");
         assert!(r3.is_some());
         assert_eq!(r3.unwrap().identifier(), "runtime3");

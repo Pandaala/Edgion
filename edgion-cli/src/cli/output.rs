@@ -294,7 +294,7 @@ pub fn print_error(error: &str) {
     eprintln!("Error: {}", error);
 }
 
-/// Print success message in green (if terminal supports colors)
+/// Print success message with a checkmark indicator.
 pub fn print_success(message: &str) {
     println!("✓ {}", message);
 }

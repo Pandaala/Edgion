@@ -138,9 +138,9 @@ fn resolve_group(
                 continue;
             };
 
-            // Reject empty / whitespace-only username and secret — matches the
-            // pre-grouping behavior; without trim+filter, `username: ""` and
-            // `secret: " "` would silently insert as live credentials.
+            // Reject empty/whitespace-only username and secret — without
+            // trim+filter, `username: ""` or `secret: " "` would silently
+            // insert as live credentials.
             let username = entry_map
                 .get(&username_key)
                 .and_then(|v| v.as_str())

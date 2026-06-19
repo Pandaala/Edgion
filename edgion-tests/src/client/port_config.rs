@@ -1,5 +1,4 @@
-// Port config
-//  ports.json Port config
+// Port configuration loaded from ports.json.
 
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -24,9 +23,8 @@ pub struct SuitePorts {
 }
 
 impl PortConfig {
-    ///  ports.json Port config
+    /// Load the port configuration from ports.json.
     pub fn load() -> Result<Self, String> {
-        //
         let possible_paths = [
             "edgion-tests/integration/conf/ports.json",
             "../conf/ports.json",
@@ -43,13 +41,13 @@ impl PortConfig {
         Err("Could not find ports.json in any expected location".to_string())
     }
 
-    /// Port config
+    /// Look up ports for the given suite key, returning defaults for unknown keys.
     pub fn get_ports(&self, suite: &str) -> SuitePorts {
         self.suites.get(suite).cloned().unwrap_or_default()
     }
 }
 
-/// suite name
+/// Map a legacy command alias to its canonical suite name.
 pub fn command_to_suite(command: &str) -> &str {
     match command {
         "http" => "http",
@@ -74,7 +72,7 @@ pub fn command_to_suite(command: &str) -> &str {
         "backend-tls" | "backendtls" => "backend-tls",
         "plugin-logs" | "pluginlogs" => "plugin-logs",
         "stream-plugins" | "streamplugins" => "stream-plugins",
-        _ => "http", //  http port
+        _ => "http", // default: http suite
     }
 }
 

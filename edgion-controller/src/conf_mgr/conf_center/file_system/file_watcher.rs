@@ -88,7 +88,7 @@ impl FileSystemWatcher {
             // drains them.  4096 leaves headroom for our test-fixture loads
             // (single-kind peaks ~110 in the integration suite); larger fleets
             // could in principle exceed this, in which case `Lagged` would be
-            // logged with no automatic recovery — that's a known follow-up.
+            // logged with no automatic recovery.
             let (tx, rx) = broadcast::channel(4096);
             senders.insert(kind, tx);
             rx
@@ -281,8 +281,7 @@ impl FileSystemWatcher {
         // is one read_dir syscall (+ stat per entry) so it's cheap even at
         // tens of thousands of files. We do this once per controller
         // lifetime — conf size doesn't change in bursts in practice, and
-        // operators can restart to retune; see tasks/todo/multi-conf-dir.md
-        // for the recursive variant when nested directories are supported.
+        // operators can restart to retune.
         let poll_interval = match self.poll_interval_override {
             Some(d) => {
                 tracing::info!(
@@ -565,8 +564,7 @@ impl FileSystemWatcher {
                     // Common: a deleted file we never tracked (status sidecars, tmp files).
                 }
             },
-            // invariant: Recheck is resolved to Apply or Delete in the block above (lines 461-471);
-            //   this arm is structurally unreachable
+            // Recheck is resolved to Apply or Delete in the block above; this arm is structurally unreachable.
             DispatchAction::Recheck => unreachable!(),
         }
     }

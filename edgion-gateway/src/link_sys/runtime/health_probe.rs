@@ -20,9 +20,7 @@ use tokio::task::JoinHandle;
 use crate::observe::metrics::registry::{record_link_sys_health, record_link_sys_health_flip};
 
 /// Flip-log rate-limit window. Matches Kafka's `FLIP_LOG_MIN_INTERVAL_MS` so the
-/// whole project bounds flip-log volume identically. This is the canonical shared
-/// constant; Kafka's `FLIP_LOG_MIN_INTERVAL_MS` (same value) will defer to this
-/// one after migration.
+/// whole project bounds flip-log volume identically.
 pub(crate) const FLIP_LOG_WINDOW_MS: u64 = 5_000;
 
 /// Process-start monotonic base for flip-log rate limiting (same pattern as

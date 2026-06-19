@@ -1,14 +1,12 @@
 //! `EdgionBackend` — load balancer backend wrapper.
 //!
 //! Per-backend metrics (`conn_count`, `ewma_us`) live on the wrapper itself,
-//! sharing the EP/EPS lifecycle with the backend list rather than living in a
-//! side `runtime_state` DashMap. All metric sharing happens via
-//! `Arc<EdgionBackend>` — the type is intentionally `!Clone` (auto-clone
-//! would silently fork atomic metric state).
+//! sharing the EP/EPS lifecycle with the backend list. All metric sharing
+//! happens via `Arc<EdgionBackend>` — the type is intentionally `!Clone`
+//! (auto-clone would silently fork atomic metric state).
 //!
-//! Implements `Deref<Target = pingora_load_balancing::Backend>` so existing
-//! call sites that read `addr` / `weight` / `ext` continue to work without
-//! source changes.
+//! Implements `Deref<Target = pingora_load_balancing::Backend>` so callers
+//! can read `addr` / `weight` / `ext` directly.
 //
 
 use pingora_load_balancing::Backend;
@@ -16,8 +14,6 @@ use std::ops::Deref;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 /// Initial EWMA value for new backends (1 ms in µs).
-/// Mirrors the legacy `runtime_state::INITIAL_EWMA_US` so backends bootstrap
-/// at the same latency baseline.
 pub const INITIAL_EWMA_US: u64 = 1_000;
 
 #[derive(Debug)]
@@ -80,7 +76,7 @@ impl EdgionBackend {
     }
 
     /// Update EWMA using the percent-alpha formula. Reads alpha from the
-    /// global EWMA config. Called at request end by `lb_runtime_cleanup`.
+    /// global EWMA config.
     pub fn update_ewma(&self, latency_us: u64) {
         let alpha = crate::lb::ewma::get_alpha() as u64;
         let mut current = self.ewma_us.load(Ordering::Relaxed);

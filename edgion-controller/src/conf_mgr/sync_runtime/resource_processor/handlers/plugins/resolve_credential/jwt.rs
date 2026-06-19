@@ -62,9 +62,9 @@ fn resolve_group(
             continue;
         };
 
-        // JwtAuth Secret format: each Secret carries ONE credential as the
-        // fields `key` (kid string), and one of `secret` (HS*) or `publicKey`
-        // (RS*/ES*). This matches the existing single-Secret resolve path.
+        // JwtAuth Secret format: each Secret carries ONE credential with a
+        // `key` field (kid string) and one of `secret` (HS*) or `publicKey`
+        // (RS*/ES*).
         let kid = data
             .get("key")
             .and_then(|v| String::from_utf8(v.0.clone()).ok())
@@ -103,9 +103,9 @@ fn resolve_group(
         }
 
         if credentials.contains_key(&kid) {
-            // Intra-group duplicate kid — secret_key identifies the "loser"
-            // entry; the originally inserted one stays. Mirrors HmacAuth
-            // pilot's secret-data-safety contract: no secret value in warn.
+            // Intra-group duplicate kid — secret_key identifies the dropped
+            // entry; the first occurrence is kept. No secret value in the
+            // warn to avoid credential leakage.
             tracing::warn!(
                 edgion_plugins = %resource_ref.key(),
                 secret_key = %secret_key,

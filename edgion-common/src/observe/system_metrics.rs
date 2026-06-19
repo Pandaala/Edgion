@@ -1,7 +1,7 @@
 //! System-level error state metrics.
 //!
 //! A single registry for "system-level" degraded states across Edgion
-//! binaries (Gateway, Controller, Center). Emits a Prometheus gauge that
+//! binaries (Gateway, Controller). Emits a Prometheus gauge that
 //! stays at `1` while a degraded mode is active, so operators can wire
 //! an Alertmanager rule like:
 //!

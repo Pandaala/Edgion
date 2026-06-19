@@ -1,10 +1,10 @@
 // CtxSet Plugin Test Suite
 //
-// ：
-// -  Access Log Store  ctx
-// -  Access Log  stage_logs
+// Verifies CtxSet plugin scenarios via the Access Log Store:
+// - Set ctx fields from request headers, with optional default, transform, and mapping
+// - Read back ctx fields from Access Log stage_logs to confirm they were written correctly
 //
-// ：conf/EdgionPlugins/CtxSet/01_EdgionPlugins_ctx-setter.yaml
+// Required config: conf/EdgionPlugins/CtxSet/01_EdgionPlugins_ctx-setter.yaml
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -12,7 +12,7 @@ use std::time::Instant;
 pub struct CtxSetTestSuite;
 
 impl CtxSetTestSuite {
-    // ==================== 1.  Header  ctx  ====================
+    // ==================== 1. Set ctx from header ====================
     fn test_ctx_from_header() -> TestCase {
         TestCase::new("ctx_set_from_header", "CtxSet:  Header  ctx ", |ctx: TestContext| {
             Box::pin(async move {
@@ -38,7 +38,7 @@ impl CtxSetTestSuite {
                             return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                         }
 
-                        //  Access Log Store
+                        // Fetch from access log store.
                         let al_client = ctx.access_log_client();
                         let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
                             Ok(e) => e,
@@ -52,7 +52,7 @@ impl CtxSetTestSuite {
 
                         let access_log = entry.data.to_string();
 
-                        //  tenant_id
+                        // Verify tenant_id in ctx.
                         if access_log.contains(r#""tenant_id":"acme-corp""#) {
                             TestResult::passed_with_message(
                                 start.elapsed(),
@@ -71,7 +71,7 @@ impl CtxSetTestSuite {
         })
     }
 
-    // ==================== 2.  ====================
+    // ==================== 2. Default value when header absent ====================
     fn test_ctx_default_value() -> TestCase {
         TestCase::new("ctx_set_default_value", "CtxSet:  Header ", |ctx: TestContext| {
             Box::pin(async move {
@@ -81,7 +81,7 @@ impl CtxSetTestSuite {
 
                 let trace_id = format!("test-ctx-default-{}", uuid::Uuid::new_v4());
 
-                //  X-Tenant-Id header，
+                // No X-Tenant-Id header sent; expect the configured default value.
                 let response = client
                     .get(url)
                     .header("host", "ctx-setter.example.com")
@@ -110,7 +110,7 @@ impl CtxSetTestSuite {
 
                         let access_log = entry.data.to_string();
 
-                        //
+                        // Verify default tenant_id in ctx.
                         if access_log.contains(r#""tenant_id":"default-tenant""#) {
                             TestResult::passed_with_message(
                                 start.elapsed(),
@@ -129,7 +129,7 @@ impl CtxSetTestSuite {
         })
     }
 
-    // ==================== 3.  ====================
+    // ==================== 3. Case transform (method -> lower) ====================
     fn test_ctx_transform_case() -> TestCase {
         TestCase::new(
             "ctx_set_transform_case",
@@ -170,7 +170,7 @@ impl CtxSetTestSuite {
 
                             let access_log = entry.data.to_string();
 
-                            //  method
+                            // Verify method transformed to lowercase in ctx.
                             if access_log.contains(r#""method_lower":"get""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -190,7 +190,7 @@ impl CtxSetTestSuite {
         )
     }
 
-    // ==================== 4.  ====================
+    // ==================== 4. Value mapping (premium -> tier_1) ====================
     fn test_ctx_mapping() -> TestCase {
         TestCase::new("ctx_set_mapping", "CtxSet:  (premium -> tier_1)", |ctx: TestContext| {
             Box::pin(async move {
@@ -229,7 +229,7 @@ impl CtxSetTestSuite {
 
                         let access_log = entry.data.to_string();
 
-                        //  premium  tier_1
+                        // Verify premium maps to tier_1 in ctx.
                         if access_log.contains(r#""tier":"tier_1""#) {
                             TestResult::passed_with_message(
                                 start.elapsed(),
@@ -248,7 +248,7 @@ impl CtxSetTestSuite {
         })
     }
 
-    // ==================== 5.  ====================
+    // ==================== 5. Mapping default fallback (unknown -> tier_3) ====================
     fn test_ctx_mapping_default() -> TestCase {
         TestCase::new(
             "ctx_set_mapping_default",
@@ -290,7 +290,7 @@ impl CtxSetTestSuite {
 
                             let access_log = entry.data.to_string();
 
-                            //  mapping.default
+                            // Verify mapping.default applied: unknown plan falls back to tier_3.
                             if access_log.contains(r#""tier":"tier_3""#) {
                                 TestResult::passed_with_message(
                                     start.elapsed(),

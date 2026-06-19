@@ -37,7 +37,6 @@ impl CsrfToken {
         }
     }
 
-    /// Generate signature for token
     fn gen_sign(random: &str, expires: i64, key: &str) -> String {
         let mut mac = HmacSha256::new_from_slice(key.as_bytes())
             .expect("HMAC accepts any non-empty key per RFC 2104; key validated non-empty by config loader");
@@ -65,7 +64,6 @@ impl CsrfToken {
 
     /// Verify token signature and expiration
     pub fn verify(&self, key: &str, max_expires: i64) -> bool {
-        // Check expiration
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()

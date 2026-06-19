@@ -40,7 +40,6 @@ impl RequestFilter for JwtAuth {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        // Extract token
         let (token, source) = match self.extract_token(session) {
             Some(t) => {
                 let src_tag = match t.1 {
@@ -53,13 +52,11 @@ impl RequestFilter for JwtAuth {
             }
             None => {
                 plugin_log.push("No token");
-                // Check anonymous
                 if self.handle_anonymous_access(session, plugin_log) {
                     return PluginRunningResult::GoodNext;
                 }
                 // Apply failure delay before returning 401
                 apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-                // No credentials present: omit the RFC 6750 error code (SHOULD NOT).
                 let _ = self.auth_failed_return(session, None).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
@@ -73,9 +70,7 @@ impl RequestFilter for JwtAuth {
                     "OK group={} iss={} u={}",
                     la![ok.group.group.as_str(), ok.iss.as_str(), sensitive(&username)],
                 );
-                // Set claims to headers if configured
                 self.set_claims_headers(session, &ok.claims);
-                // Store claims in context if configured
                 if self.config.store_claims_in_ctx {
                     if let Ok(claims_json) = serde_json::to_string(&ok.claims) {
                         let _ = session.set_ctx_var("jwt_claims", &claims_json);

@@ -67,9 +67,9 @@ impl ExtensionRefFilter {
         }
     }
 
-    /// Assign the rule-scope index. Called by the rule-scope builder
-    /// (`PluginRuntime::add_from_httproute_filters_inner` with assign_indices=true).
-    /// No-op when called twice — idempotent on `clone()`-fanout.
+    /// Assign the rule-scope index. Called once by the rule-scope builder
+    /// (`PluginRuntime::add_from_httproute_filters_inner` with assign_indices=true)
+    /// before the four-stage clone fanout; each clone inherits the set index.
     pub(crate) fn set_index(&mut self, index: usize) {
         self.index = Some(index);
     }
@@ -106,7 +106,7 @@ impl ExtensionRefFilter {
     /// Helper to prepare plugin execution: validation, lookup, logging setup
     /// Returns:
     /// - Ok(Some((plugin, token))): Success
-    /// - Ok(None): no longer produced; the `Option` layer is retained to keep this change's diff narrow
+    /// - `Ok(None)`: never returned; the `Option` wrapping is a retained artifact
     /// - Err(()): Error — unsupported kind, or referenced EdgionPlugins not found; logged
     fn prepare_execution(
         &self,
@@ -163,14 +163,14 @@ impl ExtensionRefFilter {
             Err(_) => {
                 // Sync stage: no `await`, so we cannot write a response body
                 // here. Signal the status via `ErrResponse` instead. The
-                // response runner (`check_response_stage_terminate`) now turns
-                // this into a real local reply: it builds a fresh `500` and
-                // `response_filter` writes it to the client, replacing the
-                // upstream response (filter-04b). `body` is `None`, so the client
-                // gets a bare `500` (no JSON envelope); the request-stage
-                // `run_extension_async` path is the one that writes a JSON body.
-                // A bare `ErrTerminateRequest` would instead trip the runtime's
-                // 502 fail-safe, masking that this is a plugin-reference error.
+                // response runner (`check_response_stage_terminate`) turns this
+                // into a local reply: it builds a fresh `500` and `response_filter`
+                // writes it to the client, replacing the upstream response.
+                // `body` is `None`, so the client gets a bare `500` (no JSON
+                // envelope); the request-stage `run_extension_async` path is the
+                // one that writes a JSON body. A bare `ErrTerminateRequest` would
+                // trip the runtime's 502 fail-safe, masking this as a plugin-reference
+                // error.
                 return PluginRunningResult::ErrResponse {
                     status: 500,
                     body: None,
@@ -437,14 +437,10 @@ mod tests {
         let mut log = PluginLog::new("test");
         let result = filter.run_extension(PluginRunningStage::UpstreamResponseFilter, &mut session, &mut log);
         assert_eq!(result, PluginRunningResult::GoodNext);
-        // Verify refer_to is set (now just the name string)
+        // Verify refer_to is set
         assert!(log.refer_to.is_some());
         assert_eq!(log.refer_to.as_ref().unwrap(), "p1");
     }
-
-    // ============================================
-    // Tests for the rule-scope index path (Task 6)
-    // ============================================
 
     /// Rule-scope filter with valid index: resolved_route_ext_ref returns Some.
     /// prepare_execution should not touch the global store; it uses the
@@ -518,18 +514,16 @@ mod tests {
         );
     }
 
-    /// Runtime backstop (Task 9): an ExtensionRef whose `kind` is not
-    /// `EdgionPlugins` must fail closed. `prepare_execution` returns `Err(())`,
-    /// which `run_extension_async` (the request stage) maps to a 500 response +
-    /// JSON body followed by `ErrTerminateRequest` — NOT `GoodNext`.
+    /// An ExtensionRef whose `kind` is not `EdgionPlugins` must fail closed.
+    /// `prepare_execution` returns `Err(())`, which `run_extension_async`
+    /// (the request stage) maps to a 500 response + JSON body followed by
+    /// `ErrTerminateRequest` — NOT `GoodNext`.
     ///
-    /// Note: the request-stage path returns `ErrTerminateRequest` (after
-    /// writing a 500 + body itself) rather than `ErrResponse { status: 500 }`.
-    /// The draft test in the plan asserted `ErrResponse { status: 500, .. }`,
-    /// but that is what the *sync* `run_extension` `Err` arm returns;
-    /// `run_request` -> `run_extension_async` returns `ErrTerminateRequest`.
-    /// We assert that, plus verify the mock session received the 500 header
-    /// write, so the test genuinely proves fail-closed behavior.
+    /// Note: the request-stage path returns `ErrTerminateRequest` (after writing
+    /// a 500 + body itself) rather than `ErrResponse { status: 500 }`, which is
+    /// what the sync `run_extension` `Err` arm returns. We assert that, plus
+    /// verify the mock session received the 500 header write, so the test
+    /// genuinely proves fail-closed behavior.
     #[tokio::test]
     async fn unsupported_kind_fails_closed() {
         let mut session = MockPluginSession::new();

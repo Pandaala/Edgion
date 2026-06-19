@@ -97,15 +97,12 @@ impl ReferenceGrantStore {
         to_kind: &str,
         to_name: Option<&str>,
     ) -> bool {
-        // Same namespace references are always allowed
+        // Same-namespace references are always allowed without a grant.
         if from_namespace == to_namespace {
             return true;
         }
 
-        // Get all grants in the target namespace
         let grants = self.get_by_to_namespace(to_namespace);
-
-        // Check if any grant allows this reference
         grants
             .iter()
             .any(|grant| grant.allows_reference(from_namespace, from_group, from_kind, to_group, to_kind, to_name))

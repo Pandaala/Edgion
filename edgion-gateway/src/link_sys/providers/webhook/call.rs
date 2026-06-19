@@ -280,7 +280,7 @@ fn inject_auth(auth: &Option<WebhookAuth>, headers: &mut reqwest::header::Header
                         }
                     }
                     "query" => {
-                        // Query param injection requires URL mutation; deferred to a follow-up.
+                        // Query param injection via URL mutation is not yet implemented.
                         let _ = (query_param, key_val);
                     }
                     _ => {}

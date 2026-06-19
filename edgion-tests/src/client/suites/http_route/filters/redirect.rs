@@ -16,8 +16,6 @@ use async_trait::async_trait;
 use reqwest::redirect::Policy;
 use std::time::Instant;
 
-// HTTP redirect test port loaded from ports.json， ctx.http_port
-
 pub struct HttpRedirectTestSuite;
 
 impl HttpRedirectTestSuite {
@@ -229,9 +227,9 @@ impl HttpRedirectTestSuite {
         )
     }
 
-    /// Test redirect preserves IPv6-literal Host brackets (regression: redirect-F001).
-    /// An IPv6-literal Host such as `[::1]:8443` must keep its brackets in the
-    /// `Location` URL — the pre-fix `host.split(':').next()` produced `https://[:...`.
+    /// Verify that redirect preserves IPv6-literal Host brackets in the Location URL.
+    /// An IPv6-literal `[::1]:8443` Host must produce `https://[::1]:...`; naively
+    /// splitting on `:` drops the closing bracket, producing a malformed URL.
     fn test_redirect_ipv6_host_literal() -> TestCase {
         TestCase::new(
             "http_redirect_ipv6_host_literal",

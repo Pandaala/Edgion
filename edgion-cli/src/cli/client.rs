@@ -55,7 +55,6 @@ impl EdgionClient {
             .build()
             .context("Failed to create HTTP client")?;
 
-        // Determine base URL based on target and server option
         let base_url = server.unwrap_or_else(|| {
             let port = match target {
                 TargetType::Center => DEFAULT_PORT_CENTER,
@@ -396,10 +395,8 @@ fn format_request_error(url: &str, error: &reqwest::Error, target: TargetType) -
     msg.push_str("  - Check if the server address is correct\n");
     msg.push_str(&format!("  - Try: curl -v {}\n", url));
 
-    // Add error details
     msg.push_str(&format!("\nDetails: {}\n", error));
 
-    // Add hint if available
     if let Some(h) = hint {
         msg.push_str(&format!("\nHint: {}", h));
     }

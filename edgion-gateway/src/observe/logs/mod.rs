@@ -8,8 +8,7 @@ pub mod tls_log;
 pub mod udp_log;
 
 pub use crate::link_sys::providers::local_file::LogType;
-// System log bootstrap now lives in `common::observe::logs`; re-export it here
-// so existing `gateway::observe::logs::{SysLogConfig, ...}` call sites are stable.
+// Re-export from edgion_common so gateway call sites remain stable.
 pub use buffer::{LogBuffer, ULogBuffer};
 pub use edgion_common::observe::{init_default, init_logging, SysLogConfig};
 pub use logger_factory::{create_async_logger, create_sync_logger};

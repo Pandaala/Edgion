@@ -315,7 +315,7 @@ async fn requeue_selector_gateways(runtime: Arc<ControllerRuntime>) {
 
 /// Kubernetes Controller that spawns independent ResourceControllers for each resource type
 ///
-/// Note: Leader election is handled externally by lifecycle_kubernetes.rs.
+/// Note: Leader election is handled externally by `KubernetesCenter` (center.rs).
 /// This controller focuses solely on resource watching and synchronization.
 pub struct KubernetesController {
     client: Client,

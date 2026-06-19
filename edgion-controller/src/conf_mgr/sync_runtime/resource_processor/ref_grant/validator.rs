@@ -112,7 +112,6 @@ impl CrossNamespaceValidator {
     }
 }
 
-/// Check if ReferenceGrant validation is enabled by querying EdgionGatewayConfig
 fn is_validation_enabled() -> bool {
     is_reference_grant_validation_enabled()
 }

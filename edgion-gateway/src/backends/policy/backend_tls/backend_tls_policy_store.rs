@@ -87,7 +87,6 @@ impl BackendTLSPolicyStore {
     fn build_reverse_index(policies: &BackendTLSPolicyMap) -> ReverseIndexMap {
         let mut index: HashMap<String, Vec<Arc<BackendTLSPolicy>>> = HashMap::new();
 
-        // Build initial index
         for policy in policies.values() {
             let policy_namespace = policy.namespace().unwrap_or("");
 
@@ -246,7 +245,6 @@ impl BackendTLSPolicyStore {
                     }
 
                     if target_policies.is_empty() {
-                        // No policies for this target, remove the entry
                         new_index.remove(target_key);
                     } else {
                         // Sort by Gateway API precedence rules
@@ -286,11 +284,8 @@ impl BackendTLSPolicyStore {
     pub fn get_policies_for_target(&self, name: &str, namespace: Option<&str>) -> Vec<Arc<BackendTLSPolicy>> {
         let index = self.reverse_index.load();
 
-        // Build target key (namespace/name)
         let target_namespace = namespace.unwrap_or("");
         let target_key = format!("{}/{}", target_namespace, name);
-
-        // O(1) lookup in reverse index
         index.get(&target_key).cloned().unwrap_or_default()
     }
 

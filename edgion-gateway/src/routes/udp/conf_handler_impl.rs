@@ -91,8 +91,8 @@ impl GlobalUdpRouteManagers {
     /// Built ONCE per route here (in the conf-handler), then cached and reused
     /// across listener rebuilds, so a sibling route change on the same listener
     /// never resets this route's `backend_finder` WRR cursor. The compiled
-    /// runtime (BackendSelector, stream-plugin store key) no longer lives on the
-    /// schema — see [`UdpRouteUnit::from_route`].
+    /// runtime (BackendSelector, stream-plugin store key) lives on the unit,
+    /// not on the schema — see [`UdpRouteUnit::from_route`].
     fn initialize_route(&self, route: UDPRoute) -> Result<Arc<UdpRouteUnit>, String> {
         Ok(Arc::new(UdpRouteUnit::from_route(Arc::new(route))))
     }

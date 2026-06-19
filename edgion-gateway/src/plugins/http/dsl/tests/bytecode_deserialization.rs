@@ -10,9 +10,8 @@ use super::*;
 
 #[test]
 fn test_deserialize_invalid_base64() {
-    // "not_valid_base64" contains '_' (URL-safe alphabet) — STANDARD base64 rejects it,
-    // and even allowing for permissive decoders the length (16) is not a multiple of 4
-    // without padding. STANDARD::decode returns Err either way.
+    // "not_valid_base64" contains '_' (URL-safe alphabet) — STANDARD base64 rejects it
+    // because '_' is not in the STANDARD alphabet.
     let err = CompiledScript::deserialize_base64("not_valid_base64").expect_err("invalid base64 must fail");
     assert!(err.contains("base64"), "expected base64 error, got: {}", err);
 }
@@ -49,7 +48,7 @@ fn test_deserialize_unsupported_version() {
     );
 }
 
-// ── Validator rejects semantically-malicious bytecode (#14) ─────────────────
+// ── Validator rejects semantically-malicious bytecode ────────────────────────
 
 use super::super::lang::validator::Validator;
 
@@ -94,7 +93,6 @@ fn test_validator_rejects_local_slot_out_of_bounds() {
     );
 }
 
-// Additional imports needed for the tests below.
 use super::super::lang::bytecode::{BuiltinId, Constant};
 
 #[test]

@@ -86,9 +86,6 @@ pub struct RealIpConfig {
     /// Only takes effect when `recursive=true`. Default: `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_trusted_hops: Option<u32>,
-    // NOTE: trusted_ip_matcher field DELETED in this refactor.
-    // No production consumers existed (is_trusted_ip had zero non-test callers).
-    // The matcher is now built by RealIpExtractor::new from `trusted_ips`.
 }
 
 fn default_real_ip_header() -> String {

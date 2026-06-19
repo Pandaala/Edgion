@@ -96,7 +96,7 @@ impl GlobalTlsRouteManagers {
     /// a sibling route change on the same listener never resets this route's
     /// `backend_finder` WRR cursor. The compiled runtime (BackendSelector,
     /// proxy-protocol version, connect retry budget, keepalive config,
-    /// stream-plugin store key) no longer lives on the schema — see
+    /// stream-plugin store key) lives on [`TlsRouteUnit`], not the schema; see
     /// [`TlsRouteUnit::from_route`].
     fn initialize_route(&self, route: TLSRoute) -> Result<Arc<TlsRouteUnit>, String> {
         Ok(Arc::new(TlsRouteUnit::from_route(Arc::new(route))))

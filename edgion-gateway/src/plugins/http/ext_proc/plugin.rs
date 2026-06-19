@@ -1,9 +1,9 @@
 //! ExtProc plugin — external processing over a bidirectional gRPC stream.
 //!
-//! MVP scope: the request-header phase (`RequestFilter`) and the response-header
+//! Covers the request-header phase (`RequestFilter`) and response-header
 //! phase (the async `UpstreamResponse` hook). The processor may mutate headers
-//! or return an `ImmediateResponse` to short-circuit. Body phases are out of
-//! scope (rejected at config validation).
+//! or return an `ImmediateResponse` to short-circuit. Body phases are not
+//! supported (rejected at config validation).
 //!
 //! A single plugin type implements both traits; the runtime constructs a
 //! separate instance per stage from the same config.

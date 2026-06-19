@@ -113,7 +113,6 @@ mod tests {
     fn test_partial_update_update() {
         let store = PluginStore::new();
 
-        // First add a plugin
         let mut data = HashMap::new();
         data.insert(
             "default/plugin1".to_string(),
@@ -121,7 +120,6 @@ mod tests {
         );
         store.full_set(&data);
 
-        // Then update it
         let mut update = HashMap::new();
         update.insert(
             "default/plugin1".to_string(),
@@ -137,7 +135,6 @@ mod tests {
     fn test_partial_update_remove() {
         let store = PluginStore::new();
 
-        // First add a plugin
         let mut data = HashMap::new();
         data.insert(
             "default/plugin1".to_string(),
@@ -145,7 +142,6 @@ mod tests {
         );
         store.full_set(&data);
 
-        // Then remove it
         let mut remove = HashSet::new();
         remove.insert("default/plugin1".to_string());
         store.partial_update(HashMap::new(), HashMap::new(), remove);

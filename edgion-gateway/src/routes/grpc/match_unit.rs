@@ -234,11 +234,9 @@ pub struct GrpcRouteRuleUnit {
     /// Pre-resolved Counter/Histogram handles for the request-end metric
     /// path. The hot path indexes by
     /// `lookup(gw_ns, gw_name).counters[backend_ref_idx][ps_index(...)]`.
-    /// Invariants: `BackendRequestsLabels` / `RequestDurationConfig.labels`
-    /// are read once at build time (init-once globals — see
-    /// `docs/superpowers/specs/2026-06-10-observe-f002-route-unit-metric-handles-design.md`
-    /// §6); `backend_refs` is never mutated in place, so indices stay valid
-    /// for the lifetime of this `Arc<GrpcRouteRuleUnit>`.
+    /// Invariant: labels and backend_refs are fixed at build time (init-once
+    /// globals); `backend_refs` is never mutated in place, so indices stay
+    /// valid for the lifetime of this `Arc<GrpcRouteRuleUnit>`.
     pub metric_handles: Arc<crate::observe::metrics::route_handles::RouteMetricHandles>,
     /// Compiled rule-level plugin chain. Shared across ALL match-item units of
     /// this rule — in-memory RateLimit owns per-rule CMS state.

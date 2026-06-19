@@ -329,7 +329,7 @@ impl TestSuite for RealIpPluginTestSuite {
             Self::test_xff_extraction_recursive(),
             Self::test_direct_connection(),
             Self::test_all_trusted_ips(),
-            // access log regression
+            // Access log: stage_logs includes RealIp entry
             Self::test_stage_logs_contain_real_ip(),
         ]
     }

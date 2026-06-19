@@ -146,7 +146,6 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             self.route_cache.remove(key);
         }
 
-        // Rebuild affected listener managers
         self.rebuild_affected_listener_managers(&affected_listeners);
 
         tracing::info!(
@@ -167,7 +166,7 @@ pub fn create_route_manager_handler() -> Box<dyn ConfHandler<HTTPRoute> + Send +
 // ============================================================================
 
 /// Extract creation timestamp as milliseconds since epoch from route metadata.
-/// Returns 0 if not available (treat as oldest for backward compat).
+/// Returns 0 if unavailable; 0 is treated as the oldest timestamp in tie-breaking.
 fn extract_creation_ts_ms(route: &HTTPRoute) -> i64 {
     route
         .metadata
@@ -196,7 +195,6 @@ fn build_specificity(
     }
 }
 
-/// Check if the path match is a regex type
 fn is_regex_path(match_item: &HTTPRouteMatch) -> bool {
     if let Some(ref path_match) = match_item.path {
         if let Some(ref match_type) = path_match.match_type {
@@ -375,7 +373,7 @@ fn append_route_to_hostname(
         let rule_arc = Arc::new(rule.clone());
         // Compiled runtime is built ONCE per rule (`rule_runtimes[rule_id]`);
         // the LB selector is built once per (rule, hostname) and shared across
-        // this rule's match-item units — mirroring today's sharing topology.
+        // this rule's match-item units.
         let rule_rt = &rule_runtimes[rule_id];
         let backend_finder = HttpRouteRuleUnit::build_backend_selector(&rule_rt.backends);
         let matches = match &rule.matches {
@@ -476,8 +474,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
     domain_rules
 }
 
-/// Validate HTTPRoute and extract required fields
-/// Returns Some(ValidatedHttpRoute) if valid, None otherwise
+/// Validate HTTPRoute and extract required fields, returning None if any required field is missing.
 fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
     match &route.spec.parent_refs {
         Some(refs) if !refs.is_empty() => refs,

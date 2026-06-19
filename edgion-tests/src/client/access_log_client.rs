@@ -41,7 +41,6 @@ impl AccessLogEntry {
 
     /// Get the response status code
     pub fn status_code(&self) -> Option<u64> {
-        // Try different possible paths for status code
         self.data
             .get("request_info")
             .and_then(|ri| ri.get("status"))

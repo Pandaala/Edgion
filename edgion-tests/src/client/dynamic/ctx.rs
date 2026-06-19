@@ -40,8 +40,6 @@ impl ScenarioCtx {
     }
 }
 
-// apply / delete / wait helpers are added progressively in follow-up tasks.
-
 impl ScenarioCtx {
     /// Apply a sub-path (file or directory) relative to the scenario conf directory.
     pub async fn apply_dir(&self, rel_path: &str) -> Result<()> {

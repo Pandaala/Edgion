@@ -38,10 +38,10 @@ static DSL_HTTP_CLIENT_GUARDED: OnceLock<reqwest::Client> = OnceLock::new();
 /// Returns the process-global shared reqwest client for DSL http.call.
 ///
 /// Selection is keyed by the per-request `block_private_ips` flag:
-/// - false → permissive client (`Policy::limited(10)`); behavior unchanged.
+/// - false → permissive client (`Policy::limited(10)`)
 /// - true  → guarded client whose `Policy::custom` re-applies
-///   `is_ssrf_blocked_ip_literal` to every redirect hop's host, closing F-012's
-///   "first-hop only" gap. Same 10-hop cap as the permissive client.
+///   `is_ssrf_blocked_ip_literal` to every redirect hop's host.
+///   Same 10-hop cap as the permissive client.
 ///
 /// Both clients are process-global so connection pools are reused across calls.
 pub(crate) fn dsl_http_client(block_private_ips: bool) -> &'static reqwest::Client {

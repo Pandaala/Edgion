@@ -324,8 +324,7 @@ mod tests {
         data.validate_and_init().unwrap();
     }
 
-    /// Convenience: `check_ip` returns an `AccessDecision`; the legacy
-    /// tests were boolean. This helper preserves their semantic intent.
+    /// Maps an `AccessDecision` to a boolean allow/deny for test assertions.
     fn is_allowed(decision: AccessDecision) -> bool {
         matches!(
             decision,

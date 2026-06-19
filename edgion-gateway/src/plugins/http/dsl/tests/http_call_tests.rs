@@ -157,12 +157,11 @@ fn test_http_call_block_private_ips_rejects_ipv4_mapped_ipv6() {
 
 #[test]
 fn test_http_call_caps_large_response_body() {
-    // Regression for F-007: a response body larger than max_response_body_bytes must be
-    // streamed and truncated to the cap, never fully buffered first. Unlike the other tests
-    // in this file, this one needs a live response to exercise the body-read path, so it
-    // drives a loopback server in-process (deterministic, no external dependency). The
-    // server returns 100 bytes; with the cap set to 4 the script must observe exactly the
-    // first 4 bytes.
+    // A response body larger than max_response_body_bytes must be streamed and truncated to
+    // the cap, never fully buffered first. Unlike the other tests in this file, this one
+    // needs a live response to exercise the body-read path, so it drives a loopback server
+    // in-process (deterministic, no external dependency). The server returns 100 bytes;
+    // with the cap set to 4 the script must observe exactly the first 4 bytes.
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -214,13 +213,13 @@ fn test_http_call_caps_large_response_body() {
 
 #[test]
 fn test_http_call_body_truncated_to_max_string_len() {
-    // Regression for FB-03: even after streaming-truncation at max_response_body_bytes,
-    // r["body"] must also honor the sandbox-wide max_string_len. Without that cap, a
-    // body up to max_response_body_bytes (default 1 MB = 128x max_string_len) would
-    // flow into req.set_header / ctx.set / log without any further size gate. The
-    // truncation is silent (not an error) to preserve http.call's documented
-    // "never raises a runtime error" contract — mirroring the existing silent caps on
-    // body bytes (max_response_body_bytes) and headers map size (max_map_size).
+    // After streaming-truncation at max_response_body_bytes, r["body"] must also honor
+    // the sandbox-wide max_string_len. Without that cap, a body up to
+    // max_response_body_bytes (default 1 MB = 128x max_string_len) would flow into
+    // req.set_header / ctx.set / log without any further size gate. The truncation is
+    // silent (not an error) to preserve http.call's documented "never raises a runtime
+    // error" contract — mirroring the existing silent caps on body bytes
+    // (max_response_body_bytes) and headers map size (max_map_size).
     // Setup: server returns 16 bytes, default max_response_body_bytes (1 MB) so the
     // body-bytes cap does not fire, but max_string_len = 4 forces the new truncation.
     let rt = tokio::runtime::Builder::new_current_thread()

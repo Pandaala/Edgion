@@ -11,7 +11,7 @@ use std::collections::HashMap;
 /// defense-in-depth for the day per-endpoint weights are introduced, when an
 /// unclamped value would (a) silently truncate on the cast and (b) expand into
 /// a multi-GB ring. A 1024:1 ratio is finer than any realistic backend split.
-/// Mirrors the WeightedRoundRobin weight cap (lb-F005).
+/// Mirrors the WeightedRoundRobin weight cap.
 const MAX_CH_BACKEND_WEIGHT: usize = 1 << 10;
 
 /// Consistent hash ring wrapping `pingora_ketama::Continuum`.
@@ -240,12 +240,10 @@ mod tests {
 
     #[test]
     fn high_weight_unhealthy_backend_does_not_starve_healthy_peers() {
-        // Regression for F-004: a high-weight unhealthy backend places ~160*weight
-        // virtual nodes on the ring. Previously every duplicate vnode it owned
-        // consumed the iteration budget, so the walk could exhaust the budget
-        // before reaching a distinct healthy peer and return None. With the fix,
-        // only distinct-backend attempts consume the budget, so a budget equal to
-        // the distinct-backend count always suffices to find a healthy peer.
+        // A high-weight unhealthy backend places ~160*weight virtual nodes on the
+        // ring. Only distinct-backend attempts consume the iteration budget, so a
+        // budget equal to the distinct-backend count always suffices to reach a
+        // healthy peer.
         let mut backends: Vec<Backend> = (1..=4).map(make_backend).collect();
         backends[0].weight = 200; // dominates ~98% of the ring slots
         let heavy_addr = backends[0].addr.clone();
@@ -265,12 +263,11 @@ mod tests {
 
     #[test]
     fn all_unhealthy_with_heavy_backend_terminates() {
-        // Termination guard for F-004: because `Continuum::get_addr` never yields
-        // None on a non-empty ring, counting only distinct-backend attempts could
-        // spin forever once every backend has been seen-but-rejected. The
-        // distinct-backend break must stop the walk. A budget far larger than the
-        // backend count ensures it is the break (not the budget cap) that ends the
-        // loop; if the guard were missing this test would hang.
+        // Termination guard: `Continuum::get_addr` never returns None on a
+        // non-empty ring, so the walk could spin forever without the
+        // distinct-backend break. A budget far larger than the backend count
+        // ensures it is the break (not the budget cap) that ends the walk;
+        // if the guard were missing this test would hang.
         let mut backends: Vec<Backend> = (1..=4).map(make_backend).collect();
         backends[0].weight = 200;
         let ring = ConsistentHashRing::build(&backends);

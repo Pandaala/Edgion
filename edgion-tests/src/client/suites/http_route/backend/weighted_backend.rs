@@ -1,14 +1,14 @@
 // Weighted Backend Test suite
 //
 // Required config files (in edgion-tests/integration/conf/):
-// - HTTPRoute_default_weighted-backend.yaml    # Weighted backend test route（50:30:20）
+// - HTTPRoute_default_weighted-backend.yaml    # Weighted backend test route (50:30:20)
 // - Service_edge_backend-a.yaml                # Backend A service
 // - Service_edge_backend-b.yaml                # Backend B service
 // - Service_edge_backend-c.yaml                # Backend C service
 // - EndpointSlice_edge_backend-a.yaml          # Backend A endpoints
 // - EndpointSlice_edge_backend-b.yaml          # Backend B endpoints
 // - EndpointSlice_edge_backend-c.yaml          # Backend C endpoints
-// - EdgionPlugins_default_timeout-debug.yaml   # Debugconfig
+// - EdgionPlugins_default_timeout-debug.yaml   # Debug config
 // - Gateway_edge_example-gateway.yaml          # Gateway config
 // - GatewayClass__public-gateway.yaml          # GatewayClass config
 
@@ -20,7 +20,7 @@ use std::time::Instant;
 pub struct WeightedBackendTestSuite;
 
 impl WeightedBackendTestSuite {
-    /// Test weighted backend traffic distribution（50:30:20）
+    /// Test weighted backend traffic distribution (50:30:20)
     fn test_weighted_distribution() -> TestCase {
         TestCase::new(
             "weighted_distribution",
@@ -167,7 +167,7 @@ impl WeightedBackendTestSuite {
         )
     }
 
-    /// Test backend response consistency（ensure all backends return200）
+    /// Test backend response consistency (ensure all backends return 200)
     fn test_backend_consistency() -> TestCase {
         TestCase::new(
             "backend_consistency",

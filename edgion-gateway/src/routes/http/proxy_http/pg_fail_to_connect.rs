@@ -5,7 +5,6 @@ use pingora_core::{Error, ErrorType};
 use pingora_proxy::Session;
 use std::time::Instant;
 
-/// fail_to_connect - called when connection to upstream fails
 #[inline]
 pub fn fail_to_connect(
     edgion_http: &EdgionHttpProxy,
@@ -53,7 +52,6 @@ pub fn fail_to_connect(
     // deadline blown means a new LB pick / connection / circuit-breaker
     // counter increment would only burn resources the caller has given up on.
     if ctx.request_timeout_exceeded() || ctx.grpc_deadline_exceeded() {
-        // Set 504 status for timeout
         if let Some(upstream) = ctx.get_current_upstream_mut() {
             upstream.status = Some(504);
         }

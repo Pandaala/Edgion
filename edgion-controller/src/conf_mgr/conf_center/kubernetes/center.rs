@@ -191,7 +191,7 @@ impl KubernetesCenter {
         Ok(config)
     }
 
-    /// Create K8s controller (new architecture - no ConfigServer dependency)
+    /// Create the Kubernetes resource controller (no ConfigServer dependency).
     fn create_k8s_controller(&self, client: &Client) -> Result<KubernetesController> {
         let config = self.config();
 
@@ -465,7 +465,7 @@ impl KubernetesCenter {
             .with_leader_handle(leader_handle.clone());
         let expected_processor_kinds = controller.all_processor_kinds();
 
-        // 5. Spawn controller.run task
+        // 4. Spawn controller.run task
         let shutdown_signal = shutdown_handle.signal();
         let tx = event_tx.clone();
         let runtime_for_controller = self.runtime.clone();
@@ -485,7 +485,7 @@ impl KubernetesCenter {
             let _ = tx.send(LifecycleEvent::ControllerExit(reason)).await;
         });
 
-        // 6. Spawn caches-ready watcher (starts ACME on ready — leader-only mode)
+        // 5. Spawn caches-ready watcher (starts ACME on ready — leader-only mode)
         let no_sync_kinds = crate::config::get_no_sync_kinds();
         let caches_handle = Self::spawn_caches_ready_task(
             config_sync_server.clone(),
@@ -496,7 +496,7 @@ impl KubernetesCenter {
             Some(client.clone()), // start ACME when ready
         );
 
-        // 7. Spawn leadership-loss watcher (leader-only: only fires LeadershipLost)
+        // 6. Spawn leadership-loss watcher (leader-only: only fires LeadershipLost)
         let lh = leader_handle.clone();
         let tx = event_tx.clone();
         let leader_watcher_handle = tokio::spawn(async move {
@@ -506,7 +506,7 @@ impl KubernetesCenter {
             let _ = tx.send(LifecycleEvent::LeadershipLost).await;
         });
 
-        // 8. Spawn reload-signal watcher
+        // 7. Spawn reload-signal watcher
         let reload_watcher_handle = self.spawn_reload_watcher(event_tx);
 
         Ok((
@@ -825,7 +825,7 @@ impl KubernetesCenter {
             .with_leader_handle(leader_handle.clone());
         let expected_processor_kinds = controller.all_processor_kinds();
 
-        // 5. Spawn controller.run task
+        // 4. Spawn controller.run task
         let shutdown_signal = shutdown_handle.signal();
         let tx = event_tx.clone();
         let runtime_for_controller = self.runtime.clone();
@@ -845,7 +845,7 @@ impl KubernetesCenter {
             let _ = tx.send(LifecycleEvent::ControllerExit(reason)).await;
         });
 
-        // 6. Spawn caches-ready watcher (no ACME — started via start_leader_services)
+        // 5. Spawn caches-ready watcher (no ACME — started via start_leader_services)
         let no_sync_kinds = crate::config::get_no_sync_kinds();
         let caches_handle = Self::spawn_caches_ready_task(
             config_sync_server.clone(),
@@ -856,7 +856,7 @@ impl KubernetesCenter {
             None, // ACME starts via start_leader_services
         );
 
-        // 7. Spawn leadership watcher — bidirectional (Acquired + Lost)
+        // 6. Spawn leadership watcher — bidirectional (Acquired + Lost)
         // Poll at 100 ms so leader transitions are detected promptly.
         let lh = leader_handle.clone();
         let tx_leader = event_tx.clone();
@@ -882,7 +882,7 @@ impl KubernetesCenter {
             }
         });
 
-        // 8. Spawn reload-signal watcher
+        // 7. Spawn reload-signal watcher
         let reload_watcher_handle = self.spawn_reload_watcher(event_tx);
 
         Ok((

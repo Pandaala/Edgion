@@ -3,9 +3,8 @@
 // Verifies that multiple TLSRoutes with different SNI hostnames can be served
 // on a single Gateway listener (same port), using the global TlsRouteTable.
 //
-// This test validates the fix for the stale-Arc problem: because EdgionTls
-// now loads a fresh route table snapshot per-connection (via ArcSwap), route
-// updates are always visible regardless of timing.
+// Verifies that EdgionTls loads a fresh route table snapshot per connection
+// (via ArcSwap), so route updates are always visible regardless of timing.
 //
 // Required config files (in edgion-tests/integration/conf/TLSRoute/MultiSNI/):
 // - 01_Gateway.yaml              # Single TLS listener on port 31284

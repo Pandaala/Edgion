@@ -1,12 +1,12 @@
 //! Shared Prometheus recorder installation and `/metrics` handler.
 //!
-//! Gateway, Controller, and Center all need to install a process-wide
-//! `PrometheusRecorder` and render a `/metrics` page. They differ only in:
+//! Gateway and Controller install a process-wide `PrometheusRecorder` and
+//! render a `/metrics` page. They differ only in:
 //!
 //! - how they mount the handler (Gateway runs its own listener; Controller
-//!   and Center hang the route off their existing admin router);
+//!   hangs the route off its existing admin router);
 //! - whether they customize histogram buckets (Gateway tunes the
-//!   `gateway_request_duration_ms` histogram; Controller/Center have no
+//!   `gateway_request_duration_ms` histogram; Controller has no
 //!   histograms in scope).
 //!
 //! This module exposes the recorder install as an idempotent operation
@@ -30,8 +30,8 @@ static PROMETHEUS_HANDLE: OnceLock<PrometheusHandle> = OnceLock::new();
 /// Configuration for installing the global Prometheus recorder.
 ///
 /// `service` is used as a Prometheus `service=""` global label so metrics
-/// from Gateway/Controller/Center can be distinguished in a shared
-/// backend. `idle_timeout_secs = 0` disables cold-series eviction.
+/// from Gateway/Controller can be distinguished in a shared backend.
+/// `idle_timeout_secs = 0` disables cold-series eviction.
 ///
 /// `histogram_buckets` is an optional list of `(matcher, buckets)` pairs
 /// for tuning individual histograms (Gateway uses this for
@@ -110,14 +110,14 @@ pub async fn metrics_handler() -> Response {
 }
 
 /// Liveness probe paired with `/metrics` on Gateway's standalone metrics
-/// listener. Controller and Center reuse their existing `/health` route.
+/// listener. Controller reuses its existing `/health` route.
 pub async fn health_handler() -> &'static str {
     "OK"
 }
 
 /// Router that exposes `/metrics` and `/health` on a standalone listener.
-/// Used by Gateway; Controller and Center instead mount `metrics_handler`
-/// directly on their admin router.
+/// Used by Gateway; Controller instead mounts `metrics_handler` directly
+/// on its admin router.
 pub fn create_metrics_router() -> Router {
     Router::new()
         .route("/metrics", get(metrics_handler))

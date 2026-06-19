@@ -36,7 +36,6 @@ impl<T: ResourceMeta> CacheData<T> {
     /// Reset cache with a complete set of resources
     /// Uses resource.key_name() (namespace/name) as the key for each resource
     pub(crate) fn reset(&mut self, resources: Vec<T>, sync_version: u64) {
-        // Build new HashMap directly from resources, wrapping each in Arc
         self.data = resources
             .into_iter()
             .map(|resource| (resource.key_name(), Arc::new(resource)))
@@ -50,7 +49,6 @@ impl<T: ResourceMeta> CacheData<T> {
         }
     }
 
-    // Ready state methods
     pub(crate) fn is_ready(&self) -> bool {
         self.ready
     }
@@ -88,7 +86,6 @@ impl<T: ResourceMeta> CacheData<T> {
         self.data.len()
     }
 
-    // Sync version methods
     pub(crate) fn sync_version(&self) -> u64 {
         self.sync_version
     }
@@ -97,7 +94,6 @@ impl<T: ResourceMeta> CacheData<T> {
         self.sync_version = version;
     }
 
-    // Configuration handler methods
     pub(crate) fn set_conf_processor(
         &mut self,
         processor: Box<dyn ConfHandler<T> + Send + Sync>,
@@ -131,7 +127,6 @@ impl<T: ResourceMeta> CacheData<T> {
     {
         let mut cache = cache_data.write();
 
-        // Get handler reference at the beginning
         let handler = match cache.handler.as_mut() {
             Some(h) => h,
             None => {
@@ -143,7 +138,6 @@ impl<T: ResourceMeta> CacheData<T> {
             }
         };
 
-        // If no events, skip this iteration
         if handler.compressed_events.events.is_empty() {
             return true; // Continue
         }
@@ -158,15 +152,13 @@ impl<T: ResourceMeta> CacheData<T> {
 
         // The mutable borrow of handler ends here, allowing us to access cache.data below
 
-        // Classify events based on ResourceChange type and current state in cache.data
         let mut add = HashMap::new();
         let mut update = HashMap::new();
         let mut remove = HashSet::new();
 
         for (key, events) in event_infos {
             if let Some(resource) = cache.data.get(&key).cloned() {
-                // Resource exists in cache - check event history to determine if it's add or update
-                // Check if any event in the history is InitAdd or EventAdd
+                // Check event history: if any entry is InitAdd/EventAdd, classify as add; otherwise update.
                 let is_add = events
                     .iter()
                     .any(|e| matches!(e, ResourceChange::InitAdd | ResourceChange::EventAdd));
@@ -184,7 +176,6 @@ impl<T: ResourceMeta> CacheData<T> {
             }
         }
 
-        // Process events if there are any
         if !add.is_empty() || !update.is_empty() || !remove.is_empty() {
             // Info-level log keeps counts only; per-key detail stays at debug to avoid
             // log volume bloat during high-churn batches (see event_dispatch.rs:105 for
@@ -204,7 +195,6 @@ impl<T: ResourceMeta> CacheData<T> {
                 "Compressed event key details"
             );
 
-            // Process events with immutable borrow
             if let Some(handler) = cache.handler.as_ref() {
                 handler.processor.partial_update(add, update, remove);
             } else {
@@ -215,7 +205,6 @@ impl<T: ResourceMeta> CacheData<T> {
                 return false;
             }
 
-            // Clear events with mutable borrow
             if let Some(handler) = cache.handler.as_mut() {
                 handler.compressed_events.clear();
             }
@@ -224,7 +213,6 @@ impl<T: ResourceMeta> CacheData<T> {
         true // Continue
     }
 
-    // Compress events methods
     pub(crate) fn add_compress_event(&mut self, key: String, change: ResourceChange) {
         // Only add event if handler exists (which means processor is set)
         // Events added before processor is set will be lost, but that's acceptable
@@ -256,8 +244,7 @@ impl CompressEvent {
     }
 }
 
-/// Configuration handler data structure
-/// Contains handler state, processor, and compressed events
+/// Handler state: processor, compressed-event queue, and notify trigger.
 pub struct ConfHandlerData<T> {
     processor: Box<dyn ConfHandler<T> + Send + Sync>,
     compressed_events: CompressEvent,
@@ -279,8 +266,7 @@ mod tests {
     //! Unit tests for `CacheData<T>` data-structure operations and `CompressEvent`
     //! event accumulation. These tests intentionally avoid the
     //! `set_conf_processor` path (which spawns a tokio background task and is
-    //! deferred to integration coverage — see
-    //! `tasks/todo-test-cover/05-integration-gaps-controller.md` #3/#4).
+    //! deferred to integration coverage).
     use super::*;
     use edgion_common::conf_sync::traits::ResourceChange;
     use k8s_openapi::api::core::v1::ConfigMap;

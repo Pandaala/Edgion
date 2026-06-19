@@ -111,10 +111,8 @@ impl Default for VmLimits {
 
 // ==================== Error Policy ====================
 
-// `DslErrorPolicy` is serializable schema and now lives in the `types` leaf
-// layer. Re-export it here so existing `vm::DslErrorPolicy` references (config,
-// plugin, tests) keep resolving; `apply_error_policy` below maps its variants
-// onto runtime `PluginRunningResult`s.
+// Re-exported from `edgion_resources` so callers can use `vm::DslErrorPolicy`;
+// `apply_error_policy` below maps its variants onto `PluginRunningResult`.
 pub use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::DslErrorPolicy;
 
 // ==================== VM State ====================

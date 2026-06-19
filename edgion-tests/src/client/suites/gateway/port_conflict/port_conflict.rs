@@ -192,8 +192,8 @@ impl PortConflictTestSuite {
         )
     }
 
-    /// Test: Cross-Gateway same port is NOT a conflict
-    /// After fix: conflict detection is Gateway-internal only, so two different
+    /// Test: Cross-Gateway same port is NOT a conflict.
+    /// Conflict detection is Gateway-internal only, so two different
     /// Gateways using the same port should each be healthy (no Conflicted, no ListenersNotValid).
     fn test_cross_gateway_no_conflict() -> TestCase {
         TestCase::new(

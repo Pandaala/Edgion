@@ -1,6 +1,7 @@
-//! gRPC server for configuration synchronization (new version)
+//! gRPC server for configuration synchronization.
 //!
-//! This module provides the gRPC service implementation using ConfigSyncServer.
+//! Implements the ConfigSync service using `ConfigSyncServer` and a provider
+//! pattern so the gRPC layer always uses the latest server instance after reload.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,7 +58,6 @@ impl ConfigSyncGrpcServer {
             .ok_or_else(|| Status::unavailable("ConfigSyncServer not ready"))
     }
 
-    /// Convert to tonic service
     pub fn into_service(self) -> ConfigSyncService<ConfigSyncGrpcServer> {
         ConfigSyncService::new(self)
     }
@@ -88,7 +88,6 @@ impl ConfigSyncGrpcServer {
         Ok(builder)
     }
 
-    /// Start the gRPC server on the given address
     pub async fn serve(self, addr: std::net::SocketAddr, security: &ConfSyncSecurityConfig) -> anyhow::Result<()> {
         let mut builder = Self::build_server(security).await?;
         builder.add_service(self.into_service()).serve(addr).await?;
@@ -161,12 +160,10 @@ impl ConfigSync for ConfigSyncGrpcServer {
             }
         }
 
-        // Validate kind is not empty
         if req.kind.is_empty() {
             return Err(Status::invalid_argument("Resource kind is required"));
         }
 
-        // Call list on ConfigSyncServer with string kind directly
         let list_data = server
             .list(&req.kind)
             .map_err(|e| Status::internal(format!("Failed to list resources: {}", e)))?;
@@ -199,7 +196,6 @@ impl ConfigSync for ConfigSyncGrpcServer {
             }
         }
 
-        // Validate kind is not empty
         if req.kind.is_empty() {
             return Err(Status::invalid_argument("Resource kind is required"));
         }
@@ -218,7 +214,6 @@ impl ConfigSync for ConfigSyncGrpcServer {
             "Watch request received"
         );
 
-        // Call watch on ConfigSyncServer with string kind directly
         let receiver = server
             .watch(kind_name, req.client_id, req.client_name, req.from_version)
             .map_err(|e| {
@@ -304,7 +299,6 @@ impl ConfigSync for ConfigSyncGrpcServer {
                                     server_id: new_server_id,
                                 };
                                 let _ = tx.send(Ok(response)).await;
-                                // Record metric for client notification
                                 reload_metrics().client_notified();
                                 break;
                             }
@@ -338,7 +332,6 @@ impl ConfigSync for ConfigSyncGrpcServer {
         let req = request.into_inner();
         let registry = server.client_registry();
 
-        // Register this client
         registry.register(req.client_id.clone(), req.client_name.clone());
 
         let (tx, rx) = tokio::sync::mpsc::channel(8);
@@ -543,10 +536,6 @@ mod tests {
 
         // 6. Next poll should return None (stream closed)
         assert!(stream.next().await.is_none());
-
-        // 7. Verify the old client unregistration logic happened
-        // The count in old registry drops to 1, but let's just make sure unregister was called.
-        // Even if empty, registry.count() returns max(1), but since we know the exit happened, we are good.
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 //! EWMA (Exponentially Weighted Moving Average) load balancing
 //!
-//! The service-scoped EWMA latency tracking and selection live in
-//! `lb::runtime_state` and `lb::selection::ewma` respectively.
+//! Per-backend EWMA latency tracking lives on `EdgionBackend` (see
+//! `lb::edgion_backend`). Selection is performed by `lb::selection::p2c`.
 //! This module only owns the global alpha (smoothing factor) parameter.
 
 pub mod metrics;
@@ -165,11 +165,10 @@ mod tests {
 
     #[test]
     fn ewma_update_does_not_overflow_on_extreme_sample() {
-        // Regression for lb-F001: the blend is computed via u128 intermediates,
-        // so an extreme latency sample (or stored EWMA) cannot overflow the
-        // u64 multiply. `u64::MAX / 50` exceeds u64::MAX / 100, so the old
-        // u64-only `alpha * latency_us` / `(100 - alpha) * current` products
-        // would have overflowed (panic in debug builds).
+        // The blend is computed via u128 intermediates, so an extreme latency
+        // sample (or stored EWMA) cannot overflow the u64 intermediate multiply.
+        // `u64::MAX / 50` is used to verify a value that would overflow without
+        // the u128 widening.
         let _g = AlphaGuard::capture();
         let huge = u64::MAX / 50;
         let b = make_backend();

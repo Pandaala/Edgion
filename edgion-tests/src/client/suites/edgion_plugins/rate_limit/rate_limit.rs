@@ -1,24 +1,24 @@
 // RateLimit Plugin Test Suite
 //
-// ：
-// -
-// -  429
-// -
-// -  key
+// Covers:
+// - Allow requests within the configured rate limit
+// - Block requests exceeding the limit with 429
+// - Shared counter across routes and rule match-items
+// - Independent counters per key
 //
-// ：rate=5, interval=10s, key=Header(X-Rate-Key)
+// Default config: rate=5, interval=10s, key=Header(X-Rate-Key)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
-//  key
+// Monotonic counter for generating unique per-test rate-limit keys.
 static KEY_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub struct RateLimitTestSuite;
 
 impl RateLimitTestSuite {
-    ///  key，
+    /// Generate a unique rate-limit key to isolate each test case from others.
     fn generate_test_key() -> String {
         let count = KEY_COUNTER.fetch_add(1, Ordering::SeqCst);
         let now = std::time::SystemTime::now()
@@ -28,7 +28,7 @@ impl RateLimitTestSuite {
         format!("test-key-{}-{}", now, count)
     }
 
-    // ==================== 1.  ====================
+    // ==================== 1. Allow within limit ====================
     fn test_allows_within_limit() -> TestCase {
         TestCase::new("rate_limit_allows_within_limit", ":  (200)", |ctx: TestContext| {
             Box::pin(async move {
@@ -37,7 +37,7 @@ impl RateLimitTestSuite {
                 let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                 let test_key = Self::generate_test_key();
 
-                //  3 （ 5），
+                // Send 3 requests (limit is 5), all must pass.
                 for i in 0..3 {
                     let response = client
                         .get(&url)
@@ -70,7 +70,7 @@ impl RateLimitTestSuite {
         })
     }
 
-    // ==================== 2.  ====================
+    // ==================== 2. Block over limit ====================
     fn test_blocks_over_limit() -> TestCase {
         TestCase::new("rate_limit_blocks_over_limit", ":  429", |ctx: TestContext| {
             Box::pin(async move {
@@ -79,7 +79,7 @@ impl RateLimitTestSuite {
                 let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                 let test_key = Self::generate_test_key();
 
-                //  5
+                // Send 5 requests to fill the limit.
                 for i in 0..5 {
                     let response = client
                         .get(&url)
@@ -108,7 +108,7 @@ impl RateLimitTestSuite {
                     }
                 }
 
-                //  6
+                // The 6th request must be blocked.
                 let response = client
                     .get(&url)
                     .header("host", "rate-limit.example.com")
@@ -120,7 +120,7 @@ impl RateLimitTestSuite {
                     Ok(resp) => {
                         let status = resp.status().as_u16();
                         if status == 429 {
-                            //
+                            // Check the rejection body.
                             let body = resp.text().await.unwrap_or_default();
                             TestResult::passed_with_message(
                                 start.elapsed(),
@@ -138,7 +138,8 @@ impl RateLimitTestSuite {
 
     // ==================== 2b. Cross-route shared counter ====================
     //
-    // Shared-CMS regression pin for the types-decouple plugin side-table.
+    // Guards that the rate-limit counter is shared across routes referencing the
+    // same EdgionPlugins.
     //
     // Two HTTPRoutes (rate-limit.example.com and rate-limit-b.example.com) both
     // ExtensionRef the SAME EdgionPlugins `rate-limit-header-key` (rate=5/10s,
@@ -148,8 +149,8 @@ impl RateLimitTestSuite {
     //
     // Send 5 requests with the same key split across the two hostnames (3 + 2) —
     // all must be 200 (shared budget not yet spent). The 6th (either host) must
-    // be 429. Regression caught: if the plugin runtime were compiled per
-    // referencing route instead of shared per ns/name, each route would hold its
+    // be 429. Failure mode: if the plugin runtime were compiled per referencing
+    // route instead of shared per ns/name, each route would hold its
     // own CMS (3 and 2, both < 5), so the 6th request would still pass — this
     // test would then fail on the "expected 429" assertion, flagging the doubled
     // effective limit. This is the HTTP/side-table analog of
@@ -246,7 +247,7 @@ impl RateLimitTestSuite {
         )
     }
 
-    // ==================== 3.  ====================
+    // ==================== 3. Rate limit response headers ====================
     fn test_headers_present() -> TestCase {
         TestCase::new("rate_limit_headers_present", ":  X-RateLimit-* ", |ctx: TestContext| {
             Box::pin(async move {
@@ -267,7 +268,7 @@ impl RateLimitTestSuite {
                         let status = resp.status().as_u16();
                         let headers = resp.headers();
 
-                        //
+                        // Verify all three standard rate-limit response headers are present.
                         let limit = headers.get("X-RateLimit-Limit");
                         let remaining = headers.get("X-RateLimit-Remaining");
                         let reset = headers.get("X-RateLimit-Reset");
@@ -308,7 +309,7 @@ impl RateLimitTestSuite {
         })
     }
 
-    // ==================== 4.  key  ====================
+    // ==================== 4. Independent counters per key ====================
     fn test_different_keys_independent() -> TestCase {
         TestCase::new(
             "rate_limit_different_keys_independent",
@@ -322,7 +323,7 @@ impl RateLimitTestSuite {
                     let key_a = Self::generate_test_key();
                     let key_b = Self::generate_test_key();
 
-                    //  key_a  (5 )
+                    // Exhaust key_a (5 requests = limit).
                     for i in 0..5 {
                         let response = client
                             .get(&url)
@@ -339,7 +340,7 @@ impl RateLimitTestSuite {
                         }
                     }
 
-                    //  key_a
+                    // Verify key_a is now blocked.
                     let resp_a = client
                         .get(&url)
                         .header("host", "rate-limit.example.com")
@@ -361,7 +362,7 @@ impl RateLimitTestSuite {
                         }
                     }
 
-                    // key_b （）
+                    // key_b has its own independent counter and must still pass.
                     let resp_b = client
                         .get(&url)
                         .header("host", "rate-limit.example.com")
@@ -391,7 +392,7 @@ impl RateLimitTestSuite {
         )
     }
 
-    // ==================== 5.  key  ====================
+    // ==================== 5. Missing key falls through to Allow ====================
     fn test_missing_key_allows() -> TestCase {
         TestCase::new(
             "rate_limit_missing_key_allows",
@@ -402,7 +403,7 @@ impl RateLimitTestSuite {
                     let client = &ctx.http_client;
                     let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
 
-                    //  X-Rate-Key header
+                    // Send request without X-Rate-Key header.
                     let response = client.get(&url).header("host", "rate-limit.example.com").send().await;
 
                     match response {
@@ -427,7 +428,7 @@ impl RateLimitTestSuite {
         )
     }
 
-    // ==================== 6. 429  Retry-After  ====================
+    // ==================== 6. 429 response includes Retry-After ====================
     fn test_retry_after_header() -> TestCase {
         TestCase::new(
             "rate_limit_retry_after_header",
@@ -439,7 +440,7 @@ impl RateLimitTestSuite {
                     let url = format!("http://{}:31180/test/rate-limit/api", ctx.target_host);
                     let test_key = Self::generate_test_key();
 
-                    //
+                    // Fill the bucket.
                     for _ in 0..5 {
                         let _ = client
                             .get(&url)
@@ -449,7 +450,7 @@ impl RateLimitTestSuite {
                             .await;
                     }
 
-                    //  429
+                    // The next request must be blocked with 429.
                     let response = client
                         .get(&url)
                         .header("host", "rate-limit.example.com")
@@ -677,30 +678,27 @@ impl TestSuite for RateLimitTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
-            //
+            // Allow within limit
             Self::test_allows_within_limit(),
-            // Per-request reuse guard: 5x 200 then the 6th -> 429 on the SAME key.
-            // Re-enabled (was disabled for an early-response flakiness concern that
-            // the active rate_limit_redis 429 tests prove is not real). Each case
-            // uses a unique key via generate_test_key(), so no ~30s window wait is
-            // needed and cases never interfere. If the runtime were rebuilt per
-            // request, every request would get a fresh CMS and never hit 429.
+            // Block over limit: 5x 200 then the 6th -> 429 on the SAME key.
+            // Each case uses a unique key via generate_test_key() so tests
+            // never interfere. If the runtime were rebuilt per request, every
+            // request would get a fresh CMS and never hit 429.
             Self::test_blocks_over_limit(),
             // Cross-route reuse guard: the same key shares one CMS budget across
             // two routes that ExtensionRef the same EdgionPlugins.
             Self::test_shared_counter_across_routes(),
-            // Across-match-items guard (http-01): a rule with >= 2 match-items builds
-            // >= 2 units that must all execute the rule-level RateLimit, so the budget
-            // stays global per rule, not per match-item (match_unit.rs fan-out path).
+            // Across-match-items guard: a rule with >= 2 match-items must share one
+            // budget, so the limit stays global per rule, not per match-item.
             Self::test_shared_limit_across_match_items(),
-            // NOTE: test_headers_present() stays disabled — separate response-header
-            // surfacing issue, unrelated to the runtime-reuse invariant.
+            // test_headers_present is disabled: response-header surfacing is a
+            // separate concern, not related to the rate-limit enforcement invariant.
             // Self::test_headers_present(),
             Self::test_retry_after_header(),
-            // key
+            // Independent per-key counters
             Self::test_different_keys_independent(),
             Self::test_missing_key_allows(),
-            // access log regression
+            // Access log: stage_logs includes RateLimit entry
             Self::test_stage_logs_contain_rate_limit(),
         ]
     }

@@ -14,11 +14,6 @@
 //!                      default            default         mapping.default
 //! ```
 //!
-//! ## Features:
-//! - Phase 1: from + name basic setting, default, template support
-//! - Phase 2: extract regex extraction
-//! - Phase 3: transform.replace, transform.case, mapping
-
 use async_trait::async_trait;
 use regex::Regex;
 
@@ -106,7 +101,6 @@ impl CtxSet {
     ) -> Option<String> {
         // Priority: value > template > from
         let mut value = if let Some(ref static_value) = rule.value {
-            // Static value has highest priority
             static_value.clone()
         } else if let Some(compiled) = self.config.get_compiled_template(rule_idx) {
             self.evaluate_template(compiled, session)
@@ -172,7 +166,6 @@ impl CtxSet {
         compiled_replace: Option<&Regex>,
         plugin_log: &mut PluginLog,
     ) -> Option<String> {
-        // Get the transform type from the config struct
         let transform_type = transform.get_transform_type()?;
 
         match transform_type {

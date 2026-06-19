@@ -455,8 +455,8 @@ pub fn clear_service_backend_refs(
 ///
 /// Uses the raw store (`get_raw_any`) so that Gateways not belonging to
 /// this controller's `gatewayClassName` (which are excluded from `ServerCache`
-/// by the handler filter) are still found. This fixes incorrect Route status
-/// calculation when a Route's parentRef points to a foreign Gateway.
+/// by the handler filter) are still found. Without this, Routes with a
+/// parentRef to a foreign Gateway would receive incorrect status.
 pub fn lookup_gateway(namespace: &str, name: &str, runtime: &ControllerRuntime) -> Option<Arc<Gateway>> {
     let processor = runtime.processor_registry.get("Gateway")?;
     let key = format!("{}/{}", namespace, name);

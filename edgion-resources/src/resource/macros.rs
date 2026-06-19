@@ -28,8 +28,8 @@ pub const CAPACITY_LARGE: u32 = 1000;
 /// define_resources! {
 ///     GatewayClass {
 ///         enum_value: 1,
-///         kind_name: "GatewayClass",
-///         kind_aliases: ["gatewayclass"],
+///         kind_name: "gatewayclass",
+///         kind_aliases: [],
 ///         cache_field: gateway_classes,
 ///         capacity_field: gateway_classes_capacity,
 ///         default_capacity: small,
@@ -189,6 +189,4 @@ macro_rules! define_resources {
 }
 
 #[cfg(test)]
-mod tests {
-    // Tests will be added after resource_defs.rs is created
-}
+mod tests {}

@@ -1,5 +1,6 @@
-//! Hidden logic structures for internal processing
-//! These structures are not serialized, only used for runtime analysis
+//! Runtime-only pre-parsed structures for internal processing.
+//! The enclosing route fields that hold these values carry `#[serde(skip)]`,
+//! so they never appear in the conf_sync payload.
 
 use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
 use crate::path_normalization::normalize_config_path;
@@ -95,7 +96,7 @@ pub fn is_lb_policy_kind(kind: &str) -> bool {
     matches!(kind, "LBPolicyConsistentHash" | "LBPolicyLeastConn" | "LBPolicyEwma")
 }
 
-/// Extension trait for HTTPRoute to parse hidden logic
+/// Pre-parse methods for HTTPRoute.
 impl HTTPRoute {
     /// Parse all extension_ref in backend_refs and populate extension_info fields.
     ///
@@ -182,7 +183,7 @@ impl HTTPRoute {
             };
 
             for backend_ref in backend_refs.iter_mut() {
-                // Find ExtensionRef filter in backend_ref.plugins
+                // Find ExtensionRef filter in backend_ref.filters
                 let extension_info = backend_ref
                     .filters
                     .as_ref()

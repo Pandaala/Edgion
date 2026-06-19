@@ -29,7 +29,7 @@ pub mod global_def {
     pub use super::constants::app::*;
 }
 
-// Resource system core module (consolidated)
+// Resource system core module
 #[macro_use]
 pub mod resource;
 
@@ -75,12 +75,7 @@ pub mod resource_meta_traits {
 }
 
 pub mod prelude_resources {
-    // Re-export all resource types
-    pub use super::resources::*;
-
-    // Re-export ResourceKind enum
     pub use super::resource::kind::ResourceKind;
-
-    // Re-export ResourceMeta trait
     pub use super::resource::meta::ResourceMeta;
+    pub use super::resources::*;
 }

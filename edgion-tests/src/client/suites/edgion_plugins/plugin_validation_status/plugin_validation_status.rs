@@ -229,9 +229,8 @@ impl PluginValidationStatusTestSuite {
     // Scenario 7: Cors with allowCredentials=true + catch-all allowOriginsByRegex
     //             → Accepted=False/Invalid
     //
-    // Regression for fr-auth2-01: a broad regex (".*") must not bypass the
-    // allow_credentials wildcard guard. The runtime error message uses
-    // snake_case "allow_origins_by_regex".
+    // A broad regex (".*") must not bypass the allow_credentials wildcard guard.
+    // The runtime error message uses snake_case "allow_origins_by_regex".
     // =========================================================================
 
     fn cors_regex_invalid() -> TestCase {

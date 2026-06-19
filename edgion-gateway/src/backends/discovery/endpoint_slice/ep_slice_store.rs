@@ -16,9 +16,8 @@ pub fn get_roundrobin_store() -> Arc<EpSliceStore<RoundRobin>> {
 
 /// Data-layer store for EndpointSlice resources.
 ///
-/// The LB cache (`service_lbs` ArcSwap) has been removed in Stage 5. Selection
-/// now goes through `compiled_selector::ServiceSelectorCell`. The data layer
-/// (`ep_slices` + `service_to_slices`) is the single source of truth;
+/// Selection goes through `compiled_selector::ServiceSelectorCell`. The data
+/// layer (`ep_slices` + `service_to_slices`) is the single source of truth;
 /// `get_backends_for_service` reads from it directly.
 pub struct EpSliceStore<S>
 where
@@ -65,10 +64,8 @@ where
 
     /// Get slices for a service from data layer.
     ///
-    /// Lock-free read path: writers (`replace_data_only`, `update_data_only`)
-    /// hold both `service_to_slices` and `ep_slices` write guards
-    /// simultaneously, so the two RwLock acquisitions below observe a
-    /// consistent snapshot without needing `creation_lock`.
+    /// No `creation_lock` needed: writers hold both write guards simultaneously,
+    /// so the two RwLock acquisitions here observe a consistent snapshot.
     pub fn get_slices_for_service(&self, service_key: &str) -> Option<Vec<EndpointSlice>> {
         let service_to_slices = self.service_to_slices.read();
         let ep_slices = self.ep_slices.read();
@@ -103,8 +100,8 @@ where
             new_service_to_slices.entry(service_key).or_default().insert(ep_key);
         }
 
-        // Hold both write guards simultaneously so readers (which no longer
-        // take `creation_lock`) cannot observe a half-applied snapshot.
+        // Hold both write guards simultaneously so readers cannot observe a
+        // half-applied snapshot.
         let mut service_to_slices_guard = self.service_to_slices.write();
         let mut ep_slices_guard = self.ep_slices.write();
         *service_to_slices_guard = new_service_to_slices;
@@ -190,14 +187,10 @@ where
             return Vec::new();
         }
 
-        // Fail closed when no EndpointSlice declares a usable port. Guessing a
-        // default (the old `unwrap_or(8080)`) silently misdirects traffic to a
-        // wrong port that often still accepts the connection, hiding the
-        // misconfiguration. Returning no backends instead surfaces an error
-        // (BackendEndpointSliceNotFoundByRoundRobinDefault → HTTP 500) that the
-        // access log records, so the operator sees the failure rather than
-        // wrong-port traffic. No tracing here: this runs on the data-plane
-        // request path via selector hydration (Iron rule 3).
+        // Fail closed when no EndpointSlice declares a usable port. Returning no
+        // backends surfaces a BackendEndpointSliceNotFoundByRoundRobinDefault error
+        // (HTTP 500) in the access log rather than silently misdirecting to a
+        // guessed port. No tracing: data-plane request path (Iron rule 3).
         let Some(port) = slices
             .iter()
             .find_map(|s| s.ports.as_ref()?.first()?.port.map(|p| p as u16))

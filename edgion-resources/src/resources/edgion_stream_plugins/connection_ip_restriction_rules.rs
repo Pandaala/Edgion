@@ -15,10 +15,11 @@ use crate::resources::edgion_plugins::{AccessDecision, DefaultAction, PluginVali
 
 /// Legacy HTTP-layer field names that must be flagged when found on L4 configs.
 ///
-/// These belonged to the pre-`ec4e000` HTTP `IpRestrictionConfig` schema. Detecting them
-/// at preparse-time lets the Controller surface a `LegacySchemaDeprecated` status condition
-/// instead of failing the whole CR deserialization at the watcher level (which would silently
-/// bypass the L4 enforcement and give operators no migration hint).
+/// These belong to the old HTTP `IpRestrictionConfig` schema and have no meaning in L4
+/// configs. Detecting them at preparse-time lets the Controller surface a
+/// `LegacySchemaDeprecated` status condition instead of failing CR deserialization at the
+/// watcher level (which would silently bypass L4 enforcement and give operators no
+/// migration hint).
 const LEGACY_HTTP_FIELDS: &[&str] = &["ipSource", "message", "status"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -64,8 +65,8 @@ impl Default for ConnectionIpRestrictionRules {
 
 impl ConnectionIpRestrictionRules {
     /// Return any legacy HTTP-layer field names (`ipSource`/`message`/`status`) captured
-    /// during deserialization. Non-empty result means the YAML predates the `ec4e000`
-    /// schema reshape and the operator must migrate.
+    /// during deserialization. A non-empty result means the YAML uses the old HTTP schema
+    /// and the operator must migrate.
     pub fn legacy_http_fields(&self) -> Vec<&'static str> {
         LEGACY_HTTP_FIELDS
             .iter()
@@ -149,8 +150,7 @@ mod tests {
         }
     }
 
-    /// Convenience: `check_ip` returns an `AccessDecision`; the legacy
-    /// tests were boolean. This helper preserves their semantic intent.
+    /// Maps an `AccessDecision` to a boolean allow/deny for test assertions.
     fn is_allowed(decision: AccessDecision) -> bool {
         matches!(
             decision,
@@ -195,9 +195,9 @@ mod tests {
 
     #[test]
     fn legacy_http_fields_captured_for_preparse() {
-        // Old schema (pre-ec4e000) HTTP-layer fields must round-trip into `unknown_fields`
-        // so the Controller's preparse step can emit a `LegacySchemaDeprecated` condition
-        // rather than failing the whole CR decode upstream at the watcher.
+        // Old HTTP-schema fields must round-trip into `unknown_fields` so the Controller's
+        // preparse step can emit a `LegacySchemaDeprecated` condition rather than failing
+        // CR deserialization at the watcher level.
         let json = r#"{
             "allow": [{"name":"office","cidrs":["192.168.1.0/24"]}],
             "ipSource": "RemoteAddr",
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn non_legacy_unknown_field_does_not_trigger_legacy_detection() {
         // A stray (non-legacy) field must not masquerade as a legacy-schema violation;
-        // preparse only cares about the three HTTP fields from the pre-ec4e000 schema.
+        // preparse only cares about the three HTTP fields from the old schema.
         let json = r#"{
             "allow": [{"name":"office","cidrs":["192.168.1.0/24"]}],
             "typoedField": "oops"

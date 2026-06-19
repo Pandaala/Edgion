@@ -77,10 +77,6 @@ use std::collections::HashMap;
 
 use crate::common::KeyGet;
 
-// ============================================================================
-// CtxSet Configuration
-// ============================================================================
-
 /// CtxSet plugin configuration
 ///
 /// Sets context variables that can be accessed by downstream plugins.
@@ -143,10 +139,6 @@ pub struct CtxVarRule {
     pub default: Option<String>,
 }
 
-// ============================================================================
-// Extraction Configuration
-// ============================================================================
-
 /// Configuration for regex extraction
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -163,10 +155,6 @@ pub struct ExtractConfig {
 fn default_group() -> usize {
     1
 }
-
-// ============================================================================
-// Transformation Configuration
-// ============================================================================
 
 /// Value transformation configuration
 ///
@@ -296,10 +284,6 @@ pub enum CaseType {
     Lower,
 }
 
-// ============================================================================
-// Mapping Configuration
-// ============================================================================
-
 /// Value mapping configuration
 ///
 /// Maps input values to output values with optional default fallback.
@@ -314,10 +298,6 @@ pub struct MappingConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
 }
-
-// ============================================================================
-// Pre-compiled Template
-// ============================================================================
 
 /// Known template variable types
 #[derive(Debug, Clone)]
@@ -442,17 +422,11 @@ impl CompiledTemplate {
     }
 }
 
-// ============================================================================
-// Validation
-// ============================================================================
-
 impl CtxSetConfig {
-    /// Check all fields for validity without mutating self or compiling patterns.
+    /// Check all fields for validity without mutating self.
     ///
-    /// This mirrors every error branch in `validate()` but skips all side effects
-    /// (compiled_patterns inserts, etc.).  Used by `PluginValidation::validation_error`
-    /// so that controller pre-parse can detect malformed configs without calling
-    /// `validate()` first.
+    /// Mirrors every error branch in `validate()` without side effects.
+    /// Called by `PluginValidation::validation_error` for controller pre-parse.
     fn check_fields(&self) -> Option<String> {
         if self.vars.is_empty() {
             return Some("vars list is empty".to_string());
@@ -601,10 +575,6 @@ impl CtxSetConfig {
         self.compiled_templates.get(&idx)
     }
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 use crate::resources::edgion_plugins::PluginValidation;
 

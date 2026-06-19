@@ -72,17 +72,13 @@ pub struct CorsConfig {
     pub compiled_timing_regex: Option<Regex>,
 }
 
-// Default functions for serde
 // Security-first defaults: restrictive by default, explicit allow required
 fn default_allow_origins() -> String {
-    // Empty string means no origins allowed - user must explicitly configure
-    // This prevents accidental exposure of APIs to all origins
     "".to_string()
 }
 
 fn default_allow_methods() -> String {
-    // Only safe methods that don't modify data
-    // POST is excluded as it can trigger state changes
+    // Safe read-only methods; POST excluded as it can trigger state changes.
     "GET,HEAD,OPTIONS".to_string()
 }
 
@@ -94,9 +90,8 @@ fn default_allow_headers() -> String {
 }
 
 fn default_expose_headers() -> String {
-    // Empty by default - only expose headers explicitly needed
-    // Note: Safe response headers are always accessible:
-    // Cache-Control, Content-Language, Content-Type, Expires, Last-Modified, Pragma
+    // Browsers can always access CORS-safe response headers without explicit exposure
+    // (Cache-Control, Content-Language, Content-Type, Expires, Last-Modified, Pragma).
     "".to_string()
 }
 

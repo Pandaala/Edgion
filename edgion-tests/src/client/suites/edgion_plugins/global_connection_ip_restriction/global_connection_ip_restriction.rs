@@ -67,7 +67,7 @@ impl GlobalConnectionIpRestrictionTestSuite {
                         match req.send().await {
                             Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
                                 Ok(body) if body["success"].as_bool().unwrap_or(false) => {
-                                    // After S1/S4 rename: spec field is `data`, not `metadata`.
+                                    // spec field is `data` (not `metadata`).
                                     let data_type = body["data"]["spec"]["data"]["type"].as_str().unwrap_or("");
                                     if data_type == "Selector" {
                                         found = true;

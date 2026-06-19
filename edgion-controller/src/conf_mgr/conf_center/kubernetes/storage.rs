@@ -360,7 +360,6 @@ impl CenterApi for KubernetesStorage {
     ) -> Result<(), ConfWriterError> {
         let api = self.dynamic_api(kind, namespace).await?;
 
-        // Parse content as DynamicObject
         let obj = self.parse_dynamic_object(kind, &content).await?;
 
         // Use server-side apply
@@ -390,7 +389,6 @@ impl CenterApi for KubernetesStorage {
     ) -> Result<(), ConfWriterError> {
         let api = self.dynamic_api(kind, namespace).await?;
 
-        // Parse content as DynamicObject
         let obj = self.parse_dynamic_object(kind, &content).await?;
 
         // Use K8s API create (fails if resource already exists with 409)
@@ -419,7 +417,6 @@ impl CenterApi for KubernetesStorage {
     ) -> Result<(), ConfWriterError> {
         let api = self.dynamic_api(kind, namespace).await?;
 
-        // Parse content as DynamicObject
         let mut obj = self.parse_dynamic_object(kind, &content).await?;
 
         // Get current resource to obtain resourceVersion (required for replace)
@@ -557,12 +554,10 @@ impl CenterApi for KubernetesStorage {
     }
 
     async fn get_list_by_kind(&self, kind: &str, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {
-        // Use dynamic_api_all_namespaces to list across ALL namespaces
         let api = self.dynamic_api_all_namespaces(kind).await?;
 
         let mut lp = ListParams::default();
 
-        // Apply pagination options if provided
         if let Some(ref options) = opts {
             if options.limit > 0 {
                 lp = lp.limit(options.limit);
@@ -620,7 +615,6 @@ impl CenterApi for KubernetesStorage {
 
         let mut lp = ListParams::default();
 
-        // Apply pagination options if provided
         if let Some(ref options) = opts {
             if options.limit > 0 {
                 lp = lp.limit(options.limit);

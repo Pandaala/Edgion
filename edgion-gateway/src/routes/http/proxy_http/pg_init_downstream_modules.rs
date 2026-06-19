@@ -20,7 +20,6 @@ pub fn init_downstream_modules(edgion_http: &EdgionHttpProxy, modules: &mut Http
     }
 
     // Only add GrpcWeb module if HTTP/2 is enabled
-    // gRPC-Web requires HTTP/2 support
     if edgion_http.enable_http2 {
         modules.add_module(Box::new(GrpcWeb));
     }

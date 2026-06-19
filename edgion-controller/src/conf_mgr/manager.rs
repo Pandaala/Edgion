@@ -106,10 +106,9 @@ impl ConfMgr {
 
     // ==================== Lifecycle Delegation ====================
 
-    /// Start the configuration center with an external shutdown handle
+    /// Start the configuration center with an external shutdown handle.
     ///
-    /// This is the preferred method when the caller manages signal handling.
-    /// The shutdown handle will be used to coordinate graceful shutdown.
+    /// Preferred when the caller manages signal handling.
     pub async fn start_with_shutdown(&self, shutdown_handle: ShutdownHandle) -> Result<()> {
         self.conf_center.start(shutdown_handle).await
     }
@@ -168,9 +167,7 @@ impl ConfMgr {
 // CenterApi implementation - delegates to `conf_center` via macro
 impl_center_api_delegate!(ConfMgr, conf_center);
 
-// ============================================================================
-// CenterLifeCycle implementation - delegates to conf_center
-// ============================================================================
+// CenterLifeCycle implementation — delegates to conf_center
 
 #[async_trait]
 impl CenterLifeCycle for ConfMgr {

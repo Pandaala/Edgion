@@ -102,25 +102,11 @@ impl DslPlugin {
     /// literal; ambiguous layouts are skipped (never rejected). See the inline
     /// notes for the layout guarantee and the remaining false-negative case.
     fn check_redis_link_names(config: &DslConfig, script: &CompiledScript) -> Result<(), String> {
-        // Compile-time link-name check (best-effort, fail-open):
-        // Scan bytecode for redis.* CallBuiltin at index i. The first argument
-        // (link name) is pushed deepest, at index i-argc — but only when every
-        // argument is a single-instruction push, so that the argc opcodes
-        // preceding the call map 1:1 to the argc arguments.
-        //
-        // Before trusting that guess we verify the layout is unambiguous: all
-        // argc opcodes in `[i-argc, i)` must be zero-input single pushes. This
-        // is provably equivalent to "every argument is a single instruction"
-        // (a stack-consuming opcode in the window means some argument spanned
-        // multiple instructions and i-argc no longer points at the link name).
-        // When the layout is ambiguous we skip the check (fail-open) rather than
-        // reject: a positional miss must never fail-close a valid config — the
-        // runtime ok=false path is the backstop for an undeclared link.
-        //
-        // Net effect: false negatives are possible (a typo'd link behind a
-        // multi-instruction sibling argument is caught only at runtime), but a
-        // valid config is never rejected. The check still catches the common
-        // case of all-literal redis arguments and typos.
+        // Scan for redis.* CallBuiltin at index i. The first argument (link name)
+        // lies at i-argc only when every preceding argument is a single-instruction
+        // push — i.e. all argc opcodes in [i-argc, i) are zero-input single pushes.
+        // A stack-consuming opcode in that window means some argument spanned
+        // multiple instructions, so i-argc is unreliable and the check is skipped.
         use super::lang::bytecode::Constant;
         let valid_names: std::collections::HashSet<&str> =
             config.linksys_refs.iter().map(|r| r.name.as_str()).collect();
@@ -343,11 +329,9 @@ mod tests {
     fn validate_config_accepts_redis_with_multi_instruction_sibling_arg() {
         use super::super::config::DslConfig;
         use edgion_resources::resources::edgion_plugins::plugin_configs::LinkSysRef;
-        // Regression for F-015: a non-literal (multi-instruction) argument after
-        // the link name used to shift the i-argc positional guess onto an
-        // unrelated LoadConst ("X-Key"), wrongly rejecting this valid config and
-        // fail-closing the whole route with a 500. The link name "cache" is
-        // correctly declared; validation must pass.
+        // A non-literal (multi-instruction) argument after the link name makes the
+        // i-argc positional guess unreliable; the link-name check must be skipped
+        // (not rejected). The link "cache" is correctly declared; validation must pass.
         let config = DslConfig {
             name: "valid-link-dynamic-key".to_string(),
             source: Some("let r = redis.get(\"cache\", req.header(\"X-Key\"))".to_string()),

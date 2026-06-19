@@ -37,8 +37,7 @@ pub trait CacheEventDispatch<T> {
 ///
 /// This trait must be Send + Sync to allow safe sharing across threads.
 pub trait ConfHandler<T>: Send + Sync {
-    /// Full set with a complete set of resources
-    /// This is typically called during initial sync or when a complete refresh is needed
+    /// Full resource set, called during initial sync or complete refresh.
     fn full_set(&self, data: &HashMap<String, Arc<T>>);
 
     /// Handle partial configuration updates (add/update/remove)

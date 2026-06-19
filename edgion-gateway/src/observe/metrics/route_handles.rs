@@ -103,10 +103,8 @@ pub struct RouteMetricHandles {
 }
 
 impl RouteMetricHandles {
-    /// Empty handles — used as a stub during incremental rollout; the
-    /// hot path's gateway lookup misses and the call falls back to the
-    /// dynamic path. Remove this constructor (or keep it gated behind
-    /// `#[cfg(test)]`) once Task 8 lands real `attached_gateways`.
+    /// Empty handles stub: the hot path's gateway lookup misses and
+    /// falls back to the dynamic metrics path.
     pub fn empty() -> Self {
         Self { matrices: Vec::new() }
     }

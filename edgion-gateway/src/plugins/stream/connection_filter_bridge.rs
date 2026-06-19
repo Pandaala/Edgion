@@ -47,12 +47,7 @@ impl std::fmt::Debug for StreamPluginConnectionFilter {
 }
 
 impl StreamPluginConnectionFilter {
-    /// Create a new connection filter bridge.
-    ///
-    /// # Parameters
-    /// - `store`: Reference to the global StreamPluginStore
-    /// - `store_key`: Resource key in "namespace/name" format
-    /// - `listener_port`: The listening port for StreamContext
+    /// Create a connection filter bridge for the given store key and listener port.
     pub fn new(store: Arc<StreamPluginStore>, store_key: String, listener_port: u16) -> Self {
         Self {
             store,

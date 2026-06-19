@@ -222,25 +222,23 @@ mod tests {
 
     #[test]
     fn test_resource_kind_from_name() {
-        // Test exact match
         assert_eq!(
             resource_kind_from_name("gatewayclass"),
             Some(ResourceKind::GatewayClass)
         );
 
-        // Test alias
+        // alias lookup
         assert_eq!(
             resource_kind_from_name("edgiongwconfig"),
             Some(ResourceKind::EdgionGatewayConfig)
         );
 
-        // Test case insensitivity
+        // case-insensitive
         assert_eq!(
             resource_kind_from_name("GatewayClass"),
             Some(ResourceKind::GatewayClass)
         );
 
-        // Test unknown
         assert_eq!(resource_kind_from_name("unknown"), None);
     }
 

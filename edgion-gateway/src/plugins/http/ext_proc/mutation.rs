@@ -394,7 +394,7 @@ mod tests {
 
         let map = collect_response_headers(&session);
         assert_eq!(values_for(&map, ":status"), vec!["200"]);
-        // Multi-value Set-Cookie is preserved (the bug fixed in review).
+        // Multi-value Set-Cookie is preserved.
         assert_eq!(values_for(&map, "set-cookie"), vec!["a=1", "b=2"]);
     }
 

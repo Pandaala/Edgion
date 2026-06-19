@@ -128,9 +128,7 @@ impl EtcdConfig {
     /// `(EtcdClientConfig { auth: None, .. }, CredentialState::NotRequired)`.
     pub fn to_client_config(&self) -> anyhow::Result<(EtcdClientConfig, CredentialState<BasicAuthMaterial>)> {
         // Auth: wire YAML username/password into CredentialState::Resolved so
-        // `build_connect_options` picks it up — previously this path hard-coded
-        // `auth = None` which silently dropped the YAML credentials (a
-        // silent-fallback regression of the credential-state contract).
+        // `build_connect_options` picks it up.
         let (auth, auth_state): (Option<EtcdAuth>, CredentialState<BasicAuthMaterial>) = match &self.auth {
             Some(cfg) => (
                 Some(EtcdAuth {
@@ -324,8 +322,7 @@ auth:
 
     #[test]
     fn test_to_client_config_with_auth_wires_yaml_credentials_into_state() {
-        // Regression guard (B1): YAML `conf_center.auth` must flow through
-        // to `CredentialState::Resolved` — previously it was silently dropped.
+        // YAML `conf_center.auth` must flow through to `CredentialState::Resolved`.
         let config = EtcdConfig {
             endpoints: vec!["http://127.0.0.1:2379".to_string()],
             key_prefix: "/edgion".to_string(),

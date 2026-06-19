@@ -30,20 +30,20 @@
 //! ```yaml
 //! conditions:
 //!   skip:
-//!     - keyExist:
-//!         key:
-//!           type: header
-//!           name: "X-Internal-Request"
-//!     - exclude:
-//!         key:
-//!           type: path
-//!         values: ["/health", "/ready"]
+//!     - type: keyExist
+//!       key:
+//!         type: header
+//!         name: "X-Internal-Request"
+//!     - type: exclude
+//!       key:
+//!         type: path
+//!       values: ["/health", "/ready"]
 //!   run:
-//!     - timeRange:
-//!         after: "2024-01-01T00:00:00Z"
-//!         before: "2025-12-31T23:59:59Z"
-//!     - probability:
-//!         ratio: 0.1
+//!     - type: timeRange
+//!       after: "2024-01-01T00:00:00Z"
+//!       before: "2025-12-31T23:59:59Z"
+//!     - type: probability
+//!       ratio: 0.1
 //! ```
 
 use crate::common::KeyGet;
@@ -66,12 +66,10 @@ pub const VALUES_HASHSET_THRESHOLD: usize = 16;
 #[serde(rename_all = "camelCase")]
 pub struct PluginConditions {
     /// Conditions that will cause the plugin to be skipped (OR logic)
-    /// If any condition in this list is satisfied, the plugin will not run
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skip: Option<Vec<Condition>>,
 
-    /// Conditions that must be satisfied for the plugin to run (AND logic)
-    /// All conditions in this list must be satisfied for the plugin to execute
+    /// Conditions that must ALL be satisfied for the plugin to run (AND logic)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run: Option<Vec<Condition>>,
 }

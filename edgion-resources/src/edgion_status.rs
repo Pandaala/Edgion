@@ -169,9 +169,8 @@ pub enum EdgionStatus {
     PluginResponseReplaced = 999_03,
 
     /// A response-phase plugin returned `ErrResponse` on a gRPC route. gRPC
-    /// response/body substitution is not supported this iteration: the response
-    /// is terminated by status only and the body is not replaced. Surfaces the
-    /// previously-silent termination. See `tasks/todo/filter-04-response-local-reply.md`.
+    /// response/body substitution is not yet supported: the response is terminated
+    /// by status only and the body is not replaced. See `tasks/todo/filter-04-response-local-reply.md`.
     PluginResponseReplaceUnsupportedGrpc = 999_04,
 }
 

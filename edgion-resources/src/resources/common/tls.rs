@@ -1,7 +1,4 @@
-//! Common TLS configuration types for `LinkSys` resources.
-//!
-//! Unifies what used to be four near-identical copies (`RedisTls` / `EtcdTls` /
-//! `EsTls` / `WebhookTls`) into a single pair:
+//! Common TLS configuration types for `LinkSys` resources:
 //!
 //! - [`TlsConfig`] — on/off switch, certs sub-object, `insecureSkipVerify`.
 //! - [`TlsCerts`] — CA + client cert + `secretRef` (+ resolved `Secret`).

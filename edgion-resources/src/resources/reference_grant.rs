@@ -22,7 +22,9 @@ use super::common::api_groups_match;
 /// Each ReferenceGrant can be used to represent a unique trust relationship.
 /// Additional Reference Grants can be used to add to the set of trusted sources
 /// of inbound references for the namespace they are defined within.
-/// ReferenceGrant (v1 — canonical internal representation)
+///
+/// v1 — canonical internal representation. The controller converts
+/// `ReferenceGrantBeta` (v1beta1) to this type before store insertion.
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
     group = "gateway.networking.k8s.io",

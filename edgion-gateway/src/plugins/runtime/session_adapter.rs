@@ -23,7 +23,7 @@ pub struct PingoraSessionAdapter<'a> {
 }
 
 /// Build a fresh local-reply `ResponseHeader` + body and stash them in `ctx`
-/// for `response_filter` to write downstream (filter-04b). Pure/synchronous and
+/// for `response_filter` to write downstream. Pure/synchronous and
 /// unit-testable; refuses gRPC routes (Upgrade/1xx are refused by the caller,
 /// `apply_response_local_reply`, which has the session + upstream header).
 ///
@@ -99,7 +99,7 @@ impl<'a> PingoraSessionAdapter<'a> {
     /// was stashed (HTTP route, not an upgrade/informational response).
     /// Refuses: gRPC route, Upgrade/CONNECT request, 1xx/101 upstream response,
     /// or no bound response header. The actual downstream write happens later in
-    /// `response_filter` (filter-04b).
+    /// `response_filter`.
     pub fn apply_response_local_reply(&mut self, status: u16, body: Option<String>) -> bool {
         if self.response_header.is_none() {
             return false;
@@ -121,8 +121,8 @@ impl<'a> PingoraSessionAdapter<'a> {
     }
 
     /// Record that a response-phase `ErrResponse` could not be turned into a
-    /// local reply (gRPC route this iteration). Surfaces the otherwise-silent
-    /// termination in the access log.
+    /// local reply (gRPC route). Surfaces the otherwise-silent termination in
+    /// the access log.
     pub fn note_response_local_reply_unsupported(&mut self) {
         self.ctx.add_error(EdgionStatus::PluginResponseReplaceUnsupportedGrpc);
     }
@@ -492,10 +492,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn append_request_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
-        // Append as a new header field line instead of read-first-value-then-replace-all.
-        // The previous approach read only headers.get(name) (first value) and then called
-        // insert_header (replaces all), silently dropping any additional same-name values.
-        // append_header preserves every existing field line per RFC 7230 §3.2.2 list semantics.
+        // Append as a new header field line (preserves every existing field line
+        // per RFC 7230 §3.2.2 list semantics; insert_header would replace all).
         self.inner
             .req_header_mut()
             .append_header(name.to_string(), value.to_string())
@@ -842,12 +840,12 @@ mod local_reply_tests {
 
     #[test]
     fn queued_ops_survive_phase6_apply_onto_local_reply() {
-        // filter-04c: simulates the fixed flow. Phase 6 applies queued ops onto
+        // Simulates the two-phase flow: the sync stage applies queued ops onto
         // the (soon-discarded) upstream header non-destructively; a response-phase
         // plugin then replaces the response, and build_response_local_reply
         // re-applies the still-intact queue onto the fresh reply. Proves BOTH the
-        // sync (Phase 6) and async (Phase 7) local-reply paths preserve the ops,
-        // since after the fix neither pre-drains the queue.
+        // sync and async local-reply paths preserve the ops, since neither
+        // pre-drains the queue.
         let mut ctx = EdgionHttpContext::default();
         ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
             name: "x-foo".to_string(),

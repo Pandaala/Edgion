@@ -54,9 +54,8 @@ fn warn_edgion_tls_collision(host: &str, listener_key: &ListenerKey, tls_list: &
     );
 }
 
-/// Config-load-path advisory warnings that used to live inside `validate_cert`.
-/// Kept gateway-side so they fire once per apply here (not also on the controller).
-/// Never on the handshake hot path.
+/// Advisory warnings emitted once per config-apply on the gateway side (not on the
+/// handshake hot path, and not inside validate_cert so the controller stays clean).
 fn warn_cert_advisories(key: &str, tls: &EdgionTls) {
     use edgion_resources::resources::edgion_tls::TlsVersion;
     if let Some(v @ (TlsVersion::Tls10 | TlsVersion::Tls11)) = tls.spec.min_tls_version {
@@ -322,57 +321,34 @@ impl TlsStore {
         );
     }
 
-    /// Get all TLS certificates (for debugging/monitoring)
+    /// Returns all TLS certificates (valid and invalid) as a snapshot.
     ///
-    /// Returns a snapshot of all certificates currently in the store,
-    /// including both valid and invalid ones.
-    ///
-    /// # Performance
     /// Lock-free: clones Arc pointers from the current snapshot.
     pub fn list_all(&self) -> Vec<Arc<EdgionTls>> {
         let snapshot = self.tls_data.load();
         snapshot.values().map(|entry| entry.tls.clone()).collect()
     }
 
-    /// Check if a specific TLS certificate exists in the store
+    /// Returns true if a certificate with the given key ("namespace/name") exists,
+    /// regardless of validity.
     ///
-    /// # Arguments
-    /// * `key` - Certificate key in format "namespace/name"
-    ///
-    /// # Returns
-    /// `true` if certificate exists (regardless of validity), `false` otherwise
-    ///
-    /// # Performance
     /// Lock-free: O(1) hash lookup on the current snapshot.
     pub fn contains(&self, key: &str) -> bool {
         let snapshot = self.tls_data.load();
         snapshot.contains_key(key)
     }
 
-    /// Get validation status for a specific certificate
+    /// Returns the validation status for the given key ("namespace/name"),
+    /// or `None` if no such entry exists.
     ///
-    /// # Arguments
-    /// * `key` - Certificate key in format "namespace/name"
-    ///
-    /// # Returns
-    /// `Some(CertValidationResult)` if certificate exists, `None` otherwise
-    ///
-    /// # Performance
     /// Lock-free: O(1) hash lookup on the current snapshot. Result is cloned.
     pub fn get_validation_status(&self, key: &str) -> Option<CertValidationResult> {
         let snapshot = self.tls_data.load();
         snapshot.get(key).map(|entry| entry.validation.clone())
     }
 
-    /// Get all invalid certificates with their validation errors
+    /// Returns (key, validation_result) pairs for every certificate that failed validation.
     ///
-    /// Returns a list of (key, validation_result) pairs for all certificates
-    /// that failed validation. Useful for monitoring and diagnostics.
-    ///
-    /// # Returns
-    /// Vector of (certificate_key, validation_result) tuples
-    ///
-    /// # Performance
     /// Lock-free: O(n) iteration over the current snapshot. Results are cloned.
     pub fn get_invalid_certs(&self) -> Vec<(String, CertValidationResult)> {
         let snapshot = self.tls_data.load();
@@ -383,15 +359,10 @@ impl TlsStore {
             .collect()
     }
 
-    /// Get count of valid and invalid certificates
+    /// Returns `(valid_count, invalid_count)` for all stored certificates.
     ///
-    /// # Returns
-    /// Tuple of (valid_count, invalid_count)
-    ///
-    /// # Performance
     /// Lock-free: O(n) iteration over the current snapshot.
     ///
-    /// # Example
     /// ```ignore
     /// let (valid, invalid) = store.get_cert_stats();
     /// println!("Valid: {}, Invalid: {}", valid, invalid);
@@ -403,18 +374,8 @@ impl TlsStore {
         (total - invalid, invalid)
     }
 
-    /// Get EdgionTls resource for a specific hostname
+    /// Returns the first valid certificate matching `hostname` (supports wildcard matching).
     ///
-    /// Returns the first valid certificate that matches the given hostname.
-    /// Only returns valid certificates (invalid ones are skipped).
-    ///
-    /// # Arguments
-    /// * `hostname` - Hostname to match (supports wildcard matching)
-    ///
-    /// # Returns
-    /// `Some(Arc<EdgionTls>)` if a valid matching certificate is found, `None` otherwise
-    ///
-    /// # Performance
     /// Lock-free: O(n) iteration over the current snapshot. Early return on first match.
     pub fn get_tls_by_host(&self, hostname: &str) -> Option<Arc<EdgionTls>> {
         let snapshot = self.tls_data.load();

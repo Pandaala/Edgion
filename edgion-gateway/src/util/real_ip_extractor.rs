@@ -278,9 +278,6 @@ mod tests {
         }
     }
 
-    // Moved from `types::resources::edgion_plugins::plugin_configs::real_ip` tests: these
-    // exercise the gateway-side `RealIpExtractor` built from the pure `RealIpConfig` schema,
-    // so they live next to the extractor rather than in the schema crate.
     #[test]
     fn test_valid_ipv4_single() {
         let config = RealIpConfig {

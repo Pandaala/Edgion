@@ -220,8 +220,6 @@ fn test_time_format() {
 }
 
 // time_format with an invalid chrono specifier returns ApiError (does not panic).
-// Replaces the previous behavior where dt.format("%Q").to_string() would panic in
-// the data plane.
 #[test]
 fn test_time_format_invalid_specifier_returns_api_error() {
     let session = MockPluginSession::new();

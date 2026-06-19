@@ -15,7 +15,6 @@ pub struct ConfigClient {
     pub base_conf: RwLock<Option<GatewayBaseConf>>,
     /// Current server_id from Controller (updated on each list/watch response)
     current_server_id: RwLock<String>,
-    // Base conf resources now have dedicated caches
     gateway_classes: ClientCache<GatewayClass>,
     gateways: ClientCache<Gateway>,
     edgion_gateway_configs: ClientCache<EdgionGatewayConfig>,
@@ -46,62 +45,50 @@ impl ConfigClient {
     /// * `client_id` - Unique identifier for this client
     /// * `client_name` - Human-readable name for this client
     pub fn new(client_id: String, client_name: String) -> Self {
-        // Register RouteManager as the handler for HTTPRoute resources
         let routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let route_handler = create_route_manager_handler();
         routes_cache.set_conf_processor(route_handler);
 
-        // Register ServiceStore as the handler for Service resources
         let services_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let service_handler = create_service_handler();
         services_cache.set_conf_processor(service_handler);
 
-        // Register EpSliceHandler as the handler for EndpointSlice resources
         let endpoint_slices_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let ep_slice_handler = create_ep_slice_handler();
         endpoint_slices_cache.set_conf_processor(ep_slice_handler);
 
-        // Register PluginStore as the handler for EdgionPlugins resources
         let plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let plugin_handler = crate::plugins::http::create_plugin_handler();
         plugins_cache.set_conf_processor(plugin_handler);
 
-        // Register TcpRouteManager as the handler for TCPRoute resources
         let tcp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tcp_route_handler = crate::routes::tcp::create_tcp_route_handler();
         tcp_routes_cache.set_conf_processor(tcp_route_handler);
 
-        // Register UdpRouteManager as the handler for UDPRoute resources
         let udp_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let udp_route_handler = crate::routes::udp::create_udp_route_handler();
         udp_routes_cache.set_conf_processor(udp_route_handler);
 
-        // Register GrpcRouteManager as the handler for GRPCRoute resources
         let grpc_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let grpc_route_handler = crate::routes::grpc::create_grpc_route_handler();
         grpc_routes_cache.set_conf_processor(grpc_route_handler);
 
-        // Register TlsRouteManager as the handler for TLSRoute resources
         let tls_routes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_route_handler = crate::routes::tls::create_tls_route_handler();
         tls_routes_cache.set_conf_processor(tls_route_handler);
 
-        // Register TlsStore as the handler for EdgionTls resources
         let edgion_tls_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let tls_handler = crate::tls::create_tls_handler();
         edgion_tls_cache.set_conf_processor(tls_handler);
 
-        // Register StreamPluginStore as the handler for EdgionStreamPlugins resources
         let stream_plugins_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let stream_plugin_handler = crate::plugins::stream::create_stream_plugin_handler();
         stream_plugins_cache.set_conf_processor(stream_plugin_handler);
 
-        // Register BackendTLSPolicyStore as the handler for BackendTLSPolicy resources
         let backend_tls_policies_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let backend_tls_policy_handler = crate::backends::create_backend_tls_policy_handler();
         backend_tls_policies_cache.set_conf_processor(backend_tls_policy_handler);
 
-        // Register handlers for base conf resources
         let gateway_classes_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let gateway_class_handler = crate::config::gateway_class::create_gateway_class_handler();
         gateway_classes_cache.set_conf_processor(gateway_class_handler);
@@ -114,7 +101,6 @@ impl ConfigClient {
         let edgion_gateway_config_handler = crate::config::edgion_gateway::create_edgion_gateway_config_handler();
         edgion_gateway_configs_cache.set_conf_processor(edgion_gateway_config_handler);
 
-        // Register AcmeChallengeStore as the handler for EdgionAcme resources
         let edgion_acme_cache = ClientCache::new(client_id.clone(), client_name.clone());
         let acme_handler = crate::services::acme::create_acme_handler();
         edgion_acme_cache.set_conf_processor(acme_handler);
@@ -122,7 +108,6 @@ impl ConfigClient {
         Self {
             base_conf: RwLock::new(None),
             current_server_id: RwLock::new(String::new()),
-            // Base conf caches with handlers registered
             gateway_classes: gateway_classes_cache,
             gateways: gateways_cache,
             edgion_gateway_configs: edgion_gateway_configs_cache,
@@ -197,7 +182,6 @@ impl ConfigClient {
     ) {
         use edgion_resources::resource_defs::all_resource_kind_names;
 
-        // Use all_resource_kind_names to get every defined kind, then dispatch
         for cache_field in all_resource_kind_names() {
             if let Some(kind) = edgion_resources::resource_defs::resource_kind_from_cache_field(cache_field) {
                 if let Some(cache) = self.get_dyn_cache(kind) {
@@ -226,11 +210,7 @@ impl ConfigClient {
         }
     }
 
-    /// Typed accessor for the `EdgionTls` cache.
-    ///
-    /// Admin-API secret redaction now happens uniformly at the serde layer
-    /// (`types::redact`), so this accessor is no longer required for scrubbing; it
-    /// is retained for typed test access.
+    /// Typed accessor for the `EdgionTls` cache, retained for typed test access.
     pub fn edgion_tls(&self) -> &ClientCache<EdgionTls> {
         &self.edgion_tls
     }
@@ -272,13 +252,11 @@ impl ConfigClient {
 
     /// Get cache ready status by name (delegates to get_dyn_cache)
     fn get_cache_status(&self, name: &str) -> Option<bool> {
-        // Map cache field name -> ResourceKind
         let kind = edgion_resources::resource_defs::resource_kind_from_cache_field(name)?;
         self.get_dyn_cache(kind).map(|c| c.is_ready())
     }
 
-    /// Get all caches status based on global resource registry
-    /// Returns a list of tuples: (cache_name, is_ready)
+    /// Returns `(name, ready)` pairs for all caches, filtered by the required-kinds whitelist.
     fn all_caches_status(&self) -> Vec<(&'static str, bool)> {
         let required = self.required_cache_names.read().clone();
         all_resource_type_names()
@@ -423,7 +401,7 @@ impl ConfigClient {
     /// matches `kind` against `kind_name_dyn()` — so it stays in lockstep with
     /// `client_cache_stats`. Returns an empty Vec for any unknown kind or for kinds
     /// not cached on Gateway (Secret, ConfigMap, ReferenceGrant).
-    #[allow(dead_code)] // Consumed by validator binary (Task 15/16); allow until then.
+    #[allow(dead_code)] // Consumed by the validator binary.
     pub fn client_cache_keys(&self, kind: &str, max: usize) -> Vec<String> {
         use edgion_resources::resource_defs::ALL_RESOURCE_INFOS;
 
@@ -480,8 +458,7 @@ mod tests {
         let _enter = rt.enter();
         let client = ConfigClient::new("cid".to_string(), "cname".to_string());
         let stats = client.client_cache_stats();
-        // 17: Secret, ConfigMap, and ReferenceGrant have no ClientCache on the gateway side;
-        // Endpoint (legacy) has been removed.
+        // 17: Secret, ConfigMap, and ReferenceGrant have no ClientCache on the gateway side.
         assert_eq!(stats.len(), 17, "expected 17 gateway-side ClientCache kinds");
         for (kind, count) in &stats {
             assert_eq!(*count, 0, "kind {kind} should start empty");

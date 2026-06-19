@@ -355,8 +355,6 @@ mod tests {
         assert_eq!(Verb::from_str("nonsense"), None);
     }
 
-    // --- New Task 1 tests ---
-
     #[test]
     fn restricted_role_uses_its_own_policy() {
         let p = CenterPolicy::from_config(&FedRbacConfig {

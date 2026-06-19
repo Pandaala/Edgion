@@ -216,10 +216,8 @@ impl GatewayTlsTestSuite {
         )
     }
 
-    // Dual-cert listener regression test (RFC tls-04): the listener carries two
-    // certificateRefs (RSA edge-tls + ECDSA edge-tls-ecdsa). Before the fix only
-    // the first (RSA) was applied, so an ECDSA-pinned handshake failed. Verify
-    // both key-type slots are served.
+    // Dual-cert: the listener has two certificateRefs (RSA edge-tls + ECDSA edge-tls-ecdsa).
+    // Verify both key-type slots are served — the ECDSA ref must not be silently ignored.
     fn test_gateway_tls_dual_cert() -> TestCase {
         TestCase::new(
             "gateway_tls_dual_cert",

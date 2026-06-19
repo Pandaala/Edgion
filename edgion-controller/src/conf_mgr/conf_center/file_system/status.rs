@@ -57,7 +57,7 @@ impl FileSystemStatusHandler {
         }
     }
 
-    /// Attach a shared path registry (optional; used by future conflict-aware status writes)
+    /// Attach a shared path registry; used by `build_status_path` to resolve the canonical spec file path.
     pub fn with_registry(mut self, registry: Arc<PathRegistry>) -> Self {
         self.registry = Some(registry);
         self

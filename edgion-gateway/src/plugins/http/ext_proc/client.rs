@@ -2,9 +2,7 @@
 //!
 //! The channel is built lazily at plugin construction (no blocking connect) and
 //! multiplexes every request. Each processing phase opens its own short-lived
-//! `Process` bidirectional stream on that shared channel — the MVP "one stream
-//! per phase" model (connection pooling / single-stream-per-transaction is a
-//! future optimization).
+//! `Process` bidirectional stream on that shared channel (one stream per phase).
 
 use std::time::Duration;
 

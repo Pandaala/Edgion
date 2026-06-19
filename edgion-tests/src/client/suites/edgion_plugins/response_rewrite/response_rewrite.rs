@@ -1,10 +1,10 @@
 // ResponseRewrite Plugin Test Suite
 //
-// ：
-// -
-// -  (set/add/remove)
-// -  (rename)
-// -
+// Covers:
+// - Status code rewrite
+// - Response header manipulation (set/add/remove)
+// - Response header rename
+// - Combined rewrite
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -12,7 +12,7 @@ use std::time::Instant;
 pub struct ResponseRewriteTestSuite;
 
 impl ResponseRewriteTestSuite {
-    // ==================== 1.  ====================
+    // ==================== 1. Status code rewrite ====================
     fn test_status_code() -> TestCase {
         TestCase::new("status_code", ":  201", |ctx: TestContext| {
             Box::pin(async move {
@@ -37,7 +37,7 @@ impl ResponseRewriteTestSuite {
         })
     }
 
-    // ==================== 2.  ====================
+    // ==================== 2. Header manipulation (set/add/remove) ====================
     fn test_headers_set() -> TestCase {
         TestCase::new("headers_set", ": set/add/remove ", |ctx: TestContext| {
             Box::pin(async move {
@@ -51,7 +51,7 @@ impl ResponseRewriteTestSuite {
                     Ok(response) => {
                         let mut errors = Vec::new();
 
-                        //  set
+                        // Header set
                         if let Some(custom_header) = response.headers().get("x-custom-header") {
                             if custom_header.to_str().unwrap_or("") != "custom-value" {
                                 errors.push(format!(
@@ -63,7 +63,7 @@ impl ResponseRewriteTestSuite {
                             errors.push("X-Custom-Header not found".to_string());
                         }
 
-                        //  Cache-Control
+                        // Header override — Cache-Control
                         if let Some(cache_control) = response.headers().get("cache-control") {
                             if cache_control.to_str().unwrap_or("") != "no-cache, no-store" {
                                 errors.push(format!(
@@ -75,7 +75,7 @@ impl ResponseRewriteTestSuite {
                             errors.push("Cache-Control not found".to_string());
                         }
 
-                        //  add
+                        // Header add
                         if let Some(powered_by) = response.headers().get("x-powered-by") {
                             if powered_by.to_str().unwrap_or("") != "Edgion" {
                                 errors.push(format!(
@@ -87,8 +87,9 @@ impl ResponseRewriteTestSuite {
                             errors.push("X-Powered-By not found".to_string());
                         }
 
-                        //  remove  - Server
-                        // ： Server ，
+                        // Header remove — Server
+                        // Skipped: test_server does not set a Server header,
+                        // so there is nothing to verify.
                         // if response.headers().get("server").is_some() {
                         //     errors.push("Server header should be removed".to_string());
                         // }
@@ -113,9 +114,9 @@ impl ResponseRewriteTestSuite {
         })
     }
 
-    // ==================== 3.  ====================
-    // ： test_server  rename
-    //  test_server  X-Internal-Id ，
+    // ==================== 3. Header rename ====================
+    // Note: full rename verification requires test_server to emit X-Internal-Id.
+    // Since test_server does not set that header, only the HTTP success is checked.
     fn test_headers_rename() -> TestCase {
         TestCase::new(
             "headers_rename",
@@ -130,9 +131,8 @@ impl ResponseRewriteTestSuite {
 
                     match request.send().await {
                         Ok(response) => {
-                            // rename  test_server
-                            //  test_server  X-Internal-Id，
-                            //
+                            // Full rename verification requires test_server to emit
+                            // X-Internal-Id; only HTTP success is checked here.
                             if response.status().is_success() {
                                 TestResult::passed_with_message(
                                     start.elapsed(),
@@ -149,7 +149,7 @@ impl ResponseRewriteTestSuite {
         )
     }
 
-    // ==================== 4.  ====================
+    // ==================== 4. Combined rewrite ====================
     fn test_combined() -> TestCase {
         TestCase::new("combined", ":  + set + add + remove", |ctx: TestContext| {
             Box::pin(async move {
@@ -163,13 +163,13 @@ impl ResponseRewriteTestSuite {
                     Ok(response) => {
                         let mut errors = Vec::new();
 
-                        //
+                        // Status code check
                         let status = response.status().as_u16();
                         if status != 200 {
                             errors.push(format!("Status: expected 200, got {}", status));
                         }
 
-                        //  set - Cache-Control
+                        // Header set — Cache-Control
                         if let Some(cache_control) = response.headers().get("cache-control") {
                             if cache_control.to_str().unwrap_or("") != "no-cache" {
                                 errors.push(format!(
@@ -181,7 +181,7 @@ impl ResponseRewriteTestSuite {
                             errors.push("Cache-Control not found".to_string());
                         }
 
-                        //  set - X-API-Version
+                        // Header set — X-API-Version
                         if let Some(api_version) = response.headers().get("x-api-version") {
                             if api_version.to_str().unwrap_or("") != "v2" {
                                 errors.push(format!(
@@ -193,7 +193,7 @@ impl ResponseRewriteTestSuite {
                             errors.push("X-API-Version not found".to_string());
                         }
 
-                        //  add - X-Powered-By
+                        // Header add — X-Powered-By
                         if let Some(powered_by) = response.headers().get("x-powered-by") {
                             if powered_by.to_str().unwrap_or("") != "Edgion" {
                                 errors.push(format!(
@@ -236,7 +236,7 @@ impl TestSuite for ResponseRewriteTestSuite {
         vec![
             Self::test_status_code(),
             Self::test_headers_set(),
-            // rename  test_server ，
+            // test_headers_rename disabled: requires test_server to emit X-Internal-Id.
             // Self::test_headers_rename(),
             Self::test_combined(),
         ]

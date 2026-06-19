@@ -528,16 +528,6 @@ async fn auth_header_probe_handler(req: AxumRequest<Body>) -> impl IntoResponse 
         .unwrap()
 }
 
-/// Webhook resolve handler — returns resolved key value via response header and JSON body.
-///
-/// Simulates an external key-resolution service. Reads the `X-Tenant-Id` header
-/// from the forwarded request and returns:
-/// - Response header `X-Resolved-Key` with the resolved value
-/// - Response header `X-Webhook-Status` = "resolved"
-/// - Set-Cookie `webhook_session=wh-sess-<tenant>`
-/// - JSON body: `{"data":{"user_id":"uid-<tenant>","tenant":"<tenant>"}}`
-///
-/// If `X-Tenant-Id` is missing, returns a default resolution.
 // ============================================================================
 // Mirror handlers (for RequestMirror plugin integration tests)
 // ============================================================================
@@ -558,7 +548,6 @@ async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
 
-    // Collect headers
     let mut headers = std::collections::HashMap::new();
     let trace_id = req
         .headers()
@@ -584,7 +573,6 @@ async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
         body,
     };
 
-    // Store under trace_id
     {
         let mut store = MIRROR_STORE.lock();
         store.entry(trace_id.clone()).or_default().push(capture);
@@ -663,7 +651,6 @@ async fn mirror_slow_handler(Path(ms): Path<u64>, req: AxumRequest<Body>) -> imp
         store.entry(trace_id.clone()).or_default().push(capture);
     }
 
-    // Simulate slow processing
     let delay_ms = ms.min(10_000); // cap at 10s for safety
     tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 
@@ -889,6 +876,16 @@ async fn cb_reset_handler() -> impl IntoResponse {
     (StatusCode::OK, "cb-reset-ok")
 }
 
+/// Webhook resolve handler — returns resolved key value via response header and JSON body.
+///
+/// Simulates an external key-resolution service. Reads the `X-Tenant-Id` header
+/// from the forwarded request and returns:
+/// - Response header `X-Resolved-Key` with the resolved value
+/// - Response header `X-Webhook-Status` = "resolved"
+/// - Set-Cookie `webhook_session=wh-sess-<tenant>`
+/// - JSON body: `{"data":{"user_id":"uid-<tenant>","tenant":"<tenant>"}}`
+///
+/// If `X-Tenant-Id` is missing, returns a default resolution.
 async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     use axum::http::StatusCode;
     use axum::response::Json;

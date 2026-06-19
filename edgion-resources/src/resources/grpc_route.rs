@@ -238,8 +238,8 @@ pub struct GRPCBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<GRPCRouteFilter>>,
 
-    /// Parsed extension info (runtime only, not serialized)
-    /// This is computed from plugins[].extensionRef at runtime
+    /// Parsed extension info (runtime only, not serialized).
+    /// Populated from `filters[].extensionRef` by `preparse()`.
     #[serde(skip)]
     #[schemars(skip)]
     pub extension_info: BackendExtensionInfo,
@@ -356,7 +356,7 @@ pub struct GRPCRouteRetry {
 // Pre-parsing logic for GRPCRoute
 // ============================================
 
-/// Extension trait for GRPCRoute to parse hidden logic
+/// Pre-parse methods for GRPCRoute.
 impl GRPCRoute {
     /// Populate `extension_info` on each backend ref from its `ExtensionRef` filter.
     ///

@@ -57,15 +57,12 @@ impl<T: Clone> BackendSelector<T> {
     }
 
     /// Initialize the selector from items and their optional weights.
-    ///
-    /// This should be called once when the route is first used.
-    /// If already initialized, this is a no-op.
+    /// Idempotent: if already initialized, does nothing.
     ///
     /// # Arguments
     /// * `items` - A vector of backend items
     /// * `weights` - A vector of optional weights for each item
     pub fn init(&self, items: Vec<T>, weights: Vec<Option<i32>>) {
-        // Already initialized, skip
         if self.state.load().is_some() {
             return;
         }
@@ -80,14 +77,12 @@ impl<T: Clone> BackendSelector<T> {
             return SelectorState::Error(ERR_NO_BACKEND_REFS);
         }
 
-        // Validate weight configuration: either all have weight or none have weight
         let has_any_weight = weights.iter().any(|w| w.is_some());
         let all_have_weight = weights.iter().all(|w| w.is_some());
         if has_any_weight && !all_have_weight {
             return SelectorState::Error(ERR_INCONSISTENT_WEIGHT);
         }
 
-        // Filter out items with weight = 0 and collect valid items with their weights
         let valid_items: Vec<(T, usize)> = items
             .into_iter()
             .zip(weights)
@@ -101,12 +96,10 @@ impl<T: Clone> BackendSelector<T> {
             })
             .collect();
 
-        // Check if we have any valid items after filtering
         if valid_items.is_empty() {
             return SelectorState::Error(ERR_NO_BACKEND_REFS);
         }
 
-        // If only one valid item, return Single
         if valid_items.len() == 1 {
             let (item, _) = valid_items
                 .into_iter()
@@ -115,10 +108,9 @@ impl<T: Clone> BackendSelector<T> {
             return SelectorState::Single(item);
         }
 
-        // Multiple valid items - create weighted round-robin selector.
-        // Inputs are already validated above (len >= 2, lengths match, all weights > 0),
-        // so `new` cannot fail here; map any error to a fail-close error code rather
-        // than unwrapping, so a future change to the pre-validation degrades gracefully.
+        // Inputs are validated above (len >= 2, lengths match, all weights > 0)
+        // so `new` cannot fail; map any error to a fail-close code rather than
+        // unwrapping, in case future pre-validation changes regress.
         let (items, weights): (Vec<T>, Vec<usize>) = valid_items.into_iter().unzip();
         match WeightedRoundRobin::new(items, weights) {
             Ok(wrr) => SelectorState::Multiple(wrr),

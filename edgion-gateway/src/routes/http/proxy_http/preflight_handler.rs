@@ -62,7 +62,6 @@ impl PreflightHandler {
             let cors_plugin = Cors::from_arc(Arc::clone(cors_config));
             let mut plugin_log = PluginLog::new("PreflightHandler");
 
-            // Wrap pingora session in adapter
             let mut adapter = PingoraSessionAdapter::new(session, ctx);
 
             // Run CORS plugin logic (this will set headers and may terminate request)

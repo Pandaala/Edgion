@@ -1,6 +1,6 @@
-//! New conf_mgr module with enhanced ResourceProcessor
+//! conf_mgr — configuration management module
 //!
-//! This module provides a redesigned configuration management system where:
+//! This module provides a configuration management system where:
 //! - ResourceProcessor<T> holds ServerCache<T> and manages the complete resource lifecycle
 //! - ProcessorRegistry provides global access to all processors
 //! - ProcessorHandler<T> trait defines resource-specific processing logic
@@ -20,7 +20,7 @@
 //!
 //! - `ConfMgr`: Unified configuration manager facade
 //! - `ConfCenter`: Super trait combining CenterApi + CenterLifeCycle
-//! - `CenterApi`: CRUD operations trait (replaces old ConfCenter)
+//! - `CenterApi`: CRUD operations trait
 //! - `CenterLifeCycle`: Lifecycle management trait
 //! - `FileSystemCenter` / `KubernetesCenter`: Concrete implementations
 //! - `ProcessorRegistry`: Global registry of all processors

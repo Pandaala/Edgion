@@ -1,10 +1,6 @@
 //! Status Diff — Semantic status comparison to minimize K8s API writes
 //!
 //! Every status write triggers a K8s API call (or a FileSystem write).
-//! The previous approach serialized status to JSON strings and compared them
-//! verbatim, which produced false positives when non-semantic fields like
-//! `last_transition_time` changed even though the logical state was identical.
-//!
 //! This module provides semantic comparison functions that ignore
 //! `last_transition_time` (and similar timestamp fields) so that a status
 //! write is only triggered when the user-visible meaning actually changes.

@@ -228,7 +228,7 @@ impl PluginValidation for ExtProcConfig {
             return Some(format!("grpcService.timeoutMs must not exceed {MAX_TIMEOUT_MS}"));
         }
         // Body processing has no runtime path this release — reject loudly so a
-        // user never configures a silently-ignored mode (task pitfall #3).
+        // user never configures a silently-ignored mode.
         if !self.processing_mode.request_body_mode.is_supported() {
             return Some(
                 "processingMode.requestBodyMode only supports NONE or SKIP in this release \

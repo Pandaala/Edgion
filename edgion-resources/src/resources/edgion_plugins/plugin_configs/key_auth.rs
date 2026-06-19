@@ -95,9 +95,7 @@ pub struct KeyAuthConfig {
     pub secret_groups: Option<Vec<KeyAuthSecretGroup>>,
 
     // === Upstream Headers ===
-    /// Whitelist: Secret fields to add as upstream headers
-    /// Only fields listed here will be forwarded to upstream
-    /// If empty, no additional headers will be added
+    /// Secret fields to add as upstream headers; if empty, no headers are forwarded.
     #[serde(default)]
     pub upstream_header_fields: Vec<String>,
 
@@ -124,8 +122,6 @@ pub struct KeyMetadata {
     #[serde(default = "default_group_name")]
     pub group: String,
 }
-
-// === Default value functions ===
 
 fn default_key_sources() -> Vec<KeyGet> {
     vec![
@@ -183,7 +179,6 @@ impl KeyAuthConfig {
                         return Err(format!("key_sources[{}]: name cannot be empty", i));
                     }
                 }
-                // Webhook is a valid key source for remote key resolution
                 KeyGet::Webhook { webhook_ref, .. } => {
                     if webhook_ref.is_empty() {
                         return Err(format!("key_sources[{}]: webhookRef cannot be empty", i));
@@ -205,7 +200,7 @@ impl KeyAuthConfig {
             return Err("key_field cannot be empty".to_string());
         }
 
-        // Validate realm is not empty (optional, but warn if empty)
+        // realm must not be empty
         if self.realm.is_empty() {
             return Err("realm cannot be empty".to_string());
         }
@@ -333,8 +328,6 @@ realm: "Production API"
         assert!(config.hide_credentials);
         assert_eq!(config.realm, "Production API");
     }
-
-    // Validation tests
 
     #[test]
     fn test_validate_default_config() {

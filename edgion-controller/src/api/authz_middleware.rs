@@ -77,10 +77,6 @@ pub async fn authz_layer(State(authorizer): State<Arc<Authorizer>>, req: Request
         None => return unauthorized(),
     };
 
-    // MatchedPath is inserted into request extensions by axum's router for every
-    // matched route. Reading it from extensions (rather than using Option<MatchedPath>
-    // as a middleware argument) avoids the OptionalFromRequestParts bound that
-    // axum 0.8.x's MatchedPath does not satisfy.
     let matched_str = req.extensions().get::<MatchedPath>().map(|m| m.as_str().to_string());
 
     let method = req.method().clone();

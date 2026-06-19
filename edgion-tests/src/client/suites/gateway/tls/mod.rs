@@ -1,5 +1,4 @@
 // Gateway TLS test module
-// Note: mTLS moved to EdgionTls module
 
 mod backend_tls;
 mod backend_tls_gateway_cert;

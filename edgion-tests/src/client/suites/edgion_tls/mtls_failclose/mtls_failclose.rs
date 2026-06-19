@@ -14,9 +14,9 @@
 // - fv-server-cert (namespace edgion-test)  # reused server cert for frontendValidation listener
 //
 // Helpers (extract_field, get_tls_info, handshake_truly_completed) are
-// duplicated from `cipher/cipher.rs` on purpose: three call sites is below the
-// abstraction threshold the F002 fix established. The duplication keeps the
-// security-critical handshake-completion check inline at the audit site.
+// intentionally duplicated from `cipher/cipher.rs`: the three call sites do not
+// justify a shared abstraction, and keeping the security-critical
+// handshake-completion check inline makes the audit site self-contained.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;

@@ -1,7 +1,7 @@
-// GatewayDynamic scenario — migrated from run_dynamic_tests() in run_integration.sh.
+// GatewayDynamic scenario.
 //
 // Phase initial: verify the baseline Gateway configuration takes effect.
-// Transition: apply updates/ + delete delete/resources_to_delete.txt + wait sync + sleep 3s.
+// Transition: apply updates/, delete resources_to_delete.txt, wait up to 15s for sync.
 // Phase update: verify the new configuration takes effect after hot reload.
 
 use crate::dynamic::scenario::{PhaseSuite, Scenario};

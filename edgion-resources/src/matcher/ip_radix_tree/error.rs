@@ -40,12 +40,11 @@ pub enum IpRadixError {
         error: String,
     },
 
-    /// Same normalised CIDR appears in two distinct group labels in the
-    /// same matcher. Tightens v3's silent-overwrite behaviour.
+    /// Same normalised CIDR appears in two distinct group labels in the same matcher.
     DuplicateCidr {
         /// The normalised CIDR string that was inserted twice.
         cidr: String,
-        /// Group name of the first insertion (winner under old semantics).
+        /// Group name of the first insertion.
         existing_label: String,
         /// Group name of the second insertion that triggered the error.
         new_label: String,
@@ -123,7 +122,7 @@ mod tests {
 
     #[test]
     fn existing_variants_still_render() {
-        // Confirms no existing arm was lost during the edit.
+        // Spot-checks that all Display arms render correctly.
         let e = IpRadixError::EmptyTree;
         assert_eq!(e.to_string(), "cannot freeze an empty tree");
     }

@@ -14,7 +14,6 @@ use std::sync::{Arc, OnceLock};
 
 use crate::observe::logs::{create_async_logger, LogType};
 
-// Global AccessLogger instance (can only be initialized once)
 static ACCESS_LOGGER: OnceLock<Arc<AccessLogger>> = OnceLock::new();
 
 /// Snapshot of the access-log config the backfill endpoint needs: the ES primary

@@ -23,11 +23,9 @@ impl ShutdownSignal {
 
     /// Wait until shutdown is requested
     pub async fn wait(&mut self) {
-        // If already shutdown, return immediately
         if self.is_shutdown() {
             return;
         }
-        // Wait for change
         let _ = self.receiver.changed().await;
     }
 }

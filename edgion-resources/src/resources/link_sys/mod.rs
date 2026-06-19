@@ -54,9 +54,9 @@ pub enum SystemConfig {
     Redis(RedisClientConfig),
     /// Etcd client configuration
     Etcd(EtcdClientConfig),
-    /// Elasticsearch client configuration (future)
+    /// Elasticsearch client configuration
     Elasticsearch(ElasticsearchClientConfig),
-    /// Kafka client configuration (future)
+    /// Kafka client configuration
     Kafka(KafkaClientConfig),
     /// HTTP webhook service configuration
     Webhook(WebhookServiceConfig),

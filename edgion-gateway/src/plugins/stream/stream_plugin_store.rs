@@ -30,9 +30,8 @@ pub fn create_stream_plugin_handler() -> Box<dyn ConfHandler<EdgionStreamPlugins
 
 /// Compiled EdgionStreamPlugins: immutable schema + the two gateway stream runtimes.
 ///
-/// Gateway-side companion to the `EdgionStreamPlugins` schema. The schema
-/// (`types`) carries no runtime; both runtimes are constructed here in
-/// `compile_stream_plugins`.
+/// `spec` holds the raw schema (no runtime state); the two runtimes are
+/// built by `compile_stream_plugins` and Arc-shared via the store.
 pub struct CompiledStreamPlugins {
     /// The serializable EdgionStreamPlugins schema (retained for store stats).
     pub spec: Arc<EdgionStreamPlugins>,
@@ -44,10 +43,9 @@ pub struct CompiledStreamPlugins {
 
 /// Build the compiled runtimes for an EdgionStreamPlugins resource.
 ///
-/// Mirrors the former `EdgionStreamPlugins::init_stream_plugin_runtime` +
-/// `init_tls_route_plugin_runtime`: when a stage's entries are absent, the
-/// runtime defaults to empty (operator intent: declare an ESP with no rules as
-/// a no-op pass-through). Built **once per (ns/name)** and Arc-shared.
+/// When a stage's entries are absent, the runtime defaults to empty (operator
+/// intent: declare an ESP with no rules as a no-op pass-through).
+/// Built once per (namespace/name) and Arc-shared.
 pub fn compile_stream_plugins(esp: &EdgionStreamPlugins) -> Arc<CompiledStreamPlugins> {
     let ns = esp.metadata.namespace.as_deref().unwrap_or("default");
 
@@ -118,12 +116,10 @@ impl StreamPluginStore {
         let current = self.plugins.load();
         let mut new_map = (**current).clone();
 
-        // Add or update plugins
         for (key, plugin) in add_or_update {
             new_map.insert(key, plugin);
         }
 
-        // Remove plugins
         for key in remove {
             new_map.remove(key);
         }
@@ -166,7 +162,7 @@ impl StreamPluginStore {
     }
 
     /// Sample resource keys (namespace/name) holding stream plugins of the given kind.
-    #[allow(dead_code)] // Consumed by validator/sample-diagnostics (Task 15); allow until then.
+    #[allow(dead_code)] // Reserved for validator/sample-diagnostics; not yet called from production paths.
     pub fn keys_by_kind(&self, kind: &str) -> Vec<String> {
         let mut out = Vec::new();
         let map = self.plugins.load();

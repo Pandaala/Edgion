@@ -89,7 +89,6 @@ pub fn error_while_proxy(
     }
 
     // Case 2: connection reuse retry (Pingora built-in: stale keepalive connection)
-    // Add max_retries and timeout guard
     let max_retries = ctx
         .retry_attempts()
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);

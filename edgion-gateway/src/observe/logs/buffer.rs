@@ -190,7 +190,7 @@ mod tests {
     #[test]
     fn log_buffer_has_no_entry_count_cap() {
         let mut b = LogBuffer::new();
-        // 1-byte entries: 128 of them all fit (the old code capped at 20 entries).
+        // 1-byte entries: all 128 fit within the 128-byte budget.
         for i in 0..128 {
             assert!(b.push("x"), "entry {i} should fit under the byte budget");
         }

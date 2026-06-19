@@ -252,9 +252,9 @@ impl EdgionTcpProxy {
 /// - Byte counters increment `TcpContext::bytes_sent` / `bytes_received` directly
 ///   (TCP has no per-attempt upstream split, unlike TLS).
 /// - Errors are recorded as `TcpStatus` enum variants on the context. The
-///   `DownstreamFlush` variant intentionally maps to `DownstreamWriteError` —
-///   matching the prior inlined behavior and aligning with `DuplexError`'s
-///   documented "callers that do not distinguish flush from write" guidance.
+///   `DownstreamFlush` variant intentionally maps to `DownstreamWriteError`,
+///   per `DuplexError`'s "callers that do not distinguish flush from write"
+///   guidance.
 struct TcpDuplexHooks<'a> {
     ctx: &'a mut TcpContext,
 }
@@ -273,7 +273,7 @@ impl DuplexHooks for TcpDuplexHooks<'_> {
             DuplexError::UpstreamWrite => TcpStatus::UpstreamWriteError,
             DuplexError::DownstreamRead => TcpStatus::DownstreamReadError,
             DuplexError::DownstreamWrite => TcpStatus::DownstreamWriteError,
-            // Collapse flush failure into DownstreamWriteError to match prior behavior.
+            // DownstreamFlush is a client-side write failure; collapse into DownstreamWriteError.
             DuplexError::DownstreamFlush => TcpStatus::DownstreamWriteError,
             DuplexError::IdleTimeout => TcpStatus::IdleTimeout,
             DuplexError::UpstreamRead => TcpStatus::UpstreamReadError,

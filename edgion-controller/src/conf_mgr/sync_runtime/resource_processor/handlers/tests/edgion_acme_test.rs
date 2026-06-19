@@ -198,8 +198,8 @@ async fn test_acme_account_resolve_scenarios() {
             expected_refs_owner_for_keys: &[],
         },
         // 4. Corrupt account data → Continue + ResolvedRefs=False/DecodeError.
-        //    ACME uses the generic DecodeError reason (M6/G) shared with
-        //    LinkSys / EdgionPlugins / EdgionTls instead of a private bucket.
+        //    ACME uses the generic DecodeError reason shared with
+        //    LinkSys / EdgionPlugins / EdgionTls.
         AcmeParseScenario {
             name: "corrupt_account_data_returns_continue_with_resolved_refs_false",
             secrets: vec![make_secret(

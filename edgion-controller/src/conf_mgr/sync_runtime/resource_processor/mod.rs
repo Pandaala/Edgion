@@ -41,15 +41,13 @@ pub use raw_store::{KubeRawStore, LocalRawStore, RawStore};
 // NOTE: `status_utils::condition_unknown` is intentionally NOT re-exported —
 // no in-tree caller uses it because `EdgionAcmeStatus` uses upstream
 // `k8s_openapi::Condition` (not our local `types::common::Condition`) and has
-// its own `k8s_condition_unknown` helper. Once R2 unifies the Condition type
-// the re-export can return.
+// its own `k8s_condition_unknown` helper.
 pub use status_utils::{
     accepted_condition, condition_false, condition_reasons, condition_true, condition_types, now_rfc3339,
     resolved_refs_condition, set_parent_conditions, set_parent_conditions_full, update_condition, AcceptedError,
     ResolvedRefsError,
 };
 
-// Re-export handlers
 pub use handlers::{
     BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
     EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler,
@@ -58,15 +56,12 @@ pub use handlers::{
     TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
 };
 
-// Re-export generic ref_manager types
 pub use ref_manager::{BidirectionalRefManager, RefManagerStats, RefValue, ResourceRef};
 
-// Re-export secret utilities from local module
 // Note: get_secret / get_global_secret_store are kept for Gateway-side fallback use.
 // Controller code should use runtime.secret_store instead.
 pub use secret_utils::{get_global_secret_store, get_secret, get_secret_by_name, SecretRefManager, SecretStore};
 
-// Re-export ref_grant utilities
 pub use ref_grant::{
     is_cross_ns_ref_allowed, run_post_cache_ready_revalidations, trigger_full_cross_ns_revalidation,
     trigger_gateway_route_revalidation, trigger_gateway_secret_revalidation, validate_grpc_route_if_enabled,
@@ -75,31 +70,24 @@ pub use ref_grant::{
     CrossNsRevalidationListener, ReferenceGrantChangedEvent, ReferenceGrantStore, RevalidationListener,
 };
 
-// Re-export listener_port_manager utilities
 pub use listener_port_manager::{make_conflict_key, ConflictKey, ListenerPortManager, ListenerRef, PortKey};
 
-// Re-export attached_route_tracker utilities
 pub use attached_route_tracker::{AttachedRouteTracker, Attachment, RouteRef};
 
-// Re-export gateway_route_index utilities
 pub use gateway_route_index::GatewayRouteIndex;
 
-// Re-export service_ref utilities
 pub use service_ref::{new_service_ref_manager, ServiceRefManager};
 
-// Re-export backend_tls_policy_ref utilities
 pub use backend_tls_policy_ref::{make_target_conflict_key, BackendTLSPolicyState};
 
-// Re-export namespace_store utilities
 pub use namespace_store::NamespaceStore;
 
-// Re-export edgion_config_data_utils
 pub use edgion_config_data_utils::EdgionConfigDataStore;
 
-// region_route_table: module kept for future use; no types exported after S3.
+// region_route_table: empty module; no types exported.
 
 // ============================================================================
-// Utility functions (previously in old conf_mgr)
+// Utility functions
 // ============================================================================
 
 use kube::Resource;

@@ -1,6 +1,6 @@
-// pub(crate): also used by the fed_client watch check (Task 6).
+// pub(crate): also used by the fed_client watch check.
 pub(crate) mod authz_classifier;
-// pub(crate): authz_layer and inject_center_identity are used at the fed spawn site (Task 6).
+// pub(crate): authz_layer and inject_center_identity are used at the federation spawn site.
 pub(crate) mod authz_middleware;
 pub(crate) mod cli_token_middleware;
 mod cluster_handlers;
@@ -135,7 +135,7 @@ async fn require_ready_middleware(State(state): State<Arc<AdminState>>, request:
     }
 }
 
-// ============= Legacy Endpoints =============
+// ============= Handlers =============
 
 /// Health check endpoint - always returns OK if server is up
 async fn health_check() -> Json<ApiResponse<String>> {
@@ -176,7 +176,6 @@ async fn get_server_info(
             Ok(Json(ApiResponse::ok_body(info)))
         }
         Err(_) => {
-            // Server not ready yet
             let info = ServerInfoResponse {
                 server_id: String::new(),
                 ready: false,

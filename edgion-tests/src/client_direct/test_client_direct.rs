@@ -82,7 +82,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    //  rustls（）
+    // Install the default rustls crypto provider (once per process).
     INIT.call_once(|| {
         rustls::crypto::ring::default_provider()
             .install_default()

@@ -279,8 +279,8 @@ mod tests {
     // unit-tested directly. The existing lifecycle tests above already cover
     // the `FederationSupervisor` machinery end-to-end. This keeps the tests
     // deterministic while still proving the key behavioral contracts:
-    //   1. Policy-only reloads do NOT restart the client (spawn counter
-    //      unchanged) AND the authorizer policy is updated.
+    //   1. Policy-only reloads do NOT restart the client (spawn counter unchanged).
+    //      Policy swapping is the reload handler's job (see apply_center_reload).
     //   2. `enabled` flip true->false stops the client; false->true restarts.
 
     use crate::authz::{CenterPolicy, Decision, Verb};

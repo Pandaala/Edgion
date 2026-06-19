@@ -1,5 +1,3 @@
-// EdgionTls wildcard_single_label test module
-
 #[allow(clippy::module_inception)]
 mod wildcard_single_label;
 

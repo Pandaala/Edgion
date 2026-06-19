@@ -174,7 +174,7 @@ mod scope_balance_tests {
     #[test]
     fn leave_scope_at_depth_zero_returns_err_not_panic() {
         // scope_depth starts at 0; an unbalanced leave must surface a CompileError
-        // (graceful degrade) instead of panicking. See plugins-http-dsl-F006.
+        // (graceful degrade) instead of panicking.
         let mut c = Compiler::new();
         assert!(c.leave_scope().is_err());
     }

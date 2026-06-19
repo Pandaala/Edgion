@@ -28,9 +28,9 @@ pub trait DiscoveryDoc: DeserializeOwned + Send + Sync + Clone + 'static {
     fn jwks_uri(&self) -> &str;
 }
 
-/// Caller-supplied post-fetch validator. Used by g3-009 to enforce
-/// config-conditional required endpoints (e.g. `token_endpoint` when
-/// `verification_mode != JwksOnly`). Default is no-op.
+/// Caller-supplied post-fetch validator for enforcing config-conditional
+/// required endpoints (e.g. `token_endpoint` when `verification_mode != JwksOnly`).
+/// Default is no-op.
 pub type DiscoveryValidator<D> = Arc<dyn Fn(&D) -> Result<(), String> + Send + Sync>;
 
 #[cfg(test)]
@@ -136,7 +136,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
         if doc.jwks_uri().is_empty() {
             return Err("Discovery document missing jwks_uri".to_string());
         }
-        // g3-009: caller-supplied config-aware validation runs before caching.
+        // Caller-supplied config-aware validation runs before caching.
         (self.validator)(&doc)?;
 
         tracing::info!(
@@ -232,7 +232,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
                     // Stale-while-revalidate: log and serve stale.
                     // Bump expires_at by min_refresh_interval so subsequent calls within the
                     // backoff window hit the fast path instead of re-fetching every request
-                    // during a prolonged IdP outage (g3-002 review M2).
+                    // during a prolonged IdP outage.
                     state.expires_at = Some(now + min_refresh);
                     tracing::warn!(
                         component = self.config.component_label,
@@ -438,9 +438,9 @@ mod tests {
 
     #[tokio::test]
     async fn stale_fallback_rate_limited_by_min_refresh() {
-        // Regression test for g3-002 review M2: during a prolonged outage with cached set,
-        // we must not hammer the JWKS endpoint on every request. Subsequent calls within
-        // min_refresh_interval after a failed refresh should hit the fast path.
+        // During a prolonged outage with a cached set, we must not hammer the JWKS
+        // endpoint on every request. Subsequent calls within min_refresh_interval after
+        // a failed refresh should hit the fast path.
         let idp = spawn_mock_idp().await;
         let p = test_provider(test_config(&idp.addr, 30, 5_000)); // 30ms TTL, 5s min_refresh
         let _ = p.get_jwks(false).await.unwrap(); // populate cache (1 request)

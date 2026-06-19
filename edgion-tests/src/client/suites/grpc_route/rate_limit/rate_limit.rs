@@ -1,11 +1,10 @@
 // gRPC rule-level RateLimit — end-to-end test.
 //
-// Scope (tasks/review-decouple/grpc-01-...): this suite guards the gRPC
-// types/compiled split's match_unit.rs fan-out, mirroring the HTTP
-// `edgion_plugins::rate_limit::test_shared_limit_across_match_items`. The split moved
-// `plugin_runtime` off the schema onto a PER-UNIT field that conf_handler must populate
-// for EVERY match-item unit (`compile_grpc_rule` builds it once per rule and Arc-shares
-// it into each unit). The K-dimension case pins exactly that: every match-item unit of
+// Guards the gRPC match_unit.rs fan-out (mirrors HTTP
+// `edgion_plugins::rate_limit::test_shared_limit_across_match_items`).
+// `plugin_runtime` is a per-unit field that conf_handler must populate for EVERY
+// match-item unit (`compile_grpc_rule` builds it once per rule and Arc-shares it
+// into each unit). The K-dimension case pins exactly that: every match-item unit of
 // one rule must route AND execute the rule-level ExtensionRef plugin chain, so both
 // variants count against the one rule budget. A regression that dropped the rule-level
 // filters from a non-first match-item unit would let `x-variant: b` traffic skip the
@@ -20,9 +19,9 @@
 // unobservable and not pinnable via RateLimit. Store-level cross-route CMS sharing is
 // covered on the HTTP side by `edgion_plugins::rate_limit::test_shared_counter_across_routes`.
 //
-// Also verified end-to-end (this is the first gRPC plugin test): gRPC rule-level
-// ExtensionRef plugins execute on the gRPC path, and a RateLimit rejection maps
-// HTTP 429 -> gRPC status 8 RESOURCE_EXHAUSTED (runtime/server/error_response.rs).
+// Also verified end-to-end: gRPC rule-level ExtensionRef plugins execute on the gRPC
+// path, and a RateLimit rejection maps HTTP 429 -> gRPC status 8 RESOURCE_EXHAUSTED
+// (runtime/server/error_response.rs).
 //
 // Scenario (conf/GRPCRoute/RateLimit): one rule, two match-items distinguished by
 // `x-variant: a` / `x-variant: b`, both routing SayHello, one rule-level RateLimit
@@ -115,9 +114,8 @@ impl GrpcRateLimitTestSuite {
     /// succeed (global budget not yet exhausted). The (RATE+1)th must be rejected with
     /// RESOURCE_EXHAUSTED.
     ///
-    /// WHAT IT PINS: the split moved `plugin_runtime` onto a per-unit field; conf_handler
-    /// must Arc-share the rule's compiled runtime into EVERY match-item unit. If a
-    /// regression left a non-first match-item unit without the rule-level filters,
+    /// WHAT IT PINS: conf_handler must Arc-share the rule's compiled runtime into EVERY
+    /// match-item unit. If a non-first match-item unit is missing the rule-level filters,
     /// `x-variant: b` would skip the limiter, only 5 (variant a) requests would count,
     /// and the 11th (variant a) would wrongly return Ok instead of RESOURCE_EXHAUSTED —
     /// this assertion catches it.

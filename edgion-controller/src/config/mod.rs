@@ -185,7 +185,6 @@ pub struct ServerConfig {
     #[arg(long, value_name = "CIDR", value_delimiter = ',')]
     #[serde(default)]
     pub allow_admin_ips: Vec<String>,
-    // Note: gateway_class, watch_namespaces, label_selector moved to ConfCenterConfig::Kubernetes
 }
 
 /// Logging configuration
@@ -219,8 +218,6 @@ pub struct LoggingConfig {
     #[serde(default = "default_buffer_size")]
     pub buffer_size: usize,
 }
-
-// Note: ConfConfig removed, conf_dir now in ConfCenterConfig::FileSystem
 
 /// Debug configuration
 #[derive(Debug, Clone, Serialize, Deserialize, Args)]
@@ -396,8 +393,6 @@ impl Default for DebugConfig {
         }
     }
 }
-
-// Default implementation is now derived
 
 impl EdgionControllerConfig {
     /// Load configuration from YAML file if config_file is specified,

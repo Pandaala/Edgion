@@ -20,7 +20,7 @@ use edgion_resources::ListenerKey;
 ///    empty snapshot (via `rebuild_one(manager, &empty_map)`). Without this
 ///    pass, the manager's `ArcSwap` retains routes from the previous rebuild
 ///    and the data plane keeps forwarding to deleted backends. Mirrors the
-///    HTTP canonical implementation at `http/routes_mgr.rs:375-381`.
+///    HTTP canonical implementation (`http/routes_mgr.rs`).
 ///
 /// Parameters:
 ///   `active_listener_keys` — current `ListenerGatewayInfoStore` snapshot; the

@@ -145,7 +145,7 @@ pub fn should_halfopen_probe(runtime: &WebhookRuntime) -> bool {
         // Only the CAS winner admits the probe. Concurrent callers that observed
         // the same `last` lose the swap and fall through to `false`, so exactly one
         // half-open probe is sent per backoff window instead of a thundering herd.
-        // Mirrors SlidingWindowCounter::try_acquire (see review finding F-006).
+        // Mirrors SlidingWindowCounter::try_acquire.
         if runtime
             .last_halfopen
             .compare_exchange(last, now, Ordering::AcqRel, Ordering::Relaxed)

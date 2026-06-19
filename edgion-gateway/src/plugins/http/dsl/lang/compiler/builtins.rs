@@ -24,7 +24,7 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         ("req", "content_type") => Some(BuiltinId::ReqContentType),
         ("req", "has_header") => Some(BuiltinId::ReqHasHeader),
 
-        // req.* metadata (P1)
+        // req.* metadata
         ("req", "protocol") => Some(BuiltinId::ReqProtocol),
         ("req", "grpc_service") => Some(BuiltinId::ReqGrpcService),
         ("req", "grpc_method") => Some(BuiltinId::ReqGrpcMethod),
@@ -50,7 +50,7 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         ("resp", "header") => Some(BuiltinId::RespHeader),
         ("resp", "has_header") => Some(BuiltinId::RespHasHeader),
 
-        // resp.* read (P2)
+        // resp.* read (additional)
         ("resp", "header_names") => Some(BuiltinId::RespHeaderNames),
         ("resp", "content_type") => Some(BuiltinId::RespContentType),
 

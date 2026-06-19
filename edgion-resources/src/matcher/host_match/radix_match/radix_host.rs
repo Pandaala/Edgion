@@ -62,7 +62,6 @@ impl<T> RadixHost<T> {
         let original = host.to_string();
         let host_lower = host.to_lowercase();
 
-        // Check if it's a wildcard pattern and count wildcards
         let is_wildcard = host_lower.starts_with('*');
         let mut wildcard_count = 0;
 
@@ -77,13 +76,11 @@ impl<T> RadixHost<T> {
                     break;
                 }
             }
-            // Join the non-wildcard parts
             parts[wildcard_count..].join(".")
         } else {
             host_lower.clone()
         };
 
-        // Reverse the fixed part for radix tree matching
         let radix_key = Self::reverse_hostname(&fixed_part);
 
         RadixHost {
@@ -95,17 +92,13 @@ impl<T> RadixHost<T> {
         }
     }
 
-    /// Reverse a hostname for radix tree matching
-    /// Handles wildcard patterns by keeping wildcards at the end after reversal
+    /// Reverse a hostname by splitting on `.` and joining the parts in reverse order.
     ///
-    /// Example output (showing the intuitive “reversed hostname” form):
-    /// - `"example.com"` -> `"com.example"`
-    /// - `"api.example.com"` -> `"com.example.api"`
-    /// - `"*.example.com"` -> `"com.example"`
-    /// - `"*.*.example.com"` -> `"com.example"`
+    /// - `”example.com”` -> `”com.example”`
+    /// - `”api.example.com”` -> `”com.example.api”`
     ///
-    /// When wildcards are present, only the fixed part is reversed; the number
-    /// of wildcard segments is stored in `wildcard_count` for validation.
+    /// The caller is responsible for stripping wildcard segments before passing to
+    /// this function. `RadixHost::new` does this automatically.
     pub fn reverse_hostname(host: &str) -> String {
         if host.is_empty() {
             return String::new();
@@ -146,7 +139,7 @@ impl<T> RadixHost<T> {
             return false;
         }
 
-        // If radix_key is the entire request, we need wildcards to match_engine something
+        // Wildcard requires at least one segment beyond the fixed prefix.
         if reversed_request.len() == self.radix_key.len() {
             return false; // No room for wildcard segments
         }

@@ -77,7 +77,7 @@ pub struct HTTPRouteRule {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<HTTPRouteFilter>>,
 
-    /// BackendRefs defines the lb(s) where matching requests should be sent
+    /// BackendRefs defines the backend(s) where matching requests should be sent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend_refs: Option<Vec<HTTPBackendRef>>,
 
@@ -178,11 +178,11 @@ pub struct HTTPRouteMatch {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<HTTPPathMatch>,
 
-    /// Headers specifies HTTP request header match_engine
+    /// Headers specifies HTTP request header matchers
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub headers: Option<Vec<HTTPHeaderMatch>>,
 
-    /// QueryParams specifies HTTP query parameter match_engine
+    /// QueryParams specifies HTTP query parameter matchers
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query_params: Option<Vec<HTTPQueryParamMatch>>,
 
@@ -194,7 +194,7 @@ pub struct HTTPRouteMatch {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPPathMatch {
-    /// Type specifies how to match_engine against the path Value
+    /// Type specifies how to match against the path value
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub match_type: Option<String>,
 
@@ -223,7 +223,7 @@ pub struct HTTPPathMatch {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPHeaderMatch {
-    /// Type specifies how to match_engine the header
+    /// Type specifies how to match the header
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub match_type: Option<String>,
 
@@ -237,7 +237,7 @@ pub struct HTTPHeaderMatch {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPQueryParamMatch {
-    /// Type specifies how to match_engine the query parameter
+    /// Type specifies how to match the query parameter
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub match_type: Option<String>,
 
@@ -251,10 +251,10 @@ pub struct HTTPQueryParamMatch {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPBackendRef {
-    /// Name is the name of the lb Service
+    /// Name is the name of the backend Service
     pub name: String,
 
-    /// Namespace is the namespace of the lb Service
+    /// Namespace is the namespace of the backend Service
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
 
@@ -262,7 +262,7 @@ pub struct HTTPBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<i32>,
 
-    /// Weight specifies the proportion of requests forwarded to the lb
+    /// Weight specifies the proportion of requests forwarded to the backend
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weight: Option<i32>,
 
@@ -278,8 +278,8 @@ pub struct HTTPBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<HTTPRouteFilter>>,
 
-    /// Parsed extension info (runtime only, not serialized)
-    /// This is computed from plugins[].extensionRef at runtime
+    /// Parsed extension info (runtime only, not serialized).
+    /// Populated from `filters[].extensionRef` by `preparse()`.
     #[serde(skip)]
     #[schemars(skip)]
     pub extension_info: BackendExtensionInfo,

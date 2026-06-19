@@ -63,8 +63,7 @@ pub async fn upstream_peer(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    // Check request timeout dynamically before attempting peer selection
-    // This prevents starting a new retry attempt when deadline is already exceeded
+    // Check request timeout before attempting peer selection
     let request_timeout = ctx.request_timeout();
 
     if let Some(timeout) = request_timeout {
@@ -197,7 +196,6 @@ pub async fn upstream_peer_grpc(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    // 1. Handle gRPC upstream selection
     match handle_grpc_upstream(session, ctx).await {
         Ok(Some(())) => {}
         Ok(None) => {
@@ -223,13 +221,11 @@ pub async fn upstream_peer_grpc(
     //    a valid entry (`current_upstream_id` is None right after `init_backend_context`).
     begin_upstream_attempt(ctx);
 
-    // 5. Get peer from gRPC backend
     let mut peer = get_peer(session, ctx, true, &edgion_http.server_header_opts).await?;
 
     // 6. Force HTTP/2 for gRPC
     peer.options.set_http_version(2, 2);
 
-    // 7. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     backfill_upstream_addr(&peer, ctx);
 
@@ -289,7 +285,6 @@ pub async fn upstream_peer_http(
         get_peer(session, ctx, false, &edgion_http.server_header_opts).await?
     };
 
-    // 6. Configure peer (shared logic)
     configure_peer_timeouts(edgion_http, &mut peer, ctx);
     backfill_upstream_addr(&peer, ctx);
 
@@ -345,12 +340,9 @@ pub async fn select_http_backend(
         service_port,
     );
 
-    // BackendTLSPolicy is applied via the peer builder; no per-request logging needed
-
     // Pre-extract route namespace before mutable ctx borrows (borrow checker)
     let route_ns = route_unit.matched_info.rsc.ns.clone();
 
-    // Run backend-level request edgion_plugins
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
         let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;

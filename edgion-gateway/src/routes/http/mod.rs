@@ -1,12 +1,9 @@
 //! HTTP Routes and Proxy Implementation
 //!
-//! This module contains all HTTP-related functionality:
 //! - Route matching and management ([`routes_mgr`])
-//! - HTTP proxy implementation ([`edgion_http`])
-//! - Pingora ProxyHttp trait implementation ([`edgion_http_pingora`])
-//! - Request/response processing
-//! - Plugin execution
-//! - Access logging
+//! - HTTP proxy ([`proxy_http`])
+//! - HTTP-to-HTTPS redirect ([`redirect_http`])
+//! - Session persistence ([`session_persistence`])
 
 pub(crate) mod conf_handler_impl;
 pub mod lb_policy_sync;
@@ -18,7 +15,6 @@ pub mod routes_mgr;
 #[cfg(test)]
 mod tests;
 
-// HTTP proxy module
 pub mod proxy_http;
 pub mod session_persistence;
 
@@ -30,5 +26,4 @@ pub use routes_mgr::{
     HttpRouteManagerStats, RouteManager,
 };
 
-// Re-export HTTP proxy types
 pub use proxy_http::EdgionHttpProxy;

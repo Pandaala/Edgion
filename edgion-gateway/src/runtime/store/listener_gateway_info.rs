@@ -7,11 +7,10 @@
 //! ## Why This Exists
 //!
 //! Route matching via `deep_match` → `check_gateway_listener_match` needs the
-//! list of GatewayInfo for the request's port.  Previously this list was baked
-//! into the HTTP proxy listener at startup and never updated. If a new Gateway was added
-//! at runtime sharing an already-bound port, its routes would silently fail to
-//! match.  This store is rebuilt on every Gateway change, keeping the list
-//! current.
+//! GatewayInfo list for the request's listener port. Baking this list into the
+//! proxy listener at startup would cause a Gateway added after startup (sharing
+//! an already-bound port) to silently fail route matching. This store is rebuilt
+//! on every Gateway change, keeping the list current.
 //!
 //! ## Performance
 //!

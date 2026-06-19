@@ -26,8 +26,6 @@ impl OpenidConnect {
             },
             Some(ttl),
         );
-        // The old `retain` and `len > 4096` emergency-clear are removed.
-        // LocalLruCache provides LRU eviction at configured capacity.
     }
 
     pub(super) async fn get_cached_access_token(&self, session_ref: &str) -> Option<String> {

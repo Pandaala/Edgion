@@ -24,13 +24,6 @@
 //!                             └── ResourceProcessor + ResourceController
 //! ```
 //!
-//! ## Key Differences from Old Architecture
-//!
-//! - ResourceProcessor<K> is now a stateful struct holding ServerCache
-//! - Processors are registered to PROCESSOR_REGISTRY on spawn
-//! - ResourceController directly calls processor lifecycle methods
-//! - No more ConfigServer dependency - processor manages its own cache
-//!
 //! ## Features
 //!
 //! - **Graceful Shutdown**: Handles SIGTERM/SIGINT signals for clean shutdown

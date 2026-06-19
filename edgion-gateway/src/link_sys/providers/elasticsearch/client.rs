@@ -58,7 +58,7 @@ pub struct EsLinkClient {
     bulk_task: parking_lot::Mutex<Option<JoinHandle<()>>>,
     /// Shared flip-log rate-limit clock for the bulk path (CAS emission dedup).
     last_flip_log_ms: Arc<AtomicU64>,
-    /// Handle to the background health probe (task 05); aborted in `shutdown()`.
+    /// Handle to the background health probe; aborted in `shutdown()`.
     probe_handle: parking_lot::Mutex<Option<JoinHandle<()>>>,
 }
 
@@ -141,7 +141,7 @@ impl EsLinkClient {
             .await;
         });
 
-        // Background health probe (task 05): actively RECOVER `healthy` during
+        // Background health probe: actively RECOVER `healthy` during
         // idle (upgrade_only). The bulk path owns downgrade. Rotates across all
         // endpoints using a probe-local index (NOT the shared round-robin), so a
         // multi-endpoint ES recovers as soon as ANY endpoint is reachable — never
@@ -167,11 +167,6 @@ impl EsLinkClient {
                     let endpoints = endpoints.clone();
                     let probe_idx = probe_idx.clone();
                     async move {
-                        // Rotate across all endpoints with a probe-local index (NOT the
-                        // shared round-robin), so a multi-endpoint ES recovers as soon as
-                        // ANY endpoint is reachable — never stuck false because endpoints[0]
-                        // alone is down. Upgrade-only, so probing a down endpoint never
-                        // spuriously downgrades.
                         let i = probe_idx.fetch_add(1, Ordering::Relaxed) % endpoints.len();
                         super::ops::probe_cluster_health(&client, &endpoints[i]).await
                     }

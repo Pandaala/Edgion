@@ -142,8 +142,7 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
 
 /// Resolve cross-EdgionConfigData references for update_status.
 ///
-/// After S3: EdgionConfigData resources no longer carry external refs (the old
-/// `ServiceRegionRoute.clusterRef` chain is gone). Always returns empty.
+/// EdgionConfigData resources carry no external refs; always returns empty.
 #[allow(dead_code)]
 fn resolve_refs(_ed: &EdgionConfigData, _ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
     vec![]

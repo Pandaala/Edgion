@@ -146,17 +146,9 @@ impl BackendTlsPolicyHandler {
             .backend_tls_policy
             .set_timestamp(&policy_resource_key, new_timestamp.as_deref());
 
-        // Decide whether to requeue siblings. Two precedence-relevant signals:
-        //   (a) target set changed — old siblings may no longer conflict, new
-        //       siblings need to (re)evaluate against this policy.
-        //   (b) target set is unchanged but creation_timestamp changed — this
-        //       happens when a BTP is delete+recreated (same name) within one
-        //       PollWatcher tick. The new timestamp shifts precedence ordering,
-        //       so previously-Conflicted siblings may now win (or lose).
-        //
-        // Otherwise (no-op update — e.g. resourceVersion bump with identical
-        // targets and timestamp) skip requeue to avoid the A→B→A→B ping-pong
-        // cycle between conflicting policies.
+        // Requeue siblings only when a precedence-relevant input changed
+        // (target set or creation_timestamp); skip no-op updates to prevent
+        // the A→B→A→B ping-pong between conflicting policies.
         if should_requeue_siblings(
             &old_target_keys,
             &new_target_keys,
@@ -175,7 +167,6 @@ impl BackendTlsPolicyHandler {
             }
         }
 
-        // Clear old references first to handle updates safely.
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
         btp.spec.resolved_ca_certificates = None;
@@ -699,9 +690,8 @@ mod tests {
 
     #[test]
     fn should_requeue_when_timestamp_changes_with_same_targets() {
-        // The bug: BTP delete+recreated within one PollWatcher tick — same
-        // name, same targets, but a new creation_timestamp must trigger
-        // sibling re-evaluation.
+        // BTP delete+recreated within one PollWatcher tick — same name and
+        // targets, but a new creation_timestamp must trigger sibling re-evaluation.
         let targets = ["ns/my-svc".to_string()];
         assert!(should_requeue_siblings(
             &targets,

@@ -600,13 +600,11 @@ impl PerTryTimeoutTestSuite {
         )
     }
 
-    /// Test: client gives up at 500ms while every attempt sleeps 3s. Probed
-    /// behavior (Pingora 0.8 h1): the downstream EOF is detected almost
-    /// immediately — the gateway aborts the in-flight first attempt (status
-    /// 499, single upstreams entry) instead of running the retry loop to
-    /// exhaustion, and fail_to_proxy records the ClientClosed marker so the
-    /// abandoned work is analyzable offline (log-only decision: the backoff
-    /// TODO in pg_upstream_peer.rs is intentionally NOT implemented).
+    /// Test: client gives up at 500ms while every attempt sleeps 3s. The
+    /// downstream EOF is detected almost immediately — the gateway aborts the
+    /// in-flight first attempt (status 499, single upstreams entry) instead of
+    /// running the retry loop to exhaustion. fail_to_proxy records the ClientClosed
+    /// marker; no early-abort backoff is applied.
     fn test_client_disconnect_is_logged() -> TestCase {
         TestCase::new(
             "client_disconnect_is_logged",
@@ -834,9 +832,9 @@ impl PerTryTimeoutTestSuite {
                         }
                     };
 
-                    // Stickiness engaged: attempt 0 (the timed-out one) is the
-                    // backend cookie1 encoded — guards against a vacuous pass via
-                    // an affinity-map miss (InjectNew) instead of Fix 1.
+                    // Stickiness engaged: attempt 0 (the timed-out one) must encode
+                    // the same backend as cookie1 — guards against an affinity-map
+                    // miss (InjectNew) masking the sticky routing check.
                     let u0 = &upstreams[0];
                     let u0_ip = u0["ip"].as_str().unwrap_or("");
                     let u0_port = u0["port"].as_u64().unwrap_or(0);

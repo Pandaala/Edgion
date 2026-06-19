@@ -57,7 +57,7 @@ const DEFAULT_DATE_PATTERN: &str = "%Y.%m.%d";
 /// Because `resolved_state` drives resolver selection from the CRD auth
 /// variant, a `Resolved(_)` value is guaranteed to match the CRD's auth kind
 /// — "type mismatch" is therefore impossible and is not checked here.
-/// `Pending` / `Invalid` produce a fail-fast `bail!` (see I4 / M4).
+/// `Pending` / `Invalid` produce a fail-fast `bail!`.
 pub fn build_es_client(
     crd: &ElasticsearchClientConfig,
     auth: &CredentialState<ResolvedCredential>,
@@ -308,7 +308,7 @@ mod tests {
         assert_eq!(auth, expected);
     }
 
-    /// I4 / M4 regression: `Pending` state → fail-fast.
+    /// `Pending` state → fail-fast.
     #[test]
     fn test_build_es_client_auth_pending_fails_fast() {
         let crd = basic_auth_crd();
@@ -319,7 +319,7 @@ mod tests {
         );
     }
 
-    /// M4 regression: `Invalid` state → fail-fast with reason surfaced.
+    /// `Invalid` state → fail-fast with reason surfaced.
     #[test]
     fn test_build_es_client_auth_invalid_fails_fast() {
         let crd = basic_auth_crd();
@@ -442,10 +442,9 @@ mod tests {
         assert_eq!(name.len(), "test-logs-2026.02.11".len());
     }
 
-    /// P1-02: `tls.enabled = false` must NOT inject TLS material or honour
-    /// `insecure_skip_verify`. Without this gate ES diverges from Redis/Etcd
-    /// and would `bail!` on `insecure_skip_verify: true` in production even
-    /// though the operator has not opted into TLS.
+    /// `tls.enabled = false` must NOT inject TLS material or honour `insecure_skip_verify`.
+    /// Without this gate, `bail!` on `insecure_skip_verify: true` in production
+    /// would fire even though the operator has not opted into TLS.
     ///
     /// Serialised via `link_sys::tls::ENV_TEST_MUTEX` because this test
     /// mutates `EDGION_ENV` (a process-global table) and would race against

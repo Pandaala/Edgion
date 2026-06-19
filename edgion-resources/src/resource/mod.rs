@@ -17,7 +17,6 @@ pub mod macros;
 // Defs uses macros
 pub mod defs;
 
-// Meta traits
 pub mod meta;
 
 // Registry uses defs

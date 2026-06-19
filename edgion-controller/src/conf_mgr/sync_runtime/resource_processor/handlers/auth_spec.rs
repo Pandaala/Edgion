@@ -201,7 +201,7 @@ impl AuthSpec for KafkaSaslConfig {
 
 // ============================================================================
 // TlsSpec impl on TlsConfig — operates on TlsCerts.secret_ref + .secret directly
-// (TlsCerts intentionally NOT migrated to SecretSlot, see plan T6 revision)
+// (TlsCerts intentionally uses secret_ref + secret directly rather than SecretSlot)
 // ============================================================================
 
 #[async_trait]

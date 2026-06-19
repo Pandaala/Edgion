@@ -1,11 +1,10 @@
 //! Service-scoped LB runtime state — SP affinity + backend lifecycle ledger.
 //!
-//! Stage 3 reduced this module to two responsibilities:
+//! Two responsibilities:
 //!   1. Session-persistence affinity map (token → endpoint SocketAddr).
-//!   2. Backend lifecycle ledger: draining registry and circuit-breaker state.
+//!   2. Backend lifecycle ledger: draining registry.
 //!
-//! Metric atomics (`ewma_us`, `conn_count`) are now on `EdgionBackend` itself.
-//! The old `SERVICES` DashMap (keyed by `(service_key, addr)`) is gone.
+//! Metric atomics (`ewma_us`, `conn_count`) live on `EdgionBackend` itself.
 //! `DRAINING_BACKENDS` holds the live `Arc<EdgionBackend>` so `BackendCleaner`
 //! can poll `backend.conn()` without a side counter.
 
@@ -147,10 +146,6 @@ pub fn remove_service(service_key: &str) {
     );
 }
 
-// ── Legacy stubs (removed in Stage 3) ────────────────────────────────────────
-// `update_ewma`, `get_ewma`, `increment`, `decrement`, `get_count` are gone.
-// Call `EdgionBackend::{update_ewma, inc_conn, dec_conn, ewma, conn}` directly.
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,10 +161,9 @@ mod tests {
         }))
     }
 
-    /// route-07 / route-08 regression: the response-side token (now derived from
-    /// the LB cell address via `std::net::SocketAddr::to_string()`) must resolve
-    /// back through the affinity map for both IPv4 and IPv6 backends, and the two
-    /// historical mismatch forms must NOT resolve.
+    /// Round-trip test: a session token derived from the backend cell address via
+    /// `SocketAddr::to_string()` must resolve back through the affinity map for
+    /// both IPv4 and IPv6 backends. Mis-formatted forms must NOT resolve.
     #[test]
     fn sp_affinity_round_trip_ipv4_and_ipv6() {
         let v4: StdSocketAddr = "10.0.0.1:8080".parse().unwrap();
@@ -177,21 +171,19 @@ mod tests {
         let svc = "ns/sp-round-trip";
         sp_affinity_build(svc, &[backend(v4), backend(v6)]);
 
-        // The token is generated exactly as the response filter now does it:
-        // `lb_backend_addr` (the cell address) formatted with `SocketAddr::to_string()`.
+        // Token format: backend cell address formatted with `SocketAddr::to_string()`.
         let v4_token = generate_session_token(&v4.to_string());
         let v6_token = generate_session_token(&v6.to_string());
         assert_eq!(sp_affinity_lookup(svc, &v4_token), Some(v4));
         assert_eq!(sp_affinity_lookup(svc, &v6_token), Some(v6));
 
-        // route-07: the old unbracketed `format!("{}:{}", ip, port)` form
-        // (`::1:30001`) must NOT resolve — it is the bug this fix removes.
+        // Unbracketed IPv6 form (`::1:30001`, from `format!("{}:{}", ip, port)`)
+        // must NOT resolve — it is not a valid `SocketAddr::to_string()` output.
         let v6_unbracketed = generate_session_token(&format!("{}:{}", v6.ip(), v6.port()));
         assert_eq!(sp_affinity_lookup(svc, &v6_unbracketed), None);
 
-        // route-08: a token built from a rewritten peer port (cell port 30001 →
-        // peer port 8080) must NOT resolve — the fix keys off the cell address,
-        // not the post-`resolve_target_port_key` peer address.
+        // Token built from a rewritten peer port must NOT resolve: session tokens
+        // key off the cell address, not the post-rewritten peer address.
         let v6_rewritten_port = generate_session_token("[::1]:8080");
         assert_eq!(sp_affinity_lookup(svc, &v6_rewritten_port), None);
 

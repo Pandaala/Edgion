@@ -3,8 +3,7 @@
 //! Provides an Elasticsearch client wrapper built from LinkSys CRD config
 //! (`ElasticsearchClientConfig`), using `reqwest` as the underlying HTTP client.
 //!
-//! Zero new dependencies — reqwest, serde_json, base64, chrono are all already
-//! in Cargo.toml. Compatible with Elasticsearch 7.x / 8.x and OpenSearch.
+//! Compatible with Elasticsearch 7.x / 8.x and OpenSearch.
 //!
 //! Key components:
 //! - `EsLinkClient` — core client wrapper with init/shutdown/health
@@ -34,7 +33,6 @@ pub mod config_mapping;
 pub mod log_sender;
 pub mod ops;
 
-// Re-export key types for convenient access
 pub use client::EsLinkClient;
 pub use config_mapping::EsBulkConfig;
 pub use log_sender::EsLogSender;

@@ -4,7 +4,7 @@
 //! observability logs to local files / external sinks.
 //!
 //! NOTE: This module is unrelated to the `LinkSys` Kubernetes CRD
-//! (`types::resources::link_sys`), which describes connections to external
+//! (`crate::resources::link_sys`), which describes connections to external
 //! systems like Redis/Etcd. For the CRD, use `crate::{LinkSys, LinkSysSpec}`.
 
 use std::collections::HashMap;

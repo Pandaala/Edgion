@@ -41,7 +41,7 @@ pub struct ResolvedBasicAuthUser {
     /// Group this user originated from. Always set by controller in
     /// current versions; `#[serde(default)]` provides a fallback so that
     /// Gateway-new / Controller-old rolling upgrades don't break
-    /// deserialization (lesson L2).
+    /// deserialization.
     #[serde(default = "default_group_name")]
     pub group: String,
 }

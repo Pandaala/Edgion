@@ -43,10 +43,10 @@ impl EdgionConfigDataRefManager {
             .unwrap_or_default()
     }
 
-    /// Remove the entire forward-direction entry for a PM key.
+    /// Remove the entire forward-direction entry for an EdgionConfigData key.
     ///
-    /// Call this when the PM itself is deleted so stale ep_keys do not linger
-    /// and get spuriously requeued if the PM key is later reused.
+    /// Call this when the EdgionConfigData itself is deleted so stale ep_keys
+    /// do not linger and get spuriously requeued if the key is later reused.
     pub fn remove_edgion_config_data(&self, ed_key: &str) {
         self.refs.write().remove(ed_key);
     }

@@ -32,7 +32,7 @@ impl TlsRoutePluginRuntime {
         Self { plugins: Vec::new() }
     }
 
-    /// Build runtime from TLS route plugin entries (called during preparse).
+    /// Build runtime from TLS route plugin entries.
     pub fn from_entries(entries: &[TlsRoutePluginEntry]) -> Self {
         let mut plugins: Vec<Arc<dyn TlsRoutePlugin>> = Vec::new();
 

@@ -8,9 +8,7 @@ use crate::plugins::runtime::{PluginLog, PluginSession, UpstreamResponseFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::ResponseRewriteConfig;
 
-/// Response Rewrite plugin
-///
-/// Rewrites responses before returning to client.
+/// Response Rewrite plugin.
 pub struct ResponseRewrite {
     name: String,
     config: ResponseRewriteConfig,
@@ -43,14 +41,10 @@ impl ResponseRewrite {
         if let Some(ref headers) = self.config.headers {
             let mut modified = false;
 
-            // Execution order: rename -> add -> set -> remove
-
             // 1. Rename headers first
             if let Some(ref rename_headers) = headers.rename {
                 for entry in rename_headers {
-                    // Get the value of the original header
                     if let Some(value) = session.get_response_header(&entry.from) {
-                        // Set the new header with the same value
                         if let Err(_e) = session.set_response_header(&entry.to, &value) {
                             plugin_log.push_err("header rename fail");
                         } else {
@@ -113,7 +107,6 @@ impl UpstreamResponseFilter for ResponseRewrite {
         plugin_log: &mut PluginLog,
     ) -> PluginRunningResult {
         use edgion_resources::resources::edgion_plugins::PluginValidation;
-        // Check if configuration is valid
         if self.config.validation_error().is_some() {
             plugin_log.push_err("config invalid");
             return PluginRunningResult::GoodNext;
@@ -125,7 +118,6 @@ impl UpstreamResponseFilter for ResponseRewrite {
         // 2. Headers modification
         self.modify_headers(session, plugin_log);
 
-        // Continue response chain
         PluginRunningResult::GoodNext
     }
 }

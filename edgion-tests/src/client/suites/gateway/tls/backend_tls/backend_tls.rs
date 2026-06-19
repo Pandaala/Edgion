@@ -1,10 +1,10 @@
 // Backend TLS Test suite
-// Test Gateway to backend TLS connection（BackendTLSPolicy）
+// Test Gateway to backend TLS connection (BackendTLSPolicy)
 //
 // Test scenarios:
 // - Client → Gateway: HTTP (port 18080)
 // - Gateway → Backend: HTTPS (port 30051, using BackendTLSPolicy)
-// - Backend server: listening on 30051，with self-signed certificate
+// - Backend server: listening on 30051, with self-signed certificate
 //
 // Required config files (in edgion-tests/integration/conf/):
 // - BackendTLSPolicy_edge_backend-tls.yaml   # BackendTLSPolicy config

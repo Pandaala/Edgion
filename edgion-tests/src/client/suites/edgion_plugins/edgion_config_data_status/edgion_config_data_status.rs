@@ -12,14 +12,9 @@
 //   2. invalid inline GCIR config (EdgionStreamPlugins) -> Accepted=False/Invalid, message
 //      contains "activeProfile"
 //
-// NOTE: a Selector EdgionConfigData is always structurally valid, so the "invalid" case can no
-// longer be an EdgionConfigData. The GCIR rule data now lives inline in the plugin config, so
-// an invalid activeProfile is rejected during EdgionStreamPlugins preparse instead.
-//
-// NOTE: Scenarios 3-6 (ClusterRegionRoute, ServiceRegionRoute, clusterRef chain) were removed
-// in the EdgionConfigData overlay refactor (H3). The ClusterRegionRoute and ServiceRegionRoute
-// EdgionConfigData variants no longer exist; overrideRef resolution is tracked via EdgionPlugins
-// ResolvedRefs conditions, not via EdgionConfigData cross-resource refs.
+// NOTE: A Selector EdgionConfigData is always structurally valid; the "invalid" case must
+// therefore be an EdgionStreamPlugins with an invalid inline GCIR config (bad activeProfile),
+// which the controller rejects during EdgionStreamPlugins preparse.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;

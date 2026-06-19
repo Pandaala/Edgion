@@ -400,9 +400,7 @@ impl PluginRuntime {
                 }
 
                 // Cache the first enabled CORS config so the global preflight
-                // handler can fetch it without deep-cloning per request. Mirrors
-                // the `find_map` semantics previously used in
-                // `pg_request_filter::extract_cors_config_from_route_filters`.
+                // handler can fetch it without deep-cloning per request.
                 // Initialize the `#[serde(skip)]` runtime fields (origins_cache /
                 // compiled_origins_regex / compiled_timing_regex) here: the
                 // preflight handler builds `Cors::from_arc` from this Arc and never
@@ -1246,15 +1244,14 @@ impl PluginRuntime {
 /// reply that fully replaces the upstream response (status + headers + body).
 ///
 /// Building the local reply is synchronous, so this is shared by both the sync
-/// Phase-6 (`run_upstream_response_plugins_sync`) and async Phase-7
+/// (`run_upstream_response_plugins_sync`) and async
 /// (`run_upstream_response_plugins_async`) loops: it stashes the built reply in
-/// `ctx` (`local_reply_header`/`local_reply_body`). `response_filter` (Phase 7)
-/// then writes that reply directly to the downstream and returns a sentinel
-/// `Err` to abort the upstream forward — this is what makes a body-less upstream
-/// (where Pingora never calls the Phase-8 body filter) still emit the
-/// replacement body (filter-04b). gRPC routes are unsupported this iteration:
-/// the response is terminated by status only (body not replaced) and a marker
-/// is recorded.
+/// `ctx` (`local_reply_header`/`local_reply_body`). `response_filter` then writes
+/// that reply to the downstream and returns a sentinel `Err` to abort the
+/// upstream forward — this is what makes a body-less upstream (where Pingora
+/// never calls the body filter) still emit the replacement body. gRPC routes
+/// are not supported: the response is terminated by status only (body not
+/// replaced) and a marker is recorded.
 fn check_response_stage_terminate(
     result: &PluginRunningResult,
     plugin_log: &mut PluginLog,

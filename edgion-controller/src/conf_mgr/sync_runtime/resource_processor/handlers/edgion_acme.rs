@@ -56,7 +56,7 @@ impl Default for EdgionAcmeHandler {
 /// has no equivalent in the generic credential pipeline. All other Secret
 /// resolution failures route through `condition_reasons` so `EdgionAcme`,
 /// `LinkSys`, `EdgionPlugins`, and `EdgionTls` produce the same reason
-/// strings for the same underlying errors (M6/G).
+/// strings for the same underlying errors.
 mod acme_reasons {
     /// ACME-specific · Secret absent or missing `accountCredentials` key —
     /// service will create/patch on first registration. Maps to
@@ -144,7 +144,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         let generation = acme.metadata.generation;
         let status = acme.status.get_or_insert_with(EdgionAcmeStatus::default);
 
-        // ── Map outcome → ResolvedRefs Action (P0-07 unified mapping) ─────
+        // Map outcome → ResolvedRefs Action
         let resource_key = resource_ref.key();
         let account_action =
             outcome_to_resolved_refs_action(&outcome, &resource_key, generation, &AcmeResolveCtx::Account);
@@ -186,8 +186,8 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
 
         // ── Resolve DNS credential Secret (if DNS-01) ───────────────────────
         //
-        // M8: run the same `resolve_secret` pipeline that LinkSys / EdgionTls /
-        // EdgionPlugins use, so DNS credential resolution produces the same
+        // Uses the same `resolve_secret` pipeline as LinkSys / EdgionTls /
+        // EdgionPlugins, so DNS credential resolution produces the same
         // four failure signals on `ResolvedRefs`:
         //   * `SecretNotFound`    — Secret object missing
         //   * `RefNotPermitted`   — cross-namespace `ReferenceGrant` absent
@@ -231,7 +231,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                     let outcome =
                         resolve_secret(ctx, &resource_ref, "edgion.io", "EdgionAcme", credential_ref, &resolver).await;
 
-                    // ── Map outcome → ResolvedRefs Action (P0-07 unified) ─
+                    // Map outcome → ResolvedRefs Action
                     let dns_action = outcome_to_resolved_refs_action(
                         &outcome,
                         &resource_key,
@@ -353,12 +353,11 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
 }
 
 // ============================================================================
-// Resolve-outcome → ResolvedRefs Action mapping (P0-07)
+// Resolve-outcome → ResolvedRefs Action mapping
 //
 // Pure mapping from a credential `ResolveOutcome` to the next action `parse`
-// should take on the `ResolvedRefs` condition. Centralizes the 12 (account+DNS)
-// × (6-variant) condition construction sites into a single match keyed on
-// `(outcome, role)`, so future changes touch one location instead of twelve.
+// should take on the `ResolvedRefs` condition. Keyed on `(outcome, role)` so
+// future changes touch one location.
 // ============================================================================
 
 /// Credential context: drives ACME-bootstrap semantics and the Ok-arm behavior.
@@ -454,12 +453,9 @@ fn outcome_to_resolved_refs_action<T>(
                 secret_name = %secret_name,
                 "Cross-namespace reference to account Secret denied (ReferenceGrant missing)"
             );
-            // M6/F: cross-ns denial collapses onto Gateway-API standard
-            // `RefNotPermitted`. The pipeline's `check_reference_allowed`
-            // returns a bare bool, so distinguishing "no grant yet" from
-            // "grant denies" is impossible — we used to advertise such a
-            // distinction via `CrossNsReferenceNotPermitted`, but it was
-            // always misleading.
+            // Cross-ns denial uses the Gateway-API standard `RefNotPermitted`
+            // reason. The pipeline's `check_reference_allowed` returns a bare
+            // bool so "no grant yet" and "grant denies" are indistinguishable.
             Continue(condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::REF_NOT_PERMITTED,
@@ -487,9 +483,8 @@ fn outcome_to_resolved_refs_action<T>(
             // `NeedsRegistration` to match the "absent Secret" case above
             // and avoid spurious alerts.
             //
-            // If M6/G ever unifies ACME onto the generic pipeline
-            // (removing the auto-patch path), this arm should collapse
-            // into the `DecodeError` / `InvalidSecretType` pattern.
+            // If the auto-patch path is ever removed, this arm should
+            // collapse into the `DecodeError` / `InvalidSecretType` pattern.
             tracing::info!(
                 edgion_acme = %resource_key,
                 "ACME account Secret exists without accountCredentials key, will be patched on first registration"
@@ -510,11 +505,6 @@ fn outcome_to_resolved_refs_action<T>(
                 detail = %detail,
                 "ACME account Secret data is corrupted (will not auto-repair)"
             );
-            // M6/G: align ACME with the generic credential pipeline. This
-            // was `AcmeAccountCorrupted` before, but that reason subsumed
-            // both DecodeError and InvalidSecretType into one bucket,
-            // diverging from how LinkSys / EdgionPlugins / EdgionTls
-            // report the same pipeline variants.
             Abort(condition_false(
                 condition_types::RESOLVED_REFS,
                 condition_reasons::DECODE_ERROR,

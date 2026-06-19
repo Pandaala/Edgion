@@ -212,7 +212,7 @@ where
     /// Resource kind name
     kind: &'static str,
 
-    /// Resource cache (previously in ConfigServer)
+    /// Resource cache
     cache: Arc<ServerCache<K>>,
 
     /// Work queue for runtime event processing
@@ -680,7 +680,6 @@ where
     }
 }
 
-// Implement ProcessorObj for ResourceProcessor<K>
 #[async_trait::async_trait]
 impl<K> ProcessorObj for ResourceProcessor<K>
 where

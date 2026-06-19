@@ -58,7 +58,6 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
     fn update_status(&self, egc: &mut EdgionGatewayConfig, _ctx: &HandlerContext, validation_errors: &[String]) {
         let generation = egc.metadata.generation;
 
-        // Initialize status if not present
         let status = egc
             .status
             .get_or_insert_with(|| EdgionGatewayConfigStatus { conditions: vec![] });

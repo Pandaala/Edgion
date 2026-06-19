@@ -1,4 +1,4 @@
-// gRPC match rulesTest suite
+// gRPC match rules test suite
 //
 // Required config files (in edgion-tests/integration/conf/):
 // - GRPCRoute_edge_match-test.yaml         # gRPC match rules test route
@@ -11,7 +11,6 @@ use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
 use std::time::Instant;
 
-// Use proto module from parent
 // Use proto module from grpc_route
 use super::super::test::test_service_client::TestServiceClient;
 use super::super::test::HelloRequest;
@@ -87,7 +86,7 @@ impl GrpcMatchTestSuite {
         )
     }
 
-    /// Test hostname negative match（wrong hostname should fail）
+    /// Test hostname negative match (wrong hostname should fail)
     fn test_hostname_match_negative() -> TestCase {
         TestCase::new(
             "grpc_hostname_match_negative",
@@ -210,7 +209,7 @@ impl GrpcMatchTestSuite {
         )
     }
 
-    /// Test sectionName mismatchmatch（route config sectionName: https，but accessed via HTTP listener）
+    /// Test sectionName mismatch: route's sectionName targets the "https" listener but request arrives on the HTTP listener
     fn test_section_name_mismatch() -> TestCase {
         TestCase::new(
             "grpc_section_name_mismatch",
@@ -219,13 +218,12 @@ impl GrpcMatchTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    //  HTTP listener (10080)
-                    //  GRPCRoute config sectionName: https
-                    // so should not match，returns 404
+                    // Request hits the HTTP listener; GRPCRoute sectionName: https points to
+                    // the HTTPS listener. No match — expects rejection (Unimplemented/Unavailable).
                     let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
                     let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                         Ok(mut ep) => {
-                            //  hostname  grpc-section-wrong.example.com
+                            // hostname grpc-section-wrong.example.com
                             let origin_uri = match format!("http://grpc-section-wrong.example.com:{}", ctx.grpc_port)
                                 .parse()
                             {
@@ -493,7 +491,7 @@ impl GrpcMatchTestSuite {
         )
     }
 
-    /// Test exact with headermatch
+    /// Test gRPC exact service+method match with a required header filter
     fn test_header_match() -> TestCase {
         TestCase::new("grpc_header_match", "Test gRPC header match", |ctx: TestContext| {
             Box::pin(async move {
@@ -523,7 +521,7 @@ impl GrpcMatchTestSuite {
                     }
                 };
 
-                // Add header
+                // Add the required x-test-header so the GRPCRoute header match fires
                 let mut request = tonic::Request::new(HelloRequest {
                     name: "HeaderTest".to_string(),
                 });

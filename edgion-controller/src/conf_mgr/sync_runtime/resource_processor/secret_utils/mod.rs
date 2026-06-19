@@ -7,8 +7,8 @@
 mod secret_ref;
 
 pub use secret_ref::{new_secret_ref_manager, SecretRefManager};
-// The global Secret store now lives in `common::secret` (shared with the data
-// plane). Re-export it from here to keep existing controller call sites stable.
+// Global Secret store lives in edgion_common::secret (shared with the data plane);
+// re-exported here for controller call sites.
 pub use edgion_common::secret::{get_global_secret_store, get_secret, get_secret_by_name, SecretStore};
 
 // Re-export from the generic ref_manager module for backward compatibility

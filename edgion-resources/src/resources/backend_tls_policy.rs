@@ -332,7 +332,6 @@ impl BackendTLSPolicy {
         let policy_ns = self.namespace();
 
         self.spec.target_refs.iter().any(|target| {
-            // Check group, kind, and name match
             let matches = target.group == group && target.kind == kind && target.name == name;
 
             if !matches {

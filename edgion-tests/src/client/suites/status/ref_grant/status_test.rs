@@ -51,7 +51,6 @@ impl RefGrantStatusTestSuite {
         false
     }
 
-    /// Test: Cross-namespace reference with ReferenceGrant should have ResolvedRefs=True
     fn test_cross_ns_allowed() -> TestCase {
         TestCase::new(
             "cross_ns_allowed",
@@ -87,7 +86,6 @@ impl RefGrantStatusTestSuite {
         )
     }
 
-    /// Test: Cross-namespace reference without ReferenceGrant should have ResolvedRefs=False
     fn test_cross_ns_denied() -> TestCase {
         TestCase::new(
             "cross_ns_denied",
@@ -123,7 +121,6 @@ impl RefGrantStatusTestSuite {
         )
     }
 
-    /// Test: Route with multiple parent_refs should have independent status for each
     fn test_multi_parent() -> TestCase {
         TestCase::new(
             "multi_parent",
@@ -172,7 +169,6 @@ impl RefGrantStatusTestSuite {
         )
     }
 
-    /// Test: Status has Accepted condition
     fn test_has_accepted_condition() -> TestCase {
         TestCase::new(
             "has_accepted_condition",
@@ -215,7 +211,6 @@ impl RefGrantStatusTestSuite {
         )
     }
 
-    /// Test: GatewayClass has Accepted=True condition
     fn test_gateway_class_accepted() -> TestCase {
         TestCase::new(
             "gateway_class_accepted",
@@ -256,7 +251,6 @@ impl RefGrantStatusTestSuite {
         )
     }
 
-    /// Test: HTTPRoute with invalid backend kind should have ResolvedRefs=False/InvalidKind
     fn test_invalid_backend_kind() -> TestCase {
         TestCase::new(
             "invalid_backend_kind",
@@ -291,7 +285,6 @@ impl RefGrantStatusTestSuite {
         )
     }
 
-    /// Test: HTTPRoute with non-existent backend should have ResolvedRefs=False/BackendNotFound
     fn test_nonexistent_backend() -> TestCase {
         TestCase::new(
             "nonexistent_backend",
@@ -327,9 +320,7 @@ impl RefGrantStatusTestSuite {
         )
     }
 
-    /// Test: HTTPRoute with one valid rule and one rule with ref-denied cross-ns backend
-    /// should have Accepted=True and ResolvedRefs=False(RefNotPermitted).
-    /// Per Gateway API conformance spec (httproute-partially-invalid-via-invalid-reference-grant),
+    /// Per Gateway API conformance (httproute-partially-invalid-via-invalid-reference-grant),
     /// PartiallyInvalid is NOT required for backend ref issues — only ResolvedRefs is affected.
     fn test_partially_invalid() -> TestCase {
         TestCase::new(
@@ -620,8 +611,6 @@ impl RefGrantStatusTestSuite {
         )
     }
 
-    /// Test: Deleting a ReferenceGrant should cause the route to become ResolvedRefs=False
-    /// while keeping Accepted=True (route stays in route table, Gateway returns 500).
     fn test_delete_reference_grant() -> TestCase {
         TestCase::new(
             "delete_reference_grant",

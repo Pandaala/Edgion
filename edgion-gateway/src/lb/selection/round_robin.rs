@@ -15,7 +15,7 @@ static TRUNCATION_WARN_ONCE: Once = Once::new();
 /// today, so the sum equals the backend count (<= u16::MAX) and this cap is a
 /// no-op; it is defense-in-depth for the day per-endpoint weights are
 /// introduced, when a single unclamped `weight` would otherwise expand into a
-/// multi-GB allocation. Mirrors the WeightedRoundRobin cap (lb-F005).
+/// multi-GB allocation. Mirrors the WeightedRoundRobin cap.
 const MAX_RR_WEIGHTED_LEN: usize = 1 << 20;
 
 /// Greatest common divisor (Euclid's algorithm). `gcd(x, 0) == x`.
@@ -30,7 +30,7 @@ fn gcd(mut a: usize, mut b: usize) -> usize {
 
 /// Normalize per-backend weights (each already `>= 1`) so the expanded index
 /// array stays within `MAX_RR_WEIGHTED_LEN`, preserving the traffic ratio.
-/// Mirrors `weighted_selector::normalize_weights` (lb-F005):
+/// Mirrors `weighted_selector::normalize_weights`:
 ///
 /// 1. Reduce by the greatest common divisor — lossless, collapses e.g.
 ///    `[100, 100]` to `[1, 1]` so common-factor weights cost almost nothing

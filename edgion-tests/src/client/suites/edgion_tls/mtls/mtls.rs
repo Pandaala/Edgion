@@ -4,8 +4,8 @@
 // Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-http.yaml         # HTTP backend service discovery
 // - Service_edge_test-http.yaml               # HTTP service definition
-// - HTTPRoute_edge_mtls-test.yaml             # mTLS routing rules（Host: mtls*.example.com）
-// - Gateway_edge_mtls-test-gateway.yaml       # mTLS Gateway config (listening port）
+// - HTTPRoute_edge_mtls-test.yaml             # mTLS routing rules (Host: mtls*.example.com)
+// - Gateway_edge_mtls-test-gateway.yaml       # mTLS Gateway config (listening port)
 // - EdgionTls_edge_mtls-test-mutual.yaml      # Mutual TLS config（Host: mtls.example.com）
 // - EdgionTls_edge_mtls-test-optional.yaml    # Optional mTLS config（Host: mtls-optional.example.com）
 // - EdgionTls_edge_mtls-test-san.yaml         # SAN config（Host: mtls-san.example.com）
@@ -19,9 +19,9 @@
 // Generated certificate files (by generate_mtls_certs.sh):
 // - edgion-tests/certs/mtls/valid-client.crt          # client certificate
 // - edgion-tests/certs/mtls/valid-client.key          # valid client private key
-// - edgion-tests/certs/mtls/invalid-client.crt        # client certificate（ CA）
+// - edgion-tests/certs/mtls/invalid-client.crt        # invalid client certificate (untrusted CA)
 // - edgion-tests/certs/mtls/invalid-client.key        # invalid client private key
-// - edgion-tests/certs/mtls/nonmatching-client.crt    # SAN matchclient certificate
+// - edgion-tests/certs/mtls/nonmatching-client.crt    # SAN-mismatched client certificate
 // - edgion-tests/certs/mtls/nonmatching-client.key    # SAN mismatched client private key
 // - edgion-tests/certs/mtls/chain-client-bundle.crt   # client certificate with chain (leaf + intermediate)
 // - edgion-tests/certs/mtls/chain-client.crt          # leaf-only client certificate (intermediate-signed)
@@ -90,7 +90,6 @@ fn create_mtls_client(
 }
 
 impl MtlsTestSuite {
-    // Test 1: Mutual TLS with valid client certificate - should succeed
     fn test_mutual_with_valid_cert() -> TestCase {
         TestCase::new(
             "mtls_mutual_valid_cert",
@@ -136,7 +135,6 @@ impl MtlsTestSuite {
         )
     }
 
-    // Test 2: Mutual TLS without client certificate - should fail
     fn test_mutual_without_cert() -> TestCase {
         TestCase::new(
             "mtls_mutual_no_cert",
@@ -183,7 +181,6 @@ impl MtlsTestSuite {
         )
     }
 
-    // Test 3: Mutual TLS with invalid (untrusted) client certificate - should fail
     fn test_mutual_with_invalid_cert() -> TestCase {
         TestCase::new(
             "mtls_mutual_invalid_cert",
@@ -233,7 +230,6 @@ impl MtlsTestSuite {
         )
     }
 
-    // Test 4: Optional Mutual TLS with client certificate - should succeed
     fn test_optional_with_cert() -> TestCase {
         TestCase::new(
             "mtls_optional_with_cert",
@@ -276,7 +272,6 @@ impl MtlsTestSuite {
         )
     }
 
-    // Test 5: Optional Mutual TLS without client certificate - should succeed
     fn test_optional_without_cert() -> TestCase {
         TestCase::new(
             "mtls_optional_no_cert",
@@ -322,7 +317,6 @@ impl MtlsTestSuite {
         )
     }
 
-    // Test 6: SAN whitelist - matching SAN - should succeed
     fn test_san_whitelist_matching() -> TestCase {
         TestCase::new(
             "mtls_san_whitelist_match",
@@ -366,7 +360,6 @@ impl MtlsTestSuite {
         )
     }
 
-    // Test 7: SAN whitelist - non-matching SAN - should fail
     fn test_san_whitelist_non_matching() -> TestCase {
         TestCase::new(
             "mtls_san_whitelist_no_match",
@@ -412,14 +405,8 @@ impl MtlsTestSuite {
         )
     }
 
-    // Test: Terminate mode without client certificate - should succeed
-    //
-    // Terminate mode performs TLS termination only and does not request a
-    // client cert. From the client's perspective the handshake should
-    // succeed even without an identity. This locks in the regression for
-    // is_mtls = is_mtls_enabled() (i.e. false for Terminate) — a connection
-    // that breaks here would indicate the Terminate path was accidentally
-    // wired into mTLS verification.
+    // Terminate mode performs TLS termination only; it must not request a client cert.
+    // A failure here indicates Terminate was accidentally wired into mTLS verification.
     fn test_terminate_without_cert() -> TestCase {
         TestCase::new(
             "mtls_terminate_no_cert",
@@ -461,11 +448,8 @@ impl MtlsTestSuite {
         )
     }
 
-    // Test: Terminate mode with client certificate - should still succeed
-    //
-    // Even when the client offers a cert, Terminate mode must not validate
-    // it (configure_mtls returns early without setting any verify mode).
-    // The handshake should succeed; the cert is silently ignored.
+    // Even when the client offers a cert, Terminate mode must not validate it
+    // (configure_mtls returns early without setting any verify mode).
     fn test_terminate_with_cert() -> TestCase {
         TestCase::new(
             "mtls_terminate_with_cert",
@@ -508,7 +492,6 @@ impl MtlsTestSuite {
         )
     }
 
-    // Test 8: Certificate chain with verifyDepth=2 - should succeed
     fn test_cert_chain_depth() -> TestCase {
         TestCase::new(
             "mtls_cert_chain_depth",
@@ -552,13 +535,10 @@ impl MtlsTestSuite {
         )
     }
 
-    // Test 8b (tls-06 regression): the intermediate CA lives ONLY inside the
-    // `ca-chain` CA bundle Secret (root + intermediate). The client presents a
-    // leaf cert signed by the intermediate but does NOT present the intermediate
-    // itself, so the gateway can only build the path if it loaded every PEM
-    // block of the bundle into its trust store. Before the fix, the CA bundle
-    // loaded only the first block (root), the intermediate was dropped, and this
-    // handshake failed with "unable to get local issuer certificate".
+    // Verifies that the gateway loads all PEM blocks from a multi-block CA bundle.
+    // The intermediate CA lives only inside the `ca-chain` Secret (root + intermediate);
+    // the client presents only the leaf cert. The gateway must load every PEM block
+    // to build the chain to root.
     fn test_cert_chain_intermediate_in_ca_store() -> TestCase {
         TestCase::new(
             "mtls_cert_chain_intermediate_in_ca_store",
@@ -626,13 +606,13 @@ impl TestSuite for MtlsTestSuite {
             Self::test_optional_with_cert(),
             Self::test_optional_without_cert(),
             Self::test_cert_chain_depth(),
-            Self::test_cert_chain_intermediate_in_ca_store(), // tls-06: intermediate from CA bundle
+            Self::test_cert_chain_intermediate_in_ca_store(),
             // Terminate mode (TLS termination only, no client cert verification)
             Self::test_terminate_without_cert(),
             Self::test_terminate_with_cert(),
-            // SAN/CN whitelist validation tests (now implemented at TLS layer)
-            Self::test_san_whitelist_matching(),     // SAN whitelist matching
-            Self::test_san_whitelist_non_matching(), // SAN whitelist non-matching
+            // SAN whitelist validation tests (TLS layer)
+            Self::test_san_whitelist_matching(),
+            Self::test_san_whitelist_non_matching(),
         ]
     }
 }

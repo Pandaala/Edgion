@@ -4,8 +4,8 @@
 // Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-grpc.yaml         # gRPC backend service discovery
 // - Service_edge_test-grpc.yaml               # gRPC service definition
-// - GRPCRoute_edge_test-grpc-https.yaml       # gRPC TLS routing rules（Host: grpc-tls.test.example.com）
-// - Gateway_edge_tls-terminate-gateway.yaml   # TLS termination Gateway config (listening port）
+// - GRPCRoute_edge_test-grpc-https.yaml       # gRPC TLS routing rules (Host: grpc-tls.test.example.com)
+// - Gateway_edge_tls-terminate-gateway.yaml   # TLS termination Gateway config (listening port)
 // - EdgionTls_edge_edge-tls.yaml              # TLS certificate config
 // - Secret_edgion-test_edge-tls.yaml          # TLS certificate Secret
 // - GatewayClass__public-gateway.yaml         # GatewayClass config
@@ -33,10 +33,8 @@ impl GrpcTlsTestSuite {
             Box::pin(async move {
                 let start = Instant::now();
 
-                // Build HTTPS connection URL
                 let grpc_url = format!("https://{}:{}", ctx.target_host, ctx.grpc_https_port);
 
-                // Read CA certificate
                 let ca_pem = match std::fs::read_to_string("edgion-tests/certs/ca.pem") {
                     Ok(pem) => pem,
                     Err(e) => {
@@ -46,11 +44,10 @@ impl GrpcTlsTestSuite {
 
                 let ca = Certificate::from_pem(ca_pem);
 
-                // config TLS -  CA certificate domain_name
+                // Configure TLS with CA certificate and domain name.
                 let domain_name = ctx.grpc_host.as_deref().unwrap_or("localhost");
                 let tls = ClientTlsConfig::new().ca_certificate(ca).domain_name(domain_name);
 
-                // Create Channel
                 let channel = match Channel::from_shared(grpc_url.clone()) {
                     Ok(mut endpoint) => {
                         // Gateway Mode: set origin to control :authority pseudo-header
@@ -86,7 +83,6 @@ impl GrpcTlsTestSuite {
 
                 let mut client = TestServiceClient::new(channel);
 
-                // Create request - same as grpc_suite
                 let request = tonic::Request::new(HelloRequest {
                     name: "Edgion".to_string(),
                 });

@@ -293,11 +293,10 @@ mod tests {
         );
     }
 
-    /// Regression for F-007: `rebuild_all` must clear the route table of an
-    /// active listener that previously had routes but now has none. Without
-    /// the clear-pass, the listener's `ArcSwap<TcpRouteTable>` retains the
-    /// previous snapshot and the data plane keeps forwarding to deleted
-    /// backends.
+    /// Invariant: `rebuild_all` must clear the route table of an active listener
+    /// that previously had routes but now has none. Without the clear-pass, the
+    /// listener's `ArcSwap<TcpRouteTable>` retains the previous snapshot and the
+    /// data plane keeps forwarding to deleted backends.
     #[test]
     fn test_rebuild_all_clears_active_listener_with_no_routes() {
         let managers = GlobalTcpRouteManagers::new();
@@ -418,12 +417,12 @@ mod tests {
         assert!(managers.by_listener.contains_key(&affected_key));
     }
 
-    /// Regression for the WRR-cursor-reset blocker: a listener-table rebuild
-    /// must Arc-CLONE the cached unit, never rebuild it. If the served unit is
-    /// the same `Arc` as the cached one, its `backend_finder` (and WRR cursor)
-    /// is preserved across rebuilds, so an unrelated route/listener change does
-    /// not reset a route's load-balancing distribution. A reintroduction of
-    /// "build the unit inside `from_units`" would make `ptr_eq` fail here.
+    /// Invariant: a listener-table rebuild must Arc-CLONE the cached unit, never
+    /// rebuild it. If the served unit is the same `Arc` as the cached one, its
+    /// `backend_finder` (and WRR cursor) is preserved across rebuilds, so an
+    /// unrelated route/listener change does not reset a route's load-balancing
+    /// distribution. A reintroduction of "build the unit inside `from_units`"
+    /// would make `ptr_eq` fail here.
     #[test]
     fn test_unit_arc_reused_across_table_rebuild() {
         let managers = GlobalTcpRouteManagers::new();

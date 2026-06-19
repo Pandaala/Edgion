@@ -78,7 +78,7 @@ pub fn check_key_matches_cert(cert_pem: &str, key_pem: &str) -> Result<(), KeyCe
 }
 
 // ---------------------------------------------------------------------------
-// matches_host_pattern (moved from gateway tls::validation::mod)
+// matches_host_pattern
 // ---------------------------------------------------------------------------
 
 /// Match value against pattern using a single-leftmost-label wildcard. Per RFC 6125 §6.4.1
@@ -337,11 +337,11 @@ impl From<KeyCertMatchError> for CertValidationError {
 }
 
 // ---------------------------------------------------------------------------
-// validate_cert (moved from gateway tls::validation::cert)
+// validate_cert
 //
-// Pure, side-effect-free — no tracing calls.  Advisory warnings for deprecated
+// Pure, side-effect-free — no tracing calls. Advisory warnings for deprecated
 // TLS version, reserved revocation/OCSP schema, and the no-SAN CN fallback are
-// emitted by a caller-side helper in the gateway (added in a later task).
+// emitted by a caller-side helper in the gateway.
 // ---------------------------------------------------------------------------
 
 /// Validate EdgionTls certificate
@@ -576,7 +576,7 @@ fn check_san_matches(cert: &X509Certificate, declared_hosts: &[String]) -> Resul
 
     // CN fallback only when certificate has no SAN extension at all (legacy cert compat).
     // Advisory warning about this deprecated fallback is emitted by a caller-side helper
-    // in the gateway (added in a later task).
+    // in the gateway.
     if !has_san_extension {
         if let Some(cn) = cert.subject().iter_common_name().next() {
             if let Ok(cn_str) = cn.as_str() {

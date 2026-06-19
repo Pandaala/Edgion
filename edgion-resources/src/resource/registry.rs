@@ -1,20 +1,15 @@
 //! Global Resource Type Registry
 //!
-//! This module provides a centralized registry for all resource types in the system.
-//! It delegates to the unified resource definitions in `resource_defs.rs`.
-//!
-//! # Migration Note
-//! This module now delegates to `resource_defs` for resource metadata.
-//! The `ResourceTypeMetadata` struct and `RESOURCE_TYPES` are kept for backward compatibility.
+//! Provides `ResourceTypeMetadata` / `RESOURCE_TYPES` wrappers around the
+//! unified definitions in `resource_defs` (kept for backward compatibility).
 
 use std::sync::LazyLock;
 
 use super::{registry_resource_names, ALL_RESOURCE_INFOS};
 
-/// Metadata for a resource type
+/// Metadata for a resource type.
 ///
-/// This struct is kept for backward compatibility.
-/// New code should use `ResourceKindInfo` from `resource_defs` module.
+/// Prefer `ResourceKindInfo` from the `resource_defs` module for new code.
 #[derive(Debug, Clone)]
 pub struct ResourceTypeMetadata {
     /// The name of the resource type (used for display and logging)
@@ -45,10 +40,9 @@ impl ResourceTypeMetadata {
     }
 }
 
-/// Global registry of all resource types
+/// Global registry of all resource types.
 ///
-/// This list is generated from `resource_defs.rs` for consistency.
-/// Only resources with `in_registry: true` are included (excludes Secret).
+/// Only resources with `in_registry: true` are included (excludes `Secret` and `ConfigMap`).
 pub static RESOURCE_TYPES: LazyLock<Vec<ResourceTypeMetadata>> = LazyLock::new(|| {
     ALL_RESOURCE_INFOS
         .iter()
@@ -70,9 +64,7 @@ pub fn all_resource_type_names() -> Vec<&'static str> {
     registry_resource_names()
 }
 
-/// Get the list of base configuration resource names
-///
-/// This function now delegates to `resource_defs::base_conf_kind_names()`.
+/// Returns base configuration resource names.
 pub fn base_conf_resource_names() -> Vec<&'static str> {
     super::base_conf_kind_names()
 }

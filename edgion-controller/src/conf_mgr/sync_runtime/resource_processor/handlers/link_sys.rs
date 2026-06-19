@@ -361,7 +361,6 @@ pub(super) async fn resolve_one<R: SecretMaterialResolver>(
     outcome_to_result(outcome).map(Some)
 }
 
-// Unit tests for this module live in `tests/link_sys_test.rs`.
 #[cfg(test)]
 #[path = "tests/link_sys_test.rs"]
 mod tests;

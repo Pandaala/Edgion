@@ -63,7 +63,6 @@ async fn test_issuer_validation_fail() {
 
     let r = auth.run_request(&mut mock, &mut log).await;
     assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
-    // With issuer_groups routing, unknown iss -> "Deny unknown iss"
     assert!(log.contains("Deny unknown iss"), "got: {log:?}");
 }
 

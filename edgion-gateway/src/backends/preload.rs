@@ -14,8 +14,6 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 /// Warm the `ServiceSelectorCell` for every service referenced by any route.
-///
-/// Called after `wait_for_ready()` when all routes and EndpointSlices are loaded.
 pub fn preload_load_balancers(config_client: Arc<ConfigClient>) {
     let mut service_keys: HashSet<String> = HashSet::new();
 

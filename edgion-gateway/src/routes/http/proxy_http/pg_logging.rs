@@ -24,23 +24,18 @@ pub async fn logging(
             upstream.wpt = Some(wpt.as_millis() as u64);
         }
     }
-    // Record proxied request bytes for bandwidth monitoring
     global_metrics().add_request_bytes(session.body_bytes_read() as u64);
-    // Record proxied response bytes for bandwidth monitoring
     global_metrics().add_response_bytes(session.upstream_body_bytes_received() as u64);
     // g1-007: balance the LB runtime ledger using the explicit fields written by
     // `connected_to_upstream` (see `lb_runtime_cleanup` for the full contract).
     lb_runtime_cleanup(ctx);
 
-    // Update response status from session
     if let Some(resp_header) = session.response_written() {
         ctx.request_info.status = Some(resp_header.status.as_u16());
     }
 
-    // Record HTTP request metrics
     record_request_metrics(ctx, _e);
 
-    // Create access log entry
     let entry = AccessLogEntry::from_context(ctx);
     // Extract LogMeta BEFORE serialization — typed fields needed by OTLP sender.
     // entry.timestamp is i64 milliseconds; guard negative values before casting.

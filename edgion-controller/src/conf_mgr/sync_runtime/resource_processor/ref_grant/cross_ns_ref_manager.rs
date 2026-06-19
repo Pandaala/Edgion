@@ -8,8 +8,7 @@
 
 use super::super::ref_manager::{BidirectionalRefManager, ResourceRef};
 
-// Re-export ResourceRef as CrossNsResourceRef for backward compatibility
-// during migration.  New code should use ResourceRef directly.
+// Alias of ResourceRef kept for call-site compatibility; prefer ResourceRef directly.
 pub type CrossNsResourceRef = ResourceRef;
 
 /// Manages cross-namespace reference mappings.

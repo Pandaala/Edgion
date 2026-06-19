@@ -1,8 +1,4 @@
 /// Compiled route path pattern for radix tree matching.
-///
-/// After the radix tree now supports `:param` parameter matching internally,
-/// this struct is greatly simplified - no longer needs `radix_key` extraction
-/// or `match_segments` parsing.
 #[derive(Debug, Clone)]
 pub struct RadixPath {
     /// Original path pattern (e.g., "/api/:version/users")

@@ -243,23 +243,17 @@ mod tests {
             }
         });
 
-        // Before the fix the URL was `http://::1:<port>/healthz` (missing brackets),
-        // which reqwest rejected as a parse error.
         let res = probe_http(addr, "/healthz", None, None, &[200], Duration::from_secs(1)).await;
         assert!(res.is_ok(), "IPv6 probe should succeed, got {res:?}");
     }
 
     #[tokio::test]
     async fn test_grpc_probe_ipv6_does_not_panic() {
-        // No gRPC server is listening, so the probe must return an error rather than
-        // panic. Before the fix the bracketless `http://::1:1` failed to parse and the
-        // `.expect()` panicked the health-check task. This does not require a working
-        // IPv6 stack: the connect simply fails and the URI parse must succeed.
+        // No gRPC server is listening; the probe must return an error rather than panic.
+        // No working IPv6 stack required: the URI must parse (bracketed `::1`) and the
+        // failure must come from the network layer, not URI construction.
         let addr: SocketAddr = "[::1]:1".parse().expect("parse ipv6 addr");
         let res = probe_grpc(addr, None, "", Duration::from_millis(300)).await;
-        // The URI must parse (bracketed IPv6) and the failure must come from the
-        // network layer, not URI construction — i.e. the probe got past the parse.
-        // Before the fix this site panicked via `.expect()` on the unparseable URI.
         assert!(matches!(
             res,
             Err(ProbeError::GrpcConnectionFailed(_)) | Err(ProbeError::Timeout)

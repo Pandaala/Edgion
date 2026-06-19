@@ -132,10 +132,10 @@ impl EdgionConfigDataStore {
         for (key, ed) in raw {
             match &ed.spec.data {
                 ConfigEntry::KeyList(_) => {
-                    // Standard primitive: no index — no live consumer yet (D1).
+                    // No typed index — no request-time consumer.
                 }
                 ConfigEntry::IpList(_) => {
-                    // Standard primitive: no index — no live consumer yet (D1).
+                    // No typed index — no request-time consumer.
                 }
                 ConfigEntry::Selector(_) => {
                     // Active-profile selector. Not indexed — the GlobalConnectionIpRestriction
@@ -281,7 +281,7 @@ mod stats_tests {
         raw.insert("ns2/key-list".to_string(), key_ed);
         store.replace_all(raw);
 
-        // IpList and KeyList are no longer indexed (D1), but raw count and keys must reflect them.
+        // IpList and KeyList have no typed index; raw count and keys still reflect them.
         assert_eq!(store.count(), 2);
         assert_eq!(store.keys().len(), 2);
     }

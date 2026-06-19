@@ -1,4 +1,4 @@
-//! OpenID Connect plugin implementation (Phase 1: Bearer + Discovery + JWKS).
+//! OpenID Connect plugin implementation.
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Nonce};
@@ -67,8 +67,7 @@ impl DiscoveryDoc for DiscoveryDocument {
 }
 
 /// Build a config-aware discovery validator that fails fetch when a required
-/// endpoint is missing for the configured plugin behavior. Closes g3-009 by
-/// shifting "missing endpoint" failures from request-time 502 to fetch-time.
+/// endpoint is missing for the configured plugin behavior.
 fn build_discovery_validator(config: &OpenidConnectConfig) -> DiscoveryValidator<DiscoveryDocument> {
     // Snapshot config flags into the closure so it stays Send + Sync + 'static.
     let unauth_action = config.unauth_action;
@@ -144,7 +143,6 @@ struct TokenEndpointResponse {
 #[derive(Debug, Clone)]
 struct IntrospectionCacheEntry {
     claims: Value,
-    // expires_at removed — TTL owned by LocalLruCache
 }
 
 #[derive(Debug, Clone)]
@@ -232,7 +230,7 @@ impl OpenidConnect {
         // cached discovery only (no fetch on the request) and silently degrades RP-
         // Initiated Logout / token revocation when the cache is cold. Pre-warming on
         // construction closes the "first request after gateway restart is /logout"
-        // gap without adding an HTTP RTT to the request path. (g3-007)
+        // gap without adding an HTTP RTT to the request path.
         //
         // Gated out under `cfg(test)` so unit tests do not fan out real DNS/HTTPS
         // probes against placeholder discovery URLs. Skipped when the config is

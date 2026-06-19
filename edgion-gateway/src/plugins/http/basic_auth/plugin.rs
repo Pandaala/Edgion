@@ -317,9 +317,9 @@ mod tests {
 
     #[test]
     fn basic_no_group_in_failure_branches() {
-        // Sanity: lesson L7 — failure literals must not carry group=.
-        // The contract is enforced by skills/04-review/basic-auth/group-in-ok-log.md.
-        // This is a literal-string check on the static deny strings.
+        // Failure literals must not carry group=.
+        // Enforced by skills/04-review/basic-auth/group-in-ok-log.md.
+        // Literal-string check — static deny strings must never include group=.
         let deny_strings = ["Allow anonymous", "Deny no credential", "Deny bad credential"];
         for s in &deny_strings {
             assert!(!s.contains("group="), "{} must not carry group= (lesson L7)", s);

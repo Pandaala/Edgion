@@ -1,10 +1,8 @@
-// tls-06 last-known-good integration test suites.
+// last-known-good integration test suites.
 //
-// Proves the two halves of the feature TOGETHER, across a hot-reload of an
-// invalid (garbage) Secret update:
+// Verifies both halves of the feature across a hot-reload of an invalid (garbage) Secret update:
 //   (a) GATEWAY data plane keeps serving the previously bound valid cert
-//       (last-known-good): the served cert serial is unchanged after the bad
-//       update.
+//       (last-known-good): the served cert serial is unchanged after the bad update.
 //   (b) CONTROLLER reports the failure on the EdgionTls `ResolvedRefs` status
 //       condition as status=False, reason="InvalidCertificate".
 //

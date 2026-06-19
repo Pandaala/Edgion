@@ -3,7 +3,7 @@
 // Required config files (in edgion-tests/integration/conf/):
 // - EndpointSlice_edge_test-websocket.yaml    # WebSocket backend service discovery
 // - Service_edge_test-websocket.yaml          # WebSocket service definition
-// - httproute_default_example-route.yaml      # WebSocket routing rules（Host: test.example.com）
+// - httproute_default_example-route.yaml      # WebSocket routing rules (Host: test.example.com)
 // - Gateway_edge_example-gateway.yaml         # Gateway config
 // - GatewayClass__public-gateway.yaml         # GatewayClass config
 
@@ -29,7 +29,7 @@ impl WebSocketTestSuite {
                 let ws_url = ctx.websocket_url();
                 let mut request = ws_url.into_client_request().unwrap();
 
-                // Gateway Mode： Host header
+                // Set Host header for gateway routing.
                 if let Some(ref host) = ctx.http_host {
                     request.headers_mut().insert("Host", host.parse().unwrap());
                 }

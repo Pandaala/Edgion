@@ -6,7 +6,7 @@
 //! - Trigger chain: cascade path tracking with cycle detection
 //! - Metrics: queue depth, adds, delayed-scheduled totals
 //! - Edge-triggered high-water logging on the depth gauge (warn on entry,
-//!   info on recovery, with hysteresis) — see `c3a-014`.
+//!   info on recovery, with hysteresis).
 //!
 //! Key design decision: We don't track "processing" state. When a key is dequeued,
 //! it's simply removed from pending. This allows new enqueue requests during processing
@@ -469,8 +469,8 @@ impl Workqueue {
 /// On collision (key already pending from a concurrent immediate enqueue) the
 /// trigger chain is **merged** into the existing pending entry rather than
 /// dropped. The deeper of the two chains wins. This preserves cascade history
-/// for cycle detection — see `c3a-008`. No new mpsc message is sent on
-/// collision because the existing pending entry already has one in flight.
+/// for cycle detection. No new mpsc message is sent on collision because the
+/// existing pending entry already has one in flight.
 async fn promote_delayed_item(
     name: &str,
     capacity: u64,
@@ -686,8 +686,7 @@ impl Workqueue {
 
     /// Mark an item as done (successfully processed).
     ///
-    /// This is now a no-op since we don't track processing state,
-    /// but kept for API compatibility and logging.
+    /// No-op since processing state is not tracked; kept for API compatibility and logging.
     pub fn done(&self, key: &str) {
         tracing::debug!(
             queue = %self.name,

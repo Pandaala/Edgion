@@ -1,14 +1,13 @@
 // ============================================================================
-// LB LeastConn Test Suite — regression for P0 g1-001
+// LB LeastConn Test Suite
 // ============================================================================
 //
 // Validates LBPolicyLeastConn distributes load across endpoints by sending
 // concurrent slow requests and asserting the load lands on more than one
-// backend. Regression for P0 g1-001 (issue: per-request LB metadata silently
-// dropped on first attempt). Without that fix, runtime_state::increment is
-// never called, all backends report count=0 forever, the LeastConn picker's
+// backend. Without per-request LB metadata, runtime_state::increment is never
+// called, all backends report count=0 forever, the LeastConn picker's
 // min-heap tiebreak picks index 0, and 100% of traffic goes to a single
-// endpoint — endpoint_count would be 1.
+// endpoint — endpoint_count == 1 is the failure signal.
 //
 // Gateway annotations enable test-mode metrics:
 //   edgion.io/metrics-test-key: "lb-lc-test"
@@ -22,8 +21,8 @@ use std::time::Instant;
 pub struct LBLeastConnTestSuite;
 
 impl LBLeastConnTestSuite {
-    /// 12 concurrent /delay/1 requests should distribute across multiple endpoints.
-    /// Bug regression: with the bug, all 12 would land on a single endpoint.
+    /// 12 concurrent /delay/1 requests should distribute across multiple endpoints;
+    /// if all 12 land on one endpoint, the LeastConn counter is stuck at 0.
     fn test_leastconn_distributes_concurrent() -> TestCase {
         TestCase::new(
             "leastconn_distributes_concurrent",
@@ -104,10 +103,9 @@ impl LBLeastConnTestSuite {
                                 .map(|(ep, count)| format!("{}:{}", ep, count))
                                 .collect();
 
-                            // The g1-001 bug fix is what allows distribution > 1 for
-                            // LeastConn under concurrency. Pre-fix, all 12 requests
-                            // would land on the first listed endpoint (counter stuck
-                            // at 0 → min-heap tiebreak by index).
+                            // LeastConn distributes correctly under concurrency: if the counter
+                            // stays at 0 for all backends, the min-heap tiebreak collapses
+                            // all requests to the first listed endpoint.
                             if endpoint_count < 2 {
                                 return TestResult::failed(
                                     start.elapsed(),

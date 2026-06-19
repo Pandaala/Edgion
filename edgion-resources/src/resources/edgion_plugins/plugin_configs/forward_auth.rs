@@ -91,7 +91,7 @@ pub struct ForwardAuthConfig {
     /// - true: Skip authentication and forward to upstream (degraded mode)
     ///
     /// This is useful for non-critical auth checks where availability is more important
-    /// than strict authentication. Comparable to APISIX's `allow_degradation`.
+    /// than strict authentication.
     #[serde(default)]
     pub allow_degradation: bool,
 
@@ -99,8 +99,6 @@ pub struct ForwardAuthConfig {
     /// Only effective when allow_degradation is false.
     /// Default: 503 (Service Unavailable)
     /// Range: 200-599
-    ///
-    /// Comparable to APISIX's `status_on_error`.
     #[serde(default = "default_status_on_error")]
     pub status_on_error: u16,
 

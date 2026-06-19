@@ -45,7 +45,6 @@ pub struct ElasticsearchClientConfig {
 /// Elasticsearch authentication configuration.
 ///
 /// Uses `type` field to select auth method. All methods require a Secret reference.
-/// Inline credentials have been removed (breaking change).
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum ElasticsearchAuth {

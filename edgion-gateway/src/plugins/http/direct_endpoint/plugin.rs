@@ -183,11 +183,7 @@ impl RequestFilter for DirectEndpoint {
                 match self.config.on_invalid {
                     DirectEndpointOnInvalid::Fallback => PluginRunningResult::GoodNext,
                     DirectEndpointOnInvalid::Reject => {
-                        // Use 403 for validation denied, 400 for parse error?
-                        // But simplification: 400 or 403.
-                        // If parse err -> 400. If deny -> 403.
-                        // But here we merged them into Invalid.
-                        // msg will contain "Deny" or "ParseErr".
+                        // 400 for parse errors ("ParseErr" in msg), 403 for validation denials.
                         let status = if msg.contains("ParseErr") { 400 } else { 403 };
                         PluginRunningResult::ErrResponse {
                             status,

@@ -233,8 +233,7 @@ fn partition_into_sub_batches(
 ///
 /// Handles retries with exponential backoff.
 /// On permanent failure, logs error and drops the sub-batch.
-// Threads the request, its config, the health flag, the name, and the shutdown
-// signal as separate borrows; bundling them into a context struct would not
+// Passes each concern as a separate argument; a context struct would not
 // improve clarity for a single private helper.
 #[allow(clippy::too_many_arguments)]
 async fn send_bulk_request(
@@ -494,11 +493,9 @@ mod tests {
         assert_eq!(batches[0].len(), 1);
     }
 
-    /// link-sys-F016 regression: once the shutdown signal is set, the retry loop
-    /// must exit before the next backoff sleep instead of exhausting `max_retries`.
-    /// With a 5s backoff against an unreachable endpoint, the pre-fix code would
-    /// sleep for seconds; the fix returns promptly after the first failed request,
-    /// so the 2s guard below would trip if any retry sleep ran.
+    /// Once shutdown is signaled the retry loop must exit before the next backoff
+    /// sleep. With a 5s backoff and an unreachable endpoint, the 2s timeout below
+    /// trips if any retry sleep runs.
     #[tokio::test]
     async fn test_send_bulk_request_aborts_retry_on_shutdown() {
         let client = Client::builder()

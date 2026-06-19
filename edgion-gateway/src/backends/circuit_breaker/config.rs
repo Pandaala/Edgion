@@ -2,9 +2,9 @@ use edgion_resources::constants::annotations::edgion::{CIRCUIT_BREAKER, OUTLIER_
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 use serde::Deserialize;
 
-/// Resolved outlier-detection config for a service. Field names keep the
-/// historical `circuit_breaker` module naming by decision; the user-facing
-/// annotation is `edgion.io/outlier-detection`.
+/// Resolved outlier-detection config for a service. The internal module and
+/// struct retain the `circuit_breaker` name; the user-facing annotation is
+/// `edgion.io/outlier-detection`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CircuitBreakerConfig {
     /// Consecutive application-5xx (any >=500 that is NOT 502/503/504) before ejection.
@@ -19,8 +19,9 @@ pub struct CircuitBreakerConfig {
     pub max_ejection_percent: u32,
 }
 
-/// Deserialize shape. New fields are `Option` so `normalize` can apply
-/// field-dependent defaults that `#[serde(default)]` cannot express.
+/// Deserialize shape. Fields whose defaults depend on sibling values are
+/// `Option` so `normalize` can apply them; `#[serde(default)]` cannot
+/// express cross-field defaults.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RawCircuitBreakerConfig {

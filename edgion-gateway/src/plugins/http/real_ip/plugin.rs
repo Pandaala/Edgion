@@ -1,7 +1,6 @@
 //! Real IP plugin implementation
 //!
 //! Extracts the real client IP address from HTTP headers when behind trusted proxies.
-//! Reuses the global RealIpExtractor for consistent behavior.
 
 use async_trait::async_trait;
 use std::net::{IpAddr, SocketAddr};
@@ -12,9 +11,7 @@ use crate::util::RealIpExtractor;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::RealIpConfig;
 
-/// RealIp plugin for extracting real client IP
-///
-/// Wraps the global RealIpExtractor for use in plugin chain.
+/// RealIp plugin: extracts real client IP using a per-instance RealIpExtractor.
 pub struct RealIp {
     name: String,
     extractor: Option<RealIpExtractor>,
@@ -75,7 +72,6 @@ impl RequestFilter for RealIp {
             _ => plugin_log.push("header custom"),
         };
 
-        // Check if client addr is a trusted proxy
         let client_addr_str = session.client_addr();
         let client_ip: IpAddr = client_addr_str
             .parse::<SocketAddr>()

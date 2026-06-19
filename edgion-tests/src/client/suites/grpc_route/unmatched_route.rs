@@ -1,7 +1,7 @@
 // gRPC Unmatched Route Test Suite
 //
-// Tests that gRPC requests to unmatched routes return the correct gRPC status codes.
-// This reproduces the issue where requests return Internal(13) instead of Unimplemented(12).
+// Guards the invariant: gRPC requests to unmatched methods must return
+// Unimplemented(12), not Internal(13).
 //
 // Required config files (in edgion-tests/integration/conf/GRPCRoute/UnmatchedRoute/):
 // - GRPCRoute.yaml              # gRPC route with only SayHello method
@@ -20,18 +20,10 @@ use super::test::{HelloRequest, NumberRequest};
 pub struct GrpcUnmatchedRouteTestSuite;
 
 impl GrpcUnmatchedRouteTestSuite {
-    /// Test that unmatched method returns gRPC UNIMPLEMENTED (status 12)
+    /// Test that an unmatched gRPC method returns Unimplemented(12), not Internal(13).
     ///
-    /// Setup:
-    /// - GRPCRoute configured to route only test.TestService.SayHello
-    /// - Test tries to call test.TestService.StreamNumbers (not configured)
-    ///
-    /// Expected:
-    /// - gRPC status code: 12 (Unimplemented)
-    /// - Not Internal(13) or other error codes
-    ///
-    /// This reproduces the bug where unmatched gRPC methods return Internal(13)
-    /// instead of the correct Unimplemented(12) status.
+    /// Setup: GRPCRoute routes only test.TestService.SayHello.
+    /// Calls test.TestService.StreamNumbers (not configured) → expects Unimplemented(12).
     fn test_unmatched_method() -> TestCase {
         TestCase::new(
             "grpc_unmatched_method",
@@ -42,10 +34,9 @@ impl GrpcUnmatchedRouteTestSuite {
 
                     let grpc_url = format!("http://{}:{}", ctx.target_host, ctx.grpc_port);
 
-                    // Create gRPC client
                     let endpoint = match tonic::transport::Endpoint::from_shared(grpc_url.clone()) {
                         Ok(mut ep) => {
-                            // Set correct hostname that matches GRPCRoute
+                            // Set :authority to the hostname the GRPCRoute expects
                             if let Some(ref host) = ctx.grpc_host {
                                 let origin_uri = match format!("http://{}:{}", host, ctx.grpc_port).parse() {
                                     Ok(uri) => uri,
@@ -75,8 +66,7 @@ impl GrpcUnmatchedRouteTestSuite {
                         }
                     };
 
-                    // Try to call StreamNumbers method, which is NOT configured in the GRPCRoute
-                    // The GRPCRoute only allows test.TestService.SayHello
+                    // Call StreamNumbers — the GRPCRoute only routes SayHello, so this should be rejected
                     let request = tonic::Request::new(NumberRequest { count: 5 });
 
                     match client.stream_numbers(request).await {
@@ -99,7 +89,7 @@ impl GrpcUnmatchedRouteTestSuite {
                                     format!("✓ Correctly returned Unimplemented(12): {}", status.message()),
                                 )
                             } else if code == Code::Internal {
-                                // This is the bug we're trying to reproduce
+                                // Internal(13) on an unmatched method indicates incorrect error mapping
                                 TestResult::failed(
                                     start.elapsed(),
                                     format!(
@@ -124,9 +114,7 @@ impl GrpcUnmatchedRouteTestSuite {
         )
     }
 
-    /// Test that matched method succeeds
-    ///
-    /// This verifies the baseline: when a method IS matched, it should return OK(0)
+    /// Baseline: a matched gRPC method (SayHello) must return OK(0).
     fn test_matched_method() -> TestCase {
         TestCase::new(
             "grpc_matched_method",

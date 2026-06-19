@@ -44,7 +44,6 @@ impl Csrf {
     fn get_cookie_value(&self, session: &mut dyn PluginSession, cookie_name: &str) -> Option<String> {
         let cookie_header = session.header_value("cookie")?;
 
-        // Parse cookies using the cookie crate to handle edge cases correctly
         for cookie_str in cookie_header.split(';') {
             if let Ok(c) = Cookie::parse(cookie_str.trim()) {
                 if c.name() == cookie_name {
@@ -56,13 +55,11 @@ impl Csrf {
         None
     }
 
-    /// Generate and set CSRF token cookie in response
-    /// Enforces rigorous security practices for the cookie.
+    /// Generate and set CSRF token cookie in response.
     fn set_csrf_cookie(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) {
         let token = CsrfToken::generate(&self.key);
         match token.encode() {
             Ok(encoded_token) => {
-                // Build the cookie.
                 // Note: http_only is often FALSE for CSRF tokens in double-submit patterns
                 // because the JS client needs to read it to populate the header.
                 // Secure defaults to true; operators terminating TLS upstream (plain HTTP

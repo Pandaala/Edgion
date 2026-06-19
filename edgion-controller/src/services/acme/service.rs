@@ -343,10 +343,8 @@ impl AcmeServiceWorker {
             return;
         }
 
-        // Parse key into namespace/name
         let (namespace, name) = parse_resource_key(key);
 
-        // Fetch current resource from K8s
         let api: Api<EdgionAcme> = Api::namespaced(self.client.clone(), &namespace);
         let acme = match api.get(&name).await {
             Ok(a) => a,
@@ -363,7 +361,6 @@ impl AcmeServiceWorker {
             }
         };
 
-        // Check current phase
         let phase = acme
             .status
             .as_ref()
@@ -417,7 +414,6 @@ impl AcmeServiceWorker {
             }
         }
 
-        // Mark as processing
         self.processing.write().insert(key.to_string());
 
         // Spawn the ACME flow task
@@ -501,7 +497,6 @@ impl AcmeServiceWorker {
                 }
             }
 
-            // Remove from processing set
             processing.write().remove(&key_owned);
         });
     }

@@ -146,10 +146,8 @@ impl TimeoutTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Use ctx.http_client with per-request 1s timeout instead of creating a new client,
-                    // which would lose DNS overrides and other framework configuration.
-                    // server delay 3s (will not trigger server timeout, backend timeout is 10s)
-                    // but client 1s will disconnect
+                    // Use ctx.http_client with a per-request 1s timeout to preserve DNS overrides
+                    // and framework configuration. Backend delay is 3s; client disconnects at 1s.
                     let request = ctx
                         .http_client
                         .get(format!("{}/delay/3", ctx.http_url()))
@@ -158,7 +156,7 @@ impl TimeoutTestSuite {
 
                     match request.send().await {
                         Ok(response) => {
-                            // If response returned, no timeout（should not happen）
+                            // If response returned without timing out (should not happen)
                             let status = response.status();
                             let elapsed = start.elapsed();
                             TestResult::failed(
@@ -174,16 +172,15 @@ impl TimeoutTestSuite {
                             let elapsed = start.elapsed();
                             let error_msg = e.to_string();
 
-                            // reqwest client timeout disconnect，this is expected
-                            // Gateway should detect disconnect and log as499
-                            // Check for timeout keywords
+                            // Client timeout disconnect is expected; the gateway should detect
+                            // the disconnect and log it as 499. Check for timeout keywords.
                             let is_timeout = error_msg.to_lowercase().contains("timeout")
                                 || error_msg.to_lowercase().contains("timed out")
                                 || error_msg.to_lowercase().contains("time out")
                                 || error_msg.contains("deadline");
 
                             if is_timeout || elapsed.as_millis() >= 500 && elapsed.as_secs() <= 3 {
-                                // Client timed out (about1s）
+                                // Client timed out (~1s, as configured)
                                 TestResult::passed_with_message(
                                 elapsed,
                                 format!("Client closed connection after ~{}ms (reqwest timeout 1s) - Gateway should log this as 499. Error: {}", 
@@ -206,7 +203,7 @@ impl TimeoutTestSuite {
         )
     }
 
-    /// RED: end-to-end enforcement of request timeout — route sets request: "1s", backend delays 3s, expect 504.
+    /// End-to-end enforcement of request timeout — route sets request: "1s", backend delays 3s, expect 504.
     fn test_request_timeout_enforced() -> TestCase {
         TestCase::new(
             "request_timeout_enforced",
@@ -256,7 +253,7 @@ impl TimeoutTestSuite {
         )
     }
 
-    /// RED: "0s" disables backend timeout — with backendRequest: "0s", a 2s backend delay should still return 200.
+    /// "0s" disables backend timeout — with backendRequest: "0s", a 2s backend delay should still return 200.
     fn test_backend_request_disabled() -> TestCase {
         TestCase::new(
             "backend_request_disabled",
@@ -290,7 +287,7 @@ impl TimeoutTestSuite {
         )
     }
 
-    /// RED: "0s" disables request timeout — with request: "0s", a 2s backend delay should still return 200.
+    /// "0s" disables request timeout — with request: "0s", a 2s backend delay should still return 200.
     fn test_request_timeout_disabled() -> TestCase {
         TestCase::new(
             "request_timeout_disabled",
@@ -333,8 +330,8 @@ impl TimeoutTestSuite {
                     let start = Instant::now();
 
                     let trace_id = format!("timeout-read-{}", uuid::Uuid::new_v4());
-                    // Use ctx.http_client with per-request timeout instead of creating a new client,
-                    // which would lose DNS overrides and other framework configuration.
+                    // Use ctx.http_client with a per-request 5s timeout to preserve DNS overrides
+                    // and framework configuration.
                     let request = ctx
                         .http_client
                         .get(format!("{}/delay/3", ctx.http_url()))
@@ -349,8 +346,7 @@ impl TimeoutTestSuite {
                             let status_code = status.as_u16();
                             let elapsed = start.elapsed();
 
-                            // normally should return in3s or so200
-                            // backend timeout10s，client timeout5s
+                            // 3s delay < 5s client timeout < 10s backend timeout; expect 200.
                             if status_code == 200 {
                                 TestResult::passed_with_message(
                                     elapsed,

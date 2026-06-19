@@ -158,7 +158,6 @@ impl EdgionPlugin {
     pub fn validation_error(&self) -> Option<String> {
         use crate::resources::edgion_plugins::PluginValidation;
         match self {
-            // Bucket 1 — Pattern A (check_fields)
             EdgionPlugin::CtxSet(c) => c.validation_error(),
             EdgionPlugin::DirectEndpoint(c) => c.validation_error(),
             EdgionPlugin::RegionRoute(c) => c.validation_error(),
@@ -170,31 +169,19 @@ impl EdgionPlugin {
             EdgionPlugin::RequestRestriction(c) => c.validation_error(),
             EdgionPlugin::RateLimit(c) => c.validation_error(),
             EdgionPlugin::RateLimitRedis(c) => c.validation_error(),
-
-            // Bucket 2 — Pattern B (validate().err())
             EdgionPlugin::Mock(c) => c.validation_error(),
             EdgionPlugin::Csrf(c) => c.validation_error(),
-
-            // Bucket 3 — Pattern C (detect_validation_error)
             EdgionPlugin::BasicAuth(c) => c.validation_error(),
             EdgionPlugin::JweDecrypt(c) => c.validation_error(),
             EdgionPlugin::HmacAuth(c) => c.validation_error(),
             EdgionPlugin::HeaderCertAuth(c) => c.validation_error(),
-
-            // Bucket 4 — stateless get_validation_error
             EdgionPlugin::FaultInjection(c) => c.validation_error(),
             EdgionPlugin::ForwardAuth(c) => c.validation_error(),
             EdgionPlugin::OpenidConnect(c) => c.validation_error(),
             EdgionPlugin::BandwidthLimit(c) => c.validation_error(),
             EdgionPlugin::LdapAuth(c) => c.validation_error(),
-
-            // Bucket 5 — new field checks
             EdgionPlugin::AllEndpointStatus(c) => c.validation_error(),
-
-            // Bucket 6 — DSL
             EdgionPlugin::Dsl(c) => c.validation_error(),
-
-            // Bucket 7 — no preparse validation
             EdgionPlugin::Cors(c) => c.validation_error(),
             EdgionPlugin::IpRestriction(c) => c.validation_error(),
             EdgionPlugin::RealIp(c) => c.validation_error(),
@@ -202,8 +189,7 @@ impl EdgionPlugin {
             EdgionPlugin::DebugAccessLogToHeader(c) => c.validation_error(),
             EdgionPlugin::TraceContext(c) => c.validation_error(),
             EdgionPlugin::ExtProc(c) => c.validation_error(),
-
-            // Bucket 8 — Gateway API filter variants (foreign types, no trait impl)
+            // Gateway API filter variants (foreign types): no PluginValidation impl.
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::ResponseHeaderModifier(_)
             | EdgionPlugin::RequestRedirect(_)

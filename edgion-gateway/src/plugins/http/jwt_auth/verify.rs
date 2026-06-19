@@ -69,7 +69,7 @@ pub(super) fn verify_jwt(
         }
     };
 
-    // 4. Route to group (exact iss match -- no normalization, see spec §11).
+    // 4. Route to group (exact iss match; no normalization).
     let group = match store.lookup_by_iss(iss) {
         Some(g) => Arc::clone(g),
         None => {
@@ -127,7 +127,7 @@ pub(super) fn verify_jwt(
         }
     };
 
-    // 8. Maximum-expiration post-check (existing logic -- preserved from prior verify.rs).
+    // 8. Reject tokens whose exp exceeds now + maximum_expiration.
     if config.maximum_expiration > 0 {
         if let Some(exp) = decoded.claims.get("exp").and_then(|v| v.as_u64()) {
             let now = std::time::SystemTime::now()
@@ -149,7 +149,6 @@ pub(super) fn verify_jwt(
 }
 
 /// Map jsonwebtoken decode errors to PluginLog literal strings.
-/// Preserves existing behavior -- all ErrorKind variants from the prior implementation.
 fn classify_jwt_decode_error(e: &jsonwebtoken::errors::Error) -> &'static str {
     use jsonwebtoken::errors::ErrorKind;
     match e.kind() {
@@ -243,7 +242,7 @@ mod tests {
 
     #[test]
     fn verify_rejects_iss_trailing_slash_mismatch() {
-        // Token iss has trailing slash; group iss does not. Spec §11: no normalization.
+        // Token iss has trailing slash; group iss does not. iss matching is exact, no normalization.
         let secret = b"hs256-secret-at-least-32-bytes-long-padding";
         let group_a = make_hs_group("partner-a", "k1", secret);
         let mut by_iss = HashMap::new();

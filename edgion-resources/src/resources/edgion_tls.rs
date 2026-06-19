@@ -71,9 +71,9 @@ pub struct ClientAuthConfig {
     #[serde(default = "default_verify_depth", skip_serializing_if = "is_default_verify_depth")]
     pub verify_depth: u8,
 
-    /// CA Secret data (filled by controller, not from YAML)
-    /// Note: This field is serialized for controller->gateway communication,
-    /// but should be skipped when deserializing from YAML files
+    /// Controller-resolved CA Secret. Populated at pre-parse time and carried to the
+    /// Gateway via conf_sync (redacted in admin output). `#[schemars(skip)]` keeps it
+    /// out of the CRD schema so the K8s API server prunes it from user-submitted CRs.
     #[serde(
         skip_serializing_if = "Option::is_none",
         default,
@@ -283,12 +283,12 @@ impl EdgionTls {
         for host in &self.spec.hosts {
             let host_lower = host.to_lowercase();
 
-            // Exact match_engine
+            // Exact match
             if host_lower == hostname_lower {
                 return true;
             }
 
-            // Wildcard match_engine: only allow * at the beginning in "*.*.*.domain" format
+            // Wildcard match: only allow * at the beginning in "*.*.*.domain" format
             if host_lower.starts_with('*') && Self::wildcard_match(&host_lower, &hostname_lower) {
                 return true;
             }
@@ -310,7 +310,7 @@ impl EdgionTls {
 
         let mut p_idx = 0; // Pattern pointer
         let mut h_idx = 0; // Hostname pointer
-        let mut has_exact_match = false; // Track if we've seen any exact match_engine segment
+        let mut has_exact_match = false; // Track if we've seen any exact match segment
 
         // Process pattern segment by segment
         while p_idx < pattern_len {
@@ -327,14 +327,14 @@ impl EdgionTls {
             if segment_len == 1 && pattern_bytes[segment_start] == b'*' {
                 // This is a wildcard segment
 
-                // Rule: wildcard cannot appear after exact match_engine
+                // Rule: wildcard cannot appear after exact match
                 if has_exact_match {
                     return false;
                 }
 
                 // Find the next dot in hostname (or end)
                 if h_idx >= hostname_len {
-                    return false; // No more hostname to match_engine
+                    return false; // No more hostname to match
                 }
 
                 let h_segment_start = h_idx;
@@ -343,7 +343,7 @@ impl EdgionTls {
                     h_segment_end += 1;
                 }
 
-                // Wildcard must match_engine at least one character
+                // Wildcard must match at least one character
                 if h_segment_end == h_segment_start {
                     return false;
                 }
@@ -351,7 +351,7 @@ impl EdgionTls {
                 // Move hostname pointer past this segment
                 h_idx = h_segment_end;
             } else {
-                // This is an exact match_engine segment
+                // This is an exact match segment
                 has_exact_match = true;
 
                 // Check if hostname has enough bytes left

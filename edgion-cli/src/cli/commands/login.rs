@@ -4,7 +4,7 @@ use crate::cli::token::save_token;
 
 /// Execute the `login` command.
 ///
-/// Authentication is now a pre-shared bearer token only — there is no
+/// Authentication is a pre-shared bearer token only — there is no
 /// username/password exchange. This command simply persists the supplied token
 /// to `~/.edgion/token` so subsequent invocations pick it up automatically
 /// (file is the lowest-precedence source, below `--token` and `EDGION_TOKEN`).

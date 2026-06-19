@@ -1,7 +1,5 @@
 //! Shared IP / CIDR validation and IpRadixMatcher building helpers.
-//!
-//! Extracted from `src/types/resources/edgion_plugins/plugin_configs/ip_restriction.rs`
-//! so both HTTP and L4 IP-restriction paths can share validation logic.
+//! Used by HTTP and L4 IP-restriction plugins.
 
 use std::collections::HashSet;
 use std::net::IpAddr;

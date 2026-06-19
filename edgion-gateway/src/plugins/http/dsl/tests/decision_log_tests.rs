@@ -67,12 +67,10 @@ fn test_decision_log_runtime_error_emits_only_err_entry() {
     let (result, log) = run_vm_policy_log(&vm, MockPluginSession::new(), &DslErrorPolicy::Deny);
     assert_eq!(result, err_response_body(500, "DSL execution error"));
 
-    // PARTIAL CONVERSION (spec § 4 Step 2 / review finding I1):
-    // The exact-string snapshot below guards the precise log format.
-    // The three negative `!contains` probes below the snapshot carry
-    // invariant-explanation messages a reviewer reads in a failure
-    // output — these protect against a regression that re-introduces
-    // a decision token on the error path, where the snapshot alone
+    // The exact-string snapshot guards the precise log format.
+    // The three negative `!contains` probes below carry invariant-explanation messages
+    // a reviewer reads in failure output — they protect against a regression that
+    // re-introduces a decision token on the error path, where the snapshot alone
     // would only show "string differs" without the "why".
     expect!["err: step limit exceeded"].assert_eq(&log.render_for_test());
 

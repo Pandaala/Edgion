@@ -30,7 +30,7 @@ impl UdpRouteUnit {
     /// Resolves the stream-plugin store key from the route's metadata (single
     /// source of truth shared with the HTTP/TCP/TLS conf-handlers) and builds
     /// the WRR selector from the first rule's backend refs. None of this state
-    /// lives on the schema anymore.
+    /// lives on the schema.
     pub fn from_route(route: Arc<UDPRoute>) -> Self {
         let stream_plugin_store_key = resolve_stream_plugin_store_key(&route.metadata);
         let backend_finder = build_backend_selector(&route);
