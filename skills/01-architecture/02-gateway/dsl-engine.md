@@ -9,6 +9,15 @@ description: DSL engine architecture — data flow, source layout, plugin entry 
 >
 > This page is the architecture entry for engine maintainers. User-facing syntax, builtin function signatures, and runtime tuning live in `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/` — do not duplicate them here.
 
+## 0. Design philosophy & scope boundary
+
+EdgionDSL is **not** a general-purpose embedded language (it deliberately stops short of Lua/JS). It runs in-process, on shared Pingora worker threads, and its bytecode is shipped controller→gateway as configuration. Its value is *flexible orchestration with a provable resource ceiling*, not *arbitrary computation*. Keep this boundary when evaluating any new capability:
+
+- **Orchestration logic** (read headers, branch on conditions, rewrite, compose/reuse predicates) → may live in the DSL, but prefer the lightest possible form.
+- **Computation / capability** (new protocols, heavy algorithms, external integrations, perf-sensitive paths) → push down into Rust as a `BuiltinId` (the `CallBuiltin` seam), never as a language feature. Adding a builtin is cheaper, safer, and more testable than growing the language.
+- **Decision rule**: ask "is X orchestration or computation?" Computation always becomes a Rust builtin.
+- **User-defined functions**: at most a restricted **expression-function + compile-time inlining** form (no call frame, no recursion, no in-body `return`/statements, no bytecode-format change → existing step/loop/call/stack budgets and the validator still cover it). Full block-style functions with a runtime call stack are intentionally deferred — they shift isolation cost (recursion/stack bounds, frame accounting, bytecode compat) onto our own sandbox, which Lambda/Lua externalize to a mature runtime + MicroVM. Do not chase Lua-like ergonomics here.
+
 ## 1. Data flow
 
 ```

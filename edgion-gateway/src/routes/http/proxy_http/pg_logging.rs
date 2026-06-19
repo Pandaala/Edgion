@@ -145,18 +145,10 @@ fn try_record_via_handles(ctx: &EdgionHttpContext, duration_ms: f64) -> bool {
     let s_idx = status_to_idx(ctx.request_info.status);
     let idx = ps_index(p_idx, s_idx);
 
-    if b_idx >= entry.counters.len() {
-        debug_assert!(
-            false,
-            "backend_ref_idx out of bounds — RouteMetricHandles built against stale backend_refs"
-        );
-        return false;
-    }
-    entry.counters[b_idx][idx].increment(1);
-    if let Some(hs) = entry.histograms.as_ref() {
-        hs[b_idx][idx].record(duration_ms);
-    }
-    true
+    // Graceful degradation on a stale-handle / backend-index mismatch: `record`
+    // returns false so the caller falls back to the dynamic metrics path (the
+    // drift stays visible in the access log). No panic on the data-plane hot path.
+    entry.record(b_idx, idx, duration_ms)
 }
 
 /// Dynamic fallback path. Same code as the previous `record_request_metrics`

@@ -13,7 +13,12 @@ use crate::config::{CliTokenConfig, EdgionControllerConfig, FedRbacConfig};
 use edgion_resources::resource::kind::ResourceKind;
 
 /// Synthetic classifier kinds that are valid in a policy but are NOT `ResourceKind`s.
-const SYNTHETIC_KINDS: &[&str] = &["RegionRoute"];
+///
+/// - `RegionRoute`: the aggregate region-route read/failover endpoints.
+/// - `NonResource`: non-resource operational endpoints (server-info, diagnostics,
+///   reload, ...) — see `api::authz_classifier::NON_RESOURCE_KIND`. Having a named
+///   kind lets policies scope these without resorting to `kinds: ["*"]`.
+const SYNTHETIC_KINDS: &[&str] = &["RegionRoute", "NonResource"];
 
 /// Lint one policy's verbs/kinds and emit advisory WARNs.
 ///

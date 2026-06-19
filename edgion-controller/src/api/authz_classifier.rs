@@ -11,6 +11,14 @@ use http::Method;
 use crate::authz::Verb;
 use edgion_resources::ResourceKind;
 
+/// Synthetic classifier kind for non-resource operational endpoints
+/// (`server-info`, `diagnostics`, `reload`, `wipe-all`, `debug`). These verbs
+/// never target a `ResourceKind`, so they carry this named sentinel instead of
+/// `"*"`. Using a named kind keeps RBAC policies auditable: a reviewer reading a
+/// rule sees `kinds: [NonResource]` — an explicit "non-resource operations"
+/// scope — rather than a wildcard that looks like "grant everything".
+pub const NON_RESOURCE_KIND: &str = "NonResource";
+
 /// Normalize a wire kind param to the canonical kind string, falling back to the
 /// raw value (which the policy will not match) for unknown kinds.
 /// `pub`: also consumed by the authz middleware (Task 5) and the fed watch check (Task 6).
@@ -32,6 +40,9 @@ pub fn bounded_kind_label(kind: &str) -> &'static str {
     if kind == "RegionRoute" {
         return "RegionRoute";
     }
+    if kind == NON_RESOURCE_KIND {
+        return NON_RESOURCE_KIND;
+    }
     match ResourceKind::from_kind_name(kind) {
         Some(k) => k.as_str(),
         None => "unknown",
@@ -45,8 +56,8 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
 
     // Literal (no-{kind}-param) routes first.
     match (m.as_str(), template) {
-        ("POST", "/api/v1/reload") => return Some((Verb::Reload, "*".into())),
-        ("GET", "/api/v1/server-info") => return Some((Verb::ServerInfo, "*".into())),
+        ("POST", "/api/v1/reload") => return Some((Verb::Reload, NON_RESOURCE_KIND.into())),
+        ("GET", "/api/v1/server-info") => return Some((Verb::ServerInfo, NON_RESOURCE_KIND.into())),
         ("POST", "/api/v1/cluster-region-routes/failover") | ("POST", "/api/v1/service-region-routes/failover") => {
             return Some((Verb::Failover, "RegionRoute".into()))
         }
@@ -59,15 +70,15 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
         }
         // test-mode-only routes (registered only under is_test_mode()); axum never
         // matches these in production.
-        ("POST", "/api/v1/admin/wipe-all") => return Some((Verb::WipeAll, "*".into())),
-        ("GET", "/api/v1/debug/store-stats") => return Some((Verb::Debug, "*".into())),
+        ("POST", "/api/v1/admin/wipe-all") => return Some((Verb::WipeAll, NON_RESOURCE_KIND.into())),
+        ("GET", "/api/v1/debug/store-stats") => return Some((Verb::Debug, NON_RESOURCE_KIND.into())),
         _ => {}
     }
 
     // Diagnostics: all sub-paths are GETs with at least one segment after the prefix; an absent or
     // odd path falls through to the resource-route block and default-denies safely.
     if m == Method::GET && template.starts_with("/api/v1/diagnostics/") {
-        return Some((Verb::Diagnostics, "*".into()));
+        return Some((Verb::Diagnostics, NON_RESOURCE_KIND.into()));
     }
 
     // Resource routes carrying a {kind} param.
@@ -150,10 +161,10 @@ mod tests {
     }
 
     #[test]
-    fn reload_is_nonresource_wildcard_kind() {
+    fn reload_is_nonresource_kind() {
         let (v, k) = classify("POST", Some("/api/v1/reload"), None).unwrap();
         assert_eq!(v, Verb::Reload);
-        assert_eq!(k, "*");
+        assert_eq!(k, NON_RESOURCE_KIND);
     }
 
     #[test]
@@ -196,18 +207,18 @@ mod tests {
     fn server_info_is_server_info() {
         let (v, k) = classify("GET", Some("/api/v1/server-info"), None).unwrap();
         assert_eq!(v, Verb::ServerInfo);
-        assert_eq!(k, "*");
+        assert_eq!(k, NON_RESOURCE_KIND);
     }
 
     #[test]
     fn diagnostics_routes_are_diagnostics() {
         let (v, k) = classify("GET", Some("/api/v1/diagnostics/nested_ext_ref_usage"), None).unwrap();
         assert_eq!(v, Verb::Diagnostics);
-        assert_eq!(k, "*");
+        assert_eq!(k, NON_RESOURCE_KIND);
 
         let (v2, k2) = classify("GET", Some("/api/v1/diagnostics/conf-conflicts"), None).unwrap();
         assert_eq!(v2, Verb::Diagnostics);
-        assert_eq!(k2, "*");
+        assert_eq!(k2, NON_RESOURCE_KIND);
     }
 
     #[test]
@@ -268,11 +279,11 @@ mod tests {
     fn wipe_all_and_debug_test_mode_routes() {
         let (v, k) = classify("POST", Some("/api/v1/admin/wipe-all"), None).unwrap();
         assert_eq!(v, Verb::WipeAll);
-        assert_eq!(k, "*");
+        assert_eq!(k, NON_RESOURCE_KIND);
 
         let (v, k) = classify("GET", Some("/api/v1/debug/store-stats"), None).unwrap();
         assert_eq!(v, Verb::Debug);
-        assert_eq!(k, "*");
+        assert_eq!(k, NON_RESOURCE_KIND);
     }
 
     #[test]
@@ -286,6 +297,7 @@ mod tests {
         assert_eq!(bounded_kind_label("zzz_unknown_kind"), "unknown");
         assert_eq!(bounded_kind_label("*"), "*");
         assert_eq!(bounded_kind_label("RegionRoute"), "RegionRoute");
+        assert_eq!(bounded_kind_label(NON_RESOURCE_KIND), NON_RESOURCE_KIND);
         assert_eq!(bounded_kind_label("EdgionConfigData"), "EdgionConfigData");
     }
 

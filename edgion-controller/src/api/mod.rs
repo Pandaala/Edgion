@@ -464,10 +464,6 @@ pub fn create_admin_router(
         )
         // Effective resolved views for Center dashboard polling
         .route(
-            "/api/v1/region-routes/effective",
-            get(effective_handlers::region_routes_effective),
-        )
-        .route(
             "/api/v1/global-ip-restrictions/effective",
             get(effective_handlers::global_ip_restrictions_effective),
         )

@@ -76,6 +76,28 @@ pub struct GatewayMatrixEntry {
     pub histograms: Option<Vec<[Histogram; N_PS]>>,
 }
 
+impl GatewayMatrixEntry {
+    /// Record one request into the precomputed handles at `(backend_idx, ps_idx)`.
+    ///
+    /// Returns `true` on success. Returns `false` when `backend_idx` falls
+    /// outside the counter array (precomputed handles built against a stale set
+    /// of `backend_refs`). The caller then falls back to the dynamic metrics
+    /// path, so the request still emits its time series and the drift is
+    /// observable from the access log. No panic / `debug_assert!(false)` on the
+    /// data-plane hot path (see `skills/03-coding/02-rust-coding-rules.md` Rule 5).
+    #[inline]
+    pub fn record(&self, backend_idx: usize, ps_idx: usize, duration_ms: f64) -> bool {
+        if backend_idx >= self.counters.len() {
+            return false;
+        }
+        self.counters[backend_idx][ps_idx].increment(1);
+        if let Some(hs) = self.histograms.as_ref() {
+            hs[backend_idx][ps_idx].record(duration_ms);
+        }
+        true
+    }
+}
+
 pub struct RouteMetricHandles {
     matrices: Vec<GatewayMatrixEntry>,
 }
@@ -441,6 +463,47 @@ mod tests {
             .collect();
         let n_hist = names.iter().filter(|n| n.contains("request_duration_ms")).count();
         assert_eq!(n_hist, N_PS);
+    }
+
+    #[test]
+    fn record_succeeds_for_in_bounds_backend_index() {
+        let gws = vec![("gw_ns".to_string(), "gw_a".to_string())];
+        let backends = vec![("ns1".to_string(), "svc_a".to_string())];
+        let backend_cfg = BackendRequestsLabels {
+            backend: true,
+            ..Default::default()
+        };
+        let duration_cfg = RequestDurationConfig::default();
+
+        let (_, ok) = run_with_recorder(|| {
+            let handles =
+                RouteMetricHandles::build_with(&gws, "rns", "route_a", &backends, &backend_cfg, &duration_cfg);
+            let entry = handles.lookup("gw_ns", "gw_a").unwrap();
+            entry.record(0, ps_index(ProtocolIdx::Http, StatusIdx::S2xx), 1.0)
+        });
+        assert!(ok, "in-bounds backend index must record successfully");
+    }
+
+    #[test]
+    fn record_falls_back_on_out_of_bounds_backend_index() {
+        let gws = vec![("gw_ns".to_string(), "gw_a".to_string())];
+        // A single backend → only index 0 is valid; index 1 is out of bounds.
+        let backends = vec![("ns1".to_string(), "svc_a".to_string())];
+        let backend_cfg = BackendRequestsLabels {
+            backend: true,
+            ..Default::default()
+        };
+        let duration_cfg = RequestDurationConfig::default();
+
+        let (_, ok) = run_with_recorder(|| {
+            let handles =
+                RouteMetricHandles::build_with(&gws, "rns", "route_a", &backends, &backend_cfg, &duration_cfg);
+            let entry = handles.lookup("gw_ns", "gw_a").unwrap();
+            // Out-of-bounds index must NOT panic and must return false.
+            entry.record(1, ps_index(ProtocolIdx::Http, StatusIdx::S2xx), 1.0)
+        });
+
+        assert!(!ok, "out-of-bounds backend index must return false (graceful fallback)");
     }
 
     #[test]

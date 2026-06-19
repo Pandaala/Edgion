@@ -150,6 +150,14 @@ where
                                 Ok(obj) => {
                                     let key = make_resource_key(&obj);
 
+                                    // Reject files whose content identity drifted from their
+                                    // filename to avoid registry/work-key divergence.
+                                    if let Some(filename_key) = filename_identity_mismatch(&path, kind, &key) {
+                                        reject_identity_mismatch(&status_handler, kind, &path, &key, &filename_key)
+                                            .await;
+                                        continue;
+                                    }
+
                                     // Maintain raw store for cross-resource lookups.
                                     self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
 
@@ -271,6 +279,11 @@ where
                                 match parse_resource_content::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
+                                        if let Some(filename_key) = filename_identity_mismatch(&path, kind, &key) {
+                                            reject_identity_mismatch(&status_handler, kind, &path, &key, &filename_key)
+                                                .await;
+                                            continue;
+                                        }
                                         self.fs_raw_store.upsert(key.clone(), Arc::new(obj.clone()));
                                         let existing_status_json = status_handler.read_status_json(kind, &key).await;
                                         let result = self.processor.on_init_apply(obj, existing_status_json).await;
@@ -328,6 +341,11 @@ where
                                 match parse_resource_content::<K>(&content) {
                                     Ok(obj) => {
                                         let key = make_resource_key(&obj);
+                                        if let Some(filename_key) = filename_identity_mismatch(&path, kind, &key) {
+                                            reject_identity_mismatch(&status_handler, kind, &path, &key, &filename_key)
+                                                .await;
+                                            continue;
+                                        }
                                         tracing::info!(
                                             component = "fs_resource_controller",
                                             kind = kind,
@@ -511,6 +529,44 @@ where
                         match tokio::fs::read_to_string(&path).await {
                             Ok(content) => match parse_resource_content::<K>(&content) {
                                 Ok(obj) => {
+                                    // Guard the same content/filename identity invariant the
+                                    // main loop enforces. The worker re-reads the registry-winner
+                                    // file for `work_item.key`, but the file content could have
+                                    // drifted to a different metadata.name/namespace between enqueue
+                                    // and dequeue (a narrow race the main-loop reject can't cover for
+                                    // an already-queued item). Applying it under the stale work key
+                                    // would reintroduce the drift, so reject and surface an error
+                                    // status instead.
+                                    let content_key = make_resource_key(&obj);
+                                    if content_key != work_item.key {
+                                        let message = format!(
+                                            "file content identity '{content_key}' does not match work key \
+                                             '{}'; in FileSystem mode the filename is authoritative — rename \
+                                             the file or revert metadata.name/namespace to '{}'",
+                                            work_item.key, work_item.key
+                                        );
+                                        if let Err(e) = status_handler
+                                            .write_error_status(kind, &work_item.key, "IdentityMismatch", &message)
+                                            .await
+                                        {
+                                            tracing::warn!(
+                                                component = "fs_resource_controller",
+                                                kind = kind,
+                                                key = %work_item.key,
+                                                error = %e,
+                                                "Failed to write identity-mismatch error status"
+                                            );
+                                        }
+                                        tracing::warn!(
+                                            component = "fs_resource_controller",
+                                            kind = kind,
+                                            key = %work_item.key,
+                                            content_key = %content_key,
+                                            "Worker rejected resource: content identity does not match work key"
+                                        );
+                                        workqueue.done(&work_item.key);
+                                        continue;
+                                    }
                                     // Keep raw store in sync with the latest file version.
                                     // The main loop upserts on Apply events, but the worker
                                     // re-reads the file (possibly a newer version), so we
@@ -671,6 +727,66 @@ fn parse_delete_info(info: &str) -> Option<String> {
     None
 }
 
+/// Detect a drift between the resource identity encoded in the on-disk
+/// filename and the identity declared in the file content.
+///
+/// In FileSystem mode the filename (`{Kind}_{ns}_{name}.yaml`) is the
+/// authoritative identity: the watcher derives the `PathRegistry` key from it,
+/// while the work key the controller enqueues comes from the file content's
+/// `metadata.name`/`namespace`. If an operator edits the content identity
+/// without renaming the file, the registry key and the work key drift apart —
+/// the resource is never reconciled under its new content key (the registry
+/// has no winner for it, so the worker falls back to a non-existent path and
+/// treats it as deleted) and the old key is left stale. Callers reject such a
+/// file and surface an error status instead of silently drifting.
+///
+/// Returns the filename-derived key when it disagrees with `content_key`
+/// (a mismatch that must be rejected); `None` when they agree or the filename
+/// cannot be parsed (unparseable filenames are already handled elsewhere).
+fn filename_identity_mismatch(path: &std::path::Path, kind: &str, content_key: &str) -> Option<String> {
+    match extract_key_from_path(path, kind) {
+        Some(filename_key) if filename_key != content_key => Some(filename_key),
+        _ => None,
+    }
+}
+
+/// Write an `IdentityMismatch` error status beside the offending file and log
+/// the rejection. Keyed by the filename identity so the `.status` sidecar lands
+/// next to the spec file (the registry winner for the filename key).
+async fn reject_identity_mismatch(
+    status_handler: &FileSystemStatusHandler,
+    kind: &str,
+    path: &std::path::Path,
+    content_key: &str,
+    filename_key: &str,
+) {
+    let message = format!(
+        "file content identity '{content_key}' does not match filename identity '{filename_key}'; \
+         in FileSystem mode the filename is authoritative — rename the file or revert \
+         metadata.name/namespace to '{filename_key}'"
+    );
+    if let Err(e) = status_handler
+        .write_error_status(kind, filename_key, "IdentityMismatch", &message)
+        .await
+    {
+        tracing::warn!(
+            component = "fs_resource_controller",
+            kind = kind,
+            path = %path.display(),
+            error = %e,
+            "Failed to write identity-mismatch error status"
+        );
+    }
+    tracing::warn!(
+        component = "fs_resource_controller",
+        kind = kind,
+        path = %path.display(),
+        content_key = %content_key,
+        filename_key = %filename_key,
+        "Rejected resource: file content identity does not match filename identity"
+    );
+}
+
 /// Extract resource key from file path
 ///
 /// Filename format:
@@ -701,7 +817,56 @@ fn extract_key_from_path(path: &std::path::Path, expected_kind: &str) -> Option<
 
 #[cfg(test)]
 mod tests {
+    use super::filename_identity_mismatch;
     use super::parse_resource_content;
+    use std::path::Path;
+
+    #[test]
+    fn identity_match_returns_none() {
+        let path = Path::new("/conf/default/HTTPRoute_default_r1.yaml");
+        assert_eq!(filename_identity_mismatch(path, "HTTPRoute", "default/r1"), None);
+    }
+
+    #[test]
+    fn identity_name_change_is_detected() {
+        let path = Path::new("/conf/default/HTTPRoute_default_r1.yaml");
+        assert_eq!(
+            filename_identity_mismatch(path, "HTTPRoute", "default/r2"),
+            Some("default/r1".to_string())
+        );
+    }
+
+    #[test]
+    fn identity_namespace_change_is_detected() {
+        let path = Path::new("/conf/HTTPRoute_default_r1.yaml");
+        assert_eq!(
+            filename_identity_mismatch(path, "HTTPRoute", "other/r1"),
+            Some("default/r1".to_string())
+        );
+    }
+
+    #[test]
+    fn identity_cluster_scoped_match_returns_none() {
+        let path = Path::new("/conf/GatewayClass__gc1.yaml");
+        assert_eq!(filename_identity_mismatch(path, "GatewayClass", "gc1"), None);
+    }
+
+    #[test]
+    fn identity_cluster_scoped_name_change_is_detected() {
+        let path = Path::new("/conf/GatewayClass__gc1.yaml");
+        assert_eq!(
+            filename_identity_mismatch(path, "GatewayClass", "gc2"),
+            Some("gc1".to_string())
+        );
+    }
+
+    #[test]
+    fn identity_unparseable_filename_returns_none() {
+        // Filename kind does not match the controller kind → extract_key_from_path
+        // returns None, so no mismatch is raised here (handled by other paths).
+        let path = Path::new("/conf/random.yaml");
+        assert_eq!(filename_identity_mismatch(path, "HTTPRoute", "default/r2"), None);
+    }
     use edgion_resources::prelude_resources::{
         BackendTLSPolicy, BackendTLSPolicyAlpha3, BackendTLSPolicyAlpha3Spec, BackendTLSPolicySpec,
         BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BackendTLSPolicyValidation, TLSBackendRef, TLSRoute,
