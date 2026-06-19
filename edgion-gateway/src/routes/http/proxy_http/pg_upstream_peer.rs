@@ -74,7 +74,10 @@ pub async fn upstream_peer(
             if let Some(upstream) = ctx.get_current_upstream_mut() {
                 upstream.status = Some(504);
             }
-            return Err(PingoraError::new_str("Request timeout exceeded"));
+            return Err(PingoraError::explain(
+                ErrorType::HTTPStatus(504),
+                "Request timeout exceeded",
+            ));
         }
     }
 
