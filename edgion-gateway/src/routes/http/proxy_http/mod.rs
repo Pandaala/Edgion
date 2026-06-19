@@ -16,6 +16,7 @@ use crate::EdgionHttpContext;
 use edgion_resources::{EdgionGatewayConfig, Listener, ListenerKey};
 
 // Sub-modules
+pub mod content_type;
 pub mod global_plugins_resolve;
 pub mod parse_timeout;
 pub mod preflight_handler;
@@ -38,6 +39,7 @@ mod pg_upstream_response_body_filter;
 mod pg_upstream_response_filter;
 
 // Re-exports
+pub use content_type::{is_grpc_content_type, is_grpc_web_content_type};
 pub use global_plugins_resolve::{resolve_global_plugins, resolve_route_ext_refs};
 pub use parse_timeout::{ParsedBackendTimeout, ParsedClientTimeout, ParsedTimeouts};
 pub use preflight_handler::PreflightHandler;

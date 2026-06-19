@@ -258,10 +258,13 @@ async fn build_request_metadata(
         if ctx.request_info.discover_protocol.is_none() {
             if let Some(ct) = req_header.headers.get("content-type") {
                 if let Ok(ct_str) = ct.to_str() {
-                    if ct_str.starts_with("application/grpc-web") {
+                    // Media type matching is case-insensitive (RFC 9110 §8.3.1);
+                    // gRPC-Web must be tested first since its prefix also
+                    // satisfies the native gRPC prefix check.
+                    if super::is_grpc_web_content_type(ct_str) {
                         ctx.request_info.discover_protocol = Some("grpc-web".to_string());
                         ctx.request_info.is_grpc_request = true;
-                    } else if ct_str.starts_with("application/grpc") {
+                    } else if super::is_grpc_content_type(ct_str) {
                         ctx.request_info.discover_protocol = Some("grpc".to_string());
                         ctx.request_info.is_grpc_request = true;
                     }

@@ -35,7 +35,7 @@ pub async fn early_request_filter(
         .headers
         .get(http::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|ct| ct.starts_with("application/grpc-web"));
+        .is_some_and(super::is_grpc_web_content_type);
     if is_grpc_web {
         if let Some(bridge) = session.downstream_modules_ctx.get_mut::<GrpcWebBridge>() {
             bridge.init();
