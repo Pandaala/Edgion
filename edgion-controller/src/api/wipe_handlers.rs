@@ -107,36 +107,55 @@ async fn wipe_tier(
 
 async fn wipe_kind(state: &AdminState, kind: ResourceKind) -> (Vec<String>, Vec<WipeError>) {
     let writer = state.conf_center();
-    let items = match writer.get_list_by_kind(kind.as_str(), None).await {
-        Ok(list) => list.items,
-        Err(e) => {
-            return (
-                Vec::new(),
-                vec![WipeError {
-                    kind: kind.as_str().to_string(),
-                    name: String::new(),
-                    reason: format!("list failed: {}", e),
-                }],
-            );
-        }
-    };
-
     let mut deleted = Vec::new();
     let mut errors = Vec::new();
 
-    for item in items {
-        let (ns, name) = (item.namespace.clone(), item.name.clone());
-        let key = match &ns {
-            Some(n) => format!("{}/{}", n, name),
-            None => name.clone(),
+    // The list is winner-only (one entry per (kind,key)). Deleting a winner
+    // promotes any conflict loser to winner (PathRegistry::mark_api_deleted), so
+    // a re-list surfaces it next pass. Loop until the kind is empty. Bounded by
+    // the maximum conflict depth for a key; the no-progress guard plus the hard
+    // cap prevent an infinite loop if a delete persistently fails.
+    const MAX_PASSES: usize = 100;
+    for _ in 0..MAX_PASSES {
+        let items = match writer.get_list_by_kind(kind.as_str(), None).await {
+            Ok(list) => list.items,
+            Err(e) => {
+                errors.push(WipeError {
+                    kind: kind.as_str().to_string(),
+                    name: String::new(),
+                    reason: format!("list failed: {}", e),
+                });
+                break;
+            }
         };
-        match writer.delete_one(kind.as_str(), ns.as_deref(), &name).await {
-            Ok(_) => deleted.push(key),
-            Err(e) => errors.push(WipeError {
-                kind: kind.as_str().to_string(),
-                name: key,
-                reason: format!("{}", e),
-            }),
+        if items.is_empty() {
+            break;
+        }
+
+        let mut deleted_this_pass = 0usize;
+        for item in items {
+            let (ns, name) = (item.namespace.clone(), item.name.clone());
+            let key = match &ns {
+                Some(n) => format!("{}/{}", n, name),
+                None => name.clone(),
+            };
+            match writer.delete_one(kind.as_str(), ns.as_deref(), &name).await {
+                Ok(_) => {
+                    deleted.push(key);
+                    deleted_this_pass += 1;
+                }
+                Err(e) => errors.push(WipeError {
+                    kind: kind.as_str().to_string(),
+                    name: key,
+                    reason: format!("{}", e),
+                }),
+            }
+        }
+
+        // No successful delete this pass -> remaining items are stuck; stop
+        // rather than spin (the hard cap is a secondary backstop).
+        if deleted_this_pass == 0 {
+            break;
         }
     }
 
@@ -217,6 +236,47 @@ mod tests {
                 .items;
             assert!(items.is_empty(), "expected {kind} list to be empty after wipe");
         }
+    }
+
+    #[tokio::test]
+    async fn wipe_drains_conflict_loser() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let state = make_test_state(tmp.path()).await;
+        let root = tmp.path();
+
+        // Winner via the API (canonical path); registry is still empty here.
+        seed_resource(&state, "HTTPRoute", Some("default"), "r1").await;
+        let winner = root.join("default").join("HTTPRoute_default_r1.yaml");
+
+        // Second file for the SAME key at a non-canonical subdir.
+        let yaml = "apiVersion: v1\nkind: HTTPRoute\nmetadata:\n  name: r1\n  namespace: default\n";
+        let loser = root.join("legacy").join("HTTPRoute_default_r1.yaml");
+        std::fs::create_dir_all(loser.parent().unwrap()).unwrap();
+        std::fs::write(&loser, yaml).unwrap();
+
+        // Populate the registry as the watcher would: winner first, loser second.
+        let reg = state.conf_dir_registry().expect("fs registry available");
+        let key = crate::conf_mgr::conf_center::file_system::ResourceKey::new("HTTPRoute", "default/r1");
+        reg.record(key.clone(), winner.clone());
+        reg.record(key, loser.clone());
+        assert!(winner.exists() && loser.exists(), "both files seeded");
+
+        // Wipe.
+        let resp = wipe_all(axum::extract::State(state.clone())).await.0;
+        assert_eq!(resp.error, None, "wipe_all returned an API error");
+
+        // Drain loop must remove BOTH files (a single pass would orphan the loser;
+        // a non-pending-aware is_recorded_loser would also orphan it).
+        assert!(!winner.exists(), "winner must be deleted");
+        assert!(!loser.exists(), "loser must be deleted by the drain loop");
+
+        let items = state
+            .conf_center()
+            .get_list_by_kind("HTTPRoute", None)
+            .await
+            .expect("get_list_by_kind")
+            .items;
+        assert!(items.is_empty(), "HTTPRoute must be empty after wipe");
     }
 
     #[test]

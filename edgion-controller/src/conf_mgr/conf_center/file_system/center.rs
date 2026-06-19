@@ -6,6 +6,7 @@
 //! Shared lifecycle logic is delegated to `CenterBase` (see `non_kube_common`).
 //! The only FileSystem-specific work is creating `FileSystemController` per iteration.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -37,26 +38,37 @@ pub struct FileSystemCenter {
     registry: Arc<PathRegistry>,
     /// Shared lifecycle base (handles, runtime)
     base: CenterBase,
+    /// Absolute conf directory, computed once so storage and the watcher share
+    /// one identical scan/record base (design §0).
+    conf_dir_abs: PathBuf,
 }
 
 impl FileSystemCenter {
     /// Create a new FileSystemCenter
     pub fn new(config: FileSystemConfig) -> Result<Self> {
+        let registry = Arc::new(PathRegistry::new());
+        // §0: absolutize once at the single source. Storage's scan base and the
+        // watcher's recorded paths must be byte-identical or the list drop-loser
+        // filter is a silent no-op under a relative conf_dir.
+        let conf_dir_abs = super::storage::absolutize_path(config.conf_dir().clone());
+
+        // Log the resolved absolute path so the startup log shows what storage
+        // and the watcher actually use, not the operator's (possibly relative) input.
         tracing::info!(
             component = "file_system_center",
             mode = "file_system",
-            conf_dir = %config.conf_dir().display(),
+            conf_dir = %conf_dir_abs.display(),
             "Creating FileSystemCenter"
         );
 
-        let registry = Arc::new(PathRegistry::new());
-        let writer = FileSystemStorage::new(config.conf_dir()).with_registry(registry.clone());
+        let writer = FileSystemStorage::new(conf_dir_abs.clone()).with_registry(registry.clone());
 
         Ok(Self {
             config,
             writer,
             registry,
             base: CenterBase::new(),
+            conf_dir_abs,
         })
     }
 
@@ -68,6 +80,16 @@ impl FileSystemCenter {
     /// Get the shared path registry
     pub fn registry(&self) -> &Arc<PathRegistry> {
         &self.registry
+    }
+
+    #[cfg(test)]
+    pub(super) fn conf_dir_abs(&self) -> &std::path::Path {
+        &self.conf_dir_abs
+    }
+
+    #[cfg(test)]
+    pub(super) fn storage_root(&self) -> &std::path::Path {
+        self.writer.root().as_path()
     }
 }
 
@@ -101,10 +123,10 @@ impl CenterLifeCycle for FileSystemCenter {
 
         // Inject conf_writer into runtime so handlers can auto-create resources (e.g. EdgionConfigData).
         let writer_arc: Arc<dyn CenterApi + Send + Sync> =
-            Arc::new(FileSystemStorage::new(self.config.conf_dir()).with_registry(self.registry.clone()));
+            Arc::new(FileSystemStorage::new(self.conf_dir_abs.clone()).with_registry(self.registry.clone()));
         self.base.runtime().set_conf_writer(writer_arc);
 
-        let conf_dir = self.config.conf_dir().clone();
+        let conf_dir = self.conf_dir_abs.clone();
         let registry = self.registry.clone();
         let poll_interval_override = self.config.poll_interval_ms.map(Duration::from_millis);
 
@@ -155,5 +177,24 @@ impl CenterLifeCycle for FileSystemCenter {
 
     fn conf_dir_registry(&self) -> Option<Arc<super::path_registry::PathRegistry>> {
         Some(self.registry.clone())
+    }
+}
+
+#[cfg(test)]
+mod center_path_tests {
+    use super::*;
+
+    #[test]
+    fn new_absolutizes_conf_dir_and_shares_base_with_storage() {
+        let center = FileSystemCenter::new(FileSystemConfig::new(std::path::PathBuf::from("relative/conf"))).unwrap();
+        assert!(
+            center.conf_dir_abs().is_absolute(),
+            "conf_dir handed to the watcher must be absolute"
+        );
+        assert_eq!(
+            center.storage_root(),
+            center.conf_dir_abs(),
+            "storage scan base must equal the watcher base (design §0)"
+        );
     }
 }

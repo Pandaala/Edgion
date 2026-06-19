@@ -165,6 +165,31 @@ impl PathRegistry {
         })
     }
 
+    /// True iff `path` is a recorded non-winner (conflict loser) for its key.
+    ///
+    /// Unknown paths (not yet recorded by the watcher) return `false` — they are
+    /// kept and treated as winners, so in the cold-registry window the list is a
+    /// strict no-op (identical to the current unfiltered scan). It only positively
+    /// drops a path the registry KNOWS is a non-winner.
+    ///
+    /// The "winner" here is the SAME pending-aware value `winner_of` computes
+    /// (first path of the key not in `pending_api_delete`), so list and `get_one`
+    /// agree, and the wipe drain loop's pass-2 promoted loser is not wrongly dropped.
+    pub fn is_recorded_loser(&self, path: &Path) -> bool {
+        let inner = self.inner.read();
+        let Some(key) = inner.by_path.get(path) else {
+            return false; // unknown path -> keep
+        };
+        let live_winner = inner
+            .by_key
+            .get(key)
+            .and_then(|v| v.iter().find(|p| !inner.pending_api_delete.contains(*p)));
+        match live_winner {
+            Some(w) => w.as_path() != path, // loser iff it is not the live winner
+            None => false,                  // no live winner left -> keep
+        }
+    }
+
     pub fn snapshot_conflicts(&self) -> Vec<ConflictReport> {
         let inner = self.inner.read();
         let mut out = Vec::new();
@@ -441,5 +466,61 @@ mod tests {
         // ns/y: unaffected — both return /y.yaml
         assert_eq!(snap.get(&k("S", "ns/y")), Some(&p("/y.yaml")));
         assert_eq!(r.winner_of(&k("S", "ns/y")), Some(p("/y.yaml")));
+    }
+
+    // --- is_recorded_loser tests ---
+
+    #[test]
+    fn is_recorded_loser_unknown_path_is_false() {
+        let r = PathRegistry::new();
+        assert!(!r.is_recorded_loser(&p("/conf/x.yaml")));
+    }
+
+    #[test]
+    fn is_recorded_loser_winner_false_loser_true() {
+        let r = PathRegistry::new();
+        r.record(k("S", "ns/x"), p("/conf/a.yaml")); // winner (first)
+        r.record(k("S", "ns/x"), p("/conf/b.yaml")); // loser
+        assert!(!r.is_recorded_loser(&p("/conf/a.yaml")), "winner is not a loser");
+        assert!(r.is_recorded_loser(&p("/conf/b.yaml")), "second path is a loser");
+    }
+
+    #[test]
+    fn is_recorded_loser_pending_winner_promotes_loser() {
+        let r = PathRegistry::new();
+        r.record(k("S", "ns/x"), p("/conf/a.yaml"));
+        r.record(k("S", "ns/x"), p("/conf/b.yaml"));
+        r.mark_api_deleted(&p("/conf/a.yaml")); // a pending -> b is the live winner
+        assert!(
+            !r.is_recorded_loser(&p("/conf/b.yaml")),
+            "promoted loser must no longer be flagged a loser (pending-aware)"
+        );
+    }
+
+    #[test]
+    fn is_recorded_loser_all_pending_is_false() {
+        let r = PathRegistry::new();
+        r.record(k("S", "ns/x"), p("/conf/a.yaml"));
+        r.mark_api_deleted(&p("/conf/a.yaml")); // no live winner left
+        assert!(!r.is_recorded_loser(&p("/conf/a.yaml")), "no live winner -> keep");
+    }
+
+    #[test]
+    fn is_recorded_loser_all_pending_two_paths_is_false() {
+        // winner + loser BOTH pending -> no live winner -> neither path is a loser
+        // (exercises the `None => false` branch with more than one recorded path).
+        let r = PathRegistry::new();
+        r.record(k("S", "ns/x"), p("/conf/a.yaml")); // winner
+        r.record(k("S", "ns/x"), p("/conf/b.yaml")); // loser
+        r.mark_api_deleted(&p("/conf/a.yaml"));
+        r.mark_api_deleted(&p("/conf/b.yaml"));
+        assert!(
+            !r.is_recorded_loser(&p("/conf/a.yaml")),
+            "all paths pending -> keep (no live winner)"
+        );
+        assert!(
+            !r.is_recorded_loser(&p("/conf/b.yaml")),
+            "all paths pending -> keep (no live winner)"
+        );
     }
 }

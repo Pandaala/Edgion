@@ -41,14 +41,7 @@ pub struct FileSystemStorage {
 impl FileSystemStorage {
     /// Create a new file system writer with root directory path
     pub fn new<P: Into<PathBuf>>(root: P) -> Self {
-        let root_path = root.into();
-        let root_abs = if root_path.is_absolute() {
-            root_path
-        } else {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(&root_path))
-                .unwrap_or(root_path)
-        };
+        let root_abs = absolutize_path(root.into());
 
         tracing::info!(
             component = "file_system_writer",
@@ -312,6 +305,11 @@ impl CenterApi for FileSystemStorage {
 
         let mut resources = Vec::with_capacity(entries.len());
         for (path, content) in entries {
+            if let Some(reg) = &self.registry {
+                if reg.is_recorded_loser(&path) {
+                    continue;
+                }
+            }
             if let Some(metadata) = extract_resource_metadata(&content) {
                 resources.push(ConfEntry {
                     kind: metadata.kind.unwrap_or_default(),
@@ -432,7 +430,12 @@ impl CenterApi for FileSystemStorage {
         .map_err(|e| ConfWriterError::io("list_by_kind join failed", std::io::Error::other(e)))?;
 
         let mut resources = Vec::with_capacity(entries.len());
-        for (_path, content) in entries {
+        for (path, content) in entries {
+            if let Some(reg) = &self.registry {
+                if reg.is_recorded_loser(&path) {
+                    continue;
+                }
+            }
             if let Some(metadata) = extract_resource_metadata(&content) {
                 if metadata.kind.as_deref() == Some(kind) {
                     resources.push(ConfEntry {
@@ -498,7 +501,12 @@ impl CenterApi for FileSystemStorage {
         .map_err(|e| ConfWriterError::io("list_by_kind_ns join failed", std::io::Error::other(e)))?;
 
         let mut resources = Vec::with_capacity(entries.len());
-        for (_path, content) in entries {
+        for (path, content) in entries {
+            if let Some(reg) = &self.registry {
+                if reg.is_recorded_loser(&path) {
+                    continue;
+                }
+            }
             if let Some(metadata) = extract_resource_metadata(&content) {
                 if metadata.kind.as_deref() == Some(kind) && metadata.namespace.as_deref() == Some(namespace) {
                     resources.push(ConfEntry {
@@ -573,6 +581,19 @@ pub(super) fn build_resource_path_from_key(root: &Path, kind: &str, key: &str) -
     build_resource_path(root, kind, namespace, name)
 }
 
+/// Absolutize a possibly-relative path against the current working directory,
+/// WITHOUT resolving symlinks. Used by both `FileSystemStorage::new` and
+/// `FileSystemCenter::new` so the storage scan base and the watcher's recorded
+/// paths share one identical base (design §0). Resolving symlinks on only one
+/// side would create a new divergence, so this deliberately does not canonicalize.
+pub(super) fn absolutize_path(path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir().map(|cwd| cwd.join(&path)).unwrap_or(path)
+    }
+}
+
 #[cfg(test)]
 mod path_tests {
     use super::*;
@@ -619,5 +640,68 @@ mod path_tests {
         assert!(validate_path_components("..", Some("default"), "x").is_err());
         assert!(validate_path_components("HTTPRoute", Some("default"), "..").is_err());
         assert!(validate_path_components("HTTPRoute", Some("default"), "a/b").is_err());
+    }
+
+    #[test]
+    fn absolutize_path_keeps_absolute_unchanged() {
+        let abs = PathBuf::from("/etc/edgion/conf");
+        assert_eq!(absolutize_path(abs.clone()), abs);
+    }
+
+    #[test]
+    fn absolutize_path_makes_relative_absolute() {
+        let out = absolutize_path(PathBuf::from("relative/conf"));
+        assert!(out.is_absolute(), "relative input must become absolute");
+        assert!(out.ends_with("relative/conf"));
+    }
+}
+
+#[cfg(test)]
+mod list_filter_tests {
+    use super::*;
+    use crate::conf_mgr::conf_center::file_system::path_registry::ResourceKey;
+    use crate::conf_mgr::conf_center::traits::CenterApi;
+    use std::sync::Arc;
+
+    const YAML: &str = "apiVersion: v1\nkind: HTTPRoute\nmetadata:\n  name: r1\n  namespace: default\n";
+
+    fn seed_conflict(root: &Path, registry: &Arc<PathRegistry>) -> (PathBuf, PathBuf) {
+        // Two files for the SAME (kind, ns/name) at different subdirs (a cross-dir
+        // collision — they cannot share one directory, identical canonical filename).
+        let winner = root.join("default").join("HTTPRoute_default_r1.yaml");
+        let loser = root.join("legacy").join("HTTPRoute_default_r1.yaml");
+        std::fs::create_dir_all(winner.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(loser.parent().unwrap()).unwrap();
+        std::fs::write(&winner, YAML).unwrap();
+        std::fs::write(&loser, YAML).unwrap();
+        let key = ResourceKey::new("HTTPRoute", "default/r1");
+        registry.record(key.clone(), winner.clone()); // winner first
+        registry.record(key, loser.clone()); // loser second
+        (winner, loser)
+    }
+
+    #[tokio::test]
+    async fn list_methods_drop_recorded_loser_and_match_get_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let registry = Arc::new(PathRegistry::new());
+        let storage = FileSystemStorage::new(tmp.path().to_path_buf()).with_registry(registry.clone());
+        let (_winner, _loser) = seed_conflict(tmp.path(), &registry);
+
+        // get_list_by_kind returns only the winner.
+        let by_kind = storage.get_list_by_kind("HTTPRoute", None).await.unwrap();
+        assert_eq!(by_kind.items.len(), 1, "get_list_by_kind must drop the loser");
+        assert_eq!(by_kind.items[0].name, "r1");
+
+        // get_list_by_kind_ns returns only the winner.
+        let by_ns = storage.get_list_by_kind_ns("HTTPRoute", "default", None).await.unwrap();
+        assert_eq!(by_ns.items.len(), 1, "get_list_by_kind_ns must drop the loser");
+
+        // list_all returns only the winner.
+        let all = storage.list_all(None).await.unwrap();
+        assert_eq!(all.items.len(), 1, "list_all must drop the loser");
+
+        // get_one resolves the same winner the list kept (registry winner_of).
+        let one = storage.get_one("HTTPRoute", Some("default"), "r1").await.unwrap();
+        assert!(one.contains("name: r1"));
     }
 }
