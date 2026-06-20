@@ -33,10 +33,10 @@ pub async fn spawn_active_health_check(webhook_ref: String, runtime: Arc<Webhook
     loop {
         tokio::time::sleep(interval).await;
 
-        // Re-evaluate on every tick so that endpoint injection (Pending → Endpoints)
-        // is picked up without restarting the health task.
+        // Re-evaluate on every tick so that a Service target with no ready
+        // backend yet is skipped without restarting the health task.
         let Some(base) = runtime.resolved_target.pick_url() else {
-            tracing::debug!(webhook = %webhook_ref, "Active health check skipped: target still Pending");
+            tracing::debug!(webhook = %webhook_ref, "Active health check skipped: no ready backend yet");
             continue;
         };
         let check_url = match &active.path {

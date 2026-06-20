@@ -78,3 +78,21 @@ spec:
                 source: body
                 path: "data.apikey_user"
             default: "fallback-apikey"
+
+          # 7. Resolve via webhook with target.type=service (EndpointSlice path).
+          # Gateway reads the backend IP from the shared EpSliceStore instead of
+          # a controller-embedded endpoint list.  allowDegradation=true on the
+          # LinkSys keeps existing test cases unaffected if the slice is not yet
+          # synced when those requests arrive.
+          - name: webhook_svc_user_id
+            from:
+              type: webhook
+              webhookRef: "edgion-default/webhook-svc-resolver"
+              forwardHeaders:
+                - X-Tenant-Id
+                - X-Request-ID
+              pathSuffix: "/webhook/resolve"
+              extract:
+                source: body
+                path: "data.user_id"
+            default: "fallback-svc"

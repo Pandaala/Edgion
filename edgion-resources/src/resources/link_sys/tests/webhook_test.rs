@@ -89,7 +89,6 @@ fn test_validation_service_empty_name() {
             port: None,
             group: None,
             kind: None,
-            endpoints: vec![],
         },
         ..Default::default()
     };
@@ -108,7 +107,6 @@ fn test_validation_service_port_zero() {
             port: Some(0),
             group: None,
             kind: None,
-            endpoints: vec![],
         },
         ..Default::default()
     };
@@ -127,7 +125,6 @@ fn test_validation_service_port_negative() {
             port: Some(-1),
             group: None,
             kind: None,
-            endpoints: vec![],
         },
         ..Default::default()
     };
@@ -146,7 +143,6 @@ fn test_validation_service_valid() {
             port: Some(8080),
             group: None,
             kind: None,
-            endpoints: vec![],
         },
         ..Default::default()
     };
@@ -162,7 +158,6 @@ fn test_validation_service_kind_service_import() {
             port: Some(80),
             group: None,
             kind: Some("ServiceImport".to_string()),
-            endpoints: vec![],
         },
         ..Default::default()
     };
@@ -181,7 +176,6 @@ fn test_validation_service_kind_external_name() {
             port: Some(80),
             group: None,
             kind: Some("ServiceExternalName".to_string()),
-            endpoints: vec![],
         },
         ..Default::default()
     };
@@ -200,7 +194,6 @@ fn test_validation_service_kind_unsupported() {
             port: Some(80),
             group: None,
             kind: Some("BogusKind".to_string()),
-            endpoints: vec![],
         },
         ..Default::default()
     };
@@ -335,7 +328,7 @@ fn test_serde_roundtrip() {
 #[test]
 fn test_serde_service_target_roundtrip() {
     // Verifies both serialization and deserialization of the Service variant,
-    // including optional fields and endpoints injected by the Controller.
+    // including optional fields.
     let config = WebhookServiceConfig {
         target: WebhookTarget::Service {
             name: "auth-svc".into(),
@@ -343,7 +336,6 @@ fn test_serde_service_target_roundtrip() {
             port: Some(8080),
             group: None,
             kind: Some("ServiceClusterIp".into()),
-            endpoints: vec!["10.0.0.1:8080".into(), "10.0.0.2:8080".into()],
         },
         request_method: "POST".into(),
         ..Default::default()
@@ -355,8 +347,6 @@ fn test_serde_service_target_roundtrip() {
         json.contains("\"type\":\"service\""),
         "serialized JSON must contain type tag"
     );
-    // Verify endpoints are serialized.
-    assert!(json.contains("10.0.0.1:8080"), "endpoints must be serialized");
     // Verify None fields are omitted.
     assert!(!json.contains("\"group\""), "None group must be omitted");
 
@@ -367,39 +357,28 @@ fn test_serde_service_target_roundtrip() {
             namespace,
             port,
             kind,
-            endpoints,
             ..
         } => {
             assert_eq!(name, "auth-svc");
             assert_eq!(namespace.as_deref(), Some("prod"));
             assert_eq!(port, Some(8080));
             assert_eq!(kind.as_deref(), Some("ServiceClusterIp"));
-            assert_eq!(endpoints, vec!["10.0.0.1:8080", "10.0.0.2:8080"]);
         }
         _ => panic!("expected Service target after roundtrip"),
     }
 }
 
 #[test]
-fn test_serde_service_target_empty_endpoints_omitted() {
-    // endpoints: Vec::is_empty → skip_serializing_if ensures empty endpoints
-    // do not appear in the serialized output (users never set them manually).
-    let config = WebhookServiceConfig {
-        target: WebhookTarget::Service {
-            name: "svc".into(),
-            namespace: None,
-            port: Some(80),
-            group: None,
-            kind: None,
-            endpoints: vec![],
-        },
-        ..Default::default()
+fn service_target_serialization_has_no_endpoints_key() {
+    let target = WebhookTarget::Service {
+        name: "websvc".to_string(),
+        namespace: Some("ns".to_string()),
+        port: Some(8080),
+        group: None,
+        kind: None,
     };
-    let json = serde_json::to_string(&config).unwrap();
-    assert!(
-        !json.contains("\"endpoints\""),
-        "empty endpoints must be omitted from output"
-    );
+    let json = serde_json::to_string(&target).expect("serialize");
+    assert!(!json.contains("endpoints"), "endpoints field must be gone: {json}");
 }
 
 #[test]

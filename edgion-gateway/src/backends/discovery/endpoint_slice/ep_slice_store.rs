@@ -83,6 +83,53 @@ where
         }
     }
 
+    /// Ready `"ip:port"` endpoints for a service, matched to an explicit serving port.
+    ///
+    /// Mirrors the controller's former `extract_ready_ips`: `port` is matched against
+    /// `EndpointPort.port` (the pod serving-port number); `None` falls back to each
+    /// slice's first available port. Filters `conditions.ready` and brackets IPv6
+    /// literals (RFC 3986) so the caller can build `{scheme}://{ip:port}` directly.
+    ///
+    /// Hot path: no `tracing` here (data-plane rule).
+    pub fn ready_endpoints_for_port(&self, service_key: &str, port: Option<i32>) -> Vec<String> {
+        let service_to_slices = self.service_to_slices.read();
+        let ep_slices = self.ep_slices.read();
+
+        let Some(slice_keys) = service_to_slices.get(service_key) else {
+            return Vec::new();
+        };
+
+        let mut out = Vec::new();
+        for key in slice_keys {
+            let Some((eps, _)) = ep_slices.get(key) else {
+                continue;
+            };
+            let ports = eps.ports.as_deref().unwrap_or(&[]);
+            let ep_port = ports
+                .iter()
+                .find(|p| port.is_none() || p.port == port)
+                .and_then(|p| p.port);
+            let Some(ep_port) = ep_port else {
+                continue;
+            };
+            let is_ipv6 = eps.address_type == "IPv6";
+            for ep in &eps.endpoints {
+                let ready = ep.conditions.as_ref().and_then(|c| c.ready).unwrap_or(false);
+                if !ready {
+                    continue;
+                }
+                for ip in &ep.addresses {
+                    out.push(if is_ipv6 {
+                        format!("[{ip}]:{ep_port}")
+                    } else {
+                        format!("{ip}:{ep_port}")
+                    });
+                }
+            }
+        }
+        out
+    }
+
     // ==================== Data Layer Methods ====================
 
     /// Replace all data (full_set). Returns all service_keys in the new data.
@@ -457,5 +504,168 @@ mod tests {
         let mut ep_no_ns = ep.clone();
         ep_no_ns.metadata.namespace = None;
         assert_eq!(extract_service_key(&ep_no_ns), "my-service");
+    }
+
+    /// Build a slice with a single ready endpoint and multiple declared ports.
+    fn slice_multi_ports(name: &str, svc: &str, addr: &str, ports: &[i32], ready: bool) -> EndpointSlice {
+        let mut labels = BTreeMap::new();
+        labels.insert(SERVICE_NAME.to_string(), svc.to_string());
+        EndpointSlice {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some("ns".to_string()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            address_type: "IPv4".to_string(),
+            ports: Some(
+                ports
+                    .iter()
+                    .map(|&p| EndpointPort {
+                        port: Some(p),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ),
+            endpoints: vec![Endpoint {
+                addresses: vec![addr.to_string()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(ready),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+        }
+    }
+
+    fn slice(name: &str, svc: &str, addr_type: &str, port: i32, addrs_ready: &[(&str, bool)]) -> EndpointSlice {
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+        use std::collections::BTreeMap;
+        let mut labels = BTreeMap::new();
+        labels.insert(SERVICE_NAME.to_string(), svc.to_string());
+        EndpointSlice {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some("ns".to_string()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            address_type: addr_type.to_string(),
+            ports: Some(vec![EndpointPort {
+                port: Some(port),
+                ..Default::default()
+            }]),
+            endpoints: addrs_ready
+                .iter()
+                .map(|(ip, ready)| Endpoint {
+                    addresses: vec![ip.to_string()],
+                    conditions: Some(EndpointConditions {
+                        ready: Some(*ready),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn ready_endpoints_for_port_matches_port_and_filters_unready() {
+        let store = EpSliceStore::<RoundRobin>::new();
+        let mut data = HashMap::new();
+        data.insert(
+            "ns/eps-1".to_string(),
+            slice(
+                "eps-1",
+                "websvc",
+                "IPv4",
+                8080,
+                &[("10.0.0.1", true), ("10.0.0.2", false)],
+            ),
+        );
+        store.replace_data_only(data);
+
+        let mut got = store.ready_endpoints_for_port("ns/websvc", Some(8080));
+        got.sort();
+        assert_eq!(got, vec!["10.0.0.1:8080".to_string()]);
+
+        // Non-matching port -> empty.
+        assert!(store.ready_endpoints_for_port("ns/websvc", Some(9999)).is_empty());
+        // Unknown service -> empty.
+        assert!(store.ready_endpoints_for_port("ns/nope", Some(8080)).is_empty());
+    }
+
+    #[test]
+    fn ready_endpoints_for_port_brackets_ipv6_and_port_none_fallback() {
+        let store = EpSliceStore::<RoundRobin>::new();
+        let mut data = HashMap::new();
+        data.insert(
+            "ns/v6".to_string(),
+            slice("v6", "v6svc", "IPv6", 443, &[("2001:db8::1", true)]),
+        );
+        store.replace_data_only(data);
+
+        // port = None falls back to the slice's first port.
+        let got = store.ready_endpoints_for_port("ns/v6svc", None);
+        assert_eq!(got, vec!["[2001:db8::1]:443".to_string()]);
+    }
+
+    /// A slice declaring multiple ports (e.g. [80, 8080]): querying Some(8080) must
+    /// return only the :8080 endpoint, and querying Some(80) must return :80.
+    #[test]
+    fn ready_endpoints_for_port_multi_port_slice_selects_correct_port() {
+        let store = EpSliceStore::<RoundRobin>::new();
+        let mut data = HashMap::new();
+        data.insert(
+            "ns/multi-eps".to_string(),
+            slice_multi_ports("multi-eps", "multisvc", "10.0.1.1", &[80, 8080], true),
+        );
+        store.replace_data_only(data);
+
+        let got_8080 = store.ready_endpoints_for_port("ns/multisvc", Some(8080));
+        assert_eq!(got_8080, vec!["10.0.1.1:8080".to_string()]);
+
+        let got_80 = store.ready_endpoints_for_port("ns/multisvc", Some(80));
+        assert_eq!(got_80, vec!["10.0.1.1:80".to_string()]);
+
+        // A port not present in the slice's port list returns empty.
+        assert!(store.ready_endpoints_for_port("ns/multisvc", Some(443)).is_empty());
+    }
+
+    /// When port = None and the slice's EndpointPort.port field is itself None,
+    /// the slice must be skipped (returns empty) rather than panic.
+    #[test]
+    fn ready_endpoints_for_port_none_with_null_ep_port_returns_empty() {
+        let store = EpSliceStore::<RoundRobin>::new();
+        let mut labels = BTreeMap::new();
+        labels.insert(SERVICE_NAME.to_string(), "nullsvc".to_string());
+        let eps = EndpointSlice {
+            metadata: ObjectMeta {
+                name: Some("null-port-eps".to_string()),
+                namespace: Some("ns".to_string()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            address_type: "IPv4".to_string(),
+            // The port entry exists but its numeric value is absent (None).
+            ports: Some(vec![EndpointPort {
+                port: None,
+                ..Default::default()
+            }]),
+            endpoints: vec![Endpoint {
+                addresses: vec!["10.0.2.1".to_string()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+        };
+        let mut data = HashMap::new();
+        data.insert("ns/null-port-eps".to_string(), eps);
+        store.replace_data_only(data);
+
+        // port = None + EndpointPort.port = None: slice must be skipped, not a panic.
+        assert!(store.ready_endpoints_for_port("ns/nullsvc", None).is_empty());
     }
 }

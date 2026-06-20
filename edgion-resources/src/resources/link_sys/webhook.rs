@@ -56,8 +56,8 @@ pub enum WebhookAuth {
 /// Webhook target backend.
 ///
 /// Selects where the webhook request is sent. Use `Uri` for external HTTP/HTTPS
-/// endpoints or `Service` to target a Kubernetes Service whose endpoints are
-/// injected by the Controller.
+/// endpoints or `Service` to target a Kubernetes Service whose pod endpoints are
+/// resolved by the gateway from the shared EndpointSlice store at call time.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum WebhookTarget {
@@ -66,7 +66,7 @@ pub enum WebhookTarget {
 
     /// Kubernetes Service backend.
     /// `kind` semantics match `EdgionService::from_kind()`:
-    ///   `None` / `""` / `"Service"` / `"ServiceEndpointSlice"` → WRR over endpoints (injected by Controller)
+    ///   `None` / `""` / `"Service"` / `"ServiceEndpointSlice"` → WRR over pod endpoints resolved by the gateway at call time
     ///   `"ServiceClusterIp"`                                    → ClusterIP DNS, kube-proxy LB
     Service {
         name: String,
@@ -78,10 +78,6 @@ pub enum WebhookTarget {
         group: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<String>,
-        /// Pod IPs injected by the Controller. Format: "ip:port". Not set by users.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        #[schemars(skip)]
-        endpoints: Vec<String>,
     },
 }
 

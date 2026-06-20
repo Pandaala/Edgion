@@ -19,14 +19,12 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 };
 use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::prelude_resources::LinkSys;
-use edgion_resources::resources::common::{EdgionService, SecretObjectReference};
-use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::link_sys::{LinkSysStatus, SystemConfig};
 
 use super::auth_spec::{AuthSpec, TlsSpec};
 use edgion_resources::ResourceKind;
 use k8s_openapi::api::core::v1::Secret;
-use k8s_openapi::api::discovery::v1::EndpointSlice;
 
 /// LinkSys handler
 pub struct LinkSysHandler;
@@ -124,11 +122,10 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
             ls.metadata.name.clone().unwrap_or_default(),
         );
 
-        // Clear old references first (for update scenario).
-        // Both managers must be cleared so that changing target type (e.g. Service → Uri)
-        // does not leave stale registrations that trigger spurious requeues.
+        // Clear old Secret references first (for update scenario) so that a Secret
+        // that was previously referenced but is no longer referenced after an update
+        // does not trigger spurious requeues.
         ctx.secret_ref_manager().clear_resource_refs(&owner);
-        ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
 
         let errors = resolve_for_spec(ctx, &owner, &mut ls.spec.config).await;
         let generation = ls.metadata.generation;
@@ -169,10 +166,9 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
             ls.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&owner);
-        ctx.runtime().service_ref_mgr.clear_resource_refs(&owner);
         tracing::debug!(
             link_sys = %owner.key(),
-            "Cleared SecretRefManager and ServiceRefManager references on LinkSys delete"
+            "Cleared SecretRefManager references on LinkSys delete"
         );
     }
 
@@ -248,107 +244,11 @@ async fn resolve_for_spec(
         SystemConfig::Redis(r) => drive_standard(ctx, owner, r.auth.as_mut(), r.tls.as_mut()).await,
         SystemConfig::Etcd(e) => drive_standard(ctx, owner, e.auth.as_mut(), e.tls.as_mut()).await,
         SystemConfig::Elasticsearch(es) => drive_standard(ctx, owner, es.auth.as_mut(), es.tls.as_mut()).await,
-        SystemConfig::Webhook(w) => {
-            let errors = drive_standard(ctx, owner, w.auth.as_mut(), w.tls.as_mut()).await;
-
-            if let WebhookTarget::Service {
-                name,
-                namespace,
-                port,
-                kind,
-                endpoints,
-                ..
-            } = &mut w.target
-            {
-                if matches!(
-                    EdgionService::from_kind(kind.as_ref()),
-                    EdgionService::Service | EdgionService::ServiceEndpointSlice
-                ) {
-                    let ns = namespace.as_deref().or(owner.namespace.as_deref()).unwrap_or("default");
-                    let svc_key = format!("{ns}/{name}");
-
-                    ctx.runtime().service_ref_mgr.add_ref(svc_key.clone(), owner.clone());
-
-                    *endpoints = resolve_endpoints(ctx, ns, name, *port);
-
-                    if endpoints.is_empty() {
-                        tracing::debug!(
-                            link_sys = %owner.key(),
-                            service = %svc_key,
-                            "Webhook service endpoints not yet available (EndpointSlice pending)"
-                        );
-                    }
-                }
-            }
-            errors
-        }
+        SystemConfig::Webhook(w) => drive_standard(ctx, owner, w.auth.as_mut(), w.tls.as_mut()).await,
         SystemConfig::Kafka(kafka_config) => {
             drive_standard(ctx, owner, kafka_config.sasl.as_mut(), kafka_config.tls.as_mut()).await
         }
     }
-}
-
-/// Collect ready pod IP:port strings for a Service from cached EndpointSlice objects.
-fn resolve_endpoints(ctx: &HandlerContext, namespace: &str, svc_name: &str, port: Option<i32>) -> Vec<String> {
-    let Some(proc) = ctx.runtime().processor_registry.get("EndpointSlice") else {
-        return vec![];
-    };
-    proc.list_keys()
-        .into_iter()
-        .filter_map(|key| {
-            let any = proc.get_raw_any(&key)?;
-            any.downcast::<EndpointSlice>().ok()
-        })
-        .filter(|eps| {
-            eps.metadata.namespace.as_deref() == Some(namespace)
-                && eps
-                    .metadata
-                    .labels
-                    .as_ref()
-                    .and_then(|l| l.get("kubernetes.io/service-name"))
-                    .map(|s| s == svc_name)
-                    .unwrap_or(false)
-        })
-        .flat_map(|eps| extract_ready_ips(&eps, port))
-        .collect()
-}
-
-/// Extract `"ip:port"` strings for ready endpoints from a single EndpointSlice.
-fn extract_ready_ips(eps: &EndpointSlice, port: Option<i32>) -> Vec<String> {
-    let target_port = port;
-    let ports = eps.ports.as_deref().unwrap_or(&[]);
-    if target_port.is_none() && ports.len() > 1 {
-        tracing::debug!(
-            eps = eps.metadata.name.as_deref().unwrap_or(""),
-            port_count = ports.len(),
-            "Webhook service target has no port specified; selecting first available EndpointSlice port"
-        );
-    }
-    let ep_port = ports
-        .iter()
-        .find(|p| target_port.is_none() || p.port == target_port)
-        .and_then(|p| p.port);
-    let Some(ep_port) = ep_port else {
-        return vec![];
-    };
-
-    // IPv6 literals must be bracketed in an authority (RFC 3986); the downstream
-    // webhook provider builds `{scheme}://{ep}` and feeds it to reqwest. Mirror the
-    // EndpointSlice discovery path (`discovery_impl.rs`) which branches on address_type.
-    let is_ipv6 = eps.address_type == "IPv6";
-    eps.endpoints
-        .iter()
-        .filter(|ep| ep.conditions.as_ref().and_then(|c| c.ready).unwrap_or(false))
-        .flat_map(|ep| {
-            ep.addresses.iter().map(move |ip| {
-                if is_ipv6 {
-                    format!("[{ip}]:{ep_port}")
-                } else {
-                    format!("{ip}:{ep_port}")
-                }
-            })
-        })
-        .collect()
 }
 
 pub(super) async fn resolve_one<R: SecretMaterialResolver>(

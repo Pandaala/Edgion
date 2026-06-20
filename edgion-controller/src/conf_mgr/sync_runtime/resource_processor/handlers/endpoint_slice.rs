@@ -1,8 +1,9 @@
 //! EndpointSlice Handler
 //!
 //! Handles EndpointSlice resources. When an EndpointSlice changes, requeues
-//! all LinkSys resources that registered a dependency on the parent Service
-//! via `service_ref_mgr`, so their endpoint lists are refreshed.
+//! all registered `service_ref_mgr` dependents (Routes, BackendTLSPolicy) that
+//! track the parent Service, and relays the updated EndpointSlice to the gateway
+//! via conf_sync so the gateway can resolve endpoints itself.
 
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 

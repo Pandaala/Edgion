@@ -1,0 +1,23 @@
+# LinkSys webhook with target.type=service.
+# The gateway resolves the backend by reading the shared EpSliceStore
+# (populated by 07_EndpointSlice_*), not from a controller-embedded endpoint list.
+# Only the target type differs from the uri-based webhook-resolver; all other
+# parameters (method, timeout, success codes) are kept identical for a clean comparison.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: webhook-svc-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      type: service
+      name: webhook-svc-backend
+      namespace: edgion-default
+      port: 30001
+    requestMethod: GET
+    timeoutMs: 5000
+    successStatusCodes: [200]
+    allowDegradation: true
+    maxResponseBytes: 4096

@@ -178,7 +178,8 @@ impl KubernetesStorage {
                 (ar, Scope::Namespaced)
             }
             "EdgionGatewayConfig" => {
-                let mut ar = ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1alpha1", "EdgionGatewayConfig"));
+                let mut ar =
+                    ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1alpha1", "EdgionGatewayConfig"));
                 ar.plural = "edgiongatewayclassconfigs".to_string();
                 (ar, Scope::Cluster)
             }

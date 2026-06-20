@@ -12,7 +12,6 @@ use async_trait::async_trait;
 use tokio::sync::RwLock;
 
 use crate::backends::service_kind::EdgionService;
-use crate::lb::WeightedRoundRobin;
 use crate::plugins::http::common::http_client::{build_webhook_client, get_http_client_arc};
 use edgion_resources::resources::link_sys::webhook::{WebhookAuth, WebhookServiceConfig, WebhookTarget};
 
@@ -114,37 +113,20 @@ impl WebhookManager {
                 namespace,
                 port,
                 kind,
-                endpoints,
                 ..
             } => {
                 let ns = namespace.as_deref().or(linksys_ns).unwrap_or("default");
-                let port_suffix = port.map(|p| format!(":{p}")).unwrap_or_default();
                 match EdgionService::from_kind(kind.as_ref()) {
                     EdgionService::ServiceClusterIp => {
+                        let port_suffix = port.map(|p| format!(":{p}")).unwrap_or_default();
                         WebhookResolvedTarget::Static(format!("{scheme}://{name}.{ns}.svc.cluster.local{port_suffix}"))
                     }
-                    EdgionService::Service | EdgionService::ServiceEndpointSlice => {
-                        if endpoints.is_empty() {
-                            WebhookResolvedTarget::Pending
-                        } else {
-                            let urls: Vec<String> = endpoints.iter().map(|ep| format!("{scheme}://{ep}")).collect();
-                            match WeightedRoundRobin::with_equal_weights(urls) {
-                                Ok(rr) => WebhookResolvedTarget::Endpoints(rr),
-                                Err(e) => {
-                                    // Fail-close: treat the webhook as not-yet-ready rather than
-                                    // routing to a malformed selector. Runs at registration time
-                                    // (not the request hot path), so logging is allowed here.
-                                    tracing::warn!(
-                                        webhook = %webhook_ref,
-                                        count = endpoints.len(),
-                                        error = %e,
-                                        "Failed to build webhook endpoint selector; treating target as pending"
-                                    );
-                                    WebhookResolvedTarget::Pending
-                                }
-                            }
-                        }
-                    }
+                    EdgionService::Service | EdgionService::ServiceEndpointSlice => WebhookResolvedTarget::Service {
+                        service_key: format!("{ns}/{name}"),
+                        port: *port,
+                        scheme,
+                        cursor: AtomicUsize::new(0),
+                    },
                     _ => {
                         return Err(anyhow::anyhow!("unsupported service kind: {:?}", kind));
                     }
@@ -342,7 +324,6 @@ mod tests {
                 port: Some(8080),
                 group: None,
                 kind: Some("ServiceClusterIp".to_string()),
-                endpoints: vec![],
             },
             ..Default::default()
         };
@@ -373,7 +354,6 @@ mod tests {
                 port: Some(9090),
                 group: None,
                 kind: Some("ServiceClusterIp".to_string()),
-                endpoints: vec![],
             },
             ..Default::default()
         };
@@ -392,74 +372,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_manager_service_with_endpoints_builds_wrr() {
-        use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
-
-        let manager = WebhookManager::new();
-        let config = WebhookServiceConfig {
-            target: WebhookTarget::Service {
-                name: "backend".to_string(),
-                namespace: Some("default".to_string()),
-                port: Some(8080),
-                group: None,
-                kind: None, // default → Service → WRR
-                endpoints: vec!["10.0.0.1:8080".to_string(), "10.0.0.2:8080".to_string()],
-            },
-            ..Default::default()
-        };
-        manager
-            .upsert("default/backend", config, None)
-            .await
-            .expect("upsert should succeed");
-
-        let runtime = manager.get("default/backend").await.expect("runtime should exist");
-        match &runtime.resolved_target {
-            WebhookResolvedTarget::Endpoints(rr) => {
-                let picked = rr.select().clone();
-                assert!(
-                    picked == "http://10.0.0.1:8080" || picked == "http://10.0.0.2:8080",
-                    "unexpected endpoint: {picked}"
-                );
-            }
-            other => panic!("expected Endpoints, got {other:?}"),
-        }
-    }
-
-    #[tokio::test]
-    async fn test_manager_service_empty_endpoints_is_pending() {
-        use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
-
-        let manager = WebhookManager::new();
-        let config = WebhookServiceConfig {
-            target: WebhookTarget::Service {
-                name: "backend".to_string(),
-                namespace: Some("default".to_string()),
-                port: Some(8080),
-                group: None,
-                kind: None,
-                endpoints: vec![], // no endpoints yet
-            },
-            ..Default::default()
-        };
-        manager
-            .upsert("default/backend", config, None)
-            .await
-            .expect("upsert should succeed");
-
-        let runtime = manager.get("default/backend").await.expect("runtime should exist");
-        assert!(
-            matches!(runtime.resolved_target, WebhookResolvedTarget::Pending),
-            "expected Pending for empty endpoints"
-        );
-        assert!(
-            runtime.resolved_target.pick_url().is_none(),
-            "pick_url must return None for Pending"
-        );
-    }
-
-    #[tokio::test]
     async fn test_manager_unsupported_service_kind_returns_error() {
         use edgion_resources::resources::link_sys::webhook::WebhookTarget;
 
@@ -471,12 +383,85 @@ mod tests {
                 port: Some(80),
                 group: None,
                 kind: Some("ServiceImport".to_string()),
-                endpoints: vec![],
             },
             ..Default::default()
         };
         let result = manager.upsert("ns/wh", config, None).await;
         assert!(result.is_err(), "ServiceImport should be rejected by manager");
+    }
+
+    #[tokio::test]
+    async fn service_kind_none_builds_service_target() {
+        use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+
+        let manager = WebhookManager::new();
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "backend".to_string(),
+                namespace: Some("ns1".to_string()),
+                port: Some(8080),
+                group: None,
+                kind: None, // None → EdgionService::Service → WebhookResolvedTarget::Service
+            },
+            ..Default::default()
+        };
+        manager
+            .upsert("ns1/backend", config, None)
+            .await
+            .expect("upsert with kind=None should succeed");
+
+        let runtime = manager.get("ns1/backend").await.expect("runtime should exist");
+        match &runtime.resolved_target {
+            WebhookResolvedTarget::Service {
+                service_key,
+                port,
+                scheme,
+                ..
+            } => {
+                assert_eq!(service_key, "ns1/backend");
+                assert_eq!(*port, Some(8080));
+                assert_eq!(*scheme, "http");
+            }
+            other => panic!("expected Service variant, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn service_target_uses_linksys_ns_fallback() {
+        use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+
+        let manager = WebhookManager::new();
+        let config = WebhookServiceConfig {
+            target: WebhookTarget::Service {
+                name: "backend".to_string(),
+                namespace: None, // absent — should fall back to linksys_ns
+                port: Some(8080),
+                group: None,
+                kind: None,
+            },
+            ..Default::default()
+        };
+        manager
+            .upsert("fallback-ns/backend", config, Some("fallback-ns"))
+            .await
+            .expect("upsert with namespace=None and linksys_ns should succeed");
+
+        let runtime = manager.get("fallback-ns/backend").await.expect("runtime should exist");
+        match &runtime.resolved_target {
+            WebhookResolvedTarget::Service {
+                service_key,
+                port,
+                scheme,
+                ..
+            } => {
+                assert_eq!(service_key, "fallback-ns/backend");
+                assert_eq!(*port, Some(8080));
+                assert_eq!(*scheme, "http");
+            }
+            other => panic!("expected Service variant, got {other:?}"),
+        }
     }
 
     #[tokio::test]

@@ -784,36 +784,4 @@ mod tests {
         assert!(result.is_ok(), "defaultHeaders merge call failed");
         assert_eq!(result.unwrap().status, 200);
     }
-
-    #[tokio::test]
-    async fn pending_target_returns_unhealthy() {
-        // WebhookResolvedTarget::Pending means endpoints haven't been injected yet.
-        // The call must fail immediately with Unhealthy so that callers can surface
-        // a meaningful error rather than panicking or hanging.
-        let config = WebhookServiceConfig {
-            target: WebhookTarget::Uri { uri: String::new() },
-            ..Default::default()
-        };
-        let runtime = WebhookRuntime {
-            config,
-            http_client: Arc::new(reqwest::Client::new()),
-            resolved_target: WebhookResolvedTarget::Pending,
-            healthy: AtomicBool::new(true),
-            passive_failures: AtomicU32::new(0),
-            last_halfopen: AtomicU64::new(0),
-            backoff_sec: AtomicU64::new(0),
-            rate_counter: None,
-        };
-        let req = WebhookCallRequest {
-            method: "GET".to_string(),
-            path: String::new(),
-            headers: Default::default(),
-            body: None,
-        };
-        let result = webhook_call(&runtime, req, 65536).await;
-        assert!(
-            matches!(result, Err(WebhookCallError::Unhealthy)),
-            "expected Unhealthy for Pending target, got {result:?}"
-        );
-    }
 }

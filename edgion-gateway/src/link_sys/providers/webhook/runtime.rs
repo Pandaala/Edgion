@@ -3,11 +3,11 @@
 //! Contains WebhookRuntime (per-webhook state), SlidingWindowCounter (rate limiter),
 //! and time utilities.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::lb::WeightedRoundRobin;
+use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
 use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 use reqwest::Client;
 
@@ -17,36 +17,70 @@ use reqwest::Client;
 
 /// Resolved target for a webhook service at runtime.
 ///
-/// Derived from `WebhookTarget` during manager upsert. Decouples
-/// routing decisions from the raw configuration.
+/// `Static` covers `Uri` and `ServiceClusterIp` (a fixed base URL). `Service`
+/// holds a reference into the shared EndpointSlice data layer plus a local
+/// round-robin cursor; endpoints are read fresh on every `pick_url()`, so pod
+/// churn never rebuilds this target. Routing is fully decoupled from the route
+/// `ServiceSelectorCell` / circuit-breaker / health stores.
 pub enum WebhookResolvedTarget {
     /// Single base URL: Uri target or ServiceClusterIp.
     Static(String),
-    /// WRR pool of pod IPs: Service/ServiceEndpointSlice with injected endpoints.
-    Endpoints(WeightedRoundRobin<String>),
-    /// Endpoints not yet injected by Controller (transient state).
-    Pending,
+    /// Service-backed pool read from the shared EpSliceStore at call time.
+    Service {
+        /// Canonical `"namespace/service-name"` key (matches EpSliceStore).
+        service_key: String,
+        /// Explicit serving-port number to match, or None for first available.
+        port: Option<i32>,
+        /// "http" or "https".
+        scheme: &'static str,
+        /// Webhook-local round-robin cursor.
+        cursor: AtomicUsize,
+    },
 }
 
 impl std::fmt::Debug for WebhookResolvedTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Static(url) => write!(f, "Static({url:?})"),
-            Self::Endpoints(rr) => write!(f, "Endpoints(count={})", rr.len()),
-            Self::Pending => write!(f, "Pending"),
+            Self::Service {
+                service_key,
+                port,
+                scheme,
+                ..
+            } => {
+                write!(f, "Service(key={service_key:?}, port={port:?}, scheme={scheme})")
+            }
         }
     }
 }
 
 impl WebhookResolvedTarget {
-    /// Pick the next base URL. Returns `None` when the target is `Pending`.
+    /// Pick the next base URL. Returns `None` when the Service target currently
+    /// has no ready backend (callers map this to `WebhookCallError::Unhealthy`).
     pub fn pick_url(&self) -> Option<String> {
         match self {
             Self::Static(url) => Some(url.clone()),
-            Self::Endpoints(rr) => Some(rr.select().clone()),
-            Self::Pending => None,
+            Self::Service {
+                service_key,
+                port,
+                scheme,
+                cursor,
+            } => {
+                let eps = get_roundrobin_store().ready_endpoints_for_port(service_key, *port);
+                rr_pick(&eps, cursor, scheme)
+            }
         }
     }
+}
+
+/// Round-robin one `"ip:port"` from `eps` and format `"{scheme}://{ep}"`.
+/// Returns `None` for an empty list. Pure (no global state) for testability.
+fn rr_pick(eps: &[String], cursor: &AtomicUsize, scheme: &str) -> Option<String> {
+    if eps.is_empty() {
+        return None;
+    }
+    let idx = cursor.fetch_add(1, Ordering::Relaxed) % eps.len();
+    Some(format!("{scheme}://{}", eps[idx]))
 }
 
 // ============================================================
@@ -229,5 +263,207 @@ mod tests {
 
         let total: u64 = handles.into_iter().map(|h| h.join().unwrap()).sum();
         assert_eq!(total, limit);
+    }
+
+    #[test]
+    fn rr_pick_rotates_and_handles_empty() {
+        use std::sync::atomic::AtomicUsize;
+        let cursor = AtomicUsize::new(0);
+        let eps = vec!["10.0.0.1:8080".to_string(), "[2001:db8::1]:8080".to_string()];
+
+        let a = super::rr_pick(&eps, &cursor, "http");
+        let b = super::rr_pick(&eps, &cursor, "https");
+        let c = super::rr_pick(&eps, &cursor, "http");
+        assert_eq!(a.as_deref(), Some("http://10.0.0.1:8080"));
+        assert_eq!(b.as_deref(), Some("https://[2001:db8::1]:8080"));
+        assert_eq!(c.as_deref(), Some("http://10.0.0.1:8080")); // wrapped around
+
+        let empty: Vec<String> = vec![];
+        assert_eq!(super::rr_pick(&empty, &cursor, "http"), None);
+    }
+
+    /// Test A: `WebhookResolvedTarget::Service` resolves from the global EpSliceStore.
+    ///
+    /// Verifies that `pick_url()` returns `None` when the store has no entry for the
+    /// service key, and `Some(url)` after an endpoint slice is seeded via the
+    /// incremental `update_data_only` path (unique slice key — no cross-test pollution).
+    #[test]
+    fn pick_url_service_resolves_from_global_store() {
+        use edgion_resources::constants::labels::k8s::SERVICE_NAME;
+        use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+        use std::collections::{BTreeMap, HashMap, HashSet};
+
+        let svc_key = "wh-pickurl-test/svc";
+        let slice_key = "wh-pickurl-test/svc-slice";
+
+        let target = WebhookResolvedTarget::Service {
+            service_key: svc_key.to_string(),
+            port: Some(8080),
+            scheme: "http",
+            cursor: AtomicUsize::new(0),
+        };
+
+        // No entry in the global store yet: pick_url must return None.
+        assert_eq!(target.pick_url(), None);
+
+        // Build a ready EndpointSlice whose label resolves to "wh-pickurl-test/svc".
+        let mut labels = BTreeMap::new();
+        labels.insert(SERVICE_NAME.to_string(), "svc".to_string());
+        let ep_slice = EndpointSlice {
+            metadata: ObjectMeta {
+                name: Some("svc-slice".to_string()),
+                namespace: Some("wh-pickurl-test".to_string()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            address_type: "IPv4".to_string(),
+            endpoints: vec![Endpoint {
+                addresses: vec!["10.0.0.1".to_string()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+            ports: Some(vec![EndpointPort {
+                port: Some(8080),
+                ..Default::default()
+            }]),
+        };
+
+        // Incremental add: only this unique slice key is touched; other test keys unaffected.
+        let add = HashMap::from([(slice_key.to_string(), ep_slice)]);
+        get_roundrobin_store().update_data_only(add, HashMap::new(), &HashSet::new());
+
+        // After seeding: pick_url resolves the ready endpoint.
+        assert_eq!(target.pick_url(), Some("http://10.0.0.1:8080".to_string()));
+
+        // Cleanup: remove so we do not leave stale entries in the global store.
+        let remove = HashSet::from([slice_key.to_string()]);
+        get_roundrobin_store().update_data_only(HashMap::new(), HashMap::new(), &remove);
+    }
+
+    /// Test B: health state on `WebhookRuntime` is preserved across endpoint churn.
+    ///
+    /// Regression test: pod turnover (slice add/remove/re-add) must not rebuild the
+    /// `WebhookRuntime` or reset its atomic health fields.  The `Service` variant of
+    /// `WebhookResolvedTarget` reads the global store fresh on every `pick_url()` call,
+    /// so endpoint churn never requires replacing the runtime itself.
+    #[tokio::test]
+    async fn pick_url_health_state_preserved_across_churn() {
+        use edgion_resources::constants::labels::k8s::SERVICE_NAME;
+        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+        use std::collections::{BTreeMap, HashMap, HashSet};
+
+        let svc_key = "wh-health-test/svc";
+        let slice_key_1 = "wh-health-test/svc-slice-1";
+        let slice_key_2 = "wh-health-test/svc-slice-2";
+
+        // Construct a WebhookRuntime with deliberate unhealthy state.
+        let runtime = Arc::new(WebhookRuntime {
+            config: WebhookServiceConfig {
+                target: WebhookTarget::Uri {
+                    uri: "http://example.invalid".to_string(),
+                },
+                ..Default::default()
+            },
+            http_client: Arc::new(Client::new()),
+            resolved_target: WebhookResolvedTarget::Service {
+                service_key: svc_key.to_string(),
+                port: Some(8080),
+                scheme: "http",
+                cursor: AtomicUsize::new(0),
+            },
+            healthy: AtomicBool::new(false),
+            passive_failures: AtomicU32::new(5),
+            last_halfopen: AtomicU64::new(0),
+            backoff_sec: AtomicU64::new(0),
+            rate_counter: None,
+        });
+
+        // Capture Arc identity before any churn.
+        let ptr_before = Arc::as_ptr(&runtime);
+
+        let store = get_roundrobin_store();
+
+        // Build a ready EndpointSlice for "wh-health-test/svc".
+        let make_slice = |slice_name: &str, ip: &str| {
+            let mut labels = BTreeMap::new();
+            labels.insert(SERVICE_NAME.to_string(), "svc".to_string());
+            EndpointSlice {
+                metadata: ObjectMeta {
+                    name: Some(slice_name.to_string()),
+                    namespace: Some("wh-health-test".to_string()),
+                    labels: Some(labels),
+                    ..Default::default()
+                },
+                address_type: "IPv4".to_string(),
+                endpoints: vec![Endpoint {
+                    addresses: vec![ip.to_string()],
+                    conditions: Some(EndpointConditions {
+                        ready: Some(true),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }],
+                ports: Some(vec![EndpointPort {
+                    port: Some(8080),
+                    ..Default::default()
+                }]),
+            }
+        };
+
+        // Seed: add initial slice with IP 10.0.1.1.
+        store.update_data_only(
+            HashMap::from([(slice_key_1.to_string(), make_slice("svc-slice-1", "10.0.1.1"))]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
+        assert_eq!(
+            runtime.resolved_target.pick_url(),
+            Some("http://10.0.1.1:8080".to_string())
+        );
+
+        // Churn: remove slice-1 (momentary gap — no ready endpoints).
+        store.update_data_only(
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::from([slice_key_1.to_string()]),
+        );
+        assert_eq!(runtime.resolved_target.pick_url(), None);
+
+        // Add slice-2 with replacement IP 10.0.1.2 (simulates pod turnover).
+        store.update_data_only(
+            HashMap::from([(slice_key_2.to_string(), make_slice("svc-slice-2", "10.0.1.2"))]),
+            HashMap::new(),
+            &HashSet::new(),
+        );
+        assert_eq!(
+            runtime.resolved_target.pick_url(),
+            Some("http://10.0.1.2:8080".to_string())
+        );
+
+        // Arc identity, health flag, and failure counter are all unchanged by endpoint churn.
+        assert_eq!(
+            Arc::as_ptr(&runtime),
+            ptr_before,
+            "Arc identity must not change across churn"
+        );
+        assert!(!runtime.healthy.load(Ordering::Relaxed), "healthy must remain false");
+        assert_eq!(
+            runtime.passive_failures.load(Ordering::Relaxed),
+            5,
+            "passive_failures must remain 5"
+        );
+
+        // Cleanup: remove so we do not leave stale entries in the global store.
+        store.update_data_only(
+            HashMap::new(),
+            HashMap::new(),
+            &HashSet::from([slice_key_2.to_string()]),
+        );
     }
 }

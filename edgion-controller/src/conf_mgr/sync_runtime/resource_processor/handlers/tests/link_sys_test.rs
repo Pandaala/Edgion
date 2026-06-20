@@ -744,139 +744,29 @@ async fn test_spec_serde_round_trip_preserves_secret() {
     assert_eq!(rr.status, "True");
 }
 
-fn make_webhook_link_sys(ns: &str, name: &str, svc_name: &str, svc_ns: Option<&str>) -> LinkSys {
+/// After Task 3: webhook Service targets must NOT register into service_ref_mgr.
+/// The gateway resolves endpoints itself from the shared store; the controller
+/// no longer embeds them or registers wakeup dependencies.
+#[tokio::test]
+async fn webhook_service_target_registers_no_service_ref() {
     use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
-    LinkSys {
-        metadata: ObjectMeta {
-            name: Some(name.to_string()),
-            namespace: Some(ns.to_string()),
-            generation: Some(1),
-            ..Default::default()
-        },
-        spec: LinkSysSpec {
-            config: SystemConfig::Webhook(WebhookServiceConfig {
-                target: WebhookTarget::Service {
-                    name: svc_name.to_string(),
-                    namespace: svc_ns.map(str::to_string),
-                    port: Some(8080),
-                    group: None,
-                    kind: None,
-                    endpoints: vec![],
-                },
-                ..Default::default()
-            }),
-        },
-        status: None,
-    }
-}
 
-#[tokio::test]
-async fn test_webhook_service_target_registers_service_ref() {
-    let (ctx, runtime) = make_ctx(HashMap::new());
-    let handler = LinkSysHandler::new();
-    let ls = make_webhook_link_sys("default", "my-wh", "auth-svc", None);
-
-    let result = handler.parse(ls, &ctx).await;
-    assert!(matches!(result, ProcessResult::Continue(_)));
-
-    // "default/auth-svc" should now be registered in service_ref_mgr.
-    let refs = runtime.service_ref_mgr.get_refs("default/auth-svc");
-    let owner = ResourceRef::new(ResourceKind::LinkSys, Some("default".to_string()), "my-wh".to_string());
-    assert!(refs.contains(&owner), "service_ref_mgr must contain owner after parse");
-}
-
-#[tokio::test]
-async fn test_webhook_service_target_clears_stale_ref_on_target_change() {
-    let (ctx, runtime) = make_ctx(HashMap::new());
-    let handler = LinkSysHandler::new();
-
-    // First parse: Service target.
-    let ls_svc = make_webhook_link_sys("default", "my-wh", "auth-svc", None);
-    handler.parse(ls_svc, &ctx).await;
-
-    let refs = runtime.service_ref_mgr.get_refs("default/auth-svc");
-    let owner = ResourceRef::new(ResourceKind::LinkSys, Some("default".to_string()), "my-wh".to_string());
-    assert!(refs.contains(&owner), "should be registered after first parse");
-
-    // Second parse: Uri target (user switched webhook type).
-    let ls_uri = LinkSys {
-        metadata: ObjectMeta {
-            name: Some("my-wh".to_string()),
-            namespace: Some("default".to_string()),
-            generation: Some(2),
-            ..Default::default()
-        },
-        spec: LinkSysSpec {
-            config: SystemConfig::Webhook(edgion_resources::resources::link_sys::webhook::WebhookServiceConfig {
-                target: edgion_resources::resources::link_sys::webhook::WebhookTarget::Uri {
-                    uri: "http://external.example.com/hook".to_string(),
-                },
-                ..Default::default()
-            }),
-        },
-        status: None,
-    };
-    handler.parse(ls_uri, &ctx).await;
-
-    // Stale registration must be gone after switching to Uri target.
-    let refs = runtime.service_ref_mgr.get_refs("default/auth-svc");
-    assert!(
-        !refs.contains(&owner),
-        "stale service_ref_mgr registration must be cleared when target changes to Uri"
-    );
-}
-
-#[tokio::test]
-async fn test_on_delete_clears_service_ref_manager() {
-    let (ctx, runtime) = make_ctx(HashMap::new());
-    let handler = LinkSysHandler::new();
-    let ls = make_webhook_link_sys("default", "my-wh", "auth-svc", None);
-
-    handler.parse(ls.clone(), &ctx).await;
-
-    let owner = ResourceRef::new(ResourceKind::LinkSys, Some("default".to_string()), "my-wh".to_string());
-    assert!(
-        runtime.service_ref_mgr.get_refs("default/auth-svc").contains(&owner),
-        "should be registered before delete"
-    );
-
-    handler.on_delete(&ls, &ctx).await;
-
-    assert!(
-        !runtime.service_ref_mgr.get_refs("default/auth-svc").contains(&owner),
-        "service_ref_mgr should be cleared on delete"
-    );
-}
-
-#[test]
-fn test_extract_ready_ips_brackets_ipv6() {
-    use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort};
-
-    let make_eps = |address_type: &str, addr: &str| EndpointSlice {
-        address_type: address_type.to_string(),
-        endpoints: vec![Endpoint {
-            addresses: vec![addr.to_string()],
-            conditions: Some(EndpointConditions {
-                ready: Some(true),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }],
-        ports: Some(vec![EndpointPort {
+    let (ctx, _runtime) = make_ctx(HashMap::new());
+    let owner = ResourceRef::new(ResourceKind::LinkSys, Some("ns".to_string()), "websvc".to_string());
+    let mut cfg = SystemConfig::Webhook(WebhookServiceConfig {
+        target: WebhookTarget::Service {
+            name: "websvc".into(),
+            namespace: Some("ns".into()),
             port: Some(8080),
-            ..Default::default()
-        }]),
+            group: None,
+            kind: None,
+        },
         ..Default::default()
-    };
-
-    // IPv6 endpoints must be bracketed so the downstream `{scheme}://{ep}` URL is valid.
-    assert_eq!(
-        extract_ready_ips(&make_eps("IPv6", "fd00::1"), Some(8080)),
-        vec!["[fd00::1]:8080".to_string()]
-    );
-    // IPv4 endpoints are unchanged.
-    assert_eq!(
-        extract_ready_ips(&make_eps("IPv4", "10.0.0.5"), Some(8080)),
-        vec!["10.0.0.5:8080".to_string()]
+    });
+    let _ = resolve_for_spec(&ctx, &owner, &mut cfg).await;
+    let refs = ctx.runtime().service_ref_mgr.get_refs("ns/websvc");
+    assert!(
+        refs.is_empty(),
+        "webhook target must not register a service_ref after decouple"
     );
 }

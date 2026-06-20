@@ -548,6 +548,82 @@ impl WebhookKeyGetTestSuite {
             },
         )
     }
+
+    // ==================== 9. Webhook target.type=service resolves via EndpointSlice ====================
+    //
+    // Proves the end-to-end resolution path: the gateway reads the backend IP from the
+    // shared EpSliceStore (populated by the EndpointSlice conf-synced from the controller),
+    // NOT from a controller-embedded endpoint list.  Only the LinkSys target type differs
+    // from the uri-based tests; the assertion follows the same access-log pattern.
+    fn test_webhook_service_target() -> TestCase {
+        TestCase::new(
+            "webhook_service_target",
+            "Webhook: target.type=service resolves backend via shared EndpointSlice store",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let client = &ctx.http_client;
+                    let url = format!("http://{}:31180/test/webhook-keyget/api", ctx.target_host);
+
+                    let trace_id = format!("test-wh-svc-{}", uuid::Uuid::new_v4());
+
+                    // Use a unique tenant so the assertion does not collide with other cases.
+                    // test_server /webhook/resolve returns {"data":{"user_id":"uid-zeta-io",...}}
+                    // for X-Tenant-Id: zeta-io.
+                    let response = client
+                        .get(url)
+                        .header("host", TEST_HOST)
+                        .header("X-Tenant-Id", "zeta-io")
+                        .header("x-trace-id", &trace_id)
+                        .header("access_log", "test_store")
+                        .send()
+                        .await;
+
+                    match response {
+                        Ok(resp) => {
+                            let status = resp.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+
+                            let al_client = ctx.access_log_client();
+                            let entry = match al_client.get_access_log_with_retry(&trace_id, 10, 200).await {
+                                Ok(e) => e,
+                                Err(e) => {
+                                    return TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Failed to fetch access log: {}", e),
+                                    )
+                                }
+                            };
+
+                            let access_log = entry.data.to_string();
+
+                            // webhook_svc_user_id is set by the service-target LinkSys
+                            // (webhook-svc-resolver → webhook-svc-backend EndpointSlice).
+                            // A successful resolve proves the gateway picked the backend from
+                            // the EpSliceStore, not from a controller-embedded list.
+                            if access_log.contains(r#""webhook_svc_user_id":"uid-zeta-io""#) {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "ctx.webhook_svc_user_id correctly resolved via target.type=service (EndpointSlice path)".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected webhook_svc_user_id=uid-zeta-io in ctx. Access-Log: {}",
+                                        access_log
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for WebhookKeyGetTestSuite {
@@ -565,6 +641,7 @@ impl TestSuite for WebhookKeyGetTestSuite {
             Self::test_local_default_without_header(),
             Self::test_webhook_path_suffix_extract(),
             Self::test_webhook_apikey_auth(),
+            Self::test_webhook_service_target(),
         ]
     }
 }
