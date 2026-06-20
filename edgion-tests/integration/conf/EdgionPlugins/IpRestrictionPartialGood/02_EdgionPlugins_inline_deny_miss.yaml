@@ -1,0 +1,26 @@
+# IpRestriction plugin: INLINE deny group (NOT a denyRef) whose good CIDR
+# (10.0.0.0/8) does NOT cover the client. The sibling inline entry is invalid
+# ("not-a-cidr") and is dropped, so the inline deny set is exactly { 10.0.0.0/8 }
+# — NOT deny-all. The client peer (127.0.0.1) misses the list and falls through
+# to defaultAction: allow -> 200. Crucially, if the bad inline CIDR had made the
+# plugin init_failed it would deny ALL traffic (403); the 200 therefore proves
+# the plugin LOADED and did not collapse to deny-all on the bad entry.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ip-restriction-inline-deny-miss
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        defaultAction: allow
+        deny:
+          - name: mixed-good-and-bad
+            cidrs:
+              - "10.0.0.0/8" # good — does NOT cover the client peer (127.0.0.1)
+              - "not-a-cidr" # bad  — skipped (partial-good), not fatal
+        status: 403
+        message: "IP is in inline partial-good block list"

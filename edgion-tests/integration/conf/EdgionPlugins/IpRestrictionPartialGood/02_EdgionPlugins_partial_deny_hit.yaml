@@ -1,0 +1,20 @@
+# IpRestriction plugin: denyRefs → the partial-good block-list whose good CIDR
+# covers the client (127.0.0.0/8). The sibling entry in that list is invalid,
+# but partial-good compilation keeps the good CIDR, so the client peer
+# (127.0.0.1) is a deny-list hit → 403.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ip-restriction-partial-deny-hit
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        defaultAction: allow
+        denyRefs:
+          - name: ippg-blocklist-hit
+        status: 403
+        message: "IP is in referenced partial-good block list"

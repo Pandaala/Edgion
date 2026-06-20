@@ -1,0 +1,90 @@
+# HTTPRoute for the IpRestrictionPartialGood scenario.
+# Four PathPrefix rules exercise partial-good deny-list compilation:
+#   - rules 1 & 2: denyRefs block-lists (partial-deny hit / miss)
+#   - rules 3 & 4: INLINE deny groups (inline-deny hit / miss)
+# Each "hit" proves the good CIDR survived a bad sibling (deny → 403); each "miss"
+# proves the list compiled to the good CIDR only (NOT deny-all) and falls through to
+# defaultAction: allow → 200.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ippg-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "ippg.example.com"
+  rules:
+    # 1. partial-deny hit — the good CIDR (127.0.0.0/8) compiled despite the bad
+    #    sibling, so the client (127.0.0.1) is a deny-list hit → 403.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/partial-deny-hit
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ip-restriction-partial-deny-hit
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 2. partial-deny miss — the list compiled to { 10.0.0.0/8 } (NOT deny-all)
+    #    after dropping the bad entry, so the client (127.0.0.1) falls through to
+    #    defaultAction: allow → 200.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/partial-deny-miss
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ip-restriction-partial-deny-miss
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 3. inline-deny hit — the INLINE deny group's good CIDR (127.0.0.0/8)
+    #    compiled despite the bad inline sibling, so the client (127.0.0.1) is a
+    #    deny-list hit → 403.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/inline-deny-hit
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ip-restriction-inline-deny-hit
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 4. inline-deny miss — the INLINE deny group compiled to { 10.0.0.0/8 } (NOT
+    #    deny-all) after dropping the bad inline entry, so the client (127.0.0.1)
+    #    falls through to defaultAction: allow → 200 (proves the plugin loaded and
+    #    did not init_failed into deny-all).
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/inline-deny-miss
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: ip-restriction-inline-deny-miss
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
