@@ -1,0 +1,35 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: gac-lockdown
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: GlobalAccessControl
+      config:
+        enable: true
+        activeProfile: lockdown
+        status: 403
+        message: "forbidden: origin accepts CDN traffic only"
+        activeProfileRef:
+          name: gac-selector
+          namespace: edgion-test
+        profiles:
+          normal:
+            defaultAction: allow
+            ruleGroups: []
+          lockdown:
+            defaultAction: deny
+            ruleGroups:
+              - name: cloudflare
+                ip:
+                  - name: loopback
+                    cidrs: ["127.0.0.0/8"]
+                rules:
+                  - source: Header
+                    key: "X-CF-Secret"
+                    secretRef:
+                      name: gac-origin-secret
+                      namespace: edgion-test
+                    onMissing: NoMatch

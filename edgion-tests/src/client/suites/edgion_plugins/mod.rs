@@ -19,6 +19,7 @@ mod edgion_config_data_status;
 mod ext_proc;
 mod fault_injection;
 mod forward_auth;
+mod global_access_control;
 mod global_connection_ip_restriction;
 mod global_plugins_snapshot;
 mod header_cert_auth;
@@ -67,6 +68,7 @@ pub use edgion_config_data_status::{
 pub use ext_proc::ExtProcTestSuite;
 pub use fault_injection::FaultInjectionTestSuite;
 pub use forward_auth::ForwardAuthTestSuite;
+pub use global_access_control::GlobalAccessControlTestSuite;
 pub use global_connection_ip_restriction::GlobalConnectionIpRestrictionTestSuite;
 pub use global_plugins_snapshot::GlobalPluginsSnapshotTestSuite;
 pub use header_cert_auth::HeaderCertAuthTestSuite;

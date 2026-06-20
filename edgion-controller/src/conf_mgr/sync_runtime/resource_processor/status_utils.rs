@@ -106,6 +106,8 @@ pub mod condition_reasons {
     pub const INVALID_EDGION_CONFIG_DATA_REF: &str = "InvalidEdgionConfigDataRef";
     /// Gateway-level: edgion.io/edgion-stream-plugins annotation references a missing resource.
     pub const INVALID_STREAM_PLUGINS_REF: &str = "InvalidStreamPluginsRef";
+    /// Gateway-level: edgion.io/edgion-plugins annotation references a missing EdgionPlugins resource.
+    pub const INVALID_PLUGINS_REF: &str = "InvalidPluginsRef";
 
     // Listener ResolvedRefs reasons (Gateway API v1.5)
     /// Listener certificate Secret ref invalid or unresolvable.

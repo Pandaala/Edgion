@@ -168,6 +168,7 @@ spec:
                           - FaultInjection
                           - TraceContext
                           - ExtProc
+                          - GlobalAccessControl
                       config:
                         type: object
                         description: "Plugin-specific configuration"

@@ -1,10 +1,11 @@
-//! Per-request resolve helpers for global plugin refs and rule-level
-//! ExtensionRefs.
+//! Per-request resolve helpers for global plugin refs, Gateway-level plugin
+//! keys, and rule-level ExtensionRefs.
 //!
-//! Both helpers are pure: input refs/keys -> output Vec. They are called
+//! All helpers are pure: input refs/keys -> output Vec. They are called
 //! from `pg_request_filter` once per request to populate
-//! `ctx.resolved_global_plugins` and `ctx.resolved_route_ext_refs`.
-//! Dangling references are silently dropped (global refs) or kept as a
+//! `ctx.resolved_global_plugins`, `ctx.resolved_gateway_plugins`, and
+//! `ctx.resolved_route_ext_refs`.
+//! Dangling references are silently dropped (global/gateway refs) or kept as a
 //! `None` placeholder (ext refs); they are intentionally NOT logged here
 //! because this is the data-plane hot path, where `tracing` is forbidden
 //! (see `skills/03-coding/01-log-safety.md` Iron Rule 3 — a single
@@ -51,6 +52,19 @@ pub fn resolve_route_ext_refs(store: &PluginStore, keys: &[(String, String)]) ->
     for (ns, name) in keys {
         let key = format!("{}/{}", ns, name);
         out.push(store.get_plugin_runtime(&key));
+    }
+    out
+}
+
+/// Resolve already-formed "namespace/name" store keys (from a Gateway's
+/// `edgion.io/edgion-plugins` annotation) into plugin runtimes, preserving order and
+/// dropping dangling refs (hot path: no logging).
+pub fn resolve_gateway_plugins(store: &PluginStore, keys: &[String]) -> Vec<Arc<PluginRuntime>> {
+    let mut out = Vec::with_capacity(keys.len());
+    for key in keys {
+        if let Some(rt) = store.get_plugin_runtime(key) {
+            out.push(rt);
+        }
     }
     out
 }
@@ -177,5 +191,25 @@ mod tests {
         let store = get_global_plugin_store();
         let resolved = resolve_route_ext_refs(&store, &[]);
         assert!(resolved.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod gateway_plugins_resolve_tests {
+    use super::*;
+    use crate::plugins::http::get_global_plugin_store;
+
+    #[test]
+    fn empty_keys_yield_empty() {
+        let store = get_global_plugin_store();
+        assert!(resolve_gateway_plugins(&store, &[]).is_empty());
+    }
+
+    #[test]
+    fn dangling_keys_dropped() {
+        let store = get_global_plugin_store();
+        // A key that does not exist in the (empty in unit tests) store is dropped.
+        let out = resolve_gateway_plugins(&store, &["nope/missing".to_string()]);
+        assert!(out.is_empty());
     }
 }

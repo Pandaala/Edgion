@@ -6,10 +6,10 @@ use serde::{Deserialize, Serialize};
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
-    DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig, ForwardAuthConfig, HeaderCertAuthConfig,
-    HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig, LdapAuthConfig, MockConfig,
-    OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig, RealIpConfig, RegionRouteConfig,
-    RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig,
+    DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig, ForwardAuthConfig, GlobalAccessControlConfig,
+    HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
+    LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
+    RealIpConfig, RegionRouteConfig, RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig,
 };
 use crate::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter,
@@ -100,6 +100,8 @@ pub enum EdgionPlugin {
     TraceContext(TraceContextConfig),
     /// ExtProc filter (external processing over a bidirectional gRPC stream)
     ExtProc(ExtProcConfig),
+    /// GlobalAccessControl filter (L7 allow-list: IP/CIDR and header/cookie/... composite, OR groups)
+    GlobalAccessControl(GlobalAccessControlConfig),
     // TODO: Add more custom Edgion plugins here (no `Edgion` prefix on the variant name)
     // CircuitBreaker(CircuitBreakerConfig),
     // Waf(WafConfig),
@@ -148,6 +150,7 @@ impl EdgionPlugin {
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
             EdgionPlugin::TraceContext(_) => "TraceContext",
             EdgionPlugin::ExtProc(_) => "ExtProc",
+            EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
         }
     }
 
@@ -189,6 +192,7 @@ impl EdgionPlugin {
             EdgionPlugin::DebugAccessLogToHeader(c) => c.validation_error(),
             EdgionPlugin::TraceContext(c) => c.validation_error(),
             EdgionPlugin::ExtProc(c) => c.validation_error(),
+            EdgionPlugin::GlobalAccessControl(c) => c.validation_error(),
             // Gateway API filter variants (foreign types): no PluginValidation impl.
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::ResponseHeaderModifier(_)
@@ -196,5 +200,50 @@ impl EdgionPlugin {
             | EdgionPlugin::UrlRewrite(_)
             | EdgionPlugin::RequestMirror(_) => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod global_access_control_variant_tests {
+    use super::*;
+    use crate::resources::edgion_plugins::plugin_configs::GlobalAccessControlConfig;
+
+    #[test]
+    fn type_name_and_tag_roundtrip() {
+        let json = serde_json::json!({
+            "type": "GlobalAccessControl",
+            "config": {
+                "enable": true,
+                "activeProfile": "normal",
+                "profiles": { "normal": { "defaultAction": "allow", "ruleGroups": [] } }
+            }
+        });
+        let p: EdgionPlugin = serde_json::from_value(json).unwrap();
+        assert_eq!(p.type_name(), "GlobalAccessControl");
+        assert!(matches!(p, EdgionPlugin::GlobalAccessControl(_)));
+        // validation_error delegates to the config.
+        assert!(p.validation_error().is_none());
+    }
+
+    #[test]
+    fn validation_error_surfaces_bad_active_profile() {
+        let cfg = GlobalAccessControlConfig {
+            enable: true,
+            active_profile: "ghost".into(),
+            profiles: std::collections::HashMap::from([(
+                "normal".to_string(),
+                crate::resources::edgion_plugins::plugin_configs::AllowProfile {
+                    default_action: crate::resources::edgion_plugins::plugin_configs::DefaultAction::Allow,
+                    rule_groups: vec![],
+                },
+            )]),
+            description: None,
+            active_profile_ref: None,
+            status: 403,
+            message: None,
+            ip_source: crate::resources::edgion_plugins::plugin_configs::IpSource::RemoteAddr,
+        };
+        let p = EdgionPlugin::GlobalAccessControl(cfg);
+        assert!(p.validation_error().unwrap().contains("activeProfile"));
     }
 }

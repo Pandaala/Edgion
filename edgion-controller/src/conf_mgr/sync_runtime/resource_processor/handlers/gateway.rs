@@ -252,6 +252,20 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             }
         }
 
+        // Clear and re-register HTTP plugin annotation refs (edgion.io/edgion-plugins).
+        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        if let Some(v) = g
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(annotations::edgion::EDGION_PLUGINS))
+        {
+            let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("default");
+            for key in annotations::edgion::parse_plugin_ref_list(v, gateway_ns) {
+                ctx.runtime().plugin_ref_mgr.add_ref(key, resource_ref.clone());
+            }
+        }
+
         // Track cross-namespace Secret references so ReferenceGrant changes requeue this Gateway
         let cross_ns_ref = ResourceRef::new(
             ResourceKind::Gateway,
@@ -501,6 +515,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Clear SecretRefManager references
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
         ctx.runtime().stream_plugin_ref_mgr.clear_resource_refs(&resource_ref);
+        ctx.runtime().plugin_ref_mgr.clear_resource_refs(&resource_ref);
 
         // Clear cross-namespace reference tracking
         let cross_ns_ref = ResourceRef::new(
@@ -587,6 +602,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
 
         // Pre-compute stream plugin ref validation before taking a mutable borrow of gateway.
         let stream_plugin_ref_error = validate_gateway_stream_plugin_ref(gateway, _ctx.runtime());
+        let plugin_ref_error = validate_gateway_plugin_ref(gateway, _ctx.runtime());
 
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
@@ -624,10 +640,16 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             update_gateway_condition(conditions, cond);
         }
 
-        // Gateway-level ResolvedRefs: True unless edgion.io/edgion-stream-plugins
-        // annotation references a missing EdgionStreamPlugins resource.
+        // Gateway-level ResolvedRefs: merge stream-plugin and HTTP-plugin ref errors
+        // into a single shared condition — never emit two conditions of the same type.
         {
-            match stream_plugin_ref_error {
+            let merged = match (stream_plugin_ref_error.as_ref(), plugin_ref_error.as_ref()) {
+                (None, None) => None,
+                (Some(s), None) => Some((condition_reasons::INVALID_STREAM_PLUGINS_REF, s.clone())),
+                (None, Some(p)) => Some((condition_reasons::INVALID_PLUGINS_REF, p.clone())),
+                (Some(s), Some(p)) => Some((condition_reasons::INVALID_PLUGINS_REF, format!("{}; {}", s, p))),
+            };
+            match merged {
                 None => {
                     let cond = condition_true(
                         condition_types::RESOLVED_REFS,
@@ -637,18 +659,9 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     );
                     update_gateway_condition(conditions, cond);
                 }
-                Some(message) => {
-                    tracing::warn!(
-                        annotation = annotations::edgion::EDGION_STREAM_PLUGINS,
-                        error = %message,
-                        "Gateway-level stream plugin ref unresolved; stream plugin chain will be empty"
-                    );
-                    let cond = condition_false(
-                        condition_types::RESOLVED_REFS,
-                        condition_reasons::INVALID_STREAM_PLUGINS_REF,
-                        message,
-                        generation,
-                    );
+                Some((reason, message)) => {
+                    tracing::warn!(error = %message, "Gateway-level plugin ref unresolved");
+                    let cond = condition_false(condition_types::RESOLVED_REFS, reason, message, generation);
                     update_gateway_condition(conditions, cond);
                 }
             }
@@ -1593,12 +1606,40 @@ fn validate_gateway_stream_plugin_ref(gateway: &Gateway, runtime: &ControllerRun
     }
 }
 
+/// Returns `Some(error_message)` when the Gateway's `edgion.io/edgion-plugins` annotation
+/// references one or more EdgionPlugins resources that do not exist. `None` when the
+/// annotation is absent/empty or all referenced resources are found.
+fn validate_gateway_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -> Option<String> {
+    let value = gateway
+        .metadata
+        .annotations
+        .as_ref()
+        .and_then(|a| a.get(annotations::edgion::EDGION_PLUGINS))?;
+    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let missing: Vec<String> = annotations::edgion::parse_plugin_ref_list(value, gateway_ns)
+        .into_iter()
+        .filter(|key| {
+            runtime
+                .processor_registry
+                .get("EdgionPlugins")
+                .and_then(|p| p.get_raw_any(key))
+                .is_none()
+        })
+        .collect();
+    if missing.is_empty() {
+        None
+    } else {
+        Some(format!("EdgionPlugins not found: {}", missing.join(", ")))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         gateway_service_lookup_candidates, has_all_ca_refs_invalid, parse_stream_plugin_ref,
-        validate_gateway_stream_plugin_ref, GatewayResolvedRefsError,
+        validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref, GatewayHandler, GatewayResolvedRefsError,
     };
+    use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessorHandler};
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::constants::app::GATEWAY_NAME;
     use edgion_resources::prelude_resources::Gateway;
@@ -1607,6 +1648,7 @@ mod tests {
         FrontendTLSValidation, GatewaySpec, GatewayTLSConfig, GatewayTlsMode, Listener as GatewayListener,
     };
     use std::collections::BTreeMap;
+    use std::sync::Arc;
 
     fn make_test_gateway(ns: &str) -> Gateway {
         Gateway {
@@ -1800,5 +1842,76 @@ mod tests {
             },
         ];
         assert!(has_all_ca_refs_invalid(&listener, &errors));
+    }
+
+    /// Verify that processing a Gateway with `edgion.io/edgion-plugins` annotation registers
+    /// both the explicit-namespace ref ("ns1/p1") and the bare-name ref (expanded to the
+    /// Gateway's namespace) into `plugin_ref_mgr`.
+    #[tokio::test]
+    async fn gateway_plugin_annotation_registers_refs() {
+        let runtime = Arc::new(ControllerRuntime::default());
+        let ctx = HandlerContext::new(None, None, Default::default(), 5, 20, runtime.clone());
+
+        // Build a Gateway in "gw-ns" with two plugin refs: one fully-qualified, one bare.
+        let mut gw = make_test_gateway("gw-ns");
+        gw.metadata.name = Some("my-gateway".to_string());
+        let mut annotations = BTreeMap::new();
+        annotations.insert("edgion.io/edgion-plugins".to_string(), "ns1/p1, p2".to_string());
+        gw.metadata.annotations = Some(annotations);
+
+        let handler = GatewayHandler::new(None, None);
+        handler.parse(gw, &ctx).await;
+
+        // "ns1/p1" ref must be registered under the explicit namespace.
+        let refs_p1 = runtime.plugin_ref_mgr.get_refs("ns1/p1");
+        assert_eq!(refs_p1.len(), 1, "expected one Gateway ref for ns1/p1");
+        assert_eq!(refs_p1[0].resource_key(), "gw-ns/my-gateway");
+
+        // "p2" (bare name) must be expanded with the Gateway's namespace "gw-ns".
+        let refs_p2 = runtime.plugin_ref_mgr.get_refs("gw-ns/p2");
+        assert_eq!(refs_p2.len(), 1, "expected one Gateway ref for gw-ns/p2");
+        assert_eq!(refs_p2[0].resource_key(), "gw-ns/my-gateway");
+    }
+
+    fn make_gateway_with_plugin_annotation(ns: &str, annotation_value: &str) -> Gateway {
+        let mut gw = make_test_gateway(ns);
+        let mut annotations = BTreeMap::new();
+        annotations.insert("edgion.io/edgion-plugins".to_string(), annotation_value.to_string());
+        gw.metadata.annotations = Some(annotations);
+        gw
+    }
+
+    #[test]
+    fn validate_plugin_ref_no_annotation_returns_none() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_test_gateway("default");
+        assert!(validate_gateway_plugin_ref(&gw, &runtime).is_none());
+    }
+
+    #[test]
+    fn validate_plugin_ref_empty_annotation_returns_none() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_plugin_annotation("default", "  ");
+        assert!(validate_gateway_plugin_ref(&gw, &runtime).is_none());
+    }
+
+    #[test]
+    fn validate_plugin_ref_missing_resource_returns_error() {
+        let runtime = ControllerRuntime::default();
+        // "default/my-plugin" does not exist in the (empty) registry.
+        let gw = make_gateway_with_plugin_annotation("default", "default/my-plugin");
+        let result = validate_gateway_plugin_ref(&gw, &runtime);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("default/my-plugin"));
+    }
+
+    #[test]
+    fn validate_plugin_ref_fallback_to_gateway_ns() {
+        let runtime = ControllerRuntime::default();
+        // Bare name "my-plugin" should be expanded to "my-ns/my-plugin".
+        let gw = make_gateway_with_plugin_annotation("my-ns", "my-plugin");
+        let result = validate_gateway_plugin_ref(&gw, &runtime);
+        assert!(result.is_some());
+        assert!(result.unwrap().contains("my-ns/my-plugin"));
     }
 }

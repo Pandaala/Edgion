@@ -246,6 +246,11 @@ impl ListenerGatewayInfoStore {
                 .get(annotations::REQUIRE_SNI_HOST_MATCH)
                 .map(|v| v == "true");
 
+            let plugin_store_keys = gateway_annotations_map
+                .get(annotations::EDGION_PLUGINS)
+                .map(|v| annotations::parse_plugin_ref_list(v, gateway_namespace.as_deref().unwrap_or("default")))
+                .unwrap_or_default();
+
             for listener in listeners {
                 if is_listener_conflicted(gateway, &listener.name) {
                     continue;
@@ -263,6 +268,7 @@ impl ListenerGatewayInfoStore {
                     metrics_test_key.clone(),
                     metrics_test_type.clone(),
                     require_sni_host_match,
+                    plugin_store_keys.clone(),
                 );
 
                 let gateway_key = gi.gateway_key();

@@ -12,6 +12,7 @@ mod dynamic_internal_upstream;
 mod ext_proc;
 mod fault_injection;
 mod forward_auth;
+mod global_access_control;
 mod header_cert_auth;
 mod hmac_auth;
 mod ip_restriction;
@@ -28,6 +29,7 @@ mod rate_limit;
 mod rate_limit_redis;
 mod real_ip;
 mod region_route;
+mod request_match;
 mod request_restriction;
 mod response_rewrite;
 mod trace_context;
@@ -56,6 +58,7 @@ pub use fault_injection::{
     AbortConfig, DelayConfig, FaultHeaderEntry, FaultInjectionConfig, MAX_DELAY_MS as FAULT_MAX_DELAY_MS,
 };
 pub use forward_auth::ForwardAuthConfig;
+pub use global_access_control::{AllowOutcome, AllowProfile, AllowRuleGroup, GlobalAccessControlConfig};
 pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig, UpstreamHeaderConfig};
 pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential};
 pub use ip_restriction::{DefaultAction, IpRestrictionConfig, IpSource};
@@ -74,8 +77,7 @@ pub use real_ip::RealIpConfig;
 pub use region_route::{
     HashAlgorithm, HashCalcConfig, RegionDef, RegionRouteConfig, RouteByKeyConfMatchMeta, RouteRule,
 };
-pub use request_restriction::{
-    OnMissing, RequestRestrictionConfig, RestrictionMode, RestrictionRule, RestrictionSource, RuleGroup,
-};
+pub use request_match::{OnMissing, RestrictionRule, RestrictionSource};
+pub use request_restriction::{RequestRestrictionConfig, RestrictionMode, RuleGroup};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
 pub use trace_context::TraceContextConfig;

@@ -43,6 +43,7 @@ use crate::plugins::http::dynamic_internal_upstream::DynamicInternalUpstream;
 use crate::plugins::http::ext_proc::ExtProc;
 use crate::plugins::http::fault_injection::FaultInjection;
 use crate::plugins::http::forward_auth::ForwardAuth;
+use crate::plugins::http::global_access_control::GlobalAccessControl;
 use crate::plugins::http::header_cert_auth::HeaderCertAuth;
 use crate::plugins::http::hmac_auth::HmacAuth;
 use crate::plugins::http::ip_restriction::IpRestriction;
@@ -767,6 +768,9 @@ impl PluginRuntime {
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
             EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config, namespace))),
+            EdgionPlugin::GlobalAccessControl(config) => {
+                CreateResult::Ok(Some(GlobalAccessControl::create(config, namespace)))
+            }
             EdgionPlugin::JwtAuth(config) => {
                 CreateResult::Ok(Some(Box::new(JwtAuth::new(config, namespace.to_string()))))
             }
@@ -857,7 +861,8 @@ impl PluginRuntime {
             | EdgionPlugin::DynamicExternalUpstream(_)
             | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::ExtProc(_)
-            | EdgionPlugin::RegionRoute(_) => CreateResult::WrongStage,
+            | EdgionPlugin::RegionRoute(_)
+            | EdgionPlugin::GlobalAccessControl(_) => CreateResult::WrongStage,
         }
     }
 
@@ -915,6 +920,7 @@ impl PluginRuntime {
             | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::ExtProc(_)
             | EdgionPlugin::RegionRoute(_)
+            | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
         }
     }
@@ -929,6 +935,7 @@ impl PluginRuntime {
             EdgionPlugin::Cors(_) => "Cors",
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
+            EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
             EdgionPlugin::HmacAuth(_) => "HmacAuth",

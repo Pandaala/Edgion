@@ -36,6 +36,11 @@ pub struct GatewayInfo {
     /// (from edgion.io/require-sni-host-match annotation).
     /// Only used to enable when global config is off; cannot disable when global is on.
     pub require_sni_host_match: Option<bool>,
+
+    /// Resolved "namespace/name" store keys of EdgionPlugins attached to this Gateway via
+    /// the `edgion.io/edgion-plugins` annotation. Run for every request on this Gateway,
+    /// after GatewayClass-wide global plugins and before route-level plugins.
+    pub plugin_store_keys: Vec<String>,
 }
 
 impl GatewayInfo {
@@ -47,6 +52,7 @@ impl GatewayInfo {
         metrics_test_key: Option<String>,
         metrics_test_type: Option<TestType>,
         require_sni_host_match: Option<bool>,
+        plugin_store_keys: Vec<String>,
     ) -> Self {
         Self {
             namespace,
@@ -55,6 +61,7 @@ impl GatewayInfo {
             metrics_test_key,
             metrics_test_type,
             require_sni_host_match,
+            plugin_store_keys,
         }
     }
 

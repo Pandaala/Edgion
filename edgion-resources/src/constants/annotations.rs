@@ -104,4 +104,61 @@ pub mod edgion {
     /// Example: `edgion.io/log-label.tenant: internal` -> label `tenant=internal`.
     /// Supported on HTTPRoute, GRPCRoute, EdgionTls, and TLSRoute.
     pub const LOG_LABEL_PREFIX: &str = "edgion.io/log-label.";
+
+    /// Reference EdgionPlugins resources to run for every request on this Gateway
+    /// (L7, before route-level plugins). Value: comma/space-separated "namespace/name"
+    /// list (bare names use the Gateway's namespace).
+    pub const EDGION_PLUGINS: &str = "edgion.io/edgion-plugins";
+
+    /// Parse the `edgion.io/edgion-plugins` (or stream) annotation value into an ordered,
+    /// de-duplicated list of "namespace/name" store keys. Bare names (no `/`) are expanded
+    /// with `default_ns`. Blank entries are skipped.
+    pub fn parse_plugin_ref_list(value: &str, default_ns: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for tok in value.split([',', ' ', '\t', '\n']) {
+            let tok = tok.trim();
+            if tok.is_empty() {
+                continue;
+            }
+            let key = if tok.contains('/') {
+                tok.to_string()
+            } else {
+                format!("{}/{}", default_ns, tok)
+            };
+            if !out.contains(&key) {
+                out.push(key);
+            }
+        }
+        out
+    }
+
+    #[cfg(test)]
+    mod plugin_ref_list_tests {
+        use super::*;
+
+        #[test]
+        fn parses_comma_and_space_separated_with_ns_expansion() {
+            let got = parse_plugin_ref_list("foo, bar baz/qux ,, foo", "default");
+            assert_eq!(
+                got,
+                vec![
+                    "default/foo".to_string(),
+                    "default/bar".to_string(),
+                    "baz/qux".to_string()
+                ]
+            );
+        }
+
+        #[test]
+        fn blank_yields_empty() {
+            assert!(parse_plugin_ref_list("   ", "default").is_empty());
+            assert!(parse_plugin_ref_list("", "ns").is_empty());
+        }
+
+        #[test]
+        fn dedups_preserving_first_order() {
+            let got = parse_plugin_ref_list("a b a", "ns");
+            assert_eq!(got, vec!["ns/a".to_string(), "ns/b".to_string()]);
+        }
+    }
 }

@@ -172,6 +172,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "EdgionConfigDataManaged" | "edgionconfigdatamanaged" | "data-managed" => {
                 "EdgionPlugins/EdgionConfigDataManaged".to_string()
             }
+            "global-access-control" | "globalaccesscontrol" | "gac" => {
+                "EdgionPlugins/GlobalAccessControl".to_string()
+            }
             "global-connection-ip-restriction" | "globalconnectioniprestriction" | "gcir" => {
                 "EdgionPlugins/GlobalConnectionIpRestriction".to_string()
             }
@@ -306,6 +309,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/DynamicExternalUpstream" => "EdgionPlugins",
         "EdgionPlugins/RegionRoute" => "EdgionPlugins",
         "EdgionPlugins/EdgionConfigDataManaged" => "EdgionPlugins",
+        "EdgionPlugins/GlobalAccessControl" => "EdgionPlugins",
         "EdgionPlugins/GlobalConnectionIpRestriction" => "EdgionPlugins",
         "EdgionPlugins/GlobalPluginsSnapshot" => "EdgionPlugins",
         "EdgionPlugins/EdgionConfigDataStatus" => "EdgionPlugins",
@@ -1030,6 +1034,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::RequestRestrictionTestSuite));
+        }
+        "EdgionPlugins/GlobalAccessControl" => {
+            if !gateway {
+                eprintln!("Error: GlobalAccessControl tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GlobalAccessControlTestSuite));
         }
         "EdgionPlugins/IpRestriction" => {
             if !gateway {

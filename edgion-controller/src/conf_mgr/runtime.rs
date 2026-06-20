@@ -57,6 +57,10 @@ pub struct ControllerRuntime {
     /// Forward: `"esp_ns/esp_name" → Set<Gateway ResourceRef>`
     /// Reverse: `Gateway ResourceRef → Set<"esp_ns/esp_name">`
     pub(crate) stream_plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
+    /// Tracks which Gateways reference each EdgionPlugins via the
+    /// `edgion.io/edgion-plugins` annotation.
+    /// Forward: `"ep_ns/ep_name" → Set<Gateway ResourceRef>`; reverse: Gateway → Set<key>.
+    pub(crate) plugin_ref_mgr: BidirectionalRefManager<ResourceRef>,
     /// Optional conf_writer injected by the ConfCenter implementation.
     /// Used by handlers to auto-create resources (e.g., EdgionConfigData for RegionRoute).
     /// None until the ConfCenter calls `set_conf_writer()`.
@@ -82,6 +86,7 @@ impl ControllerRuntime {
             edgion_config_data_store: EdgionConfigDataStore::new(),
             edgion_config_data_refs: EdgionConfigDataRefManager::new(),
             stream_plugin_ref_mgr: BidirectionalRefManager::with_component("stream_plugin_ref_mgr"),
+            plugin_ref_mgr: BidirectionalRefManager::with_component("plugin_ref_mgr"),
             conf_writer: RwLock::new(None),
         }
     }
@@ -151,6 +156,9 @@ impl ControllerRuntime {
 
         self.stream_plugin_ref_mgr.clear();
         tracing::info!(component = "controller_runtime", "Cleared StreamPluginRefManager");
+
+        self.plugin_ref_mgr.clear();
+        tracing::info!(component = "controller_runtime", "Cleared PluginRefManager");
     }
 }
 

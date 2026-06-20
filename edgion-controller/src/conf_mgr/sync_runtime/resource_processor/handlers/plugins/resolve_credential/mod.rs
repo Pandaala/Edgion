@@ -10,6 +10,7 @@
 
 mod basic_auth;
 mod csrf;
+mod global_access_control;
 mod header_cert_auth;
 mod hmac;
 mod jwe;
@@ -19,6 +20,7 @@ mod openid_connect;
 
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use basic_auth::resolve as resolve_basic_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use csrf::resolve as resolve_csrf;
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use global_access_control::resolve as resolve_global_access_control;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use header_cert_auth::resolve as resolve_header_cert_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use hmac::resolve as resolve_hmac;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwe::resolve as resolve_jwe;

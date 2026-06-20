@@ -924,6 +924,16 @@ pub struct EdgionHttpContext {
     /// plugins.
     pub resolved_global_plugins: Option<Arc<Vec<Arc<PluginRuntime>>>>,
 
+    /// Snapshot of resolved Gateway-level plugin runtimes for this request (from the
+    /// `edgion.io/edgion-plugins` annotation on the matched Gateway). Runs after
+    /// GatewayClass-wide global plugins and before route-level plugins. `None` until
+    /// resolve runs; `Some` with empty Vec when the Gateway has no annotation or all
+    /// refs dangle.
+    ///
+    /// Populated by `pg_request_filter` Step 2b; read by response stages (inner→outer
+    /// order: route-level → Gateway-level → GatewayClass-global).
+    pub resolved_gateway_plugins: Option<Arc<Vec<Arc<PluginRuntime>>>>,
+
     /// Resolved targets of every ExtensionRef in the matched route's filter list,
     /// indexed by `ExtensionRefFilter.index` (assigned at route build time by
     /// `PluginRuntime::from_httproute_filters_for_rule` /
@@ -1029,6 +1039,7 @@ impl EdgionHttpContext {
             sp_sticky_consumed: false,
             allow_loopback_upstream: false,
             resolved_global_plugins: None,
+            resolved_gateway_plugins: None,
             resolved_route_ext_refs: None,
             local_reply_body: None,
             local_reply_header: None,

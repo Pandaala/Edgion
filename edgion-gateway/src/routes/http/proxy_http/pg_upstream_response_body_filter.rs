@@ -44,6 +44,21 @@ pub fn upstream_response_body_filter(
         }
     }
 
+    // Gateway-level plugins (response onion: before GatewayClass-global).
+    if let Some(plugins) = ctx.resolved_gateway_plugins.as_ref().map(Arc::clone) {
+        for runtime in plugins.iter() {
+            if runtime.upstream_response_body_plugins_count() == 0 {
+                continue;
+            }
+            if let Some(delay) = runtime.run_upstream_response_body_plugins(session, ctx, body, end_of_stream) {
+                max_delay = Some(match max_delay {
+                    Some(current) => current.max(delay),
+                    None => delay,
+                });
+            }
+        }
+    }
+
     // Run global plugins body filter (read from per-request snapshot; zero
     // format/store cost on the per-chunk hot path).
     if let Some(plugins) = ctx.resolved_global_plugins.as_ref().map(Arc::clone) {

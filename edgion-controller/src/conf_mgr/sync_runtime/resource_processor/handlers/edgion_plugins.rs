@@ -129,6 +129,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_key_auth(&mut ep, &resource_ref, ctx);
         cred::resolve_openid_connect(&mut ep, &resource_ref, ctx);
         cred::resolve_csrf(&mut ep, &resource_ref, ctx);
+        cred::resolve_global_access_control(&mut ep, &resource_ref, ctx);
 
         // Clear existing EdgionConfigData override refs for this EP, then re-register from scratch.
         Self::clear_config_data_refs(&ep, ctx);
@@ -156,6 +157,10 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         ProcessResult::Continue(ep)
     }
 
+    async fn on_change(&self, ep: &EdgionPlugins, ctx: &HandlerContext) {
+        requeue_referencing_gateways(ep, ctx).await;
+    }
+
     async fn on_delete(&self, ep: &EdgionPlugins, ctx: &HandlerContext) {
         let resource_ref = ResourceRef::new(
             ResourceKind::EdgionPlugins,
@@ -164,6 +169,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
         Self::clear_config_data_refs(ep, ctx);
+        requeue_referencing_gateways(ep, ctx).await;
 
         tracing::debug!(
             edgion_plugins = %resource_ref.key(),
@@ -327,6 +333,26 @@ pub fn resolve_ip_list_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Res
         }
     }
     errors
+}
+
+/// Requeue all Gateways that reference this EdgionPlugins via
+/// `edgion.io/edgion-plugins` annotation.
+async fn requeue_referencing_gateways(ep: &EdgionPlugins, ctx: &HandlerContext) {
+    let Some(ep_name) = ep.metadata.name.as_deref().filter(|n| !n.is_empty()) else {
+        return;
+    };
+    let ep_key = format!("{}/{}", ep.metadata.namespace.as_deref().unwrap_or("default"), ep_name);
+    let refs = ctx.runtime().plugin_ref_mgr.get_refs(&ep_key);
+    if !refs.is_empty() {
+        tracing::info!(
+            ep_key = %ep_key,
+            ref_count = refs.len(),
+            "EdgionPlugins changed, requeuing referencing Gateways"
+        );
+    }
+    for gw_ref in refs {
+        ctx.requeue("Gateway", gw_ref.resource_key()).await;
+    }
 }
 
 #[cfg(test)]
@@ -1163,5 +1189,189 @@ mod tests {
             }
             other => panic!("expected EdgionConfigDataNotFound, got {:?}", other),
         }
+    }
+
+    // ===== GlobalAccessControl SecretRef resolution (restored; see Plan 3) =====
+
+    #[tokio::test]
+    async fn global_access_control_resolves_secret_values() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            AllowProfile, AllowRuleGroup, GlobalAccessControlConfig, RestrictionRule, RestrictionSource,
+        };
+        use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
+
+        let mut secrets = HashMap::new();
+        secrets.insert(
+            "default/cf-origin-secret".to_string(),
+            build_secret("default", "cf-origin-secret", "token", "s3cr3t-TOKEN"),
+        );
+        let (ctx, _rt) = make_ctx_with_secrets(secrets);
+
+        let rule = RestrictionRule {
+            source: RestrictionSource::Header,
+            key: Some("X-CF-Secret".into()),
+            secret_ref: Some(SecretObjectReference {
+                name: "cf-origin-secret".into(),
+                group: None,
+                kind: None,
+                namespace: None,
+            }),
+            ..Default::default()
+        };
+        let cfg = GlobalAccessControlConfig {
+            enable: true,
+            active_profile: "lockdown".into(),
+            profiles: HashMap::from([(
+                "lockdown".to_string(),
+                AllowProfile {
+                    default_action: DefaultAction::Deny,
+                    rule_groups: vec![AllowRuleGroup {
+                        name: Some("cloudflare".into()),
+                        ip: None,
+                        rules: vec![rule],
+                        ip_matcher: None,
+                    }],
+                },
+            )]),
+            description: None,
+            active_profile_ref: None,
+            status: 403,
+            message: None,
+            ip_source: IpSource::RemoteAddr,
+        };
+
+        let mut ep = EdgionPlugins::new("origin-lockdown", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".into());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::GlobalAccessControl(cfg))]);
+
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
+            EdgionPlugin::GlobalAccessControl(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+        let resolved = config.profiles["lockdown"].rule_groups[0].rules[0]
+            .resolved_secret_values
+            .as_ref()
+            .expect("expected resolved secret values");
+        assert!(resolved.contains(&"s3cr3t-TOKEN".to_string()));
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/cf-origin-secret").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn global_access_control_no_secret_leaves_values_none() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            AllowProfile, AllowRuleGroup, GlobalAccessControlConfig, RestrictionRule, RestrictionSource,
+        };
+        use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
+
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::new());
+
+        let rule = RestrictionRule {
+            source: RestrictionSource::Header,
+            key: Some("X-CF-Secret".into()),
+            values: Some(vec!["inline".into()]),
+            ..Default::default()
+        };
+        let cfg = GlobalAccessControlConfig {
+            enable: true,
+            active_profile: "lockdown".into(),
+            profiles: HashMap::from([(
+                "lockdown".to_string(),
+                AllowProfile {
+                    default_action: DefaultAction::Deny,
+                    rule_groups: vec![AllowRuleGroup {
+                        name: Some("g".into()),
+                        ip: None,
+                        rules: vec![rule],
+                        ip_matcher: None,
+                    }],
+                },
+            )]),
+            description: None,
+            active_profile_ref: None,
+            status: 403,
+            message: None,
+            ip_source: IpSource::RemoteAddr,
+        };
+
+        let mut ep = EdgionPlugins::new("p", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".into());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::GlobalAccessControl(cfg))]);
+
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
+            EdgionPlugin::GlobalAccessControl(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+        assert!(config.profiles["lockdown"].rule_groups[0].rules[0]
+            .resolved_secret_values
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn global_access_control_missing_secret_clears_stale_values() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{
+            AllowProfile, AllowRuleGroup, GlobalAccessControlConfig, RestrictionRule, RestrictionSource,
+        };
+        use edgion_resources::resources::edgion_plugins::{DefaultAction, IpSource};
+
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::new());
+
+        let mut rule = RestrictionRule {
+            source: RestrictionSource::Header,
+            key: Some("X-CF-Secret".into()),
+            secret_ref: Some(SecretObjectReference {
+                name: "cf-origin-secret".into(),
+                group: None,
+                kind: None,
+                namespace: None,
+            }),
+            ..Default::default()
+        };
+        rule.resolved_secret_values = Some(vec!["OLD-TOKEN".into()]);
+
+        let cfg = GlobalAccessControlConfig {
+            enable: true,
+            active_profile: "lockdown".into(),
+            profiles: HashMap::from([(
+                "lockdown".to_string(),
+                AllowProfile {
+                    default_action: DefaultAction::Deny,
+                    rule_groups: vec![AllowRuleGroup {
+                        name: Some("cloudflare".into()),
+                        ip: None,
+                        rules: vec![rule],
+                        ip_matcher: None,
+                    }],
+                },
+            )]),
+            description: None,
+            active_profile_ref: None,
+            status: 403,
+            message: None,
+            ip_source: IpSource::RemoteAddr,
+        };
+
+        let mut ep = EdgionPlugins::new("p", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".into());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::GlobalAccessControl(cfg))]);
+
+        let parsed = match EdgionPluginsHandler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+        let config = match &parsed.spec.request_plugins.as_ref().unwrap()[0].plugin {
+            EdgionPlugin::GlobalAccessControl(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+        assert!(config.profiles["lockdown"].rule_groups[0].rules[0]
+            .resolved_secret_values
+            .is_none());
     }
 }
