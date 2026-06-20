@@ -1,0 +1,49 @@
+# mTLS identity sources for RequestRestriction, served on the frontendValidation
+# HTTPS listener (which exposes the verified client certificate unconditionally).
+# Both plugins allowlist on the presented client-cert identity using the single
+# trusted client CA: valid-client matches, nonmatching-client (same CA) does not.
+# Allowlist by client-cert Common Name (CN).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: fv-mtls-restrict-cn
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Whitelist
+        ruleGroups:
+          - rules:
+              - name: "allow-cn"
+                source: MtlsCn
+                values:
+                  - "valid-client"
+                onMissing: NoMatch
+        status: 403
+        message: "Client CN not allowed"
+---
+# Allowlist by a typed Subject Alternative Name (email). Typed matching strips the
+# stored "email:" prefix before comparing, so the rule value is the bare address.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: fv-mtls-restrict-san
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Whitelist
+        ruleGroups:
+          - rules:
+              - name: "allow-san-email"
+                source: MtlsSan
+                sanType: Email
+                values:
+                  - "test@edgion.io"
+                onMissing: NoMatch
+        status: 403
+        message: "Client SAN not allowed"

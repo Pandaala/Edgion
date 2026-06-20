@@ -61,9 +61,7 @@ use pingora_http::ResponseHeader;
 
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{
-    RequestRestrictionConfig, RestrictionMode, RestrictionRule, RestrictionSource, RuleGroup,
-};
+use edgion_resources::resources::edgion_plugins::{RequestRestrictionConfig, RestrictionMode, RuleGroup};
 
 /// Request Restriction plugin
 pub struct RequestRestriction {
@@ -93,35 +91,13 @@ impl RequestRestriction {
         Box::new(plugin)
     }
 
-    /// Extract value from session based on rule source and key
-    fn get_value(&self, session: &dyn PluginSession, rule: &RestrictionRule) -> Option<String> {
-        match rule.source {
-            RestrictionSource::Header => {
-                let key = rule.key.as_deref()?;
-                session.header_value(key)
-            }
-            RestrictionSource::Cookie => {
-                let key = rule.key.as_deref()?;
-                session.get_cookie(key)
-            }
-            RestrictionSource::Query => {
-                let key = rule.key.as_deref()?;
-                session.get_query_param(key)
-            }
-            RestrictionSource::Path => Some(session.get_path().to_string()),
-            RestrictionSource::RequestPath => Some(session.get_request_path().to_string()),
-            RestrictionSource::Method => Some(session.get_method().to_string()),
-            RestrictionSource::Referer => session.header_value("Referer"),
-        }
-    }
-
     /// A group matches when every non-skipped predicate is true and at least one
     /// predicate was considered (AND within the group).
     fn group_matches(&self, group: &RuleGroup, session: &dyn PluginSession) -> bool {
         let mut considered = 0usize;
         for rule in &group.rules {
-            let value = self.get_value(session, rule);
-            match rule.evaluate(value.as_deref()) {
+            let values = crate::plugins::http::common::extract_rule_values(session, rule);
+            match rule.evaluate_multi(&values) {
                 None => continue, // Skip: drop from AND
                 Some(true) => considered += 1,
                 Some(false) => return false, // AND fails
@@ -224,7 +200,9 @@ impl RequestFilter for RequestRestriction {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
-    use edgion_resources::resources::edgion_plugins::{OnMissing, RestrictionMode, RuleGroup};
+    use edgion_resources::resources::edgion_plugins::{
+        OnMissing, RestrictionMode, RestrictionRule, RestrictionSource, RuleGroup,
+    };
 
     fn cfg(mode: RestrictionMode, groups: Vec<RuleGroup>) -> RequestRestrictionConfig {
         let mut c = RequestRestrictionConfig {

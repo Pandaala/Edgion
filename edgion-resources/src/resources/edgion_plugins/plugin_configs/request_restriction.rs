@@ -14,8 +14,11 @@
 //!   - `Whitelist`: any matching group => pass; otherwise reject.
 //!
 //! A rule is a pure predicate (`value ∈ values` OR `value` matches `regex`); it
-//! carries no per-rule allow/deny. This is a request-attribute **restriction**
-//! plugin, not RBAC — there are no roles, principals, or identity subjects.
+//! carries no per-rule allow/deny. Predicates match request attributes
+//! (header/cookie/query/path/method/referer) and, additionally,
+//! post-authentication identity: mTLS client-cert subject / SAN / CN
+//! (`MtlsSubject` / `MtlsSan` / `MtlsCn`) and verified JWT claims (`JwtClaim`).
+//! It is still a local allow/deny matcher, not a full RBAC orchestration layer.
 //!
 //! ## Configuration Examples
 //!
@@ -80,7 +83,9 @@ pub enum RestrictionMode {
 ///
 /// DNF model: `ruleGroups` is OR; each group's `rules` is AND. A single global
 /// `mode` decides the outcome polarity. A rule is a pure predicate (no per-rule
-/// allow/deny). This is a request-attribute restriction plugin, not RBAC.
+/// allow/deny). Predicates match request attributes and post-authentication
+/// identity (mTLS subject/SAN/CN, verified JWT claims); it remains a local
+/// allow/deny matcher, not a full RBAC orchestration layer.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RequestRestrictionConfig {

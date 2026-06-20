@@ -77,7 +77,7 @@ pub use real_ip::RealIpConfig;
 pub use region_route::{
     HashAlgorithm, HashCalcConfig, RegionDef, RegionRouteConfig, RouteByKeyConfMatchMeta, RouteRule,
 };
-pub use request_match::{OnMissing, RestrictionRule, RestrictionSource};
+pub use request_match::{OnMissing, RestrictionRule, RestrictionSource, SanType};
 pub use request_restriction::{RequestRestrictionConfig, RestrictionMode, RuleGroup};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
 pub use trace_context::TraceContextConfig;

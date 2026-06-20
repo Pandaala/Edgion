@@ -6,9 +6,9 @@
 
 ## Overview
 
-The `RequestRestriction` plugin restricts access based on request attributes, supporting multiple data sources and matching methods. Unlike the `IpRestriction` plugin which focuses on IP addresses, this plugin supports access control based on Header, Cookie, Query parameters, Path, Method, and Referer.
+The `RequestRestriction` plugin restricts access based on request attributes, supporting multiple data sources and matching methods. Unlike the `IpRestriction` plugin which focuses on IP addresses, this plugin supports access control based on Header, Cookie, Query parameters, Path, Method, and Referer, plus **post-authentication identity** — mTLS client-certificate subject / SAN / CN (`MtlsSubject` / `MtlsSan` / `MtlsCn`) and verified JWT claims (`JwtClaim`).
 
-It is a request-attribute **restriction** plugin — not an RBAC engine. There are no roles, principals, or identity subjects; it simply decides whether to admit or reject a request based on request attributes.
+It remains a **local allow/deny matcher**, not a full RBAC orchestration layer: a rule is still a pure predicate, and a single global `mode` decides whether a match means admit or reject. The identity sources let you match on *who* the caller is (in addition to *what* they are sending) without turning the plugin into a role/principal engine.
 
 ## Model: rule groups (OR-of-AND) + global mode
 
@@ -25,6 +25,7 @@ A **rule is a pure predicate**: it is true when the extracted value is in `value
 ## Features
 
 - **Multiple data sources**: Header, Cookie, Query, Path, RequestPath, Method, Referer
+- **Identity sources**: mTLS client-cert subject / SAN / CN (`MtlsSubject` / `MtlsSan` / `MtlsCn`, with optional `sanType`) and verified JWT claims (`JwtClaim`)
 - **Exact and regex matching**: `values` for exact matching, `regex` for regex matching (a predicate is true if either matches)
 - **Automatic performance optimization**: Exact match lists exceeding 16 values automatically use HashSet (O(1) lookup)
 - **Boolean composition**: AND within a group, OR across groups (DNF)
@@ -64,10 +65,11 @@ A **rule is a pure predicate**: it is true when the extracted value is in `value
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `name` | String | none | Rule name (for logging) |
-| `source` | Enum | **Required** | Data source: `Header` / `Cookie` / `Query` / `Path` / `RequestPath` / `Method` / `Referer` |
-| `key` | String | none | Key name (**Required** for `Header` / `Cookie` / `Query`; ignored for the others) |
+| `source` | Enum | **Required** | Data source: `Header` / `Cookie` / `Query` / `Path` / `RequestPath` / `Method` / `Referer` / `MtlsSubject` / `MtlsCn` / `MtlsSan` / `JwtClaim` |
+| `key` | String | none | Key name (**Required** for `Header` / `Cookie` / `Query`; the dot-nested claim path for `JwtClaim`; ignored for the others) |
 | `values` | Array\<String\> | none | Exact-match values. Predicate is true if the value is in this list. |
 | `regex` | Array\<String\> | none | Regex patterns. Predicate is true if the value matches (patterns merged with `\|`). |
+| `sanType` | Enum | none | Only valid for `MtlsSan`. Scopes matching to one SAN kind: `DNS` / `URI` / `Email`. When omitted, raw SAN entries are whole-string matched. |
 | `caseSensitive` | Boolean | `true` | Whether exact matching is case-sensitive |
 | `onMissing` | Enum | `NoMatch` | Predicate result when the value is missing. Allowed values: `Match` / `NoMatch` / `Skip` |
 
@@ -84,6 +86,39 @@ A **rule is a pure predicate**: it is true when the extracted value is in `value
 | `RequestPath` | Entry-time raw path (frozen, not normalized) | No |
 | `Method` | HTTP method | No |
 | `Referer` | Referer request header | No |
+| `MtlsSubject` | mTLS client-certificate subject DN string | No |
+| `MtlsCn` | mTLS client-certificate subject CN | No |
+| `MtlsSan` | mTLS client-certificate SAN list ("any entry matches"); optional `sanType` | No |
+| `JwtClaim` | Verified JWT claim, addressed by a dot-nested `key` | Yes (`key` = claim path) |
+
+### Identity sources
+
+In addition to request attributes, the plugin can match on **post-authentication identity**: the mTLS client certificate and verified JWT claims. These are still pure predicates — `mode` decides admit/reject, and a missing value follows `onMissing` (default `NoMatch`).
+
+#### mTLS sources (`MtlsSubject` / `MtlsCn` / `MtlsSan`)
+
+- `MtlsSubject` — the full subject **DN string** of the client certificate.
+- `MtlsCn` — the subject **CN** only.
+- `MtlsSan` — the certificate **SAN** list, evaluated as "any entry matches". An optional `sanType` of `DNS` / `URI` / `Email` scopes the match:
+  - **Untyped** (`sanType` omitted): the raw stored SAN entries are whole-string matched, including their type prefix (e.g. `uri:spiffe://…`, `email:alice@example.com`; DNS entries are bare).
+  - **Typed**: only SAN entries of that kind are considered, and matching is done on the **prefix-stripped** value (e.g. `sanType: URI` matches `spiffe://…`, not `uri:spiffe://…`).
+
+> **Exposure gate (asymmetric).** The client certificate is only visible to this plugin when it has been exposed to the plugin layer:
+> - On the **EdgionTls** path, exposure requires the `edgion.io/expose-client-cert` annotation. Without it the mTLS sources are always **missing** (→ `onMissing`).
+> - On the **Gateway `frontendValidation` mTLS** path, the certificate is exposed **without any annotation**.
+>
+> If the certificate is not exposed (or the connection is not mTLS), every mTLS source evaluates as missing.
+
+> **Prefer `MtlsCn` / `MtlsSan` over `MtlsSubject`.** `MtlsSubject` matches the gateway's specific DN serialization (e.g. `CN=foo, O=bar` — attribute short-names, `, `-joined, in certificate-entry order). It is **order- and spacing-sensitive**, so a small formatting difference breaks an exact match. Reserve `MtlsSubject` for `regex` matching; use `MtlsCn` or a typed `MtlsSan` for exact identity checks.
+
+#### JWT claims (`JwtClaim`)
+
+- `key` is a **dot-nested claim path**, e.g. `realm_access.roles` or `sub`.
+- A **list** claim is matched with "any element matches"; scalar string/number/bool claims yield a single candidate.
+- Values are read from the **verified** JWT claims stored in the request context by an upstream auth plugin: `jwt_auth` writes `jwt_claims`, `openid_connect` writes `oidc_claims`. Lookup precedence is `jwt_claims` then `oidc_claims`: whichever blob is present is used in full — there is no per-claim fallback to the other blob.
+- **Plugin-chain ordering requirement.** The authenticating plugin (`jwt_auth` or `openid_connect`) must run **earlier in the chain** with `store_claims_in_ctx: true`. Otherwise no claims are in context and the `JwtClaim` source is always **missing** (→ `onMissing`).
+
+> **Out of scope: source IP / CIDR.** This plugin does not match on client IP or CIDR — use `IpRestriction` or `GlobalAccessControl` for that. For the same reason `sanType` deliberately omits `IP`.
 
 ### Matching Methods
 
@@ -376,6 +411,35 @@ spec:
         message: "Access denied by security policy"
 ```
 
+### 9. Identity allowlist (mTLS SAN OR JWT claim)
+
+Admit only callers proven by a SPIFFE URI SAN **or** an `admin` role in the verified JWT — two single-predicate groups combined with OR under `Whitelist`. For the `JwtClaim` group to work, an auth plugin (`jwt_auth` / `openid_connect`) must run earlier in the chain with `store_claims_in_ctx: true`; for the `MtlsSan` group the client cert must be exposed (see the exposure gate above).
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: identity-allowlist
+spec:
+  requestPlugins:
+    - type: RequestRestriction
+      config:
+        mode: Whitelist
+        ruleGroups:
+          - rules:
+              - source: MtlsSan
+                sanType: URI
+                values: ["spiffe://edgion.io/ns/payments/sa/checkout"]
+                onMissing: NoMatch
+          - rules:
+              - source: JwtClaim
+                key: "realm_access.roles"
+                values: ["admin"]
+                onMissing: NoMatch
+        status: 403
+        message: "Identity not allowed"
+```
+
 ## Comparison with Other Gateways
 
 | Feature | APISIX | Kong | Edgion |
@@ -412,7 +476,7 @@ Edgion's `RequestRestriction` plugin unifies multiple restriction capabilities i
 
 ### Q3: When is the `key` field required?
 
-**A**: For the `Header`, `Cookie`, and `Query` sources, which look up a named value. For `Path`, `RequestPath`, `Method`, and `Referer` the value is intrinsic to the request, so `key` is ignored.
+**A**: For the `Header`, `Cookie`, and `Query` sources, which look up a named value, and for `JwtClaim`, where `key` is the dot-nested claim path. For `Path`, `RequestPath`, `Method`, `Referer`, and the mTLS sources (`MtlsSubject` / `MtlsCn` / `MtlsSan`) the value is intrinsic to the request/connection, so `key` is ignored.
 
 ### Q4: What does `onMissing: Match` do?
 

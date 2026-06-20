@@ -15,9 +15,7 @@ use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_s
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
-use edgion_resources::resources::edgion_plugins::plugin_configs::{
-    AllowOutcome, GlobalAccessControlConfig, RestrictionRule, RestrictionSource,
-};
+use edgion_resources::resources::edgion_plugins::plugin_configs::{AllowOutcome, GlobalAccessControlConfig};
 use edgion_resources::resources::edgion_plugins::IpSource;
 
 /// GlobalAccessControl L7 allow-list plugin.
@@ -114,19 +112,6 @@ impl GlobalAccessControl {
     }
 }
 
-/// Extract the value a rule matches against, from the live request.
-fn extract_value(session: &dyn PluginSession, rule: &RestrictionRule) -> Option<String> {
-    match rule.source {
-        RestrictionSource::Header => rule.key.as_deref().and_then(|k| session.header_value(k)),
-        RestrictionSource::Cookie => rule.key.as_deref().and_then(|k| session.get_cookie(k)),
-        RestrictionSource::Query => rule.key.as_deref().and_then(|k| session.get_query_param(k)),
-        RestrictionSource::Path => Some(session.get_path().to_string()),
-        RestrictionSource::RequestPath => Some(session.get_request_path().to_string()),
-        RestrictionSource::Method => Some(session.get_method().to_string()),
-        RestrictionSource::Referer => session.header_value("Referer"),
-    }
-}
-
 #[async_trait]
 impl RequestFilter for GlobalAccessControl {
     fn name(&self) -> &str {
@@ -156,7 +141,9 @@ impl RequestFilter for GlobalAccessControl {
 
         let outcome = {
             let s: &dyn PluginSession = session;
-            profile.evaluate(client_ip.as_ref(), &|rule| extract_value(s, rule))
+            profile.evaluate(client_ip.as_ref(), &|rule| {
+                crate::plugins::http::common::extract_rule_values(s, rule)
+            })
         };
 
         match outcome {

@@ -43,8 +43,8 @@ pub use plugin_configs::{
     RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy, RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef,
     RegionRouteConfig, ReplaceConfig, RequestRestrictionConfig, ResolvedBasicAuthUser, ResolvedJweCredential,
     ResolvedJwtCredential, ResolvedJwtIssuerGroup, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig,
-    RestrictionMode, RestrictionRule, RestrictionSource, RouteRule, RuleGroup, TemplateSegment, TemplateVarType,
-    TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig, VerificationMode,
+    RestrictionMode, RestrictionRule, RestrictionSource, RouteRule, RuleGroup, SanType, TemplateSegment,
+    TemplateVarType, TransformConfig, TransformType, UnauthAction, UpstreamHeaderConfig, VerificationMode,
 };
 pub use plugin_validation::PluginValidation;
 

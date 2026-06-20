@@ -122,3 +122,19 @@ spec:
         - name: test-http
           namespace: edgion-test
           port: 30001
+
+    # 8. JwtClaim source: JwtAuth -> RequestRestriction chain, allowlist on realm_access.roles
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/jwt-claim
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-jwt-claim
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

@@ -13,6 +13,7 @@ Primary use case: **CDN/origin lockdown** — an origin server accepts only traf
 Unlike `IpRestriction` (IP-only, no profiles) or `RequestRestriction` (request attributes only, no CIDR, no profiles), this plugin combines:
 - IP/CIDR matching (radix-tree, O(log n))
 - Request-attribute matching (header, cookie, query, path, method) including **SecretRef** for secret values stored in K8s Secrets
+- **Identity matching** — mTLS client-cert subject / SAN / CN (`MtlsSubject` / `MtlsSan` / `MtlsCn`) and verified JWT claims (`JwtClaim`), so a group can require IP **AND** a proven caller identity
 - Profile hot-swap via a `Selector` `EdgionConfigData` reference
 - Configurable fail-safe defaults
 
@@ -83,10 +84,11 @@ All three layers execute in order; any layer can terminate the request.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `source` | Enum | **Required** | Value source: `Header` / `Cookie` / `Query` / `Path` / `RequestPath` / `Method` / `Referer` |
-| `key` | String | none | Key name. Required for `Header`, `Cookie`, `Query`; ignored for the others. |
+| `source` | Enum | **Required** | Value source: `Header` / `Cookie` / `Query` / `Path` / `RequestPath` / `Method` / `Referer` / `MtlsSubject` / `MtlsCn` / `MtlsSan` / `JwtClaim` |
+| `key` | String | none | Key name. Required for `Header`, `Cookie`, `Query`; the dot-nested claim path for `JwtClaim`; ignored for the others. |
 | `values` | Array\<String\> | none | Exact-match values. Predicate is true if the extracted value appears in this list. |
 | `regex` | Array\<String\> | none | Regex patterns. Predicate is true if the value matches (patterns merged with `\|`). |
+| `sanType` | Enum | none | Only valid for `MtlsSan`. Scopes matching to one SAN kind: `DNS` / `URI` / `Email`. When omitted, raw SAN entries are whole-string matched. |
 | `secretRef` | SecretObjectReference | none | K8s Secret reference. All string values in the Secret become accepted tokens (union). Used for CDN secret headers. |
 | `caseSensitive` | Boolean | `true` | Whether exact matching (`values`) is case-sensitive. |
 | `onMissing` | Enum | `NoMatch` | Predicate result when the source value is absent. `Match` / `NoMatch` / `Skip`. **A `secretRef` rule forces `onMissing: NoMatch` at validation** (see Security notes). |
@@ -94,6 +96,35 @@ All three layers execute in order; any layer can terminate the request.
 > **Value matching**: `values`, `regex`, and `secretRef`-resolved values are evaluated as a **union** — the predicate is true if any of the three sources matches.
 
 > **`secretRef` note**: the referenced Secret must contain only credential string values. ALL values in the Secret become accepted tokens (to support key rotation). Secret values are matched **raw, exact, case-sensitive, without trimming** — a trailing newline will never match.
+
+### Identity sources
+
+Beyond request attributes and `secretRef`, a `rules` predicate can match on **post-authentication identity** — the mTLS client certificate and verified JWT claims. Because rules within a group are ANDed, you can require, e.g., "IP in CDN CIDR **AND** SPIFFE URI SAN equals X". A missing identity value follows `onMissing` (default `NoMatch`), so an absent cert/claim fails the predicate and the group does not match.
+
+#### mTLS sources (`MtlsSubject` / `MtlsCn` / `MtlsSan`)
+
+- `MtlsSubject` — the full subject **DN string** of the client certificate.
+- `MtlsCn` — the subject **CN** only.
+- `MtlsSan` — the certificate **SAN** list, evaluated as "any entry matches". An optional `sanType` of `DNS` / `URI` / `Email` scopes the match:
+  - **Untyped** (`sanType` omitted): the raw stored SAN entries are whole-string matched, including their type prefix (e.g. `uri:spiffe://…`, `email:alice@example.com`; DNS entries are bare).
+  - **Typed**: only SAN entries of that kind are considered, and matching is done on the **prefix-stripped** value (e.g. `sanType: URI` matches `spiffe://…`, not `uri:spiffe://…`).
+
+> **Exposure gate (asymmetric).** The client certificate is only visible to this plugin when it has been exposed to the plugin layer:
+> - On the **EdgionTls** path, exposure requires the `edgion.io/expose-client-cert` annotation. Without it the mTLS sources are always **missing** (→ `onMissing`).
+> - On the **Gateway `frontendValidation` mTLS** path, the certificate is exposed **without any annotation**.
+>
+> If the certificate is not exposed (or the connection is not mTLS), every mTLS source evaluates as missing.
+
+> **Prefer `MtlsCn` / `MtlsSan` over `MtlsSubject`.** `MtlsSubject` matches the gateway's specific DN serialization (e.g. `CN=foo, O=bar` — attribute short-names, `, `-joined, in certificate-entry order). It is **order- and spacing-sensitive**, so a small formatting difference breaks an exact match. Reserve `MtlsSubject` for `regex` matching; use `MtlsCn` or a typed `MtlsSan` for exact identity checks.
+
+#### JWT claims (`JwtClaim`)
+
+- `key` is a **dot-nested claim path**, e.g. `realm_access.roles` or `sub`.
+- A **list** claim is matched with "any element matches"; scalar string/number/bool claims yield a single candidate.
+- Values are read from the **verified** JWT claims stored in the request context by an upstream auth plugin: `jwt_auth` writes `jwt_claims`, `openid_connect` writes `oidc_claims`. Lookup precedence is `jwt_claims` then `oidc_claims`: whichever blob is present is used in full — there is no per-claim fallback to the other blob.
+- **Plugin-chain ordering requirement.** The authenticating plugin (`jwt_auth` or `openid_connect`) must run **earlier in the chain** with `store_claims_in_ctx: true`. Otherwise no claims are in context and the `JwtClaim` source is always **missing** (→ `onMissing`).
+
+> **Out of scope: source IP / CIDR matching in `rules`.** IP/CIDR matching is handled by the group's dedicated `ip` field, not by a `rules` predicate. For the same reason `sanType` deliberately omits `IP`.
 
 ### EdgionConfigDataRef (for activeProfileRef)
 
@@ -281,6 +312,46 @@ To apply it GatewayClass-wide (all routes across all Gateways in the class), ref
 globalPluginsRef:
   - name: origin-lockdown
     namespace: edgion-system
+```
+
+## Identity-based allow example (mTLS SAN OR JWT claim)
+
+Admit a request when it comes from an internal CIDR **and** carries a proven SPIFFE URI SAN, **or** when the verified JWT carries an `admin` role (no IP constraint). The two cases are separate rule groups (OR); within the first group the `ip` pre-condition and the `MtlsSan` predicate are ANDed. For the `JwtClaim` group, an auth plugin (`jwt_auth` / `openid_connect`) must run earlier in the chain with `store_claims_in_ctx: true`; for the `MtlsSan` group the client cert must be exposed (see the exposure gate above).
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: identity-allow
+  namespace: edgion-system
+spec:
+  requestPlugins:
+    - type: GlobalAccessControl
+      config:
+        enable: true
+        activeProfile: identity
+        status: 403
+        message: "forbidden: identity not allowed"
+        profiles:
+          identity:
+            defaultAction: deny
+            ruleGroups:
+              - name: spiffe-checkout
+                ip:
+                  - name: internal-v4
+                    cidrs:
+                      - "10.0.0.0/8"
+                rules:
+                  - source: MtlsSan
+                    sanType: URI
+                    values: ["spiffe://edgion.io/ns/payments/sa/checkout"]
+                    onMissing: NoMatch
+              - name: jwt-admin
+                rules:
+                  - source: JwtClaim
+                    key: "realm_access.roles"
+                    values: ["admin"]
+                    onMissing: NoMatch
 ```
 
 ## Execution flow

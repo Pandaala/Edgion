@@ -13,6 +13,7 @@
 与 `IpRestriction`（仅 IP，无 profiles）或 `RequestRestriction`（仅请求属性，无 CIDR，无 profiles）不同，本插件集成了：
 - IP/CIDR 匹配（基数树，O(log n)）
 - 请求属性匹配（header、cookie、query、path、method），包含通过 K8s Secret 引用密钥的 **SecretRef**
+- **身份匹配**——mTLS 客户端证书 subject / SAN / CN（`MtlsSubject` / `MtlsSan` / `MtlsCn`）以及已验证的 JWT claim（`JwtClaim`），使一个规则组可同时要求 IP **且** 经过证明的调用方身份
 - 通过 `Selector` 类型 `EdgionConfigData` 实现的 profile 热切换
 - 可配置的 fail-safe 默认行为
 
@@ -83,10 +84,11 @@ GlobalAccessControl（以及所有 `EdgionPlugins`）可在三个粒度上挂载
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `source` | Enum | **必填** | 值来源：`Header` / `Cookie` / `Query` / `Path` / `RequestPath` / `Method` / `Referer` |
-| `key` | String | 无 | 键名。`Header`、`Cookie`、`Query` 时必填；其余来源忽略。 |
+| `source` | Enum | **必填** | 值来源：`Header` / `Cookie` / `Query` / `Path` / `RequestPath` / `Method` / `Referer` / `MtlsSubject` / `MtlsCn` / `MtlsSan` / `JwtClaim` |
+| `key` | String | 无 | 键名。`Header`、`Cookie`、`Query` 时必填；`JwtClaim` 为点分隔 claim 路径；其余来源忽略。 |
 | `values` | Array\<String\> | 无 | 精确匹配值；取到的值在列表中时断言为真。 |
 | `regex` | Array\<String\> | 无 | 正则模式；取到的值匹配时断言为真（多个模式用 `\|` 合并）。 |
+| `sanType` | Enum | 无 | 仅对 `MtlsSan` 有效。将匹配限定到某一 SAN 类型：`DNS` / `URI` / `Email`。省略时对原始 SAN 条目做整串匹配。 |
 | `secretRef` | SecretObjectReference | 无 | K8s Secret 引用。Secret 中所有字符串值均成为可接受 token（并集），用于 CDN 密钥 header/cookie。 |
 | `caseSensitive` | Boolean | `true` | `values` 精确匹配是否大小写敏感。 |
 | `onMissing` | Enum | `NoMatch` | 值缺失时的断言结果：`Match` / `NoMatch` / `Skip`。**含 `secretRef` 的规则在校验时强制为 `NoMatch`**（见安全说明）。 |
@@ -94,6 +96,35 @@ GlobalAccessControl（以及所有 `EdgionPlugins`）可在三个粒度上挂载
 > **值匹配并集**：`values`、`regex`、`secretRef` 解析出的值三者取并集求值——任一来源命中即该断言为真。
 
 > **secretRef 注意**：所引用的 Secret 应专用于该凭据。Secret 中所有键的字符串值都会成为可接受 token（以支持密钥轮换）。密钥值**按原始字节精确、大小写敏感匹配，不做任何裁剪**——带换行符的值将永远无法匹配。
+
+### 身份数据源
+
+除请求属性与 `secretRef` 外，`rules` 断言还能匹配**认证后身份**——mTLS 客户端证书与已验证的 JWT claim。由于组内 rules 为 AND，可表达「IP 落在 CDN CIDR **且** SPIFFE URI SAN 等于 X」之类条件。身份值缺失时按 `onMissing`（默认 `NoMatch`）处理，因此证书/claim 缺失会使该断言为假，该组不命中。
+
+#### mTLS 数据源（`MtlsSubject` / `MtlsCn` / `MtlsSan`）
+
+- `MtlsSubject`——客户端证书完整的 subject **DN 字符串**。
+- `MtlsCn`——仅 subject **CN**。
+- `MtlsSan`——证书 **SAN** 列表，按「任一条目命中」求值。可选 `sanType`（`DNS` / `URI` / `Email`）限定匹配范围：
+  - **不带类型**（省略 `sanType`）：对原始 SAN 条目（含类型前缀，如 `uri:spiffe://…`、`email:alice@example.com`；DNS 条目无前缀）做整串匹配。
+  - **带类型**：仅考虑该类型的 SAN 条目，并对**去掉前缀后的值**匹配（如 `sanType: URI` 匹配 `spiffe://…`，而非 `uri:spiffe://…`）。
+
+> **暴露开关（非对称）。** 客户端证书只有被暴露到插件层后，本插件才可见：
+> - 在 **EdgionTls** 路径上，需要 `edgion.io/expose-client-cert` 注解才会暴露；否则 mTLS 数据源始终**缺失**（→ `onMissing`）。
+> - 在 **Gateway `frontendValidation` mTLS** 路径上，证书**无需任何注解**即被暴露。
+>
+> 若证书未被暴露（或连接不是 mTLS），所有 mTLS 数据源都按缺失处理。
+
+> **优先使用 `MtlsCn` / `MtlsSan`，而非 `MtlsSubject`。** `MtlsSubject` 匹配的是网关特定的 DN 序列化形式（如 `CN=foo, O=bar`——属性短名、`, ` 连接、按证书条目顺序）。它**对顺序和空格敏感**，细小的格式差异即会破坏精确匹配。`MtlsSubject` 建议仅用于 `regex` 匹配；精确身份校验请用 `MtlsCn` 或带类型的 `MtlsSan`。
+
+#### JWT claim（`JwtClaim`）
+
+- `key` 是**点分隔的 claim 路径**，如 `realm_access.roles` 或 `sub`。
+- **列表**类 claim 按「任一元素命中」匹配；标量 string/number/bool claim 产生单个候选值。
+- 取值来自上游认证插件写入请求上下文的**已验证** JWT claim：`jwt_auth` 写入 `jwt_claims`，`openid_connect` 写入 `oidc_claims`。查找优先级为先 `jwt_claims` 后 `oidc_claims`：存在哪一块就整块使用，不会对单个 claim 回退到另一块。
+- **插件链顺序要求。** 认证插件（`jwt_auth` 或 `openid_connect`）必须在链中**更早执行**且设置 `store_claims_in_ctx: true`；否则上下文中没有 claim，`JwtClaim` 数据源始终**缺失**（→ `onMissing`）。
+
+> **超出范围：`rules` 中的源 IP / CIDR 匹配。** IP/CIDR 匹配由规则组专用的 `ip` 字段处理，而非 `rules` 断言。出于同样原因，`sanType` 有意不提供 `IP`。
 
 ### EdgionConfigDataRef（activeProfileRef 使用）
 
@@ -281,6 +312,46 @@ filters:
 globalPluginsRef:
   - name: origin-lockdown
     namespace: edgion-system
+```
+
+## 基于身份的放行示例（mTLS SAN 或 JWT claim）
+
+当请求来自内网 CIDR **且**携带经证明的 SPIFFE URI SAN，**或**已验证 JWT 带有 `admin` 角色（无 IP 约束）时放行。两种情形是独立的规则组（组间 OR）；第一组内 `ip` 前置条件与 `MtlsSan` 断言为 AND。`JwtClaim` 分组生效的前提是认证插件（`jwt_auth` / `openid_connect`）在链中更早执行且设置 `store_claims_in_ctx: true`；`MtlsSan` 分组则需客户端证书已被暴露（见上文暴露开关）。
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: identity-allow
+  namespace: edgion-system
+spec:
+  requestPlugins:
+    - type: GlobalAccessControl
+      config:
+        enable: true
+        activeProfile: identity
+        status: 403
+        message: "forbidden: identity not allowed"
+        profiles:
+          identity:
+            defaultAction: deny
+            ruleGroups:
+              - name: spiffe-checkout
+                ip:
+                  - name: internal-v4
+                    cidrs:
+                      - "10.0.0.0/8"
+                rules:
+                  - source: MtlsSan
+                    sanType: URI
+                    values: ["spiffe://edgion.io/ns/payments/sa/checkout"]
+                    onMissing: NoMatch
+              - name: jwt-admin
+                rules:
+                  - source: JwtClaim
+                    key: "realm_access.roles"
+                    values: ["admin"]
+                    onMissing: NoMatch
 ```
 
 ## 执行流程

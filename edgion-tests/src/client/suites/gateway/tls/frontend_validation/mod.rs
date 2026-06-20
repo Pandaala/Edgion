@@ -331,6 +331,124 @@ impl FrontendValidationTestSuite {
         )
     }
 
+    // ==================== mTLS identity sources for RequestRestriction ====================
+    // On the frontendValidation HTTPS listener the gateway exposes the verified client
+    // certificate, so RequestRestriction can allowlist on it. valid-client (CN=valid-client,
+    // SAN email test@edgion.io) and nonmatching-client (CN=nonmatching-client, SAN email
+    // other@example.com) are both signed by the trusted client CA, so both handshakes
+    // succeed and the difference is decided by the plugin, not by TLS.
+
+    /// Run a GET over an mTLS connection using the given client identity and assert the status.
+    async fn run_restrict_case(
+        ctx: &TestContext,
+        cert_path: &str,
+        key_path: &str,
+        path: &str,
+        expected: u16,
+        label: &str,
+    ) -> TestResult {
+        let start = Instant::now();
+        let client = match create_mtls_client(cert_path, key_path, HOSTNAME, &ctx.target_host, PORT) {
+            Ok(c) => c,
+            Err(e) => return TestResult::failed(start.elapsed(), format!("Failed to create mTLS client: {}", e)),
+        };
+        let url = format!("https://{}:{}{}", HOSTNAME, PORT, path);
+        match client.get(&url).header("Host", HOSTNAME).send().await {
+            Ok(response) => {
+                let status = response.status().as_u16();
+                if status == expected {
+                    TestResult::passed_with_message(start.elapsed(), format!("{}: status {}", label, status))
+                } else {
+                    TestResult::failed(
+                        start.elapsed(),
+                        format!("{}: expected {}, got {}", label, expected, status),
+                    )
+                }
+            }
+            Err(e) => TestResult::failed(start.elapsed(), format!("{}: request failed: {}", label, e)),
+        }
+    }
+
+    fn test_restrict_cn_allow() -> TestCase {
+        TestCase::new(
+            "fv_mtls_restrict_cn_allow",
+            "RequestRestriction MtlsCn: valid-client CN allowlisted (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    Self::run_restrict_case(
+                        &ctx,
+                        "edgion-tests/certs/mtls/valid-client.crt",
+                        "edgion-tests/certs/mtls/valid-client.key",
+                        "/restrict/cn",
+                        200,
+                        "MtlsCn allow",
+                    )
+                    .await
+                })
+            },
+        )
+    }
+
+    fn test_restrict_cn_deny() -> TestCase {
+        TestCase::new(
+            "fv_mtls_restrict_cn_deny",
+            "RequestRestriction MtlsCn: nonmatching-client CN denied (403)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    Self::run_restrict_case(
+                        &ctx,
+                        "edgion-tests/certs/mtls/nonmatching-client.crt",
+                        "edgion-tests/certs/mtls/nonmatching-client.key",
+                        "/restrict/cn",
+                        403,
+                        "MtlsCn deny",
+                    )
+                    .await
+                })
+            },
+        )
+    }
+
+    fn test_restrict_san_email_allow() -> TestCase {
+        TestCase::new(
+            "fv_mtls_restrict_san_email_allow",
+            "RequestRestriction MtlsSan(Email): valid-client email SAN allowlisted (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    Self::run_restrict_case(
+                        &ctx,
+                        "edgion-tests/certs/mtls/valid-client.crt",
+                        "edgion-tests/certs/mtls/valid-client.key",
+                        "/restrict/san",
+                        200,
+                        "MtlsSan email allow",
+                    )
+                    .await
+                })
+            },
+        )
+    }
+
+    fn test_restrict_san_email_deny() -> TestCase {
+        TestCase::new(
+            "fv_mtls_restrict_san_email_deny",
+            "RequestRestriction MtlsSan(Email): nonmatching-client email SAN denied (403)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    Self::run_restrict_case(
+                        &ctx,
+                        "edgion-tests/certs/mtls/nonmatching-client.crt",
+                        "edgion-tests/certs/mtls/nonmatching-client.key",
+                        "/restrict/san",
+                        403,
+                        "MtlsSan email deny",
+                    )
+                    .await
+                })
+            },
+        )
+    }
+
     fn test_insecure_invalid_cert() -> TestCase {
         TestCase::new(
             "fv_insecure_invalid_cert",
@@ -403,6 +521,11 @@ impl TestSuite for FrontendValidationTestSuite {
             Self::test_insecure_no_cert(),
             Self::test_insecure_invalid_cert(),
             Self::test_invalid_ca_ref_listener_not_served(),
+            // mTLS identity sources for RequestRestriction (MtlsCn / MtlsSan)
+            Self::test_restrict_cn_allow(),
+            Self::test_restrict_cn_deny(),
+            Self::test_restrict_san_email_allow(),
+            Self::test_restrict_san_email_deny(),
         ]
     }
 }

@@ -50,6 +50,11 @@ pub struct RestrictionRule {
     #[serde(default)]
     pub on_missing: OnMissing,
 
+    /// SAN type filter — only meaningful for `MtlsSan`. When `None`, raw SAN
+    /// strings (with their stored type prefix) are whole-string matched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub san_type: Option<SanType>,
+
     // === Runtime-only compiled matchers ===
     /// HashSet for O(1) exact lookup (when values.len() > threshold).
     #[serde(skip)]
@@ -97,6 +102,28 @@ pub enum RestrictionSource {
     Method,
     /// Referer header (no key needed)
     Referer,
+    /// mTLS client-certificate subject DN string (no key needed).
+    MtlsSubject,
+    /// mTLS client-certificate subject CN (no key needed).
+    MtlsCn,
+    /// mTLS client-certificate SAN list; "any entry matches". Optional `sanType`
+    /// scopes matching to one SAN kind.
+    MtlsSan,
+    /// Structured claim of a verified JWT; `key` is a dot-nested claim path.
+    JwtClaim,
+}
+
+/// SAN type filter for `MtlsSan`. When set, matching is scoped to SAN entries of
+/// this type, on the prefix-stripped value. `IP` is intentionally not offered
+/// (no IP-based matching in this plugin).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub enum SanType {
+    #[serde(rename = "DNS")]
+    Dns,
+    #[serde(rename = "URI")]
+    Uri,
+    #[serde(rename = "Email")]
+    Email,
 }
 
 /// Behavior when the target value is missing.
@@ -126,6 +153,7 @@ impl Default for RestrictionRule {
             regex: None,
             case_sensitive: default_case_sensitive(),
             on_missing: OnMissing::default(),
+            san_type: None,
             values_set: None,
             compiled_regex: None,
             secret_ref: None,
@@ -235,17 +263,30 @@ impl RestrictionRule {
         false
     }
 
-    /// Evaluate the predicate.
+    /// Multi-value evaluation with "any candidate matches" semantics.
     ///
-    /// Returns: `Some(true)` = holds, `Some(false)` = does not hold,
-    /// `None` = skip (drop from the group's AND).
-    pub fn evaluate(&self, value: Option<&str>) -> Option<bool> {
-        match value {
-            None => match self.on_missing {
+    /// An empty slice means the source value is absent → apply `on_missing`.
+    /// A non-empty slice yields `Some(true)` iff any candidate satisfies the
+    /// predicate (`values` / `regex` / resolved secret).
+    pub fn evaluate_multi(&self, values: &[String]) -> Option<bool> {
+        if values.is_empty() {
+            return match self.on_missing {
                 OnMissing::Match => Some(true),
                 OnMissing::NoMatch => Some(false),
                 OnMissing::Skip => None,
-            },
+            };
+        }
+        Some(values.iter().any(|v| self.matches_value(v)))
+    }
+
+    /// Scalar convenience wrapper over [`evaluate_multi`].
+    ///
+    /// `None` (absent) routes through the empty-slice / `on_missing` path; a
+    /// present scalar is a single-element "any matches", i.e. one `matches_value`
+    /// call — identical to the pre-multi behavior.
+    pub fn evaluate(&self, value: Option<&str>) -> Option<bool> {
+        match value {
+            None => self.evaluate_multi(&[]),
             Some(v) => Some(self.matches_value(v)),
         }
     }
@@ -269,10 +310,27 @@ impl RestrictionRule {
                     ));
                 }
             }
+            RestrictionSource::JwtClaim => {
+                if self.key.as_ref().is_none_or(|k| k.is_empty()) {
+                    return Some(format!(
+                        "rule '{}': 'key' (claim path) is required for source JwtClaim",
+                        rule_name
+                    ));
+                }
+            }
             RestrictionSource::Path
             | RestrictionSource::RequestPath
             | RestrictionSource::Method
-            | RestrictionSource::Referer => {}
+            | RestrictionSource::Referer
+            | RestrictionSource::MtlsSubject
+            | RestrictionSource::MtlsCn
+            | RestrictionSource::MtlsSan => {}
+        }
+        if self.san_type.is_some() && self.source != RestrictionSource::MtlsSan {
+            return Some(format!(
+                "rule '{}': 'sanType' is only valid for source MtlsSan",
+                rule_name
+            ));
         }
         // A secret_ref supplies the match set at resolution time, so it counts as a match source.
         let has_match = self.values.is_some() || self.regex.is_some() || self.secret_ref.is_some();
@@ -315,6 +373,29 @@ mod tests {
             values: Some(values.iter().map(|s| s.to_string()).collect()),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn test_evaluate_multi_any_match_and_missing() {
+        let mut r = RestrictionRule {
+            source: RestrictionSource::Header,
+            key: Some("X".to_string()),
+            values: Some(vec!["admin".to_string(), "dev".to_string()]),
+            ..Default::default()
+        };
+        r.compile().unwrap();
+        // Any element matches.
+        assert_eq!(r.evaluate_multi(&["guest".to_string(), "dev".to_string()]), Some(true));
+        assert_eq!(r.evaluate_multi(&["guest".to_string()]), Some(false));
+        // Empty = missing => default OnMissing::NoMatch.
+        assert_eq!(r.evaluate_multi(&[]), Some(false));
+
+        let mut m = r.clone();
+        m.on_missing = OnMissing::Match;
+        assert_eq!(m.evaluate_multi(&[]), Some(true));
+        let mut s = r.clone();
+        s.on_missing = OnMissing::Skip;
+        assert_eq!(s.evaluate_multi(&[]), None);
     }
 
     #[test]
@@ -523,6 +604,39 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(r.field_error(), None);
+    }
+
+    #[test]
+    fn mtls_sources_need_no_key_and_validate() {
+        use crate::resources::edgion_plugins::plugin_configs::{RestrictionSource, SanType};
+        let r = RestrictionRule {
+            source: RestrictionSource::MtlsCn,
+            values: Some(vec!["alice".to_string()]),
+            ..Default::default()
+        };
+        assert_eq!(r.field_error(), None);
+
+        let san = RestrictionRule {
+            source: RestrictionSource::MtlsSan,
+            san_type: Some(SanType::Uri),
+            values: Some(vec!["spiffe://edgion.io/ns/foo".to_string()]),
+            ..Default::default()
+        };
+        assert_eq!(san.field_error(), None);
+    }
+
+    #[test]
+    fn san_type_rejected_on_non_san_source() {
+        use crate::resources::edgion_plugins::plugin_configs::{RestrictionSource, SanType};
+        let r = RestrictionRule {
+            source: RestrictionSource::Header,
+            key: Some("X".to_string()),
+            values: Some(vec!["v".to_string()]),
+            san_type: Some(SanType::Dns),
+            ..Default::default()
+        };
+        let err = r.field_error().expect("san_type on Header must be rejected");
+        assert!(err.contains("sanType"), "got: {}", err);
     }
 
     #[test]

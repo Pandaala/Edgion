@@ -184,11 +184,7 @@ impl AllowProfile {
 
     /// Evaluate the profile. `ip` is the client IP (None when undeterminable).
     /// `get_value(rule)` returns the extracted source value for a rule.
-    pub fn evaluate(
-        &self,
-        ip: Option<&IpAddr>,
-        get_value: &dyn Fn(&RestrictionRule) -> Option<String>,
-    ) -> AllowOutcome {
+    pub fn evaluate(&self, ip: Option<&IpAddr>, get_value: &dyn Fn(&RestrictionRule) -> Vec<String>) -> AllowOutcome {
         for group in &self.rule_groups {
             if group.matches(ip, get_value) {
                 return AllowOutcome::Allowed {
@@ -250,7 +246,7 @@ impl AllowRuleGroup {
     }
 
     /// True iff the IP precondition holds (or absent) AND every non-skipped rule holds.
-    fn matches(&self, ip: Option<&IpAddr>, get_value: &dyn Fn(&RestrictionRule) -> Option<String>) -> bool {
+    fn matches(&self, ip: Option<&IpAddr>, get_value: &dyn Fn(&RestrictionRule) -> Vec<String>) -> bool {
         // Counts as evidence so an IP-only group matches on IP alone.
         let mut considered = false;
         if let Some(matcher) = &self.ip_matcher {
@@ -268,7 +264,7 @@ impl AllowRuleGroup {
             considered = true;
         }
         for rule in &self.rules {
-            match rule.evaluate(get_value(rule).as_deref()) {
+            match rule.evaluate_multi(&get_value(rule)) {
                 Some(true) => considered = true,
                 Some(false) => return false,
                 None => {} // Skip: dropped from the AND
@@ -335,10 +331,15 @@ mod tests {
     }
 
     // value accessor: only the matching header present
-    fn acc<'a>(header: Option<(&'a str, &'a str)>) -> impl Fn(&RestrictionRule) -> Option<String> + 'a {
+    fn acc<'a>(header: Option<(&'a str, &'a str)>) -> impl Fn(&RestrictionRule) -> Vec<String> + 'a {
         move |rule: &RestrictionRule| {
-            let want = rule.key.as_deref()?;
-            header.and_then(|(k, v)| if k == want { Some(v.to_string()) } else { None })
+            let Some(want) = rule.key.as_deref() else {
+                return Vec::new();
+            };
+            match header {
+                Some((k, v)) if k == want => vec![v.to_string()],
+                _ => Vec::new(),
+            }
         }
     }
 

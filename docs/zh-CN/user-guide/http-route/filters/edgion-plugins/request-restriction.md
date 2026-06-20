@@ -6,9 +6,9 @@
 
 ## 概述
 
-`RequestRestriction` 插件用于基于请求属性限制访问，支持多种数据源和匹配方式。与 `IpRestriction` 插件专注于 IP 地址不同，本插件支持基于 Header、Cookie、Query 参数、Path、Method 和 Referer 的访问控制。
+`RequestRestriction` 插件用于基于请求属性限制访问，支持多种数据源和匹配方式。与 `IpRestriction` 插件专注于 IP 地址不同，本插件支持基于 Header、Cookie、Query 参数、Path、Method 和 Referer 的访问控制，并额外支持**认证后身份**——mTLS 客户端证书的 subject / SAN / CN（`MtlsSubject` / `MtlsSan` / `MtlsCn`）以及已验证的 JWT claim（`JwtClaim`）。
 
-它是一个基于请求属性的**限制（restriction）**插件，不是 RBAC 引擎——没有角色、principal 或身份主体的概念，只是根据请求属性决定放行还是拒绝。
+它仍然是一个**本地 allow/deny 匹配器**，而非完整的 RBAC 编排层：一条 rule 仍是纯断言，由唯一的全局 `mode` 决定命中意味着放行还是拒绝。身份数据源让你在匹配「请求发了什么」之外，还能匹配「调用方是谁」，但并不会把插件变成角色 / principal 引擎。
 
 ## 模型：规则分组（OR-of-AND）+ 全局 mode
 
@@ -25,6 +25,7 @@
 ## 功能特性
 
 - **多数据源支持**：Header、Cookie、Query、Path、RequestPath、Method、Referer
+- **身份数据源**：mTLS 客户端证书 subject / SAN / CN（`MtlsSubject` / `MtlsSan` / `MtlsCn`，SAN 可选 `sanType`）以及已验证的 JWT claim（`JwtClaim`）
 - **精确匹配与正则匹配**：`values` 精确匹配，`regex` 正则匹配（任一命中断言即为真）
 - **自动性能优化**：精确匹配列表超过 16 个值时自动使用 HashSet (O(1) 查找)
 - **布尔组合**：分组内 AND、分组间 OR（DNF）
@@ -64,10 +65,11 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | `name` | `string` | ❌ | - | 规则名称（用于日志） |
-| `source` | `string` | ✅ | - | 数据源：`Header`、`Cookie`、`Query`、`Path`、`RequestPath`、`Method`、`Referer` |
-| `key` | `string` | 视情况 | - | 键名（Header/Cookie/Query 必填，其余忽略） |
+| `source` | `string` | ✅ | - | 数据源：`Header`、`Cookie`、`Query`、`Path`、`RequestPath`、`Method`、`Referer`、`MtlsSubject`、`MtlsCn`、`MtlsSan`、`JwtClaim` |
+| `key` | `string` | 视情况 | - | 键名（Header/Cookie/Query 必填；`JwtClaim` 为点分隔 claim 路径；其余忽略） |
 | `values` | `string[]` | ❌ | - | 精确匹配值；取到的值在列表中则断言为真 |
 | `regex` | `string[]` | ❌ | - | 正则模式；取到的值匹配则断言为真（多个模式用 `\|` 合并） |
+| `sanType` | `string` | ❌ | - | 仅对 `MtlsSan` 有效。将匹配限定到某一 SAN 类型：`DNS` / `URI` / `Email`。省略时对原始 SAN 条目做整串匹配。 |
 | `caseSensitive` | `boolean` | ❌ | `true` | 精确匹配是否大小写敏感 |
 | `onMissing` | `string` | ❌ | `NoMatch` | 值缺失时断言的结果：`Match`、`NoMatch`、`Skip` |
 
@@ -84,6 +86,10 @@
 | `RequestPath` | 请求路径（客户端入口 raw 视图） | ❌ | entry raw（冻结） |
 | `Method` | HTTP 方法 | ❌ | — |
 | `Referer` | Referer 请求头 | ❌ | — |
+| `MtlsSubject` | mTLS 客户端证书 subject DN 字符串 | ❌ | — |
+| `MtlsCn` | mTLS 客户端证书 subject CN | ❌ | — |
+| `MtlsSan` | mTLS 客户端证书 SAN 列表（「任一条目命中」）；可选 `sanType` | ❌ | — |
+| `JwtClaim` | 已验证的 JWT claim，由点分隔的 `key` 寻址 | ✅（`key` = claim 路径） | — |
 
 #### `Path` 与 `RequestPath` 的区别（path normalization）
 
@@ -95,6 +101,35 @@
 **推荐用法**：绝大多数 ACL 场景使用 `Path`，它覆盖 `%XX` 编码 / 双斜杠 / dot-segment / path-parameter 等所有绕过变体。`RequestPath` 仅用于需要按字面 raw 形态判断的特殊场景（如「只要含 `%2F` 就拒绝」）。`regex` 永远不会被规范化。
 
 **`Path` + 白名单分组的 `;param` 副作用**：path normalization 会剥除每个 segment 中的 `;param=...`（例如 `/api/users;v=1/data` → `/api/users/data`）。若白名单配置了精确路径，迁移时注意检查含 `;` 的请求样本，确认规则仍按预期命中。
+
+### 身份数据源
+
+除请求属性外，插件还能匹配**认证后身份**：mTLS 客户端证书与已验证的 JWT claim。它们同样是纯断言——由 `mode` 决定放行/拒绝，值缺失时按 `onMissing`（默认 `NoMatch`）处理。
+
+#### mTLS 数据源（`MtlsSubject` / `MtlsCn` / `MtlsSan`）
+
+- `MtlsSubject`——客户端证书完整的 subject **DN 字符串**。
+- `MtlsCn`——仅 subject **CN**。
+- `MtlsSan`——证书 **SAN** 列表，按「任一条目命中」求值。可选 `sanType`（`DNS` / `URI` / `Email`）限定匹配范围：
+  - **不带类型**（省略 `sanType`）：对原始 SAN 条目（含类型前缀，如 `uri:spiffe://…`、`email:alice@example.com`；DNS 条目无前缀）做整串匹配。
+  - **带类型**：仅考虑该类型的 SAN 条目，并对**去掉前缀后的值**匹配（如 `sanType: URI` 匹配 `spiffe://…`，而非 `uri:spiffe://…`）。
+
+> **暴露开关（非对称）。** 客户端证书只有被暴露到插件层后，本插件才可见：
+> - 在 **EdgionTls** 路径上，需要 `edgion.io/expose-client-cert` 注解才会暴露；否则 mTLS 数据源始终**缺失**（→ `onMissing`）。
+> - 在 **Gateway `frontendValidation` mTLS** 路径上，证书**无需任何注解**即被暴露。
+>
+> 若证书未被暴露（或连接不是 mTLS），所有 mTLS 数据源都按缺失处理。
+
+> **优先使用 `MtlsCn` / `MtlsSan`，而非 `MtlsSubject`。** `MtlsSubject` 匹配的是网关特定的 DN 序列化形式（如 `CN=foo, O=bar`——属性短名、`, ` 连接、按证书条目顺序）。它**对顺序和空格敏感**，细小的格式差异即会破坏精确匹配。`MtlsSubject` 建议仅用于 `regex` 匹配；精确身份校验请用 `MtlsCn` 或带类型的 `MtlsSan`。
+
+#### JWT claim（`JwtClaim`）
+
+- `key` 是**点分隔的 claim 路径**，如 `realm_access.roles` 或 `sub`。
+- **列表**类 claim 按「任一元素命中」匹配；标量 string/number/bool claim 产生单个候选值。
+- 取值来自上游认证插件写入请求上下文的**已验证** JWT claim：`jwt_auth` 写入 `jwt_claims`，`openid_connect` 写入 `oidc_claims`。查找优先级为先 `jwt_claims` 后 `oidc_claims`：存在哪一块就整块使用，不会对单个 claim 回退到另一块。
+- **插件链顺序要求。** 认证插件（`jwt_auth` 或 `openid_connect`）必须在链中**更早执行**且设置 `store_claims_in_ctx: true`；否则上下文中没有 claim，`JwtClaim` 数据源始终**缺失**（→ `onMissing`）。
+
+> **超出范围：源 IP / CIDR。** 本插件不匹配客户端 IP 或 CIDR——请改用 `IpRestriction` 或 `GlobalAccessControl`。出于同样原因，`sanType` 有意不提供 `IP`。
 
 ### 匹配方式说明
 
@@ -385,6 +420,35 @@ spec:
         message: "Access denied by security policy"
 ```
 
+### 9. 身份白名单（mTLS SAN 或 JWT claim）
+
+仅放行由 SPIFFE URI SAN 证明、**或**在已验证 JWT 中带 `admin` 角色的调用方——`Whitelist` 下两个单断言分组组间 OR。`JwtClaim` 分组生效的前提是认证插件（`jwt_auth` / `openid_connect`）在链中更早执行且设置 `store_claims_in_ctx: true`；`MtlsSan` 分组则需客户端证书已被暴露（见上文暴露开关）。
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: identity-allowlist
+spec:
+  requestPlugins:
+    - type: RequestRestriction
+      config:
+        mode: Whitelist
+        ruleGroups:
+          - rules:
+              - source: MtlsSan
+                sanType: URI
+                values: ["spiffe://edgion.io/ns/payments/sa/checkout"]
+                onMissing: NoMatch
+          - rules:
+              - source: JwtClaim
+                key: "realm_access.roles"
+                values: ["admin"]
+                onMissing: NoMatch
+        status: 403
+        message: "Identity not allowed"
+```
+
 ## 与其他网关对比
 
 | 功能 | APISIX | Kong | Edgion |
@@ -421,7 +485,7 @@ Edgion 的 `RequestRestriction` 插件将多种限制功能统一到一个插件
 
 ### Q3：`key` 字段何时为必填？
 
-**A**：对于 `Header`、`Cookie`、`Query` 来源，需要通过名称查找值，因此 `key` 为必填。对于 `Path`、`RequestPath`、`Method`、`Referer`，值是请求固有的，`key` 会被忽略。
+**A**：对于 `Header`、`Cookie`、`Query` 来源，需要通过名称查找值，因此 `key` 为必填；`JwtClaim` 的 `key` 则是点分隔的 claim 路径，亦为必填。对于 `Path`、`RequestPath`、`Method`、`Referer` 及 mTLS 来源（`MtlsSubject` / `MtlsCn` / `MtlsSan`），值是请求/连接固有的，`key` 会被忽略。
 
 ### Q4：`onMissing: Match` 有什么用？
 

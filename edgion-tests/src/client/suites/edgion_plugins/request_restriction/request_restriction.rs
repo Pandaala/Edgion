@@ -8,9 +8,55 @@
 // - Combined rules
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
-use std::time::Instant;
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use serde_json::json;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 pub struct RequestRestrictionTestSuite;
+
+/// JWT signing material — must match 08_Secret_default_rr-jwt-secret.yaml decoded.
+const RR_JWT_SECRET: &[u8] = b"my-jwt-secret-key-32-chars-long!!";
+/// Issuer — must match the `issuers` list in 09_EdgionPlugins_jwt-claim.yaml.
+const RR_JWT_ISS: &str = "https://rr.example";
+/// Key id (kid) — must match the `key:` field (base64 of "rr-kid") in the secret.
+const RR_JWT_KID: &str = "rr-kid";
+/// Host carrying the JwtClaim chain route (shared request-restriction route host).
+const RR_HOST: &str = "request-restriction.example.com";
+
+/// Build an HS256 JWT carrying a nested `realm_access.roles` array claim.
+fn build_jwt_with_roles(roles: &[&str]) -> String {
+    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600;
+    let claims = json!({
+        "iss": RR_JWT_ISS,
+        "key": RR_JWT_KID,
+        "sub": "test-user",
+        "exp": exp,
+        "realm_access": { "roles": roles },
+    });
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(RR_JWT_SECRET),
+    )
+    .unwrap()
+}
+
+/// Build an HS256 JWT WITHOUT the realm_access claim (to exercise the missing-claim branch).
+fn build_jwt_without_roles() -> String {
+    let exp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs() + 3600;
+    let claims = json!({
+        "iss": RR_JWT_ISS,
+        "key": RR_JWT_KID,
+        "sub": "test-user",
+        "exp": exp,
+    });
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(RR_JWT_SECRET),
+    )
+    .unwrap()
+}
 
 impl RequestRestrictionTestSuite {
     // ==================== 1. Header deny by value ====================
@@ -424,6 +470,138 @@ impl RequestRestrictionTestSuite {
         )
     }
 
+    // ==================== 7. JwtClaim source (JwtAuth -> RequestRestriction chain) ====================
+    // The route runs JwtAuth (storeClaimsInCtx) first, then RequestRestriction with a
+    // Whitelist rule on the verified claim realm_access.roles. A token whose roles array
+    // contains "admin" is admitted ("any element matches"); anything else is denied 403.
+
+    fn test_jwt_claim_admin_allowed() -> TestCase {
+        TestCase::new(
+            "jwt_claim_admin_allowed",
+            "JwtClaim: roles array contains admin => allowed (200)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let jwt = build_jwt_with_roles(&["viewer", "admin"]);
+                    let url = format!("{}/test/jwt-claim/api", ctx.http_url());
+                    let request = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", RR_HOST)
+                        .header("Authorization", format!("Bearer {}", jwt));
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 200 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("admin role admitted with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_jwt_claim_non_admin_denied() -> TestCase {
+        TestCase::new(
+            "jwt_claim_non_admin_denied",
+            "JwtClaim: roles array without admin => denied (403)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let jwt = build_jwt_with_roles(&["viewer", "editor"]);
+                    let url = format!("{}/test/jwt-claim/api", ctx.http_url());
+                    let request = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", RR_HOST)
+                        .header("Authorization", format!("Bearer {}", jwt));
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 403 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("non-admin roles denied with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_jwt_claim_missing_claim_denied() -> TestCase {
+        TestCase::new(
+            "jwt_claim_missing_claim_denied",
+            "JwtClaim: token without realm_access => onMissing NoMatch => denied (403)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let jwt = build_jwt_without_roles();
+                    let url = format!("{}/test/jwt-claim/api", ctx.http_url());
+                    let request = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", RR_HOST)
+                        .header("Authorization", format!("Bearer {}", jwt));
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 403 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("missing claim denied with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    fn test_jwt_claim_no_token_401() -> TestCase {
+        TestCase::new(
+            "jwt_claim_no_token_401",
+            "JwtClaim chain: no token => JwtAuth short-circuits (401)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/test/jwt-claim/api", ctx.http_url());
+                    let request = ctx.http_client.get(&url).header("host", RR_HOST);
+                    match request.send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status == 401 {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    format!("no token rejected by JwtAuth with status {}", status),
+                                )
+                            } else {
+                                TestResult::failed(start.elapsed(), format!("Expected status 401, got {}", status))
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
     fn test_combined_admin_blocked() -> TestCase {
         TestCase::new("combined_admin_blocked", ": Admin  (403)", |ctx: TestContext| {
             Box::pin(async move {
@@ -481,6 +659,11 @@ impl TestSuite for RequestRestrictionTestSuite {
             Self::test_and_group_both_match_blocked(),
             Self::test_and_group_header_mismatch_allowed(),
             Self::test_and_group_path_mismatch_allowed(),
+            // JwtClaim source (JwtAuth -> RequestRestriction chain)
+            Self::test_jwt_claim_admin_allowed(),
+            Self::test_jwt_claim_non_admin_denied(),
+            Self::test_jwt_claim_missing_claim_denied(),
+            Self::test_jwt_claim_no_token_401(),
         ]
     }
 }
