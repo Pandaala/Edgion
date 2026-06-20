@@ -162,6 +162,7 @@ mod tests {
                 |n| edgion_resources::resources::edgion_config_data::EdgionConfigDataRef {
                     name: n.to_string(),
                     namespace: None,
+                    ..Default::default()
                 },
             ),
         };

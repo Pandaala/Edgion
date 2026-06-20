@@ -17,6 +17,7 @@ pub use gateway_frontend_validation::GatewayFrontendValidationStatusTestSuite;
 pub use grpc_route::GrpcRouteStatusTestSuite;
 pub use hostname_intersection::HostnameIntersectionStatusTestSuite;
 pub use observed_generation::{HighFreqFinalTestSuite, HighFreqInitialTestSuite, ObservedGenerationStatusTestSuite};
+pub use ref_grant::EdgionConfigDataRefGrantTestSuite;
 pub use ref_grant::RefGrantStatusTestSuite;
 pub use ref_grant::TcpRouteCrossNsSvcTestSuite;
 pub use ref_grant::TlsRouteCrossNsSvcTestSuite;

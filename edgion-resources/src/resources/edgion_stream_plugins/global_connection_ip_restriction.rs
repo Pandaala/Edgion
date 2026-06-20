@@ -586,6 +586,7 @@ mod tests {
             allow_refs: Some(vec![EdgionConfigDataRef {
                 name: "corp".into(),
                 namespace: None,
+                ..Default::default()
             }]),
             deny_refs: None,
             allow_matcher: None,
@@ -605,6 +606,7 @@ mod tests {
             deny_refs: Some(vec![EdgionConfigDataRef {
                 name: "blk".into(),
                 namespace: None,
+                ..Default::default()
             }]),
             allow_matcher: None,
             deny_matcher: None,

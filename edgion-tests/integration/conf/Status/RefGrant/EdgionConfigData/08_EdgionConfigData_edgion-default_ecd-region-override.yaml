@@ -1,0 +1,20 @@
+# RegionRouteOverride EdgionConfigData in edgion-default.
+# Cross-namespace target for Scenario I-2a (override_ref_no_grant_ref_not_permitted).
+#
+# An EdgionPlugins in edgion-test references this via overrideRef (RegionRoute plugin).
+# visibility defaults to Namespace, so cross-ns refs require a matching ReferenceGrant.
+# Without a grant, the controller sets ResolvedRefs=False(RefNotPermitted) on the referrer.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ecd-region-override
+  namespace: edgion-default
+spec:
+  data:
+    type: RegionRouteOverride
+    config:
+      regions:
+        - name: us
+          hashRange: [0, 999]
+          backendEndpoint: "us-backend:8080"
+          tls: false

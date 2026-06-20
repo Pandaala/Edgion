@@ -98,7 +98,7 @@ Signals: gateway uses access-log `EdgionStatus` + Prometheus counter. No `tracin
 ## Variant Taxonomy
 
 Wire shape: `data: { type: <Variant>, config: {...} }` (`#[serde(tag="type", content="config")]`).
-Envelope (any variant): `enable: bool` (default true), `active: Option<String>`.
+Envelope (any variant): `enable: bool` (default true), `active: Option<String>`, `visibility: Namespace|Cluster` (default `Namespace` — governs cross-ns reference access; see [Cross-Namespace Reference Grants](#cross-namespace-reference-grants)).
 
 | Group | Variant | Shape | Notes |
 |-------|---------|-------|-------|
@@ -180,13 +180,121 @@ coordination (I1 in `tasks/todo/edgion-config-data-overlay-refactor/05-issues.md
 
 | Direction | Mechanism |
 |-----------|-----------|
-| EdgionConfigData ← EdgionPlugins | `overrideRef` in `RegionRouteConfig` → `RegionRouteOverride`; EP `ResolvedRefs` reflects resolution |
-| EdgionConfigData ← EdgionStreamPlugins | `activeProfileRef` in `GlobalConnectionIpRestrictionConfig` → `Selector`; ESP `ResolvedRefs` reflects resolution |
-| EdgionConfigData ← {EdgionPlugins, EdgionStreamPlugins} | `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile `ProfileRules` → `IpList`; referrer `ResolvedRefs` reflects resolution (missing/disabled/wrong-type IpList → `ResolvedRefs=False` on referrer) |
+| EdgionConfigData ← EdgionPlugins | `overrideRef` in `RegionRouteConfig` → `RegionRouteOverride`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
+| EdgionConfigData ← EdgionPlugins | `GlobalAccessControl.activeProfileRef` → `Selector`; EP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
+| EdgionConfigData ← EdgionStreamPlugins | `activeProfileRef` in `GlobalConnectionIpRestrictionConfig` → `Selector`; ESP `ResolvedRefs` reflects resolution; cross-ns requires a `ReferenceGrant` or `visibility: Cluster` |
+| EdgionConfigData ← {EdgionPlugins, EdgionStreamPlugins} | `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile `ProfileRules` → `IpList`; referrer `ResolvedRefs` reflects resolution (missing/disabled/wrong-type → `ResolvedRefs=False`; cross-ns without grant/visibility → `RefNotPermitted`) |
 | EdgionConfigData → {EdgionPlugins, EdgionStreamPlugins} | `EdgionConfigDataRefManager` requeue on change/delete |
 
 > The old `ServiceRegionRoute → ClusterRegionRoute` PM→PM chain and `clusterRef` indirection were
 > removed in the S3 refactor. RegionRoute logic now lives entirely in `EdgionPlugins` base config.
+
+## Cross-Namespace Reference Grants
+
+Cross-namespace EdgionConfigData references — all ref types: `allowRefs`/`denyRefs` (IpList),
+`overrideRef` (RegionRouteOverride), `activeProfileRef` (Selector, including
+`GlobalAccessControl.activeProfileRef`) — are gated by two complementary controls.
+
+### Mechanism
+
+1. **`spec.visibility`** on the EdgionConfigData target (default `Namespace`):
+   - `Namespace` — cross-ns refs require a matching Gateway-API `ReferenceGrant` in the target namespace.
+   - `Cluster` — any namespace may reference it; no grant is needed.
+   - Same-namespace refs are **always** permitted regardless of `visibility`.
+
+2. **Gateway-API `ReferenceGrant`** in the target namespace (required when `visibility: Namespace`).
+   Grant shape — `from.kind` must be `EdgionPlugins` or `EdgionStreamPlugins`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-team-a-to-blocklist
+  namespace: edgion-system          # target namespace (where EdgionConfigData lives)
+spec:
+  from:
+    - group: edgion.io
+      kind: EdgionPlugins           # or EdgionStreamPlugins
+      namespace: team-a
+  to:
+    - group: edgion.io
+      kind: EdgionConfigData
+      name: global-blocklist        # omit `name` to allow all EdgionConfigData in this namespace
+```
+
+This enforcement is gated by `is_reference_grant_validation_enabled()` (configured at controller
+startup via `validation.enable_reference_grant_validation` in the controller config; restart-scoped;
+defaults to `true`). When **disabled** (`false`), all cross-namespace refs are permitted
+unconditionally — this is the permissive/legacy mode (behavior before this feature was introduced).
+
+### Data-Plane Semantics When a Cross-Namespace Ref Is Denied
+
+When a cross-ns ref is not permitted, the controller marks it `ref_denied` on the
+`EdgionConfigDataRef` struct. The conf_sync payload carries `ref_denied` to the gateway, which
+withholds that ref at runtime:
+
+| Ref type | Denied behavior |
+|----------|-----------------|
+| `allowRefs` (IpList) | **Deny-all fail-closed**: `allow_mode` stays true but the referenced allow set is withheld — no IP is permitted through that ref. Whitelist intent is preserved; this is the safe fail direction. |
+| `denyRefs` (IpList) | **Under-block**: the denied deny set is not applied. The plugin continues with remaining inline/permitted deny entries, but the denied external deny set is missing (possible security gap). |
+| `overrideRef` (RegionRouteOverride) | **No override**: RegionRoute falls back to the base inline region table. Traffic continues (fail-to-base, not fail-closed). |
+| `activeProfileRef` (Selector) | **Fail-to-base** (NOT fail-closed): the plugin uses its base/inline `activeProfile`. Unlike `allowRefs`, a denied selector does NOT block traffic — the Selector only switches among existing git-owned profiles, and the base profile is the safe default. |
+
+### Status Conditions on the Referrer
+
+`ResolvedRefs=False` is set on the **referrer** (`EdgionPlugins` or `EdgionStreamPlugins`) — not on
+the EdgionConfigData target itself:
+
+| Reason | Meaning |
+|--------|---------|
+| `RefNotPermitted` | A cross-ns ref exists but no matching `ReferenceGrant` (target `visibility: Namespace` and no grant). |
+| `InvalidEdgionConfigDataRef` | Target EdgionConfigData is missing, disabled, or the wrong type. |
+
+### `visibility: Cluster` — Exposure Footgun
+
+Setting `visibility: Cluster` allows **all current and future namespaces** to reference the
+EdgionConfigData with no per-grant audit trail. This is convenient for globally shared data
+(shared blocklists, cluster-wide region tables) but bypasses namespace isolation entirely. To
+revoke cluster-wide access, flip `visibility` back to `Namespace`; any existing cross-ns refs
+without a matching `ReferenceGrant` then immediately resolve as `RefNotPermitted`.
+
+### Example: Shared IpList Published as Cluster-Wide
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: global-blocklist
+  namespace: edgion-system
+spec:
+  visibility: Cluster               # all namespaces may reference without a grant
+  data:
+    type: IpList
+    config:
+      items:
+        - name: known-bad
+          cidrs: ["203.0.113.0/24", "198.51.100.5/32"]
+```
+
+### Example: Per-Namespace Grant for a Cross-Namespace IpList
+
+```yaml
+# Grant lives in the target namespace (edgion-system), allows team-a EdgionPlugins to ref corp-allowlist
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-team-a-corp-allowlist
+  namespace: edgion-system
+spec:
+  from:
+    - group: edgion.io
+      kind: EdgionPlugins
+      namespace: team-a
+  to:
+    - group: edgion.io
+      kind: EdgionConfigData
+      name: corp-allowlist
+```
 
 ## RegionRoute with EdgionConfigData Overlay
 

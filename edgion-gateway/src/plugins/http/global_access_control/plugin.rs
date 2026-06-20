@@ -46,10 +46,14 @@ impl GlobalAccessControl {
             false
         };
 
-        let active_profile_ref_key = config.active_profile_ref.as_ref().map(|r| {
-            let ns = r.namespace.as_deref().unwrap_or(namespace);
-            format!("{}/{}", ns, r.name)
-        });
+        let active_profile_ref_key = config
+            .active_profile_ref
+            .as_ref()
+            .filter(|r| r.ref_denied.is_none())
+            .map(|r| {
+                let ns = r.namespace.as_deref().unwrap_or(namespace);
+                format!("{}/{}", ns, r.name)
+            });
 
         Box::new(GlobalAccessControl {
             name: "GlobalAccessControl".to_string(),
@@ -319,6 +323,7 @@ mod tests {
         let cfg = lockdown_config(Some(EdgionConfigDataRef {
             name: "ghost".into(),
             namespace: Some("edgion-system".into()),
+            ..Default::default()
         }));
         let plugin = GlobalAccessControl::create(&cfg, "edgion-system");
         let mut s = MockPluginSession::new();
@@ -333,5 +338,66 @@ mod tests {
         assert_eq!(r, PluginRunningResult::ErrTerminateRequest);
         // The unresolvable selector (not in the empty store) must be recorded.
         assert!(log.contains("selector miss: base"));
+    }
+
+    /// A denied active_profile_ref must not be resolved as a store key — even if a
+    /// valid Selector at that key would switch to the "normal" (allow-all) profile.
+    /// Effect: base "lockdown" profile is used (deny-all for 8.8.8.8).
+    #[tokio::test]
+    async fn denied_active_profile_ref_falls_back_to_base() {
+        use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+        use edgion_resources::resources::edgion_config_data::{
+            ConfigEntry, EdgionConfigData, EdgionConfigDataSpec, Selector,
+        };
+        use std::sync::Arc as StdArc;
+
+        // Seed a valid Selector that WOULD switch to "normal" (allow-all).
+        let ns = "gac-ref-denied-unit";
+        let sel_key = format!("{ns}/sel-denied");
+        let mut sel_ed = EdgionConfigData::new(
+            "sel-denied",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                data: ConfigEntry::Selector(Selector {
+                    active: Some("normal".to_string()),
+                    description: None,
+                }),
+            },
+        );
+        sel_ed.metadata.namespace = Some(ns.to_string());
+        get_global_edgion_config_data_store().insert_raw_for_test(&sel_key, StdArc::new(sel_ed));
+
+        // Config points at the Selector but marks it as denied.
+        let cfg = lockdown_config(Some(EdgionConfigDataRef {
+            name: "sel-denied".into(),
+            namespace: Some(ns.into()),
+            ref_denied: Some(edgion_resources::resources::common::RefDenied {
+                target_namespace: ns.into(),
+                target_name: "sel-denied".into(),
+                reason: None,
+            }),
+        }));
+        let plugin = GlobalAccessControl::create(&cfg, ns);
+        let mut s = MockPluginSession::new();
+        // With denied ref → active_profile_ref_key is None → base "lockdown" used → deny.
+        s.expect_client_addr().return_const("8.8.8.8".to_string());
+        s.expect_header_value().returning(|_| None);
+        s.expect_write_response_header().returning(|_, _| Ok(()));
+        s.expect_write_response_body().returning(|_, _| Ok(()));
+        s.expect_shutdown().returning(|| {});
+        let mut log = PluginLog::new("GlobalAccessControl");
+        let r = plugin.run_request(&mut s, &mut log).await;
+        assert_eq!(
+            r,
+            PluginRunningResult::ErrTerminateRequest,
+            "denied active_profile_ref must not switch to normal (allow-all); lockdown must deny"
+        );
+        // No "selector miss" emitted — the key was never looked up (denied at construction).
+        assert!(
+            !log.contains("selector miss: base"),
+            "denied ref must not trigger a store lookup"
+        );
     }
 }

@@ -9,11 +9,13 @@
 //! the validation result via the `ref_denied` field on BackendRef.
 
 pub mod cross_ns_ref_manager;
+mod edgion_config_data_grant;
 pub mod events;
 mod revalidation_listener;
 mod store;
 mod validator;
 pub use cross_ns_ref_manager::{CrossNamespaceRefManager, CrossNsResourceRef};
+pub use edgion_config_data_grant::{is_edgion_config_data_ref_allowed, EDGION_GROUP};
 pub use events::{ReferenceGrantChangedEvent, RevalidationListener};
 pub use revalidation_listener::{
     run_post_cache_ready_revalidations, trigger_full_cross_ns_revalidation, trigger_gateway_route_revalidation,

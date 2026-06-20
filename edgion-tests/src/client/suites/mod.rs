@@ -68,15 +68,14 @@ pub use edgion_plugins::{
     EdgionConfigDataFlapInitialTestSuite, EdgionConfigDataFlapInvalidTestSuite, EdgionConfigDataFlapValidTestSuite,
     EdgionConfigDataManagedTestSuite, EdgionConfigDataStatusTestSuite, ExtProcTestSuite, FaultInjectionTestSuite,
     ForwardAuthTestSuite, GlobalAccessControlTestSuite, GlobalConnectionIpRestrictionTestSuite,
-    GlobalPluginsSnapshotTestSuite,
-    HeaderCertAuthTestSuite, HmacAuthTestSuite, IpRestrictionPartialGoodPluginTestSuite, IpRestrictionPluginTestSuite,
-    IpRestrictionRefsPluginTestSuite, JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite,
-    OpenidConnectTestSuite, PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite,
-    PathNormalizationTestSuite, PluginConditionTestSuite, PluginLogsTestSuite, PluginValidationStatusTestSuite,
-    ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite,
-    RateLimitTestSuite, RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite,
-    RequestRestrictionTestSuite, ResolvedRefsTestSuite, ResponseRewriteTestSuite, TraceContextPluginTestSuite,
-    WebhookKeyGetTestSuite,
+    GlobalPluginsSnapshotTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite,
+    IpRestrictionPartialGoodPluginTestSuite, IpRestrictionPluginTestSuite, IpRestrictionRefsPluginTestSuite,
+    JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, OpenidConnectTestSuite,
+    PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite,
+    PluginConditionTestSuite, PluginLogsTestSuite, PluginValidationStatusTestSuite, ProxyRewriteTestSuite,
+    RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite, RateLimitTestSuite,
+    RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite,
+    ResolvedRefsTestSuite, ResponseRewriteTestSuite, TraceContextPluginTestSuite, WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests
@@ -87,6 +86,7 @@ pub use status::BackendTlsStatusTestSuite;
 pub use status::BtlspFlapInitialTestSuite;
 pub use status::BtlspFlapInvalidTestSuite;
 pub use status::BtlspFlapValidTestSuite;
+pub use status::EdgionConfigDataRefGrantTestSuite;
 pub use status::GatewayFrontendValidationStatusTestSuite;
 pub use status::GcParamsFlapMissingTestSuite;
 pub use status::GcParamsFlapPresentTestSuite;

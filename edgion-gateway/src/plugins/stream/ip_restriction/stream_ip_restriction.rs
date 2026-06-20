@@ -92,6 +92,7 @@ mod tests {
         let spec = EdgionConfigDataSpec {
             enable: true,
             active: None,
+            visibility: Default::default(),
             data: ConfigEntry::IpList(IpListData {
                 items: vec![IpGroup {
                     name: "g".into(),
@@ -113,6 +114,7 @@ mod tests {
         rules.deny_refs = Some(vec![EdgionConfigDataRef {
             name: "blk".into(),
             namespace: Some(ns.into()),
+            ..Default::default()
         }]);
         let plugin = StreamIpRestriction::new(&rules, ns);
         let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080);
@@ -122,5 +124,32 @@ mod tests {
         ));
         let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
         assert!(matches!(plugin.on_connection(&ctx_ok).await, StreamPluginResult::Allow));
+    }
+
+    #[tokio::test]
+    async fn l4_denied_allow_ref_contributes_no_key() {
+        use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
+        let ns = "l4-ipr-ref-denied-unit";
+        let mut rules = ConnectionIpRestrictionRules::default();
+        rules.allow_refs = Some(vec![EdgionConfigDataRef {
+            name: "corp".into(),
+            namespace: Some(ns.into()),
+            ref_denied: Some(edgion_resources::resources::common::RefDenied {
+                target_namespace: ns.into(),
+                target_name: "corp".into(),
+                reason: None,
+            }),
+        }]);
+        let plugin = StreamIpRestriction::new(&rules, ns);
+        // Denied allow_ref → allow_ref_keys is empty → no matcher resolved.
+        assert!(plugin.allow_ref_keys.is_empty(), "denied allow_ref must yield no key");
+        // Evaluate path: whitelist mode + zero allow matchers → deny-all (fail-closed).
+        // resolve_ip_list_matchers on an empty key list produces no arcs, so on_connection
+        // reaches check_ip_with_refs with empty ref slices — a whitelist miss → Deny.
+        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        assert!(
+            matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)),
+            "denied allow_ref → empty allow matchers → non-matching IP must be DENIED (deny-all fail-closed)",
+        );
     }
 }

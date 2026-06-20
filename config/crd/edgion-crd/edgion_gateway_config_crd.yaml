@@ -228,8 +228,8 @@ spec:
                 # ============================================
                 enableReferenceGrantValidation:
                   type: boolean
-                  description: "Enable ReferenceGrant validation for cross-namespace references (default: false)"
-                  default: false
+                  description: "Enable ReferenceGrant validation for cross-namespace references (default: true)"
+                  default: true
 
                 tcpTimeout:
                   type: object

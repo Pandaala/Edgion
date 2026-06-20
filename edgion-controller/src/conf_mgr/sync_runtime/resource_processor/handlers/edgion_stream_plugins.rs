@@ -7,8 +7,11 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     update_condition, ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    condition_types, EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler,
+    condition_types, EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
+use edgion_resources::ResourceKind;
+
+use super::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
 use edgion_resources::prelude_resources::{EdgionConfigData, EdgionStreamPlugins};
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
 use edgion_resources::resources::edgion_plugins::PluginValidation;
@@ -65,6 +68,65 @@ impl EdgionStreamPluginsHandler {
                 EdgionStreamPlugin::IpRestriction(_) => None,
                 EdgionStreamPlugin::ConnectionRateLimit(_) => None,
             })
+    }
+
+    /// Set or clear `ref_denied` on every EdgionConfigDataRef in this EdgionStreamPlugins.
+    ///
+    /// Called in `parse()` after ref registration, before `ProcessResult::Continue`.
+    /// Same-namespace refs are always cleared. Cross-namespace refs are marked denied
+    /// when no matching ReferenceGrant permits them and the target exists with the
+    /// expected ConfigEntry type. Missing / wrong-type targets are not marked here —
+    /// those surface as `EdgionConfigDataNotFound` in `update_status`.
+    fn mark_config_data_ref_denials(esp: &mut EdgionStreamPlugins, ctx: &HandlerContext) {
+        let from_ns = esp.metadata.namespace.as_deref().unwrap_or("default").to_string();
+
+        // Stage 1: connection-filter plugins (exhaustive over EdgionStreamPlugin).
+        for entry in esp.spec.plugins.iter_mut().flatten() {
+            match &mut entry.plugin {
+                EdgionStreamPlugin::IpRestriction(rules) => {
+                    for r in rules
+                        .allow_refs
+                        .iter_mut()
+                        .flatten()
+                        .chain(rules.deny_refs.iter_mut().flatten())
+                    {
+                        mark_one_ref(r, &from_ns, "EdgionStreamPlugins", ExpectedEntry::IpList, ctx);
+                    }
+                }
+                EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
+                    if let Some(r) = gcir.active_profile_ref.as_mut() {
+                        mark_one_ref(r, &from_ns, "EdgionStreamPlugins", ExpectedEntry::Selector, ctx);
+                    }
+                    for profile in gcir.profiles.values_mut() {
+                        for r in profile
+                            .allow_refs
+                            .iter_mut()
+                            .flatten()
+                            .chain(profile.deny_refs.iter_mut().flatten())
+                        {
+                            mark_one_ref(r, &from_ns, "EdgionStreamPlugins", ExpectedEntry::IpList, ctx);
+                        }
+                    }
+                }
+                EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+            }
+        }
+
+        // Stage 2: TLS-route plugins (exhaustive over TlsRouteStreamPlugin).
+        for entry in esp.spec.tls_route_plugins.iter_mut().flatten() {
+            match &mut entry.plugin {
+                TlsRouteStreamPlugin::IpRestriction(config) => {
+                    for r in config
+                        .allow_refs
+                        .iter_mut()
+                        .flatten()
+                        .chain(config.deny_refs.iter_mut().flatten())
+                    {
+                        mark_one_ref(r, &from_ns, "EdgionStreamPlugins", ExpectedEntry::IpList, ctx);
+                    }
+                }
+            }
+        }
     }
 
     /// Collect `(namespace, name)` for every IpList referenced by `allow_refs`/`deny_refs` on
@@ -186,7 +248,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         errors
     }
 
-    async fn parse(&self, esp: EdgionStreamPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionStreamPlugins> {
+    async fn parse(&self, mut esp: EdgionStreamPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionStreamPlugins> {
         // Rebuild outgoing EdgionConfigData refs from scratch so that an edit that removes
         // a GCIR entry correctly drops its old ref.
         let self_ref = Self::self_ref_key(&esp);
@@ -199,6 +261,27 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             let ed_key = EdgionConfigDataStore::make_key(Some(&ed_ns), &ed_name);
             ctx.runtime().edgion_config_data_refs.add_ref(ed_key, self_ref.clone());
         }
+
+        // Grant-change revalidation: register cross-ns EdgionConfigData ref target namespaces
+        // into the namespace-keyed cross_ns_ref_mgr (mirrors http_route::record_cross_ns_refs).
+        // When a ReferenceGrant in a target namespace changes, the CrossNsRevalidationListener
+        // requeues this ESP so ref_denied markers and status are recomputed.
+        let resource_ref = ResourceRef::new(
+            ResourceKind::EdgionStreamPlugins,
+            esp.metadata.namespace.clone(),
+            esp.metadata.name.clone().unwrap_or_default(),
+        );
+        let esp_ns = esp.metadata.namespace.as_deref().unwrap_or("default").to_string();
+        let cross_mgr = &ctx.runtime().cross_ns_ref_mgr;
+        cross_mgr.clear_resource_refs(&resource_ref);
+        for (target_ns, _name) in Self::iter_gcir_refs(&esp).chain(Self::iter_ip_list_refs(&esp)) {
+            if target_ns != esp_ns {
+                cross_mgr.add_ref(target_ns, resource_ref.clone());
+            }
+        }
+
+        // Mark cross-namespace EdgionConfigData refs as denied when no ReferenceGrant permits them.
+        Self::mark_config_data_ref_denials(&mut esp, ctx);
         ProcessResult::Continue(esp)
     }
 
@@ -210,6 +293,12 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         ctx.runtime()
             .edgion_config_data_refs
             .clear_refs_from(&Self::self_ref_key(esp));
+        let resource_ref = ResourceRef::new(
+            ResourceKind::EdgionStreamPlugins,
+            esp.metadata.namespace.clone(),
+            esp.metadata.name.clone().unwrap_or_default(),
+        );
+        ctx.runtime().cross_ns_ref_mgr.clear_resource_refs(&resource_ref);
         requeue_referencing_gateways(esp, ctx).await;
     }
 
@@ -279,23 +368,128 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
 }
 
 /// Resolve each IpList `allow_refs`/`deny_refs` (L4, GCIR-per-profile, TLS-route) against the
-/// EdgionConfigData store. One `EdgionConfigDataNotFound { expected_type: "IpList" }` per
-/// missing or wrong-type reference. Order is deterministic (`iter_ip_list_refs` is sorted).
+/// EdgionConfigData store. Returns one `RefNotPermitted` error when `ref_denied` is set
+/// (cross-namespace denial), or one `EdgionConfigDataNotFound { expected_type: "IpList" }` per
+/// missing or wrong-type reference. Mutually exclusive per ref via else-branch to avoid a TOCTOU
+/// double-message. GCIR profiles are iterated in sorted key order for deterministic message output.
 fn resolve_ip_list_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let from_ns = esp.metadata.namespace.as_deref().unwrap_or("default");
     let mut errors = Vec::new();
-    for (ns, name) in EdgionStreamPluginsHandler::iter_ip_list_refs(esp) {
-        let target: Option<EdgionConfigData> = ctx.runtime().edgion_config_data_store.get(Some(&ns), &name);
-        let resolved = target
-            .as_ref()
-            .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
-        if !resolved {
-            errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                namespace: ns,
-                name,
-                expected_type: "IpList".to_string(),
-            });
+
+    // Stage 1: ConnectionFilter plugins.
+    for entry in esp.spec.plugins.iter().flatten() {
+        match &entry.plugin {
+            EdgionStreamPlugin::IpRestriction(rules) => {
+                for r in rules
+                    .allow_refs
+                    .iter()
+                    .flatten()
+                    .chain(rules.deny_refs.iter().flatten())
+                {
+                    let rns = r.namespace.as_deref().unwrap_or(from_ns);
+                    if r.ref_denied.is_some() {
+                        errors.push(ResolvedRefsError::RefNotPermitted {
+                            from_namespace: from_ns.to_string(),
+                            from_kind: "EdgionStreamPlugins",
+                            target_namespace: rns.to_string(),
+                            target_name: r.name.clone(),
+                        });
+                    } else {
+                        let target: Option<EdgionConfigData> =
+                            ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
+                        let resolved = target
+                            .as_ref()
+                            .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
+                        if !resolved {
+                            errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
+                                namespace: rns.to_string(),
+                                name: r.name.clone(),
+                                expected_type: "IpList".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
+                // Iterate profiles in sorted key order for deterministic message output
+                // (HashMap iteration order is not stable).
+                let mut profile_names: Vec<&String> = gcir.profiles.keys().collect();
+                profile_names.sort();
+                for pname in profile_names {
+                    if let Some(profile) = gcir.profiles.get(pname) {
+                        for r in profile
+                            .allow_refs
+                            .iter()
+                            .flatten()
+                            .chain(profile.deny_refs.iter().flatten())
+                        {
+                            let rns = r.namespace.as_deref().unwrap_or(from_ns);
+                            if r.ref_denied.is_some() {
+                                errors.push(ResolvedRefsError::RefNotPermitted {
+                                    from_namespace: from_ns.to_string(),
+                                    from_kind: "EdgionStreamPlugins",
+                                    target_namespace: rns.to_string(),
+                                    target_name: r.name.clone(),
+                                });
+                            } else {
+                                let target: Option<EdgionConfigData> =
+                                    ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
+                                let resolved = target
+                                    .as_ref()
+                                    .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
+                                if !resolved {
+                                    errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
+                                        namespace: rns.to_string(),
+                                        name: r.name.clone(),
+                                        expected_type: "IpList".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            EdgionStreamPlugin::ConnectionRateLimit(_) => {}
         }
     }
+
+    // Stage 2: TLS-route plugins.
+    for entry in esp.spec.tls_route_plugins.iter().flatten() {
+        match &entry.plugin {
+            TlsRouteStreamPlugin::IpRestriction(config) => {
+                for r in config
+                    .allow_refs
+                    .iter()
+                    .flatten()
+                    .chain(config.deny_refs.iter().flatten())
+                {
+                    let rns = r.namespace.as_deref().unwrap_or(from_ns);
+                    if r.ref_denied.is_some() {
+                        errors.push(ResolvedRefsError::RefNotPermitted {
+                            from_namespace: from_ns.to_string(),
+                            from_kind: "EdgionStreamPlugins",
+                            target_namespace: rns.to_string(),
+                            target_name: r.name.clone(),
+                        });
+                    } else {
+                        let target: Option<EdgionConfigData> =
+                            ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
+                        let resolved = target
+                            .as_ref()
+                            .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
+                        if !resolved {
+                            errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
+                                namespace: rns.to_string(),
+                                name: r.name.clone(),
+                                expected_type: "IpList".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     errors
 }
 
@@ -379,21 +573,40 @@ fn collect_inline_ip_entry_errors(
 }
 
 /// Resolve each GCIR `activeProfileRef` against the EdgionConfigData store.
-/// Returns one error per unresolved or wrong-type reference.
-/// Only entries that have `activeProfileRef` set are checked (the config is always inline).
+/// Returns one `RefNotPermitted` error when `ref_denied` is set (cross-namespace denial),
+/// or one `EdgionConfigDataNotFound { expected_type: "Selector" }` per unresolved or wrong-type
+/// reference. Mutually exclusive per ref via else-branch to avoid a TOCTOU double-message.
+/// Iterates the real `&EdgionConfigDataRef` objects (not `(ns,name)` pairs) to preserve the
+/// `ref_denied` marker set by `parse()`.
 fn resolve_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let from_ns = esp.metadata.namespace.as_deref().unwrap_or("default");
     let mut errors = Vec::new();
-    for (ns, name) in EdgionStreamPluginsHandler::iter_gcir_refs(esp) {
-        let target: Option<EdgionConfigData> = ctx.runtime().edgion_config_data_store.get(Some(&ns), &name);
-        let resolved = target
-            .as_ref()
-            .is_some_and(|t| matches!(&t.spec.data, ConfigEntry::Selector(_)));
-        if !resolved {
-            errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
-                namespace: ns,
-                name,
-                expected_type: "Selector".to_string(),
-            });
+    for entry in esp.spec.plugins.iter().flatten() {
+        if let EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) = &entry.plugin {
+            if let Some(r) = &gcir.active_profile_ref {
+                let rns = r.namespace.as_deref().unwrap_or(from_ns);
+                if r.ref_denied.is_some() {
+                    errors.push(ResolvedRefsError::RefNotPermitted {
+                        from_namespace: from_ns.to_string(),
+                        from_kind: "EdgionStreamPlugins",
+                        target_namespace: rns.to_string(),
+                        target_name: r.name.clone(),
+                    });
+                } else {
+                    let target: Option<EdgionConfigData> =
+                        ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
+                    let resolved = target
+                        .as_ref()
+                        .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::Selector(_)));
+                    if !resolved {
+                        errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
+                            namespace: rns.to_string(),
+                            name: r.name.clone(),
+                            expected_type: "Selector".to_string(),
+                        });
+                    }
+                }
+            }
         }
     }
     errors
@@ -406,6 +619,91 @@ mod tests {
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::prelude_resources::EdgionStreamPlugins;
     use std::sync::Arc;
+
+    // ── Cross-namespace ref-denial marking test (ESP) ───────────────────────
+
+    #[tokio::test]
+    async fn esp_cross_ns_gcir_deny_ref_without_grant_is_marked() {
+        use edgion_resources::prelude_resources::EdgionConfigData;
+        use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, IpGroup, IpListData};
+
+        // Build an EdgionStreamPlugins with a GCIR profile deny_ref pointing cross-ns.
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: gcir-esp
+  namespace: team-a
+spec:
+  plugins:
+    - type: GlobalConnectionIpRestriction
+      config:
+        enable: true
+        activeProfile: main
+        profiles:
+          main:
+            defaultAction: deny
+            denyRefs:
+              - name: blocklist
+                namespace: team-b
+"#;
+        let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let ctx = make_ctx_with_runtime(Arc::new(ControllerRuntime::default()));
+
+        // Seed the IpList in team-b (enabled, Namespace visibility -> requires grant).
+        let mut ed = EdgionConfigData::new(
+            "blocklist",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(), // Namespace
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "g".into(),
+                        description: None,
+                        cidrs: vec!["9.9.9.9/32".into()],
+                    }],
+                }),
+            },
+        );
+        ed.metadata.namespace = Some("team-b".to_string());
+        let mut m = std::collections::HashMap::new();
+        m.insert("team-b/blocklist".to_string(), ed);
+        ctx.runtime().edgion_config_data_store.replace_all(m);
+        // No ReferenceGrant -> must be denied.
+
+        let handler = EdgionStreamPluginsHandler::new();
+        let parsed = match handler.parse(esp, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            other => panic!("expected Continue, got {:?}", other),
+        };
+
+        // Navigate to the deny_ref in the GCIR profile.
+        let r = parsed
+            .spec
+            .plugins
+            .as_ref()
+            .and_then(|v| {
+                v.iter()
+                    .find(|e| matches!(e.plugin, EdgionStreamPlugin::GlobalConnectionIpRestriction(_)))
+            })
+            .and_then(|e| match &e.plugin {
+                EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
+                    gcir.profiles.get("main")?.deny_refs.as_ref()?.first()
+                }
+                _ => None,
+            })
+            .expect("missing GCIR profile deny_refs[0]");
+        assert!(
+            r.ref_denied.is_some(),
+            "cross-ns GCIR deny_ref without grant must be marked denied; got ref_denied = {:?}",
+            r.ref_denied
+        );
+        let denied = r.ref_denied.as_ref().unwrap();
+        assert_eq!(denied.target_namespace, "team-b");
+        assert_eq!(denied.target_name, "blocklist");
+        assert_eq!(denied.reason.as_deref(), Some("NoMatchingReferenceGrant"));
+    }
 
     #[test]
     fn iter_ip_list_refs_collects_l4_gcir_and_tls_sorted() {
@@ -493,6 +791,7 @@ spec:
             EdgionConfigDataSpec {
                 enable: true,
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),
@@ -509,15 +808,135 @@ spec:
         assert!(resolve_ip_list_refs(&esp, &ctx).is_empty());
     }
 
+    // ── Task 6: ESP cross_ns_ref_mgr registration test ──────────────────────
+
+    #[tokio::test]
+    async fn esp_cross_ns_ref_registered_for_grant_revalidation() {
+        use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, IpGroup, IpListData};
+
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: cross-ns-esp
+  namespace: team-a
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        denyRefs:
+          - name: blocklist
+            namespace: team-b
+"#;
+        let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let ctx = make_ctx_with_runtime(Arc::new(ControllerRuntime::default()));
+
+        // Seed the IpList in team-b so ref_denied is set on parse.
+        let mut ed = EdgionConfigData::new(
+            "blocklist",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "g".into(),
+                        description: None,
+                        cidrs: vec!["9.9.9.9/32".into()],
+                    }],
+                }),
+            },
+        );
+        ed.metadata.namespace = Some("team-b".to_string());
+        let mut m = std::collections::HashMap::new();
+        m.insert("team-b/blocklist".to_string(), ed);
+        ctx.runtime().edgion_config_data_store.replace_all(m);
+
+        let handler = EdgionStreamPluginsHandler::new();
+        let _ = handler.parse(esp, &ctx).await;
+
+        // After parse(), cross_ns_ref_mgr must contain this ESP's ResourceRef under "team-b".
+        let refs = ctx.runtime().cross_ns_ref_mgr.get_refs("team-b");
+        assert!(
+            refs.iter().any(|rr| rr.kind == ResourceKind::EdgionStreamPlugins),
+            "ESP must be registered under team-b in cross_ns_ref_mgr; got: {:?}",
+            refs
+        );
+    }
+
+    #[tokio::test]
+    async fn esp_on_delete_clears_cross_ns_refs() {
+        use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, IpGroup, IpListData};
+
+        // ESP in team-a with a cross-ns IpList deny_ref into team-b.
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: cross-ns-esp
+  namespace: team-a
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        denyRefs:
+          - name: blocklist
+            namespace: team-b
+"#;
+        let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let ctx = make_ctx_with_runtime(Arc::new(ControllerRuntime::default()));
+
+        // Seed the IpList in team-b so parse() registers the cross-ns ref.
+        let mut ed = EdgionConfigData::new(
+            "blocklist",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "g".into(),
+                        description: None,
+                        cidrs: vec!["9.9.9.9/32".into()],
+                    }],
+                }),
+            },
+        );
+        ed.metadata.namespace = Some("team-b".to_string());
+        let mut m = std::collections::HashMap::new();
+        m.insert("team-b/blocklist".to_string(), ed);
+        ctx.runtime().edgion_config_data_store.replace_all(m);
+
+        let handler = EdgionStreamPluginsHandler::new();
+        // parse() registers the ESP under team-b in cross_ns_ref_mgr.
+        let _ = handler.parse(esp.clone(), &ctx).await;
+
+        let refs_before = ctx.runtime().cross_ns_ref_mgr.get_refs("team-b");
+        assert!(
+            refs_before
+                .iter()
+                .any(|rr| rr.kind == ResourceKind::EdgionStreamPlugins),
+            "ESP must be registered under team-b in cross_ns_ref_mgr after parse; got: {:?}",
+            refs_before
+        );
+
+        // on_delete() must clear the registration.
+        handler.on_delete(&esp, &ctx).await;
+
+        let refs_after = ctx.runtime().cross_ns_ref_mgr.get_refs("team-b");
+        assert!(
+            !refs_after.iter().any(|rr| rr.kind == ResourceKind::EdgionStreamPlugins),
+            "ESP must not be in cross_ns_ref_mgr under team-b after on_delete; got: {:?}",
+            refs_after
+        );
+    }
+
     fn make_ctx() -> HandlerContext {
-        HandlerContext::new(
-            None,
-            None,
-            TriggerChain::default(),
-            3,
-            20,
-            Arc::new(ControllerRuntime::default()),
-        )
+        make_ctx_with_runtime(Arc::new(ControllerRuntime::default()))
+    }
+
+    fn make_ctx_with_runtime(runtime: Arc<ControllerRuntime>) -> HandlerContext {
+        HandlerContext::new(None, None, TriggerChain::default(), 3, 20, runtime)
     }
 
     fn legacy_yaml_esp() -> EdgionStreamPlugins {
@@ -851,6 +1270,82 @@ spec:
         assert!(errs.is_empty(), "expected no errors for clean config; got: {:?}", errs);
     }
 
+    // ── RefNotPermitted status reporting test (Task 5) ──────────────────────
+
+    #[tokio::test]
+    async fn esp_denied_ref_reports_ref_not_permitted() {
+        // Cross-namespace GCIR profile deny_ref with no ReferenceGrant -> after parse() marks
+        // ref_denied, update_status must report ResolvedRefs=False reason=RefNotPermitted.
+        use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, IpGroup, IpListData};
+
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: gcir-esp
+  namespace: team-a
+spec:
+  plugins:
+    - type: GlobalConnectionIpRestriction
+      config:
+        enable: true
+        activeProfile: main
+        profiles:
+          main:
+            defaultAction: deny
+            denyRefs:
+              - name: blocklist
+                namespace: team-b
+"#;
+        let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let ctx = make_ctx_with_runtime(Arc::new(ControllerRuntime::default()));
+
+        // Seed the IpList in team-b (enabled, Namespace visibility -> requires grant).
+        let mut ed = EdgionConfigData::new(
+            "blocklist",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(), // Namespace
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "g".into(),
+                        description: None,
+                        cidrs: vec!["9.9.9.9/32".into()],
+                    }],
+                }),
+            },
+        );
+        ed.metadata.namespace = Some("team-b".to_string());
+        let mut m = std::collections::HashMap::new();
+        m.insert("team-b/blocklist".to_string(), ed);
+        ctx.runtime().edgion_config_data_store.replace_all(m);
+        // No ReferenceGrant -> parse() marks ref_denied on the deny_ref.
+
+        let handler = EdgionStreamPluginsHandler::new();
+        let mut parsed = match handler.parse(esp, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            other => panic!("expected Continue, got {:?}", other),
+        };
+
+        handler.update_status(&mut parsed, &ctx, &[]);
+
+        let status = parsed
+            .status
+            .as_ref()
+            .expect("status must be populated by update_status");
+        let cond = status
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "ResolvedRefs")
+            .expect("ResolvedRefs condition must be present");
+        assert_eq!(cond.status, "False");
+        assert_eq!(
+            cond.reason, "RefNotPermitted",
+            "denied cross-ns ESP ref must yield reason RefNotPermitted"
+        );
+    }
+
     #[tokio::test]
     async fn stream_disabled_ip_list_ref_reports_error() {
         use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, IpGroup, IpListData};
@@ -876,6 +1371,7 @@ spec:
             EdgionConfigDataSpec {
                 enable: false,
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),

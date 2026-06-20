@@ -200,6 +200,31 @@ If your plugin depends on Secrets but is not wired into this chain, you usually 
 - Status may even pass.
 - But the runtime never gets the actual credentials.
 
+### 6b. If the plugin uses EdgionConfigData refs (`allowRefs`/`denyRefs`, `overrideRef`, or `activeProfileRef`)
+
+Cross-namespace EdgionConfigData refs require controller-side handling for the
+`ReferenceGrant` / `visibility` gate:
+
+1. **Register refs** in `EdgionPluginsHandler.parse()`: call the shared ref-registration helper
+   (see `register_ip_allow_deny_refs` and the `overrideRef` / `activeProfileRef` patterns) to
+   record the reverse dependency in `EdgionConfigDataRefManager`. This ensures the EdgionPlugins
+   resource is requeued when the referenced EdgionConfigData changes (including when a grant is
+   added or removed).
+2. **Mark `ref_denied`**: after registration, call the `set_ref_denied` helper (checks
+   `is_reference_grant_validation_enabled()`, target `visibility`, and the `ReferenceGrantStore`)
+   to stamp `ref_denied` on any cross-namespace ref that is not permitted.
+3. **Check `ref_denied` in `update_status`**: map `ref_denied` → `ResolvedRefsError::RefNotPermitted`
+   (reason `RefNotPermitted`) before emitting the `ResolvedRefs` condition.
+4. **Gateway data-plane**: when consuming the ref, check `ref_denied`; if set, apply the correct
+   fail behavior: `allowRef` → deny-all fail-closed; `denyRef` → under-block (omit that deny set);
+   `overrideRef` / `activeProfileRef` → fall to base.
+
+**Cross-namespace `allowRefs`/`denyRefs` — key semantics for operators:**
+A denied `allowRef` is deny-all fail-closed (whitelist intent preserved); a denied `denyRef` is
+under-block (the deny set is missing). Operators who want cross-ns IpList refs must either set
+`spec.visibility: Cluster` on the target or author a `ReferenceGrant` in the target namespace.
+See [15-edgion-config-data.md — Cross-Namespace Reference Grants](../../01-architecture/05-resources/15-edgion-config-data.md#cross-namespace-reference-grants).
+
 ### 7. Finally, add user docs and tests
 
 If the plugin is a user-facing capability, in addition to skill / dev-guide, also consider user-guide:

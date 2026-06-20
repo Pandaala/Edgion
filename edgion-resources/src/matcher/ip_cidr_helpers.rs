@@ -608,6 +608,7 @@ mod tests {
         let refs = vec![EdgionConfigDataRef {
             name: "corp".into(),
             namespace: None,
+            ..Default::default()
         }];
         assert!(validate_refs_structure(&refs).is_ok());
     }
@@ -618,6 +619,7 @@ mod tests {
         let refs = vec![EdgionConfigDataRef {
             name: "  ".into(),
             namespace: None,
+            ..Default::default()
         }];
         assert!(validate_refs_structure(&refs).is_err());
     }

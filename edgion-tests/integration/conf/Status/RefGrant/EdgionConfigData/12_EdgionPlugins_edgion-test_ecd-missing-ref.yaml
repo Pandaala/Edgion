@@ -1,0 +1,26 @@
+# EdgionPlugins in edgion-test: IpRestriction referencing a non-existent EdgionConfigData.
+#
+# allowRefs points to 'ecd-does-not-exist' in the same namespace (edgion-test).
+# Same-namespace refs never need a ReferenceGrant; the failure here is a missing
+# target, not a permission denial.
+#
+# Expected controller status: ResolvedRefs=False, reason="InvalidEdgionConfigDataRef".
+# This distinguishes the "target absent" error path from the "RefNotPermitted" path
+# (cross-ns without grant) exercised by Scenarios 1 and 2.
+#
+# Scenario I-3 (missing_ref_invalid_edgion_config_data_ref) uses this resource.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-missing-ref
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        defaultAction: allow
+        allowRefs:
+          - name: ecd-does-not-exist
+            namespace: edgion-test

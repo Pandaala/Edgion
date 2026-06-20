@@ -78,10 +78,7 @@ impl GlobalAccessControlTestSuite {
                                     format!("Allowed with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 200, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 200, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -114,10 +111,7 @@ impl GlobalAccessControlTestSuite {
                                     format!("Missing secret denied with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 403, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -152,10 +146,7 @@ impl GlobalAccessControlTestSuite {
                                     format!("Wrong secret denied with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 403, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -190,10 +181,7 @@ impl GlobalAccessControlTestSuite {
                                     format!("IP outside CIDR denied with status {}", status),
                                 )
                             } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!("Expected status 403, got {}", status),
-                                )
+                                TestResult::failed(start.elapsed(), format!("Expected status 403, got {}", status))
                             }
                         }
                         Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
@@ -331,10 +319,7 @@ impl GlobalAccessControlTestSuite {
                                                 } else {
                                                     TestResult::failed(
                                                         start.elapsed(),
-                                                        format!(
-                                                            "Expected deny:no-match in log, got: {:?}",
-                                                            log.log
-                                                        ),
+                                                        format!("Expected deny:no-match in log, got: {:?}", log.log),
                                                     )
                                                 }
                                             }

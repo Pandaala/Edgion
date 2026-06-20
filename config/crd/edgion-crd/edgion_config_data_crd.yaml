@@ -25,6 +25,13 @@ spec:
                 active:
                   type: string
                   description: "Optional profile selector. When set, consumers that support preloaded profiles use this value to select the active profile from the base config. Consumers that do not support profiles ignore this field."
+                visibility:
+                  type: string
+                  enum:
+                    - Namespace
+                    - Cluster
+                  default: Namespace
+                  description: "Cross-namespace reference visibility. Namespace (default): cross-ns references require a matching ReferenceGrant. Cluster: any namespace may reference this resource. WARNING: Cluster grants reference access to all current and future namespaces with no per-grant audit trail; revoke by setting back to Namespace."
                 data:
                   type: object
                   description: "The single data entry carried by this EdgionConfigData."

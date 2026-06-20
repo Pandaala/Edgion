@@ -33,6 +33,18 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Controls which namespaces may reference this EdgionConfigData cross-namespace.
+/// `Namespace` (default): cross-ns refs require a matching `ReferenceGrant`.
+/// `Cluster`: any namespace may reference it (no grant needed).
+/// Only consulted when `is_reference_grant_validation_enabled()` is on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "PascalCase")]
+pub enum ConfigDataVisibility {
+    #[default]
+    Namespace,
+    Cluster,
+}
+
 fn default_enable() -> bool {
     true
 }
@@ -41,12 +53,20 @@ fn default_enable() -> bool {
 pub const EDGION_CONFIG_DATA_KIND: &str = "EdgionConfigData";
 
 /// Reference to an EdgionConfigData resource by name (and optional namespace).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionConfigDataRef {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub namespace: Option<String>,
+    /// Controller-set cross-namespace denial marker. When `Some`, this ref lacks a
+    /// permitting `ReferenceGrant` (and the target is not `visibility: Cluster`); the
+    /// gateway withholds its matcher (deny-all fail-closed for allowRefs). Not
+    /// operator-facing — excluded from the CRD via `schemars(skip)`; serialized for
+    /// conf_sync so the gateway sees it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub ref_denied: Option<crate::resources::common::RefDenied>,
 }
 
 /// EdgionConfigData is a general-purpose, hot-swappable metadata/overlay primitive
@@ -79,6 +99,10 @@ pub struct EdgionConfigDataSpec {
     /// GlobalConnIp uses its own variant-inner `activeProfile` field, not this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active: Option<String>,
+
+    /// Cross-namespace reference visibility. See `ConfigDataVisibility`.
+    #[serde(default)]
+    pub visibility: ConfigDataVisibility,
 
     /// The data entry. Each EdgionConfigData contains exactly one entry,
     /// discriminated by the `type` tag.
@@ -224,6 +248,76 @@ pub fn effective_switch(spec: &EdgionConfigDataSpec) -> (bool, Option<&str>) {
 }
 
 #[cfg(test)]
+mod ref_denied_tests {
+    use super::*;
+
+    #[test]
+    fn ref_denied_absent_round_trips_and_skips_serialization() {
+        let r = EdgionConfigDataRef {
+            name: "x".into(),
+            namespace: None,
+            ref_denied: None,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        // ref_denied is skipped when None
+        assert!(!json.contains("refDenied"), "got: {json}");
+        let back: EdgionConfigDataRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn ref_denied_present_serializes_and_round_trips() {
+        let r = EdgionConfigDataRef {
+            name: "x".into(),
+            namespace: Some("team-b".into()),
+            ref_denied: Some(crate::resources::common::RefDenied {
+                target_namespace: "team-b".into(),
+                target_name: "x".into(),
+                reason: Some("NoMatchingReferenceGrant".into()),
+            }),
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(json.contains("refDenied"), "got: {json}");
+        let back: EdgionConfigDataRef = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, r);
+    }
+
+    #[test]
+    fn old_payload_without_ref_denied_deserializes() {
+        let back: EdgionConfigDataRef = serde_json::from_str(r#"{"name":"x"}"#).unwrap();
+        assert_eq!(
+            back,
+            EdgionConfigDataRef {
+                name: "x".into(),
+                namespace: None,
+                ref_denied: None
+            }
+        );
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+
+    #[test]
+    fn visibility_defaults_to_namespace_when_absent() {
+        // a minimal spec JSON without `visibility`
+        let spec: EdgionConfigDataSpec = serde_json::from_str(r#"{"data":{"type":"Misc","config":{}}}"#).unwrap();
+        assert_eq!(spec.visibility, ConfigDataVisibility::Namespace);
+    }
+
+    #[test]
+    fn visibility_cluster_round_trips_pascal_case() {
+        let spec: EdgionConfigDataSpec =
+            serde_json::from_str(r#"{"visibility":"Cluster","data":{"type":"Misc","config":{}}}"#).unwrap();
+        assert_eq!(spec.visibility, ConfigDataVisibility::Cluster);
+        let json = serde_json::to_string(&spec).unwrap();
+        assert!(json.contains(r#""visibility":"Cluster""#), "got: {json}");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
@@ -246,6 +340,7 @@ mod tests {
         let spec = EdgionConfigDataSpec {
             enable: true,
             active: None,
+            visibility: ConfigDataVisibility::Namespace,
             data: ConfigEntry::IpList(IpListData { items: items.clone() }),
         };
         let ed = EdgionConfigData {
@@ -283,6 +378,7 @@ mod tests {
         let spec = EdgionConfigDataSpec {
             enable: true,
             active: None,
+            visibility: ConfigDataVisibility::Namespace,
             data: ConfigEntry::IpList(IpListData { items: items.clone() }),
         };
         let ed = EdgionConfigData {

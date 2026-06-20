@@ -61,10 +61,14 @@ impl GlobalConnectionIpRestrictionPlugin {
         base.validate_and_init()
             .map_err(|e| format!("GlobalConnectionIpRestriction config validation failed: {e}"))?;
 
-        let active_profile_ref_key = config.active_profile_ref.as_ref().map(|r| {
-            let ns = r.namespace.as_deref().unwrap_or(parent_namespace);
-            format!("{}/{}", ns, r.name)
-        });
+        let active_profile_ref_key = config
+            .active_profile_ref
+            .as_ref()
+            .filter(|r| r.ref_denied.is_none())
+            .map(|r| {
+                let ns = r.namespace.as_deref().unwrap_or(parent_namespace);
+                format!("{}/{}", ns, r.name)
+            });
 
         let profile_ref_keys = config
             .profiles
@@ -228,6 +232,7 @@ mod tests {
             EdgionConfigDataSpec {
                 enable,
                 active: None,
+                visibility: Default::default(),
                 data,
             },
         );
@@ -256,6 +261,7 @@ mod tests {
         config.active_profile_ref = Some(EdgionConfigDataRef {
             name: "gcir-unit-absent-selector-do-not-register".to_string(),
             namespace: Some("default".to_string()),
+            ..Default::default()
         });
         let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, "default").expect("valid config");
 
@@ -294,6 +300,7 @@ mod tests {
             active_profile_ref: Some(EdgionConfigDataRef {
                 name: ref_name.to_string(),
                 namespace: Some(ns.to_string()),
+                ..Default::default()
             }),
         }
     }
@@ -409,6 +416,39 @@ mod tests {
         assert!(GlobalConnectionIpRestrictionPlugin::new(&config, "default").is_err());
     }
 
+    /// A denied active_profile_ref must not be resolved as a store key (ref_denied is
+    /// set) — even if a Selector at that key would switch to the "open" profile.
+    /// Effect: base "deny" profile is used (8.8.8.8 is denied instead of allowed).
+    #[tokio::test]
+    async fn gcir_denied_active_profile_ref_falls_back_to_base() {
+        let ns = "gcir-ref-denied-unit";
+        // Seed a valid Selector that WOULD switch the active profile to "open".
+        insert_ed(
+            ns,
+            "sel-denied",
+            true,
+            ConfigEntry::Selector(edgion_resources::resources::edgion_config_data::Selector {
+                active: Some("open".to_string()),
+                description: None,
+            }),
+        );
+        // Build a two-profile config pointing at that selector, but with ref_denied set.
+        let mut config = two_profile_config(ns, "sel-denied");
+        config.active_profile_ref.as_mut().unwrap().ref_denied = Some(edgion_resources::resources::common::RefDenied {
+            target_namespace: ns.to_string(),
+            target_name: "sel-denied".to_string(),
+            reason: None,
+        });
+        let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid config");
+        // Denied ref → active_profile_ref_key is None → base "deny" profile used.
+        // 8.8.8.8 must be denied (not allowed by "open").
+        let ctx = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        assert!(
+            matches!(plugin.on_connection(&ctx).await, StreamPluginResult::Deny(_)),
+            "denied active_profile_ref must not switch profile; base deny must apply"
+        );
+    }
+
     #[tokio::test]
     async fn profile_deny_refs_block_referenced_ip() {
         let ns = "gcir-denyref-unit";
@@ -426,6 +466,7 @@ mod tests {
         profile.deny_refs = Some(vec![EdgionConfigDataRef {
             name: "blk".into(),
             namespace: Some(ns.into()),
+            ..Default::default()
         }]);
         let config = GlobalConnectionIpRestrictionConfig {
             enable: true,

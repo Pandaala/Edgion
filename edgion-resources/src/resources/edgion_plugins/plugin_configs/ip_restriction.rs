@@ -679,6 +679,7 @@ mod tests {
             allow_refs: Some(vec![EdgionConfigDataRef {
                 name: "corp".into(),
                 namespace: None,
+                ..Default::default()
             }]),
             ..Default::default()
         };
@@ -692,6 +693,7 @@ mod tests {
             deny_refs: Some(vec![EdgionConfigDataRef {
                 name: "blocklist".into(),
                 namespace: None,
+                ..Default::default()
             }]),
             ..Default::default()
         };
@@ -734,6 +736,7 @@ mod tests {
             allow_refs: Some(vec![EdgionConfigDataRef {
                 name: "missing".into(),
                 namespace: None,
+                ..Default::default()
             }]),
             ..Default::default()
         };

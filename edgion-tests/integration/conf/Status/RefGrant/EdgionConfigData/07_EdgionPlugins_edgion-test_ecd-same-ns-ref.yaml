@@ -1,0 +1,19 @@
+# EdgionPlugins in edgion-test referencing edgion-test/ecd-same-ns-data (same namespace).
+# Same-namespace refs are always permitted: no ReferenceGrant is needed, and the
+# validation flag has no effect on them.  The controller must set ResolvedRefs=True.
+#
+# Scenario 4 (same_ns_ref_always_resolves) uses this resource.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-same-ns-ref
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        defaultAction: allow
+        denyRefs:
+          - name: ecd-same-ns-data

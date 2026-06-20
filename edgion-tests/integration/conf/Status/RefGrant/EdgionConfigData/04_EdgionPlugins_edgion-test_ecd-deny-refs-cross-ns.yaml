@@ -1,0 +1,22 @@
+# EdgionPlugins in edgion-test referencing edgion-default/ecd-refgrant-blocklist via denyRefs.
+# This is a cross-namespace reference.  Without a ReferenceGrant in edgion-default
+# permitting EdgionPlugins from edgion-test, the controller must set
+# ResolvedRefs=False(RefNotPermitted) on this EdgionPlugins.
+#
+# Scenario 1 (deny_refs_no_grant_ref_not_permitted) and
+# Scenario 5 (add_grant_restores_resolved_refs) both use this resource.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-deny-refs-cross-ns
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        defaultAction: allow
+        denyRefs:
+          - name: ecd-refgrant-blocklist
+            namespace: edgion-default

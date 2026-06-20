@@ -34,6 +34,7 @@ pub fn get_global_edgion_config_data_store() -> Arc<EdgionConfigDataStore> {
 pub fn resolve_ip_list_ref_keys(refs: Option<&Vec<EdgionConfigDataRef>>, parent_namespace: &str) -> Vec<String> {
     refs.map(|v| {
         v.iter()
+            .filter(|r| r.ref_denied.is_none())
             .map(|r| format!("{}/{}", r.namespace.as_deref().unwrap_or(parent_namespace), r.name))
             .collect()
     })
@@ -309,6 +310,7 @@ mod stats_tests {
             let spec = EdgionConfigDataSpec {
                 enable: true,
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "default".into(),
@@ -325,6 +327,7 @@ mod stats_tests {
             let spec = EdgionConfigDataSpec {
                 enable: true,
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::KeyList(KeyListData {
                     match_mode: KeyMatchMode::default(),
                     items: vec![KeyGroup {
@@ -360,6 +363,7 @@ mod stats_tests {
             let spec = EdgionConfigDataSpec {
                 enable: true,
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
                     enable: None,
                     active: None,
@@ -389,6 +393,7 @@ mod stats_tests {
             let spec = EdgionConfigDataSpec {
                 enable: true,
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "office".into(),
@@ -418,6 +423,7 @@ mod stats_tests {
             let spec = EdgionConfigDataSpec {
                 enable: false,
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),
@@ -437,13 +443,14 @@ mod stats_tests {
     }
 
     #[test]
-    fn ip_list_empty_items_is_skipped() {
+    fn ip_list_empty_items_yields_empty_matcher() {
         use edgion_resources::resources::edgion_config_data::IpListData;
         let store = EdgionConfigDataStore::new();
         let ed = {
             let spec = EdgionConfigDataSpec {
                 enable: true,
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::IpList(IpListData { items: vec![] }),
             };
             let mut ed = EdgionConfigData::new("ip-empty", spec);
@@ -453,8 +460,14 @@ mod stats_tests {
         let mut raw: RawMap = HashMap::new();
         raw.insert("ns3/ip-empty".to_string(), ed);
         store.replace_all(raw);
-        // All-or-nothing build: empty items -> build error -> not indexed (treated as missing).
-        assert!(store.get_ip_list_matcher_by_key("ns3/ip-empty").is_none());
+        // Partial-good build (`build_grouped_matcher_partial`): an ENABLED IpList is always
+        // indexed, even with no items — it produces a present-but-empty matcher that matches
+        // nothing. For a whitelist (allowRefs) consumer this is deny-all (fail-closed); the
+        // *disabled* IpList is the one that resolves as absent/`None` (see `ip_list_disabled`).
+        let m = store
+            .get_ip_list_matcher_by_key("ns3/ip-empty")
+            .expect("an enabled IpList is indexed under partial-good, even when empty");
+        assert_eq!(m.matched_group(&"10.1.2.3".parse().unwrap()), None);
     }
 
     #[test]
@@ -464,14 +477,39 @@ mod stats_tests {
             EdgionConfigDataRef {
                 name: "a".into(),
                 namespace: None,
+                ..Default::default()
             },
             EdgionConfigDataRef {
                 name: "b".into(),
                 namespace: Some("other".into()),
+                ..Default::default()
             },
         ];
         let keys = resolve_ip_list_ref_keys(Some(&refs), "parent");
         assert_eq!(keys, vec!["parent/a".to_string(), "other/b".to_string()]);
         assert!(resolve_ip_list_ref_keys(None, "parent").is_empty());
+    }
+
+    #[test]
+    fn ref_denied_entries_are_skipped() {
+        use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
+        let refs = vec![
+            EdgionConfigDataRef {
+                name: "a".into(),
+                namespace: None,
+                ..Default::default()
+            },
+            EdgionConfigDataRef {
+                name: "b".into(),
+                namespace: Some("other".into()),
+                ref_denied: Some(edgion_resources::resources::common::RefDenied {
+                    target_namespace: "other".into(),
+                    target_name: "b".into(),
+                    reason: None,
+                }),
+            },
+        ];
+        let keys = resolve_ip_list_ref_keys(Some(&refs), "ns");
+        assert_eq!(keys, vec!["ns/a".to_string()]); // "other/b" dropped
     }
 }

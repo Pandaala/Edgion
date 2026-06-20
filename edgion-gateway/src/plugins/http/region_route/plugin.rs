@@ -77,10 +77,14 @@ impl RegionRoute {
     /// `ep_namespace` is the EdgionPlugins namespace, used as the default namespace
     /// for `override_ref` entries that do not specify their own namespace.
     pub fn create(ep_config: &RegionRouteConfig, ep_namespace: &str) -> Box<dyn RequestFilter> {
-        let override_key = ep_config.override_ref.as_ref().map(|r| {
-            let ns = r.namespace.as_deref().unwrap_or(ep_namespace);
-            format!("{}/{}", ns, r.name)
-        });
+        let override_key = ep_config
+            .override_ref
+            .as_ref()
+            .filter(|r| r.ref_denied.is_none())
+            .map(|r| {
+                let ns = r.namespace.as_deref().unwrap_or(ep_namespace);
+                format!("{}/{}", ns, r.name)
+            });
 
         Box::new(Self {
             name: "RegionRoute".to_string(),
@@ -659,6 +663,7 @@ mod tests {
             EdgionConfigDataSpec {
                 enable: false, // envelope kill-switch
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
                     enable: None,
                     active: None,
@@ -712,6 +717,7 @@ mod tests {
             EdgionConfigDataSpec {
                 enable: true, // envelope enabled — the validation must catch the bad regions
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::RegionRouteOverride(RegionRouteOverride {
                     enable: None,
                     active: None,

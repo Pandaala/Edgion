@@ -1,0 +1,30 @@
+# EdgionPlugins in edgion-test: RegionRoute with a cross-ns overrideRef.
+#
+# overrideRef points to 'ecd-region-override' in edgion-default (type: RegionRouteOverride).
+# No ReferenceGrant exists in edgion-default granting access from edgion-test.
+#
+# Expected controller status: ResolvedRefs=False(RefNotPermitted).
+# Scenario I-2a (override_ref_no_grant_ref_not_permitted) uses this resource.
+#
+# Data-plane behavior when ref_denied: fail-to-base (base regions are used).
+# That behavior is verified by Task 7 gateway unit tests, not here.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-override-ref-cross-ns
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: RegionRoute
+      config:
+        myRegion: "us"
+        regions:
+          - name: us
+            hashRange: [0, 999]
+            backendEndpoint: "us-backend:8080"
+            tls: false
+        routeRules: []
+        overrideRef:
+          name: ecd-region-override
+          namespace: edgion-default

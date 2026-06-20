@@ -104,6 +104,14 @@ The gateway merges referenced IpLists into the same allow/deny pools as inline e
 disabled referenced IpList causes the `allowRef` to fail closed (deny-all). The L4 variant is defined in
 `edgion-resources/src/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs`.
 
+**Cross-namespace `allowRefs`/`denyRefs`:** when the referenced IpList EdgionConfigData is in a
+different namespace, a Gateway-API `ReferenceGrant` must exist in the target namespace granting
+`from {group: edgion.io, kind: EdgionStreamPlugins, namespace: <referrer>}` access to
+`to {group: edgion.io, kind: EdgionConfigData}`. Alternatively, set `spec.visibility: Cluster`
+on the target EdgionConfigData to grant access to all namespaces without a per-grant entry. A
+denied cross-ns `allowRef` → deny-all fail-closed (safe); a denied `denyRef` → under-block.
+See [15-edgion-config-data.md — Cross-Namespace Reference Grants](../../01-architecture/05-resources/15-edgion-config-data.md#cross-namespace-reference-grants).
+
 If your stream plugin can also share configuration with the HTTP layer, prefer reuse; otherwise add a dedicated configuration.
 
 ## 3. Wire the new type into the resource enum

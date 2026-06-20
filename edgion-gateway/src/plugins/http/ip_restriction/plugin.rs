@@ -359,6 +359,7 @@ mod tests {
         let spec = EdgionConfigDataSpec {
             enable: true,
             active: None,
+            visibility: Default::default(),
             data: ConfigEntry::IpList(IpListData {
                 items: vec![IpGroup {
                     name: "blocked".into(),
@@ -380,6 +381,7 @@ mod tests {
             deny_refs: Some(vec![EdgionConfigDataRef {
                 name: "blocklist".into(),
                 namespace: Some(ns.to_string()),
+                ..Default::default()
             }]),
             ip_source: IpSource::ClientIp,
             message: None,
@@ -428,6 +430,7 @@ mod tests {
             let spec = EdgionConfigDataSpec {
                 enable: true,
                 active: None,
+                visibility: Default::default(),
                 data: ConfigEntry::IpList(IpListData {
                     items: vec![IpGroup {
                         name: "g".into(),
@@ -450,6 +453,7 @@ mod tests {
             allow_refs: Some(vec![EdgionConfigDataRef {
                 name: "reload-list".into(),
                 namespace: Some(ns.to_string()),
+                ..Default::default()
             }]),
             deny_refs: None,
             ip_source: IpSource::ClientIp,
@@ -484,6 +488,42 @@ mod tests {
             plugin.run_request(&mut s2, &mut log2).await,
             PluginRunningResult::ErrTerminateRequest,
             "after the IpList content changed to [10.0.0.0/8], 127.0.0.1 must be denied (hot reload)"
+        );
+    }
+
+    /// A denied allow_ref must NOT flip allow_mode to false (which would allow all).
+    /// With allow_mode=true but zero allow matchers, a non-matching IP is denied.
+    #[test]
+    fn denied_allow_ref_keeps_allow_mode_and_contributes_no_key() {
+        use crate::plugins::runtime::edgion_config_data::resolve_ip_list_ref_keys;
+        use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
+        let cfg = IpRestrictionConfig {
+            allow_refs: Some(vec![EdgionConfigDataRef {
+                name: "corp".into(),
+                namespace: Some("team-b".into()),
+                ref_denied: Some(edgion_resources::resources::common::RefDenied {
+                    target_namespace: "team-b".into(),
+                    target_name: "corp".into(),
+                    reason: None,
+                }),
+            }]),
+            ..Default::default()
+        };
+        // allow_mode() must be true (the field is still present — whitelist intent preserved).
+        assert!(cfg.allow_mode(), "whitelist intent must survive the denial marker");
+        // The ref_denied entry contributes no key (fail-closed: deny-all with empty allow set).
+        let keys = resolve_ip_list_ref_keys(cfg.allow_refs.as_ref(), "team-a");
+        assert!(keys.is_empty(), "denied allow_ref must contribute no matcher key");
+        // Evaluate path: whitelist mode + zero allow matchers → deny-all (fail-closed).
+        // Empty ref slices mirror what on-request evaluation produces when allow_ref_keys is empty.
+        use edgion_resources::resources::edgion_plugins::AccessDecision;
+        let ip: std::net::IpAddr = "8.8.8.8".parse().unwrap();
+        assert!(
+            matches!(
+                cfg.check_ip_access_with_refs(&ip, &[], &[]),
+                AccessDecision::DenyByWhitelistMiss
+            ),
+            "whitelist miss with no allow matchers must be DENIED (deny-all fail-closed)",
         );
     }
 }

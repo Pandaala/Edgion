@@ -104,6 +104,7 @@ mod tests {
         let spec = EdgionConfigDataSpec {
             enable: true,
             active: None,
+            visibility: Default::default(),
             data: ConfigEntry::IpList(IpListData {
                 items: vec![IpGroup {
                     name: "blk".into(),
@@ -124,6 +125,7 @@ mod tests {
             deny_refs: Some(vec![EdgionConfigDataRef {
                 name: "blk".into(),
                 namespace: Some(ns.into()),
+                ..Default::default()
             }]),
             ip_source: IpSource::ClientIp,
             message: None,
@@ -140,5 +142,43 @@ mod tests {
             plugin.on_tls_route(&ctx("8.8.8.8")).await,
             StreamPluginResult::Allow
         ));
+    }
+
+    #[tokio::test]
+    async fn tls_route_denied_allow_ref_contributes_no_key() {
+        use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
+        let ns = "tls-ipr-ref-denied-unit";
+        let config = IpRestrictionConfig {
+            allow: None,
+            deny: None,
+            default_action: DefaultAction::Allow,
+            allow_refs: Some(vec![EdgionConfigDataRef {
+                name: "corp".into(),
+                namespace: Some(ns.into()),
+                ref_denied: Some(edgion_resources::resources::common::RefDenied {
+                    target_namespace: ns.into(),
+                    target_name: "corp".into(),
+                    reason: None,
+                }),
+            }]),
+            deny_refs: None,
+            ip_source: IpSource::ClientIp,
+            message: None,
+            status: 403,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        let plugin = TlsRouteIpRestriction::new(&config, ns);
+        assert!(
+            plugin.allow_ref_keys.is_empty(),
+            "denied allow_ref must yield no key in TLS route"
+        );
+        // Evaluate path: whitelist mode + zero allow matchers → deny-all (fail-closed).
+        // resolve_ip_list_matchers on an empty key list produces no arcs, so on_tls_route
+        // reaches check_ip_access_with_refs with empty ref slices — a whitelist miss → Deny.
+        assert!(
+            matches!(plugin.on_tls_route(&ctx("8.8.8.8")).await, StreamPluginResult::Deny(_)),
+            "denied allow_ref → empty allow matchers → non-matching IP must be DENIED (deny-all fail-closed)",
+        );
     }
 }

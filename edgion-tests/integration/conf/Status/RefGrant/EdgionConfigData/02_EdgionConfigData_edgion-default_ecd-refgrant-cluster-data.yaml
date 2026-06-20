@@ -1,0 +1,18 @@
+# IpList EdgionConfigData in edgion-default with visibility:Cluster.
+# Cluster-visible data does not require a ReferenceGrant for cross-ns resolution;
+# any EdgionPlugins in any namespace may reference it freely.
+# Scenario 3 (visibility_cluster_bypasses_grant) references this from edgion-test.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ecd-refgrant-cluster-data
+  namespace: edgion-default
+spec:
+  visibility: Cluster
+  data:
+    type: IpList
+    config:
+      items:
+        - name: loopback
+          cidrs:
+            - "127.0.0.0/8"

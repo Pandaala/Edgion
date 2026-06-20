@@ -172,9 +172,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "EdgionConfigDataManaged" | "edgionconfigdatamanaged" | "data-managed" => {
                 "EdgionPlugins/EdgionConfigDataManaged".to_string()
             }
-            "global-access-control" | "globalaccesscontrol" | "gac" => {
-                "EdgionPlugins/GlobalAccessControl".to_string()
-            }
+            "global-access-control" | "globalaccesscontrol" | "gac" => "EdgionPlugins/GlobalAccessControl".to_string(),
             "global-connection-ip-restriction" | "globalconnectioniprestriction" | "gcir" => {
                 "EdgionPlugins/GlobalConnectionIpRestriction".to_string()
             }
@@ -330,6 +328,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "Gateway/AllowedRoutes/Selector" => "Gateway/AllowedRoutes/Selector",
         "Status/RefGrant/TCPRouteCrossNsSvc" => "Status/RefGrant/TCPRouteCrossNsSvc",
         "Status/RefGrant/TLSRouteCrossNsSvc" => "Status/RefGrant/TLSRouteCrossNsSvc",
+        "Status/RefGrant/EdgionConfigData" => "Status/RefGrant/EdgionConfigData",
         "Status/ObservedGeneration/HighFrequency" => "Status/ObservedGeneration/HighFrequency",
         "Status/BackendTLSPolicy/RefFlap" => "Status/BackendTLSPolicy/RefFlap",
         "Gateway/StreamPlugins" => "Gateway/StreamPlugins",
@@ -1561,6 +1560,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TlsRouteCrossNsSvcTestSuite));
+        }
+        "Status/RefGrant/EdgionConfigData" => {
+            if !gateway {
+                eprintln!("Error: Status/RefGrant/EdgionConfigData tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::EdgionConfigDataRefGrantTestSuite));
         }
         // Services tests (ACME, etc.)
         "Services/acme" => {
