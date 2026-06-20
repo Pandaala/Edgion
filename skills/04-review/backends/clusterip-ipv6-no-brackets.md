@@ -38,8 +38,9 @@ so the downstream `validate_backend_addr` / `create_tls_peer` calls are unaffect
 (`"None"`), empty, and garbage `cluster_ip` strings still fail with the same
 `BackendAddressParsingFailed`, so non-IPv6 behavior is unchanged.
 
-This is the same IPv6 defect class as backends-F001 (probe URLs) and link-sys-F001
-(`extract_ready_ips`), both already fixed — confirming IPv6 backends are in scope for Edgion.
+This is the same IPv6 defect class as backends-F001 (probe URLs) and link-sys-F001 (controller
+path, since removed by the 2026-06-20 endpoint-decouple refactor), both fixed — confirming
+IPv6 backends are in scope for Edgion.
 
 ## Fix Suggestions Not Accepted
 

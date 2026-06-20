@@ -21,9 +21,13 @@ Error`). The two callers degrade gracefully (fail-close):
 - `BackendSelector::create_state` (`selector.rs`) maps any `Err` to `SelectorState::Error(ERR_WRR_BUILD_FAILED)`
   (new code `3`), so `select()` returns `Err(code)` and the data plane serves an error response
   instead of panicking. No `tracing::` is added here — this path is request-triggered lazy init.
-- The webhook resolver (`link_sys/providers/webhook/manager.rs`) matches the `Result`; on `Err`
-  it emits `tracing::warn!` (registration time, off the request hot path) and falls back to
-  `WebhookResolvedTarget::Pending`.
+- The webhook path (`link_sys/providers/webhook/manager.rs`) has been migrated (2026-06-20
+  endpoint-decouple refactor) and **no longer uses WRR**. `WebhookManager::upsert` now constructs
+  `WebhookResolvedTarget::Service { service_key, port, scheme, cursor: AtomicUsize }` for
+  `WebhookTarget::Service` entries; `pick_url()` reads ready endpoints directly from the shared
+  `EpSliceStore` using a local `AtomicUsize` cursor for round-robin. `Uri` and `ServiceClusterIp`
+  targets map to `WebhookResolvedTarget::Static(String)`. The `Pending` and `Endpoints(WRR)`
+  variants have been removed. This bullet is preserved for historical reference only.
 
 Both call sites still pre-validate their inputs, so `WrrError` is currently unreachable in
 production — the conversion is forward-looking hardening for a future in-crate caller that forgets
@@ -66,5 +70,5 @@ arms changed from `panic!` to `Err`.
 - lb-FB01 (review finding, promoted to task then fixed 2026-05-25)
 - `edgion-gateway/src/lb/backend_selector/weighted_selector.rs` — `WrrError`, `new`, `with_equal_weights`
 - `edgion-gateway/src/lb/backend_selector/selector.rs` — `ERR_WRR_BUILD_FAILED`, `create_state`
-- `edgion-gateway/src/link_sys/providers/webhook/manager.rs` — `Pending` fallback
+- `edgion-gateway/src/link_sys/providers/webhook/manager.rs` — migrated away from WRR (2026-06-20 endpoint-decouple refactor); `Pending` and `Endpoints(WRR)` variants removed
 - Sibling LB hardening: `weighted_selector.rs::normalize_weights` (lb-F005 weight-cap, orthogonal OOM guard)

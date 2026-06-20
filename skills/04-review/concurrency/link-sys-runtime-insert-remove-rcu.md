@@ -8,9 +8,11 @@ description: LinkSys runtime-store insert/remove go through the generic Provider
 **Status:** ✅ fixed · 2026-05-25
 **Severity:** Medium (BadLogic) — non-atomic RMW on the process-global runtime maps could silently lose a concurrent insert/remove
 
-> Not to be confused with the IPv6 `extract_ready_ips` finding also tagged `link-sys-F001`
-> (controller path, `handlers/link_sys.rs`, fixed 2026-05-20). This entry is the **gateway**
-> runtime store (`edgion-gateway/src/link_sys/runtime/store.rs`).
+> Not to be confused with the link-sys-F001 controller path — that finding described the
+> controller-side webhook endpoint injection (`handlers/link_sys.rs`) and has since been
+> entirely removed by the 2026-06-20 endpoint-decouple refactor
+> (`docs/superpowers/specs/2026-06-20-linksys-webhook-endpoint-decouple-design.md`).
+> This entry is the **gateway** runtime store (`edgion-gateway/src/link_sys/runtime/store.rs`).
 
 ## Conclusion
 
