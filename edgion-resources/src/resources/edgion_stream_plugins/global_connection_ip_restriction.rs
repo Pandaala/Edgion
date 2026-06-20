@@ -63,6 +63,13 @@ pub struct ProfileRules {
     #[serde(default)]
     pub default_action: DefaultAction,
 
+    /// Allow-list references to `IpList` EdgionConfigData resources (resolved in gateway).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_refs: Option<Vec<EdgionConfigDataRef>>,
+    /// Deny-list references to `IpList` EdgionConfigData resources (resolved in gateway).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deny_refs: Option<Vec<EdgionConfigDataRef>>,
+
     // Runtime-only, not serialized
     #[serde(skip)]
     #[schemars(skip)]
@@ -101,10 +108,12 @@ impl GlobalConnectionIpRestrictionConfig {
 
 impl ProfileRules {
     pub(crate) fn validate_and_init(&mut self) -> Result<(), String> {
-        let has_allow = self.allow.as_ref().is_some_and(|v| !v.is_empty());
-        let has_deny = self.deny.as_ref().is_some_and(|v| !v.is_empty());
+        let has_allow = self.allow.as_ref().is_some_and(|v| !v.is_empty())
+            || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty());
+        let has_deny =
+            self.deny.as_ref().is_some_and(|v| !v.is_empty()) || self.deny_refs.as_ref().is_some_and(|v| !v.is_empty());
         if !has_allow && !has_deny {
-            return Err("at least one of 'allow' or 'deny' must be non-empty".to_string());
+            return Err("at least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
         }
 
         // Intentionally stricter than HTTP/Stream IpRestriction: a present
@@ -118,6 +127,13 @@ impl ProfileRules {
         }
         if let Some(deny) = &self.deny {
             self.deny_matcher = Some(build_flat_matcher(deny)?);
+        }
+        use crate::matcher::ip_cidr_helpers::validate_refs_structure;
+        if let Some(refs) = &self.allow_refs {
+            validate_refs_structure(refs)?;
+        }
+        if let Some(refs) = &self.deny_refs {
+            validate_refs_structure(refs)?;
         }
         Ok(())
     }
@@ -134,6 +150,26 @@ impl ProfileRules {
             &self.default_action,
             ip,
         )
+    }
+
+    /// Whitelist mode by configured intent (spec Decision 5).
+    pub fn allow_mode(&self) -> bool {
+        self.allow.as_ref().is_some_and(|v| !v.is_empty()) || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty())
+    }
+
+    /// Decision over inline ∪ gateway-resolved reference matchers.
+    pub fn check_ip_with_refs(
+        &self,
+        ip: &IpAddr,
+        deny_ref_matchers: &[&IpRadixMatcher],
+        allow_ref_matchers: &[&IpRadixMatcher],
+    ) -> AccessDecision {
+        use crate::matcher::ip_cidr_helpers::evaluate_ip_access_multi;
+        let mut deny: Vec<&IpRadixMatcher> = self.deny_matcher.iter().collect();
+        deny.extend_from_slice(deny_ref_matchers);
+        let mut allow: Vec<&IpRadixMatcher> = self.allow_matcher.iter().collect();
+        allow.extend_from_slice(allow_ref_matchers);
+        evaluate_ip_access_multi(&deny, &allow, self.allow_mode(), &self.default_action, ip)
     }
 }
 
@@ -162,6 +198,8 @@ mod tests {
                 }]),
                 deny: None,
                 default_action: DefaultAction::Deny,
+                allow_refs: None,
+                deny_refs: None,
                 allow_matcher: None,
                 deny_matcher: None,
             },
@@ -189,6 +227,8 @@ mod tests {
             allow: None,
             deny: None,
             default_action: DefaultAction::Allow,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         }
@@ -251,6 +291,8 @@ mod tests {
             ]),
             deny: None,
             default_action: DefaultAction::Deny,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -271,6 +313,8 @@ mod tests {
             allow: Some(vec![group("office", &[])]),
             deny: None,
             default_action: DefaultAction::Deny,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -292,6 +336,8 @@ mod tests {
             allow: Some(vec![group("office", &["not-an-ip"])]),
             deny: None,
             default_action: DefaultAction::Deny,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -348,6 +394,8 @@ mod tests {
             allow: Some(vec![group("office", &["192.168.1.0/24"])]),
             deny: None,
             default_action: DefaultAction::Allow, // irrelevant when allow is present
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -374,6 +422,8 @@ mod tests {
             allow: Some(vec![group("all", &["10.0.0.0/8"])]),
             deny: Some(vec![group("bad", &["10.0.0.100"])]),
             default_action: DefaultAction::Allow,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -406,6 +456,8 @@ mod tests {
             allow: None,
             deny: Some(vec![group("bad", &["1.2.3.4"])]),
             default_action: DefaultAction::Allow,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -431,6 +483,8 @@ mod tests {
             ]),
             deny: None,
             default_action: DefaultAction::Deny,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -466,6 +520,8 @@ mod tests {
             allow: Some(vec![]), // Some but empty
             deny: Some(vec![group("bad", &["1.2.3.4"])]),
             default_action: DefaultAction::Deny,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -479,5 +535,73 @@ mod tests {
         let err = d.validate_and_init().unwrap_err();
         // Should error cleanly mentioning empty group list (not opaque "Failed to build IpRadixMatcher")
         assert!(err.contains("empty"), "error should mention empty: {}", err);
+    }
+
+    #[test]
+    fn profile_allow_mode_true_when_only_allow_refs_set() {
+        use crate::resources::edgion_config_data::EdgionConfigDataRef;
+        let p = ProfileRules {
+            allow: None,
+            deny: None,
+            default_action: DefaultAction::Deny,
+            allow_refs: Some(vec![EdgionConfigDataRef {
+                name: "corp".into(),
+                namespace: None,
+            }]),
+            deny_refs: None,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        assert!(p.allow_mode());
+    }
+
+    #[test]
+    fn profile_refs_only_passes_validate_and_init() {
+        use crate::resources::edgion_config_data::EdgionConfigDataRef;
+        let p = ProfileRules {
+            allow: None,
+            deny: None,
+            default_action: DefaultAction::Deny,
+            allow_refs: None,
+            deny_refs: Some(vec![EdgionConfigDataRef {
+                name: "blk".into(),
+                namespace: None,
+            }]),
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        let mut d = GlobalConnectionIpRestrictionConfig {
+            enable: true,
+            active_profile: "p1".to_string(),
+            profiles: HashMap::from([("p1".to_string(), p)]),
+            description: None,
+            active_profile_ref: None,
+        };
+        assert!(d.validate_and_init().is_ok());
+    }
+
+    #[test]
+    fn profile_with_refs_deny_union_blocks_referenced_ip() {
+        use crate::matcher::ip_cidr_helpers::build_grouped_matcher;
+        let mut p = ProfileRules {
+            allow: None,
+            deny: Some(vec![group("inline", &["1.1.1.1"])]),
+            default_action: DefaultAction::Allow,
+            allow_refs: None,
+            deny_refs: None,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        p.validate_and_init().unwrap();
+        let ref_deny = build_grouped_matcher(&[group("reflist", &["2.2.2.2"])]).unwrap();
+        assert!(matches!(
+            p.check_ip_with_refs(&"2.2.2.2".parse().unwrap(), &[&ref_deny], &[]),
+            AccessDecision::DenyByGroup(_)
+        ));
+        assert!(is_allowed(p.check_ip_with_refs(
+            &"8.8.8.8".parse().unwrap(),
+            &[&ref_deny],
+            &[]
+        )));
     }
 }

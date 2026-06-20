@@ -34,7 +34,7 @@ Scan the Stage 1 `plugins` array and detect legacy HTTP fields written into the 
 Uses `k8s_openapi::Condition`, writing two conditions:
 
 - **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False/`LegacySchemaDeprecated` for legacy-schema errors; False/`Invalid` for other errors
-- **`ResolvedRefs`**: iterate each Stage 1 `GlobalConnectionIpRestriction` entry, requiring the PM referenced by `edgion_config_data_ref` to exist with `spec.metadata.type = GlobalConnectionIpRestriction`. Any failure → `ResolvedRefsError::EdgionConfigDataNotFound`, reason `InvalidEdgionConfigDataRef`. Stage 2 `tls_route_plugins` are currently all inline configurations with no external refs
+- **`ResolvedRefs`**: iterate each Stage 1 `GlobalConnectionIpRestriction` entry, requiring the PM referenced by `edgion_config_data_ref` to exist with `spec.metadata.type = GlobalConnectionIpRestriction`. Also resolves `allowRefs`/`denyRefs` on every `IpRestriction` entry (Stage 1 and Stage 2) and on each GCIR per-profile `ProfileRules`, requiring each named `IpList` EdgionConfigData to exist and be enabled. Any failure → `ResolvedRefsError::EdgionConfigDataNotFound`, reason `InvalidEdgionConfigDataRef`. Stage 2 `tls_route_plugins` `IpRestriction` entries may also carry `allowRefs`/`denyRefs` and are checked here.
 
 ## Gateway-side processing
 
@@ -51,3 +51,4 @@ These plugins run at the TCP-connection level and do not require HTTP protocol p
 |---------|---------|---------|------|
 | EdgionStreamPlugins ← Route resources | HTTPRoute/GRPCRoute/TCPRoute/TLSRoute | association reference | Route resources may reference Stream plugins |
 | EdgionStreamPlugins → EdgionConfigData | EdgionConfigData | `GlobalConnectionIpRestriction.overrideRef` | References a GCIR PM; a reverse-requeue index is built via `edgion_config_data_refs`, so PM changes re-process ESP |
+| EdgionStreamPlugins → EdgionConfigData | EdgionConfigData | `IpRestriction.allowRefs` / `IpRestriction.denyRefs` (Stage 1 + Stage 2); GCIR per-profile `ProfileRules.allowRefs` / `ProfileRules.denyRefs` | References an `IpList` EdgionConfigData; resolved at gateway; `ResolvedRefs=False` on this ESP when referenced IpList is missing/disabled/wrong-type |

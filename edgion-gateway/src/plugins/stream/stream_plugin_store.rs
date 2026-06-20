@@ -54,7 +54,7 @@ pub fn compile_stream_plugins(esp: &EdgionStreamPlugins) -> Arc<CompiledStreamPl
         None => Arc::<StreamPluginRuntime>::default(),
     };
     let tls_route_plugin_runtime = match &esp.spec.tls_route_plugins {
-        Some(entries) => Arc::new(TlsRoutePluginRuntime::from_entries(entries)),
+        Some(entries) => Arc::new(TlsRoutePluginRuntime::from_entries(entries, ns)),
         None => Arc::<TlsRoutePluginRuntime>::default(),
     };
 

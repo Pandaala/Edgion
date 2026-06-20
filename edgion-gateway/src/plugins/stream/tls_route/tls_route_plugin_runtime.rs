@@ -33,7 +33,7 @@ impl TlsRoutePluginRuntime {
     }
 
     /// Build runtime from TLS route plugin entries.
-    pub fn from_entries(entries: &[TlsRoutePluginEntry]) -> Self {
+    pub fn from_entries(entries: &[TlsRoutePluginEntry], parent_namespace: &str) -> Self {
         let mut plugins: Vec<Arc<dyn TlsRoutePlugin>> = Vec::new();
 
         for entry in entries {
@@ -42,7 +42,9 @@ impl TlsRoutePluginRuntime {
             }
 
             let plugin: Arc<dyn TlsRoutePlugin> = match &entry.plugin {
-                TlsRouteStreamPlugin::IpRestriction(config) => Arc::new(TlsRouteIpRestriction::new(config)),
+                TlsRouteStreamPlugin::IpRestriction(config) => {
+                    Arc::new(TlsRouteIpRestriction::new(config, parent_namespace))
+                }
             };
 
             plugins.push(plugin);
@@ -101,7 +103,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_from_empty_entries() {
-        let rt = TlsRoutePluginRuntime::from_entries(&[]);
+        let rt = TlsRoutePluginRuntime::from_entries(&[], "default");
         assert!(rt.is_empty());
         assert_eq!(rt.plugin_count(), 0);
     }

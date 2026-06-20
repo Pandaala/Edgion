@@ -1,11 +1,12 @@
 //! Stream IP Restriction plugin (inline L4 config).
 
 use async_trait::async_trait;
-use std::net::IpAddr;
 
+use crate::plugins::runtime::edgion_config_data::{resolve_ip_list_matchers, resolve_ip_list_ref_keys};
 use crate::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
 };
+use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_stream_plugins::ConnectionIpRestrictionRules;
 
 const PLUGIN_NAME: &str = "StreamIpRestriction";
@@ -30,28 +31,25 @@ pub(crate) fn init_ip_restriction(
     (rules, init_failed)
 }
 
-/// Check IP access with fail-closed guard.
-pub(crate) fn check_ip_access(
-    rules: &ConnectionIpRestrictionRules,
-    init_failed: bool,
-    ip: &IpAddr,
-) -> StreamPluginResult {
-    if init_failed {
-        return StreamPluginResult::Deny("ip init fail".to_string());
-    }
-    access_decision_to_stream_result(rules.check_ip(ip), || {})
-}
-
 /// Stream IP Restriction plugin
 pub struct StreamIpRestriction {
     rules: ConnectionIpRestrictionRules,
     init_failed: bool,
+    allow_ref_keys: Vec<String>,
+    deny_ref_keys: Vec<String>,
 }
 
 impl StreamIpRestriction {
-    pub fn new(rules: &ConnectionIpRestrictionRules) -> Self {
+    pub fn new(rules: &ConnectionIpRestrictionRules, parent_namespace: &str) -> Self {
         let (rules, init_failed) = init_ip_restriction(rules, "stream plugin");
-        Self { rules, init_failed }
+        let allow_ref_keys = resolve_ip_list_ref_keys(rules.allow_refs.as_ref(), parent_namespace);
+        let deny_ref_keys = resolve_ip_list_ref_keys(rules.deny_refs.as_ref(), parent_namespace);
+        Self {
+            rules,
+            init_failed,
+            allow_ref_keys,
+            deny_ref_keys,
+        }
     }
 }
 
@@ -62,6 +60,61 @@ impl StreamPlugin for StreamIpRestriction {
     }
 
     async fn on_connection(&self, ctx: &StreamContext) -> StreamPluginResult {
-        check_ip_access(&self.rules, self.init_failed, &ctx.client_ip)
+        if self.init_failed {
+            return StreamPluginResult::Deny("ip init fail".to_string());
+        }
+        let deny_arcs = resolve_ip_list_matchers(&self.deny_ref_keys);
+        let allow_arcs = resolve_ip_list_matchers(&self.allow_ref_keys);
+        let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
+        let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
+        let decision = self.rules.check_ip_with_refs(&ctx.client_ip, &deny_refs, &allow_refs);
+        access_decision_to_stream_result(decision, || {})
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+    use crate::plugins::stream::stream_plugin_trait::StreamContext;
+    use edgion_resources::resources::edgion_config_data::{
+        ConfigEntry, EdgionConfigData, EdgionConfigDataRef, EdgionConfigDataSpec, IpGroup, IpListData,
+    };
+    use std::sync::Arc;
+
+    fn seed_iplist(ns: &str, name: &str, cidr: &str) {
+        let spec = EdgionConfigDataSpec {
+            enable: true,
+            active: None,
+            data: ConfigEntry::IpList(IpListData {
+                items: vec![IpGroup {
+                    name: "g".into(),
+                    description: None,
+                    cidrs: vec![cidr.into()],
+                }],
+            }),
+        };
+        let mut ed = EdgionConfigData::new(name, spec);
+        ed.metadata.namespace = Some(ns.to_string());
+        get_global_edgion_config_data_store().insert_raw_for_test(&format!("{ns}/{name}"), Arc::new(ed));
+    }
+
+    #[tokio::test]
+    async fn deny_refs_block_referenced_ip() {
+        let ns = "l4-ipr-denyref-unit";
+        seed_iplist(ns, "blk", "9.9.9.9/32");
+        let mut rules = ConnectionIpRestrictionRules::default();
+        rules.deny_refs = Some(vec![EdgionConfigDataRef {
+            name: "blk".into(),
+            namespace: Some(ns.into()),
+        }]);
+        let plugin = StreamIpRestriction::new(&rules, ns);
+        let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080);
+        assert!(matches!(
+            plugin.on_connection(&ctx_block).await,
+            StreamPluginResult::Deny(_)
+        ));
+        let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        assert!(matches!(plugin.on_connection(&ctx_ok).await, StreamPluginResult::Allow));
     }
 }

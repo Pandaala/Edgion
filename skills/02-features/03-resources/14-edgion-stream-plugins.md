@@ -29,6 +29,11 @@ spec:
             - "192.168.1.0/24"
           denylist:
             - "10.0.0.100"
+          # allowRefs/denyRefs (optional): reference central IpList EdgionConfigData objects;
+          # merged into the same allow/deny pools as inline entries.
+          # namespace defaults to this EdgionStreamPlugins resource's namespace if omitted.
+          allowRefs:
+            - name: corp-allowlist   # references an IpList EdgionConfigData named "corp-allowlist"
 
   # Stage 2: TlsRoute (post-TLS handshake, SNI/certificate information available)
   tlsRoutePlugins:
@@ -38,6 +43,7 @@ spec:
         config:
           allowlist:
             - "172.16.0.0/12"
+          # allowRefs/denyRefs also available here (same semantics as Stage 1)
 ```
 
 ## Two-Stage Model
@@ -79,8 +85,8 @@ On `UDPRoute` the binding runs only the Stage-1 ConnectionFilter (`spec.plugins`
 
 | Type | Stage | Description |
 |------|-------|-------------|
-| `IpRestriction` | Stage 1 + Stage 2 | Inline IP allow/deny list (CIDR supported); rules embedded directly in the plugin config |
-| `GlobalConnectionIpRestriction` | Stage 1 + Stage 2 | EdgionConfigData-referenced IP restriction. The plugin config only holds `overrideRef` (namespace inherited from the parent EdgionStreamPlugins if omitted); the actual rules live in a `GlobalConnectionIpRestriction` EdgionConfigData. Center-managed and synced across multiple Controllers. |
+| `IpRestriction` | Stage 1 + Stage 2 | IP allow/deny list (CIDR supported); rules may be inline (`allowlist`/`denylist`) or referenced from a central `IpList` EdgionConfigData via `allowRefs`/`denyRefs` (merged into the same pools; a missing/disabled referenced IpList causes allowRef to fail closed) |
+| `GlobalConnectionIpRestriction` | Stage 1 + Stage 2 | EdgionConfigData-referenced IP restriction. The plugin config only holds `overrideRef` (namespace inherited from the parent EdgionStreamPlugins if omitted); the actual rules live in a `GlobalConnectionIpRestriction` EdgionConfigData. Each profile may also carry `allowRefs`/`denyRefs` referencing central `IpList` EdgionConfigDatas. Center-managed and synced across multiple Controllers. |
 
 ## Differences from HTTP Plugins
 

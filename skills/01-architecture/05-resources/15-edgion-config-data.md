@@ -103,7 +103,7 @@ Envelope (any variant): `enable: bool` (default true), `active: Option<String>`.
 | Group | Variant | Shape | Notes |
 |-------|---------|-------|-------|
 | std primitive | `KeyList` | `{ matchMode: Exact\|Regex, items: [KeyGroup] }` | Unified string+regex via `matchMode` |
-| std primitive | `IpList` | `{ items: [IpGroup] }` | Radix-tree CIDR matcher |
+| std primitive | `IpList` | `{ items: [IpGroup] }` | Radix-tree CIDR matcher; consumed by IpRestriction (HTTP/L4/TLS-route) and GCIR per-profile via `allowRefs`/`denyRefs` |
 | selector | `Selector` | `{ active?: string, description?: string }` | Active-profile selector; switches among the consumer's git-owned profiles |
 | first-party overlay | `RegionRouteOverride` | `{ regions?: [...], enable?: bool, active?: string }` | Typed; whole-replace of region table |
 | escape hatch | `Misc` | `x-kubernetes-preserve-unknown-fields` | Third-party / unknown / experimental only |
@@ -131,7 +131,9 @@ exposes only "which profile is active" as the hot-swappable surface — see the 
 
 - Looks up resources referencing this EdgionConfigData via `EdgionConfigDataRefManager` and requeues them.
   Consumers include EdgionPlugins (via `overrideRef` in `RegionRouteConfig`) and EdgionStreamPlugins
-  (via `activeProfileRef` in `GlobalConnectionIpRestrictionConfig`).
+  (via `activeProfileRef` in `GlobalConnectionIpRestrictionConfig`). Also requeues EdgionPlugins and
+  EdgionStreamPlugins that reference this object as an `IpList` via `allowRefs`/`denyRefs` in
+  IpRestriction configs or GCIR per-profile `ProfileRules`.
 
 ### on_delete
 
@@ -143,7 +145,7 @@ exposes only "which profile is active" as the hot-swappable surface — see the 
 | Condition | Semantics |
 |-----------|-----------|
 | `Accepted` | Spec passes preparse validation |
-| `ResolvedRefs` | No current typed variant carries external cross-resource refs; always `True` |
+| `ResolvedRefs` | EdgionConfigData itself carries no external cross-resource refs; own `ResolvedRefs` is always `True`. Note: `IpList` variants are ref targets — when `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile fail to resolve an `IpList`, `ResolvedRefs=False` is set on the *referring* EdgionPlugins/EdgionStreamPlugins, not on the `IpList` EdgionConfigData itself. |
 
 ## Gateway-Side Processing
 
@@ -176,6 +178,7 @@ coordination (I1 in `tasks/todo/edgion-config-data-overlay-refactor/05-issues.md
 |-----------|-----------|
 | EdgionConfigData ← EdgionPlugins | `overrideRef` in `RegionRouteConfig` → `RegionRouteOverride`; EP `ResolvedRefs` reflects resolution |
 | EdgionConfigData ← EdgionStreamPlugins | `activeProfileRef` in `GlobalConnectionIpRestrictionConfig` → `Selector`; ESP `ResolvedRefs` reflects resolution |
+| EdgionConfigData ← {EdgionPlugins, EdgionStreamPlugins} | `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile `ProfileRules` → `IpList`; referrer `ResolvedRefs` reflects resolution (missing/disabled/wrong-type IpList → `ResolvedRefs=False` on referrer) |
 | EdgionConfigData → {EdgionPlugins, EdgionStreamPlugins} | `EdgionConfigDataRefManager` requeue on change/delete |
 
 > The old `ServiceRegionRoute → ClusterRegionRoute` PM→PM chain and `clusterRef` indirection were
@@ -232,7 +235,11 @@ switch among the plugin's own `profiles`; it can never inject rules or disable f
     enable: true
     activeProfile: locked          # git default (safe)
     profiles:
-      locked:  { defaultAction: deny, allow: [{ name: office, cidrs: ["10.0.0.0/8"] }] }
+      locked:
+        defaultAction: deny
+        allow: [{ name: office, cidrs: ["10.0.0.0/8"] }]
+        # allowRefs (optional): merge additional IpList EdgionConfigData into the allow pool
+        allowRefs: [{ name: corp-allowlist }]   # namespace defaults to parent ESP namespace
       open:    { defaultAction: deny, allow: [{ name: any, cidrs: ["0.0.0.0/0"] }] }
     activeProfileRef: { name: gcir-active, namespace: edgion-system }  # optional
 

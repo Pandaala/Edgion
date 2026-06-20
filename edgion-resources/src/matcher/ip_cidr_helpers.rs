@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
-use crate::resources::edgion_config_data::IpGroup;
+use crate::resources::edgion_config_data::{EdgionConfigDataRef, IpGroup};
 use crate::resources::edgion_plugins::{AccessDecision, DefaultAction};
 
 pub use crate::resources::common::group_name::validate_group_name;
@@ -81,6 +81,19 @@ pub fn validate_groups_structure(groups: &[IpGroup]) -> Result<(), String> {
     Ok(())
 }
 
+/// Structural validation of an `EdgionConfigDataRef` list: each ref must carry a
+/// non-blank `name`. Existence/type of the referenced resource is NOT checked here
+/// (that is a runtime/status concern resolved against the live store). Safe for the
+/// admission hot path.
+pub fn validate_refs_structure(refs: &[EdgionConfigDataRef]) -> Result<(), String> {
+    for r in refs {
+        if r.name.trim().is_empty() {
+            return Err("EdgionConfigData reference has empty name".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Full build: run `validate_groups_structure` first, then construct the
 /// matcher. Error messages are identical between the two paths for the
 /// same invalid input.
@@ -120,14 +133,35 @@ pub fn evaluate_ip_access(
     default_action: &DefaultAction,
     ip: &IpAddr,
 ) -> AccessDecision {
-    if let Some(d) = deny {
+    // Preserve the historical semantics exactly: "allow present" == whitelist mode.
+    let deny_slice: Vec<&IpRadixMatcher> = deny.into_iter().collect();
+    let allow_slice: Vec<&IpRadixMatcher> = allow.into_iter().collect();
+    evaluate_ip_access_multi(&deny_slice, &allow_slice, allow.is_some(), default_action, ip)
+}
+
+/// N-matcher generalization of [`evaluate_ip_access`]. `deny`/`allow` are the
+/// union of inline and reference-resolved matchers; `allow_mode` is whitelist
+/// mode decided by *configured intent* (inline allow non-empty OR allow_refs
+/// configured non-empty), NOT by whether any allow matcher resolved. See spec
+/// Decisions 4 & 5: an allow-mode config with an empty resolved allow set
+/// denies all (fail-closed whitelist).
+pub fn evaluate_ip_access_multi(
+    deny: &[&IpRadixMatcher],
+    allow: &[&IpRadixMatcher],
+    allow_mode: bool,
+    default_action: &DefaultAction,
+    ip: &IpAddr,
+) -> AccessDecision {
+    for d in deny {
         if let Some(g) = d.matched_group_arc(ip) {
             return AccessDecision::DenyByGroup(g);
         }
     }
-    if let Some(a) = allow {
-        if let Some(g) = a.matched_group_arc(ip) {
-            return AccessDecision::AllowByGroup(g);
+    if allow_mode {
+        for a in allow {
+            if let Some(g) = a.matched_group_arc(ip) {
+                return AccessDecision::AllowByGroup(g);
+            }
         }
         return AccessDecision::DenyByWhitelistMiss;
     }
@@ -313,5 +347,96 @@ mod tests {
         assert_eq!(m.matched_group(&ip), Some("narrow"));
         let outside: std::net::IpAddr = "10.5.0.0".parse().unwrap();
         assert_eq!(m.matched_group(&outside), Some("wide"));
+    }
+
+    #[test]
+    fn multi_deny_any_matcher_wins() {
+        let d1 = build_grouped_matcher(&[IpGroup {
+            name: "a".into(),
+            description: None,
+            cidrs: vec!["1.1.1.1/32".into()],
+        }])
+        .unwrap();
+        let d2 = build_grouped_matcher(&[IpGroup {
+            name: "b".into(),
+            description: None,
+            cidrs: vec!["2.2.2.2/32".into()],
+        }])
+        .unwrap();
+        let ip: IpAddr = "2.2.2.2".parse().unwrap();
+        let dec = evaluate_ip_access_multi(&[&d1, &d2], &[], false, &DefaultAction::Allow, &ip);
+        assert!(matches!(dec, AccessDecision::DenyByGroup(g) if &*g == "b"));
+    }
+
+    #[test]
+    fn multi_allow_mode_miss_is_whitelist_miss() {
+        let a = build_grouped_matcher(&[IpGroup {
+            name: "office".into(),
+            description: None,
+            cidrs: vec!["192.168.0.0/16".into()],
+        }])
+        .unwrap();
+        let ip: IpAddr = "8.8.8.8".parse().unwrap();
+        let dec = evaluate_ip_access_multi(&[], &[&a], true, &DefaultAction::Allow, &ip);
+        assert!(matches!(dec, AccessDecision::DenyByWhitelistMiss));
+    }
+
+    #[test]
+    fn multi_allow_mode_true_with_empty_allow_denies_all() {
+        // allowRefs-configured-but-all-missing case: allow_mode=true, no allow matchers.
+        let ip: IpAddr = "8.8.8.8".parse().unwrap();
+        let dec = evaluate_ip_access_multi(&[], &[], true, &DefaultAction::Allow, &ip);
+        assert!(matches!(dec, AccessDecision::DenyByWhitelistMiss));
+    }
+
+    #[test]
+    fn multi_not_allow_mode_falls_through_to_default() {
+        let ip: IpAddr = "8.8.8.8".parse().unwrap();
+        let dec = evaluate_ip_access_multi(&[], &[], false, &DefaultAction::Deny, &ip);
+        assert!(matches!(dec, AccessDecision::Default(DefaultAction::Deny)));
+    }
+
+    #[test]
+    fn multi_allow_union_across_matchers() {
+        let a1 = build_grouped_matcher(&[IpGroup {
+            name: "g1".into(),
+            description: None,
+            cidrs: vec!["10.0.0.0/8".into()],
+        }])
+        .unwrap();
+        let a2 = build_grouped_matcher(&[IpGroup {
+            name: "g2".into(),
+            description: None,
+            cidrs: vec!["192.168.0.0/16".into()],
+        }])
+        .unwrap();
+        let ip: IpAddr = "192.168.1.1".parse().unwrap();
+        let dec = evaluate_ip_access_multi(&[], &[&a1, &a2], true, &DefaultAction::Deny, &ip);
+        assert!(matches!(dec, AccessDecision::AllowByGroup(g) if &*g == "g2"));
+    }
+
+    #[test]
+    fn refs_structure_ok() {
+        use crate::resources::edgion_config_data::EdgionConfigDataRef;
+        let refs = vec![EdgionConfigDataRef {
+            name: "corp".into(),
+            namespace: None,
+        }];
+        assert!(validate_refs_structure(&refs).is_ok());
+    }
+
+    #[test]
+    fn refs_structure_empty_name_errs() {
+        use crate::resources::edgion_config_data::EdgionConfigDataRef;
+        let refs = vec![EdgionConfigDataRef {
+            name: "  ".into(),
+            namespace: None,
+        }];
+        assert!(validate_refs_structure(&refs).is_err());
+    }
+
+    #[test]
+    fn refs_structure_empty_list_ok() {
+        assert!(validate_refs_structure(&[]).is_ok());
     }
 }

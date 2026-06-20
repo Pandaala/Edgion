@@ -766,7 +766,7 @@ impl PluginRuntime {
             EdgionPlugin::BasicAuth(config) => CreateResult::Ok(Some(Box::new(BasicAuth::new(config)))),
             EdgionPlugin::Cors(config) => CreateResult::Ok(Some(Box::new(Cors::new(config)))),
             EdgionPlugin::Csrf(config) => CreateResult::Ok(Some(Box::new(Csrf::new(config)))),
-            EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config))),
+            EdgionPlugin::IpRestriction(config) => CreateResult::Ok(Some(IpRestriction::create(config, namespace))),
             EdgionPlugin::JwtAuth(config) => {
                 CreateResult::Ok(Some(Box::new(JwtAuth::new(config, namespace.to_string()))))
             }

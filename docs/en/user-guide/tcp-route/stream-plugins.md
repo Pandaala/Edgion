@@ -43,9 +43,11 @@ a `type`, and a `config` object.
 |-------|------|---------|-------------|
 | `allow` | Array\<Object\> | none | Allow groups; each is `{name, cidrs}`. A non-empty `allow` turns on whitelist mode. |
 | `deny` | Array\<Object\> | none | Deny groups; each is `{name, cidrs}`. Evaluated before `allow`. |
+| `allowRefs` | Array\<Object\> | none | References to central `IpList` EdgionConfigData whose CIDRs merge into the allowlist. Each ref is `{name, namespace?}`; `namespace` defaults to the parent `EdgionStreamPlugins` namespace. Configuring any `allowRefs` puts the plugin in whitelist mode. A missing or disabled IpList fails closed (deny-all) and is reported via `ResolvedRefs=False`. |
+| `denyRefs` | Array\<Object\> | none | Same as `allowRefs` but merges into the denylist. A missing or disabled IpList under-blocks (still reported via `ResolvedRefs=False`). |
 | `defaultAction` | Enum | `allow` | Action when no rule matches. Allowed values: `allow` \| `deny`. |
 
-At least one of `allow` or `deny` must be non-empty.
+At least one of `allow`/`deny` or `allowRefs`/`denyRefs` must be non-empty.
 
 #### Group sub-fields
 
@@ -68,7 +70,7 @@ hot-swappable input is *which profile is active*, supplied by an optional
 |-------|------|---------|-------------|
 | `enable` | Boolean | **Required** | Kill switch. `false` disables the plugin (all connections allowed). |
 | `activeProfile` | String | **Required** | Default active profile name; must exist in `profiles`. |
-| `profiles` | Map\<String, Object\> | **Required** | Named rule sets. Each profile is `{ defaultAction, allow?, deny? }` (same group shape as `IpRestriction`). |
+| `profiles` | Map\<String, Object\> | **Required** | Named rule sets. Each profile is `{ defaultAction, allow?, deny?, allowRefs?, denyRefs? }` (same group shape as `IpRestriction`). Each profile may also reference central IpLists via per-profile `allowRefs`/`denyRefs` (distinct from `activeProfileRef`, which selects which profile is active, not an IpList). |
 | `description` | String | none | Optional human-readable note. |
 | `activeProfileRef.name` | String | none | Optional. Name of a `Selector` EdgionConfigData that overrides which profile is active. |
 | `activeProfileRef.namespace` | String | parent ESP namespace | Namespace of the Selector; inherited from the parent `EdgionStreamPlugins` if omitted. |

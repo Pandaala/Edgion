@@ -1,0 +1,17 @@
+# IpList EdgionConfigData — central block-list for IpRestrictionRefs tests.
+# Contains the loopback range (127.0.0.0/8) so the test client's TCP peer
+# address (127.0.0.1) resolves as "in-list" (i.e. blocked) when referenced
+# via denyRefs.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ipref-blocklist
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: blocked
+          cidrs:
+            - "127.0.0.0/8"

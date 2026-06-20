@@ -3,13 +3,13 @@
 //! Handles EdgionStreamPlugins resources with Gateway API standard status management.
 
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
-    condition_false, condition_reasons, condition_true, update_condition, ResolvedRefsError,
+    condition_false, condition_reasons, condition_true, pick_resolved_refs_reason, update_condition, ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_types, EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler,
 };
 use edgion_resources::prelude_resources::{EdgionConfigData, EdgionStreamPlugins};
-use edgion_resources::resources::edgion_config_data::ConfigEntry;
+use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
 use edgion_resources::resources::edgion_plugins::PluginValidation;
 use edgion_resources::resources::edgion_stream_plugins::{
     EdgionStreamPlugin, EdgionStreamPluginsStatus, TlsRouteStreamPlugin,
@@ -64,6 +64,48 @@ impl EdgionStreamPluginsHandler {
                 EdgionStreamPlugin::IpRestriction(_) => None,
                 EdgionStreamPlugin::ConnectionRateLimit(_) => None,
             })
+    }
+
+    /// Collect `(namespace, name)` for every IpList referenced by `allow_refs`/`deny_refs` on
+    /// the L4 `IpRestriction`, each GCIR profile, and the TLS-route `IpRestriction`. Namespace
+    /// defaults to the ESP namespace. Returns a SORTED, de-duplicated Vec so the resulting
+    /// status `message` is stable (GCIR `profiles` is a `HashMap` with unstable order).
+    fn iter_ip_list_refs(esp: &EdgionStreamPlugins) -> Vec<(String, String)> {
+        let esp_ns = esp.metadata.namespace.as_deref().unwrap_or("");
+        let mut out: Vec<(String, String)> = Vec::new();
+
+        // Stage 1: ConnectionFilter plugins.
+        for entry in esp.spec.plugins.iter().flatten() {
+            match &entry.plugin {
+                EdgionStreamPlugin::IpRestriction(rules) => {
+                    collect_ref_pairs(&mut out, esp_ns, rules.allow_refs.as_ref(), rules.deny_refs.as_ref());
+                }
+                EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) => {
+                    for profile in gcir.profiles.values() {
+                        collect_ref_pairs(
+                            &mut out,
+                            esp_ns,
+                            profile.allow_refs.as_ref(),
+                            profile.deny_refs.as_ref(),
+                        );
+                    }
+                }
+                EdgionStreamPlugin::ConnectionRateLimit(_) => {}
+            }
+        }
+
+        // Stage 2: TlsRoute plugins (HTTP-layer `IpRestrictionConfig`).
+        for entry in esp.spec.tls_route_plugins.iter().flatten() {
+            match &entry.plugin {
+                TlsRouteStreamPlugin::IpRestriction(config) => {
+                    collect_ref_pairs(&mut out, esp_ns, config.allow_refs.as_ref(), config.deny_refs.as_ref());
+                }
+            }
+        }
+
+        out.sort();
+        out.dedup();
+        out
     }
 }
 
@@ -152,6 +194,10 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             let ed_key = EdgionConfigDataStore::make_key(Some(&ed_ns), &ed_name);
             ctx.runtime().edgion_config_data_refs.add_ref(ed_key, self_ref.clone());
         }
+        for (ed_ns, ed_name) in Self::iter_ip_list_refs(&esp) {
+            let ed_key = EdgionConfigDataStore::make_key(Some(&ed_ns), &ed_name);
+            ctx.runtime().edgion_config_data_refs.add_ref(ed_key, self_ref.clone());
+        }
         ProcessResult::Continue(esp)
     }
 
@@ -194,7 +240,9 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
 
         // ResolvedRefs: each GlobalConnectionIpRestriction activeProfileRef must
         // resolve to an existing EdgionConfigData of the `Selector` variant.
-        let resolved_errors = resolve_refs(esp, ctx);
+        // IpList allow_refs/deny_refs (L4, GCIR-per-profile, TLS-route) are also checked.
+        let mut resolved_errors = resolve_refs(esp, ctx);
+        resolved_errors.extend(resolve_ip_list_refs(esp, ctx));
         let resolved_refs = if resolved_errors.is_empty() {
             condition_true(
                 condition_types::RESOLVED_REFS,
@@ -203,7 +251,7 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
                 generation,
             )
         } else {
-            let reason = resolved_errors[0].reason();
+            let reason = pick_resolved_refs_reason(&resolved_errors);
             let message = resolved_errors
                 .iter()
                 .map(|e| e.message())
@@ -218,6 +266,29 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
     }
+}
+
+/// Resolve each IpList `allow_refs`/`deny_refs` (L4, GCIR-per-profile, TLS-route) against the
+/// EdgionConfigData store. One `EdgionConfigDataNotFound { expected_type: "IpList" }` per
+/// missing or wrong-type reference. Order is deterministic (`iter_ip_list_refs` is sorted).
+fn resolve_ip_list_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let mut errors = Vec::new();
+    for (ns, name) in EdgionStreamPluginsHandler::iter_ip_list_refs(esp) {
+        let target: Option<EdgionConfigData> = ctx.runtime().edgion_config_data_store.get(Some(&ns), &name);
+        let resolved = target.as_ref().is_some_and(|t| {
+            t.spec.enable
+                && matches!(&t.spec.data, ConfigEntry::IpList(d)
+                    if edgion_resources::matcher::ip_cidr_helpers::build_grouped_matcher(&d.items).is_ok())
+        });
+        if !resolved {
+            errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
+                namespace: ns,
+                name,
+                expected_type: "IpList".to_string(),
+            });
+        }
+    }
+    errors
 }
 
 /// Requeue all Gateways that reference this EdgionStreamPlugins via
@@ -241,6 +312,20 @@ async fn requeue_referencing_gateways(esp: &EdgionStreamPlugins, ctx: &HandlerCo
     }
     for gw_ref in refs {
         ctx.requeue("Gateway", gw_ref.resource_key()).await;
+    }
+}
+
+/// Push `(namespace, name)` for each ref in `allow`/`deny`, defaulting an unset ref namespace
+/// to `esp_ns`.
+fn collect_ref_pairs(
+    out: &mut Vec<(String, String)>,
+    esp_ns: &str,
+    allow: Option<&Vec<EdgionConfigDataRef>>,
+    deny: Option<&Vec<EdgionConfigDataRef>>,
+) {
+    for r in allow.into_iter().flatten().chain(deny.into_iter().flatten()) {
+        let ns = r.namespace.clone().unwrap_or_else(|| esp_ns.to_string());
+        out.push((ns, r.name.clone()));
     }
 }
 
@@ -272,6 +357,108 @@ mod tests {
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::prelude_resources::EdgionStreamPlugins;
     use std::sync::Arc;
+
+    #[test]
+    fn iter_ip_list_refs_collects_l4_gcir_and_tls_sorted() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: refs
+  namespace: default
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        denyRefs: [{ name: l4-blk }]
+    - type: GlobalConnectionIpRestriction
+      config:
+        enable: true
+        activeProfile: main
+        profiles:
+          main:
+            defaultAction: deny
+            allowRefs: [{ name: gcir-allow }]
+  tlsRoutePlugins:
+    - type: IpRestriction
+      config:
+        denyRefs: [{ name: tls-blk }]
+"#;
+        let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let refs = EdgionStreamPluginsHandler::iter_ip_list_refs(&esp);
+        // Sorted by (ns, name): all default namespace.
+        assert_eq!(
+            refs,
+            vec![
+                ("default".to_string(), "gcir-allow".to_string()),
+                ("default".to_string(), "l4-blk".to_string()),
+                ("default".to_string(), "tls-blk".to_string()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_ip_list_refs_registered_and_resolved() {
+        use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, IpGroup, IpListData};
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: refs-esp
+  namespace: default
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        denyRefs: [{ name: l4-blk }]
+"#;
+        let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let ctx = make_ctx();
+
+        // Missing IpList -> one error, expected_type IpList.
+        let errors = resolve_ip_list_refs(&esp, &ctx);
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            ResolvedRefsError::EdgionConfigDataNotFound {
+                name, expected_type, ..
+            } => {
+                assert_eq!(name, "l4-blk");
+                assert_eq!(expected_type, "IpList");
+            }
+            other => panic!("expected EdgionConfigDataNotFound, got {:?}", other),
+        }
+
+        // parse registers the reverse ref for requeue.
+        let handler = EdgionStreamPluginsHandler::new();
+        let _ = handler.parse(esp.clone(), &ctx).await;
+        let regs = ctx.runtime().edgion_config_data_refs.get_refs("default/l4-blk");
+        assert!(
+            regs.contains(&"EdgionStreamPlugins:default/refs-esp".to_string()),
+            "got: {:?}",
+            regs
+        );
+
+        // Seed the IpList -> resolves cleanly.
+        let mut ed = EdgionConfigData::new(
+            "l4-blk",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "g".into(),
+                        description: None,
+                        cidrs: vec!["9.9.9.9/32".into()],
+                    }],
+                }),
+            },
+        );
+        ed.metadata.namespace = Some("default".to_string());
+        let mut m = std::collections::HashMap::new();
+        m.insert("default/l4-blk".to_string(), ed);
+        ctx.runtime().edgion_config_data_store.replace_all(m);
+        assert!(resolve_ip_list_refs(&esp, &ctx).is_empty());
+    }
 
     fn make_ctx() -> HandlerContext {
         HandlerContext::new(
@@ -520,5 +707,57 @@ spec:
         let status = esp.status.as_ref().unwrap();
         let accepted = status.conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
         assert_eq!(accepted.reason, "Invalid");
+    }
+
+    #[tokio::test]
+    async fn stream_disabled_ip_list_ref_reports_error() {
+        use edgion_resources::resources::edgion_config_data::{EdgionConfigDataSpec, IpGroup, IpListData};
+
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: disabled-ref-esp
+  namespace: default
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        denyRefs: [{ name: disabled-list }]
+"#;
+        let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let ctx = make_ctx();
+
+        // Seed a disabled (enable: false) IpList -> must not resolve.
+        let mut ed = EdgionConfigData::new(
+            "disabled-list",
+            EdgionConfigDataSpec {
+                enable: false,
+                active: None,
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "g".into(),
+                        description: None,
+                        cidrs: vec!["1.2.3.4/32".into()],
+                    }],
+                }),
+            },
+        );
+        ed.metadata.namespace = Some("default".to_string());
+        let mut m = std::collections::HashMap::new();
+        m.insert("default/disabled-list".to_string(), ed);
+        ctx.runtime().edgion_config_data_store.replace_all(m);
+
+        let errors = resolve_ip_list_refs(&esp, &ctx);
+        assert_eq!(errors.len(), 1, "disabled IpList must not resolve; got: {:?}", errors);
+        match &errors[0] {
+            ResolvedRefsError::EdgionConfigDataNotFound {
+                name, expected_type, ..
+            } => {
+                assert_eq!(name, "disabled-list");
+                assert_eq!(expected_type, "IpList");
+            }
+            other => panic!("expected EdgionConfigDataNotFound, got {:?}", other),
+        }
     }
 }

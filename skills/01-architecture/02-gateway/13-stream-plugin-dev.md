@@ -98,6 +98,12 @@ The current `IpRestriction` reuses `IpRestrictionConfig` from the HTTP plugin si
 
 - [../../../edgion-resources/src/resources/edgion_plugins/plugin_configs/](../../../edgion-resources/src/resources/edgion_plugins/plugin_configs/)
 
+`IpRestrictionConfig` supports both inline rules (`allowlist`/`denylist`) and references to central
+`IpList` EdgionConfigData objects via `allowRefs`/`denyRefs` (`Option<Vec<EdgionConfigDataRef>>`).
+The gateway merges referenced IpLists into the same allow/deny pools as inline entries; a missing or
+disabled referenced IpList causes the `allowRef` to fail closed (deny-all). The L4 variant is defined in
+`edgion-resources/src/resources/edgion_stream_plugins/connection_ip_restriction_rules.rs`.
+
 If your stream plugin can also share configuration with the HTTP layer, prefer reuse; otherwise add a dedicated configuration.
 
 ## 3. Wire the new type into the resource enum
@@ -202,6 +208,9 @@ spec:
       config:
         allow:
           - 127.0.0.1/32
+        # allowRefs: reference a central IpList EdgionConfigData (merged into the allow pool)
+        # allowRefs:
+        #   - name: corp-allowlist   # namespace defaults to edgion-test
 ```
 
 ### Reference it from a `TCPRoute` / `TLSRoute` / Gateway

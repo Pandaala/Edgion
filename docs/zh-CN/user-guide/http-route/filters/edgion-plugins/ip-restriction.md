@@ -50,10 +50,49 @@ filters:
 |------|------|--------|------|
 | `allow` | Array | 无 | 白名单。IP 地址或 CIDR 列表。示例：`["192.168.1.0/24", "10.0.0.1"]` |
 | `deny` | Array | 无 | 黑名单。IP 地址或 CIDR 列表。示例：`["203.0.113.50"]` |
+| `allowRefs` | Array | 无 | 引用中心化 `IpList` EdgionConfigData，其 CIDR 合并进白名单。每项 `{name, namespace?}`，`namespace` 缺省取资源所在 namespace；缺失/禁用时 fail-closed（全拒），以 `ResolvedRefs=False` 暴露。 |
+| `denyRefs` | Array | 无 | 同 `allowRefs`，合并进黑名单；缺失/禁用时少拦，以 `ResolvedRefs=False` 暴露。 |
 | `ipSource` | String | `"clientIp"` | IP 来源。`clientIp`：从代理头提取真实 IP；`remoteAddr`：使用 TCP 连接地址 |
 | `status` | Integer | `403` | 拒绝时返回的 HTTP 状态码 |
 | `message` | String | 无 | 拒绝时返回的自定义消息 |
 | `defaultAction` | String | `"allow"` | 默认动作。当 IP 不匹配任何规则时的行为。`allow` 或 `deny` |
+
+---
+
+### 集中管理 IpList（`allowRefs`/`denyRefs`）
+
+通过 `EdgionConfigData`（`spec.data.type: IpList`）可以将一份 IP 名单定义一次、被多个 `IpRestriction` 插件复用，无需在每个插件中重复内联 CIDR。示例片段：
+
+```yaml
+# 共享 IpList EdgionConfigData
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: corp-allowlist
+  namespace: security
+spec:
+  enable: true
+  data:
+    type: IpList
+    config:
+      items:
+        - name: office
+          cidrs:
+            - "10.0.0.0/8"
+            - "203.0.113.0/24"
+---
+# 在插件中通过 allowRefs 引用
+- type: IpRestriction
+  config:
+    allowRefs:
+      - name: corp-allowlist
+        namespace: security   # 省略时继承资源自身 namespace
+    defaultAction: deny
+```
+
+未能解析的引用（IpList 不存在、`enable: false`、或结构非法）会通过该资源的 `ResolvedRefs=False` 状态条件暴露，`allowRef` 方向 fail-closed（全拒），`denyRef` 方向少拦。
+
+> **注意**：该中文页其余部分相对英文版偏旧（示例仍使用字符串数组形式的 `allow`/`deny`），本次仅补充 `allowRefs`/`denyRefs` 引用字段；完整对齐留待后续。
 
 ---
 

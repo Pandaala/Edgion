@@ -163,29 +163,49 @@ impl KubernetesStorage {
                 ApiResource::from_gvk(&GroupVersionKind::gvk("discovery.k8s.io", "v1", "EndpointSlice")),
                 Scope::Namespaced,
             ),
-            // Edgion CRDs
-            "EdgionTls" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionTls")),
-                Scope::Namespaced,
-            ),
-            "EdgionGatewayConfig" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionGatewayConfig")),
-                Scope::Cluster,
-            ),
-            "EdgionPlugins" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionPlugins")),
-                Scope::Namespaced,
-            ),
-            "EdgionStreamPlugins" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionStreamPlugins")),
-                Scope::Namespaced,
-            ),
-            "EdgionConfigData" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionConfigData")),
-                Scope::Namespaced,
-            ),
-            "LinkSys" => (
-                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "LinkSys")),
+            // Edgion CRDs.
+            //
+            // These CRDs declare non-conventional plurals (e.g. EdgionPlugins ->
+            // "edgionplugins", LinkSys -> "linksys"), but `ApiResource::from_gvk`
+            // infers the conventional plural (kind lowercased + "s"/"es"), which
+            // would be "edgionpluginses" / "linksyses" and not match the CRD. The
+            // K8s API server then rejects the request (403 from RBAC, since the
+            // ClusterRole grants only the real plural). Override `plural` to the
+            // CRD-declared value so admin list/get hits the correct resource.
+            "EdgionTls" => {
+                let mut ar = ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionTls"));
+                ar.plural = "edgiontls".to_string();
+                (ar, Scope::Namespaced)
+            }
+            "EdgionGatewayConfig" => {
+                let mut ar = ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1alpha1", "EdgionGatewayConfig"));
+                ar.plural = "edgiongatewayclassconfigs".to_string();
+                (ar, Scope::Cluster)
+            }
+            "EdgionPlugins" => {
+                let mut ar = ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionPlugins"));
+                ar.plural = "edgionplugins".to_string();
+                (ar, Scope::Namespaced)
+            }
+            "EdgionStreamPlugins" => {
+                let mut ar = ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionStreamPlugins"));
+                ar.plural = "edgionstreamplugins".to_string();
+                (ar, Scope::Namespaced)
+            }
+            "EdgionConfigData" => {
+                let mut ar = ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionConfigData"));
+                ar.plural = "edgionconfigdata".to_string();
+                (ar, Scope::Namespaced)
+            }
+            "LinkSys" => {
+                let mut ar = ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "LinkSys"));
+                ar.plural = "linksys".to_string();
+                (ar, Scope::Namespaced)
+            }
+            // EdgionAcme: the conventional plural ("edgionacmes") matches the CRD,
+            // so `from_gvk` resolves correctly without a plural override.
+            "EdgionAcme" => (
+                ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionAcme")),
                 Scope::Namespaced,
             ),
             _ => {

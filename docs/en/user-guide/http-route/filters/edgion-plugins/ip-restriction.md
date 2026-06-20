@@ -8,7 +8,7 @@
 
 The IP Restriction plugin controls which IP addresses or CIDR ranges can access your API, providing allowlist and denylist functionality.
 
-`allow` and `deny` are lists of **named IP groups**. Each group has a `name` (surfaced in deny logs for audit/attribution) and a `cidrs` list of IP/CIDR strings. At least one of `allow` or `deny` must be non-empty.
+`allow` and `deny` are lists of **named IP groups**. Each group has a `name` (surfaced in deny logs for audit/attribution) and a `cidrs` list of IP/CIDR strings. At least one of `allow`/`deny` or `allowRefs`/`denyRefs` must be non-empty.
 
 **Use cases**:
 - Only allow internal network IPs to access admin interfaces
@@ -56,12 +56,14 @@ filters:
 |-----------|------|---------|-------------|
 | `allow` | Array\<Object\> | none | Allowlist groups (whitelist). When non-empty, only IPs in an allow group are permitted. Each entry is an IP group (see sub-table). |
 | `deny` | Array\<Object\> | none | Denylist groups (blacklist). Highest priority: IPs in a deny group are always denied. |
+| `allowRefs` | Array\<Object\> | none | References to central `IpList` EdgionConfigData whose CIDRs merge into the allowlist. Each ref is `{name, namespace?}`; `namespace` defaults to the resource's namespace. Configuring any `allowRefs` puts the plugin in whitelist mode. A missing or disabled IpList fails closed (deny-all) and is reported via `ResolvedRefs=False`. |
+| `denyRefs` | Array\<Object\> | none | Same as `allowRefs` but merges into the denylist. A missing or disabled IpList under-blocks (still reported via `ResolvedRefs=False`). |
 | `ipSource` | Enum | `clientIp` | IP source. `clientIp`: reads `remote_addr` (pre-processed by the RealIp plugin or global `spec.realIp`; falls back to the TCP peer IP if neither is configured). `remoteAddr`: always the TCP connection peer address (never forgeable). |
 | `status` | Integer | `403` | HTTP status code returned when denied (100..=599). |
 | `message` | String | none | Custom message returned when denied. |
 | `defaultAction` | Enum | `allow` | Action when an IP matches no rule. Allowed values: `allow` / `deny`. |
 
-At least one of `allow` or `deny` must be non-empty, otherwise the configuration is rejected.
+At least one of `allow`/`deny` or `allowRefs`/`denyRefs` must be non-empty, otherwise the configuration is rejected.
 
 ### IP group sub-fields (`allow[]` / `deny[]`)
 
@@ -70,6 +72,38 @@ At least one of `allow` or `deny` must be non-empty, otherwise the configuration
 | `name` | String | — | Group name. Required. Surfaces in deny logs for audit/attribution. |
 | `description` | String | none | Human-readable description (not used by the runtime). |
 | `cidrs` | Array\<String\> | `[]` | IP addresses or CIDR ranges (IPv4 and IPv6). |
+
+### Referencing a central IpList
+
+You can define a shared IP list once as an `IpList` EdgionConfigData and reference it from many IpRestriction plugins via `allowRefs` or `denyRefs`, avoiding copy-paste across routes. The gateway resolves the reference live and merges the IpList's CIDRs into the same allow/deny pools as inline `allow`/`deny` entries; the deny → allow → defaultAction priority order is unchanged. If the referenced IpList is missing, disabled (`enable: false`), or malformed, an `allowRef` fails closed (deny-all) while a `denyRef` under-blocks; both cases surface on the owning resource as a `ResolvedRefs=False` status condition. `namespace` in each ref defaults to the IpRestriction plugin's own namespace when omitted.
+
+```yaml
+# Define the central list once (any namespace)
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: corp-allowlist
+  namespace: security
+spec:
+  enable: true
+  data:
+    type: IpList
+    config:
+      items:
+        - name: corporate
+          cidrs:
+            - "10.0.0.0/8"
+            - "203.0.113.0/24"
+---
+# Reference it from any IpRestriction plugin
+filters:
+  - type: IpRestriction
+    config:
+      allowRefs:
+        - name: corp-allowlist
+          namespace: security   # omit if same namespace
+      defaultAction: deny
+```
 
 ---
 

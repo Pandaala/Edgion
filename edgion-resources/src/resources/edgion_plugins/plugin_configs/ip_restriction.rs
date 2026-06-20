@@ -1,7 +1,7 @@
 //! IP Restriction plugin configuration
 
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
-use crate::resources::edgion_config_data::IpGroup;
+use crate::resources::edgion_config_data::{EdgionConfigDataRef, IpGroup};
 use crate::resources::edgion_plugins::AccessDecision;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -73,6 +73,17 @@ pub struct IpRestrictionConfig {
     #[serde(default)]
     pub default_action: DefaultAction,
 
+    /// Allow-list references to `IpList` EdgionConfigData resources (whole list).
+    /// Resolved live in the gateway; merged into the allow set. Configuring any
+    /// entry puts the plugin in whitelist mode (see `allow_mode`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_refs: Option<Vec<EdgionConfigDataRef>>,
+
+    /// Deny-list references to `IpList` EdgionConfigData resources (whole list).
+    /// Resolved live in the gateway; merged into the deny set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deny_refs: Option<Vec<EdgionConfigDataRef>>,
+
     // === Runtime-only fields (not serialized) ===
     /// Compiled allow matcher (built from allow list)
     #[serde(skip)]
@@ -124,6 +135,8 @@ impl Default for IpRestrictionConfig {
             message: None,
             status: default_status(),
             default_action: DefaultAction::default(),
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         }
@@ -142,10 +155,12 @@ impl IpRestrictionConfig {
     pub fn validate_and_init(&mut self) -> Result<(), String> {
         use crate::matcher::ip_cidr_helpers::build_grouped_matcher;
 
-        let allow_nonempty = self.allow.as_ref().is_some_and(|v| !v.is_empty());
-        let deny_nonempty = self.deny.as_ref().is_some_and(|v| !v.is_empty());
-        if !allow_nonempty && !deny_nonempty {
-            return Err("At least one of 'allow' or 'deny' must be non-empty".to_string());
+        let any_allow = self.allow.as_ref().is_some_and(|v| !v.is_empty())
+            || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty());
+        let any_deny =
+            self.deny.as_ref().is_some_and(|v| !v.is_empty()) || self.deny_refs.as_ref().is_some_and(|v| !v.is_empty());
+        if !any_allow && !any_deny {
+            return Err("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
         }
 
         if self.status < 100 || self.status >= 600 {
@@ -162,6 +177,15 @@ impl IpRestrictionConfig {
                 self.deny_matcher = Some(build_grouped_matcher(groups)?);
             }
         }
+
+        use crate::matcher::ip_cidr_helpers::validate_refs_structure;
+        if let Some(refs) = &self.allow_refs {
+            validate_refs_structure(refs)?;
+        }
+        if let Some(refs) = &self.deny_refs {
+            validate_refs_structure(refs)?;
+        }
+
         Ok(())
     }
 
@@ -179,6 +203,30 @@ impl IpRestrictionConfig {
             &self.default_action,
             ip,
         )
+    }
+
+    /// Whitelist mode is decided by configured intent (spec Decision 5): true iff
+    /// an inline allow group OR an allow ref is configured.
+    pub fn allow_mode(&self) -> bool {
+        self.allow.as_ref().is_some_and(|v| !v.is_empty()) || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty())
+    }
+
+    /// Decision over the union of inline matchers and gateway-resolved reference
+    /// matchers. `*_ref_matchers` are the already-resolved `IpList` matchers; an
+    /// unresolved ref simply contributes nothing (fail-closed for allow per
+    /// `allow_mode`). Delegates to the shared `evaluate_ip_access_multi`.
+    pub fn check_ip_access_with_refs(
+        &self,
+        ip: &IpAddr,
+        deny_ref_matchers: &[&IpRadixMatcher],
+        allow_ref_matchers: &[&IpRadixMatcher],
+    ) -> AccessDecision {
+        use crate::matcher::ip_cidr_helpers::evaluate_ip_access_multi;
+        let mut deny: Vec<&IpRadixMatcher> = self.deny_matcher.iter().collect();
+        deny.extend_from_slice(deny_ref_matchers);
+        let mut allow: Vec<&IpRadixMatcher> = self.allow_matcher.iter().collect();
+        allow.extend_from_slice(allow_ref_matchers);
+        evaluate_ip_access_multi(&deny, &allow, self.allow_mode(), &self.default_action, ip)
     }
 }
 
@@ -203,7 +251,7 @@ mod validation_trait_tests {
         let result = PluginValidation::validation_error(&config);
         assert_eq!(
             result,
-            Some("At least one of 'allow' or 'deny' must be non-empty".to_string())
+            Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string())
         );
     }
 
@@ -216,7 +264,7 @@ mod validation_trait_tests {
         let result = PluginValidation::validation_error(&config);
         assert_eq!(
             result,
-            Some("At least one of 'allow' or 'deny' must be non-empty".to_string())
+            Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string())
         );
     }
 
@@ -229,7 +277,7 @@ mod validation_trait_tests {
         let result = PluginValidation::validation_error(&config);
         assert_eq!(
             result,
-            Some("At least one of 'allow' or 'deny' must be non-empty".to_string())
+            Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string())
         );
     }
 
@@ -289,12 +337,14 @@ mod validation_trait_tests {
 
 impl PluginValidation for IpRestrictionConfig {
     fn validation_error(&self) -> Option<String> {
-        use crate::matcher::ip_cidr_helpers::validate_groups_structure;
+        use crate::matcher::ip_cidr_helpers::{validate_groups_structure, validate_refs_structure};
 
-        let allow_nonempty = self.allow.as_ref().is_some_and(|v| !v.is_empty());
-        let deny_nonempty = self.deny.as_ref().is_some_and(|v| !v.is_empty());
-        if !allow_nonempty && !deny_nonempty {
-            return Some("At least one of 'allow' or 'deny' must be non-empty".to_string());
+        let any_allow = self.allow.as_ref().is_some_and(|v| !v.is_empty())
+            || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty());
+        let any_deny =
+            self.deny.as_ref().is_some_and(|v| !v.is_empty()) || self.deny_refs.as_ref().is_some_and(|v| !v.is_empty());
+        if !any_allow && !any_deny {
+            return Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
         }
         if self.status < 100 || self.status >= 600 {
             return Some(format!("Invalid status code: {}", self.status));
@@ -311,6 +361,16 @@ impl PluginValidation for IpRestrictionConfig {
                 if let Err(e) = validate_groups_structure(groups) {
                     return Some(format!("deny: {}", e));
                 }
+            }
+        }
+        if let Some(refs) = &self.allow_refs {
+            if let Err(e) = validate_refs_structure(refs) {
+                return Some(format!("allowRefs: {}", e));
+            }
+        }
+        if let Some(refs) = &self.deny_refs {
+            if let Err(e) = validate_refs_structure(refs) {
+                return Some(format!("denyRefs: {}", e));
             }
         }
         None
@@ -558,6 +618,8 @@ mod tests {
             message: None,
             status: 403,
             default_action: DefaultAction::Allow,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -586,6 +648,8 @@ mod tests {
             message: None,
             status: 403,
             default_action: DefaultAction::Allow,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         };
@@ -595,5 +659,77 @@ mod tests {
             AccessDecision::DenyByGroup(g) => assert_eq!(&*g, "blocked"),
             other => panic!("expected DenyByGroup, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn allow_mode_true_when_only_allow_refs_set() {
+        use crate::resources::edgion_config_data::EdgionConfigDataRef;
+        let config = IpRestrictionConfig {
+            allow_refs: Some(vec![EdgionConfigDataRef {
+                name: "corp".into(),
+                namespace: None,
+            }]),
+            ..Default::default()
+        };
+        assert!(config.allow_mode());
+    }
+
+    #[test]
+    fn refs_only_config_passes_validation() {
+        use crate::resources::edgion_config_data::EdgionConfigDataRef;
+        let mut config = IpRestrictionConfig {
+            deny_refs: Some(vec![EdgionConfigDataRef {
+                name: "blocklist".into(),
+                namespace: None,
+            }]),
+            ..Default::default()
+        };
+        // No inline allow/deny, only denyRefs -> must be accepted now.
+        assert!(config.validate_and_init().is_ok());
+        assert_eq!(PluginValidation::validation_error(&config), None);
+    }
+
+    #[test]
+    fn with_refs_deny_union_blocks_referenced_ip() {
+        use crate::matcher::ip_cidr_helpers::build_grouped_matcher;
+        let mut config = IpRestrictionConfig {
+            deny: Some(vec![group("inline", &["1.1.1.1"])]),
+            ..Default::default()
+        };
+        config.validate_and_init().unwrap();
+        let ref_deny = build_grouped_matcher(&[group("reflist", &["2.2.2.2"])]).unwrap();
+        // referenced deny IP
+        assert!(matches!(
+            config.check_ip_access_with_refs(&"2.2.2.2".parse().unwrap(), &[&ref_deny], &[]),
+            AccessDecision::DenyByGroup(_)
+        ));
+        // inline deny IP still blocked
+        assert!(matches!(
+            config.check_ip_access_with_refs(&"1.1.1.1".parse().unwrap(), &[&ref_deny], &[]),
+            AccessDecision::DenyByGroup(_)
+        ));
+        // unrelated IP allowed (default Allow)
+        assert!(is_allowed(config.check_ip_access_with_refs(
+            &"8.8.8.8".parse().unwrap(),
+            &[&ref_deny],
+            &[]
+        )));
+    }
+
+    #[test]
+    fn allow_refs_missing_denies_all_in_allow_mode() {
+        use crate::resources::edgion_config_data::EdgionConfigDataRef;
+        let config = IpRestrictionConfig {
+            allow_refs: Some(vec![EdgionConfigDataRef {
+                name: "missing".into(),
+                namespace: None,
+            }]),
+            ..Default::default()
+        };
+        // allow_mode true, but no resolved allow matchers -> whitelist miss (fail-closed).
+        assert!(matches!(
+            config.check_ip_access_with_refs(&"8.8.8.8".parse().unwrap(), &[], &[]),
+            AccessDecision::DenyByWhitelistMiss
+        ));
     }
 }

@@ -8,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 
-use crate::matcher::ip_cidr_helpers::{build_grouped_matcher, evaluate_ip_access, validate_groups_structure};
+use crate::matcher::ip_cidr_helpers::{
+    build_grouped_matcher, evaluate_ip_access, validate_groups_structure, validate_refs_structure,
+};
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::resources::edgion_config_data::IpGroup;
 use crate::resources::edgion_plugins::{AccessDecision, DefaultAction, PluginValidation};
@@ -34,6 +36,14 @@ pub struct ConnectionIpRestrictionRules {
     #[serde(default)]
     pub default_action: DefaultAction,
 
+    /// Allow-list references to `IpList` EdgionConfigData resources (resolved in gateway).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_refs: Option<Vec<crate::resources::edgion_config_data::EdgionConfigDataRef>>,
+
+    /// Deny-list references to `IpList` EdgionConfigData resources (resolved in gateway).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deny_refs: Option<Vec<crate::resources::edgion_config_data::EdgionConfigDataRef>>,
+
     /// Catch-all for any field not recognized by the struct. Populated by serde during
     /// deserialization so the Controller's preparse can identify legacy HTTP fields
     /// (`ipSource`/`message`/`status`) from the old schema and emit a migration status
@@ -56,6 +66,8 @@ impl Default for ConnectionIpRestrictionRules {
             allow: None,
             deny: None,
             default_action: DefaultAction::default(),
+            allow_refs: None,
+            deny_refs: None,
             unknown_fields: BTreeMap::new(),
             allow_matcher: None,
             deny_matcher: None,
@@ -76,10 +88,12 @@ impl ConnectionIpRestrictionRules {
     }
 
     pub fn validate_and_init(&mut self) -> Result<(), String> {
-        let allow_nonempty = self.allow.as_ref().is_some_and(|v| !v.is_empty());
-        let deny_nonempty = self.deny.as_ref().is_some_and(|v| !v.is_empty());
-        if !allow_nonempty && !deny_nonempty {
-            return Err("At least one of 'allow' or 'deny' must be non-empty".to_string());
+        let any_allow = self.allow.as_ref().is_some_and(|v| !v.is_empty())
+            || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty());
+        let any_deny =
+            self.deny.as_ref().is_some_and(|v| !v.is_empty()) || self.deny_refs.as_ref().is_some_and(|v| !v.is_empty());
+        if !any_allow && !any_deny {
+            return Err("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
         }
         if let Some(groups) = &self.allow {
             if !groups.is_empty() {
@@ -90,6 +104,12 @@ impl ConnectionIpRestrictionRules {
             if !groups.is_empty() {
                 self.deny_matcher = Some(build_grouped_matcher(groups)?);
             }
+        }
+        if let Some(refs) = &self.allow_refs {
+            validate_refs_structure(refs)?;
+        }
+        if let Some(refs) = &self.deny_refs {
+            validate_refs_structure(refs)?;
         }
         Ok(())
     }
@@ -107,6 +127,26 @@ impl ConnectionIpRestrictionRules {
             ip,
         )
     }
+
+    /// Whitelist mode by configured intent (spec Decision 5).
+    pub fn allow_mode(&self) -> bool {
+        self.allow.as_ref().is_some_and(|v| !v.is_empty()) || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty())
+    }
+
+    /// Decision over inline ∪ gateway-resolved reference matchers.
+    pub fn check_ip_with_refs(
+        &self,
+        ip: &IpAddr,
+        deny_ref_matchers: &[&IpRadixMatcher],
+        allow_ref_matchers: &[&IpRadixMatcher],
+    ) -> AccessDecision {
+        use crate::matcher::ip_cidr_helpers::evaluate_ip_access_multi;
+        let mut deny: Vec<&IpRadixMatcher> = self.deny_matcher.iter().collect();
+        deny.extend_from_slice(deny_ref_matchers);
+        let mut allow: Vec<&IpRadixMatcher> = self.allow_matcher.iter().collect();
+        allow.extend_from_slice(allow_ref_matchers);
+        evaluate_ip_access_multi(&deny, &allow, self.allow_mode(), &self.default_action, ip)
+    }
 }
 
 /// Stateless structural validation mirroring HTTP `IpRestrictionConfig`. The
@@ -115,10 +155,12 @@ impl ConnectionIpRestrictionRules {
 /// data-plane builders in `StreamIpRestriction::new`).
 impl PluginValidation for ConnectionIpRestrictionRules {
     fn validation_error(&self) -> Option<String> {
-        let allow_nonempty = self.allow.as_ref().is_some_and(|v| !v.is_empty());
-        let deny_nonempty = self.deny.as_ref().is_some_and(|v| !v.is_empty());
-        if !allow_nonempty && !deny_nonempty {
-            return Some("At least one of 'allow' or 'deny' must be non-empty".to_string());
+        let any_allow = self.allow.as_ref().is_some_and(|v| !v.is_empty())
+            || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty());
+        let any_deny =
+            self.deny.as_ref().is_some_and(|v| !v.is_empty()) || self.deny_refs.as_ref().is_some_and(|v| !v.is_empty());
+        if !any_allow && !any_deny {
+            return Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
         }
         if let Some(groups) = &self.allow {
             if !groups.is_empty() {
@@ -134,6 +176,16 @@ impl PluginValidation for ConnectionIpRestrictionRules {
                 }
             }
         }
+        if let Some(refs) = &self.allow_refs {
+            if let Err(e) = validate_refs_structure(refs) {
+                return Some(format!("allowRefs: {}", e));
+            }
+        }
+        if let Some(refs) = &self.deny_refs {
+            if let Err(e) = validate_refs_structure(refs) {
+                return Some(format!("denyRefs: {}", e));
+            }
+        }
         None
     }
 }
@@ -141,6 +193,69 @@ impl PluginValidation for ConnectionIpRestrictionRules {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn allow_mode_true_when_only_allow_refs_set() {
+        use crate::resources::edgion_config_data::EdgionConfigDataRef;
+        let r = ConnectionIpRestrictionRules {
+            allow_refs: Some(vec![EdgionConfigDataRef {
+                name: "corp".into(),
+                namespace: None,
+            }]),
+            ..Default::default()
+        };
+        assert!(r.allow_mode());
+    }
+
+    #[test]
+    fn refs_only_config_passes_validation() {
+        use crate::resources::edgion_config_data::EdgionConfigDataRef;
+        let mut r = ConnectionIpRestrictionRules {
+            deny_refs: Some(vec![EdgionConfigDataRef {
+                name: "blocklist".into(),
+                namespace: None,
+            }]),
+            ..Default::default()
+        };
+        assert!(r.validate_and_init().is_ok());
+        assert_eq!(r.validation_error(), None);
+    }
+
+    #[test]
+    fn with_refs_deny_union_blocks_referenced_ip() {
+        use crate::matcher::ip_cidr_helpers::build_grouped_matcher;
+        let mut r = ConnectionIpRestrictionRules {
+            deny: Some(vec![group("inline", &["1.1.1.1"])]),
+            ..Default::default()
+        };
+        r.validate_and_init().unwrap();
+        let ref_deny = build_grouped_matcher(&[group("reflist", &["2.2.2.2"])]).unwrap();
+        assert!(matches!(
+            r.check_ip_with_refs(&"2.2.2.2".parse().unwrap(), &[&ref_deny], &[]),
+            AccessDecision::DenyByGroup(_)
+        ));
+        assert!(is_allowed(r.check_ip_with_refs(
+            &"8.8.8.8".parse().unwrap(),
+            &[&ref_deny],
+            &[]
+        )));
+    }
+
+    #[test]
+    fn allow_refs_missing_denies_all_in_allow_mode() {
+        use crate::resources::edgion_config_data::EdgionConfigDataRef;
+        let r = ConnectionIpRestrictionRules {
+            allow_refs: Some(vec![EdgionConfigDataRef {
+                name: "missing".into(),
+                namespace: None,
+            }]),
+            ..Default::default()
+        };
+        assert!(matches!(
+            r.check_ip_with_refs(&"8.8.8.8".parse().unwrap(), &[], &[]),
+            AccessDecision::DenyByWhitelistMiss
+        ));
+    }
 
     fn group(name: &str, cidrs: &[&str]) -> IpGroup {
         IpGroup {
@@ -290,7 +405,7 @@ mod tests {
         let rules = ConnectionIpRestrictionRules::default();
         assert_eq!(
             rules.validation_error(),
-            Some("At least one of 'allow' or 'deny' must be non-empty".to_string())
+            Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string())
         );
     }
 

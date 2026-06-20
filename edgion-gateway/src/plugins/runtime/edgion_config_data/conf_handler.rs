@@ -16,13 +16,43 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use edgion_common::conf_sync::traits::ConfHandler;
-use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigData, RegionRouteOverride};
+use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
+use edgion_resources::resources::edgion_config_data::{
+    ConfigEntry, EdgionConfigData, EdgionConfigDataRef, RegionRouteOverride,
+};
 
 static GLOBAL_EDGION_CONFIG_DATA_STORE: LazyLock<Arc<EdgionConfigDataStore>> =
     LazyLock::new(|| Arc::new(EdgionConfigDataStore::new()));
 
 pub fn get_global_edgion_config_data_store() -> Arc<EdgionConfigDataStore> {
     GLOBAL_EDGION_CONFIG_DATA_STORE.clone()
+}
+
+/// Flatten optional `EdgionConfigDataRef`s into store keys ("namespace/name"),
+/// defaulting an unspecified ref namespace to `parent_namespace`. Pure; called at
+/// plugin construction (cold path).
+pub fn resolve_ip_list_ref_keys(refs: Option<&Vec<EdgionConfigDataRef>>, parent_namespace: &str) -> Vec<String> {
+    refs.map(|v| {
+        v.iter()
+            .map(|r| format!("{}/{}", r.namespace.as_deref().unwrap_or(parent_namespace), r.name))
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// Resolve already-flattened ref keys to their pre-compiled IpList matchers against
+/// the global store. Unresolved keys (absent/disabled/uncompilable IpList) are
+/// silently skipped — fail-closed direction is enforced by the caller's `allow_mode`.
+/// Empty `keys` returns an empty Vec WITHOUT touching the store (hot-path fast path).
+/// NOTE: runs on the request/connection hot path — MUST NOT log (data-plane no-tracing).
+pub fn resolve_ip_list_matchers(keys: &[String]) -> Vec<Arc<IpRadixMatcher>> {
+    if keys.is_empty() {
+        return Vec::new();
+    }
+    let store = get_global_edgion_config_data_store();
+    keys.iter()
+        .filter_map(|k| store.get_ip_list_matcher_by_key(k))
+        .collect()
 }
 
 pub fn create_edgion_config_data_handler() -> Box<dyn ConfHandler<EdgionConfigData> + Send + Sync> {
@@ -47,6 +77,12 @@ type RawMap = HashMap<String, Arc<EdgionConfigData>>;
 /// Key: "namespace/name". Values carry the overlay config; no pre-compilation needed.
 type RegionRouteOverrideMap = HashMap<String, Arc<RegionRouteOverride>>;
 
+/// Typed index for `IpList` EdgionConfigData resources, keyed "namespace/name".
+/// Each `IpList`'s groups are pre-compiled into one `IpRadixMatcher` at conf-change
+/// time so the request path never rebuilds. A disabled (`spec.enable=false`) or
+/// uncompilable IpList produces NO entry (treated as a missing reference).
+type IpListMatcherMap = HashMap<String, Arc<IpRadixMatcher>>;
+
 /// All typed indexes bundled into a single struct so they can be swapped atomically.
 ///
 /// Note: `Selector` (GlobalConnectionIpRestriction's active-profile selector) is NOT
@@ -54,6 +90,7 @@ type RegionRouteOverrideMap = HashMap<String, Arc<RegionRouteOverride>>;
 /// inline, so a typed index would be unused. Add one only if a typed consumer appears.
 struct TypedIndexes {
     region_route_overrides: RegionRouteOverrideMap,
+    ip_list: IpListMatcherMap,
 }
 
 /// Atomic view of the store: raw map + derived typed indexes published together.
@@ -89,6 +126,7 @@ impl EdgionConfigDataStore {
                 raw: HashMap::new(),
                 indexes: TypedIndexes {
                     region_route_overrides: HashMap::new(),
+                    ip_list: HashMap::new(),
                 },
             }),
         }
@@ -115,6 +153,13 @@ impl EdgionConfigDataStore {
         snap.indexes.region_route_overrides.get(key).cloned()
     }
 
+    /// Look up the pre-compiled `IpRadixMatcher` for an `IpList` by "namespace/name".
+    /// Returns `None` if absent, disabled, or uncompilable.
+    pub fn get_ip_list_matcher_by_key(&self, key: &str) -> Option<Arc<IpRadixMatcher>> {
+        let snap = self.snapshot.load();
+        snap.indexes.ip_list.get(key).cloned()
+    }
+
     /// Look up a raw `EdgionConfigData` entry by "namespace/name" key.
     /// Used by the GCIR plugin to perform the type guard before overlay application.
     pub fn get_raw_by_key(&self, key: &str) -> Option<Arc<EdgionConfigData>> {
@@ -127,15 +172,38 @@ impl EdgionConfigDataStore {
     /// Build all typed indexes from a raw map. Pure function; called at conf change
     /// time only (low frequency).
     fn build_indexes(raw: &RawMap) -> TypedIndexes {
+        use edgion_resources::matcher::ip_cidr_helpers::build_grouped_matcher;
+
         let mut rr_overrides = RegionRouteOverrideMap::new();
+        let mut ip_list = IpListMatcherMap::new();
 
         for (key, ed) in raw {
             match &ed.spec.data {
                 ConfigEntry::KeyList(_) => {
                     // No typed index — no request-time consumer.
                 }
-                ConfigEntry::IpList(_) => {
-                    // No typed index — no request-time consumer.
+                ConfigEntry::IpList(d) => {
+                    // Honor the envelope kill-switch: a disabled IpList resolves as absent.
+                    // (Asymmetric with RegionRouteOverride, which honors `enable` at read time;
+                    // IpList has no per-consumer plugin, so the matcher IS the consumer surface.)
+                    if ed.spec.enable {
+                        match build_grouped_matcher(&d.items) {
+                            Ok(matcher) => {
+                                ip_list.insert(key.clone(), Arc::new(matcher));
+                            }
+                            Err(e) => {
+                                // All-or-nothing compilation (partial-good is a separate task):
+                                // a malformed/empty IpList yields no entry -> treated as missing.
+                                // Cold path (conf change), so tracing is allowed here.
+                                tracing::warn!(
+                                    component = "edgion_config_data_store",
+                                    key = %key,
+                                    error = %e,
+                                    "IpList failed to compile; reference will resolve as missing"
+                                );
+                            }
+                        }
+                    }
                 }
                 ConfigEntry::Selector(_) => {
                     // Active-profile selector. Not indexed — the GlobalConnectionIpRestriction
@@ -154,6 +222,7 @@ impl EdgionConfigDataStore {
 
         TypedIndexes {
             region_route_overrides: rr_overrides,
+            ip_list,
         }
     }
 
@@ -281,7 +350,8 @@ mod stats_tests {
         raw.insert("ns2/key-list".to_string(), key_ed);
         store.replace_all(raw);
 
-        // IpList and KeyList have no typed index; raw count and keys still reflect them.
+        // KeyList has no typed index; IpList is now indexed (asserted separately).
+        // Raw count and keys still reflect both.
         assert_eq!(store.count(), 2);
         assert_eq!(store.keys().len(), 2);
     }
@@ -315,5 +385,99 @@ mod stats_tests {
         let found = store.get_region_route_override_by_key("ns-test/rr-override");
         assert!(found.is_some(), "RegionRouteOverride must be indexed");
         assert!(found.unwrap().regions.is_none());
+    }
+
+    #[test]
+    fn ip_list_is_indexed_and_matches() {
+        use edgion_resources::resources::edgion_config_data::IpListData;
+        let store = EdgionConfigDataStore::new();
+        let ed = {
+            let spec = EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "office".into(),
+                        description: None,
+                        cidrs: vec!["10.0.0.0/8".into()],
+                    }],
+                }),
+            };
+            let mut ed = EdgionConfigData::new("ip-allow", spec);
+            ed.metadata.namespace = Some("ns1".to_string());
+            Arc::new(ed)
+        };
+        let mut raw: RawMap = HashMap::new();
+        raw.insert("ns1/ip-allow".to_string(), ed);
+        store.replace_all(raw);
+
+        let m = store.get_ip_list_matcher_by_key("ns1/ip-allow").expect("indexed");
+        assert_eq!(m.matched_group(&"10.1.2.3".parse().unwrap()), Some("office"));
+        assert!(store.get_ip_list_matcher_by_key("ns1/missing").is_none());
+    }
+
+    #[test]
+    fn ip_list_disabled_is_not_indexed() {
+        use edgion_resources::resources::edgion_config_data::IpListData;
+        let store = EdgionConfigDataStore::new();
+        let ed = {
+            let spec = EdgionConfigDataSpec {
+                enable: false,
+                active: None,
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "g".into(),
+                        description: None,
+                        cidrs: vec!["10.0.0.0/8".into()],
+                    }],
+                }),
+            };
+            let mut ed = EdgionConfigData::new("ip-off", spec);
+            ed.metadata.namespace = Some("ns2".to_string());
+            Arc::new(ed)
+        };
+        let mut raw: RawMap = HashMap::new();
+        raw.insert("ns2/ip-off".to_string(), ed);
+        store.replace_all(raw);
+        assert!(store.get_ip_list_matcher_by_key("ns2/ip-off").is_none());
+    }
+
+    #[test]
+    fn ip_list_empty_items_is_skipped() {
+        use edgion_resources::resources::edgion_config_data::IpListData;
+        let store = EdgionConfigDataStore::new();
+        let ed = {
+            let spec = EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                data: ConfigEntry::IpList(IpListData { items: vec![] }),
+            };
+            let mut ed = EdgionConfigData::new("ip-empty", spec);
+            ed.metadata.namespace = Some("ns3".to_string());
+            Arc::new(ed)
+        };
+        let mut raw: RawMap = HashMap::new();
+        raw.insert("ns3/ip-empty".to_string(), ed);
+        store.replace_all(raw);
+        // All-or-nothing build: empty items -> build error -> not indexed (treated as missing).
+        assert!(store.get_ip_list_matcher_by_key("ns3/ip-empty").is_none());
+    }
+
+    #[test]
+    fn resolve_ref_keys_defaults_namespace() {
+        use edgion_resources::resources::edgion_config_data::EdgionConfigDataRef;
+        let refs = vec![
+            EdgionConfigDataRef {
+                name: "a".into(),
+                namespace: None,
+            },
+            EdgionConfigDataRef {
+                name: "b".into(),
+                namespace: Some("other".into()),
+            },
+        ];
+        let keys = resolve_ip_list_ref_keys(Some(&refs), "parent");
+        assert_eq!(keys, vec!["parent/a".to_string(), "other/b".to_string()]);
+        assert!(resolve_ip_list_ref_keys(None, "parent").is_empty());
     }
 }

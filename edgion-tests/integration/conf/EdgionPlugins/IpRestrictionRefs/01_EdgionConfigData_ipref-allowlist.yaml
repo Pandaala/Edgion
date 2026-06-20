@@ -1,0 +1,16 @@
+# IpList EdgionConfigData — central allow-list for IpRestrictionRefs tests.
+# Contains the loopback range (127.0.0.0/8) so the test client's TCP peer
+# address (127.0.0.1) resolves as "in-list" when referenced via allowRefs.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ipref-allowlist
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: loopback
+          cidrs:
+            - "127.0.0.0/8"

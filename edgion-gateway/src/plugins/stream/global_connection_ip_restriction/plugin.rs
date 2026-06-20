@@ -19,15 +19,19 @@
 //! or inject rules. Every non-switch outcome falls back to `active_profile` (fail-to-base),
 //! so the base MUST be authored as the conservative/safe value (e.g. `defaultAction: Deny`).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
 use crate::observe::metrics::record_conn_ip_restriction_event;
-use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
+use crate::plugins::runtime::edgion_config_data::{
+    get_global_edgion_config_data_store, resolve_ip_list_matchers, resolve_ip_list_ref_keys,
+};
 use crate::plugins::stream::stream_plugin_trait::{
     access_decision_to_stream_result, StreamContext, StreamPlugin, StreamPluginResult,
 };
+use edgion_resources::matcher::ip_radix_tree::IpRadixMatcher;
 use edgion_resources::resources::edgion_config_data::ConfigEntry;
 use edgion_resources::resources::edgion_stream_plugins::GlobalConnectionIpRestrictionConfig;
 
@@ -41,6 +45,9 @@ pub struct GlobalConnectionIpRestrictionPlugin {
     /// Optional EdgionConfigData store key ("namespace/name") for a `Selector` that
     /// supplies the active profile name at connection time. `None` means no selector.
     active_profile_ref_key: Option<String>,
+    /// Per-profile resolved IpList ref keys (deny_keys, allow_keys), keyed by profile name.
+    /// Pre-resolved at construction because `parent_namespace` is not retained.
+    profile_ref_keys: HashMap<String, (Vec<String>, Vec<String>)>,
 }
 
 impl GlobalConnectionIpRestrictionPlugin {
@@ -59,9 +66,20 @@ impl GlobalConnectionIpRestrictionPlugin {
             format!("{}/{}", ns, r.name)
         });
 
+        let profile_ref_keys = config
+            .profiles
+            .iter()
+            .map(|(name, p)| {
+                let deny_keys = resolve_ip_list_ref_keys(p.deny_refs.as_ref(), parent_namespace);
+                let allow_keys = resolve_ip_list_ref_keys(p.allow_refs.as_ref(), parent_namespace);
+                (name.clone(), (deny_keys, allow_keys))
+            })
+            .collect();
+
         Ok(Self {
             base: Arc::new(base),
             active_profile_ref_key,
+            profile_ref_keys,
         })
     }
 
@@ -132,9 +150,16 @@ impl StreamPlugin for GlobalConnectionIpRestrictionPlugin {
             return StreamPluginResult::Deny("ip:deny:profile-missing".to_string());
         };
 
-        access_decision_to_stream_result(profile.check_ip(&ctx.client_ip), || {
-            record_conn_ip_restriction_event("denied")
-        })
+        static NO_KEYS: (Vec<String>, Vec<String>) = (Vec::new(), Vec::new());
+        let (deny_keys, allow_keys) = self.profile_ref_keys.get(&active).unwrap_or(&NO_KEYS);
+        let deny_arcs = resolve_ip_list_matchers(deny_keys);
+        let allow_arcs = resolve_ip_list_matchers(allow_keys);
+        let deny_refs: Vec<&IpRadixMatcher> = deny_arcs.iter().map(|a| a.as_ref()).collect();
+        let allow_refs: Vec<&IpRadixMatcher> = allow_arcs.iter().map(|a| a.as_ref()).collect();
+        access_decision_to_stream_result(
+            profile.check_ip_with_refs(&ctx.client_ip, &deny_refs, &allow_refs),
+            || record_conn_ip_restriction_event("denied"),
+        )
     }
 }
 
@@ -164,6 +189,8 @@ mod tests {
             allow: allow_cidr.map(|c| vec![ip_group("test-allow", c)]),
             deny: deny_cidr.map(|c| vec![ip_group("test-deny", c)]),
             default_action,
+            allow_refs: None,
+            deny_refs: None,
             allow_matcher: None,
             deny_matcher: None,
         }
@@ -380,5 +407,40 @@ mod tests {
             active_profile_ref: None,
         };
         assert!(GlobalConnectionIpRestrictionPlugin::new(&config, "default").is_err());
+    }
+
+    #[tokio::test]
+    async fn profile_deny_refs_block_referenced_ip() {
+        let ns = "gcir-denyref-unit";
+        // Seed a deny IpList.
+        insert_ed(
+            ns,
+            "blk",
+            true,
+            ConfigEntry::IpList(IpListData {
+                items: vec![ip_group("blocked", "9.9.9.9/32")],
+            }),
+        );
+        // One profile, default Allow, with a denyRef to the seeded IpList.
+        let mut profile = profile(DefaultAction::Allow, None, None);
+        profile.deny_refs = Some(vec![EdgionConfigDataRef {
+            name: "blk".into(),
+            namespace: Some(ns.into()),
+        }]);
+        let config = GlobalConnectionIpRestrictionConfig {
+            enable: true,
+            active_profile: "main".to_string(),
+            profiles: HashMap::from([("main".to_string(), profile)]),
+            description: None,
+            active_profile_ref: None,
+        };
+        let plugin = GlobalConnectionIpRestrictionPlugin::new(&config, ns).expect("valid");
+        let ctx_block = StreamContext::new("9.9.9.9".parse().unwrap(), 8080);
+        assert!(matches!(
+            plugin.on_connection(&ctx_block).await,
+            StreamPluginResult::Deny(_)
+        ));
+        let ctx_ok = StreamContext::new("8.8.8.8".parse().unwrap(), 8080);
+        assert!(matches!(plugin.on_connection(&ctx_ok).await, StreamPluginResult::Allow));
     }
 }

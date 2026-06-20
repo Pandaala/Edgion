@@ -12,12 +12,16 @@
 //!    ResourceKind): get/list allow the aggregate read endpoints
 //!    (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes),
 //!    and failover covers the POST failover endpoint.
+//!  - server-info on the NonResource route (GET /api/v1/server-info). It exposes
+//!    only a reload marker (server_id), readiness, and mode -- no secrets -- so
+//!    it is safe to read by default; Center uses it to verify reload propagation.
 //!
-//! Nothing else is allowed: no reload, server-info, diagnostics, wipe-all.
+//! Nothing else is allowed: no reload, diagnostics, wipe-all.
 //!
 //! When `center.rbac` is `Some(...)` the operator's config is used verbatim;
 //! the built-in default is NOT applied.
 
+use crate::api::authz_classifier::NON_RESOURCE_KIND;
 use crate::authz::CenterPolicy;
 use crate::config::{FedAllowRule, FedRbacConfig};
 use edgion_resources::resource::kind::ResourceKind;
@@ -114,6 +118,8 @@ const DEFAULT_READ_KINDS: &[&str] = &[
 ///      RegionRoute is intentionally kept as its own rule because it is NOT part
 ///      of the ResourceKind exhaustiveness gate -- it is a synthetic classifier
 ///      label only used on the fed-proxy routing layer.
+///   4. server-info on the NonResource route. Read-only and non-sensitive
+///      (server_id / ready / mode only); Center reads it to verify reloads.
 pub(crate) fn default_center_policy() -> CenterPolicy {
     let read_kinds: Vec<String> = DEFAULT_READ_KINDS.iter().map(|s| s.to_string()).collect();
 
@@ -140,6 +146,12 @@ pub(crate) fn default_center_policy() -> CenterPolicy {
             FedAllowRule {
                 verbs: vec!["get".to_string(), "list".to_string(), "failover".to_string()],
                 kinds: vec!["RegionRoute".to_string()],
+            },
+            // Rule 4: server-info on the NonResource route. Read-only and
+            // non-sensitive (server_id / ready / mode); used to verify reloads.
+            FedAllowRule {
+                verbs: vec!["server-info".to_string()],
+                kinds: vec![NON_RESOURCE_KIND.to_string()],
             },
         ],
     };
@@ -269,8 +281,15 @@ mod tests {
     }
 
     #[test]
-    fn default_denies_server_info() {
-        assert!(!allows(&az(), Verb::ServerInfo, "*"));
+    fn default_allows_server_info() {
+        // server-info is read-only and non-sensitive, allowed on the NonResource route.
+        assert!(allows(&az(), Verb::ServerInfo, NON_RESOURCE_KIND));
+    }
+
+    #[test]
+    fn default_denies_server_info_on_resource_kind() {
+        // The allowance is scoped to NonResource; it must not leak to resource kinds.
+        assert!(!allows(&az(), Verb::ServerInfo, "Gateway"));
     }
 
     #[test]

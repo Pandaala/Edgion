@@ -34,9 +34,11 @@ metadata:
 |------|------|--------|------|
 | `allow` | Array\<Object\> | 无 | 允许分组；每项格式为 `{name, cidrs}`。非空的 `allow` 启用白名单模式。 |
 | `deny` | Array\<Object\> | 无 | 拒绝分组；每项格式为 `{name, cidrs}`。优先于 `allow` 求值。 |
+| `allowRefs` | Array\<Object\> | 无 | 引用中心化的 `IpList` EdgionConfigData，其 CIDR 合并进白名单。每项为 `{name, namespace?}`；`namespace` 缺省取该资源所在 namespace。被引用 IpList 缺失/禁用时 fail-closed（全拒），并通过 `ResolvedRefs=False` 暴露。 |
+| `denyRefs` | Array\<Object\> | 无 | 同 `allowRefs`，但合并进黑名单。被引用 IpList 缺失/禁用时少拦（同样以 `ResolvedRefs=False` 暴露）。 |
 | `defaultAction` | Enum | `allow` | 没有规则匹配时的动作。允许值：`allow` \| `deny`。 |
 
-`allow` 和 `deny` 中至少有一个必须非空。
+`allow`/`deny` 或 `allowRefs`/`denyRefs` 中至少有一个必须非空。
 
 #### 分组子字段
 
@@ -58,7 +60,7 @@ EdgionConfigData 提供。
 |------|------|--------|------|
 | `enable` | Boolean | **必填** | 总开关。`false` 时禁用插件（放行所有连接）。 |
 | `activeProfile` | String | **必填** | 默认激活的 profile 名；必须存在于 `profiles` 中。 |
-| `profiles` | Map\<String, Object\> | **必填** | 命名规则集。每个 profile 为 `{ defaultAction, allow?, deny? }`（分组结构同 `IpRestriction`）。 |
+| `profiles` | Map\<String, Object\> | **必填** | 命名规则集。每个 profile 为 `{ defaultAction, allow?, deny?, allowRefs?, denyRefs? }`（分组结构同 `IpRestriction`）。每个 profile 也可通过 per-profile 的 `allowRefs`/`denyRefs` 引用中心 IpList（与 `activeProfileRef` 不同——后者是选择哪个 profile 生效，而非引用 IpList）。 |
 | `description` | String | 无 | 可选的可读说明。 |
 | `activeProfileRef.name` | String | 无 | 可选。一个 `Selector` EdgionConfigData 的名称，用于覆盖当前激活的 profile。 |
 | `activeProfileRef.namespace` | String | 父 ESP 命名空间 | Selector 的命名空间；省略时继承父 `EdgionStreamPlugins` 的命名空间。 |

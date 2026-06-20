@@ -41,8 +41,8 @@ impl Default for EdgionPluginsHandler {
 // ============================================================================
 
 impl EdgionPluginsHandler {
-    /// Clear all EdgionConfigData refs registered by this EdgionPlugins in `edgion_config_data_refs`.
-    fn clear_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) {
+    /// Clear all EdgionConfigData reverse refs (overrideRef + IpList allow/deny refs) registered by this EdgionPlugins.
+    fn clear_config_data_refs(ep: &EdgionPlugins, ctx: &HandlerContext) {
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
         let ep_name = ep.metadata.name.as_deref().unwrap_or("");
         let ep_key = format!("{}:{}/{}", ResourceKind::EdgionPlugins.as_str(), ns, ep_name);
@@ -69,6 +69,31 @@ impl EdgionPluginsHandler {
                 }
             })
             .collect()
+    }
+
+    /// Collect "namespace/name" keys for every IpList referenced by an `IpRestriction`
+    /// plugin's `allow_refs`/`deny_refs` in `request_plugins`. Namespace defaults to the
+    /// EP namespace.
+    fn get_ip_list_ref_keys(ep: &EdgionPlugins) -> Vec<String> {
+        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+        let Some(plugins) = &ep.spec.request_plugins else {
+            return vec![];
+        };
+        let mut keys = Vec::new();
+        for e in plugins {
+            if let EdgionPlugin::IpRestriction(ref config) = e.plugin {
+                for r in config
+                    .allow_refs
+                    .iter()
+                    .flatten()
+                    .chain(config.deny_refs.iter().flatten())
+                {
+                    let rns = r.namespace.as_deref().unwrap_or(ns);
+                    keys.push(format!("{}/{}", rns, r.name));
+                }
+            }
+        }
+        keys
     }
 }
 
@@ -106,7 +131,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_csrf(&mut ep, &resource_ref, ctx);
 
         // Clear existing EdgionConfigData override refs for this EP, then re-register from scratch.
-        Self::clear_override_refs(&ep, ctx);
+        Self::clear_config_data_refs(&ep, ctx);
 
         let ns = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
         let ep_name = ep.metadata.name.as_deref().unwrap_or("").to_string();
@@ -120,6 +145,14 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
                 .add_ref(override_key, ep_key.clone());
         }
 
+        // Register requeue watcher: EP → EdgionConfigData(IpList refs).
+        // When the referenced EdgionConfigData changes, the EdgionConfigDataHandler requeues this EP.
+        for ip_list_key in Self::get_ip_list_ref_keys(&ep) {
+            ctx.runtime()
+                .edgion_config_data_refs
+                .add_ref(ip_list_key, ep_key.clone());
+        }
+
         ProcessResult::Continue(ep)
     }
 
@@ -130,7 +163,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ep.metadata.name.clone().unwrap_or_default(),
         );
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
-        Self::clear_override_refs(ep, ctx);
+        Self::clear_config_data_refs(ep, ctx);
 
         tracing::debug!(
             edgion_plugins = %resource_ref.key(),
@@ -160,6 +193,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
 
         let mut resolved_errors = Self::resolve_secret_refs(ep, ctx);
         resolved_errors.extend(resolve_override_refs(ep, ctx));
+        resolved_errors.extend(resolve_ip_list_refs(ep, ctx));
         let resolved_refs = if resolved_errors.is_empty() {
             condition_true(
                 condition_types::RESOLVED_REFS,
@@ -250,6 +284,43 @@ pub fn resolve_override_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Re
                         namespace: override_ns.to_string(),
                         name: override_ref.name.clone(),
                         expected_type: "RegionRouteOverride".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    errors
+}
+
+/// Check each `IpRestriction` plugin's `allow_refs`/`deny_refs` against the EdgionConfigData
+/// store. Returns one `EdgionConfigDataNotFound { expected_type: "IpList" }` per missing or
+/// wrong-type reference. `request_plugins` is a Vec (stable order), so no extra sort needed.
+pub fn resolve_ip_list_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+    let Some(plugins) = &ep.spec.request_plugins else {
+        return vec![];
+    };
+    let mut errors = Vec::new();
+    for entry in plugins {
+        if let EdgionPlugin::IpRestriction(ref config) = entry.plugin {
+            for r in config
+                .allow_refs
+                .iter()
+                .flatten()
+                .chain(config.deny_refs.iter().flatten())
+            {
+                let rns = r.namespace.as_deref().unwrap_or(ns);
+                let target = ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
+                let resolved = target.as_ref().is_some_and(|t| {
+                    t.spec.enable
+                        && matches!(&t.spec.data, ConfigEntry::IpList(d)
+                            if edgion_resources::matcher::ip_cidr_helpers::build_grouped_matcher(&d.items).is_ok())
+                });
+                if !resolved {
+                    errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
+                        namespace: rns.to_string(),
+                        name: r.name.clone(),
+                        expected_type: "IpList".to_string(),
                     });
                 }
             }
@@ -826,6 +897,271 @@ mod tests {
                 assert_eq!(expected_type, "RegionRouteOverride");
             }
             other => panic!("expected EdgionConfigDataNotFound, got: {:?}", other),
+        }
+    }
+
+    // ── IpRestriction + allowRefs/denyRefs resolution tests ─────────────────
+
+    #[tokio::test]
+    async fn ip_restriction_deny_refs_registered_and_resolved() {
+        use edgion_resources::resources::edgion_config_data::{IpGroup, IpListData};
+        use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
+
+        // Seed an IpList EdgionConfigData.
+        let ip_ed = build_edgion_config_data(
+            "default",
+            "blocklist",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "g".into(),
+                        description: None,
+                        cidrs: vec!["9.9.9.9/32".into()],
+                    }],
+                }),
+            },
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ed_map = HashMap::new();
+        ed_map.insert("default/blocklist".to_string(), ip_ed);
+        runtime.edgion_config_data_store.replace_all(ed_map);
+
+        let mut ep = EdgionPlugins::new("ipr-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
+            IpRestrictionConfig {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "blocklist".into(),
+                    namespace: None,
+                }]),
+                ..Default::default()
+            },
+        ))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+        // Registered for requeue.
+        let refs = runtime.edgion_config_data_refs.get_refs("default/blocklist");
+        assert!(
+            refs.contains(&"EdgionPlugins:default/ipr-ep".to_string()),
+            "got: {:?}",
+            refs
+        );
+        // Resolves cleanly (IpList exists).
+        assert!(super::resolve_ip_list_refs(&parsed, &ctx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn ip_restriction_missing_deny_ref_reports_iplist_error() {
+        use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ep = EdgionPlugins::new("ipr-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
+            IpRestrictionConfig {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "missing".into(),
+                    namespace: None,
+                }]),
+                ..Default::default()
+            },
+        ))]);
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("skip: {}", reason),
+        };
+        let errors = super::resolve_ip_list_refs(&parsed, &ctx);
+        assert_eq!(errors.len(), 1);
+        match &errors[0] {
+            crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::
+                EdgionConfigDataNotFound { namespace, name, expected_type } => {
+                assert_eq!(namespace, "default");
+                assert_eq!(name, "missing");
+                assert_eq!(expected_type, "IpList");
+            }
+            other => panic!("expected EdgionConfigDataNotFound, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn ip_restriction_disabled_deny_ref_reports_error() {
+        use edgion_resources::resources::edgion_config_data::{IpGroup, IpListData};
+        use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
+
+        // Seed a disabled (enable: false) IpList — should not count as resolved.
+        let ip_ed = build_edgion_config_data(
+            "default",
+            "disabled-list",
+            EdgionConfigDataSpec {
+                enable: false,
+                active: None,
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "g".into(),
+                        description: None,
+                        cidrs: vec!["1.2.3.4/32".into()],
+                    }],
+                }),
+            },
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ed_map = HashMap::new();
+        ed_map.insert("default/disabled-list".to_string(), ip_ed);
+        runtime.edgion_config_data_store.replace_all(ed_map);
+
+        let mut ep = EdgionPlugins::new("ipr-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
+            IpRestrictionConfig {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "disabled-list".into(),
+                    namespace: None,
+                }]),
+                ..Default::default()
+            },
+        ))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("skip: {}", reason),
+        };
+        let errors = super::resolve_ip_list_refs(&parsed, &ctx);
+        assert_eq!(errors.len(), 1, "disabled IpList must not resolve; got: {:?}", errors);
+        match &errors[0] {
+            crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::
+                EdgionConfigDataNotFound { expected_type, .. } => {
+                assert_eq!(expected_type, "IpList");
+            }
+            other => panic!("expected EdgionConfigDataNotFound, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn ip_restriction_allow_ref_resolves() {
+        use edgion_resources::resources::edgion_config_data::{IpGroup, IpListData};
+        use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
+
+        // Seed an enabled, valid IpList — should resolve cleanly.
+        let ip_ed = build_edgion_config_data(
+            "default",
+            "allowlist",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![IpGroup {
+                        name: "g".into(),
+                        description: None,
+                        cidrs: vec!["192.168.0.0/24".into()],
+                    }],
+                }),
+            },
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ed_map = HashMap::new();
+        ed_map.insert("default/allowlist".to_string(), ip_ed);
+        runtime.edgion_config_data_store.replace_all(ed_map);
+
+        let mut ep = EdgionPlugins::new("ipr-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
+            IpRestrictionConfig {
+                allow_refs: Some(vec![EdgionConfigDataRef {
+                    name: "allowlist".into(),
+                    namespace: None,
+                }]),
+                ..Default::default()
+            },
+        ))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("skip: {}", reason),
+        };
+        // Enabled, valid IpList referenced via allow_refs -> resolves cleanly.
+        assert!(
+            super::resolve_ip_list_refs(&parsed, &ctx).is_empty(),
+            "enabled valid IpList allow_ref must resolve without errors"
+        );
+    }
+
+    #[tokio::test]
+    async fn ip_restriction_enabled_malformed_ip_list_reports_error() {
+        use edgion_resources::resources::edgion_config_data::{IpGroup, IpListData};
+        use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
+
+        // Seed an enabled IpList whose CIDRs produce a post-normalization duplicate:
+        // 10.0.0.0/8 and 10.0.0.1/8 both normalize to the same /8 network in the
+        // radix builder. validate_groups_structure (exact-string) misses this;
+        // build_grouped_matcher catches it. The IpList is enabled so the
+        // enable-guard alone would not report an error — only the stricter predicate does.
+        let ip_ed = build_edgion_config_data(
+            "default",
+            "malformed-list",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                data: ConfigEntry::IpList(IpListData {
+                    items: vec![
+                        IpGroup {
+                            name: "a".into(),
+                            description: None,
+                            cidrs: vec!["10.0.0.0/8".into()],
+                        },
+                        IpGroup {
+                            name: "b".into(),
+                            description: None,
+                            cidrs: vec!["10.0.0.1/8".into()],
+                        },
+                    ],
+                }),
+            },
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ed_map = HashMap::new();
+        ed_map.insert("default/malformed-list".to_string(), ip_ed);
+        runtime.edgion_config_data_store.replace_all(ed_map);
+
+        let mut ep = EdgionPlugins::new("ipr-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
+            IpRestrictionConfig {
+                deny_refs: Some(vec![EdgionConfigDataRef {
+                    name: "malformed-list".into(),
+                    namespace: None,
+                }]),
+                ..Default::default()
+            },
+        ))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("skip: {}", reason),
+        };
+        let errors = super::resolve_ip_list_refs(&parsed, &ctx);
+        assert_eq!(
+            errors.len(),
+            1,
+            "enabled-but-uncompilable IpList must not resolve; got: {:?}",
+            errors
+        );
+        match &errors[0] {
+            crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::EdgionConfigDataNotFound {
+                expected_type,
+                ..
+            } => {
+                assert_eq!(expected_type, "IpList");
+            }
+            other => panic!("expected EdgionConfigDataNotFound, got {:?}", other),
         }
     }
 }
