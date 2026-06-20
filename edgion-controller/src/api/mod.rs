@@ -605,10 +605,14 @@ pub async fn serve_with_shutdown(
         }
     };
 
+    // Transport is always plaintext HTTP — there is no admin TLS listener. Network-level
+    // controls (private bind, `allow_admin_ips`, K8s ClusterIP/NetworkPolicy) plus Bearer-token
+    // auth guard this endpoint; make the plaintext nature explicit at startup.
     tracing::info!(
         component = "admin_api",
         addr = %addr,
-        "Controller Admin API server listening with unified K8s-style routes"
+        scheme = "http",
+        "Controller Admin API server listening (plaintext HTTP) with unified K8s-style routes"
     );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
