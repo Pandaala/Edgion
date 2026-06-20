@@ -976,6 +976,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
                     run_test "EdgionPlugins_GlobalAccessControl" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i GlobalAccessControl" || test_failed=true
                     run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
+                    run_test "EdgionPlugins_IpRestrictionPartialGood" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestrictionPartialGood" || test_failed=true
                     run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
                     run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
                     run_test "EdgionPlugins_FaultInjection" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i FaultInjection" || test_failed=true
@@ -1161,6 +1162,7 @@ run_all_tests() {
         run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
         run_test "EdgionPlugins_GlobalAccessControl" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i GlobalAccessControl" || test_failed=true
         run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
+        run_test "EdgionPlugins_IpRestrictionPartialGood" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestrictionPartialGood" || test_failed=true
         run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
         run_test "EdgionPlugins_PathNormalization_ForwardView" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization/ForwardView" || test_failed=true
         run_test "EdgionPlugins_FaultInjection" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i FaultInjection" || test_failed=true
@@ -1318,7 +1320,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/GlobalAccessControl,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/GlobalAccessControl,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/AllEndpointStatus"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth"
                 fi

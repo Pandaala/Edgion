@@ -12,7 +12,7 @@
 //!   `active_profile` (fail-to-base). A selector can only switch among these git-owned
 //!   profiles; it can never disable filtering.
 
-use crate::matcher::ip_cidr_helpers::{build_grouped_matcher, evaluate_ip_access};
+use crate::matcher::ip_cidr_helpers::{build_grouped_matcher_partial, evaluate_ip_access, EntryError};
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::resources::edgion_config_data::{EdgionConfigDataRef, IpGroup};
 use crate::resources::edgion_plugins::{AccessDecision, DefaultAction};
@@ -116,17 +116,24 @@ impl ProfileRules {
             return Err("at least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
         }
 
-        // Intentionally stricter than HTTP/Stream IpRestriction: a present
-        // but empty `allow`/`deny` (`Some(vec![])`) is rejected here via
-        // `build_flat_matcher` ("group list is empty"), rather than being
-        // treated as absent. This preserves pre-existing GlobalConnection
-        // semantics — do not "harmonize" it into the `!is_empty()` guard
-        // the other consumers use.
+        // Intentionally stricter than HTTP/L4 IpRestriction: a present-but-empty
+        // `allow`/`deny` (`Some(vec![])`) is REJECTED here (structural), preserving
+        // GlobalConnection semantics — do not "harmonize" it into the `!is_empty()`
+        // guard the other consumers use. A non-empty list is partial-good: bad CIDRs
+        // are skipped, not fatal.
         if let Some(allow) = &self.allow {
-            self.allow_matcher = Some(build_flat_matcher(allow)?);
+            if allow.is_empty() {
+                return Err("allow group list is empty".to_string());
+            }
+            let (m, _errs) = build_flat_matcher_partial(allow);
+            self.allow_matcher = Some(m);
         }
         if let Some(deny) = &self.deny {
-            self.deny_matcher = Some(build_flat_matcher(deny)?);
+            if deny.is_empty() {
+                return Err("deny group list is empty".to_string());
+            }
+            let (m, _errs) = build_flat_matcher_partial(deny);
+            self.deny_matcher = Some(m);
         }
         use crate::matcher::ip_cidr_helpers::validate_refs_structure;
         if let Some(refs) = &self.allow_refs {
@@ -173,12 +180,12 @@ impl ProfileRules {
     }
 }
 
-/// Flatten `Vec<IpGroup>` into a single IpRadixMatcher.
-/// Delegates to the shared grouped-matcher builder, which performs name
-/// validation (charset + length), name uniqueness, cross-group CIDR
-/// uniqueness, and label interning.
-fn build_flat_matcher(groups: &[IpGroup]) -> Result<IpRadixMatcher, String> {
-    build_grouped_matcher(groups)
+/// Partial-good flat matcher builder. Used by `ProfileRules` once the
+/// present-but-empty structural guard (kept in `validate_and_init`) has passed:
+/// it flattens `Vec<IpGroup>` into a single IpRadixMatcher over the VALID entries,
+/// skipping (and returning) bad CIDRs rather than failing the whole profile.
+fn build_flat_matcher_partial(groups: &[IpGroup]) -> (IpRadixMatcher, Vec<EntryError>) {
+    build_grouped_matcher_partial(groups)
 }
 
 #[cfg(test)]
@@ -283,7 +290,9 @@ mod tests {
     }
 
     #[test]
-    fn validate_duplicate_group_names_errs() {
+    fn validate_duplicate_group_names_is_partial_good() {
+        // Partial-good: a duplicate group name is keep-first (the later occurrence is
+        // skipped, not fatal). The first "office" group's CIDR survives.
         let p = ProfileRules {
             allow: Some(vec![
                 group("office", &["192.168.1.0/24"]),
@@ -303,12 +312,22 @@ mod tests {
             description: None,
             active_profile_ref: None,
         };
-        let err = d.validate_and_init().unwrap_err();
-        assert!(err.contains("duplicate") && err.contains("office"), "{}", err);
+        assert!(d.validate_and_init().is_ok());
+        let p = d.profiles.get("p1").unwrap();
+        // First occurrence ("office" with 192.168.1.0/24) survives.
+        assert!(is_allowed(p.check_ip(&"192.168.1.50".parse().unwrap())));
+        // Second occurrence's CIDR (10.0.0.0/8) was skipped -> whitelist miss.
+        assert!(matches!(
+            p.check_ip(&"10.0.0.1".parse().unwrap()),
+            AccessDecision::DenyByWhitelistMiss
+        ));
     }
 
     #[test]
-    fn validate_empty_cidrs_errs() {
+    fn validate_empty_cidrs_group_is_partial_good() {
+        // Partial-good: an inline group with no cidrs is now SKIPPED (not fatal) because
+        // the list itself is present-and-non-empty. Only a present-but-empty group LIST
+        // (`allow: Some(vec![])`) is still rejected (see validate_allow_some_empty_errs_cleanly).
         let p = ProfileRules {
             allow: Some(vec![group("office", &[])]),
             deny: None,
@@ -325,15 +344,15 @@ mod tests {
             description: None,
             active_profile_ref: None,
         };
-        let err = d.validate_and_init().unwrap_err();
-        // Error message comes from validate_groups_structure: "group 'office' has no cidrs"
-        assert!(err.contains("cidrs") && err.contains("no"), "{}", err);
+        assert!(d.validate_and_init().is_ok());
+        assert!(d.profiles.get("p1").unwrap().allow_matcher.is_some());
     }
 
     #[test]
-    fn validate_bad_cidr_errs() {
+    fn validate_bad_cidr_is_partial_good() {
+        // Partial-good (CIDR-only leniency): a bad inline CIDR is skipped, not fatal.
         let p = ProfileRules {
-            allow: Some(vec![group("office", &["not-an-ip"])]),
+            allow: Some(vec![group("office", &["not-an-ip", "10.0.0.0/8"])]),
             deny: None,
             default_action: DefaultAction::Deny,
             allow_refs: None,
@@ -348,7 +367,27 @@ mod tests {
             description: None,
             active_profile_ref: None,
         };
-        assert!(d.validate_and_init().is_err());
+        assert!(d.validate_and_init().is_ok());
+        // The good CIDR survived.
+        let p = d.profiles.get("p1").unwrap();
+        assert!(is_allowed(p.check_ip(&"10.1.2.3".parse().unwrap())));
+    }
+
+    #[test]
+    fn validate_present_but_empty_allow_list_still_errs() {
+        // Structural guard kept: a present-but-empty allow group LIST is rejected.
+        // A valid `deny` is supplied so the at-least-one guard passes and we exercise
+        // the empty-allow-list path specifically.
+        let mut p = ProfileRules {
+            allow: Some(vec![]),
+            deny: Some(vec![group("bad", &["1.2.3.4"])]),
+            default_action: DefaultAction::Deny,
+            allow_refs: None,
+            deny_refs: None,
+            allow_matcher: None,
+            deny_matcher: None,
+        };
+        assert_eq!(p.validate_and_init(), Err("allow group list is empty".to_string()));
     }
 
     #[test]

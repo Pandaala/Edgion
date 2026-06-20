@@ -51,7 +51,7 @@ spec:
 |------|-------------|
 | `Cors` | CORS cross-origin resource sharing |
 | `Csrf` | CSRF protection |
-| `IpRestriction` | IP allow/deny list (CIDR supported) |
+| `IpRestriction` | IP allow/deny list (CIDR supported). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with the valid entries. Bad entries surface as a `PartiallyInvalid` status condition (reason `RuleInvalid`); `Accepted` stays `True`. A skipped inline deny entry also increments `edgion_ip_deny_entries_skipped_total{scope="http"}`. |
 | `RequestRestriction` | Request restrictions (header/body rules) |
 
 ### Traffic Control

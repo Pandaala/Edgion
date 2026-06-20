@@ -28,6 +28,12 @@ pub(crate) fn init_ip_restriction(
     } else {
         false
     };
+    // Loud signal: a skipped inline deny entry is a blacklist hole (fail-open direction).
+    if let Some(deny) = rules.deny.as_ref() {
+        if !edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors(deny).is_empty() {
+            crate::observe::metrics::record_ip_deny_entries_skipped("stream_l4");
+        }
+    }
     (rules, init_failed)
 }
 

@@ -153,7 +153,7 @@ impl IpRestrictionConfig {
 
     /// Validate configuration and initialize runtime matchers
     pub fn validate_and_init(&mut self) -> Result<(), String> {
-        use crate::matcher::ip_cidr_helpers::build_grouped_matcher;
+        use crate::matcher::ip_cidr_helpers::build_grouped_matcher_partial;
 
         let any_allow = self.allow.as_ref().is_some_and(|v| !v.is_empty())
             || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty());
@@ -169,12 +169,14 @@ impl IpRestrictionConfig {
 
         if let Some(groups) = &self.allow {
             if !groups.is_empty() {
-                self.allow_matcher = Some(build_grouped_matcher(groups)?);
+                let (m, _errs) = build_grouped_matcher_partial(groups);
+                self.allow_matcher = Some(m);
             }
         }
         if let Some(groups) = &self.deny {
             if !groups.is_empty() {
-                self.deny_matcher = Some(build_grouped_matcher(groups)?);
+                let (m, _errs) = build_grouped_matcher_partial(groups);
+                self.deny_matcher = Some(m);
             }
         }
 
@@ -282,14 +284,15 @@ mod validation_trait_tests {
     }
 
     #[test]
-    fn validation_error_invalid_ip_string() {
+    fn validation_error_tolerates_invalid_inline_cidr() {
+        // Partial-good (CIDR-only leniency): a bad inline CIDR no longer rejects the
+        // plugin at admission; CIDR errors are surfaced later via status/metric.
         let config = IpRestrictionConfig {
             allow: Some(vec![group("default", &["not-an-ip"])]),
             ..Default::default()
         };
         let result = PluginValidation::validation_error(&config);
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("not-an-ip"));
+        assert!(result.is_none());
     }
 
     #[test]
@@ -337,7 +340,7 @@ mod validation_trait_tests {
 
 impl PluginValidation for IpRestrictionConfig {
     fn validation_error(&self) -> Option<String> {
-        use crate::matcher::ip_cidr_helpers::{validate_groups_structure, validate_refs_structure};
+        use crate::matcher::ip_cidr_helpers::validate_refs_structure;
 
         let any_allow = self.allow.as_ref().is_some_and(|v| !v.is_empty())
             || self.allow_refs.as_ref().is_some_and(|v| !v.is_empty());
@@ -348,20 +351,6 @@ impl PluginValidation for IpRestrictionConfig {
         }
         if self.status < 100 || self.status >= 600 {
             return Some(format!("Invalid status code: {}", self.status));
-        }
-        if let Some(groups) = &self.allow {
-            if !groups.is_empty() {
-                if let Err(e) = validate_groups_structure(groups) {
-                    return Some(format!("allow: {}", e));
-                }
-            }
-        }
-        if let Some(groups) = &self.deny {
-            if !groups.is_empty() {
-                if let Err(e) = validate_groups_structure(groups) {
-                    return Some(format!("deny: {}", e));
-                }
-            }
         }
         if let Some(refs) = &self.allow_refs {
             if let Err(e) = validate_refs_structure(refs) {
@@ -448,23 +437,45 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_ip() {
+    fn test_invalid_ip_is_partial_good() {
+        // Partial-good (CIDR-only leniency): a bad inline IP is skipped, not fatal.
         let mut config = IpRestrictionConfig {
             allow: Some(vec![group("default", &["192.168.1.256"])]),
             ..Default::default()
         };
         let result = config.validate_and_init();
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        // All CIDRs invalid -> empty matcher (whitelist denies all), but still built.
+        assert!(config.allow_matcher.is_some());
     }
 
     #[test]
-    fn test_invalid_cidr_prefix() {
+    fn test_invalid_cidr_prefix_is_partial_good() {
+        // Partial-good (CIDR-only leniency): a bad CIDR prefix is skipped, not fatal.
         let mut config = IpRestrictionConfig {
             allow: Some(vec![group("default", &["192.168.1.0/33"])]),
             ..Default::default()
         };
         let result = config.validate_and_init();
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert!(config.allow_matcher.is_some());
+    }
+
+    #[test]
+    fn validate_and_init_partial_keeps_good_inline_cidr() {
+        let mut cfg = IpRestrictionConfig {
+            allow: Some(vec![IpGroup {
+                name: "g".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into(), "bad-ip".into()],
+            }]),
+            ..Default::default()
+        };
+        // No longer an Err on a bad inline CIDR (partial-good); structural checks still pass.
+        assert!(cfg.validate_and_init().is_ok());
+        assert!(cfg.allow_matcher.is_some());
+        // The good CIDR survived and matches.
+        assert!(is_allowed(cfg.check_ip_access(&"10.1.2.3".parse().unwrap())));
     }
 
     #[test]

@@ -44,6 +44,30 @@ Closed cases (do not reopen without new requirement): see the "Closed: not group
 - **Cross-group duplicate items**: use **first-wins** (groups are iterated in array order) and emit a `tracing::warn!` carrying both the *existing* and *incoming* group plus the offending item identifier (`secret_key`, `iss`, `cidr`, …). Rationale: grouping is a management / audit aid, **not** a tenant isolation primitive — a single misconfigured partner Secret must not take the whole plugin down. **Forbidden**: fail-fast (kills the resource) and last-wins (order-dependent, operator-unpredictable).
 - Cross-group uniqueness validation reuses the helper pattern in `validate_groups_structure` (see `edgion-resources/src/matcher/ip_cidr_helpers.rs`); abstract a `HashSet`-based helper rather than re-implementing per plugin.
 
+### 3.1 Partial-good compilation (IpList and inline IP lists)
+
+`IpList` EdgionConfigData and the inline `allow`/`deny` groups on `IpRestriction` plugins (HTTP, L4 `ConnectionIpRestriction`, GCIR `ProfileRules`, TLS-route `IpRestriction`) use a **partial-good** compilation path instead of the strict all-or-nothing helper:
+
+| Helper | Path | Used by |
+|--------|------|---------|
+| `validate_groups_structure` | Strict: any bad entry → `Err`, callers typically set `Accepted=False` | `real_ip::trusted_ips` (strict/all-or-nothing; intentional) |
+| `build_grouped_matcher` | Strict: same, builds matcher only if all entries valid | Any legacy/strict caller that must treat a partial group as invalid |
+| `collect_entry_errors(groups) -> Vec<EntryError>` | Partial-good: returns per-entry errors without aborting | Controller `update_status` for `PartiallyInvalid` condition; gateway metric gate |
+| `build_grouped_matcher_partial(groups) -> (IpRadixMatcher, Vec<EntryError>)` | Partial-good: skips bad entries, builds matcher from valid ones | `validate_and_init` for all IP-restriction inline lists; `IpList` gateway index build |
+
+**Skipped entry categories** (as produced by `collect_entry_errors`):
+- Invalid CIDR string (parse failure)
+- Empty `cidrs` list on a group (empty group)
+- Cross-group duplicate CIDR: **keep-first** (first occurrence wins by group iteration order); later duplicates are skipped with a `tracing::warn!` at config-compilation/construction time and surfaced as an entry error on the controller side
+- Duplicate group name: **keep-first** (same keep-first rule)
+- Invalid group name (violates `validate_group_name` charset/length)
+
+**Empty `items` is valid**: an `IpList` with `items: []` compiles to an empty matcher (no entries). This is distinct from a missing `allow`/`deny` field.
+
+**Controller surface**: the controller calls `collect_entry_errors` in `update_status` and writes a `PartiallyInvalid` condition (`status=True`, `reason=RuleInvalid`, message listing the bad entries) when any errors exist; `status=False`/`reason=AllRulesValid` when clean. `Accepted` stays `True` — partial-good entries are admitted.
+
+**Gateway metric**: a skipped inline **deny** entry increments `edgion_ip_deny_entries_skipped_total{scope="http"|"stream_l4"|"tls_route"}` (IpRestriction HTTP/L4/TLS-route only; GCIR per-profile deny is not metered by this counter — it uses `record_conn_ip_restriction_event`). A blacklist hole is the fail-open direction, so it gets a loud counter. Skipped **allow** entries are not metered (over-blocking is the safe direction).
+
 ## 4. Gateway runtime / observability contract
 
 - **Hit branch** (`Allow` / `OK`): `PluginLog` must include `group=<name>`. Follow the `<verb>:group=<name>` shape that IpRestriction uses (`allow:group=<name>`, `deny:group=<name>`, `deny:default`, `deny:not-in-allow`) so existing log parsers keep working.

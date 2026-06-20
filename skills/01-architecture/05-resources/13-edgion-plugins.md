@@ -40,8 +40,9 @@ Clear all references for this EdgionPlugins in SecretRefManager.
 
 Two Gateway-API-style conditions (`k8s_openapi::Condition` type):
 
-- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist
+- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist. Stays `True` even when inline IP lists have bad entries (partial-good; see `PartiallyInvalid` below).
 - **`ResolvedRefs`**: via `SecretRefManager::get_dependencies(ep_key)`, aggregate **all** Secret references registered by this EP during parse, and check `secret_store.get(ns, name)` one by one. Any unresolved Secret → `ResolvedRefsError::SecretNotFound` (reason mapped to `BackendNotFound`); the message lists all missing `ns/name`. When all references resolve → True
+- **`PartiallyInvalid`**: set when `IpRestriction` inline `allow`/`deny` groups contain bad entries (invalid CIDR, empty group, cross-group duplicate CIDR, duplicate/invalid group name). `status=True`/`reason=RuleInvalid` when bad entries exist (message lists them); `status=False`/`reason=AllRulesValid` when clean. The plugin still loads — valid entries compile and the plugin accepts requests normally. A skipped inline **deny** entry additionally increments `edgion_ip_deny_entries_skipped_total{scope="http"}` (blacklist hole = loud metric). The exception: if **both** `allow` and `deny` are completely absent or empty and no `allowRefs`/`denyRefs` are configured, `validate_and_init` returns `Err` and the plugin sets `init_failed` (deny-all fail-closed); this is a structural misconfiguration, not a bad-CIDR case.
 
 Note: `ResolvedRefs` currently checks only Secret **existence**, not whether the Secret contains the required keys (e.g., a BasicAuth Secret missing the `username` field). The latter only emits `tracing::warn!` during parse and is not reflected in the condition.
 

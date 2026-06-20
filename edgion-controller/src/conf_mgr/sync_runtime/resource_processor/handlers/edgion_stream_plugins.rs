@@ -3,7 +3,8 @@
 //! Handles EdgionStreamPlugins resources with Gateway API standard status management.
 
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
-    condition_false, condition_reasons, condition_true, pick_resolved_refs_reason, update_condition, ResolvedRefsError,
+    condition_false, condition_reasons, condition_true, partially_invalid_condition, pick_resolved_refs_reason,
+    update_condition, ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_types, EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler,
@@ -260,11 +261,20 @@ impl ProcessorHandler<EdgionStreamPlugins> for EdgionStreamPluginsHandler {
             condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
         };
 
+        let inline_errors = collect_inline_ip_entry_errors(esp);
+        let partially_invalid = if inline_errors.is_empty() {
+            partially_invalid_condition(None, generation)
+        } else {
+            let msg = edgion_resources::matcher::ip_cidr_helpers::format_entry_errors(&inline_errors);
+            partially_invalid_condition(Some(msg), generation)
+        };
+
         let status = esp
             .status
             .get_or_insert_with(|| EdgionStreamPluginsStatus { conditions: vec![] });
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
+        update_condition(&mut status.conditions, partially_invalid);
     }
 }
 
@@ -275,11 +285,9 @@ fn resolve_ip_list_refs(esp: &EdgionStreamPlugins, ctx: &HandlerContext) -> Vec<
     let mut errors = Vec::new();
     for (ns, name) in EdgionStreamPluginsHandler::iter_ip_list_refs(esp) {
         let target: Option<EdgionConfigData> = ctx.runtime().edgion_config_data_store.get(Some(&ns), &name);
-        let resolved = target.as_ref().is_some_and(|t| {
-            t.spec.enable
-                && matches!(&t.spec.data, ConfigEntry::IpList(d)
-                    if edgion_resources::matcher::ip_cidr_helpers::build_grouped_matcher(&d.items).is_ok())
-        });
+        let resolved = target
+            .as_ref()
+            .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
         if !resolved {
             errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
                 namespace: ns,
@@ -327,6 +335,47 @@ fn collect_ref_pairs(
         let ns = r.namespace.clone().unwrap_or_else(|| esp_ns.to_string());
         out.push((ns, r.name.clone()));
     }
+}
+
+/// Collect partial-good entry errors over every inline allow/deny in L4 IpRestriction
+/// (spec.plugins), each GCIR ProfileRules (gcir.profiles), and TLS-route IpRestriction
+/// (spec.tls_route_plugins). GCIR present-but-empty is a separate structural concern
+/// (Accepted), not reported here.
+fn collect_inline_ip_entry_errors(
+    esp: &EdgionStreamPlugins,
+) -> Vec<edgion_resources::matcher::ip_cidr_helpers::EntryError> {
+    use edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors;
+    let mut errs = Vec::new();
+    for entry in esp.spec.plugins.iter().flatten() {
+        if let EdgionStreamPlugin::IpRestriction(rules) = &entry.plugin {
+            if let Some(g) = &rules.allow {
+                errs.extend(collect_entry_errors(g));
+            }
+            if let Some(g) = &rules.deny {
+                errs.extend(collect_entry_errors(g));
+            }
+        }
+        if let EdgionStreamPlugin::GlobalConnectionIpRestriction(gcir) = &entry.plugin {
+            for profile in gcir.profiles.values() {
+                if let Some(g) = &profile.allow {
+                    errs.extend(collect_entry_errors(g));
+                }
+                if let Some(g) = &profile.deny {
+                    errs.extend(collect_entry_errors(g));
+                }
+            }
+        }
+    }
+    for entry in esp.spec.tls_route_plugins.iter().flatten() {
+        let TlsRouteStreamPlugin::IpRestriction(config) = &entry.plugin;
+        if let Some(g) = &config.allow {
+            errs.extend(collect_entry_errors(g));
+        }
+        if let Some(g) = &config.deny {
+            errs.extend(collect_entry_errors(g));
+        }
+    }
+    errs
 }
 
 /// Resolve each GCIR `activeProfileRef` against the EdgionConfigData store.
@@ -707,6 +756,99 @@ spec:
         let status = esp.status.as_ref().unwrap();
         let accepted = status.conditions.iter().find(|c| c.type_ == "Accepted").unwrap();
         assert_eq!(accepted.reason, "Invalid");
+    }
+
+    // ── Inline entry-error collection tests ──────────────────────────────────
+
+    #[test]
+    fn collect_inline_ip_entry_errors_l4_bad_cidr() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: bad-inline
+  namespace: default
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        deny:
+          - name: bad
+            cidrs: ["not-a-cidr"]
+        defaultAction: allow
+"#;
+        let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let errs = collect_inline_ip_entry_errors(&esp);
+        assert_eq!(
+            errs.len(),
+            1,
+            "expected one entry error for bad L4 inline CIDR; got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn collect_inline_ip_entry_errors_gcir_bad_cidr() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: gcir-bad
+  namespace: default
+spec:
+  plugins:
+    - type: GlobalConnectionIpRestriction
+      config:
+        enable: true
+        activeProfile: main
+        profiles:
+          main:
+            defaultAction: deny
+            allow:
+              - name: bad
+                cidrs: ["256.0.0.1/32"]
+"#;
+        let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let errs = collect_inline_ip_entry_errors(&esp);
+        assert_eq!(
+            errs.len(),
+            1,
+            "expected one entry error for bad GCIR profile CIDR; got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn collect_inline_ip_entry_errors_tls_route_bad_cidr() {
+        let yaml = r#"
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tls-bad
+  namespace: default
+spec:
+  tlsRoutePlugins:
+    - type: IpRestriction
+      config:
+        deny:
+          - name: bad
+            cidrs: ["not-a-cidr"]
+"#;
+        let esp: EdgionStreamPlugins = serde_yaml::from_str(yaml).unwrap();
+        let errs = collect_inline_ip_entry_errors(&esp);
+        assert_eq!(
+            errs.len(),
+            1,
+            "expected one entry error for bad TLS-route inline CIDR; got: {:?}",
+            errs
+        );
+    }
+
+    #[test]
+    fn collect_inline_ip_entry_errors_empty_for_clean_config() {
+        let esp = clean_esp();
+        let errs = collect_inline_ip_entry_errors(&esp);
+        assert!(errs.is_empty(), "expected no errors for clean config; got: {:?}", errs);
     }
 
     #[tokio::test]

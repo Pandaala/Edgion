@@ -162,11 +162,10 @@ impl EdgionConfigData {
     pub fn validate_pre_parse(&self) -> Vec<String> {
         let mut errors = Vec::new();
         match &self.spec.data {
-            ConfigEntry::IpList(ip_list) => {
-                if let Err(e) = crate::matcher::ip_cidr_helpers::build_grouped_matcher(&ip_list.items) {
-                    errors.push(format!("IpList invalid: {}", e));
-                }
-            }
+            // IpList compilation is partial-good (see the partial-good spec): bad entries are
+            // skipped at index-build time and surfaced via the PartiallyInvalid status condition,
+            // NOT rejected here. KeyList/RegionRouteOverride remain all-or-nothing.
+            ConfigEntry::IpList(_) => {}
             ConfigEntry::KeyList(key_list) => {
                 if let Err(e) = crate::matcher::key_group_helpers::validate_key_groups_structure(
                     &key_list.items,
@@ -230,78 +229,74 @@ mod tests {
     use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
     #[test]
-    fn iplist_with_duplicate_cidr_fails_pre_parse() {
+    fn iplist_with_duplicate_cidr_is_partial_not_pre_parse_error() {
+        use crate::matcher::ip_cidr_helpers::collect_entry_errors;
+        let items = vec![
+            IpGroup {
+                name: "a".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into()],
+            },
+            IpGroup {
+                name: "b".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into()],
+            },
+        ];
         let spec = EdgionConfigDataSpec {
             enable: true,
             active: None,
-            data: ConfigEntry::IpList(IpListData {
-                items: vec![
-                    IpGroup {
-                        name: "a".into(),
-                        description: None,
-                        cidrs: vec!["10.0.0.0/8".into()],
-                    },
-                    IpGroup {
-                        name: "b".into(),
-                        description: None,
-                        cidrs: vec!["10.0.0.0/8".into()],
-                    },
-                ],
-            }),
+            data: ConfigEntry::IpList(IpListData { items: items.clone() }),
         };
         let ed = EdgionConfigData {
             metadata: ObjectMeta {
-                name: Some("dup".to_string()),
-                namespace: Some("default".to_string()),
+                name: Some("dup".into()),
+                namespace: Some("default".into()),
                 ..Default::default()
             },
             spec,
             status: None,
         };
-        let errors = ed.validate_pre_parse();
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("IpList invalid"), "got: {:?}", errors);
+        // Partial-good: no pre_parse error any more.
+        assert!(ed.validate_pre_parse().is_empty());
+        // The duplicate is surfaced by collect_entry_errors (drives PartiallyInvalid).
+        let errs = collect_entry_errors(&items);
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].reason.contains("duplicate CIDR"));
     }
 
     #[test]
-    fn iplist_host_bit_duplicate_fails_pre_parse() {
-        // 10.0.0.0/8 and 10.0.0.1/8 both normalize to the same /8 network
-        // prefix inside the radix builder (host bits zeroed out). The exact-string
-        // check in validate_groups_structure misses this because "10.0.0.0/8" !=
-        // "10.0.0.1/8" as strings; build_grouped_matcher catches it via the
-        // radix-tree DuplicateCidr error.
+    fn iplist_host_bit_duplicate_is_partial_not_pre_parse_error() {
+        // 10.0.0.0/8 and 10.0.0.1/8 normalize to the same /8 prefix in the radix builder.
+        let items = vec![
+            IpGroup {
+                name: "a".into(),
+                description: None,
+                cidrs: vec!["10.0.0.0/8".into()],
+            },
+            IpGroup {
+                name: "b".into(),
+                description: None,
+                cidrs: vec!["10.0.0.1/8".into()],
+            },
+        ];
         let spec = EdgionConfigDataSpec {
             enable: true,
             active: None,
-            data: ConfigEntry::IpList(IpListData {
-                items: vec![
-                    IpGroup {
-                        name: "a".into(),
-                        description: None,
-                        cidrs: vec!["10.0.0.0/8".into()],
-                    },
-                    IpGroup {
-                        name: "b".into(),
-                        description: None,
-                        cidrs: vec!["10.0.0.1/8".into()],
-                    },
-                ],
-            }),
+            data: ConfigEntry::IpList(IpListData { items: items.clone() }),
         };
         let ed = EdgionConfigData {
             metadata: ObjectMeta {
-                name: Some("host-bit-dup".to_string()),
-                namespace: Some("default".to_string()),
+                name: Some("host-bit-dup".into()),
+                namespace: Some("default".into()),
                 ..Default::default()
             },
             spec,
             status: None,
         };
-        let errors = ed.validate_pre_parse();
-        assert!(
-            !errors.is_empty(),
-            "expected errors for host-bit-set duplicate; got empty"
-        );
-        assert!(errors[0].contains("IpList invalid"), "got: {:?}", errors);
+        assert!(ed.validate_pre_parse().is_empty());
+        // Note: collect_entry_errors compares normalized CIDR strings; 10.0.0.1/8 vs 10.0.0.0/8
+        // normalize differently as strings, so this case is caught at radix build() / index time,
+        // not here. Assert at least that pre_parse no longer rejects it.
     }
 }

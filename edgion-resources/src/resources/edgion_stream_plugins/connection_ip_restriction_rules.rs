@@ -8,9 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 
-use crate::matcher::ip_cidr_helpers::{
-    build_grouped_matcher, evaluate_ip_access, validate_groups_structure, validate_refs_structure,
-};
+use crate::matcher::ip_cidr_helpers::{build_grouped_matcher_partial, evaluate_ip_access, validate_refs_structure};
 use crate::matcher::ip_radix_tree::IpRadixMatcher;
 use crate::resources::edgion_config_data::IpGroup;
 use crate::resources::edgion_plugins::{AccessDecision, DefaultAction, PluginValidation};
@@ -97,12 +95,14 @@ impl ConnectionIpRestrictionRules {
         }
         if let Some(groups) = &self.allow {
             if !groups.is_empty() {
-                self.allow_matcher = Some(build_grouped_matcher(groups)?);
+                let (m, _errs) = build_grouped_matcher_partial(groups);
+                self.allow_matcher = Some(m);
             }
         }
         if let Some(groups) = &self.deny {
             if !groups.is_empty() {
-                self.deny_matcher = Some(build_grouped_matcher(groups)?);
+                let (m, _errs) = build_grouped_matcher_partial(groups);
+                self.deny_matcher = Some(m);
             }
         }
         if let Some(refs) = &self.allow_refs {
@@ -161,20 +161,6 @@ impl PluginValidation for ConnectionIpRestrictionRules {
             self.deny.as_ref().is_some_and(|v| !v.is_empty()) || self.deny_refs.as_ref().is_some_and(|v| !v.is_empty());
         if !any_allow && !any_deny {
             return Some("At least one of 'allow'/'deny' or 'allowRefs'/'denyRefs' must be non-empty".to_string());
-        }
-        if let Some(groups) = &self.allow {
-            if !groups.is_empty() {
-                if let Err(e) = validate_groups_structure(groups) {
-                    return Some(e);
-                }
-            }
-        }
-        if let Some(groups) = &self.deny {
-            if !groups.is_empty() {
-                if let Err(e) = validate_groups_structure(groups) {
-                    return Some(e);
-                }
-            }
         }
         if let Some(refs) = &self.allow_refs {
             if let Err(e) = validate_refs_structure(refs) {
@@ -422,12 +408,14 @@ mod tests {
     }
 
     #[test]
-    fn validation_error_surfaces_invalid_cidr() {
+    fn validation_error_tolerates_invalid_cidr() {
+        // Partial-good (CIDR-only leniency): a bad inline CIDR no longer rejects at
+        // admission. Structural (non-CIDR) errors are still surfaced elsewhere.
         let rules = ConnectionIpRestrictionRules {
             allow: Some(vec![group("bad", &["not-an-ip"])]),
             ..Default::default()
         };
-        assert!(rules.validation_error().is_some());
+        assert!(rules.validation_error().is_none());
     }
 
     #[test]

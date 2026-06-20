@@ -12,13 +12,14 @@
 //!   (from ref resolution) conditions per Gateway API conventions.
 
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
-    condition_false, condition_reasons, condition_true, condition_types, update_condition, ResolvedRefsError,
+    condition_false, condition_reasons, condition_true, condition_types, partially_invalid_condition, update_condition,
+    ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler,
 };
 use edgion_resources::prelude_resources::EdgionConfigData;
-use edgion_resources::resources::edgion_config_data::EdgionConfigDataStatus;
+use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataStatus};
 
 /// Kind string used when an EdgionConfigData registers a cross-EdgionConfigData reference in the shared
 /// `edgion_config_data_refs` manager. The existing `requeue_edgion_config_data_referrers` splits refs on `:`
@@ -134,9 +135,29 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
             generation,
         );
 
+        // PartiallyInvalid: IpList ONLY (partial-good compilation applies to nothing else).
+        // For an IpList we list every skipped/invalid entry; Accepted stays True and this
+        // condition is the operator's signal that some entries dropped. For non-IpList
+        // variants (KeyList/Selector/RegionRouteOverride) we write NO PartiallyInvalid
+        // condition at all — there is no partial-good notion for them.
+        let partially_invalid = if let ConfigEntry::IpList(ip_list) = &ed.spec.data {
+            let entry_errors = edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors(&ip_list.items);
+            if entry_errors.is_empty() {
+                Some(partially_invalid_condition(None, generation))
+            } else {
+                let msg = edgion_resources::matcher::ip_cidr_helpers::format_entry_errors(&entry_errors);
+                Some(partially_invalid_condition(Some(msg), generation))
+            }
+        } else {
+            None
+        };
+
         let status = ed.status.get_or_insert_with(EdgionConfigDataStatus::default);
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
+        if let Some(partially_invalid) = partially_invalid {
+            update_condition(&mut status.conditions, partially_invalid);
+        }
     }
 }
 

@@ -72,6 +72,13 @@ impl IpRestriction {
             false
         };
 
+        // Loud signal: a skipped inline deny entry is a blacklist hole (fail-open direction).
+        if let Some(deny) = config.deny.as_ref() {
+            if !edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors(deny).is_empty() {
+                crate::observe::metrics::record_ip_deny_entries_skipped("http");
+            }
+        }
+
         let allow_ref_keys = resolve_ip_list_ref_keys(config.allow_refs.as_ref(), namespace);
         let deny_ref_keys = resolve_ip_list_ref_keys(config.deny_refs.as_ref(), namespace);
 

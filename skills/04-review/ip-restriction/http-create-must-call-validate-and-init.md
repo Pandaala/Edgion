@@ -1,6 +1,6 @@
 ---
 name: http-create-must-call-validate-and-init
-description: Use when reviewing findings that HTTP `IpRestriction::create` clones the config without compiling `allow_matcher`/`deny_matcher`, leaving the ACL fail-open; documents that this was fixed (fr-types-01) so it now mirrors the stream-layer `validate_and_init` + `init_failed` fail-closed pattern.
+description: Use when reviewing findings that HTTP `IpRestriction::create` clones the config without compiling `allow_matcher`/`deny_matcher`, leaving the ACL fail-open; documents that this was fixed (fr-types-01) so it now mirrors the stream-layer `validate_and_init` + `init_failed` fail-closed pattern; also documents the 2026-06-20 partial-good update.
 ---
 
 # HTTP `IpRestriction::create` compiles matchers + fail-closed guard — FIXED
@@ -12,6 +12,16 @@ the config, calls `config.validate_and_init()` to compile `allow_matcher`/`deny_
 stores an `init_failed` flag. `run_request` denies every request (HTTP 403, `plugin_log` =
 `"ip init fail"`) when `init_failed` is set, instead of falling through to the uncompiled
 default action. Fixed by `fr-types-01` (2026-05-29).
+
+**Partial-good update (2026-06-20):** `validate_and_init` now uses `build_grouped_matcher_partial`
+for inline `allow`/`deny` group compilation. Individual bad CIDR entries are **skipped** (not
+fatal), so a bad CIDR no longer triggers `init_failed`. The plugin loads with the valid entries.
+`init_failed` is now only set by structural failures: both `allow` and `deny` absent/empty with
+no `allowRefs`/`denyRefs`, or an invalid `status` code (100–599 range). Bad entries surface as
+`PartiallyInvalid` status condition + `edgion_ip_deny_entries_skipped_total{scope="http"}` metric
+(for skipped deny entries). Fix suggestions of the form "bad inline CIDR drives HTTP IpRestriction
+to `init_failed`/deny-all" are **no longer correct** — verify the `build_grouped_matcher_partial`
+call inside `validate_and_init` before re-reporting.
 
 Fix suggestions of the form "HTTP `IpRestriction::create` never calls `validate_and_init`, so
 `allow_matcher`/`deny_matcher` stay `None` and an allow-only whitelist silently allows every
@@ -63,8 +73,11 @@ Re-open only if:
 - A new field with `#[serde(skip)]` runtime state is added to `IpRestrictionConfig` and `create`
   is not updated to populate it.
 - `validate_and_init` and `validation_error` diverge such that an operator-reachable config
-  passes preparse but fails matcher build at construction (would now correctly fail-closed via
-  `init_failed`, but the asymmetry should be reviewed).
+  passes preparse but causes a structural failure at construction (would now correctly fail-closed
+  via `init_failed`, but the asymmetry should be reviewed).
+- The partial-good semantics change (e.g., a bad CIDR becomes fatal again) — in that case the
+  `build_grouped_matcher_partial` call inside `validate_and_init` must be reverted to
+  `build_grouped_matcher` and `init_failed` must be updated accordingly.
 
 ## Reference Cases
 

@@ -46,7 +46,7 @@ The preparse wrapper string stayed identical: `"plugins[{idx}] (IpRestriction): 
 Re-open only if:
 
 - A new L4 stream-plugin config type is added that depends on a side-effectful `validate_and_init` at controller preparse time (i.e., regresses to the old pattern).
-- `validate_groups_structure` and `build_grouped_matcher` diverge such that an operator-reachable invalid config slips past preparse but trips the data-plane builder (would be a fail-closed silent-blackhole-during-construction regression).
+- `validate_groups_structure` and `build_grouped_matcher` diverge from `collect_entry_errors` / `build_grouped_matcher_partial` such that an entry the partial-good path accepts causes an unexpected result at connection time (note: individual bad CIDRs intentionally slip past strict preparse — they are surfaced via `PartiallyInvalid` on the controller side, not `Accepted=False`; this is by design).
 - A real fail-closed contract change ships and the controller status text needs new prefixes that the data-plane `validate_and_init` does not produce.
 
 ## Reference Cases

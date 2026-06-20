@@ -172,7 +172,7 @@ impl EdgionConfigDataStore {
     /// Build all typed indexes from a raw map. Pure function; called at conf change
     /// time only (low frequency).
     fn build_indexes(raw: &RawMap) -> TypedIndexes {
-        use edgion_resources::matcher::ip_cidr_helpers::build_grouped_matcher;
+        use edgion_resources::matcher::ip_cidr_helpers::build_grouped_matcher_partial;
 
         let mut rr_overrides = RegionRouteOverrideMap::new();
         let mut ip_list = IpListMatcherMap::new();
@@ -184,25 +184,19 @@ impl EdgionConfigDataStore {
                 }
                 ConfigEntry::IpList(d) => {
                     // Honor the envelope kill-switch: a disabled IpList resolves as absent.
-                    // (Asymmetric with RegionRouteOverride, which honors `enable` at read time;
-                    // IpList has no per-consumer plugin, so the matcher IS the consumer surface.)
                     if ed.spec.enable {
-                        match build_grouped_matcher(&d.items) {
-                            Ok(matcher) => {
-                                ip_list.insert(key.clone(), Arc::new(matcher));
-                            }
-                            Err(e) => {
-                                // All-or-nothing compilation (partial-good is a separate task):
-                                // a malformed/empty IpList yields no entry -> treated as missing.
-                                // Cold path (conf change), so tracing is allowed here.
-                                tracing::warn!(
-                                    component = "edgion_config_data_store",
-                                    key = %key,
-                                    error = %e,
-                                    "IpList failed to compile; reference will resolve as missing"
-                                );
-                            }
+                        // Partial-good: always produce a usable matcher; log every skipped entry.
+                        // Cold path (conf change), so tracing is allowed here.
+                        let (matcher, entry_errors) = build_grouped_matcher_partial(&d.items);
+                        for e in &entry_errors {
+                            tracing::warn!(
+                                component = "edgion_config_data_store",
+                                key = %key,
+                                entry = %e,
+                                "IpList entry skipped (partial-good); valid entries kept",
+                            );
                         }
+                        ip_list.insert(key.clone(), Arc::new(matcher));
                     }
                 }
                 ConfigEntry::Selector(_) => {

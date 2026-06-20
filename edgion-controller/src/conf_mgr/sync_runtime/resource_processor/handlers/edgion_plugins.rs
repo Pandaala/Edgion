@@ -10,7 +10,8 @@
 //! - update_status: Validate `overrideRef` resolves to a `RegionRouteOverride` EdgionConfigData
 
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
-    condition_false, condition_reasons, condition_true, pick_resolved_refs_reason, update_condition, ResolvedRefsError,
+    condition_false, condition_reasons, condition_true, partially_invalid_condition, pick_resolved_refs_reason,
+    update_condition, ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_types, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -222,11 +223,20 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             condition_false(condition_types::RESOLVED_REFS, reason, message, generation)
         };
 
+        let inline_errors = collect_inline_ip_entry_errors(ep);
+        let partially_invalid = if inline_errors.is_empty() {
+            partially_invalid_condition(None, generation)
+        } else {
+            let msg = edgion_resources::matcher::ip_cidr_helpers::format_entry_errors(&inline_errors);
+            partially_invalid_condition(Some(msg), generation)
+        };
+
         let status = ep
             .status
             .get_or_insert_with(|| EdgionPluginsStatus { conditions: vec![] });
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
+        update_condition(&mut status.conditions, partially_invalid);
     }
 }
 
@@ -317,11 +327,9 @@ pub fn resolve_ip_list_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<Res
             {
                 let rns = r.namespace.as_deref().unwrap_or(ns);
                 let target = ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
-                let resolved = target.as_ref().is_some_and(|t| {
-                    t.spec.enable
-                        && matches!(&t.spec.data, ConfigEntry::IpList(d)
-                            if edgion_resources::matcher::ip_cidr_helpers::build_grouped_matcher(&d.items).is_ok())
-                });
+                let resolved = target
+                    .as_ref()
+                    .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::IpList(_)));
                 if !resolved {
                     errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
                         namespace: rns.to_string(),
@@ -353,6 +361,27 @@ async fn requeue_referencing_gateways(ep: &EdgionPlugins, ctx: &HandlerContext) 
     for gw_ref in refs {
         ctx.requeue("Gateway", gw_ref.resource_key()).await;
     }
+}
+
+/// Collect partial-good entry errors over every inline IpRestriction allow/deny in the
+/// request stage (the only stage IpRestriction refs are scanned; see get_ip_list_ref_keys).
+fn collect_inline_ip_entry_errors(ep: &EdgionPlugins) -> Vec<edgion_resources::matcher::ip_cidr_helpers::EntryError> {
+    use edgion_resources::matcher::ip_cidr_helpers::collect_entry_errors;
+    let mut errs = Vec::new();
+    let Some(plugins) = &ep.spec.request_plugins else {
+        return errs;
+    };
+    for entry in plugins {
+        if let EdgionPlugin::IpRestriction(ref config) = entry.plugin {
+            if let Some(g) = &config.allow {
+                errs.extend(collect_entry_errors(g));
+            }
+            if let Some(g) = &config.deny {
+                errs.extend(collect_entry_errors(g));
+            }
+        }
+    }
+    errs
 }
 
 #[cfg(test)]
@@ -1119,16 +1148,47 @@ mod tests {
         );
     }
 
+    // ── Inline IpRestriction entry-error collection tests ────────────────────
+
+    #[test]
+    fn collect_inline_ip_entry_errors_returns_error_for_bad_cidr() {
+        use edgion_resources::resources::edgion_config_data::IpGroup;
+        use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
+
+        let mut ep = EdgionPlugins::new("ipr-inline", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::IpRestriction(
+            IpRestrictionConfig {
+                deny: Some(vec![IpGroup {
+                    name: "bad".to_string(),
+                    description: None,
+                    cidrs: vec!["not-a-cidr".to_string()],
+                }]),
+                ..Default::default()
+            },
+        ))]);
+
+        let errs = super::collect_inline_ip_entry_errors(&ep);
+        assert_eq!(errs.len(), 1, "expected one entry error for bad CIDR; got: {:?}", errs);
+    }
+
+    #[test]
+    fn collect_inline_ip_entry_errors_empty_when_no_request_plugins() {
+        let ep = EdgionPlugins::new("ipr-inline", EdgionPluginsSpec::default());
+        let errs = super::collect_inline_ip_entry_errors(&ep);
+        assert!(errs.is_empty(), "expected no errors when no plugins; got: {:?}", errs);
+    }
+
     #[tokio::test]
-    async fn ip_restriction_enabled_malformed_ip_list_reports_error() {
+    async fn ip_restriction_enabled_malformed_ip_list_resolves() {
         use edgion_resources::resources::edgion_config_data::{IpGroup, IpListData};
         use edgion_resources::resources::edgion_plugins::IpRestrictionConfig;
 
-        // Seed an enabled IpList whose CIDRs produce a post-normalization duplicate:
-        // 10.0.0.0/8 and 10.0.0.1/8 both normalize to the same /8 network in the
-        // radix builder. validate_groups_structure (exact-string) misses this;
-        // build_grouped_matcher catches it. The IpList is enabled so the
-        // enable-guard alone would not report an error — only the stricter predicate does.
+        // Seed an enabled IpList whose CIDRs produce a post-normalization duplicate
+        // (10.0.0.0/8 and 10.0.0.1/8 both normalize to the same /8 network).
+        // The gateway now uses build_grouped_matcher_partial and always inserts a usable
+        // (partial/empty) matcher for an enabled IpList, so the ref IS considered resolved.
+        // Per-entry problems surface on the IpList's own PartiallyInvalid status, not here.
         let ip_ed = build_edgion_config_data(
             "default",
             "malformed-list",
@@ -1174,21 +1234,11 @@ mod tests {
             ProcessResult::Skip { reason } => panic!("skip: {}", reason),
         };
         let errors = super::resolve_ip_list_refs(&parsed, &ctx);
-        assert_eq!(
-            errors.len(),
-            1,
-            "enabled-but-uncompilable IpList must not resolve; got: {:?}",
+        assert!(
+            errors.is_empty(),
+            "enabled IpList (even with malformed CIDRs) must resolve; got: {:?}",
             errors
         );
-        match &errors[0] {
-            crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::EdgionConfigDataNotFound {
-                expected_type,
-                ..
-            } => {
-                assert_eq!(expected_type, "IpList");
-            }
-            other => panic!("expected EdgionConfigDataNotFound, got {:?}", other),
-        }
     }
 
     // ===== GlobalAccessControl SecretRef resolution (restored; see Plan 3) =====

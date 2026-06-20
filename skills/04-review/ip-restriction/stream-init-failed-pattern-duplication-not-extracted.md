@@ -1,13 +1,26 @@
 ---
 name: stream-init-failed-pattern-duplication-not-extracted
-description: Use when reviewing findings that propose extracting the "clone → validate_and_init → tracing::error → init_failed" pattern that appears in `StreamIpRestriction::new` and `TlsRouteIpRestriction::new` into a shared trait + generic helper; documents why the duplication is intentionally kept.
+description: Use when reviewing findings that propose extracting the "clone → validate_and_init → tracing::error → init_failed" pattern that appears in `StreamIpRestriction::new` and `TlsRouteIpRestriction::new` into a shared trait + generic helper; documents why the duplication is intentionally kept. Also notes the 2026-06-20 partial-good update.
 ---
 
 # Stream IP-restriction `init_failed` guard duplication — DESIGN-TRADEOFF
 
 ## Conclusion
 
-The ~12-line `let mut cfg = cfg.clone(); if let Err(e) = cfg.validate_and_init() { tracing::error!(...); true } else { false }` pattern is intentionally kept inlined in both `StreamIpRestriction::new` (`edgion-gateway/src/plugins/stream/ip_restriction/stream_ip_restriction.rs`) and `TlsRouteIpRestriction::new` (`edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs`). The two sites use different config types from different protocol layers and a shared trait + generic helper would add an abstraction whose net code saving is in the single-digit-line range. Closed as ⚠️ accepted tradeoff (`plugins-stream-F003`, 2026-05-26).
+The `clone → validate_and_init → tracing::error → init_failed` pattern is intentionally kept
+(see rationale below). The two sites — `StreamIpRestriction::new` via `init_ip_restriction`
+(`edgion-gateway/src/plugins/stream/ip_restriction/stream_ip_restriction.rs`) and
+`TlsRouteIpRestriction::new` (`edgion-gateway/src/plugins/stream/tls_route/ip_restriction.rs`) —
+use different config types from different protocol layers. Closed as ⚠️ accepted tradeoff
+(`plugins-stream-F003`, 2026-05-26).
+
+**Partial-good update (2026-06-20):** `validate_and_init` for both `ConnectionIpRestrictionRules`
+and `IpRestrictionConfig` now uses `build_grouped_matcher_partial` internally. Individual bad CIDR
+entries in inline `allow`/`deny` groups are **skipped** (not fatal), so bad CIDRs no longer
+trigger `init_failed`. The `init_failed` flag is now only set by structural failures: both lists
+absent/empty with no refs, or capacity-limit errors (`TooManyNodes`/`TooManyGroups`) which are
+unreachable via normal K8s-sized CRDs. Fix suggestions of the form "a bad inline CIDR drives
+stream IpRestriction to `init_failed`/deny-all connections" are **no longer correct**.
 
 Fix suggestions of the form "introduce a crate-internal `ValidateAndInit` trait with a blanket / two impls and a generic `init_with_validate<C: Clone + ValidateAndInit>(cfg, label) -> (C, bool)` helper, then route both `*::new` through it" are **not accepted**.
 
@@ -65,6 +78,7 @@ Re-open only if:
 - A third stream-side plugin appears with the same `clone → validate_and_init → log → init_failed` shape (the duplication count crosses the 2 → 3 threshold and the abstraction becomes proportionate).
 - `ConnectionIpRestrictionRules` and `IpRestrictionConfig` are unified into a shared rule type (independent refactor) — the trait then has a natural single owner.
 - A real fail-closed divergence bug is reported (one site updated, the other forgotten, producing observable user-visible behavior), confirming the latent risk became active.
+- The partial-good semantics are reverted (bad CIDRs become fatal again) — in that case `validate_and_init` must be re-examined to verify both sites remain in sync on the fail-closed path.
 
 ## Reference Cases
 

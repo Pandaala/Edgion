@@ -48,6 +48,8 @@ pub mod names {
     pub const ACME_CHALLENGE_LOOKUP_TOTAL: &str = "edgion_acme_challenge_lookup_total";
     // Stream plugin: GlobalConnectionIpRestriction decision events
     pub const CONN_IP_RESTRICTION_EVENTS_TOTAL: &str = "edgion_conn_ip_restriction_events_total";
+    // IP restriction: inline deny CIDR entries skipped by partial-good compilation (blacklist hole)
+    pub const IP_DENY_ENTRIES_SKIPPED_TOTAL: &str = "edgion_ip_deny_entries_skipped_total";
     // HTTP plugin: RegionRoute overlay resolution events (overlay_missing / overlay_type_mismatch)
     pub const REGION_ROUTE_OVERLAY_EVENTS_TOTAL: &str = "edgion_region_route_overlay_events_total";
     // Stream plugin: ConnectionRateLimit rejections
@@ -540,6 +542,14 @@ pub fn record_region_route_overlay_event(result: &'static str) {
 /// Low, fixed cardinality — safe as a label.
 pub fn record_conn_ip_restriction_event(result: &'static str) {
     counter!(names::CONN_IP_RESTRICTION_EVENTS_TOTAL, "result" => result).increment(1);
+}
+
+/// Record that one or more inline `deny` CIDR entries were skipped by partial-good
+/// compilation. A skipped deny entry is a hole in a blacklist (under-block / fail-open
+/// direction), so it gets a loud counter — not just a passive status condition.
+/// `scope` is a low-cardinality `&'static str`: "http" | "stream_l4" | "tls_route".
+pub fn record_ip_deny_entries_skipped(scope: &'static str) {
+    counter!(names::IP_DENY_ENTRIES_SKIPPED_TOTAL, "scope" => scope).increment(1);
 }
 
 /// Record a connection rejected by the ConnectionRateLimit stream plugin.

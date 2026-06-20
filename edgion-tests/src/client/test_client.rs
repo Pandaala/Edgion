@@ -300,6 +300,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/IpRestriction" => "EdgionPlugins",
         "EdgionPlugins/IpRestrictionRefs" => "EdgionPlugins",
+        "EdgionPlugins/IpRestrictionPartialGood" => "EdgionPlugins",
         "EdgionPlugins/ResponseRewrite" => "EdgionPlugins",
         "EdgionPlugins/FaultInjection" => "EdgionPlugins",
         "EdgionPlugins/ForwardAuth" => "EdgionPlugins",
@@ -1055,6 +1056,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::IpRestrictionRefsPluginTestSuite));
+        }
+        "EdgionPlugins/IpRestrictionPartialGood" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/IpRestrictionPartialGood tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::IpRestrictionPartialGoodPluginTestSuite));
         }
         "EdgionPlugins/FaultInjection" => {
             if !gateway {

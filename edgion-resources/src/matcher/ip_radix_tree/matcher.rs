@@ -56,6 +56,17 @@ impl IpRadixMatcher {
         IpRadixMatcherBuilder::new()
     }
 
+    /// Creates a matcher with no rules — always returns `None` for every IP.
+    /// Used as the infallible fallback when partial compilation produces an
+    /// empty or all-invalid rule set.
+    pub fn empty() -> Self {
+        Self {
+            ipv4_tree: None,
+            ipv6_tree: None,
+            labels: vec![Arc::from("")], // index 0: reserved sentinel (mirrors builder)
+        }
+    }
+
     /// Zero-allocation membership check. Hot path for RealIpExtractor.
     pub fn contains(&self, ip: &IpAddr) -> bool {
         self.match_label_id(ip).is_some()

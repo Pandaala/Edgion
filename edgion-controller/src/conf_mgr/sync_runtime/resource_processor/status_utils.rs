@@ -412,6 +412,25 @@ pub fn accepted_condition_with_message(observed_generation: Option<i64>, message
     )
 }
 
+/// Build a `PartiallyInvalid` condition. `Some(message)` → True (reason RuleInvalid)
+/// listing the bad entries; `None` → False (reason AllRulesValid).
+pub fn partially_invalid_condition(entry_message: Option<String>, observed_generation: Option<i64>) -> Condition {
+    match entry_message {
+        Some(msg) => condition_true(
+            condition_types::PARTIALLY_INVALID,
+            condition_reasons::RULE_INVALID,
+            msg,
+            observed_generation,
+        ),
+        None => condition_false(
+            condition_types::PARTIALLY_INVALID,
+            condition_reasons::ALL_RULES_VALID,
+            "All entries valid",
+            observed_generation,
+        ),
+    }
+}
+
 /// Create standard "ResolvedRefs" condition based on typed validation errors
 pub fn resolved_refs_condition(errors: &[ResolvedRefsError], observed_generation: Option<i64>) -> Condition {
     if errors.is_empty() {
@@ -523,6 +542,19 @@ pub fn set_parent_conditions_full(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_partially_invalid_condition_true_and_false() {
+        let t = partially_invalid_condition(Some("group 'a' cidr 'x': invalid CIDR".into()), Some(1));
+        assert_eq!(t.type_, "PartiallyInvalid");
+        assert_eq!(t.status, "True");
+        assert_eq!(t.reason, "RuleInvalid");
+        assert!(t.message.contains("invalid CIDR"));
+
+        let f = partially_invalid_condition(None, Some(1));
+        assert_eq!(f.status, "False");
+        assert_eq!(f.reason, "AllRulesValid");
+    }
 
     #[test]
     fn test_update_condition_insert() {

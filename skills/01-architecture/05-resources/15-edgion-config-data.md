@@ -117,10 +117,13 @@ exposes only "which profile is active" as the hot-swappable surface — see the 
 
 ### preparse
 
-- Calls `EdgionConfigData::validate_pre_parse()` for per-variant validation (invalid CIDR for `IpList`,
-  invalid regex for `KeyList`, invalid regions for `RegionRouteOverride`) → `Vec<String>`.
-  Non-empty → `Accepted=False/Invalid`. `Selector` is always structurally valid (the active-name ↔
-  profile check is a consumer-side, connection-time concern, not a controller preparse check).
+- Calls `EdgionConfigData::validate_pre_parse()` for per-variant validation (invalid regex for `KeyList`,
+  invalid regions for `RegionRouteOverride`) → `Vec<String>`. Non-empty → `Accepted=False/Invalid`.
+  `Selector` is always structurally valid (the active-name ↔ profile check is a consumer-side,
+  connection-time concern, not a controller preparse check).
+- **`IpList` is partial-good**: `validate_pre_parse` returns empty (no `Accepted=False`) for bad CIDR
+  entries. Bad entries are skipped at compilation time and surfaced via the `PartiallyInvalid` condition
+  in `update_status` (see below). Empty `items: []` is valid and compiles to an empty matcher.
 
 ### parse
 
@@ -144,8 +147,9 @@ exposes only "which profile is active" as the hot-swappable surface — see the 
 
 | Condition | Semantics |
 |-----------|-----------|
-| `Accepted` | Spec passes preparse validation |
+| `Accepted` | Spec passes preparse validation. For `IpList`, always `True` even when entries are bad (partial-good). |
 | `ResolvedRefs` | EdgionConfigData itself carries no external cross-resource refs; own `ResolvedRefs` is always `True`. Note: `IpList` variants are ref targets — when `allowRefs`/`denyRefs` in IpRestriction (HTTP/L4/TLS-route) or GCIR per-profile fail to resolve an `IpList`, `ResolvedRefs=False` is set on the *referring* EdgionPlugins/EdgionStreamPlugins, not on the `IpList` EdgionConfigData itself. |
+| `PartiallyInvalid` | **`IpList` only**: `status=True`/`reason=RuleInvalid` (with message listing bad entries) when `collect_entry_errors` finds invalid CIDRs, empty groups, duplicate group names, invalid group names, or cross-group duplicate CIDRs (keep-first). `status=False`/`reason=AllRulesValid` when clean. `Accepted` stays `True`; partial-good entries are admitted and the rest still compile. |
 
 ## Gateway-Side Processing
 

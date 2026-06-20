@@ -31,10 +31,11 @@ Scan the Stage 1 `plugins` array and detect legacy HTTP fields written into the 
 
 ### update_status
 
-Uses `k8s_openapi::Condition`, writing two conditions:
+Uses `k8s_openapi::Condition`, writing three conditions:
 
-- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False/`LegacySchemaDeprecated` for legacy-schema errors; False/`Invalid` for other errors
+- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False/`LegacySchemaDeprecated` for legacy-schema errors; False/`Invalid` for other errors. Stays `True` even when inline IP lists have bad entries (partial-good; see `PartiallyInvalid` below).
 - **`ResolvedRefs`**: iterate each Stage 1 `GlobalConnectionIpRestriction` entry, requiring the PM referenced by `edgion_config_data_ref` to exist with `spec.metadata.type = GlobalConnectionIpRestriction`. Also resolves `allowRefs`/`denyRefs` on every `IpRestriction` entry (Stage 1 and Stage 2) and on each GCIR per-profile `ProfileRules`, requiring each named `IpList` EdgionConfigData to exist and be enabled. Any failure → `ResolvedRefsError::EdgionConfigDataNotFound`, reason `InvalidEdgionConfigDataRef`. Stage 2 `tls_route_plugins` `IpRestriction` entries may also carry `allowRefs`/`denyRefs` and are checked here.
+- **`PartiallyInvalid`**: set when `IpRestriction` (Stage 1 or Stage 2) or GCIR `ProfileRules` inline `allow`/`deny` groups contain bad entries (invalid CIDR, empty group, cross-group duplicate CIDR, duplicate/invalid group name). `status=True`/`reason=RuleInvalid` when bad entries exist (message lists them); `status=False`/`reason=AllRulesValid` when clean. The plugin still loads — valid entries compile and the connection filter operates normally. A skipped inline **deny** entry from `IpRestriction` (Stage 1 or Stage 2) increments `edgion_ip_deny_entries_skipped_total{scope="stream_l4"|"tls_route"}` (IpRestriction HTTP/L4/TLS-route only; GCIR per-profile deny is not metered by this counter — it uses `record_conn_ip_restriction_event`). Blacklist hole = loud metric. Exception: if the structural guards fire (both allow+deny empty with no refs, or GCIR `ProfileRules` `Some(vec![])` on an inline allow/deny), `Accepted` is set `False/Invalid` — those are structural misconfigurations, not bad-CIDR cases.
 
 ## Gateway-side processing
 
