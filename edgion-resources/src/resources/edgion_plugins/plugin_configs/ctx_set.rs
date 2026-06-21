@@ -316,6 +316,10 @@ pub enum TemplateVarType {
     RequestUri,
     Method,
     ClientIp,
+    /// Matched HTTPRoute identity/metadata `${matchedHttpRoute:name|namespace|label.<k>|annotation.<k>}`.
+    MatchedHttpRoute,
+    /// Matched GRPCRoute identity/metadata `${matchedGrpcRoute:...}`.
+    MatchedGrpcRoute,
     /// Kubernetes Secret reference `${secretRef:ns/name:key}`. Webhook-only: in
     /// ctx_set it resolves to empty and is rejected at validation. The resolved
     /// value is carried inline by the controller (never read at gateway runtime
@@ -336,6 +340,8 @@ impl TemplateVarType {
             "requestUri" => Ok(Self::RequestUri),
             "method" => Ok(Self::Method),
             "clientIp" => Ok(Self::ClientIp),
+            "matchedHttpRoute" => Ok(Self::MatchedHttpRoute),
+            "matchedGrpcRoute" => Ok(Self::MatchedGrpcRoute),
             "secretRef" => Ok(Self::SecretRef),
             _ => Err(format!("unknown variable type: {}", s)),
         }
@@ -1060,5 +1066,12 @@ vars:
         .expect("deserialize");
         let err = cfg.check_fields().expect("must reject bare secretRef");
         assert!(err.contains("secretRef"), "got: {err}");
+    }
+
+    #[test]
+    fn test_matched_route_tokens_accepted() {
+        assert!(CompiledTemplate::compile("${matchedHttpRoute:name}").is_ok());
+        assert!(CompiledTemplate::compile("${matchedGrpcRoute:annotation.owner}").is_ok());
+        assert!(CompiledTemplate::compile("${matchedFooRoute:name}").is_err());
     }
 }

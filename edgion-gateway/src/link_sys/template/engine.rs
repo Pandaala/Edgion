@@ -45,6 +45,12 @@ pub fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: 
         TemplateVarType::RequestUri => session.get_request_uri(),
         TemplateVarType::Method => session.get_method().to_string(),
         TemplateVarType::ClientIp => session.remote_addr().to_string(),
+        TemplateVarType::MatchedHttpRoute => var_name
+            .and_then(|n| session.matched_route_meta(crate::plugins::runtime::traits::session::RouteProto::Http, n))
+            .unwrap_or_default(),
+        TemplateVarType::MatchedGrpcRoute => var_name
+            .and_then(|n| session.matched_route_meta(crate::plugins::runtime::traits::session::RouteProto::Grpc, n))
+            .unwrap_or_default(),
         // secretRef is webhook-only; the shared engine (ctx_set) has no secret
         // source, so it resolves to empty. This is a B2-leak backstop — ctx_set
         // is also rejected at validation, but this guarantees no value can ever
@@ -131,6 +137,18 @@ mod tests {
             .withf(|n| n == "domain")
             .return_const(Some("example.com".to_string()));
         assert_eq!(evaluate_template(&compiled, &session), "alice@example.com");
+    }
+
+    #[test]
+    fn test_resolve_matched_http_route() {
+        use crate::plugins::runtime::traits::session::RouteProto;
+        let mut session = MockPluginSession::new();
+        session
+            .expect_matched_route_meta()
+            .withf(|p, s| *p == RouteProto::Http && s == "name")
+            .return_const(Some("route1".to_string()));
+        let v = resolve_var(&TemplateVarType::MatchedHttpRoute, Some("name"), &session);
+        assert_eq!(v, "route1");
     }
 
     #[test]

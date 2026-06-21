@@ -280,13 +280,13 @@ impl HttpPortRouteManager {
 
 /// Global wrapper managing `ListenerKey -> Arc<HttpPortRouteManager>`.
 ///
-/// Owns the canonical route cache (`resource_key -> HTTPRoute`) and
+/// Owns the canonical route cache (`resource_key -> Arc<HTTPRoute>`) and
 /// implements `ConfHandler<HTTPRoute>`. On every change it rebuilds
 /// per-listener managers by resolving each route's target listeners from its
 /// `spec.resolved_listeners`.
 pub struct GlobalHttpRouteManagers {
-    /// Canonical route store: resource_key -> HTTPRoute
-    pub(crate) route_cache: DashMap<String, HTTPRoute>,
+    /// Canonical route store: resource_key -> Arc<HTTPRoute>
+    pub(crate) route_cache: DashMap<String, Arc<HTTPRoute>>,
 
     /// listener -> per-listener manager (stable Arc held by request filter)
     pub(crate) by_listener: DashMap<ListenerKey, Arc<HttpPortRouteManager>>,
@@ -415,7 +415,7 @@ impl GlobalHttpRouteManagers {
             return;
         }
 
-        let mut listener_buckets: HashMap<ListenerKey, HashMap<String, HTTPRoute>> = HashMap::new();
+        let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<HTTPRoute>>> = HashMap::new();
         for key in affected_listeners {
             listener_buckets.insert(key.clone(), HashMap::new());
         }
@@ -426,10 +426,10 @@ impl GlobalHttpRouteManagers {
         let mut route_referenced: HashSet<ListenerKey> = HashSet::new();
         for entry in self.route_cache.iter() {
             let route = entry.value();
-            let listeners = resolved_listeners_for_route(route);
+            let listeners = resolved_listeners_for_route(route); // &Arc coerces to &HTTPRoute
             for key in listeners {
                 if let Some(bucket) = listener_buckets.get_mut(key) {
-                    bucket.insert(entry.key().clone(), entry.value().clone());
+                    bucket.insert(entry.key().clone(), entry.value().clone()); // Arc clone
                 }
                 route_referenced.insert(key.clone());
             }
@@ -474,13 +474,13 @@ impl GlobalHttpRouteManagers {
     }
 
     /// Bucket all cached routes by their resolved listeners.
-    fn bucket_routes_by_listener(&self) -> HashMap<ListenerKey, HashMap<String, HTTPRoute>> {
-        let mut listener_buckets: HashMap<ListenerKey, HashMap<String, HTTPRoute>> = HashMap::new();
+    fn bucket_routes_by_listener(&self) -> HashMap<ListenerKey, HashMap<String, Arc<HTTPRoute>>> {
+        let mut listener_buckets: HashMap<ListenerKey, HashMap<String, Arc<HTTPRoute>>> = HashMap::new();
 
         for entry in self.route_cache.iter() {
             let route_key = entry.key().clone();
-            let route = entry.value().clone();
-            let listeners = resolved_listeners_for_route(&route);
+            let route = entry.value().clone(); // Arc clone
+            let listeners = resolved_listeners_for_route(&route); // &Arc coerces to &HTTPRoute
 
             // Listener keys this route is bucketed under, from the
             // controller-computed spec.resolved_listeners.
@@ -498,7 +498,7 @@ impl GlobalHttpRouteManagers {
                     listener_buckets
                         .entry(key.clone())
                         .or_default()
-                        .insert(route_key.clone(), route.clone());
+                        .insert(route_key.clone(), route.clone()); // Arc clone
                 }
             }
         }

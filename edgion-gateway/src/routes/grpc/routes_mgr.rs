@@ -145,8 +145,8 @@ impl GrpcPortRouteManager {
 
 /// Global wrapper managing `ListenerKey -> Arc<GrpcPortRouteManager>`.
 pub struct GlobalGrpcRouteManagers {
-    /// Canonical route store: resource_key -> GRPCRoute
-    pub(crate) route_cache: DashMap<String, GRPCRoute>,
+    /// Canonical route store: resource_key -> Arc<GRPCRoute>
+    pub(crate) route_cache: DashMap<String, Arc<GRPCRoute>>,
 
     /// listener -> per-listener manager
     pub(crate) by_listener: DashMap<ListenerKey, Arc<GrpcPortRouteManager>>,

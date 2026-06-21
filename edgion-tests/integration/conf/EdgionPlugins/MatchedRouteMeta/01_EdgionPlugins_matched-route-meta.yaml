@@ -1,0 +1,19 @@
+# EdgionPlugins - MatchedRouteMeta
+# A CtxSet plugin that reads matched-route identity and metadata via the
+# ${matchedHttpRoute:<selector>} template family and writes them into a
+# ctx variable so the access-log assertion can verify end-to-end rendering.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: matched-route-meta-plugin
+  namespace: edgion-it
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          # Compose name, namespace, label.app, label.edgion.io/team, annotation.owner
+          # into a single pipe-delimited ctx variable for assertion.
+          - name: route_meta
+            template: "${matchedHttpRoute:name}|${matchedHttpRoute:namespace}|${matchedHttpRoute:label.app}|${matchedHttpRoute:label.edgion.io/team}|${matchedHttpRoute:annotation.owner}"

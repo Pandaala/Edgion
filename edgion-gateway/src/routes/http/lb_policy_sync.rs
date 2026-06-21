@@ -6,12 +6,13 @@
 use crate::lb::lb_policy::{get_global_policy_store, LbPolicy};
 use edgion_resources::{HTTPRoute, ParsedLBPolicy};
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 /// Extract LB policies from HTTPRoute backend refs and update the global policy store.
 ///
 /// Reads `extension_info.lb_policy` (pre-parsed during `pre_parse()`) from each
 /// `HTTPBackendRef` and batch-inserts the results into the policy store.
-pub fn sync_lb_policies_for_routes(routes: &HashMap<String, HTTPRoute>) {
+pub fn sync_lb_policies_for_routes(routes: &HashMap<String, Arc<HTTPRoute>>) {
     let policy_store = get_global_policy_store();
 
     // route_key -> service_key -> Vec<LbPolicy>
@@ -149,7 +150,7 @@ mod tests {
             "LBPolicyConsistentHash",
             "header.x-user-id",
         );
-        routes.insert("test-sync/route1".to_string(), route);
+        routes.insert("test-sync/route1".to_string(), Arc::new(route));
 
         sync_lb_policies_for_routes(&routes);
 
@@ -174,7 +175,7 @@ mod tests {
             "LBPolicyConsistentHash",
             "cookie.session-id",
         );
-        routes.insert("test-cleanup/route1".to_string(), route);
+        routes.insert("test-cleanup/route1".to_string(), Arc::new(route));
         sync_lb_policies_for_routes(&routes);
 
         // Verify policies exist
@@ -204,8 +205,8 @@ mod tests {
         );
         let route2 =
             create_test_route_with_lb_policy("test-multi", "route2", "svc-multi-2", "LBPolicyLeastConn", "default");
-        routes.insert("test-multi/route1".to_string(), route1);
-        routes.insert("test-multi/route2".to_string(), route2);
+        routes.insert("test-multi/route1".to_string(), Arc::new(route1));
+        routes.insert("test-multi/route2".to_string(), Arc::new(route2));
 
         sync_lb_policies_for_routes(&routes);
 

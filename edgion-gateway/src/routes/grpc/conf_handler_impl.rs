@@ -22,7 +22,7 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
         for (key, route) in data {
             let units = parse_route_to_units(key, route);
             new_units_cache.insert(key.clone(), units);
-            self.route_cache.insert(key.clone(), (**route).clone());
+            self.route_cache.insert(key.clone(), route.clone()); // Arc clone
         }
 
         *self.route_units_cache.lock() = new_units_cache;
@@ -89,7 +89,7 @@ impl ConfHandler<GRPCRoute> for GlobalGrpcRouteManagers {
             for (key, route) in &add_or_update {
                 let units = parse_route_to_units(key, route);
                 units_cache.insert(key.clone(), units);
-                self.route_cache.insert(key.clone(), (**route).clone());
+                self.route_cache.insert(key.clone(), route.clone()); // Arc clone
             }
             for key in &remove {
                 self.route_cache.remove(key);
@@ -114,7 +114,7 @@ pub fn create_grpc_route_handler() -> Box<dyn ConfHandler<GRPCRoute> + Send + Sy
 }
 
 /// Parse a single GRPCRoute into route rule units.
-fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRouteRuleUnit>> {
+fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<GrpcRouteRuleUnit>> {
     let route_namespace = route.metadata.namespace.as_deref().unwrap_or("default");
     let route_name = route.metadata.name.as_deref().unwrap_or("");
 
@@ -198,6 +198,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                         route_labels.clone(),
                     ),
                     rule: rule_arc.clone(),
+                    route: Some(route.clone()),
                     route_info: route_info.clone(),
                     specificity,
                     metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
@@ -232,6 +233,7 @@ fn parse_route_to_units(resource_key: &str, route: &GRPCRoute) -> Vec<Arc<GrpcRo
                             route_labels.clone(),
                         ),
                         rule: rule_arc.clone(),
+                        route: Some(route.clone()),
                         route_info: route_info.clone(),
                         specificity,
                         metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::build(
@@ -266,4 +268,51 @@ fn grpc_backends_from_rule(rule: &GRPCRouteRule, route_ns: &str) -> Vec<(String,
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a minimal GRPCRoute suitable for unit tests.
+    ///
+    /// The route has a single parent ref (so `filter_accepted_parent_refs` returns
+    /// `Some`) and one catch-all rule with a backend ref (so `parse_route_to_units`
+    /// produces at least one unit).
+    fn build_test_grpc_route(namespace: &str, name: &str) -> GRPCRoute {
+        let json = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "namespace": namespace, "name": name },
+            "spec": {
+                "parentRefs": [{ "name": "test-gw", "kind": "Gateway" }],
+                "rules": [{
+                    "backendRefs": [{ "name": "svc1", "port": 8080 }]
+                }]
+            }
+        });
+        let mut route: GRPCRoute = serde_json::from_value(json).expect("Failed to build GRPCRoute");
+        route.pre_parse();
+        route
+    }
+
+    #[test]
+    fn test_grpc_full_set_shares_arc_and_unit_carries_route() {
+        let mgr = GlobalGrpcRouteManagers::new();
+        let key = "test-grpc-arc/route1";
+        let route = std::sync::Arc::new(build_test_grpc_route("test-grpc-arc", "route1"));
+        let mut data = std::collections::HashMap::new();
+        data.insert(key.to_string(), route.clone());
+        mgr.full_set(&data);
+
+        let cached = mgr.route_cache.get(key).expect("cached");
+        assert!(std::sync::Arc::ptr_eq(cached.value(), &route), "cache shares Arc");
+
+        let units = mgr.route_units_cache.lock();
+        let unit = units.get(key).and_then(|v| v.first()).expect("a unit");
+        assert!(
+            std::sync::Arc::ptr_eq(unit.route.as_ref().expect("unit route"), &route),
+            "unit shares the cache Arc"
+        );
+    }
 }

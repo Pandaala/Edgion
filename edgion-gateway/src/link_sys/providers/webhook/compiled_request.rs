@@ -345,6 +345,12 @@ fn resolve_var(
                 Some(addr.to_string())
             }
         }
+        TemplateVarType::MatchedHttpRoute => {
+            session.matched_route_meta(crate::plugins::runtime::traits::session::RouteProto::Http, var_name?)
+        }
+        TemplateVarType::MatchedGrpcRoute => {
+            session.matched_route_meta(crate::plugins::runtime::traits::session::RouteProto::Grpc, var_name?)
+        }
         // Resolved at call time from the controller-carried map (keyed by the
         // raw var_name "ns/name:key"). Absent → None (the readiness gate ensures
         // a served webhook never has an absent ref).

@@ -7,7 +7,7 @@ use crate::runtime::GatewayInfo;
 use crate::MatchInfo;
 use edgion_resources::err::EdError;
 use edgion_resources::resources::common::ParentReference;
-use edgion_resources::{HTTPBackendRef, HTTPRouteRule};
+use edgion_resources::{HTTPBackendRef, HTTPRoute, HTTPRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use std::cmp::Ordering;
@@ -106,6 +106,10 @@ pub struct HttpRouteRuleUnit {
     pub matched_info: MatchInfo,
     /// Reference to the original rule (for backend_refs, plugins, etc.)
     pub rule: Arc<HTTPRouteRule>,
+    /// Shared handle to the full matched route, for metadata-only template
+    /// access (`${matchedHttpRoute:...}`). Same `Arc` the route cache holds —
+    /// zero-copy. `None` only in unit-test fixtures that build the unit directly.
+    pub route: Option<Arc<HTTPRoute>>,
     /// Compiled regex for path matching (only for RegularExpression path type)
     pub path_regex: Option<Regex>,
     /// Parent references for sectionName matching

@@ -10,7 +10,7 @@ use crate::routes::http::routes_mgr::{
 };
 use crate::routes::http::{get_global_http_route_managers, HttpRouteRuleUnit};
 use crate::MatchInfo;
-use edgion_common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
+use edgion_common::conf_sync::traits::ConfHandler;
 use edgion_resources::matcher::host_match::radix_match::{RadixHost, RadixHostMatchEngine};
 use edgion_resources::resources::common::ParentReference;
 use edgion_resources::{HTTPPathMatch, HTTPRoute, HTTPRouteMatch, HTTPRouteRule, ListenerKey, ResourceMeta};
@@ -57,19 +57,17 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
     // whose LB policy is still stale (or missing). Regression tests in this file
     // pin the end-state for full_set / partial_update / mixed scenarios.
     fn full_set(&self, data: &HashMap<String, Arc<HTTPRoute>>) {
-        // Serialize against a concurrent Gateway-driven rebuild_all (see rebuild_lock).
         let _guard = self.lock_rebuild();
-        let data_owned = arc_map_to_owned(data);
         // Step 1: sync LB policies (must precede cache mutation — see invariant above).
-        sync_lb_policies_for_routes(&data_owned);
+        sync_lb_policies_for_routes(data);
 
         let start_time = Instant::now();
         tracing::info!(component = "http_route_manager", cnt = data.len(), "full set start");
 
-        // Step 2: Replace route cache (reuse data_owned to avoid double clone)
+        // Step 2: Replace route cache with shared Arcs (no deep clone).
         self.route_cache.clear();
-        for (key, route) in data_owned {
-            self.route_cache.insert(key, route);
+        for (key, route) in data {
+            self.route_cache.insert(key.clone(), route.clone()); // Arc clone
         }
 
         // Step 3: Rebuild all per-listener managers (lock already held above).
@@ -93,18 +91,18 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         // Covers the affected-set computation, route_cache mutation, and rebuild as one
         // critical section so rebuild_all cannot interleave on a stale snapshot.
         let _guard = self.lock_rebuild();
-        let mut add_or_update_owned = arc_map_into_owned(add);
-        add_or_update_owned.extend(arc_map_into_owned(update));
+        let mut add_or_update: HashMap<String, Arc<HTTPRoute>> = add;
+        add_or_update.extend(update);
         // Step 1: sync/cleanup LB policies before touching route_cache (see invariant
         // above on full_set). cleanup runs after sync so that an updated route which
         // still references an old service does not have its policy dropped here.
-        sync_lb_policies_for_routes(&add_or_update_owned);
+        sync_lb_policies_for_routes(&add_or_update);
         cleanup_lb_policies_for_routes(&remove);
 
         let start_time = Instant::now();
         tracing::info!(
             component = "http_route_manager",
-            add = add_or_update_owned.len(),
+            add = add_or_update.len(),
             rm = remove.len(),
             "partial update start"
         );
@@ -112,8 +110,8 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
         // Compute affected listeners BEFORE updating cache.
         let mut affected_listeners: HashSet<ListenerKey> = HashSet::new();
 
-        for (key, route) in &add_or_update_owned {
-            let listeners = resolved_listeners_for_route(route);
+        for (key, route) in &add_or_update {
+            let listeners = resolved_listeners_for_route(route); // &Arc coerces to &HTTPRoute
             if listeners.is_empty() {
                 tracing::warn!(route = %key, "HTTPRoute has no resolved_listeners during partial_update");
             } else {
@@ -138,9 +136,9 @@ impl ConfHandler<HTTPRoute> for GlobalHttpRouteManagers {
             }
         }
 
-        // Update route cache (reuse add_or_update_owned to avoid double clone)
-        for (key, route) in add_or_update_owned {
-            self.route_cache.insert(key, route);
+        // Update route cache (store shared Arcs)
+        for (key, route) in add_or_update {
+            self.route_cache.insert(key, route); // moves the Arc
         }
         for key in &remove {
             self.route_cache.remove(key);
@@ -230,6 +228,8 @@ struct RouteUnitCtx<'a> {
     /// Operator-defined log labels, resolved once per route, Arc-shared into
     /// each match-item unit's `MatchInfo`.
     labels: Option<crate::LogLabels>,
+    /// Shared handle to the full route (for metadata-only template access).
+    route: Arc<HTTPRoute>,
 }
 
 fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, String> {
@@ -268,6 +268,7 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
             ctx.labels.clone(),
         ),
         rule: ctx.rule.clone(),
+        route: Some(ctx.route.clone()),
         path_regex: Some(regex),
         parent_refs: ctx.parent_refs,
         compiled_header_regexes,
@@ -310,6 +311,7 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
             ctx.labels.clone(),
         ),
         rule: ctx.rule.clone(),
+        route: Some(ctx.route.clone()),
         path_regex: None,
         parent_refs: ctx.parent_refs,
         compiled_header_regexes,
@@ -342,7 +344,7 @@ fn append_match_to_domain(domain_rules: &mut DomainRouteRulesMap, hostname: &str
 }
 
 /// Expand all rules of a single route into `hostname`'s domain bucket.
-#[allow(clippy::too_many_arguments)] // validated route context has 8 interrelated params; grouping would obscure them
+#[allow(clippy::too_many_arguments)] // validated route context has 9 interrelated params; grouping would obscure them
 fn append_route_to_hostname(
     domain_rules: &mut DomainRouteRulesMap,
     hostname: &str,
@@ -353,6 +355,7 @@ fn append_route_to_hostname(
     creation_ts_ms: i64,
     route_sv: u64,
     rule_runtimes: &[HttpRuleRuntime],
+    route_arc: &Arc<HTTPRoute>,
 ) {
     let default_matches = vec![HTTPRouteMatch {
         path: Some(HTTPPathMatch {
@@ -400,6 +403,7 @@ fn append_route_to_hostname(
                     backend_finder: backend_finder.clone(),
                     backends: rule_rt.backends.clone(),
                     labels: validated.labels.clone(),
+                    route: route_arc.clone(),
                 },
             );
         }
@@ -410,7 +414,7 @@ fn append_route_to_hostname(
 ///
 /// Routes are merged into a single table keyed by hostname.
 /// Each route unit carries its parentRefs so gateway validation happens at match time.
-fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> DomainRouteRulesMap {
+fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> DomainRouteRulesMap {
     let mut domain_rules: DomainRouteRulesMap = HashMap::new();
     let mut processed_routes = 0;
     let mut skipped_routes = 0;
@@ -458,6 +462,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, HTTPRoute>) -> Domai
                 creation_ts_ms,
                 route_sv,
                 &rule_runtimes,
+                route,
             );
         }
         processed_routes += 1;
@@ -519,7 +524,7 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
 }
 
 /// Build DomainRouteRules from a set of routes (used by per-port rebuild).
-pub(crate) fn build_domain_route_rules_from_routes(data: &HashMap<String, HTTPRoute>) -> DomainRouteRules {
+pub(crate) fn build_domain_route_rules_from_routes(data: &HashMap<String, Arc<HTTPRoute>>) -> DomainRouteRules {
     let domain_rules_map = parse_http_routes_to_domain_rules(data);
 
     let mut exact_domain_map: HashMap<DomainStr, Arc<RouteRules>> = HashMap::new();
@@ -753,7 +758,8 @@ mod tests {
         let stale_key = "test-fs-ord/stale";
 
         let stale = build_route_with_lb_policy("test-fs-ord", "stale", "svc1", "LBPolicyLeastConn", "default");
-        mgr.route_cache.insert(stale_key.to_string(), stale);
+        mgr.route_cache
+            .insert(stale_key.to_string(), std::sync::Arc::new(stale));
 
         let mut data = HashMap::new();
         data.insert(
@@ -962,5 +968,65 @@ mod tests {
 
         policy_store.delete_lb_policies_by_resource_key(route_a);
         policy_store.delete_lb_policies_by_resource_key(route_c);
+    }
+
+    #[test]
+    fn test_full_set_shares_arc_no_deep_clone() {
+        let mgr = GlobalHttpRouteManagers::new();
+        let route_key = "test-arc-share/route1";
+        let route = std::sync::Arc::new(build_route_with_lb_policy(
+            "test-arc-share",
+            "route1",
+            "svc1",
+            "LBPolicyConsistentHash",
+            "header.x-id",
+        ));
+
+        let mut data = std::collections::HashMap::new();
+        data.insert(route_key.to_string(), route.clone());
+        mgr.full_set(&data);
+
+        let cached = mgr.route_cache.get(route_key).expect("route must be cached");
+        assert!(
+            std::sync::Arc::ptr_eq(cached.value(), &route),
+            "route_cache must store the same Arc (zero-copy), not a deep clone"
+        );
+
+        crate::lb::lb_policy::get_global_policy_store().delete_lb_policies_by_resource_key(route_key);
+    }
+
+    #[test]
+    fn test_built_unit_carries_route_arc() {
+        let _mgr = GlobalHttpRouteManagers::new();
+        let route_key = "test-unit-route/route1";
+        let route = std::sync::Arc::new(build_route_with_lb_policy(
+            "test-unit-route",
+            "route1",
+            "svc1",
+            "LBPolicyConsistentHash",
+            "header.x-id",
+        ));
+        let mut data = std::collections::HashMap::new();
+        data.insert(route_key.to_string(), route.clone());
+
+        let table = build_domain_route_rules_from_routes(&data);
+        // build_route_with_lb_policy sets hostnames: ["test.example.com"] -> exact_domain_map bucket.
+        let rules = table
+            .exact_domain_map
+            .get("test.example.com")
+            .cloned()
+            .expect("test.example.com rules present");
+        let unit = rules
+            .route_rules_list
+            .first()
+            .or_else(|| rules.regex_routes.first())
+            .expect("at least one unit built");
+        let unit_route = unit.route.as_ref().expect("unit carries its route");
+        assert!(
+            std::sync::Arc::ptr_eq(unit_route, &route),
+            "unit.route must share the cache Arc (zero-copy)"
+        );
+
+        crate::lb::lb_policy::get_global_policy_store().delete_lb_policies_by_resource_key(route_key);
     }
 }

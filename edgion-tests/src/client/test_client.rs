@@ -321,6 +321,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/PathNormalization" => "EdgionPlugins",
         "EdgionPlugins/PathNormalization/PreserveParam" => "EdgionPlugins",
         "EdgionPlugins/PathNormalization/ForwardView" => "EdgionPlugins",
+        "EdgionPlugins/MatchedRouteMeta" => "EdgionPlugins",
         "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
         "EdgionPlugins/Dsl" => "EdgionPlugins",
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
@@ -1257,6 +1258,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::CtxSetTestSuite));
+        }
+        "EdgionPlugins/MatchedRouteMeta" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/MatchedRouteMeta tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::MatchedRouteMetaTestSuite));
         }
         "EdgionPlugins/WebhookKeyGet" => {
             if !gateway {

@@ -6,12 +6,34 @@ use pingora_proxy::Session;
 use std::collections::HashMap;
 
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
+use super::traits::session::RouteProto;
 use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
 use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::common::{KeyGet, KeySet, WebhookExtract};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::EdgionStatus;
+
+/// Resolve a `${matchedHttpRoute:<selector>}` / `${matchedGrpcRoute:<selector>}`
+/// selector against route metadata.
+/// Selectors: `name`, `namespace`, `label.<key>`, `annotation.<key>`.
+/// The split is on the FIRST `.` so keys containing `.`/`/`
+/// (e.g. `edgion.io/team`) round-trip. Absent/unknown -> None.
+pub(crate) fn route_meta_field(meta: &kube::api::ObjectMeta, selector: &str) -> Option<String> {
+    match selector {
+        "name" => meta.name.clone(),
+        "namespace" => meta.namespace.clone(),
+        _ => {
+            if let Some(key) = selector.strip_prefix("label.") {
+                meta.labels.as_ref()?.get(key).cloned()
+            } else if let Some(key) = selector.strip_prefix("annotation.") {
+                meta.annotations.as_ref()?.get(key).cloned()
+            } else {
+                None
+            }
+        }
+    }
+}
 
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
@@ -370,6 +392,14 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             self.extract_path_params();
         }
         self.ctx.path_params.as_ref()?.get(name).cloned()
+    }
+
+    fn matched_route_meta(&self, proto: RouteProto, selector: &str) -> Option<String> {
+        let meta = match proto {
+            RouteProto::Http => &self.ctx.route_unit.as_ref()?.route.as_ref()?.metadata,
+            RouteProto::Grpc => &self.ctx.grpc_route_unit.as_ref()?.route.as_ref()?.metadata,
+        };
+        route_meta_field(meta, selector)
     }
 
     async fn write_response_header(
@@ -860,6 +890,48 @@ mod local_reply_tests {
         assert_eq!(reply.headers.get("x-foo").unwrap().to_str().unwrap(), "bar");
         // The builder's destructive drain consumed the queue.
         assert!(ctx.pending_response_header_ops.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod route_meta_tests {
+    use super::route_meta_field;
+    use kube::api::ObjectMeta;
+    use std::collections::BTreeMap;
+
+    fn meta() -> ObjectMeta {
+        let mut labels = BTreeMap::new();
+        labels.insert("app".to_string(), "web".to_string());
+        labels.insert("edgion.io/team".to_string(), "team-a".to_string());
+        let mut ann = BTreeMap::new();
+        ann.insert("owner".to_string(), "platform".to_string());
+        ObjectMeta {
+            name: Some("route1".to_string()),
+            namespace: Some("ns1".to_string()),
+            labels: Some(labels),
+            annotations: Some(ann),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn resolves_identity_and_metadata() {
+        let m = meta();
+        assert_eq!(route_meta_field(&m, "name").as_deref(), Some("route1"));
+        assert_eq!(route_meta_field(&m, "namespace").as_deref(), Some("ns1"));
+        assert_eq!(route_meta_field(&m, "label.app").as_deref(), Some("web"));
+        // dotted/slashed key round-trips (split on first '.')
+        assert_eq!(route_meta_field(&m, "label.edgion.io/team").as_deref(), Some("team-a"));
+        assert_eq!(route_meta_field(&m, "annotation.owner").as_deref(), Some("platform"));
+    }
+
+    #[test]
+    fn missing_and_unknown_return_none() {
+        let m = meta();
+        assert_eq!(route_meta_field(&m, "label.absent"), None);
+        assert_eq!(route_meta_field(&m, "annotation.absent"), None);
+        assert_eq!(route_meta_field(&m, "bogus"), None);
+        assert_eq!(route_meta_field(&ObjectMeta::default(), "name"), None);
     }
 }
 

@@ -473,6 +473,7 @@ mod tests {
             matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None, None),
             rule,
             route_info,
+            route: None,
             specificity: GrpcMatchSpecificity {
                 header_count: 0,
                 creation_ts_ms: 0,
@@ -715,6 +716,7 @@ mod tests {
             matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None, None),
             rule,
             route_info,
+            route: None,
             specificity: GrpcMatchSpecificity {
                 header_count: headers.len() as u16,
                 creation_ts_ms: 0,

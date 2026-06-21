@@ -5,7 +5,7 @@ use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::runtime::GatewayInfo;
 use edgion_resources::err::EdError;
 use edgion_resources::resources::common::ParentReference;
-use edgion_resources::{GRPCBackendRef, GRPCRouteMatch, GRPCRouteRule};
+use edgion_resources::{GRPCBackendRef, GRPCRoute, GRPCRouteMatch, GRPCRouteRule};
 use pingora_proxy::Session;
 use regex::Regex;
 use schemars::JsonSchema;
@@ -227,6 +227,10 @@ pub struct GrpcRouteRuleUnit {
     pub resource_key: String,
     pub matched_info: GrpcMatchInfo,
     pub rule: Arc<GRPCRouteRule>,
+    /// Shared handle to the full matched route, for metadata-only template
+    /// access (`${matchedGrpcRoute:...}`). Same `Arc` the route cache holds.
+    /// `None` only in unit-test fixtures.
+    pub route: Option<Arc<GRPCRoute>>,
     /// Route level information (parent_refs, hostnames, etc.)
     pub route_info: Arc<GrpcRouteInfo>,
     /// Pre-computed match specificity for Gateway API precedence ordering.

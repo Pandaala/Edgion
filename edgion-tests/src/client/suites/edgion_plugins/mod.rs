@@ -31,6 +31,7 @@ mod jwe_decrypt;
 mod jwt_auth;
 mod key_auth;
 mod ldap_auth;
+mod matched_route_meta;
 mod openid_connect;
 mod path_normalization;
 mod plugin_condition;
@@ -81,6 +82,7 @@ pub use jwe_decrypt::JweDecryptTestSuite;
 pub use jwt_auth::JwtAuthTestSuite;
 pub use key_auth::KeyAuthTestSuite;
 pub use ldap_auth::LdapAuthTestSuite;
+pub use matched_route_meta::MatchedRouteMetaTestSuite;
 pub use openid_connect::OpenidConnectTestSuite;
 pub use path_normalization::{
     PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite,

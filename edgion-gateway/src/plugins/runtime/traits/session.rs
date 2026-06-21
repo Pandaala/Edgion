@@ -12,6 +12,13 @@ use pingora_http::ResponseHeader;
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
 pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 
+/// Which matched route a `matched_route_meta` lookup targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteProto {
+    Http,
+    Grpc,
+}
+
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait PluginSession: Send + Sync {
@@ -69,6 +76,13 @@ pub trait PluginSession: Send + Sync {
     /// This uses lazy extraction - parameters are only parsed on first call
     /// and then cached for subsequent calls.
     fn get_path_param(&mut self, name: &str) -> Option<String>;
+
+    /// Read identity/metadata of the matched route for template variables
+    /// `${matchedHttpRoute:<selector>}` / `${matchedGrpcRoute:<selector>}`.
+    /// Selectors: `name`, `namespace`, `label.<key>`, `annotation.<key>`.
+    /// Returns `None` when no route matched, the route handle is absent, or the
+    /// selector/key is unknown.
+    fn matched_route_meta(&self, proto: RouteProto, selector: &str) -> Option<String>;
 
     async fn write_response_header(
         &mut self,

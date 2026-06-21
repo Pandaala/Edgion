@@ -1,0 +1,16 @@
+# ReferenceGrant: allow HTTPRoutes in edgion-it namespace to reference
+# Services in edgion-test (e.g. test-http:30001).
+# The grant lives in the target namespace (edgion-test) per Gateway API spec.
+apiVersion: gateway.networking.k8s.io/v1
+kind: ReferenceGrant
+metadata:
+  name: allow-cross-ns-edgion-it
+  namespace: edgion-test
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: HTTPRoute
+      namespace: edgion-it
+  to:
+    - group: ""
+      kind: Service
