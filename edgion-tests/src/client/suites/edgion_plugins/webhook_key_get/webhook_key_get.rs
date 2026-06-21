@@ -33,17 +33,14 @@
 //     return a 5xx to the client. Scenario 5 asserts the *gating* property (the
 //     webhook was not called) rather than a 403 client status. PASSES.
 //
-//  2. `service_clusterip` (scenario 2) is DISABLED in the local integration harness:
-//     the webhook provider resolves `kind: ServiceClusterIp` to a
-//     `<svc>.<ns>.svc.cluster.local` DNS name (edgion-gateway .../webhook/manager.rs)
-//     and never dials the Service's `spec.clusterIP`. With no cluster DNS locally,
-//     the call is unreachable and the var degrades to its default. It is a
-//     test-harness limitation, not a defect (it works under a real cluster). The
-//     scenario fn `test_service_clusterip` is retained as an executable spec but is
-//     NOT registered in `test_cases()`; re-enable it once ServiceClusterIp routing is
-//     supported. See tasks/pending/13-webhook-serviceclusterip-resolution.md.
+//  2. `kind: ServiceClusterIp` webhook resolution is intentionally NOT covered by
+//     this suite. The webhook provider resolves it to a `<svc>.<ns>.svc.cluster.local`
+//     DNS name (edgion-gateway .../webhook/manager.rs) and relies on cluster DNS,
+//     which the local harness lacks. Making it dial `spec.clusterIP` directly (to
+//     match the route backend path) was evaluated and declined as low-value / niche;
+//     see docs/superpowers/specs/2026-06-21-webhook-serviceclusterip-resolution-design.md.
 //
-// Net: 10/10 active scenarios pass (scenario 2 disabled pending the ClusterIP gap).
+// Net: 10/10 scenarios pass.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -161,44 +158,6 @@ impl WebhookKeyGetTestSuite {
                                 Ok("backend resolved via EndpointSlice; origin X-Tenant-Id forwarded".into())
                             } else {
                                 Err("expected wh1_user_id=uid-ep-tenant-1".into())
-                            }
-                        },
-                    )
-                    .await
-                })
-            },
-        )
-    }
-
-    // ==================== 2. ServiceClusterIp DNS resolution ====================
-    // Retained as an executable spec but NOT registered in `test_cases()` — the local
-    // harness has no cluster DNS so this scenario is unreachable. Re-register once the
-    // webhook provider dials spec.clusterIP. See tasks/pending/13-...md.
-    #[allow(dead_code)]
-    fn test_service_clusterip() -> TestCase {
-        TestCase::new(
-            "service_clusterip",
-            "Webhook backend resolved via kind: ServiceClusterIp (ClusterIP/DNS path)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    run_case(
-                        &ctx,
-                        "wh2.example.com",
-                        "/test/wh2",
-                        &[("X-Tenant-Id", "cip-tenant-2")],
-                        "wh2",
-                        start,
-                        true,
-                        |log| {
-                            if log_has(log, "wh2_user_id", "uid-cip-tenant-2") {
-                                Ok("webhook reached via ServiceClusterIp; request succeeded".into())
-                            } else {
-                                Err("expected wh2_user_id=uid-cip-tenant-2 — KNOWN GAP: the webhook \
-                                     provider dials <svc>.<ns>.svc.cluster.local (cluster DNS) and \
-                                     never spec.clusterIP, so ServiceClusterIp is unreachable in the \
-                                     local harness"
-                                    .into())
                             }
                         },
                     )
@@ -572,8 +531,6 @@ impl TestSuite for WebhookKeyGetTestSuite {
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_service_plus_endpointslice(),
-            // scenario 2 `service_clusterip` disabled (local cluster-DNS gap) — see the
-            // module header and tasks/pending/13-webhook-serviceclusterip-resolution.md.
             Self::test_all_origin_transparent(),
             Self::test_all_custom_literal(),
             Self::test_presence_required_fail(),
