@@ -29,6 +29,9 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 | Annotation | Value | Description |
 |------------|-------|-------------|
 | `edgion.io/hostname-resolution` | — | System-managed (do not set manually) |
+| `edgion.io/log-label.<key>` | string | Adds `<key>=<value>` to `rsc.labels` in the access log (also on `metadata.labels`). |
+| `edgion.io/log-ctx-keys` | comma-separated list | Opt-in allowlist of plugin-set ctx-var (`ctx_map`) keys to project into the access log. Context variables are **not** logged by default; only keys named here are emitted (known-sensitive keys like claims stay hard-blocked). Shorthand for `log-keys` entries of `type: ctx`. |
+| `edgion.io/log-keys` | JSON array | Unified opt-in log-projection carrier. Each entry is `{"key": "<name>", "type": "ctx"\|"label"\|"annotation"}`. `type: ctx` adds `<name>` to the access-log ctx allowlist; `type: label` / `type: annotation` projects the value of the existing `metadata.labels[<name>]` / `metadata.annotations[<name>]` into `rsc.labels`. Malformed entries are skipped individually; merges with `log-label.<key>` and `log-ctx-keys`. |
 
 - `edgion.io/forward-raw-path` (HTTPRoute) — three-state control over the upstream path forwarding view:
   - `"true"` forces raw, `"false"` forces normalized (overrides region_route); absent falls back to the default flow.

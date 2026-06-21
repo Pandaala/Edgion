@@ -310,5 +310,5 @@ This table is kept as a historical record; there are no remaining open items in 
 | ~~`connection_filter_bridge.rs`~~ | ~~Connection-filter debug/info~~ | ~~Remove all~~ | Fixed |
 | ~~`grpc/match_unit.rs`~~ | ~~Request-level warn~~ | ~~Remove~~ | Fixed |
 | ~~`preflight_handler.rs`~~ | ~~preflight debug~~ | ~~Remove~~ | Fixed |
-| ~~Access log `ctx_map`~~ | ~~Sensitive claim keys (`jwt_claims` / `oidc_claims` / `jwe_payload`) flattened verbatim into the access log~~ | `entry.rs` `FilteredCtx` blocklist drops the three keys during serialization; other `ctx_map` keys (CtxSet) still flatten | Fixed |
+| ~~Access log `ctx_map`~~ | ~~Sensitive claim keys (`jwt_claims` / `oidc_claims` / `jwe_payload`) flattened verbatim into the access log~~ | `entry.rs` `AllowlistedCtx` is deny-by-default: ctx vars reach the log only via the per-route opt-in allowlist (`edgion.io/log-ctx-keys` or `edgion.io/log-keys` `type: ctx`), and the three sensitive keys stay hard-blocked even if allow-listed | Fixed |
 | ~~LDAP/JWT auth plugin username~~ | ~~username flowing into stage_logs~~ | Wired into the `access_log_sensitive` global masking switch with explicit `sensitive(...)` markers | Fixed |

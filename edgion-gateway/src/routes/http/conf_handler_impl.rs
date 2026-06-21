@@ -33,6 +33,9 @@ struct ValidatedHttpRoute<'a> {
     /// Operator-defined log labels, resolved once per route at build time and
     /// shared (Arc) into every match-item unit's `MatchInfo`.
     labels: Option<crate::LogLabels>,
+    /// Opt-in allowlist of `ctx_map` keys to project into the access log,
+    /// resolved once per route and Arc-shared into each match-item unit.
+    log_ctx_keys: crate::ctx::LogCtxKeys,
 }
 
 /// Sentinel hostname used when an HTTPRoute has no spec.hostnames.
@@ -228,6 +231,9 @@ struct RouteUnitCtx<'a> {
     /// Operator-defined log labels, resolved once per route, Arc-shared into
     /// each match-item unit's `MatchInfo`.
     labels: Option<crate::LogLabels>,
+    /// Opt-in allowlist of `ctx_map` keys to project into the access log,
+    /// resolved once per route, Arc-shared into each match-item unit's `MatchInfo`.
+    log_ctx_keys: crate::ctx::LogCtxKeys,
     /// Shared handle to the full route (for metadata-only template access).
     route: Arc<HTTPRoute>,
 }
@@ -266,7 +272,8 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
             ctx.match_item.clone(),
             ctx.route_sv,
             ctx.labels.clone(),
-        ),
+        )
+        .with_log_ctx_keys(ctx.log_ctx_keys.clone()),
         rule: ctx.rule.clone(),
         route: Some(ctx.route.clone()),
         path_regex: Some(regex),
@@ -309,7 +316,8 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
             ctx.match_item.clone(),
             ctx.route_sv,
             ctx.labels.clone(),
-        ),
+        )
+        .with_log_ctx_keys(ctx.log_ctx_keys.clone()),
         rule: ctx.rule.clone(),
         route: Some(ctx.route.clone()),
         path_regex: None,
@@ -403,6 +411,7 @@ fn append_route_to_hostname(
                     backend_finder: backend_finder.clone(),
                     backends: rule_rt.backends.clone(),
                     labels: validated.labels.clone(),
+                    log_ctx_keys: validated.log_ctx_keys.clone(),
                     route: route_arc.clone(),
                 },
             );
@@ -514,12 +523,14 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
     };
 
     let labels = crate::extract_log_labels(&route.metadata);
+    let log_ctx_keys = crate::ctx::extract_log_ctx_keys(&route.metadata);
 
     Some(ValidatedHttpRoute {
         rules,
         namespace: route_namespace,
         name: route_name,
         labels,
+        log_ctx_keys,
     })
 }
 

@@ -15,7 +15,7 @@ use edgion_resources::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -70,6 +70,23 @@ pub fn extract_log_labels(meta: &kube::api::ObjectMeta) -> Option<LogLabels> {
     edgion_resources::resources::common::resolve_log_labels(meta).map(LogLabels)
 }
 
+/// Opt-in allowlist of plugin-set `ctx_map` keys to project into the access log
+/// for a route. Resolved once at route conf-handler build time from the
+/// `edgion.io/log-ctx-keys` annotation and shared (`Arc`) onto each match-item
+/// unit's `MatchInfo`. `None` means no context variable is logged for the route
+/// (default-off). The deny-by-default model replaces the former "flatten every
+/// `ctx_map` entry minus a blocklist" behavior; known-sensitive keys remain
+/// hard-blocked at log time as defense-in-depth (see the access-log `entry`).
+pub type LogCtxKeys = Option<Arc<BTreeSet<String>>>;
+
+/// Thin gateway-side wrapper over
+/// [`edgion_resources::resources::common::resolve_log_ctx_keys`] (the single
+/// implementation of the annotation parse + guardrails). Call at route
+/// conf-handler build time (HTTP/gRPC).
+pub fn extract_log_ctx_keys(meta: &kube::api::ObjectMeta) -> LogCtxKeys {
+    edgion_resources::resources::common::resolve_log_ctx_keys(meta)
+}
+
 /// Unified resource identifier for access log.
 /// Provides consistent `kind`/`ns`/`name` across all resource types.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -120,6 +137,12 @@ pub struct MatchInfo {
     /// match item
     #[serde(skip)]
     pub m: HTTPRouteMatch,
+
+    /// Opt-in allowlist of `ctx_map` keys to project into the access log for
+    /// this route (`edgion.io/log-ctx-keys`). In-process only — never part of
+    /// the serialized log entry.
+    #[serde(skip)]
+    pub log_ctx_keys: LogCtxKeys,
 }
 
 pub fn is_zero(v: &u64) -> bool {
@@ -147,7 +170,14 @@ impl MatchInfo {
             rule_id,
             match_id,
             sv,
+            log_ctx_keys: None,
         }
+    }
+
+    /// Attach the resolved ctx-key allowlist, consuming and returning `self`.
+    pub fn with_log_ctx_keys(mut self, keys: LogCtxKeys) -> Self {
+        self.log_ctx_keys = keys;
+        self
     }
 }
 

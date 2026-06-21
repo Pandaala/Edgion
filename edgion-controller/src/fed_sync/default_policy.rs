@@ -8,10 +8,11 @@
 //!  - Read (get / list / watch / list-keys) on every ResourceKind except Secret.
 //!  - Write (create / update / delete) on EdgionConfigData only
 //!    (region-route and ip-restriction handlers drive this).
-//!  - Get, list, and failover on RegionRoute (synthetic classifier label, not a
-//!    ResourceKind): get/list allow the aggregate read endpoints
-//!    (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes),
-//!    and failover covers the POST failover endpoint.
+//!  - List and failover on RegionRoute (synthetic classifier label, not a
+//!    ResourceKind): list allows the aggregate read endpoints
+//!    (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes,
+//!    GET /api/v1/region-routes/effective), and failover covers the POST
+//!    failover endpoint.
 //!  - server-info on the NonResource route (GET /api/v1/server-info). It exposes
 //!    only a reload marker (server_id), readiness, and mode -- no secrets -- so
 //!    it is safe to read by default; Center uses it to verify reload propagation.
@@ -110,11 +111,14 @@ const DEFAULT_READ_KINDS: &[&str] = &[
 /// Rules:
 ///   1. read (get, list, watch, list-keys) on all ResourceKinds except Secret.
 ///   2. write (create, update, delete) on EdgionConfigData.
-///   3. get, list, failover on RegionRoute (synthetic label -- not a ResourceKind).
-///      `get` and `list` cover the aggregate read endpoints
-///      (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes)
-///      which classify as (list, "RegionRoute") and (get, "RegionRoute").
-///      `failover` covers the POST failover endpoint.
+///   3. list, failover on RegionRoute (synthetic label -- not a ResourceKind).
+///      `list` covers the aggregate read endpoints
+///      (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes,
+///      GET /api/v1/region-routes/effective), all of which classify as
+///      (list, "RegionRoute"). `failover` covers the POST failover endpoint.
+///      `get` is intentionally NOT granted: no classifier route currently emits
+///      (get, "RegionRoute"), so granting it would be a dead permission that
+///      widens the default boundary for any future single-resource read route.
 ///      RegionRoute is intentionally kept as its own rule because it is NOT part
 ///      of the ResourceKind exhaustiveness gate -- it is a synthetic classifier
 ///      label only used on the fed-proxy routing layer.
@@ -140,11 +144,12 @@ pub(crate) fn default_center_policy() -> CenterPolicy {
                 verbs: vec!["create".to_string(), "update".to_string(), "delete".to_string()],
                 kinds: vec![ResourceKind::EdgionConfigData.as_str().to_string()],
             },
-            // Rule 3: get, list, and failover on RegionRoute (synthetic label).
-            // get / list cover the aggregate region-route read endpoints;
-            // failover covers the POST failover operation.
+            // Rule 3: list and failover on RegionRoute (synthetic label).
+            // list covers the aggregate region-route read endpoints;
+            // failover covers the POST failover operation. `get` is omitted
+            // because no classifier route emits (get, "RegionRoute").
             FedAllowRule {
-                verbs: vec!["get".to_string(), "list".to_string(), "failover".to_string()],
+                verbs: vec!["list".to_string(), "failover".to_string()],
                 kinds: vec!["RegionRoute".to_string()],
             },
             // Rule 4: server-info on the NonResource route. Read-only and
@@ -228,17 +233,20 @@ mod tests {
         assert!(allows(&az(), Verb::Delete, "EdgionConfigData"));
     }
 
-    // -- RegionRoute: get, list, and failover are all allowed --
+    // -- RegionRoute: only list and failover are allowed --
     //
     // RegionRoute is a synthetic classifier label (not a ResourceKind variant).
-    // The default now includes get and list so that the aggregate read endpoints
-    // GET /api/v1/cluster-region-routes and GET /api/v1/service-region-routes
-    // (which classify as (list, "RegionRoute") and (get, "RegionRoute"))
-    // are accessible under the built-in default policy.
+    // The aggregate read endpoints GET /api/v1/cluster-region-routes,
+    // GET /api/v1/service-region-routes, and GET /api/v1/region-routes/effective
+    // all classify as (list, "RegionRoute"), so the default grants `list`.
+    // `get` is intentionally NOT granted: no classifier route emits
+    // (get, "RegionRoute"), so allowing it would be a dead permission.
 
     #[test]
-    fn default_allows_get_regionroute() {
-        assert!(allows(&az(), Verb::Get, "RegionRoute"));
+    fn default_denies_get_regionroute() {
+        // No classifier route emits (get, "RegionRoute"); the default must not
+        // grant a dead permission that widens the boundary for future routes.
+        assert!(!allows(&az(), Verb::Get, "RegionRoute"));
     }
 
     #[test]

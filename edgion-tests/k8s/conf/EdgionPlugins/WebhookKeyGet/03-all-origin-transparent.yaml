@@ -1,0 +1,109 @@
+# Scenario 3: all-origin-transparent (K8s mode)
+# ---------------------------------------------------------------------------
+# Every forwarded field comes from the incoming request via `origin` (the
+# forward-auth-style transparent case). headers / args / cookies all list
+# multiple origin fields; only a single minimal custom marker is added.
+# Backend via Service (real selector) + auto EndpointSlice.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh3-svc
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh3-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh3-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+      headers:
+        origin:
+          - name: X-Tenant-Id
+          - name: X-Request-ID
+          - name: X-User-Id
+        custom:
+          - name: X-Source
+            value: "edgion"
+      args:
+        origin:
+          - name: tenant_id
+          - name: trace_id
+      cookies:
+        origin:
+          - name: session_id
+          - name: locale
+    timeoutMs: 5000
+    successStatusCodes: [200]
+    allowDegradation: false
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh3-ctx-set
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: wh3_user_id
+            from:
+              type: webhook
+              webhookRef: "edgion-default/wh3-resolver"
+              extract:
+                # The webhook backend echoes inbound headers under data.echo_headers.
+                # X-Request-ID is one of the declared origin headers, so a non-default
+                # value here proves the gateway forwarded the origin header transparently.
+                source: body
+                path: "data.echo_headers.x-request-id"
+            default: "fallback-user"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh3-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh3.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh3
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh3-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

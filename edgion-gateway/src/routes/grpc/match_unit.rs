@@ -125,6 +125,11 @@ pub struct GrpcMatchInfo {
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_method_regex: Option<Regex>,
+    /// Opt-in allowlist of `ctx_map` keys to project into the access log for
+    /// this route (`edgion.io/log-ctx-keys`). In-process only.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub log_ctx_keys: crate::ctx::LogCtxKeys,
 }
 
 impl GrpcMatchInfo {
@@ -217,7 +222,14 @@ impl GrpcMatchInfo {
             compiled_header_regexes,
             compiled_service_regex,
             compiled_method_regex,
+            log_ctx_keys: None,
         }
+    }
+
+    /// Attach the resolved ctx-key allowlist, consuming and returning `self`.
+    pub fn with_log_ctx_keys(mut self, keys: crate::ctx::LogCtxKeys) -> Self {
+        self.log_ctx_keys = keys;
+        self
     }
 }
 

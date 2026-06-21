@@ -125,6 +125,8 @@ kind: HTTPRoute
 metadata:
   name: wh8-route
   namespace: edgion-default
+  annotations:
+    edgion.io/log-ctx-keys: "wh8_overridden,wh8_ignored"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

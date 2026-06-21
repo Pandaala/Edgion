@@ -35,11 +35,12 @@ pub struct AccessLogEntry<'a> {
     pub backend_context: Option<&'a BackendContext>,
     pub stage_logs: &'a [StageLogs],             // plugin execution logs
     pub conn_est: Option<bool>,                   // whether the upstream connection is established
-    pub ctx: &'a HashMap<String, String>,         // custom context variables
+    pub ctx: AllowlistedCtx<'a>,                  // ctx_map projection (deny-by-default opt-in)
 }
 ```
 
 - `RouteMatchInfo` is an `untagged` enum supporting both HTTP (`MatchInfo`) and gRPC (`GrpcMatchInfo`) match info.
+- `ctx` projects plugin context variables (`ctx_map`) into the log **deny-by-default**: only keys allow-listed on the matched route (`edgion.io/log-ctx-keys` / `edgion.io/log-keys` `type: ctx`) are emitted, and known-sensitive keys stay hard-blocked. See `skills/03-coding/observability/00-access-log.md`.
 - Built from EdgionHttpContext via `AccessLogEntry::from_context(ctx)`.
 - JSON serialization uses serde's `skip_serializing_if` to reduce output size.
 

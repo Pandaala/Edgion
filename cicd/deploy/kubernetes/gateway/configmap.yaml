@@ -60,6 +60,10 @@ data:
     # mTLS client config for the conf_sync channel. With auto_ca the Controller's
     # internal CA provisions the `edgion-conf-sync-certs` Secret (mounted at
     # /etc/edgion/conf-sync-certs); the Gateway loads its client cert from those files.
+    # auto_ca is ENFORCED on the data plane: the Gateway will not run this channel in
+    # plaintext. If the Secret is not yet provisioned at cold start it retries within the
+    # startup-probe budget (the volume is `optional`); it never downgrades to plaintext.
+    # The tls block below is REQUIRED under auto_ca (auto_ca implies mTLS).
     conf_sync_security:
       auto_ca: true
       tls:

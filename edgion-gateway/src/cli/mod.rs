@@ -5,7 +5,7 @@ use crate::lb::leastconn::BackendCleaner;
 use crate::observe::access_log::init_access_logger;
 use crate::observe::logs::{init_logging, init_ssl_logger, init_tcp_logger, init_tls_logger, init_udp_logger};
 use crate::observe::metrics;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 use edgion_resources::{init_work_dir, work_dir};
 use std::path::PathBuf;
@@ -42,16 +42,68 @@ impl EdgionGatewayCli {
             .as_deref()
             .ok_or_else(|| anyhow!("server_addr is required, please provide --server-addr or set in config file"))?;
 
-        config
-            .conf_sync_security
+        let security = &config.conf_sync_security;
+        security
             .validate()
             .map_err(|e| anyhow!("Invalid conf_sync_security config: {}", e))?;
+
+        // auto_ca=true with no TLS block at all is a permanent misconfiguration: auto_ca
+        // means the Controller's internal CA provisions the certs, so the cert paths must
+        // be configured. Fail fast (no retry) — retrying a config error only stalls.
+        if security.auto_ca && security.is_plaintext_omitted() {
+            bail!(
+                "conf_sync_security.auto_ca=true but no cert paths are configured. auto_ca \
+                 requires mTLS; set conf_sync_security.tls (or certs) to the Controller-provisioned \
+                 cert files (mounted from the edgion-conf-sync-certs Secret)."
+            );
+        }
+
+        // Under auto_ca the gateway-client Secret is provisioned by the Controller and may
+        // not exist yet at cold start (the mounted volume is `optional`). Rather than
+        // crash-loop on a transient "cert file not found", retry within the startup-probe
+        // budget (~40s < the 60s startupProbe window) so a Secret that lands shortly is
+        // picked up in-process. Non-auto_ca keeps the original single-shot behavior:
+        // manual certs are expected to be present at startup.
+        if security.auto_ca {
+            const MAX_ATTEMPTS: u32 = 20;
+            const BACKOFF: Duration = Duration::from_secs(2);
+            let mut attempt: u32 = 0;
+            loop {
+                attempt += 1;
+                match ConfigSyncClient::new(
+                    server_addr,
+                    "edgion-gateway".to_string(),
+                    Duration::from_secs(10),
+                    security,
+                )
+                .await
+                {
+                    Ok(client) => return Ok(client),
+                    Err(e) if attempt < MAX_ATTEMPTS => {
+                        tracing::warn!(
+                            component = "grpc_client",
+                            attempt,
+                            max_attempts = MAX_ATTEMPTS,
+                            error = %e,
+                            "conf_sync client init failed (auto_ca: waiting for the provisioned \
+                             cert Secret to appear); retrying"
+                        );
+                        tokio::time::sleep(BACKOFF).await;
+                    }
+                    Err(e) => {
+                        return Err(anyhow!(
+                            "Failed to create ConfigSyncClient after {attempt} attempts: {e}"
+                        ));
+                    }
+                }
+            }
+        }
 
         let sync_client = ConfigSyncClient::new(
             server_addr,
             "edgion-gateway".to_string(),
             Duration::from_secs(10),
-            &config.conf_sync_security,
+            security,
         )
         .await
         .map_err(|e| anyhow!("Failed to create ConfigSyncClient: {}", e))?;

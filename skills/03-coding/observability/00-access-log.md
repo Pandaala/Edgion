@@ -64,6 +64,37 @@ Each access log entry must contain enough information for an operator to locate 
 - Putting the full request body into the access log
 - Expanding every header into the access log
 
+### Context variables (`ctx_map`) in the access log — opt-in only
+
+Plugin-set context variables (`CtxSet`, DSL `ctx.set`, `KeySet { Ctx }`, the
+webhook KeyGet result, …) are **not** logged by default. To project specific
+ctx vars into the access log, allow-list their keys on the HTTPRoute / GRPCRoute.
+Two equivalent carriers exist (they union):
+
+```yaml
+metadata:
+  annotations:
+    # Shorthand: comma-separated ctx-var names.
+    edgion.io/log-ctx-keys: "tenant_id,tier"
+    # Unified carrier: JSON array, also covers label/annotation projection.
+    edgion.io/log-keys: '[{"key":"tenant_id","type":"ctx"},{"key":"tier","type":"ctx"}]'
+```
+
+The unified `edgion.io/log-keys` carrier additionally supports projecting the
+value of an existing `metadata.labels` / `metadata.annotations` key into
+`rsc.labels` via `type: label` / `type: annotation` (a more flexible alternative
+to the `edgion.io/log-label.<suffix>` prefix, which gives the value inline). All
+three carriers merge; malformed `log-keys` entries are skipped individually.
+
+Only the named keys are flattened into the entry (e.g. `"tenant_id":"acme"`).
+This is deny-by-default: with no annotation, no ctx var is logged. Resolution
+happens once at route build time (`resolve_log_ctx_keys`); the per-request log
+path only filters by the resolved set. Known-sensitive keys
+(`ACCESS_LOG_BLOCKED_CTX_KEYS`: `jwt_claims` / `oidc_claims` / `jwe_payload`)
+are dropped even if explicitly allow-listed — defense-in-depth so claims /
+decrypted payloads can never reach the log. Implementation: `AllowlistedCtx` in
+`edgion-gateway/src/observe/access_log/entry.rs`.
+
 ---
 
 ## Plugin Log (PluginLog) rules

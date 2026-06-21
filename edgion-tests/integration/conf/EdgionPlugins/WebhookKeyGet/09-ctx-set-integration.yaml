@@ -103,6 +103,8 @@ kind: HTTPRoute
 metadata:
   name: wh9-route
   namespace: edgion-default
+  annotations:
+    edgion.io/log-ctx-keys: "wh9_result"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

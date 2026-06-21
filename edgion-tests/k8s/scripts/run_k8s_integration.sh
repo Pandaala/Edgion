@@ -1081,8 +1081,12 @@ start_local_test_server_pods() {
 
   for pod in ${pods}; do
     echo "Start test_server in ${ns}/${pod}"
+    # Always (re)start so the freshly-copied binary is the one actually running.
+    # The previous skip-if-running guard left a stale process serving an old
+    # binary after copy_local_binary_to_pods refreshed the on-disk binary,
+    # which silently broke any test relying on new test_server behavior.
     kubectl exec -n "${ns}" -c test-server "${pod}" -- sh -c \
-      "if [ -f /tmp/test_server.pid ] && kill -0 \"\$(cat /tmp/test_server.pid)\" 2>/dev/null; then exit 0; fi; nohup /usr/local/bin/test_server ${args} >/tmp/test_server.log 2>&1 & echo \$! >/tmp/test_server.pid"
+      "if [ -f /tmp/test_server.pid ]; then kill \"\$(cat /tmp/test_server.pid)\" 2>/dev/null || true; fi; pkill -x test_server 2>/dev/null || true; sleep 1; nohup /usr/local/bin/test_server ${args} >/tmp/test_server.log 2>&1 & echo \$! >/tmp/test_server.pid; sleep 1; kill -0 \"\$(cat /tmp/test_server.pid)\" 2>/dev/null && echo \"test_server restarted (pid \$(cat /tmp/test_server.pid))\""
   done
 }
 

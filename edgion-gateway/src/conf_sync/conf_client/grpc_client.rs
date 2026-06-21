@@ -59,6 +59,16 @@ impl ConfigSyncClient {
 
         if let Some(tls) = tls_config {
             if tls.skip_tls {
+                // Explicit emergency escape hatch — plaintext even when auto_ca is on.
+                // auto_ca's contract is "always mTLS", so a skip_tls override of it is a
+                // higher-severity event than a bare skip_tls; surface it loudly.
+                if security.auto_ca {
+                    tracing::warn!(
+                        component = "grpc_client",
+                        "conf_sync skip_tls=true OVERRIDES auto_ca=true: connecting WITHOUT TLS. \
+                         Emergency use only — auto_ca is meant to guarantee mTLS on this channel."
+                    );
+                }
                 tracing::error!(
                     component = "grpc_client",
                     "conf_sync mTLS skip_tls=true: connecting WITHOUT TLS. INSECURE, emergency use only!"
@@ -76,9 +86,20 @@ impl ConfigSyncClient {
             }
         } else {
             // resolve_active_tls() == None. validate() already rejected the
-            // dangling-`active` case, so this is the truly-omitted section: a
-            // secret-carrying channel running in plaintext.
+            // dangling-`active` case, so this is the truly-omitted section.
             debug_assert!(security.is_plaintext_omitted());
+            // auto_ca=true means the Controller's internal CA provisions the conf_sync
+            // certs and the channel MUST be mTLS. An omitted TLS block under auto_ca is a
+            // misconfiguration, NOT a license to run plaintext: fail closed rather than
+            // silently downgrade a Secret-carrying channel. This mirrors the Controller
+            // side, whose provision() failure aborts startup.
+            if security.auto_ca {
+                anyhow::bail!(
+                    "conf_sync_security.auto_ca=true but no TLS certs are configured (no `certs`/`tls`). \
+                     auto_ca requires mTLS; refusing to connect in plaintext. Configure the conf_sync \
+                     cert paths (the Controller's internal CA provisions the gateway Secret)."
+                );
+            }
             tracing::error!(
                 component = "grpc_client",
                 "conf_sync_security omitted: connecting in PLAINTEXT. This channel carries \
@@ -305,13 +326,70 @@ fn build_grpc_uri(addr: &str, tls: bool) -> String {
 
 #[cfg(test)]
 mod tests {
-    //! Unit tests for the small pure helpers in this module.
-    //!
-    //! `ConfigSyncClient::new`, `start_watch_server_meta` and
-    //! `start_watch_kinds` all require a live tonic Channel / gRPC server to
-    //! exercise meaningfully — those paths are deferred to integration coverage.
-    //! Here we cover only the URI scheme builder, which has no I/O dependencies.
+    //! Unit tests for the small pure helpers in this module, plus the
+    //! `ConfigSyncClient::new` security-branch decisions. `new` uses
+    //! `connect_lazy`, so it builds a Channel without any network I/O; the
+    //! auto_ca fail-close / plaintext branches are reachable without a live
+    //! server. The streaming paths (`start_watch_*`) still need integration
+    //! coverage.
     use super::build_grpc_uri;
+    use super::ConfigSyncClient;
+    use edgion_common::conf_sync::config::{ConfSyncSecurityConfig, ConfSyncTlsConfig};
+    use std::time::Duration;
+
+    /// A loopback address that is never dialed (connect_lazy defers the connect).
+    const DUMMY_ADDR: &str = "127.0.0.1:65000";
+
+    #[tokio::test]
+    async fn auto_ca_with_omitted_tls_fails_closed_not_plaintext() {
+        // auto_ca=true means "always mTLS". An omitted TLS block is a misconfig,
+        // so `new` must refuse rather than silently downgrade to plaintext.
+        let security = ConfSyncSecurityConfig {
+            auto_ca: true,
+            ..Default::default()
+        };
+        // ConfigSyncClient is not Debug, so avoid expect_err (needs Debug on the Ok type).
+        let Err(err) = ConfigSyncClient::new(DUMMY_ADDR, "test".to_string(), Duration::from_secs(1), &security).await
+        else {
+            panic!("auto_ca + omitted TLS must fail closed");
+        };
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("auto_ca"),
+            "error must explain the auto_ca contract, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_auto_ca_with_omitted_tls_still_connects_plaintext() {
+        // Backward-compatible interim stance: without auto_ca, an omitted section
+        // keeps the plaintext-default behavior (loud telemetry, but connects).
+        let security = ConfSyncSecurityConfig::default();
+        let client = ConfigSyncClient::new(DUMMY_ADDR, "test".to_string(), Duration::from_secs(1), &security).await;
+        assert!(client.is_ok(), "non-auto_ca omitted must keep plaintext-default (Ok)");
+    }
+
+    #[tokio::test]
+    async fn auto_ca_with_skip_tls_is_allowed_escape_hatch() {
+        // skip_tls is the explicit emergency bypass; it overrides auto_ca (with a
+        // loud WARN at runtime) and must NOT bail. No cert files are read.
+        let security = ConfSyncSecurityConfig {
+            auto_ca: true,
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: String::new(),
+                key: String::new(),
+                ca: String::new(),
+                skip_tls: true,
+            }),
+            ..Default::default()
+        };
+        let client = ConfigSyncClient::new(DUMMY_ADDR, "test".to_string(), Duration::from_secs(1), &security).await;
+        assert!(
+            client.is_ok(),
+            "skip_tls must remain a usable escape hatch under auto_ca"
+        );
+    }
 
     #[test]
     fn plain_addr_without_tls_uses_http_scheme() {

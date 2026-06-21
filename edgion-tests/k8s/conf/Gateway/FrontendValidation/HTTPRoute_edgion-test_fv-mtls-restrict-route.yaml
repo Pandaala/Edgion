@@ -1,0 +1,44 @@
+# Routes on the frontendValidation HTTPS listener that gate on the client-cert
+# identity via RequestRestriction. More specific path prefixes than fv-route's "/",
+# so they take precedence for these paths on the same hostname.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: fv-mtls-restrict-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: frontend-validation-gateway
+      namespace: edgion-test
+      sectionName: https-fv
+  hostnames:
+    - "fv-mtls.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /restrict/cn
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: fv-mtls-restrict-cn
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /restrict/san
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: fv-mtls-restrict-san
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

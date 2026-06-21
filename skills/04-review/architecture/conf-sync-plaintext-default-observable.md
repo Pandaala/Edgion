@@ -20,6 +20,26 @@ stay plaintext — it is made loud and the shipped defaults are flipped to mTLS:
    integration stack now default to active mTLS (cert Secret `edgion-conf-sync-certs`
    is a documented prerequisite).
 
+## Update (2026-06-21+): partial fail-close under `auto_ca`
+
+Auto-CA provisioning v0 (Phase 1) has since landed: the Controller's internal CA
+auto-provisions the conf_sync certs when `conf_sync_security.auto_ca: true`. For that
+path the re-evaluation trigger below ("cert bootstrap lands") has fired, and the
+**data plane now fails closed under `auto_ca`** (see
+`tasks/pending/16-conf-sync-auto-cert-failclose-and-reload.md` §1):
+
+- `auto_ca: true` + omitted `tls`/`certs` → gateway fails fast at startup (misconfig;
+  no plaintext, no retry).
+- `auto_ca: true` + certs configured but Secret not yet provisioned → gateway retries
+  client init within the startup-probe budget; it never downgrades to plaintext.
+- `skip_tls: true` stays the only explicit plaintext escape hatch (overrides `auto_ca`
+  with a high-visibility WARN).
+
+The **legacy omitted path (no `auto_ca`) is unchanged** — still observable-but-not-fail-closed
+(`plaintext_default`), for backward compatibility. The global fail-close flip (reject
+plaintext even without `auto_ca`) remains deferred as a fast-follow with a migration note
+(`tasks/pending/14-mesh-identity-plane-scale-taxes.md` §2.5).
+
 ## Why not fail-close / not secure-by-default in code
 
 conf_sync is **data-plane critical** (the Gateway cannot serve traffic without it)

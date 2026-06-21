@@ -12,6 +12,8 @@ metadata:
     edgion.io/team: team-a
   annotations:
     owner: platform
+    # Opt-in: project the rendered route_meta ctx var into the access log.
+    edgion.io/log-ctx-keys: "route_meta"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

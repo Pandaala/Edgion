@@ -134,10 +134,26 @@ Optional configuration; when enabled, the Gateway connects to the Controller's g
 | `key` | `String` | — | Client private key path (PEM) |
 | `ca` | `String` | — | CA certificate path (used to verify the Controller server certificate) |
 | `skip_tls` | `bool` | `false` | Emergency downgrade switch: `true` skips TLS and connects in plaintext (logs ERROR) |
+| `auto_ca` | `bool` | `false` | Kubernetes only. `true` = the Controller's internal CA provisions the gateway client Secret (`edgion-conf-sync-certs`). On the data plane `auto_ca` is an **enforced** switch (see below), not just documentation. |
 
 > When this section is not configured, gRPC connects in plaintext, fully compatible with previous versions.
 > When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically switched to `https://`.
 > Generate certificates with `edgion-cli gen-certs --output file --output-dir <dir>`.
+
+**`auto_ca` fail-close (data plane).** When `auto_ca: true` the gateway refuses to run the
+conf_sync channel in plaintext, mirroring the Controller (whose provisioning failure aborts
+startup):
+> - `auto_ca: true` **with no `tls`/`certs` block at all** → permanent misconfiguration:
+>   the gateway fails fast at startup (no plaintext, no retry). auto_ca implies mTLS, so the
+>   cert paths must be set.
+> - `auto_ca: true` **with cert paths but the Secret not yet provisioned** (cold start, the
+>   mounted volume is `optional`) → the gateway does NOT downgrade to plaintext; it retries
+>   client init within the startup-probe budget until the cert files appear, then connects mTLS.
+> - `skip_tls: true` remains the only explicit plaintext escape hatch; it overrides `auto_ca`
+>   but logs a high-visibility WARN.
+>
+> Without `auto_ca`, an omitted section keeps the legacy plaintext-default behavior (loud
+> telemetry via the `plaintext_default` system-error state, but it connects).
 
 ### server
 

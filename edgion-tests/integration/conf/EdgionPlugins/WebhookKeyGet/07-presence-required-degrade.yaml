@@ -91,6 +91,8 @@ kind: HTTPRoute
 metadata:
   name: wh7-route
   namespace: edgion-default
+  annotations:
+    edgion.io/log-ctx-keys: "wh7_user_id"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

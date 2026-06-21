@@ -41,7 +41,7 @@ rules:
   resources: ["edgiontls", "edgiongatewayclassconfigs", "edgionstreamplugins", "edgionplugins", "edgionconfigdata", "edgionconfigdatas", "linksys", "edgionacmes"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["edgion.io"]
-  resources: ["edgiontls/status", "edgiongatewayclassconfigs/status", "edgionstreamplugins/status", "edgionplugins/status", "edgionacmes/status"]
+  resources: ["edgiontls/status", "edgiongatewayclassconfigs/status", "edgionstreamplugins/status", "edgionplugins/status", "edgionacmes/status", "linksys/status", "edgionconfigdata/status", "edgionconfigdatas/status"]
   verbs: ["get", "list", "watch", "update", "patch"]
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["referencegrants"]

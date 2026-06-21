@@ -1,0 +1,103 @@
+# Scenario 9: ctx-set-integration (K8s mode)
+# ---------------------------------------------------------------------------
+# Consumer feeds dynamic values into the gateway context via ctx-set, then the
+# webhook references them with ${ctx:NAME} templates (path + custom header).
+# Backend via Service (real selector) + auto EndpointSlice.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh9-svc
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh9-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh9-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/${ctx:action}"
+      method:
+        template: "GET"
+      headers:
+        custom:
+          - name: X-Resolved-User
+            template: "${ctx:user_id}"
+    timeoutMs: 5000
+    successStatusCodes: [200]
+    allowDegradation: false
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh9-ctx-set
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          # 1. Static action fed into ctx (top-level `value` field).
+          - name: action
+            value: "resolve"
+          # 2. Dynamic user id pulled from the incoming header into ctx.
+          - name: user_id
+            from:
+              type: header
+              name: X-User-Id
+            default: "anon"
+          # 3. Webhook call whose templates interpolate the two ctx vars above.
+          - name: wh9_result
+            from:
+              type: webhook
+              webhookRef: "edgion-default/wh9-resolver"
+              extract:
+                source: body
+                path: "data.echo_headers.x-resolved-user"
+            default: "fallback"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh9-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh9.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh9
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh9-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
