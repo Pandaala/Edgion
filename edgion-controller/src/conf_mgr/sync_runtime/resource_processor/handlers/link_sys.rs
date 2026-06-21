@@ -142,7 +142,7 @@ impl ProcessorHandler<LinkSys> for LinkSysHandler {
                 // (partially resolved when only one side failed). Gateway
                 // providers must check `CredentialState::is_buildable` and
                 // refuse to build a client on `Pending` / `Invalid` material;
-                // see `edgion_common::link::credential` for the contract.
+                // see `edgion_common::link_sys_core::credential` for the contract.
                 tracing::warn!(
                     link_sys = %owner.key(),
                     ?err,

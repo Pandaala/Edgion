@@ -10,7 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::conf_mgr::conf_center::traits::{CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult};
-use edgion_common::link::providers::etcd::EtcdLinkClient;
+use edgion_common::link_sys_core::providers::etcd::EtcdLinkClient;
 
 /// Etcd-backed configuration storage implementing `CenterApi`.
 pub struct EtcdStorage {

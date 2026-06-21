@@ -20,8 +20,8 @@ LinkSys defines external system connectors (Redis / Etcd / Elasticsearch / Webho
 | Resource type definitions | `edgion-resources/src/resources/link_sys/` (mod.rs, redis.rs, etcd.rs, elasticsearch.rs, webhook.rs, common.rs) |
 | Shared SecretObjectReference / SecretSlot / TLS types | `edgion-resources/src/resources/common/{secret_object_ref,secret_slot,tls}.rs` |
 | Credential resolution layer (Controller + Gateway shared) | `edgion-resources/src/credentials/` (materials / resolver / resolvers) |
-| Gateway credential four-state | `edgion-common/src/link/credential.rs` |
-| Gateway TLS assembly | `edgion-common/src/link/tls.rs` |
+| Gateway credential four-state | `edgion-common/src/link_sys_core/credential.rs` |
+| Gateway TLS assembly | `edgion-common/src/link_sys_core/tls.rs` |
 | Gateway runtime Store | `edgion-gateway/src/link_sys/runtime/store.rs` |
 | Provider clients | `edgion-gateway/src/link_sys/providers/{redis,etcd,elasticsearch}/` |
 
@@ -122,7 +122,7 @@ Constraints:
 
 ### TLS assembly
 
-`edgion-common/src/link/tls.rs` plugs `TlsConfig` + the resolved `TlsMaterial` into each provider's TLS configuration:
+`edgion-common/src/link_sys_core/tls.rs` plugs `TlsConfig` + the resolved `TlsMaterial` into each provider's TLS configuration:
 - `ca_pem`: if `TlsCerts.caCert` inline is present, use the inline value; otherwise use the material's `ca_pem`.
 - `client_cert_pem` / `client_key_pem`: prefer material (via secretRef); the private key is `Zeroizing<Vec<u8>>`.
 - `insecureSkipVerify` is handled per provider capability: etcd ignores and warns; Redis/ES/Webhook honor it.

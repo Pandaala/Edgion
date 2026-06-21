@@ -1,7 +1,7 @@
 pub mod conf_sync;
 pub mod ext_proc;
 pub mod grpc_tls;
-pub mod link;
+pub mod link_sys_core;
 pub mod observe;
 pub mod secret;
 pub mod startup;

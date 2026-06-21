@@ -48,10 +48,10 @@ Three deployment modes are supported:
 
 ### Etcd
 
-> Unlike the other providers, Etcd lives in `edgion-common/src/link/providers/etcd/` (re-exported by the gateway), so it can also be used by the controller.
+> Unlike the other providers, Etcd lives in `edgion-common/src/link_sys_core/providers/etcd/` (re-exported by the gateway), so it can also be used by the controller.
 
 ```
-edgion-common/src/link/providers/etcd/
+edgion-common/src/link_sys_core/providers/etcd/
 ├── client.rs          # EtcdLinkClient (etcd-client wrapper, background health monitor)
 ├── config_mapping.rs  # configuration mapping
 ├── ops.rs             # Etcd operation wrappers
@@ -173,7 +173,7 @@ impl ConfHandler<LinkSys> for Arc<LinkSysStore> {
 
 ## Directory layout
 
-After the crate split, the LinkSys **core framework** (credential / health / lifecycle / TLS) and the **Etcd provider** live in `edgion-common`; the gateway re-exports them via `edgion-gateway/src/link_sys/mod.rs` (`pub use edgion_common::link::{credential, health, lifecycle, tls, LinkSysHealth}`). The gateway crate itself holds the sink/connector providers and the runtime framework.
+After the crate split, the LinkSys **core** (credential / health / lifecycle / TLS) and the **Etcd provider** live in `edgion-common/src/link_sys_core/`; the gateway re-exports them via `edgion-gateway/src/link_sys/mod.rs` (`pub use edgion_common::link_sys_core::{credential, health, lifecycle, tls, LinkSysHealth}`). The gateway crate itself holds the sink/connector providers and the runtime framework. Placement rule: backend-agnostic core logic (or a provider the controller also needs) goes in the common `link_sys_core`; data-plane runtime providers and stores go in `gateway::link_sys`.
 
 ```
 edgion-gateway/src/link_sys/
@@ -192,7 +192,7 @@ edgion-gateway/src/link_sys/
     ├── conf_handler.rs       # ConfHandler<LinkSys> implementation
     └── mod.rs
 
-edgion-common/src/link/       # core framework + Etcd provider (re-exported by the gateway)
+edgion-common/src/link_sys_core/       # core framework + Etcd provider (re-exported by the gateway)
 ├── credential.rs             # materialise credentials from the embedded Secret in LinkSys.spec.*Auth
 ├── health.rs                 # LinkSysHealth status DTO shared by all providers
 ├── lifecycle.rs              # unified provider lifecycle (init/shutdown, dispatch)

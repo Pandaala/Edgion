@@ -10,7 +10,7 @@ use k8s_openapi::ByteString;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use edgion_common::link::credential::CredentialState;
+use edgion_common::link_sys_core::credential::CredentialState;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
 use edgion_resources::resources::common::{SecretObjectReference, SecretSlot, TlsCerts, TlsConfig};

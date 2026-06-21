@@ -1,8 +1,9 @@
 //! Etcd-based configuration center backend
 //!
 //! Stores and watches Edgion configuration resources (Gateway, Route, Plugin, etc.)
-//! in an etcd cluster. Reuses `EtcdLinkClient` from the gateway LinkSys provider
-//! for connection management, health monitoring, and KV/Watch operations.
+//! in an etcd cluster. Reuses `EtcdLinkClient` from the common LinkSys core
+//! (`edgion_common::link_sys_core::providers::etcd`, also re-exported by the
+//! gateway) for connection management, health monitoring, and KV/Watch operations.
 //!
 //! ## Architecture
 //!

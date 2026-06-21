@@ -16,7 +16,7 @@ use etcd_client::{
 
 use super::client::EtcdLinkClient;
 use super::config_mapping::health_probe_timeout;
-use crate::link::LinkSysHealth;
+use crate::link_sys_core::LinkSysHealth;
 
 // ============================================================================
 // KV Operations

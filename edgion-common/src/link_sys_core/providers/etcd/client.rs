@@ -20,8 +20,8 @@ use tokio::task::JoinHandle;
 
 use async_trait::async_trait;
 
-use crate::link::credential::CredentialState;
-use crate::link::lifecycle::LinkSysLifecycle;
+use crate::link_sys_core::credential::CredentialState;
+use crate::link_sys_core::lifecycle::LinkSysLifecycle;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
 

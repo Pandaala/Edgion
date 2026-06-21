@@ -15,8 +15,12 @@ pub mod providers;
 pub mod runtime;
 pub mod template;
 
-// Re-exports from `edgion_common::link` so gateway crate paths remain stable.
-pub use edgion_common::link::{credential, health, lifecycle, tls, LinkSysHealth};
+// Re-exports of the LinkSys core (defined in `edgion_common::link_sys_core`) so
+// gateway crate paths remain stable. New code should pick its home by the
+// core/runtime boundary: backend-agnostic core logic (credential / TLS / health /
+// lifecycle, or a provider the controller also needs) belongs in the common
+// `link_sys_core`; data-plane runtime providers and stores belong in this module.
+pub use edgion_common::link_sys_core::{credential, health, lifecycle, tls, LinkSysHealth};
 
 pub use providers::webhook::{
     get_webhook_call_handle, WebhookCallError, WebhookCallHandle, WebhookCallRequest, WebhookCallResult,

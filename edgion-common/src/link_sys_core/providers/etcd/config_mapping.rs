@@ -9,8 +9,8 @@ use std::time::Duration;
 use anyhow::Result;
 use etcd_client::{Certificate, ConnectOptions, Identity, TlsOptions};
 
-use crate::link::credential::CredentialState;
-use crate::link::tls as tls_helper;
+use crate::link_sys_core::credential::CredentialState;
+use crate::link_sys_core::tls as tls_helper;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
@@ -33,7 +33,7 @@ const DEFAULT_DIAL_TIMEOUT_MS: u64 = 5_000;
 /// The caller passes the options to `Client::connect(endpoints, options)`.
 ///
 /// `auth` is the [`CredentialState`] produced by
-/// [`credential::basic_state`](crate::link::credential::basic_state).
+/// [`credential::basic_state`](crate::link_sys_core::credential::basic_state).
 /// `Pending` / `Invalid` produce a fail-fast `bail!`.
 pub fn build_connect_options(
     crd: &EtcdClientConfig,
@@ -43,7 +43,7 @@ pub fn build_connect_options(
     let mut has_options = false;
 
     if crd.auth.is_some() {
-        let m = crate::link::credential::require_basic_material(auth, "Etcd")?.ok_or_else(|| {
+        let m = crate::link_sys_core::credential::require_basic_material(auth, "Etcd")?.ok_or_else(|| {
             anyhow::anyhow!("Etcd auth configured in CRD but credential state is NotRequired (internal bug)")
         })?;
         let user = m.username.as_deref().unwrap_or("");
@@ -155,7 +155,7 @@ pub fn health_probe_timeout(crd: &EtcdClientConfig) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::link::credential::{CredentialState, InvalidReason};
+    use crate::link_sys_core::credential::{CredentialState, InvalidReason};
     use edgion_resources::resources::link_sys::etcd::*;
 
     /// Shorthand: `NotRequired` state (no auth configured).

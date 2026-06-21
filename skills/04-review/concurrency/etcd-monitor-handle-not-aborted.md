@@ -10,7 +10,7 @@ description: EtcdLinkClient now stores its health-monitor JoinHandle and aborts 
 
 ## Conclusion
 
-`EtcdLinkClient` (`edgion-common/src/link/providers/etcd/client.rs`) now holds
+`EtcdLinkClient` (`edgion-common/src/link_sys_core/providers/etcd/client.rs`) now holds
 `monitor_handle: parking_lot::Mutex<Option<JoinHandle<()>>>`. `start_health_monitor` stores the
 handle returned by `tokio::spawn`, and `shutdown` takes the handle and calls `handle.abort()`
 right after sending the cooperative `shutdown_tx` signal and **before** acquiring the `client`

@@ -57,7 +57,7 @@ not, by itself, a finding.
 ## Already-Performed Cleanup (to avoid re-filing)
 
 - External task numbers like `tasks/fix-change/I*/M*/R*/C1/D2/S3` scattered in comments (linked tasks no longer exist) have been removed in the following files, while keeping substantive semantics:
-  - `edgion-common/src/link/credential.rs`
+  - `edgion-common/src/link_sys_core/credential.rs`
   - `edgion-resources/src/resources/common/tls.rs`
   - `edgion-resources/src/credentials/materials.rs`
   - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs`

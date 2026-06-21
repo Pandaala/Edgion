@@ -1,6 +1,6 @@
 //! Health status DTO shared by all LinkSys providers.
 //!
-//! This is the canonical type — providers must `use crate::link::LinkSysHealth;`
+//! This is the canonical type — providers must `use crate::link_sys_core::LinkSysHealth;`
 //! rather than re-defining it locally or importing from a sibling provider.
 
 use serde::Serialize;

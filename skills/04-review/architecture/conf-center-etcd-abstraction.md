@@ -15,7 +15,7 @@ description: Use when reviewing ConfCenter etcd abstraction boundary findings; d
   (`EtcdConfig::to_client_config`)
 - `edgion-controller/src/conf_mgr/conf_center/etcd/center.rs:47-48`
   (`EtcdCenter::new` directly news `EtcdLinkClient`)
-- `edgion-common/src/link/providers/etcd/config_mapping.rs:38`
+- `edgion-common/src/link_sys_core/providers/etcd/config_mapping.rs:38`
   (`build_connect_options` signature serves both the CRD flow and the file-config flow)
 
 ## Three Points That Look Like Issues (none will be fixed)

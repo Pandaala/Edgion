@@ -6,7 +6,7 @@ pub mod redis;
 pub mod webhook;
 
 // etcd provider lives in edgion_common; re-export it here for gateway consumers.
-pub use edgion_common::link::providers::etcd;
+pub use edgion_common::link_sys_core::providers::etcd;
 
 pub use elasticsearch::EsLinkClient;
 pub use etcd::EtcdLinkClient;
