@@ -736,9 +736,7 @@ extract:
         let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
         match key {
             KeyGet::Webhook {
-                extract,
-                path_override,
-                ..
+                extract, path_override, ..
             } => {
                 assert!(path_override.is_none());
                 assert_eq!(
@@ -790,10 +788,7 @@ extract:
         let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
         match key {
             KeyGet::Webhook { path_override, .. } => {
-                assert!(
-                    path_override.is_none(),
-                    "pathSuffix must not map onto path_override"
-                );
+                assert!(path_override.is_none(), "pathSuffix must not map onto path_override");
             }
             _ => panic!("Expected Webhook variant"),
         }

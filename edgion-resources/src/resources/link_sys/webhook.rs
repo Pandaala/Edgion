@@ -761,8 +761,7 @@ fn validate_request_fields(request: &WebhookOutboundRequest) -> Option<String> {
     let has_cookies = !request.cookies.origin.is_empty() || !request.cookies.custom.is_empty();
     if has_cookie_header && has_cookies {
         return Some(
-            "cannot specify both headers.origin[name:Cookie] and cookies.* — use one or the other"
-                .to_string(),
+            "cannot specify both headers.origin[name:Cookie] and cookies.* — use one or the other".to_string(),
         );
     }
 
@@ -804,10 +803,7 @@ fn validate_field_group(group: &ListFields, case_insensitive: bool) -> Option<St
     // Validation 1: a name appearing in both origin and custom.
     for field in &group.custom {
         if origin_names.contains(&norm(&field.name)) {
-            return Some(format!(
-                "field '{}' appears in both origin and custom",
-                field.name
-            ));
+            return Some(format!("field '{}' appears in both origin and custom", field.name));
         }
     }
 
@@ -1097,13 +1093,19 @@ unknownField: value
         let mut config = valid_base_config();
         config.request.args.origin = vec![origin("trace_id"), origin("trace_id")];
         let err = config.get_validation_error().expect("should reject");
-        assert!(err.contains("duplicate field name") && err.contains("origin"), "got: {err}");
+        assert!(
+            err.contains("duplicate field name") && err.contains("origin"),
+            "got: {err}"
+        );
 
         // headers duplicate in origin, case-insensitive.
         let mut config = valid_base_config();
         config.request.headers.origin = vec![origin("X-Id"), origin("x-id")];
         let err = config.get_validation_error().expect("should reject");
-        assert!(err.contains("duplicate field name") && err.contains("origin"), "got: {err}");
+        assert!(
+            err.contains("duplicate field name") && err.contains("origin"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1111,7 +1113,10 @@ unknownField: value
         let mut config = valid_base_config();
         config.request.headers.custom = vec![custom("Authorization"), custom("Authorization")];
         let err = config.get_validation_error().expect("should reject");
-        assert!(err.contains("duplicate field name") && err.contains("custom"), "got: {err}");
+        assert!(
+            err.contains("duplicate field name") && err.contains("custom"),
+            "got: {err}"
+        );
     }
 
     #[test]

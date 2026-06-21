@@ -20,9 +20,7 @@ use anyhow::{bail, Result};
 use edgion_resources::credentials::materials::{
     BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial, WebhookApiKeyMaterial,
 };
-use edgion_resources::credentials::resolvers::{
-    BasicAuthResolver, BearerResolver, EsApiKeyResolver,
-};
+use edgion_resources::credentials::resolvers::{BasicAuthResolver, BearerResolver, EsApiKeyResolver};
 use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;

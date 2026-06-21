@@ -43,12 +43,20 @@ cargo build
 # Run tests
 cargo test --all
 
-# Run clippy (linter)
-cargo clippy --all-targets --all-features -- -D warnings
+# Run clippy (linter) on the default feature set (BoringSSL + jemalloc)
+cargo clippy --all-targets -- -D warnings
 
 # Format code
 cargo fmt --all
 ```
+
+> Do **not** use `--all-features`. The TLS backends (`boringssl`/`rustls`) and the
+> allocators (`allocator-jemalloc`/`allocator-mimalloc`/`allocator-system`) are
+> mutually exclusive; enabling more than one fails the build by design. Lint a
+> non-default combination explicitly, e.g.
+> `cargo clippy --all-targets --no-default-features --features boringssl,allocator-mimalloc -- -D warnings`.
+> Note: the gateway data plane currently builds only against `boringssl`; the
+> `rustls` backend compiles for the controller but not yet for the gateway.
 
 ### Running Integration Tests
 
@@ -93,7 +101,7 @@ cargo fmt --all
 3. **Test your changes**
    ```bash
    cargo test --all
-   cargo clippy --all-targets --all-features -- -D warnings
+   cargo clippy --all-targets -- -D warnings
    cargo fmt --all --check
    ```
 
