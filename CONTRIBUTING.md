@@ -46,7 +46,9 @@ cargo test --all
 # Run clippy (linter) on the default feature set (BoringSSL + jemalloc).
 # `--workspace` so the `edgion-tests` harness (excluded from `default-members`)
 # is linted too; a bare `--all-targets` would skip it.
-cargo clippy --workspace --all-targets -- -D warnings
+# The curated workspace lints are advisory (CI does NOT pass `-D warnings`), so
+# this matches CI: review the warnings, don't let them hard-fail your build.
+cargo clippy --workspace --all-targets
 
 # Format code
 cargo fmt --all
@@ -56,7 +58,7 @@ cargo fmt --all
 > allocators (`allocator-jemalloc`/`allocator-mimalloc`/`allocator-system`) are
 > mutually exclusive; enabling more than one fails the build by design. Lint a
 > non-default combination explicitly, e.g.
-> `cargo clippy --all-targets --no-default-features --features boringssl,allocator-mimalloc -- -D warnings`.
+> `cargo clippy --all-targets --no-default-features --features boringssl,allocator-mimalloc`.
 > Note: the gateway data plane currently builds only against `boringssl`; the
 > `rustls` backend compiles for the controller but not yet for the gateway.
 
@@ -103,7 +105,7 @@ cargo fmt --all
 3. **Test your changes**
    ```bash
    cargo test --all
-   cargo clippy --workspace --all-targets -- -D warnings
+   cargo clippy --workspace --all-targets
    cargo fmt --all --check
    ```
 
