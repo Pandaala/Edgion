@@ -323,7 +323,7 @@ if not req.has_header("X-Request-Id") {
 
 返回当前请求的协议类型标识。可能的值为：
 - `"http"` — 普通 HTTP/1.1 或 HTTP/2 请求
-- `"grpc"` — gRPC 请求（`Content-Type: application/grpc`）
+- `"grpc"` — gRPC 请求（`Content-Type: application/grpc`，大小写不敏感匹配）
 - `"grpc-web"` — gRPC-Web 请求
 - `"websocket"` — WebSocket 升级请求
 

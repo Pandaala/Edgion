@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gcir-enforce-test
+  namespace: edgion-test
+spec:
+  data:
+    type: Selector
+    config:
+      active: allow-local

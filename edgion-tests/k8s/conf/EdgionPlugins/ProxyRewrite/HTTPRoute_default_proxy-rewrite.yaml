@@ -106,3 +106,35 @@ spec:
         - name: test-http
           namespace: edgion-test
           port: 30001
+
+    # 7. Header rewrite + query argument is always url-encoded.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /request-header-test
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-header-arg
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 8. Regex capture in header value is always url-encoded.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /capture-header
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: proxy-rewrite-capture-header
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

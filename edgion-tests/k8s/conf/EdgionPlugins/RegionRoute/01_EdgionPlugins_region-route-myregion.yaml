@@ -1,0 +1,39 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: region-route-myregion
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: RegionRoute
+    config:
+      myRegion: virginia
+      keyGet:
+      - type: header
+        name: X-Account-Id
+      routeRules:
+      - type: RouteByDirectRegion
+        keyFrom:
+        - type: header
+          name: X-Direct-Region
+      regions:
+      - name: virginia
+        hashRange:
+        - 0
+        - 599
+        backendEndpoint: 127.0.0.1:30001
+        tls: false
+      - name: ohio
+        hashRange:
+        - 600
+        - 999
+        backendEndpoint: 127.0.0.1:30002
+        tls: false
+        failoverTo: virginia
+      - name: europe
+        hashRange:
+        - 0
+        - 0
+        backendEndpoint: 127.0.0.1:30003
+        tls: false
+        failoverTo: ohio

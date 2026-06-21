@@ -1,0 +1,27 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: key-auth-grouped
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: KeyAuth
+      config:
+        keySources:
+          - type: header
+            name: "X-API-Key"
+        realm: "Grouped API"
+        keyField: "key"
+        secretGroups:
+          - name: partner-a
+            secretRefs:
+              - name: api-keys-partner-a
+                namespace: edgion-default
+          - name: partner-b
+            secretRefs:
+              - name: api-keys-partner-b
+                namespace: edgion-default
+        upstreamHeaderFields:
+          - "X-Consumer-Username"
+          - "X-Customer-ID"

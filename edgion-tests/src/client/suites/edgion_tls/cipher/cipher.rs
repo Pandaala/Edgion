@@ -17,8 +17,8 @@
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
-use std::process::Command;
-use std::time::Instant;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 pub struct CipherTestSuite;
 
@@ -44,24 +44,51 @@ fn extract_field(output: &str, field_name: &str) -> Option<String> {
     None
 }
 
-/// Use openssl s_client to test TLS connection and get negotiated cipher info
-fn get_tls_info(host: &str, port: u16, servername: &str, tls_version: &str) -> Result<TlsConnectionInfo, String> {
-    let output = Command::new("openssl")
-        .args([
-            "s_client",
-            "-connect",
-            &format!("{}:{}", host, port),
-            "-servername",
-            servername,
-            tls_version,
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
+fn run_openssl_s_client(args: &[&str]) -> Result<String, String> {
+    let mut child = Command::new("openssl")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| format!("Failed to run openssl: {}", e))?;
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}{}", stdout, stderr);
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                let output = child
+                    .wait_with_output()
+                    .map_err(|e| format!("Failed to collect openssl output: {}", e))?;
+                return Ok(format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                ));
+            }
+            Ok(None) => {
+                if started.elapsed() > Duration::from_secs(10) {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err("openssl s_client timed out after 10 seconds".to_string());
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(e) => return Err(format!("Failed to poll openssl: {}", e)),
+        }
+    }
+}
+
+/// Use openssl s_client to test TLS connection and get negotiated cipher info
+fn get_tls_info(host: &str, port: u16, servername: &str, tls_version: &str) -> Result<TlsConnectionInfo, String> {
+    let combined = run_openssl_s_client(&[
+        "s_client",
+        "-connect",
+        &format!("{}:{}", host, port),
+        "-servername",
+        servername,
+        tls_version,
+    ])?;
 
     // Parse Protocol and Cipher from output
     let protocol = extract_field(&combined, "Protocol  :")
@@ -82,24 +109,16 @@ fn get_tls_info(host: &str, port: u16, servername: &str, tls_version: &str) -> R
 
 /// Test connection with a specific cipher (verify server accepts/rejects it)
 fn test_with_specific_cipher(host: &str, port: u16, servername: &str, cipher: &str) -> Result<(bool, String), String> {
-    let output = Command::new("openssl")
-        .args([
-            "s_client",
-            "-connect",
-            &format!("{}:{}", host, port),
-            "-servername",
-            servername,
-            "-cipher",
-            cipher,
-            "-tls1_2",
-        ])
-        .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| format!("Failed to run openssl: {}", e))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let combined = format!("{}{}", stdout, stderr);
+    let combined = run_openssl_s_client(&[
+        "s_client",
+        "-connect",
+        &format!("{}:{}", host, port),
+        "-servername",
+        servername,
+        "-cipher",
+        cipher,
+        "-tls1_2",
+    ])?;
 
     let negotiated_cipher = extract_field(&combined, "Cipher    :")
         .or_else(|| extract_field(&combined, "Cipher:"))

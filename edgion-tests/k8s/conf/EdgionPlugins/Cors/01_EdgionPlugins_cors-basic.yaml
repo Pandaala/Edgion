@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-basic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: Cors
+    config:
+      allowOrigins: https://app.example.com
+      allowMethods: GET,POST,PUT
+      allowHeaders: Content-Type,Authorization
+      exposeHeaders: X-Custom-Header
+      maxAge: 3600
+      allowCredentials: false

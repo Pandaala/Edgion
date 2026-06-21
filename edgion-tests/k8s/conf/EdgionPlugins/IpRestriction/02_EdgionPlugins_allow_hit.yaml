@@ -1,0 +1,17 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ip-restriction-allow-hit
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - enable: true
+    type: IpRestriction
+    config:
+      ipSource: remoteAddr
+      allow:
+      - name: loopback
+        cidrs:
+        - 10.0.0.0/8
+      status: 403
+      message: IP not in allow list

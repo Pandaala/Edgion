@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: grpc-rate-limit-shared
+  namespace: edgion-test
+spec:
+  requestPlugins:
+  - enable: true
+    type: RateLimit
+    config:
+      rate: 10
+      interval: 60s
+      key:
+      - type: header
+        name: x-rate-key
+      onMissingKey: Deny
+      rejectStatus: 429
+      rejectMessage: Rate limit exceeded
+      showLimitHeaders: true

@@ -15,8 +15,9 @@ data:
     gateway:
       # Controller gRPC server address (use K8s service DNS)
       server_addr: http://edgion-controller-leader.edgion-system.svc.cluster.local:12151
-      # Admin API (default 127.0.0.1:12001). Scripts that need the admin API reach
-      # it via the pod loopback (kubectl exec / port-forward), not the Service.
+      # Test-only admin API access for suites that run inside test-client pods.
+      # Production defaults remain loopback-only unless explicitly configured.
+      admin_listen: "0.0.0.0:12001"
       # Probe endpoints listen on 0.0.0.0:12000.
 
     logging:

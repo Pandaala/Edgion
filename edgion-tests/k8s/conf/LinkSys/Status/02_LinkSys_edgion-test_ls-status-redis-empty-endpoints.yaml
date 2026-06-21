@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: ls-status-redis-empty-endpoints
+  namespace: edgion-test
+spec:
+  type: redis
+  config:
+    endpoints: []
+    db: 0

@@ -1,0 +1,17 @@
+# TLS 1.3-only EdgionTls bound to https-strict listener
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: cipher-strict
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: cipher-gateway
+      namespace: edgion-test
+      sectionName: https-strict
+  hosts:
+    - cipher-strict.wildcard.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test
+  minTlsVersion: TLS1_3

@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-wildcard
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: Cors
+    config:
+      allowOrigins: '*'
+      allowMethods: GET,POST
+      allowHeaders: '*'
+      allowCredentials: false

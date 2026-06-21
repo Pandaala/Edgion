@@ -1,0 +1,21 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-multi-header-ops
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "multi-header-ops"
+        source: |
+          req.set_header("X-Set", "value1")
+          req.append_header("X-Multi", "first")
+          req.append_header("X-Multi", "second")
+          req.remove_header("User-Agent")
+          req.set_host("override.host")
+          resp.set_header("X-Set", "value1")
+          resp.set_header("X-Multi", "first, second")
+          resp.set_header("X-UA-Removed", "true")
+        errorPolicy: deny

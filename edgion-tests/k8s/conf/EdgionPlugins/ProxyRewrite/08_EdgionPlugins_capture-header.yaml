@@ -1,0 +1,19 @@
+# 8. $1 in header context: regex capture must always url_encode the captured
+# bytes when injected into a header value, mirroring $arg_<name>'s rule.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: proxy-rewrite-capture-header
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ProxyRewrite
+      config:
+        regexUri:
+          pattern: "^/capture-header/(.+)$"
+          replacement: "/request-header-test"
+        headers:
+          set:
+            - name: X-Trace
+              value: "$1"

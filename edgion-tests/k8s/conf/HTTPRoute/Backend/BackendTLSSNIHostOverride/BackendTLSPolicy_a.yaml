@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1alpha3
+kind: BackendTLSPolicy
+metadata:
+  name: btls-sni-policy-a
+  namespace: edgion-test
+spec:
+  targetRefs:
+  - group: ''
+    kind: Service
+    name: btls-sni-service-a
+  validation:
+    caCertificateRefs:
+    - name: backend-ca
+      kind: ConfigMap
+      group: ''
+    hostname: hostname-a.example.com

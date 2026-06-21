@@ -1,0 +1,55 @@
+# HTTP rule-level RateLimit across match-items regression route.
+#
+# ONE rule with TWO match-items (x-variant=a / x-variant=b, both PathPrefix
+# /shared) => the gateway builds two HttpRouteRuleUnits for this rule. This pins
+# that EVERY match-item unit of a single rule routes AND executes the rule-level
+# ExtensionRef plugin chain (compile_http_rule's per-rule runtime is shared into
+# all units): both variants must count against the SAME rule-level RateLimit
+# budget, so the limit stays GLOBAL across the rule's match-items.
+#
+# (Note: the RateLimit Count-Min-Sketch itself lives in the global plugin store,
+# keyed once per EdgionPlugins ns/name and resolved at request time — see
+# plugin_store.rs / resolve_route_ext_refs. Store-level cross-route sharing is
+# covered by the sibling test_shared_counter_across_routes; THIS scenario covers
+# the orthogonal match_unit.rs fan-out: a regression that dropped the rule-level
+# filters from a non-first match-item unit would let x-variant=b traffic skip the
+# limiter, and this test would catch it.)
+#
+# The fixed X-Rate-Key the client sends forces all traffic into one CMS bucket so
+# the budget is keyed only by the rule's RateLimit, not by the request content.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: rate-limit-shared-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "http-ratelimit-shared.example.com"
+  rules:
+    # Single rule, two header-based match-items, one rule-level RateLimit filter.
+    - matches:                       # >= 2 match-items => 2+ HttpRouteRuleUnits
+        - headers:
+            - name: x-variant
+              value: a
+          path:
+            type: PathPrefix
+            value: /shared
+        - headers:
+            - name: x-variant
+              value: b
+          path:
+            type: PathPrefix
+            value: /shared
+      filters:                       # RULE-LEVEL plugin => shared into every unit
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: rate-limit-shared
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

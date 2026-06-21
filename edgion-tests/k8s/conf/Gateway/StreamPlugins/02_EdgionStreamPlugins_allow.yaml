@@ -10,5 +10,7 @@ spec:
     - type: IpRestriction
       config:
         allow:
-          - "0.0.0.0/0"
+          - name: allow-all
+            cidrs:
+              - "0.0.0.0/0"
         defaultAction: allow

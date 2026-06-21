@@ -11,6 +11,6 @@ spec:
   validation:
     caCertificateRefs:
       - name: backend-ca
-        kind: Secret
+        kind: ConfigMap
         group: ""
     hostname: backend.example.com

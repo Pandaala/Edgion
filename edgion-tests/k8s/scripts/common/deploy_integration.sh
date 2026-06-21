@@ -260,7 +260,9 @@ scale_if_exists() {
   if kubectl get deployment "${name}" -n "${ns}" >/dev/null 2>&1; then
     echo "Scaling ${ns}/${name} to ${replicas}"
     kubectl scale deployment "${name}" -n "${ns}" --replicas="${replicas}"
-    kubectl rollout status deployment/"${name}" -n "${ns}" --timeout=300s
+    if [[ "${WAIT_READY}" == "true" ]]; then
+      kubectl rollout status deployment/"${name}" -n "${ns}" --timeout=300s
+    fi
   else
     echo "Skip scaling missing deployment ${ns}/${name}"
   fi

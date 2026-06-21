@@ -647,7 +647,15 @@ impl RefGrantStatusTestSuite {
                     // debounce adds another ~1 s.  A fixed 2 s sleep is therefore too short.
                     // Polling lets the test succeed as soon as the controller reacts while
                     // still failing deterministically if no reaction arrives within the budget.
-                    let delete_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+                    let delete_timeout = if std::env::var("EDGION_TEST_K8S_MODE")
+                        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+                        .unwrap_or(false)
+                    {
+                        Duration::from_secs(15)
+                    } else {
+                        Duration::from_secs(5)
+                    };
+                    let delete_deadline = tokio::time::Instant::now() + delete_timeout;
                     let mut delete_observed = false;
                     let mut last_route_status: Option<Value> = None;
                     while tokio::time::Instant::now() < delete_deadline {

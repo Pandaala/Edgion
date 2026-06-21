@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: configmap-ca
+  namespace: edgion-test
+spec:
+  targetRefs:
+  - group: ''
+    kind: Service
+    name: test-backend-configmap-ca
+  validation:
+    caCertificateRefs:
+    - name: test-ca-configmap
+      kind: ConfigMap
+      group: ''
+    hostname: backend.example.com

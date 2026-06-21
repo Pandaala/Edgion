@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: fault-delay-and-abort
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - enable: true
+    type: FaultInjection
+    config:
+      delay:
+        ratio: 1.0
+        fixedMs: 200
+      abort:
+        ratio: 1.0
+        statusCode: 504
+        body: delay-then-abort
+        headers:
+        - name: X-Fault-Injected
+          value: delay-then-abort

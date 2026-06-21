@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-deny-by-header
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "deny-by-header"
+        source: |
+          if req.header("X-Block") != nil {
+              return deny(403, "blocked")
+          }
+        errorPolicy: deny

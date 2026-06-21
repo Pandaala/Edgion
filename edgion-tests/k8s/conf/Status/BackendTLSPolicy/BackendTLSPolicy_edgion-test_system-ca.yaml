@@ -1,0 +1,13 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata:
+  name: system-ca
+  namespace: edgion-test
+spec:
+  targetRefs:
+  - group: ''
+    kind: Service
+    name: test-backend-system-ca
+  validation:
+    wellKnownCACertificates: System
+    hostname: backend.example.com

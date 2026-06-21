@@ -1,0 +1,40 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: frontend-validation-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  tls:
+    frontend:
+      default:
+        validation:
+          caCertificateRefs:
+          - name: fv-client-ca
+            kind: Secret
+            group: ''
+      perPort:
+      - port: 31336
+        tls:
+          validation:
+            mode: AllowInsecureFallback
+            caCertificateRefs:
+            - name: fv-client-ca
+              kind: Secret
+              group: ''
+  listeners:
+  - name: https-fv
+    protocol: HTTPS
+    port: 31312
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: fv-server-cert
+  - name: https-fv-insecure
+    hostname: fv-mtls.example.com
+    protocol: HTTPS
+    port: 31336
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: fv-server-cert

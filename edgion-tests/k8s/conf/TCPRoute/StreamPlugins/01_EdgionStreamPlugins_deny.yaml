@@ -9,5 +9,8 @@ spec:
   plugins:
     - type: IpRestriction
       config:
+        deny:
+          - name: deny-all
+            cidrs:
+              - "0.0.0.0/0"
         defaultAction: deny
-        message: "Blocked by TCPRoute stream plugin"

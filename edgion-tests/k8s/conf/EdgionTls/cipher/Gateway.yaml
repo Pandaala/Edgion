@@ -11,7 +11,11 @@ spec:
     - name: https-legacy
       protocol: HTTPS
       port: 31195
-    # Modern cipher  - TLS 1.2 + 
+    # Modern cipher  - TLS 1.2 +
     - name: https-modern
       protocol: HTTPS
       port: 31196
+    # Strict TLS 1.3 listener for per-SNI minimum-version checks.
+    - name: https-strict
+      protocol: HTTPS
+      port: 31197

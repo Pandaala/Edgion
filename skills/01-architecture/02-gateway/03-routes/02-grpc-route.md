@@ -56,6 +56,8 @@ The gRPC-Web protocol is identified during the `early_request_filter` phase via 
 - `application/grpc` → marked as `grpc`.
 - `application/grpc-web` or `application/grpc-web+proto` → marked as `grpc-web`.
 
+Content-Type matching is case-insensitive (RFC 9110 §8.3.1), so `Application/Grpc` and `APPLICATION/GRPC-WEB+PROTO` match too. The shared helpers live in `proxy_http::content_type`.
+
 The result is stored in `ctx.request_info.discover_protocol`. The `is_grpc_protocol` helper checks this field; gRPC and gRPC-Web share the same route-matching logic.
 
 ## HTTP pipeline integration

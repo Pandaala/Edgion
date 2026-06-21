@@ -448,7 +448,7 @@ pub fn create_admin_router(
         // Special operations
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
-        // RegionRoute EdgionConfigData endpoints
+        // Effective resolved views for Center dashboard polling.
         .route(
             "/api/v1/region-routes/effective",
             get(region_route_handlers::list_region_routes_effective),
@@ -461,7 +461,6 @@ pub fn create_admin_router(
             "/api/v1/service-region-routes",
             get(region_route_handlers::list_service_region_edgion_config_data),
         )
-        // Effective resolved views for Center dashboard polling
         .route(
             "/api/v1/global-ip-restrictions/effective",
             get(effective_handlers::global_ip_restrictions_effective),

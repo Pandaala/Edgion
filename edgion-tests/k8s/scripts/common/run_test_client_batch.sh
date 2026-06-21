@@ -87,6 +87,19 @@ else
   echo "WARNING: DirectEndpoint IP not resolved (kubectl endpointslices/endpoints both empty); continuing with empty EDGION_TEST_DIRECT_ENDPOINT_IP"
 fi
 
+TEST_SERVER_ENDPOINT_IPS="$(
+  kubectl get endpointslices -n edgion-test \
+    -l kubernetes.io/service-name=edgion-test-server -o json 2>/dev/null \
+    | jq -r '[.items[]?.endpoints[]? | select(.conditions.ready != false) | .addresses[]?] | unique | join(",")' 2>/dev/null || true
+)"
+if [[ -z "${TEST_SERVER_ENDPOINT_IPS}" || "${TEST_SERVER_ENDPOINT_IPS}" == "null" ]]; then
+  TEST_SERVER_ENDPOINT_IPS="$(
+    kubectl get endpoints -n edgion-test edgion-test-server -o json 2>/dev/null \
+      | jq -r '[.subsets[]?.addresses[]?.ip] | unique | join(",")' 2>/dev/null || true
+  )"
+fi
+echo "Test server endpoints: ${TEST_SERVER_ENDPOINT_IPS:-<none>}"
+
 # --- Resolve Gateway Metrics Endpoints (once) ---
 GATEWAY_METRICS_ENDPOINTS="${EDGION_TEST_GATEWAY_METRICS_ENDPOINTS:-}"
 if [[ -z "${GATEWAY_METRICS_ENDPOINTS}" ]]; then
@@ -115,14 +128,19 @@ echo "Gateway metrics endpoints (${METRICS_ENDPOINT_COUNT}): ${GATEWAY_METRICS_E
 generate_inner_script() {
   cat <<HEADER
 #!/bin/sh
-export EDGION_TEST_ADMIN_API_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller.edgion-system.svc.cluster.local:12101}"
+export EDGION_TEST_ADMIN_API_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller-leader.edgion-system.svc.cluster.local:12101}"
+export EDGION_TEST_ADMIN_TOKEN="${EDGION_TEST_ADMIN_TOKEN:-}"
+export EDGION_TOKEN="${EDGION_TOKEN:-${EDGION_TEST_ADMIN_TOKEN}}"
+export EDGION_GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-}"
 export EDGION_TEST_K8S_MODE="true"
 export EDGION_TEST_DIRECT_ENDPOINT_IP="${DIRECT_ENDPOINT_IP}"
+export EDGION_TEST_BACKEND_ENDPOINT_IPS="${TEST_SERVER_ENDPOINT_IPS}"
 export EDGION_TEST_GATEWAY_METRICS_ENDPOINTS="${GATEWAY_METRICS_ENDPOINTS}"
 TEST_BIN="${TEST_CLIENT_BIN_PATH}"
 TARGET="${TARGET_HOST}"
 TOTAL=0
 FAIL=0
+cd /usr/local/edgion || exit 1
 HEADER
 
   while IFS='|' read -r resource item || [[ -n "${resource}" ]]; do

@@ -118,7 +118,23 @@ spec:
         - name: test-http
           port: 30001
 
-    # 6: （ filter）
+    # 6: RequestHeaderModifier add onto a header the client already sent with
+    # multiple same-name values. Append must preserve every existing field line.
+    - matches:
+        - path:
+            type: Exact
+            value: /multi-value-append-test
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            add:
+              - name: "X-Multi-Append"
+                value: "appended-value"
+      backendRefs:
+        - name: test-http
+          port: 30001
+
+    # 7: catch-all (no filter)
     - matches:
         - path:
             type: PathPrefix

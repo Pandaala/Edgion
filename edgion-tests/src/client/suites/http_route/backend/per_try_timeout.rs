@@ -18,6 +18,12 @@ fn sp_token(ip: &str, port: u64) -> String {
     format!("{:08x}", crc32fast::hash(format!("{}:{}", ip, port).as_bytes()))
 }
 
+fn is_k8s_mode() -> bool {
+    std::env::var("EDGION_TEST_K8S_MODE")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false)
+}
+
 pub struct PerTryTimeoutTestSuite;
 
 impl PerTryTimeoutTestSuite {
@@ -909,6 +915,13 @@ impl PerTryTimeoutTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    if is_k8s_mode() {
+                        return TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Skipped in K8s mode: Gateway API HTTPRoute CRD rejects Edgion's non-standard sessionPersistence.strict extension".to_string(),
+                        );
+                    }
+
                     let seq_id = format!("ptt-sp-strict-{}", uuid::Uuid::new_v4());
 
                     let client = reqwest::Client::builder()
@@ -1064,6 +1077,12 @@ impl PerTryTimeoutTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    if is_k8s_mode() {
+                        return TestResult::passed_with_message(
+                            start.elapsed(),
+                            "Skipped in K8s mode: Gateway API HTTPRoute CRD rejects Edgion's non-standard sessionPersistence.strict extension".to_string(),
+                        );
+                    }
 
                     let client = reqwest::Client::builder()
                         .no_proxy()

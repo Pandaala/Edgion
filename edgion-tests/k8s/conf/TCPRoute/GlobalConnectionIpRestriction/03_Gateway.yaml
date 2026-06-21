@@ -1,0 +1,13 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gcir-gateway
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: edgion-test/gcir-stream-plugins
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+  - name: tcp
+    protocol: TCP
+    port: 31296

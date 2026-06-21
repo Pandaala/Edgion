@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-resp-replace-body
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "resp-replace-body"
+        source: |
+          if resp.status == 502 {
+            return deny(502, "{\"error\":\"upstream_error\",\"code\":502}")
+          }
+        errorPolicy: deny

@@ -34,6 +34,10 @@ CONTROLLER_ADMIN_URL="${EDGION_CONTROLLER_ADMIN_URL:-http://edgion-controller.ed
 # this harness sends the same value when curling the gateway admin API through a
 # port-forward. Define the token once here so the Secret and the curls always match.
 GATEWAY_ADMIN_TOKEN="${EDGION_GATEWAY_ADMIN_TOKEN:-integration-gateway-admin-token-0123456789}"
+export EDGION_GATEWAY_ADMIN_TOKEN="${GATEWAY_ADMIN_TOKEN}"
+CONTROLLER_ADMIN_TOKEN="${EDGION_TEST_ADMIN_TOKEN:-integration-controller-admin-token-0123456789}"
+export EDGION_TEST_ADMIN_TOKEN="${CONTROLLER_ADMIN_TOKEN}"
+export EDGION_TOKEN="${EDGION_TOKEN:-${CONTROLLER_ADMIN_TOKEN}}"
 
 START_FROM="${START_FROM:-}"
 ONLY_RESOURCE=""
@@ -55,13 +59,22 @@ CONTROLLER_IMAGE="${CONTROLLER_IMAGE:-}"
 GATEWAY_IMAGE="${GATEWAY_IMAGE:-}"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
-IMAGE_VERSION="${IMAGE_VERSION:-v0.1.1}"
+IMAGE_VERSION="${IMAGE_VERSION:-0.3.2}"
 IMAGE_ARCH="${IMAGE_ARCH:-}"
 PREPARE_LOCAL_IMAGES=false
 LOCAL_IMAGE_REBUILD=false
 PULL_POLICY_OVERRIDE="${PULL_POLICY_OVERRIDE:-}"
 LOCAL_IMAGE_MODE_RESOLVED=""
 LOCAL_BUILD_IMAGE_VERSION_SUFFIX="${LOCAL_BUILD_IMAGE_VERSION_SUFFIX:-}"
+LOCAL_TEST_BIN_DIR="${LOCAL_TEST_BIN_DIR:-}"
+LOCAL_CORE_BIN_DIR="${LOCAL_CORE_BIN_DIR:-}"
+LOCAL_TEST_RUNTIME_IMAGE="${LOCAL_TEST_RUNTIME_IMAGE:-ubuntu:24.04}"
+
+if [[ -z "${LOCAL_CORE_BIN_DIR}" && -n "${LOCAL_TEST_BIN_DIR}" \
+  && -x "${LOCAL_TEST_BIN_DIR}/edgion-controller" \
+  && -x "${LOCAL_TEST_BIN_DIR}/edgion-gateway" ]]; then
+  LOCAL_CORE_BIN_DIR="${LOCAL_TEST_BIN_DIR}"
+fi
 
 FILTERED_MODE=false
 SELECTED_COUNT=0
@@ -73,6 +86,8 @@ FAILED_SUITES=()
 
 SLOW_TESTS=(
   "HTTPRoute_Backend_Timeout"
+  "HTTPRoute_Backend_HealthCheckTransition"
+  "HTTPRoute_Backend_PerTryTimeout"
   "EdgionPlugins_AllEndpointStatus"
   "EdgionPlugins_LdapAuth"
 )
@@ -120,6 +135,11 @@ Env:
   GATEWAY_IMAGE                  Optional gateway image override (passed to deploy script)
   IMAGE_CONFIG_FILE              Path to image config file
   LOCAL_IMAGE_MODE              Same as --local-image-mode
+  LOCAL_TEST_BIN_DIR             Directory containing linux/amd64 test_client and test_server.
+                                 When set, test pods use LOCAL_TEST_RUNTIME_IMAGE
+                                 and binaries are copied into running pods.
+  LOCAL_TEST_RUNTIME_IMAGE       Runtime image for LOCAL_TEST_BIN_DIR mode
+                                 (default: ${LOCAL_TEST_RUNTIME_IMAGE})
 EOF
 }
 
@@ -334,7 +354,7 @@ load_image_config_file() {
 
   IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
   IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
-  IMAGE_VERSION="${IMAGE_VERSION:-v0.1.1}"
+  IMAGE_VERSION="${IMAGE_VERSION:-0.3.2}"
 
   if [[ -z "${TEST_CLIENT_IMAGE}" ]]; then
     if [[ -n "${IMAGE_ARCH:-}" ]]; then
@@ -508,6 +528,52 @@ build_and_import_local_images() {
   rm -f "${tar_file}"
 }
 
+local_test_binary_mode() {
+  [[ -n "${LOCAL_TEST_BIN_DIR}" ]]
+}
+
+local_core_binary_mode() {
+  [[ -n "${LOCAL_CORE_BIN_DIR}" ]]
+}
+
+require_local_test_binaries() {
+  if ! local_test_binary_mode; then
+    return 0
+  fi
+
+  for bin in test_client test_server; do
+    if [[ ! -x "${LOCAL_TEST_BIN_DIR}/${bin}" ]]; then
+      echo "LOCAL_TEST_BIN_DIR is set but executable not found: ${LOCAL_TEST_BIN_DIR}/${bin}"
+      exit 1
+    fi
+  done
+}
+
+require_local_core_binaries() {
+  if ! local_core_binary_mode; then
+    return 0
+  fi
+
+  for bin in edgion-controller edgion-gateway; do
+    if [[ ! -x "${LOCAL_CORE_BIN_DIR}/${bin}" ]]; then
+      echo "LOCAL_CORE_BIN_DIR is set but executable not found: ${LOCAL_CORE_BIN_DIR}/${bin}"
+      exit 1
+    fi
+  done
+}
+
+apply_local_test_image_overrides() {
+  if ! local_test_binary_mode; then
+    return 0
+  fi
+
+  TEST_CLIENT_IMAGE="${LOCAL_TEST_RUNTIME_IMAGE}"
+  TEST_SERVER_IMAGE="${LOCAL_TEST_RUNTIME_IMAGE}"
+  PULL_POLICY_OVERRIDE="IfNotPresent"
+  echo "Local test binary mode enabled: ${LOCAL_TEST_BIN_DIR}"
+  echo "Test pods will use runtime image: ${LOCAL_TEST_RUNTIME_IMAGE}"
+}
+
 print_cluster_and_image_context() {
   local mode arches primary local_mode
   mode="$(detect_cluster_mode)"
@@ -548,9 +614,13 @@ print_cluster_and_image_context() {
   fi
 
   prepare_local_images_if_needed "${mode}"
+  apply_local_test_image_overrides
 
   echo "Cluster mode: ${mode} (configured: ${CLUSTER_MODE})"
   echo "Cluster node arch(es): ${arches}"
+  if local_core_binary_mode; then
+    echo "Local core binary mode enabled: ${LOCAL_CORE_BIN_DIR}"
+  fi
   echo "Image override CONTROLLER_IMAGE: ${CONTROLLER_IMAGE:-<unset>}"
   echo "Image override GATEWAY_IMAGE: ${GATEWAY_IMAGE:-<unset>}"
   echo "Image override TEST_CLIENT_IMAGE: ${TEST_CLIENT_IMAGE:-<unset>}"
@@ -791,6 +861,281 @@ restart_secret_dependent_workloads() {
   fi
 }
 
+patch_local_binary_deployment() {
+  local ns="$1"
+  local name="$2"
+  local container="$3"
+
+  if ! kubectl get deployment "${name}" -n "${ns}" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Patch ${ns}/${name} for local test binary injection"
+  kubectl patch deployment "${name}" -n "${ns}" --type='strategic' \
+    -p="{\"spec\":{\"template\":{\"spec\":{\"containers\":[{\"name\":\"${container}\",\"image\":\"${LOCAL_TEST_RUNTIME_IMAGE}\",\"imagePullPolicy\":\"IfNotPresent\",\"command\":[\"sleep\",\"infinity\"],\"args\":[]}]}}}}"
+  kubectl patch deployment "${name}" -n "${ns}" --type='json' \
+    -p='[{"op":"remove","path":"/spec/template/spec/containers/0/livenessProbe"}]' >/dev/null 2>&1 || true
+  kubectl patch deployment "${name}" -n "${ns}" --type='json' \
+    -p='[{"op":"remove","path":"/spec/template/spec/containers/0/readinessProbe"}]' >/dev/null 2>&1 || true
+}
+
+patch_local_binary_test_deployments() {
+  if ! local_test_binary_mode; then
+    return 0
+  fi
+
+  patch_local_binary_deployment "edgion-test" "edgion-test-client" "test-client"
+  patch_local_binary_deployment "edgion-test" "edgion-test-server" "test-server"
+  patch_local_binary_deployment "edgion-default" "edgion-test-server" "test-server"
+  patch_local_binary_deployment "${BACKEND_TEST_NAMESPACE}" "edgion-test-server" "test-server"
+  patch_local_binary_deployment "edgion-default" "lb-multi-test-server" "test-server"
+}
+
+rollout_local_binary_test_deployments() {
+  if ! local_test_binary_mode; then
+    return 0
+  fi
+
+  local ns name
+  for pair in \
+    "edgion-test edgion-test-client" \
+    "edgion-test edgion-test-server" \
+    "edgion-default edgion-test-server" \
+    "${BACKEND_TEST_NAMESPACE} edgion-test-server" \
+    "edgion-default lb-multi-test-server"; do
+    ns="${pair%% *}"
+    name="${pair#* }"
+    if kubectl get deployment "${name}" -n "${ns}" >/dev/null 2>&1; then
+      kubectl rollout status deployment/"${name}" -n "${ns}" --timeout=300s
+    fi
+  done
+}
+
+label_single_backend_pod() {
+  local pod
+  kubectl label pod -n edgion-test -l app=edgion-test-server edgion.io/sticky-single- >/dev/null 2>&1 || true
+  pod="$(
+    kubectl get pods -n edgion-test -l app=edgion-test-server \
+      --field-selector=status.phase=Running \
+      --sort-by=.metadata.creationTimestamp \
+      -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true
+  )"
+  if [[ -n "${pod}" ]]; then
+    echo "Label single-state backend pod: edgion-test/${pod}"
+    kubectl label pod -n edgion-test "${pod}" edgion.io/sticky-single=true --overwrite >/dev/null
+  fi
+}
+
+kubectl_retry() {
+  local attempt rc
+  for attempt in 1 2 3; do
+    if "$@"; then
+      return 0
+    fi
+    rc=$?
+    echo "[WARN] kubectl command failed (attempt ${attempt}/3, rc=${rc}); retrying..."
+    sleep $((attempt * 2))
+  done
+  return "${rc}"
+}
+
+copy_local_binary_to_pods() {
+  local ns="$1"
+  local selector="$2"
+  local container="$3"
+  local binary="$4"
+  local src="${LOCAL_TEST_BIN_DIR}/${binary}"
+  local pods pod
+
+  pods="$(kubectl get pods -n "${ns}" -l "${selector}" \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+  if [[ -z "${pods}" ]]; then
+    echo "No running pods found for ${ns}/${selector}"
+    return 1
+  fi
+
+  for pod in ${pods}; do
+    echo "Copy ${binary} to ${ns}/${pod}"
+    kubectl_retry kubectl cp -n "${ns}" -c "${container}" "${src}" "${pod}:/usr/local/bin/${binary}"
+    kubectl_retry kubectl exec -n "${ns}" -c "${container}" "${pod}" -- chmod +x "/usr/local/bin/${binary}"
+  done
+}
+
+copy_local_core_binary_to_pods() {
+  local ns="$1"
+  local selector="$2"
+  local container="$3"
+  local binary="$4"
+  local src="${LOCAL_CORE_BIN_DIR}/${binary}"
+  local pods pod
+
+  pods="$(kubectl get pods -n "${ns}" -l "${selector}" \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+  if [[ -z "${pods}" ]]; then
+    echo "No running pods found for ${ns}/${selector}"
+    return 1
+  fi
+
+  for pod in ${pods}; do
+    echo "Copy ${binary} to ${ns}/${pod}"
+    kubectl_retry kubectl exec -n "${ns}" -c "${container}" "${pod}" -- sh -c 'mkdir -p /usr/local/edgion'
+    kubectl_retry kubectl cp -n "${ns}" -c "${container}" "${src}" "${pod}:/tmp/${binary}.new"
+    kubectl_retry kubectl exec -n "${ns}" -c "${container}" "${pod}" -- sh -c \
+      "chmod +x /tmp/${binary}.new && mv /tmp/${binary}.new /usr/local/edgion/${binary}"
+  done
+}
+
+restart_core_binary_in_pods() {
+  local ns="$1"
+  local selector="$2"
+  local container="$3"
+  local binary="$4"
+  local pods pod
+
+  pods="$(kubectl get pods -n "${ns}" -l "${selector}" \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+  if [[ -z "${pods}" ]]; then
+    echo "No running pods found for ${ns}/${selector}"
+    return 1
+  fi
+
+  for pod in ${pods}; do
+    echo "Restart ${binary} process in ${ns}/${pod}"
+    kubectl exec -n "${ns}" -c "${container}" "${pod}" -- sh -c '
+      bin="$1"
+      pids=""
+      if command -v pidof >/dev/null 2>&1; then
+        pids="$(pidof "$bin" 2>/dev/null || true)"
+      fi
+      if [ -z "$pids" ] && command -v ps >/dev/null 2>&1; then
+        pids="$(ps -eo pid=,comm= 2>/dev/null | while read -r pid comm _rest; do
+          if [ "$comm" = "$bin" ]; then
+            echo "$pid"
+          fi
+        done || true)"
+      fi
+      for p in $pids; do
+        kill -TERM "$p" 2>/dev/null || true
+      done
+    ' sh "${binary}"
+  done
+}
+
+install_local_core_binaries() {
+  if ! local_core_binary_mode; then
+    return 0
+  fi
+
+  require_local_core_binaries
+  copy_local_core_binary_to_pods "edgion-system" "app=edgion-controller" "edgion-controller" "edgion-controller"
+  copy_local_core_binary_to_pods "edgion-system" "app=edgion-gateway" "edgion-gateway" "edgion-gateway"
+  restart_core_binary_in_pods "edgion-system" "app=edgion-controller" "edgion-controller" "edgion-controller"
+  echo "Waiting for controller leadership after local binary restart..."
+  sleep 30
+  restart_core_binary_in_pods "edgion-system" "app=edgion-gateway" "edgion-gateway" "edgion-gateway"
+  sleep 5
+  wait_gateway_stable 300
+  echo "Waiting for gateway listeners to settle after local binary restart..."
+  sleep 15
+}
+
+install_local_test_client_tools() {
+  local pods pod
+
+  pods="$(kubectl get pods -n edgion-test -l app=edgion-test-client \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+  if [[ -z "${pods}" ]]; then
+    echo "No running test-client pods found for tool installation"
+    return 1
+  fi
+
+  for pod in ${pods}; do
+    echo "Ensure test-client tools in edgion-test/${pod}"
+    kubectl exec -n edgion-test -c test-client "${pod}" -- sh -c \
+      'if command -v openssl >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then exit 0; fi; apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssl curl ca-certificates procps && rm -rf /var/lib/apt/lists/*'
+  done
+}
+
+start_local_test_server_pods() {
+  local ns="$1"
+  local selector="$2"
+  local with_tls="${3:-false}"
+  local pods pod args
+
+  pods="$(kubectl get pods -n "${ns}" -l "${selector}" \
+    --field-selector=status.phase=Running \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)"
+  if [[ -z "${pods}" ]]; then
+    echo "No running test-server pods found for ${ns}/${selector}"
+    return 1
+  fi
+
+  args="--http-ports=30001,30002,30003,30004 --grpc-ports=30021,30022 --websocket-port=30005 --tcp-port=30010 --tcp-pp2-port=30012 --udp-port=30011 --auth-port=30040 --ext-proc-port=30041 --log-level=info"
+  if [[ "${with_tls}" == "true" ]]; then
+    args="${args} --https-backend-port=30051 --https-backend-mtls-port=30052 --cert-file=/etc/edgion/backend-tls/tls.crt --key-file=/etc/edgion/backend-tls/tls.key --client-ca-file=/etc/edgion/client-ca/ca.crt --https-backend-multi-sni-port=30026 --multi-sni-cert-a=/etc/edgion/backend-sni-a/tls.crt --multi-sni-key-a=/etc/edgion/backend-sni-a/tls.key --multi-sni-cert-b=/etc/edgion/backend-sni-b/tls.crt --multi-sni-key-b=/etc/edgion/backend-sni-b/tls.key"
+  fi
+
+  for pod in ${pods}; do
+    echo "Start test_server in ${ns}/${pod}"
+    kubectl exec -n "${ns}" -c test-server "${pod}" -- sh -c \
+      "if [ -f /tmp/test_server.pid ] && kill -0 \"\$(cat /tmp/test_server.pid)\" 2>/dev/null; then exit 0; fi; nohup /usr/local/bin/test_server ${args} >/tmp/test_server.log 2>&1 & echo \$! >/tmp/test_server.pid"
+  done
+}
+
+install_local_test_binaries() {
+  if ! local_test_binary_mode; then
+    return 0
+  fi
+
+  require_local_test_binaries
+  patch_local_binary_test_deployments
+  rollout_local_binary_test_deployments
+  label_single_backend_pod
+
+  copy_local_binary_to_pods "edgion-test" "app=edgion-test-client" "test-client" "test_client"
+  install_local_test_client_tools
+  copy_local_binary_to_pods "edgion-test" "app=edgion-test-server" "test-server" "test_server"
+  copy_local_binary_to_pods "edgion-default" "app=edgion-test-server" "test-server" "test_server"
+  copy_local_binary_to_pods "${BACKEND_TEST_NAMESPACE}" "app=edgion-test-server" "test-server" "test_server"
+  if kubectl get deployment lb-multi-test-server -n edgion-default >/dev/null 2>&1; then
+    copy_local_binary_to_pods "edgion-default" "app=edgion-test-server-multi" "test-server" "test_server"
+  fi
+
+  start_local_test_server_pods "edgion-test" "app=edgion-test-server" "true"
+  start_local_test_server_pods "edgion-default" "app=edgion-test-server" "false"
+  start_local_test_server_pods "${BACKEND_TEST_NAMESPACE}" "app=edgion-test-server" "false"
+  if kubectl get deployment lb-multi-test-server -n edgion-default >/dev/null 2>&1; then
+    start_local_test_server_pods "edgion-default" "app=edgion-test-server-multi" "false"
+  fi
+}
+
+sync_k8s_redis_auth_secret() {
+  if ! kubectl get secret dragonfly-redis -n dragonfly-system >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "Syncing Dragonfly Redis auth Secret..."
+  kubectl get secret dragonfly-redis -n dragonfly-system -o json \
+    | jq '{
+        apiVersion: "v1",
+        kind: "Secret",
+        metadata: {
+          name: "redis-test-auth",
+          namespace: "edgion-default"
+        },
+        type: "Opaque",
+        data: {
+          password: .data["redis-password"]
+        }
+      }' \
+    | kubectl apply --server-side --force-conflicts \
+        --field-manager=edgion-k8s-test -f -
+}
+
 # Work around init-phase race: Secret ResourceProcessor may finish after
 # EdgionPlugins / EdgionTls / Gateway processors, so their resolved_* fields
 # are empty. Annotating every Secret triggers a Watch UPDATE event which
@@ -800,7 +1145,7 @@ force_sync_secrets() {
   ts="$(date +%s)"
   echo "Force-syncing Secrets to fix init-phase ordering..."
   local ns secret_list
-  for ns in edgion-default edgion-test; do
+  for ns in edgion-default edgion-test backend cert-store; do
     secret_list="$(kubectl get secrets -n "${ns}" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)"
     for s in ${secret_list}; do
       kubectl annotate secret -n "${ns}" "${s}" \
@@ -1009,20 +1354,45 @@ run_all_selected_suites() {
     "HTTPRoute/Match|HTTPRoute|Match"
     "HTTPRoute/Backend/LBRoundRobin|HTTPRoute|Backend/LBRoundRobin"
     "HTTPRoute/Backend/LBConsistentHash|HTTPRoute|Backend/LBConsistentHash"
+    "HTTPRoute/Backend/LBLeastConn|HTTPRoute|Backend/LBLeastConn"
+    "HTTPRoute/Backend/LBLeastConnRetryOnStatus|HTTPRoute|Backend/LBLeastConnRetryOnStatus"
     "HTTPRoute/Backend/WeightedBackend|HTTPRoute|Backend/WeightedBackend"
+    "HTTPRoute/Backend/HealthCheck|HTTPRoute|Backend/HealthCheck"
     "HTTPRoute/Backend/Timeout|HTTPRoute|Backend/Timeout"
+    "HTTPRoute/Backend/HealthCheckTransition|HTTPRoute|Backend/HealthCheckTransition"
+    "HTTPRoute/Backend/RetryOnStatus|HTTPRoute|Backend/RetryOnStatus"
+    "HTTPRoute/Backend/PerTryTimeout|HTTPRoute|Backend/PerTryTimeout"
+    "HTTPRoute/Backend/CircuitBreaker|HTTPRoute|Backend/CircuitBreaker"
+    "HTTPRoute/Backend/SessionPersistence|HTTPRoute|Backend/SessionPersistence"
+    "HTTPRoute/Backend/H2BackendMtlsPersistence|HTTPRoute|Backend/H2BackendMtlsPersistence"
+    "HTTPRoute/Backend/BackendTLSSNIHostOverride|HTTPRoute|Backend/BackendTLSSNIHostOverride"
+    "HTTPRoute/Backend/PartiallyInvalid|HTTPRoute|Backend/PartiallyInvalid"
+    "HTTPRoute/Backend/GrpcHealthCheck|HTTPRoute|Backend/GrpcHealthCheck"
+    "HTTPRoute/Backend/DnsResolutionFailure|HTTPRoute|Backend/DnsResolutionFailure"
     "HTTPRoute/Filters/Redirect|HTTPRoute|Filters/Redirect"
     "HTTPRoute/Filters/Security|HTTPRoute|Filters/Security"
     "HTTPRoute/Filters/HeaderModifier|HTTPRoute|Filters/HeaderModifier"
+    "HTTPRoute/Filters/FilterConflict|HTTPRoute|Filters/FilterConflict"
     "HTTPRoute/Protocol/WebSocket|HTTPRoute|Protocol/WebSocket"
+    "HTTPRoute/Protocol/H2C|HTTPRoute|Protocol/H2C"
+    "HTTPRoute/Protocol/GrpcWeb|HTTPRoute|Protocol/GrpcWeb"
+    "HTTPRoute/Protocol/H2TrailerMalformed|HTTPRoute|Protocol/H2TrailerMalformed"
+    "HTTPRoute/MultiPort|HTTPRoute|MultiPort"
     "GRPCRoute/Basic|GRPCRoute|Basic"
     "GRPCRoute/Match|GRPCRoute|Match"
+    "GRPCRoute/RateLimit|GRPCRoute|RateLimit"
     "TCPRoute/Basic|TCPRoute|Basic"
     "TCPRoute/StreamPlugins|TCPRoute|StreamPlugins"
+    "TCPRoute/GlobalConnectionIpRestriction|TCPRoute|GlobalConnectionIpRestriction"
+    "TCPRoute/IdleTimeout|TCPRoute|IdleTimeout"
     "TLSRoute/Basic|TLSRoute|Basic"
     "TLSRoute/ProxyProtocol|TLSRoute|ProxyProtocol"
     "TLSRoute/StreamPlugins|TLSRoute|StreamPlugins"
+    "TLSRoute/MultiSNI|TLSRoute|MultiSNI"
+    "TLSRoute/BothAbsentParentRef|TLSRoute|BothAbsentParentRef"
+    "TLSRoute/Passthrough|TLSRoute|Passthrough"
     "UDPRoute/Basic|UDPRoute|Basic"
+    "UDPRoute/StreamPlugins|UDPRoute|StreamPlugins"
     "Gateway/Security|Gateway|Security"
     "Gateway/RealIP|Gateway|RealIP"
     "Gateway/TLS/BackendTLS|Gateway|TLS/BackendTLS"
@@ -1034,12 +1404,20 @@ run_all_selected_suites() {
     "Gateway/AllowedRoutes/Selector|Gateway|AllowedRoutes/Selector"
     "Gateway/Combined|Gateway|Combined"
     "Gateway/StreamPlugins|Gateway|StreamPlugins"
+    "HTTPRoute/Backend/BackendTLSSAN|Gateway|TLS/BackendTLSSAN"
+    "Gateway/TLS/NoHostnameListener|Gateway|TLS/NoHostnameListener"
+    "Gateway/FrontendValidation|Gateway|FrontendValidation"
     "Gateway/PortConflict|Gateway|PortConflict"
     "EdgionTls/https|EdgionTls|https"
     "EdgionTls/grpctls|EdgionTls|grpctls"
     "EdgionTls/mTLS|EdgionTls|mTLS"
     "EdgionTls/cipher|EdgionTls|cipher"
+    "EdgionTls/mtls_failclose|EdgionTls|mtls_failclose"
+    "EdgionTls/fallback_sni|EdgionTls|fallback_sni"
+    "EdgionTls/BothAbsentParentRef|EdgionTls|BothAbsentParentRef"
     "EdgionPlugins/DebugAccessLog|EdgionPlugins|DebugAccessLog"
+    "EdgionPlugins/Csrf|EdgionPlugins|Csrf"
+    "EdgionPlugins/Cors|EdgionPlugins|Cors"
     "EdgionPlugins/PluginCondition|EdgionPlugins|PluginCondition"
     "EdgionPlugins/PluginCondition/AllConditions|EdgionPlugins|PluginCondition/AllConditions"
     "EdgionPlugins/CtxSet|EdgionPlugins|CtxSet"
@@ -1049,21 +1427,41 @@ run_all_selected_suites() {
     "EdgionPlugins/HeaderCertAuth|EdgionPlugins|HeaderCertAuth"
     "EdgionPlugins/KeyAuth|EdgionPlugins|KeyAuth"
     "EdgionPlugins/BasicAuth|EdgionPlugins|BasicAuth"
+    "EdgionPlugins/LdapAuth|EdgionPlugins|LdapAuth"
     "EdgionPlugins/ProxyRewrite|EdgionPlugins|ProxyRewrite"
     "EdgionPlugins/RateLimit|EdgionPlugins|RateLimit"
+    "EdgionPlugins/RateLimitRedis|EdgionPlugins|RateLimitRedis"
     "EdgionPlugins/RealIp|EdgionPlugins|RealIp"
+    "EdgionPlugins/RequestMirror|EdgionPlugins|RequestMirror"
     "EdgionPlugins/ResponseRewrite|EdgionPlugins|ResponseRewrite"
     "EdgionPlugins/RequestRestriction|EdgionPlugins|RequestRestriction"
+    "EdgionPlugins/IpRestriction|EdgionPlugins|IpRestriction"
+    "EdgionPlugins/PathNormalization|EdgionPlugins|PathNormalization"
+    "EdgionPlugins/PathNormalization/ForwardView|EdgionPlugins|PathNormalization/ForwardView"
+    "EdgionPlugins/FaultInjection|EdgionPlugins|FaultInjection"
     "EdgionPlugins/ForwardAuth|EdgionPlugins|ForwardAuth"
+    "EdgionPlugins/ExtProc|EdgionPlugins|ExtProc"
     "EdgionPlugins/OpenidConnect|EdgionPlugins|OpenidConnect"
     "EdgionPlugins/BandwidthLimit|EdgionPlugins|BandwidthLimit"
     "EdgionPlugins/DirectEndpoint|EdgionPlugins|DirectEndpoint"
     "EdgionPlugins/DynamicInternalUpstream|EdgionPlugins|DynamicInternalUpstream"
     "EdgionPlugins/DynamicExternalUpstream|EdgionPlugins|DynamicExternalUpstream"
+    "EdgionPlugins/RegionRoute|EdgionPlugins|RegionRoute"
+    "EdgionPlugins/GlobalConnectionIpRestriction|EdgionPlugins|GlobalConnectionIpRestriction"
+    "EdgionPlugins/EdgionConfigDataStatus|EdgionPlugins|EdgionConfigDataStatus"
+    "EdgionPlugins/ResolvedRefs|EdgionPlugins|ResolvedRefs"
     "EdgionPlugins/WebhookKeyGet|EdgionPlugins|WebhookKeyGet"
     "EdgionPlugins/Dsl|EdgionPlugins|Dsl"
+    "EdgionPlugins/Dsl|EdgionPlugins|DslGrpcError"
     "EdgionPlugins/AllEndpointStatus|EdgionPlugins|AllEndpointStatus"
-    "EdgionPlugins/LdapAuth|EdgionPlugins|LdapAuth"
+    "Status/RefGrant|Status|RefGrant"
+    "Status/RefGrant/TCPRouteCrossNsSvc|Status|RefGrant/TCPRouteCrossNsSvc"
+    "Status/RefGrant/TLSRouteCrossNsSvc|Status|RefGrant/TLSRouteCrossNsSvc"
+    "Status/BackendTLSPolicy|Status|BackendTLSPolicy"
+    "Status/GatewayFrontendValidation|Status|GatewayFrontendValidation"
+    "Status/TLSListenerMode|Status|TLSListenerMode"
+    "Status/TLSRoute|Status|TLSRoute"
+    "LinkSys/Status|LinkSys|Status"
   )
 
   local local_start_from="${START_FROM}"
@@ -1235,6 +1633,9 @@ if should_run_prepare; then
       kubectl apply --server-side --force-conflicts -f "${K8S_DEPLOY_ROOT}/namespace.yaml"
     fi
   fi
+  if [[ -f "${CONF_ROOT}/Status/00_Namespace_status-compat.yaml" ]]; then
+    kubectl apply --server-side --force-conflicts -f "${CONF_ROOT}/Status/00_Namespace_status-compat.yaml"
+  fi
 
   echo "Generate runtime TLS/mTLS secrets..."
   "${GENERATE_CERTS_SCRIPT}" "${GENERATED_DIR}"
@@ -1254,14 +1655,36 @@ if should_run_prepare; then
 
   if [[ "${SKIP_DEPLOY}" == "false" ]]; then
     export CONTROLLER_IMAGE GATEWAY_IMAGE TEST_CLIENT_IMAGE TEST_SERVER_IMAGE PULL_POLICY_OVERRIDE
+    deploy_args=(--test-server-replicas "${TEST_SERVER_REPLICAS}")
+    if local_test_binary_mode; then
+      deploy_args+=(--no-wait)
+    fi
     K8S_DEPLOY_ROOT="$K8S_DEPLOY_ROOT" BACKEND_TEST_NAMESPACE="${BACKEND_TEST_NAMESPACE}" "${DEPLOY_SCRIPT}" \
-      --test-server-replicas "${TEST_SERVER_REPLICAS}"
+      "${deploy_args[@]}"
+    if local_test_binary_mode; then
+      echo "Waiting controller rollout..."
+      kubectl rollout status deployment/edgion-controller -n edgion-system --timeout=300s
+      echo "Waiting gateway rollout..."
+      kubectl rollout status deployment/edgion-gateway -n edgion-system --timeout=300s
+    fi
+    install_local_core_binaries
   fi
 
   ensure_gatewayclass_compat
   apply_all_conf_with_fallback
-  override_suite_test_server_images
+  sync_k8s_redis_auth_secret
+  if local_test_binary_mode; then
+    patch_local_binary_test_deployments
+  else
+    override_suite_test_server_images
+  fi
   restart_secret_dependent_workloads
+  if local_test_binary_mode; then
+    echo "Restarting test-client after ConfigMap updates..."
+    kubectl rollout restart deployment/edgion-test-client -n edgion-test
+    kubectl rollout status deployment/edgion-test-client -n edgion-test --timeout=300s
+  fi
+  install_local_test_binaries
 
   CLUSTER_PATCH_SCRIPT="${SCRIPT_DIR}/cluster-patch.sh"
   if [[ -x "${CLUSTER_PATCH_SCRIPT}" ]]; then
@@ -1274,6 +1697,7 @@ if should_run_prepare; then
   echo "Restarting gateway after full apply..."
   kubectl rollout restart deployment/edgion-gateway -n edgion-system
   kubectl rollout status deployment/edgion-gateway -n edgion-system --timeout=300s
+  install_local_core_binaries
   wait_gateway_stable 300
 
   force_sync_secrets
@@ -1288,6 +1712,7 @@ else
   fi
   print_cluster_and_image_context
   verify_skip_prepare_preconditions
+  install_local_core_binaries
 fi
 
 if [[ "${PREPARE_ONLY}" == "true" ]]; then

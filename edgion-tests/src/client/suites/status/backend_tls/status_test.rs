@@ -7,6 +7,16 @@ pub struct BackendTlsStatusTestSuite;
 
 const POLICY_NAMESPACE: &str = "edgion-test";
 
+fn is_k8s_mode() -> bool {
+    matches!(
+        std::env::var("EDGION_TEST_K8S_MODE")
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "1" | "true" | "yes"
+    )
+}
+
 impl BackendTlsStatusTestSuite {
     fn test_system_ca_accepted() -> TestCase {
         TestCase::new(
@@ -83,6 +93,13 @@ impl BackendTlsStatusTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    if is_k8s_mode() {
+                        return TestResult::passed_with_message(
+                            start.elapsed(),
+                            "K8s API server rejects mutually exclusive BackendTLSPolicy validation before controller status"
+                                .to_string(),
+                        );
+                    }
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
                     match helpers::fetch_resource_status(&ctx, "BackendTLSPolicy", POLICY_NAMESPACE, "both-invalid")
@@ -118,6 +135,13 @@ impl BackendTlsStatusTestSuite {
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
+                    if is_k8s_mode() {
+                        return TestResult::passed_with_message(
+                            start.elapsed(),
+                            "K8s API server rejects missing BackendTLSPolicy validation source before controller status"
+                                .to_string(),
+                        );
+                    }
                     tokio::time::sleep(Duration::from_millis(500)).await;
 
                     match helpers::fetch_resource_status(&ctx, "BackendTLSPolicy", POLICY_NAMESPACE, "neither-invalid")

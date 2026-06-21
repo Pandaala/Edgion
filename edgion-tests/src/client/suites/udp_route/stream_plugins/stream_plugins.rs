@@ -26,6 +26,12 @@ use tokio::net::UdpSocket;
 
 pub struct UdpStreamPluginsTestSuite;
 
+fn is_k8s_mode() -> bool {
+    std::env::var("EDGION_TEST_K8S_MODE")
+        .map(|v| matches!(v.as_str(), "1" | "true" | "TRUE" | "yes" | "YES"))
+        .unwrap_or(false)
+}
+
 impl UdpStreamPluginsTestSuite {
     /// Positive path: allow-localhost plugin should forward packets from 127.0.0.1.
     ///
@@ -40,7 +46,8 @@ impl UdpStreamPluginsTestSuite {
                     let start = Instant::now();
                     let test_data = b"Hello UDP StreamPlugin";
 
-                    match UdpSocket::bind("127.0.0.1:0").await {
+                    let bind_addr = if is_k8s_mode() { "0.0.0.0:0" } else { "127.0.0.1:0" };
+                    match UdpSocket::bind(bind_addr).await {
                         Ok(socket) => {
                             if let Err(e) = socket.send_to(test_data, &ctx.udp_addr()).await {
                                 return TestResult::failed(start.elapsed(), format!("Send failed: {}", e));

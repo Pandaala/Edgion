@@ -1,0 +1,28 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: frontend-validation-invalid-default
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  tls:
+    frontend:
+      default:
+        validation:
+          caCertificateRefs:
+          - name: does-not-exist
+            kind: ConfigMap
+            group: ''
+  listeners:
+  - name: https-invalid-default
+    protocol: HTTPS
+    port: 31314
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: fv-server-cert
+        kind: Secret
+        group: ''
+  - name: http-unaffected
+    protocol: HTTP
+    port: 31315

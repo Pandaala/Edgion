@@ -1,0 +1,11 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gcir-smoke
+  namespace: edgion-test
+spec:
+  data:
+    type: Selector
+    config:
+      active: p1
+      description: smoke-test selector for GlobalConnectionIpRestriction

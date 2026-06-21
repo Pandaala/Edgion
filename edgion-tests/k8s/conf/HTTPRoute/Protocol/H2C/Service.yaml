@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: test-h2c
+  namespace: edgion-test
+spec:
+  ports:
+  - port: 30001
+    targetPort: 30001
+    protocol: TCP
+    appProtocol: kubernetes.io/h2c
+  selector:
+    app: edgion-test-server

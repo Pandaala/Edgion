@@ -1,4 +1,4 @@
-# EdgionStreamPlugins: allow only localhost (K8s)
+# EdgionStreamPlugins: allow all clients in the K8s test cluster.
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
@@ -8,6 +8,8 @@ spec:
   plugins:
     - type: IpRestriction
       config:
-        defaultAction: deny
-        allowList:
-          - "127.0.0.0/8"
+        defaultAction: allow
+        allow:
+          - name: allow-all
+            cidrs:
+              - "0.0.0.0/0"

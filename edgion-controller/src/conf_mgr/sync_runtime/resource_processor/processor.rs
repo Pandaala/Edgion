@@ -375,10 +375,10 @@ where
         self.workqueue.enqueue(key).await;
     }
 
-    /// Handle Delete event (enqueue for runtime processing)
+    /// Handle Delete event using the object carried by the watch event.
     pub async fn on_delete(&self, obj: &K) {
-        let key = make_resource_key(obj);
-        self.workqueue.enqueue(key).await;
+        let ctx = self.create_context(TriggerChain::default());
+        self.process_delete(obj, &ctx).await;
     }
 
     // ==================== Cache Operations ====================

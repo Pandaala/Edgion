@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: fault-delay-fixed
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - enable: true
+    type: FaultInjection
+    config:
+      delay:
+        ratio: 1.0
+        fixedMs: 300

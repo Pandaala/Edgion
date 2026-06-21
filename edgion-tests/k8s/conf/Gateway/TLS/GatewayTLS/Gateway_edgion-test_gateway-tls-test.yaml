@@ -20,3 +20,7 @@ spec:
           #  edge-tls Secret（ generate_tls_certs.sh ）
           - name: edge-tls
             namespace: edgion-test
+          # Second ref (ECDSA) makes this a dual-cert listener: BoringSSL serves
+          # RSA or ECDSA per the client's negotiated key type.
+          - name: edge-tls-ecdsa
+            namespace: edgion-test

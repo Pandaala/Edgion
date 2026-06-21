@@ -10,8 +10,11 @@ spec:
   selector:
     app: edgion-gateway
   ports:
-  # Admin API (12001) is loopback-only and intentionally NOT exposed via the Service.
-  # k8stest reaches admin through the pod loopback (kubectl exec / port-forward).
+  # Test-only Gateway admin API access for suites that run inside test-client pods.
+  - name: admin-12001
+    port: 12001
+    targetPort: 12001
+    protocol: TCP
   - name: metrics-12090
     port: 12090
     targetPort: 12090
@@ -235,4 +238,276 @@ spec:
   - name: p31902
     port: 31902
     targetPort: 31902
+    protocol: TCP
+  - name: p31062
+    port: 31062
+    targetPort: 31062
+    protocol: TCP
+  - name: p31063
+    port: 31063
+    targetPort: 31063
+    protocol: TCP
+  - name: p31081
+    port: 31081
+    targetPort: 31081
+    protocol: TCP
+  - name: p31082
+    port: 31082
+    targetPort: 31082
+    protocol: TCP
+  - name: p31122
+    port: 31122
+    targetPort: 31122
+    protocol: TCP
+  - name: p31124
+    port: 31124
+    targetPort: 31124
+    protocol: TCP
+  - name: p31125
+    port: 31125
+    targetPort: 31125
+    protocol: TCP
+  - name: p31126
+    port: 31126
+    targetPort: 31126
+    protocol: TCP
+  - name: p31141
+    port: 31141
+    targetPort: 31141
+    protocol: TCP
+  - name: p31142
+    port: 31142
+    targetPort: 31142
+    protocol: TCP
+  - name: p31143
+    port: 31143
+    targetPort: 31143
+    protocol: TCP
+  - name: p31144
+    port: 31144
+    targetPort: 31144
+    protocol: TCP
+  - name: p31145
+    port: 31145
+    targetPort: 31145
+    protocol: TCP
+  - name: p31197
+    port: 31197
+    targetPort: 31197
+    protocol: TCP
+  - name: p31198
+    port: 31198
+    targetPort: 31198
+    protocol: TCP
+  - name: p31269
+    port: 31269
+    targetPort: 31269
+    protocol: TCP
+  - name: p31273
+    port: 31273
+    targetPort: 31273
+    protocol: TCP
+  - name: p31277
+    port: 31277
+    targetPort: 31277
+    protocol: TCP
+  - name: p31278
+    port: 31278
+    targetPort: 31278
+    protocol: TCP
+  - name: p31280
+    port: 31280
+    targetPort: 31280
+    protocol: TCP
+  - name: p31281
+    port: 31281
+    targetPort: 31281
+    protocol: TCP
+  - name: p31282
+    port: 31282
+    targetPort: 31282
+    protocol: TCP
+  - name: p31283
+    port: 31283
+    targetPort: 31283
+    protocol: TCP
+  - name: p31284
+    port: 31284
+    targetPort: 31284
+    protocol: TCP
+  - name: p31285
+    port: 31285
+    targetPort: 31285
+    protocol: TCP
+  - name: p31286
+    port: 31286
+    targetPort: 31286
+    protocol: TCP
+  - name: p31287
+    port: 31287
+    targetPort: 31287
+    protocol: TCP
+  - name: p31288
+    port: 31288
+    targetPort: 31288
+    protocol: TCP
+  - name: p31289
+    port: 31289
+    targetPort: 31289
+    protocol: TCP
+  - name: p31290
+    port: 31290
+    targetPort: 31290
+    protocol: TCP
+  - name: p31291
+    port: 31291
+    targetPort: 31291
+    protocol: TCP
+  - name: p31296
+    port: 31296
+    targetPort: 31296
+    protocol: TCP
+  - name: p31300
+    port: 31300
+    targetPort: 31300
+    protocol: TCP
+  - name: p31301
+    port: 31301
+    targetPort: 31301
+    protocol: TCP
+  - name: p31302
+    port: 31302
+    targetPort: 31302
+    protocol: TCP
+  - name: p31310
+    port: 31310
+    targetPort: 31310
+    protocol: TCP
+  - name: p31311
+    port: 31311
+    targetPort: 31311
+    protocol: TCP
+  - name: p31312
+    port: 31312
+    targetPort: 31312
+    protocol: TCP
+  - name: p31313
+    port: 31313
+    targetPort: 31313
+    protocol: TCP
+  - name: p31320
+    port: 31320
+    targetPort: 31320
+    protocol: TCP
+  - name: p31321
+    port: 31321
+    targetPort: 31321
+    protocol: TCP
+  - name: p31322
+    port: 31322
+    targetPort: 31322
+    protocol: TCP
+  - name: p31330
+    port: 31330
+    targetPort: 31330
+    protocol: TCP
+  - name: p31331
+    port: 31331
+    targetPort: 31331
+    protocol: TCP
+  - name: p31332
+    port: 31332
+    targetPort: 31332
+    protocol: TCP
+  - name: p31333
+    port: 31333
+    targetPort: 31333
+    protocol: TCP
+  - name: p31334
+    port: 31334
+    targetPort: 31334
+    protocol: TCP
+  - name: p31336
+    port: 31336
+    targetPort: 31336
+    protocol: TCP
+  - name: p31337
+    port: 31337
+    targetPort: 31337
+    protocol: TCP
+  - name: p31338
+    port: 31338
+    targetPort: 31338
+    protocol: TCP
+  - name: p31339
+    port: 31339
+    targetPort: 31339
+    protocol: TCP
+  - name: p31341
+    port: 31341
+    targetPort: 31341
+    protocol: TCP
+  - name: p31342
+    port: 31342
+    targetPort: 31342
+    protocol: TCP
+  - name: p31381
+    port: 31381
+    targetPort: 31381
+    protocol: TCP
+  - name: p31382
+    port: 31382
+    targetPort: 31382
+    protocol: TCP
+  - name: p31383
+    port: 31383
+    targetPort: 31383
+    protocol: TCP
+  - name: p31384
+    port: 31384
+    targetPort: 31384
+    protocol: TCP
+  - name: p31385
+    port: 31385
+    targetPort: 31385
+    protocol: TCP
+  - name: p31386
+    port: 31386
+    targetPort: 31386
+    protocol: TCP
+  - name: p31387
+    port: 31387
+    targetPort: 31387
+    protocol: TCP
+  - name: p31388
+    port: 31388
+    targetPort: 31388
+    protocol: TCP
+  - name: p31390
+    port: 31390
+    targetPort: 31390
+    protocol: TCP
+  - name: p31391
+    port: 31391
+    targetPort: 31391
+    protocol: TCP
+  - name: p31392-udp
+    port: 31392
+    targetPort: 31392
+    protocol: UDP
+  - name: p31393-udp
+    port: 31393
+    targetPort: 31393
+    protocol: UDP
+  - name: p31394-udp
+    port: 31394
+    targetPort: 31394
+    protocol: UDP
+  - name: p31930
+    port: 31930
+    targetPort: 31930
+    protocol: TCP
+  - name: p31931
+    port: 31931
+    targetPort: 31931
     protocol: TCP

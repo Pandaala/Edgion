@@ -16,7 +16,7 @@ use crate::EdgionHttpContext;
 use bytes::Bytes;
 use edgion_resources::EdgionStatus;
 use http::HeaderMap;
-use percent_encoding::{utf8_percent_encode, CONTROLS};
+use percent_encoding::{utf8_percent_encode, AsciiSet, CONTROLS};
 use pingora_core::modules::http::grpc_web::GrpcWebBridge;
 use pingora_core::protocols::http::bridge::grpc_web::GrpcWebCtx;
 use pingora_core::protocols::http::HttpTask;
@@ -135,13 +135,26 @@ pub(crate) async fn send_grpc_trailers_only(
     send_grpc_trailers_only_frame(session, resp, grpc_status, Some(grpc_message)).await
 }
 
+/// ASCII byte set for gRPC `grpc-message` percent-encoding.
+///
+/// The gRPC over HTTP/2 spec only permits unencoded bytes `%x20-%x24` and `%x26-%x7E`.
+/// `%x25` (`%`) is the percent-encoding escape introducer (RFC 3986 §2.1) and is excluded
+/// from the unencoded set, so it must itself be encoded as `%25` — otherwise a message such
+/// as `quota 50% exceeded` becomes ambiguous on the wire.
+///
+/// This set governs only ASCII bytes: `CONTROLS` (C0 controls 0x00-0x1F and DEL 0x7F) plus
+/// `%`. Non-ASCII bytes (0x80-0xFF) are always encoded by `utf8_percent_encode` regardless of
+/// the set. The result keeps exactly `%x20-%x24` and `%x26-%x7E` unencoded — matching the gRPC
+/// grammar (and Envoy's behavior).
+const GRPC_MESSAGE_ASCII_SET: &AsciiSet = &CONTROLS.add(b'%');
+
 /// Percent-encode a gRPC message string per gRPC over HTTP/2 spec (RFC 3986 §2.1).
 ///
-/// Keeps ASCII visible characters (0x21-0x7E) and space (0x20) as-is; percent-encodes
-/// control characters and non-ASCII bytes. Matches the encoding used by
+/// Keeps ASCII visible characters as-is except `%` and space (0x20); percent-encodes
+/// control characters, `%`, and non-ASCII bytes. Matches the encoding used by
 /// `session_adapter::send_grpc_error_direct` for consistency across gRPC error paths.
 pub(crate) fn percent_encode_grpc_message(s: &str) -> String {
-    utf8_percent_encode(s, CONTROLS).to_string()
+    utf8_percent_encode(s, GRPC_MESSAGE_ASCII_SET).to_string()
 }
 
 /// Map an HTTP status code to a (grpc_status_code, message) pair.
@@ -443,5 +456,17 @@ mod tests {
     fn percent_encode_grpc_message_control_chars_encoded() {
         assert_eq!(percent_encode_grpc_message("line\nbreak"), "line%0Abreak");
         assert_eq!(percent_encode_grpc_message("tab\there"), "tab%09here");
+    }
+
+    /// The percent sign itself (0x25) is the escape introducer and is excluded from the
+    /// gRPC unencoded byte set, so it must be encoded as `%25` (matches Envoy's behavior).
+    #[test]
+    fn percent_encode_grpc_message_percent_encoded() {
+        assert_eq!(
+            percent_encode_grpc_message("quota 50% exceeded"),
+            "quota 50%25 exceeded"
+        );
+        // A literal percent-escape in the input must be double-encoded, not passed through.
+        assert_eq!(percent_encode_grpc_message("%41"), "%2541");
     }
 }

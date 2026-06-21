@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-terminate
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "terminate-test"
+        source: |
+          if req.header("X-Terminate") == "true" {
+            return terminate()
+          }
+        errorPolicy: deny

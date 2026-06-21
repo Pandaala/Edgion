@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-response-inject
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "response-inject"
+        source: |
+          resp.set_header("Access-Control-Allow-Origin", "*")
+          resp.set_header("X-Powered-By", "Edgion-DSL")
+          resp.append_header("Vary", "Origin")
+        errorPolicy: deny

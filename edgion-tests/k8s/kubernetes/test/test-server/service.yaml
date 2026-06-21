@@ -48,6 +48,11 @@ spec:
     port: 30040
     targetPort: 30040
     protocol: TCP
+  # Fake ext_proc gRPC endpoint
+  - name: ext-proc
+    port: 30041
+    targetPort: 30041
+    protocol: TCP
   # TCP port
   - name: tcp
     port: 30010

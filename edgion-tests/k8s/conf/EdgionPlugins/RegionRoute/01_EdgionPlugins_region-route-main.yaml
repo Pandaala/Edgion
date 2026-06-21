@@ -1,0 +1,50 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: region-route-main
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: RegionRoute
+    config:
+      regions:
+      - name: virginia
+        hashRange:
+        - 0
+        - 599
+        backendEndpoint: 127.0.0.1:30001
+        tls: false
+      - name: ohio
+        hashRange:
+        - 600
+        - 999
+        backendEndpoint: 127.0.0.1:30002
+        tls: false
+      keyGet:
+      - type: header
+        name: X-Account-Id
+      - type: cookie
+        name: account_id
+      hashKeyGet:
+      - type: cookie
+        name: x_region_hash
+      hashCalc:
+        algorithm: crc32
+        modulo: 1000
+        writeBack:
+        - type: responseHeader
+          name: X-Region-Hash
+      routeRules:
+      - type: RouteByDirectRegion
+        keyFrom:
+        - type: header
+          name: X-Direct-Region
+      - type: RouteByKeyConfMatch
+        matchMap:
+          vip-va: virginia
+          vip-oh: ohio
+      - type: RouteByHashRange
+      routeByKeyConfMatch:
+        matchMap:
+          vip-va: virginia
+          vip-oh: ohio

@@ -323,6 +323,7 @@ impl AllEndpointStatus {
             Err(_) => return PluginRunningResult::ErrTerminateRequest,
         };
         let _ = resp.insert_header("Content-Type", "application/json");
+        let _ = resp.insert_header("Content-Length", body.len().to_string());
         let _ = resp.insert_header("Connection", "close");
         let _ = resp.insert_header("Cache-Control", "no-store");
         for (name, value) in extra_headers {

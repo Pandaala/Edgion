@@ -1,0 +1,37 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-ratelimit-shared
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: grpc-ratelimit-gateway
+    namespace: edgion-test
+    sectionName: grpc
+  hostnames:
+  - grpc-ratelimit.example.com
+  rules:
+  - matches:
+    - method:
+        type: Exact
+        service: test.TestService
+        method: SayHello
+      headers:
+      - name: x-variant
+        value: a
+    - method:
+        type: Exact
+        service: test.TestService
+        method: SayHello
+      headers:
+      - name: x-variant
+        value: b
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: grpc-rate-limit-shared
+    backendRefs:
+    - name: test-grpc
+      port: 30021

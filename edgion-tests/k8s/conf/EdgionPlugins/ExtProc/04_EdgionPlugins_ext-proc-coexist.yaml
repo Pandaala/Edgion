@@ -1,0 +1,24 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-coexist
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - enable: true
+    type: ForwardAuth
+    config:
+      uri: http://edgion-test-server.edgion-test.svc.cluster.local:30040/verify
+      requestMethod: GET
+      timeoutMs: 5000
+      upstreamHeaders:
+      - X-User-ID
+  - enable: true
+    type: ExtProc
+    config:
+      grpcService:
+        target: edgion-test-server.edgion-test.svc.cluster.local:30041
+        timeoutMs: 2000
+      processingMode:
+        requestHeaderMode: SEND
+      failureModeAllow: false

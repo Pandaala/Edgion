@@ -12,6 +12,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::ctx::NormalizedHostname;
 use crate::observe::AccessLogger;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 
@@ -77,6 +78,17 @@ impl EdgionHttpRedirectProxy {
             access_logger,
             edgion_gateway_config,
         }
+    }
+
+    /// Whether the request authority is absent for redirect purposes.
+    ///
+    /// Returns `true` when the raw host is missing, whitespace-only, or collapses
+    /// to empty after port stripping (e.g. a bare `:8080`). Uses the same
+    /// normalization as the main proxy path so the redirect listener and the
+    /// proxy agree on what counts as a valid Host (RFC 9112 §3.2 / Envoy parity).
+    #[inline]
+    fn host_is_missing(raw_host: &str) -> bool {
+        NormalizedHostname::new(raw_host).is_empty()
     }
 
     /// Build the HTTPS redirect URL from host and URI components
@@ -150,12 +162,28 @@ impl ProxyHttp for EdgionHttpRedirectProxy {
             return Ok(true);
         }
 
-        ctx.host = req_header
-            .headers
-            .get("host")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("localhost")
-            .to_string();
+        // RFC 9112 §3.2 — an HTTP/1.1 request whose Host is missing, invalid, or
+        // collapses to empty (e.g. whitespace-only or a bare `:port`) must be
+        // rejected with 400, not silently rewritten. This mirrors the main proxy
+        // `HostMissing` guard in `pg_request_filter::build_request_metadata`, and
+        // matches Envoy, which 400s requests lacking a valid authority. We must
+        // NOT fall back to `localhost`, which would emit an attacker-unrelated
+        // authority into the 301 `Location:`.
+        let raw_host = req_header
+            .uri
+            .host()
+            .or_else(|| req_header.headers.get("host").and_then(|h| h.to_str().ok()))
+            .unwrap_or("");
+        if Self::host_is_missing(raw_host) {
+            ctx.status = 400;
+            let mut resp = ResponseHeader::build(StatusCode::BAD_REQUEST, Some(2))?;
+            resp.insert_header("Content-Length", "0")?;
+            resp.insert_header("Connection", "close")?;
+            session.write_response_header(Box::new(resp), true).await?;
+            return Ok(true);
+        }
+
+        ctx.host = raw_host.to_string();
         ctx.path = req_header
             .uri
             .path_and_query()
@@ -307,6 +335,24 @@ mod tests {
             redirect.build_redirect_url_from_parts("example.com", "/path/to/%C3%A9%C3%B1"),
             "https://example.com/path/to/%C3%A9%C3%B1"
         );
+    }
+
+    #[test]
+    fn test_host_is_missing() {
+        // Missing / empty / whitespace-only Host must be treated as absent (→ 400).
+        assert!(EdgionHttpRedirectProxy::host_is_missing(""));
+        assert!(EdgionHttpRedirectProxy::host_is_missing("   "));
+        assert!(EdgionHttpRedirectProxy::host_is_missing("\t"));
+        // A bare `:port` with no authority collapses to empty after port strip.
+        assert!(EdgionHttpRedirectProxy::host_is_missing(":8080"));
+
+        // Valid authorities are accepted (→ 301).
+        assert!(!EdgionHttpRedirectProxy::host_is_missing("example.com"));
+        assert!(!EdgionHttpRedirectProxy::host_is_missing("example.com:80"));
+        assert!(!EdgionHttpRedirectProxy::host_is_missing("192.168.1.1"));
+        // IPv6 literal (bracketed) with and without port.
+        assert!(!EdgionHttpRedirectProxy::host_is_missing("[::1]"));
+        assert!(!EdgionHttpRedirectProxy::host_is_missing("[2001:db8::1]:8443"));
     }
 
     #[test]

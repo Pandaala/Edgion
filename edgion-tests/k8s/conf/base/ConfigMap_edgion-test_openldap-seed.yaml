@@ -22,3 +22,17 @@ data:
     sn: User
     uid: bob
     userPassword: password456
+
+    dn: uid=John Smith,ou=people,dc=example,dc=org
+    objectClass: inetOrgPerson
+    cn: John Smith
+    sn: Smith
+    uid: John Smith
+    userPassword: spaceuser-pw
+
+    dn: uid=alice\+work,ou=people,dc=example,dc=org
+    objectClass: inetOrgPerson
+    cn: Alice Work
+    sn: Work
+    uid: alice+work
+    userPassword: plususer-pw

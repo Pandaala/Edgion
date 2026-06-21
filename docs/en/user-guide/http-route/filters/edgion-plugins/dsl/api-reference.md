@@ -323,7 +323,7 @@ if not req.has_header("X-Request-Id") {
 
 Returns the protocol type identifier of the current request. Possible values are:
 - `"http"` — Ordinary HTTP/1.1 or HTTP/2 request
-- `"grpc"` — gRPC request (`Content-Type: application/grpc`)
+- `"grpc"` — gRPC request (`Content-Type: application/grpc`, matched case-insensitively)
 - `"grpc-web"` — gRPC-Web request
 - `"websocket"` — WebSocket upgrade request
 

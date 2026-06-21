@@ -31,6 +31,29 @@ const HOST_BASIC: &str = "mirror-basic.example.com";
 const HOST_SAMPLED: &str = "mirror-sampled.example.com";
 const HOST_TIMEOUT: &str = "mirror-timeout.example.com";
 
+fn mirror_backend_hosts(ctx: &TestContext) -> Vec<String> {
+    let k8s_mode = std::env::var("EDGION_TEST_K8S_MODE")
+        .map(|v| matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+        .unwrap_or(false);
+    if k8s_mode {
+        if let Ok(ips) = std::env::var("EDGION_TEST_BACKEND_ENDPOINT_IPS") {
+            let hosts: Vec<String> = ips
+                .split(',')
+                .map(str::trim)
+                .filter(|host| !host.is_empty())
+                .map(ToOwned::to_owned)
+                .collect();
+            if !hosts.is_empty() {
+                return hosts;
+            }
+        }
+        vec![std::env::var("EDGION_TEST_MIRROR_BACKEND_HOST")
+            .unwrap_or_else(|_| "edgion-test-server.edgion-test.svc.cluster.local".to_string())]
+    } else {
+        vec![ctx.target_host.clone()]
+    }
+}
+
 /// Generate a unique trace ID for test correlation.
 fn gen_trace_id(label: &str) -> String {
     format!("mirror-test-{}-{}", label, uuid::Uuid::new_v4())
@@ -45,27 +68,30 @@ async fn poll_mirror_received(
     retries: u32,
     interval_ms: u64,
 ) -> Result<Vec<Value>, String> {
-    let direct_url = format!("http://{}:30001/mirror/query/{}", ctx.target_host, trace_id);
     let client = &ctx.http_client;
+    let hosts = mirror_backend_hosts(ctx);
 
     for attempt in 0..=retries {
-        match client.get(&direct_url).send().await {
-            Ok(resp) => {
-                if let Ok(body) = resp.json::<Value>().await {
-                    let found = body["found"].as_bool().unwrap_or(false);
-                    if found {
-                        let captures = body["captures"].as_array().cloned().unwrap_or_default();
-                        // Wait until the mirror capture (x-mirror: "true") arrives,
-                        // not just the main request forwarded by the gateway
-                        if find_mirror_capture(&captures).is_some() {
-                            return Ok(captures);
+        for host in &hosts {
+            let direct_url = format!("http://{}:30001/mirror/query/{}", host, trace_id);
+            match client.get(&direct_url).send().await {
+                Ok(resp) => {
+                    if let Ok(body) = resp.json::<Value>().await {
+                        let found = body["found"].as_bool().unwrap_or(false);
+                        if found {
+                            let captures = body["captures"].as_array().cloned().unwrap_or_default();
+                            // Wait until the mirror capture (x-mirror: "true") arrives,
+                            // not just the main request forwarded by the gateway.
+                            if find_mirror_capture(&captures).is_some() {
+                                return Ok(captures);
+                            }
                         }
                     }
                 }
-            }
-            Err(e) => {
-                if attempt == retries {
-                    return Err(format!("query request failed: {}", e));
+                Err(e) => {
+                    if attempt == retries {
+                        return Err(format!("query request failed for {}: {}", host, e));
+                    }
                 }
             }
         }
@@ -81,8 +107,10 @@ async fn poll_mirror_received(
 
 /// Reset the mirror capture store between tests.
 async fn reset_mirror_store(ctx: &TestContext) {
-    let url = format!("http://{}:30001/mirror/reset", ctx.target_host);
-    let _ = ctx.http_client.get(&url).send().await;
+    for host in mirror_backend_hosts(ctx) {
+        let url = format!("http://{}:30001/mirror/reset", host);
+        let _ = ctx.http_client.get(&url).send().await;
+    }
 }
 
 /// Find the mirror capture (the one with x-mirror: "true" header).
@@ -503,16 +531,21 @@ impl RequestMirrorTestSuite {
                     // Wait for mirror async tasks to complete
                     sleep(Duration::from_millis(800)).await;
 
-                    // Count how many were mirrored (look for captures with x-mirror: "true")
+                    // Count how many were mirrored (look for captures with x-mirror: "true").
+                    // In K8s mode, capture state is process-local to each test-server replica.
+                    let mirror_hosts = mirror_backend_hosts(&ctx);
                     let mut received = 0u32;
                     for tid in &trace_ids {
-                        let direct = format!("http://{}:30001/mirror/query/{}", ctx.target_host, tid);
-                        if let Ok(resp) = ctx.http_client.get(&direct).send().await {
-                            if let Ok(body) = resp.json::<Value>().await {
-                                if body["found"].as_bool().unwrap_or(false) {
-                                    if let Some(caps) = body["captures"].as_array() {
-                                        if find_mirror_capture(caps).is_some() {
-                                            received += 1;
+                        for host in &mirror_hosts {
+                            let direct = format!("http://{}:30001/mirror/query/{}", host, tid);
+                            if let Ok(resp) = ctx.http_client.get(&direct).send().await {
+                                if let Ok(body) = resp.json::<Value>().await {
+                                    if body["found"].as_bool().unwrap_or(false) {
+                                        if let Some(caps) = body["captures"].as_array() {
+                                            if find_mirror_capture(caps).is_some() {
+                                                received += 1;
+                                                break;
+                                            }
                                         }
                                     }
                                 }

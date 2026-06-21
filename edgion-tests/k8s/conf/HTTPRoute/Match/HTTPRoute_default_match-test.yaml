@@ -3,7 +3,6 @@ kind: HTTPRoute
 metadata:
   name: match-test
   namespace: edgion-default
-  resourceVersion: "1766852000000000000"
 spec:
   parentRefs:
     - name: http-match-gateway
@@ -16,6 +15,24 @@ spec:
         - path:
             type: PathPrefix
             value: /api/v1
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # Rule 9: Percent-encoded query parameter, value is the decoded form.
+    # Verifies that route matching and PluginSession::get_query_param both
+    # see the decoded value (cached_query is shared between them).
+    # The value `hello world` contains a space, so the request side must send
+    # `name=hello%20world` and the matcher must url-decode before comparing.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /percent-query
+          queryParams:
+            - type: Exact
+              name: name
+              value: "hello world"
       backendRefs:
         - name: test-http
           namespace: edgion-test

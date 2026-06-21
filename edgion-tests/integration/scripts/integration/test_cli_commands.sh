@@ -495,8 +495,6 @@ run_delete_tests() {
 run_gen_certs_tests() {
     log_section "5. gen-certs"
 
-    local cert_dir="${TMP_DIR}/test-certs"
-
     # Case 5.1: gen-certs --output file --output-dir → exit 0
     assert_exit0 \
         "gen-certs: generates certs in file mode" \

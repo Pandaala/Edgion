@@ -11,6 +11,20 @@ const TEST_SERVICE: &str = "hc-transition";
 const HC_ANNOTATION_KEY: &str = "edgion.io/health-check";
 
 impl HealthCheckTransitionTestSuite {
+    fn healthy_hc_annotation() -> String {
+        r#"active:
+  type: http
+  path: /health
+  interval: 1s
+  timeout: 1s
+  healthyThreshold: 1
+  unhealthyThreshold: 1
+  expectedStatuses:
+    - 200
+"#
+        .to_string()
+    }
+
     fn unhealthy_hc_annotation() -> String {
         r#"active:
   type: http
@@ -63,9 +77,11 @@ impl HealthCheckTransitionTestSuite {
             TEST_SERVICE
         );
 
-        let current: Value = ctx
-            .http_client
-            .get(&admin_url)
+        let mut get_req = ctx.http_client.get(&admin_url);
+        if let Some(ref token) = ctx.admin_token {
+            get_req = get_req.header("Authorization", format!("Bearer {}", token));
+        }
+        let current: Value = get_req
             .send()
             .await
             .map_err(|e| format!("Failed to fetch Service: {}", e))?
@@ -84,10 +100,17 @@ impl HealthCheckTransitionTestSuite {
         }
         updated["metadata"]["annotations"][HC_ANNOTATION_KEY] = Value::String(annotation_value.to_string());
 
-        ctx.http_client
+        let mut put_req = ctx
+            .http_client
             .put(&admin_url)
             .header("Content-Type", "application/json")
-            .body(serde_json::to_string(&updated).map_err(|e| format!("Failed to encode updated Service JSON: {}", e))?)
+            .body(
+                serde_json::to_string(&updated).map_err(|e| format!("Failed to encode updated Service JSON: {}", e))?,
+            );
+        if let Some(ref token) = ctx.admin_token {
+            put_req = put_req.header("Authorization", format!("Bearer {}", token));
+        }
+        put_req
             .send()
             .await
             .map_err(|e| format!("Failed to update Service: {}", e))?
@@ -105,12 +128,20 @@ impl HealthCheckTransitionTestSuite {
                 Box::pin(async move {
                     let start = Instant::now();
 
+                    // Previous runs may have intentionally switched this Service
+                    // to an unhealthy HC path. Reset first so skip-prepare reruns
+                    // start from the same state as a fresh prepare.
+                    if let Err(e) = Self::update_service_health_check(&ctx, &Self::healthy_hc_annotation()).await {
+                        return TestResult::failed(start.elapsed(), e);
+                    }
+
                     // Step 1: verify initial healthy state
-                    let initial = match Self::wait_for_status(&ctx, 200, 10, 500).await {
+                    let initial = match Self::wait_for_status(&ctx, 200, 24, 500).await {
                         Ok(statuses) => statuses,
                         Err(e) => return TestResult::failed(start.elapsed(), e),
                     };
                     if !initial.contains(&200) {
+                        let _ = Self::update_service_health_check(&ctx, &Self::healthy_hc_annotation()).await;
                         return TestResult::failed(
                             start.elapsed(),
                             format!("Expected initial 200 before transition, observed={:?}", initial),
@@ -125,9 +156,13 @@ impl HealthCheckTransitionTestSuite {
                     // Step 3: wait until backend is marked unhealthy and selection returns 503
                     let transitioned = match Self::wait_for_status(&ctx, 503, 24, 500).await {
                         Ok(statuses) => statuses,
-                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                        Err(e) => {
+                            let _ = Self::update_service_health_check(&ctx, &Self::healthy_hc_annotation()).await;
+                            return TestResult::failed(start.elapsed(), e);
+                        }
                     };
                     if transitioned.last() == Some(&503) || transitioned.contains(&503) {
+                        let _ = Self::update_service_health_check(&ctx, &Self::healthy_hc_annotation()).await;
                         return TestResult::passed_with_message(
                             start.elapsed(),
                             format!(
@@ -137,6 +172,7 @@ impl HealthCheckTransitionTestSuite {
                         );
                     }
 
+                    let _ = Self::update_service_health_check(&ctx, &Self::healthy_hc_annotation()).await;
                     TestResult::failed(
                         start.elapsed(),
                         format!("Expected transition to 503, observed after update={:?}", transitioned),

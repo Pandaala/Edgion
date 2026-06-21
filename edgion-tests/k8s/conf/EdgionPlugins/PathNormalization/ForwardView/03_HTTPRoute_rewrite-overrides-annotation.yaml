@@ -1,0 +1,28 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: forward-view-rewrite-vs-annotation
+  namespace: edgion-default
+  annotations:
+    edgion.io/forward-raw-path: 'true'
+spec:
+  hostnames:
+  - path-fwd-rewrite.example.com
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  rules:
+  - filters:
+    - type: URLRewrite
+      urlRewrite:
+        path:
+          type: ReplacePrefixMatch
+          replacePrefixMatch: /rewritten
+    matches:
+    - path:
+        type: PathPrefix
+        value: /api
+    backendRefs:
+    - name: test-http
+      namespace: edgion-test
+      port: 30001

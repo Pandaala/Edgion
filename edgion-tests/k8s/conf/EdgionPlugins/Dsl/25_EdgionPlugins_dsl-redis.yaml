@@ -1,0 +1,134 @@
+# DSL Plugin - redis.* builtins integration test
+#
+# Scenarios covered:
+#   1. redis.set + redis.get round-trip: set a value, read it back, expose via response header.
+#   2. redis.incr counter: increment a key; if value > threshold deny with 429.
+#   3. redis.hset + redis.hgetall: write a hash field, read all fields, expose one via header.
+#   4. link declared in linkSysRefs but references a non-existent LinkSys resource: redis.*
+#      returns ok=false; script checks ok and passes the request through (fail-open).
+#
+# Depends on: edgion-tests/integration/conf/LinkSys/Redis/ (redis-test LinkSys + Secret already loaded)
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-redis-roundtrip
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "redis-roundtrip"
+        source: |
+          let key = "edgion:dsl:test:roundtrip"
+          let set_r = redis.set("redis-test", key, "hello-from-dsl", 60000)
+          if !set_r["ok"] {
+            resp.set_header("X-Redis-Status", "set-fail")
+            return next()
+          }
+          let get_r = redis.get("redis-test", key)
+          if !get_r["ok"] {
+            resp.set_header("X-Redis-Status", "get-fail")
+            return next()
+          }
+          if get_r["value"] == "hello-from-dsl" {
+            resp.set_header("X-Redis-Status", "ok")
+            resp.set_header("X-Redis-Value", get_r["value"])
+          } else {
+            resp.set_header("X-Redis-Status", "mismatch")
+          }
+          return next()
+        linkSysRefs:
+          - namespace: edgion-default
+            name: redis-test
+        errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-redis-incr
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "redis-incr-demo"
+        source: |
+          let key = "edgion:dsl:test:incr-counter"
+          let _ = redis.del("redis-test", key)
+          let r = redis.incr("redis-test", key)
+          if !r["ok"] {
+            resp.set_header("X-Redis-Status", "error")
+            return next()
+          }
+          resp.set_header("X-Redis-Counter", to_str(r["value"]))
+          if r["value"] > 100 {
+            return deny(429, "rate limit exceeded")
+          }
+          resp.set_header("X-Redis-Status", "ok")
+          return next()
+        linkSysRefs:
+          - namespace: edgion-default
+            name: redis-test
+        errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-redis-hash
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "redis-hash-demo"
+        source: |
+          let key = "edgion:dsl:test:hash"
+          let hset_r = redis.hset("redis-test", key, "field1", "value1")
+          if !hset_r["ok"] {
+            resp.set_header("X-Redis-Status", "hset-fail")
+            return next()
+          }
+          let hgetall_r = redis.hgetall("redis-test", key)
+          if !hgetall_r["ok"] {
+            resp.set_header("X-Redis-Status", "hgetall-fail")
+            return next()
+          }
+          let val = hgetall_r["value"]["field1"]
+          if val == "value1" {
+            resp.set_header("X-Redis-Status", "ok")
+            resp.set_header("X-Redis-Hash-Field1", val)
+          } else {
+            resp.set_header("X-Redis-Status", "mismatch")
+          }
+          return next()
+        linkSysRefs:
+          - namespace: edgion-default
+            name: redis-test
+        errorPolicy: deny
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-redis-missing-ref
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "redis-missing-ref"
+        source: |
+          let r = redis.get("not-ready-redis", "edgion:dsl:test:missing")
+          if r["ok"] && r["value"] != nil {
+            resp.set_header("X-Redis-Status", "found")
+          } else {
+            resp.set_header("X-Redis-Status", "not-found-or-missing-client")
+          }
+          return next()
+        linkSysRefs:
+          - namespace: edgion-default
+            name: not-ready-redis
+        errorPolicy: deny
