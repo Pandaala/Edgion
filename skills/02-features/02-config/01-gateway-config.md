@@ -220,16 +220,27 @@ Controls the redaction behavior of fields marked as sensitive in access log, ssl
 
 ## `integration_testing_mode`
 
-This is a CLI flag, not a YAML config section:
+This is a CLI flag, not a YAML config section. It is **production-unsafe** and is
+guarded by a second, explicit gate: the flag is refused at startup (fail-close)
+unless the `EDGION_ALLOW_INTEGRATION_TESTING_MODE` environment variable is also
+set to a truthy value (`1` / `true` / `yes` / `on`). A single accidental CLI flag
+in a production rollout therefore aborts startup loudly instead of silently
+widening the surface.
 
 ```bash
-./target/debug/edgion-gateway --config-file config/edgion-gateway.yaml --integration-testing-mode
+EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
+  ./target/debug/edgion-gateway --config-file config/edgion-gateway.yaml --integration-testing-mode
 ```
 
 When enabled, it additionally activates:
 - Access Log Store
-- Test-only metrics tags
+- Test-only metrics tags (per-request `test_data` labels — unbounded cardinality)
 - `/api/v1/testing/*` debug endpoints
+- Loopback-upstream allowance for endpoint-derived backends
+
+While active it also raises `edgion_system_error_state{component="gateway_runtime",
+reason="integration_testing_mode"} = 1`, so monitoring catches accidental
+production enablement even when the startup WARN goes unread.
 
 ## Most Common Gateway Configuration Changes in This Project
 

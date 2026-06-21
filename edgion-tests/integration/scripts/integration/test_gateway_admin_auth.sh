@@ -250,6 +250,7 @@ EOF
 
     echo "=== Starting gateway: ${label} ==="
     RUST_LOG="info,pingora_proxy=error,pingora_core=error" \
+    EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
     "$GATEWAY_BIN" \
         -c "$GW_TMPDIR/gateway.yaml" \
         --work-dir "$GW_TMPDIR" \

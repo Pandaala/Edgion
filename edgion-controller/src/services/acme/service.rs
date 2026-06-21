@@ -710,6 +710,14 @@ async fn execute_http01_flow(
 // DNS-01 Challenge Flow
 // ============================================================================
 
+/// Controller-level backstop timeout for a single DNS provider operation
+/// (`create_txt_record` / `remove_txt_record`). Each operation may issue
+/// several sequential HTTP calls (e.g. list-zone → create), so this is larger
+/// than the per-request `reqwest` timeout configured in `dns_provider`. It
+/// guarantees the ACME flow task fails and clears the in-flight `processing`
+/// key even if a provider client somehow stalls past its own request timeout.
+const DNS_OP_TIMEOUT: Duration = Duration::from_secs(120);
+
 async fn execute_dns01_flow(
     client: &Client,
     acme_client: &AcmeClient,
@@ -744,13 +752,26 @@ async fn execute_dns01_flow(
         .await
         .context("Failed to prepare DNS-01 ACME order")?;
 
-    // Phase 2: Create DNS TXT records for each challenge
+    // Phase 2: Create DNS TXT records for each challenge.
+    // Each provider call is bounded by a controller-level timeout so a hung DNS
+    // API cannot keep this ACME flow task (and the in-flight `processing` key)
+    // alive indefinitely; on timeout we return an error and the caller routes
+    // into the existing retry/backoff path.
     let mut created_records: Vec<(String, String)> = Vec::new();
     for challenge in &pending {
-        dns_provider
-            .create_txt_record(&challenge.domain, &challenge.digest)
-            .await
-            .context(format!("Failed to create DNS TXT record for {}", challenge.domain))?;
+        tokio::time::timeout(
+            DNS_OP_TIMEOUT,
+            dns_provider.create_txt_record(&challenge.domain, &challenge.digest),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Timed out after {}s creating DNS TXT record for {}",
+                DNS_OP_TIMEOUT.as_secs(),
+                challenge.domain
+            )
+        })?
+        .context(format!("Failed to create DNS TXT record for {}", challenge.domain))?;
         created_records.push((challenge.domain.clone(), challenge.digest.clone()));
     }
 
@@ -784,15 +805,29 @@ async fn execute_dns01_flow(
         .complete_dns01_order(order_ctx, &acme.spec.domains, &acme.spec.key_type)
         .await;
 
-    // Phase 6: Clean up DNS records (even if order failed)
+    // Phase 6: Clean up DNS records (even if order failed). Cleanup is
+    // best-effort and non-fatal, but still bounded by the same controller-level
+    // timeout so a hung removal call cannot keep this task alive after the order
+    // has otherwise finished.
     for (domain, value) in &created_records {
-        if let Err(e) = dns_provider.remove_txt_record(domain, value).await {
-            tracing::warn!(
-                component = "acme_service",
-                domain = %domain,
-                error = %e,
-                "Failed to remove DNS TXT record (non-fatal)"
-            );
+        match tokio::time::timeout(DNS_OP_TIMEOUT, dns_provider.remove_txt_record(domain, value)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    component = "acme_service",
+                    domain = %domain,
+                    error = %e,
+                    "Failed to remove DNS TXT record (non-fatal)"
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    component = "acme_service",
+                    domain = %domain,
+                    timeout_secs = DNS_OP_TIMEOUT.as_secs(),
+                    "Timed out removing DNS TXT record (non-fatal)"
+                );
+            }
         }
     }
 

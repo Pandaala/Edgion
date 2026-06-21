@@ -463,6 +463,7 @@ EOF
     EDGION_ACCESS_LOG="${log_dir}/edgion_access.log" \
     RUST_LOG="${gw_rust_log}" \
     EDGION_TEST_ACCESS_LOG_PATH="${log_dir}/edgion_access.log" \
+    EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
     "${PROJECT_ROOT}/target/debug/edgion-gateway" \
         -c "$gateway_yaml" \
         --work-dir "${WORK_DIR}" \

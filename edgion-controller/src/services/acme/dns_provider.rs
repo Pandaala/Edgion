@@ -3,8 +3,89 @@
 //! Provides a trait for DNS-01 challenge validation by creating/removing
 //! TXT records at `_acme-challenge.<domain>`.
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use futures::StreamExt;
+
+/// Connect timeout for a DNS provider API request (TCP + TLS handshake).
+const DNS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Total per-request timeout (connect + TLS + headers + body) for a single DNS
+/// provider API call. Bounds how long one HTTP call to a DNS API can hang so a
+/// slow or misbehaving endpoint cannot keep an ACME flow task alive forever.
+const DNS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Upper bound on a DNS provider response body we are willing to buffer.
+/// Provider responses are small JSON/text payloads; anything larger is treated
+/// as a misbehaving endpoint and rejected before fully buffering it.
+const MAX_DNS_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// Build a reqwest client for DNS provider API calls with explicit connect and
+/// total request timeouts. Falls back to a default client if the builder fails;
+/// with the static timeout config above that path is practically unreachable.
+fn build_dns_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .connect_timeout(DNS_CONNECT_TIMEOUT)
+        .timeout(DNS_REQUEST_TIMEOUT)
+        .build()
+        .unwrap_or_else(|e| {
+            tracing::warn!(
+                component = "acme_dns_provider",
+                error = %e,
+                "Failed to build DNS HTTP client with timeouts; falling back to default client"
+            );
+            reqwest::Client::new()
+        })
+}
+
+/// Read a response body with a hard byte cap, mirroring the gateway's
+/// `fetch_json_limited`: a `Content-Length` pre-check rejects well-behaved
+/// oversized responses before any body is read, and streaming accumulation
+/// cuts off a chunked/dishonest server the moment the running total would
+/// exceed the cap (peak memory is at most `MAX_DNS_RESPONSE_BYTES` + one chunk).
+async fn read_body_limited(resp: reqwest::Response, ctx: &str) -> Result<Vec<u8>> {
+    if let Some(cl) = resp.content_length() {
+        if cl > MAX_DNS_RESPONSE_BYTES as u64 {
+            anyhow::bail!(
+                "{} response too large: Content-Length {} > limit {} bytes",
+                ctx,
+                cl,
+                MAX_DNS_RESPONSE_BYTES
+            );
+        }
+    }
+
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::with_capacity(8192.min(MAX_DNS_RESPONSE_BYTES));
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.with_context(|| format!("{} body read error", ctx))?;
+        if buf.len().saturating_add(chunk.len()) > MAX_DNS_RESPONSE_BYTES {
+            anyhow::bail!("{} response body exceeds limit {} bytes", ctx, MAX_DNS_RESPONSE_BYTES);
+        }
+        buf.extend_from_slice(&chunk);
+    }
+
+    Ok(buf)
+}
+
+/// Read and parse a response body as JSON, refusing bodies larger than
+/// `MAX_DNS_RESPONSE_BYTES` (see [`read_body_limited`]).
+async fn read_json_limited(resp: reqwest::Response, ctx: &str) -> Result<serde_json::Value> {
+    let bytes = read_body_limited(resp, ctx).await?;
+    serde_json::from_slice(&bytes).with_context(|| format!("Failed to parse {} response as JSON", ctx))
+}
+
+/// Read a response body as (lossy) UTF-8 text capped at `MAX_DNS_RESPONSE_BYTES`.
+/// Used for error bodies so a misbehaving endpoint cannot force unbounded
+/// buffering when we format the resulting diagnostic message.
+async fn read_text_limited(resp: reqwest::Response, ctx: &str) -> String {
+    match read_body_limited(resp, ctx).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        Err(e) => format!("<failed to read {} body: {}>", ctx, e),
+    }
+}
 
 /// DNS-01 challenge provider trait
 ///
@@ -96,7 +177,7 @@ impl CloudflareDnsProvider {
     pub fn new(api_token: String) -> Self {
         Self {
             api_token,
-            client: reqwest::Client::new(),
+            client: build_dns_http_client(),
         }
     }
 
@@ -113,7 +194,7 @@ impl CloudflareDnsProvider {
             .send()
             .await?;
 
-        let body: serde_json::Value = resp.json().await?;
+        let body = read_json_limited(resp, "Cloudflare list-zones").await?;
 
         if !body["success"].as_bool().unwrap_or(false) {
             return Err(anyhow::anyhow!("Cloudflare API error: {}", body["errors"]));
@@ -140,7 +221,7 @@ impl CloudflareDnsProvider {
             .send()
             .await?;
 
-        let body: serde_json::Value = resp.json().await?;
+        let body = read_json_limited(resp, "Cloudflare list-records").await?;
 
         if !body["success"].as_bool().unwrap_or(false) {
             return Err(anyhow::anyhow!("Cloudflare API error: {}", body["errors"]));
@@ -187,7 +268,7 @@ impl DnsProvider for CloudflareDnsProvider {
             .send()
             .await?;
 
-        let body: serde_json::Value = resp.json().await?;
+        let body = read_json_limited(resp, "Cloudflare create-record").await?;
 
         if !body["success"].as_bool().unwrap_or(false) {
             return Err(anyhow::anyhow!("Failed to create TXT record: {}", body["errors"]));
@@ -224,7 +305,7 @@ impl DnsProvider for CloudflareDnsProvider {
                 .send()
                 .await?;
 
-            let body: serde_json::Value = resp.json().await?;
+            let body = read_json_limited(resp, "Cloudflare delete-record").await?;
 
             if !body["success"].as_bool().unwrap_or(false) {
                 tracing::warn!(
@@ -259,7 +340,7 @@ impl AlidnsDnsProvider {
         Self {
             access_key_id,
             access_key_secret,
-            client: reqwest::Client::new(),
+            client: build_dns_http_client(),
         }
     }
 
@@ -346,7 +427,7 @@ impl DnsProvider for AlidnsDnsProvider {
             .send()
             .await?;
 
-        let body: serde_json::Value = resp.json().await?;
+        let body = read_json_limited(resp, "AliDNS add-record").await?;
 
         if body.get("Code").is_some() {
             return Err(anyhow::anyhow!(
@@ -387,7 +468,7 @@ impl DnsProvider for AlidnsDnsProvider {
             .send()
             .await?;
 
-        let body: serde_json::Value = resp.json().await?;
+        let body = read_json_limited(resp, "AliDNS describe-records").await?;
 
         if let Some(records) = body["DomainRecords"]["Record"].as_array() {
             for record in records {
@@ -478,7 +559,7 @@ impl PebbleChalltestDnsProvider {
     pub fn new(api_url: String) -> Self {
         Self {
             api_url,
-            client: reqwest::Client::new(),
+            client: build_dns_http_client(),
         }
     }
 }
@@ -506,7 +587,7 @@ impl DnsProvider for PebbleChalltestDnsProvider {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_text_limited(resp, "challtestsrv /set-txt").await;
             return Err(anyhow::anyhow!("challtestsrv /set-txt failed: {} - {}", status, body));
         }
 
@@ -533,7 +614,7 @@ impl DnsProvider for PebbleChalltestDnsProvider {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+            let body = read_text_limited(resp, "challtestsrv /clear-txt").await;
             return Err(anyhow::anyhow!("challtestsrv /clear-txt failed: {} - {}", status, body));
         }
 

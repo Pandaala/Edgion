@@ -193,6 +193,23 @@ impl std::fmt::Debug for GatewayConfig {
     }
 }
 
+/// Environment variable that must be explicitly set (to a truthy value) for the
+/// `--integration-testing-mode` flag to take effect. This is a deliberate second
+/// guard: the mode activates production-unsafe behavior (test-only admin routes,
+/// in-memory access-log storage, per-request metric labels, loopback upstreams),
+/// so a single CLI flag must not be enough to enable it in a production rollout.
+pub const ALLOW_INTEGRATION_TESTING_MODE_ENV: &str = "EDGION_ALLOW_INTEGRATION_TESTING_MODE";
+
+/// Whether the integration-testing-mode env override is set to a truthy value.
+/// Accepts `1`, `true`, `yes`, `on` (case-insensitive, trimmed). Anything else —
+/// including unset/empty — is treated as not enabled, so the gateway fails closed.
+pub fn integration_testing_mode_env_enabled(env_value: Option<&str>) -> bool {
+    match env_value.map(|v| v.trim().to_ascii_lowercase()) {
+        Some(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
+        None => false,
+    }
+}
+
 /// Resolve the gateway admin token from its sources, highest precedence first:
 /// the `EDGION_GATEWAY_ADMIN_TOKEN` env var, then the config field. Values are
 /// trimmed; empty/whitespace-only is treated as absent (so a present-but-empty
@@ -867,6 +884,30 @@ access_log_sensitive:
         // (120xx). Changing this would silently break the port-unification plan.
         let cfg = MetricsConfig::default();
         assert_eq!(cfg.listen, "0.0.0.0:12090");
+    }
+
+    #[test]
+    fn integration_testing_mode_env_accepts_truthy_values() {
+        for v in ["1", "true", "TRUE", "Yes", "on", "  on  "] {
+            assert!(
+                integration_testing_mode_env_enabled(Some(v)),
+                "expected {v:?} to enable integration testing mode"
+            );
+        }
+    }
+
+    #[test]
+    fn integration_testing_mode_env_rejects_falsey_and_unset() {
+        for v in ["0", "false", "no", "off", "", "   ", "enable", "2"] {
+            assert!(
+                !integration_testing_mode_env_enabled(Some(v)),
+                "expected {v:?} NOT to enable integration testing mode"
+            );
+        }
+        assert!(
+            !integration_testing_mode_env_enabled(None),
+            "unset env must not enable integration testing mode"
+        );
     }
 
     #[test]

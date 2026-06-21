@@ -303,6 +303,7 @@ log_info "test_server started (pid $(cat "${PID_DIR}/test_server.pid"))"
 # =============================================================================
 log_section "Test 1: Gateway starts without collector (lazy gRPC connect)"
 
+EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
 "$GATEWAY_BIN" \
     -c "$GATEWAY_CONFIG" \
     --work-dir "$WORK_DIR" \

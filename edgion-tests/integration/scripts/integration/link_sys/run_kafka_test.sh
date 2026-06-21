@@ -333,6 +333,7 @@ echo $! > "${PID_DIR}/test_server.pid"
 # ── Test 1: Gateway starts with kafka output config ──────────────────────────
 log_section "Test 1: Gateway starts with kafka access_log config"
 
+EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
 "$GATEWAY_BIN" \
     -c "$GATEWAY_CONFIG" \
     --work-dir "$WORK_DIR" \

@@ -40,6 +40,8 @@ pub mod components {
     pub const FED_SYNC_CLIENT: &str = "fed_sync_client";
     /// Controller-side Admin HTTP API server.
     pub const ADMIN_API: &str = "admin_api";
+    /// Gateway data-plane runtime (process-wide mode toggles).
+    pub const GATEWAY_RUNTIME: &str = "gateway_runtime";
 }
 
 /// Reason label values — what kind of system-level error condition.
@@ -67,6 +69,12 @@ pub mod reasons {
     /// `no_tls_configured` (which means *refused to start*, fail-close); this one
     /// means a secret-carrying channel is *running* in plaintext.
     pub const PLAINTEXT_DEFAULT: &str = "plaintext_default";
+    /// Gateway integration testing mode is active (`--integration-testing-mode`
+    /// plus the `EDGION_ALLOW_INTEGRATION_TESTING_MODE` env override). Activates
+    /// test-only admin routes, in-memory access-log storage, per-request metric
+    /// labels, and loopback-upstream allowance. Production-unsafe; surfaced here
+    /// so accidental enablement is caught by monitoring, not just a startup log.
+    pub const INTEGRATION_TESTING_MODE: &str = "integration_testing_mode";
 }
 
 /// Mark a system-level error condition as active.
@@ -173,6 +181,25 @@ mod tests {
                     && l.contains("reason=\"insecure_admin_exposure\"")
                     && l.trim_end().ends_with(" 1")),
                 "expected admin_api/insecure_admin_exposure gauge = 1, got:\n{rendered}"
+            );
+        });
+    }
+
+    #[test]
+    fn integration_testing_mode_emits_gauge_with_bounded_labels() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        metrics::with_local_recorder(&recorder, || {
+            mark_system_error(components::GATEWAY_RUNTIME, reasons::INTEGRATION_TESTING_MODE);
+
+            let rendered = handle.render();
+            assert!(
+                rendered.lines().any(|l| l.contains("edgion_system_error_state{")
+                    && l.contains("component=\"gateway_runtime\"")
+                    && l.contains("reason=\"integration_testing_mode\"")
+                    && l.trim_end().ends_with(" 1")),
+                "expected gateway_runtime/integration_testing_mode gauge = 1, got:\n{rendered}"
             );
         });
     }

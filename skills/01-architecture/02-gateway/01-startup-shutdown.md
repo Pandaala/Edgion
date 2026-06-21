@@ -73,7 +73,7 @@ The `GetServerInfo` gRPC call returns:
 - `supported_kinds`: list of resource kinds supported by the Controller, used for selective Watch.
 - `server_id`: Controller instance identifier, used for version consistency checks.
 
-It also initializes integration testing mode and the global testing mode (controlled by the `--integration-testing-mode` CLI flag).
+It also initializes integration testing mode and the global testing mode (controlled by the `--integration-testing-mode` CLI flag). The flag is gated earlier in `run_after_logging`: startup fails closed unless `EDGION_ALLOW_INTEGRATION_TESTING_MODE` is also set to a truthy value, and when the mode is active the gateway raises `edgion_system_error_state{component="gateway_runtime", reason="integration_testing_mode"}`. The Prometheus recorder is installed up-front in the same function so this (and other startup-time degraded-state marks like `skip_tls`) is captured rather than dropped before the metrics server task starts.
 
 ### Step 7: Start watching resources
 

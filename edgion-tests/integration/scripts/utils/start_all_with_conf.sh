@@ -444,6 +444,7 @@ start_gateway() {
     EDGION_ACCESS_LOG="${LOG_DIR}/edgion_access.log" \
     RUST_LOG="${gateway_rust_log}" \
     EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/edgion_access.log" \
+    EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
     "${BIN_DIR}/edgion-gateway" \
         -c "$GATEWAY_CONFIG" \
         --work-dir "${WORK_DIR}" \

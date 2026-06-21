@@ -388,6 +388,7 @@ log_section "Starting Gateway"
 
 EDGION_ACCESS_LOG="${LOG_DIR}/edgion_access.log" \
 EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/edgion_access.log" \
+EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
 "$GATEWAY_BIN" \
     -c "$GATEWAY_CONFIG" \
     --work-dir "$WORK_DIR" \

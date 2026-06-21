@@ -265,13 +265,35 @@ impl EdgionGatewayCli {
     /// `run` so the top-level error can be logged while the log `WorkerGuard` is
     /// still alive (see `run`).
     fn run_after_logging(&self, runtime: tokio::runtime::Runtime, config: EdgionGatewayConfig) -> Result<()> {
+        // Production guard: the `--integration-testing-mode` flag activates
+        // production-unsafe subsystems (test-only admin routes, in-memory
+        // access-log storage, per-request metric labels, loopback upstreams).
+        // It is refused unless the operator ALSO sets the explicit env override,
+        // so a single accidental CLI flag in a production rollout fails closed
+        // (loudly) instead of silently widening the attack/cardinality surface.
+        let integration_testing = self.config.integration_testing_mode;
+        if integration_testing
+            && !config::integration_testing_mode_env_enabled(
+                std::env::var(config::ALLOW_INTEGRATION_TESTING_MODE_ENV)
+                    .ok()
+                    .as_deref(),
+            )
+        {
+            return Err(anyhow!(
+                "--integration-testing-mode is refused: this mode is production-unsafe and \
+                 requires the {env} environment variable to be explicitly set to a truthy value \
+                 (e.g. {env}=1). Set it only in local/integration environments, never in production.",
+                env = config::ALLOW_INTEGRATION_TESTING_MODE_ENV,
+            ));
+        }
+
         // 4b. Install the process-wide Prometheus recorder eagerly, before any
         // startup-time metric is emitted (e.g. the conf_sync client's
         // plaintext_default / skip_tls system-error gauge during config-sync
-        // client construction). Reuses the gateway's MetricsConfig so custom
-        // histogram buckets are preserved; install_global_recorder is
-        // OnceLock-guarded, so the metrics server's later lazy install no-ops.
-        // Mirrors the controller's "1b" eager install.
+        // client construction, or the integration-testing-mode gauge below).
+        // Reuses the gateway's MetricsConfig so custom histogram buckets are
+        // preserved; install_global_recorder is OnceLock-guarded, so the metrics
+        // server's later lazy install no-ops. Mirrors the controller's "1b" eager install.
         if let Err(e) = metrics::api::init_metrics_exporter(&config.metrics) {
             tracing::error!(
                 component = "metrics_api",
@@ -311,10 +333,18 @@ impl EdgionGatewayCli {
             .block_on(sync_client.get_server_info())
             .map_err(|e| anyhow!("Failed to get server info from Controller: {}", e))?;
 
-        // 10. Initialize integration testing mode from CLI flag
+        // 10. Initialize integration testing mode from CLI flag (already gated on
+        // the env override at the top of this function).
         // This flag activates: Access Log Store + Metrics Test Data collection
-        let integration_testing = self.config.integration_testing_mode;
         edgion_common::test_mode::init_integration_testing_mode(integration_testing);
+        if integration_testing {
+            // Register the active production-unsafe mode so monitoring catches
+            // accidental enablement even when startup logs go unread.
+            edgion_common::observe::system_metrics::mark_system_error(
+                edgion_common::observe::system_metrics::components::GATEWAY_RUNTIME,
+                edgion_common::observe::system_metrics::reasons::INTEGRATION_TESTING_MODE,
+            );
+        }
 
         // 11. Initialize global test mode using the same flag
         edgion_common::test_mode::init_global_test_mode(integration_testing);

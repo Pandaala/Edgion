@@ -67,6 +67,10 @@ spec:
         env:
         - name: RUST_LOG
           value: "info"
+        # Required for the --integration-testing-mode flag below to take effect.
+        # This is a TEST deployment; never set this in a production manifest.
+        - name: EDGION_ALLOW_INTEGRATION_TESTING_MODE
+          value: "1"
         # Gateway admin API token injected from the edgion-gateway-admin-credentials
         # Secret. Resolved by the kubelet (secretKeyRef); the gateway never calls
         # the API server.

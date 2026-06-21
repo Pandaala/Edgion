@@ -85,7 +85,7 @@ edgion-gateway [OPTIONS]
 | `--log-dir` | — | `String` | `logs` | System log directory |
 | `--log-level` | — | `String` | `info` | Log level |
 | `--json-format` | — | `bool` | `false` | JSON-formatted log |
-| `--integration-testing-mode` | — | `bool` | `false` | Integration testing mode (**must not be used in production**) |
+| `--integration-testing-mode` | — | `bool` | `false` | Integration testing mode (**must not be used in production**). Refused at startup unless `EDGION_ALLOW_INTEGRATION_TESTING_MODE` is also set to a truthy value (`1`/`true`/`yes`/`on`). |
 
 ### Startup Examples
 

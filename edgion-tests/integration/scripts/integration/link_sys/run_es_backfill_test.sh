@@ -392,6 +392,7 @@ sleep 1
 # Step 5: Start Gateway
 # =============================================================================
 log_section "Starting Gateway"
+EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
 "$GATEWAY_BIN" \
     -c "$GATEWAY_CONFIG" \
     --work-dir "$WORK_DIR" \
