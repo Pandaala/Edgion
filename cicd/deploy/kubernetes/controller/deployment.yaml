@@ -80,15 +80,11 @@ spec:
           readOnly: true
         - name: logs
           mountPath: /usr/local/edgion/logs
-        - name: conf-sync-certs
-          mountPath: /etc/edgion/conf-sync-certs
-          readOnly: true
+        # No conf-sync cert mount: with auto_ca the Controller mints its server cert
+        # in memory and does not depend on a Secret-backed volume to start.
       volumes:
       - name: config
         configMap:
           name: edgion-controller-config
       - name: logs
         emptyDir: {}
-      - name: conf-sync-certs
-        secret:
-          secretName: edgion-conf-sync-certs

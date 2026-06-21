@@ -88,6 +88,11 @@ pub struct ConfSyncSecurityConfig {
     pub certs: Vec<ConfSyncTlsConfig>,
     /// Legacy single-cert format [conf_sync_security.tls] — kept for backward compat.
     pub tls: Option<ConfSyncTlsConfig>,
+    /// When true (Kubernetes only), the Controller's internal CA auto-provisions the
+    /// conf_sync mTLS certs (CA + gateway-client Secret) instead of requiring
+    /// manually-mounted cert files. Default false (manual file certs).
+    #[serde(default)]
+    pub auto_ca: bool,
     // Reserved: token authentication can be added here later
 }
 
@@ -334,6 +339,16 @@ mod tests {
         let config = ConfSyncConfig::default();
         assert_eq!(config.default_capacity, 200);
         assert!(config.capacity_overrides.is_none());
+    }
+
+    #[test]
+    fn auto_ca_defaults_false_and_parses() {
+        assert!(!ConfSyncSecurityConfig::default().auto_ca);
+        let parsed: ConfSyncSecurityConfig = serde_json::from_str(r#"{"auto_ca": true}"#).unwrap();
+        assert!(parsed.auto_ca);
+        // Omitting the field keeps the backward-compatible default.
+        let omitted: ConfSyncSecurityConfig = serde_json::from_str("{}").unwrap();
+        assert!(!omitted.auto_ca);
     }
 
     // ── Group C: resolve_active_tls (5 → 1 table-driven) ───────────────────

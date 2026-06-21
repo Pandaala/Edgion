@@ -63,10 +63,31 @@ impl ConfigSyncGrpcServer {
     }
 
     /// Build a tonic Server with shared HTTP/2 keepalive and conf_sync mTLS settings applied.
-    async fn build_server(security: &ConfSyncSecurityConfig) -> anyhow::Result<tonic::transport::Server> {
+    ///
+    /// When `auto_identity` is supplied (auto-CA path), the controller-server cert is
+    /// minted in memory and used directly, bypassing the file-path / skip_tls / plaintext
+    /// branches below.
+    async fn build_server(
+        security: &ConfSyncSecurityConfig,
+        auto_identity: Option<&crate::services::conf_sync_ca::ServerIdentityPem>,
+    ) -> anyhow::Result<tonic::transport::Server> {
         let mut builder = tonic::transport::Server::builder()
             .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
             .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
+
+        if let Some(id) = auto_identity {
+            let server_tls = edgion_common::grpc_tls::load_server_tls_from_pem(
+                id.cert_pem.as_bytes(),
+                id.key_pem.as_bytes(),
+                id.ca_cert_pem.as_bytes(),
+            );
+            builder = builder.tls_config(server_tls)?;
+            tracing::info!(
+                component = "grpc_server",
+                "conf_sync mTLS enabled for gRPC server (auto-CA, in-memory server cert)"
+            );
+            return Ok(builder);
+        }
 
         if let Some(tls) = security.resolve_active_tls() {
             if tls.skip_tls {
@@ -101,8 +122,13 @@ impl ConfigSyncGrpcServer {
         Ok(builder)
     }
 
-    pub async fn serve(self, addr: std::net::SocketAddr, security: &ConfSyncSecurityConfig) -> anyhow::Result<()> {
-        let mut builder = Self::build_server(security).await?;
+    pub async fn serve(
+        self,
+        addr: std::net::SocketAddr,
+        security: &ConfSyncSecurityConfig,
+        auto_identity: Option<&crate::services::conf_sync_ca::ServerIdentityPem>,
+    ) -> anyhow::Result<()> {
+        let mut builder = Self::build_server(security, auto_identity).await?;
         builder.add_service(self.into_service()).serve(addr).await?;
         Ok(())
     }
@@ -112,9 +138,10 @@ impl ConfigSyncGrpcServer {
         self,
         addr: std::net::SocketAddr,
         security: &ConfSyncSecurityConfig,
+        auto_identity: Option<&crate::services::conf_sync_ca::ServerIdentityPem>,
         shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> anyhow::Result<()> {
-        let mut builder = Self::build_server(security).await?;
+        let mut builder = Self::build_server(security, auto_identity).await?;
 
         tracing::info!(
             component = "grpc_server",

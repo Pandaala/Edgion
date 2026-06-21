@@ -104,3 +104,7 @@ spec:
       - name: conf-sync-certs
         secret:
           secretName: edgion-conf-sync-certs
+          # optional: the Controller's internal CA provisions this Secret. The pod
+          # must start before it exists; the conf_sync client connects lazily and
+          # retries until the cert appears.
+          optional: true

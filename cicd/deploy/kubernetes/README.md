@@ -8,35 +8,27 @@ Deploy Edgion API Gateway to a Kubernetes cluster using Gateway API.
 - `kubectl` configured with cluster access
 - Cluster admin permissions (for CRD and RBAC installation)
 
-## conf_sync mTLS (required prerequisite)
+## conf_sync mTLS (auto-provisioned)
 
 The Controller→Gateway `conf_sync` channel carries resolved Secrets (TLS keys,
-backend credentials), so the shipped manifests default to mTLS. Before
-`kubectl apply`, create the cert Secret the Controller and Gateway mount:
+backend credentials) and runs over mTLS. With `auto_ca: true` (the shipped default),
+the Controller's internal CA auto-provisions the certs on first start (Kubernetes
+only): it creates `edgion-conf-sync-ca` (the CA, controller-only) and the
+`edgion-conf-sync-certs` Secret (the gateway client cert) that the Gateway mounts.
+**No manual `gen-certs` / `kubectl create secret` step is required** — just
+`kubectl apply -f cicd/deploy/kubernetes/`.
 
-1. Generate a CA + server (Controller) + client (Gateway) cert set. The server
-   cert SAN must cover the Controller service DNS
-   (`edgion-controller-leader.edgion-system.svc.cluster.local`):
-
-       edgion-cli gen-certs --output file --output-dir ./conf-sync-certs --cert-name primary
-
-2. Create the Secret (keys: `ca.crt`, `server.crt`, `server.key`, `client.crt`, `client.key`):
-
-       kubectl -n edgion-system create secret generic edgion-conf-sync-certs \
-         --from-file=ca.crt=./conf-sync-certs/primary/ca.crt \
-         --from-file=server.crt=./conf-sync-certs/primary/server.crt \
-         --from-file=server.key=./conf-sync-certs/primary/server.key \
-         --from-file=client.crt=./conf-sync-certs/primary/client.crt \
-         --from-file=client.key=./conf-sync-certs/primary/client.key
-
-3. `kubectl apply -f cicd/deploy/kubernetes/`.
-
-Auto-provisioning of these certs (SPIFFE/CA bootstrap) is tracked in
-`tasks/pending/13-conf-sync-spiffe-cert-bootstrap.md`. Until then this Secret is
-a manual prerequisite. For non-production plaintext, remove the
-`conf_sync_security` blocks and revert `server_addr` to `http://` — the
-Controller and Gateway will log an ERROR and raise
-`edgion_system_error_state{reason="plaintext_default"}`.
+- **Bring-your-own root (optional):** pre-create the `edgion-conf-sync-ca` Secret
+  with your own `ca.crt` + `ca.key` before deploy; the Controller adopts it instead
+  of self-signing.
+- **Upgrade note:** on the first rollout the Controller overwrites any manually
+  created `edgion-conf-sync-certs` leaf with an auto-CA-signed one (required for
+  chain consistency); expect a brief one-time conf_sync reconnect (control-plane
+  only, no data-plane impact).
+- **Cert rotation** is added in a follow-up (Phase 2); v0 issues 1-year leaves.
+- For non-production plaintext, set `conf_sync_security.auto_ca: false` and omit the
+  cert config — the Controller and Gateway then log an ERROR and raise
+  `edgion_system_error_state{reason="plaintext_default"}`.
 
 ## Quick Start
 

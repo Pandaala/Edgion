@@ -58,10 +58,8 @@ data:
       default_capacity: 200
 
     # mTLS for the Controller→Gateway conf_sync channel (carries resolved Secrets).
-    # Certs come from the `edgion-conf-sync-certs` Secret (see README) mounted at
-    # /etc/edgion/conf-sync-certs. Omit this block ONLY for non-production plaintext.
+    # auto_ca: the Controller's internal CA self-provisions the CA + gateway leaf
+    # Secret and mints its own server cert in memory (no mounted cert files needed).
+    # For bring-your-own root, pre-create the `edgion-conf-sync-ca` Secret (see README).
     conf_sync_security:
-      tls:
-        cert: /etc/edgion/conf-sync-certs/server.crt
-        key: /etc/edgion/conf-sync-certs/server.key
-        ca: /etc/edgion/conf-sync-certs/ca.crt
+      auto_ca: true

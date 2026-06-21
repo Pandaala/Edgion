@@ -216,6 +216,21 @@ impl EdgionControllerCli {
         // Note: gRPC server will return UNAVAILABLE until ConfigSyncServer is ready
         let grpc_server = ConfigSyncGrpcServer::new(provider, grpc_shutdown_token);
 
+        // conf_sync auto-CA (K8s only): when enabled, the Controller's internal CA
+        // ensures the CA Secret, provisions the gateway-client leaf Secret, and mints
+        // the controller-server cert in memory (fed straight into tonic — no mount).
+        // Idempotent on every startup; a concurrent create is adopted on a 409.
+        // Phase 1 relies on this idempotent-adopt for split-brain safety; Phase 2 adds
+        // the leader gate + rotation.
+        let auto_identity = if security.auto_ca {
+            let ns = std::env::var("POD_NAMESPACE").unwrap_or_else(|_| "default".to_string());
+            let client = kube::Client::try_default().await?;
+            let sans = crate::services::conf_sync_ca::server_sans_for(&ns);
+            Some(crate::services::conf_sync_ca::provision(client, &ns, sans).await?)
+        } else {
+            None
+        };
+
         // Dedicated probe listener (liveness/readiness) — own socket, no auth.
         {
             let probe_state = crate::api::build_admin_state(
@@ -276,7 +291,7 @@ impl EdgionControllerCli {
         // `tokio::time::timeout` ensures the countdown only begins after SIGTERM/SIGINT.
         let serve_fut = async {
             tokio::join!(
-                grpc_server.serve_with_shutdown(grpc_addr, &security, grpc_shutdown),
+                grpc_server.serve_with_shutdown(grpc_addr, &security, auto_identity.as_ref(), grpc_shutdown),
                 serve_admin_api_with_shutdown(
                     conf_mgr.clone(),
                     schema_validator,

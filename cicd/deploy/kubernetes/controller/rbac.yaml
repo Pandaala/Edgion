@@ -30,7 +30,10 @@ rules:
   verbs: ["get", "list", "watch"]
 - apiGroups: [""]
   resources: ["secrets"]
-  verbs: ["get", "list", "watch"]
+  # create/update/patch are required so the conf_sync internal CA can provision and
+  # rotate the CA Secret (edgion-conf-sync-ca) and the gateway leaf Secret
+  # (edgion-conf-sync-certs). get/list/watch are used for Secret resolution.
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "list", "watch"]

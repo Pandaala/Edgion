@@ -49,3 +49,33 @@ pub async fn load_client_tls(cfg: &ConfSyncTlsConfig) -> anyhow::Result<tonic::t
         .ca_certificate(tonic::transport::Certificate::from_pem(ca))
         .identity(tonic::transport::Identity::from_pem(cert, key)))
 }
+
+/// Build a server TLS config from in-memory PEM bytes (used by the auto-CA path,
+/// which mints the controller-server cert in memory rather than mounting files).
+pub fn load_server_tls_from_pem(cert_pem: &[u8], key_pem: &[u8], ca_pem: &[u8]) -> tonic::transport::ServerTlsConfig {
+    tonic::transport::ServerTlsConfig::new()
+        .identity(tonic::transport::Identity::from_pem(cert_pem, key_pem))
+        .client_ca_root(tonic::transport::Certificate::from_pem(ca_pem))
+}
+
+/// Build a client TLS config from in-memory PEM bytes.
+pub fn load_client_tls_from_pem(cert_pem: &[u8], key_pem: &[u8], ca_pem: &[u8]) -> tonic::transport::ClientTlsConfig {
+    tonic::transport::ClientTlsConfig::new()
+        .ca_certificate(tonic::transport::Certificate::from_pem(ca_pem))
+        .identity(tonic::transport::Identity::from_pem(cert_pem, key_pem))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Minimal valid PEMs are not needed: these constructors do not parse/validate
+    // eagerly (tonic defers to handshake). We assert they build without panicking
+    // and return the expected types.
+    #[test]
+    fn from_pem_builders_construct() {
+        let dummy = b"-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n";
+        let _s: tonic::transport::ServerTlsConfig = load_server_tls_from_pem(dummy, dummy, dummy);
+        let _c: tonic::transport::ClientTlsConfig = load_client_tls_from_pem(dummy, dummy, dummy);
+    }
+}
