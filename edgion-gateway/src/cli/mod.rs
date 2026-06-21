@@ -244,6 +244,27 @@ impl EdgionGatewayCli {
         let log_config = config.to_log_config();
         let _log_guard = runtime.block_on(init_logging(log_config))?;
 
+        // Logging is live from here on. Run the serving body and, on failure,
+        // record the error through structured logging while `_log_guard` is
+        // still alive: the non-blocking file worker stops accepting writes once
+        // the guard drops, so logging the error from `main` (after `run`
+        // returns) would be lost. Errors before this point (config / work_dir
+        // load) fall back to stderr via `report_startup_failure` in `main`.
+        let result = self.run_after_logging(runtime, config);
+        if let Err(err) = &result {
+            tracing::error!(
+                component = "gateway",
+                error = %format_args!("{err:#}"),
+                "Gateway exited with error"
+            );
+        }
+        result
+    }
+
+    /// Serving body: everything after logging has been initialized. Split out of
+    /// `run` so the top-level error can be logged while the log `WorkerGuard` is
+    /// still alive (see `run`).
+    fn run_after_logging(&self, runtime: tokio::runtime::Runtime, config: EdgionGatewayConfig) -> Result<()> {
         // 5. Initialize RateLimit / LRU cache / access-log sensitive global configurations
         edgion_resources::rate_limit_config::init_rate_limit_global_config(&config.rate_limit);
         config::init_lru_cache_global_config(&config.lru_cache);

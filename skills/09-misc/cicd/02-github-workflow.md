@@ -155,24 +155,42 @@ cargo test --all
 
 ### Reproduce the release binary builds
 
+Shipped images use the `production` profile (LTO + `codegen-units = 1`, see the
+root `Cargo.toml`), so reproducing the *shipped* artifact requires `--profile
+production` — a plain `--release` build optimizes differently and lands in a
+different directory. The commands below mirror the `build-binaries` job exactly
+(`-p` package selectors + `production` profile); output lands in
+`target/<triple>/production/`, not `target/<triple>/release/`.
+
 ```bash
 # amd64
-cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-cli \
+cargo build --profile production \
+  -p edgion-gateway -p edgion-controller -p edgion-cli \
+  --bin edgion-gateway --bin edgion-controller --bin edgion-cli \
   --target x86_64-unknown-linux-gnu
 
 # arm64
 rustup target add aarch64-unknown-linux-gnu
-cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-cli \
+cargo build --profile production \
+  -p edgion-gateway -p edgion-controller -p edgion-cli \
+  --bin edgion-gateway --bin edgion-controller --bin edgion-cli \
   --target aarch64-unknown-linux-gnu
 ```
 
+> The three main binaries are in `default-members`, so the bare
+> `cargo build --bin edgion-gateway ...` form also resolves from the workspace
+> root; the explicit `-p` selectors are kept here only to mirror CI verbatim.
+
 ### Reproduce the runtime image packaging
+
+`BINARY_PATH` must point at the `production` output directory, matching the
+`build-and-push-images` job (which downloads the `production` artifacts):
 
 ```bash
 docker build \
   --file cicd/docker/Dockerfile.runtime \
   --build-arg BINARY=gateway \
-  --build-arg BINARY_PATH=target/x86_64-unknown-linux-gnu/release \
+  --build-arg BINARY_PATH=target/x86_64-unknown-linux-gnu/production \
   -t edgion-gateway:local .
 ```
 

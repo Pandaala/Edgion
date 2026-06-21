@@ -358,6 +358,27 @@ impl EdgionControllerCli {
         // 1. Initialize environment (work_dir, logging)
         let _log_guard = self.init_environment(&config).await?;
 
+        // Logging is live from here on. Run the serving body and, on failure,
+        // record the error through structured logging while `_log_guard` is
+        // still alive: the non-blocking file worker stops accepting writes once
+        // the guard drops, so logging the error from `main` (after `run`
+        // returns) would be lost. Errors before this point (config load) fall
+        // back to stderr via `report_startup_failure` in `main`.
+        let result = self.run_after_logging(config).await;
+        if let Err(err) = &result {
+            tracing::error!(
+                component = COMPONENT_EDGION_CONTROLLER,
+                error = %format_args!("{err:#}"),
+                "Controller exited with error"
+            );
+        }
+        result
+    }
+
+    /// Serving body: everything after logging has been initialized. Split out of
+    /// `run` so the top-level error can be logged while the log `WorkerGuard` is
+    /// still alive (see `run`).
+    async fn run_after_logging(&self, config: EdgionControllerConfig) -> Result<()> {
         // 1b. Install the process-wide Prometheus recorder so any metric emitted
         // during startup (ConfMgr init, federation client connect, etc.) is
         // captured. The recorder is idempotent, so tests and combined modes

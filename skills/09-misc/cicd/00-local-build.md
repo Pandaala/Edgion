@@ -42,6 +42,17 @@ cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-
 cargo build --release -p edgion-tests --bin test_server --bin test_client
 ```
 
+> The three main binaries are in `default-members`, so the bare `--bin <name>`
+> form above resolves from the workspace root. The `edgion-tests` bins
+> (`test_server`, `test_client`, `cache_residue`, …) are **not** in
+> `default-members`, so they need an explicit `-p edgion-tests`.
+>
+> These `--release` commands are for **local** builds. Shipped images are built
+> with the `production` profile (LTO + `codegen-units = 1`), which optimizes
+> differently and lands in `target/<triple>/production/`. To reproduce the
+> shipped artifact, follow
+> [02-github-workflow.md → Reproduce the release binary builds](02-github-workflow.md#reproduce-the-release-binary-builds).
+
 ## Feature combinations
 
 Common combinations:

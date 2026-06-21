@@ -13,9 +13,9 @@ It supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, and WebSocket, and includes a
 - `edgion-gateway` — data plane; the `edgion-gateway` binary lives here. Owns `boringssl`/`rustls` + allocator features.
 - `edgion-controller` — control plane; the `edgion-controller` binary lives here. Depends only on `edgion-common`/`edgion-resources` — **not** on `edgion-gateway`. Plugin validation on resource ingest runs the schema-layer `EdgionPlugins::validate_plugins` (in `edgion-resources`), which reproduces the gateway `compile_plugins` preparse errors minus the DSL deep checks (Rhai compile / VM init, gateway-only). The former `controller → gateway` edge is gone, so the workspace dependency graph is a clean DAG (`resources → common → {gateway, controller, cli}`).
 - `edgion-cli` — the `edgion-cli` binary + lib; depends only on `edgion-common`/`edgion-resources`.
-- root `edgion` package — a thin umbrella that only hosts integration-test `examples/` and the `cache_residue` helper bin.
+- `edgion-tests` — the end-to-end integration-test harness; a workspace member kept out of `default-members`. Owns the test/helper bins (`test_server`, `test_client`, `cache_residue`, …). There is **no** root `edgion` package — the workspace root is a virtual manifest.
 
-Each binary crate sets its own `#[global_allocator]`; libraries set none. Because each binary is its own package, build them with `cargo build -p <crate> --bin <name>` (a bare `--bin <name>` from the workspace root no longer resolves).
+Each binary crate sets its own `#[global_allocator]`; libraries set none. Because each binary is its own package, the precise form is `cargo build -p <crate> --bin <name>`. The three main binaries (`edgion-gateway`, `edgion-controller`, `edgion-cli`) are all in `default-members`, so a bare `cargo build --bin <name>` from the workspace root *does* resolve them. The bins that do NOT resolve bare are the ones in `edgion-tests` (`test_server`, `test_client`), since that crate is deliberately excluded from `default-members` — build those with `cargo build -p edgion-tests --bin <name>`.
 
 **Feature Flags** (mutually exclusive — pay attention at build time):
 - TLS backend: `boringssl` (default) | `rustls`

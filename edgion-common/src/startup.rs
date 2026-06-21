@@ -20,18 +20,20 @@ pub fn tracing_ready() -> bool {
     TRACING_READY.load(Ordering::SeqCst)
 }
 
-/// Report a fatal startup/runtime error from a service binary's top level.
+/// Fallback reporter for a fatal top-level error in a service binary's `main`,
+/// for the window *before* structured logging is live.
 ///
-/// Once logging is up the error is routed through `tracing::error!` (structured,
-/// `component = "startup"`) so it lands in the configured log sink and obeys the
-/// project's log-safety rules. Before the subscriber is installed (e.g. a config
-/// load failure that happens before `init_logging`), `tracing` is a no-op, so a
-/// single plain stderr line is emitted as the only available diagnostic channel.
-/// The alternate `{:#}` formatting expands the full error chain.
+/// Contract: once the subscriber is installed, the service's `run()` is
+/// responsible for logging the error through `tracing` *while the log
+/// `WorkerGuard` is still alive*. Writing here in that case would be too late --
+/// the non-blocking file worker shuts down with the guard, so a `tracing::error!`
+/// emitted from `main` (after `run` returned and the guard dropped) would be
+/// silently discarded. Therefore this only emits when logging is not yet ready
+/// (e.g. a config-load failure before `init_logging`), where `tracing` is a
+/// no-op and stderr is the only diagnostic channel. The alternate `{:#}`
+/// formatting expands the full error chain.
 pub fn report_startup_failure(err: &(impl std::fmt::Display + ?Sized)) {
-    if tracing_ready() {
-        tracing::error!(component = "startup", error = %format_args!("{err:#}"), "fatal startup error");
-    } else {
+    if !tracing_ready() {
         eprintln!("[startup] fatal error: {err:#}");
     }
 }
