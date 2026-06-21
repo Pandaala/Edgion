@@ -95,10 +95,12 @@ pub async fn webhook_call(
     //    single-URL behavior: retries reuse the same endpoint).
     let base = runtime.resolved_target.pick_url().ok_or(WebhookCallError::Unhealthy)?;
     let timeout = Duration::from_millis(runtime.config.timeout_ms);
-    let template_req = match runtime
-        .compiled_request
-        .build_request(session, path_override.as_deref(), &base)
-    {
+    let template_req = match runtime.compiled_request.build_request(
+        session,
+        path_override.as_deref(),
+        &base,
+        runtime.config.resolved_secrets.as_ref(),
+    ) {
         Ok(mut req) => {
             *req.timeout_mut() = Some(timeout);
             req
@@ -378,9 +380,8 @@ mod tests {
             ..Default::default()
         };
         config_overrides(&mut config);
-        let compiled_request =
-            CompiledOutboundRequest::from_spec(&WebhookOutboundRequest::default(), |_, _, _| Ok(String::new()))
-                .expect("default request spec must compile");
+        let compiled_request = CompiledOutboundRequest::from_spec(&WebhookOutboundRequest::default())
+            .expect("default request spec must compile");
         WebhookRuntime {
             config,
             http_client: Arc::new(reqwest::Client::new()),
@@ -419,8 +420,7 @@ mod tests {
             ..Default::default()
         };
         config_overrides(&mut config);
-        let compiled_request =
-            CompiledOutboundRequest::from_spec(&spec, |_, _, _| Ok(String::new())).expect("request spec must compile");
+        let compiled_request = CompiledOutboundRequest::from_spec(&spec).expect("request spec must compile");
         WebhookRuntime {
             config,
             http_client: Arc::new(reqwest::Client::new()),

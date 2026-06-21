@@ -20,7 +20,7 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 **New model (current):**
 - **`target` is `backendRef`-only** — a single `BackendObjectReference` (`{group, kind, name, namespace, port}`), the same shape HTTPRoute/TCPRoute use. No `Uri` variant, no `type: service` wrapper tag. `port` is required. Supported `kind`: `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty/unset (→ Service). `ExternalName`/`ServiceImport` are rejected at admission.
 - The webhook resource carries a required **`request` block** that is the *single source of truth* for the outbound request shape: `path`, `method`, and **allow-listed** `args` / `headers` / `cookies`. Nothing is forwarded unless the resource names it.
-- Each `args`/`headers`/`cookies` block splits into **`origin`** (copy the same-named value from the frozen incoming request, with a `presence` policy) and **`custom`** (operator-constructed: a literal `value`, a `template`, or a K8s `secret`).
+- Each `args`/`headers`/`cookies` block splits into **`origin`** (copy the same-named value from the frozen incoming request, with a `presence` policy) and **`custom`** (operator-constructed: a literal `value`, or a `template`; secrets are expressed as `${secretRef:ns/name:key}` inside a template string, controller-resolved and carried inline).
 - Templates reuse the existing **ctx-set template engine** (`${header:X}`, `${ctx:Y}`, ...), pre-compiled at resource ingest.
 
 **Why:** unified target resolution (matches routes; ExternalName via a proxy Service), an allow-list so a misbehaving upstream plugin cannot leak headers, full auditability of the outbound request from the resource alone, and first-class `presence` semantics (required / warn / skip) for missing fields.
@@ -33,13 +33,14 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 │ 1. Read WebhookServiceConfig      │            │ 5. ConfHandler<LinkSys> upserts   │
 │    from K8s (CR ingest)           │            │    WebhookManager runtime         │
 │ 2. validate_config():             │            │ 6. CompiledOutboundRequest::      │
-│    - target.backendRef (port/kind)│  conf_sync │    from_spec(request, resolve)    │
+│    - target.backendRef (port/kind)│  conf_sync │    from_spec(request)             │
 │    - request template syntax,     │  (full     │    parses templates (already      │
 │      origin/custom name conflicts │  struct,   │    parsed controller-side here too)│
-│ 3. Register secretRef in          │  serde)    │    + reads resolved secret values │
-│    SecretRefManager               │───────────►│    from the global SecretStore    │
-│ 4. Embed resolved Secret data     │            │ 7. webhook_call(session,          │
-│    into spec; ship full struct    │            │    path_override): evaluate        │
+│ 3. Scan ${secretRef:...} vars;    │  serde)    │ 7. webhook_call(session,          │
+│    fetch; embed in resolved_      │───────────►│    path_override, resolved):      │
+│    secrets; ship full struct      │            │    substitute secretRef vars from │
+│ 4. (same struct carries resolved  │            │    resolved_secrets; evaluate      │
+│    secret values inline)          │            │    templates vs SessionSnapshot   │
 └──────────────────────────────────┘            │    templates vs SessionSnapshot   │
                                                  └──────────────────────────────────┘
 ```
@@ -50,35 +51,27 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 - **Validation** (`edgion-resources/src/resources/link_sys/webhook.rs`): `backend_ref.port.is_some()`, `kind` in the supported set, and `request` field consistency (`validate_request_fields`): no template parse errors, no field name appearing in both `origin` and `custom`, no duplicate names within a block, no `headers.origin: [{name: Cookie}]` colliding with a non-empty `cookies` block. Any violation → `Accepted=False` with a descriptive message; the resource is **not** loaded into the gateway runtime.
 - **Template/secret errors propagate**: a resource that fails compilation is not registered; a consumer calling it hits the "webhook not found" path (same as `statusOnError`).
 
-> **Implementation status — secret resolution (`CustomSource::Secret`).** The other LinkSys
-> credentials (Redis/Etcd/ES auth, TLS) are resolved by the controller's credential pipeline
-> (`AuthSpec`/`TlsSpec` traits) which registers each `secretRef` in `SecretRefManager` and embeds
-> the resolved `Secret` into the spec for conf_sync. The new webhook `request.*.custom.secret`
-> refs are **not yet on that path**: the LinkSys handler currently *skips* webhook auth
-> processing and only emits a WARN for the deprecated `auth`/`defaultHeaders`/`requestMethod`
-> shim fields (see `edgion-controller/.../handlers/link_sys.rs`, `SystemConfig::Webhook` arm —
-> "Auth processing will be re-implemented … with the new request field"). On the gateway,
-> `CompiledOutboundRequest::from_spec` resolves each `CustomSource::Secret` through the
-> `resolve_secret(ns, name, key)` callback, which in production reads the global `SecretStore`
-> via `edgion_common::secret::get_secret`. Because `Secret` is a `no_sync_kind`
-> (`ResourceKind::Secret` has no gateway ClientCache), that store is **not** populated over
-> conf_sync today, so the request-secret flow is not yet end-to-end — the
-> `11-custom-secret.yaml` integration fixture exercises the *intended* behavior. The design
-> target is: controller registers the ref in `SecretRefManager`, resolves it, ships the value
-> to the gateway, and a referenced-Secret change triggers `trigger_cascading_requeue` → full
-> re-resolve → re-emit (no operator action on rotation, same model as the old
-> `WebhookAuth::Bearer`). Treat secret resolution as the remaining wiring, not a finished path.
+> **Secret resolution in custom templates.** Secret values in `request.*.custom` fields are
+> expressed as `${secretRef:ns/name:key}` inside a `template` string (e.g.,
+> `template: "Bearer ${secretRef:prod/webhook-token:token}"`). The controller
+> (`SystemConfig::Webhook` arm) scans `collect_secret_ref_names`, registers each ref in
+> `SecretRefManager`, fetches the Secret via `fetch_secret` (ReferenceGrant enforced for
+> cross-namespace), and embeds the resolved values in `spec.resolved_secrets` (a
+> `ResolvedSecrets` newtype; admin `/configclient` renders entries as `"[redacted]"`). The
+> full struct is shipped over conf_sync; the gateway substitutes `${secretRef:...}` vars from
+> `resolved_secrets` at call time. A Secret change triggers `trigger_cascading_requeue` → full
+> re-resolve → re-emit (no operator action required on rotation).
 
 ### conf_sync
 
-- The gateway receives the **full** `WebhookServiceConfig` struct (serde) — the standard LinkSys conf_sync path. The compiled request templates are re-derived gateway-side from the synced `request` block (no separate "compiled" wire format). Secret *values* are intended to ride along via the controller-embed mechanism (see the implementation-status note above); resolved secret material in admin `/configclient` output renders as `"[redacted]"`.
-- The gateway compiles `CompiledOutboundRequest` once at upsert time, **not** per call — keeping the request-time (RT) loop free of template parsing and secret lookups.
+- The gateway receives the **full** `WebhookServiceConfig` struct (serde) — the standard LinkSys conf_sync path. The compiled request templates are re-derived gateway-side from the synced `request` block (no separate "compiled" wire format). Resolved secret values ride along in `spec.resolved_secrets` (a `ResolvedSecrets` newtype); admin `/configclient` output renders each entry as `"[redacted]"`.
+- The gateway compiles `CompiledOutboundRequest` once at upsert time, **not** per call — keeping the request-time (RT) loop free of template parsing. `${secretRef:...}` substitution happens at call time from the `resolved_secrets` passed through `webhook_call`.
 
 ### Gateway side (WebhookRuntime)
 
 - `WebhookManager.upsert()` (`providers/webhook/manager.rs`) builds a `WebhookRuntime` carrying a `compiled_request: CompiledOutboundRequest` field.
-- `CompiledOutboundRequest::from_spec(spec, resolve_secret)` (`providers/webhook/compiled_request.rs`) compiles every `path`/`method`/`custom.template` into a `CompiledTemplate` and resolves every `CustomSource::Secret` to a plain string via the `resolve_secret(ns, name, key)` callback (production: `edgion_common::secret::get_secret`). The optional `prefix` (e.g. `"Bearer "`) is applied here at load time.
-- At call time, `webhook_call(runtime, session, path_override, global_max_bytes)` (`providers/webhook/call.rs`) calls `compiled_request.build_request(session, path_override, base_url)`, then handles retry / health / rate-limit / response-size cap. The outbound `reqwest::Request` is built once and cloned per retry.
+- `CompiledOutboundRequest::from_spec(spec)` (`providers/webhook/compiled_request.rs`) compiles every `path`/`method`/`custom.template` into a `CompiledTemplate`. `${secretRef:ns/name:key}` vars in templates are NOT resolved here; they are stored as-is and substituted at call time from the `resolved_secrets` map carried in the spec.
+- At call time, `webhook_call(runtime, session, path_override, resolved, global_max_bytes)` (`providers/webhook/call.rs`) calls `compiled_request.build_request(session, path_override, base_url, resolved)`, substituting `${secretRef:...}` vars from the passed `resolved` map, then handles retry / health / rate-limit / response-size cap. The outbound `reqwest::Request` is built once and cloned per retry.
 
 ## Consumer API change
 
@@ -125,6 +118,7 @@ Webhook templates reuse the ctx-set engine (`CompiledTemplate` in `edgion-resour
 | `${requestPath}` / `${requestUri}` | frozen entry-time path / URI |
 | `${method}` | current HTTP method |
 | `${clientIp}` | real client IP |
+| `${secretRef:ns/name:key}` | Secret value resolved by the controller at config-apply time; shipped inline in `resolved_secrets`; substituted at call time. Admin `/configclient` renders as `"[redacted]"`. Both `ns` and `key` are required. |
 
 **`origin` vs `template` for the same field:** `origin: [{name: X}]` copies `X` from the **frozen entry-time snapshot** (immune to earlier-plugin rewrites). `custom: [{name: X, template: "${header:X}"}]` reads the **current view**. Use `origin` for the unmodified client value; use a `${header:X}` template for the post-transformation value.
 
@@ -159,8 +153,8 @@ The redesign carries a one-release **shim**: removed fields `auth` / `defaultHea
 | `target: { type: service, backendRef, kind }` | `target: { backendRef: { kind, name, port, ... } }` |
 | `requestMethod: POST` | `request.method.template: "POST"` |
 | `defaultHeaders: { X-Source: edgion }` | `request.headers.custom: [{ name: X-Source, value: edgion }]` |
-| `auth.bearer: { secretRef, key: token }` | `request.headers.custom: [{ name: Authorization, secret: { secretRef, key: token, prefix: "Bearer " } }]` |
-| `auth.apiKey: { ..., headerName: X-API-Key }` | `request.headers.custom: [{ name: X-API-Key, secret: { secretRef, key: apiKey } }]` |
+| `auth.bearer: { secretRef: { name: N, namespace: NS }, key: token }` | `request.headers.custom: [{ name: Authorization, template: "Bearer ${secretRef:NS/N:token}" }]` |
+| `auth.apiKey: { secretRef: { name: N, namespace: NS }, ..., headerName: X-API-Key }` | `request.headers.custom: [{ name: X-API-Key, template: "${secretRef:NS/N:apiKey}" }]` |
 | consumer `pathSuffix` / `forwardHeaders` | declare on the webhook resource (`request.path`, `request.headers.origin`); use `pathOverride` only for genuinely per-call paths |
 
 ## Module map
@@ -169,7 +163,7 @@ The redesign carries a one-release **shim**: removed fields `auth` / `defaultHea
 edgion-resources/src/resources/link_sys/webhook.rs   # WebhookServiceConfig, WebhookTarget,
                                                       #   WebhookOutboundRequest, PathSpec, MethodSpec,
                                                       #   ListFields, OriginField, PresencePolicy,
-                                                      #   CustomField, CustomSource, SecretSpec,
+                                                      #   CustomField, CustomSource, ResolvedSecrets,
                                                       #   validate_config / validate_request_fields
 edgion-resources/src/common/key_accessor.rs          # KeyGet::Webhook { webhook_ref, path_override, extract }
 edgion-gateway/src/link_sys/providers/webhook/

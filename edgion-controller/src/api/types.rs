@@ -264,7 +264,16 @@ impl AdminState {
         let server = self.config_sync_server()?;
         let kind_str = kind.as_str();
 
-        let result = server.list(kind_str).map_err(|e| {
+        // Redact resolved secret material in admin output. The struct->JSON
+        // serialize (which runs the `redact_*` adapters) happens synchronously
+        // inside `server.list()`; the guard is a thread-local RAII held across it.
+        // conf_sync transport serialization runs on a different path (no guard),
+        // so it still ships real values to the gateway.
+        let result = {
+            let _redact = edgion_resources::redact::AdminRedactGuard::new();
+            server.list(kind_str)
+        }
+        .map_err(|e| {
             tracing::warn!(
                 component = "admin_state",
                 kind = kind_str,
@@ -398,5 +407,90 @@ impl<T> ListResponse<T> {
             continue_token: None,
             error: Some(message),
         }
+    }
+}
+
+#[cfg(test)]
+mod cache_redact_tests {
+    use crate::conf_sync::{ConfigSyncServer, ServerCache};
+    use edgion_common::conf_sync::traits::{CacheEventDispatch, ResourceChange};
+    use edgion_resources::redact::AdminRedactGuard;
+    use edgion_resources::resources::link_sys::webhook::ResolvedSecrets;
+    use edgion_resources::resources::link_sys::{LinkSys, LinkSysSpec, SystemConfig, WebhookServiceConfig};
+    use kube::api::ObjectMeta;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    /// Build a `ServerCache<LinkSys>` containing one LinkSys whose webhook config
+    /// carries a known plaintext value in `resolved_secrets`.
+    fn make_link_sys_cache() -> ServerCache<LinkSys> {
+        let cache = ServerCache::<LinkSys>::new(10);
+
+        let mut secrets = BTreeMap::new();
+        secrets.insert("ns/n:k".to_string(), "supersecret".to_string());
+        let mut webhook_config = WebhookServiceConfig::default();
+        webhook_config.resolved_secrets = Some(ResolvedSecrets(secrets));
+
+        let link_sys = LinkSys {
+            metadata: ObjectMeta {
+                name: Some("test-webhook".to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                config: SystemConfig::Webhook(webhook_config),
+            },
+            status: None,
+        };
+
+        cache.apply_change(ResourceChange::InitAdd, link_sys, Some(1));
+        cache
+    }
+
+    /// Prove that holding `AdminRedactGuard` across `ConfigSyncServer::list()` causes
+    /// `resolved_secrets` to appear as `"[redacted]"` instead of the real value.
+    ///
+    /// This is the exact code path exercised by `AdminState::cache_list_resources` after
+    /// the Task-9 guard placement: `cache_list_resources` calls `server.list(kind_str)`
+    /// inside a block holding `_redact`.
+    ///
+    /// Building a fully initialised `AdminState` (with a ready `ConfigSyncServer`) in a
+    /// unit test requires running the full `ConfCenter::init_resources` lifecycle, which
+    /// is impractical here.  The guard placement in `cache_list_resources` is therefore
+    /// validated at the `ConfigSyncServer` level — the layer the guard directly covers.
+    #[test]
+    fn configserver_redacts_resolved_secrets() {
+        let cache = make_link_sys_cache();
+        let server = ConfigSyncServer::new();
+        server.register_watch_obj("LinkSys", Arc::new(cache));
+
+        // Without guard: real value must be present (confirms the adapter IS the gate).
+        let no_guard = server.list("LinkSys").expect("list without guard");
+        assert!(
+            no_guard.data.contains("supersecret"),
+            "without guard: real value must appear — got: {}",
+            no_guard.data
+        );
+        assert!(
+            !no_guard.data.contains("[redacted]"),
+            "without guard: must not redact — got: {}",
+            no_guard.data
+        );
+
+        // With guard: secret must be redacted and real value must not appear.
+        let with_guard = {
+            let _redact = AdminRedactGuard::new();
+            server.list("LinkSys").expect("list with guard")
+        };
+        assert!(
+            with_guard.data.contains("[redacted]"),
+            "with guard: must redact — got: {}",
+            with_guard.data
+        );
+        assert!(
+            !with_guard.data.contains("supersecret"),
+            "with guard: real value must not leak — got: {}",
+            with_guard.data
+        );
     }
 }

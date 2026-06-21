@@ -380,6 +380,15 @@ fn credential_readiness<M>(
     (ready, tls_ok, auth)
 }
 
+/// Webhook readiness for `${secretRef:...}`: every referenced secret must be
+/// present in the controller-carried `resolved_secrets` map. An unresolved ref
+/// (missing/invalid Secret, or a not-yet-granted cross-namespace reference)
+/// makes the webhook not-ready (fail-closed) — never serve with an empty
+/// credential.
+fn webhook_secrets_ready(config: &edgion_resources::resources::link_sys::webhook::WebhookServiceConfig) -> bool {
+    config.unresolved_secret_refs().is_empty()
+}
+
 /// Helper shared by the remove / disable paths: if there is an old client,
 /// spawn its shutdown.
 ///
@@ -594,7 +603,7 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                 // `inject_auth` would silently send an unauthenticated request.
                 // Mirrors the Elasticsearch arm below.
                 let auth = credential::resolved_state(ls);
-                let ready = auth.is_buildable();
+                let ready = auth.is_buildable() && webhook_secrets_ready(config);
                 if carry_over_if_not_ready(
                     key,
                     "Webhook",
@@ -730,7 +739,7 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                 // unauthenticated request. Mirrors the Elasticsearch arm.
                 let auth = credential::resolved_state(ls);
                 let tls_ok = true; // Webhook TLS material is validated inside build_webhook_client.
-                let ready = auth.is_buildable();
+                let ready = auth.is_buildable() && webhook_secrets_ready(config);
                 if preserve_if_not_ready(key, "Webhook", auth.kind(), tls_ok, ready, &WEBHOOK_RUNTIME) {
                     continue;
                 }
@@ -1148,6 +1157,32 @@ mod tests {
         assert!(
             get_redis_client(&key).is_none(),
             "no client should be built for an invalid-credential partial add"
+        );
+    }
+
+    #[test]
+    fn webhook_with_unresolved_secret_ref_is_not_ready() {
+        use edgion_resources::resources::link_sys::webhook::{
+            CustomField, CustomSource, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
+        };
+        let mut config = WebhookServiceConfig::default();
+        config.target.backend_ref.name = "svc".to_string();
+        config.target.backend_ref.port = Some(8080);
+        config.request = WebhookOutboundRequest {
+            headers: ListFields {
+                origin: vec![],
+                custom: vec![CustomField {
+                    name: "Authorization".to_string(),
+                    source: CustomSource::Template("Bearer ${secretRef:ns/tok:token}".to_string()),
+                }],
+            },
+            ..Default::default()
+        };
+        // resolved_secrets is None → the ref is unresolved.
+        assert!(!config.unresolved_secret_refs().is_empty());
+        assert!(
+            !webhook_secrets_ready(&config),
+            "must be not-ready when refs unresolved"
         );
     }
 

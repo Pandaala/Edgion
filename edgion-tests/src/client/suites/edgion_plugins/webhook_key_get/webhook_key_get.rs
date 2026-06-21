@@ -41,16 +41,7 @@
 //     kept as an executable spec; it will pass under a real cluster (or once the
 //     provider learns to dial spec.clusterIP). NOT a defect in this suite.
 //
-//  3. `custom_secret` (scenario 11) FAILS: the webhook `CustomSource::Secret` path
-//     is only half-wired. The controller's LinkSys webhook reconcile arm skips
-//     secret resolution (handlers/link_sys.rs: "re-implemented in Wave B") and the
-//     gateway resolves the secret from an always-empty in-process SecretStore
-//     (Secrets are intentionally never conf-synced to the gateway). The webhook
-//     therefore fails to compile ("secret not found"), is left unregistered, and
-//     the var degrades to its default. Kept as an executable spec for when the
-//     controller-resolves-and-inlines path lands. NOT a defect in this suite.
-//
-// Net: 9/11 pass; scenarios 2 and 11 are red pending the two implementation gaps.
+// Net: 10/11 pass; scenario 2 is red pending the ServiceClusterIp DNS resolution gap.
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -554,10 +545,8 @@ impl WebhookKeyGetTestSuite {
                             if log_has(log, "wh11_result", "Bearer test-secret-key-12345") {
                                 Ok("Secret resolved and injected as 'Bearer <token>' into outbound header".into())
                             } else {
-                                Err("expected wh11_result='Bearer test-secret-key-12345' — KNOWN GAP: \
-                                     the webhook CustomSource::Secret path is unwired (controller skips \
-                                     secret resolution; gateway SecretStore is empty), so the webhook \
-                                     fails to compile and degrades to its default"
+                                Err("expected wh11_result='Bearer test-secret-key-12345' \
+                                     (controller-resolved secretRef injected as 'Bearer <token>')"
                                     .into())
                             }
                         },

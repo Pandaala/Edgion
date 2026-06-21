@@ -6,20 +6,22 @@
 //!
 //! ## Lifecycle
 //!
-//! * **Load time** — `CompiledOutboundRequest::from_spec` parses templates,
-//!   resolves secrets, and stores the compiled result.
+//! * **Load time** — `CompiledOutboundRequest::from_spec` parses templates
+//!   and stores the compiled result.
 //! * **Call time** — `build_request` evaluates the compiled segments against
-//!   the current `PluginSession` and returns a `reqwest::Request`.
+//!   the current `PluginSession` and the controller-carried `ResolvedSecrets`
+//!   map, and returns a `reqwest::Request`.
 //!
 //! ## Secrets
 //!
-//! Secrets are resolved via the `resolve_secret(namespace, name, key)`
-//! callback supplied to `from_spec`.  In production this calls the global
-//! `SecretStore`; in tests a simple closure can be substituted.
+//! `${secretRef:ns/name:key}` segments are compiled at load time into
+//! `CompiledCustomFieldSource::Template` entries.  At call time, `build_request`
+//! receives an `Option<&ResolvedSecrets>` map (keyed by `"ns/name:key"`) and
+//! passes it through to `resolve_var`, which performs the lookup.
 
 use edgion_resources::resources::edgion_plugins::plugin_configs::{CompiledTemplate, TemplateSegment, TemplateVarType};
 use edgion_resources::resources::link_sys::webhook::{
-    CustomSource, ListFields, PresencePolicy, WebhookOutboundRequest,
+    CustomSource, ListFields, PresencePolicy, ResolvedSecrets, WebhookOutboundRequest,
 };
 
 use crate::plugins::runtime::PluginSession;
@@ -87,10 +89,9 @@ pub struct CompiledCustomField {
 pub enum CompiledCustomFieldSource {
     /// Verbatim string literal emitted as-is on every call.
     Literal(String),
-    /// Template compiled at load time; segments evaluated at call time.
+    /// Template compiled at load time; `${secretRef:...}` segments are resolved
+    /// at call time from the carried `resolved_secrets` map.
     Template(CompiledTemplate),
-    /// Secret value resolved at load time; stored as a plain string.
-    Secret(String),
 }
 
 // ============================================================
@@ -100,17 +101,12 @@ pub enum CompiledCustomFieldSource {
 impl CompiledOutboundRequest {
     /// Compile a [`WebhookOutboundRequest`] into a `CompiledOutboundRequest`.
     ///
-    /// `resolve_secret(namespace, name, key)` is invoked for every
-    /// `CustomSource::Secret` entry encountered while compiling.  It must
-    /// return the raw secret value (the `prefix`, if any, is applied here).
+    /// Templates are parsed once at load time. `${secretRef:...}` segments are
+    /// stored as `Template` entries and resolved at call time from the
+    /// `resolved_secrets` map passed to `build_request`.
     ///
-    /// Returns `Err` if:
-    /// - any template string fails to parse,
-    /// - a secret cannot be resolved.
-    pub fn from_spec<F>(spec: &WebhookOutboundRequest, resolve_secret: F) -> Result<Self, String>
-    where
-        F: Fn(Option<&str>, &str, &str) -> Result<String, String>,
-    {
+    /// Returns `Err` if any template string fails to parse.
+    pub fn from_spec(spec: &WebhookOutboundRequest) -> Result<Self, String> {
         let path = spec
             .path
             .as_ref()
@@ -128,9 +124,9 @@ impl CompiledOutboundRequest {
             .map(|ms| CompiledTemplate::compile(&ms.template))
             .transpose()?;
 
-        let args = compile_list_fields(&spec.args, &resolve_secret)?;
-        let headers = compile_list_fields(&spec.headers, &resolve_secret)?;
-        let cookies = compile_list_fields(&spec.cookies, &resolve_secret)?;
+        let args = compile_list_fields(&spec.args)?;
+        let headers = compile_list_fields(&spec.headers)?;
+        let cookies = compile_list_fields(&spec.cookies)?;
 
         Ok(CompiledOutboundRequest {
             path,
@@ -163,6 +159,7 @@ impl CompiledOutboundRequest {
         session: &dyn PluginSession,
         path_override: Option<&str>,
         base_url: &str,
+        resolved: Option<&ResolvedSecrets>,
     ) -> Result<reqwest::Request, String> {
         // ── 1. Determine path ──────────────────────────────────────────────
         let final_path = match &self.path {
@@ -171,10 +168,10 @@ impl CompiledOutboundRequest {
                     if let Some(ov) = path_override {
                         ov.to_string()
                     } else {
-                        evaluate_template(&path_spec.template, session)?
+                        evaluate_template(&path_spec.template, session, resolved)?
                     }
                 } else {
-                    evaluate_template(&path_spec.template, session)?
+                    evaluate_template(&path_spec.template, session, resolved)?
                 }
             }
             // No path spec: use the frozen entry-time path.
@@ -183,13 +180,13 @@ impl CompiledOutboundRequest {
 
         // ── 2. Determine method ───────────────────────────────────────────
         let final_method = match &self.method {
-            Some(method_tpl) => evaluate_template(method_tpl, session)?,
+            Some(method_tpl) => evaluate_template(method_tpl, session, resolved)?,
             None => session.get_method().to_string(),
         };
 
         // ── 3. Collect query args ─────────────────────────────────────────
         let mut query_pairs: Vec<(String, String)> = Vec::new();
-        collect_list_fields(&self.args, session, FieldKind::Query, &mut query_pairs)?;
+        collect_list_fields(&self.args, session, FieldKind::Query, &mut query_pairs, resolved)?;
 
         // ── 4. Build URL ──────────────────────────────────────────────────
         let url_base = base_url.trim_end_matches('/');
@@ -217,7 +214,7 @@ impl CompiledOutboundRequest {
 
         // ── 7. Add headers ────────────────────────────────────────────────
         let mut header_pairs: Vec<(String, String)> = Vec::new();
-        collect_list_fields(&self.headers, session, FieldKind::Header, &mut header_pairs)?;
+        collect_list_fields(&self.headers, session, FieldKind::Header, &mut header_pairs, resolved)?;
         for (k, v) in header_pairs {
             match (
                 reqwest::header::HeaderName::from_bytes(k.as_bytes()),
@@ -237,7 +234,7 @@ impl CompiledOutboundRequest {
 
         // ── 8. Add cookies as a single Cookie header ──────────────────────
         let mut cookie_pairs: Vec<(String, String)> = Vec::new();
-        collect_list_fields(&self.cookies, session, FieldKind::Cookie, &mut cookie_pairs)?;
+        collect_list_fields(&self.cookies, session, FieldKind::Cookie, &mut cookie_pairs, resolved)?;
         if !cookie_pairs.is_empty() {
             let cookie_str = cookie_pairs
                 .iter()
@@ -270,10 +267,7 @@ enum FieldKind {
 }
 
 /// Compile a [`ListFields`] specification into its pre-parsed form.
-fn compile_list_fields<F>(fields: &ListFields, resolve_secret: &F) -> Result<CompiledListFields, String>
-where
-    F: Fn(Option<&str>, &str, &str) -> Result<String, String>,
-{
+fn compile_list_fields(fields: &ListFields) -> Result<CompiledListFields, String> {
     let origin = fields
         .origin
         .iter()
@@ -292,15 +286,6 @@ where
             let source = match &f.source {
                 CustomSource::Value(v) => CompiledCustomFieldSource::Literal(v.clone()),
                 CustomSource::Template(t) => CompiledCustomFieldSource::Template(CompiledTemplate::compile(t)?),
-                CustomSource::Secret(spec) => {
-                    let ns = spec.secret_ref.namespace.as_deref();
-                    let raw = resolve_secret(ns, &spec.secret_ref.name, &spec.key)?;
-                    let value = match &spec.prefix {
-                        Some(pfx) => format!("{}{}", pfx, raw),
-                        None => raw,
-                    };
-                    CompiledCustomFieldSource::Secret(value)
-                }
             };
             Ok::<_, String>(CompiledCustomField {
                 name: f.name.clone(),
@@ -316,13 +301,17 @@ where
 ///
 /// Missing variable values are silently substituted with an empty string —
 /// the same convention used by the ctx_set plugin.
-fn evaluate_template(tpl: &CompiledTemplate, session: &dyn PluginSession) -> Result<String, String> {
+fn evaluate_template(
+    tpl: &CompiledTemplate,
+    session: &dyn PluginSession,
+    resolved: Option<&ResolvedSecrets>,
+) -> Result<String, String> {
     let mut result = String::with_capacity(tpl.hint_len());
     for seg in tpl.segments() {
         match seg {
             TemplateSegment::Literal(s) => result.push_str(s),
             TemplateSegment::Variable { var_type, var_name } => {
-                if let Some(v) = resolve_var(var_type, var_name.as_deref(), session) {
+                if let Some(v) = resolve_var(var_type, var_name.as_deref(), session, resolved) {
                     result.push_str(&v);
                 }
             }
@@ -332,7 +321,12 @@ fn evaluate_template(tpl: &CompiledTemplate, session: &dyn PluginSession) -> Res
 }
 
 /// Resolve a single template variable from the session.
-fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: &dyn PluginSession) -> Option<String> {
+fn resolve_var(
+    var_type: &TemplateVarType,
+    var_name: Option<&str>,
+    session: &dyn PluginSession,
+    resolved: Option<&ResolvedSecrets>,
+) -> Option<String> {
     match var_type {
         TemplateVarType::Header => session.header_value(var_name?),
         TemplateVarType::Query => session.get_query_param(var_name?),
@@ -351,6 +345,10 @@ fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: &dyn
                 Some(addr.to_string())
             }
         }
+        // Resolved at call time from the controller-carried map (keyed by the
+        // raw var_name "ns/name:key"). Absent → None (the readiness gate ensures
+        // a served webhook never has an absent ref).
+        TemplateVarType::SecretRef => resolved.and_then(|r| r.0.get(var_name?).cloned()),
     }
 }
 
@@ -363,6 +361,7 @@ fn collect_list_fields(
     session: &dyn PluginSession,
     kind: FieldKind,
     output: &mut Vec<(String, String)>,
+    resolved: Option<&ResolvedSecrets>,
 ) -> Result<(), String> {
     // Origin fields: forwarded from the incoming request.
     for origin in &fields.origin {
@@ -394,8 +393,7 @@ fn collect_list_fields(
     for custom in &fields.custom {
         let value = match &custom.source {
             CompiledCustomFieldSource::Literal(v) => v.clone(),
-            CompiledCustomFieldSource::Template(tpl) => evaluate_template(tpl, session)?,
-            CompiledCustomFieldSource::Secret(v) => v.clone(),
+            CompiledCustomFieldSource::Template(tpl) => evaluate_template(tpl, session, resolved)?,
         };
         output.push((custom.name.clone(), value));
     }
@@ -424,11 +422,6 @@ mod tests {
         CustomField, CustomSource, ListFields, MethodSpec, OriginField, PathSpec, WebhookOutboundRequest,
     };
 
-    // A resolver that panics if called — for specs with no Secret sources.
-    fn no_secrets(_ns: Option<&str>, name: &str, key: &str) -> Result<String, String> {
-        panic!("unexpected secret lookup: name={name:?} key={key:?}")
-    }
-
     // Build a minimal session mock that covers the path/method fallback paths.
     // Only `get_method` and `get_request_path` are set up here; callers add
     // extra expectations for origin-field / template tests.
@@ -452,7 +445,7 @@ mod tests {
             },
             ..WebhookOutboundRequest::default()
         };
-        let compiled = CompiledOutboundRequest::from_spec(&spec, no_secrets).unwrap();
+        let compiled = CompiledOutboundRequest::from_spec(&spec).unwrap();
 
         let mut session = make_session("GET", "/api/v1");
         session
@@ -460,7 +453,7 @@ mod tests {
             .withf(|name| name == "X-Tenant-Id")
             .return_const(Some("tenant-123".to_string()));
 
-        let req = compiled.build_request(&session, None, "http://svc:8080").unwrap();
+        let req = compiled.build_request(&session, None, "http://svc:8080", None).unwrap();
         let header = req.headers().get("x-tenant-id").and_then(|v| v.to_str().ok());
         assert_eq!(header, Some("tenant-123"));
     }
@@ -478,7 +471,7 @@ mod tests {
             },
             ..WebhookOutboundRequest::default()
         };
-        let compiled = CompiledOutboundRequest::from_spec(&spec, no_secrets).unwrap();
+        let compiled = CompiledOutboundRequest::from_spec(&spec).unwrap();
 
         let mut session = make_session("GET", "/api/v1");
         session
@@ -486,7 +479,7 @@ mod tests {
             .withf(|name| name == "X-Optional")
             .return_const(None::<String>);
 
-        let req = compiled.build_request(&session, None, "http://svc:8080").unwrap();
+        let req = compiled.build_request(&session, None, "http://svc:8080", None).unwrap();
         assert!(req.headers().get("x-optional").is_none());
     }
 
@@ -503,7 +496,7 @@ mod tests {
             },
             ..WebhookOutboundRequest::default()
         };
-        let compiled = CompiledOutboundRequest::from_spec(&spec, no_secrets).unwrap();
+        let compiled = CompiledOutboundRequest::from_spec(&spec).unwrap();
 
         let mut session = make_session("GET", "/api/v1");
         session
@@ -511,7 +504,7 @@ mod tests {
             .withf(|name| name == "X-Required-Header")
             .return_const(None::<String>);
 
-        let result = compiled.build_request(&session, None, "http://svc:8080");
+        let result = compiled.build_request(&session, None, "http://svc:8080", None);
         assert!(result.is_err(), "expected Err for missing required field");
         let err = result.unwrap_err();
         assert!(
@@ -533,10 +526,10 @@ mod tests {
             },
             ..WebhookOutboundRequest::default()
         };
-        let compiled = CompiledOutboundRequest::from_spec(&spec, no_secrets).unwrap();
+        let compiled = CompiledOutboundRequest::from_spec(&spec).unwrap();
         let session = make_session("GET", "/api");
 
-        let req = compiled.build_request(&session, None, "http://svc:8080").unwrap();
+        let req = compiled.build_request(&session, None, "http://svc:8080", None).unwrap();
         let pairs: Vec<(String, String)> = req
             .url()
             .query_pairs()
@@ -559,7 +552,7 @@ mod tests {
             },
             ..WebhookOutboundRequest::default()
         };
-        let compiled = CompiledOutboundRequest::from_spec(&spec, no_secrets).unwrap();
+        let compiled = CompiledOutboundRequest::from_spec(&spec).unwrap();
 
         let mut session = make_session("GET", "/api");
         session
@@ -571,7 +564,7 @@ mod tests {
             .withf(|k| k == "region")
             .returning(|_| Some("us-east".to_string()));
 
-        let req = compiled.build_request(&session, None, "http://svc:8080").unwrap();
+        let req = compiled.build_request(&session, None, "http://svc:8080", None).unwrap();
         let pairs: Vec<(String, String)> = req
             .url()
             .query_pairs()
@@ -591,11 +584,11 @@ mod tests {
             }),
             ..WebhookOutboundRequest::default()
         };
-        let compiled = CompiledOutboundRequest::from_spec(&spec, no_secrets).unwrap();
+        let compiled = CompiledOutboundRequest::from_spec(&spec).unwrap();
         let session = make_session("GET", "/ignored");
 
         let req = compiled
-            .build_request(&session, Some("/override-path"), "http://svc:8080")
+            .build_request(&session, Some("/override-path"), "http://svc:8080", None)
             .unwrap();
         assert_eq!(req.url().path(), "/override-path");
     }
@@ -610,11 +603,11 @@ mod tests {
             }),
             ..WebhookOutboundRequest::default()
         };
-        let compiled = CompiledOutboundRequest::from_spec(&spec, no_secrets).unwrap();
+        let compiled = CompiledOutboundRequest::from_spec(&spec).unwrap();
         let session = make_session("GET", "/ignored");
 
         let req = compiled
-            .build_request(&session, Some("/attempted-override"), "http://svc:8080")
+            .build_request(&session, Some("/attempted-override"), "http://svc:8080", None)
             .unwrap();
         assert_eq!(req.url().path(), "/fixed-path");
     }
@@ -623,10 +616,10 @@ mod tests {
     #[test]
     fn no_path_spec_uses_frozen_request_path() {
         let spec = WebhookOutboundRequest::default();
-        let compiled = CompiledOutboundRequest::from_spec(&spec, no_secrets).unwrap();
+        let compiled = CompiledOutboundRequest::from_spec(&spec).unwrap();
         let session = make_session("GET", "/frozen/path");
 
-        let req = compiled.build_request(&session, None, "http://svc:8080").unwrap();
+        let req = compiled.build_request(&session, None, "http://svc:8080", None).unwrap();
         assert_eq!(req.url().path(), "/frozen/path");
     }
 
@@ -639,50 +632,46 @@ mod tests {
             }),
             ..WebhookOutboundRequest::default()
         };
-        let compiled = CompiledOutboundRequest::from_spec(&spec, no_secrets).unwrap();
+        let compiled = CompiledOutboundRequest::from_spec(&spec).unwrap();
         let session = make_session("POST", "/api/resource");
 
-        let req = compiled.build_request(&session, None, "http://svc:8080").unwrap();
+        let req = compiled.build_request(&session, None, "http://svc:8080", None).unwrap();
         assert_eq!(req.method().as_str(), "DELETE");
 
         // Also verify the true "frozen method" case: no method spec at all.
         let spec_no_method = WebhookOutboundRequest::default();
-        let compiled2 = CompiledOutboundRequest::from_spec(&spec_no_method, no_secrets).unwrap();
+        let compiled2 = CompiledOutboundRequest::from_spec(&spec_no_method).unwrap();
         let session2 = make_session("PATCH", "/api/resource");
-        let req2 = compiled2.build_request(&session2, None, "http://svc:8080").unwrap();
+        let req2 = compiled2
+            .build_request(&session2, None, "http://svc:8080", None)
+            .unwrap();
         assert_eq!(req2.method().as_str(), "PATCH");
     }
 
-    // ── Bonus: secret value resolved at compile time ───────────────────────
+    // ── Secret injected via ${secretRef:...} resolved at call time from the map.
     #[test]
-    fn custom_secret_resolved_at_compile_time() {
+    fn custom_secret_ref_resolved_at_call_time() {
+        use edgion_resources::resources::link_sys::webhook::ResolvedSecrets;
         let spec = WebhookOutboundRequest {
             headers: ListFields {
                 origin: vec![],
                 custom: vec![CustomField {
                     name: "Authorization".to_string(),
-                    source: CustomSource::Secret(edgion_resources::resources::link_sys::webhook::SecretSpec {
-                        secret_ref: edgion_resources::resources::link_sys::webhook::SecretObjectReference {
-                            namespace: Some("default".to_string()),
-                            name: "my-secret".to_string(),
-                        },
-                        key: "token".to_string(),
-                        prefix: Some("Bearer ".to_string()),
-                    }),
+                    source: CustomSource::Template("Bearer ${secretRef:default/my-secret:token}".to_string()),
                 }],
             },
             ..WebhookOutboundRequest::default()
         };
+        let compiled = CompiledOutboundRequest::from_spec(&spec).unwrap();
 
-        let compiled = CompiledOutboundRequest::from_spec(&spec, |_ns, name, key| {
-            assert_eq!(name, "my-secret");
-            assert_eq!(key, "token");
-            Ok("supersecret".to_string())
-        })
-        .unwrap();
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("default/my-secret:token".to_string(), "supersecret".to_string());
+        let resolved = ResolvedSecrets(map);
 
         let session = make_session("GET", "/api");
-        let req = compiled.build_request(&session, None, "http://svc:8080").unwrap();
+        let req = compiled
+            .build_request(&session, None, "http://svc:8080", Some(&resolved))
+            .unwrap();
         let auth = req.headers().get("authorization").and_then(|v| v.to_str().ok());
         assert_eq!(auth, Some("Bearer supersecret"));
     }

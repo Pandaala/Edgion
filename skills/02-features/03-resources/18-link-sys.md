@@ -52,9 +52,11 @@ secretRef:
 
 > **Webhook secrets** no longer use the well-known-key convention. After the webhook
 > redesign, webhook outbound credentials are arbitrary `request.headers.custom` entries
-> with a `secret: { secretRef, key, prefix? }` source, where `key` names the Secret data
-> key explicitly (any name). Bearer/HMAC/apiKey are expressed as `Authorization` / custom
-> headers built from a secret value (`prefix: "Bearer "` etc.). See the `type: webhook`
+> using a `template: "<prefix>${secretRef:ns/name:key}"` source. The controller resolves
+> the referenced Secret at config-apply time and ships the resolved value inline in
+> `spec.resolved_secrets`; the gateway substitutes it at call time. Bearer/HMAC/apiKey
+> are expressed as `Authorization` / custom headers built from this template form (e.g.,
+> `template: "Bearer ${secretRef:prod/webhook-token:token}"`). See the `type: webhook`
 > section below.
 
 All application-layer key names use **camelCase**; TLS keys follow the K8s `kubernetes.io/tls` standard (which contains dots).
@@ -250,11 +252,8 @@ spec:
           - { name: X-Tenant-Id }
         custom:
           - { name: X-Caller, value: "edgion-gateway" }
-          - name: Authorization                    # secret source, resolved controller-side at load time
-            secret:
-              secretRef: { name: webhook-token }
-              key: token
-              prefix: "Bearer "                     # optional prefix applied to the resolved value
+          - name: Authorization                    # secretRef template: controller-resolved + carried inline
+            template: "Bearer ${secretRef:prod/webhook-token:token}"
       cookies:
         origin:
           - { name: session_id }
@@ -300,8 +299,7 @@ spec:
 - **`PresencePolicy`** enum (camelCase): `skipIfMissing` (default — omit, no log), `warnIfMissing` (omit + PluginLog alert + continue), `required` (treat as webhook failure; `statusOnError`/`allowDegradation` apply).
 - **`CustomField`**: `{ name: String, <source> }` where source is exactly one of (`CustomSource`, externally tagged + flattened):
   - `value: "literal"` → verbatim string.
-  - `template: "${ctx:x}/${header:y}"` → ctx-set template, evaluated at call time.
-  - `secret: SecretSpec` → `{ secretRef: SecretObjectReference, key: String, prefix?: String }`; the gateway resolves it at compile time via the `SecretStore`, the `prefix` is prepended, and admin `/configclient` output is `[redacted]`. Note: the controller-side registration/embedding of `request.*.secret` refs is **still being wired** — see the implementation-status note in [the architecture doc](../../01-architecture/03-controller-gateway-link/webhook.md#controller-side-linksys-handler).
+  - `template: "${ctx:x}/${header:y}"` → ctx-set template, evaluated at call time. Secret values are embedded as `${secretRef:ns/name:key}` inside the template string (e.g., `"Bearer ${secretRef:prod/webhook-token:token}"`); the controller resolves the referenced Secret at config-apply time, embeds the values in `resolved_secrets`, and ships the full struct over conf_sync; the gateway substitutes `${secretRef:...}` vars from the carried map at call time. Admin `/configclient` renders resolved secret values as `"[redacted]"`. Both `ns` and `key` are required in the `secretRef` token.
 - **Validation** (`Accepted=False` on violation): missing `port`; unsupported `kind`; template parse error; same name in both `origin` and `custom`; duplicate name within a block; `headers.origin: [{name: Cookie}]` together with a non-empty `cookies` block.
 - **`statusOnError`** ∈ [200, 599]; `maxResponseBytes` clamped to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`.
 

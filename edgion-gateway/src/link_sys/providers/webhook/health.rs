@@ -180,7 +180,7 @@ mod tests {
     /// Compile a default (no-op) `CompiledOutboundRequest` for tests that only exercise
     /// health-state logic and don't care about request template behaviour.
     fn default_compiled_request() -> CompiledOutboundRequest {
-        CompiledOutboundRequest::from_spec(&WebhookOutboundRequest::default(), |_, _, _| Ok(String::new()))
+        CompiledOutboundRequest::from_spec(&WebhookOutboundRequest::default())
             .expect("default request spec must compile")
     }
 

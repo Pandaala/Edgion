@@ -11,7 +11,7 @@
 //! the Gateway side via `edgion_resources::credentials`.
 
 use crate::conf_mgr::sync_runtime::resource_processor::credential::{
-    resolve_secret, InvalidCredentialError, PendingReason, ResolveOutcome,
+    fetch_secret, resolve_secret, FetchOutcome, InvalidCredentialError, PendingReason, ResolveOutcome,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     accepted_condition, condition_false, condition_types, resolved_refs_condition, update_condition, HandlerContext,
@@ -20,8 +20,10 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::prelude_resources::LinkSys;
 use edgion_resources::resources::common::SecretObjectReference;
-use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
+use edgion_resources::resources::edgion_plugins::plugin_configs::parse_secret_ref;
+use edgion_resources::resources::link_sys::webhook::{ResolvedSecrets, WebhookServiceConfig};
 use edgion_resources::resources::link_sys::{LinkSysStatus, SystemConfig};
+use std::collections::BTreeMap;
 
 use super::auth_spec::{AuthSpec, TlsSpec};
 use edgion_resources::ResourceKind;
@@ -258,7 +260,7 @@ fn detect_deprecated_webhook_shim_fields(w: &WebhookServiceConfig) -> Vec<Deprec
     if w.auth.is_some() {
         out.push(DeprecatedShimField {
             field: "auth",
-            migrate_to: "request.headers.custom with source: secret",
+            migrate_to: "request.headers.custom with template: \"<prefix>${secretRef:ns/name:key}\"",
         });
     }
     if w.default_headers.is_some() {
@@ -305,21 +307,81 @@ async fn resolve_for_spec(
         SystemConfig::Elasticsearch(es) => drive_standard(ctx, owner, es.auth.as_mut(), es.tls.as_mut()).await,
         SystemConfig::Webhook(w) => {
             // Emit deprecation warnings for shim fields (auth, defaultHeaders,
-            // requestMethod). These fields are accepted for backward compatibility
-            // but not used at runtime in this release; they will be removed in the
-            // next release (Task D2). Warn so operators migrate ahead of removal.
+            // requestMethod), accepted for backward compat but unused at runtime.
             warn_deprecated_webhook_shim_fields(owner, w);
 
-            // Webhook auth is now a deprecated shim field (Option<serde_json::Value>)
-            // that is accepted for backward compatibility but not used at runtime.
-            // Skip auth processing for webhook; process only TLS if present.
-            // Auth processing will be re-implemented in Wave B with the new request field.
             let mut errs = Vec::new();
+
+            // Resolve TLS (unchanged).
             if let Some(tls) = w.tls.as_mut() {
                 if let Some(e) = tls.resolve(ctx, owner).await {
                     errs.push(e);
                 }
             }
+
+            // Resolve every ${secretRef:ns/name:key} referenced in the outbound
+            // request templates, carrying the values inline. FULL REBUILD: the
+            // map is reconstructed from scratch each reconcile so a deleted
+            // Secret drops out (fail-closed via the gateway readiness gate).
+            let mut resolved: BTreeMap<String, String> = BTreeMap::new();
+            for name in w.collect_secret_ref_names() {
+                let parts = match parse_secret_ref(&name) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        // Malformed refs are also rejected at Accepted-validation;
+                        // record a resolved-refs error and skip.
+                        errs.push(ResolvedRefsError::DecodeError {
+                            key: "secretRef",
+                            detail: format!("{}: {}", name, e),
+                        });
+                        continue;
+                    }
+                };
+                let secret_ref = SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: parts.name.clone(),
+                    namespace: Some(parts.namespace.clone()),
+                };
+                match fetch_secret(ctx, owner, "edgion.io", "LinkSys", &secret_ref) {
+                    FetchOutcome::Ok(secret) => match read_secret_key(&secret, &parts.key) {
+                        Ok(value) => {
+                            resolved.insert(name, value);
+                        }
+                        Err(detail) => errs.push(ResolvedRefsError::DecodeError {
+                            key: "secretRef",
+                            detail: format!("{}: {}", name, detail),
+                        }),
+                    },
+                    FetchOutcome::Pending(PendingReason::SecretNotFound {
+                        namespace,
+                        name: secret_name,
+                    }) => {
+                        errs.push(ResolvedRefsError::SecretNotFound {
+                            namespace,
+                            name: secret_name,
+                        });
+                    }
+                    FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                        from_ns,
+                        to_ns,
+                        secret_name,
+                    }) => {
+                        errs.push(ResolvedRefsError::RefNotPermitted {
+                            from_namespace: from_ns,
+                            from_kind: ResourceKind::LinkSys.as_str(),
+                            target_namespace: to_ns,
+                            target_name: secret_name,
+                        });
+                    }
+                }
+            }
+            w.resolved_secrets = if resolved.is_empty() {
+                None
+            } else {
+                Some(ResolvedSecrets(resolved))
+            };
+
             errs
         }
         SystemConfig::Kafka(kafka_config) => {
@@ -336,6 +398,26 @@ pub(super) async fn resolve_one<R: SecretMaterialResolver>(
 ) -> Result<Option<Secret>, ResolvedRefsError> {
     let outcome = resolve_secret(ctx, owner, "edgion.io", "LinkSys", secret_ref, resolver).await;
     outcome_to_result(outcome).map(Some)
+}
+
+/// Read a single key out of a resolved K8s Secret as a UTF-8 string.
+///
+/// Checks `.data` (base64-decoded bytes) first, then `.string_data` as a
+/// fallback (string_data is usually only present before the object is stored
+/// server-side, but we handle it defensively). Returns an error string if the
+/// key is absent or the bytes are not valid UTF-8.
+fn read_secret_key(secret: &Secret, key: &str) -> Result<String, String> {
+    if let Some(data) = &secret.data {
+        if let Some(bytes) = data.get(key) {
+            return String::from_utf8(bytes.0.clone()).map_err(|e| format!("key {:?}: invalid UTF-8: {}", key, e));
+        }
+    }
+    if let Some(string_data) = &secret.string_data {
+        if let Some(value) = string_data.get(key) {
+            return Ok(value.clone());
+        }
+    }
+    Err(format!("key {:?} not found in secret", key))
 }
 
 #[cfg(test)]

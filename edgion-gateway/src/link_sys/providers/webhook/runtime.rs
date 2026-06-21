@@ -393,10 +393,7 @@ mod tests {
                 scheme: "http",
                 cursor: AtomicUsize::new(0),
             },
-            compiled_request: CompiledOutboundRequest::from_spec(&WebhookOutboundRequest::default(), |_, _, _| {
-                Ok(String::new())
-            })
-            .unwrap(),
+            compiled_request: CompiledOutboundRequest::from_spec(&WebhookOutboundRequest::default()).unwrap(),
             healthy: AtomicBool::new(false),
             passive_failures: AtomicU32::new(5),
             last_halfopen: AtomicU64::new(0),

@@ -810,6 +810,21 @@ unknownFieldName: "should fail"
 }
 
 #[test]
+fn validation_rejects_bare_secret_ref() {
+    // A bare `${secretRef}` (no ns/name:key) in a custom template header
+    // must be rejected at validation — it would produce an empty credential.
+    let mut config = WebhookServiceConfig::default();
+    config.target.backend_ref.name = "webhook-svc".to_string();
+    config.target.backend_ref.port = Some(8080);
+    config.request.headers.custom.push(CustomField {
+        name: "Authorization".to_string(),
+        source: CustomSource::Template("Bearer ${secretRef}".to_string()),
+    });
+    let err = config.get_validation_error().expect("must reject bare secretRef");
+    assert!(err.contains("secretRef"), "got: {err}");
+}
+
+#[test]
 fn test_webhook_config_without_shim_fields_valid() {
     // Config without any shim fields should be valid
     let yaml = r#"

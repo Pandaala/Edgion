@@ -9,6 +9,25 @@ use serde::{Deserialize, Serialize};
 use crate::resources::common::{EdgionService, SecretSlot, TlsConfig};
 use crate::resources::http_route::BackendObjectReference;
 
+use std::collections::BTreeMap;
+
+/// Controller-resolved `${secretRef:...}` values for a webhook, carried inline
+/// to the gateway over conf_sync. The map key is the raw template var_name
+/// (`"ns/name:key"`); the value is the decoded Secret value.
+///
+/// This is the ONLY place resolved webhook secret plaintext lives. It is never
+/// `JsonSchema` (so it can never enter a CRD), serializes as `"[redacted]"`
+/// under the admin redact guard, and has a hand-written `Debug` so a `{:?}` on
+/// any enclosing struct cannot leak values.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub struct ResolvedSecrets(pub BTreeMap<String, String>);
+
+impl std::fmt::Debug for ResolvedSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ResolvedSecrets(<{} redacted entries>)", self.0.len())
+    }
+}
+
 // ============================================================
 // WebhookAuth — authentication configuration
 // ============================================================
@@ -218,50 +237,22 @@ pub struct CustomField {
     /// Field name in the outbound webhook request.
     pub name: String,
 
-    /// Source: exactly one of value, template, or secret.
+    /// Source: exactly one of value or template.
     #[serde(flatten)]
     pub source: CustomSource,
 }
 
-/// Source for a custom field: literal, template, or K8s Secret reference.
+/// Source for a custom field: literal or template (which may embed
+/// `${secretRef:ns/name:key}` for Secret injection).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum CustomSource {
     /// Verbatim literal string.
     Value(String),
 
-    /// Template interpolated at call time using ctx-set template engine.
+    /// Template interpolated at call time. May contain `${secretRef:ns/name:key}`
+    /// to inject a controller-resolved Kubernetes Secret value.
     Template(String),
-
-    /// Value resolved from a Kubernetes Secret at config time.
-    Secret(SecretSpec),
-}
-
-/// Reference to a field within a Kubernetes Secret.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SecretSpec {
-    /// Reference to the Kubernetes Secret object.
-    pub secret_ref: SecretObjectReference,
-
-    /// Key within the Secret's data map.
-    pub key: String,
-
-    /// Optional prefix prepended to the resolved value (e.g., "Bearer " for auth headers).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prefix: Option<String>,
-}
-
-/// Reference to a Kubernetes Secret object.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SecretObjectReference {
-    /// Secret namespace. Defaults to the LinkSys namespace if omitted.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-
-    /// Secret name.
-    pub name: String,
 }
 
 // ============================================================
@@ -343,6 +334,18 @@ pub struct WebhookServiceConfig {
     /// Default: empty (no fields forwarded).
     #[serde(default)]
     pub request: WebhookOutboundRequest,
+
+    /// Controller-resolved `${secretRef:...}` values, carried inline to the
+    /// gateway. Keyed by the raw template var_name (`"ns/name:key"`). Never set
+    /// by operators (`#[schemars(skip)]` — the API server prunes it); redacted in
+    /// admin output; shipped real over conf_sync.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_secrets: Option<ResolvedSecrets>,
 
     // ============================================================
     // Connection (DEPRECATED - shim field)
@@ -676,6 +679,7 @@ impl Default for WebhookServiceConfig {
                 headers: ListFields::default(),
                 cookies: ListFields::default(),
             },
+            resolved_secrets: None,
             request_method: None,
             timeout_ms: default_timeout_ms(),
             tls: None,
@@ -725,7 +729,75 @@ impl WebhookServiceConfig {
             return Some(err);
         }
 
+        // Validate every secretRef segment in every request template: must be a
+        // well-formed `${secretRef:ns/name:key}`. This also catches a bare
+        // `${secretRef}` (no name) that `collect_secret_ref_names` skips.
+        use crate::resources::edgion_plugins::plugin_configs::{validate_secret_ref_segments, CompiledTemplate};
+        let mut templates_to_check: Vec<&str> = Vec::new();
+        if let Some(p) = &self.request.path {
+            templates_to_check.push(&p.template);
+        }
+        if let Some(m) = &self.request.method {
+            templates_to_check.push(&m.template);
+        }
+        for group in [&self.request.args, &self.request.headers, &self.request.cookies] {
+            for f in &group.custom {
+                if let CustomSource::Template(t) = &f.source {
+                    templates_to_check.push(t);
+                }
+            }
+        }
+        for t in templates_to_check {
+            if let Ok(compiled) = CompiledTemplate::compile(t) {
+                if let Err(e) = validate_secret_ref_segments(&compiled) {
+                    return Some(e);
+                }
+            }
+        }
+
         None
+    }
+
+    /// Collect the raw var_names of every `${secretRef:...}` referenced across
+    /// the outbound request templates (path, method, args/headers/cookies
+    /// custom). Best-effort: templates that fail to compile contribute nothing
+    /// (the compile error is surfaced separately by `get_validation_error`).
+    pub fn collect_secret_ref_names(&self) -> Vec<String> {
+        use crate::resources::edgion_plugins::plugin_configs::{secret_ref_var_names, CompiledTemplate};
+        let mut out = Vec::new();
+        let mut scan = |t: &str| {
+            if let Ok(c) = CompiledTemplate::compile(t) {
+                out.extend(secret_ref_var_names(&c));
+            }
+        };
+        if let Some(p) = &self.request.path {
+            scan(&p.template);
+        }
+        if let Some(m) = &self.request.method {
+            scan(&m.template);
+        }
+        for group in [&self.request.args, &self.request.headers, &self.request.cookies] {
+            for f in &group.custom {
+                if let CustomSource::Template(t) = &f.source {
+                    scan(t);
+                }
+            }
+        }
+        out
+    }
+
+    /// Referenced `secretRef`s that are absent from `resolved_secrets`
+    /// (i.e. the controller has not resolved them). Used by the gateway
+    /// readiness gate to refuse a webhook with unresolved secrets.
+    pub fn unresolved_secret_refs(&self) -> Vec<String> {
+        let resolved = self.resolved_secrets.as_ref();
+        self.collect_secret_ref_names()
+            .into_iter()
+            .filter(|name| match resolved {
+                Some(rs) => !rs.0.contains_key(name),
+                None => true,
+            })
+            .collect()
     }
 }
 
@@ -860,29 +932,6 @@ headers: {}
     }
 
     #[test]
-    fn test_custom_field_with_secret() {
-        let yaml_str = r#"
-- name: Authorization
-  secret:
-    secretRef:
-      name: webhook-token
-    key: token
-    prefix: "Bearer "
-"#;
-        let custom_fields: Vec<CustomField> = serde_yaml::from_str(yaml_str).expect("deserialize");
-        assert_eq!(custom_fields.len(), 1);
-        assert_eq!(custom_fields[0].name, "Authorization");
-        match &custom_fields[0].source {
-            CustomSource::Secret(spec) => {
-                assert_eq!(spec.secret_ref.name, "webhook-token");
-                assert_eq!(spec.key, "token");
-                assert_eq!(spec.prefix, Some("Bearer ".to_string()));
-            }
-            _ => panic!("Expected Secret source"),
-        }
-    }
-
-    #[test]
     fn test_custom_field_with_literal_value() {
         let yaml_str = r#"
 - name: X-Source
@@ -948,27 +997,6 @@ headers: {}
     }
 
     #[test]
-    fn test_secret_object_reference_with_namespace() {
-        let yaml_str = r#"
-namespace: my-namespace
-name: webhook-secret
-"#;
-        let secret_ref: SecretObjectReference = serde_yaml::from_str(yaml_str).expect("deserialize");
-        assert_eq!(secret_ref.namespace, Some("my-namespace".to_string()));
-        assert_eq!(secret_ref.name, "webhook-secret");
-    }
-
-    #[test]
-    fn test_secret_object_reference_without_namespace() {
-        let yaml_str = r#"
-name: webhook-secret
-"#;
-        let secret_ref: SecretObjectReference = serde_yaml::from_str(yaml_str).expect("deserialize");
-        assert!(secret_ref.namespace.is_none());
-        assert_eq!(secret_ref.name, "webhook-secret");
-    }
-
-    #[test]
     fn test_webhook_outbound_request_all_custom() {
         let yaml_str = r#"
 path:
@@ -985,11 +1013,7 @@ args:
 headers:
   custom:
     - name: Authorization
-      secret:
-        secretRef:
-          name: webhook-token
-        key: token
-        prefix: "Bearer "
+      template: "Bearer ${secretRef:edgion-default/webhook-token:token}"
 "#;
         let request: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
         assert!(request.path.is_some());
@@ -1139,6 +1163,107 @@ unknownField: value
         let mut config = valid_base_config();
         config.request.headers.origin = vec![origin("Cookie")];
         assert!(config.get_validation_error().is_none(), "Cookie header alone is valid");
+    }
+
+    #[test]
+    fn collect_secret_ref_names_across_fields() {
+        let yaml_str = r#"
+path:
+  template: "/wh/${secretRef:ns/p:k}"
+headers:
+  custom:
+    - name: Authorization
+      template: "Bearer ${secretRef:edgion-system/tok:token}"
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        let mut names = cfg.collect_secret_ref_names();
+        names.sort();
+        assert_eq!(names, vec!["edgion-system/tok:token".to_string(), "ns/p:k".to_string()]);
+    }
+
+    #[test]
+    fn unresolved_secret_refs_reports_missing() {
+        let yaml_str = r#"
+headers:
+  custom:
+    - name: Authorization
+      template: "Bearer ${secretRef:edgion-system/tok:token}"
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        // No resolved_secrets -> reported unresolved.
+        assert_eq!(
+            cfg.unresolved_secret_refs(),
+            vec!["edgion-system/tok:token".to_string()]
+        );
+    }
+
+    #[test]
+    fn validation_rejects_malformed_secret_ref() {
+        let yaml_str = r#"
+headers:
+  custom:
+    - name: Authorization
+      template: "Bearer ${secretRef:tok:token}"
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        let err = cfg.get_validation_error().expect("must reject no-namespace secretRef");
+        assert!(err.contains("secretRef"), "got: {err}");
+    }
+
+    #[test]
+    fn resolved_secrets_debug_is_redacted() {
+        let mut m = std::collections::BTreeMap::new();
+        m.insert("ns/n:k".to_string(), "supersecret".to_string());
+        let rs = ResolvedSecrets(m);
+        let dbg = format!("{:?}", rs);
+        assert!(!dbg.contains("supersecret"), "Debug must not print values: {dbg}");
+        assert!(dbg.contains("redacted"), "Debug should mark redaction: {dbg}");
+    }
+
+    #[test]
+    fn resolved_secrets_redacts_under_guard_real_without() {
+        use crate::redact::AdminRedactGuard;
+        let mut m = std::collections::BTreeMap::new();
+        m.insert("ns/n:k".to_string(), "supersecret".to_string());
+        let wrapped: Option<ResolvedSecrets> = Some(ResolvedSecrets(m));
+
+        // Under guard -> "[redacted]".
+        {
+            let _g = AdminRedactGuard::new();
+            let json = serde_json::to_string(&RedactProbe {
+                resolved_secrets: wrapped.clone(),
+            })
+            .unwrap();
+            assert!(json.contains("[redacted]"), "guarded: {json}");
+            assert!(!json.contains("supersecret"), "guarded leaked: {json}");
+        }
+        // Without guard -> real value (conf_sync transport).
+        let json = serde_json::to_string(&RedactProbe {
+            resolved_secrets: wrapped,
+        })
+        .unwrap();
+        assert!(json.contains("supersecret"), "transport must ship real value: {json}");
+    }
+
+    #[derive(serde::Serialize)]
+    struct RedactProbe {
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            serialize_with = "crate::redact::redact_opt::serialize"
+        )]
+        resolved_secrets: Option<ResolvedSecrets>,
     }
 }
 

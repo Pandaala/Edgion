@@ -811,8 +811,8 @@ fn test_deprecation_warns_on_auth_shim_field() {
     assert_eq!(detected.len(), 1, "exactly the 'auth' shim field should warn");
     assert_eq!(detected[0].field, "auth");
     assert!(
-        detected[0].migrate_to.contains("source: secret"),
-        "auth migration hint should point to secret-sourced custom header, got: {}",
+        detected[0].migrate_to.contains("secretRef"),
+        "auth migration hint should point to the secretRef template, got: {}",
         detected[0].migrate_to
     );
 }
@@ -872,4 +872,163 @@ fn test_deprecation_warns_on_all_shim_fields_together() {
     let detected = detect_deprecated_webhook_shim_fields(&cfg);
     let fields: Vec<&str> = detected.iter().map(|d| d.field).collect();
     assert_eq!(fields, vec!["auth", "defaultHeaders", "requestMethod"]);
+}
+
+// ============================================================================
+// Task 8: webhook secretRef resolution — controller resolves ${secretRef:...}
+// templates and carries the values inline in resolved_secrets.
+// ============================================================================
+
+/// Build a webhook LinkSys whose Authorization header template references a
+/// secretRef, then inject the matching Secret and assert that the handler
+/// populates `resolved_secrets` with the decoded value.
+#[tokio::test]
+async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
+    use edgion_resources::resources::http_route::BackendObjectReference;
+    use edgion_resources::resources::link_sys::webhook::{
+        CustomField, CustomSource, ListFields, WebhookOutboundRequest, WebhookServiceConfig, WebhookTarget,
+    };
+
+    // Secret: namespace="edgion-default", name="wh-tok", key="token" -> "my-secret-token"
+    let (secret_key, secret) = make_secret("edgion-default", "wh-tok", &[("token", b"my-secret-token")]);
+    let (ctx, _runtime) = make_ctx(HashMap::from([(secret_key, secret)]));
+    let handler = LinkSysHandler::new();
+
+    let ls = LinkSys {
+        metadata: ObjectMeta {
+            name: Some("webhook-ls".to_string()),
+            namespace: Some("edgion-default".to_string()),
+            generation: Some(1),
+            ..Default::default()
+        },
+        spec: edgion_resources::resources::link_sys::LinkSysSpec {
+            config: SystemConfig::Webhook(WebhookServiceConfig {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "wh-svc".into(),
+                        namespace: Some("edgion-default".into()),
+                        port: Some(8080),
+                    },
+                },
+                request: WebhookOutboundRequest {
+                    headers: ListFields {
+                        custom: vec![CustomField {
+                            name: "Authorization".to_string(),
+                            // Template references the secret; the controller must resolve it.
+                            source: CustomSource::Template(
+                                "Bearer ${secretRef:edgion-default/wh-tok:token}".to_string(),
+                            ),
+                        }],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        },
+        status: None,
+    };
+
+    let result = handler.parse(ls, &ctx).await;
+
+    match result {
+        ProcessResult::Continue(ls) => {
+            let w = match &ls.spec.config {
+                SystemConfig::Webhook(w) => w,
+                _ => panic!("expected Webhook"),
+            };
+            let rs = w.resolved_secrets.as_ref().expect("resolved_secrets must be populated");
+            // The map key is the raw var_name: "edgion-default/wh-tok:token"
+            let value =
+                rs.0.get("edgion-default/wh-tok:token")
+                    .expect("resolved_secrets must contain the secretRef key");
+            assert_eq!(value, "my-secret-token", "resolved value must match Secret data");
+
+            // ResolvedRefs must be True — all refs resolved.
+            let rr = find_cond(&ls, condition_types::RESOLVED_REFS).expect("ResolvedRefs condition");
+            assert_eq!(
+                rr.status, "True",
+                "ResolvedRefs must be True when all secretRefs resolve"
+            );
+        }
+        ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
+    }
+}
+
+/// When the Secret referenced by a webhook template is absent, the handler
+/// must set ResolvedRefs=False with reason SecretNotFound and leave
+/// resolved_secrets as None (fail-closed).
+#[tokio::test]
+async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
+    use edgion_resources::resources::http_route::BackendObjectReference;
+    use edgion_resources::resources::link_sys::webhook::{
+        CustomField, CustomSource, ListFields, WebhookOutboundRequest, WebhookServiceConfig, WebhookTarget,
+    };
+
+    // No secrets in the store — the referenced secret does not exist.
+    let (ctx, _runtime) = make_ctx(HashMap::new());
+    let handler = LinkSysHandler::new();
+
+    let ls = LinkSys {
+        metadata: ObjectMeta {
+            name: Some("webhook-ls".to_string()),
+            namespace: Some("edgion-default".to_string()),
+            generation: Some(1),
+            ..Default::default()
+        },
+        spec: edgion_resources::resources::link_sys::LinkSysSpec {
+            config: SystemConfig::Webhook(WebhookServiceConfig {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "wh-svc".into(),
+                        namespace: Some("edgion-default".into()),
+                        port: Some(8080),
+                    },
+                },
+                request: WebhookOutboundRequest {
+                    headers: ListFields {
+                        custom: vec![CustomField {
+                            name: "Authorization".to_string(),
+                            source: CustomSource::Template(
+                                "Bearer ${secretRef:edgion-default/wh-tok:token}".to_string(),
+                            ),
+                        }],
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        },
+        status: None,
+    };
+
+    let result = handler.parse(ls, &ctx).await;
+
+    match result {
+        ProcessResult::Continue(ls) => {
+            let w = match &ls.spec.config {
+                SystemConfig::Webhook(w) => w,
+                _ => panic!("expected Webhook"),
+            };
+            // resolved_secrets must remain None while the Secret is absent.
+            assert!(
+                w.resolved_secrets.is_none(),
+                "resolved_secrets must be None while Secret is missing"
+            );
+            let rr = find_cond(&ls, condition_types::RESOLVED_REFS).expect("ResolvedRefs condition");
+            assert_eq!(rr.status, "False", "ResolvedRefs must be False when Secret is missing");
+            assert_eq!(
+                rr.reason,
+                condition_reasons::SECRET_NOT_FOUND,
+                "reason must be SecretNotFound, got: {}",
+                rr.reason,
+            );
+        }
+        ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
+    }
 }

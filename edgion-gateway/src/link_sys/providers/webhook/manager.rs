@@ -13,7 +13,6 @@ use tokio::sync::RwLock;
 
 use crate::backends::service_kind::EdgionService;
 use crate::plugins::http::common::http_client::{build_webhook_client, get_http_client_arc};
-use edgion_common::secret::get_secret;
 use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 
 use super::compiled_request::CompiledOutboundRequest;
@@ -116,36 +115,11 @@ impl WebhookManager {
             }
         };
 
-        // Compile the outbound request spec at load time.
-        //
-        // Secrets are resolved from the global SecretStore via `edgion_common::secret::get_secret`.
-        // The key is read from `.data` (raw bytes from the API server) or `.string_data`
-        // (plain string).  If the secret or its key is absent the compile step returns
-        // `Err`, which propagates as an `anyhow::Error` and prevents the webhook from
-        // being registered with a silently-broken template.
-        let compiled_request = CompiledOutboundRequest::from_spec(&config.request, |ns, name, key| {
-            let secret = get_secret(ns, name).ok_or_else(|| format!("secret {:?}/{} not found", ns, name))?;
-            if let Some(data) = &secret.data {
-                if let Some(bytes) = data.get(key) {
-                    return String::from_utf8(bytes.0.clone()).map_err(|e| {
-                        format!(
-                            "secret {}/{} key {:?}: invalid UTF-8: {}",
-                            name,
-                            ns.unwrap_or(""),
-                            key,
-                            e
-                        )
-                    });
-                }
-            }
-            if let Some(string_data) = &secret.string_data {
-                if let Some(value) = string_data.get(key) {
-                    return Ok(value.clone());
-                }
-            }
-            Err(format!("key {:?} not found in secret {:?}/{}", key, ns, name))
-        })
-        .map_err(|e| anyhow::anyhow!("failed to compile webhook request for '{}': {}", webhook_ref, e))?;
+        // Compile the outbound request spec at load time. Templates are parsed
+        // once; `${secretRef:...}` segments are resolved at call time from
+        // `config.resolved_secrets` (carried inline by the controller).
+        let compiled_request = CompiledOutboundRequest::from_spec(&config.request)
+            .map_err(|e| anyhow::anyhow!("failed to compile webhook request for '{}': {}", webhook_ref, e))?;
 
         let rate_counter = config
             .rate_limit

@@ -316,6 +316,11 @@ pub enum TemplateVarType {
     RequestUri,
     Method,
     ClientIp,
+    /// Kubernetes Secret reference `${secretRef:ns/name:key}`. Webhook-only: in
+    /// ctx_set it resolves to empty and is rejected at validation. The resolved
+    /// value is carried inline by the controller (never read at gateway runtime
+    /// from a global store).
+    SecretRef,
 }
 
 impl TemplateVarType {
@@ -331,6 +336,7 @@ impl TemplateVarType {
             "requestUri" => Ok(Self::RequestUri),
             "method" => Ok(Self::Method),
             "clientIp" => Ok(Self::ClientIp),
+            "secretRef" => Ok(Self::SecretRef),
             _ => Err(format!("unknown variable type: {}", s)),
         }
     }
@@ -422,6 +428,97 @@ impl CompiledTemplate {
     }
 }
 
+/// Parsed components of a `${secretRef:ns/name:key}` variable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecretRefParts {
+    pub namespace: String,
+    pub name: String,
+    pub key: String,
+}
+
+/// Parse the `var_name` of a `SecretRef` segment (the raw `"ns/name:key"`
+/// string, already stripped of the `secretRef:` prefix by `compile`).
+///
+/// Requires an explicit namespace and a non-empty key. The map key used to
+/// carry the resolved value is the unparsed `var_name` itself; this function is
+/// only for the controller, which needs the split components to fetch the Secret.
+pub fn parse_secret_ref(var_name: &str) -> Result<SecretRefParts, String> {
+    let (path, key) = var_name
+        .rsplit_once(':')
+        .ok_or_else(|| format!("secretRef '{}' is missing ':key' (expected ns/name:key)", var_name))?;
+    if key.is_empty() {
+        return Err(format!("secretRef '{}' has an empty key", var_name));
+    }
+    let (namespace, name) = path.split_once('/').ok_or_else(|| {
+        format!(
+            "secretRef '{}' is missing 'namespace/' (expected ns/name:key)",
+            var_name
+        )
+    })?;
+    if namespace.is_empty() {
+        return Err(format!("secretRef '{}' has an empty namespace", var_name));
+    }
+    if name.is_empty() {
+        return Err(format!("secretRef '{}' has an empty name", var_name));
+    }
+    Ok(SecretRefParts {
+        namespace: namespace.to_string(),
+        name: name.to_string(),
+        key: key.to_string(),
+    })
+}
+
+/// Collect the raw `var_name`s of every `SecretRef` segment in a compiled
+/// template (e.g. `"ns/name:key"`). These are the canonical `resolved_secrets`
+/// map keys.
+pub fn secret_ref_var_names(tpl: &CompiledTemplate) -> Vec<String> {
+    tpl.segments()
+        .iter()
+        .filter_map(|seg| match seg {
+            TemplateSegment::Variable {
+                var_type: TemplateVarType::SecretRef,
+                var_name: Some(name),
+            } => Some(name.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// True if the template contains ANY `secretRef` segment (including a malformed
+/// bare `${secretRef}` with no `ns/name:key`).
+pub fn template_has_secret_ref(tpl: &CompiledTemplate) -> bool {
+    tpl.segments().iter().any(|seg| {
+        matches!(
+            seg,
+            TemplateSegment::Variable {
+                var_type: TemplateVarType::SecretRef,
+                ..
+            }
+        )
+    })
+}
+
+/// Validate every `secretRef` segment in a compiled template: each must be a
+/// well-formed `${secretRef:ns/name:key}` (explicit ns + key). A bare
+/// `${secretRef}` (no name) is rejected. Returns the first error.
+pub fn validate_secret_ref_segments(tpl: &CompiledTemplate) -> Result<(), String> {
+    for seg in tpl.segments() {
+        if let TemplateSegment::Variable {
+            var_type: TemplateVarType::SecretRef,
+            var_name,
+        } = seg
+        {
+            match var_name {
+                Some(name) => {
+                    parse_secret_ref(name)?;
+                }
+                None => return Err("secretRef requires the form ${secretRef:ns/name:key}".to_string()),
+            }
+        }
+    }
+    Ok(())
+}
+
 impl CtxSetConfig {
     /// Check all fields for validity without mutating self.
     ///
@@ -468,8 +565,16 @@ impl CtxSetConfig {
                 }
             }
             if let Some(ref template) = rule.template {
-                if let Err(e) = CompiledTemplate::compile(template) {
-                    return Some(format!("vars[{}] '{}': invalid template: {}", idx, rule.name, e));
+                match CompiledTemplate::compile(template) {
+                    Err(e) => return Some(format!("vars[{}] '{}': invalid template: {}", idx, rule.name, e)),
+                    Ok(compiled) => {
+                        if template_has_secret_ref(&compiled) {
+                            return Some(format!(
+                                "vars[{}] '{}': secretRef is only supported in webhook templates, not ctx_set",
+                                idx, rule.name
+                            ));
+                        }
+                    }
                 }
             }
         }
@@ -549,6 +654,12 @@ impl CtxSetConfig {
             if let Some(ref template) = rule.template {
                 match CompiledTemplate::compile(template) {
                     Ok(compiled) => {
+                        if template_has_secret_ref(&compiled) {
+                            return Err(format!(
+                                "vars[{}] '{}': secretRef is only supported in webhook templates, not ctx_set",
+                                idx, rule.name
+                            ));
+                        }
                         self.compiled_templates.insert(idx, compiled);
                     }
                     Err(e) => {
@@ -903,5 +1014,51 @@ vars:
         let mut config: CtxSetConfig = serde_yaml::from_str(yaml).unwrap();
         let err = config.validate().unwrap_err();
         assert!(err.contains("invalid template"));
+    }
+
+    #[test]
+    fn secret_ref_variant_parses() {
+        let compiled = CompiledTemplate::compile("${secretRef:edgion-system/tok:key}").expect("compile");
+        let names = secret_ref_var_names(&compiled);
+        assert_eq!(names, vec!["edgion-system/tok:key".to_string()]);
+    }
+
+    #[test]
+    fn parse_secret_ref_valid() {
+        let p = parse_secret_ref("edgion-system/tok:api-key").expect("valid");
+        assert_eq!(p.namespace, "edgion-system");
+        assert_eq!(p.name, "tok");
+        assert_eq!(p.key, "api-key");
+    }
+
+    #[test]
+    fn parse_secret_ref_rejects_missing_key() {
+        assert!(parse_secret_ref("edgion-system/tok").is_err());
+    }
+
+    #[test]
+    fn parse_secret_ref_rejects_missing_namespace() {
+        assert!(parse_secret_ref("tok:key").is_err());
+    }
+
+    #[test]
+    fn ctx_set_rejects_secret_ref_template() {
+        let cfg: CtxSetConfig = serde_json::from_value(serde_json::json!({
+            "vars": [ { "name": "x", "template": "${secretRef:ns/n:k}" } ]
+        }))
+        .expect("deserialize");
+        let err = cfg.check_fields().expect("must reject");
+        assert!(err.contains("secretRef"), "got: {err}");
+    }
+
+    #[test]
+    fn ctx_set_rejects_bare_secret_ref() {
+        // A bare `${secretRef}` (no ns/name:key) must also be rejected by check_fields.
+        let cfg: CtxSetConfig = serde_json::from_value(serde_json::json!({
+            "vars": [ { "name": "x", "template": "${secretRef}" } ]
+        }))
+        .expect("deserialize");
+        let err = cfg.check_fields().expect("must reject bare secretRef");
+        assert!(err.contains("secretRef"), "got: {err}");
     }
 }

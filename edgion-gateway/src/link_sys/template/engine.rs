@@ -45,6 +45,11 @@ pub fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: 
         TemplateVarType::RequestUri => session.get_request_uri(),
         TemplateVarType::Method => session.get_method().to_string(),
         TemplateVarType::ClientIp => session.remote_addr().to_string(),
+        // secretRef is webhook-only; the shared engine (ctx_set) has no secret
+        // source, so it resolves to empty. This is a B2-leak backstop — ctx_set
+        // is also rejected at validation, but this guarantees no value can ever
+        // be surfaced here even if that guard were bypassed.
+        TemplateVarType::SecretRef => String::new(),
     }
 }
 
@@ -126,6 +131,14 @@ mod tests {
             .withf(|n| n == "domain")
             .return_const(Some("example.com".to_string()));
         assert_eq!(evaluate_template(&compiled, &session), "alice@example.com");
+    }
+
+    #[test]
+    fn test_secret_ref_resolves_empty_in_shared_engine() {
+        let compiled = compile("x=${secretRef:ns/n:k}");
+        let session = MockPluginSession::new();
+        // The shared engine (used by ctx_set) has no secret source: secretRef is empty.
+        assert_eq!(evaluate_template(&compiled, &session), "x=");
     }
 
     #[test]

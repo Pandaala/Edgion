@@ -40,8 +40,9 @@ pub use basic_auth::{BasicAuthConfig, BasicAuthSecretGroup, ResolvedBasicAuthUse
 pub use cors::CorsConfig;
 pub use csrf::CsrfConfig;
 pub use ctx_set::{
-    CaseType, CompiledTemplate, CtxSetConfig, CtxVarRule, ExtractConfig, MappingConfig, ReplaceConfig, TemplateSegment,
-    TemplateVarType, TransformConfig, TransformType,
+    parse_secret_ref, secret_ref_var_names, template_has_secret_ref, validate_secret_ref_segments, CaseType,
+    CompiledTemplate, CtxSetConfig, CtxVarRule, ExtractConfig, MappingConfig, ReplaceConfig, SecretRefParts,
+    TemplateSegment, TemplateVarType, TransformConfig, TransformType,
 };
 pub use debug_access_log::DebugAccessLogToHeaderConfig;
 pub use direct_endpoint::{DirectEndpointConfig, DirectEndpointOnInvalid, DirectEndpointOnMissing, EndpointExtract};
