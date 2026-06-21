@@ -3,24 +3,30 @@
 //! This is the main entry point called from session_adapter's key_get for
 //! KeyGet::Webhook variants.
 
-use std::collections::HashMap;
-
 use crate::observe::metrics::record_webhook_resolve_error;
-use crate::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
 use crate::plugins::runtime::PluginSession;
 use edgion_resources::common::WebhookExtract;
 
-use super::call::{webhook_call, WebhookCallError, WebhookCallRequest, WebhookCallResult};
+use super::call::{webhook_call, WebhookCallError, WebhookCallResult};
 use super::manager::{get_webhook_global_max, get_webhook_manager};
 
 /// Resolve a key value by calling an external webhook service.
 ///
 /// This is the main entry point called from session_adapter's key_get.
+///
+/// The outbound request shape (method, path, query args, headers, cookies) is
+/// now defined entirely by the webhook resource's `request` block and applied
+/// inside `webhook_call`. The consumer only supplies the `session` (for origin
+/// and template lookups) and an optional `path_override`.
+///
+/// `_forward_headers` is retained in the signature for the Wave C consumer
+/// migration but is no longer consumed here — headers to forward are declared
+/// on the webhook resource's `request.headers.origin` allow-list.
 pub async fn resolve_webhook_key(
     session: &dyn PluginSession,
     webhook_ref: &str,
-    forward_headers: Option<&[String]>,
-    path_suffix: Option<&str>,
+    _forward_headers: Option<&[String]>,
+    path_override: Option<&str>,
     extract: &WebhookExtract,
 ) -> Option<String> {
     let runtime = match get_webhook_manager().get(webhook_ref).await {
@@ -31,45 +37,9 @@ pub async fn resolve_webhook_key(
         }
     };
 
-    // Build forwarded headers from incoming request
-    let mut headers = HashMap::new();
+    let path_override = path_override.map(|s| s.to_string());
 
-    // Always forward X-Forwarded-* context headers
-    let remote = session.remote_addr();
-    if !remote.is_empty() {
-        headers.insert("X-Forwarded-For".to_string(), remote.to_string());
-    }
-    headers.insert("X-Forwarded-Method".to_string(), session.get_method().to_string());
-    headers.insert("X-Forwarded-Uri".to_string(), session.get_path().to_string());
-    if let Some(host) = session.header_value("host") {
-        headers.insert("X-Forwarded-Host".to_string(), host);
-    }
-
-    // Forward explicitly requested headers from the incoming request.
-    // Per RFC 9110 §7.6.1, also strip names dynamically nominated by the
-    // originating request's Connection: header value, in addition to the
-    // canonical hop-by-hop set.
-    if let Some(fwd) = forward_headers {
-        let connection_value = session.header_value("connection").unwrap_or_default();
-        let dynamic_listed = connection_listed_hop_by_hop(&connection_value);
-        for name in fwd {
-            if is_hop_by_hop_or_listed(name, &dynamic_listed) {
-                continue;
-            }
-            if let Some(val) = session.header_value(name) {
-                headers.insert(name.clone(), val);
-            }
-        }
-    }
-
-    let req = WebhookCallRequest {
-        method: runtime.config.request_method.clone(),
-        path: path_suffix.unwrap_or("").to_string(),
-        headers,
-        body: None,
-    };
-
-    match webhook_call(&runtime, req, get_webhook_global_max()).await {
+    match webhook_call(&runtime, session, path_override, get_webhook_global_max()).await {
         Ok(result) => extract_value(&result, extract),
         Err(WebhookCallError::Unhealthy) => {
             record_webhook_resolve_error("unhealthy");

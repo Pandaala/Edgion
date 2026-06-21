@@ -123,15 +123,11 @@ pub enum KeyGet {
         #[serde(rename = "webhookRef")]
         webhook_ref: String,
 
-        /// Headers to forward from the incoming request to the webhook service.
-        /// None = do not forward any incoming headers.
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "forwardHeaders")]
-        forward_headers: Option<Vec<String>>,
-
-        /// Path suffix appended to the webhook uri.
-        /// e.g. uri="https://api.example.com" + pathSuffix="/v2/resolve" → https://api.example.com/v2/resolve
-        #[serde(default, skip_serializing_if = "Option::is_none", rename = "pathSuffix")]
-        path_suffix: Option<String>,
+        /// Optional path override for the webhook call.
+        /// Only takes effect if the referenced webhook resource allows path overrides;
+        /// otherwise it is ignored in favor of the resource-declared path.
+        #[serde(default, skip_serializing_if = "Option::is_none", rename = "pathOverride")]
+        path_override: Option<String>,
 
         /// How to extract the key value from the webhook response
         extract: WebhookExtract,
@@ -350,8 +346,7 @@ mod tests {
         assert_eq!(
             KeyGet::Webhook {
                 webhook_ref: "prod/resolver".to_string(),
-                forward_headers: None,
-                path_suffix: None,
+                path_override: None,
                 extract: WebhookExtract::BodyText,
             }
             .as_log_str(),
@@ -378,8 +373,7 @@ mod tests {
         assert_eq!(
             KeyGet::Webhook {
                 webhook_ref: "ns/name".to_string(),
-                forward_headers: None,
-                path_suffix: None,
+                path_override: None,
                 extract: WebhookExtract::BodyText,
             }
             .source_type(),
@@ -574,8 +568,7 @@ extract:
             key,
             KeyGet::Webhook {
                 webhook_ref: "prod/key-resolver".to_string(),
-                forward_headers: None,
-                path_suffix: None,
+                path_override: None,
                 extract: WebhookExtract::Header {
                     name: "X-Resolved-Key".to_string(),
                 },
@@ -597,8 +590,7 @@ extract:
             key,
             KeyGet::Webhook {
                 webhook_ref: "prod/user-mapper".to_string(),
-                forward_headers: None,
-                path_suffix: None,
+                path_override: None,
                 extract: WebhookExtract::Body {
                     path: "data.user_id".to_string(),
                 },
@@ -619,8 +611,7 @@ extract:
             key,
             KeyGet::Webhook {
                 webhook_ref: "ns/resolver".to_string(),
-                forward_headers: None,
-                path_suffix: None,
+                path_override: None,
                 extract: WebhookExtract::BodyText,
             }
         );
@@ -640,8 +631,7 @@ extract:
             key,
             KeyGet::Webhook {
                 webhook_ref: "ns/resolver".to_string(),
-                forward_headers: None,
-                path_suffix: None,
+                path_override: None,
                 extract: WebhookExtract::Cookie {
                     name: "session_token".to_string(),
                 },
@@ -653,8 +643,7 @@ extract:
     fn test_key_get_webhook_json_roundtrip() {
         let key = KeyGet::Webhook {
             webhook_ref: "prod/resolver".to_string(),
-            forward_headers: None,
-            path_suffix: None,
+            path_override: None,
             extract: WebhookExtract::Body {
                 path: "data.key".to_string(),
             },
@@ -668,8 +657,7 @@ extract:
     fn test_key_get_webhook_is_remote() {
         assert!(KeyGet::Webhook {
             webhook_ref: "ns/name".to_string(),
-            forward_headers: None,
-            path_suffix: None,
+            path_override: None,
             extract: WebhookExtract::BodyText,
         }
         .is_remote());
@@ -685,8 +673,7 @@ extract:
         assert_eq!(
             KeyGet::Webhook {
                 webhook_ref: "prod/resolver".to_string(),
-                forward_headers: None,
-                path_suffix: None,
+                path_override: None,
                 extract: WebhookExtract::BodyText,
             }
             .name(),
@@ -695,14 +682,11 @@ extract:
     }
 
     #[test]
-    fn test_key_get_webhook_forward_headers_and_path_suffix() {
+    fn test_key_get_webhook_with_path_override() {
         let yaml = r#"
 type: webhook
 webhookRef: "prod/resolver"
-forwardHeaders:
-  - Authorization
-  - X-User-ID
-pathSuffix: "/v2/resolve"
+pathOverride: "/v2/resolve"
 extract:
   source: bodyText
 "#;
@@ -710,16 +694,11 @@ extract:
         match key {
             KeyGet::Webhook {
                 webhook_ref,
-                forward_headers,
-                path_suffix,
+                path_override,
                 extract,
             } => {
                 assert_eq!(webhook_ref, "prod/resolver");
-                assert_eq!(
-                    forward_headers.as_deref(),
-                    Some(["Authorization".to_string(), "X-User-ID".to_string()].as_slice())
-                );
-                assert_eq!(path_suffix.as_deref(), Some("/v2/resolve"));
+                assert_eq!(path_override.as_deref(), Some("/v2/resolve"));
                 assert_eq!(extract, WebhookExtract::BodyText);
             }
             _ => panic!("Expected Webhook variant"),
@@ -727,8 +706,8 @@ extract:
     }
 
     #[test]
-    fn test_key_get_webhook_defaults_omitted() {
-        // forward_headers and path_suffix should be None when absent
+    fn test_key_get_webhook_without_path_override_defaults_none() {
+        // path_override should default to None when absent.
         let yaml = r#"
 type: webhook
 webhookRef: "ns/name"
@@ -737,13 +716,84 @@ extract:
 "#;
         let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
         match key {
+            KeyGet::Webhook { path_override, .. } => {
+                assert!(path_override.is_none());
+            }
+            _ => panic!("Expected Webhook variant"),
+        }
+    }
+
+    #[test]
+    fn test_key_get_webhook_with_extract() {
+        // The extract field is preserved and parsed independently of path_override.
+        let yaml = r#"
+type: webhook
+webhookRef: "ns/name"
+extract:
+  source: header
+  name: "X-Resolved-Key"
+"#;
+        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
+        match key {
             KeyGet::Webhook {
-                forward_headers,
-                path_suffix,
+                extract,
+                path_override,
                 ..
             } => {
-                assert!(forward_headers.is_none());
-                assert!(path_suffix.is_none());
+                assert!(path_override.is_none());
+                assert_eq!(
+                    extract,
+                    WebhookExtract::Header {
+                        name: "X-Resolved-Key".to_string(),
+                    }
+                );
+            }
+            _ => panic!("Expected Webhook variant"),
+        }
+    }
+
+    #[test]
+    fn test_key_get_webhook_forward_headers_field_removed() {
+        // forwardHeaders is no longer a recognized field. With serde's default
+        // (non-deny-unknown) behavior the unknown key is ignored, and the webhook
+        // still deserializes without any forward_headers field on the variant.
+        let yaml = r#"
+type: webhook
+webhookRef: "ns/name"
+forwardHeaders:
+  - Authorization
+extract:
+  source: bodyText
+"#;
+        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(
+            key,
+            KeyGet::Webhook {
+                webhook_ref: "ns/name".to_string(),
+                path_override: None,
+                extract: WebhookExtract::BodyText,
+            }
+        );
+    }
+
+    #[test]
+    fn test_key_get_webhook_path_suffix_field_removed() {
+        // pathSuffix has been replaced by pathOverride. A pathSuffix key is now an
+        // ignored unknown field and does NOT populate path_override.
+        let yaml = r#"
+type: webhook
+webhookRef: "ns/name"
+pathSuffix: "/v2/resolve"
+extract:
+  source: bodyText
+"#;
+        let key: KeyGet = serde_yaml::from_str(yaml).unwrap();
+        match key {
+            KeyGet::Webhook { path_override, .. } => {
+                assert!(
+                    path_override.is_none(),
+                    "pathSuffix must not map onto path_override"
+                );
             }
             _ => panic!("Expected Webhook variant"),
         }

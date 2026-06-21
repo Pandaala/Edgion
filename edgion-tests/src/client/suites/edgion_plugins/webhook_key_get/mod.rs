@@ -1,14 +1,14 @@
-// WebhookKeyGet Plugin Test Module
+// WebhookKeyGet Plugin Test Module (LinkSys webhook redesign — Wave E)
 //
-// Tests KeyGet::Webhook variant integration with CtxSet plugin.
-// Verifies that webhook-based key resolution works correctly through
-// the full gateway pipeline: request → webhook call → response extraction → ctx set.
+// Tests the redesigned KeyGet::Webhook variant integration with the CtxSet plugin
+// across 11 end-to-end scenarios: backend resolution (Service+EndpointSlice,
+// ServiceClusterIp), outbound request construction (origin/custom/template/secret
+// allow-list), presence policies, and pathOverride — verified through the full
+// gateway pipeline: request → webhook call → response extraction → ctx set →
+// access log.
 //
-// Required config files (in edgion-tests/integration/conf/EdgionPlugins/WebhookKeyGet/):
-// - 01_LinkSys_edgion-default_webhook-resolver.yaml    # LinkSys Webhook resource
-// - 02_LinkSys_edgion-default_webhook-body-resolver.yaml
-// - 03_EdgionPlugins_default_webhook-ctx-set.yaml      # CtxSet plugin with webhook key_get
-// - HTTPRoute_default_webhook-keyget-test.yaml          # Route binding
+// Config: one self-contained fixture per scenario in
+// edgion-tests/integration/conf/EdgionPlugins/WebhookKeyGet/NN-*.yaml (Task E1).
 
 mod webhook_key_get;
 

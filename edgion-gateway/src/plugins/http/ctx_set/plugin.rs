@@ -17,13 +17,11 @@
 use async_trait::async_trait;
 use regex::Regex;
 
+use crate::link_sys::template::evaluate_template;
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{
-    CaseType, CompiledTemplate, CtxSetConfig, CtxVarRule, TemplateSegment, TemplateVarType, TransformConfig,
-    TransformType,
-};
+use edgion_resources::resources::edgion_plugins::{CaseType, CtxSetConfig, CtxVarRule, TransformConfig, TransformType};
 
 // ============================================================================
 // CtxSet Plugin
@@ -53,42 +51,6 @@ impl CtxSet {
         Box::new(plugin)
     }
 
-    /// Evaluate a pre-compiled template by resolving each segment.
-    ///
-    /// Because the template structure is fixed at config-load time, user-supplied
-    /// values that happen to contain `${…}` are emitted verbatim -- they are
-    /// never re-parsed as template directives.  This eliminates the template
-    /// injection vulnerability present in the old `resolve_template` approach.
-    fn evaluate_template(&self, compiled: &CompiledTemplate, session: &dyn PluginSession) -> String {
-        let mut result = String::with_capacity(compiled.hint_len());
-        for segment in compiled.segments() {
-            match segment {
-                TemplateSegment::Literal(lit) => result.push_str(lit),
-                TemplateSegment::Variable { var_type, var_name } => {
-                    let value = Self::resolve_var(var_type, var_name.as_deref(), session);
-                    result.push_str(&value);
-                }
-            }
-        }
-        result
-    }
-
-    /// Resolve a single variable by type and optional name
-    fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: &dyn PluginSession) -> String {
-        match var_type {
-            TemplateVarType::Header => var_name.and_then(|n| session.header_value(n)).unwrap_or_default(),
-            TemplateVarType::Query => var_name.and_then(|n| session.get_query_param(n)).unwrap_or_default(),
-            TemplateVarType::Cookie => var_name.and_then(|n| session.get_cookie(n)).unwrap_or_default(),
-            TemplateVarType::Ctx => var_name.and_then(|n| session.get_ctx_var(n)).unwrap_or_default(),
-            TemplateVarType::Path => session.get_path().to_string(),
-            TemplateVarType::Uri => session.get_uri(),
-            TemplateVarType::RequestPath => session.get_request_path().to_string(),
-            TemplateVarType::RequestUri => session.get_request_uri(),
-            TemplateVarType::Method => session.get_method().to_string(),
-            TemplateVarType::ClientIp => session.remote_addr().to_string(),
-        }
-    }
-
     /// Process a single variable rule
     ///
     /// Returns the final value to set, or None if the value should not be set
@@ -103,7 +65,7 @@ impl CtxSet {
         let mut value = if let Some(ref static_value) = rule.value {
             static_value.clone()
         } else if let Some(compiled) = self.config.get_compiled_template(rule_idx) {
-            self.evaluate_template(compiled, session)
+            evaluate_template(compiled, session)
         } else if let Some(ref from) = rule.from {
             // Get from KeyGet source
             session.key_get(from).await.or(rule.default.clone())?

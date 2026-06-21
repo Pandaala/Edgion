@@ -21,12 +21,11 @@ use edgion_resources::credentials::materials::{
     BasicAuthMaterial, BearerMaterial, EsApiKeyMaterial, HmacMaterial, WebhookApiKeyMaterial,
 };
 use edgion_resources::credentials::resolvers::{
-    BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, WebhookApiKeyResolver,
+    BasicAuthResolver, BearerResolver, EsApiKeyResolver,
 };
 use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
-use edgion_resources::resources::link_sys::webhook::WebhookAuth;
 use edgion_resources::resources::link_sys::{LinkSys, SystemConfig};
 use k8s_openapi::api::core::v1::Secret;
 
@@ -241,22 +240,12 @@ pub fn resolved_state(ls: &LinkSys) -> CredentialState<ResolvedCredential> {
                 state_from_optional_secret(slot.secret.as_ref(), &BearerResolver).map(ResolvedCredential::Bearer)
             }
         },
-        SystemConfig::Webhook(w) => match w.auth.as_ref() {
-            None => CredentialState::NotRequired,
-            Some(WebhookAuth::Basic { slot }) => {
-                state_from_optional_secret(slot.secret.as_ref(), &BasicAuthResolver).map(ResolvedCredential::Basic)
-            }
-            Some(WebhookAuth::Bearer { slot }) => {
-                state_from_optional_secret(slot.secret.as_ref(), &BearerResolver).map(ResolvedCredential::Bearer)
-            }
-            Some(WebhookAuth::Hmac { slot }) => {
-                state_from_optional_secret(slot.secret.as_ref(), &HmacResolver).map(ResolvedCredential::Hmac)
-            }
-            Some(WebhookAuth::ApiKey { slot, .. }) => {
-                state_from_optional_secret(slot.secret.as_ref(), &WebhookApiKeyResolver)
-                    .map(ResolvedCredential::WebhookApiKey)
-            }
-        },
+        SystemConfig::Webhook(_w) => {
+            // Webhook auth is now a deprecated shim field (Option<serde_json::Value>)
+            // that is accepted for backward compatibility but not used at runtime.
+            // Credential processing will be re-implemented in Wave B with the new request field.
+            CredentialState::NotRequired
+        }
         SystemConfig::Kafka(kafka) => match kafka.sasl.as_ref() {
             None => CredentialState::NotRequired,
             Some(sasl) => state_from_optional_secret(sasl.password.secret.as_ref(), &BasicAuthResolver)
@@ -609,7 +598,8 @@ mod tests {
     // unauthenticated request.
     // ------------------------------------------------------------
 
-    fn mk_webhook_linksys(auth: Option<WebhookAuth>) -> LinkSys {
+    fn mk_webhook_linksys(auth: Option<serde_json::Value>) -> LinkSys {
+        use edgion_resources::resources::http_route::BackendObjectReference;
         use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
         LinkSys {
             metadata: ObjectMeta {
@@ -619,29 +609,20 @@ mod tests {
             },
             spec: LinkSysSpec {
                 config: SystemConfig::Webhook(WebhookServiceConfig {
-                    target: WebhookTarget::Uri {
-                        uri: "http://localhost:8080/hook".into(),
+                    target: WebhookTarget {
+                        backend_ref: BackendObjectReference {
+                            group: String::new(),
+                            kind: None,
+                            name: "webhook-svc".into(),
+                            namespace: Some("default".into()),
+                            port: Some(8080),
+                        },
                     },
                     auth,
                     ..Default::default()
                 }),
             },
             status: None,
-        }
-    }
-
-    fn mk_webhook_bearer(secret: Option<Secret>) -> WebhookAuth {
-        use edgion_resources::resources::common::SecretSlot;
-        WebhookAuth::Bearer {
-            slot: SecretSlot {
-                secret_ref: SecretObjectReference {
-                    group: None,
-                    kind: None,
-                    name: "s".into(),
-                    namespace: None,
-                },
-                secret,
-            },
         }
     }
 
@@ -652,18 +633,22 @@ mod tests {
     }
 
     #[test]
-    fn resolved_state_webhook_bearer_pending_when_secret_missing() {
-        let ls = mk_webhook_linksys(Some(mk_webhook_bearer(None)));
-        assert!(matches!(resolved_state(&ls), CredentialState::Pending));
+    fn resolved_state_webhook_bearer_not_required_shim_field_unused() {
+        // Webhook auth is now a deprecated shim field that is not used at runtime.
+        // Credential resolution always returns NotRequired regardless of auth content.
+        let ls = mk_webhook_linksys(None);
+        assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
     }
 
     #[test]
-    fn resolved_state_webhook_bearer_resolved_when_secret_present() {
-        let ls = mk_webhook_linksys(Some(mk_webhook_bearer(Some(mk_secret(&[("bearerToken", b"tok")])))));
-        assert!(matches!(
-            resolved_state(&ls),
-            CredentialState::Resolved(ResolvedCredential::Bearer(_))
-        ));
+    fn resolved_state_webhook_bearer_shim_value_ignored() {
+        // Webhook auth is now a deprecated shim field that is not used at runtime.
+        // Even with a shim value, credential resolution returns NotRequired.
+        let ls = mk_webhook_linksys(Some(serde_json::json!({
+            "type": "bearer",
+            "secretRef": {"name": "token"}
+        })));
+        assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
     }
 
     /// The exact gate expression used by both Webhook dispatch arms in
@@ -679,14 +664,13 @@ mod tests {
     }
 
     #[test]
-    fn webhook_dispatch_gate_blocks_pending_auth() {
-        let ls = mk_webhook_linksys(Some(mk_webhook_bearer(None)));
-        assert!(!webhook_dispatch_gate(&ls));
-    }
-
-    #[test]
-    fn webhook_dispatch_gate_opens_with_resolved_auth() {
-        let ls = mk_webhook_linksys(Some(mk_webhook_bearer(Some(mk_secret(&[("bearerToken", b"tok")])))));
+    fn webhook_dispatch_gate_open_with_shim_auth() {
+        // Webhook auth is a deprecated shim field that is not used.
+        // Dispatch gate is always open (NotRequired is buildable).
+        let ls = mk_webhook_linksys(Some(serde_json::json!({
+            "type": "bearer",
+            "secretRef": {"name": "token"}
+        })));
         assert!(webhook_dispatch_gate(&ls));
     }
 

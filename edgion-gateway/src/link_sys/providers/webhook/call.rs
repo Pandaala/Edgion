@@ -9,6 +9,7 @@ use futures::StreamExt;
 
 use super::health::{record_passive_result, should_halfopen_probe};
 use super::runtime::WebhookRuntime;
+use crate::plugins::runtime::PluginSession;
 use edgion_resources::resources::link_sys::webhook::WebhookAuth;
 
 // ============================================================
@@ -61,11 +62,19 @@ pub enum WebhookCallError {
 
 /// Execute an outbound HTTP call using the given webhook runtime.
 ///
-/// Handles: auth injection, default_headers merge, path construction,
-/// retry, health tracking, rate limiting, response size capping.
+/// The outbound request shape (method, path, query args, headers, cookies) is
+/// defined entirely by the webhook resource and pre-compiled into
+/// `runtime.compiled_request`. This function feeds the caller's `session`
+/// (for origin / template lookups) and an optional `path_override` into
+/// [`CompiledOutboundRequest::build_request`], then handles retry, health
+/// tracking, rate limiting, and response size capping.
+///
+/// [`CompiledOutboundRequest::build_request`]:
+/// super::compiled_request::CompiledOutboundRequest::build_request
 pub async fn webhook_call(
     runtime: &WebhookRuntime,
-    req: WebhookCallRequest,
+    session: &dyn PluginSession,
+    path_override: Option<String>,
     global_max_bytes: usize,
 ) -> Result<WebhookCallResult, WebhookCallError> {
     // 1. Health check gate
@@ -80,30 +89,27 @@ pub async fn webhook_call(
         }
     }
 
-    // 3. Build URL
+    // 3. Resolve the base URL (round-robin for Service targets) and build the
+    //    outbound request from the compiled spec + the caller's session. The
+    //    request is built once and cloned per retry attempt (mirrors the prior
+    //    single-URL behavior: retries reuse the same endpoint).
     let base = runtime.resolved_target.pick_url().ok_or(WebhookCallError::Unhealthy)?;
-    let url = build_url(&base, &req.path);
-
-    // 4. Merge headers: default_headers < req.headers
-    let merged = merge_default_headers(runtime.config.default_headers.clone().unwrap_or_default(), req.headers);
-
-    // 5. Build reqwest HeaderMap
-    let mut header_map = reqwest::header::HeaderMap::new();
-    for (k, v) in &merged {
-        if let (Ok(name), Ok(val)) = (
-            reqwest::header::HeaderName::from_bytes(k.as_bytes()),
-            reqwest::header::HeaderValue::from_str(v),
-        ) {
-            header_map.insert(name, val);
-        }
-    }
-
-    // 6. Inject auth
-    inject_auth(&runtime.config.auth, &mut header_map);
-
-    // 7. Build request and execute with retry
-    let method: reqwest::Method = req.method.parse().unwrap_or(reqwest::Method::GET);
     let timeout = Duration::from_millis(runtime.config.timeout_ms);
+    let template_req = match runtime
+        .compiled_request
+        .build_request(session, path_override.as_deref(), &base)
+    {
+        Ok(mut req) => {
+            *req.timeout_mut() = Some(timeout);
+            req
+        }
+        // A build failure (missing required origin field, invalid templated URL
+        // or method) is a request-construction error, not a backend failure, so
+        // it does not record a passive health result.
+        Err(e) => return Err(WebhookCallError::Connect(e)),
+    };
+
+    // 4. Execute with retry.
     let max_attempts = 1 + runtime.config.retry.as_ref().map_or(0, |r| r.max_retries);
     let max_bytes = runtime.config.max_response_bytes.min(global_max_bytes);
 
@@ -116,17 +122,18 @@ pub async fn webhook_call(
             tokio::time::sleep(Duration::from_millis(delay)).await;
         }
 
-        let mut builder = runtime
-            .http_client
-            .request(method.clone(), &url)
-            .headers(header_map.clone())
-            .timeout(timeout);
+        // Body-less webhook requests always clone; the `None` branch is defensive
+        // (a streaming body cannot be cloned, but webhooks send none in this round).
+        let req = match template_req.try_clone() {
+            Some(r) => r,
+            None => {
+                return Err(WebhookCallError::Connect(
+                    "webhook request is not cloneable".to_string(),
+                ))
+            }
+        };
 
-        if let Some(ref body) = req.body {
-            builder = builder.body(body.clone());
-        }
-
-        match builder.send().await {
+        match runtime.http_client.execute(req).await {
             Ok(resp) => {
                 let status = resp.status().as_u16();
 
@@ -215,22 +222,13 @@ pub async fn webhook_call(
 // Helpers (pub(crate) for tests)
 // ============================================================
 
-/// Concatenate base uri and path suffix.
-pub(crate) fn build_url(base: &str, path: &str) -> String {
-    if path.is_empty() {
-        return base.to_string();
-    }
-    let base = base.trim_end_matches('/');
-    let path = if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{path}")
-    };
-    format!("{base}{path}")
-}
-
 /// Merge default_headers (from config) with per-call headers.
 /// Per-call headers win on conflict.
+///
+/// Legacy helper superseded by `CompiledOutboundRequest`; the outbound request
+/// shape now comes entirely from the webhook resource. Retained until the Wave D
+/// auth/default-headers removal.
+#[allow(dead_code)]
 pub(crate) fn merge_default_headers(
     defaults: HashMap<String, String>,
     caller: HashMap<String, String>,
@@ -240,6 +238,9 @@ pub(crate) fn merge_default_headers(
     merged
 }
 
+/// Legacy `WebhookAuth` injection, superseded by `CompiledOutboundRequest`'s
+/// `CustomSource::Secret` handling. Retained until the Wave D auth removal.
+#[allow(dead_code)]
 fn inject_auth(auth: &Option<WebhookAuth>, headers: &mut reqwest::header::HeaderMap) {
     let Some(auth) = auth else { return };
     match auth {
@@ -294,6 +295,9 @@ fn inject_auth(auth: &Option<WebhookAuth>, headers: &mut reqwest::header::Header
     }
 }
 
+/// Legacy secret extractor used only by `inject_auth`. Retained until the
+/// Wave D auth removal.
+#[allow(dead_code)]
 fn extract_secret_string(secret: &Option<k8s_openapi::api::core::v1::Secret>, key: &str) -> Option<String> {
     let secret = secret.as_ref()?;
     let data = secret.data.as_ref()?;
@@ -348,6 +352,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::resources::link_sys::webhook::{WebhookRetry, WebhookServiceConfig, WebhookTarget};
 
     // ============================================================
@@ -355,16 +360,32 @@ mod tests {
     // ============================================================
 
     fn make_runtime(uri: String, config_overrides: impl FnOnce(&mut WebhookServiceConfig)) -> WebhookRuntime {
+        use crate::link_sys::providers::webhook::compiled_request::CompiledOutboundRequest;
+        use edgion_resources::resources::http_route::BackendObjectReference;
+        use edgion_resources::resources::link_sys::webhook::WebhookOutboundRequest;
+
         let resolved_target = WebhookResolvedTarget::Static(uri.clone());
         let mut config = WebhookServiceConfig {
-            target: WebhookTarget::Uri { uri },
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "test-svc".to_string(),
+                    namespace: Some("default".to_string()),
+                    port: Some(8080),
+                },
+            },
             ..Default::default()
         };
         config_overrides(&mut config);
+        let compiled_request =
+            CompiledOutboundRequest::from_spec(&WebhookOutboundRequest::default(), |_, _, _| Ok(String::new()))
+                .expect("default request spec must compile");
         WebhookRuntime {
             config,
             http_client: Arc::new(reqwest::Client::new()),
             resolved_target,
+            compiled_request,
             healthy: AtomicBool::new(true),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),
@@ -373,22 +394,54 @@ mod tests {
         }
     }
 
-    fn make_secret(key: &str, value: &str) -> k8s_openapi::api::core::v1::Secret {
-        let mut data = std::collections::BTreeMap::new();
-        data.insert(key.to_string(), k8s_openapi::ByteString(value.as_bytes().to_vec()));
-        k8s_openapi::api::core::v1::Secret {
-            data: Some(data),
+    /// Build a runtime whose outbound request is compiled from `spec` (rather
+    /// than the empty default). Used by tests that exercise origin / custom
+    /// fields in the compiled request.
+    fn make_runtime_with_request(
+        uri: String,
+        spec: edgion_resources::resources::link_sys::webhook::WebhookOutboundRequest,
+        config_overrides: impl FnOnce(&mut WebhookServiceConfig),
+    ) -> WebhookRuntime {
+        use crate::link_sys::providers::webhook::compiled_request::CompiledOutboundRequest;
+        use edgion_resources::resources::http_route::BackendObjectReference;
+
+        let resolved_target = WebhookResolvedTarget::Static(uri);
+        let mut config = WebhookServiceConfig {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "test-svc".to_string(),
+                    namespace: Some("default".to_string()),
+                    port: Some(8080),
+                },
+            },
             ..Default::default()
+        };
+        config_overrides(&mut config);
+        let compiled_request =
+            CompiledOutboundRequest::from_spec(&spec, |_, _, _| Ok(String::new())).expect("request spec must compile");
+        WebhookRuntime {
+            config,
+            http_client: Arc::new(reqwest::Client::new()),
+            resolved_target,
+            compiled_request,
+            healthy: AtomicBool::new(true),
+            passive_failures: AtomicU32::new(0),
+            last_halfopen: AtomicU64::new(0),
+            backoff_sec: AtomicU64::new(0),
+            rate_counter: None,
         }
     }
 
-    fn simple_get_req() -> WebhookCallRequest {
-        WebhookCallRequest {
-            method: "GET".to_string(),
-            path: String::new(),
-            headers: HashMap::new(),
-            body: None,
-        }
+    /// Mock session that returns a fixed method + frozen request path. The
+    /// default (empty) compiled request reads these to derive the outbound
+    /// method and path. Each is expected to be read at most once per call.
+    fn make_session(method: &str, path: &str) -> MockPluginSession {
+        let mut s = MockPluginSession::new();
+        s.expect_get_method().return_const(method.to_string());
+        s.expect_get_request_path().return_const(path.to_string());
+        s
     }
 
     /// Spawn a one-shot server that returns a 200 with the body sent via
@@ -420,38 +473,6 @@ mod tests {
     // ============================================================
 
     #[test]
-    fn webhook_call_request_default_path_is_empty() {
-        let req = WebhookCallRequest {
-            method: "GET".to_string(),
-            path: String::new(),
-            headers: Default::default(),
-            body: None,
-        };
-        assert!(req.path.is_empty());
-    }
-
-    #[test]
-    fn build_url_appends_path_suffix() {
-        assert_eq!(
-            build_url("https://api.example.com/v1", "/resolve"),
-            "https://api.example.com/v1/resolve"
-        );
-        assert_eq!(
-            build_url("https://api.example.com/v1", ""),
-            "https://api.example.com/v1"
-        );
-        assert_eq!(build_url("https://api.example.com", "/"), "https://api.example.com/");
-    }
-
-    #[test]
-    fn build_url_no_double_slash() {
-        assert_eq!(
-            build_url("https://api.example.com/", "/resolve"),
-            "https://api.example.com/resolve"
-        );
-    }
-
-    #[test]
     fn merge_headers_caller_wins() {
         let mut base = HashMap::new();
         base.insert("X-Source".to_string(), "base".to_string());
@@ -472,13 +493,15 @@ mod tests {
     // ============================================================
 
     /// 1. Unhealthy gate: runtime marked unhealthy with no half-open path → Unhealthy error.
+    /// The build path is never reached, so a bare session (no expectations) is fine.
     #[tokio::test]
     async fn unhealthy_gate_returns_unhealthy_error() {
         let runtime = make_runtime("http://127.0.0.1:1".to_string(), |_| {});
         // Mark unhealthy — no backoff config so should_halfopen_probe returns false.
         runtime.healthy.store(false, std::sync::atomic::Ordering::Relaxed);
 
-        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        let session = MockPluginSession::new();
+        let result = webhook_call(&runtime, &session, None, 65536).await;
         assert!(matches!(result, Err(WebhookCallError::Unhealthy)), "Expected Unhealthy");
     }
 
@@ -491,7 +514,8 @@ mod tests {
         // Create a counter with limit=0 so every acquire fails immediately.
         runtime.rate_counter = Some(SlidingWindowCounter::new(0, std::time::Duration::from_secs(1)));
 
-        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        let session = MockPluginSession::new();
+        let result = webhook_call(&runtime, &session, None, 65536).await;
         assert!(
             matches!(result, Err(WebhookCallError::RateLimited)),
             "Expected RateLimited"
@@ -499,6 +523,8 @@ mod tests {
     }
 
     /// 3. Successful 2xx call: wiremock returns 200 with body → Ok result with correct status + body.
+    /// The default (empty) request spec derives the outbound path from the
+    /// session's frozen request path.
     #[tokio::test]
     async fn successful_2xx_call_returns_ok_with_body() {
         use wiremock::matchers::{method, path};
@@ -511,12 +537,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let runtime = make_runtime(format!("{}/resolve", server.uri()), |c| {
+        let runtime = make_runtime(server.uri(), |c| {
             // 1MB limit so body is not truncated
             c.max_response_bytes = 1024 * 1024;
         });
 
-        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        let session = make_session("GET", "/resolve");
+        let result = webhook_call(&runtime, &session, None, 65536).await;
         let ok = result.expect("Expected Ok");
         assert_eq!(ok.status, 200);
         assert_eq!(ok.body.as_ref(), b"hello-webhook");
@@ -535,11 +562,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let runtime = make_runtime(format!("{}/check", server.uri()), |c| {
+        let runtime = make_runtime(server.uri(), |c| {
             c.max_response_bytes = 1024 * 1024;
         });
 
-        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        let session = make_session("GET", "/check");
+        let result = webhook_call(&runtime, &session, None, 65536).await;
         match result {
             Err(WebhookCallError::StatusNotSuccess { status, .. }) => {
                 assert_eq!(status, 500);
@@ -564,11 +592,12 @@ mod tests {
             .mount(&server)
             .await;
 
-        let runtime = make_runtime(format!("{}/big", server.uri()), |c| {
+        let runtime = make_runtime(server.uri(), |c| {
             c.max_response_bytes = 10;
         });
 
-        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        let session = make_session("GET", "/big");
+        let result = webhook_call(&runtime, &session, None, 65536).await;
         assert!(
             matches!(result, Err(WebhookCallError::ResponseTooLarge)),
             "Expected ResponseTooLarge"
@@ -577,6 +606,7 @@ mod tests {
 
     /// 5b. Streaming guard: a chunked response (no Content-Length) larger than
     /// the cap is rejected by the streaming accumulator, not buffered in full.
+    /// The one-shot server ignores the request path, so any session path works.
     #[tokio::test]
     async fn chunked_response_exceeding_cap_returns_too_large() {
         let url = spawn_chunked_server(vec![b'z'; 4096]).await;
@@ -584,7 +614,8 @@ mod tests {
             c.max_response_bytes = 128;
         });
 
-        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        let session = make_session("GET", "/");
+        let result = webhook_call(&runtime, &session, None, 65536).await;
         assert!(
             matches!(result, Err(WebhookCallError::ResponseTooLarge)),
             "Expected ResponseTooLarge from streaming guard, got {result:?}"
@@ -601,102 +632,118 @@ mod tests {
             c.max_response_bytes = 1024;
         });
 
-        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        let session = make_session("GET", "/");
+        let result = webhook_call(&runtime, &session, None, 65536).await;
         let ok = result.expect("Expected Ok");
         assert_eq!(ok.status, 200);
         assert_eq!(ok.body.as_ref(), body.as_slice());
     }
 
-    /// 6. Bearer auth injection: Authorization: Bearer tok123 is sent to the server.
+    /// 6. Custom header from the request spec is sent on the wire.
+    /// Replaces the former auth/default-header tests: outbound headers now come
+    /// from `request.headers.custom`, not the caller.
     #[tokio::test]
-    async fn bearer_auth_injects_authorization_header() {
-        use edgion_resources::resources::common::SecretObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookAuth;
+    async fn custom_header_from_request_spec_is_sent() {
+        use edgion_resources::resources::link_sys::webhook::{
+            CustomField, CustomSource, ListFields, WebhookOutboundRequest,
+        };
         use wiremock::matchers::{header, method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
         Mock::given(method("GET"))
-            .and(path("/auth"))
-            .and(header("Authorization", "Bearer tok123"))
+            .and(path("/hook"))
+            .and(header("X-Caller", "edgion-gateway"))
             .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
             .mount(&server)
             .await;
 
-        let secret = make_secret("bearerToken", "tok123");
-        let runtime = make_runtime(format!("{}/auth", server.uri()), |c| {
+        let spec = WebhookOutboundRequest {
+            headers: ListFields {
+                origin: vec![],
+                custom: vec![CustomField {
+                    name: "X-Caller".to_string(),
+                    source: CustomSource::Value("edgion-gateway".to_string()),
+                }],
+            },
+            ..WebhookOutboundRequest::default()
+        };
+        let runtime = make_runtime_with_request(server.uri(), spec, |c| {
             c.max_response_bytes = 1024;
-            use edgion_resources::resources::common::SecretSlot;
-            c.auth = Some(WebhookAuth::Bearer {
-                slot: SecretSlot {
-                    secret_ref: SecretObjectReference {
-                        group: None,
-                        kind: None,
-                        name: "test-secret".to_string(),
-                        namespace: None,
-                    },
-                    secret: Some(secret),
-                },
-            });
         });
 
-        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
-        assert!(result.is_ok(), "Bearer auth call failed");
+        let session = make_session("GET", "/hook");
+        let result = webhook_call(&runtime, &session, None, 65536).await;
+        assert!(result.is_ok(), "webhook call with custom header should succeed");
         assert_eq!(result.unwrap().status, 200);
     }
 
-    /// 7. ApiKey header auth injection: X-API-Key: k123 is sent to the server.
+    /// 7. Missing required origin field: `build_request` fails before any network
+    /// I/O, and the error surfaces as a webhook call failure (no server needed).
     #[tokio::test]
-    async fn api_key_header_auth_injects_custom_header() {
-        use edgion_resources::resources::common::SecretObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookAuth;
-        use wiremock::matchers::{header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
+    async fn missing_required_origin_field_returns_error() {
+        use edgion_resources::resources::link_sys::webhook::{
+            ListFields, OriginField, PresencePolicy, WebhookOutboundRequest,
+        };
 
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/key"))
-            .and(header("X-API-Key", "k123"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("authorized"))
-            .mount(&server)
-            .await;
+        let spec = WebhookOutboundRequest {
+            headers: ListFields {
+                origin: vec![OriginField {
+                    name: "X-Required".to_string(),
+                    presence: PresencePolicy::Required,
+                }],
+                custom: vec![],
+            },
+            ..WebhookOutboundRequest::default()
+        };
+        let runtime = make_runtime_with_request("http://127.0.0.1:8080".to_string(), spec, |_| {});
 
-        let secret = make_secret("apiKey", "k123");
-        let runtime = make_runtime(format!("{}/key", server.uri()), |c| {
-            c.max_response_bytes = 1024;
-            use edgion_resources::resources::common::SecretSlot;
-            c.auth = Some(WebhookAuth::ApiKey {
-                slot: SecretSlot {
-                    secret_ref: SecretObjectReference {
-                        group: None,
-                        kind: None,
-                        name: "test-apikey".to_string(),
-                        namespace: None,
-                    },
-                    secret: Some(secret),
-                },
-                r#in: "header".to_string(),
-                header_name: Some("X-API-Key".to_string()),
-                query_param: None,
-            });
-        });
+        let mut session = make_session("GET", "/api");
+        session
+            .expect_header_value()
+            .withf(|n| n == "X-Required")
+            .return_const(None::<String>);
 
-        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
-        assert!(result.is_ok(), "ApiKey header auth call failed");
-        assert_eq!(result.unwrap().status, 200);
+        let result = webhook_call(&runtime, &session, None, 65536).await;
+        match result {
+            Err(WebhookCallError::Connect(msg)) => {
+                assert!(
+                    msg.contains("X-Required"),
+                    "error should name the missing field, got: {msg}"
+                );
+            }
+            other => panic!("Expected Connect(build error) for missing required field, got {other:?}"),
+        }
     }
 
-    /// 8. Retry on retry_on_status: first 500 then 200; final result is Ok, exactly 2 requests received.
+    /// 8. Connection refused: a healthy runtime pointed at a closed port returns
+    /// a connection error (not Unhealthy / RateLimited).
+    #[tokio::test]
+    async fn connection_refused_returns_connect_error() {
+        let runtime = make_runtime("http://127.0.0.1:1".to_string(), |c| {
+            c.max_response_bytes = 1024;
+        });
+
+        let session = make_session("GET", "/");
+        let result = webhook_call(&runtime, &session, None, 65536).await;
+        assert!(
+            matches!(
+                result,
+                Err(WebhookCallError::Connect(_)) | Err(WebhookCallError::Timeout)
+            ),
+            "Expected Connect/Timeout for a closed port, got {result:?}"
+        );
+    }
+
+    /// 9. Retry on retry_on_status: first 500 then 200; final result is Ok, exactly 2 requests received.
     #[tokio::test]
     async fn retry_on_status_retries_and_succeeds() {
-        use std::sync::atomic::AtomicU32 as StdAtomicU32;
         use wiremock::matchers::{method, path};
         use wiremock::{Mock, MockServer, ResponseTemplate};
 
         let server = MockServer::start().await;
 
         // First request returns 500, second returns 200.
-        // We use a counter to serve different responses.
         // wiremock supports priority: lower number = matched first.
         // Use `.up_to_n_times(1)` for the first 500, then unlimited 200.
         Mock::given(method("GET"))
@@ -714,9 +761,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        let _ = StdAtomicU32::new(0); // silence unused import warning
-
-        let runtime = make_runtime(format!("{}/retry", server.uri()), |c| {
+        let runtime = make_runtime(server.uri(), |c| {
             c.max_response_bytes = 1024;
             c.retry = Some(WebhookRetry {
                 max_retries: 1,
@@ -727,7 +772,10 @@ mod tests {
             });
         });
 
-        let result = webhook_call(&runtime, simple_get_req(), 65536).await;
+        // The request is built once and cloned per attempt, so the session is
+        // read once even though two HTTP requests are sent.
+        let session = make_session("GET", "/retry");
+        let result = webhook_call(&runtime, &session, None, 65536).await;
         assert!(result.is_ok(), "Expected Ok after retry");
         assert_eq!(result.unwrap().status, 200);
 
@@ -739,49 +787,5 @@ mod tests {
             "Expected exactly 2 requests (1 initial + 1 retry), got {}",
             received.len()
         );
-    }
-
-    // ============================================================
-    // P1 — defaultHeaders merge precedence in a real call
-    // ============================================================
-
-    /// 11. defaultHeaders merge precedence: caller wins on conflict, default kept when not overridden.
-    #[tokio::test]
-    async fn default_headers_merge_precedence_in_real_call() {
-        use wiremock::matchers::{header, method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let server = MockServer::start().await;
-        // Wiremock asserts: X-Source=caller (caller overrides default) AND X-Constant=yes (default kept).
-        Mock::given(method("GET"))
-            .and(path("/merge"))
-            .and(header("X-Source", "caller"))
-            .and(header("X-Constant", "yes"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("merged"))
-            .mount(&server)
-            .await;
-
-        let runtime = make_runtime(format!("{}/merge", server.uri()), |c| {
-            c.max_response_bytes = 1024;
-            let mut defaults = HashMap::new();
-            defaults.insert("X-Source".to_string(), "srv".to_string());
-            defaults.insert("X-Constant".to_string(), "yes".to_string());
-            c.default_headers = Some(defaults);
-        });
-
-        // Caller provides X-Source which should override the default.
-        let mut caller_headers = HashMap::new();
-        caller_headers.insert("X-Source".to_string(), "caller".to_string());
-
-        let req = WebhookCallRequest {
-            method: "GET".to_string(),
-            path: String::new(),
-            headers: caller_headers,
-            body: None,
-        };
-
-        let result = webhook_call(&runtime, req, 65536).await;
-        assert!(result.is_ok(), "defaultHeaders merge call failed");
-        assert_eq!(result.unwrap().status, 200);
     }
 }

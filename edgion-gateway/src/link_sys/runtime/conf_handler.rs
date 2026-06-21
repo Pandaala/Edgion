@@ -47,6 +47,7 @@ impl ConfHandler<LinkSys> for LinkSysStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::http_route::BackendObjectReference;
     use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
     use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
@@ -59,8 +60,14 @@ mod tests {
             },
             spec: LinkSysSpec {
                 config: SystemConfig::Webhook(WebhookServiceConfig {
-                    target: WebhookTarget::Uri {
-                        uri: "http://localhost:8080/resolve".to_string(),
+                    target: WebhookTarget {
+                        backend_ref: BackendObjectReference {
+                            group: String::new(),
+                            kind: None,
+                            name: "resolve-svc".to_string(),
+                            namespace: Some(namespace.to_string()),
+                            port: Some(8080),
+                        },
                     },
                     ..Default::default()
                 }),

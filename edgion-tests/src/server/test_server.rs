@@ -329,6 +329,16 @@ fn create_echo_router(server_addr_str: String) -> Router {
             "/webhook/resolve",
             get(webhook_resolve_handler).post(webhook_resolve_handler),
         )
+        // Path-override scenarios reuse the same echo handler; the extracted
+        // `data.path` proves which path the gateway actually called.
+        .route(
+            "/webhook/default",
+            get(webhook_resolve_handler).post(webhook_resolve_handler),
+        )
+        .route(
+            "/webhook/override",
+            get(webhook_resolve_handler).post(webhook_resolve_handler),
+        )
         .route(
             "/webhook/resolve-body",
             get(webhook_resolve_body_handler).post(webhook_resolve_body_handler),
@@ -876,26 +886,83 @@ async fn cb_reset_handler() -> impl IntoResponse {
     (StatusCode::OK, "cb-reset-ok")
 }
 
-/// Webhook resolve handler — returns resolved key value via response header and JSON body.
+/// Webhook resolve handler — returns resolved key value AND echoes the inbound
+/// request so integration tests can verify outbound-request construction.
 ///
 /// Simulates an external key-resolution service. Reads the `X-Tenant-Id` header
 /// from the forwarded request and returns:
 /// - Response header `X-Resolved-Key` with the resolved value
 /// - Response header `X-Webhook-Status` = "resolved"
 /// - Set-Cookie `webhook_session=wh-sess-<tenant>`
-/// - JSON body: `{"data":{"user_id":"uid-<tenant>","tenant":"<tenant>"}}`
+/// - JSON body:
+///   ```json
+///   {"data":{
+///     "user_id":"uid-<tenant>","tenant":"<tenant>",
+///     "method":"GET","path":"/webhook/resolve","query":"a=b",
+///     "echo_headers":{"<lowercased-name>":"<value>", ...},
+///     "echo_args":{"<name>":"<value>", ...},
+///     "echo_cookies":{"<name>":"<value>", ...}
+///   }}
+///   ```
 ///
-/// If `X-Tenant-Id` is missing, returns a default resolution.
+/// The `echo_*` maps reflect exactly what the gateway sent on the wire, so a
+/// webhook `extract` of e.g. `data.echo_headers.x-source` surfaces the outbound
+/// header value into a ctx var (and thus the access log) for assertion. The
+/// `data.path` field lets path-override tests prove which path was called.
+///
+/// If `X-Tenant-Id` is missing, returns a default resolution. The legacy
+/// `user_id`/`tenant` body keys and response headers are preserved so existing
+/// extraction paths keep working — the echo fields are purely additive.
+///
+/// Note: query/cookie values are echoed verbatim (no percent-decoding); tests
+/// that assert on them use plain alphanumeric values.
 async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     use axum::http::StatusCode;
     use axum::response::Json;
     use serde_json::json;
+    use std::collections::BTreeMap;
+
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+    let query = req.uri().query().unwrap_or("").to_string();
 
     let headers = req.headers();
     let tenant = headers
         .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("unknown");
+
+    // Echo every inbound header (keys lowercased for stable lookup).
+    let mut echo_headers: BTreeMap<String, String> = BTreeMap::new();
+    for (k, v) in headers.iter() {
+        if let Ok(val) = v.to_str() {
+            echo_headers.insert(k.as_str().to_lowercase(), val.to_string());
+        }
+    }
+
+    // Echo query args (raw, split on `&` then `=`).
+    let mut echo_args: BTreeMap<String, String> = BTreeMap::new();
+    for pair in query.split('&').filter(|s| !s.is_empty()) {
+        let mut it = pair.splitn(2, '=');
+        let key = it.next().unwrap_or("").to_string();
+        let val = it.next().unwrap_or("").to_string();
+        echo_args.insert(key, val);
+    }
+
+    // Echo cookies parsed from the single `Cookie` header the gateway sends.
+    let mut echo_cookies: BTreeMap<String, String> = BTreeMap::new();
+    if let Some(cookie_hdr) = headers.get("cookie").and_then(|v| v.to_str().ok()) {
+        for pair in cookie_hdr.split(';') {
+            let pair = pair.trim();
+            if pair.is_empty() {
+                continue;
+            }
+            let mut it = pair.splitn(2, '=');
+            let key = it.next().unwrap_or("").trim().to_string();
+            let val = it.next().unwrap_or("").trim().to_string();
+            echo_cookies.insert(key, val);
+        }
+    }
 
     let resolved_key = format!("resolved-{}", tenant);
     let user_id = format!("uid-{}", tenant);
@@ -905,6 +972,12 @@ async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
         "data": {
             "user_id": user_id,
             "tenant": tenant,
+            "method": method,
+            "path": path,
+            "query": query,
+            "echo_headers": echo_headers,
+            "echo_args": echo_args,
+            "echo_cookies": echo_cookies,
         }
     });
 

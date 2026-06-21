@@ -20,6 +20,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use edgion_resources::credentials::SecretMaterialResolver;
 use edgion_resources::prelude_resources::LinkSys;
 use edgion_resources::resources::common::SecretObjectReference;
+use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 use edgion_resources::resources::link_sys::{LinkSysStatus, SystemConfig};
 
 use super::auth_spec::{AuthSpec, TlsSpec};
@@ -235,6 +236,64 @@ async fn drive_standard<A: AuthSpec, T: TlsSpec>(
 /// Leaving `secret: None` on the unresolved field is safe: gateway providers
 /// only build a client when `CredentialState::is_buildable` returns true, so
 /// a partially resolved spec never reaches a live client.
+/// A webhook shim field that is present in the spec and therefore triggers a
+/// deprecation warning. Carries the CRD field name and the migration hint so
+/// the WARN message and the unit test assertions share one source of truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeprecatedShimField {
+    /// CRD field name as the operator wrote it (camelCase).
+    field: &'static str,
+    /// Migration guidance appended to the warning message.
+    migrate_to: &'static str,
+}
+
+/// Detect which webhook shim fields are present (pure, side-effect free).
+///
+/// Splitting detection from logging lets unit tests assert exactly which fields
+/// would warn without standing up a tracing subscriber. Returns the fields in a
+/// stable order (auth, defaultHeaders, requestMethod) so log/test output is
+/// deterministic.
+fn detect_deprecated_webhook_shim_fields(w: &WebhookServiceConfig) -> Vec<DeprecatedShimField> {
+    let mut out = Vec::new();
+    if w.auth.is_some() {
+        out.push(DeprecatedShimField {
+            field: "auth",
+            migrate_to: "request.headers.custom with source: secret",
+        });
+    }
+    if w.default_headers.is_some() {
+        out.push(DeprecatedShimField {
+            field: "defaultHeaders",
+            migrate_to: "request.headers.custom with source: value",
+        });
+    }
+    if w.request_method.is_some() {
+        out.push(DeprecatedShimField {
+            field: "requestMethod",
+            migrate_to: "request.method.template",
+        });
+    }
+    out
+}
+
+/// Emit WARN-level deprecation logs for any webhook shim fields still present.
+///
+/// The shim fields (`auth`, `defaultHeaders`, `requestMethod`) are accepted for
+/// backward compatibility during rolling upgrades but are not used at runtime in
+/// this release. They will be removed in the next release (Task D2). This only
+/// logs — it never rejects the resource or alters behavior.
+fn warn_deprecated_webhook_shim_fields(owner: &ResourceRef, w: &WebhookServiceConfig) {
+    for shim in detect_deprecated_webhook_shim_fields(w) {
+        tracing::warn!(
+            link_sys = %owner.key(),
+            deprecated_field = shim.field,
+            "LinkSys uses a deprecated webhook configuration field that will be removed in the \
+             next release. Migrate to {}.",
+            shim.migrate_to,
+        );
+    }
+}
+
 async fn resolve_for_spec(
     ctx: &HandlerContext,
     owner: &ResourceRef,
@@ -244,7 +303,25 @@ async fn resolve_for_spec(
         SystemConfig::Redis(r) => drive_standard(ctx, owner, r.auth.as_mut(), r.tls.as_mut()).await,
         SystemConfig::Etcd(e) => drive_standard(ctx, owner, e.auth.as_mut(), e.tls.as_mut()).await,
         SystemConfig::Elasticsearch(es) => drive_standard(ctx, owner, es.auth.as_mut(), es.tls.as_mut()).await,
-        SystemConfig::Webhook(w) => drive_standard(ctx, owner, w.auth.as_mut(), w.tls.as_mut()).await,
+        SystemConfig::Webhook(w) => {
+            // Emit deprecation warnings for shim fields (auth, defaultHeaders,
+            // requestMethod). These fields are accepted for backward compatibility
+            // but not used at runtime in this release; they will be removed in the
+            // next release (Task D2). Warn so operators migrate ahead of removal.
+            warn_deprecated_webhook_shim_fields(owner, w);
+
+            // Webhook auth is now a deprecated shim field (Option<serde_json::Value>)
+            // that is accepted for backward compatibility but not used at runtime.
+            // Skip auth processing for webhook; process only TLS if present.
+            // Auth processing will be re-implemented in Wave B with the new request field.
+            let mut errs = Vec::new();
+            if let Some(tls) = w.tls.as_mut() {
+                if let Some(e) = tls.resolve(ctx, owner).await {
+                    errs.push(e);
+                }
+            }
+            errs
+        }
         SystemConfig::Kafka(kafka_config) => {
             drive_standard(ctx, owner, kafka_config.sasl.as_mut(), kafka_config.tls.as_mut()).await
         }

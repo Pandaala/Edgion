@@ -749,17 +749,20 @@ async fn test_spec_serde_round_trip_preserves_secret() {
 /// no longer embeds them or registers wakeup dependencies.
 #[tokio::test]
 async fn webhook_service_target_registers_no_service_ref() {
+    use edgion_resources::resources::http_route::BackendObjectReference;
     use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
 
     let (ctx, _runtime) = make_ctx(HashMap::new());
     let owner = ResourceRef::new(ResourceKind::LinkSys, Some("ns".to_string()), "websvc".to_string());
     let mut cfg = SystemConfig::Webhook(WebhookServiceConfig {
-        target: WebhookTarget::Service {
-            name: "websvc".into(),
-            namespace: Some("ns".into()),
-            port: Some(8080),
-            group: None,
-            kind: None,
+        target: WebhookTarget {
+            backend_ref: BackendObjectReference {
+                group: String::new(),
+                kind: None,
+                name: "websvc".into(),
+                namespace: Some("ns".into()),
+                port: Some(8080),
+            },
         },
         ..Default::default()
     });
@@ -769,4 +772,104 @@ async fn webhook_service_target_registers_no_service_ref() {
         refs.is_empty(),
         "webhook target must not register a service_ref after decouple"
     );
+}
+
+// ============================================================================
+// Task D1: deprecation warnings for webhook shim fields
+//
+// The warning emission itself goes through `tracing::warn!`, which the test
+// harness does not capture without a subscriber. We therefore assert on the
+// pure detector `detect_deprecated_webhook_shim_fields`, which is the single
+// source of truth that drives `warn_deprecated_webhook_shim_fields`: if a field
+// is detected, the warning fires; if none are detected, none fire.
+// ============================================================================
+
+/// Build a minimal valid webhook config with no shim fields set.
+fn make_webhook_config() -> edgion_resources::resources::link_sys::webhook::WebhookServiceConfig {
+    use edgion_resources::resources::http_route::BackendObjectReference;
+    use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+    WebhookServiceConfig {
+        target: WebhookTarget {
+            backend_ref: BackendObjectReference {
+                group: String::new(),
+                kind: None,
+                name: "websvc".into(),
+                namespace: Some("ns".into()),
+                port: Some(8080),
+            },
+        },
+        ..Default::default()
+    }
+}
+
+#[test]
+fn test_deprecation_warns_on_auth_shim_field() {
+    let mut cfg = make_webhook_config();
+    cfg.auth = Some(serde_json::json!({ "type": "bearer" }));
+
+    let detected = detect_deprecated_webhook_shim_fields(&cfg);
+    assert_eq!(detected.len(), 1, "exactly the 'auth' shim field should warn");
+    assert_eq!(detected[0].field, "auth");
+    assert!(
+        detected[0].migrate_to.contains("source: secret"),
+        "auth migration hint should point to secret-sourced custom header, got: {}",
+        detected[0].migrate_to
+    );
+}
+
+#[test]
+fn test_deprecation_warns_on_default_headers_shim_field() {
+    let mut cfg = make_webhook_config();
+    cfg.default_headers = Some(serde_json::json!({ "X-Source": "edgion" }));
+
+    let detected = detect_deprecated_webhook_shim_fields(&cfg);
+    assert_eq!(detected.len(), 1, "exactly the 'defaultHeaders' shim field should warn");
+    assert_eq!(detected[0].field, "defaultHeaders");
+    assert!(
+        detected[0].migrate_to.contains("source: value"),
+        "defaultHeaders migration hint should point to value-sourced custom header, got: {}",
+        detected[0].migrate_to
+    );
+}
+
+#[test]
+fn test_deprecation_warns_on_request_method_shim_field() {
+    let mut cfg = make_webhook_config();
+    cfg.request_method = Some(serde_json::json!("POST"));
+
+    let detected = detect_deprecated_webhook_shim_fields(&cfg);
+    assert_eq!(detected.len(), 1, "exactly the 'requestMethod' shim field should warn");
+    assert_eq!(detected[0].field, "requestMethod");
+    assert!(
+        detected[0].migrate_to.contains("request.method.template"),
+        "requestMethod migration hint should point to request.method.template, got: {}",
+        detected[0].migrate_to
+    );
+}
+
+#[test]
+fn test_no_deprecation_warning_when_shim_fields_absent() {
+    let cfg = make_webhook_config();
+    assert!(cfg.auth.is_none());
+    assert!(cfg.default_headers.is_none());
+    assert!(cfg.request_method.is_none());
+
+    let detected = detect_deprecated_webhook_shim_fields(&cfg);
+    assert!(
+        detected.is_empty(),
+        "no shim fields set must produce no deprecation warnings, got: {detected:?}"
+    );
+}
+
+/// All three shim fields present at once: every one must warn, in stable order.
+#[test]
+fn test_deprecation_warns_on_all_shim_fields_together() {
+    let mut cfg = make_webhook_config();
+    cfg.auth = Some(serde_json::json!({ "type": "bearer" }));
+    cfg.default_headers = Some(serde_json::json!({ "X-Source": "edgion" }));
+    cfg.request_method = Some(serde_json::json!("POST"));
+
+    let detected = detect_deprecated_webhook_shim_fields(&cfg);
+    let fields: Vec<&str> = detected.iter().map(|d| d.field).collect();
+    assert_eq!(fields, vec!["auth", "defaultHeaders", "requestMethod"]);
 }

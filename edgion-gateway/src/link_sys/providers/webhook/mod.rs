@@ -6,6 +6,7 @@
 
 pub mod call;
 pub mod client;
+pub mod compiled_request;
 pub mod health;
 pub mod manager;
 pub mod resolver;

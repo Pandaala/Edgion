@@ -1,0 +1,121 @@
+# Bonus scenario 10: custom-template
+# ---------------------------------------------------------------------------
+# Custom headers built from template interpolation. ${header:X-User-Id} reads
+# the current view of an incoming header; ${ctx:trace} reads a ctx var set by an
+# earlier ctx-set step. Verifies the webhook template engine resolves both token
+# types into the outbound request.
+# Backend via Service + EndpointSlice.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh10-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: wh10-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: wh10-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh10-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh10-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+      headers:
+        custom:
+          - name: X-From-Header
+            template: "${header:X-User-Id}"
+          - name: X-From-Ctx
+            template: "${ctx:trace}"
+    timeoutMs: 5000
+    successStatusCodes: [200]
+    allowDegradation: false
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh10-ctx-set
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          # Set the ctx var the webhook template reads via ${ctx:trace}.
+          - name: trace
+            from:
+              type: header
+              name: X-Request-ID
+            default: "no-trace"
+          - name: wh10_result
+            from:
+              type: webhook
+              webhookRef: "edgion-default/wh10-resolver"
+              extract:
+                # X-From-Header is a custom template header "${header:X-User-Id}".
+                # Reading it back proves the ${header:...} token resolved against the
+                # current request view and was injected into the outbound request.
+                source: body
+                path: "data.echo_headers.x-from-header"
+            default: "fallback"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh10-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh10.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh10
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh10-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

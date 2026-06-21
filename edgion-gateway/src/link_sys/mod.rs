@@ -13,6 +13,7 @@
 
 pub mod providers;
 pub mod runtime;
+pub mod template;
 
 // Re-exports from `edgion_common::link` so gateway crate paths remain stable.
 pub use edgion_common::link::{credential, health, lifecycle, tls, LinkSysHealth};

@@ -53,7 +53,7 @@ The module path `crate::types::link_sys` **no longer exists**. If you still see 
 - Calls `LinkSys::validate_config()`:
   - Redis/Etcd/Elasticsearch with empty `endpoints` → error
   - Redis with `topology.mode=sentinel` but no `sentinel` sub-object / `mode=cluster` but no `cluster` sub-object → error
-  - Webhook: invalid URI, invalid method, `statusOnError` out of range, `maxResponseBytes` over the cap → error
+  - Webhook (redesigned): `target.backendRef` missing `port` or unsupported `kind`; `request` template parse error; a field name in both `origin` and `custom`, duplicate names within a block, or a `headers.origin: [{name: Cookie}]` / non-empty `cookies` conflict; `statusOnError` out of range; `maxResponseBytes` over the cap → error. See [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
 - Unimplemented providers (e.g., `Kafka`) **do not** produce errors and stay `Accepted=True` (the schema is valid; the backend is simply not yet wired up — this avoids flipping existing resources to Invalid on upgrade).
 
 ### parse — credential resolution
@@ -61,7 +61,7 @@ The module path `crate::types::link_sys` **no longer exists**. If you still see 
 Unlike the older "pass through directly", the new parse goes through the full **credential pipeline** (`resource_processor/credential/pipeline.rs`):
 
 1. Via `AuthSpec` / `TlsSpec` traits + the generic `drive_standard`, walks every `SecretObjectReference` in the spec uniformly:
-   - The `AuthSpec` trait binds "declaration → resolver selection → material extraction" to a concrete `*Auth` type (Redis/Etcd's `RedisAuth`/`EtcdAuth`; ES/Webhook's tagged-enum variants)
+   - The `AuthSpec` trait binds "declaration → resolver selection → material extraction" to a concrete `*Auth` type (Redis/Etcd's `RedisAuth`/`EtcdAuth`; Elasticsearch's tagged-enum variants). **Webhook no longer participates here:** after the redesign its top-level `auth` is a deprecated shim and the handler's `SystemConfig::Webhook` arm skips auth processing (only TLS is resolved); outbound credentials are `request.headers.custom` entries with a `secret` source, whose controller-side resolution is still being wired (see [webhook.md](../03-controller-gateway-link/webhook.md))
    - The `TlsSpec` trait handles each provider's optional `tls.certs.secretRef` (`TlsConfig` already implements this trait, reusable directly)
    - `resolve_for_spec` calls `drive_standard::<A: AuthSpec, T: TlsSpec>` to fold over all ref handling
    - Adding a new backend just needs: (1) impl `AuthSpec`; (2) add a `SystemConfig` variant; (3) add one line of `drive_standard(...)` in `resolve_for_spec`; (4) if it has TLS, `TlsConfig` already impls `TlsSpec` and can be reused directly
@@ -118,7 +118,7 @@ enum CredentialState<M> {
 Constraints:
 - `Debug` is **redacted**: the `Resolved` variant does not print Material; this way `tracing::info!(state=?state)` never leaks passwords.
 - `is_buildable()` returns true only for `NotRequired` / `Resolved`. The provider's dispatch path is fail-fast: `Pending` / `Invalid` `bail!` directly, and **never** degrades to "empty credentials / anonymous connection" (a historical silent-degrade bug).
-- For tagged-enum auth (ES / Webhook), wrap with the generic `CredentialState<ResolvedCredential>`, with `ResolvedCredential` further dispatching by variant.
+- For tagged-enum auth (Elasticsearch), wrap with the generic `CredentialState<ResolvedCredential>`, with `ResolvedCredential` further dispatching by variant. (Webhook is no longer a tagged-enum-auth provider — its outbound credentials are per-field `request.headers.custom` secret sources resolved in the webhook provider, not via `CredentialState`.)
 
 ### TLS assembly
 

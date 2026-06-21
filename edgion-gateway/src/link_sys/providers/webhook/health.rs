@@ -170,16 +170,32 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64};
 
+    use crate::link_sys::providers::webhook::compiled_request::CompiledOutboundRequest;
     use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
     use edgion_resources::resources::link_sys::webhook::{
-        PassiveBackoff, PassiveHealthCheck, WebhookHealthCheck, WebhookServiceConfig, WebhookTarget,
+        PassiveBackoff, PassiveHealthCheck, WebhookHealthCheck, WebhookOutboundRequest, WebhookServiceConfig,
+        WebhookTarget,
     };
+
+    /// Compile a default (no-op) `CompiledOutboundRequest` for tests that only exercise
+    /// health-state logic and don't care about request template behaviour.
+    fn default_compiled_request() -> CompiledOutboundRequest {
+        CompiledOutboundRequest::from_spec(&WebhookOutboundRequest::default(), |_, _, _| Ok(String::new()))
+            .expect("default request spec must compile")
+    }
 
     #[test]
     fn test_passive_health_check_marks_unhealthy() {
+        use edgion_resources::resources::http_route::BackendObjectReference;
         let config = WebhookServiceConfig {
-            target: WebhookTarget::Uri {
-                uri: "http://localhost:8080".to_string(),
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "health-svc".to_string(),
+                    namespace: Some("default".to_string()),
+                    port: Some(8080),
+                },
             },
             health_check: Some(WebhookHealthCheck {
                 active: None,
@@ -197,6 +213,7 @@ mod tests {
             config,
             http_client: std::sync::Arc::new(reqwest::Client::builder().build().expect("test client")),
             resolved_target: WebhookResolvedTarget::Static("http://localhost:8080".to_string()),
+            compiled_request: default_compiled_request(),
             healthy: AtomicBool::new(true),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),
@@ -215,9 +232,16 @@ mod tests {
 
     #[test]
     fn test_passive_health_check_resets_on_success() {
+        use edgion_resources::resources::http_route::BackendObjectReference;
         let config = WebhookServiceConfig {
-            target: WebhookTarget::Uri {
-                uri: "http://localhost:8080".to_string(),
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "health-svc".to_string(),
+                    namespace: Some("default".to_string()),
+                    port: Some(8080),
+                },
             },
             health_check: Some(WebhookHealthCheck {
                 active: None,
@@ -235,6 +259,7 @@ mod tests {
             config,
             http_client: std::sync::Arc::new(reqwest::Client::builder().build().expect("test client")),
             resolved_target: WebhookResolvedTarget::Static("http://localhost:8080".to_string()),
+            compiled_request: default_compiled_request(),
             healthy: AtomicBool::new(true),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),
@@ -252,11 +277,18 @@ mod tests {
 
     #[test]
     fn test_halfopen_probe_admits_exactly_one_under_contention() {
+        use edgion_resources::resources::http_route::BackendObjectReference;
         use std::sync::{Arc, Barrier};
 
         let config = WebhookServiceConfig {
-            target: WebhookTarget::Uri {
-                uri: "http://localhost:8080".to_string(),
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "health-svc".to_string(),
+                    namespace: Some("default".to_string()),
+                    port: Some(8080),
+                },
             },
             health_check: Some(WebhookHealthCheck {
                 active: None,
@@ -280,6 +312,7 @@ mod tests {
             config,
             http_client: std::sync::Arc::new(reqwest::Client::builder().build().expect("test client")),
             resolved_target: WebhookResolvedTarget::Static("http://localhost:8080".to_string()),
+            compiled_request: default_compiled_request(),
             healthy: AtomicBool::new(false),
             passive_failures: AtomicU32::new(0),
             last_halfopen: AtomicU64::new(0),

@@ -62,14 +62,14 @@ Secret 键名遵循固定的已知约定，不支持通过 `usernameKey` / `pass
 
 | 认证类型 | 推荐 `Secret.type` | 必需键 | 可选键 |
 |---------|---------------------|--------|--------|
-| basic（Redis / Etcd / ES / Webhook） | `kubernetes.io/basic-auth` 或 `Opaque` | `password` | `username` |
+| basic（Redis / Etcd / ES） | `kubernetes.io/basic-auth` 或 `Opaque` | `password` | `username` |
 | apiKey（Elasticsearch） | `Opaque` | `apiKeyId`、`apiKeySecret` | — |
-| bearer（Elasticsearch / Webhook） | `Opaque` | `bearerToken` | — |
-| hmac（Webhook） | `Opaque` | `hmacKey` | — |
-| apiKey（Webhook） | `Opaque` | `apiKey` | — |
+| bearer（Elasticsearch） | `Opaque` | `bearerToken` | — |
 | TLS（所有后端） | `kubernetes.io/tls` 或 `Opaque` | `tls.crt`、`tls.key`、`ca.crt` 中至少一个 | — |
 
 应用层键名使用 camelCase；TLS 键名遵循 Kubernetes `kubernetes.io/tls` 标准。
+
+> **Webhook 凭据有所不同。** Webhook 连接器不再有类型化的 `auth` 块。改为将任意凭据作为自定义请求头（或 arg/cookie）注入，并从 Secret 中读取。Secret 的键名由**运营者自行选择**（即 `key:` 中填写的内容），可选的 `prefix:` 用于在前面拼接 `Bearer ` / `Basic ` 等。详见 [Webhook 连接器 → 自定义字段来源](#自定义字段来源)。
 
 ### TLS
 
@@ -416,7 +416,7 @@ spec:
 
 ## Webhook 连接器
 
-Webhook 连接器需要指定一个 `target`，即在外部 URI（`type: uri`）和 Kubernetes Service（`type: service`）之间的标签选择。
+Webhook 连接器让插件（ctx-set、key-auth、hmac-auth 等）调用外部 HTTP 服务，用于用户解析、权限校验、上下文增强、审计日志等查询。该连接器是出站请求的**唯一事实来源**：它声明后端（`target.backendRef`），并通过 `request` 块精确定义发送的路径、方法、查询参数、请求头和 Cookie。消费方插件不能再静默地改变请求形状——它们只能向 webhook 作者声明的命名槽位填值，可选地覆盖路径（在被允许时），以及解析响应。出站字段遵循**白名单**模型：除非 webhook 明确声明，否则不转发任何内容，因此上游某个行为异常的插件无法泄露运营者从未打算暴露的请求头。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -428,52 +428,205 @@ spec:
   type: webhook
   config:
     target:
-      type: uri
-      uri: "https://key-service.internal/resolve"
-    requestMethod: POST
+      backendRef:
+        kind: Service
+        name: key-service
+        namespace: production
+        port: 8080
+    request:
+      method:
+        template: POST
+      headers:
+        origin:
+          - name: X-Tenant-Id
+        custom:
+          - name: X-Source
+            value: edgion
+          - name: Authorization
+            secret:
+              secretRef:
+                name: webhook-token
+              key: token
+              prefix: "Bearer "
     timeoutMs: 3000
-    auth:
-      type: bearer
-      secretRef:
-        name: webhook-token
-    defaultHeaders:
-      X-Source: edgion
     successStatusCodes: [200]
     maxResponseBytes: 2048
 ```
 
 ### 目标
 
+每个 webhook 通过单一的 `backendRef` 引用其后端，与路由已采用的 `BackendObjectReference` 形状相同。不再有 `type: uri` / `type: service` 的选择——`backendRef` 是唯一的目标形式。
+
+```yaml
+target:
+  backendRef:
+    group: ""              # 可选；默认为 core API 组
+    kind: Service          # Service | ServiceClusterIp | ServiceEndpointSlice（留空默认为 Service）
+    name: webhook-backend
+    namespace: production  # 可选；默认为 LinkSys 所在命名空间
+    port: 8080             # 必填
+```
+
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `target.type` | Enum | **必填** | 目标类型。可选值：`uri` \| `service`。 |
-| `target.uri` | String | **必填**（`uri` 时） | 外部端点，必须以 `http://` 或 `https://` 开头。 |
-| `target.name` | String | **必填**（`service` 时） | Kubernetes Service 名称。 |
-| `target.namespace` | String | LinkSys 所在命名空间 | Service 所在命名空间。 |
-| `target.port` | Integer | none | Service 端口，设置时必须大于 0。 |
-| `target.kind` | String | `Service` | Service 类型，例如 `Service` 或 `ServiceClusterIp`。 |
+| `target.backendRef.group` | String | core（`""`） | 被引用对象的 API 组。 |
+| `target.backendRef.kind` | String | `Service` | 目标类型。可选：`Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 或留空（默认 `Service`）。 |
+| `target.backendRef.name` | String | **必填** | Kubernetes Service 名称。 |
+| `target.backendRef.namespace` | String | LinkSys 所在命名空间 | Service 所在命名空间。 |
+| `target.backendRef.port` | Integer | **必填** | Service 端口，必须大于 0。缺少端口会在准入时以 `Accepted=False` 拒绝。 |
+
+按 kind 的解析方式：
+
+- `Service`（默认，留空/未设置亦同）：网关在调用时从 Kubernetes EndpointSlice 存储解析就绪端点。
+- `ServiceEndpointSlice`：同样的 EndpointSlice 解析的显式形式。
+- `ServiceClusterIp`：通过 Service ClusterIP 的 DNS 名称解析（kube-proxy）。
+
+`kind: ExternalName` 和 `ServiceImport` **不**支持作为 webhook 目标，会在准入时以带说明的 `Accepted=False` 消息拒绝。要访问外部端点，请创建一个代理 Service（例如 `LoadBalancer` 类型的 Service，或由 ingress controller 前置的 `ClusterIP` Service）指向外部主机，然后按名称引用该 Service。详见[从旧 schema 迁移](#从旧-schema-迁移)。
+
+### 出站请求
+
+`request` 块声明出站请求的形状。所有五个子字段均为可选：
+
+- **`path`** / **`method`**——单值。省略任一项则复用来自传入客户端请求的**冻结**值。设置时，其值为一个 `template`（字面字符串或 `${type:name}` 表达式）。
+- **`args`** / **`headers`** / **`cookies`**——白名单字段组，每组拆分为 `origin` 列表和 `custom` 列表。省略某组则不转发该类的任何字段。Cookie 作为单个 `Cookie` 请求头转发。
+
+```yaml
+request:
+  path:
+    template: "/resolve/${ctx:action}"
+    allowOverride: true        # 消费方可在调用时传入 pathOverride
+  method:
+    template: POST
+
+  args:
+    origin:
+      - name: tenant_id                      # 缺失 → 省略（默认）
+      - name: trace_id
+        presence: required                   # 缺失 → webhook 调用失败
+      - name: org_id
+        presence: warnIfMissing              # 缺失 → PluginLog 告警，继续
+    custom:
+      - name: source
+        value: edgion                        # 字面值
+      - name: action
+        template: "${ctx:action}"            # 调用时求值
+
+  headers:
+    origin:
+      - name: X-Tenant-Id
+      - name: X-User-Id
+        presence: required
+    custom:
+      - name: X-Caller
+        value: edgion-gateway
+      - name: X-User
+        template: "${ctx:user_id}"
+      - name: Authorization
+        secret:
+          secretRef:
+            name: webhook-token
+          key: token
+          prefix: "Bearer "
+
+  cookies:
+    origin:
+      - name: session_id
+    custom:
+      - name: webhook_call_id
+        template: "${ctx:trace_id}"
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `request.path.template` | String | 冻结的传入路径 | 出站路径；字面或 `${type:name}` 模板。 |
+| `request.path.allowOverride` | Boolean | `false` | 为 `true` 时，消费方的 `pathOverride` 在调用时替换整个路径；为 `false` 时，任何 `pathOverride` 被忽略。 |
+| `request.method.template` | String | 冻结的传入方法 | 出站 HTTP 方法；字面（`POST`、`GET` 等）或模板。 |
+| `request.{args,headers,cookies}.origin` | Array | `[]` | 按名称从**冻结**的传入请求复制的字段。 |
+| `request.{args,headers,cookies}.custom` | Array | `[]` | 运营者构造的字段（字面 / 模板 / secret）。 |
+
+**Origin 字段**从传入请求的冻结入口快照中复制同名值——不受链中较早插件所做任何改写的影响。每个 origin 字段只有 `{ name, presence }`。共有三类 origin 组，对应 HTTP 的三个位置：
+
+- `headers.origin`——复制请求头。**请求头名称大小写不敏感**（HTTP 标准）。
+- `args.origin`——复制查询字符串参数。**arg 名称大小写敏感。**
+- `cookies.origin`——复制单个 Cookie。**Cookie 名称大小写敏感。**
+
+如果你想要请求头的**当前**（可能已被改写）视图，请改用 custom 模板字段：`custom: [{ name: X-Foo, template: "${header:X-Foo}" }]`。
+
+#### 存在性策略（presence）
+
+`presence` 只存在于 `origin` 字段上（custom 字段总有值）。它控制当命名字段在传入请求中缺失时的行为：
+
+| 策略 | 字段缺失时的行为 | 何时使用 |
+|------|------------------|----------|
+| `skipIfMissing`（默认） | 从出站请求中静默省略该字段，不记录日志。 | 缺失属正常的可选增强。 |
+| `warnIfMissing` | 省略该字段，写入一条 PluginLog 告警，请求继续。 | *应当*存在的字段——你想要可见性但不想让调用失败。 |
+| `required` | webhook 调用被视为失败。随后 `statusOnError` / `allowDegradation` 与其他任何 webhook 失败完全一样地生效。 | 后端缺之不可的字段。 |
+
+`presence` 与 `allowDegradation` 正交且可组合：`presence: required` 决定缺失字段是否*算作失败*；`allowDegradation` 随后决定该失败是中止插件链（`false`，默认）还是静默跳过 webhook 并继续（`true`）。
+
+#### 自定义字段来源
+
+每个 `custom` 条目为 `{ name, <source> }`，其中 source 是以下之一（**且仅一个**）：
+
+| 来源 | 形式 | 解析时机 | 说明 |
+|------|------|----------|------|
+| 字面 | `value: "edgion"` | 无 | 逐字的静态字符串。 |
+| 模板 | `template: "${ctx:user_id}"` | 调用时 | 由 ctx-set 模板引擎插值（见[模板变量](#模板变量)）。 |
+| Secret | `secret: { secretRef: {...}, key: ..., prefix: ... }` | 配置时 | 由控制器从 Kubernetes Secret 读取并经 conf_sync 下发到网关。解析后的值在 `/configclient` 输出中被脱敏。 |
+
+Secret 形式是注入凭据的方式（不再有类型化的 `auth` 块）：
+
+```yaml
+custom:
+  - name: Authorization
+    secret:
+      secretRef:
+        name: webhook-token       # 命名空间默认为 LinkSys 所在命名空间
+      key: token                  # Secret data map 中由运营者选择的键
+      prefix: "Bearer "           # 可选；拼接到解析值之前
+```
+
+`prefix` 用于把原始令牌变成 `Bearer <token>`、`Basic <encoded>` 等。Secret 轮换是自动的：当被引用的 Secret 变化时，控制器重新入队该 LinkSys 资源、重新解析值并重新下发到网关——无需运营者操作。
+
+#### 模板变量
+
+`path.template`、`method.template` 和 `custom[].template` 中的模板复用 ctx-set 模板引擎。它们在资源摄入时预编译，因此热路径只做替换。语法为 `${type:name}`：
+
+| Token | 含义 |
+|-------|------|
+| `${header:Name}` | 传入请求头（当前视图）。 |
+| `${query:name}` | 传入请求查询参数。 |
+| `${cookie:name}` | 传入请求 Cookie。 |
+| `${ctx:name}` | 由 ctx-set 或其他插件设置的网关上下文变量。 |
+| `${path}` / `${uri}` | 当前（可能已改写的）路径 / URI。 |
+| `${requestPath}` / `${requestUri}` | 冻结的入口路径 / URI。 |
+| `${method}` | 当前 HTTP 方法。 |
+| `${clientIp}` | 真实客户端 IP。 |
+
+引用未定义变量的 `${ctx:X}` 解析为空字符串。要强制存在性，请在 origin 字段上使用 `presence: required`，或在调用 webhook 之前用 ctx-set 步骤设置该变量。
+
+#### 路径覆盖
+
+当 `request.path.allowOverride: true` 时，消费方插件可传入 `pathOverride` 在调用时替换整个路径。当 `allowOverride` 为 `false`（默认）或省略 `path` 块时，消费方发送的任何 `pathOverride` 都被**忽略**。这让 webhook 资源掌控自身的面貌，同时在作者主动允许时支持按调用的路径。
+
+#### 字段冲突校验
+
+以下组合在准入时以 `Accepted=False` 拒绝：
+
+- 同一名称同时出现在某组的 `origin` 和 `custom` 中（例如 `headers.origin[name: X-Foo]` 和 `headers.custom[name: X-Foo]`）。
+- 同一 `origin` 列表或同一 `custom` 列表内的重复名称。
+- 同时声明 `headers.origin[name: Cookie]` 和任何非空的 `cookies.*` 列表（会重复注入 `Cookie` 请求头）——二者只能取其一。
 
 ### 基础参数
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `requestMethod` | String | `GET` | HTTP 请求方法，必须为有效的 HTTP 方法。 |
 | `timeoutMs` | Integer | `5000` | 请求超时（毫秒），必须大于 0。 |
-| `auth` | Object | none | 认证配置（标签枚举），见下文。 |
 | `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。未设置时使用系统 CA 包。 |
-| `defaultHeaders` | Object | none | 每次调用都发送的静态请求头（冲突时按调用时请求头优先）。 |
 | `successStatusCodes` | Array\<Integer\> | 任意 2xx | 视为成功的 HTTP 状态码。 |
 | `maxResponseBytes` | Integer | `1024` | 读取的最大响应体大小（字节），受 `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`（默认 16 KiB）限制。 |
 
-### 认证
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `auth.type` | Enum | **必填**（设置 `auth` 时） | 认证方式。可选值：`basic` \| `bearer` \| `hmac` \| `apiKey`。 |
-| `auth.secretRef` | Object | **必填**（设置 `auth` 时） | 提供所选 `auth.type` 凭据的 Secret。 |
-| `auth.in` | String | **必填**（`apiKey` 时） | 密钥注入位置。可选值：`header` \| `query`。 |
-| `auth.headerName` | String | none | `in=header` 时的请求头名称。示例：`X-API-Key`。 |
-| `auth.queryParam` | String | none | `in=query` 时的查询参数名称。示例：`api_key`。 |
+> **已移除的字段。** `requestMethod`、`auth` 和 `defaultHeaders` 已弃用。在滚动升级期间它们仍被接受但运行时忽略，控制器在遇到时记录 WARN。它们将在下一个版本中移除——请在此之前迁移。详见[从旧 schema 迁移](#从旧-schema-迁移)。
 
 ### 降级与错误处理
 
@@ -521,6 +674,224 @@ spec:
 | `healthCheck.passive.backoff.multiplier` | Number | `2.0` | 退避乘数。 |
 | `healthCheck.passive.backoff.maxSec` | Integer | `60` | 最大退避时间（秒）。 |
 
+### 示例
+
+以下示例各聚焦于一个特性。它们是可运行的 LinkSys 清单；按需裁剪不需要的字段。
+
+#### 1. Service 与 EndpointSlice 解析
+
+```yaml
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: key-resolver-svc
+  namespace: production
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef:
+        kind: Service              # 从 EndpointSlice 解析就绪端点
+        name: key-service
+        namespace: production
+        port: 8080
+    request:
+      method:
+        template: POST
+    timeoutMs: 3000
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: key-resolver-clusterip
+  namespace: production
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef:
+        kind: ServiceClusterIp     # 通过 ClusterIP 的 DNS 名称解析（kube-proxy）
+        name: key-service
+        port: 8080
+    request:
+      method:
+        template: POST
+```
+
+#### 2. Origin 字段（白名单转发）
+
+从冻结的传入请求中转发选定的值，保持不变。省略 `path` / `method` 时复用传入的路径和方法——这是 forward-auth 风格 webhook 的常见形状。
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: authz, port: 8080 }
+    request:
+      headers:
+        origin:
+          - name: X-Tenant-Id
+          - name: X-User-Id
+      args:
+        origin:
+          - name: tenant_id
+      cookies:
+        origin:
+          - name: session_id
+```
+
+#### 3. Custom 字面字段
+
+注入运营者掌控的静态值。
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: audit-sink, port: 8080 }
+    request:
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: X-Source
+            value: edgion-gateway
+          - name: X-Env
+            value: production
+```
+
+#### 4. 来自 K8s Secret 的 Custom 字段
+
+从 Secret 注入凭据。`prefix` 构造完整的请求头值（`Bearer <token>`）。
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: key-service, port: 8080 }
+    request:
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: Authorization
+            secret:
+              secretRef:
+                name: webhook-token   # 在 LinkSys 所在命名空间
+              key: token
+              prefix: "Bearer "
+          - name: X-API-Key
+            secret:
+              secretRef:
+                name: webhook-apikey
+              key: apiKey             # 无 prefix → 原始值
+```
+
+#### 5. 模板变量替换
+
+在调用时从传入请求数据和网关上下文计算出站值。
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: enrich, port: 8080 }
+    request:
+      path:
+        template: "/resolve/${ctx:action}"
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: X-User
+            template: "${ctx:user_id}"
+          - name: X-Forwarded-Path
+            template: "${requestPath}"     # 冻结的入口路径
+          - name: X-Client-Ip
+            template: "${clientIp}"
+```
+
+#### 6. 存在性策略（required / skipIfMissing / warnIfMissing）
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: authz, port: 8080 }
+    allowDegradation: false        # required 字段失败时暴露 statusOnError
+    statusOnError: 503
+    request:
+      headers:
+        origin:
+          - name: X-Trace-Id                       # 默认：skipIfMissing
+          - name: X-User-Id
+            presence: required                     # 缺失 → 调用失败 → 503
+          - name: X-Org-Id
+            presence: warnIfMissing                # 缺失 → PluginLog 告警，继续
+```
+
+#### 7. 路径覆盖（allowOverride）
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: user-resolver, port: 8080 }
+    request:
+      path:
+        template: "/v1/users/lookup"
+        allowOverride: true        # 消费方可通过 pathOverride 替换路径
+      method:
+        template: POST
+```
+
+当 `allowOverride: false`（或没有 `path` 块）时，消费方的 `pathOverride` 被忽略，使用此模板（或冻结的传入路径）。
+
+#### 8. ctx-set 集成（`${ctx:*}` 变量）
+
+消费方插件先设置上下文变量，再从 webhook 的模板中引用它们。按调用的动态值完全经由 `${ctx:*}` 流入——没有单独的"调用方参数"概念。
+
+```yaml
+# Webhook 资源
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: user-resolver
+  namespace: production
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: user-service, port: 8080 }
+    request:
+      path:
+        template: "/resolve/${ctx:action}"
+        allowOverride: true
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: X-User-Id
+            template: "${ctx:user_id}"
+---
+# 消费方插件（ctx-set），位于 HTTPRoute filter 上
+type: ctx-set
+vars:
+  - { name: user_id, template: "${header:X-User-Id}" }
+  - { name: action, value: "get-user" }
+  - name: resolved_user
+    from:
+      type: webhook
+      webhookRef: production/user-resolver
+      pathOverride: "/special/path"   # 仅因 allowOverride: true 才被采纳
+```
+
 #### 示例：带重试和健康检查的弹性 webhook
 
 ```yaml
@@ -533,14 +904,23 @@ spec:
   type: webhook
   config:
     target:
-      type: uri
-      uri: "https://key-service.internal/resolve"
-    requestMethod: POST
+      backendRef:
+        kind: Service
+        name: key-service
+        namespace: production
+        port: 8080
+    request:
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: Authorization
+            secret:
+              secretRef:
+                name: webhook-token
+              key: token
+              prefix: "Bearer "
     timeoutMs: 3000
-    auth:
-      type: hmac
-      secretRef:
-        name: webhook-hmac
     allowDegradation: false
     statusOnError: 503
     retry:
@@ -561,25 +941,110 @@ spec:
         unhealthyThreshold: 3
 ```
 
-#### 示例：指向 Kubernetes Service 的 webhook
+### 从旧 schema 迁移
+
+Webhook schema 在本版本中发生变化。旧字段在滚动升级期间被接受但运行时忽略（控制器记录 WARN），并将在下一版本中移除。请在此之前迁移每个 webhook LinkSys。
+
+| 旧 | 新 |
+|----|----|
+| `target.type: uri` + `target.uri` | 指向（代理）Service 的 `target.backendRef`——不再支持原始 URL |
+| `target.type: service` + `target.name/port` | `target.backendRef.{kind,name,namespace,port}`（去掉 `type` 标签） |
+| `auth.bearer` / `auth.basic` / `auth.hmac` / `auth.apiKey` | 带 `secret:` 的 `request.headers.custom`（用 `prefix:` 拼 `Bearer `/`Basic `） |
+| `defaultHeaders`（静态 map） | 每条用 `value:` 的 `request.headers.custom` |
+| `requestMethod: POST` | `request.method.template: POST`（旧默认是 `GET`） |
+| 消费方 `pathSuffix` | webhook 上的 `request.path`，或当 `allowOverride: true` 时消费方 `pathOverride` |
+| 消费方 `forwardHeaders` | webhook 上的 `request.headers.origin`（集中式白名单） |
+
+旧：
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: LinkSys
-metadata:
-  name: key-resolver-svc
-  namespace: production
 spec:
   type: webhook
   config:
     target:
-      type: service
-      name: key-service
-      namespace: production
-      port: 8080
+      type: uri
+      uri: "https://key-service.internal/resolve"
     requestMethod: POST
-    timeoutMs: 3000
+    auth:
+      type: bearer
+      secretRef:
+        name: webhook-token
+    defaultHeaders:
+      X-Source: edgion
 ```
+
+新：
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef:
+        kind: Service
+        name: key-service        # 对于外部端点，将此指向一个代理 Service
+        namespace: production
+        port: 8080
+    request:
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: X-Source
+            value: edgion
+          - name: Authorization
+            secret:
+              secretRef:
+                name: webhook-token
+              key: token
+              prefix: "Bearer "
+```
+
+消费方侧，`pathSuffix` 和 `forwardHeaders` 已移除：
+
+```yaml
+# 旧
+- type: key-auth
+  config:
+    keys:
+      - type: webhook
+        webhookRef: production/user-resolver
+        pathSuffix: "/special/path"
+        forwardHeaders: ["X-Tenant-Id", "X-User-Id"]
+
+# 新——在 webhook 资源上声明 path/headers；消费方只覆盖路径
+- type: key-auth
+  config:
+    keys:
+      - type: webhook
+        webhookRef: production/user-resolver
+        pathOverride: "/special/path"   # 仅当 webhook 上 allowOverride: true 时被采纳
+```
+
+> **外部端点。** `target.type: uri` 和 `kind: ExternalName` 不支持。用代理 Service（LoadBalancer，或由 ingress controller 前置的 ClusterIP）前置外部主机，并按名称引用该 Service。
+
+### Webhook 故障排查
+
+**Webhook 无法解析 / "webhook not found"。**
+检查 `target.backendRef`：命名的 Service 必须存在于解析出的命名空间中，且 `port` 必须已设置且有效。`Accepted=False` 的 LinkSys 不会加载进网关运行时，因此任何调用它的消费方都会命中相同的"webhook 不可用"路径。运行 `kubectl get linksys <name> -o yaml` 并阅读 `Accepted` 条件消息。
+
+**关于 `kind` 值的 `Accepted=False`。**
+只有 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 和留空有效。`ExternalName` 和 `ServiceImport` 被拒绝——请改用代理 Service。
+
+**Required 字段错误 / 意外的 `statusOnError`。**
+某个 `presence: required` 的 `origin` 字段在传入请求中缺失，这算作 webhook 失败。确认客户端确实发送了该 header/arg/cookie（注意大小写：请求头大小写不敏感，arg 和 cookie 大小写敏感）。要降级而非失败，设置 `allowDegradation: true`；要仅记录，用 `presence: warnIfMissing`。
+
+**模板变量解析为空。**
+`${ctx:NAME}` 在变量从未设置时返回空。确保在 webhook 被调用之前有一个 ctx-set 步骤设置它，并检查 `${type:name}` 拼写。要强制存在性，优先在 `origin` 字段上用 `presence: required` 而非模板。
+
+**路径覆盖不生效。**
+`pathOverride` 仅当 webhook 的 `request.path.allowOverride` 为 `true` 时被采纳。如果 `path` 被省略或 `allowOverride` 为 `false`，覆盖被静默忽略，使用模板（或冻结的传入路径）。
+
+**关于重复或冲突字段的准入错误。**
+你在 `origin` 和 `custom` 中命名了同一字段、在一个列表内列了重复名称，或同时声明了 `headers.origin[name: Cookie]` 和一个 `cookies.*` 列表。移除冲突。
+
+**健康状态重置 vs. 端点变动。**
+编辑任何 `request.*` 字段（或目标）会重建 webhook 运行时并**重置**其健康状态——这是有意的，运营者的配置变更不等于 Pod 变动。EndpointSlice 变化（Pod 扩缩/重启）**不会**重建运行时，也**不会**重置健康状态：端点在调用时重新解析，而聚合健康模型被保留。
 
 ## Kafka 连接器
 
@@ -700,7 +1165,7 @@ spec:
 
 ### Q1：为什么我的 LinkSys 报告 `Accepted=False/Invalid`？
 
-**A**：结构或后端特定校验失败。常见原因：`endpoints` 列表为空、`topology.mode=sentinel` 但缺少 `sentinel` 块（或 `mode=cluster` 但缺少 `cluster` 块）、webhook 的 `target.uri` 不以 `http://` 或 `https://` 开头、webhook 的 `requestMethod` 不是有效的 HTTP 方法。状态 `message` 字段列出了具体错误。
+**A**：结构或后端特定校验失败。常见原因：`endpoints` 列表为空、`topology.mode=sentinel` 但缺少 `sentinel` 块（或 `mode=cluster` 但缺少 `cluster` 块）、webhook 的 `target.backendRef` 缺少/为零的 `port` 或不支持的 `kind`（仅允许 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice`、留空）、webhook 的 `request` 存在冲突字段（同一名称同时出现在 `origin` 和 `custom`、列表内重复名称、或同时声明 `headers.origin[name: Cookie]` 和 `cookies.*` 列表）。状态 `message` 字段列出了具体错误。
 
 ### Q2：凭据看起来正确，但 `ResolvedRefs` 为 `False`。为什么？
 

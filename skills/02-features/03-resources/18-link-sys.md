@@ -45,11 +45,17 @@ secretRef:
 
 | Auth Type | Recommended Secret.type | Required Keys | Optional Keys |
 |-----------|--------------------------|----------------|----------------|
-| basic (Redis/Etcd/ES/Webhook) | `kubernetes.io/basic-auth` or `Opaque` | `password` | `username` (default = backend default ACL) |
+| basic (Redis/Etcd/ES) | `kubernetes.io/basic-auth` or `Opaque` | `password` | `username` (default = backend default ACL) |
 | apiKey (Elasticsearch) | `Opaque` | `apiKeyId`, `apiKeySecret` | — |
-| bearer (Elasticsearch/Webhook) | `Opaque` | `bearerToken` | — |
-| hmac (Webhook) | `Opaque` | `hmacKey` | — |
+| bearer (Elasticsearch) | `Opaque` | `bearerToken` | — |
 | TLS (all providers) | `kubernetes.io/tls` or `Opaque` | **At least one of** `tls.crt` / `tls.key` / `ca.crt` | — |
+
+> **Webhook secrets** no longer use the well-known-key convention. After the webhook
+> redesign, webhook outbound credentials are arbitrary `request.headers.custom` entries
+> with a `secret: { secretRef, key, prefix? }` source, where `key` names the Secret data
+> key explicitly (any name). Bearer/HMAC/apiKey are expressed as `Authorization` / custom
+> headers built from a secret value (`prefix: "Bearer "` etc.). See the `type: webhook`
+> section below.
 
 All application-layer key names use **camelCase**; TLS keys follow the K8s `kubernetes.io/tls` standard (which contains dots).
 
@@ -206,34 +212,69 @@ spec:
 
 ### `type: webhook`
 
+> Redesigned: `backendRef`-only target + a `request` block that is the single source of
+> truth for the outbound request. The architecture, controller→conf_sync→gateway flow,
+> consumer `path_override` API, template engine, presence and health semantics live in
+> [01-architecture/03-controller-gateway-link/webhook.md](../../01-architecture/03-controller-gateway-link/webhook.md).
+> The old `uri` / `requestMethod` / `auth` / `defaultHeaders` fields and the consumer-side
+> `forwardHeaders` / `pathSuffix` are **removed** (see Migration in that doc).
+
 ```yaml
 spec:
   type: webhook
   config:
-    uri: "https://key-service.internal/resolve"   # Required, http/https
-    requestMethod: POST                            # Default GET
+    target:                                        # backendRef-only (no uri, no type: service wrapper)
+      backendRef:
+        group: ""                                  # default core
+        kind: Service                              # Service | ServiceClusterIp | ServiceEndpointSlice | empty
+        name: webhook-svc
+        namespace: prod                            # optional; defaults to LinkSys namespace
+        port: 8080                                 # required — missing port is rejected (Accepted=False)
+
+    request:                                       # required — declares the outbound request shape
+      path:                                        # omit entirely → reuse frozen incoming path
+        template: "/resolve/${ctx:action}"         # literal or ${type:name} template
+        allowOverride: true                        # consumer pathOverride honored only when true
+      method:                                      # omit → reuse frozen incoming method
+        template: "POST"
+      args:                                        # allow-list; nothing forwarded unless named
+        origin:
+          - { name: tenant_id }                    # missing → skipIfMissing (default)
+          - { name: trace_id, presence: required } # missing → webhook call fails
+          - { name: org_id, presence: warnIfMissing }
+        custom:
+          - { name: source, value: "edgion" }      # literal
+          - { name: action, template: "${ctx:action}" }
+      headers:
+        origin:
+          - { name: X-Tenant-Id }
+        custom:
+          - { name: X-Caller, value: "edgion-gateway" }
+          - name: Authorization                    # secret source, resolved controller-side at load time
+            secret:
+              secretRef: { name: webhook-token }
+              key: token
+              prefix: "Bearer "                     # optional prefix applied to the resolved value
+      cookies:
+        origin:
+          - { name: session_id }
+
     timeoutMs: 3000
-    auth:                                          # Optional
-      type: bearer                                 # basic | bearer | hmac
-      secretRef:
-        name: webhook-token
     tls:
       enabled: true
       certs:
         secretRef: { name: webhook-client-tls }
-    defaultHeaders:                                # Static outgoing headers, sent on every call
-      X-Source: edgion
     successStatusCodes: [200]
-    maxResponseBytes: 2048                         # Default hard upper bound 16 KiB (configurable via EdgionGatewayConfig.linkSys.webhookMaxResponseBytes)
-    allowDegradation: true                         # Silently degrade to None on failure
-    statusOnError: 503                             # Status code returned when allowDegradation=false and the webhook is the sole key source
+    maxResponseBytes: 2048                         # clamped to EdgionGatewayConfig.linkSys.webhookMaxResponseBytes (default 16 KiB)
+    allowDegradation: true                         # silently degrade to None on failure
+    statusOnError: 503                             # returned when allowDegradation=false and webhook is the sole key source
     retry:
       maxRetries: 1
       retryDelayMs: 100
       retryOnTimeout: true
       retryOnConnectError: true
       retryOnStatus: [502, 503, 504]
-    rateLimit:                                     # Protection for the external webhook
+    rateLimit:
       rate: 200
       windowSec: 1
     healthCheck:
@@ -247,15 +288,26 @@ spec:
         unhealthyThreshold: 3
         failureStatusCodes: [500, 502, 503, 504]
         countTimeout: true
-        # backoff:                                 # Effective only when active is disabled
-        #   initialSec: 5
-        #   multiplier: 2.0
-        #   maxSec: 60
 ```
 
-- Auth tagged-enum: `type: basic` → `BasicAuthResolver`, `type: bearer` → `BearerResolver`, `type: hmac` → `HmacResolver` (Secret key `hmacKey`), `type: apiKey` → `WebhookApiKeyResolver` (Secret key `apiKey`, injected as a header or query parameter).
-- `uri` must be `http://` or `https://`; `requestMethod` must be a valid HTTP method; `statusOnError` ∈ [200, 599]; `maxResponseBytes` is clamped at call time to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes` (default 16 KiB).
-- Call semantics (method/path/headers/body) are decided by the consumer: `KeyGet::Webhook` selects which inbound request headers to forward via `forwardHeaders`, and appends `pathSuffix` to the end of `uri`; other consumers customize via `get_webhook_call_handle()` + `WebhookCallRequest`.
+**Schema reference:**
+
+- **`target.backendRef`** (`BackendObjectReference`): required `name` + `port`; `kind` ∈ `{Service, ServiceClusterIp, ServiceEndpointSlice, "", unset→Service}`. `ExternalName` / `ServiceImport` are rejected at admission (use a proxy Service for external endpoints). `Service`/`ServiceEndpointSlice` resolve ready endpoints from `EpSliceStore` at call time; `ServiceClusterIp` uses ClusterIP DNS.
+- **`request.path`** (`PathSpec`): `{ template: String, allowOverride: bool = false }`. Omit the whole block → reuse the frozen incoming path.
+- **`request.method`** (`MethodSpec`): `{ template: String }`. Omit → reuse the frozen incoming method.
+- **`request.{args,headers,cookies}`** (`ListFields`): `{ origin: [OriginField], custom: [CustomField] }`, both default empty. An allow-list — only named fields appear on the wire. Cookies are emitted as a combined `Cookie` header.
+- **`OriginField`**: `{ name: String, presence: PresencePolicy = skipIfMissing }`. Copies `name` from the **frozen** entry-time incoming request.
+- **`PresencePolicy`** enum (camelCase): `skipIfMissing` (default — omit, no log), `warnIfMissing` (omit + PluginLog alert + continue), `required` (treat as webhook failure; `statusOnError`/`allowDegradation` apply).
+- **`CustomField`**: `{ name: String, <source> }` where source is exactly one of (`CustomSource`, externally tagged + flattened):
+  - `value: "literal"` → verbatim string.
+  - `template: "${ctx:x}/${header:y}"` → ctx-set template, evaluated at call time.
+  - `secret: SecretSpec` → `{ secretRef: SecretObjectReference, key: String, prefix?: String }`; the gateway resolves it at compile time via the `SecretStore`, the `prefix` is prepended, and admin `/configclient` output is `[redacted]`. Note: the controller-side registration/embedding of `request.*.secret` refs is **still being wired** — see the implementation-status note in [the architecture doc](../../01-architecture/03-controller-gateway-link/webhook.md#controller-side-linksys-handler).
+- **Validation** (`Accepted=False` on violation): missing `port`; unsupported `kind`; template parse error; same name in both `origin` and `custom`; duplicate name within a block; `headers.origin: [{name: Cookie}]` together with a non-empty `cookies` block.
+- **`statusOnError`** ∈ [200, 599]; `maxResponseBytes` clamped to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`.
+
+**Consumer side:** the outbound request shape is owned entirely by the webhook resource. Consumers (`KeyGet::Webhook`) pass only the `session` and an optional `pathOverride` (honored only when `path.allowOverride: true`); the `forwardHeaders` / `pathSuffix` knobs are gone. Per-call dynamic values flow in via ctx-set `vars` → `${ctx:NAME}` in the webhook templates.
+
+**Rolling-upgrade shim:** the removed `auth` / `defaultHeaders` / `requestMethod` fields are accepted as ignored no-ops for one release (old-controller → new-gateway compatibility); the controller logs a WARN. They are removed next release. Migration table in the architecture doc.
 
 ### `type: kafka`
 

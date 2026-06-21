@@ -62,14 +62,23 @@ edgion-common/src/link/providers/etcd/
 
 ```
 providers/webhook/
-├── manager.rs         # WebhookManager (manages webhook instances)
-├── runtime.rs         # webhook runtime
-├── resolver.rs        # KeyGet::Webhook resolver
-├── call.rs            # unified webhook call interface
-├── client.rs          # WebhookLinkClient
-├── health.rs          # health check
+├── manager.rs           # WebhookManager.upsert() — builds runtime, compiles request, resolves secrets, resets health
+├── compiled_request.rs  # CompiledOutboundRequest::{from_spec, build_request} (request templating)
+├── runtime.rs           # WebhookRuntime (compiled_request + health atomics + resolved_target)
+├── resolver.rs          # KeyGet::Webhook resolver — consumer entry, response extract
+├── call.rs              # webhook_call(runtime, session, path_override, max_bytes)
+├── client.rs            # reqwest client construction (TLS material)
+├── health.rs            # active / passive health check
 └── mod.rs
 ```
+
+> After the **target-unification + request-templating redesign**, the webhook target is
+> `backendRef`-only and the outbound request shape (path / method / allow-listed
+> args / headers / cookies, with `origin` / `custom` split and `presence` policy) is owned
+> entirely by the webhook resource and pre-compiled into `CompiledOutboundRequest` at upsert
+> time. Consumers pass only `session` + optional `path_override` (no more
+> `forwardHeaders` / `pathSuffix`). Full architecture:
+> [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
 
 ### LocalFile
 

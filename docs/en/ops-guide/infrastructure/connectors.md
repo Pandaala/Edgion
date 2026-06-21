@@ -62,14 +62,14 @@ Secret keys follow a fixed, well-known convention — there are no `usernameKey`
 
 | Auth type | Recommended `Secret.type` | Required keys | Optional keys |
 |-----------|---------------------------|---------------|---------------|
-| basic (Redis / Etcd / ES / Webhook) | `kubernetes.io/basic-auth` or `Opaque` | `password` | `username` |
+| basic (Redis / Etcd / ES) | `kubernetes.io/basic-auth` or `Opaque` | `password` | `username` |
 | apiKey (Elasticsearch) | `Opaque` | `apiKeyId`, `apiKeySecret` | — |
-| bearer (Elasticsearch / Webhook) | `Opaque` | `bearerToken` | — |
-| hmac (Webhook) | `Opaque` | `hmacKey` | — |
-| apiKey (Webhook) | `Opaque` | `apiKey` | — |
+| bearer (Elasticsearch) | `Opaque` | `bearerToken` | — |
 | TLS (all backends) | `kubernetes.io/tls` or `Opaque` | At least one of `tls.crt` / `tls.key` / `ca.crt` | — |
 
 Application-layer key names use camelCase; TLS keys follow the Kubernetes `kubernetes.io/tls` standard.
+
+> **Webhook credentials are different.** The webhook connector no longer has a typed `auth` block. Instead, you inject any credential as a custom request header (or arg/cookie) that reads from a Secret. The Secret key name is **operator-chosen** (whatever you put in `key:`), and an optional `prefix:` lets you prepend `Bearer ` / `Basic ` / etc. See [Webhook connector → Custom field sources](#custom-field-sources).
 
 ### TLS
 
@@ -417,7 +417,7 @@ spec:
 
 ## Webhook connector
 
-The webhook connector requires a `target`, which is a tagged choice between an external URI (`type: uri`) and a Kubernetes Service (`type: service`).
+A webhook connector lets plugins (ctx-set, key-auth, hmac-auth, and so on) call an external HTTP service for user resolution, permission checks, context enrichment, audit logging, and similar lookups. The connector is the **single source of truth** for the outbound request: it declares the backend (`target.backendRef`), and a `request` block that defines exactly which path, method, query args, headers, and cookies are sent. Consuming plugins can no longer silently reshape the request — they can only feed values into the named slots the webhook author declared, optionally override the path (when allowed), and parse the response. Outbound fields follow an **allow-list** model: nothing is forwarded unless the webhook explicitly names it, so a misbehaving upstream plugin cannot leak headers the operator never intended to expose.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -429,52 +429,205 @@ spec:
   type: webhook
   config:
     target:
-      type: uri
-      uri: "https://key-service.internal/resolve"
-    requestMethod: POST
+      backendRef:
+        kind: Service
+        name: key-service
+        namespace: production
+        port: 8080
+    request:
+      method:
+        template: POST
+      headers:
+        origin:
+          - name: X-Tenant-Id
+        custom:
+          - name: X-Source
+            value: edgion
+          - name: Authorization
+            secret:
+              secretRef:
+                name: webhook-token
+              key: token
+              prefix: "Bearer "
     timeoutMs: 3000
-    auth:
-      type: bearer
-      secretRef:
-        name: webhook-token
-    defaultHeaders:
-      X-Source: edgion
     successStatusCodes: [200]
     maxResponseBytes: 2048
 ```
 
 ### Target
 
+Every webhook references its backend through a single `backendRef`, the same `BackendObjectReference` shape that routes already use. There is no longer a `type: uri` / `type: service` choice — `backendRef` is the only target form.
+
+```yaml
+target:
+  backendRef:
+    group: ""              # optional; defaults to the core API group
+    kind: Service          # Service | ServiceClusterIp | ServiceEndpointSlice (empty defaults to Service)
+    name: webhook-backend
+    namespace: production  # optional; defaults to the LinkSys namespace
+    port: 8080             # required
+```
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `target.type` | Enum | **Required** | Target kind. Allowed values: `uri` \| `service`. |
-| `target.uri` | String | **Required** (for `uri`) | External endpoint; must start with `http://` or `https://`. |
-| `target.name` | String | **Required** (for `service`) | Kubernetes Service name. |
-| `target.namespace` | String | LinkSys namespace | Service namespace. |
-| `target.port` | Integer | none | Service port; must be greater than 0 when set. |
-| `target.kind` | String | `Service` | Service kind; for example `Service` or `ServiceClusterIp`. |
+| `target.backendRef.group` | String | core (`""`) | API group of the referenced object. |
+| `target.backendRef.kind` | String | `Service` | Target kind. Allowed: `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, or empty (defaults to `Service`). |
+| `target.backendRef.name` | String | **Required** | Kubernetes Service name. |
+| `target.backendRef.namespace` | String | LinkSys namespace | Service namespace. |
+| `target.backendRef.port` | Integer | **Required** | Service port; must be greater than 0. A missing port is rejected at admission with `Accepted=False`. |
+
+Resolution by kind:
+
+- `Service` (default, and empty/unset): the gateway resolves ready endpoints from the Kubernetes EndpointSlice store at call time.
+- `ServiceEndpointSlice`: explicit form of the same EndpointSlice resolution.
+- `ServiceClusterIp`: resolved via the Service ClusterIP DNS name (kube-proxy).
+
+`kind: ExternalName` and `ServiceImport` are **not** supported as webhook targets and are rejected at admission with a descriptive `Accepted=False` message. To reach an external endpoint, create a proxy Service (for example a `LoadBalancer` Service, or a `ClusterIP` Service fronted by an ingress controller) that routes to the external host, then reference that Service by name. See [Migration from the old schema](#migration-from-the-old-schema).
+
+### Outbound request
+
+The `request` block declares the outbound request shape. All five sub-fields are optional:
+
+- **`path`** / **`method`** — single-valued. Omit either to reuse the **frozen** value from the incoming client request. When present, the value is a `template` (a literal string or a `${type:name}` expression).
+- **`args`** / **`headers`** / **`cookies`** — allow-listed field groups, each split into an `origin` list and a `custom` list. Omit a group to forward nothing of that kind. Cookies are forwarded as a single `Cookie` header.
+
+```yaml
+request:
+  path:
+    template: "/resolve/${ctx:action}"
+    allowOverride: true        # consumer may pass pathOverride at call time
+  method:
+    template: POST
+
+  args:
+    origin:
+      - name: tenant_id                      # missing → omitted (default)
+      - name: trace_id
+        presence: required                   # missing → webhook call fails
+      - name: org_id
+        presence: warnIfMissing              # missing → PluginLog alert, continues
+    custom:
+      - name: source
+        value: edgion                        # literal
+      - name: action
+        template: "${ctx:action}"            # evaluated at call time
+
+  headers:
+    origin:
+      - name: X-Tenant-Id
+      - name: X-User-Id
+        presence: required
+    custom:
+      - name: X-Caller
+        value: edgion-gateway
+      - name: X-User
+        template: "${ctx:user_id}"
+      - name: Authorization
+        secret:
+          secretRef:
+            name: webhook-token
+          key: token
+          prefix: "Bearer "
+
+  cookies:
+    origin:
+      - name: session_id
+    custom:
+      - name: webhook_call_id
+        template: "${ctx:trace_id}"
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `request.path.template` | String | frozen incoming path | Outbound path; literal or `${type:name}` template. |
+| `request.path.allowOverride` | Boolean | `false` | When `true`, a consumer's `pathOverride` replaces the whole path at call time. When `false`, any `pathOverride` is ignored. |
+| `request.method.template` | String | frozen incoming method | Outbound HTTP method; literal (`POST`, `GET`, …) or template. |
+| `request.{args,headers,cookies}.origin` | Array | `[]` | Fields copied from the **frozen** incoming request by name. |
+| `request.{args,headers,cookies}.custom` | Array | `[]` | Operator-constructed fields (literal / template / secret). |
+
+**Origin fields** copy the same-named value from a frozen entry-time snapshot of the incoming request — immune to any rewrite made by an earlier plugin in the chain. Each origin field is just `{ name, presence }`. There are three kinds of origin group, one per HTTP location:
+
+- `headers.origin` — copies request headers. **Header names are case-insensitive** (HTTP standard).
+- `args.origin` — copies query-string parameters. **Arg names are case-sensitive.**
+- `cookies.origin` — copies individual cookies. **Cookie names are case-sensitive.**
+
+If you instead want the **current** (possibly rewritten) view of a header, use a custom template field: `custom: [{ name: X-Foo, template: "${header:X-Foo}" }]`.
+
+#### Presence policies
+
+`presence` lives only on `origin` fields (custom fields always have a value). It controls what happens when the named field is absent from the incoming request:
+
+| Policy | Behavior when the field is missing | When to use |
+|--------|-----------------------------------|-------------|
+| `skipIfMissing` (default) | The field is silently omitted from the outbound request; no log. | Optional enrichment where absence is normal. |
+| `warnIfMissing` | The field is omitted, a PluginLog alert is written, and the request continues. | Fields that *should* be present — you want visibility without failing the call. |
+| `required` | The webhook call is treated as failed. `statusOnError` / `allowDegradation` then apply exactly as for any other webhook failure. | Fields the backend cannot function without. |
+
+`presence` and `allowDegradation` are orthogonal and compose: `presence: required` decides whether a missing field *counts as a failure*; `allowDegradation` then decides whether that failure aborts the plugin chain (`false`, default) or silently skips the webhook and continues (`true`).
+
+#### Custom field sources
+
+Each `custom` entry is `{ name, <source> }` where the source is **exactly one** of:
+
+| Source | Form | Resolved | Notes |
+|--------|------|----------|-------|
+| Literal | `value: "edgion"` | n/a | Verbatim static string. |
+| Template | `template: "${ctx:user_id}"` | call time | Interpolated by the ctx-set template engine (see [Template variables](#template-variables)). |
+| Secret | `secret: { secretRef: {...}, key: ..., prefix: ... }` | config time | Read from a Kubernetes Secret by the controller and shipped to the gateway over conf_sync. The resolved value is redacted in `/configclient` output. |
+
+The Secret form is how you inject credentials (there is no typed `auth` block anymore):
+
+```yaml
+custom:
+  - name: Authorization
+    secret:
+      secretRef:
+        name: webhook-token       # namespace defaults to the LinkSys namespace
+      key: token                  # operator-chosen key inside the Secret's data map
+      prefix: "Bearer "           # optional; prepended to the resolved value
+```
+
+`prefix` is what turns a raw token into `Bearer <token>`, `Basic <encoded>`, and so on. Secret rotation is automatic: when the referenced Secret changes, the controller requeues the LinkSys resource, re-resolves the value, and re-emits it to the gateway — no operator action required.
+
+#### Template variables
+
+Templates in `path.template`, `method.template`, and `custom[].template` reuse the ctx-set template engine. They are pre-compiled at resource ingest, so the hot path only performs substitution. Syntax is `${type:name}`:
+
+| Token | Meaning |
+|-------|---------|
+| `${header:Name}` | Incoming request header (current view). |
+| `${query:name}` | Incoming request query parameter. |
+| `${cookie:name}` | Incoming request cookie. |
+| `${ctx:name}` | Gateway context variable set by ctx-set or another plugin. |
+| `${path}` / `${uri}` | Current (possibly rewritten) path / URI. |
+| `${requestPath}` / `${requestUri}` | Frozen entry-time path / URI. |
+| `${method}` | Current HTTP method. |
+| `${clientIp}` | Real client IP. |
+
+A `${ctx:X}` that names an undefined variable resolves to an empty string. To enforce presence, use `presence: required` on an origin field, or set the ctx variable in a ctx-set step before calling the webhook.
+
+#### Path override
+
+When `request.path.allowOverride: true`, a consuming plugin may pass `pathOverride` to replace the entire path at call time. When `allowOverride` is `false` (the default) or the `path` block is omitted, any `pathOverride` the consumer sends is **ignored**. This keeps the webhook resource in control of its own surface while still allowing per-call paths where the author opts in.
+
+#### Field-conflict validation
+
+The following combinations are rejected at admission with `Accepted=False`:
+
+- The same name appearing in both `origin` and `custom` within one group (e.g. `headers.origin[name: X-Foo]` and `headers.custom[name: X-Foo]`).
+- A duplicate name within a single `origin` list or a single `custom` list.
+- Declaring both `headers.origin[name: Cookie]` and any non-empty `cookies.*` list (would double-inject the `Cookie` header) — use one or the other.
 
 ### Basic parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `requestMethod` | String | `GET` | HTTP request method; must be a valid HTTP method. |
 | `timeoutMs` | Integer | `5000` | Request timeout in milliseconds; must be greater than 0. |
-| `auth` | Object | none | Authentication (tagged enum); see below. |
 | `tls` | Object | none | TLS configuration; see [TLS](#tls). Defaults to the system CA bundle when unset. |
-| `defaultHeaders` | Object | none | Static headers sent on every call (per-call headers win on conflict). |
 | `successStatusCodes` | Array\<Integer\> | any 2xx | HTTP status codes treated as success. |
 | `maxResponseBytes` | Integer | `1024` | Maximum response body size to read in bytes. Clamped at call time to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes` (default 16 KiB). |
 
-### Authentication
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `auth.type` | Enum | **Required** (when `auth` is set) | Auth method. Allowed values: `basic` \| `bearer` \| `hmac` \| `apiKey`. |
-| `auth.secretRef` | Object | **Required** (when `auth` is set) | Secret supplying the credential for the chosen `auth.type`. |
-| `auth.in` | String | **Required** (for `apiKey`) | Where to inject the key. Allowed values: `header` \| `query`. |
-| `auth.headerName` | String | none | Header name when `in=header`. Example: `X-API-Key`. |
-| `auth.queryParam` | String | none | Query parameter name when `in=query`. Example: `api_key`. |
+> **Removed fields.** `requestMethod`, `auth`, and `defaultHeaders` are deprecated. They are still accepted during a rolling upgrade but ignored at runtime, and the controller logs a WARN when it sees them. They will be removed in the next release — migrate before then. See [Migration from the old schema](#migration-from-the-old-schema).
 
 ### Degradation and error handling
 
@@ -522,6 +675,224 @@ Supports active probing, passive monitoring, or both (recommended).
 | `healthCheck.passive.backoff.multiplier` | Number | `2.0` | Backoff multiplier. |
 | `healthCheck.passive.backoff.maxSec` | Integer | `60` | Maximum backoff in seconds. |
 
+### Examples
+
+The following examples each focus on one feature. They are runnable LinkSys manifests; trim the fields you do not need.
+
+#### 1. Service and EndpointSlice resolution
+
+```yaml
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: key-resolver-svc
+  namespace: production
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef:
+        kind: Service              # resolves ready endpoints from EndpointSlice
+        name: key-service
+        namespace: production
+        port: 8080
+    request:
+      method:
+        template: POST
+    timeoutMs: 3000
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: key-resolver-clusterip
+  namespace: production
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef:
+        kind: ServiceClusterIp     # resolves via the ClusterIP DNS name (kube-proxy)
+        name: key-service
+        port: 8080
+    request:
+      method:
+        template: POST
+```
+
+#### 2. Origin fields (allow-list forwarding)
+
+Forward selected values from the frozen incoming request, unchanged. With `path` / `method` omitted, the incoming path and method are reused — the common shape for a forward-auth-style webhook.
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: authz, port: 8080 }
+    request:
+      headers:
+        origin:
+          - name: X-Tenant-Id
+          - name: X-User-Id
+      args:
+        origin:
+          - name: tenant_id
+      cookies:
+        origin:
+          - name: session_id
+```
+
+#### 3. Custom literal fields
+
+Inject static values the operator controls.
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: audit-sink, port: 8080 }
+    request:
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: X-Source
+            value: edgion-gateway
+          - name: X-Env
+            value: production
+```
+
+#### 4. Custom fields from K8s Secrets
+
+Inject a credential from a Secret. The `prefix` builds the full header value (`Bearer <token>`).
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: key-service, port: 8080 }
+    request:
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: Authorization
+            secret:
+              secretRef:
+                name: webhook-token   # in the LinkSys namespace
+              key: token
+              prefix: "Bearer "
+          - name: X-API-Key
+            secret:
+              secretRef:
+                name: webhook-apikey
+              key: apiKey             # no prefix → raw value
+```
+
+#### 5. Template variable substitution
+
+Compute outbound values from incoming request data and gateway context at call time.
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: enrich, port: 8080 }
+    request:
+      path:
+        template: "/resolve/${ctx:action}"
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: X-User
+            template: "${ctx:user_id}"
+          - name: X-Forwarded-Path
+            template: "${requestPath}"     # frozen entry-time path
+          - name: X-Client-Ip
+            template: "${clientIp}"
+```
+
+#### 6. Presence policies (required / skipIfMissing / warnIfMissing)
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: authz, port: 8080 }
+    allowDegradation: false        # required-field failure surfaces statusOnError
+    statusOnError: 503
+    request:
+      headers:
+        origin:
+          - name: X-Trace-Id                       # default: skipIfMissing
+          - name: X-User-Id
+            presence: required                     # missing → call fails → 503
+          - name: X-Org-Id
+            presence: warnIfMissing                # missing → PluginLog alert, continues
+```
+
+#### 7. Path override (allowOverride)
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: user-resolver, port: 8080 }
+    request:
+      path:
+        template: "/v1/users/lookup"
+        allowOverride: true        # consumers may replace the path via pathOverride
+      method:
+        template: POST
+```
+
+With `allowOverride: false` (or no `path` block), a consumer's `pathOverride` is ignored and this template (or the frozen incoming path) is used.
+
+#### 8. ctx-set integration (`${ctx:*}` variables)
+
+A consuming plugin sets context variables first, then references them from the webhook's templates. Per-call dynamic values flow exclusively through `${ctx:*}` — there is no separate "invoker arg" concept.
+
+```yaml
+# Webhook resource
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: user-resolver
+  namespace: production
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef: { kind: Service, name: user-service, port: 8080 }
+    request:
+      path:
+        template: "/resolve/${ctx:action}"
+        allowOverride: true
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: X-User-Id
+            template: "${ctx:user_id}"
+---
+# Consuming plugin (ctx-set) on an HTTPRoute filter
+type: ctx-set
+vars:
+  - { name: user_id, template: "${header:X-User-Id}" }
+  - { name: action, value: "get-user" }
+  - name: resolved_user
+    from:
+      type: webhook
+      webhookRef: production/user-resolver
+      pathOverride: "/special/path"   # honored only because allowOverride: true
+```
+
 #### Example: Resilient webhook with retry and health checks
 
 ```yaml
@@ -534,14 +905,23 @@ spec:
   type: webhook
   config:
     target:
-      type: uri
-      uri: "https://key-service.internal/resolve"
-    requestMethod: POST
+      backendRef:
+        kind: Service
+        name: key-service
+        namespace: production
+        port: 8080
+    request:
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: Authorization
+            secret:
+              secretRef:
+                name: webhook-token
+              key: token
+              prefix: "Bearer "
     timeoutMs: 3000
-    auth:
-      type: hmac
-      secretRef:
-        name: webhook-hmac
     allowDegradation: false
     statusOnError: 503
     retry:
@@ -562,25 +942,110 @@ spec:
         unhealthyThreshold: 3
 ```
 
-#### Example: Webhook targeting a Kubernetes Service
+### Migration from the old schema
+
+The webhook schema changed in this release. Old fields are accepted during a rolling upgrade but ignored at runtime (the controller logs a WARN), and will be removed in the next release. Migrate every webhook LinkSys before then.
+
+| Old | New |
+|-----|-----|
+| `target.type: uri` + `target.uri` | `target.backendRef` to a (proxy) Service — raw URLs are no longer supported |
+| `target.type: service` + `target.name/port` | `target.backendRef.{kind,name,namespace,port}` (drop the `type` tag) |
+| `auth.bearer` / `auth.basic` / `auth.hmac` / `auth.apiKey` | `request.headers.custom` with `secret:` (use `prefix:` for `Bearer `/`Basic `) |
+| `defaultHeaders` (static map) | `request.headers.custom` with `value:` per entry |
+| `requestMethod: POST` | `request.method.template: POST` (old default was `GET`) |
+| consumer `pathSuffix` | `request.path` on the webhook, or consumer `pathOverride` when `allowOverride: true` |
+| consumer `forwardHeaders` | `request.headers.origin` on the webhook (centralized allow-list) |
+
+Old:
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: LinkSys
-metadata:
-  name: key-resolver-svc
-  namespace: production
 spec:
   type: webhook
   config:
     target:
-      type: service
-      name: key-service
-      namespace: production
-      port: 8080
+      type: uri
+      uri: "https://key-service.internal/resolve"
     requestMethod: POST
-    timeoutMs: 3000
+    auth:
+      type: bearer
+      secretRef:
+        name: webhook-token
+    defaultHeaders:
+      X-Source: edgion
 ```
+
+New:
+
+```yaml
+spec:
+  type: webhook
+  config:
+    target:
+      backendRef:
+        kind: Service
+        name: key-service        # for an external endpoint, point this at a proxy Service
+        namespace: production
+        port: 8080
+    request:
+      method:
+        template: POST
+      headers:
+        custom:
+          - name: X-Source
+            value: edgion
+          - name: Authorization
+            secret:
+              secretRef:
+                name: webhook-token
+              key: token
+              prefix: "Bearer "
+```
+
+Consumer-side, `pathSuffix` and `forwardHeaders` are removed:
+
+```yaml
+# Old
+- type: key-auth
+  config:
+    keys:
+      - type: webhook
+        webhookRef: production/user-resolver
+        pathSuffix: "/special/path"
+        forwardHeaders: ["X-Tenant-Id", "X-User-Id"]
+
+# New — declare path/headers on the webhook resource; consumer only overrides the path
+- type: key-auth
+  config:
+    keys:
+      - type: webhook
+        webhookRef: production/user-resolver
+        pathOverride: "/special/path"   # honored only if allowOverride: true on the webhook
+```
+
+> **External endpoints.** `target.type: uri` and `kind: ExternalName` are not supported. Front the external host with a proxy Service (LoadBalancer, or ClusterIP behind an ingress controller) and reference that Service by name.
+
+### Webhook troubleshooting
+
+**Webhook not resolving / "webhook not found".**
+Verify the `target.backendRef`: the named Service must exist in the resolved namespace and the `port` must be set and valid. A LinkSys with `Accepted=False` is not loaded into the gateway runtime, so any consumer calling it hits the same "webhook unavailable" path. Run `kubectl get linksys <name> -o yaml` and read the `Accepted` condition message.
+
+**`Accepted=False` on a `kind` value.**
+Only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, and empty are valid. `ExternalName` and `ServiceImport` are rejected — use a proxy Service instead.
+
+**Required-field error / unexpected `statusOnError`.**
+An `origin` field with `presence: required` was missing from the incoming request, which counts as a webhook failure. Confirm the client actually sends the header/arg/cookie (mind case: headers are case-insensitive, args and cookies are case-sensitive). To degrade instead of failing, set `allowDegradation: true`; to merely log, use `presence: warnIfMissing`.
+
+**Template variable resolves to empty.**
+`${ctx:NAME}` returns empty when the variable was never set. Ensure a ctx-set step sets it before the webhook is called, and check the `${type:name}` spelling. To enforce presence, prefer `presence: required` on an `origin` field over a template.
+
+**Path override not working.**
+`pathOverride` is honored only when the webhook's `request.path.allowOverride` is `true`. If `path` is omitted or `allowOverride` is `false`, the override is silently ignored and the template (or frozen incoming path) is used.
+
+**Admission error about duplicate or conflicting fields.**
+You named the same field in both `origin` and `custom`, listed a duplicate name inside one list, or declared both `headers.origin[name: Cookie]` and a `cookies.*` list. Remove the conflict.
+
+**Health state reset vs. endpoint churn.**
+Editing any `request.*` field (or the target) rebuilds the webhook runtime and **resets** its health state — this is intended, an operator config change is not pod churn. EndpointSlice changes (pods scaling/restarting) do **not** rebuild the runtime and do **not** reset health: endpoints are re-resolved at call time while the aggregate health model is preserved.
 
 ## Kafka connector
 
@@ -701,7 +1166,7 @@ spec:
 
 ### Q1: Why does my LinkSys report `Accepted=False/Invalid`?
 
-**A**: The structure or per-backend validation failed. Common causes: an empty `endpoints` list, `topology.mode=sentinel` without a `sentinel` block (or `mode=cluster` without `cluster`), a webhook `target.uri` that is not `http://` or `https://`, or a webhook `requestMethod` that is not a valid HTTP method. The status `message` concatenates the specific errors.
+**A**: The structure or per-backend validation failed. Common causes: an empty `endpoints` list, `topology.mode=sentinel` without a `sentinel` block (or `mode=cluster` without `cluster`), a webhook `target.backendRef` with a missing/zero `port` or an unsupported `kind` (only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty are allowed), or a webhook `request` with conflicting fields (the same name in both `origin` and `custom`, a duplicate name within a list, or both `headers.origin[name: Cookie]` and a `cookies.*` list). The status `message` concatenates the specific errors.
 
 ### Q2: My credentials look correct, but `ResolvedRefs` is `False`. Why?
 

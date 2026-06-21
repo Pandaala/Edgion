@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
+use crate::link_sys::providers::webhook::compiled_request::CompiledOutboundRequest;
 use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 use reqwest::Client;
 
@@ -97,6 +98,12 @@ pub struct WebhookRuntime {
 
     /// Resolved target for outbound requests (derived from `config.target` at upsert time).
     pub resolved_target: WebhookResolvedTarget,
+
+    /// Pre-compiled outbound request spec (compiled from `config.request` at upsert time).
+    ///
+    /// Templates are parsed and secrets resolved once at load time; the hot
+    /// call path (`build_request`) only evaluates already-segmented data.
+    pub compiled_request: CompiledOutboundRequest,
 
     // ---- Health state ----
     /// Current health status (true = healthy). Lock-free reads via AtomicBool.
@@ -363,10 +370,19 @@ mod tests {
         let slice_key_2 = "wh-health-test/svc-slice-2";
 
         // Construct a WebhookRuntime with deliberate unhealthy state.
+        use crate::link_sys::providers::webhook::compiled_request::CompiledOutboundRequest;
+        use edgion_resources::resources::http_route::BackendObjectReference;
+        use edgion_resources::resources::link_sys::webhook::WebhookOutboundRequest;
         let runtime = Arc::new(WebhookRuntime {
             config: WebhookServiceConfig {
-                target: WebhookTarget::Uri {
-                    uri: "http://example.invalid".to_string(),
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "wh-svc".to_string(),
+                        namespace: Some("default".to_string()),
+                        port: Some(8080),
+                    },
                 },
                 ..Default::default()
             },
@@ -377,6 +393,10 @@ mod tests {
                 scheme: "http",
                 cursor: AtomicUsize::new(0),
             },
+            compiled_request: CompiledOutboundRequest::from_spec(&WebhookOutboundRequest::default(), |_, _, _| {
+                Ok(String::new())
+            })
+            .unwrap(),
             healthy: AtomicBool::new(false),
             passive_failures: AtomicU32::new(5),
             last_halfopen: AtomicU64::new(0),

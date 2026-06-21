@@ -828,6 +828,7 @@ mod tests {
     use super::*;
 
     fn create_test_webhook_linksys(namespace: &str, name: &str) -> LinkSys {
+        use edgion_resources::resources::http_route::BackendObjectReference;
         use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
         use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
@@ -839,8 +840,14 @@ mod tests {
             },
             spec: LinkSysSpec {
                 config: SystemConfig::Webhook(WebhookServiceConfig {
-                    target: WebhookTarget::Uri {
-                        uri: "http://localhost:8080/resolve".to_string(),
+                    target: WebhookTarget {
+                        backend_ref: BackendObjectReference {
+                            group: String::new(),
+                            kind: None,
+                            name: "resolve-svc".to_string(),
+                            namespace: Some(namespace.to_string()),
+                            port: Some(8080),
+                        },
                     },
                     ..Default::default()
                 }),
@@ -1158,7 +1165,8 @@ mod tests {
         // Use a unique key to also avoid interference with other tests' add/remove paths.
         let key = "t13-ns/wh-arc-swap".to_string();
 
-        let make_ls = |uri: &str| {
+        let make_ls = || {
+            use edgion_resources::resources::http_route::BackendObjectReference;
             use edgion_resources::resources::link_sys::webhook::WebhookTarget;
             LinkSys {
                 metadata: kube::core::ObjectMeta {
@@ -1168,7 +1176,15 @@ mod tests {
                 },
                 spec: LinkSysSpec {
                     config: SystemConfig::Webhook(WebhookServiceConfig {
-                        target: WebhookTarget::Uri { uri: uri.into() },
+                        target: WebhookTarget {
+                            backend_ref: BackendObjectReference {
+                                group: String::new(),
+                                kind: None,
+                                name: "webhook-svc".to_string(),
+                                namespace: Some("t13-ns".to_string()),
+                                port: Some(8080),
+                            },
+                        },
                         ..Default::default()
                     }),
                 },
@@ -1178,7 +1194,7 @@ mod tests {
 
         // Add
         let mut add = HashMap::new();
-        add.insert(key.clone(), make_ls("http://a/x"));
+        add.insert(key.clone(), make_ls());
         dispatch_partial_update(&add, &HashSet::new()).await;
         // spawn_and_swap_partial inserts into WEBHOOK_RUNTIME synchronously before
         // spawning background init, so the Arc is visible immediately after await.
@@ -1188,7 +1204,7 @@ mod tests {
         // Update (different config) — a new Arc should replace the old one.
         // SHUTDOWN_ON_REPLACE is false for Webhook, so the old Arc is simply dropped.
         let mut update = HashMap::new();
-        update.insert(key.clone(), make_ls("http://b/y"));
+        update.insert(key.clone(), make_ls());
         dispatch_partial_update(&update, &HashSet::new()).await;
         let arc2 = WEBHOOK_RUNTIME.get(&key);
         assert!(arc2.is_some(), "after update, WEBHOOK_RUNTIME must still hold a client");
