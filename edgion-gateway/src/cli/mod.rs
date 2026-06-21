@@ -265,6 +265,22 @@ impl EdgionGatewayCli {
     /// `run` so the top-level error can be logged while the log `WorkerGuard` is
     /// still alive (see `run`).
     fn run_after_logging(&self, runtime: tokio::runtime::Runtime, config: EdgionGatewayConfig) -> Result<()> {
+        // 4b. Install the process-wide Prometheus recorder eagerly, before any
+        // startup-time metric is emitted (e.g. the conf_sync client's
+        // plaintext_default / skip_tls system-error gauge during config-sync
+        // client construction). Reuses the gateway's MetricsConfig so custom
+        // histogram buckets are preserved; install_global_recorder is
+        // OnceLock-guarded, so the metrics server's later lazy install no-ops.
+        // Mirrors the controller's "1b" eager install.
+        if let Err(e) = metrics::api::init_metrics_exporter(&config.metrics) {
+            tracing::error!(
+                component = "metrics_api",
+                event = "metrics_recorder_install_failed",
+                error = %e,
+                "Failed to install Prometheus recorder eagerly; /metrics may be incomplete"
+            );
+        }
+
         // 5. Initialize RateLimit / LRU cache / access-log sensitive global configurations
         edgion_resources::rate_limit_config::init_rate_limit_global_config(&config.rate_limit);
         config::init_lru_cache_global_config(&config.lru_cache);

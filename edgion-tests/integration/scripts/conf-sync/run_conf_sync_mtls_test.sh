@@ -28,6 +28,7 @@ UTILS_DIR="${SCRIPT_DIR}/../utils"
 CERTS_DIR_SCRIPT="${SCRIPT_DIR}/../gen_certs"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
+source "${UTILS_DIR}/inject_conf_sync_mtls.sh"
 
 # Ports — use different gRPC port to avoid conflict with plain-text tests
 CONTROLLER_GRPC_PORT="${EDGION_TEST_MTLS_GRPC_PORT:-50061}"
@@ -239,18 +240,7 @@ start_mtls_environment() {
 
     # ── 3. Generate conf_sync mTLS certificates ──
     log_section "Generating conf_sync mTLS certificates"
-    EDGION_CONF_SYNC_CERTS_DIR="$certs_dir" \
-        bash "${CERTS_DIR_SCRIPT}/generate_conf_sync_certs.sh" --force
-
-    # New multi-cert layout: files are under primary/ and secondary/ subdirectories
-    for set_name in primary secondary; do
-        for f in ca.crt server.crt server.key client.crt client.key; do
-            if [ ! -f "$certs_dir/$set_name/$f" ]; then
-                log_error "Missing expected cert file: $certs_dir/$set_name/$f"
-                exit 1
-            fi
-        done
-    done
+    conf_sync_generate_and_distribute_certs "${WORK_DIR}"
     log_success "All mTLS certificates present (primary + secondary)"
 
     # ── 4. Generate YAML configs with multi-cert mTLS section ──

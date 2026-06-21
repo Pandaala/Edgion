@@ -61,6 +61,12 @@ pub mod reasons {
     /// TLS — the privileged admin plane is reachable on every routable interface
     /// in plaintext. A deliberate-exposure flag for monitoring, not a blocker.
     pub const INSECURE_ADMIN_EXPOSURE: &str = "insecure_admin_exposure";
+    /// conf_sync `conf_sync_security` was omitted entirely — the channel is
+    /// running in PLAINTEXT while it carries resolved Secrets to the data plane.
+    /// Distinct from `skip_tls` (certs present but bypassed) and from federation's
+    /// `no_tls_configured` (which means *refused to start*, fail-close); this one
+    /// means a secret-carrying channel is *running* in plaintext.
+    pub const PLAINTEXT_DEFAULT: &str = "plaintext_default";
 }
 
 /// Mark a system-level error condition as active.
@@ -114,6 +120,25 @@ mod tests {
                     && l.contains("reason=\"skip_tls\"")
                     && l.trim_end().ends_with(" 1")),
                 "expected gauge value of 1, got:\n{rendered}"
+            );
+        });
+    }
+
+    #[test]
+    fn plaintext_default_reason_renders_with_labels() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        metrics::with_local_recorder(&recorder, || {
+            mark_system_error(components::CONF_SYNC_CLIENT, reasons::PLAINTEXT_DEFAULT);
+
+            let rendered = handle.render();
+            assert!(
+                rendered.lines().any(|l| l.contains("edgion_system_error_state{")
+                    && l.contains("component=\"conf_sync_client\"")
+                    && l.contains("reason=\"plaintext_default\"")
+                    && l.trim_end().ends_with(" 1")),
+                "expected plaintext_default gauge = 1, got:\n{rendered}"
             );
         });
     }

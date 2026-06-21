@@ -80,9 +80,15 @@ spec:
           readOnly: true
         - name: logs
           mountPath: /usr/local/edgion/logs
+        - name: conf-sync-certs
+          mountPath: /etc/edgion/conf-sync-certs
+          readOnly: true
       volumes:
       - name: config
         configMap:
           name: edgion-controller-config
       - name: logs
         emptyDir: {}
+      - name: conf-sync-certs
+        secret:
+          secretName: edgion-conf-sync-certs

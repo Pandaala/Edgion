@@ -248,8 +248,15 @@ conf_sync:
 # ============================================================================
 # conf_sync Channel Security (mTLS)
 # ============================================================================
-# Omit this section entirely to keep plaintext gRPC (backward compatible).
-# When configured, Controller requires valid certificates to start gRPC listener.
+# PRODUCTION: enable mTLS. This channel carries resolved Secrets (TLS private
+# keys, backend credentials) from Controller to Gateway. Following the Istio
+# principle that certificate/secret distribution is never served over plaintext,
+# the shipped Kubernetes manifests (cicd/deploy/kubernetes/) default to mTLS.
+#
+# Omitting this section keeps plaintext gRPC (LOCAL DEV / NON-PRODUCTION only).
+# When omitted, Controller and Gateway both log an ERROR and raise the metric
+# edgion_system_error_state{reason="plaintext_default"} so the degraded state
+# is visible in monitoring.
 #
 # --- Option A: Legacy single-cert format (backward compatible) ---
 # conf_sync_security:

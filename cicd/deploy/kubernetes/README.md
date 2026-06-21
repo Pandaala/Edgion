@@ -8,6 +8,36 @@ Deploy Edgion API Gateway to a Kubernetes cluster using Gateway API.
 - `kubectl` configured with cluster access
 - Cluster admin permissions (for CRD and RBAC installation)
 
+## conf_sync mTLS (required prerequisite)
+
+The Controller→Gateway `conf_sync` channel carries resolved Secrets (TLS keys,
+backend credentials), so the shipped manifests default to mTLS. Before
+`kubectl apply`, create the cert Secret the Controller and Gateway mount:
+
+1. Generate a CA + server (Controller) + client (Gateway) cert set. The server
+   cert SAN must cover the Controller service DNS
+   (`edgion-controller-leader.edgion-system.svc.cluster.local`):
+
+       edgion-cli gen-certs --output file --output-dir ./conf-sync-certs --cert-name primary
+
+2. Create the Secret (keys: `ca.crt`, `server.crt`, `server.key`, `client.crt`, `client.key`):
+
+       kubectl -n edgion-system create secret generic edgion-conf-sync-certs \
+         --from-file=ca.crt=./conf-sync-certs/primary/ca.crt \
+         --from-file=server.crt=./conf-sync-certs/primary/server.crt \
+         --from-file=server.key=./conf-sync-certs/primary/server.key \
+         --from-file=client.crt=./conf-sync-certs/primary/client.crt \
+         --from-file=client.key=./conf-sync-certs/primary/client.key
+
+3. `kubectl apply -f cicd/deploy/kubernetes/`.
+
+Auto-provisioning of these certs (SPIFFE/CA bootstrap) is tracked in
+`tasks/pending/13-conf-sync-spiffe-cert-bootstrap.md`. Until then this Secret is
+a manual prerequisite. For non-production plaintext, remove the
+`conf_sync_security` blocks and revert `server_addr` to `http://` — the
+Controller and Gateway will log an ERROR and raise
+`edgion_system_error_state{reason="plaintext_default"}`.
+
 ## Quick Start
 
 ```bash

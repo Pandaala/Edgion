@@ -74,6 +74,20 @@ impl ConfigSyncClient {
                     .map_err(|e| anyhow::anyhow!("Failed to configure client TLS: {}", e))?;
                 tracing::info!(component = "grpc_client", "conf_sync mTLS enabled for gRPC client");
             }
+        } else {
+            // resolve_active_tls() == None. validate() already rejected the
+            // dangling-`active` case, so this is the truly-omitted section: a
+            // secret-carrying channel running in plaintext.
+            debug_assert!(security.is_plaintext_omitted());
+            tracing::error!(
+                component = "grpc_client",
+                "conf_sync_security omitted: connecting in PLAINTEXT. This channel carries \
+                 resolved Secrets (TLS keys, backend credentials). Configure mTLS for production."
+            );
+            edgion_common::observe::system_metrics::mark_system_error(
+                edgion_common::observe::system_metrics::components::CONF_SYNC_CLIENT,
+                edgion_common::observe::system_metrics::reasons::PLAINTEXT_DEFAULT,
+            );
         }
 
         // connect_lazy returns a Channel immediately, connection happens on first request

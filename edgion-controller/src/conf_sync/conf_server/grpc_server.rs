@@ -83,6 +83,19 @@ impl ConfigSyncGrpcServer {
                 builder = builder.tls_config(server_tls)?;
                 tracing::info!(component = "grpc_server", "conf_sync mTLS enabled for gRPC server");
             }
+        } else {
+            // No active TLS resolved. validate() already rejected the dangling-`active`
+            // case, so this is the truly-omitted section: plaintext while carrying Secrets.
+            debug_assert!(security.is_plaintext_omitted());
+            tracing::error!(
+                component = "grpc_server",
+                "conf_sync_security omitted: starting gRPC server in PLAINTEXT. This channel \
+                 carries resolved Secrets (TLS keys, backend credentials). Configure mTLS for production."
+            );
+            edgion_common::observe::system_metrics::mark_system_error(
+                edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
+                edgion_common::observe::system_metrics::reasons::PLAINTEXT_DEFAULT,
+            );
         }
 
         Ok(builder)

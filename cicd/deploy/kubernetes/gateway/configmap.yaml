@@ -10,7 +10,7 @@ data:
     work_dir: /usr/local/edgion
 
     gateway:
-      server_addr: http://edgion-controller-leader.edgion-system.svc.cluster.local:12151
+      server_addr: https://edgion-controller-leader.edgion-system.svc.cluster.local:12151
       # Admin API stays loopback (default 127.0.0.1:12001); not exposed cluster-wide.
       # Liveness/readiness are served on the dedicated probe port (default
       # 0.0.0.0:12000), which the kubelet httpGet probes hit over the pod IP.
@@ -56,3 +56,11 @@ data:
 
     udp_log:
       enabled: false
+
+    # mTLS client config for the conf_sync channel. Certs come from the
+    # `edgion-conf-sync-certs` Secret (see README) mounted at /etc/edgion/conf-sync-certs.
+    conf_sync_security:
+      tls:
+        cert: /etc/edgion/conf-sync-certs/client.crt
+        key: /etc/edgion/conf-sync-certs/client.key
+        ca: /etc/edgion/conf-sync-certs/ca.crt

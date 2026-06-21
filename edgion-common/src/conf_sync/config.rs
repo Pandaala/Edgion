@@ -112,6 +112,16 @@ impl ConfSyncSecurityConfig {
         self.tls.as_ref()
     }
 
+    /// True when the security section is entirely unconfigured: no cert sets,
+    /// no legacy `tls`, and no `active` selector. In this state conf_sync runs
+    /// in plaintext and the channel builder marks `PLAINTEXT_DEFAULT`.
+    ///
+    /// Distinct from `skip_tls` (certs present but bypassed) and from a dangling
+    /// `active` selector (rejected by `validate()`).
+    pub fn is_plaintext_omitted(&self) -> bool {
+        self.certs.is_empty() && self.tls.is_none() && self.active.is_none()
+    }
+
     /// Federation requires real mTLS. Returns the active cert set only when one
     /// is configured AND `skip_tls` is not set; otherwise refuses with a reason.
     /// Plaintext is never representable through this path.
@@ -156,6 +166,13 @@ impl ConfSyncSecurityConfig {
                     anyhow::bail!("conf_sync_security: active='{}' does not match any cert name", active);
                 }
             }
+        }
+        // Reject a dangling `active` selector: it names a cert set but no certs
+        // (and no legacy `tls`) are configured. Without this guard the config
+        // passes validation yet `resolve_active_tls()` returns None, which would
+        // be indistinguishable from a truly-omitted section at the channel builder.
+        if self.active.is_some() && self.certs.is_empty() && self.tls.is_none() {
+            anyhow::bail!("conf_sync_security: 'active' is set but no certs are configured");
         }
         // Validate the active cert's paths (skip if skip_tls)
         if let Some(tls) = self.resolve_active_tls() {
@@ -502,5 +519,45 @@ mod tests {
             ..Default::default()
         };
         assert!(sec.resolve_mtls_or_refuse().is_ok());
+    }
+
+    #[test]
+    fn is_plaintext_omitted_scenarios() {
+        // Truly empty section → omitted.
+        assert!(ConfSyncSecurityConfig::default().is_plaintext_omitted());
+
+        // Legacy tls present → not omitted.
+        let with_tls = ConfSyncSecurityConfig {
+            tls: Some(make_tls(None, "c.crt")),
+            ..Default::default()
+        };
+        assert!(!with_tls.is_plaintext_omitted());
+
+        // certs present → not omitted.
+        let with_certs = ConfSyncSecurityConfig {
+            certs: vec![make_tls(Some("primary"), "p.crt")],
+            ..Default::default()
+        };
+        assert!(!with_certs.is_plaintext_omitted());
+
+        // active set but nothing else → NOT omitted (it is a dangling misconfig).
+        let dangling = ConfSyncSecurityConfig {
+            active: Some("ghost".to_string()),
+            ..Default::default()
+        };
+        assert!(!dangling.is_plaintext_omitted());
+    }
+
+    #[test]
+    fn validate_rejects_dangling_active_with_no_certs() {
+        let cfg = ConfSyncSecurityConfig {
+            active: Some("ghost".to_string()),
+            ..Default::default()
+        };
+        let err = cfg.validate().expect_err("dangling active must be rejected");
+        assert!(
+            format!("{err:?}").contains("active"),
+            "error should mention 'active', got: {err:?}"
+        );
     }
 }

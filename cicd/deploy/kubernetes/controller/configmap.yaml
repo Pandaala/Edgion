@@ -56,3 +56,12 @@ data:
     conf_sync:
       no_sync_kinds: [ReferenceGrant, Secret]
       default_capacity: 200
+
+    # mTLS for the Controller→Gateway conf_sync channel (carries resolved Secrets).
+    # Certs come from the `edgion-conf-sync-certs` Secret (see README) mounted at
+    # /etc/edgion/conf-sync-certs. Omit this block ONLY for non-production plaintext.
+    conf_sync_security:
+      tls:
+        cert: /etc/edgion/conf-sync-certs/server.crt
+        key: /etc/edgion/conf-sync-certs/server.key
+        ca: /etc/edgion/conf-sync-certs/ca.crt
