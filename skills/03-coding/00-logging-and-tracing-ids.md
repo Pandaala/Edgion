@@ -77,8 +77,19 @@ The data plane does not use `tracing::*` for request-level logs (see [01-log-saf
 The `MatchInfo` struct carries `sv` automatically, injected from `route.get_sync_version()` at route compilation time:
 
 ```rust
-MatchInfo::new(ns, name, rule_id, match_id, match_item, route_sv)
+MatchInfo::new(ns, name, rule_id, match_id, match_item, route_sv, log_labels)
 ```
+
+`log_labels` is the `Option<LogLabels>` resolved **at resource-parse time, never
+on the data path** (keys prefixed `edgion.io/log-label.`, serialized under
+`rsc.labels`). The single resolver + guardrails live in
+`edgion_resources::resources::common::resolve_log_labels`; the gateway
+`extract_log_labels(&metadata)` is a thin wrapper used at route conf-handler
+build (HTTP/gRPC) and `TlsRouteUnit::from_route` (TLSRoute). `EdgionTls` instead
+caches the resolved map in `EdgionTlsSpec::resolved_log_labels` during
+`pre_parse`, and the handshake callback only `LogLabels::from_resolved`-wraps the
+cached `Arc` (no per-handshake scan). See
+`skills/03-coding/observability/00-access-log.md`.
 
 ### TLS / TCP / Stream routes
 

@@ -46,10 +46,10 @@ The repo currently has the following workflows under `.github/workflows/`:
 
 `ci.yml` triggers on `push` / `pull_request` to `main` or `master`, in the following order:
 
-1. `check` -> `cargo check --all-targets`
+1. `check` -> `cargo check --workspace --all-targets`
 2. `fmt` -> `cargo fmt --all -- --check`
 3. `agent-docs` -> `python3 cicd/checks/validate_agent_docs.py`
-4. `clippy` -> `cargo clippy --all-targets`
+4. `clippy` -> `cargo clippy --workspace --all-targets`
 5. `test` -> `cargo test --all`
 6. `ci-success` -> aggregates the results of the previous five jobs to provide a stable check for branch protection
 
@@ -59,6 +59,7 @@ Key facts:
 - `agent-docs` only needs checkout + `python3 cicd/checks/validate_agent_docs.py`; it does not depend on Rust toolchain initialization
 - `fmt` does not install system dependencies and does not enable cargo cache; the other build-style Rust jobs install dependencies and enable cache
 - The current CI commands do not include `--all-features`; before changing this, confirm whether you really want to expand the matrix rather than casually inflate CI cost
+- `check` and `clippy` pass `--workspace` on purpose: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip the harness. `--workspace` gives it the same fast type-check + clippy signal that `cargo test --all` already exercises at compile time
 
 ## What the local `setup-rust` action does
 
@@ -145,10 +146,10 @@ When changing it, treat it as "shared infrastructure", not as a private script f
 ### Reproduce CI checks
 
 ```bash
-cargo check --all-targets
+cargo check --workspace --all-targets
 cargo fmt --all -- --check
 python3 cicd/checks/validate_agent_docs.py
-cargo clippy --all-targets
+cargo clippy --workspace --all-targets
 cargo test --all
 ```
 

@@ -43,8 +43,10 @@ cargo build
 # Run tests
 cargo test --all
 
-# Run clippy (linter) on the default feature set (BoringSSL + jemalloc)
-cargo clippy --all-targets -- -D warnings
+# Run clippy (linter) on the default feature set (BoringSSL + jemalloc).
+# `--workspace` so the `edgion-tests` harness (excluded from `default-members`)
+# is linted too; a bare `--all-targets` would skip it.
+cargo clippy --workspace --all-targets -- -D warnings
 
 # Format code
 cargo fmt --all
@@ -101,7 +103,7 @@ cargo fmt --all
 3. **Test your changes**
    ```bash
    cargo test --all
-   cargo clippy --all-targets -- -D warnings
+   cargo clippy --workspace --all-targets -- -D warnings
    cargo fmt --all --check
    ```
 

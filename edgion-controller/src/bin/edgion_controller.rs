@@ -13,7 +13,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use edgion_common::startup::{init_crypto, install_panic_hook};
+use edgion_common::startup::{init_crypto, install_panic_hook, report_startup_failure};
 use edgion_controller::EdgionControllerCli;
 
 #[tokio::main(flavor = "multi_thread")]
@@ -23,7 +23,7 @@ async fn main() {
 
     let cli = EdgionControllerCli::parse_args();
     if let Err(err) = cli.run().await {
-        eprintln!("Error: {:#}", err);
+        report_startup_failure(&err);
         std::process::exit(1);
     }
 }

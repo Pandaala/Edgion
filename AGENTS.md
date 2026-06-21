@@ -86,10 +86,11 @@ The task templates, lifecycle stages, stage→Skills mapping, and trimming rules
 ## Common commands
 
 ```bash
-# Full check
-cargo check --all-targets
+# Full check (--workspace also covers `edgion-tests`, which is a workspace
+# member but kept out of `default-members`; without it, check/clippy skip it)
+cargo check --workspace --all-targets
 cargo fmt --all -- --check
-cargo clippy --all-targets
+cargo clippy --workspace --all-targets
 cargo test --all
 python3 cicd/checks/validate_agent_docs.py
 
@@ -105,9 +106,11 @@ python3 cicd/checks/validate_agent_docs.py
 When the user says "run check", "check the code", "format the code", "run CI", "pre-commit check", or anything similar, run the following in order:
 
 1. **Format**: `cargo fmt --all` (apply directly — not `--check`)
-2. **Compile check**: `cargo check --all-targets`
-3. **Lint**: `cargo clippy --all-targets`
+2. **Compile check**: `cargo check --workspace --all-targets`
+3. **Lint**: `cargo clippy --workspace --all-targets`
 4. **Doc consistency**: `python3 cicd/checks/validate_agent_docs.py`
+
+> `--workspace` is intentional: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip it. `--workspace` brings it back into the fast check/clippy signal (matching what `cargo test --all` already compiles).
 
 Steps 2/3/4 may run in parallel. If any step fails, report the error immediately and try to fix it; after fixing, re-run that step. Once all pass, summarize the result.
 

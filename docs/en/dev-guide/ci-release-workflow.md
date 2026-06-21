@@ -68,16 +68,17 @@ So if you edit this action, treat it as shared infrastructure rather than a priv
 
 The current `ci.yml` check order is:
 
-1. `cargo check --all-targets`
+1. `cargo check --workspace --all-targets`
 2. `cargo fmt --all -- --check`
 3. `python3 cicd/checks/validate_agent_docs.py`
-4. `cargo clippy --all-targets`
+4. `cargo clippy --workspace --all-targets`
 5. `cargo test --all`
 6. summary job `ci-success`
 
 A few details are easy to misunderstand:
 
 - the current CI commands do not automatically expand to `--all-features`
+- `check` and `clippy` use `--workspace` so they also cover `edgion-tests` (a workspace member excluded from `default-members`); a bare `--all-targets` would skip the harness
 - `python3 cicd/checks/validate_agent_docs.py` is the guardrail for `AGENTS.md`, `skills/`, and the dev-guide entry layer
 - the `fmt` job does not install system dependencies and does not use Cargo cache
 - `ci-success` exists to provide a stable branch-protection result, not to re-run checks
@@ -137,10 +138,10 @@ For this repository, command ownership works best in layers:
 If you only want to reproduce the current CI checks locally, start with:
 
 ```bash
-cargo check --all-targets
+cargo check --workspace --all-targets
 cargo fmt --all -- --check
 python3 cicd/checks/validate_agent_docs.py
-cargo clippy --all-targets
+cargo clippy --workspace --all-targets
 cargo test --all
 ```
 

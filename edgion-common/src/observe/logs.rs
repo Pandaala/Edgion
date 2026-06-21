@@ -87,6 +87,10 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
         subscriber.try_init()?;
     }
 
+    // Subscriber is now live: let the startup-error and panic paths route
+    // through structured logging instead of falling back to plain stderr.
+    crate::startup::mark_tracing_ready();
+
     Ok(guard)
 }
 

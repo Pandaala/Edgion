@@ -13,7 +13,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-use edgion_common::startup::{init_crypto, install_panic_hook};
+use edgion_common::startup::{init_crypto, install_panic_hook, report_startup_failure};
 use edgion_gateway::EdgionGatewayCli;
 
 fn main() {
@@ -22,7 +22,7 @@ fn main() {
 
     let cli = EdgionGatewayCli::parse_args();
     if let Err(err) = cli.run() {
-        eprintln!("Error: {:#}", err);
+        report_startup_failure(&err);
         std::process::exit(1);
     }
 }

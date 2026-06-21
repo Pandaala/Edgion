@@ -68,16 +68,17 @@ CI 和 release 现在都依赖同一个本地 action：
 
 当前 `ci.yml` 的主检查顺序是：
 
-1. `cargo check --all-targets`
+1. `cargo check --workspace --all-targets`
 2. `cargo fmt --all -- --check`
 3. `python3 cicd/checks/validate_agent_docs.py`
-4. `cargo clippy --all-targets`
+4. `cargo clippy --workspace --all-targets`
 5. `cargo test --all`
 6. 汇总 job `ci-success`
 
 这里有几个容易被误解的点：
 
 - 当前 CI 命令没有默认扩大到 `--all-features`
+- `check` 和 `clippy` 带 `--workspace`，目的是把 `edgion-tests`（一个被排除在 `default-members` 之外的 workspace 成员）也覆盖进来；若只用 `--all-targets`，会漏掉这个测试框架
 - `python3 cicd/checks/validate_agent_docs.py` 专门负责兜住 `AGENTS.md`、`skills/` 和 dev-guide 入口层的一致性
 - `fmt` job 不安装系统依赖，也不开 Cargo cache
 - `ci-success` 的作用是给 branch protection 一个稳定汇总结果，不是重复跑检查
@@ -137,10 +138,10 @@ CI 和 release 现在都依赖同一个本地 action：
 如果你只是想本地复现当前 CI，优先跑：
 
 ```bash
-cargo check --all-targets
+cargo check --workspace --all-targets
 cargo fmt --all -- --check
 python3 cicd/checks/validate_agent_docs.py
-cargo clippy --all-targets
+cargo clippy --workspace --all-targets
 cargo test --all
 ```
 

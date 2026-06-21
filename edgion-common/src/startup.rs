@@ -1,4 +1,40 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing_subscriber::EnvFilter;
+
+/// Whether a `tracing` subscriber has been installed. Flipped to `true` by
+/// `mark_tracing_ready()` (called from `init_logging` once the subscriber is
+/// live). Before that point `tracing::*` macros are silent no-ops, so the
+/// startup-error and panic paths fall back to a plain stderr line; afterwards
+/// they route through structured logging instead of bypassing the configured
+/// log sink.
+static TRACING_READY: AtomicBool = AtomicBool::new(false);
+
+/// Mark the `tracing` subscriber as installed. Call once, right after the
+/// subscriber is initialized.
+pub fn mark_tracing_ready() {
+    TRACING_READY.store(true, Ordering::SeqCst);
+}
+
+/// Returns whether the `tracing` subscriber has been installed.
+pub fn tracing_ready() -> bool {
+    TRACING_READY.load(Ordering::SeqCst)
+}
+
+/// Report a fatal startup/runtime error from a service binary's top level.
+///
+/// Once logging is up the error is routed through `tracing::error!` (structured,
+/// `component = "startup"`) so it lands in the configured log sink and obeys the
+/// project's log-safety rules. Before the subscriber is installed (e.g. a config
+/// load failure that happens before `init_logging`), `tracing` is a no-op, so a
+/// single plain stderr line is emitted as the only available diagnostic channel.
+/// The alternate `{:#}` formatting expands the full error chain.
+pub fn report_startup_failure(err: &(impl std::fmt::Display + ?Sized)) {
+    if tracing_ready() {
+        tracing::error!(component = "startup", error = %format_args!("{err:#}"), "fatal startup error");
+    } else {
+        eprintln!("[startup] fatal error: {err:#}");
+    }
+}
 
 pub fn init_crypto() {
     rustls::crypto::ring::default_provider()
@@ -39,9 +75,18 @@ pub fn install_panic_hook() {
             "thread panicked: {}",
             message
         );
-        // Fallback for panics before the subscriber is installed (tracing is a
-        // no-op then). Harmless duplication once tracing also writes to stderr.
-        eprintln!("[panic] thread '{thread}' panicked at {location}: {message}\n{backtrace}");
+        if tracing_ready() {
+            // Subscriber is live: the full message + backtrace already went to
+            // structured logging above. Keep stderr to a single generic line so
+            // panic internals (paths, topology, payload fragments) do not leak
+            // outside the configured log sink.
+            eprintln!("[panic] thread '{thread}' panicked at {location}; see structured logs for details");
+        } else {
+            // Subscriber not yet installed (the tracing::error! above was a
+            // no-op): stderr is the only diagnostic channel for very early
+            // panics, so emit the full detail here as a fallback.
+            eprintln!("[panic] thread '{thread}' panicked at {location}: {message}\n{backtrace}");
+        }
     }));
 }
 

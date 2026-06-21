@@ -25,8 +25,12 @@ jobs:
           cache-enabled: "true"
           cache-key-prefix: "cargo-check"
 
+      # `--workspace` so the end-to-end harness `edgion-tests` (a member kept out
+      # of `default-members`) gets the fast type-check signal too — without it,
+      # `--all-targets` alone covers only default members and harness breakages
+      # surface much later in the slow `test` job.
       - name: Run cargo check
-        run: cargo check --all-targets
+        run: cargo check --workspace --all-targets
 
   fmt:
     name: Format
@@ -70,8 +74,10 @@ jobs:
           cache-enabled: "true"
           cache-key-prefix: "cargo-clippy"
 
+      # `--workspace` so clippy also lints `edgion-tests` (excluded from
+      # `default-members`); otherwise the harness never gets a clippy signal in CI.
       - name: Run clippy
-        run: cargo clippy --all-targets
+        run: cargo clippy --workspace --all-targets
 
   test:
     name: Test
