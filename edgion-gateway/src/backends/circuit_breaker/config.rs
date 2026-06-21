@@ -9,8 +9,11 @@ use serde::Deserialize;
 pub struct CircuitBreakerConfig {
     /// Consecutive application-5xx (any >=500 that is NOT 502/503/504) before ejection.
     pub consecutive_errors: u32,
-    /// Consecutive gateway failures (502/503/504, connect/proxy errors) before ejection.
+    /// Consecutive upstream-origin gateway failures (backend returned 502/503/504) before ejection.
     pub consecutive_gateway_errors: u32,
+    /// Consecutive local-origin failures (connect/TLS-handshake/transport-reset/proxy
+    /// errors — the data-plane never got a usable HTTP response) before ejection.
+    pub consecutive_local_origin_failures: u32,
     /// Base ejection duration in seconds (multiplied by the endpoint's ejection count).
     pub ejection_seconds: u64,
     /// Upper bound on the backoff-scaled ejection duration in seconds.
@@ -29,6 +32,8 @@ struct RawCircuitBreakerConfig {
     consecutive_errors: u32,
     #[serde(default)]
     consecutive_gateway_errors: Option<u32>,
+    #[serde(default)]
+    consecutive_local_origin_failures: Option<u32>,
     #[serde(default = "default_ejection_seconds")]
     ejection_seconds: u64,
     #[serde(default)]
@@ -53,6 +58,12 @@ impl RawCircuitBreakerConfig {
         // Gateway threshold inherits the (possibly tuned) consecutive_errors so
         // old single-field configs keep their aggressiveness on the hard-failure path.
         let consecutive_gateway_errors = self.consecutive_gateway_errors.unwrap_or(self.consecutive_errors);
+        // Local-origin threshold inherits the (already-resolved) gateway threshold when
+        // unset, so a config that predates this field keeps counting connect/proxy errors
+        // exactly as it did when they shared the gateway bucket — behaviour is unchanged.
+        let consecutive_local_origin_failures = self
+            .consecutive_local_origin_failures
+            .unwrap_or(consecutive_gateway_errors);
         // Default cap = max(300, ejection); explicit cap below base is clamped UP, never rejected.
         let max_ejection_seconds = self
             .max_ejection_seconds
@@ -61,6 +72,7 @@ impl RawCircuitBreakerConfig {
         CircuitBreakerConfig {
             consecutive_errors: self.consecutive_errors,
             consecutive_gateway_errors,
+            consecutive_local_origin_failures,
             ejection_seconds: self.ejection_seconds,
             max_ejection_seconds,
             max_ejection_percent: self.max_ejection_percent,
@@ -73,6 +85,7 @@ impl Default for CircuitBreakerConfig {
         RawCircuitBreakerConfig {
             consecutive_errors: default_consecutive_errors(),
             consecutive_gateway_errors: None,
+            consecutive_local_origin_failures: None,
             ejection_seconds: default_ejection_seconds(),
             max_ejection_seconds: None,
             max_ejection_percent: default_max_ejection_percent(),
@@ -88,6 +101,9 @@ impl CircuitBreakerConfig {
         }
         if self.consecutive_gateway_errors == 0 {
             return Some("consecutiveGatewayErrors must be >= 1".to_string());
+        }
+        if self.consecutive_local_origin_failures == 0 {
+            return Some("consecutiveLocalOriginFailures must be >= 1".to_string());
         }
         if self.ejection_seconds == 0 {
             return Some("ejectionSeconds must be >= 1".to_string());
@@ -164,7 +180,36 @@ mod tests {
         let p = parse_outlier_detection_annotation(&m).unwrap();
         assert_eq!(p.config.consecutive_errors, 2);
         assert_eq!(p.config.consecutive_gateway_errors, 2); // inherits, not literal 5
+        assert_eq!(p.config.consecutive_local_origin_failures, 2); // inherits gateway -> errors
         assert!(!p.used_alias);
+    }
+
+    #[test]
+    fn local_origin_failures_defaults_to_gateway_errors() {
+        // Only the gateway threshold is set; local-origin inherits it (back-compat:
+        // connect/proxy errors keep counting at the same threshold they used when they
+        // shared the gateway bucket).
+        let m = meta_with(OUTLIER_DETECTION, "consecutiveGatewayErrors: 4\n");
+        let p = parse_outlier_detection_annotation(&m).unwrap();
+        assert_eq!(p.config.consecutive_gateway_errors, 4);
+        assert_eq!(p.config.consecutive_local_origin_failures, 4);
+    }
+
+    #[test]
+    fn local_origin_failures_explicit_overrides_inheritance() {
+        let m = meta_with(
+            OUTLIER_DETECTION,
+            "consecutiveGatewayErrors: 8\nconsecutiveLocalOriginFailures: 2\n",
+        );
+        let p = parse_outlier_detection_annotation(&m).unwrap();
+        assert_eq!(p.config.consecutive_gateway_errors, 8);
+        assert_eq!(p.config.consecutive_local_origin_failures, 2);
+    }
+
+    #[test]
+    fn zero_local_origin_failures_rejected() {
+        let m = meta_with(OUTLIER_DETECTION, "consecutiveLocalOriginFailures: 0\n");
+        assert!(parse_outlier_detection_annotation(&m).is_none());
     }
 
     #[test]
@@ -211,6 +256,7 @@ mod tests {
         let p = parse_outlier_detection_annotation(&m).unwrap();
         assert_eq!(p.config.consecutive_errors, 5);
         assert_eq!(p.config.consecutive_gateway_errors, 5);
+        assert_eq!(p.config.consecutive_local_origin_failures, 5);
         assert_eq!(p.config.ejection_seconds, 30);
         assert_eq!(p.config.max_ejection_seconds, 300);
         assert_eq!(p.config.max_ejection_percent, 50);

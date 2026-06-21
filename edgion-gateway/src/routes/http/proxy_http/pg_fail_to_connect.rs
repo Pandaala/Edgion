@@ -37,10 +37,12 @@ pub fn fail_to_connect(
     // Record circuit breaker failure
     if let Some(upstream) = ctx.get_current_upstream() {
         if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
+            // Connect failure / connect timeout / TLS-handshake timeout — the data plane
+            // never got a usable HTTP response, so this is a local-origin failure.
             crate::backends::get_circuit_breaker_store().record_failure_by_addr(
                 service_key,
                 addr,
-                crate::backends::FailureClass::Gateway,
+                crate::backends::FailureClass::LocalOrigin,
             );
         }
     }

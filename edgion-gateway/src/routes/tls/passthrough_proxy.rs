@@ -317,10 +317,11 @@ impl EdgionTlsPassthroughProxy {
                     break;
                 }
                 Err(e) => {
+                    // TLS passthrough upstream connect failure — local-origin failure.
                     crate::backends::get_circuit_breaker_store().record_failure_by_addr(
                         &service_key,
                         &upstream_addr,
-                        crate::backends::FailureClass::Gateway,
+                        crate::backends::FailureClass::LocalOrigin,
                     );
                     last_err = format!("connect failed: {upstream_addr_str}: {e}");
                     if attempt + 1 < max_attempts {

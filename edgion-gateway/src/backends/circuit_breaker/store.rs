@@ -12,17 +12,23 @@ pub fn get_circuit_breaker_store() -> Arc<CircuitBreakerStore> {
 /// Classification of a recorded backend failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureClass {
-    /// Transport / gateway failure: 502/503/504, connect failure, proxy error.
-    /// Almost always means the node cannot serve.
+    /// Upstream-origin gateway failure: the backend was reachable and returned an
+    /// HTTP 502/503/504. The node is online but is itself signalling unavailability.
     Gateway,
     /// Application 5xx (any >=500 that is not 502/503/504). The request failed,
     /// not necessarily the node.
     Application,
+    /// Local-origin (data-plane side) failure: connect failure / connect timeout,
+    /// TLS handshake timeout, transport reset, or a mid-proxy read/write error. The
+    /// gateway never got a usable HTTP response — almost always the node cannot serve.
+    LocalOrigin,
 }
 
 impl FailureClass {
     /// Classify an HTTP upstream status. Returns `None` for a non-failure (<500),
-    /// which the caller records as a success.
+    /// which the caller records as a success. Note this path only ever yields
+    /// `Gateway` or `Application` — `LocalOrigin` failures never carry an HTTP
+    /// status and are recorded directly by the connect/proxy-error call sites.
     #[inline]
     pub fn from_http_status(status: u16) -> Option<FailureClass> {
         if status < 500 {
@@ -33,14 +39,28 @@ impl FailureClass {
             _ => FailureClass::Application,
         })
     }
+
+    /// Stable, low-cardinality label for the `class` dimension of the ejection
+    /// metric. Bounded to three values so it cannot explode metric cardinality.
+    #[inline]
+    pub fn metric_label(self) -> &'static str {
+        match self {
+            FailureClass::Gateway => "gateway",
+            FailureClass::Application => "application",
+            FailureClass::LocalOrigin => "local_origin",
+        }
+    }
 }
 
 #[derive(Debug, Default)]
 struct EndpointState {
     /// Consecutive application-5xx since the last success.
     app_failures: u32,
-    /// Consecutive gateway failures since the last success.
+    /// Consecutive upstream-origin gateway failures (502/503/504) since the last success.
     gateway_failures: u32,
+    /// Consecutive local-origin failures (connect/TLS/transport/proxy errors) since
+    /// the last success.
+    local_origin_failures: u32,
     /// Set while the endpoint is ejected; the instant ejection began.
     ejected_at: Option<Instant>,
     /// Number of times this endpoint has been ejected. Drives backoff. Persists
@@ -105,6 +125,7 @@ impl CircuitBreakerStore {
                     let existing_cfg = &occ.get().config;
                     let changed = existing_cfg.consecutive_errors != cfg.consecutive_errors
                         || existing_cfg.consecutive_gateway_errors != cfg.consecutive_gateway_errors
+                        || existing_cfg.consecutive_local_origin_failures != cfg.consecutive_local_origin_failures
                         || existing_cfg.ejection_seconds != cfg.ejection_seconds
                         || existing_cfg.max_ejection_seconds != cfg.max_ejection_seconds
                         || existing_cfg.max_ejection_percent != cfg.max_ejection_percent;
@@ -162,6 +183,7 @@ impl CircuitBreakerStore {
                 if Instant::now().saturating_duration_since(at) >= dur {
                     ep.app_failures = 0;
                     ep.gateway_failures = 0;
+                    ep.local_origin_failures = 0;
                     ep.ejected_at = None;
                     drop(ep);
                     crate::observe::metrics::record_cb_recovery(service_key);
@@ -197,9 +219,11 @@ impl CircuitBreakerStore {
             match class {
                 FailureClass::Application => ep.app_failures = ep.app_failures.saturating_add(1),
                 FailureClass::Gateway => ep.gateway_failures = ep.gateway_failures.saturating_add(1),
+                FailureClass::LocalOrigin => ep.local_origin_failures = ep.local_origin_failures.saturating_add(1),
             }
             ep.app_failures >= svc.config.consecutive_errors
                 || ep.gateway_failures >= svc.config.consecutive_gateway_errors
+                || ep.local_origin_failures >= svc.config.consecutive_local_origin_failures
         };
 
         if !should_eject {
@@ -235,7 +259,11 @@ impl CircuitBreakerStore {
             if ep.ejected_at.is_none() {
                 ep.ejected_at = Some(Instant::now());
                 ep.num_ejections = ep.num_ejections.saturating_add(1);
-                crate::observe::metrics::record_cb_ejection(service_key);
+                // `class` is the triggering reason: each record_failure bumps exactly one
+                // counter, and once a counter crosses its threshold ejected_at is set so
+                // later failures early-return — so the counter that newly tripped is the
+                // one matching this call's `class`.
+                crate::observe::metrics::record_cb_ejection(service_key, class.metric_label());
             }
         };
     }
@@ -257,6 +285,7 @@ impl CircuitBreakerStore {
             let was_ejected = ep.ejected_at.is_some();
             ep.app_failures = 0;
             ep.gateway_failures = 0;
+            ep.local_origin_failures = 0;
             ep.ejected_at = None;
             drop(ep);
             if was_ejected {
@@ -354,12 +383,28 @@ mod tests {
     use super::*;
 
     fn make_config(errors: u32, gateway: u32, seconds: u64, max_secs: u64, max_pct: u32) -> CircuitBreakerConfig {
+        // Local-origin threshold inherits the gateway threshold, matching the
+        // config `normalize` default, so existing tests need no extra argument.
         CircuitBreakerConfig {
             consecutive_errors: errors,
             consecutive_gateway_errors: gateway,
+            consecutive_local_origin_failures: gateway,
             ejection_seconds: seconds,
             max_ejection_seconds: max_secs,
             max_ejection_percent: max_pct,
+        }
+    }
+
+    /// Build a config with an explicit local-origin threshold distinct from the
+    /// gateway threshold, for the local-origin split tests.
+    fn make_config_lo(gateway: u32, local_origin: u32) -> CircuitBreakerConfig {
+        CircuitBreakerConfig {
+            consecutive_errors: 100,
+            consecutive_gateway_errors: gateway,
+            consecutive_local_origin_failures: local_origin,
+            ejection_seconds: 30,
+            max_ejection_seconds: 300,
+            max_ejection_percent: 0,
         }
     }
 
@@ -641,6 +686,52 @@ mod tests {
         store.record_failure("default/svc", 1, 1, FailureClass::Application);
         store.record_failure("default/svc", 1, 1, FailureClass::Application);
         assert!(!store.is_ejected("default/svc", 1));
+    }
+
+    #[test]
+    fn local_origin_counter_is_independent_of_gateway() {
+        let store = CircuitBreakerStore::new();
+        // gateway threshold 10, local-origin threshold 3.
+        store.set_service_config("default/svc", Some(make_config_lo(10, 3)));
+
+        // 3 local-origin failures eject via the local-origin counter even though the
+        // gateway counter is far from 10.
+        for _ in 0..3 {
+            store.record_failure("default/svc", 1, 1, FailureClass::LocalOrigin);
+        }
+        assert!(store.is_ejected("default/svc", 1));
+    }
+
+    #[test]
+    fn gateway_failures_do_not_trip_local_origin_threshold() {
+        let store = CircuitBreakerStore::new();
+        // gateway threshold 10, local-origin threshold 2: 2 gateway failures must NOT
+        // eject through the (lower) local-origin counter — the buckets are separate.
+        store.set_service_config("default/svc", Some(make_config_lo(10, 2)));
+        for _ in 0..2 {
+            store.record_failure("default/svc", 1, 1, FailureClass::Gateway);
+        }
+        assert!(!store.is_ejected("default/svc", 1));
+    }
+
+    #[test]
+    fn success_resets_local_origin_counter() {
+        let store = CircuitBreakerStore::new();
+        store.set_service_config("default/svc", Some(make_config_lo(10, 3)));
+        store.record_failure("default/svc", 1, 1, FailureClass::LocalOrigin);
+        store.record_failure("default/svc", 1, 1, FailureClass::LocalOrigin);
+        store.record_success("default/svc", 1);
+        // After reset, two more local-origin failures still below threshold 3.
+        store.record_failure("default/svc", 1, 1, FailureClass::LocalOrigin);
+        store.record_failure("default/svc", 1, 1, FailureClass::LocalOrigin);
+        assert!(!store.is_ejected("default/svc", 1));
+    }
+
+    #[test]
+    fn failure_class_metric_labels_are_bounded() {
+        assert_eq!(FailureClass::Gateway.metric_label(), "gateway");
+        assert_eq!(FailureClass::Application.metric_label(), "application");
+        assert_eq!(FailureClass::LocalOrigin.metric_label(), "local_origin");
     }
 
     #[test]

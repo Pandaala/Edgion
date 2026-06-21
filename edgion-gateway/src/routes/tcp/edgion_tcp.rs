@@ -207,10 +207,11 @@ impl EdgionTcpProxy {
             Ok(stream) => stream,
             Err(_) => {
                 ctx.status = TcpStatus::UpstreamConnectionFailed;
+                // L4 upstream connect failure — local-origin failure.
                 crate::backends::get_circuit_breaker_store().record_failure_by_addr(
                     &service_key,
                     &upstream_addr,
-                    crate::backends::FailureClass::Gateway,
+                    crate::backends::FailureClass::LocalOrigin,
                 );
                 return;
             }

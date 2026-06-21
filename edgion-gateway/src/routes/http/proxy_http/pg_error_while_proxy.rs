@@ -30,10 +30,11 @@ pub fn error_while_proxy(
     if !ctx.retry_on_status {
         if let Some(upstream) = ctx.get_current_upstream() {
             if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
+                // Mid-proxy read/write error or transport reset — local-origin failure.
                 crate::backends::get_circuit_breaker_store().record_failure_by_addr(
                     service_key,
                     addr,
-                    crate::backends::FailureClass::Gateway,
+                    crate::backends::FailureClass::LocalOrigin,
                 );
             }
         }

@@ -443,9 +443,13 @@ pub fn record_request_duration(
     histogram!(names::GATEWAY_REQUEST_DURATION_MS, label_vec).record(duration_ms);
 }
 
-/// Record a circuit breaker ejection event
-pub fn record_cb_ejection(service_key: &str) {
-    counter!(names::CB_EJECTIONS_TOTAL, "service" => service_key.to_string()).increment(1);
+/// Record a circuit breaker ejection event. `class` is the bounded failure-class
+/// label (`gateway` | `application` | `local_origin`) identifying which counter
+/// tripped, so operators can split local-origin (data-plane connect/proxy) ejections
+/// from upstream-origin 5xx ejections. The gauge stays unlabelled by class so its
+/// +1/-1 balance with `record_cb_recovery` (which has no class context) holds.
+pub fn record_cb_ejection(service_key: &str, class: &'static str) {
+    counter!(names::CB_EJECTIONS_TOTAL, "service" => service_key.to_string(), "class" => class).increment(1);
     gauge!(names::CB_EJECTED_ENDPOINTS, "service" => service_key.to_string()).increment(1.0);
 }
 
