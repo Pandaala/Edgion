@@ -11,7 +11,7 @@ work_dir: "."
 
 server:
   grpc_listen: "0.0.0.0:12151"   # ConfigSyncServer gRPC listen address
-  admin_listen: "0.0.0.0:12101"  # Admin HTTP API address (/api/v1, /configclient)
+  admin_listen: "127.0.0.1:12101"  # Admin HTTP API address (/api/v1, /configclient) — loopback default; set 0.0.0.0 + allow_admin_ips for cluster/remote access
   # probe_listen: "0.0.0.0:12100"   # Liveness/readiness (/health, /ready); default 0.0.0.0:12100
   # metrics_listen: "0.0.0.0:12190" # Prometheus metrics (/metrics); default 0.0.0.0:12190
 
@@ -83,7 +83,7 @@ conf_center:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `grpc_listen` | `String` | `0.0.0.0:12151` | gRPC listen address for ConfigSyncServer; Gateways connect here to receive config |
-| `admin_listen` | `String` | `0.0.0.0:12101` | Admin HTTP API listen address — serves `/api/v1/*` and `/configclient` |
+| `admin_listen` | `String` | `127.0.0.1:12101` | Admin HTTP API listen address — serves `/api/v1/*` and `/configclient`. Defaults to loopback; set `0.0.0.0` and configure `allow_admin_ips` for cluster or remote access |
 | `probe_listen` | `String` | `0.0.0.0:12100` | Probe listener — serves `/health` (liveness) and `/ready` (readiness); use `httpGet.port: 12100` in Kubernetes pod spec |
 | `metrics_listen` | `String` | `0.0.0.0:12190` | Metrics listener — serves `/metrics` (Prometheus scrape target) |
 

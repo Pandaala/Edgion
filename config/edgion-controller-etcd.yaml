@@ -26,7 +26,9 @@ logging:
 # ============================================================================
 server:
   grpc_listen: "0.0.0.0:12151"
-  admin_listen: "0.0.0.0:12101"
+  # Secure default: loopback. A distributed etcd-backed deployment that needs
+  # remote admin access must set 0.0.0.0 plus allow_admin_ips.
+  admin_listen: "127.0.0.1:12101"
 
 # ============================================================================
 # Configuration Center — Etcd Mode

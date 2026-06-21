@@ -177,6 +177,11 @@ RUN if [ "$BUILD_TYPE" != "example" ]; then \
 # Copy default config files from builder (if any exist)
 COPY --from=builder --chown=edgion:edgion /app/config ./config
 
+# Deployment artifact: bind the admin API to all interfaces (the repo sample
+# defaults to loopback for local-source safety). Restrict exposure via network
+# controls / allow_admin_ips in production.
+RUN sed -i 's/admin_listen: "127.0.0.1:12101"/admin_listen: "0.0.0.0:12101"/' config/edgion-controller.yaml
+
 # Switch to non-root user
 USER edgion
 

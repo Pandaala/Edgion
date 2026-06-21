@@ -7,7 +7,9 @@ server:
   # gRPC server for Gateway config sync
   grpc_listen: "0.0.0.0:12151"
 
-  # Admin HTTP server for health check and dashboard
+  # 0.0.0.0 is REQUIRED in K8s: the ClusterIP Service forwards to the Pod IP and
+  # in-cluster consumers reach it across the network. Restrict with a
+  # NetworkPolicy and/or allow_admin_ips — do NOT expose this port externally.
   admin_listen: "0.0.0.0:12101"
 
 # Configuration Center - Use Kubernetes mode in K8s deployment

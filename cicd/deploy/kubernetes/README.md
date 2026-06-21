@@ -33,7 +33,9 @@ cicd/deploy/kubernetes/
 │   ├── rbac.yaml               # ServiceAccount, ClusterRole, ClusterRoleBinding
 │   ├── configmap.yaml          # Controller YAML configuration
 │   ├── deployment.yaml         # Controller deployment (2 replicas)
-│   └── service.yaml            # Controller + leader services
+│   ├── service.yaml            # Controller + leader services
+│   └── optional/
+│       └── networkpolicy.yaml  # Optional: restrict admin/gRPC ingress (NOT auto-applied)
 ├── gateway/
 │   ├── configmap.yaml          # Gateway YAML configuration
 │   ├── deployment.yaml         # Gateway deployment (2 replicas)
@@ -96,45 +98,49 @@ This creates:
 
 ## Admin Credentials
 
-The controller reads admin credentials from the `edgion-admin-credentials` Secret via
-environment variables (`EDGION_ADMIN_USERNAME`, `EDGION_ADMIN_PASSWORD`,
-`EDGION_ADMIN_JWT_SECRET`). The Secret is wired into the controller Deployment via
-`secretKeyRef` entries in `controller/deployment.yaml`.
+Admin API auth is a single pre-shared bearer token. The controller reads it from the
+`edgion-admin-credentials` Secret via the env var `EDGION_ADMIN_TOKEN` (injected via
+`secretKeyRef` in `controller/deployment.yaml`), or from the `admin_token` field in a
+Secret-mounted config file. There is no username/password and no OIDC for the Admin API.
+No token is auto-generated: a blank token means the server returns 503 fail-close on all
+Admin API business routes at startup.
 
 ### How `deploy.sh` bootstraps the Secret
 
 `deploy.sh` creates the Secret **before** applying the controller manifests, using the
 operator's own kubectl (not the controller ServiceAccount). The step is idempotent: if the
-Secret already exists, it is left untouched so the current password is preserved. This
-means re-running `deploy.sh` on an existing cluster never resets the password.
+Secret already exists, it is left untouched so the current token is preserved. This means
+re-running `deploy.sh` on an existing cluster never resets the token.
 
 ```bash
 kubectl -n edgion-system get secret edgion-admin-credentials >/dev/null 2>&1 || \
   kubectl -n edgion-system create secret generic edgion-admin-credentials \
-    --from-literal=username=admin \
-    --from-literal=password="$(openssl rand -base64 16)" \
-    --from-literal=jwt_secret="$(openssl rand -base64 32)"
+    --from-literal=token="$(openssl rand -hex 32)"
 ```
 
-### Reading the admin password
+### Viewing the token
 
 ```bash
 kubectl -n edgion-system get secret edgion-admin-credentials \
-  -o jsonpath='{.data.password}' | base64 -d
+  -o jsonpath='{.data.token}' | base64 -d
 ```
 
-### Rotating the password
+### Rotating the token
 
 Edit the Secret directly; the controller picks up the new value on restart (or via a
-rolling update):
+rolling update). All previously issued requests using the old token are immediately
+rejected once the controller reloads.
 
 ```bash
 kubectl -n edgion-system patch secret edgion-admin-credentials \
-  -p "{\"stringData\":{\"password\":\"$(openssl rand -base64 16)\"}}"
+  -p "{\"stringData\":{\"token\":\"$(openssl rand -hex 32)\"}}"
 kubectl rollout restart deployment/edgion-controller -n edgion-system
 ```
 
-To invalidate **all issued JWTs immediately**, also rotate `jwt_secret` in the same patch.
+### CLI and API authentication
+
+- **CLI**: `edgion-cli login --token <TOKEN>` — persists the token to `~/.edgion/token`.
+- **API**: `Authorization: Bearer <TOKEN>` header on all Admin API requests.
 
 ## Configuration
 
@@ -231,6 +237,27 @@ cicd/deploy/kubernetes/scripts/cleanup.sh
 # Full removal including CRDs and namespace
 cicd/deploy/kubernetes/scripts/cleanup.sh --with-crds --with-namespace
 ```
+
+## Optional Hardening
+
+### Admin NetworkPolicy
+
+`controller/optional/networkpolicy.yaml` restricts ingress to the controller pod to only
+the admin API port (12101) and conf_sync gRPC port (12151). It is **not** applied
+automatically by `deploy.sh` — `kubectl apply -f <dir>` is non-recursive, so files in
+subdirectories are never auto-picked-up.
+
+To apply it manually after editing the selectors for your environment:
+
+```bash
+kubectl apply -f cicd/deploy/kubernetes/controller/optional/networkpolicy.yaml
+```
+
+> **Warning**: as written, this policy adds an Ingress `policyTypes` entry, which causes
+> Kubernetes to **default-deny all other ingress** on the controller pod, including metrics
+> scraping (port 12190) and kubelet liveness/readiness probes (port 12100). Before applying,
+> edit the policy to add explicit ingress rules for those ports (or for the specific scraper
+> and kubelet source CIDRs), or probe/metrics traffic will be blocked.
 
 ## Troubleshooting
 

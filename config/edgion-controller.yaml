@@ -48,8 +48,11 @@ server:
   #  Gateway
   grpc_listen: "0.0.0.0:12151"
 
-  # Admin HTTP API (/api/v1, /configclient); used by edgion-cli and Web Dashboard
-  admin_listen: "0.0.0.0:12101"
+  # Admin HTTP API (/api/v1, /configclient); used by edgion-cli and Web Dashboard.
+  # Secure default: loopback only. For cluster/remote access set 0.0.0.0 AND set
+  # allow_admin_ips (and/or a NetworkPolicy) — exposing the admin plane is an
+  # explicit operator choice.
+  admin_listen: "127.0.0.1:12101"
 
   # probe_listen: "0.0.0.0:12100"    # Liveness/readiness (/health, /ready); default 0.0.0.0:12100
   # metrics_listen: "0.0.0.0:12190"  # Prometheus metrics (/metrics); default 0.0.0.0:12190

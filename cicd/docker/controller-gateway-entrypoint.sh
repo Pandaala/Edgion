@@ -13,7 +13,7 @@ cleanup() {
 trap cleanup SIGTERM SIGINT
 
 echo "[controller-gateway] starting edgion-controller (admin 0.0.0.0:12101, probe 0.0.0.0:12100)..."
-/usr/local/bin/edgion-controller &
+/usr/local/bin/edgion-controller --admin-listen 0.0.0.0:12101 &
 
 echo "[controller-gateway] starting edgion-gateway..."
 /usr/local/bin/edgion-gateway &

@@ -11,7 +11,14 @@ data:
 
     server:
       grpc_listen: 0.0.0.0:12151
+      # 0.0.0.0 is REQUIRED in K8s (ClusterIP Service -> Pod IP). Restrict with
+      # the bundled NetworkPolicy and/or allow_admin_ips below.
       admin_listen: 0.0.0.0:12101
+      # Hardening: restrict the admin plane to the cluster Pod/Service CIDR.
+      # Matched against the TCP peer IP only (X-Forwarded-For is never trusted).
+      # Empty/unset = allow all. Uncomment and set to your cluster's CIDRs:
+      # allow_admin_ips:
+      #   - "10.0.0.0/8"
       probe_listen: 0.0.0.0:12100
       metrics_listen: 0.0.0.0:12190
 

@@ -11,7 +11,7 @@ The Controller exposes three HTTP listeners:
 |----------|-------------|---------|--------|
 | Probe | `probe_listen` | `0.0.0.0:12100` | `/health`, `/ready` |
 | Metrics | `metrics_listen` | `0.0.0.0:12190` | `/metrics` |
-| Admin | `admin_listen` | `0.0.0.0:12101` | `/api/v1/*`, `/configclient` |
+| Admin | `admin_listen` | `127.0.0.1:12101` (loopback; set `0.0.0.0` + `allow_admin_ips` for cluster/remote access) | `/api/v1/*`, `/configclient` |
 
 The Admin API listens on port 12101 (default) via Axum, used by the edgion-cli command-line tool and operations workflows. `/health` and `/ready` are served exclusively on the **probe listener** (`:12100`); `/metrics` is served exclusively on the **metrics listener** (`:12190`). Neither endpoint is available on `:12101`.
 

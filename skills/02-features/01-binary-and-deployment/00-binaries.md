@@ -42,7 +42,7 @@ edgion-controller [OPTIONS]
 | `--conf-dir` | — | `PathBuf` | — | Configuration directory for FileSystem mode (overrides conf_center.conf_dir in YAML) |
 | `--test-mode` | — | `bool` | `false` | Enable test mode (metrics testing features) |
 | `--grpc-listen` | — | `String` | `0.0.0.0:12151` | gRPC listen address |
-| `--admin-listen` | — | `String` | `0.0.0.0:12101` | Admin HTTP API address |
+| `--admin-listen` | — | `String` | `127.0.0.1:12101` (loopback; set `0.0.0.0` + `allow_admin_ips` for cluster/remote access) | Admin HTTP API address |
 | `--log-dir` | — | `String` | `logs` | Log directory |
 | `--log-level` | — | `String` | `info` | Log level: trace/debug/info/warn/error |
 | `--json-format` | — | `bool` | `false` | JSON-formatted log |

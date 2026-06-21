@@ -34,7 +34,7 @@ All in-repo binaries follow the **thin entry point** pattern — `src/bin/*.rs` 
 | Flag | Default | Description |
 |------|--------|------|
 | `--grpc-listen` | `0.0.0.0:12151` | gRPC listening address |
-| `--admin-listen` | `0.0.0.0:12101` | Admin API address |
+| `--admin-listen` | `127.0.0.1:12101` (loopback; set `0.0.0.0` + `allow_admin_ips` for cluster/remote access) | Admin API address |
 | `--conf-dir` | — | Configuration directory for FileSystem mode |
 
 ### Gateway-specific
@@ -77,7 +77,7 @@ All in-repo binaries follow the **thin entry point** pattern — `src/bin/*.rs` 
 ```yaml
 server:
   grpc_listen: "0.0.0.0:12151"
-  admin_listen: "0.0.0.0:12101"
+  admin_listen: "127.0.0.1:12101"
 
 logging:
   log_dir: logs

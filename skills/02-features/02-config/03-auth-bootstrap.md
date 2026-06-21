@@ -57,6 +57,30 @@ If neither source provides a non-blank token (and no `cli_tokens` are configured
 - It **survives reloads**: `Authorizer::apply` re-merges the admin-token entry into the cli-token map on every reload.
 - **Scoped, role-limited** tokens for automation are configured separately under `[cli_tokens]` (each with a fine-grained `rbac.allow` policy). See `skills/02-features/02-config/00-controller-config.md`.
 
+## Admin API network exposure
+
+The Admin API is plaintext HTTP (no TLS listener). Its security relies on
+network controls plus the bearer token. Secure defaults:
+
+- `admin_listen` defaults to `127.0.0.1:12101` (loopback). Cluster/remote access
+  requires explicitly setting `0.0.0.0` AND restricting reach via `allow_admin_ips`
+  and/or a Kubernetes NetworkPolicy. K8s sample configs set `0.0.0.0` explicitly
+  because the ClusterIP Service forwards to the Pod IP.
+- `allow_admin_ips` is empty by default (allow all). Set it to the trusted
+  peer CIDRs; matched against the TCP peer IP only.
+
+When the controller starts bound to a non-loopback address with an empty
+`allow_admin_ips`, it logs a high-severity WARN and sets the gauge:
+
+    edgion_system_error_state{component="admin_api", reason="insecure_admin_exposure"} = 1
+
+Example Alertmanager rule:
+
+    edgion_system_error_state{reason="insecure_admin_exposure"} > 0 for 5m
+
+The detection is observability-only — it never blocks startup. A hardening
+NetworkPolicy template ships at `cicd/deploy/kubernetes/controller/optional/networkpolicy.yaml`.
+
 ## Token Revocation / Rotation
 
 The pre-shared token is stateless — there is no session, cookie, or server-side blacklist. To revoke access:

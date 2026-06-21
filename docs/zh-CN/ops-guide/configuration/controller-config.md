@@ -11,7 +11,7 @@ work_dir: "."
 
 server:
   grpc_listen: "0.0.0.0:12151"   # ConfigSyncServer gRPC 监听地址
-  admin_listen: "0.0.0.0:12101"  # Admin HTTP API 地址（/api/v1、/configclient）
+  admin_listen: "127.0.0.1:12101"  # Admin HTTP API 地址（/api/v1、/configclient）——默认回环地址；集群/远程访问需设置 0.0.0.0 并配置 allow_admin_ips
   # probe_listen: "0.0.0.0:12100"   # 存活/就绪探针（/health、/ready）；默认 0.0.0.0:12100
   # metrics_listen: "0.0.0.0:12190" # Prometheus 指标（/metrics）；默认 0.0.0.0:12190
 
@@ -81,7 +81,7 @@ conf_center:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `grpc_listen` | `String` | `0.0.0.0:12151` | ConfigSyncServer gRPC 监听地址，Gateway 连接此地址同步配置 |
-| `admin_listen` | `String` | `0.0.0.0:12101` | Admin HTTP API 监听地址，提供 `/api/v1/*` 和 `/configclient` |
+| `admin_listen` | `String` | `127.0.0.1:12101` | Admin HTTP API 监听地址，提供 `/api/v1/*` 和 `/configclient`。默认绑定回环地址；如需集群或远程访问，需将其设置为 `0.0.0.0` 并配置 `allow_admin_ips` |
 | `probe_listen` | `String` | `0.0.0.0:12100` | 探针监听地址，提供 `/health`（存活）和 `/ready`（就绪）；Kubernetes pod spec 中使用 `httpGet.port: 12100` |
 | `metrics_listen` | `String` | `0.0.0.0:12190` | 指标监听地址，提供 `/metrics`（Prometheus 抓取目标） |
 

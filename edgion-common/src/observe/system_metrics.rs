@@ -38,6 +38,8 @@ pub mod components {
     pub const CONF_SYNC_SERVER: &str = "conf_sync_server";
     /// Controller-side federation gRPC client (Controller → Center).
     pub const FED_SYNC_CLIENT: &str = "fed_sync_client";
+    /// Controller-side Admin HTTP API server.
+    pub const ADMIN_API: &str = "admin_api";
 }
 
 /// Reason label values — what kind of system-level error condition.
@@ -55,6 +57,10 @@ pub mod reasons {
     /// Controller's own client cert SPIFFE SAN does not match its configured
     /// cluster/name; federation client was not started.
     pub const PEER_IDENTITY_SELF_CHECK: &str = "peer_identity_self_check";
+    /// Admin API is bound to a non-loopback address with no IP allowlist and no
+    /// TLS — the privileged admin plane is reachable on every routable interface
+    /// in plaintext. A deliberate-exposure flag for monitoring, not a blocker.
+    pub const INSECURE_ADMIN_EXPOSURE: &str = "insecure_admin_exposure";
 }
 
 /// Mark a system-level error condition as active.
@@ -124,6 +130,25 @@ mod tests {
             let rendered = handle.render();
             assert!(rendered.contains("component=\"conf_sync_client\""));
             assert!(rendered.contains("component=\"conf_sync_server\""));
+        });
+    }
+
+    #[test]
+    fn admin_insecure_exposure_emits_gauge_with_bounded_labels() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        metrics::with_local_recorder(&recorder, || {
+            mark_system_error(components::ADMIN_API, reasons::INSECURE_ADMIN_EXPOSURE);
+
+            let rendered = handle.render();
+            assert!(
+                rendered.lines().any(|l| l.contains("edgion_system_error_state{")
+                    && l.contains("component=\"admin_api\"")
+                    && l.contains("reason=\"insecure_admin_exposure\"")
+                    && l.trim_end().ends_with(" 1")),
+                "expected admin_api/insecure_admin_exposure gauge = 1, got:\n{rendered}"
+            );
         });
     }
 }

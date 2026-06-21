@@ -287,7 +287,11 @@ fn default_grpc_listen() -> String {
 }
 
 fn default_admin_listen() -> String {
-    "0.0.0.0:12101".to_string()
+    // Secure default: bind the privileged admin plane to loopback. Cluster /
+    // remote access must be an explicit operator choice (set 0.0.0.0 plus
+    // allow_admin_ips / a NetworkPolicy). K8s deploy configs set 0.0.0.0
+    // explicitly and are unaffected.
+    "127.0.0.1:12101".to_string()
 }
 
 fn default_probe_listen() -> String {
@@ -984,7 +988,7 @@ rbac:
     fn test_listen_address_defaults() {
         let cfg = EdgionControllerConfig::default();
         assert_eq!(cfg.grpc_listen(), "0.0.0.0:12151");
-        assert_eq!(cfg.admin_listen(), "0.0.0.0:12101");
+        assert_eq!(cfg.admin_listen(), "127.0.0.1:12101");
         assert_eq!(cfg.probe_listen(), "0.0.0.0:12100");
         assert_eq!(cfg.metrics_listen(), "0.0.0.0:12190");
     }

@@ -618,7 +618,7 @@ impl EdgionControllerCli {
         // 8. Parse addresses and start services with shutdown support
         // Note: Services start immediately but return UNAVAILABLE until ConfigServer is ready
         let grpc_addr = parse_listen_addr(Some(&config.grpc_listen()), DEFAULT_OPERATOR_GRPC_ADDR)?;
-        let admin_addr = parse_listen_addr(Some(&config.admin_listen()), "0.0.0.0:12101")?;
+        let admin_addr = parse_listen_addr(Some(&config.admin_listen()), "127.0.0.1:12101")?;
         let probe_addr = parse_listen_addr(Some(&config.probe_listen()), "0.0.0.0:12100")?;
         let metrics_addr = parse_listen_addr(Some(&config.metrics_listen()), "0.0.0.0:12190")?;
         let security = config.conf_sync_security.clone();

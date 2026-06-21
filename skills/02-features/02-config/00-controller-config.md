@@ -29,7 +29,7 @@ work_dir: "."
 
 server:
   grpc_listen: "0.0.0.0:12151"    # gRPC listen address (ConfigSyncServer)
-  admin_listen: "0.0.0.0:12101"   # Admin HTTP API address (/api/v1, /configclient)
+  admin_listen: "127.0.0.1:12101"  # Admin HTTP API address (/api/v1, /configclient); default loopback
   # probe_listen: "0.0.0.0:12100"   # Liveness/readiness (/health, /ready); default 0.0.0.0:12100
   # metrics_listen: "0.0.0.0:12190" # Prometheus metrics (/metrics); default 0.0.0.0:12190
   # allow_admin_ips:                 # Optional IP allowlist for the Admin API listener; unset/empty = allow all
@@ -104,10 +104,10 @@ conf_center:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `grpc_listen` | `String` | `0.0.0.0:12151` | ConfigSyncServer gRPC address |
-| `admin_listen` | `String` | `0.0.0.0:12101` | Admin HTTP API address — serves `/api/v1/*` and `/configclient` |
+| `admin_listen` | `String` | `127.0.0.1:12101` | Admin HTTP API address — serves `/api/v1/*` and `/configclient`. Defaults to loopback; set to `0.0.0.0` for cluster-wide access and pair with `allow_admin_ips` and/or a NetworkPolicy (see [Admin API network exposure](./03-auth-bootstrap.md#admin-api-network-exposure)). |
 | `probe_listen` | `String` | `0.0.0.0:12100` | Probe listener — serves `/health` (liveness) and `/ready` (readiness) |
 | `metrics_listen` | `String` | `0.0.0.0:12190` | Metrics listener — serves `/metrics` (Prometheus) |
-| `allow_admin_ips` | `Vec<String>` | `[]` (allow all) | CIDR allowlist for the Admin API listener. **Unset or empty = allow all** (backward compatible). Matched against the **TCP peer address only**; `X-Forwarded-For` is never trusted, so it is meaningful only for direct connections to the admin socket (behind an L7 proxy it degrades to matching the proxy IP). Probe/metrics run on dedicated ports and are unaffected. Dual-stack: when the listener binds `::`, list CIDRs for both families; NAT64 `64:ff9b::/96` embedded IPv4 is not extracted. Example: `["10.0.0.0/8", "127.0.0.1/32", "::1/128"]` |
+| `allow_admin_ips` | `Vec<String>` | `[]` (allow all) | CIDR allowlist for the Admin API listener. **Unset or empty = allow all** (backward compatible). Matched against the **TCP peer address only**; `X-Forwarded-For` is never trusted, so it is meaningful only for direct connections to the admin socket (behind an L7 proxy it degrades to matching the proxy IP). Probe/metrics run on dedicated ports and are unaffected. Dual-stack: when the listener binds `::`, list CIDRs for both families; NAT64 `64:ff9b::/96` embedded IPv4 is not extracted. **Recommended whenever `admin_listen` is bound to a non-loopback address**; leaving it empty in that case triggers the `insecure_admin_exposure` gauge (see [Admin API network exposure](./03-auth-bootstrap.md#admin-api-network-exposure)). Example: `["10.0.0.0/8", "127.0.0.1/32", "::1/128"]` |
 
 > **Admin API transport is plaintext HTTP.** The Controller Admin API listener is always served over plain HTTP — there is no `admin_tls` config surface. Transport security is delegated to the deployment environment: bind it to a private interface, restrict peers with `allow_admin_ips`, and rely on Kubernetes ClusterIP / NetworkPolicy. Authentication is still enforced independently via the Bearer token (see [auth bootstrap](./03-auth-bootstrap.md)); a request reaching a plaintext socket without a valid token is rejected.
 
