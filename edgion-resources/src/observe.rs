@@ -67,30 +67,6 @@ pub struct AccessLogOptions {
     pub include_raw_uri: bool,
 }
 
-/// Log type enumeration
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LogType {
-    /// HTTP/gRPC access log
-    Access,
-    /// SSL/TLS handshake log
-    Ssl,
-    /// TCP connection log
-    Tcp,
-    /// UDP session log
-    Udp,
-}
-
-impl LogType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            LogType::Access => "access",
-            LogType::Ssl => "ssl",
-            LogType::Tcp => "tcp",
-            LogType::Udp => "udp",
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -54,7 +54,7 @@ pub use self::err::{
     WATCH_ERR_TOO_OLD_VERSION, WATCH_ERR_VERSION_UNEXPECTED,
 };
 pub use self::gateway_base_conf::GatewayBaseConf;
-pub use self::observe::{LogConfig, LogType};
+pub use self::observe::LogConfig;
 pub use self::resources::*;
 pub use self::schema::*;
 pub use self::work_dir::{init_work_dir, work_dir, WorkDir};

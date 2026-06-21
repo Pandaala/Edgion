@@ -151,9 +151,7 @@ pub async fn create_sync_logger(config: &LogConfig) -> Result<Option<SslLogger>>
 
 #[cfg(test)]
 mod tests {
-    // Do NOT add a bare `use edgion_resources::observe::LogType` — that is a
-    // different type than the gateway `LogType` `create_async_logger` takes.
-    // `use super::*` already brings in the correct one.
+    // `use super::*` brings in the gateway `LogType` that `create_async_logger` takes.
     use super::*;
     use edgion_resources::LinkSysRef;
 

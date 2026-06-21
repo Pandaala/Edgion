@@ -11,13 +11,22 @@ use std::sync::Arc;
 use edgion_resources::output::{LocalFileWriterConfig, RotationConfig};
 use edgion_resources::work_dir;
 
-/// Log type for metrics differentiation
+/// Log type used for local-file metrics differentiation.
+///
+/// `Ssl` and `Tls` are two distinct code paths, not redundant entries: `Ssl` is
+/// the synchronous TLS handshake/callback log, while `Tls` is the asynchronous
+/// TLS proxy-event log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LogType {
+    /// HTTP/gRPC access log.
     Access,
+    /// Synchronous TLS handshake/callback log (sync path, via `SslLogger`).
     Ssl,
+    /// TCP connection log.
     Tcp,
+    /// Asynchronous TLS proxy-event log (async path, via `create_async_logger`).
     Tls,
+    /// UDP session log.
     Udp,
 }
 
