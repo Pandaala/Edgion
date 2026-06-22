@@ -477,7 +477,9 @@ build_and_import_local_images() {
   fi
   echo "[local build-import] resolved image version: ${build_version}"
 
-  local build_args=(--arch "${arch}" --with-examples --version "${build_version}")
+  # Standard images (controller + gateway) and test harness images
+  # (test_server + test_client) are now separate build modes.
+  local build_args=(--arch "${arch}" --version "${build_version}")
   if [[ "${LOCAL_IMAGE_REBUILD}" == "true" ]]; then
     build_args+=(--rebuild)
   fi
@@ -487,8 +489,11 @@ build_and_import_local_images() {
     exit 1
   fi
 
-  echo "[local build-import] building local images: ${build_args[*]}"
+  echo "[local build-import] building local standard images: ${build_args[*]}"
   IMAGE_REGISTRY="${IMAGE_REGISTRY}" IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" "${build_script}" "${build_args[@]}"
+
+  echo "[local build-import] building local test images: ${build_args[*]} --test-images"
+  IMAGE_REGISTRY="${IMAGE_REGISTRY}" IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" "${build_script}" "${build_args[@]}" --test-images
 
   IMAGE_VERSION="${build_version}"
   CONTROLLER_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-controller:${IMAGE_VERSION}_${arch}"

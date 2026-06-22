@@ -84,13 +84,18 @@ if [[ "${ARCH}" != "arm64" && "${ARCH}" != "amd64" ]]; then
   exit 1
 fi
 
-BUILD_ARGS=(--arch "${ARCH}" --with-examples --version "${VERSION}")
+# Standard images (controller + gateway) and test harness images
+# (test_server + test_client) are now separate build modes.
+BUILD_ARGS=(--arch "${ARCH}" --version "${VERSION}")
 if [[ "${REBUILD}" == "true" ]]; then
   BUILD_ARGS+=(--rebuild)
 fi
 
-echo "[INFO] building local images via ${BUILD_SCRIPT} ${BUILD_ARGS[*]}"
+echo "[INFO] building local standard images via ${BUILD_SCRIPT} ${BUILD_ARGS[*]}"
 IMAGE_REGISTRY="${IMAGE_REGISTRY}" IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" "${BUILD_SCRIPT}" "${BUILD_ARGS[@]}"
+
+echo "[INFO] building local test images via ${BUILD_SCRIPT} ${BUILD_ARGS[*]} --test-images"
+IMAGE_REGISTRY="${IMAGE_REGISTRY}" IMAGE_NAMESPACE="${IMAGE_NAMESPACE}" "${BUILD_SCRIPT}" "${BUILD_ARGS[@]}" --test-images
 
 CONTROLLER_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-controller:${VERSION}_${ARCH}"
 GATEWAY_IMAGE="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-gateway:${VERSION}_${ARCH}"

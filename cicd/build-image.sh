@@ -28,13 +28,16 @@ set -eo pipefail
 # Fallback version used when HEAD has no git tag.
 # Normal release flow: git tag v0.x.y  →  script auto-detects via `git describe --tags --exact-match`
 # or pass --from-tag / --version explicitly.
-DEFAULT_VERSION="0.3.2"
+DEFAULT_VERSION="0.3.5"
 IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.92}"
 FEATURES="${FEATURES:-default}"
 BINARIES="gateway controller"
-EXAMPLES="test_server test_client"
+# Test harness binaries. These are [[bin]] targets of the edgion-tests crate
+# (formerly under examples/, now moved into edgion-tests). Built only via the
+# dedicated --test-images mode, never alongside the standard images.
+TEST_BINARIES="test_server test_client"
 
 # =============================================================================
 # Internal variables  (no need to change unless you know what you're doing)
@@ -131,11 +134,18 @@ Options:
     --version TAG                Specify version tag (default: git tag or "${DEFAULT_VERSION}")
     --from-tag                   Use current git tag as version (fails if HEAD has no tag)
     --compile-only               Only compile binaries, don't build images
-    --with-examples              Also build test_server and test_client images
-    --with-example               Alias of --with-examples
+    --test-images                Build ONLY the test harness images
+                                 (test_server + test_client); skips standard images
     --controller-gateway         Build standalone bundle image: controller + gateway
                                  Image: edgion-controller-gateway (skips standard images)
     -h, --help                   Show this help message
+
+Test-Images Notes:
+    --test-images builds only the edgion-tests harness binaries (test_server,
+    test_client) as their own images (edgion-test-server, edgion-test-client).
+    It runs as a separate mode and does NOT build the controller / gateway
+    images. Combine with --push to push them. Mutually exclusive with
+    --controller-gateway.
 
 Controller-Gateway Notes:
     --controller-gateway produces a standalone image that bundles controller +
@@ -170,8 +180,8 @@ Examples:
     # Just compile, don't build images
     $0 --arch arm64 --compile-only
 
-    # Build and push with test_server and test_client
-    $0 --arch arm64,amd64 --push --with-examples
+    # Build and push ONLY the test harness images (test_server, test_client)
+    $0 --arch arm64,amd64 --push --test-images
 
     # Build controller-gateway bundle: controller + gateway
     $0 --controller-gateway
@@ -326,10 +336,10 @@ compile_binaries() {
 }
 
 # =============================================================================
-# Stage 2b: Compile examples using Docker (only with --with-examples)
+# Test images: Compile test harness binaries using Docker (only --test-images)
 # =============================================================================
 
-compile_examples() {
+compile_test_binaries() {
     local arch=$1
     local force_rebuild=$2
 
@@ -338,7 +348,7 @@ compile_examples() {
     IFS=':' read -r platform target suffix <<< "${arch_info}"
     local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
 
-    log_info "Compiling examples for ${arch} (${target})..."
+    log_info "Compiling test binaries for ${arch} (${target})..."
 
     # Ensure builder image exists
     ensure_builder_image "${platform}"
@@ -347,8 +357,8 @@ compile_examples() {
     # They use rustls directly and define no boringssl/rustls feature, so they
     # build with `-p edgion-tests --bin <name>` and take no `--features` flag.
     local testbin_args=""
-    for example in ${EXAMPLES}; do
-        testbin_args+=" --bin ${example}"
+    for testbin in ${TEST_BINARIES}; do
+        testbin_args+=" --bin ${testbin}"
     done
 
     local build_cmd="cargo build --release \
@@ -356,8 +366,8 @@ compile_examples() {
             -p edgion-tests${testbin_args}"
 
     if [[ "${force_rebuild}" == "true" ]]; then
-        # Do not clean here: binaries compiled in Stage 2 are needed by Stage 3 image packaging.
-        log_info "Force rebuild requested for examples (${arch}): rebuilding examples without target clean"
+        log_info "Force rebuild requested for test binaries (${arch})"
+        build_cmd="cargo clean --target \"${target}\" -p edgion-tests && ${build_cmd}"
     fi
 
     # Run compilation in Docker
@@ -372,11 +382,11 @@ compile_examples() {
         bash -c "${build_cmd}"
 
     if [[ $? -ne 0 ]]; then
-        log_error "Examples compilation failed for ${arch}"
+        log_error "Test binaries compilation failed for ${arch}"
         exit 1
     fi
 
-    log_success "Compiled examples for ${arch}"
+    log_success "Compiled test binaries for ${arch}"
 }
 
 # =============================================================================
@@ -435,10 +445,10 @@ build_images() {
 }
 
 # =============================================================================
-# Stage 3b: Build example Docker images (only with --with-examples)
+# Test images: Build test harness Docker images (only --test-images)
 # =============================================================================
 
-build_example_images() {
+build_test_images() {
     local arch=$1
     local push=$2
     local version=$3
@@ -450,27 +460,30 @@ build_example_images() {
 
     ensure_buildx
 
-    for example in ${EXAMPLES}; do
-        # Convert example name to image name: test_server -> edgion-test-server
-        local image_name="${example//_/-}"
+    for testbin in ${TEST_BINARIES}; do
+        # Convert binary name to image name: test_server -> edgion-test-server
+        local image_name="${testbin//_/-}"
         local image_base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}"
         local image_tag="${image_base}:${version}_${suffix}"
         local runtime_base="debian:bookworm-slim"
         local extra_packages=""
 
         # test_client image should include debug/test tools.
-        if [[ "${example}" == "test_client" ]]; then
+        if [[ "${testbin}" == "test_client" ]]; then
             extra_packages="curl bash"
         fi
 
-        log_info "Building ${example} image for ${arch}..."
+        log_info "Building ${testbin} image for ${arch}..."
         log_info "  Tag: ${image_tag}"
         log_info "  Runtime base: ${runtime_base}"
 
+        # BUILD_TYPE=example is the Dockerfile.runtime contract for an
+        # unprefixed standalone binary (no edgion- prefix, no cli copy), which
+        # is exactly how the edgion-tests harness binaries are laid out.
         local build_cmd=(
             docker buildx build
             --file "${PROJECT_DIR}/cicd/docker/Dockerfile.runtime"
-            --build-arg "BINARY=${example}"
+            --build-arg "BINARY=${testbin}"
             --build-arg "BUILD_TYPE=example"
             --build-arg "BINARY_PATH=${bin_path}"
             --build-arg "RUNTIME_BASE=${runtime_base}"
@@ -490,14 +503,14 @@ build_example_images() {
         "${build_cmd[@]}"
 
         if [[ $? -ne 0 ]]; then
-            log_error "Failed to build ${example} image for ${arch}"
+            log_error "Failed to build ${testbin} image for ${arch}"
             exit 1
         fi
 
         log_success "Built ${image_name}:${version}_${suffix}"
 
         # Store for report
-        BUILD_INFO+=("${example}|${image_tag}|${arch}")
+        BUILD_INFO+=("${testbin}|${image_tag}|${arch}")
     done
 }
 
@@ -564,15 +577,15 @@ merge_manifests() {
 }
 
 # =============================================================================
-# Stage 4b: Merge example multi-architecture manifests (only with --with-examples)
+# Test images: Merge test harness multi-architecture manifests (--test-images)
 # =============================================================================
 
-merge_example_manifests() {
+merge_test_manifests() {
     local version=$1
     shift
     local archs=("$@")
 
-    log_info "Creating multi-architecture manifests for examples..."
+    log_info "Creating multi-architecture manifests for test images..."
 
     # Extract semantic version components
     local version_no_v="${version#v}"
@@ -583,12 +596,12 @@ merge_example_manifests() {
         minor=$(echo "${version_no_v}" | cut -d. -f1-2)
     fi
 
-    for example in ${EXAMPLES}; do
-        # Convert example name to image name: test_server -> edgion-test-server
-        local image_name="${example//_/-}"
+    for testbin in ${TEST_BINARIES}; do
+        # Convert binary name to image name: test_server -> edgion-test-server
+        local image_name="${testbin//_/-}"
         local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}"
 
-        log_info "Creating multi-arch manifest for ${example}..."
+        log_info "Creating multi-arch manifest for ${testbin}..."
 
         # Build tag list
         local tags=()
@@ -619,11 +632,11 @@ merge_example_manifests() {
             "${sources[@]}"
 
         if [[ $? -ne 0 ]]; then
-            log_error "Failed to create manifest for ${example}"
+            log_error "Failed to create manifest for ${testbin}"
             exit 1
         fi
 
-        log_success "Created multi-arch manifest for ${example}"
+        log_success "Created multi-arch manifest for ${testbin}"
     done
 }
 
@@ -822,7 +835,7 @@ main() {
     local push=false
     local rebuild=false
     local compile_only=false
-    local with_examples=false
+    local test_images=false
     local controller_gateway=false
     local from_tag=false
     local version="${VERSION}"
@@ -853,8 +866,8 @@ main() {
                 compile_only=true
                 shift
                 ;;
-            --with-examples|--with-example)
-                with_examples=true
+            --test-images)
+                test_images=true
                 shift
                 ;;
             --controller-gateway)
@@ -872,6 +885,12 @@ main() {
                 ;;
         esac
     done
+
+    # Modes are mutually exclusive
+    if [[ "${test_images}" == "true" ]] && [[ "${controller_gateway}" == "true" ]]; then
+        log_error "--test-images and --controller-gateway are mutually exclusive"
+        exit 1
+    fi
 
     # --from-tag: resolve version from current git tag
     if [[ "${from_tag}" == "true" ]]; then
@@ -941,9 +960,12 @@ main() {
     if [[ "${controller_gateway}" == "true" ]]; then
         log_info "Mode: Controller-Gateway (standalone bundle image)"
         log_info "  → edgion-controller-gateway (controller + gateway)"
+    elif [[ "${test_images}" == "true" ]]; then
+        log_info "Mode: Test images (test harness only)"
+        log_info "  → edgion-test-server, edgion-test-client"
     else
         log_info "Mode: Standard"
-        [[ "${with_examples}" == "true" ]] && log_info "  → With examples"
+        log_info "  → edgion-gateway, edgion-controller"
     fi
     echo ""
 
@@ -1003,7 +1025,76 @@ main() {
     fi
 
     # =========================================================================
-    # Standard path — gateway + controller (+ optional examples)
+    # Test-images path — test_server + test_client only (separate from standard)
+    # =========================================================================
+    if [[ "${test_images}" == "true" ]]; then
+
+        # --- Compile test harness binaries ---
+        log_stage "Test images: Compiling test harness binaries"
+        for arch in "${archs[@]}"; do
+            compile_test_binaries "${arch}" "${rebuild}"
+        done
+
+        if [[ "${compile_only}" == "true" ]]; then
+            log_success "Test binaries compilation completed (--compile-only)"
+            exit 0
+        fi
+
+        # --- Build Docker images ---
+        log_stage "Test images: Building Docker images"
+        for arch in "${archs[@]}"; do
+            build_test_images "${arch}" "${push}" "${version}"
+        done
+
+        # --- Merge manifests (only when pushing) ---
+        if [[ "${push}" == "true" ]] && [[ ${#archs[@]} -gt 1 ]]; then
+            log_stage "Test images: Creating multi-architecture manifests"
+            merge_test_manifests "${version}" "${archs[@]}"
+        elif [[ "${push}" == "true" ]]; then
+            log_info "Single architecture, creating simple tags..."
+            local version_no_v="${version#v}"
+            local arch_info
+            arch_info=$(get_arch_info "${archs[0]}")
+            IFS=':' read -r _ _ suffix <<< "${arch_info}"
+
+            for testbin in ${TEST_BINARIES}; do
+                local image_name="${testbin//_/-}"
+                local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}"
+                docker buildx imagetools create \
+                    -t "${base}:${version_no_v}" \
+                    -t "${base}:latest" \
+                    "${base}:${version}_${suffix}"
+            done
+        else
+            log_info "Skipping manifest creation (not pushing)"
+            log_info "Use --push to create and push multi-arch manifests"
+        fi
+
+        # --- Summary ---
+        echo ""
+        log_success "Test images build completed successfully!"
+        echo ""
+        log_info "Built test images:"
+        local version_no_v="${version#v}"
+        for testbin in ${TEST_BINARIES}; do
+            local image_name="${testbin//_/-}"
+            if [[ "${push}" == "true" ]]; then
+                echo "  ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}:${version_no_v}"
+            else
+                for arch in "${archs[@]}"; do
+                    local arch_info
+                    arch_info=$(get_arch_info "${arch}")
+                    IFS=':' read -r _ _ suffix <<< "${arch_info}"
+                    echo "  ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}:${version}_${suffix} (local)"
+                done
+            fi
+        done
+        echo ""
+        return 0
+    fi
+
+    # =========================================================================
+    # Standard path — gateway + controller
     # =========================================================================
 
     # Stage 2: Compile binaries
@@ -1011,14 +1102,6 @@ main() {
     for arch in "${archs[@]}"; do
         compile_binaries "${arch}" "${rebuild}"
     done
-
-    # Stage 2b: Compile examples (only with --with-examples)
-    if [[ "${with_examples}" == "true" ]]; then
-        log_stage "Stage 2b: Compiling examples"
-        for arch in "${archs[@]}"; do
-            compile_examples "${arch}" "${rebuild}"
-        done
-    fi
 
     if [[ "${compile_only}" == "true" ]]; then
         log_success "Compilation completed (--compile-only)"
@@ -1031,20 +1114,9 @@ main() {
         build_images "${arch}" "${push}" "${version}"
     done
 
-    # Stage 3b: Build example images (only with --with-examples)
-    if [[ "${with_examples}" == "true" ]]; then
-        log_stage "Stage 3b: Building example Docker images"
-        for arch in "${archs[@]}"; do
-            build_example_images "${arch}" "${push}" "${version}"
-        done
-    fi
-
     # Stage 4: Merge manifests (only when pushing)
     if [[ "${push}" == "true" ]] && [[ ${#archs[@]} -gt 1 ]]; then
         merge_manifests "${version}" "${archs[@]}"
-        if [[ "${with_examples}" == "true" ]]; then
-            merge_example_manifests "${version}" "${archs[@]}"
-        fi
     elif [[ "${push}" == "true" ]]; then
         log_info "Single architecture build, creating simple tags..."
         local version_no_v="${version#v}"
@@ -1061,19 +1133,6 @@ main() {
                 -t "${base}:latest" \
                 "${base}:${version}_${suffix}"
         done
-
-        # Handle examples for single architecture push
-        if [[ "${with_examples}" == "true" ]]; then
-            for example in ${EXAMPLES}; do
-                local image_name="${example//_/-}"
-                local base="${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}"
-
-                docker buildx imagetools create \
-                    -t "${base}:${version_no_v}" \
-                    -t "${base}:latest" \
-                    "${base}:${version}_${suffix}"
-            done
-        fi
     else
         log_info "Skipping manifest creation (not pushing)"
         log_info "Use --push to create and push multi-arch manifests"
@@ -1097,25 +1156,6 @@ main() {
             done
         fi
     done
-
-    # Show example images if built
-    if [[ "${with_examples}" == "true" ]]; then
-        echo ""
-        log_info "Built example images:"
-        for example in ${EXAMPLES}; do
-            local image_name="${example//_/-}"
-            if [[ "${push}" == "true" ]]; then
-                echo "  ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}:${version_no_v}"
-            else
-                for arch in "${archs[@]}"; do
-                    local arch_info
-                    arch_info=$(get_arch_info "${arch}")
-                    IFS=':' read -r _ _ suffix <<< "${arch_info}"
-                    echo "  ${IMAGE_REGISTRY}/${IMAGE_NAMESPACE}/edgion-${image_name}:${version}_${suffix} (local)"
-                done
-            fi
-        done
-    fi
     echo ""
 }
 
