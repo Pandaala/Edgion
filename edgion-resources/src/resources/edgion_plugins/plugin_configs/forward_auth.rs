@@ -1,4 +1,4 @@
-//! ForwardAuth plugin configuration
+//! ForwardAuth plugin configuration.
 //!
 //! Sends the original request metadata to an external authentication service.
 //! If the auth service responds with 2xx, the request is forwarded to upstream.
@@ -6,6 +6,93 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::resources::common::{ExternalHttpConnection, OutboundRequestSpec, ResolvedSecrets};
+
+// ============================================================
+// ForwardAuthDecision
+// ============================================================
+
+/// Decision-phase configuration for the ForwardAuth plugin.
+///
+/// Controls what happens after the auth service responds: which headers to
+/// propagate upstream or back to the client, degradation behavior, and timing.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ForwardAuthDecision {
+    /// Headers to copy from the auth service response to the upstream request
+    /// (forwarded to upstream on success).
+    ///
+    /// Example: ["X-User-ID", "X-User-Role"]
+    #[serde(default)]
+    pub upstream_headers: Vec<String>,
+
+    /// Headers to copy from the auth service response to the client response
+    /// (only when auth fails, i.e., non-2xx response).
+    ///
+    /// Example: ["WWW-Authenticate", "X-Auth-Error"]
+    #[serde(default)]
+    pub client_headers: Vec<String>,
+
+    /// Whether to allow the request to proceed when the auth service is
+    /// unavailable (network error, timeout, etc.).
+    ///
+    /// - false (default): Return error response (statusOnError) when auth
+    ///   service is down.
+    /// - true: Skip authentication and forward to upstream (degraded mode).
+    #[serde(default)]
+    pub allow_degradation: bool,
+
+    /// HTTP status code to return when the auth service is unreachable or
+    /// returns a network error. Only effective when allow_degradation is false.
+    ///
+    /// Default: 503 (Service Unavailable). Range: 200-599.
+    #[serde(default = "default_status_on_error")]
+    pub status_on_error: u16,
+
+    /// Remove the Authorization header from the upstream request after
+    /// successful authentication.
+    ///
+    /// Default: false.
+    #[serde(default)]
+    pub hide_credentials: bool,
+
+    /// Delay in milliseconds before returning an authentication failure response.
+    ///
+    /// Increases the time cost for brute-force / credential-stuffing attacks.
+    /// Default: 0 (no delay).
+    #[serde(default)]
+    pub auth_failure_delay_ms: u64,
+}
+
+fn default_status_on_error() -> u16 {
+    503
+}
+
+impl Default for ForwardAuthDecision {
+    fn default() -> Self {
+        Self {
+            upstream_headers: Vec::new(),
+            client_headers: Vec::new(),
+            allow_degradation: false,
+            status_on_error: default_status_on_error(),
+            hide_credentials: false,
+            auth_failure_delay_ms: 0,
+        }
+    }
+}
+
+/// Serde default for `request`: forward_auth forwards all request headers by
+/// default (unlike the webhook plugin which defaults to an empty allow-list).
+fn default_forward_auth_request() -> OutboundRequestSpec {
+    let mut r = OutboundRequestSpec::default();
+    r.headers.forward_all = true;
+    r
+}
+
+// ============================================================
+// ForwardAuthConfig
+// ============================================================
 
 /// ForwardAuth plugin configuration.
 ///
@@ -15,160 +102,100 @@ use serde::{Deserialize, Serialize};
 ///
 /// ## Examples
 ///
-/// ### Basic: forward all headers
+/// ### Basic: forward all request headers to auth service
 /// ```yaml
-/// uri: "http://auth-service:8080/verify"
-/// upstreamHeaders:
-///   - X-User-ID
-///   - X-User-Role
+/// target:
+///   name: auth-service
+///   port: 8080
+/// decision:
+///   upstreamHeaders:
+///     - X-User-ID
+///     - X-User-Role
 /// ```
 ///
-/// ### Selective: forward only specific headers
+/// ### Selective: forward only specific headers, with degradation
 /// ```yaml
-/// uri: "https://auth.example.com/api/verify"
-/// requestMethod: POST
+/// target:
+///   name: auth-service
+///   port: 8443
+/// tls:
+///   insecureSkipVerify: false
 /// timeoutMs: 5000
-/// requestHeaders:
-///   - Authorization
-///   - Cookie
-/// upstreamHeaders:
-///   - X-User-ID
-/// clientHeaders:
-///   - WWW-Authenticate
-/// successStatusCodes: [200, 204]
+/// request:
+///   headers:
+///     origin:
+///       - name: Authorization
+///       - name: Cookie
+/// decision:
+///   upstreamHeaders:
+///     - X-User-ID
+///   clientHeaders:
+///     - WWW-Authenticate
+///   allowDegradation: true
+///   statusOnError: 503
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ForwardAuthConfig {
-    /// Auth service URL (required).
-    /// Example: "http://auth-service:8080/verify"
-    pub uri: String,
+    /// Connection-level configuration: target, TLS, timeout, retry,
+    /// rate-limit, health-check, and response-handling.
+    #[serde(flatten)]
+    pub conn: ExternalHttpConnection,
 
-    /// HTTP method to use for the auth request.
-    /// Default: GET (most auth services use GET)
-    #[serde(default = "default_method")]
-    pub request_method: String,
-
-    /// Headers to forward from the original request to the auth service.
+    /// Outbound request specification: which path, method, args, headers,
+    /// and cookies are forwarded to the auth service.
     ///
-    /// Behavior:
-    /// - If empty/None: forward ALL request headers (skipping hop-by-hop)
-    /// - If specified: forward ONLY the listed headers
-    ///
-    /// In both cases, hop-by-hop headers are always excluded.
-    #[serde(default)]
-    pub request_headers: Option<Vec<String>>,
+    /// Default: forward all request headers (forward_auth default behavior).
+    #[serde(default = "default_forward_auth_request")]
+    pub request: OutboundRequestSpec,
 
-    /// Headers to copy from auth service's response back to the original request
-    /// (forwarded to upstream).
-    ///
-    /// Useful for passing identity info: e.g., ["X-User-ID", "X-User-Role"]
-    #[serde(default)]
-    pub upstream_headers: Vec<String>,
+    /// Decision-phase configuration: header propagation, degradation behavior,
+    /// error status, and timing.
+    pub decision: ForwardAuthDecision,
 
-    /// Headers to copy from auth service's response to the client response
-    /// (only when auth fails, i.e., non-2xx response).
-    ///
-    /// Useful for passing error details: e.g., ["X-Auth-Error", "WWW-Authenticate"]
-    #[serde(default)]
-    pub client_headers: Vec<String>,
-
-    /// Request timeout in milliseconds.
-    /// Default: 10000 (10 seconds)
-    #[serde(default = "default_timeout_ms")]
-    pub timeout_ms: u64,
-
-    /// Status codes from auth service that are considered "success" (forward to upstream).
-    /// Default: any 2xx status code
-    /// Example: [200, 201, 204]
-    #[serde(default)]
-    pub success_status_codes: Option<Vec<u16>>,
-
-    /// Whether to allow the request to proceed when the auth service is unavailable
-    /// (network error, timeout, etc.).
-    ///
-    /// - false (default): Return error response (status_on_error) when auth service is down
-    /// - true: Skip authentication and forward to upstream (degraded mode)
-    ///
-    /// This is useful for non-critical auth checks where availability is more important
-    /// than strict authentication.
-    #[serde(default)]
-    pub allow_degradation: bool,
-
-    /// HTTP status code to return when the auth service is unreachable or returns a network error.
-    /// Only effective when allow_degradation is false.
-    /// Default: 503 (Service Unavailable)
-    /// Range: 200-599
-    #[serde(default = "default_status_on_error")]
-    pub status_on_error: u16,
-
-    /// Remove Authorization header from the upstream request after successful auth.
-    /// Default: false.
-    #[serde(default)]
-    pub hide_credentials: bool,
-
-    /// Delay in milliseconds before returning an authentication failure response.
-    /// Increases the time cost for brute-force / credential-stuffing attacks.
-    /// Default: 0 (no delay).
-    #[serde(default)]
-    pub auth_failure_delay_ms: u64,
-}
-
-fn default_method() -> String {
-    "GET".to_string()
-}
-
-fn default_timeout_ms() -> u64 {
-    10000
-}
-
-fn default_status_on_error() -> u16 {
-    503
+    /// Controller-resolved `${secretRef:...}` values carried to the gateway
+    /// over conf_sync. Never exposed in the CRD (schemars skip) and shown as
+    /// `[redacted]` in admin API output.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_secrets: Option<ResolvedSecrets>,
 }
 
 impl Default for ForwardAuthConfig {
     fn default() -> Self {
+        let mut request = OutboundRequestSpec::default();
+        // forward_auth default: forward all request headers to the auth service
+        request.headers.forward_all = true;
         Self {
-            uri: String::new(),
-            request_method: default_method(),
-            request_headers: None,
-            upstream_headers: Vec::new(),
-            client_headers: Vec::new(),
-            timeout_ms: default_timeout_ms(),
-            success_status_codes: None,
-            allow_degradation: false,
-            status_on_error: default_status_on_error(),
-            hide_credentials: false,
-            auth_failure_delay_ms: 0,
+            conn: ExternalHttpConnection::default(),
+            request,
+            decision: ForwardAuthDecision::default(),
+            resolved_secrets: None,
         }
     }
 }
 
 impl ForwardAuthConfig {
-    /// Validate the configuration and return an error message if invalid.
-    pub fn get_validation_error(&self) -> Option<&str> {
-        if self.uri.is_empty() {
-            return Some("uri is required");
+    /// Validate the configuration and return the first error found.
+    pub fn validation_error(&self) -> Option<String> {
+        // Validate the target (port required, kind must be supported)
+        if let Some(e) = crate::resources::common::validate_webhook_target(&self.conn.target) {
+            return Some(format!("target invalid: {e}"));
         }
-        // Validate URI format (must start with http:// or https://)
-        if !self.uri.starts_with("http://") && !self.uri.starts_with("https://") {
-            return Some("uri must start with http:// or https://");
+        // Validate status_on_error range
+        if !(200..=599).contains(&self.decision.status_on_error) {
+            return Some(format!(
+                "statusOnError must be 200-599, got {}",
+                self.decision.status_on_error
+            ));
         }
-        // Validate method
-        let method_upper = self.request_method.to_uppercase();
-        if !matches!(
-            method_upper.as_str(),
-            "GET" | "POST" | "PUT" | "DELETE" | "PATCH" | "HEAD" | "OPTIONS"
-        ) {
-            return Some("requestMethod must be a valid HTTP method");
-        }
-        // Validate timeout
-        if self.timeout_ms == 0 {
-            return Some("timeoutMs must be greater than 0");
-        }
-        // Validate status_on_error
-        if !(200..=599).contains(&self.status_on_error) {
-            return Some("statusOnError must be between 200 and 599");
+        // Delegate request-level validation (rejects forward_all on args/cookies)
+        if let Some(e) = self.request.validation_error() {
+            return Some(e);
         }
         None
     }
@@ -178,7 +205,7 @@ use crate::resources::edgion_plugins::PluginValidation;
 
 impl PluginValidation for ForwardAuthConfig {
     fn validation_error(&self) -> Option<String> {
-        self.get_validation_error().map(str::to_owned)
+        self.validation_error()
     }
 }
 
@@ -186,145 +213,55 @@ impl PluginValidation for ForwardAuthConfig {
 mod tests {
     use super::*;
 
+    /// New schema parses correctly: conn.target resolves port, request defaults
+    /// to forward_all=true, and validation passes.
     #[test]
-    fn test_default_config() {
-        let config = ForwardAuthConfig::default();
-        assert_eq!(config.request_method, "GET");
-        assert_eq!(config.timeout_ms, 10000);
-        assert!(config.request_headers.is_none());
-        assert!(config.upstream_headers.is_empty());
-        assert!(config.client_headers.is_empty());
-        assert!(config.success_status_codes.is_none());
-        assert!(!config.allow_degradation);
-        assert_eq!(config.status_on_error, 503);
+    fn forward_auth_new_schema_parses() {
+        let y = "target:\n  name: auth\n  port: 8080\ndecision:\n  statusOnError: 503\n";
+        let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+        assert_eq!(cfg.conn.target.backend_ref.port, Some(8080));
+        assert!(cfg.request.headers.forward_all); // forward_auth Default sets true
+        assert!(cfg.validation_error().is_none());
     }
 
+    /// Missing port must produce a validation error.
     #[test]
-    fn test_validation_empty_uri() {
-        let config = ForwardAuthConfig::default();
-        assert_eq!(config.get_validation_error(), Some("uri is required"));
+    fn forward_auth_rejects_missing_port() {
+        let y = "target:\n  name: auth\ndecision: {}\n";
+        let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+        assert!(cfg.validation_error().is_some());
     }
 
+    /// statusOnError = 600 is out of range (200-599) and must be rejected.
     #[test]
-    fn test_validation_invalid_uri_scheme() {
-        let config = ForwardAuthConfig {
-            uri: "ftp://auth-service/verify".to_string(),
-            ..Default::default()
-        };
-        assert_eq!(
-            config.get_validation_error(),
-            Some("uri must start with http:// or https://")
+    fn forward_auth_rejects_status_on_error_600() {
+        let y = "target:\n  name: auth\n  port: 8080\ndecision:\n  statusOnError: 600\n";
+        let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+        let err = cfg.validation_error().expect("600 should fail validation");
+        assert!(
+            err.contains("statusOnError"),
+            "Error should mention statusOnError; got: {err}"
+        );
+    }
+
+    /// Default::default() must set request.headers.forward_all = true (the
+    /// forward_auth default behavior contract).
+    #[test]
+    fn forward_auth_default_headers_forward_all_is_true() {
+        let cfg = ForwardAuthConfig::default();
+        assert!(
+            cfg.request.headers.forward_all,
+            "Default ForwardAuthConfig must have request.headers.forward_all = true"
         );
     }
 
     #[test]
-    fn test_validation_invalid_method() {
-        let config = ForwardAuthConfig {
-            uri: "http://auth-service/verify".to_string(),
-            request_method: "INVALID".to_string(),
-            ..Default::default()
-        };
-        assert_eq!(
-            config.get_validation_error(),
-            Some("requestMethod must be a valid HTTP method")
+    fn forward_auth_default_passes_own_validation() {
+        let decision = ForwardAuthDecision::default();
+        assert!(
+            (200..=599).contains(&decision.status_on_error),
+            "Default ForwardAuthDecision must pass status_on_error validation, got: {}",
+            decision.status_on_error
         );
-    }
-
-    #[test]
-    fn test_validation_zero_timeout() {
-        let config = ForwardAuthConfig {
-            uri: "http://auth-service/verify".to_string(),
-            timeout_ms: 0,
-            ..Default::default()
-        };
-        assert_eq!(config.get_validation_error(), Some("timeoutMs must be greater than 0"));
-    }
-
-    #[test]
-    fn test_validation_valid_config() {
-        let config = ForwardAuthConfig {
-            uri: "http://auth-service:8080/verify".to_string(),
-            ..Default::default()
-        };
-        assert!(config.get_validation_error().is_none());
-    }
-
-    #[test]
-    fn test_validation_https_uri() {
-        let config = ForwardAuthConfig {
-            uri: "https://auth.example.com/api/verify".to_string(),
-            ..Default::default()
-        };
-        assert!(config.get_validation_error().is_none());
-    }
-
-    #[test]
-    fn test_deserialization_defaults() {
-        let json = r#"{"uri": "http://auth-service/verify"}"#;
-        let config: ForwardAuthConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.uri, "http://auth-service/verify");
-        assert_eq!(config.request_method, "GET");
-        assert_eq!(config.timeout_ms, 10000);
-        assert!(config.request_headers.is_none());
-    }
-
-    #[test]
-    fn test_deserialization_full() {
-        let json = r#"{
-            "uri": "https://auth.example.com/verify",
-            "requestMethod": "POST",
-            "timeoutMs": 5000,
-            "requestHeaders": ["Authorization", "Cookie"],
-            "upstreamHeaders": ["X-User-ID", "X-User-Role"],
-            "clientHeaders": ["WWW-Authenticate"],
-            "successStatusCodes": [200, 204],
-            "allowDegradation": true,
-            "statusOnError": 403
-        }"#;
-        let config: ForwardAuthConfig = serde_json::from_str(json).unwrap();
-        assert_eq!(config.uri, "https://auth.example.com/verify");
-        assert_eq!(config.request_method, "POST");
-        assert_eq!(config.timeout_ms, 5000);
-        assert_eq!(
-            config.request_headers,
-            Some(vec!["Authorization".to_string(), "Cookie".to_string()])
-        );
-        assert_eq!(config.upstream_headers, vec!["X-User-ID", "X-User-Role"]);
-        assert_eq!(config.client_headers, vec!["WWW-Authenticate"]);
-        assert_eq!(config.success_status_codes, Some(vec![200, 204]));
-        assert!(config.allow_degradation);
-        assert_eq!(config.status_on_error, 403);
-    }
-
-    #[test]
-    fn test_deserialization_defaults_new_fields() {
-        let json = r#"{"uri": "http://auth-service/verify"}"#;
-        let config: ForwardAuthConfig = serde_json::from_str(json).unwrap();
-        // New fields should have sensible defaults
-        assert!(!config.allow_degradation);
-        assert_eq!(config.status_on_error, 503);
-    }
-
-    #[test]
-    fn test_validation_invalid_status_on_error() {
-        let config = ForwardAuthConfig {
-            uri: "http://auth-service/verify".to_string(),
-            status_on_error: 600, // Invalid: out of range
-            ..Default::default()
-        };
-        assert_eq!(
-            config.get_validation_error(),
-            Some("statusOnError must be between 200 and 599")
-        );
-    }
-
-    #[test]
-    fn test_validation_status_on_error_valid_range() {
-        let config = ForwardAuthConfig {
-            uri: "http://auth-service/verify".to_string(),
-            status_on_error: 403,
-            ..Default::default()
-        };
-        assert!(config.get_validation_error().is_none());
     }
 }

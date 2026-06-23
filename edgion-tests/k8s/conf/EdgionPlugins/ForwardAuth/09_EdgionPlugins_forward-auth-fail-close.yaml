@@ -1,0 +1,24 @@
+# ForwardAuth fail-close test: auth server is unreachable, allowDegradation=false, statusOnError=503
+# The target port 30098 (auth-unreachable-svc, declared in file 07) is never started.
+# With allowDegradation=false the gateway must return the configured statusOnError (503)
+# and NOT forward the request to the upstream backend.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-fail-close
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-unreachable-svc
+          namespace: edgion-default
+          port: 30098
+        timeoutMs: 2000
+        decision:
+          upstreamHeaders: []
+          clientHeaders: []
+          allowDegradation: false
+          statusOnError: 503

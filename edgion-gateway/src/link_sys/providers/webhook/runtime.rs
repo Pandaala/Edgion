@@ -3,86 +3,16 @@
 //! Contains WebhookRuntime (per-webhook state), SlidingWindowCounter (rate limiter),
 //! and time utilities.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
 use crate::link_sys::providers::webhook::compiled_request::CompiledOutboundRequest;
 use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
 use reqwest::Client;
 
-// ============================================================
-// WebhookResolvedTarget — resolved runtime target
-// ============================================================
-
-/// Resolved target for a webhook service at runtime.
-///
-/// `Static` covers `Uri` and `ServiceClusterIp` (a fixed base URL). `Service`
-/// holds a reference into the shared EndpointSlice data layer plus a local
-/// round-robin cursor; endpoints are read fresh on every `pick_url()`, so pod
-/// churn never rebuilds this target. Routing is fully decoupled from the route
-/// `ServiceSelectorCell` / circuit-breaker / health stores.
-pub enum WebhookResolvedTarget {
-    /// Single base URL: Uri target or ServiceClusterIp.
-    Static(String),
-    /// Service-backed pool read from the shared EpSliceStore at call time.
-    Service {
-        /// Canonical `"namespace/service-name"` key (matches EpSliceStore).
-        service_key: String,
-        /// Explicit serving-port number to match, or None for first available.
-        port: Option<i32>,
-        /// "http" or "https".
-        scheme: &'static str,
-        /// Webhook-local round-robin cursor.
-        cursor: AtomicUsize,
-    },
-}
-
-impl std::fmt::Debug for WebhookResolvedTarget {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Static(url) => write!(f, "Static({url:?})"),
-            Self::Service {
-                service_key,
-                port,
-                scheme,
-                ..
-            } => {
-                write!(f, "Service(key={service_key:?}, port={port:?}, scheme={scheme})")
-            }
-        }
-    }
-}
-
-impl WebhookResolvedTarget {
-    /// Pick the next base URL. Returns `None` when the Service target currently
-    /// has no ready backend (callers map this to `WebhookCallError::Unhealthy`).
-    pub fn pick_url(&self) -> Option<String> {
-        match self {
-            Self::Static(url) => Some(url.clone()),
-            Self::Service {
-                service_key,
-                port,
-                scheme,
-                cursor,
-            } => {
-                let eps = get_roundrobin_store().ready_endpoints_for_port(service_key, *port);
-                rr_pick(&eps, cursor, scheme)
-            }
-        }
-    }
-}
-
-/// Round-robin one `"ip:port"` from `eps` and format `"{scheme}://{ep}"`.
-/// Returns `None` for an empty list. Pure (no global state) for testability.
-fn rr_pick(eps: &[String], cursor: &AtomicUsize, scheme: &str) -> Option<String> {
-    if eps.is_empty() {
-        return None;
-    }
-    let idx = cursor.fetch_add(1, Ordering::Relaxed) % eps.len();
-    Some(format!("{scheme}://{}", eps[idx]))
-}
+// Re-export from the shared outbound engine.
+pub use crate::plugins::http::common::outbound::target::{rr_pick, ResolvedTarget as WebhookResolvedTarget};
 
 // ============================================================
 // WebhookRuntime — per-webhook runtime state
@@ -216,6 +146,8 @@ pub fn now_epoch_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
+    use std::sync::atomic::AtomicUsize;
 
     #[test]
     fn test_sliding_window_counter_allows_within_limit() {
@@ -360,7 +292,7 @@ mod tests {
     #[tokio::test]
     async fn pick_url_health_state_preserved_across_churn() {
         use edgion_resources::constants::labels::k8s::SERVICE_NAME;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
         use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
         use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
         use std::collections::{BTreeMap, HashMap, HashSet};
@@ -375,14 +307,17 @@ mod tests {
         use edgion_resources::resources::link_sys::webhook::WebhookOutboundRequest;
         let runtime = Arc::new(WebhookRuntime {
             config: WebhookServiceConfig {
-                target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
-                        kind: None,
-                        name: "wh-svc".to_string(),
-                        namespace: Some("default".to_string()),
-                        port: Some(8080),
+                conn: ExternalHttpConnection {
+                    target: WebhookTarget {
+                        backend_ref: BackendObjectReference {
+                            group: String::new(),
+                            kind: None,
+                            name: "wh-svc".to_string(),
+                            namespace: Some("default".to_string()),
+                            port: Some(8080),
+                        },
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },

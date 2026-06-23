@@ -448,6 +448,7 @@ mod tests {
                     presence: PresencePolicy::SkipIfMissing,
                 }],
                 custom: vec![],
+                ..Default::default()
             },
             ..WebhookOutboundRequest::default()
         };
@@ -474,6 +475,7 @@ mod tests {
                     presence: PresencePolicy::SkipIfMissing,
                 }],
                 custom: vec![],
+                ..Default::default()
             },
             ..WebhookOutboundRequest::default()
         };
@@ -499,6 +501,7 @@ mod tests {
                     presence: PresencePolicy::Required,
                 }],
                 custom: vec![],
+                ..Default::default()
             },
             ..WebhookOutboundRequest::default()
         };
@@ -529,6 +532,7 @@ mod tests {
                     name: "version".to_string(),
                     source: CustomSource::Value("v2".to_string()),
                 }],
+                ..Default::default()
             },
             ..WebhookOutboundRequest::default()
         };
@@ -555,6 +559,7 @@ mod tests {
                     name: "key".to_string(),
                     source: CustomSource::Template("${ctx:tenant}_${ctx:region}".to_string()),
                 }],
+                ..Default::default()
             },
             ..WebhookOutboundRequest::default()
         };
@@ -665,6 +670,7 @@ mod tests {
                     name: "Authorization".to_string(),
                     source: CustomSource::Template("Bearer ${secretRef:default/my-secret:token}".to_string()),
                 }],
+                ..Default::default()
             },
             ..WebhookOutboundRequest::default()
         };

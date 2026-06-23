@@ -103,16 +103,19 @@ mod tests {
 
     fn config() -> WebhookServiceConfig {
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
         WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: "example-svc".into(),
-                    namespace: Some("default".into()),
-                    port: Some(80),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "example-svc".into(),
+                        namespace: Some("default".into()),
+                        port: Some(80),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         }

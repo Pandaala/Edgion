@@ -598,7 +598,9 @@ mod tests {
 
     fn mk_webhook_linksys(auth: Option<serde_json::Value>) -> LinkSys {
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{
+            ExternalHttpConnection, WebhookServiceConfig, WebhookTarget,
+        };
         LinkSys {
             metadata: ObjectMeta {
                 name: Some("wh".into()),
@@ -607,14 +609,17 @@ mod tests {
             },
             spec: LinkSysSpec {
                 config: SystemConfig::Webhook(WebhookServiceConfig {
-                    target: WebhookTarget {
-                        backend_ref: BackendObjectReference {
-                            group: String::new(),
-                            kind: None,
-                            name: "webhook-svc".into(),
-                            namespace: Some("default".into()),
-                            port: Some(8080),
+                    conn: ExternalHttpConnection {
+                        target: WebhookTarget {
+                            backend_ref: BackendObjectReference {
+                                group: String::new(),
+                                kind: None,
+                                name: "webhook-svc".into(),
+                                namespace: Some("default".into()),
+                                port: Some(8080),
+                            },
                         },
+                        ..Default::default()
                     },
                     auth,
                     ..Default::default()

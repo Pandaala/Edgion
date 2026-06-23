@@ -1849,12 +1849,28 @@ async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
                 "forwarded_method": forwarded_method,
                 "received_headers": received_headers,
             });
+            // Reflect whether specific headers were present in the auth request.
+            // Used by the dynamic hop-by-hop stripping integration test (RFC 9110 §7.6.1):
+            // the gateway must strip headers listed in Connection before forwarding to the
+            // auth server; these response headers let the test verify the auth server's view.
+            let saw_custom_hop = if headers.contains_key("x-custom-hop") {
+                "yes"
+            } else {
+                "no"
+            };
+            let saw_visible_header = if headers.contains_key("x-visible-header") {
+                "yes"
+            } else {
+                "no"
+            };
             (
                 StatusCode::OK,
                 [
                     ("X-User-ID", "user-123"),
                     ("X-User-Role", "member"),
                     ("X-User-Email", "test@example.com"),
+                    ("X-Saw-Custom-Hop", saw_custom_hop),
+                    ("X-Saw-Visible-Header", saw_visible_header),
                 ],
                 Json(body),
             )
@@ -1894,6 +1910,14 @@ async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
             )
                 .into_response()
         }
+        // Valid token that returns 204 No Content (for successStatusCodes integration test).
+        // Sends an empty body with X-User-ID so upstream-header propagation can be verified.
+        "Bearer valid-204-token" => (
+            StatusCode::NO_CONTENT,
+            [("X-User-ID", "user-204"), ("X-Auth-Status", "ok-204")],
+            "",
+        )
+            .into_response(),
         // No auth or invalid token → 401
         _ => {
             let body = json!({

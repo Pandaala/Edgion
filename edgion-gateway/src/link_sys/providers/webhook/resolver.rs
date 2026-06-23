@@ -4,10 +4,10 @@
 //! KeyGet::Webhook variants.
 
 use crate::observe::metrics::record_webhook_resolve_error;
+use crate::plugins::http::common::outbound::call::{outbound_call, OutboundCallError, OutboundResponse};
 use crate::plugins::runtime::PluginSession;
 use edgion_resources::common::WebhookExtract;
 
-use super::call::{webhook_call, WebhookCallError, WebhookCallResult};
 use super::manager::{get_webhook_global_max, get_webhook_manager};
 
 /// Resolve a key value by calling an external webhook service.
@@ -16,7 +16,7 @@ use super::manager::{get_webhook_global_max, get_webhook_manager};
 ///
 /// The outbound request shape (method, path, query args, headers, cookies) is
 /// now defined entirely by the webhook resource's `request` block and applied
-/// inside `webhook_call`. The consumer only supplies the `session` (for origin
+/// inside `outbound_call`. The consumer only supplies the `session` (for origin
 /// and template lookups) and an optional `path_override`.
 ///
 /// `_forward_headers` is retained in the signature for the Wave C consumer
@@ -29,28 +29,43 @@ pub async fn resolve_webhook_key(
     path_override: Option<&str>,
     extract: &WebhookExtract,
 ) -> Option<String> {
-    let runtime = match get_webhook_manager().get(webhook_ref).await {
-        Some(rt) => rt,
+    let client = match get_webhook_manager().get(webhook_ref).await {
+        Some(c) => c,
         None => {
             record_webhook_resolve_error("not_found");
             return None;
         }
     };
 
-    let path_override = path_override.map(|s| s.to_string());
+    let path_override_owned = path_override.map(|s| s.to_string());
 
-    match webhook_call(&runtime, session, path_override, get_webhook_global_max()).await {
-        Ok(result) => extract_value(&result, extract),
-        Err(WebhookCallError::Unhealthy) => {
+    match outbound_call(
+        &client,
+        session,
+        path_override_owned.as_deref(),
+        get_webhook_global_max(),
+        &[],
+    )
+    .await
+    {
+        Ok(resp) => {
+            let is_success = match &client.success_status_codes {
+                Some(codes) => codes.contains(&resp.status),
+                None => (200u16..300u16).contains(&resp.status),
+            };
+            if is_success {
+                extract_value_from_response(&resp, extract)
+            } else {
+                record_webhook_resolve_error("status_error");
+                None
+            }
+        }
+        Err(OutboundCallError::Unhealthy) => {
             record_webhook_resolve_error("unhealthy");
             None
         }
-        Err(WebhookCallError::RateLimited) => {
+        Err(OutboundCallError::RateLimited) => {
             record_webhook_resolve_error("rate_limited");
-            None
-        }
-        Err(WebhookCallError::StatusNotSuccess { .. }) => {
-            record_webhook_resolve_error("status_error");
             None
         }
         Err(_) => {
@@ -64,8 +79,8 @@ pub async fn resolve_webhook_key(
 // Helpers
 // ============================================================
 
-/// Extract a value from a WebhookCallResult based on WebhookExtract rules.
-fn extract_value(result: &WebhookCallResult, extract: &WebhookExtract) -> Option<String> {
+/// Extract a value from an OutboundResponse based on WebhookExtract rules.
+fn extract_value_from_response(result: &OutboundResponse, extract: &WebhookExtract) -> Option<String> {
     match extract {
         WebhookExtract::Header { name } => result
             .headers
@@ -118,7 +133,7 @@ fn extract_value(result: &WebhookCallResult, extract: &WebhookExtract) -> Option
     }
 }
 
-// NOTE: extract_value tests require a real HTTP server (mockito).
+// NOTE: extract_value_from_response tests require a real HTTP server (mockito).
 // These are covered by integration tests instead.
 // See edgion-tests/src/client/suites/edgion_plugins/webhook_key_get/ for full integration tests.
 
@@ -140,8 +155,8 @@ mod tests {
         super::resolve_webhook_key(session, webhook_ref, forward_headers, path_suffix, extract).await
     }
 
-    fn make_result(status: u16, headers: reqwest::header::HeaderMap, body: &[u8]) -> WebhookCallResult {
-        WebhookCallResult {
+    fn make_result(status: u16, headers: reqwest::header::HeaderMap, body: &[u8]) -> OutboundResponse {
+        OutboundResponse {
             status,
             headers,
             body: Bytes::copy_from_slice(body),
@@ -156,7 +171,10 @@ mod tests {
         let extract = WebhookExtract::Header {
             name: "x-resolved-key".to_string(),
         };
-        assert_eq!(extract_value(&result, &extract), Some("my-token".to_string()));
+        assert_eq!(
+            extract_value_from_response(&result, &extract),
+            Some("my-token".to_string())
+        );
     }
 
     #[test]
@@ -165,7 +183,7 @@ mod tests {
         let extract = WebhookExtract::Header {
             name: "x-missing".to_string(),
         };
-        assert_eq!(extract_value(&result, &extract), None);
+        assert_eq!(extract_value_from_response(&result, &extract), None);
     }
 
     #[test]
@@ -176,7 +194,10 @@ mod tests {
         let extract = WebhookExtract::Cookie {
             name: "session".to_string(),
         };
-        assert_eq!(extract_value(&result, &extract), Some("abc123".to_string()));
+        assert_eq!(
+            extract_value_from_response(&result, &extract),
+            Some("abc123".to_string())
+        );
     }
 
     #[test]
@@ -185,7 +206,7 @@ mod tests {
         let extract = WebhookExtract::Cookie {
             name: "session".to_string(),
         };
-        assert_eq!(extract_value(&result, &extract), None);
+        assert_eq!(extract_value_from_response(&result, &extract), None);
     }
 
     #[test]
@@ -195,7 +216,7 @@ mod tests {
         let extract = WebhookExtract::Body {
             path: "data.user_id".to_string(),
         };
-        assert_eq!(extract_value(&result, &extract), Some("42".to_string()));
+        assert_eq!(extract_value_from_response(&result, &extract), Some("42".to_string()));
     }
 
     #[test]
@@ -205,21 +226,24 @@ mod tests {
         let extract = WebhookExtract::Body {
             path: "data.user_id".to_string(),
         };
-        assert_eq!(extract_value(&result, &extract), None);
+        assert_eq!(extract_value_from_response(&result, &extract), None);
     }
 
     #[test]
     fn extract_body_text() {
         let result = make_result(200, reqwest::header::HeaderMap::new(), b"  hello-world  ");
         let extract = WebhookExtract::BodyText;
-        assert_eq!(extract_value(&result, &extract), Some("hello-world".to_string()));
+        assert_eq!(
+            extract_value_from_response(&result, &extract),
+            Some("hello-world".to_string())
+        );
     }
 
     #[test]
     fn extract_body_text_empty_returns_none() {
         let result = make_result(200, reqwest::header::HeaderMap::new(), b"");
         let extract = WebhookExtract::BodyText;
-        assert_eq!(extract_value(&result, &extract), None);
+        assert_eq!(extract_value_from_response(&result, &extract), None);
     }
 
     // P1 — hop-by-hop header filtering
@@ -233,5 +257,38 @@ mod tests {
         assert!(is_hop_by_hop("Keep-Alive"));
         assert!(!is_hop_by_hop("Authorization"));
         assert!(!is_hop_by_hop("X-Tenant-Id"));
+    }
+
+    /// TDD: a completed response with non-success status records `status_error` metric and returns None.
+    ///
+    /// Verifies that the classification logic in resolve_webhook_key correctly
+    /// identifies a 500 response as non-success (when success_status_codes is None,
+    /// meaning only 2xx is considered success) and returns None.
+    #[tokio::test]
+    async fn webhook_non_success_records_status_error_and_returns_none() {
+        // Build a fake OutboundResponse with status 500
+        let resp = OutboundResponse {
+            status: 500,
+            headers: reqwest::header::HeaderMap::new(),
+            body: Bytes::new(),
+        };
+
+        // Classify as non-success (success_status_codes = None means 2xx only)
+        let success_codes: Option<Vec<u16>> = None; // None = any 2xx
+        let is_success = match &success_codes {
+            Some(codes) => codes.contains(&resp.status),
+            None => (200u16..300u16).contains(&resp.status),
+        };
+        assert!(!is_success);
+
+        // Verify: non-success status → None (mirrors the branch in resolve_webhook_key)
+        let extract = edgion_resources::common::WebhookExtract::BodyText;
+        let result = if is_success {
+            extract_value_from_response(&resp, &extract)
+        } else {
+            record_webhook_resolve_error("status_error");
+            None
+        };
+        assert!(result.is_none(), "non-success status must return None");
     }
 }

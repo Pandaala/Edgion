@@ -4,20 +4,15 @@
 //! Keyed by "namespace/name" matching webhook_ref in KeyGet::Webhook.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::sync::RwLock;
 
-use crate::backends::service_kind::EdgionService;
-use crate::plugins::http::common::http_client::{build_webhook_client, get_http_client_arc};
+use crate::plugins::http::common::outbound::call::{outbound_call, OutboundCallError, OutboundResponse};
+use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
 use edgion_resources::resources::link_sys::webhook::WebhookServiceConfig;
-
-use super::compiled_request::CompiledOutboundRequest;
-use super::health::spawn_active_health_check;
-use super::runtime::{SlidingWindowCounter, WebhookResolvedTarget, WebhookRuntime};
 
 // ============================================================
 // Global Manager
@@ -46,12 +41,11 @@ pub fn get_webhook_manager() -> &'static WebhookManager {
 
 /// Global webhook manager, keyed by "namespace/name" matching webhook_ref.
 struct WebhookEntry {
-    runtime: Arc<WebhookRuntime>,
-    health_task: Option<tokio::task::JoinHandle<()>>,
+    client: Arc<ManagedOutboundClient>,
 }
 
 pub struct WebhookManager {
-    /// Registered webhook services: webhook_ref → runtime state
+    /// Registered webhook services: webhook_ref → managed client
     services: RwLock<HashMap<String, WebhookEntry>>,
 }
 
@@ -63,8 +57,8 @@ impl WebhookManager {
     }
 
     /// Look up a webhook by its ref ("namespace/name")
-    pub async fn get(&self, webhook_ref: &str) -> Option<Arc<WebhookRuntime>> {
-        self.services.read().await.get(webhook_ref).map(|e| e.runtime.clone())
+    pub async fn get(&self, webhook_ref: &str) -> Option<Arc<ManagedOutboundClient>> {
+        self.services.read().await.get(webhook_ref).map(|e| e.client.clone())
     }
 
     /// Register or update a webhook from a LinkSys resource change.
@@ -72,18 +66,17 @@ impl WebhookManager {
     /// `linksys_ns` is the namespace of the LinkSys resource, used to resolve
     /// a `WebhookTarget::Service` whose `namespace` field is absent.
     ///
-    /// Returns `Err` when `build_webhook_client` rejects the config — currently
-    /// when `tls.insecure_skip_verify=true` is set with `EDGION_ENV=production`,
-    /// or when the supplied PEM material is malformed. The webhook is **not**
-    /// registered in that case, so the LinkSys's `init()` surfaces the failure
-    /// to the resource processor (matching the Elasticsearch / Redis / Etcd
-    /// providers, which already propagate build-time errors). This avoids
-    /// silently downgrading a misconfigured webhook to the default secure
-    /// client (which has no private CA wired in and would fail every call).
+    /// Returns `Err` when `ManagedOutboundClient::from_parts` rejects the config —
+    /// currently when `tls.insecure_skip_verify=true` is set with `EDGION_ENV=production`,
+    /// when the supplied PEM material is malformed, when the port is missing, or when
+    /// the request template has an invalid syntax. The webhook is **not** registered
+    /// in that case, so the LinkSys's `init()` surfaces the failure to the resource
+    /// processor. This avoids silently downgrading a misconfigured webhook to the
+    /// default secure client.
     pub async fn upsert(
         &self,
         webhook_ref: &str,
-        config: WebhookServiceConfig,
+        mut config: WebhookServiceConfig,
         linksys_ns: Option<&str>,
     ) -> anyhow::Result<()> {
         // Note: auth field is now a deprecated shim field (Option<serde_json::Value>)
@@ -91,104 +84,40 @@ impl WebhookManager {
         // Auth validation and injection will be re-implemented in Wave B with the new request field.
         // Skip auth validation for shim fields.
 
-        let tls_on = config.tls.as_ref().is_some_and(|t| t.enabled);
-        let scheme = if tls_on { "https" } else { "http" };
-
-        let backend_ref = &config.target.backend_ref;
-        let ns = backend_ref.namespace.as_deref().or(linksys_ns).unwrap_or("default");
-        let resolved_target = match EdgionService::from_kind(backend_ref.kind.as_ref()) {
-            EdgionService::ServiceClusterIp => {
-                let port_suffix = backend_ref.port.map(|p| format!(":{p}")).unwrap_or_default();
-                WebhookResolvedTarget::Static(format!(
-                    "{scheme}://{}.{}.svc.cluster.local{}",
-                    backend_ref.name, ns, port_suffix
-                ))
-            }
-            EdgionService::Service | EdgionService::ServiceEndpointSlice => WebhookResolvedTarget::Service {
-                service_key: format!("{}/{}", ns, backend_ref.name),
-                port: backend_ref.port,
-                scheme,
-                cursor: AtomicUsize::new(0),
-            },
-            _ => {
-                return Err(anyhow::anyhow!("unsupported service kind: {:?}", backend_ref.kind));
-            }
-        };
-
-        // Compile the outbound request spec at load time. Templates are parsed
-        // once; `${secretRef:...}` segments are resolved at call time from
-        // `config.resolved_secrets` (carried inline by the controller).
-        let compiled_request = CompiledOutboundRequest::from_spec(&config.request)
-            .map_err(|e| anyhow::anyhow!("failed to compile webhook request for '{}': {}", webhook_ref, e))?;
-
-        let rate_counter = config
-            .rate_limit
-            .as_ref()
-            .map(|rl| SlidingWindowCounter::new(rl.rate, Duration::from_secs(rl.window_sec.max(1))));
-
-        let http_client = match build_webhook_client(&config) {
-            None => get_http_client_arc(),
-            Some(Ok(client)) => Arc::new(client),
-            Some(Err(e)) => {
-                tracing::error!(
-                    webhook = %webhook_ref,
-                    error = %e,
-                    "Failed to build webhook HTTP client with TLS config; refusing to register"
-                );
-                return Err(e.context(format!("build_webhook_client failed for webhook '{}'", webhook_ref)));
-            }
-        };
-
-        // Health state is always reset on upsert because config.request.* may have
-        // changed.  EndpointSlice churn never calls upsert(), so health is preserved
-        // across pod turnover (the Service variant of WebhookResolvedTarget reads the
-        // global EpSliceStore fresh at call time without rebuilding the runtime).
-        let runtime = Arc::new(WebhookRuntime {
-            config,
-            http_client,
-            resolved_target,
-            compiled_request,
-            healthy: AtomicBool::new(true),
-            passive_failures: AtomicU32::new(0),
-            last_halfopen: AtomicU64::new(0),
-            backoff_sec: AtomicU64::new(0),
-            rate_counter,
-        });
-
-        let health_task = if runtime
-            .config
-            .health_check
-            .as_ref()
-            .and_then(|hc| hc.active.as_ref())
-            .is_some()
-        {
-            let ref_clone = webhook_ref.to_string();
-            let rt_clone = runtime.clone();
-            Some(tokio::spawn(async move {
-                spawn_active_health_check(ref_clone, rt_clone).await;
-            }))
-        } else {
-            None
-        };
-
-        let mut services = self.services.write().await;
-        if let Some(old) = services.remove(webhook_ref) {
-            if let Some(handle) = old.health_task {
-                handle.abort();
+        // Apply linksys_ns fallback: when backend_ref.namespace is absent, use the
+        // namespace of the LinkSys resource as a fallback (matching the behaviour of
+        // the previous WebhookManager implementation).
+        if config.conn.target.backend_ref.namespace.is_none() {
+            if let Some(ns) = linksys_ns {
+                config.conn.target.backend_ref.namespace = Some(ns.to_string());
             }
         }
-        services.insert(webhook_ref.to_string(), WebhookEntry { runtime, health_task });
+
+        let managed_client = ManagedOutboundClient::from_parts(
+            &config.conn,
+            &config.request,
+            config.resolved_secrets.as_ref(),
+            webhook_ref,
+        )
+        .map_err(|e| anyhow::anyhow!("failed to register webhook '{}': {}", webhook_ref, e))?;
+
+        let mut services = self.services.write().await;
+        // Dropping the old entry aborts its health task via ManagedOutboundClient::drop.
+        services.remove(webhook_ref);
+        services.insert(
+            webhook_ref.to_string(),
+            WebhookEntry {
+                client: Arc::new(managed_client),
+            },
+        );
         tracing::info!(webhook = %webhook_ref, "Webhook registered/updated in manager");
         Ok(())
     }
 
     /// Remove a webhook (LinkSys resource deleted)
     pub async fn remove(&self, webhook_ref: &str) {
-        if let Some(entry) = self.services.write().await.remove(webhook_ref) {
-            if let Some(handle) = entry.health_task {
-                handle.abort();
-            }
-        }
+        // Dropping the entry aborts the health task via ManagedOutboundClient::drop.
+        self.services.write().await.remove(webhook_ref);
         tracing::info!(webhook = %webhook_ref, "Webhook removed from manager");
     }
 }
@@ -229,7 +158,7 @@ impl WebhookManagerOps for StaticWebhookManagerAdapter {
 // ============================================================
 
 /// Handle for making outbound calls via a registered webhook connection.
-pub struct WebhookCallHandle(pub(crate) std::sync::Arc<super::runtime::WebhookRuntime>);
+pub struct WebhookCallHandle(pub(crate) Arc<ManagedOutboundClient>);
 
 impl WebhookCallHandle {
     /// Execute an outbound HTTP call via this webhook connection.
@@ -241,8 +170,15 @@ impl WebhookCallHandle {
         &self,
         session: &dyn crate::plugins::runtime::PluginSession,
         path_override: Option<String>,
-    ) -> Result<super::call::WebhookCallResult, super::call::WebhookCallError> {
-        super::call::webhook_call(&self.0, session, path_override, get_webhook_global_max()).await
+    ) -> Result<OutboundResponse, OutboundCallError> {
+        outbound_call(
+            &self.0,
+            session,
+            path_override.as_deref(),
+            get_webhook_global_max(),
+            &[],
+        )
+        .await
     }
 }
 
@@ -271,17 +207,20 @@ mod tests {
     #[tokio::test]
     async fn test_manager_upsert_and_get() {
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: "resolve-svc".to_string(),
-                    namespace: Some("default".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "resolve-svc".to_string(),
+                        namespace: Some("default".to_string()),
+                        port: Some(8080),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -290,25 +229,28 @@ mod tests {
             .await
             .expect("upsert should succeed without TLS config");
 
-        let runtime = manager.get("test/webhook").await;
-        assert!(runtime.is_some());
-        assert!(runtime.unwrap().healthy.load(Ordering::Relaxed));
+        let client = manager.get("test/webhook").await;
+        assert!(client.is_some());
+        assert!(client.unwrap().health.healthy.load(Ordering::Relaxed));
     }
 
     #[tokio::test]
     async fn test_manager_remove() {
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: "resolve-svc".to_string(),
-                    namespace: Some("default".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "resolve-svc".to_string(),
+                        namespace: Some("default".to_string()),
+                        port: Some(8080),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -318,26 +260,29 @@ mod tests {
             .expect("upsert should succeed without TLS config");
         manager.remove("test/webhook").await;
 
-        let runtime = manager.get("test/webhook").await;
-        assert!(runtime.is_none());
+        let client = manager.get("test/webhook").await;
+        assert!(client.is_none());
     }
 
     #[tokio::test]
     async fn test_manager_service_cluster_ip_builds_dns_url() {
-        use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+        use crate::plugins::http::common::outbound::target::ResolvedTarget;
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: Some("ServiceClusterIp".to_string()),
-                    name: "auth-svc".to_string(),
-                    namespace: Some("prod".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: Some("ServiceClusterIp".to_string()),
+                        name: "auth-svc".to_string(),
+                        namespace: Some("prod".to_string()),
+                        port: Some(8080),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -346,9 +291,9 @@ mod tests {
             .await
             .expect("upsert should succeed");
 
-        let runtime = manager.get("prod/auth").await.expect("runtime should exist");
-        match &runtime.resolved_target {
-            WebhookResolvedTarget::Static(url) => {
+        let client = manager.get("prod/auth").await.expect("client should exist");
+        match &client.resolved_target {
+            ResolvedTarget::Static(url) => {
                 assert_eq!(url, "http://auth-svc.prod.svc.cluster.local:8080");
             }
             other => panic!("expected Static, got {other:?}"),
@@ -357,20 +302,23 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_service_cluster_ip_uses_linksys_ns_fallback() {
-        use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+        use crate::plugins::http::common::outbound::target::ResolvedTarget;
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: Some("ServiceClusterIp".to_string()),
-                    name: "svc".to_string(),
-                    namespace: None, // absent — should use linksys_ns
-                    port: Some(9090),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: Some("ServiceClusterIp".to_string()),
+                        name: "svc".to_string(),
+                        namespace: None, // absent — should use linksys_ns
+                        port: Some(9090),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -379,9 +327,9 @@ mod tests {
             .await
             .expect("upsert should succeed");
 
-        let runtime = manager.get("ns/wh").await.expect("runtime should exist");
-        match &runtime.resolved_target {
-            WebhookResolvedTarget::Static(url) => {
+        let client = manager.get("ns/wh").await.expect("client should exist");
+        match &client.resolved_target {
+            ResolvedTarget::Static(url) => {
                 assert_eq!(url, "http://svc.my-ns.svc.cluster.local:9090");
             }
             other => panic!("expected Static, got {other:?}"),
@@ -391,18 +339,21 @@ mod tests {
     #[tokio::test]
     async fn test_manager_unsupported_service_kind_returns_error() {
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: Some("ServiceImport".to_string()),
-                    name: "svc".to_string(),
-                    namespace: None,
-                    port: Some(80),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: Some("ServiceImport".to_string()),
+                        name: "svc".to_string(),
+                        namespace: None,
+                        port: Some(80),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -412,20 +363,23 @@ mod tests {
 
     #[tokio::test]
     async fn service_kind_none_builds_service_target() {
-        use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+        use crate::plugins::http::common::outbound::target::ResolvedTarget;
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None, // None → EdgionService::Service → WebhookResolvedTarget::Service
-                    name: "backend".to_string(),
-                    namespace: Some("ns1".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None, // None → EdgionService::Service → ResolvedTarget::Service
+                        name: "backend".to_string(),
+                        namespace: Some("ns1".to_string()),
+                        port: Some(8080),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -434,9 +388,9 @@ mod tests {
             .await
             .expect("upsert with kind=None should succeed");
 
-        let runtime = manager.get("ns1/backend").await.expect("runtime should exist");
-        match &runtime.resolved_target {
-            WebhookResolvedTarget::Service {
+        let client = manager.get("ns1/backend").await.expect("client should exist");
+        match &client.resolved_target {
+            ResolvedTarget::Service {
                 service_key,
                 port,
                 scheme,
@@ -452,20 +406,23 @@ mod tests {
 
     #[tokio::test]
     async fn service_target_uses_linksys_ns_fallback() {
-        use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
+        use crate::plugins::http::common::outbound::target::ResolvedTarget;
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: "backend".to_string(),
-                    namespace: None, // absent — should fall back to linksys_ns
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "backend".to_string(),
+                        namespace: None, // absent — should fall back to linksys_ns
+                        port: Some(8080),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -474,9 +431,9 @@ mod tests {
             .await
             .expect("upsert with namespace=None and linksys_ns should succeed");
 
-        let runtime = manager.get("fallback-ns/backend").await.expect("runtime should exist");
-        match &runtime.resolved_target {
-            WebhookResolvedTarget::Service {
+        let client = manager.get("fallback-ns/backend").await.expect("client should exist");
+        match &client.resolved_target {
+            ResolvedTarget::Service {
                 service_key,
                 port,
                 scheme,
@@ -493,18 +450,21 @@ mod tests {
     #[tokio::test]
     async fn test_manager_webhook_with_shim_auth_succeeds() {
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: "resolve-svc".to_string(),
-                    namespace: Some("default".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "resolve-svc".to_string(),
+                        namespace: Some("default".to_string()),
+                        port: Some(8080),
+                    },
                 },
+                ..Default::default()
             },
             auth: None, // Deprecated shim field; not validated at runtime
             ..Default::default()
@@ -521,22 +481,25 @@ mod tests {
     /// Helper: build a minimal valid WebhookServiceConfig with a default request spec.
     fn make_config_with_target(name: &str) -> WebhookServiceConfig {
         use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::WebhookTarget;
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
         WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: name.to_string(),
-                    namespace: Some("default".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: name.to_string(),
+                        namespace: Some("default".to_string()),
+                        port: Some(8080),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         }
     }
 
-    /// upsert() stores a compiled_request on the runtime (default spec succeeds).
+    /// upsert() stores a compiled_request on the client (default spec succeeds).
     #[tokio::test]
     async fn upsert_stores_compiled_request_on_runtime() {
         let manager = WebhookManager::new();
@@ -545,10 +508,10 @@ mod tests {
             .await
             .expect("upsert with default request should succeed");
 
-        let runtime = manager.get("ns/wh-compiled").await.expect("runtime must exist");
+        let client = manager.get("ns/wh-compiled").await.expect("client must exist");
         // The default spec has no path, method, args, headers, or cookies — all None/empty.
         // Verify the compiled_request is present by accessing it (no panic).
-        let _ = &runtime.compiled_request;
+        let _ = &client.compiled_request;
     }
 
     /// upsert() with an invalid template in request.path returns Err; nothing is registered.
@@ -575,18 +538,18 @@ mod tests {
             "error should mention template compile failure, got: {err}"
         );
 
-        // No runtime must have been registered.
+        // No client must have been registered.
         assert!(
             manager.get("ns/bad-template").await.is_none(),
-            "no runtime should be registered after a compile error"
+            "no client should be registered after a compile error"
         );
     }
 
     /// Calling upsert() a second time with a changed request resets health state.
     ///
     /// This verifies that health counters are not carried over across config changes:
-    /// a new `WebhookRuntime` (and thus fresh `AtomicBool`/`AtomicU32` health fields)
-    /// is created on every call to `upsert()`.
+    /// a new `ManagedOutboundClient` (and thus fresh `HealthState` atomics) is
+    /// created on every call to `upsert()`.
     #[tokio::test]
     async fn upsert_resets_health_on_request_change() {
         use edgion_resources::resources::link_sys::webhook::{MethodSpec, WebhookOutboundRequest};
@@ -599,11 +562,11 @@ mod tests {
             .await
             .expect("initial upsert should succeed");
 
-        // Simulate degraded health on the first runtime.
-        let runtime1 = manager.get("ns/health-reset").await.expect("runtime must exist");
-        runtime1.healthy.store(false, Ordering::Relaxed);
-        runtime1.passive_failures.store(5, Ordering::Relaxed);
-        let ptr1 = Arc::as_ptr(&runtime1);
+        // Simulate degraded health on the first client.
+        let client1 = manager.get("ns/health-reset").await.expect("client must exist");
+        client1.health.healthy.store(false, Ordering::Relaxed);
+        client1.health.passive_failures.store(5, Ordering::Relaxed);
+        let ptr1 = Arc::as_ptr(&client1);
 
         // Re-upsert with a changed request spec.
         let mut config2 = make_config_with_target("svc");
@@ -618,17 +581,17 @@ mod tests {
             .await
             .expect("second upsert should succeed");
 
-        let runtime2 = manager.get("ns/health-reset").await.expect("runtime must exist");
+        let client2 = manager.get("ns/health-reset").await.expect("client must exist");
 
-        // A brand-new Arc is stored: the old runtime has been replaced.
-        assert_ne!(Arc::as_ptr(&runtime2), ptr1, "upsert must replace the runtime Arc");
-        // Health is reset on the new runtime.
+        // A brand-new Arc is stored: the old client has been replaced.
+        assert_ne!(Arc::as_ptr(&client2), ptr1, "upsert must replace the client Arc");
+        // Health is reset on the new client.
         assert!(
-            runtime2.healthy.load(Ordering::Relaxed),
+            client2.health.healthy.load(Ordering::Relaxed),
             "healthy must be reset to true on re-upsert"
         );
         assert_eq!(
-            runtime2.passive_failures.load(Ordering::Relaxed),
+            client2.health.passive_failures.load(Ordering::Relaxed),
             0,
             "passive_failures must be reset to 0 on re-upsert"
         );
@@ -636,9 +599,9 @@ mod tests {
 
     /// EndpointSlice churn does NOT call upsert(), so health state is preserved.
     ///
-    /// Regression test: the `WebhookResolvedTarget::Service` variant reads the
-    /// global EpSliceStore at call time.  Endpoint add/remove/re-add must never
-    /// rebuild the `WebhookRuntime` or reset its health atomics.
+    /// Regression test: the `ResolvedTarget::Service` variant reads the
+    /// global EpSliceStore at call time. Endpoint add/remove/re-add must never
+    /// rebuild the `ManagedOutboundClient` or reset its health atomics.
     #[tokio::test]
     async fn endpoint_churn_preserves_health_state() {
         use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
@@ -654,11 +617,11 @@ mod tests {
             .await
             .expect("upsert should succeed");
 
-        // Record the Arc identity and degrade the runtime health.
-        let runtime = manager.get("ns/ep-churn").await.expect("runtime must exist");
-        let ptr_before = Arc::as_ptr(&runtime);
-        runtime.healthy.store(false, Ordering::Relaxed);
-        runtime.passive_failures.store(3, Ordering::Relaxed);
+        // Record the Arc identity and degrade the client health.
+        let client = manager.get("ns/ep-churn").await.expect("client must exist");
+        let ptr_before = Arc::as_ptr(&client);
+        client.health.healthy.store(false, Ordering::Relaxed);
+        client.health.passive_failures.store(3, Ordering::Relaxed);
 
         // Simulate endpoint churn by updating the EpSliceStore directly (bypassing upsert).
         let store = get_roundrobin_store();
@@ -692,19 +655,19 @@ mod tests {
             &HashSet::new(),
         );
 
-        // The runtime fetched from the manager must be the SAME Arc — upsert was not called.
-        let runtime_after = manager.get("ns/ep-churn").await.expect("runtime must exist");
+        // The client fetched from the manager must be the SAME Arc — upsert was not called.
+        let client_after = manager.get("ns/ep-churn").await.expect("client must exist");
         assert_eq!(
-            Arc::as_ptr(&runtime_after),
+            Arc::as_ptr(&client_after),
             ptr_before,
-            "endpoint churn must not replace the runtime Arc"
+            "endpoint churn must not replace the client Arc"
         );
         assert!(
-            !runtime_after.healthy.load(Ordering::Relaxed),
+            !client_after.health.healthy.load(Ordering::Relaxed),
             "healthy must remain false after endpoint churn"
         );
         assert_eq!(
-            runtime_after.passive_failures.load(Ordering::Relaxed),
+            client_after.health.passive_failures.load(Ordering::Relaxed),
             3,
             "passive_failures must remain 3 after endpoint churn"
         );

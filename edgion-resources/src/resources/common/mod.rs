@@ -1,13 +1,22 @@
 //! Common reusable types for Edgion custom resources.
 
+pub mod external_http;
 pub mod group_name;
 pub mod log_labels;
+pub mod outbound_request;
 pub mod secret_object_ref;
 pub mod secret_slot;
 pub mod service_kind;
 pub mod tls;
 
+pub use external_http::{
+    validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff, PassiveHealthCheck,
+    ResolvedSecrets, WebhookHealthCheck, WebhookRateLimit, WebhookRetry, WebhookTarget,
+};
 pub use log_labels::{resolve_log_ctx_keys, resolve_log_labels};
+pub use outbound_request::{
+    CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec, PresencePolicy,
+};
 pub use secret_object_ref::SecretObjectReference;
 pub use secret_slot::SecretSlot;
 pub use service_kind::EdgionService;

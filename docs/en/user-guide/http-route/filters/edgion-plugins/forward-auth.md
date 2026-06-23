@@ -1,7 +1,7 @@
 # ForwardAuth (HTTPRoute Filter)
 
-> **🔌 Edgion extension**
-> 
+> **Edgion extension**
+>
 > ForwardAuth is an external authentication delegation plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
 ForwardAuth can be used as an HTTPRoute filter or configured globally via `EdgionPlugins`. This page describes how to use it within HTTPRoute; for complete configuration parameters, see the [standalone plugin page](../../../edgion-plugins/forward-auth.md).
@@ -43,7 +43,14 @@ spec:
   requestPlugins:
     - type: ForwardAuth
       config:
-        uri: "http://auth-service.production:8080/verify"
+        target:
+          name: auth-service
+          namespace: production
+          port: 8080
+        request:
+          path: { template: "/verify" }
+        decision:
+          upstreamHeaders: [X-User-ID]
 ```
 
 ## Related Documentation

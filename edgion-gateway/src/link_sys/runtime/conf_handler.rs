@@ -48,7 +48,7 @@ impl ConfHandler<LinkSys> for LinkSysStore {
 mod tests {
     use super::*;
     use edgion_resources::resources::http_route::BackendObjectReference;
-    use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookServiceConfig, WebhookTarget};
     use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
     fn create_test_linksys(namespace: &str, name: &str) -> LinkSys {
@@ -60,14 +60,17 @@ mod tests {
             },
             spec: LinkSysSpec {
                 config: SystemConfig::Webhook(WebhookServiceConfig {
-                    target: WebhookTarget {
-                        backend_ref: BackendObjectReference {
-                            group: String::new(),
-                            kind: None,
-                            name: "resolve-svc".to_string(),
-                            namespace: Some(namespace.to_string()),
-                            port: Some(8080),
+                    conn: ExternalHttpConnection {
+                        target: WebhookTarget {
+                            backend_ref: BackendObjectReference {
+                                group: String::new(),
+                                kind: None,
+                                name: "resolve-svc".to_string(),
+                                namespace: Some(namespace.to_string()),
+                                port: Some(8080),
+                            },
                         },
+                        ..Default::default()
                     },
                     ..Default::default()
                 }),

@@ -91,19 +91,19 @@ pub fn get_http_client_with_ssl_verify(ssl_verify: bool) -> &'static Client {
     })
 }
 
-/// Build an HTTP client for webhook requests based on WebhookServiceConfig.
+/// Build an HTTP client for external HTTP connections based on an optional TLS config.
 ///
-/// When `config.tls` is present, builds a custom client with the configured TLS settings
-/// (insecure_skip_verify, custom CA, client certs). When no TLS config, returns `None` to
+/// When `tls` is `Some`, builds a custom client with the configured TLS settings
+/// (insecure_skip_verify, custom CA, client certs). When `None`, returns `None` to
 /// indicate the caller should use `get_http_client()` for connection pooling.
 ///
 /// `insecure_skip_verify` is gated through the shared
 /// [`link_sys::tls::apply_insecure_skip_verify`] helper, which refuses to honour the flag
 /// when `EDGION_ENV=production`.
 pub fn build_webhook_client(
-    config: &edgion_resources::resources::link_sys::webhook::WebhookServiceConfig,
+    tls_config: &Option<edgion_resources::resources::common::TlsConfig>,
 ) -> Option<anyhow::Result<Client>> {
-    let tls = config.tls.as_ref()?;
+    let tls = tls_config.as_ref()?;
 
     let mut builder = Client::builder()
         .pool_max_idle_per_host(32)

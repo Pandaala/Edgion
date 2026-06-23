@@ -12,12 +12,19 @@ use super::runtime::{now_epoch_secs, WebhookRuntime};
 
 /// Spawn a background active health check task for a webhook service.
 pub async fn spawn_active_health_check(webhook_ref: String, runtime: Arc<WebhookRuntime>) {
-    let active = match runtime.config.health_check.as_ref().and_then(|hc| hc.active.as_ref()) {
+    let active = match runtime
+        .config
+        .conn
+        .health_check
+        .as_ref()
+        .and_then(|hc| hc.active.as_ref())
+    {
         Some(a) => a.clone(),
         None => return,
     };
     let has_passive = runtime
         .config
+        .conn
         .health_check
         .as_ref()
         .and_then(|hc| hc.passive.as_ref())
@@ -80,7 +87,13 @@ pub async fn spawn_active_health_check(webhook_ref: String, runtime: Arc<Webhook
 
 /// Record a webhook call result for passive health monitoring.
 pub fn record_passive_result(runtime: &WebhookRuntime, success: bool) {
-    let passive = match runtime.config.health_check.as_ref().and_then(|hc| hc.passive.as_ref()) {
+    let passive = match runtime
+        .config
+        .conn
+        .health_check
+        .as_ref()
+        .and_then(|hc| hc.passive.as_ref())
+    {
         Some(p) => p,
         None => return,
     };
@@ -100,6 +113,7 @@ pub fn record_passive_result(runtime: &WebhookRuntime, success: bool) {
             // Initialize backoff timer if passive-only
             let has_active = runtime
                 .config
+                .conn
                 .health_check
                 .as_ref()
                 .and_then(|hc| hc.active.as_ref())
@@ -121,6 +135,7 @@ pub fn should_halfopen_probe(runtime: &WebhookRuntime) -> bool {
     }
     let has_active = runtime
         .config
+        .conn
         .health_check
         .as_ref()
         .and_then(|hc| hc.active.as_ref())
@@ -128,7 +143,13 @@ pub fn should_halfopen_probe(runtime: &WebhookRuntime) -> bool {
     if has_active {
         return false; // Active handles recovery
     }
-    let passive = match runtime.config.health_check.as_ref().and_then(|hc| hc.passive.as_ref()) {
+    let passive = match runtime
+        .config
+        .conn
+        .health_check
+        .as_ref()
+        .and_then(|hc| hc.passive.as_ref())
+    {
         Some(p) => p,
         None => return false,
     };
@@ -173,8 +194,8 @@ mod tests {
     use crate::link_sys::providers::webhook::compiled_request::CompiledOutboundRequest;
     use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
     use edgion_resources::resources::link_sys::webhook::{
-        PassiveBackoff, PassiveHealthCheck, WebhookHealthCheck, WebhookOutboundRequest, WebhookServiceConfig,
-        WebhookTarget,
+        ExternalHttpConnection, PassiveBackoff, PassiveHealthCheck, WebhookHealthCheck, WebhookOutboundRequest,
+        WebhookServiceConfig, WebhookTarget,
     };
 
     /// Compile a default (no-op) `CompiledOutboundRequest` for tests that only exercise
@@ -188,24 +209,27 @@ mod tests {
     fn test_passive_health_check_marks_unhealthy() {
         use edgion_resources::resources::http_route::BackendObjectReference;
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: "health-svc".to_string(),
-                    namespace: Some("default".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "health-svc".to_string(),
+                        namespace: Some("default".to_string()),
+                        port: Some(8080),
+                    },
                 },
-            },
-            health_check: Some(WebhookHealthCheck {
-                active: None,
-                passive: Some(PassiveHealthCheck {
-                    unhealthy_threshold: 3,
-                    failure_status_codes: vec![500, 502, 503, 504],
-                    count_timeout: true,
-                    backoff: None,
+                health_check: Some(WebhookHealthCheck {
+                    active: None,
+                    passive: Some(PassiveHealthCheck {
+                        unhealthy_threshold: 3,
+                        failure_status_codes: vec![500, 502, 503, 504],
+                        count_timeout: true,
+                        backoff: None,
+                    }),
                 }),
-            }),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -234,24 +258,27 @@ mod tests {
     fn test_passive_health_check_resets_on_success() {
         use edgion_resources::resources::http_route::BackendObjectReference;
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: "health-svc".to_string(),
-                    namespace: Some("default".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "health-svc".to_string(),
+                        namespace: Some("default".to_string()),
+                        port: Some(8080),
+                    },
                 },
-            },
-            health_check: Some(WebhookHealthCheck {
-                active: None,
-                passive: Some(PassiveHealthCheck {
-                    unhealthy_threshold: 3,
-                    failure_status_codes: vec![500],
-                    count_timeout: true,
-                    backoff: None,
+                health_check: Some(WebhookHealthCheck {
+                    active: None,
+                    passive: Some(PassiveHealthCheck {
+                        unhealthy_threshold: 3,
+                        failure_status_codes: vec![500],
+                        count_timeout: true,
+                        backoff: None,
+                    }),
                 }),
-            }),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -281,28 +308,31 @@ mod tests {
         use std::sync::{Arc, Barrier};
 
         let config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: "health-svc".to_string(),
-                    namespace: Some("default".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "health-svc".to_string(),
+                        namespace: Some("default".to_string()),
+                        port: Some(8080),
+                    },
                 },
-            },
-            health_check: Some(WebhookHealthCheck {
-                active: None,
-                passive: Some(PassiveHealthCheck {
-                    unhealthy_threshold: 3,
-                    failure_status_codes: vec![500],
-                    count_timeout: true,
-                    backoff: Some(PassiveBackoff {
-                        initial_sec: 5,
-                        multiplier: 2.0,
-                        max_sec: 60,
+                health_check: Some(WebhookHealthCheck {
+                    active: None,
+                    passive: Some(PassiveHealthCheck {
+                        unhealthy_threshold: 3,
+                        failure_status_codes: vec![500],
+                        count_timeout: true,
+                        backoff: Some(PassiveBackoff {
+                            initial_sec: 5,
+                            multiplier: 2.0,
+                            max_sec: 60,
+                        }),
                     }),
                 }),
-            }),
+                ..Default::default()
+            },
             ..Default::default()
         };
 

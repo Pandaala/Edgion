@@ -1,20 +1,21 @@
 //! Unit tests for `webhook.rs` (see `super`).
 use super::*;
+use crate::resources::http_route::BackendObjectReference;
 
 #[test]
 fn test_default_config() {
     let config = WebhookServiceConfig::default();
     assert!(config.auth.is_none());
     assert!(config.request_method.is_none());
-    assert_eq!(config.timeout_ms, 5000);
-    assert_eq!(config.max_response_bytes, 1024);
+    assert_eq!(config.conn.timeout_ms, 5000);
+    assert_eq!(config.conn.max_response_bytes, 1024);
     assert!(!config.allow_degradation);
     assert_eq!(config.status_on_error, 503);
-    assert!(config.retry.is_none());
-    assert!(config.rate_limit.is_none());
-    assert!(config.health_check.is_none());
+    assert!(config.conn.retry.is_none());
+    assert!(config.conn.rate_limit.is_none());
+    assert!(config.conn.health_check.is_none());
     // Default target has no port (will fail validation)
-    assert!(config.target.backend_ref.port.is_none());
+    assert!(config.conn.target.backend_ref.port.is_none());
 }
 
 #[test]
@@ -34,14 +35,17 @@ fn test_validation_invalid_method_shim_field_not_validated() {
     // request_method is now a deprecated shim field and is not validated.
     // An invalid method value is accepted without error.
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: "svc".to_string(),
-                namespace: None,
-                port: Some(80),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "svc".to_string(),
+                    namespace: None,
+                    port: Some(80),
+                },
             },
+            ..Default::default()
         },
         request_method: Some(serde_json::json!("INVALID")),
         ..Default::default()
@@ -53,16 +57,19 @@ fn test_validation_invalid_method_shim_field_not_validated() {
 #[test]
 fn test_validation_zero_timeout() {
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: "svc".to_string(),
-                namespace: None,
-                port: Some(80),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "svc".to_string(),
+                    namespace: None,
+                    port: Some(80),
+                },
             },
+            timeout_ms: 0,
+            ..Default::default()
         },
-        timeout_ms: 0,
         ..Default::default()
     };
     assert_eq!(
@@ -74,14 +81,17 @@ fn test_validation_zero_timeout() {
 #[test]
 fn test_validation_valid_config() {
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: "api-svc".to_string(),
-                namespace: Some("prod".to_string()),
-                port: Some(8080),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "api-svc".to_string(),
+                    namespace: Some("prod".to_string()),
+                    port: Some(8080),
+                },
             },
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -93,14 +103,17 @@ fn test_validation_valid_config() {
 #[test]
 fn test_validation_service_no_port() {
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: "my-svc".to_string(),
-                namespace: None,
-                port: None,
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "my-svc".to_string(),
+                    namespace: None,
+                    port: None,
+                },
             },
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -113,14 +126,17 @@ fn test_validation_service_no_port() {
 #[test]
 fn test_validation_service_port_zero() {
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: "my-svc".to_string(),
-                namespace: None,
-                port: Some(0),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "my-svc".to_string(),
+                    namespace: None,
+                    port: Some(0),
+                },
             },
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -133,14 +149,17 @@ fn test_validation_service_port_zero() {
 #[test]
 fn test_validation_service_port_negative() {
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: "my-svc".to_string(),
-                namespace: None,
-                port: Some(-1),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "my-svc".to_string(),
+                    namespace: None,
+                    port: Some(-1),
+                },
             },
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -153,14 +172,17 @@ fn test_validation_service_port_negative() {
 #[test]
 fn test_validation_service_valid() {
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: "my-svc".to_string(),
-                namespace: Some("prod".to_string()),
-                port: Some(8080),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "my-svc".to_string(),
+                    namespace: Some("prod".to_string()),
+                    port: Some(8080),
+                },
             },
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -170,14 +192,17 @@ fn test_validation_service_valid() {
 #[test]
 fn test_validation_service_kind_service_import() {
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: Some("ServiceImport".to_string()),
-                name: "my-svc".to_string(),
-                namespace: None,
-                port: Some(80),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: Some("ServiceImport".to_string()),
+                    name: "my-svc".to_string(),
+                    namespace: None,
+                    port: Some(80),
+                },
             },
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -190,14 +215,17 @@ fn test_validation_service_kind_service_import() {
 #[test]
 fn test_validation_service_kind_external_name() {
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: Some("ServiceExternalName".to_string()),
-                name: "my-svc".to_string(),
-                namespace: None,
-                port: Some(80),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: Some("ServiceExternalName".to_string()),
+                    name: "my-svc".to_string(),
+                    namespace: None,
+                    port: Some(80),
+                },
             },
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -210,14 +238,17 @@ fn test_validation_service_kind_external_name() {
 #[test]
 fn test_validation_service_kind_unsupported() {
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: Some("BogusKind".to_string()),
-                name: "my-svc".to_string(),
-                namespace: None,
-                port: Some(80),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: Some("BogusKind".to_string()),
+                    name: "my-svc".to_string(),
+                    namespace: None,
+                    port: Some(80),
+                },
             },
+            ..Default::default()
         },
         ..Default::default()
     };
@@ -235,10 +266,10 @@ target:
   port: 8080
 "#;
     let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(config.target.backend_ref.name, "api-svc");
-    assert_eq!(config.target.backend_ref.port, Some(8080));
+    assert_eq!(config.conn.target.backend_ref.name, "api-svc");
+    assert_eq!(config.conn.target.backend_ref.port, Some(8080));
     assert!(config.request_method.is_none());
-    assert_eq!(config.timeout_ms, 5000);
+    assert_eq!(config.conn.timeout_ms, 5000);
     assert!(config.get_validation_error().is_none());
 }
 
@@ -277,27 +308,27 @@ healthCheck:
     healthyThreshold: 1
 "#;
     let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(config.target.backend_ref.name, "key-service");
-    assert_eq!(config.target.backend_ref.namespace, Some("internal".to_string()));
-    assert_eq!(config.target.backend_ref.port, Some(443));
+    assert_eq!(config.conn.target.backend_ref.name, "key-service");
+    assert_eq!(config.conn.target.backend_ref.namespace, Some("internal".to_string()));
+    assert_eq!(config.conn.target.backend_ref.port, Some(443));
     // request_method is now a shim field; verify it deserialized as serde_json::Value
     assert!(config.request_method.is_some());
-    assert_eq!(config.timeout_ms, 3000);
-    assert_eq!(config.max_response_bytes, 2048);
+    assert_eq!(config.conn.timeout_ms, 3000);
+    assert_eq!(config.conn.max_response_bytes, 2048);
     assert!(config.allow_degradation);
     // Validate before consuming fields with unwrap()
     assert!(config.get_validation_error().is_none());
-    assert!(config.retry.is_some());
-    let retry = config.retry.unwrap();
+    assert!(config.conn.retry.is_some());
+    let retry = config.conn.retry.unwrap();
     assert_eq!(retry.max_retries, 1);
     assert!(retry.retry_on_timeout);
     assert_eq!(retry.retry_on_status, vec![502, 503, 504]);
-    assert!(config.rate_limit.is_some());
-    let rl = config.rate_limit.unwrap();
+    assert!(config.conn.rate_limit.is_some());
+    let rl = config.conn.rate_limit.unwrap();
     assert_eq!(rl.rate, 200);
     assert_eq!(rl.window_sec, 1);
-    assert!(config.health_check.is_some());
-    let hc = config.health_check.unwrap();
+    assert!(config.conn.health_check.is_some());
+    let hc = config.conn.health_check.unwrap();
     assert!(hc.passive.is_some());
     assert!(hc.active.is_some());
 }
@@ -311,23 +342,26 @@ target:
   port: 8080
 "#;
     let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(config.target.backend_ref.name, "my-webhook-svc");
-    assert_eq!(config.target.backend_ref.namespace, Some("prod".to_string()));
-    assert_eq!(config.target.backend_ref.port, Some(8080));
+    assert_eq!(config.conn.target.backend_ref.name, "my-webhook-svc");
+    assert_eq!(config.conn.target.backend_ref.namespace, Some("prod".to_string()));
+    assert_eq!(config.conn.target.backend_ref.port, Some(8080));
     assert!(config.get_validation_error().is_none());
 }
 
 #[test]
 fn test_serde_roundtrip() {
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: "example-svc".to_string(),
-                namespace: None,
-                port: Some(443),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "example-svc".to_string(),
+                    namespace: None,
+                    port: Some(443),
+                },
             },
+            ..Default::default()
         },
         request_method: Some(serde_json::json!("POST")),
         ..Default::default()
@@ -335,10 +369,16 @@ fn test_serde_roundtrip() {
 
     let json = serde_json::to_string(&config).unwrap();
     let deserialized: WebhookServiceConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.target.backend_ref.name, config.target.backend_ref.name);
-    assert_eq!(deserialized.target.backend_ref.port, config.target.backend_ref.port);
+    assert_eq!(
+        deserialized.conn.target.backend_ref.name,
+        config.conn.target.backend_ref.name
+    );
+    assert_eq!(
+        deserialized.conn.target.backend_ref.port,
+        config.conn.target.backend_ref.port
+    );
     assert_eq!(deserialized.request_method, config.request_method);
-    assert_eq!(deserialized.timeout_ms, config.timeout_ms);
+    assert_eq!(deserialized.conn.timeout_ms, config.conn.timeout_ms);
 }
 
 #[test]
@@ -346,14 +386,17 @@ fn test_serde_service_target_roundtrip() {
     // Verifies both serialization and deserialization of BackendObjectReference,
     // including optional fields.
     let config = WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: Some("ServiceClusterIp".to_string()),
-                name: "auth-svc".to_string(),
-                namespace: Some("prod".to_string()),
-                port: Some(8080),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: Some("ServiceClusterIp".to_string()),
+                    name: "auth-svc".to_string(),
+                    namespace: Some("prod".to_string()),
+                    port: Some(8080),
+                },
             },
+            ..Default::default()
         },
         request_method: Some(serde_json::json!("POST")),
         ..Default::default()
@@ -364,11 +407,11 @@ fn test_serde_service_target_roundtrip() {
     assert!(!json.contains("\"group\""), "empty group must be omitted: {json}");
 
     let deserialized: WebhookServiceConfig = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.target.backend_ref.name, "auth-svc");
-    assert_eq!(deserialized.target.backend_ref.namespace.as_deref(), Some("prod"));
-    assert_eq!(deserialized.target.backend_ref.port, Some(8080));
+    assert_eq!(deserialized.conn.target.backend_ref.name, "auth-svc");
+    assert_eq!(deserialized.conn.target.backend_ref.namespace.as_deref(), Some("prod"));
+    assert_eq!(deserialized.conn.target.backend_ref.port, Some(8080));
     assert_eq!(
-        deserialized.target.backend_ref.kind.as_deref(),
+        deserialized.conn.target.backend_ref.kind.as_deref(),
         Some("ServiceClusterIp")
     );
 }
@@ -792,21 +835,14 @@ target:
     );
 }
 
+/// Intentional: #[serde(flatten)] disables deny_unknown_fields (spec §3.2).
+/// Unknown fields in a flattened WebhookServiceConfig are now silently ignored
+/// rather than rejected. This documents the intentional relaxation.
 #[test]
-fn test_deny_unknown_fields_rejects_typo() {
-    // deny_unknown_fields should catch misspelled field names
-    let yaml = r#"
-target:
-  name: "api-svc"
-  port: 80
-unknownFieldName: "should fail"
-"#;
-    let result: Result<WebhookServiceConfig, _> = serde_yaml::from_str(yaml);
-    assert!(
-        result.is_err(),
-        "deny_unknown_fields must reject unknown fields: {:?}",
-        result
-    );
+fn webhook_config_ignores_unknown_fields_after_flatten() {
+    // Intentional: #[serde(flatten)] disables deny_unknown_fields (spec §3.2).
+    let y = "target:\n  name: s\n  port: 1\nunknownFieldName: x\n";
+    assert!(serde_yaml::from_str::<WebhookServiceConfig>(y).is_ok());
 }
 
 #[test]
@@ -814,8 +850,8 @@ fn validation_rejects_bare_secret_ref() {
     // A bare `${secretRef}` (no ns/name:key) in a custom template header
     // must be rejected at validation — it would produce an empty credential.
     let mut config = WebhookServiceConfig::default();
-    config.target.backend_ref.name = "webhook-svc".to_string();
-    config.target.backend_ref.port = Some(8080);
+    config.conn.target.backend_ref.name = "webhook-svc".to_string();
+    config.conn.target.backend_ref.port = Some(8080);
     config.request.headers.custom.push(CustomField {
         name: "Authorization".to_string(),
         source: CustomSource::Template("Bearer ${secretRef}".to_string()),
@@ -834,6 +870,21 @@ target:
 timeoutMs: 3000
 "#;
     let config: WebhookServiceConfig = serde_yaml::from_str(yaml).unwrap();
-    assert!(config.target.backend_ref.port.is_some());
-    assert_eq!(config.timeout_ms, 3000);
+    assert!(config.conn.target.backend_ref.port.is_some());
+    assert_eq!(config.conn.timeout_ms, 3000);
+}
+
+// ============================================================
+// Task 2 tests
+// ============================================================
+
+/// After the flatten refactor, `target` must still parse as a nested object
+/// (not flattened). This tests that `cfg.conn.target.backend_ref.name` is
+/// accessible after deserializing from the flat YAML representation.
+#[test]
+fn webhook_config_target_stays_nested_after_flatten() {
+    let y = "target:\n  name: svc\n  namespace: prod\n  port: 8080\nrequest: {}\n";
+    let cfg: WebhookServiceConfig = serde_yaml::from_str(y).unwrap();
+    assert_eq!(cfg.conn.target.backend_ref.name, "svc");
+    assert_eq!(cfg.conn.target.backend_ref.port, Some(8080));
 }

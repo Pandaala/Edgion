@@ -10,12 +10,22 @@ spec:
     - enable: true
       type: ForwardAuth
       config:
-        uri: "http://127.0.0.1:30040/verify"
-        requestMethod: GET
+        target:
+          name: auth-svc
+          namespace: edgion-default
+          port: 30040
         timeoutMs: 5000
-        hideCredentials: true
-        upstreamHeaders:
-          - X-User-ID
-          - X-User-Role
-        clientHeaders:
-          - WWW-Authenticate
+        request:
+          path:
+            template: "/verify"
+          method:
+            template: "GET"
+          headers:
+            forwardAll: true
+        decision:
+          upstreamHeaders:
+            - X-User-ID
+            - X-User-Role
+          clientHeaders:
+            - WWW-Authenticate
+          hideCredentials: true

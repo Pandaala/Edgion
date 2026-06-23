@@ -58,7 +58,7 @@ pub use ext_proc::{BodySendMode, ExtProcConfig, GrpcServiceConfig, HeaderSendMod
 pub use fault_injection::{
     AbortConfig, DelayConfig, FaultHeaderEntry, FaultInjectionConfig, MAX_DELAY_MS as FAULT_MAX_DELAY_MS,
 };
-pub use forward_auth::ForwardAuthConfig;
+pub use forward_auth::{ForwardAuthConfig, ForwardAuthDecision};
 pub use global_access_control::{AllowOutcome, AllowProfile, AllowRuleGroup, GlobalAccessControlConfig};
 pub use header_cert_auth::{CertHeaderFormat, CertSourceMode, ConsumerBy, HeaderCertAuthConfig, UpstreamHeaderConfig};
 pub use hmac_auth::{HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup, HmacCredential};

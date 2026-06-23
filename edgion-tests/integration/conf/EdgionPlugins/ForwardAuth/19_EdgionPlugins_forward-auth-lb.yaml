@@ -1,0 +1,78 @@
+# ForwardAuth LB test: multi-endpoint EndpointSlice (simplified round-robin smoke test).
+#
+# Declares a new Service (auth-svc-lb) backed by an EndpointSlice with TWO ready
+# endpoint entries, both at 127.0.0.1 on port 30040.
+#
+# EpSliceStore.ready_endpoints_for_port("edgion-default/auth-svc-lb", Some(30040))
+# returns ["127.0.0.1:30040", "127.0.0.1:30040"].  pick_url() alternates between
+# index 0 and index 1 via the local RR cursor, exercising the multi-endpoint code
+# path on every other request.
+#
+# Since both entries resolve to the same listener (the auth server on port 30040),
+# all requests succeed.  The test asserts 4/4 requests return 200 + X-User-ID:user-123.
+#
+# Limitation: true per-backend traffic distribution is NOT verified here because
+# both endpoints share the same address.  Proving distinct-backend alternation
+# would require SO_REUSEPORT or two separate listeners on different ports plus
+# port-agnostic endpoint resolution — deferred to a future infrastructure change.
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-svc-lb
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30040
+      targetPort: 30040
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: auth-svc-lb-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: auth-svc-lb
+addressType: IPv4
+ports:
+  - name: http
+    port: 30040
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-lb
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-svc-lb
+          namespace: edgion-default
+          port: 30040
+        timeoutMs: 5000
+        request:
+          path:
+            template: "/verify"
+          method:
+            template: "GET"
+          headers:
+            forwardAll: true
+        decision:
+          upstreamHeaders:
+            - X-User-ID
+          clientHeaders:
+            - WWW-Authenticate

@@ -750,19 +750,22 @@ async fn test_spec_serde_round_trip_preserves_secret() {
 #[tokio::test]
 async fn webhook_service_target_registers_no_service_ref() {
     use edgion_resources::resources::http_route::BackendObjectReference;
-    use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookServiceConfig, WebhookTarget};
 
     let (ctx, _runtime) = make_ctx(HashMap::new());
     let owner = ResourceRef::new(ResourceKind::LinkSys, Some("ns".to_string()), "websvc".to_string());
     let mut cfg = SystemConfig::Webhook(WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: "websvc".into(),
-                namespace: Some("ns".into()),
-                port: Some(8080),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "websvc".into(),
+                    namespace: Some("ns".into()),
+                    port: Some(8080),
+                },
             },
+            ..Default::default()
         },
         ..Default::default()
     });
@@ -787,16 +790,19 @@ async fn webhook_service_target_registers_no_service_ref() {
 /// Build a minimal valid webhook config with no shim fields set.
 fn make_webhook_config() -> edgion_resources::resources::link_sys::webhook::WebhookServiceConfig {
     use edgion_resources::resources::http_route::BackendObjectReference;
-    use edgion_resources::resources::link_sys::webhook::{WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookServiceConfig, WebhookTarget};
     WebhookServiceConfig {
-        target: WebhookTarget {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: "websvc".into(),
-                namespace: Some("ns".into()),
-                port: Some(8080),
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                backend_ref: BackendObjectReference {
+                    group: String::new(),
+                    kind: None,
+                    name: "websvc".into(),
+                    namespace: Some("ns".into()),
+                    port: Some(8080),
+                },
             },
+            ..Default::default()
         },
         ..Default::default()
     }
@@ -886,7 +892,8 @@ fn test_deprecation_warns_on_all_shim_fields_together() {
 async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
     use edgion_resources::resources::http_route::BackendObjectReference;
     use edgion_resources::resources::link_sys::webhook::{
-        CustomField, CustomSource, ListFields, WebhookOutboundRequest, WebhookServiceConfig, WebhookTarget,
+        CustomField, CustomSource, ExternalHttpConnection, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
+        WebhookTarget,
     };
 
     // Secret: namespace="edgion-default", name="wh-tok", key="token" -> "my-secret-token"
@@ -903,14 +910,17 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
         },
         spec: edgion_resources::resources::link_sys::LinkSysSpec {
             config: SystemConfig::Webhook(WebhookServiceConfig {
-                target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
-                        kind: None,
-                        name: "wh-svc".into(),
-                        namespace: Some("edgion-default".into()),
-                        port: Some(8080),
+                conn: ExternalHttpConnection {
+                    target: WebhookTarget {
+                        backend_ref: BackendObjectReference {
+                            group: String::new(),
+                            kind: None,
+                            name: "wh-svc".into(),
+                            namespace: Some("edgion-default".into()),
+                            port: Some(8080),
+                        },
                     },
+                    ..Default::default()
                 },
                 request: WebhookOutboundRequest {
                     headers: ListFields {
@@ -964,7 +974,8 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
 async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
     use edgion_resources::resources::http_route::BackendObjectReference;
     use edgion_resources::resources::link_sys::webhook::{
-        CustomField, CustomSource, ListFields, WebhookOutboundRequest, WebhookServiceConfig, WebhookTarget,
+        CustomField, CustomSource, ExternalHttpConnection, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
+        WebhookTarget,
     };
 
     // No secrets in the store — the referenced secret does not exist.
@@ -980,14 +991,17 @@ async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
         },
         spec: edgion_resources::resources::link_sys::LinkSysSpec {
             config: SystemConfig::Webhook(WebhookServiceConfig {
-                target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
-                        kind: None,
-                        name: "wh-svc".into(),
-                        namespace: Some("edgion-default".into()),
-                        port: Some(8080),
+                conn: ExternalHttpConnection {
+                    target: WebhookTarget {
+                        backend_ref: BackendObjectReference {
+                            group: String::new(),
+                            kind: None,
+                            name: "wh-svc".into(),
+                            namespace: Some("edgion-default".into()),
+                            port: Some(8080),
+                        },
                     },
+                    ..Default::default()
                 },
                 request: WebhookOutboundRequest {
                     headers: ListFields {

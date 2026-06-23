@@ -94,7 +94,7 @@ pub async fn webhook_call(
     //    request is built once and cloned per retry attempt (mirrors the prior
     //    single-URL behavior: retries reuse the same endpoint).
     let base = runtime.resolved_target.pick_url().ok_or(WebhookCallError::Unhealthy)?;
-    let timeout = Duration::from_millis(runtime.config.timeout_ms);
+    let timeout = Duration::from_millis(runtime.config.conn.timeout_ms);
     let template_req = match runtime.compiled_request.build_request(
         session,
         path_override.as_deref(),
@@ -112,14 +112,14 @@ pub async fn webhook_call(
     };
 
     // 4. Execute with retry.
-    let max_attempts = 1 + runtime.config.retry.as_ref().map_or(0, |r| r.max_retries);
-    let max_bytes = runtime.config.max_response_bytes.min(global_max_bytes);
+    let max_attempts = 1 + runtime.config.conn.retry.as_ref().map_or(0, |r| r.max_retries);
+    let max_bytes = runtime.config.conn.max_response_bytes.min(global_max_bytes);
 
     let mut last_error = String::new();
 
     for attempt in 0..max_attempts {
         if attempt > 0 {
-            let base_ms = runtime.config.retry.as_ref().map_or(100, |r| r.retry_delay_ms);
+            let base_ms = runtime.config.conn.retry.as_ref().map_or(100, |r| r.retry_delay_ms);
             let delay = compute_retry_delay_ms(attempt, base_ms, 30_000);
             tokio::time::sleep(Duration::from_millis(delay)).await;
         }
@@ -142,6 +142,7 @@ pub async fn webhook_call(
                 // Check if we should retry on this status
                 let should_retry = runtime
                     .config
+                    .conn
                     .retry
                     .as_ref()
                     .is_some_and(|r| r.retry_on_status.contains(&status));
@@ -153,6 +154,7 @@ pub async fn webhook_call(
                 // Passive health check
                 let is_passive_fail = runtime
                     .config
+                    .conn
                     .health_check
                     .as_ref()
                     .and_then(|hc| hc.passive.as_ref())
@@ -161,7 +163,7 @@ pub async fn webhook_call(
                 record_passive_result(runtime, !is_passive_fail);
 
                 // Check success
-                let is_success = match &runtime.config.success_status_codes {
+                let is_success = match &runtime.config.conn.success_status_codes {
                     Some(codes) => codes.contains(&status),
                     None => (200..300).contains(&status),
                 };
@@ -199,7 +201,7 @@ pub async fn webhook_call(
                 });
             }
             Err(e) => {
-                let should_retry = runtime.config.retry.as_ref().is_some_and(|r| {
+                let should_retry = runtime.config.conn.retry.as_ref().is_some_and(|r| {
                     (r.retry_on_timeout && e.is_timeout()) || (r.retry_on_connect_error && e.is_connect())
                 });
                 last_error = e.to_string();
@@ -355,7 +357,9 @@ mod tests {
 
     use crate::link_sys::providers::webhook::runtime::WebhookResolvedTarget;
     use crate::plugins::runtime::traits::session::MockPluginSession;
-    use edgion_resources::resources::link_sys::webhook::{WebhookRetry, WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::{
+        ExternalHttpConnection, WebhookRetry, WebhookServiceConfig, WebhookTarget,
+    };
 
     // ============================================================
     // Test helpers
@@ -368,14 +372,17 @@ mod tests {
 
         let resolved_target = WebhookResolvedTarget::Static(uri.clone());
         let mut config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: "test-svc".to_string(),
-                    namespace: Some("default".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "test-svc".to_string(),
+                        namespace: Some("default".to_string()),
+                        port: Some(8080),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -408,14 +415,17 @@ mod tests {
 
         let resolved_target = WebhookResolvedTarget::Static(uri);
         let mut config = WebhookServiceConfig {
-            target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
-                    kind: None,
-                    name: "test-svc".to_string(),
-                    namespace: Some("default".to_string()),
-                    port: Some(8080),
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "test-svc".to_string(),
+                        namespace: Some("default".to_string()),
+                        port: Some(8080),
+                    },
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -539,7 +549,7 @@ mod tests {
 
         let runtime = make_runtime(server.uri(), |c| {
             // 1MB limit so body is not truncated
-            c.max_response_bytes = 1024 * 1024;
+            c.conn.max_response_bytes = 1024 * 1024;
         });
 
         let session = make_session("GET", "/resolve");
@@ -563,7 +573,7 @@ mod tests {
             .await;
 
         let runtime = make_runtime(server.uri(), |c| {
-            c.max_response_bytes = 1024 * 1024;
+            c.conn.max_response_bytes = 1024 * 1024;
         });
 
         let session = make_session("GET", "/check");
@@ -593,7 +603,7 @@ mod tests {
             .await;
 
         let runtime = make_runtime(server.uri(), |c| {
-            c.max_response_bytes = 10;
+            c.conn.max_response_bytes = 10;
         });
 
         let session = make_session("GET", "/big");
@@ -611,7 +621,7 @@ mod tests {
     async fn chunked_response_exceeding_cap_returns_too_large() {
         let url = spawn_chunked_server(vec![b'z'; 4096]).await;
         let runtime = make_runtime(url, |c| {
-            c.max_response_bytes = 128;
+            c.conn.max_response_bytes = 128;
         });
 
         let session = make_session("GET", "/");
@@ -629,7 +639,7 @@ mod tests {
         let body = b"streamed-body".to_vec();
         let url = spawn_chunked_server(body.clone()).await;
         let runtime = make_runtime(url, |c| {
-            c.max_response_bytes = 1024;
+            c.conn.max_response_bytes = 1024;
         });
 
         let session = make_session("GET", "/");
@@ -665,11 +675,12 @@ mod tests {
                     name: "X-Caller".to_string(),
                     source: CustomSource::Value("edgion-gateway".to_string()),
                 }],
+                ..Default::default()
             },
             ..WebhookOutboundRequest::default()
         };
         let runtime = make_runtime_with_request(server.uri(), spec, |c| {
-            c.max_response_bytes = 1024;
+            c.conn.max_response_bytes = 1024;
         });
 
         let session = make_session("GET", "/hook");
@@ -693,6 +704,7 @@ mod tests {
                     presence: PresencePolicy::Required,
                 }],
                 custom: vec![],
+                ..Default::default()
             },
             ..WebhookOutboundRequest::default()
         };
@@ -721,7 +733,7 @@ mod tests {
     #[tokio::test]
     async fn connection_refused_returns_connect_error() {
         let runtime = make_runtime("http://127.0.0.1:1".to_string(), |c| {
-            c.max_response_bytes = 1024;
+            c.conn.max_response_bytes = 1024;
         });
 
         let session = make_session("GET", "/");
@@ -762,8 +774,8 @@ mod tests {
             .await;
 
         let runtime = make_runtime(server.uri(), |c| {
-            c.max_response_bytes = 1024;
-            c.retry = Some(WebhookRetry {
+            c.conn.max_response_bytes = 1024;
+            c.conn.retry = Some(WebhookRetry {
                 max_retries: 1,
                 retry_delay_ms: 0, // no delay in tests
                 retry_on_timeout: false,

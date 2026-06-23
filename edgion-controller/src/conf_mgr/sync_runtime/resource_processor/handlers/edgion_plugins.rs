@@ -229,6 +229,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_openid_connect(&mut ep, &resource_ref, ctx);
         cred::resolve_csrf(&mut ep, &resource_ref, ctx);
         cred::resolve_global_access_control(&mut ep, &resource_ref, ctx);
+        cred::resolve_forward_auth(&mut ep, &resource_ref, ctx).await;
 
         // Clear existing EdgionConfigData override refs for this EP, then re-register from scratch.
         Self::clear_config_data_refs(&ep, ctx);
@@ -2182,5 +2183,81 @@ mod tests {
         assert!(config.profiles["lockdown"].rule_groups[0].rules[0]
             .resolved_secret_values
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn forward_auth_resolved_refs_missing() {
+        use edgion_resources::resources::common::{
+            CustomField, CustomSource, ExternalHttpConnection, OutboundRequestSpec, WebhookTarget,
+        };
+        use edgion_resources::resources::edgion_plugins::{ForwardAuthConfig, ForwardAuthDecision};
+        use edgion_resources::resources::http_route::BackendObjectReference;
+
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        // ForwardAuth plugin with a custom header that embeds a ${secretRef:...} template.
+        // The referenced Secret does not exist, so resolved_secrets stays None and
+        // SecretRefManager registers the dependency. update_status then derives
+        // ResolvedRefs=False / SecretNotFound from the dependency list.
+        let mut request = OutboundRequestSpec::default();
+        request.headers.forward_all = true;
+        request.headers.custom = vec![CustomField {
+            name: "X-Api-Key".to_string(),
+            source: CustomSource::Template("${secretRef:default/missing:api-key}".to_string()),
+        }];
+
+        let cfg = ForwardAuthConfig {
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    backend_ref: BackendObjectReference {
+                        group: String::new(),
+                        kind: None,
+                        name: "auth-svc".to_string(),
+                        namespace: None,
+                        port: Some(8080),
+                    },
+                },
+                ..Default::default()
+            },
+            request,
+            decision: ForwardAuthDecision::default(),
+            resolved_secrets: None,
+        };
+
+        let mut ep = EdgionPlugins::new("fa-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::ForwardAuth(cfg))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let mut parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+        handler.update_status(&mut parsed, &ctx, &[]);
+
+        let cond = parsed
+            .status
+            .as_ref()
+            .unwrap()
+            .conditions
+            .iter()
+            .find(|c| c.type_ == "ResolvedRefs")
+            .cloned()
+            .expect("ResolvedRefs condition must be present");
+
+        assert_eq!(
+            cond.status, "False",
+            "ResolvedRefs must be False when the ForwardAuth secretRef is missing"
+        );
+        assert_eq!(
+            cond.reason, "SecretNotFound",
+            "expected SecretNotFound reason; got: {}",
+            cond.reason
+        );
+        assert!(
+            cond.message.contains("missing"),
+            "condition message must mention the missing secret name; got: {}",
+            cond.message
+        );
     }
 }

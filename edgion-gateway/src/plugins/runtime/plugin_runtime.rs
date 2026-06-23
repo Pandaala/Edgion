@@ -274,7 +274,10 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::ExternalAuth => {
                     if let Some(config) = &filter.external_auth {
-                        self.add_request_filter(Box::new(ForwardAuth::new(config)));
+                        match ForwardAuth::new(config) {
+                            Ok(fa) => self.add_request_filter(Box::new(fa)),
+                            Err(_) => self.invalid_plugins.push("ForwardAuth"),
+                        }
                     }
                 }
                 HTTPRouteFilterType::ExtensionRef => {
@@ -800,7 +803,10 @@ impl PluginRuntime {
             EdgionPlugin::RealIp(config) => CreateResult::Ok(Some(RealIp::create(config))),
             EdgionPlugin::TraceContext(config) => CreateResult::Ok(Some(TraceContext::create(config))),
             EdgionPlugin::ExtProc(config) => CreateResult::Ok(ExtProc::create_request(config)),
-            EdgionPlugin::ForwardAuth(config) => CreateResult::Ok(Some(Box::new(ForwardAuth::new(config)))),
+            EdgionPlugin::ForwardAuth(config) => match ForwardAuth::new(config) {
+                Ok(fa) => CreateResult::Ok(Some(Box::new(fa))),
+                Err(_) => CreateResult::Ok(None),
+            },
             EdgionPlugin::AllEndpointStatus(config) => CreateResult::Ok(Some(Box::new(AllEndpointStatus::new(config)))),
             EdgionPlugin::OpenidConnect(config) => {
                 CreateResult::Ok(Some(Box::new(OpenidConnect::new(config, namespace.to_string()))))
@@ -1350,11 +1356,8 @@ mod tests {
 
         let mut runtime = PluginRuntime::new();
 
-        // Entry 0: invalid config (empty uri fails ForwardAuthConfig validation).
-        let invalid = RequestFilterEntry::new(EdgionPlugin::ForwardAuth(ForwardAuthConfig {
-            uri: String::new(),
-            ..Default::default()
-        }));
+        // Entry 0: invalid config (missing port fails ForwardAuthConfig validation).
+        let invalid = RequestFilterEntry::new(EdgionPlugin::ForwardAuth(ForwardAuthConfig::default()));
         // Entry 1: valid config.
         let valid = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
 
