@@ -28,15 +28,21 @@ description: Use when reviewing dependency upgrades, new crate additions, MSRV b
 
 | Tool | Purpose | When to run |
 |------|---------|-------------|
-| `cargo audit` | Check `Cargo.lock` against the RUSTSEC advisory database | CI on every PR; manually before a release |
-| `cargo deny` | License allowlist, source allowlist, banned crates | CI on every PR |
+| `cargo audit` | Check `Cargo.lock` against the RUSTSEC advisory database | Manually (not yet CI-gated — see Cadence) |
+| `cargo deny` | License allowlist, source allowlist, banned crates | Manually (no `deny.toml` checked in yet) |
 | Manual lockfile review | Verify no unexpected version bumps or new transitive deps | Before merging a `Cargo.lock`-touching PR |
-
-> TODO: confirm whether `cargo audit` and `cargo deny` are currently wired into the CI workflow — check `skills/09-misc/cicd/02-github-workflow.md`.
 
 ## Cadence
 
-- **CI (every PR)**: `cargo audit` and `cargo deny` run automatically; failures block merge.
+> **Reality check (verified 2026-05-29)**: `cargo audit` and `cargo deny` are **NOT**
+> currently wired into CI. The `.github/workflows/` set is `ci.yml`, `check-english-only.yml`,
+> `build-image.yml`, `docs.yml` — none invoke audit/deny, and there is no `deny.toml` in the
+> repo root. So supply-chain advisories and license violations are **not** gated on merge today;
+> they rely on manual runs. Wiring these into `ci.yml` (and adding a `deny.toml`) is an open
+> hardening gap — do not assume an existing gate when reviewing.
+
+- **Per PR (intended, not yet enforced)**: run `cargo audit` and `cargo deny` manually on
+  `Cargo.lock`-touching PRs until they are added to CI.
 - **Pre-release**: full manual lockfile diff against the previous release tag; triage any new advisories or new crates.
 - **Quarterly manual triage**: review maintenance state of crates flagged as "feature-complete / low activity" — check for new advisories, successor projects, or changed maintainer status.
 

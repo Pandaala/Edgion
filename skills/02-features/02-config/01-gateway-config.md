@@ -10,10 +10,10 @@ description: Full schema for the edgion-gateway YAML configuration.
 ## Files to Reference
 
 - Sample configuration: `config/edgion-gateway.yaml`
-- Configuration structure: `src/core/gateway/cli/config.rs`
-- Startup logic: `src/core/gateway/cli/mod.rs`
-- work_dir: `src/types/work_dir.rs`
-- Common log structures: `src/types/observe.rs`, `src/types/output.rs`
+- Configuration structure: `edgion-gateway/src/cli/config.rs`
+- Startup logic: `edgion-gateway/src/cli/mod.rs`
+- work_dir: `edgion-resources/src/work_dir.rs`
+- Common log structures: `edgion-resources/src/observe.rs`, `edgion-resources/src/output.rs`
 
 ## Full Schema
 
@@ -22,8 +22,9 @@ description: Full schema for the edgion-gateway YAML configuration.
 work_dir: "."
 
 gateway:
-  server_addr: "http://127.0.0.1:50051"   # Required: Controller gRPC address
-  admin_listen: "0.0.0.0:5900"            # Admin API (currently fixed at :5900)
+  server_addr: "http://127.0.0.1:12151"   # Required: Controller gRPC address
+  admin_listen: "127.0.0.1:12001"         # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
+  # probe_listen: "0.0.0.0:12000"         # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
 
 # ─── gRPC channel security (optional mTLS) ───
 # conf_sync_security:
@@ -107,16 +108,23 @@ access_log_sensitive:
 
 ## Field Details
 
-### [gateway]
+### gateway
+
+**Three-port model**: the gateway spawns three independent servers.
+
+| Port | Default bind | Purpose |
+|------|-------------|---------|
+| Admin | `127.0.0.1:12001` | Admin API (`/configclient`, `/api/v1/server-info`) — loopback-only |
+| Probe | `0.0.0.0:12000` | Liveness/readiness (`/health`, `/ready`) — outward-facing, kubelet probes pod IP |
+| Metrics | `0.0.0.0:12090` | Prometheus metrics — independent listener, outward-facing |
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `server_addr` | `String` | **Required** | Controller gRPC address |
-| `admin_listen` | `String` | — | Admin API address (**Note**: the current code fixes this to `:5900`; this configuration does not yet take effect) |
+| `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback — sensitive endpoints not reachable cluster-wide. Remote access: `kubectl port-forward pod/<name> 12001:12001`. |
+| `probe_listen` | `String` | `0.0.0.0:12000` | Probe listen address. Serves `/health` and `/ready` only. Binds all interfaces so kubelet can probe the pod IP directly. Not included in the gateway Service. |
 
-> Note: if you changed `gateway.admin_listen` and the port did not change, this is not an operator error — the current implementation has not yet wired up this field. Gateway Admin API is currently fixed at `5900`, and Gateway Metrics API is currently fixed at `5901`.
-
-### [conf_sync_security.tls]
+### conf_sync_security.tls
 
 Optional configuration; when enabled, the Gateway connects to the Controller's gRPC using mTLS.
 
@@ -126,12 +134,28 @@ Optional configuration; when enabled, the Gateway connects to the Controller's g
 | `key` | `String` | — | Client private key path (PEM) |
 | `ca` | `String` | — | CA certificate path (used to verify the Controller server certificate) |
 | `skip_tls` | `bool` | `false` | Emergency downgrade switch: `true` skips TLS and connects in plaintext (logs ERROR) |
+| `auto_ca` | `bool` | `false` | Kubernetes only. `true` = the Controller's internal CA provisions the gateway client Secret (`edgion-conf-sync-certs`). On the data plane `auto_ca` is an **enforced** switch (see below), not just documentation. |
 
 > When this section is not configured, gRPC connects in plaintext, fully compatible with previous versions.
-> When mTLS is enabled, the URI scheme of `[gateway].server_addr` is automatically switched to `https://`.
+> When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically switched to `https://`.
 > Generate certificates with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
-### [server]
+**`auto_ca` fail-close (data plane).** When `auto_ca: true` the gateway refuses to run the
+conf_sync channel in plaintext, mirroring the Controller (whose provisioning failure aborts
+startup):
+> - `auto_ca: true` **with no `tls`/`certs` block at all** → permanent misconfiguration:
+>   the gateway fails fast at startup (no plaintext, no retry). auto_ca implies mTLS, so the
+>   cert paths must be set.
+> - `auto_ca: true` **with cert paths but the Secret not yet provisioned** (cold start, the
+>   mounted volume is `optional`) → the gateway does NOT downgrade to plaintext; it retries
+>   client init within the startup-probe budget until the cert files appear, then connects mTLS.
+> - `skip_tls: true` remains the only explicit plaintext escape hatch; it overrides `auto_ca`
+>   but logs a high-visibility WARN.
+>
+> Without `auto_ca`, an omitted section keeps the legacy plaintext-default behavior (loud
+> telemetry via the `plaintext_default` system-error state, but it connects).
+
+### server
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -168,11 +192,11 @@ LogConfig:
 | `"daily"` | Rotate at midnight daily |
 | `"hourly"` | Rotate hourly |
 | `"never"` | Do not rotate |
-| `{ Size = 104857600 }` | Rotate by file size (bytes, default 100 MB) |
+| `{ Size: 104857600 }` | Rotate by file size (bytes, default 100 MB) |
 
-**Important**: `[logging].log_dir` only affects the system log path; it does not affect business log paths. Business log paths are configured independently in each `output.localFile.path`.
+**Important**: `logging.log_dir` only affects the system log path; it does not affect business log paths. Business log paths are configured independently in each `output.localFile.path`.
 
-### [rate_limit]
+### rate_limit
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -180,7 +204,7 @@ LogConfig:
 | `max_estimator_slots_k` | `usize` | `1024` | CMS maximum slot cap |
 | `gateway_instance_count` | `u32` | `1` | Gateway instance count (denominator for cluster rate limiting; static fallback when there is no Controller) |
 
-### [access_log_sensitive]
+### access_log_sensitive
 
 Controls the redaction behavior of fields marked as sensitive in access log, ssl.log, and plugin log. **`mode=off` by default**: all sensitive values are emitted in plaintext (preserving historical behavior).
 
@@ -212,21 +236,32 @@ Controls the redaction behavior of fields marked as sensitive in access log, ssl
 
 ## `integration_testing_mode`
 
-This is a CLI flag, not a TOML section:
+This is a CLI flag, not a YAML config section. It is **production-unsafe** and is
+guarded by a second, explicit gate: the flag is refused at startup (fail-close)
+unless the `EDGION_ALLOW_INTEGRATION_TESTING_MODE` environment variable is also
+set to a truthy value (`1` / `true` / `yes` / `on`). A single accidental CLI flag
+in a production rollout therefore aborts startup loudly instead of silently
+widening the surface.
 
 ```bash
-./target/debug/edgion-gateway --config-file config/edgion-gateway.yaml --integration-testing-mode
+EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
+  ./target/debug/edgion-gateway --config-file config/edgion-gateway.yaml --integration-testing-mode
 ```
 
 When enabled, it additionally activates:
 - Access Log Store
-- Test-only metrics tags
+- Test-only metrics tags (per-request `test_data` labels — unbounded cardinality)
 - `/api/v1/testing/*` debug endpoints
+- Loopback-upstream allowance for endpoint-derived backends
+
+While active it also raises `edgion_system_error_state{component="gateway_runtime",
+reason="integration_testing_mode"} = 1`, so monitoring catches accidental
+production enablement even when the startup WARN goes unread.
 
 ## Most Common Gateway Configuration Changes in This Project
 
-- Change the Controller gRPC address: change `[gateway].server_addr`
-- Change system log noise: change `[logging].log_level`
-- Toggle business logs: change `[access_log]` / `[ssl_log]` / `[tcp_log]` / `[udp_log]`
-- Tune Pingora workers and keepalive: change `[server]`
-- Tune the default RateLimit precision: change `[rate_limit]`
+- Change the Controller gRPC address: change `gateway.server_addr`
+- Change system log noise: change `logging.log_level`
+- Toggle business logs: change `access_log` / `ssl_log` / `tcp_log` / `udp_log`
+- Tune Pingora workers and keepalive: change `server`
+- Tune the default RateLimit precision: change `rate_limit`

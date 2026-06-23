@@ -32,16 +32,16 @@ in the plugin's `linkSysRefs` list. This allows scripts to access multiple Redis
 
 | File | Role |
 |------|------|
-| `src/core/gateway/plugins/http/dsl/lang/builtins.rs` | `call_builtin_redis`, `redis_ok`, `redis_err`, error helpers |
-| `src/core/gateway/plugins/http/dsl/lang/bytecode.rs` | `BuiltinId` Redis variants |
-| `src/core/gateway/plugins/http/dsl/lang/compiler/builtins.rs` | `resolve_namespace_method` + `builtin_expected_argc` entries |
-| `src/core/gateway/plugins/http/dsl/lang/vm.rs` | `is_redis_builtin`, `CallBuiltin` dispatch |
-| `src/core/gateway/plugins/http/dsl/runtime.rs` | `DslRuntime.redis_links: HashMap<String, String>` |
-| `src/core/gateway/plugins/http/dsl/config.rs` | `DslConfig.linksys_refs: Vec<LinkSysRef>` |
-| `src/core/gateway/plugins/http/dsl/plugin.rs` | Compile-time bytecode scan, client resolution via `get_redis_client()` |
-| `src/types/resources/edgion_plugins/plugin_configs/linksys_ref.rs` | `LinkSysRef { namespace, name }` type |
-| `src/core/gateway/link_sys/providers/redis/ops.rs` | Actual Redis operations (`get`, `set`, `set_px`, `incr`, ...) |
-| `src/core/gateway/link_sys/runtime/store.rs` | `get_redis_client("ns/name") -> Option<Arc<RedisLinkClient>>` |
+| `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `call_builtin_redis`, `redis_ok`, `redis_err`, error helpers |
+| `edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs` | `BuiltinId` Redis variants |
+| `edgion-gateway/src/plugins/http/dsl/lang/compiler/builtins.rs` | `resolve_namespace_method` + `builtin_expected_argc` entries |
+| `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `is_redis_builtin`, `CallBuiltin` dispatch |
+| `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `DslRuntime.redis_links: HashMap<String, String>` |
+| `edgion-gateway/src/plugins/http/dsl/config.rs` | `DslConfig.linksys_refs: Vec<LinkSysRef>` |
+| `edgion-gateway/src/plugins/http/dsl/plugin.rs` | Compile-time bytecode scan, client resolution via `get_redis_client()` |
+| `edgion-resources/src/resources/edgion_plugins/plugin_configs/linksys_ref.rs` | `LinkSysRef { namespace, name }` type |
+| `edgion-gateway/src/link_sys/providers/redis/ops.rs` | Actual Redis operations (`get`, `set`, `set_px`, `incr`, ...) |
+| `edgion-gateway/src/link_sys/runtime/store.rs` | `get_redis_client("ns/name") -> Option<Arc<RedisLinkClient>>` |
 
 ## DslRuntime field
 
@@ -135,9 +135,9 @@ declared in `linkSysRefs[0].name`.
 
 ## Integration tests
 
-Config: `examples/test/conf/EdgionPlugins/Dsl/25_EdgionPlugins_dsl-redis.yaml`
-Routes: `examples/test/conf/EdgionPlugins/Dsl/HTTPRoute_dsl-redis.yaml`
-Test client: `examples/code/client/suites/edgion_plugins/dsl/dsl.rs` — scenario 25 (4 test cases)
+Config: `edgion-tests/integration/conf/EdgionPlugins/Dsl/25_EdgionPlugins_dsl-redis.yaml`
+Routes: `edgion-tests/integration/conf/EdgionPlugins/Dsl/HTTPRoute_dsl-redis.yaml`
+Test client: `edgion-tests/src/client/suites/edgion_plugins/dsl/dsl.rs` — scenario 25 (4 test cases)
 
 ## Adding new redis.* functions
 

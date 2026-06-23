@@ -42,7 +42,7 @@ conf_center:
 edgion-controller --conf-dir config/resources
 
 # Terminal 2: Gateway
-edgion-gateway --server-addr http://127.0.0.1:50051
+edgion-gateway --server-addr http://127.0.0.1:12151
 ```
 
 ---

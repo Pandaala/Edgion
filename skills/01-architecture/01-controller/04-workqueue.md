@@ -1,6 +1,6 @@
 ---
 name: controller-workqueue
-description: Workqueue internals — dedup, dirty requeue, exponential backoff, delayed enqueue, TriggerChain cycle detection.
+description: Workqueue internals — dedup, dirty requeue, delayed enqueue, TriggerChain cycle detection.
 ---
 
 # Workqueue Mechanism
@@ -11,11 +11,12 @@ The Workqueue follows a Go controller-runtime style design. Each resource type o
 
 - **Dedup**: the same key exists in the queue at most once
 - **Dirty requeue**: re-enqueueing during processing is allowed; updates are not lost
-- **Exponential backoff**: increasing delay on retry after failure
 - **Delayed enqueue**: coalesced scheduling for cross-resource requeue
 - **TriggerChain**: cascade causality tracking and cycle detection
 
-Source file: `src/core/controller/conf_mgr/sync_runtime/workqueue.rs`
+There is intentionally **no** exponential-backoff retry; failed status writes self-heal on watcher relist (see the note under WorkqueueConfig below).
+
+Source file: `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs`
 
 ## Data Structures
 
@@ -24,9 +25,9 @@ Source file: `src/core/controller/conf_mgr/sync_runtime/workqueue.rs`
 ```text
 Workqueue
 ├── name: String                          // queue name (used in logs and metrics)
-├── tx: mpsc::Sender<WorkItem>            // ready-queue sender
-├── rx: Mutex<mpsc::Receiver<WorkItem>>   // ready-queue receiver (Mutex enforces single consumer)
-├── pending: Arc<DashSet<String>>         // set of keys in the ready queue (for dedup)
+├── tx: mpsc::Sender<String>             // ready-queue sender (only the key flows through the channel)
+├── rx: Mutex<mpsc::Receiver<String>>    // ready-queue receiver (Mutex enforces single consumer)
+├── pending: Arc<DashMap<String, PendingEntry>> // key → (enqueue_time, merged chain); also the dedup set
 ├── scheduled: Arc<DashSet<String>>       // set of keys in the delay queue (for dedup)
 ├── delay_tx: mpsc::Sender<DelayedItem>   // delay-queue sender
 ├── config: WorkqueueConfig               // configuration
@@ -48,6 +49,10 @@ pub struct WorkItem {
 Two construction methods:
 - `WorkItem::new(key)` — original event, empty chain
 - `WorkItem::with_chain(key, chain)` — cross-resource requeue, carrying a causality chain
+
+Only the `key` (a `String`) flows through the ready-queue channel. The `enqueue_time` and merged
+`trigger_chain` live in the `pending: DashMap<String, PendingEntry>`; `dequeue()` reconstructs the
+`WorkItem` by pairing the dequeued key with its `PendingEntry`.
 
 ## WorkqueueConfig
 
@@ -192,16 +197,16 @@ ResourceController event loop:
 This design ensures that:
 
 - During the init phase, the full data set is processed in order without intermediate states caused by concurrency
-- During the runtime phase, the Workqueue decouples event reception from processing, supporting dedup and backoff
+- During the runtime phase, the Workqueue decouples event reception from processing, supporting dedup and delayed (coalesced) requeue
 
 ## Metrics (WorkqueueMetrics)
 
 | Metric | Type | Description |
 |--------|------|-------------|
 | `adds_total` | AtomicU64 | Total number of enqueue operations |
-| `retries_total` | AtomicU64 | Total number of retries |
 | `depth` | AtomicU64 | Current queue depth |
 | `delayed_total` | AtomicU64 | Total number of delayed enqueues |
+| `high_water_depth` | AtomicBool | Edge-trigger latch: true while depth is at/above the high-water mark (one log line per crossing) |
 
 All metrics use `Ordering::Relaxed` atomic operations — fine for monitoring but not strictly consistent.
 
@@ -209,7 +214,7 @@ All metrics use `Ordering::Relaxed` atomic operations — fine for monitoring bu
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/controller/conf_mgr/sync_runtime/workqueue.rs` | Full Workqueue implementation |
-| `src/core/controller/conf_mgr/sync_runtime/resource_processor/processor.rs` | ResourceProcessor; uses Workqueue |
-| `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` | K8s ResourceController, spawn_worker |
-| `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` | File-system ResourceController, spawn_worker |
+| `edgion-controller/src/conf_mgr/sync_runtime/workqueue.rs` | Full Workqueue implementation |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs` | ResourceProcessor; uses Workqueue |
+| `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` | K8s ResourceController, spawn_worker |
+| `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs` | File-system ResourceController, spawn_worker |

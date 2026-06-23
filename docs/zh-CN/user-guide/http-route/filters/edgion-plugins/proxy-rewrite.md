@@ -24,8 +24,7 @@ metadata:
   name: my-proxy-rewrite
 spec:
   requestPlugins:
-    - enable: true
-      type: ProxyRewrite
+    - type: ProxyRewrite
       config:
         uri: "/internal/api/v2"
 ```
@@ -120,6 +119,31 @@ config:
 ```
 
 **效果**：`/api/users/456` → `/internal/users/id/456`
+
+### 关于 `ProxyRewriteRegex` 模式的说明
+
+> **说明**：**不存在独立的 `ProxyRewriteRegex` 插件类型**。正则 URI 重写是单一 `ProxyRewrite` 插件（`type: ProxyRewrite`）的 `regexUri` 模式。上面场景 4 和场景 5 展示的捕获组重写，即为所谓的"ProxyRewriteRegex"行为。静态路径请使用 `uri` 字段，需要捕获入站路径片段时请使用 `regexUri` 字段（含 `pattern` + `replacement`）。
+
+两种 URI 重写模式互斥——当 `uri` 和 `regexUri` 同时设置时，`uri` 优先，`regexUri` 被忽略：
+
+| 模式 | 字段 | 适用场景 |
+|------|------|----------|
+| 静态 | `uri` | 上游路径为固定字符串（可选带 `$uri` / `$arg_*` 变量） |
+| 正则 | `regexUri.pattern` + `regexUri.replacement` | 需要通过 `$1`、`$2`…… 捕获请求路径片段时 |
+
+```yaml
+# 捕获并重塑路径，同时注入标记头
+config:
+  regexUri:
+    pattern: "^/api/v[0-9]+/users/([0-9]+)/profile$"
+    replacement: "/internal/profile/$1"
+  headers:
+    set:
+      - name: X-Rewritten-By
+        value: "edgion"
+```
+
+**效果**：`/api/v2/users/42/profile` → `/internal/profile/42`（原始查询字符串自动保留）。
 
 ### 6. Host 重写
 
@@ -316,10 +340,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-route
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -341,11 +365,10 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: api-rewrite
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
-      type: ProxyRewrite
+    - type: ProxyRewrite
       config:
         # URI 重写：v1 → v2
         regexUri:
@@ -396,13 +419,13 @@ curl -H "X-Debug: true" "https://api.example.com/api/v1/users/123?detail=true"
 ```yaml
 spec:
   requestPlugins:
-    - enable: true
-      type: BasicAuth
+    - type: BasicAuth
       config:
-        secretRefs:
-          - name: api-users
-    - enable: true
-      type: ProxyRewrite
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: api-users
+    - type: ProxyRewrite
       config:
         uri: "/internal$uri"
         headers:
@@ -418,13 +441,11 @@ spec:
 ```yaml
 spec:
   requestPlugins:
-    - enable: true
-      type: Cors
+    - type: Cors
       config:
-        allow_origins: "https://app.example.com"
-        allow_methods: "GET,POST,PUT,DELETE"
-    - enable: true
-      type: ProxyRewrite
+        allowOrigins: "https://app.example.com"
+        allowMethods: "GET,POST,PUT,DELETE"
+    - type: ProxyRewrite
       config:
         host: "backend.internal.svc"
 ```

@@ -125,7 +125,7 @@ impl WorkDir {
 ### 1. Determine work_dir
 
 ```rust
-// src/core/cli/edgion_gateway/mod.rs
+// src/core/gateway/cli/mod.rs
 let base_work_dir = self.config.work_dir.clone()
     .or_else(|| std::env::var("EDGION_WORK_DIR").ok().map(PathBuf::from))
     .unwrap_or_else(|| PathBuf::from("."));
@@ -136,7 +136,7 @@ init_work_dir(base_work_dir)?;
 ### 2. Validate Directory
 
 ```rust
-// src/types/work_dir.rs
+// edgion-resources/src/work_dir.rs
 impl WorkDir {
     pub fn validate(&self) -> anyhow::Result<()> {
         // 1. Check if base directory exists, create if not
@@ -337,15 +337,14 @@ mkdir -p /usr/local/edgion/{config,logs,runtime}
 ## Related Files
 
 ### Core Implementation
-- `src/types/work_dir.rs` - WorkDir implementation
-- `src/types/global_def.rs` - Global constants (DEFAULT_WORK_DIR)
-- `src/types/mod.rs` - Export work_dir API
+- `edgion-resources/src/work_dir.rs` - WorkDir implementation
+- `edgion-resources/src/mod.rs` - Export work_dir API
 
 ### Usage Locations
-- `src/core/cli/edgion_gateway/mod.rs` - Gateway initialization
-- `src/core/cli/edgion_controller/mod.rs` - Controller initialization
-- `src/core/link_sys/local_file/mod.rs` - Log file path resolution
-- `src/core/observe/ssl_log.rs` - SSL log path
+- `src/core/gateway/cli/mod.rs` - Gateway initialization
+- `src/core/controller/cli/mod.rs` - Controller initialization
+- `src/core/gateway/link_sys/providers/local_file/mod.rs` - Log file path resolution
+- `src/core/gateway/observe/logs/ssl_log.rs` - SSL log path
 
 ### Configuration Files
 - `config/edgion-gateway.yaml` - Gateway configuration

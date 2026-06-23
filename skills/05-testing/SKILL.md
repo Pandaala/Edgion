@@ -5,18 +5,19 @@ description: Testing skill for Edgion. Use when writing, running, or extending u
 
 # 05 Testing
 
-> Edgion test system. Goal: unit tests + integration tests reach **99% code coverage**.
-> Split into **standard tests** (coverage guarantee) and **dedicated tests** (specific-scenario validation).
+> Edgion test system. Goal: **maximize meaningful coverage without padding** — write tests worth keeping (critical paths, branches, risk boundaries, with real assertions) and push coverage as high as that allows; do not add low-value tests just to hit a line-coverage number.
+> Split into **standard tests** (critical-path & risk-boundary coverage) and **dedicated tests** (specific-scenario validation).
 
 ## File list
 
-### Part 1 — Standard tests (coverage guarantee)
+### Part 1 — Standard tests (critical-path & risk-boundary coverage)
 
 | File | Topic | Status |
 |------|------|------|
 | [00-unit-testing.md](00-unit-testing.md) | Unit testing: inline test module, how to run, writing rules, division of labor with integration tests | Complete |
 | [01-integration-testing.md](01-integration-testing.md) | Integration testing: architecture, run flow, steps to add a test, **dynamic (hot reload) test scenario framework** | Refactored |
 | [02-k8s-integration-testing.md](02-k8s-integration-testing.md) | K8s integration testing: differences from local testing, modification checklist, execution phases | Complete |
+| [05-snapshot-testing.md](05-snapshot-testing.md) | Snapshot testing: when to use / refuse, expect-test workflow, volatile-field escape hatches | Complete |
 
 ### Part 2 — Dedicated tests (specific-scenario validation)
 
@@ -38,23 +39,23 @@ cargo test --all
 # Main runner — every suite that shares the single controller/gateway topology
 # (HTTPRoute, GRPCRoute, EdgionPlugins, EdgionTls, Status, LinkSys/Status,
 # LinkSys/Redis, dynamic scenarios, …)
-./examples/test/scripts/integration/run_integration.sh
+./edgion-tests/integration/scripts/integration/run_integration.sh
 
 # Top-level orchestrator — main runner PLUS every standalone integration script
 # (Etcd / Elasticsearch LinkSys, ACME, Center watch-sync, edgion-cli E2E,
 # FileWatcher). Sequential; continues on failure; unified report at the end.
-./examples/test/scripts/integration/run_all_integration.sh
+./edgion-tests/integration/scripts/integration/run_all_integration.sh
 ```
 
 ### Run dynamic (hot reload) tests
 Dynamic scenarios run by default as the final step of the full `run_integration.sh` (without `-r`) and the `-r Gateway` path; narrow paths (`-r EdgionPlugins -i ...` etc.) skip them.
 ```bash
 # Default run: includes dynamic scenarios
-./examples/test/scripts/integration/run_integration.sh
+./edgion-tests/integration/scripts/integration/run_integration.sh
 
 # List / run a single scenario
-./target/debug/examples/test_client --list-dynamic-scenarios
-./target/debug/examples/test_client -g --dynamic-scenario <id>
+./target/debug/test_client --list-dynamic-scenarios
+./target/debug/test_client -g --dynamic-scenario <id>
 ```
 For the scenario framework and how to add new scenarios see [the "Dynamic (hot reload) testing" section in 01-integration-testing.md](01-integration-testing.md).
 
@@ -64,10 +65,10 @@ cat ${WORK_DIR}/report.log
 ```
 
 ### Key test directories
-- `examples/code/` — test code (client/server/validator)
-- `examples/test/conf/` — test configurations (organized by resource type)
-- `examples/test/scripts/` — test scripts
-- `integration_testing/` — runtime working directory (gitignored)
+- `edgion-tests/src/` — test code (client/server/validator)
+- `edgion-tests/integration/conf/` — test configurations (organized by resource type)
+- `edgion-tests/integration/scripts/` — test scripts
+- `tmp/integration_testing/` — runtime working directory (gitignored)
 
 ### Read on demand
 - [references/integration-suite-map.md](references/integration-suite-map.md) — suite family, conf directory, Rust suite, `--gateway` mapping

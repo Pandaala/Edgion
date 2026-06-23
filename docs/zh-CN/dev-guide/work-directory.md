@@ -125,7 +125,7 @@ impl WorkDir {
 ### 1. 确定 work_dir
 
 ```rust
-// src/core/cli/edgion_gateway/mod.rs
+// src/core/gateway/cli/mod.rs
 let base_work_dir = self.config.work_dir.clone()
     .or_else(|| std::env::var("EDGION_WORK_DIR").ok().map(PathBuf::from))
     .unwrap_or_else(|| PathBuf::from("."));
@@ -136,7 +136,7 @@ init_work_dir(base_work_dir)?;
 ### 2. 验证目录
 
 ```rust
-// src/types/work_dir.rs
+// edgion-resources/src/work_dir.rs
 impl WorkDir {
     pub fn validate(&self) -> anyhow::Result<()> {
         // 1. 检查 base 目录是否存在，不存在则创建
@@ -337,15 +337,14 @@ mkdir -p /usr/local/edgion/{config,logs,runtime}
 ## 相关文件
 
 ### 核心实现
-- `src/types/work_dir.rs` - WorkDir 实现
-- `src/types/global_def.rs` - 全局常量（DEFAULT_WORK_DIR）
-- `src/types/mod.rs` - 导出 work_dir API
+- `edgion-resources/src/work_dir.rs` - WorkDir 实现
+- `edgion-resources/src/mod.rs` - 导出 work_dir API
 
 ### 使用位置
-- `src/core/cli/edgion_gateway/mod.rs` - Gateway 初始化
-- `src/core/cli/edgion_controller/mod.rs` - Controller 初始化
-- `src/core/link_sys/local_file/mod.rs` - 日志文件路径解析
-- `src/core/observe/ssl_log.rs` - SSL 日志路径
+- `src/core/gateway/cli/mod.rs` - Gateway 初始化
+- `src/core/controller/cli/mod.rs` - Controller 初始化
+- `src/core/gateway/link_sys/providers/local_file/mod.rs` - 日志文件路径解析
+- `src/core/gateway/observe/logs/ssl_log.rs` - SSL 日志路径
 
 ### 配置文件
 - `config/edgion-gateway.yaml` - Gateway 配置

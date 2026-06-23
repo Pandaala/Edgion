@@ -43,7 +43,7 @@ Edgion extension CRDs are installed via Edgion's own deployment manifest.
 | **EdgionPlugins** | edgion.io/v1alpha1 | HTTP plugin collection: referenceable via the ExtensionRef of HTTPRoute/GRPCRoute |
 | **EdgionStreamPlugins** | edgion.io/v1alpha1 | TCP/UDP stream plugin collection: connection-level filters (IP allow/deny lists, etc.) |
 | **EdgionTls** | edgion.io/v1alpha1 | TLS certificate and key resource: an alternative to standard Secret, supports file path references and inline certificates |
-| **PluginMetaData** | edgion.io/v1alpha1 | Plugin metadata: describes plugin capabilities, parameter schema, and version information |
+| **EdgionConfigData** | edgion.io/v1alpha1 | Plugin metadata: describes plugin capabilities, parameter schema, and version information |
 | **LinkSys** | edgion.io/v1alpha1 | External system integration: connection configuration for ES, Redis, Etcd, Webhook, File, and other data sources |
 | **EdgionAcme** | edgion.io/v1alpha1 | ACME automatic certificate issuance configuration: Let's Encrypt integration, executed only on the Leader Controller |
 
@@ -55,7 +55,7 @@ Edgion uses the official Go test suite from `sigs.k8s.io/gateway-api/conformance
 
 ```bash
 # Enter the conformance test directory
-cd examples/gateway-api-conformance
+cd edgion-tests/conformance
 
 # Run the conformance tests (requires a K8s cluster with Edgion deployed)
 go test -v -run TestConformance ./...
@@ -88,15 +88,18 @@ Edgion extends standard Gateway API through the following mechanisms:
 
 ### 1. Annotations
 
-Use annotations with the `edgion.io/*` prefix to add Edgion-specific behavior to standard resources:
+Use annotations with the `edgion.io/*` prefix to add Edgion-specific behavior to standard resources.
+Most `edgion.io/*` annotations tune runtime behavior (e.g. `edgion.io/enable-http2`,
+`edgion.io/http-to-https-redirect`, `edgion.io/health-check`, `edgion.io/circuit-breaker`,
+`edgion.io/proxy-protocol`). The one annotation that references another resource is:
 
 | Annotation | Applicable Resources | Description |
 |------|---------|------|
-| `edgion.io/edgion-plugins` | HTTPRoute, GRPCRoute | References an EdgionPlugins resource by name |
 | `edgion.io/edgion-stream-plugins` | Gateway | References an EdgionStreamPlugins resource by name |
-| `edgion.io/edgion-gateway-config` | Gateway | References an EdgionGatewayConfig resource by name |
-| `edgion.io/edgion-tls` | Gateway | References an EdgionTls resource by name (alternative to Secret) |
-| `edgion.io/link-sys` | Gateway | References a LinkSys resource by name |
+
+EdgionPlugins, EdgionTls, and EdgionGatewayConfig are **not** wired via annotation keys — they are
+associated through `ExtensionRef`-type filters (EdgionPlugins) or spec references (EdgionTls,
+EdgionGatewayConfig); LinkSys is its own resource. See the ExtensionRef section below.
 
 For the full list of annotations, see `skills/02-features/05-annotations/00-annotations-overview.md`.
 

@@ -1,0 +1,2 @@
+mod edgion_config_data_managed;
+pub use edgion_config_data_managed::EdgionConfigDataManagedTestSuite;

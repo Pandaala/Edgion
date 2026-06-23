@@ -2,17 +2,17 @@
 
 EdgionGatewayConfig 是 Edgion 的 Cluster 作用域 CRD（`edgion.io/v1alpha1`），用于设置 GatewayClass 级别的运行时行为，通过 `GatewayClass.spec.parametersRef` 关联，更新后动态生效，无需重启进程。
 
-## 与 Gateway TOML 的区别
+## 与 Gateway YAML 的区别
 
-| 配置层 | Gateway TOML | EdgionGatewayConfig |
+| 配置层 | Gateway YAML | EdgionGatewayConfig |
 |--------|-------------|---------------------|
 | 作用域 | 单个 Gateway 进程 | 整个 GatewayClass |
 | 变更生效方式 | 需要重启进程 | 动态生效 |
 | 典型用途 | 进程连接参数、日志路径、限流精度 | 超时策略、安全防护、全局插件、真实 IP 提取 |
 
-**何时用 TOML，何时用 EdgionGatewayConfig：**
-- 改 Controller gRPC 地址 → Gateway TOML `[gateway].server_addr`
-- 改 Admin / Metrics 端口 → Gateway TOML（进程启动层）
+**何时用 Gateway YAML，何时用 EdgionGatewayConfig：**
+- 改 Controller gRPC 地址 → Gateway YAML `gateway.server_addr`
+- 改 Admin / Metrics 端口 → Gateway YAML（进程启动层）
 - 配置 HTTP 超时、真实 IP、全局插件 → EdgionGatewayConfig
 
 ## 关联方式
@@ -112,6 +112,28 @@ spec:
 | `defaultConnectTimeout` | `Duration` | `5s` | 连接上游服务器的超时时间 |
 | `defaultRequestTimeout` | `Duration` | `60s` | 完整请求（含重试）的总超时时间 |
 | `defaultIdleTimeout` | `Duration` | `300s` | 连接池中连接的空闲超时 |
+
+### spec.tcpTimeout
+
+L4 中继（纯 TCP、TLS 终止、TLS 透传）的超时配置。UDP 有独立的会话模型，不受本节影响。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `idleTimeout` | Duration 字符串 | `1h` | 在指定时间窗口内，若中继两个方向均无字节进展，则关闭该中继。任意方向完成一次读取或写入有所推进，计时器都会重置，因此活跃传输和缓慢但持续推进的传输不会被误断。 |
+| `connectTimeout` | Duration 字符串 | `10s` | 建立上游 TCP 连接的上限（TCP 握手）。三类中继的上游连接都是纯 TCP，因此这里限制的是连接建立本身，而非 TLS 握手。当后端静默丢弃 SYN（防火墙、尚未就绪的 Pod）时快速失败，而不是把下游连接一直挂起到 OS TCP 重传超时（约 2 分钟）才结束。 |
+
+**安全默认：** 如果省略整个 `tcpTimeout` 节，`1h` 空闲超时与 `10s` 连接超时仍然生效——无需任何配置，每条 L4 中继都有上限。
+
+**关闭与风险：** 将 `idleTimeout` 设为 `"0"` 或 `"0s"` 可禁用空闲超时（无界中继）。这会重新引入资源耗尽风险：一个停滞或低速发送的对端可以无限期持有中继——包括其 socket、任务和缓冲区——且进程内没有连接数上限。仅在上层机制已对连接生命周期设限的情况下才应禁用。同理，将 `connectTimeout` 设为 `"0"` 会移除应用层连接上界，回退到 OS TCP 重传超时（Linux 上约 2 分钟）。
+
+> **已知局限：** 空闲超时无法阻止有意为之的低速攻击者（每 N 秒发送一个字节，任一读写方向都能重置计时器）。要限制这类攻击需要总时长上限，但这会断开合法的长空闲连接（DB 连接池、消息队列、long-poll、SSH），不适合作为默认值。
+
+```yaml
+spec:
+  tcpTimeout:
+    idleTimeout: 1h
+    connectTimeout: 10s
+```
 
 ### spec.maxRetries
 

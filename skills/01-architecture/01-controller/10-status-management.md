@@ -1,3 +1,8 @@
+---
+name: status-management
+description: update_status implementation rules and pitfalls — status write flow, field rules, and testing points for CRD status writeback.
+---
+
 # Status Management — update_status Implementation Rules
 
 > For the location of status fields per resource, see [05-resources/SKILL.md](../05-resources/SKILL.md); this document covers only the status write flow, field rules, and testing points.
@@ -61,20 +66,20 @@ A Controller → Gateway HTTP Pull reverse-query scheme was once evaluated (with
 
 ### 4.1 Simple resources (flat status with conditions)
 
-**Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy, PluginMetaData
+**Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy, EdgionConfigData
 
 **Implementation split of Condition-type choice** — both styles coexist in this repo:
 
 | Style | Condition library used | Helpers used | Resources |
 |-------|-----------------------|--------------|-----------|
 | Internal `types::resources::common::Condition` | `status_utils::{accepted_condition, condition_false, update_condition}` | GatewayClass, EdgionGatewayConfig, LinkSys, BackendTLSPolicy |
-| `k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition` | Per-handler local `k8s_condition_true/false` + `update_k8s_condition` (with some duplication) | EdgionPlugins, EdgionStreamPlugins, EdgionAcme, PluginMetaData |
+| `k8s_openapi::apimachinery::pkg::apis::meta::v1::Condition` | Per-handler local `k8s_condition_true/false` + `update_k8s_condition` (with some duplication) | EdgionPlugins, EdgionStreamPlugins, EdgionAcme, EdgionConfigData |
 
 New resources should prefer `k8s_openapi::Condition` (aligned with the kube-rs ecosystem). The two styles of `update_condition`/`update_k8s_condition` behave equivalently: they refresh `last_transition_time` only when the status actually changes.
 
 **GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<String>>`,
 populated in `update_status()` with the full list of supported Gateway API features (matching
-the conformance test declaration in `examples/gateway-api-conformance/conformance_test.go`).
+the conformance test declaration in `edgion-tests/conformance/conformance_test.go`).
 
 ```rust
 fn update_status(&self, obj: &mut T, _ctx: &HandlerContext, validation_errors: &[String]) {
@@ -174,24 +179,24 @@ EdgionAcme has both a Gateway API-style `Accepted` condition and ACME-specific l
 
 ### 4.5 Resources without status
 
-**Pattern:** Secret, Service, EndpointSlice, Endpoint, ReferenceGrant, ConfigMap
+**Pattern:** Secret, Service, EndpointSlice, ReferenceGrant, ConfigMap
 
 These use `DefaultHandler` or a handler with empty `update_status()`.
 
-(PluginMetaData was previously in this list; it has been moved to 4.1 — Gateway API-style Accepted + ResolvedRefs; see the `update_status` section in [05-resources/15-plugin-metadata.md](../05-resources/15-plugin-metadata.md).)
+(EdgionConfigData was previously in this list as `PluginMetaData`; it has been moved to 4.1 — Gateway API-style Accepted + ResolvedRefs; see the `update_status` section in [05-resources/15-edgion-config-data.md](../05-resources/15-edgion-config-data.md).)
 
 ### 4.6 Cross-resource reference resolution (new)
 
-Several simple resources register outbound references during `parse` via indices such as `plugin_metadata_refs` / `SecretRefManager`, symmetrically clean them up during `on_delete` via `clear_refs_from`, and then look them up in the store during `update_status` to compute `ResolvedRefs`:
+Several simple resources register outbound references during `parse` via indices such as `edgion_config_data_refs` / `SecretRefManager`, symmetrically clean them up during `on_delete` via `clear_refs_from`, and then look them up in the store during `update_status` to compute `ResolvedRefs`:
 
 | Handler | Reference type | resolved via | Reason when unresolved |
 |---------|---------------|--------------|-------------------------|
 | EdgionPlugins | Secret | `SecretRefManager::get_dependencies(ep_key)` | `BackendNotFound` (`ResolvedRefsError::SecretNotFound`) |
-| EdgionStreamPlugins | PluginMetaData (GCIR) | iterate GCIR entries in spec → `plugin_metadata_store.get(ns, name)` with matching type | `InvalidPluginMetaDataRef` |
-| PluginMetaData (ServiceRegionRoute) | PluginMetaData (ClusterRegionRoute) | `plugin_metadata_store.get` with matching type | `InvalidPluginMetaDataRef` |
+| EdgionStreamPlugins | EdgionConfigData (Selector) | iterate GCIR entries' `activeProfileRef` → `edgion_config_data_store.get(ns, name)` with matching `Selector` type | `InvalidEdgionConfigDataRef` |
+| EdgionPlugins | EdgionConfigData (RegionRouteOverride) | `edgion_config_data_store.get` via `overrideRef` with type guard | `InvalidEdgionConfigDataRef` |
 | EdgionTls | Secret | `secret_store.get` | `BackendNotFound` (`ResolvedRefsError::SecretNotFound`) |
 
-When the referenced object changes, a reverse requeue is performed via `plugin_metadata_refs` / `SecretRefManager`, allowing the consumer's ResolvedRefs to self-heal. The reverse requeue for cross-PM cases encodes the kind in the `ep_key` format `"<Kind>:<ns>/<name>"`; `requeue_pm_referrers` uses `split_once(':')` to dispatch to the corresponding processor.
+When the referenced object changes, a reverse requeue is performed via `edgion_config_data_refs` / `SecretRefManager`, allowing the consumer's ResolvedRefs to self-heal. The reverse requeue encodes the kind in the `ep_key` format `"<Kind>:<ns>/<name>"`; `requeue_pm_referrers` uses `split_once(':')` to dispatch to the corresponding processor. (The old PM→PM cross-ref chain — ServiceRegionRoute → ClusterRegionRoute — was removed in the EdgionConfigData refactor; `overrideRef` is now a direct EdgionPlugins → EdgionConfigData reference.)
 
 ## 5. The set_parent_conditions_full Contract
 
@@ -268,7 +273,7 @@ state is unchanged.
 
 | Category | Kinds | Comparator | What it compares |
 |----------|-------|------------|------------------|
-| **Condition-only** | GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, PluginMetaData | `conditions_only_status_equal` | `status.conditions[]` |
+| **Condition-only** | GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData | `conditions_only_status_equal` | `status.conditions[]` |
 | **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `parents_status_equal` | `status.parents[]` matched by parentRef identity |
 | **Per-ancestor** | BackendTLSPolicy | `ancestors_status_equal` | `status.ancestors[]` matched by ancestorRef identity |
 | **Hybrid** | Gateway | `gateway_status_equal` | `addresses` + gateway-level `conditions` + `listeners[]` (matched by name) |

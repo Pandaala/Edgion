@@ -117,13 +117,15 @@ LocalFileWriter implements batch writing logic:
 ```rust
 // Block waiting for the first log entry
 while let Ok(first_line) = rx.recv() {
-    let _ = writeln!(file, "{}", first_line);
-    
+    // write_log_line tracks size only on success and, on a write error,
+    // records the dropped-log metric + logs the first error of a burst.
+    write_log_line(&mut file, &first_line, &mut current_size, &mut consecutive_write_errors, log_type);
+
     // Batch process remaining logs (up to 999 more, 1000 total)
     for _ in 0..999 {
         match rx.try_recv() {
             Ok(line) => {
-                let _ = writeln!(file, "{}", line);
+                write_log_line(&mut file, &line, &mut current_size, &mut consecutive_write_errors, log_type);
             }
             Err(_) => break,
         }
@@ -158,7 +160,11 @@ Automatic cleanup of old files, keeping the most recent N (configurable via `max
 
 #### 4. Metrics Integration
 
-When queue-full causes log drops, metrics are automatically recorded:
+A log line counts as dropped in two cases, both recorded on the same metric: the
+send queue is full (`send` below), or the background thread fails to write the line
+to disk (disk full, permission revoked, file deleted externally). A write failure
+also emits a `tracing::error!` (debounced to the first error of a burst) and leaves
+the tracked file size unchanged so it cannot trigger premature size rotation.
 
 ```rust
 async fn send(&self, data: String) -> Result<()> {
@@ -178,7 +184,7 @@ Monitor the `access_log_dropped` metric via Prometheus to detect issues promptly
 
 ### Access Logger
 
-**Location**: `src/core/observe/access_log/`
+**Location**: `src/core/gateway/observe/access_log/`
 
 **Architecture**:
 
@@ -200,7 +206,7 @@ pub struct AccessLogger {
 
 ### SSL Logger
 
-**Location**: `src/core/observe/ssl_log.rs`
+**Location**: `src/core/gateway/observe/logs/ssl_log.rs`
 
 **Architecture**:
 
@@ -232,7 +238,7 @@ log_ssl(&entry);  // Synchronous call, never blocks
 
 ### TCP Logger
 
-**Location**: `src/core/observe/tcp_log.rs`
+**Location**: `src/core/gateway/observe/logs/tcp_log.rs`
 
 **Architecture**:
 
@@ -250,6 +256,8 @@ pub struct TcpLogEntry {
     pub bytes_received: u64,
     pub status: String,
     pub connection_established: bool,
+    // Bounded fail-close / policy-deny reason; present only on denied connections.
+    pub deny_reason: Option<&'static str>,
 }
 ```
 
@@ -262,8 +270,8 @@ log_tcp(&log_entry).await;
 ```
 
 **Logging timing**:
-- Only logs after connection is successfully established (`connection_established = true`)
-- Records complete connection lifecycle: establishment, data transfer, closure
+- Logs every accepted connection when it ends, regardless of outcome — failed and stream-plugin-denied connections are logged too (`connection_established` distinguishes whether the upstream was actually reached)
+- Records the complete connection lifecycle: establishment, data transfer, closure
 
 **Log content**:
 - Client info (address, port)
@@ -271,10 +279,11 @@ log_tcp(&log_entry).await;
 - Connection duration
 - Byte transfer statistics (sent/received)
 - Connection status (Success, UpstreamConnectionFailed, ReadError, WriteError, etc.)
+- Deny reason (`deny_reason`, present only when a stream plugin rejects the connection; bounded label, no dynamic content)
 
 ### UDP Logger
 
-**Location**: `src/core/observe/udp_log.rs`
+**Location**: `src/core/gateway/observe/logs/udp_log.rs`
 
 **Architecture**:
 
@@ -328,7 +337,7 @@ log_udp(&log_entry).await;
 
 ### LocalFileWriter
 
-**Location**: `src/core/link_sys/local_file/`
+**Location**: `src/core/gateway/link_sys/providers/local_file/`
 
 **Responsibilities**:
 - Manage log file opening, writing, and closing
@@ -554,14 +563,15 @@ All logs are output in JSON format, one record per line. Below are format exampl
 
 ## Metrics Monitoring
 
-Each log type has independent dropped metrics for monitoring queue-full log loss:
+Each log type has independent dropped metrics for monitoring log loss, counting both
+queue-full drops and background file-write failures:
 
 | Metric Name | Description | Trigger |
 |------------|-------------|---------|
-| `edgion_access_log_dropped_total` | Access log dropped count | Access log queue full |
-| `edgion_ssl_log_dropped_total` | SSL log dropped count | SSL log queue full |
-| `edgion_tcp_log_dropped_total` | TCP log dropped count | TCP log queue full |
-| `edgion_udp_log_dropped_total` | UDP log dropped count | UDP log queue full |
+| `edgion_access_log_dropped_total` | Access log dropped count | Access log queue full or file-write failure |
+| `edgion_ssl_log_dropped_total` | SSL log dropped count | SSL log queue full or file-write failure |
+| `edgion_tcp_log_dropped_total` | TCP log dropped count | TCP log queue full or file-write failure |
+| `edgion_udp_log_dropped_total` | UDP log dropped count | UDP log queue full or file-write failure |
 
 **Monitoring examples**:
 
@@ -647,7 +657,7 @@ impl DataSender<String> for ElasticsearchSender {
 ### 2. Add Configuration Type
 
 ```rust
-// src/types/link_sys.rs
+// edgion-resources/src/output.rs
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub enum StringOutput {
@@ -659,7 +669,7 @@ pub enum StringOutput {
 ### 3. Update Initialization Logic
 
 ```rust
-// src/core/observe/access_log/mod.rs
+// src/core/gateway/observe/access_log/mod.rs
 match &config.output {
     StringOutput::LocalFile(cfg) => { /* ... */ }
     StringOutput::Elasticsearch(cfg) => {
@@ -718,15 +728,15 @@ match &config.output {
 
 ### Core Implementation
 
-- `src/core/observe/access_log/` - Access Log implementation
-- `src/core/observe/ssl_log.rs` - SSL Log implementation
-- `src/core/link_sys/local_file/` - LocalFileWriter implementation
-- `src/core/link_sys/data_sender_trait.rs` - DataSender trait definition
+- `src/core/gateway/observe/access_log/` - Access Log implementation
+- `src/core/gateway/observe/logs/ssl_log.rs` - SSL Log implementation
+- `src/core/gateway/link_sys/providers/local_file/` - LocalFileWriter implementation
+- `src/core/gateway/link_sys/runtime/data_sender.rs` - DataSender trait definition
 
 ### Configuration
 
-- `src/core/cli/edgion_gateway/config.rs` - Gateway configuration structure
-- `src/types/link_sys.rs` - Log output configuration types
+- `src/core/gateway/cli/config.rs` - Gateway configuration structure
+- `edgion-resources/src/output.rs` - Log output configuration types (StringOutput, LocalFileWriterCfg)
 - `config/edgion-gateway.yaml` - Configuration example
 
 ### User Documentation

@@ -1,0 +1,27 @@
+# OTel Collector config for Edgion OTLP integration test.
+#
+# Receives OTLP/gRPC log records from the gateway, writes them as NDJSON to a
+# file that the test script reads and asserts on.
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+
+exporters:
+  file:
+    path: /var/log/otel/otlp-logs.ndjson
+    rotation:
+      max_megabytes: 10
+      max_backups: 1
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+service:
+  extensions: [health_check]
+  pipelines:
+    logs:
+      receivers: [otlp]
+      exporters: [file]

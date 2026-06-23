@@ -1,5 +1,0 @@
-# Test certificate files (auto-generated, do not commit)
-certs/
-
-# Dynamically generated Secret manifests (contain certificates, do not commit)
-conf/**/Secret*.yaml

@@ -57,7 +57,7 @@ sessionPersistence:
     lifetimeType: Permanent
 ```
 
-Cookie 属性：`Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`
+Cookie 属性：`Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`。当请求通过 TLS 到达时，`Secure` 属性会自动添加。`Max-Age` 仅在 `lifetimeType: Permanent` 且设置了 `absoluteTimeout` 时才会输出。
 
 ### Header
 
@@ -113,7 +113,7 @@ metadata:
   name: session-sticky
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     - sessionPersistence:
         type: Cookie
@@ -135,7 +135,7 @@ metadata:
   name: session-strict
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     - sessionPersistence:
         type: Header

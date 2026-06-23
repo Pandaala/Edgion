@@ -15,6 +15,7 @@ description: Bidirectional gRPC sync architecture between Controller and Gateway
 | [00-overview.md](00-overview.md) | ConfigSync gRPC protocol overview | Understanding the sync protocol design, Proto definitions, version tracking |
 | [01-controller-side.md](01-controller-side.md) | Controller-side gRPC server | Debugging ConfigSyncServer, WatchObj, ClientRegistry |
 | [02-gateway-side.md](02-gateway-side.md) | Gateway-side gRPC client | Debugging ConfigSyncClient, ClientCache, ConfHandler |
+| [webhook.md](webhook.md) | Webhook provider (backendRef target + request-templating redesign) | Webhook outbound request shape, origin/custom allow-list, presence policy, controller-side template compile + secret resolution, consumer `path_override` API, health-reset semantics |
 
 ## Architecture overview
 
@@ -45,4 +46,4 @@ description: Bidirectional gRPC sync architecture between Controller and Gateway
 
 ## Testing infrastructure
 
-- **Wipe-all test path**: `POST controller /api/v1/admin/wipe-all` (testing-mode only) deletes all 21 kinds in tier order, used together with `cache_residue` to verify leaks. See [05-testing/02-cache-residue-detection.md](../../05-testing/02-cache-residue-detection.md) for details.
+- **Wipe-all test path**: `POST controller /api/v1/admin/wipe-all` (testing-mode only) deletes all 20 kinds in tier order, used together with `cache_residue` to verify leaks. See [05-testing/02-cache-residue-detection.md](../../05-testing/02-cache-residue-detection.md) for details.

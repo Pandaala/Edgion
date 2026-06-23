@@ -165,7 +165,7 @@ In one terminal run a single test, in another monitor the logs:
 
 ```bash
 # Terminal 1: run a single test
-cd examples/gateway-api-conformance
+cd edgion-tests/conformance
 GO_RUN_FILTER="TestConformance/GRPCRouteListenerHostnameMatching$" bash scripts/run.sh
 
 # Terminal 2: tail the access log live (you can also look at it after the test finishes)
@@ -179,8 +179,10 @@ GO_RUN_FILTER="TestConformance/GRPCRouteListenerHostnameMatching$" bash scripts/
 
 ## References
 
+- Conformance failure-pattern recipes (kubectl + in-cluster runner lens): `skills/08-kubernetes/01-gateway-api/06-conformance-debug-cookbook.md`
+- Cross-test leakage / timeline correlation: `skills/08-kubernetes/01-gateway-api/05-batch-conformance-debugging.md`
 - rv/sv triple architecture: `skills/03-coding/00-logging-and-tracing-ids.md`
 - access-log field spec: `skills/03-coding/observability/00-access-log.md`
 - Targeted TLS debugging (more grep patterns): `skills/09-misc/debugging-tls-gateway.md`
 - Local integration-test debugging workflow: `skills/06-tracing/00-debugging.md`
-- Tooling script: `examples/gateway-api-conformance/scripts/orbstack-dev.sh`
+- Tooling script: `edgion-tests/conformance/scripts/orbstack-dev.sh`

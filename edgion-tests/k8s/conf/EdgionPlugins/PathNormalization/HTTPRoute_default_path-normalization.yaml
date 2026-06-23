@@ -1,0 +1,58 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: path-norm-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: edgion-plugins-gateway
+    namespace: edgion-test
+  hostnames:
+  - path-norm.example.com
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /test/restriction
+    filters:
+    - type: ExtensionRef
+      extensionRef:
+        group: edgion.io
+        kind: EdgionPlugins
+        name: path-norm-request-restriction-deny
+    backendRefs:
+    - name: test-http
+      namespace: edgion-test
+      port: 30001
+  - matches:
+    - path:
+        type: Exact
+        value: /admin
+    backendRefs:
+    - name: test-http
+      namespace: edgion-test
+      port: 30001
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /api
+    backendRefs:
+    - name: test-http
+      namespace: edgion-test
+      port: 30001
+  - matches:
+    - path:
+        type: RegularExpression
+        value: ^/regex/v[0-9]+/.*$
+    backendRefs:
+    - name: test-http
+      namespace: edgion-test
+      port: 30001
+  - matches:
+    - path:
+        type: Exact
+        value: /secret
+    backendRefs:
+    - name: test-http
+      namespace: edgion-test
+      port: 30001

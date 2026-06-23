@@ -156,8 +156,7 @@ spec:
                           - RequestHeaderModifier
                           - ResponseHeaderModifier
                           - RequestRedirect
-                          - ExtensionRef
-                          - ForwardAuth
+                          - UrlRewrite
                           - DebugAccessLogToHeader
                           - DirectEndpoint
                           - DynamicInternalUpstream
@@ -166,7 +165,10 @@ spec:
                           - Dsl
                           - RegionRoute
                           - RequestMirror
-                          - WebhookKeyGet
+                          - FaultInjection
+                          - TraceContext
+                          - ExtProc
+                          - GlobalAccessControl
                       config:
                         type: object
                         description: "Plugin-specific configuration"
@@ -365,7 +367,6 @@ spec:
                           - ResponseHeaderModifier
                           - ResponseRewrite
                           - DebugAccessLogToHeader
-                          - ExtensionRef
                           - Dsl
                       config:
                         type: object

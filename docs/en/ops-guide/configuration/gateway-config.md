@@ -10,8 +10,9 @@ edgion-gateway reads its configuration from a YAML file. The default path is `co
 work_dir: "."
 
 gateway:
-  server_addr: "http://127.0.0.1:50051"  # Required: Controller gRPC address
-  admin_listen: "0.0.0.0:5900"           # Admin API (note: currently fixed at :5900, this field has no effect)
+  server_addr: "http://127.0.0.1:12151"  # Required: Controller gRPC address
+  admin_listen: "127.0.0.1:12001"        # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
+  # probe_listen: "0.0.0.0:12000"        # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
 
 # ─── gRPC channel security (optional mTLS) ────────────────────────
 # conf_sync_security:
@@ -84,24 +85,88 @@ rate_limit:
   max_estimator_slots_k: 1024     # CMS maximum precision cap
   gateway_instance_count: 1       # Cluster rate limiting: instance count (static fallback when no Controller push)
 
-# ─── Plugin metadata ──────────────────────────────────────────────
+# ─── Log redaction (off by default) ────────────────────────────────
 
-plugin_metadata:
-  # IMPORTANT: setting this field REPLACES the default list entirely — it is not appended.
-  # To preserve the default protection, include all default keywords plus your custom ones.
-  ctx_log_denylist: [auth, pass, claim, payload, token, secret, credential]
+access_log_sensitive:
+  mode: off                       # off | replace | wrap
+  # replace_with: "***"           # Replacement string when mode=replace
+  # wrap_prefix: "<E>"            # Prefix when mode=wrap
+  # wrap_suffix: "</E>"           # Suffix when mode=wrap
 ```
 
 ## Configuration Parameters
 
-### [gateway]
+### gateway
+
+The gateway uses a **three-port model**:
+
+| Port | Default bind | Purpose |
+|------|-------------|---------|
+| Admin | `127.0.0.1:12001` | Admin API (`/configclient`, `/api/v1/server-info`, etc.) — loopback-only, never externally reachable |
+| Probe | `0.0.0.0:12000` | Liveness and readiness only (`/health`, `/ready`) — binds all interfaces so kubelet can reach the pod IP |
+| Metrics | `0.0.0.0:12090` | Prometheus metrics — independent listener, outward-facing |
+
+The probe port is intentionally **not** added to the gateway Service; kubelet probes the pod IP directly on port 12000.
+
+> **Breaking change for operators**: remote access to the gateway admin API (`/configclient`, `/api/v1/server-info`) via pod IP or a Kubernetes Service is removed. Use `kubectl port-forward pod/<gw-pod> 12001:12001` (targets the pod loopback) or `kubectl exec` instead. Do **not** use the gateway Service for this. `edgion-cli --target client` defaults to `localhost:12001` and is unaffected.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `server_addr` | `String` | **Required** | Controller gRPC address, e.g. `http://127.0.0.1:50051` |
-| `admin_listen` | `String` | — | Admin API address (**note: currently fixed at `:5900`, this field has no effect**; Gateway Metrics API is fixed at `:5901`) |
+| `server_addr` | `String` | **Required** | Controller gRPC address, e.g. `http://127.0.0.1:12151` |
+| `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback (`127.0.0.1:12001`) — sensitive endpoints (`/configclient`, `/api/v1/server-info`) are not exposed cluster-wide. Access remotely via `kubectl port-forward pod/<name> 12001:12001`. |
+| `admin_token` | `String` | — | Shared bearer token for the admin API (config-file fallback). Prefer the `EDGION_GATEWAY_ADMIN_TOKEN` env var in Kubernetes. Never serialized out, redacted in logs. See [Gateway admin API authentication](#gateway-admin-api-authentication). |
+| `probe_listen` | `String` | `0.0.0.0:12000` | Liveness/readiness probe listen address. Binds all interfaces so kubelet can reach the pod IP. Serves only `/health` and `/ready`. Not included in the gateway Service. |
 
-### [conf_sync_security.tls]
+### Gateway admin API authentication
+
+The admin API (`gateway.admin_listen`, default `127.0.0.1:12001`) is protected by a
+**static bearer token**. Every admin route — including the integration-testing /
+destructive routes — requires `Authorization: Bearer <token>`. The probe port
+(`:12000`, `/health` `/ready`) is intentionally left auth-free.
+
+**Configuring the token (highest precedence first):**
+
+1. **`EDGION_GATEWAY_ADMIN_TOKEN` env var** — recommended for Kubernetes. Injected
+   from the `edgion-gateway-admin-credentials` Secret (key `token`) via
+   `secretKeyRef`. `deploy.sh` creates this Secret idempotently with a random value
+   (`openssl rand -hex 32`); an existing Secret is left untouched.
+2. **`gateway.admin_token` config-file field** — fallback for a Secret-mounted
+   config file only. It is never serialized out and is redacted in `Debug` / logs.
+
+**Reading the token** (for `edgion-cli` or `curl`):
+
+```bash
+kubectl -n <ns> get secret edgion-gateway-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+```bash
+curl -H "Authorization: Bearer $(kubectl -n <ns> get secret \
+  edgion-gateway-admin-credentials -o jsonpath='{.data.token}' | base64 -d)" \
+  http://127.0.0.1:12001/configclient/gateway/list
+```
+
+**Fail-close behavior:**
+
+| Condition | Response |
+|-----------|----------|
+| No token configured server-side | `503` on all admin routes (with a startup `WARN`) |
+| Missing or wrong token | `401` |
+| Correct token | request proceeds |
+
+> **Security caveat:** a non-loopback admin bind (`admin_listen: 0.0.0.0:...`)
+> sends a **replayable, non-expiring static token in cleartext** unless fronted by
+> mesh mTLS. A `NetworkPolicy` is L3/L4 access control, **not** confidentiality.
+> Require mesh mTLS for any non-loopback exposure. The token has no `exp` — on any
+> suspected exposure, rotate the Secret and restart the pod immediately:
+>
+> ```bash
+> kubectl -n <ns> delete secret edgion-gateway-admin-credentials
+> # re-run deploy.sh (or recreate the Secret), then:
+> kubectl -n <ns> rollout restart deployment/edgion-gateway
+> ```
+
+### conf_sync_security.tls
 
 Optional. When present, Gateway connects to Controller gRPC using mTLS. When absent, gRPC runs in plaintext (compatible with older versions).
 
@@ -112,9 +177,9 @@ Optional. When present, Gateway connects to Controller gRPC using mTLS. When abs
 | `ca` | `String` | — | CA certificate path used to verify the Controller server certificate |
 | `skip_tls` | `Boolean` | `false` | Emergency fallback: `true` skips TLS and connects in plaintext (logs ERROR) |
 
-When mTLS is enabled, the URI scheme of `[gateway].server_addr` is automatically switched to `https://`. Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
+When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically switched to `https://`. Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
-### [logging]
+### logging
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -125,7 +190,7 @@ When mTLS is enabled, the URI scheme of `[gateway].server_addr` is automatically
 | `console` | `Boolean` | `true` | Also write logs to stdout |
 | `buffer_size` | `Integer` | `10000` | Async log buffer size |
 
-### [server]
+### server
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -146,11 +211,11 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | `Boolean` | — | Whether to enable this log type |
-| `output.localFile.path` | `String` | — | Log file path (relative to work_dir); independent of `[logging].log_dir` |
+| `output.localFile.path` | `String` | — | Log file path (relative to work_dir); independent of `logging.log_dir` |
 | `output.localFile.queue_size` | `Integer` | CPU cores × 10000 | Write queue size |
 | `output.localFile.rotation.strategy` | `Enum` | — | Rotation strategy (see table below) |
 | `output.localFile.rotation.max_files` | `Integer` | — | Number of rotated files to retain; `0` means unlimited |
-| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | Rotation check interval in seconds |
+| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | Check interval in seconds for the time-based strategies (`daily` / `hourly`). The `Size` strategy is checked after every write batch and is not affected by this field. |
 
 **`rotation.strategy` values:**
 
@@ -159,9 +224,9 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 | `"daily"` | Rotate at midnight each day |
 | `"hourly"` | Rotate every hour |
 | `"never"` | No rotation |
-| `{ Size = 104857600 }` | Rotate by file size (bytes), default 100 MB |
+| `{ Size: 104857600 }` | Rotate by file size (bytes), default 100 MB |
 
-### [rate_limit]
+### rate_limit
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -169,18 +234,24 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 | `max_estimator_slots_k` | `Integer` | `1024` | Maximum CMS slot count cap |
 | `gateway_instance_count` | `Integer` | `1` | Gateway instance count used as divisor for cluster rate limiting. **Must be set correctly for multi-instance deployments** |
 
-### [plugin_metadata]
+### access_log_sensitive
+
+Controls redaction of fields marked sensitive in the access log, ssl.log, and plugin log. **Disabled (`off`) by default** — all sensitive values are emitted in plaintext.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `ctx_log_denylist` | `Array<String>` | `["auth","pass","claim","payload","token","secret","credential"]` | Ctx keys containing any of these substrings (case-insensitive) are excluded from access log |
+| `mode` | `Enum` | `off` | Redaction mode: `off`, `replace`, or `wrap` |
+| `replace_with` | `String` | `"***"` | Replacement string used when `mode=replace` |
+| `wrap_prefix` | `String` | `"<E>"` | Prefix added when `mode=wrap` |
+| `wrap_suffix` | `String` | `"</E>"` | Suffix added when `mode=wrap` |
 
-**Important:** Setting this field **completely replaces** the default list — it is not appended. To preserve the default protection, include all default keywords plus any custom ones.
+Behavior (using `client_addr=192.168.1.10`):
 
-Filtering rules (either condition causes the entry to be skipped):
-
-1. Key starts with `_` (plugin-private convention)
-2. Key contains any substring in `ctx_log_denylist` (case-insensitive)
+| Mode | Output |
+|------|--------|
+| `off` | `192.168.1.10` |
+| `replace` | `***` |
+| `wrap` | `<E>192.168.1.10</E>` |
 
 ## Common Scenarios
 
@@ -188,7 +259,7 @@ Filtering rules (either condition causes the entry to be skipped):
 
 ```yaml
 gateway:
-  server_addr: "http://10.0.0.5:50051"
+  server_addr: "http://10.0.0.5:12151"
 ```
 
 ### Enabling Daily Log Rotation for Access Logs
@@ -216,19 +287,21 @@ rate_limit:
   gateway_instance_count: 3   # Running 3 Gateway replicas
 ```
 
-### Extending the Sensitive Field Denylist
+### Redacting Sensitive Fields in Access Logs
+
+Replace sensitive values (client IPs, SNI, client-certificate fields, etc.) with a placeholder in the access log:
 
 ```yaml
-plugin_metadata:
-  # Keep all defaults and add "tenant"
-  ctx_log_denylist: [auth, pass, claim, payload, token, secret, credential, tenant]
+access_log_sensitive:
+  mode: replace
+  replace_with: "***"
 ```
 
 ### Enabling mTLS to Controller
 
 ```yaml
 gateway:
-  server_addr: "http://10.0.0.5:50051"  # scheme is automatically switched to https://
+  server_addr: "http://10.0.0.5:12151"  # scheme is automatically switched to https://
 
 conf_sync_security:
   tls:

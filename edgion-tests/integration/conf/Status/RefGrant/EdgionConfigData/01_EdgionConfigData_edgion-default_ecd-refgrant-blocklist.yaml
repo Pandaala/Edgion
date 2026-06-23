@@ -1,0 +1,17 @@
+# IpList EdgionConfigData in edgion-default — used as the cross-namespace reference target.
+# visibility defaults to Namespace, so cross-ns refs require a matching ReferenceGrant.
+# Contains the loopback range (127.0.0.0/8) so the test client's TCP peer (127.0.0.1)
+# is covered when the ref resolves.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ecd-refgrant-blocklist
+  namespace: edgion-default
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: loopback
+          cidrs:
+            - "127.0.0.0/8"

@@ -1,0 +1,116 @@
+# Scenario 7: presence-required-degrade
+# ---------------------------------------------------------------------------
+# A required origin header (X-Auth) with presence: required AND
+# allowDegradation: true. presence and allowDegradation are orthogonal:
+#   - presence: required  -> missing X-Auth counts as a webhook call FAILURE
+#   - allowDegradation: true -> that failure does NOT abort the chain; the
+#     gateway skips the webhook result and continues (degraded mode, not 5xx).
+# Test sends a request WITHOUT X-Auth -> webhook fails -> gateway continues;
+# the CtxSet var falls back to its `default`. PluginLog records the failure.
+# Backend via Service + EndpointSlice.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh7-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: wh7-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: wh7-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh7-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh7-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+      headers:
+        origin:
+          - name: X-Auth
+            presence: required
+    timeoutMs: 5000
+    successStatusCodes: [200]
+    allowDegradation: true
+    statusOnError: 503
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh7-ctx-set
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: wh7_user_id
+            from:
+              type: webhook
+              webhookRef: "edgion-default/wh7-resolver"
+              extract:
+                source: body
+                path: "data.user_id"
+            default: "degraded-fallback"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh7-route
+  namespace: edgion-default
+  annotations:
+    edgion.io/log-ctx-keys: "wh7_user_id"
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh7.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh7
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh7-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

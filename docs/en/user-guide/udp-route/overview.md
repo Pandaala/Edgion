@@ -9,10 +9,10 @@ apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: UDPRoute
 metadata:
   name: udp-route
-  namespace: default
+  namespace: production
 spec:
   parentRefs:             # Which Gateway to bind to
-    - name: my-gateway
+    - name: main-gateway
       sectionName: udp
   rules:                  # List of routing rules
     - backendRefs:        # Backend services
@@ -112,6 +112,10 @@ spec:
 
 1. UDP is connectionless; retry and session semantics differ from TCP/HTTP.
 2. Reliability compensation should be handled at the backend application layer.
+3. Once a client session is established, its upstream is pinned for the session's
+   lifetime: route or backend changes apply only to new sessions. Existing sessions
+   keep forwarding to their original upstream until they expire after 60 s of
+   inactivity, at which point the next packet re-runs route matching.
 
 ## Sub-document Navigation
 

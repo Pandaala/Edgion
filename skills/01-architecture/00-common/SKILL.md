@@ -1,11 +1,11 @@
 ---
 name: common-conventions
-description: Conventions shared by all four binaries (edgion-controller, edgion-gateway, edgion-cli, edgion-center) — project overview, command line / directory / config-path conventions, Core layering conventions, resource system.
+description: Conventions shared by the in-repo binaries (edgion-controller, edgion-gateway, edgion-cli) — project overview, command line / directory / config-path conventions, Core layering conventions, resource system.
 ---
 
 # 00 Common conventions
 
-> This directory describes the foundational conventions shared by the four binaries. It is recommended to read this first before reading the architecture documentation for any specific binary.
+> This directory describes the foundational conventions shared by the in-repo binaries. It is recommended to read this first before reading the architecture documentation for any specific binary.
 
 ## File index
 

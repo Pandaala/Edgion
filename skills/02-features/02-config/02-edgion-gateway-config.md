@@ -9,7 +9,7 @@ description: EdgionGatewayConfig CRD schema: GatewayClass-level runtime configur
 
 ## When to Change This Layer
 
-Change here, instead of the Gateway TOML, when:
+Change here, instead of the Gateway YAML, when:
 
 - A specific GatewayClass needs its own server / timeout / security defaults
 - You want to configure global plugin references
@@ -20,8 +20,8 @@ Entry relationship: `GatewayClass.spec.parametersRef` -> `EdgionGatewayConfig`
 
 ## Files to Reference
 
-- Example file: `examples/test/conf/base/EdgionGatewayConfig.yaml`
-- Code definition: `src/types/resources/edgion_gateway_config.rs`
+- Example file: `edgion-tests/integration/conf/base/EdgionGatewayConfig.yaml`
+- Code definition: `edgion-resources/src/resources/edgion_gateway_config.rs`
 
 ## How to Associate
 
@@ -70,6 +70,12 @@ spec:
 
   # ─── Max retries ───
   maxRetries: 3                             # uint32, max upstream connection retries
+
+  # ─── Load balancing ───
+  loadBalancing:
+    panicThreshold: 0                       # uint8 0-100; default 0 (disabled). When the healthy-backend fraction
+                                            # drops below this percent, ignore health filtering and route across all
+                                            # backends. 0 = disabled. Per-Service annotation overrides this value.
 
   # ─── Real IP extraction ───
   realIp:
@@ -142,6 +148,14 @@ spec:
 | `defaultRequestTimeout` | `Duration` | `60s` | Total request timeout (including retries) |
 | `defaultIdleTimeout` | `Duration` | `300s` | Connection pool idle timeout |
 
+### spec.loadBalancing
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `panicThreshold` | `u8` | `0` | Global panic threshold percent (0–100). When the fraction of healthy backends for a service (after health-check + circuit-breaker filtering) drops below this value, the gateway routes across all backends instead of returning 503. `0` disables panic mode. The per-Service `edgion.io/panic-threshold` annotation overrides this global default. Prometheus gauge `edgion_lb_panic_mode{service}` = 1 while panic mode is engaged. |
+
+> Default `0` matches Istio's Kubernetes default. Enable (e.g. `50`) only for services with larger backend pools (≈ ≥ 5 endpoints); see the annotation reference for the full rationale.
+
 ### spec.realIp
 
 | Field | Type | Default | Description |
@@ -182,7 +196,7 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 
 - **No `enabled` field** — path normalization is Edgion's default behavior and **cannot be disabled**.
 - **No per-Gateway / per-Listener override** — these two switches are global.
-- For the security guarantee scope see spec §1.4: [tasks/todo/uri-normalization.md](../../../tasks/todo/uri-normalization.md).
+- For the security guarantee scope see the URI normalization architecture doc: [../../01-architecture/02-gateway/uri-normalization/SKILL.md](../../01-architecture/02-gateway/uri-normalization/SKILL.md).
 
 ### spec.linkSys
 
@@ -202,9 +216,9 @@ globalPluginsRef:
 
 Global plugins are applied to all routes and execute before route-level plugins.
 
-## Differences from TOML Configuration
+## Differences from Gateway YAML Configuration
 
-| Configuration Item | TOML | EdgionGatewayConfig |
+| Configuration Item | Gateway YAML | EdgionGatewayConfig |
 |--------------------|------|---------------------|
 | Scope | A single process instance | The entire GatewayClass |
 | Change Method | Restart the process | Takes effect dynamically (CRD update) |
@@ -214,6 +228,6 @@ Global plugins are applied to all routes and execute before route-level plugins.
 
 Do not use `EdgionGatewayConfig` to solve these problems:
 
-- Which Controller the Gateway process connects to: that is `server_addr` in the Gateway TOML.
+- Which Controller the Gateway process connects to: that is `server_addr` in the Gateway YAML.
 - Gateway Admin / Metrics ports: that is the process startup layer.
-- Whether the Controller uses file_system or kubernetes: that is `conf_center` in the Controller TOML.
+- Whether the Controller uses file_system or kubernetes: that is `conf_center` in the Controller YAML.

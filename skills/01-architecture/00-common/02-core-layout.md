@@ -9,28 +9,34 @@ description: Core module layering conventions — top-level grouping, per-bin la
 
 ## Top-level grouping
 
-`src/core/` has only four top-level groups:
+The code is a Cargo workspace (resolver 2); each plane is its own crate (the old
+single-crate `src/core/` layout is gone):
 
 ```
-src/core/
-├── controller/   # Logic belonging to edgion-controller
-├── gateway/      # Logic belonging to edgion-gateway
-├── ctl/          # Logic belonging to edgion-cli
-└── common/       # Code shared across bins
+edgion-resources/    # Shared resource/config schema (leaf)
+edgion-common/       # Code shared across bins (depends on edgion-resources)
+edgion-gateway/      # Data plane + `edgion-gateway` binary
+edgion-controller/   # Control plane + `edgion-controller` binary
+edgion-cli/          # CLI lib + `edgion-cli` binary
+.  (root `edgion`)   # Thin umbrella — only hosts integration-test examples + cache_residue bin
 ```
 
 **Placement principles**:
-- Serves the control plane only → `controller/`
-- Serves the data plane only → `gateway/`
-- Serves only the CLI → `ctl/`
-- Depended on by at least two bins with no implicit runtime coupling → `common/`
+- Serves the control plane only → `edgion-controller/`
+- Serves the data plane only → `edgion-gateway/`
+- Serves only the CLI → `edgion-cli/`
+- Depended on by at least two bins with no implicit runtime coupling → `edgion-common/`
+- Pure resource/config schema (no runtime) → `edgion-resources/`
+
+The federation Center is a separate repository (EdgionCenter); only its shared
+`fed_sync` proto remains here, in `edgion-common/src/fed_sync/`.
 
 ## Gateway layout
 
 Organized by subsystem, not by technical primitive:
 
 ```
-src/core/gateway/
+edgion-gateway/src/
 ├── api/          # Admin / test API
 ├── backends/     # Backend discovery / health checks / BackendTLSPolicy
 │   ├── discovery/    # Endpoint / EndpointSlice / Service discovery
@@ -55,6 +61,7 @@ src/core/gateway/
 │   ├── providers/    # Redis / Etcd / ES / Webhook / LocalFile
 │   └── runtime/      # LinkSysStore + DataSender
 ├── observe/      # AccessLog / Metrics / SSL/TCP/TLS/UDP logs
+├── path_normalization/ # Request path normalization
 ├── plugins/      # Plugin system
 │   ├── http/         # 28 HTTP plugin implementations
 │   ├── stream/       # Stream plugins (IP restriction + TLS routing)
@@ -88,58 +95,75 @@ src/core/gateway/
 
 ## Controller layout
 
+The `api/` handlers are flat `.rs` files; `workqueue`, `processor_registry`, and `schema_validator`
+are also flat `.rs` files, not directories. The canonical, fully annotated tree lives in
+`../01-controller/00-overview.md`; this is the placement-oriented summary.
+
 ```
-src/core/controller/
-├── api/          # Admin API endpoints
-│   ├── cluster_handlers/      # Cluster-scoped resource CRUD
-│   ├── namespaced_handlers/   # Namespaced resource CRUD
-│   ├── configserver_handlers/ # ConfigServer endpoints (for ctl)
-│   └── common/                # Shared handler logic
+edgion-controller/src/
+├── api/          # Admin API endpoints (flat .rs files)
+│   ├── cluster_handlers.rs       # Cluster-scoped resource CRUD
+│   ├── namespaced_handlers.rs    # Namespaced resource CRUD
+│   ├── configserver_handlers.rs  # ConfigServer endpoints (for ctl)
+│   ├── region_route_handlers.rs  # RegionRoute endpoints
+│   ├── wipe_handlers.rs          # Wipe-all endpoints
+│   ├── debug_handlers.rs / diagnostics_handlers.rs # Debug / diagnostics
+│   ├── authz_classifier.rs / authz_middleware.rs / cli_token_middleware.rs # Authz
+│   └── common.rs                 # Shared handler logic
+├── authz/        # Authorization engine
 ├── cli/          # CLI entry and startup
 ├── conf_mgr/     # Configuration manager (core)
-│   ├── conf_center/           # Configuration source abstraction
-│   │   ├── file_system/       #   FileSystemCenter implementation
-│   │   └── kubernetes/        #   KubernetesCenter implementation
-│   ├── sync_runtime/          # Sync runtime
-│   │   ├── workqueue/         #   Work queue
-│   │   ├── resource_processor/#   Resource processing pipeline
-│   │   │   ├── handlers/      #     23 resource handlers
-│   │   │   ├── ref_grant/     #     Cross-namespace reference validation
-│   │   │   ├── secret_utils/  #     Secret dependency tracking
-│   │   │   └── configmap_utils/#    ConfigMap utilities
-│   │   ├── shutdown/          #   Graceful shutdown
-│   │   └── metrics/           #   Prometheus metrics
-│   ├── processor_registry/    # Global processor registry
-│   └── schema_validator/      # CRD Schema validation
+│   ├── manager.rs                # ConfMgr facade
+│   ├── processor_registry.rs     # Global processor registry
+│   ├── schema_validator.rs       # CRD Schema validation
+│   ├── conf_center/              # Configuration source abstraction
+│   │   ├── file_system/          #   FileSystemCenter implementation
+│   │   └── kubernetes/           #   KubernetesCenter implementation
+│   └── sync_runtime/             # Sync runtime
+│       ├── workqueue.rs          #   Work queue
+│       ├── metrics.rs            #   Prometheus metrics
+│       ├── shutdown.rs           #   Graceful shutdown
+│       └── resource_processor/   #   Resource processing pipeline
+│           ├── handlers/         #     20 resource handlers
+│           ├── ref_grant/        #     Cross-namespace reference validation
+│           ├── secret_utils/     #     Secret dependency tracking
+│           └── configmap_utils/  #     ConfigMap utilities
 ├── conf_sync/    # Config sync (gRPC server side)
-│   ├── conf_server/           # ConfigSyncServer + gRPC implementation
-│   └── cache_server/          # ServerCache + EventStore
+│   ├── conf_server/              # ConfigSyncServer + gRPC implementation
+│   └── cache_server/             # ServerCache + EventStore
+├── fed_sync/     # Federation sync toward Center
 ├── observe/      # Logging facade
 └── services/     # Controller-side services
-    └── acme/                  # ACME certificate automation
+    └── acme/                     # ACME certificate automation
 ```
 
 **Placement rules**:
 - K8s watch/list, parse/preparse, reference management, status writeback → `conf_mgr/`
 - Configuration distribution toward the Gateway → `conf_sync/`
 
+## Center layout
+
+The federation Center binary (edgion-center) and its tree have been extracted to the
+separate EdgionCenter repository. The Controller side still depends on the shared federation-sync proto in
+`edgion-common/src/fed_sync/`; cross-crate schema types live in `edgion-resources`.
+
 ## Common layout
 
 Deliberately kept small:
 
 ```
-src/core/common/
-├── auth/         # OIDC JWT authentication state (AuthMiddlewareState, JWKS cache)
-├── local_auth/   # Local HS256 JWT authentication (login, token issuance)
-├── unified_auth/ # Unified authentication middleware (OIDC + local sequential validation)
-├── api/          # Admin API route composition utilities (compose, auth-layer wrapping)
-├── jwt_common.rs # Common JWT/JWK utility functions (algorithm policy, JWK selection, error mapping)
-│                 #   ← both common and gateway depend on this module; gateway must not be reverse-depended on by common
-├── conf_sync/    # Shared proto / traits / sync types
+edgion-common/src/
+├── secret/       # Secret store
+├── conf_sync/    # Shared proto / traits / sync types + gRPC sync security config
+│   ├── config.rs     # ConfSyncConfig / ConfSyncSecurityConfig / ConfSyncTlsConfig
 │   ├── proto/        # protobuf definitions
 │   ├── traits/       # CacheEventDispatch + ConfHandler
 │   └── types/        # Sync-related types
+├── fed_sync/     # Shared federation-sync proto / types (Controller ↔ Center)
+├── observe/      # Shared observability helpers (logging facade)
 ├── config/       # Shared startup configuration
+├── startup.rs    # Common process startup helpers
+├── grpc_tls.rs   # Shared gRPC TLS setup
 ├── matcher/      # Shared matching algorithms
 │   ├── host_match/   # Domain matching (Hash + Radix)
 │   ├── ip_radix_tree/ # IP Radix tree
@@ -152,26 +176,32 @@ src/core/common/
     └── proxy_protocol/   # PROXY Protocol
 ```
 
-**Dependency direction constraints**:
-- `common` must not depend on `gateway`
-- `common` must not depend on `controller` (3 historical legacy exceptions remain to be cleaned up; see below)
-- `center` must not depend on `controller`
+**Dependency direction constraints** (now enforced by the crate boundary — a
+violation is a compile error, not just a convention):
+- `edgion-common` must not depend on `edgion-gateway` or `edgion-controller`.
+- There is **no** control→data edge: `edgion-controller` does not depend on
+  `edgion-gateway`. Plugin validation on resource ingest runs the schema-layer
+  `EdgionPlugins::validate_plugins` (in `edgion-resources`), not the gateway's
+  `plugins::http::compile_plugins`. The two share the same underlying checks; the
+  schema layer omits only the DSL deep checks (Rhai compile / VM init), which the
+  data plane still enforces fail-closed at runtime.
+- The config-center schema (`ConfCenterConfig`, `FileSystemConfig`,
+  `KubernetesConfig`, `MetadataFilterConfig`, `EtcdConfig`) lives in
+  `edgion-controller/src/config/conf_center/` (controller-only — the gateway never
+  reads it); the controller's `conf_mgr/conf_center/*/config.rs` modules re-export
+  it from there for their runtime use.
 
-Types shared across bins (such as RegionRoute Entry types) must live in `types/`, so each side depends on `types` rather than depending on each other. JWT/JWK utilities and other logic shared by both sides must live in `common/`, with gateway/center depending on it.
+Types shared across bins must live in `edgion-resources` (pure schema) or
+`edgion-common` (shared runtime infra), so each side depends on those rather than
+on each other.
 
-**Known historical legacy exceptions (`common → controller`, to be cleaned up later):**
-- `common/config/mod.rs` → `controller::conf_mgr::{ConfCenterConfig, FileSystemConfig}`
-- `common/utils/metadata_filter.rs` → `controller::conf_mgr::conf_center::MetadataFilterConfig`
-- `common/local_auth/secret.rs` → `controller::conf_mgr::conf_center::traits::{CenterApi, ConfWriterError}`
-
-When you encounter these three places do not mistake them for new violations; fixing them requires lifting the related configuration/traits up into `types/` or `common/`, which is a separate task.
-
-Do not move code into `common/` simply to avoid a cross-module import. Keep ownership clear by business domain.
+Do not move code into `edgion-common` simply to avoid a cross-crate import. Keep
+ownership clear by business domain.
 
 ## Types layout
 
 ```
-src/types/
+edgion-resources/src/
 ├── resource/         # Resource system infrastructure
 │   ├── kind/         #   ResourceKind enum
 │   ├── defs/         #   define_resources! macro declarations
@@ -204,11 +234,11 @@ Avoid reintroducing the following patterns:
 
 | Anti-pattern | Correct approach |
 |---------|---------|
-| Top-level `src/core/api`, `src/core/cli`, `src/core/conf_sync` | Place under the corresponding bin group |
+| Top-level `src/core/api`, `src/core/cli`, `src/core/conf_sync` | Place under the owning crate |
 | Flat gateway buckets such as `gateway/http_routes`, `gateway/health_check` | Organize by subsystem |
 | New compatibility shims that hide the real ownership | Place directly in the correct bin group |
-| Putting execution logic in `types/` | types only holds data definitions |
-| `common` or `center` importing internal `controller` modules | Lift shared types into `types/`, have each side depend on types |
+| Putting execution logic in `edgion-resources/` | resources only holds schema/data definitions and schema-layer validation |
+| Shared code importing internal `controller` modules | Lift shared types into `edgion-resources` or backend-agnostic helpers into `edgion-common` |
 | Calling kube-rs API directly inside the gateway | Sync from the Controller via ConfigClient |
 | Plugins accessing databases / external systems directly | Go through the client in LinkSysStore |
 

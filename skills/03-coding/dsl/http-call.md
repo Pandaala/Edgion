@@ -8,23 +8,29 @@
 
 | File | Role |
 |------|------|
-| `src/core/gateway/plugins/http/dsl/lang/builtins.rs` | `call_builtin_http` + SSRF helpers |
-| `src/core/gateway/plugins/http/dsl/runtime.rs` | `DslRuntime` struct + global `DSL_HTTP_CLIENT` |
-| `src/core/gateway/plugins/http/dsl/config.rs` | Config fields: `http_max_timeout_ms`, `http_max_response_body_bytes`, `http_block_private_ips` |
-| `src/core/gateway/plugins/http/dsl/lang/bytecode.rs` | `OpCode::MakeMap(u16)`, `OpCode::IndexGet` |
-| `src/core/gateway/plugins/http/dsl/lang/vm.rs` | `MakeMap` handler, `IndexGet` handler (Map + List), async `execute` / `execute_safe` |
-| `src/core/gateway/plugins/http/dsl/lang/compiler/expr.rs` | `ExprKind::Index` → `OpCode::IndexGet` |
-| `src/core/gateway/plugins/http/dsl/tests/http_call_tests.rs` | Unit + integration tests |
+| `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `call_builtin_http` + SSRF helpers |
+| `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `DslRuntime` struct + global `DSL_HTTP_CLIENT` |
+| `edgion-gateway/src/plugins/http/dsl/config.rs` | Config fields: `http_max_timeout_ms`, `http_max_response_body_bytes`, `http_block_private_ips` |
+| `edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs` | `OpCode::MakeMap(u16)`, `OpCode::IndexGet` |
+| `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `MakeMap` handler, `IndexGet` handler (Map + List), async `execute` / `execute_safe` |
+| `edgion-gateway/src/plugins/http/dsl/lang/compiler/expr.rs` | `ExprKind::Index` → `OpCode::IndexGet` |
+| `edgion-gateway/src/plugins/http/dsl/tests/http_call_tests.rs` | Unit + integration tests |
 
 ## Return value shape
 
 ```
 Map {
   "status":  Int   // HTTP status code, or 0 on failure
-  "body":    Str   // Response body (truncated at httpMaxResponseBodyBytes)
+  "body":    Str   // Response body (truncated at min(httpMaxResponseBodyBytes, max_string_len))
   "headers": Map   // Lowercase header name → last value for that name
 }
 ```
+
+The body is first streaming-capped at `max_response_body_bytes`, then silently truncated to
+`max_string_len` (UTF-8 boundary aware) before being wrapped in `Value::Str`, so the effective
+cap is `min(httpMaxResponseBodyBytes, max_string_len)` (default `min(1 MiB, 8 KiB)` = 8 KiB).
+Why truncation rather than raising `StringTooLong` →
+[http-call body cap](../../04-review/dsl-builtins/http-call-body-truncate-to-max-string-len.md).
 
 ## DslRuntime fields
 
@@ -91,7 +97,7 @@ spec:
 
 ## Adding new tests
 
-Integration test config: `examples/test/conf/EdgionPlugins/Dsl/24_EdgionPlugins_dsl-http-call.yaml`
-Test client: `examples/code/client/suites/edgion_plugins/dsl/dsl.rs` — see `test_http_call_success` (scenario 24).
+Integration test config: `edgion-tests/integration/conf/EdgionPlugins/Dsl/24_EdgionPlugins_dsl-http-call.yaml`
+Test client: `edgion-tests/src/client/suites/edgion_plugins/dsl/dsl.rs` — see `test_http_call_success` (scenario 24).
 
 Use `resp.set_header()` in DSL test scripts when you need to assert on the result from the test client — `req.set_header()` only reaches the backend echo, not the test client response.

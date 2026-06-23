@@ -4,16 +4,16 @@ Use this file when the task is about real Kubernetes object annotations under `m
 
 ## Verify In Code
 
-- `src/types/constants/annotations.rs`
-- `src/core/gateway/runtime/server/listener_builder.rs`
-- `src/core/gateway/runtime/store/listener_gateway_info.rs`
-- `src/core/gateway/routes/tcp/conf_handler_impl.rs`
-- `src/core/gateway/routes/tls/conf_handler_impl.rs`
-- `src/types/resources/http_route_preparse.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/grpc_route.rs`
-- `src/core/gateway/backends/health/check/annotation.rs`
-- `src/types/resources/edgion_tls.rs`
+- `edgion-resources/src/constants/annotations.rs`
+- `edgion-gateway/src/runtime/server/listener_builder.rs`
+- `edgion-gateway/src/runtime/store/listener_gateway_info.rs`
+- `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`
+- `edgion-gateway/src/routes/tls/conf_handler_impl.rs`
+- `edgion-resources/src/resources/http_route_preparse.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/grpc_route.rs`
+- `edgion-gateway/src/backends/health/check/annotation.rs`
+- `edgion-resources/src/resources/edgion_tls.rs`
 
 ## Gateway `metadata.annotations`
 
@@ -26,7 +26,7 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 | `edgion.io/https-redirect-port` | integer string | `443` | Target port used when HTTP-to-HTTPS redirect is enabled. |
 | `edgion.io/metrics-test-key` | string | none | Test-only metrics correlation key. Consumed by Gateway runtime for integration metrics scenarios. |
 | `edgion.io/metrics-test-type` | `lb` / `retry` / `latency` | none | Test-only metrics mode selector. |
-| `edgion.io/edgion-stream-plugins` | `name` or `namespace/name` | none | Enables Gateway-level connection filtering before HTTP parsing or TLS handshake. Current verified runtime path is in `listener_builder.rs`. |
+| `edgion.io/edgion-stream-plugins` | `name` or `namespace/name` | none | Enables Gateway-level connection filtering before HTTP parsing or TLS handshake. Short names are expanded with the Gateway's namespace. Current verified runtime path is in `listener_builder.rs`. |
 | `edgion.io/require-sni-host-match` | `"true"` / `"false"` | inherits `EdgionGatewayConfig.spec.requireSniHostMatch` | When `true`, on HTTPS listeners the SNI must match the request `Host` header (otherwise the request is rejected). Read in `listener_gateway_info.rs`; falls back to the cluster-wide `EdgionGatewayConfig` setting when absent. |
 
 Important:
@@ -39,11 +39,23 @@ Important:
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
 | `edgion.io/hostname-resolution` | controller-generated string | system-managed | Diagnostic annotation describing effective hostname resolution. The controller writes it during parse. Do not hand-author it. |
+| `edgion.io/retry-non-idempotent` | `"true"` / `"false"` | `false` (safe) | Opt-in to retrying non-idempotent methods on the reused-connection retry path. Applies to all rules under this HTTPRoute/GRPCRoute. |
 
 Notes:
 
 - Retry configuration uses the standard Gateway API `spec.rules[*].retry` field (see HTTPRoute/GRPCRoute resource docs). Runtime precedence: `rule.retry.attempts > EdgionGatewayConfig.spec.maxRetries`.
 - `edgion.io/hostname-resolution` is currently injected on `HTTPRoute` and `GRPCRoute`.
+
+### `edgion.io/retry-non-idempotent`
+
+- **Granularity**: HTTPRoute / GRPCRoute (applied to all rules under the route).
+- **Valid values**:
+  - `"true"` — allow the reused-connection retry to replay a non-idempotent request body (restores the pre-guard behavior).
+  - `"false"` / absent / any other value — keep the safe default.
+- **Default behavior (annotation absent)**: when a reused keepalive connection is reset mid-request, the buffered request body is replayed on a fresh connection only for idempotent methods (GET/HEAD/PUT/DELETE/OPTIONS/TRACE). Non-idempotent methods (POST/PATCH/CONNECT, and all gRPC since it is POST at the HTTP layer) are **not** retried there, to avoid a silent duplicate mutation.
+- **Scope**: only the reused-connection retry path (`error_while_proxy` Case 2). The connect-failure path (`fail_to_connect`) never wrote request bytes upstream and is always retried regardless of method. The status-code retry (`retry.codes`) and per-try-timeout paths are explicitly operator-configured and are unaffected by this guard.
+- **Why an annotation, not a CRD field**: the standard Gateway API `HTTPRouteRetry` CRD is a structural schema that prunes unknown fields, so a new `spec.rules[*].retry` field would be silently dropped by the API server.
+- **Idempotency definition**: uses `http::Method::is_idempotent()` (RFC 9110), matching nginx's default `proxy_next_upstream` exclusion of non-idempotent methods.
 
 ### `edgion.io/forward-raw-path`
 
@@ -77,18 +89,21 @@ Notes:
             port: 8080
   ```
 
-## TCPRoute / TLSRoute `metadata.annotations`
+## TCPRoute / TLSRoute / UDPRoute `metadata.annotations`
 
 | Key | Resource | Value | Default | Effect |
 |-----|----------|-------|---------|--------|
-| `edgion.io/edgion-stream-plugins` | `TCPRoute`, `TLSRoute` | `name` or `namespace/name` | none | Resolves dynamic `EdgionStreamPlugins` lookup key. Short names are expanded with the route namespace. |
+| `edgion.io/edgion-stream-plugins` | `TCPRoute`, `TLSRoute`, `UDPRoute` | `name` or `namespace/name` | none | Resolves dynamic `EdgionStreamPlugins` lookup key. Short names are expanded with the route namespace. On `UDPRoute` only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based) runs — there is no TLS stage. |
 | `edgion.io/proxy-protocol` | `TLSRoute` | currently `"v2"` is recognized | disabled | Sends Proxy Protocol v2 to upstream. Other values are ignored. |
 | `edgion.io/max-connect-retries` | `TLSRoute` | unsigned integer string | `2` | Max upstream connect attempts. Values below `1` are normalized to `1`; values above `5` are capped to `5`. |
+| `edgion.io/tcp-keepalive-time` | `TCPRoute`, `TLSRoute` | positive integer string | disabled (absent) | Idle seconds before the first TCP keepalive probe on the upstream L4 connection. Presence (a valid positive integer) enables keepalive; absent disables it entirely (no probes sent). Clamped to 1–7200; out-of-range values are clamped with a warning at config-load time. Mitigates half-open connections after NAT/firewall drops (~15 min silent stall without keepalive). |
+| `edgion.io/tcp-keepalive-interval` | `TCPRoute`, `TLSRoute` | integer string | `75` (OS default) | Seconds between consecutive keepalive probes. Only applied when `tcp-keepalive-time` is also set. Clamped to 1–75; absent or invalid value falls back to `75`. |
+| `edgion.io/tcp-keepalive-probes` | `TCPRoute`, `TLSRoute` | integer string | `9` (OS default) | Number of consecutive failed probes before the connection is declared dead and closed. Only applied when `tcp-keepalive-time` is also set. Clamped to 1–20; absent or invalid value falls back to `9`. |
 
 Current implementation note:
 
-- I verified active annotation resolution paths for `Gateway`, `TCPRoute`, and `TLSRoute`.
-- `UDPRoute` has runtime fields for stream plugin state, but I did not find a matching annotation parser in the current Gateway conf handlers. Treat UDP annotation support as unverified until code lands.
+- Active annotation resolution paths verified for `Gateway`, `TCPRoute`, `TLSRoute`, and `UDPRoute`.
+- `UDPRoute` resolves the key in `GlobalUdpRouteManagers::initialize_route` and enforces it (fail-close) in `edgion_udp.rs::handle_client_packet`, mirroring the TCP path. The F-016 session fast-path returns first for established sessions, so the check runs once at session creation (a denied client never establishes a session) — like TCP's per-connection check. Only Stage-1 plugins apply (UDP has no TLS handshake).
 
 ## EdgionTls `metadata.annotations`
 
@@ -105,7 +120,7 @@ Not an `edgion.io/*` annotation, but a standard Kubernetes field that Edgion rea
 | `kubernetes.io/h2c` or `h2c` | Forces HTTP/2 cleartext to upstream (`set_http_version(2, 2)`) |
 | `kubernetes.io/ws`, `ws`, `kubernetes.io/wss`, `wss` | Forces HTTP/1.1 for WebSocket upgrade (`set_http_version(1, 1)`) |
 
-Verify in code: `src/core/gateway/backends/mod.rs` (`detect_backend_app_protocol`, `apply_backend_app_protocol`).
+Verify in code: `edgion-gateway/src/backends/mod.rs` (`detect_backend_app_protocol`, `apply_backend_app_protocol`).
 
 GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 
@@ -114,6 +129,9 @@ GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
 | `edgion.io/health-check` | YAML string | none | Configures active backend health checks (type: http/tcp/grpc). For gRPC, supports `grpcServiceName` field. Parsed from object metadata and validated before use. |
+| `edgion.io/outlier-detection` | YAML string | none | Per-endpoint passive health check (Envoy-style outlier detection). Fields: `consecutiveErrors` (consecutive **application** 5xx — any >=500 except 502/503/504; default `5`), `consecutiveGatewayErrors` (consecutive **upstream-origin gateway** failures — backend returned 502/503/504; defaults to the parsed `consecutiveErrors`), `consecutiveLocalOriginFailures` (consecutive **local-origin** failures — connect failure/timeout, TLS-handshake timeout, transport reset, mid-proxy error; the data plane never got a usable HTTP response; defaults to the resolved `consecutiveGatewayErrors`), `ejectionSeconds` (base ejection time; default `30`), `maxEjectionSeconds` (cap on the backoff-scaled ejection time = `ejectionSeconds × num_ejections`; default `max(300, ejectionSeconds)`), `maxEjectionPercent` (default `50`). The three failure counters are independent; any one reaching its threshold ejects the endpoint. Aligns with Envoy `splitExternalLocalOriginErrors`: connect/transport failures (local-origin) are split from backend-returned 5xx (gateway/application) so a backend doing graceful 503 overload-shedding is not ejected on the same threshold as a dead port. Limitation: app-origin 502/503/504 are counted as gateway failures (the gateway sees only the status code) — raise `consecutiveGatewayErrors` if your app emits them. No-op for UDPRoute. Metrics: `edgion_circuit_breaker_ejected_endpoints` gauge + `edgion_circuit_breaker_ejections_total` counter (labelled `class` = `gateway`/`application`/`local_origin`) + `cb_recovery`/`cb_rejection`. Verify in code: `edgion-gateway/src/backends/circuit_breaker/config.rs`. |
+| `edgion.io/circuit-breaker` | YAML string | none | **Deprecated alias** for `edgion.io/outlier-detection` (logs a one-time deprecation warning per service; still fully functional). Despite the name this is passive health check / outlier detection, **not** an upstream circuit breaker. Prefer the canonical key. |
+| `edgion.io/panic-threshold` | integer string `0`–`100` | `0` (disabled) | Panic threshold percent. When the fraction of healthy backends (after health-check and circuit-breaker filtering) drops below this value, the gateway ignores health filtering and routes across **all** backends instead of returning 503. `0` disables panic mode. Values outside `0`–`100` are rejected. Overrides `EdgionGatewayConfig.spec.loadBalancing.panicThreshold` for this Service. |
 
 Notes:
 

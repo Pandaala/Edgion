@@ -1,0 +1,13 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: fault-abort-empty
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - enable: true
+    type: FaultInjection
+    config:
+      abort:
+        ratio: 1.0
+        statusCode: 204

@@ -4,7 +4,7 @@
 
 ## 1. What is ConfHandler
 
-`ConfHandler<T>` is the standard interface used by the **Gateway data plane** to receive and process configuration changes (defined in `src/core/common/conf_sync/traits.rs`).
+`ConfHandler<T>` is the standard interface used by the **Gateway data plane** to receive and process configuration changes (defined in `edgion-common/src/conf_sync/traits.rs`).
 
 ```
 Controller → gRPC Watch/List → ClientCache → ConfHandler<T>.full_set / partial_update
@@ -83,7 +83,7 @@ Reference implementation: HTTPRoute's `build_affected_hostnames` + per-hostname 
 | AcmeConfHandler | EdgionAcme | `services/acme/conf_handler_impl.rs` |
 | LinkSysStore | LinkSys | `link_sys/runtime/conf_handler.rs` |
 
-> All paths are relative to `src/core/gateway/`.
+> All paths are relative to `edgion-gateway/src/`.
 
 ## 7. Best practices for incremental updates of engine resources
 
@@ -147,6 +147,6 @@ partial_update:
 | BackendTLSPolicy | B | ArcSwap clone-modify-swap |
 | LinkSys | B | ArcSwap clone-modify-swap |
 | EdgionAcme | B | Incremental challenge store |
-| Gateway | B | Incremental GatewayConfigStore; full TLS matcher rebuild (with short-circuit optimization) |
+| Gateway | B | Incremental updates to GatewayStore + ListenerGatewayInfoStore; full TLS matcher rebuild (with short-circuit optimization) |
 | GatewayClass | C | Linear Vec scan, acceptable due to very small count |
 | EdgionGatewayConfig | C | Same as GatewayClass |

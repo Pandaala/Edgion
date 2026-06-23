@@ -1,6 +1,6 @@
 # Key Auth Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > KeyAuth is an API Key authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 
@@ -23,7 +23,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: api-keys
-  namespace: default
+  namespace: production
 type: Opaque
 stringData:
   keys.yaml: |
@@ -40,10 +40,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: key-auth-plugin
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: KeyAuth
       config:
         keySources:
@@ -59,31 +58,31 @@ spec:
 
 ## Configuration Reference
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `keySources` | Array | No | `[{type:"header",name:"apikey"}, {type:"query",name:"apikey"}]` | Key source list |
-| `hideCredentials` | Boolean | No | `false` | Remove API Key from request after validation |
-| `authFailureDelayMs` | Integer | No | `0` | Delay response on auth failure (brute force protection) |
-| `anonymous` | String | No | none | Anonymous username; unauthenticated requests pass through |
-| `realm` | String | No | `"API Gateway"` | Authentication realm name |
-| `keyField` | String | No | `"key"` | Field name storing the key value in Secret |
-| `secretGroups` | Array | No | none | Named groups of Kubernetes Secret references (see below) |
-| `upstreamHeaderFields` | Array | No | `[]` | Extra headers to forward upstream (from key metadata) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `keySources` | Array\<Object\> | `[{type:"header",name:"apikey"}, {type:"query",name:"apikey"}]` | Key source list (see sub-table) |
+| `hideCredentials` | Boolean | `false` | Remove API Key from request after validation |
+| `authFailureDelayMs` | Integer | `0` | Delay response on auth failure (brute force protection) |
+| `anonymous` | String | none | Anonymous username; unauthenticated requests pass through |
+| `realm` | String | `"API Gateway"` | Authentication realm name |
+| `keyField` | String | `"key"` | Field name storing the key value in Secret |
+| `secretGroups` | Array\<Object\> | none | Named groups of Kubernetes Secret references (see sub-table) |
+| `upstreamHeaderFields` | Array\<String\> | `[]` | Extra headers to forward upstream (from key metadata) |
 
 ### KeySource Sub-fields
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `type` | String | Yes | Source type: `header` / `query` / `cookie` / `ctx` |
-| `name` | String | Yes | Source name (header name, query param name, etc.) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | String | **Required** | Source type: `header` / `query` / `cookie` / `ctx` |
+| `name` | String | **Required** | Source name (header name, query param name, etc.) |
 
 ### KeyAuthSecretGroup Sub-fields
 
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `name` | String | Yes | Group name. Charset: `^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, max 63 chars. Surfaces in PluginLog as `group=<name>`. |
-| `description` | String | No | Human-readable description (not used by runtime) |
-| `secretRefs` | Array | Yes | Secret references for this group; must be non-empty |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | String | **Required** | Group name. Charset: `^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, max 63 chars. Surfaces in PluginLog as `group=<name>` |
+| `description` | String | none | Human-readable description (not used by runtime) |
+| `secretRefs` | Array\<Object\> | **Required** | Secret references for this group; must be non-empty |
 
 ---
 
@@ -93,7 +92,6 @@ spec:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: KeyAuth
     config:
       keySources:
@@ -115,7 +113,6 @@ curl -H "X-API-Key: my-secret-api-key-1" https://api.example.com/resource
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: KeyAuth
     config:
       keySources:
@@ -135,7 +132,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: KeyAuth
     config:
       keySources:
@@ -152,7 +148,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: KeyAuth
     config:
       keySources:
@@ -174,7 +169,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: KeyAuth
     config:
       keySources:
@@ -209,7 +203,7 @@ Failure branches (`Deny bad key`, `Deny no key`) and anonymous pass-through (`Al
 ## Behavior Details
 
 - Multiple `keySources` are checked in order; the first non-empty value is used for authentication
-- With `hideCredentials: true`, the source used for authentication is removed from the request
+- With `hideCredentials: true`, the source used for authentication is removed from the request before it is forwarded upstream. This covers the `header`, `query`, and `cookie` sources (for `query`, the matched parameter is stripped from the request URI; for `cookie`, the matched cookie is removed from the `Cookie` header). The `webhook` source is resolved server-side and never travels in the forwarded request, so nothing is stripped for it.
 - In `anonymous` mode, requests without a key still pass through with `X-Anonymous-Consumer: true`
 - Keys are stored in the `keys.yaml` field of Kubernetes Secrets as a YAML array
 - When the same raw key appears in multiple groups, the first group wins; a warning is logged with both group names
@@ -245,7 +239,7 @@ metadata:
   name: protected-api
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -269,7 +263,6 @@ metadata:
   name: key-auth-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: KeyAuth
       config:
         keySources:

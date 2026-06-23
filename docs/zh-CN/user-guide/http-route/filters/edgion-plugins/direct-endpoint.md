@@ -19,7 +19,6 @@ metadata:
   name: direct-endpoint-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: DirectEndpoint
       config:
         from:
@@ -120,14 +119,20 @@ kubectl get endpoints <service-name> -o yaml
 
 ### 问题 2：返回 400 错误
 
-**原因**：`onInvalid` 设置为 `Reject` 且提供的值格式无效。
+**原因**：请求中缺少来源值（endpoint 值），且 `onMissing` 设置为 `Reject`。
 
-**解决方案**：确保提供的是合法的 IP 地址格式。
+**解决方案**：提供配置的来源（Header/Query/Cookie/Ctx），或将 `onMissing` 设为 `fallback`，以便在值缺失时回退到正常负载均衡。
+
+### 问题 3：返回 403 错误
+
+**原因**：解析出的端点不属于路由任何 `backendRefs` 的后端，且 `onInvalid` 为 `Reject`（默认值）。
+
+**解决方案**：确认该端点 IP 属于某个后端 Service 的 Endpoint，或将 `onInvalid` 设为 `fallback`。
 
 ---
 
 ## 相关文档
 
 - [Dynamic Upstream](./dynamic-upstream.md)
-- [负载均衡算法](../../lb-algorithms.md)
 - [后端配置](../../backends/README.md)
+- [过滤器总览](../overview.md)

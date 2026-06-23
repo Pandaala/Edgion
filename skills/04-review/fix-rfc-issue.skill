@@ -92,7 +92,7 @@ Load, in order, only what applies to the finding's area:
    - `ws` findings → `skills/01-architecture/02-gateway/03-routes/SKILL.md` (WS is a transparent tunnel; document this)
    - `tls` findings → `skills/01-architecture/02-gateway/04-tls/SKILL.md`
    - `cookie-auth` findings → `skills/04-review/local-auth/`, `skills/04-review/oidc/`, `skills/04-review/cors/`, `skills/04-review/auth-timing/`, `skills/04-review/forward-auth/` as applicable
-   - `admin-rest` findings → `skills/01-architecture/01-controller/SKILL.md`, `skills/01-architecture/06-center/SKILL.md`
+   - `admin-rest` findings → `skills/01-architecture/01-controller/SKILL.md`
 7. **Source code at the cited `file:line`** — never proceed past Step 1 without confirming the cited code still says what the finding claims it says (the rfc-review batch was produced at a snapshot; code may have moved)
 
 ### P3 — Identify the finding's Type
@@ -113,7 +113,7 @@ Check the finding against:
 - The sealed sonnet verifier's conclusion in `_raw/verification-<area>.md` — was it CONFIRM, UNCERTAIN, or REFUTE? REFUTE means stop now and close as ❌.
 - Existing `skills/04-review/` entries — is there an explicit accepted-tradeoff for this exact pattern?
 - `skills/08-kubernetes/01-gateway-api/01-not-implemented.md` — is the "violation" actually a documented Gateway API non-implementation that the project signed off on?
-- `CLOSED-FINDINGS.md` — has an analogous P-finding been closed under the related review-* skill (the existing 04-review CLOSED log uses P-IDs like `P3-g3-016`)?
+- `grep -rl '<keyword>' skills/04-review/` — has an analogous finding already been closed? Each closed finding is one independent file under its topic directory (there is no central CLOSED log); `grep` / `ls` over the topic dirs is the source of truth.
 - Current source code state — the file may already be fixed by another stream of work; RFC review was a point-in-time snapshot.
 
 **Present to the user (mandatory pause before proceeding):**
@@ -300,11 +300,11 @@ Ask: does the fix change user-visible behavior, a configuration field, a default
 
 This is **especially important for RFC findings** because the project will get re-reviewed in future sweeps; without a skills entry, the same finding gets re-flagged.
 
-- ✅ fixes where the code now matches RFC: add an entry under the relevant `skills/04-review/<topic>/` (or create one) explaining what was fixed and what re-reports to reject.
+- ✅ fixes where the code now matches RFC: create ONE independent per-finding file under `skills/04-review/<topic>/<finding-id>-<slug>.md` explaining what was fixed and what re-reports to reject.
 - ⚠️ accepted tradeoffs: **mandatory** create `skills/04-review/rfc-divergence/<finding-id>-<short-slug>.md` (flat directory; finding ID already encodes the area) — see template in 4c below.
 - 📝 doc-comment-only: if the doc-comment encodes a deliberate divergence, also add the skills entry (4c).
 - Check `skills/SKILL.md` "Key constraints" table; if the fix touches a listed constraint, update the table entry.
-- Update `CLOSED-FINDINGS.md` with the row: finding ID, fix date, topic, summary, linked rule.
+- **One finding = one new file. Do NOT append to any shared / aggregate file** — there is no central CLOSED log and no SKILL.md index to update. Discovery is by `ls` / `grep` over the topic directories (the same "ls is the source of truth" rule the RFC review queue already uses). This is what keeps parallel runs conflict-free.
 
 ### 4c. RFC-divergence record (mandatory for ⚠️ and for 🟡 mitigation fixes)
 
@@ -352,15 +352,15 @@ Suggestions of the form "<rejected suggestion>" are **not accepted**.
 ## Reference
 
 - Verifier: `tasks/todo/rfc-review/_raw/verification-<area>.md → <ID>`
-- Closure: [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)
+- (this file IS the durable closure record — there is no central CLOSED log)
 - (optional) Gateway API test / Pingora upstream issue
 ```
 
-### 4d. Integration tests (`examples/test/`)
+### 4d. Integration tests (`edgion-tests/`)
 
 For RFC fixes that change observable behavior — STATUS code, header presence, error mapping, framing — a regression test is highly recommended.
 
-- Search `examples/test/` for related scenarios first.
+- Search `edgion-tests/` for related scenarios first.
 - If the fix changes a wire-observable property (`405 + Allow`, `WWW-Authenticate` on admin 401, percent-encoded `grpc-message`, etc.) add a scenario that asserts the new property; follow `skills/05-testing/01-integration-testing.md`.
 - For Type D doc-comment-only fixes: integration test is not needed.
 
@@ -402,7 +402,7 @@ Please:
 1. Read the changed files in full + the cited RFC §<sec> at datatracker.ietf.org.
 2. Check all callers / usages of modified symbols.
 3. Verify the fix actually addresses the cited RFC clause (does the new code satisfy the MUST/SHOULD?).
-4. **Gateway API regression sweep**: list any Gateway API conformance test under examples/test/ that touches the changed surface; assess whether the fix could flip its result. If unclear, name the test and recommend a manual run.
+4. **Gateway API regression sweep**: list any Gateway API conformance test under edgion-tests/ that touches the changed surface; assess whether the fix could flip its result. If unclear, name the test and recommend a manual run.
 5. **Project-constraint sweep**: confirm the fix does NOT (a) remove an operator-facing CRD field, (b) silently change a default, (c) add tracing::* on a data-plane hot path (refer to skills/03-coding/01-log-safety.md), (d) break a plugin trait or pub-export.
 6. Look for regressions, edge cases, or new bugs introduced by the fix.
 
@@ -436,7 +436,7 @@ Run in sequence:
 
 1. `cargo check --all-targets` — must pass.
 2. `cargo clippy --all-targets` — must pass with no new warnings.
-3. `make check-agent-docs` — must pass (this enforces English-only + skills consistency, which RFC fixes touching `skills/` may break).
+3. `python3 cicd/checks/validate_agent_docs.py` — must pass (this enforces English-only + skills consistency, which RFC fixes touching `skills/` may break).
 
 If all pass:
 - Verify Step 4e was actually executed (the finding file is gone, INDEX.md is updated).
@@ -471,7 +471,7 @@ When tempted to skip a step, check this table first:
 | "Pingora limitation note in the code is probably stale" | Verify against current pingora-core source / upstream issues before working around. Re-creating worked-around bugs is the #1 RFC-fix regression source. |
 | "Suggested fix in the finding file is obviously right" | The discovery agent was sonnet at finding-time; it didn't run Step 1.5. Treat it as input, not decision. |
 | "Step 5 review is overkill for a doc-comment-only change" | Doc-comment fixes can encode wrong divergence rationale, mis-cite RFCs, or leak into auto-generated API docs. Mandatory, no exceptions. |
-| "cargo check passed, clippy is probably fine" | Step 6 requires both + `make check-agent-docs` (English-only + skills consistency). All three. |
+| "cargo check passed, clippy is probably fine" | Step 6 requires both + `python3 cicd/checks/validate_agent_docs.py` (English-only + skills consistency). All three. |
 | "User said 'fix this finding' once, I can skip future confirmation prompts on similar findings" | Approval is per-gate per-finding. Each Step 1 / 1.5 / 2 panel needs its own confirmation. |
 
 If your reasoning matches any row: **stop, return to the skipped gate, run it properly.**

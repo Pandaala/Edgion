@@ -1,0 +1,18 @@
+# Selector EdgionConfigData for L4 enforcement tests
+#
+# This is the Selector resource referenced by the EdgionStreamPlugins via `activeProfileRef`.
+# The complete plugin config (with both profiles) lives inline in 02_EdgionStreamPlugins.yaml;
+# this Selector only chooses which of those git-owned profiles is active.
+#
+# Initial state: active=allow-local (loopback allowed)
+# Tests re-apply this selector to switch the active profile between the inline profiles.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gcir-enforce-test
+  namespace: edgion-test
+spec:
+  data:
+    type: Selector
+    config:
+      active: allow-local

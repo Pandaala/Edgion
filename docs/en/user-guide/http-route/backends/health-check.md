@@ -1,6 +1,6 @@
 # Backend Active Health Check
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 >
 > This feature enables active probing for backends via the `edgion.io/health-check` Annotation, and is an Edgion extension capability.
 
@@ -18,7 +18,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: my-backend
-  namespace: default
+  namespace: production
   annotations:
     edgion.io/health-check: |
       active:
@@ -40,7 +40,7 @@ spec:
 
 | Annotation | Applicable Resources | Type | Default | Description |
 |------------|---------------------|------|---------|-------------|
-| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | YAML string | None | Configure active health check parameters |
+| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | YAML string | none | Configure active health check parameters |
 
 Example value:
 
@@ -58,24 +58,24 @@ active:
 
 YAML structure of `edgion.io/health-check`:
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `active` | object | No | None | Active probe configuration; health check is disabled if not configured |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `active` | Object | none | Active probe configuration; health check is disabled if not configured |
 
 `active` sub-fields:
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `type` | `http` \| `tcp` \| `grpc` | No | `http` | Probe type |
-| `path` | string | No | `/` | HTTP probe path (only effective for `http`) |
-| `port` | uint16 | No | Uses backend port | Probe port override |
-| `interval` | duration string | No | `10s` | Probe interval |
-| `timeout` | duration string | No | `3s` | Single probe timeout |
-| `healthyThreshold` | uint32 | No | `2` | Number of consecutive successes to recover healthy status |
-| `unhealthyThreshold` | uint32 | No | `3` | Number of consecutive failures to mark unhealthy |
-| `expectedStatuses` | `[]uint16` | No | `[200]` | Expected HTTP status codes (only effective for `http`) |
-| `host` | string | No | None | HTTP Host header override (only effective for `http`) |
-| `grpcServiceName` | string | No | `""` (whole server) | gRPC Health Check service name (only effective for `grpc`) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `type` | Enum | `http` | Probe type. Allowed values: `http` / `tcp` / `grpc` |
+| `path` | String | `/` | HTTP probe path (only effective for `http`) |
+| `port` | Integer | uses backend port | Probe port override |
+| `interval` | Duration | `10s` | Probe interval |
+| `timeout` | Duration | `3s` | Single probe timeout |
+| `healthyThreshold` | Integer | `2` | Number of consecutive successes to recover healthy status |
+| `unhealthyThreshold` | Integer | `3` | Number of consecutive failures to mark unhealthy |
+| `expectedStatuses` | Array\<Integer\> | `[200]` | Expected HTTP status codes (only effective for `http`) |
+| `host` | String | none | HTTP Host header override (only effective for `http`) |
+| `grpcServiceName` | String | `""` (whole server) | gRPC Health Check service name (only effective for `grpc`) |
 
 ## Behavior Details and Priority
 
@@ -136,7 +136,7 @@ apiVersion: v1
 kind: Endpoints
 metadata:
   name: legacy-backend
-  namespace: default
+  namespace: production
   annotations:
     edgion.io/health-check: |
       active:
@@ -189,11 +189,12 @@ metadata:
 
 ## Notes
 
-1. `expectedStatuses` only applies to `http` mode; `tcp` and `grpc` modes ignore this field.
-2. `path` must start with `/`, otherwise the configuration is considered invalid and ignored. Only applies to `http` mode.
+1. `expectedStatuses` only applies to `http` mode; `tcp` and `grpc` modes ignore this field. For `http`, the list must be non-empty and every entry must be a valid HTTP status code (100–599).
+2. `path` applies to `http` mode only and must not be empty; an empty `path` makes the whole configuration invalid, so it is ignored. Use a leading-slash path such as `/healthz`.
 3. `healthyThreshold` and `unhealthyThreshold` must be greater than or equal to `1`.
-4. Services without health check configuration are not probed and participate in load balancing as "healthy" by default.
-5. `grpcServiceName` only applies to `grpc` mode. An empty string (default) checks the overall server health.
+4. `interval` and `timeout` must parse to a non-zero duration (for example `10s`, `500ms`); otherwise the configuration is rejected.
+5. Services without health check configuration are not probed and participate in load balancing as "healthy" by default.
+6. `grpcServiceName` only applies to `grpc` mode. An empty string (default) checks the overall server health.
 
 ## Current Limitations
 

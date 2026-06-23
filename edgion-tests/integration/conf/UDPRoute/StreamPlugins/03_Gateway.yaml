@@ -1,0 +1,19 @@
+# Gateway for UDPRoute StreamPlugins testing.
+# 3 UDP listeners: allow-localhost filter, deny-all filter, missing-ESP fail-close.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: udp-stream-plugins-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: udp-allow-localhost
+      protocol: UDP
+      port: 31392
+    - name: udp-deny-all
+      protocol: UDP
+      port: 31393
+    - name: udp-fail-close
+      protocol: UDP
+      port: 31394

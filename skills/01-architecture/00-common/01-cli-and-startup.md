@@ -1,13 +1,13 @@
 ---
 name: cli-and-startup
-description: Command-line conventions, working-directory layout, config-file path conventions, log initialization, and signal handling shared by all four binaries.
+description: Command-line conventions, working-directory layout, config-file path conventions, log initialization, and signal handling shared by the in-repo binaries.
 ---
 
 # Unified command-line and configuration conventions
 
 ## Entry-point pattern
 
-All four binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work:
+All in-repo binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work:
 
 | bin | Entry logic |
 |-----|---------|
@@ -33,8 +33,8 @@ All four binaries follow the **thin entry point** pattern — `src/bin/*.rs` doe
 
 | Flag | Default | Description |
 |------|--------|------|
-| `--grpc-listen` | `0.0.0.0:50051` | gRPC listening address |
-| `--admin-listen` | `0.0.0.0:5800` | Admin API address |
+| `--grpc-listen` | `0.0.0.0:12151` | gRPC listening address |
+| `--admin-listen` | `127.0.0.1:12101` (loopback; set `0.0.0.0` + `allow_admin_ips` for cluster/remote access) | Admin API address |
 | `--conf-dir` | — | Configuration directory for FileSystem mode |
 
 ### Gateway-specific
@@ -76,8 +76,8 @@ All four binaries follow the **thin entry point** pattern — `src/bin/*.rs` doe
 
 ```yaml
 server:
-  grpc_listen: "0.0.0.0:50051"
-  admin_listen: "0.0.0.0:5800"
+  grpc_listen: "0.0.0.0:12151"
+  admin_listen: "127.0.0.1:12101"
 
 logging:
   log_dir: logs
@@ -88,7 +88,7 @@ logging:
 
 conf_center:
   type: file_system  # or kubernetes
-  conf_dir: examples/test/conf
+  conf_dir: edgion-tests/integration/conf
 
 conf_sync:
   default_capacity: 200
@@ -99,7 +99,7 @@ conf_sync:
 
 ```yaml
 gateway:
-  server_addr: "http://127.0.0.1:50051"
+  server_addr: "http://127.0.0.1:12151"
 
 logging:
   log_dir: logs
@@ -121,7 +121,7 @@ access_log:
 
 ## Working directory
 
-### WorkDir layout (`src/types/work_dir.rs`)
+### WorkDir layout (`edgion-resources/src/work_dir.rs`)
 
 ```
 work_dir/
@@ -147,7 +147,7 @@ wd.resolve("/var/log/app.log"); // Absolute path → unchanged
 
 ## Log initialization
 
-### Shared logging function (`src/core/gateway/observe/logs/sys_log.rs`)
+### Shared logging function (`edgion-common/src/observe/logs.rs`)
 
 Both Controller and Gateway call the same `init_logging()` function:
 
@@ -178,7 +178,7 @@ init_udp_logger(&config.udp_log);
 
 ### Controller — ShutdownHandle
 
-Location: `src/core/controller/conf_mgr/sync_runtime/shutdown.rs`
+Location: `edgion-controller/src/conf_mgr/sync_runtime/shutdown.rs`
 
 ```rust
 pub struct ShutdownHandle {
@@ -205,7 +205,7 @@ ctl is a synchronous CLI tool that exits as soon as the command finishes.
 
 | Global variable | Location | Purpose |
 |---------|------|------|
-| `CONTROLLER_CONFIG` | `src/core/common/config/mod.rs` | Controller global configuration (`OnceLock`) |
+| `CONTROLLER_CONFIG` | `edgion-controller/src/config/mod.rs` | Controller global configuration (`OnceLock`) |
 | `GATEWAY_INSTANCE_COUNT` | same as above | Gateway cluster instance count (`AtomicU32`, used for cluster-level rate limiting) |
 | `GLOBAL_TEST_MODE` | same as above | Test mode flag (enables metrics test features) |
 | `GLOBAL_INTEGRATION_TESTING_MODE` | same as above | Integration testing mode (enables AccessLog storage + metrics test data) |

@@ -7,7 +7,7 @@ description: Use when reviewing CORS plugin findings that propose splitting `get
 
 ## Conclusion
 
-`Cors::get_validated_origin` (in `src/core/gateway/plugins/http/cors/plugin.rs`)
+`Cors::get_validated_origin` (in `edgion-gateway/src/plugins/http/cors/plugin.rs`)
 keeps the allow/deny decision and now delegates the
 Access-Control-Allow-Origin value choice to a separate, independently
 unit-tested helper:

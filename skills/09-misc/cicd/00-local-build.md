@@ -38,9 +38,20 @@ cargo build --release
 # Common binaries
 cargo build --release --bin edgion-gateway --bin edgion-controller --bin edgion-cli
 
-# Common examples
-cargo build --release --example test_server --example test_client
+# Common test-harness binaries (live in the edgion-tests crate)
+cargo build --release -p edgion-tests --bin test_server --bin test_client
 ```
+
+> The three main binaries are in `default-members`, so the bare `--bin <name>`
+> form above resolves from the workspace root. The `edgion-tests` bins
+> (`test_server`, `test_client`, `cache_residue`, …) are **not** in
+> `default-members`, so they need an explicit `-p edgion-tests`.
+>
+> These `--release` commands are for **local** builds. Shipped images are built
+> with the `production` profile (LTO + `codegen-units = 1`), which optimizes
+> differently and lands in `target/<triple>/production/`. To reproduce the
+> shipped artifact, follow
+> [02-github-workflow.md → Reproduce the release binary builds](02-github-workflow.md#reproduce-the-release-binary-builds).
 
 ## Feature combinations
 
@@ -71,14 +82,14 @@ For more detailed feature semantics:
 | `cargo build` | `target/debug/` |
 | `cargo build --release` | `target/release/` |
 | `cargo build --target <triple> --release` | `target/<triple>/release/` |
-| `cargo build --example <name> --release` | `target/release/examples/` |
+| `cargo build -p edgion-tests --bin <name> --release` | `target/release/` |
 
 Common files:
 
 - `target/debug/edgion-gateway`
 - `target/release/edgion-controller`
 - `target/release/edgion-cli`
-- `target/release/examples/test_server`
+- `target/release/test_server`
 
 ## Cross-compilation
 
@@ -110,8 +121,8 @@ sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 
 Look at:
 
-- `docker/Dockerfile.builder`
-- `docker/Dockerfile`
+- `cicd/docker/Dockerfile.builder`
+- `cicd/docker/Dockerfile`
 - `.github/workflows/build-image.yml`
 
 These three are the project's actual ground truth for "the minimum set of build dependencies" and "how cross-compilation is done".

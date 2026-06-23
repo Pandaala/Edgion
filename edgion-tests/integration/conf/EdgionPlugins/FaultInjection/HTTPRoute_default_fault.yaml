@@ -1,0 +1,110 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: fault-injection-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "fault.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/fault/delay-fixed
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: fault-delay-fixed
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/fault/delay-range
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: fault-delay-range
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/fault/abort
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: fault-abort
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/fault/delay-and-abort
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: fault-delay-and-abort
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/fault/ratio-zero
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: fault-ratio-zero
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/fault/entry-conditions
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: fault-entry-conditions
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/fault/abort-empty
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: fault-abort-empty
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

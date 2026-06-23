@@ -1,6 +1,6 @@
 # HTTP Method Matching
 
-Route matching based on HTTP request methods.
+Method matching routes requests by their HTTP method.
 
 ## Configuration
 
@@ -10,6 +10,7 @@ matches:
 ```
 
 Supported methods:
+
 - `GET`
 - `POST`
 - `PUT`
@@ -17,19 +18,34 @@ Supported methods:
 - `PATCH`
 - `HEAD`
 - `OPTIONS`
+- `CONNECT`
+
+## Configuration reference
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `method` | Enum | none | HTTP method to match. Use uppercase method tokens |
+
+## How method conditions combine
+
+- A single match block holds at most one `method`. It is ANDed with `path`, `headers`, and `queryParams` in the same block.
+- To match several methods, list them as separate match blocks; multiple matches in a rule are ORed.
 
 ## Examples
 
-### Example 1: RESTful Routing
+### Example 1: Split reads and writes
+
+`GET /users` goes to the query service; `POST`, `PUT`, and `DELETE` to the command service. Each method is its own ORed match block:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: restful-routing
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     # GET /users -> query service
     - matches:
@@ -40,7 +56,7 @@ spec:
       backendRefs:
         - name: user-query-service
           port: 8080
-    # POST/PUT/DELETE /users -> write service
+    # POST/PUT/DELETE /users -> command service
     - matches:
         - path:
             type: PathPrefix
@@ -59,7 +75,9 @@ spec:
           port: 8080
 ```
 
-### Example 2: Read-Only Gateway
+### Example 2: Read-only gateway
+
+Only read-only methods pass through (three ORed match blocks):
 
 ```yaml
 rules:
@@ -68,13 +86,12 @@ rules:
       - method: HEAD
       - method: OPTIONS
     backendRefs:
-      - name: backend
+      - name: backend-service
         port: 8080
 ```
 
-Only allows read-only requests to pass through.
+## Related documents
 
-## Related Documentation
-
-- [Path Matching](./path.md)
-- [Header Matching](./headers.md)
+- [Path matching](./path.md)
+- [Header matching](./headers.md)
+- [Query parameter matching](./query-params.md)

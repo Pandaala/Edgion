@@ -37,7 +37,7 @@ Useful templates:
 
 - Route-like resources: `HTTPRoute`, `GRPCRoute`, `TLSRoute`
 - TLS / Secret dependent resources: `EdgionTls`, `EdgionAcme`
-- Plugin-like resources: `EdgionPlugins`, `EdgionStreamPlugins`, `PluginMetaData`
+- Plugin-like resources: `EdgionPlugins`, `EdgionStreamPlugins`, `EdgionConfigData`
 - Controller-only / no-sync resources: `ReferenceGrant`, `Secret`
 - Cluster-scoped base config resources: `GatewayClass`, `EdgionGatewayConfig`
 
@@ -62,9 +62,9 @@ Replace `EdgionAcme` with the closest analog for your new resource.
 
 Always update:
 
-- `src/types/resources/<resource>.rs` or `src/types/resources/<resource>/mod.rs`
-- `src/types/resources/mod.rs`
-- `src/types/mod.rs` only if you introduce a new export pattern beyond the normal `resources::*` flow
+- `edgion-resources/src/resources/<resource>.rs` or `edgion-resources/src/resources/<resource>/mod.rs`
+- `edgion-resources/src/resources/mod.rs`
+- `edgion-resources/src/lib.rs` only if you introduce a new export pattern beyond the normal `resources::*` flow
 
 Notes:
 
@@ -75,25 +75,25 @@ Notes:
 
 Always update:
 
-- `src/types/resource/kind.rs`
-- `src/types/resource/defs.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resource/kind.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 Notes:
 
 - `kind.rs` is still manual in this repo. Add the enum variant, `as_str()`, and `from_kind_name()` support.
 - `defs.rs` is the single source of truth for cache field names, capacities, aliases, and registry behavior.
 - `meta/impls.rs` is where `impl_resource_meta!` lives, including any `pre_parse` hook.
-- If the resource should stay controller-only by default, consider whether `DEFAULT_NO_SYNC_KINDS` in `src/types/resource/defs.rs` should include it.
+- If the resource should stay controller-only by default, consider whether `DEFAULT_NO_SYNC_KINDS` in `edgion-resources/src/resource/defs.rs` should include it.
 
 ### 3. Wire The Controller Side
 
 Usually update:
 
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
-- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What the handler usually owns:
 
@@ -118,7 +118,7 @@ Important rules:
 
 If the resource must be available on Gateway, update:
 
-- `src/core/gateway/conf_sync/conf_client/config_client.rs`
+- `edgion-gateway/src/conf_sync/conf_client/config_client.rs`
 
 Usually that means:
 
@@ -136,10 +136,10 @@ If the resource is controller-only, do not add Gateway cache wiring.
 
 If Gateway must turn the synced resource into runtime state, add or update a handler under the relevant subsystem, for example:
 
-- `src/core/gateway/routes/*/conf_handler_impl.rs`
-- `src/core/gateway/tls/store/conf_handler.rs`
-- `src/core/gateway/link_sys/runtime/conf_handler.rs`
-- `src/core/gateway/services/acme/conf_handler_impl.rs`
+- `edgion-gateway/src/routes/*/conf_handler_impl.rs`
+- `edgion-gateway/src/tls/store/conf_handler.rs`
+- `edgion-gateway/src/link_sys/runtime/conf_handler.rs`
+- `edgion-gateway/src/services/acme/conf_handler_impl.rs`
 
 If the resource is only stored and queried but has no runtime side effects, a dedicated `ConfHandler` may be unnecessary.
 
@@ -147,18 +147,18 @@ If the resource is only stored and queried but has no runtime side effects, a de
 
 Controller Admin API is explicit, not automatic. If the new resource should support create/update via controller admin endpoints, update:
 
-- namespaced resources: `src/core/controller/api/namespaced_handlers.rs`
-- cluster-scoped resources: `src/core/controller/api/cluster_handlers.rs`
+- namespaced resources: `edgion-controller/src/api/namespaced_handlers.rs`
+- cluster-scoped resources: `edgion-controller/src/api/cluster_handlers.rs`
 
 Gateway Admin API read endpoints are also explicit. If the new resource should be listed or fetched from Gateway admin endpoints, update:
 
-- `src/core/gateway/api/mod.rs`
+- `edgion-gateway/src/api/mod.rs`
 
 ### 7. Wire K8s Dynamic Storage If Needed
 
 If the resource should support CRUD in Kubernetes mode through the controller's dynamic writer, update:
 
-- `src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/storage.rs`
 
 This is especially important for custom Edgion CRDs and any new kind that the controller admin API should be able to create or update in K8s mode.
 
@@ -184,7 +184,7 @@ Make sure the Rust type definition and manifest agree on:
 At minimum, decide which of these you need:
 
 - Rust unit tests near the resource type or handler
-- integration tests under `examples/test/`
+- integration tests under `edgion-tests/`
 - controller / gateway admin API coverage if you exposed new endpoints
 
 For route-like or dependency-heavy resources, integration coverage is usually the real safety net.
@@ -205,13 +205,13 @@ Run the smallest checks that prove the new resource is really wired:
 ```bash
 cargo check
 cargo test
-./examples/test/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
 ```
 
 Also verify that your template resource and the new resource have comparable touchpoints:
 
 ```bash
-rg -n "ResourceKind::<YourKind>|<YourKind>|<your_resource>" src config/crd examples/test
+rg -n "ResourceKind::<YourKind>|<YourKind>|<your_resource>" src config/crd edgion-tests
 ```
 
 ## References

@@ -127,7 +127,7 @@ spec:
 ## Directory layout
 
 ```
-src/core/gateway/lb/
+edgion-gateway/src/lb/
 ├── mod.rs                    # module exports
 ├── backend_selector/         # general-purpose backend selector
 │   ├── selector.rs           # BackendSelector<T> implementation

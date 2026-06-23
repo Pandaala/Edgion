@@ -2,7 +2,7 @@
 
 本文档面向需要扩展 `EdgionPlugins` 的贡献者，解释 HTTP 插件在 Edgion 中的执行阶段、资源到运行时的接线方式，以及实现时最常漏掉的几段。
 
-> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/01-architecture/02-gateway/12-edgion-plugin-dev.md](../../../skills/01-architecture/02-gateway/12-edgion-plugin-dev.md)。
+> 面向 AI / Agent 的主 workflow 入口现在是 [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/12-edgion-plugin-dev.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/12-edgion-plugin-dev.md)。
 > 本文档保留给人看的背景说明、实现边界和人工审查清单。
 
 ## 这类插件解决什么问题
@@ -65,9 +65,9 @@ graph TD
 
 ### 资源与配置
 
-- `src/types/resources/edgion_plugins/`
-- `src/types/resources/edgion_plugins/plugin_configs/`
-- `src/types/resources/edgion_plugins/edgion_plugin.rs`
+- `edgion-resources/src/resources/edgion_plugins/`
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/`
+- `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`
 
 这里负责：
 
@@ -182,7 +182,7 @@ graph TD
 
 如果你是让 AI 来做，直接从 skill 入口开始更稳：
 
-- [../../../skills/01-architecture/02-gateway/12-edgion-plugin-dev.md](../../../skills/01-architecture/02-gateway/12-edgion-plugin-dev.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/12-edgion-plugin-dev.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/12-edgion-plugin-dev.md)
 
 ## 测试与验证
 

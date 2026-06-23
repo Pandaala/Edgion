@@ -35,11 +35,12 @@ pub struct AccessLogEntry<'a> {
     pub backend_context: Option<&'a BackendContext>,
     pub stage_logs: &'a [StageLogs],             // plugin execution logs
     pub conn_est: Option<bool>,                   // whether the upstream connection is established
-    pub ctx: &'a HashMap<String, String>,         // custom context variables
+    pub ctx: AllowlistedCtx<'a>,                  // ctx_map projection (deny-by-default opt-in)
 }
 ```
 
 - `RouteMatchInfo` is an `untagged` enum supporting both HTTP (`MatchInfo`) and gRPC (`GrpcMatchInfo`) match info.
+- `ctx` projects plugin context variables (`ctx_map`) into the log **deny-by-default**: only keys allow-listed on the matched route (`edgion.io/log-ctx-keys` / `edgion.io/log-keys` `type: ctx`) are emitted, and known-sensitive keys stay hard-blocked. See `skills/03-coding/observability/00-access-log.md`.
 - Built from EdgionHttpContext via `AccessLogEntry::from_context(ctx)`.
 - JSON serialization uses serde's `skip_serializing_if` to reduce output size.
 
@@ -83,7 +84,7 @@ Logging infrastructure:
 
 ### Exposed port
 
-Metrics are exposed on port `:5901` via Axum routes:
+Metrics are exposed on port `:12090` via Axum routes:
 - `GET /metrics` — Prometheus-format metrics.
 - `GET /health` — health-check endpoint.
 
@@ -95,8 +96,6 @@ Metrics are exposed on port `:5901` via Axum routes:
 |-------------|------|-------------|
 | `edgion_ctx_created_total` | Counter | Total contexts created |
 | `edgion_ctx_active` | Gauge | Currently active contexts |
-| `edgion_requests_total` | Counter | Total requests |
-| `edgion_requests_failed_total` | Counter | Total failed requests |
 | `edgion_access_log_dropped_total` | Counter | Number of dropped access logs |
 | `edgion_ssl_log_dropped_total` | Counter | Number of dropped SSL logs |
 | `edgion_tcp_log_dropped_total` | Counter | Number of dropped TCP logs |
@@ -107,6 +106,7 @@ Metrics are exposed on port `:5901` via Axum routes:
 | `edgion_status_update_skipped_total` | Counter | Skipped K8s status updates |
 | `edgion_config_reload_signals_total` | Counter | Configuration reload signals |
 | `edgion_config_relist_total` | Counter | Configuration relist count |
+| `edgion_config_event_parse_errors_total` | Counter | Watch-event JSON parse failures (label: `kind`); fires when `ClientCache::start_watch` cannot deserialize a `WatchResponse.data` batch or a per-event `T` payload — primary symptom of controller↔gateway schema drift |
 | `edgion_backend_requests_total` | Counter | Total backend requests (grouped by backend) |
 | `edgion_gateway_request_bytes_total` | Counter | Gateway request bytes |
 | `edgion_gateway_response_bytes_total` | Counter | Gateway response bytes |
@@ -151,7 +151,7 @@ pub struct AccessLogStore {
 ## Directory layout
 
 ```
-src/core/gateway/observe/
+edgion-gateway/src/observe/
 ├── mod.rs                    # module exports
 ├── access_log/               # access logs
 │   ├── entry.rs              # AccessLogEntry definition (zero-copy)
@@ -168,7 +168,7 @@ src/core/gateway/observe/
 │   ├── logger_factory.rs     # logger factory
 │   └── mod.rs
 └── metrics/                  # Prometheus metrics
-    ├── api.rs                # Axum HTTP endpoint (:5901)
+    ├── api.rs                # Axum HTTP endpoint (:12090)
     ├── registry.rs           # GatewayMetrics definition
     ├── test_metrics.rs       # test-only metric injection
     └── mod.rs

@@ -28,32 +28,6 @@ Operations:
 
 Global singleton: `get_global_gateway_store()` returns `Arc<RwLock<GatewayStore>>`.
 
-## Gateway configuration store (GatewayConfigStore)
-
-`GatewayConfigStore` provides per-Listener Gateway configuration queries with a two-level matching structure:
-
-```rust
-pub struct GatewayListenerConfig {
-    host_map: Option<HashMap<String, Arc<ListenerConfig>>>,           // exact hostname match
-    wildcard_host_map: Option<HashHost<Arc<ListenerConfig>>>,         // wildcard hostname match
-    listener_map: Option<HashMap<String, Arc<ListenerConfig>>>,       // match by listener name
-}
-```
-
-`ListenerConfig` includes:
-- `name` — Listener name.
-- `port` — listening port.
-- `hostname` — optional SNI hostname.
-- `allowed_routes` — allowed route configuration.
-
-Route matching strategies:
-- **Routes with a sectionName**: exact match against `listener_map` by listener name.
-- **Routes without a sectionName**: match by hostname against `host_map` (exact) or `wildcard_host_map` (wildcard).
-
-Performance optimization: all internal HashMaps use `Option`; most Gateways do not configure a hostname, so the host_map lookup can be skipped.
-
-Global singleton: `get_global_gateway_config_store()`.
-
 ## ListenerGatewayInfo Store
 
 `ListenerGatewayInfoStore` manages an aggregated Gateway info view for each Listener, indexed by `ListenerKey` (formatted as `"{addr}/{protocol}"`):
@@ -74,7 +48,6 @@ ConfHandler.full_set()                   store.load()  -> Arc<T>
 ```
 
 Stores using ArcSwap:
-- `GatewayConfigStore` — Gateway listener configuration.
 - `LinkSysStore` — LinkSys resources.
 - `PluginStore` — EdgionPlugins resources.
 - Each provider's runtime store (Redis / Etcd / ES).
@@ -97,10 +70,9 @@ The Gateway runtime provides standardized error response generators:
 ## Directory layout
 
 ```
-src/core/gateway/runtime/
+edgion-gateway/src/runtime/
 └── store/
     ├── mod.rs                # module exports
     ├── gateway.rs            # GatewayStore (CRUD for Gateway resources)
-    ├── config.rs             # GatewayConfigStore (Listener configuration)
-    └── listener_gateway_info.rs  # ListenerGatewayInfoStore (Listener-Gateway mapping)
+    └── listener_gateway_info.rs  # ListenerGatewayInfoStore (Listener-Gateway mapping; carries hostname + allowedRoutes)
 ```

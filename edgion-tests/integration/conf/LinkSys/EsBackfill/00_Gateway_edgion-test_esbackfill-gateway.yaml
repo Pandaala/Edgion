@@ -1,0 +1,14 @@
+# Minimal Gateway listener for the ES access-log backfill integration test.
+# The test sends HTTP requests through this listener to generate access log
+# entries that route to the ES primary (or LocalFile fallback during an outage).
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: esbackfill-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31931

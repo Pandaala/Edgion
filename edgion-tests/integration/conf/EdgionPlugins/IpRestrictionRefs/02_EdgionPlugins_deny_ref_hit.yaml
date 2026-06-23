@@ -1,0 +1,18 @@
+# IpRestriction plugin using denyRefs to reference the central ipref-blocklist.
+# The test client's IP (127.0.0.1) is covered by 127.0.0.0/8 → deny-list hit → expect 403.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ip-restriction-deny-ref-hit
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        defaultAction: allow
+        denyRefs:
+          - name: ipref-blocklist
+        status: 403
+        message: "IP is in referenced block list"

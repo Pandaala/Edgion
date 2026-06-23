@@ -8,7 +8,7 @@ Use for these tasks:
 
 ## Design principles
 
-- The combined goal of unit tests + integration tests: **99% code coverage**
+- The combined goal of unit tests + integration tests: **maximize meaningful coverage without padding** — cover critical paths, branches, and risk boundaries with real assertions and push coverage as high as that allows; never add low-value tests just to hit a coverage number
 - Unit tests cover: pure logic, data structures, parsing, validation, utility functions
 - Integration tests cover: cross-process interaction, config sync, routing behavior, plugin runtime
 
@@ -30,7 +30,48 @@ mod tests {
 }
 ```
 
-A separate `tests/` directory is not used for unit tests.
+A top-level `tests/` directory (crate-level integration tests) is **not** used for unit tests: those files compile as a separate crate and can only reach the public API, so they cannot test private items.
+
+### Separating large test blocks (when a file is dominated by tests)
+
+When the inline test block makes a file hard to read/review, move the tests into a sibling **in-crate** test file. **Trigger** (guideline, not a hard gate): test lines > ~60% of the file **and** file > ~800 lines. Below that, keep tests inline — selectivity is what keeps the tree from filling with test files.
+
+The mechanism keeps the test module a **child of the source file** (via `#[path]`), so it retains full access to module-private items — no visibility changes are ever needed.
+
+**1. In the source file** `foo.rs`, replace the whole `#[cfg(test)] mod tests { ... }` block with this footer at the very bottom:
+
+```rust
+// Unit tests for this module live in `tests/foo_test.rs`.
+#[cfg(test)]
+#[path = "tests/foo_test.rs"]
+mod tests;
+```
+
+**2. The test file** `<source_dir>/tests/foo_test.rs` starts with a back-pointer header, then the moved body:
+
+```rust
+//! Unit tests for `foo.rs` (see `super`).
+use super::*;
+// ... the moved test body, verbatim ...
+```
+
+**Rules:**
+- Naming: `<source_stem>_test.rs` (singular `_test`). For a directory module whose code is in `mod.rs`, name it after the directory (`config/tests/config_test.rs`).
+- The `tests/` sub-dir needs **no** `mod.rs` — each file is pulled in only by its source file's `#[path]`. Multiple source files in one directory share one `tests/` dir (each is a distinct child module, no collision).
+- **Never** bump an item's visibility (`pub`/`pub(crate)`) just to relocate a test. If the move needs that, you are using the wrong mechanism — go back to `#[path]`.
+- Pure move: same test count in and out; no logic edits. Verify with `cargo test --lib <module>::tests` before/after.
+- `#[path]` resolves relative to the **directory of the source file**, so `#[path = "tests/foo_test.rs"]` written in `bar/foo.rs` loads `bar/tests/foo_test.rs`.
+
+**Finding separated tests (grep standard for AI/humans):**
+
+```bash
+# List every source file that has an externalized test file:
+rg -l '#\[path = "tests/.*_test\.rs"\]' src
+# Review only production changes (exclude separated tests + the integration harness):
+git diff main... -- ':(exclude)**/tests/*_test.rs' ':(exclude)**/tests.rs' ':(exclude)edgion-tests/src/**'
+```
+
+The leading `// Unit tests for this module live in ...` comment + the `#[path]` line are the machine-readable markers; AI review tooling should scope to non-test paths via the exclusion above.
 
 ### Distribution of test files
 
@@ -38,13 +79,12 @@ Unit tests mainly cover the following areas:
 
 | Area | Example path | Test focus |
 |------|---------|---------|
-| Resource type parsing | `src/types/resources/*.rs` | CRD struct deserialization, field validation, preparse |
-| Plugin configuration | `src/types/resources/edgion_plugins/plugin_configs/*.rs` | `validate_and_init()`, default values, edge cases |
-| LinkSys configuration | `src/types/resources/link_sys/*.rs` | Connector config parsing and validation |
-| Core utility functions | `src/core/common/utils/mod.rs` | String handling, path utilities, common logic |
-| Configuration system | `src/core/common/config/mod.rs` | TOML parsing, config merging, default values |
-| Gateway backends | `src/core/gateway/backends/mod.rs` | Backend selection, load-balancing logic |
-| Working directory | `src/types/work_dir.rs` | Path resolution, directory creation, permission checks |
+| Resource type parsing | `edgion-resources/src/resources/*.rs` | CRD struct deserialization, field validation, preparse |
+| Plugin configuration | `edgion-resources/src/resources/edgion_plugins/plugin_configs/*.rs` | `validate_and_init()`, default values, edge cases |
+| LinkSys configuration | `edgion-resources/src/resources/link_sys/*.rs` | Connector config parsing and validation |
+| Configuration system | `edgion-controller/src/config/mod.rs` | YAML parsing, config merging, default values |
+| Gateway backends | `edgion-gateway/src/backends/mod.rs` | Backend selection, load-balancing logic |
+| Working directory | `edgion-resources/src/work_dir.rs` | Path resolution, directory creation, permission checks |
 
 ## How to run
 
@@ -145,18 +185,18 @@ When pruning / merging unit tests (parameterizing, removing tests covered equiva
 
 | Location | Reason |
 |---|---|
-| `src/core/gateway/lb/runtime_state/mod.rs` leastconn count | P0-07 regression |
-| `src/core/gateway/tls/validation/cert.rs` | mTLS verify_depth / SAN wildcard |
-| `src/core/gateway/cache/lru.rs` invariant tests | LRU underflow / hit_ratio |
-| `src/core/gateway/routes/grpc/match_engine.rs` sort tests | spec conformance |
-| `src/core/gateway/runtime/matching/route.rs` allowed_routes | spec conformance |
-| `src/core/controller/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping | reason/message text |
-| `src/core/controller/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs` port-conflict matrix | Protocol mixing rules |
-| `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 | Version compatibility |
-| `src/core/common/matcher/**` | IP / host matching algorithm |
-| `src/core/common/utils/duration.rs` / `real_ip_extractor.rs` | Duration expression / header priority algorithm |
-| `src/core/common/unified_auth/mod.rs` `from_configs` / `require_auth` | Multi-source auth assembly |
-| `src/core/common/local_auth/handlers.rs` `AuthStatus` JSON wire format | CLI hard-parsing dependency |
+| `edgion-gateway/src/lb/runtime_state/mod.rs` leastconn count | P0-07 regression |
+| `edgion-gateway/src/tls/validation/cert.rs` | mTLS verify_depth / SAN wildcard |
+| `edgion-gateway/src/cache/lru.rs` invariant tests | LRU underflow / hit_ratio |
+| `edgion-gateway/src/routes/grpc/match_engine.rs` sort tests | spec conformance |
+| `edgion-gateway/src/runtime/matching/route.rs` allowed_routes | spec conformance |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/status_utils.rs` Condition mapping | reason/message text |
+| `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/listener_port_manager.rs` port-conflict matrix | Protocol mixing rules |
+| `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs` v1alpha3→v1 | Version compatibility |
+| `edgion-resources/src/matcher/**` | IP / host matching algorithm |
+| `edgion-resources/src/duration.rs` / `real_ip_extractor.rs` | Duration expression / header priority algorithm |
+| `edgion-controller/src/authz/mod.rs` `Authorizer` admin-token merge / `cli_lookup` | Token authn + RBAC policy assembly |
+| `edgion-resources/src/auth_dto.rs` `AuthStatusResponse` JSON wire format | CLI hard-parsing dependency |
 
 ### Reviewer checklist (mandatory for pruning PRs)
 

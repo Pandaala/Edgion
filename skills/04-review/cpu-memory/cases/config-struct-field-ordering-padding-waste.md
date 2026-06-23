@@ -7,7 +7,7 @@ description: Use when reviewing findings that suggest reordering config struct f
 
 # Configuration Struct Field Ordering Causing Padding Waste
 
-**False-positive scenario**: the audit flags configuration structs with `JsonSchema` such as `OpenidConnectConfig` (`src/types/resources/edgion_plugins/plugin_configs/openid_connect.rs:78-227`) where bool, String/u64/Option are interleaved; each instance wastes 30-50 B of alignment padding; suggests reordering by field size for tight packing.
+**False-positive scenario**: the audit flags configuration structs with `JsonSchema` such as `OpenidConnectConfig` (`edgion-resources/src/resources/edgion_plugins/plugin_configs/openid_connect.rs:78-227`) where bool, String/u64/Option are interleaved; each instance wastes 30-50 B of alignment padding; suggests reordering by field size for tight packing.
 
 **Reality**:
 

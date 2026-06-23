@@ -12,11 +12,11 @@ Use `EdgionPlugins` as the reference pattern when the new resource:
 
 ### 1. Resource Type And Registration
 
-- `src/types/resources/edgion_plugins/mod.rs`
-- `src/types/resources/mod.rs`
-- `src/types/resource/kind.rs`
-- `src/types/resource/defs.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resources/edgion_plugins/mod.rs`
+- `edgion-resources/src/resources/mod.rs`
+- `edgion-resources/src/resource/kind.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 Why it matters:
 
@@ -25,10 +25,10 @@ Why it matters:
 
 ## 2. Controller Processing
 
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
-- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What `EdgionPluginsHandler` demonstrates:
 
@@ -42,8 +42,8 @@ If your new resource is reusable runtime config with secret-backed fields, this 
 
 ## 3. Controller CRUD And K8s Writer
 
-- `src/core/controller/api/namespaced_handlers.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`
+- `edgion-controller/src/api/namespaced_handlers.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/storage.rs`
 
 Why it matters:
 
@@ -52,9 +52,9 @@ Why it matters:
 
 ## 4. Gateway Sync And Runtime Store
 
-- `src/core/gateway/conf_sync/conf_client/config_client.rs`
-- `src/core/gateway/plugins/http/conf_handler_impl.rs`
-- `src/core/gateway/api/mod.rs`
+- `edgion-gateway/src/conf_sync/conf_client/config_client.rs`
+- `edgion-gateway/src/plugins/http/conf_handler_impl.rs`
+- `edgion-gateway/src/api/mod.rs`
 
 What this pattern shows:
 
@@ -68,7 +68,7 @@ This differs from route-like resources because the object becomes shared runtime
 ## 5. Manifests And Tests
 
 - `config/crd/edgion-crd/edgion_plugins_crd.yaml`
-- `examples/test/conf/EdgionPlugins/`
+- `edgion-tests/integration/conf/EdgionPlugins/`
 
 What to copy:
 

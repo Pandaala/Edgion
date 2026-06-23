@@ -2,7 +2,7 @@
 
 This document is for contributors who need to extend `EdgionPlugins`. It explains the execution stages used by HTTP plugins in Edgion, how the resource-to-runtime wiring works, and which segments are most often missed during implementation.
 
-> The primary AI / agent workflow now lives in [../../../skills/01-architecture/02-gateway/12-edgion-plugin-dev.md](../../../skills/01-architecture/02-gateway/12-edgion-plugin-dev.md).
+> The primary AI / agent workflow now lives in [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/12-edgion-plugin-dev.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/12-edgion-plugin-dev.md).
 > This document remains the human-facing background guide, implementation-boundary explanation, and manual review checklist.
 
 ## What This Plugin Family Is For
@@ -65,9 +65,9 @@ When adding or extending an HTTP plugin, you usually touch these areas.
 
 ### Resource and config
 
-- `src/types/resources/edgion_plugins/`
-- `src/types/resources/edgion_plugins/plugin_configs/`
-- `src/types/resources/edgion_plugins/edgion_plugin.rs`
+- `edgion-resources/src/resources/edgion_plugins/`
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/`
+- `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`
 
 These own:
 
@@ -185,7 +185,7 @@ So when implementing a new plugin, it is not enough to write the trait implement
 
 If you want an AI tool to implement it, start from the skill entry:
 
-- [../../../skills/01-architecture/02-gateway/12-edgion-plugin-dev.md](../../../skills/01-architecture/02-gateway/12-edgion-plugin-dev.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/12-edgion-plugin-dev.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/12-edgion-plugin-dev.md)
 
 ## Testing And Verification
 

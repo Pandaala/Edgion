@@ -1,0 +1,40 @@
+# Optional Hardening: restrict ingress to the Controller admin (12101) and gRPC (12151) ports.
+# WARNING: applying this policy enables Kubernetes default-deny for ALL ingress to the
+# controller pod. Only the ports listed in the rules below (currently 12101 admin and
+# 12151 conf_sync gRPC) will be reachable. ALL other ingress — including metrics (12190)
+# and kubelet probes (12100) — will be BLOCKED unless you add explicit allow rules for them.
+# Before applying, add ingress rules for:
+#   - Port 12190 (metrics) from your Prometheus scraper namespace/pods
+#   - Port 12100 (probes) from the kubelet (typically nodeSelector or 0.0.0.0/0)
+# This is a hardening TEMPLATE: edit the `from` selectors to match the pods that
+# legitimately call the admin API (edgion-cli pods) and the Gateways that consume conf_sync.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: edgion-controller-admin-restrict
+  namespace: edgion-system
+  labels:
+    app: edgion-controller
+spec:
+  podSelector:
+    matchLabels:
+      app: edgion-controller
+  policyTypes:
+  - Ingress
+  ingress:
+  # Admin HTTP API — only from same-namespace clients (edit as needed).
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: edgion-system
+    ports:
+    - protocol: TCP
+      port: 12101
+  # conf_sync gRPC — only from Gateway pods (edit the selector to your Gateways).
+  - from:
+    - podSelector:
+        matchLabels:
+          app: edgion-gateway
+    ports:
+    - protocol: TCP
+      port: 12151

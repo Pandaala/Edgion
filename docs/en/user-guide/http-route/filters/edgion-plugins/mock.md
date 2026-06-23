@@ -1,140 +1,185 @@
 # Mock Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
-> Mock is a mock response plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
+> Mock is a mock response plugin provided by the `EdgionPlugins` CRD; it is not part of standard Gateway API.
 
 ## Overview
 
-The Mock plugin returns preset HTTP responses without forwarding requests to upstream services. Useful for API prototyping, interface testing, health check endpoints, and error simulation.
+The Mock plugin returns a preset HTTP response without forwarding the request to an upstream service. Use it for API prototyping, interface testing, health-check endpoints, and error simulation.
 
 ## Quick Start
+
+### Simplest configuration
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: mock-plugin
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
-      type: Mock
+    - type: Mock
       config:
         statusCode: 200
         body: '{"status": "ok", "message": "Service is healthy"}'
         contentType: "application/json"
 ```
 
----
+### Default-value notes
 
-## Configuration Reference
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `statusCode` | Integer | No | `200` | HTTP response status code |
-| `body` | String | No | none | Response body content |
-| `headers` | Object | No | none | Custom response headers (key-value pairs) |
-| `contentType` | String | No | `"application/json"` | Content-Type |
-| `delay` | Integer | No | none | Response delay in milliseconds |
-| `terminate` | Boolean | No | `true` | Whether to terminate request processing |
-
-### terminate Behavior
-
-- `true` (default): Returns the mock response directly, does not forward to upstream
-- `false`: Sets response status and headers but continues processing subsequent plugins and upstream forwarding
+| Field | Default | Meaning |
+|-------|---------|---------|
+| `statusCode` | `200` | Returned HTTP status code |
+| `contentType` | `"application/json"` | `Content-Type` of the response |
+| `terminate` | `true` | Returns the mock response and stops further processing |
 
 ---
 
-## Usage Scenarios
+## Configuration parameters
 
-### Scenario 1: Health Check Endpoint
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `statusCode` | Integer | `200` | HTTP status code. Valid range: `100`–`599` |
+| `body` | String | none | Response body content (JSON, XML, plain text, etc.) |
+| `headers` | Object | none | Custom response headers as key-value pairs |
+| `contentType` | String | `"application/json"` | `Content-Type` header value |
+| `delay` | Integer | none | Delay in milliseconds before responding. Maximum: `30000` |
+| `terminate` | Boolean | `true` | Whether to terminate request processing after running |
+
+### `terminate` behavior
+
+- `true` (default): returns the mock response directly; does not forward to upstream or run later plugins.
+- `false`: sets the response status and headers but continues to subsequent plugins and upstream forwarding.
+
+---
+
+## Common configuration scenarios
+
+### 1. Health-check endpoint
 
 ```yaml
-requestPlugins:
-  - enable: true
-    type: Mock
-    config:
-      statusCode: 200
-      body: '{"status": "healthy"}'
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-health
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Mock
+      config:
+        statusCode: 200
+        body: '{"status": "healthy"}'
 ```
 
-### Scenario 2: API Prototyping
+### 2. API prototyping with custom headers
 
 ```yaml
-requestPlugins:
-  - enable: true
-    type: Mock
-    config:
-      statusCode: 200
-      body: |
-        {
-          "users": [
-            {"id": 1, "name": "Alice"},
-            {"id": 2, "name": "Bob"}
-          ]
-        }
-      headers:
-        X-Mock: "true"
-        Cache-Control: "no-cache"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-prototype
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Mock
+      config:
+        statusCode: 200
+        body: |
+          {
+            "users": [
+              {"id": 1, "name": "Alice"},
+              {"id": 2, "name": "Bob"}
+            ]
+          }
+        headers:
+          X-Mock: "true"
+          Cache-Control: "no-cache"
 ```
 
-### Scenario 3: Simulate Error Response
+### 3. Simulate an error response
 
 ```yaml
-requestPlugins:
-  - enable: true
-    type: Mock
-    config:
-      statusCode: 503
-      body: '{"error": "Service temporarily unavailable"}'
-      contentType: "application/json"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-error
+  namespace: staging
+spec:
+  requestPlugins:
+    - type: Mock
+      config:
+        statusCode: 503
+        body: '{"error": "Service temporarily unavailable"}'
+        contentType: "application/json"
 ```
 
-### Scenario 4: Delayed Response (Simulate Slow API)
+### 4. Delayed response (simulate a slow API)
 
 ```yaml
-requestPlugins:
-  - enable: true
-    type: Mock
-    config:
-      statusCode: 200
-      body: '{"result": "slow response"}'
-      delay: 2000
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-slow
+  namespace: staging
+spec:
+  requestPlugins:
+    - type: Mock
+      config:
+        statusCode: 200
+        body: '{"result": "slow response"}'
+        # Delay is capped at 30000ms
+        delay: 2000
 ```
 
-### Scenario 5: Non-Terminating Mode
+### 5. Non-terminating mode (set headers, keep going)
 
 ```yaml
-requestPlugins:
-  - enable: true
-    type: Mock
-    config:
-      statusCode: 200
-      terminate: false
-      headers:
-        X-Mock-Flag: "true"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: mock-tag
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Mock
+      config:
+        statusCode: 200
+        terminate: false
+        headers:
+          X-Mock-Flag: "true"
 ```
 
 ---
 
-## Important Notes
+## FAQ
 
-1. With `terminate: true`, subsequent plugins and upstream forwarding are not executed
-2. Mock can be combined with Plugin Conditions for conditional mocking
-3. `delay` blocks the current request processing thread; use with caution under high concurrency
+### Q1: Why do my other plugins not run after Mock?
+
+**A**: With `terminate: true` (the default), Mock returns immediately and skips all later plugins and upstream forwarding. Set `terminate: false` if you want the request to continue.
+
+### Q2: Can I mock only some requests on a route?
+
+**A**: Yes. Match the requests with a separate HTTPRoute rule (path / header / method match) and attach the Mock plugin only to that rule. The plugin itself always responds when it runs.
+
+### Q3: My `delay` value seems to be ignored above 30 seconds?
+
+**A**: `delay` is validated against a 30000ms (30s) ceiling. A configuration with a larger value is rejected at parse time.
 
 ---
 
-## Complete Example
+## Complete configuration example
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: mock-api
+  name: mock-route
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "mock.example.com"
   rules:
@@ -149,17 +194,17 @@ spec:
             kind: EdgionPlugins
             name: health-mock
       backendRefs:
-        - name: backend-service
+        - name: api-service
           port: 8080
 ---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: health-mock
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
-      type: Mock
+    - type: Mock
       config:
         statusCode: 200
         body: '{"status": "ok", "version": "1.0.0"}'
@@ -168,7 +213,7 @@ spec:
           X-Health-Check: "true"
 ```
 
-## Related Docs
+## Related links
 
-- [Filters Overview](../overview.md)
-- [Plugin Composition](../plugin-composition.md)
+- [Filters overview](../README.md)
+- [CORS Plugin](./cors.md)

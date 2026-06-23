@@ -8,7 +8,7 @@ description: Use when reviewing Controller federation client / HttpProxy / admin
 ## Conclusion
 
 **FIXED (controller-01, 2026-05-20 + RBAC layer 2026-05-21).** The Controller
-federation client (`src/core/controller/fed_sync/fed_client/mod.rs`) now
+federation client (`edgion-controller/src/fed_sync/fed_client/mod.rs`) now
 **fails closed** unless its gRPC channel to Center is mTLS-authenticated. `run()`
 calls `resolve_mtls_or_refuse(&config.security)`: it returns the active cert set
 only when one is configured **and** `skip_tls` is not set; otherwise `run()` logs
@@ -25,8 +25,8 @@ replaces the old bare unauthenticated router and closes the residual authorizati
 gap that mTLS alone did not cover. See `skills/02-features/02-config/00-controller-config.md`
 for the `[center.rbac]` starter allowlist operators must add after upgrade.
 
-Fix suggestions of the form "wrap the fed router with `compose_admin_routes` /
-unified auth", "add a Controller-side `allow_plaintext` / `allow_insecure_federation`
+Fix suggestions of the form "wrap the fed router with the local admin token
+authn layer", "add a Controller-side `allow_plaintext` / `allow_insecure_federation`
 opt-out", or "the `connect_and_run` `skip_tls` plaintext branch is still a hole"
 are **not accepted**.
 
@@ -51,22 +51,23 @@ degrades (log + metric, does not federate, data plane keeps running). The operat
 decision (2026-05-20) was "federation must be mTLS on both ends; no plaintext
 escape on either side."
 
-**3. The fed router uses a dedicated RBAC layer, not `compose_admin_routes`.**
+**3. The fed router uses a dedicated RBAC layer, not the local admin token authn.**
 
-`compose_admin_routes` enforces a Bearer/cookie session; Center supplies no such
-credential over the `HttpProxy` wire format. Instead, the fed router uses a
-`route_layer(authz)` + `inject_center_identity` pair: `inject_center_identity`
-stamps every federation request with the `CenterRestricted` role (no Bearer
-needed -- mTLS authenticates the peer); `authz_layer` then evaluates
-`(CenterRestricted, verb, kind)` against `center.rbac` (default-deny). This
-provides per-endpoint authorization without a session-token protocol change.
+The local Admin API authenticates with a pre-shared Bearer token (`cli_token_pre_authn`
++ the 503 token gate); Center supplies no such credential over the `HttpProxy` wire
+format. Instead, the fed router uses a `route_layer(authz)` + `inject_center_identity`
+pair: `inject_center_identity` stamps every federation request with a `Role::Restricted`
+carrying the Center policy (no Bearer needed -- mTLS authenticates the peer); `authz_layer`
+then evaluates `(Restricted, verb, kind)` against `center.rbac` (default-deny). This
+provides per-endpoint authorization without a token protocol change, and the fed router
+deliberately omits the token authn layer and the 503 token gate.
 
 ## Fix Suggestions Not Accepted
 
-- Wrap the fed_client admin router with `compose_admin_routes` / unified-auth — not needed and would require a protocol change (Bearer/cookie over the HttpProxy wire); the RBAC `route_layer` is the correct mechanism.
+- Wrap the fed_client admin router with the local admin token authn — not needed and would require a protocol change (a pre-shared Bearer token over the HttpProxy wire); the RBAC `route_layer` + `inject_center_identity` is the correct mechanism.
 - Add a `allow_plaintext` / `allow_insecure_federation` opt-out on either side -- explicitly rejected by the operator; both the Controller and the Center insist on mTLS with no escape hatch.
 - "`connect_and_run` still has a `skip_tls` plaintext branch" -- `run()` fails closed before `connect_and_run` is ever reached, so that branch is unreachable defensive code; verify the `resolve_mtls_or_refuse` gate in `run()` before re-reporting.
-- "Center can read Secrets via the blind proxy" -- the RBAC layer is default-deny and the starter allowlist enumerates only `PluginMetaData`; wildcard-read rules are explicitly prohibited by operator policy and documented in `skills/02-features/02-config/00-controller-config.md`.
+- "Center can read Secrets via the blind proxy" -- the RBAC layer is default-deny and the starter allowlist enumerates only `EdgionConfigData`; wildcard-read rules are explicitly prohibited by operator policy and documented in `skills/02-features/02-config/00-controller-config.md`.
 
 ## Re-evaluation Triggers
 

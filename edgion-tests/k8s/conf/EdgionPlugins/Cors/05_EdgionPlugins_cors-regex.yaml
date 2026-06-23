@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: cors-regex
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: Cors
+    config:
+      allowOrigins: https://a.example.com,*.sub.example.com
+      allowOriginsByRegex:
+      - https://.*\.regex\.example\.com
+      allowMethods: GET,POST
+      allowHeaders: Content-Type
+      allowCredentials: false

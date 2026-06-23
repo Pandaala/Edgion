@@ -1,105 +1,33 @@
 # TLS 终结
 
-配置 Gateway 的 TLS 终结。
+使用标准 Gateway API 监听器配置，在 Gateway 上终结客户端 TLS。
 
 ## 概述
 
-TLS 终结是指 Gateway 解密客户端的 TLS 连接，然后以明文或重新加密的方式转发到后端：
+**TLS 终结**是指 Gateway 在监听器处解密客户端的 TLS 连接，检查明文请求（主机、路径、请求头），然后以明文或通过新 TLS 连接重新加密的方式转发到后端：
 
 ```
-Client → [TLS] → Gateway → [明文/TLS] → Backend
+Client --[TLS]--> Gateway (decrypt) --[plaintext or re-encrypted TLS]--> Backend
 ```
 
-## 配置方式
+只要 Gateway 需要对 HTTPS 端点进行七层路由（HTTPRoute / GRPCRoute），就需要 TLS 终结，因为路由决策依赖于解密后的请求。
 
-### 方式 1: Gateway TLS 配置
+这是标准 Gateway API 的方式：一个 `protocol: HTTPS` 的 Listener，配置 `tls.mode: Terminate` 和指向 `kubernetes.io/tls` Secret 的 `certificateRefs`。与之相对的是 **TLS Passthrough**（`tls.mode: Passthrough` + `TLSRoute`），Gateway 将加密字节直接转发到后端而不解密——详见 [TCP / TLS 监听器](../listeners/tcp.md)和 [TLSRoute 总览](../../../user-guide/tls-route/overview.md)。
+
+如果需要 Gateway API 之外的 TLS 功能（mTLS、最低 TLS 版本、自定义密码套件），请使用 [EdgionTls 扩展](./edgion-tls.md)替代或补充标准监听器配置。
+
+## 配置
+
+### 方式 1：Gateway 监听器（标准 Gateway API）
+
+一个完整可应用的 Gateway，包含一个终结 TLS 的 HTTPS 监听器：
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: tls-gateway
+  name: main-gateway
   namespace: production
-spec:
-  gatewayClassName: edgion
-  listeners:
-    - name: https
-      port: 443
-      protocol: HTTPS
-      tls:
-        mode: Terminate
-        certificateRefs:
-          - name: my-tls-secret
-```
-
-### 方式 2: EdgionTls 扩展
-
-> **🔌 Edgion 扩展**
-> 
-> `EdgionTls` 是 Edgion 自定义 CRD，提供比标准 Gateway API 更丰富的 TLS 配置选项。
-
-使用 EdgionTls 资源提供更多 TLS 选项：
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionTls
-metadata:
-  name: advanced-tls
-spec:
-  secretRef:
-    name: my-tls-secret
-  minVersion: TLSv1.2
-  cipherSuites:
-    - TLS_AES_128_GCM_SHA256
-    - TLS_AES_256_GCM_SHA384
-```
-
-## 证书管理
-
-### 创建 TLS Secret
-
-```bash
-# 从文件创建
-kubectl create secret tls my-tls-secret \
-  --cert=path/to/cert.pem \
-  --key=path/to/key.pem
-```
-
-或使用 YAML：
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: my-tls-secret
-type: kubernetes.io/tls
-data:
-  tls.crt: <base64-encoded-cert>
-  tls.key: <base64-encoded-key>
-```
-
-### 证书链
-
-如果需要完整证书链，将中间证书附加到 tls.crt：
-
-```
------BEGIN CERTIFICATE-----
-(服务器证书)
------END CERTIFICATE-----
------BEGIN CERTIFICATE-----
-(中间证书)
------END CERTIFICATE-----
-```
-
-## 示例
-
-### 示例 1: 单域名证书
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: single-domain
 spec:
   gatewayClassName: edgion
   listeners:
@@ -108,32 +36,185 @@ spec:
       protocol: HTTPS
       hostname: "example.com"
       tls:
+        mode: Terminate
         certificateRefs:
           - name: example-com-tls
 ```
 
-### 示例 2: 通配符证书
+关键字段：
+
+| 字段 | 值 | 说明 |
+|------|-----|------|
+| `protocol` | `HTTPS` | 七层终结使用 `HTTPS`；`TLS` 用于原始 TLS 流的 Passthrough / 终结 |
+| `tls.mode` | `Terminate` | 在 Gateway 解密，`Passthrough` 将加密字节转发到后端 |
+| `tls.certificateRefs[].name` | Secret 名称 | 必须引用 Gateway 同命名空间的 `kubernetes.io/tls` Secret，跨命名空间访问需要 `ReferenceGrant` |
+
+### 方式 2：EdgionTls 扩展
+
+> **🔌 Edgion 扩展**
+>
+> `EdgionTls` 是 Edgion 自定义 CRD，提供标准 Gateway API 不支持的 TLS 功能——双向 TLS、最低 TLS 版本和 OpenSSL 格式密码套件列表。
+
+需要这些额外功能时，在监听器上挂载 EdgionTls 资源替代（或补充）`certificateRefs`。schema 和所有参数详见 [EdgionTls 扩展](./edgion-tls.md)：
 
 ```yaml
-listeners:
-  - name: https
-    port: 443
-    protocol: HTTPS
-    hostname: "*.example.com"
-    tls:
-      certificateRefs:
-        - name: wildcard-example-com-tls
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: example-tls
+  namespace: production
+spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
+  hosts:
+    - example.com
+  secretRef:
+    name: example-com-tls
+    namespace: production
+  # 最低接受的 TLS 版本（可选）。
+  minTlsVersion: TLS1_2
 ```
 
-> **通配符深度说明**: `*.example.com` 在 Listener 上的 TLS 证书仅覆盖**一级子域名** ——
-> `api.example.com` ✅，但 `deep.sub.example.com` ❌（RFC 6125 §6.4.3）。Edgion 在 SNI →
-> 证书选择阶段强制执行该单层规则，因此对 `deep.sub.example.com` 的连接会在 TLS 握手阶
-> 段失败，除非额外配置更具体的通配符（如 `*.sub.example.com`）。`HTTPRoute` /
-> `TLSRoute` 的路由匹配仍保留 Gateway API §4.3 的多级通配语义 —— 仅证书选择遵循
-> RFC 6125 严格的单层语义。
+## 证书管理
+
+### 创建 TLS Secret
+
+证书 Secret 必须是 `kubernetes.io/tls` 类型，并包含 `tls.crt` 和 `tls.key` 键。
+
+```bash
+# 直接从 PEM 文件创建（推荐）
+kubectl create secret tls example-com-tls \
+  --cert=path/to/tls.crt \
+  --key=path/to/tls.key \
+  -n production
+```
+
+或以 YAML 声明，数据字段使用 base64 编码的 PEM：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: example-com-tls
+  namespace: production
+type: kubernetes.io/tls
+data:
+  tls.crt: <base64-encoded-cert>
+  tls.key: <base64-encoded-key>
+```
+
+⚠️ **切勿将真实私钥提交到 Git 或粘贴到文档中。** 上方的 `<base64-encoded-cert>` / `<base64-encoded-key>` 均为占位符。
+
+### 证书链
+
+如果客户端需要完整链来验证，请将叶证书后跟中间证书拼接到 `tls.crt`（叶证书在前）：
+
+```text
+-----BEGIN CERTIFICATE-----
+(leaf / server certificate)
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+(intermediate CA certificate)
+-----END CERTIFICATE-----
+```
+
+## 示例
+
+### 示例 1：单域名证书
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: main-gateway
+  namespace: production
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: "example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: example-com-tls
+```
+
+### 示例 2：通配符证书
+
+通配符证书仅覆盖一个子域名标签（RFC 6125 §6.4.3）：
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: main-gateway
+  namespace: production
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: https-wildcard
+      port: 443
+      protocol: HTTPS
+      hostname: "*.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: wildcard-example-com-tls
+```
+
+> **通配符深度说明**：`*.example.com` 覆盖 `api.example.com` 和 `app.example.com`，但**不覆盖**顶级域名 `example.com`，也**不覆盖** `deep.sub.example.com`。Edgion 使用 RFC 6125 单标签规则按 SNI 选择证书，因此超出该单标签范围的主机连接 TLS 握手会失败，除非额外配置了更具体的监听器 / 证书（例如 `*.sub.example.com` 或显式的 `example.com` 监听器）。请注意，HTTPRoute / TLSRoute 的主机名*路由*匹配遵循 Gateway API §4.3（多标签），只有证书选择遵循严格的 RFC 6125 单标签规则。
+
+### 示例 3：同一 Gateway 上的多证书 / SNI
+
+为不同域名使用不同证书时，每个 hostname 声明一个监听器，Gateway 根据客户端的 SNI 选择对应证书：
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: main-gateway
+  namespace: production
+spec:
+  gatewayClassName: edgion
+  listeners:
+    # 顶级域名 + www 使用同一证书
+    - name: https-apex
+      port: 443
+      protocol: HTTPS
+      hostname: "example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: example-com-tls
+    # 所有单标签子域名使用通配符证书
+    - name: https-wildcard
+      port: 443
+      protocol: HTTPS
+      hostname: "*.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: wildcard-example-com-tls
+    # 同一 Gateway 上的第二个不相关域名
+    - name: https-other
+      port: 443
+      protocol: HTTPS
+      hostname: "api.partner.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: partner-com-tls
+```
+
+每个监听器拥有独立证书，Gateway 根据客户端发送的 SNI 按连接选择证书。
 
 ## 相关文档
 
 - [HTTPS 监听器](../listeners/https.md)
+- [TCP / TLS 监听器](../listeners/tcp.md)
 - [EdgionTls 扩展](./edgion-tls.md)
-- [mTLS 配置](../../infrastructure/mtls.md)
+- [ACME 自动证书](./acme.md)
+- [TLSRoute 总览](../../../user-guide/tls-route/overview.md)

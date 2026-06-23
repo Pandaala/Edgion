@@ -19,7 +19,7 @@
 
 | Category | Risk | Handling |
 |------|------|---------|
-| `client_cert_info` | subject / SAN may contain PII | Already wired into the `[access_log_sensitive]` global switch via `serialize_with = "masked::serialize"` |
+| `client_cert_info` | subject / SAN may contain PII | Already wired into the `access_log_sensitive` global switch via `serialize_with = "masked::serialize"` |
 | `client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` | Real user IP / request path | Same as above; uniformly masked when `mode=replace` or `mode=wrap` is enabled |
 | Plugin log dynamic parameters | May contain username / IP / token | Use `push_fmt` + `sensitive(...)` to mark explicitly; DSL `log_warn` / `log_error` automatically go through `push_sensitive` |
 
@@ -103,7 +103,7 @@ The data plane (request/connection processing path) produces logs only through t
 | **access log** | Request-level result records | `AccessLogEntry` / `log_tls()` |
 | **ctx.err_log / ctx.log** | Connection-level error/event | TLS proxy's `ctx.err_log = Some(...)` |
 | **PluginLog** | Plugin execution summary | `log.push("OK u=alice")` |
-| **Metrics** | Aggregated counters | `global_metrics().request_success()` |
+| **Metrics** | Aggregated counters | `global_metrics().ctx_created()` / `record_backend_request(...)` |
 
 **Any `tracing::` macro is forbidden on the request/connection processing hot path**, including `debug!`.
 
@@ -232,46 +232,48 @@ Use during code review:
 
 ## Periodic maintenance (run quarterly or after each "data-plane entry list" change)
 
+> **Automated gate**: `cicd/checks/check_gateway_no_tracing.py` enforces this rule in CI. The data/control boundary here is *function-level* — the same file often holds a constructor (`new`/`from_config`/`build`, control-plane, `tracing` allowed) and a per-request method (`run_request`, hot path, `tracing` forbidden) — which a file/regex scanner cannot separate, so the gate resolves the **enclosing function** of each `tracing` line. Over the "Data-plane entry list" files below (including every `plugins/http/*/plugin.rs`, `gateway_api_filters/`, the match engines, `lb/selection`, `backends/`, and the TLS-handshake callbacks), it flags a `tracing` use only when its enclosing function is **not** construction/config-build/once-init — recognised by name via the `COLD_FN` knob (`new`, `from_config`, `create`, `build`, `load_*`, `compile_*`, `init_*`, `parse_*`, `update`, `spawn_*`, …). It is **zero-tolerance** (the request/connection functions are already clean), with registered exceptions carrying an inline `// tracing-allow: <reason>` marker (currently only `pg_logging.rs`'s access-log-store-send warn). Run `--list` to see current matches; if a genuinely-cold function is flagged, rename it to a cold prefix or add its name to `COLD_FN`. Keep the gate's entry-list (`DP_DIRS`/`DP_FILES`/`DP_GLOBS`) in sync with the list below when either changes. The manual `rg` recipes here remain useful for the per-line decision context. (See also [../04-review/observability/observability-review-rule.md](../04-review/observability/observability-review-rule.md) → "Zero Tracing on the Data Plane".)
+
 **1. Scan data-plane entry files for newly introduced tracing** (note: only check **the entry files themselves** — `conf_handler_impl.rs` / `routes_mgr.rs` / `conf_handler.rs` in those directories belong to the config phase, do not scan the whole directory):
 
 ```bash
 rg -n 'tracing::' \
-  src/core/gateway/routes/http/proxy_http/ \
-  src/core/gateway/routes/http/match_engine/ \
-  src/core/gateway/routes/http/match_unit.rs \
-  src/core/gateway/routes/http/session_persistence.rs \
-  src/core/gateway/routes/http/redirect_http.rs \
-  src/core/gateway/routes/tcp/edgion_tcp.rs \
-  src/core/gateway/routes/tls/passthrough_proxy.rs \
-  src/core/gateway/routes/tls/proxy.rs \
-  src/core/gateway/routes/udp/edgion_udp.rs \
-  src/core/gateway/routes/grpc/match_engine.rs \
-  src/core/gateway/routes/grpc/match_unit.rs \
-  src/core/gateway/routes/grpc/integration.rs \
-  src/core/gateway/tls/runtime/gateway/tls_pingora.rs \
-  src/core/gateway/tls/runtime/backend/backend_api.rs \
-  src/core/gateway/tls/runtime/backend/cert_extractor.rs \
-  src/core/gateway/tls/boringssl/mtls_verify_callback.rs \
-  src/core/gateway/tls/store/cert_matcher.rs \
-  src/core/gateway/plugins/stream/stream_plugin_runtime.rs \
-  src/core/gateway/plugins/stream/connection_filter_bridge.rs \
-  src/core/gateway/plugins/stream/tls_route/ \
-  src/core/gateway/plugins/stream/ip_restriction/ \
-  src/core/gateway/plugins/stream/global_connection_ip_restriction/ \
-  src/core/gateway/plugins/runtime/plugin_runtime.rs \
-  src/core/gateway/plugins/runtime/conditional_filter.rs \
-  src/core/gateway/plugins/runtime/session_adapter.rs \
-  src/core/gateway/plugins/runtime/gateway_api_filters/ \
-  src/core/gateway/plugins/http/*/plugin.rs \
-  src/core/gateway/plugins/http/*/request_filter_impl.rs \
-  src/core/gateway/lb/selection/ \
-  src/core/gateway/lb/runtime_state/ \
-  src/core/gateway/backends/mod.rs \
-  src/core/gateway/backends/validation.rs \
-  src/core/gateway/backends/circuit_breaker/store.rs \
-  src/core/gateway/backends/policy/ \
-  src/core/gateway/cache/ \
-  src/core/gateway/runtime/server/error_response.rs
+  edgion-gateway/src/routes/http/proxy_http/ \
+  edgion-gateway/src/routes/http/match_engine/ \
+  edgion-gateway/src/routes/http/match_unit.rs \
+  edgion-gateway/src/routes/http/session_persistence.rs \
+  edgion-gateway/src/routes/http/redirect_http.rs \
+  edgion-gateway/src/routes/tcp/edgion_tcp.rs \
+  edgion-gateway/src/routes/tls/passthrough_proxy.rs \
+  edgion-gateway/src/routes/tls/proxy.rs \
+  edgion-gateway/src/routes/udp/edgion_udp.rs \
+  edgion-gateway/src/routes/grpc/match_engine.rs \
+  edgion-gateway/src/routes/grpc/match_unit.rs \
+  edgion-gateway/src/routes/grpc/integration.rs \
+  edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs \
+  edgion-gateway/src/tls/runtime/backend/backend_api.rs \
+  edgion-gateway/src/tls/runtime/backend/cert_extractor.rs \
+  edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs \
+  edgion-gateway/src/tls/store/cert_matcher.rs \
+  edgion-gateway/src/plugins/stream/stream_plugin_runtime.rs \
+  edgion-gateway/src/plugins/stream/connection_filter_bridge.rs \
+  edgion-gateway/src/plugins/stream/tls_route/ \
+  edgion-gateway/src/plugins/stream/ip_restriction/ \
+  edgion-gateway/src/plugins/stream/global_connection_ip_restriction/ \
+  edgion-gateway/src/plugins/runtime/plugin_runtime.rs \
+  edgion-gateway/src/plugins/runtime/conditional_filter.rs \
+  edgion-gateway/src/plugins/runtime/session_adapter.rs \
+  edgion-gateway/src/plugins/runtime/gateway_api_filters/ \
+  edgion-gateway/src/plugins/http/*/plugin.rs \
+  edgion-gateway/src/plugins/http/*/request_filter_impl.rs \
+  edgion-gateway/src/lb/selection/ \
+  edgion-gateway/src/lb/runtime_state/ \
+  edgion-gateway/src/backends/mod.rs \
+  edgion-gateway/src/backends/validation.rs \
+  edgion-gateway/src/backends/circuit_breaker/store.rs \
+  edgion-gateway/src/backends/policy/ \
+  edgion-gateway/src/cache/ \
+  edgion-gateway/src/runtime/server/error_response.rs
 ```
 
 **Expected**: only the exempt items listed in the exception table remain (the access-log-send failure warn in `pg_logging.rs`, the panic-capture error in `mtls_verify_callback.rs`, etc.). Any new hit must either:
@@ -286,16 +288,17 @@ rg -n 'tracing::' \
 ```bash
 # Data-plane trait impls — every result's file path must match an entry in the "Data-plane entry list" table or the "Plugin dispatch" subsection
 rg -n 'impl (ProxyHttp|ServerApp|TlsAccept|ConnectionFilter|StreamPlugin|TlsRoutePlugin|RequestFilter|UpstreamResponseFilter|UpstreamResponseBodyFilter|UpstreamResponse) for ' \
-  src/core/gateway/
+  edgion-gateway/src/
 ```
 
 **Expected**: every hit is covered under "HTTP request path / TCP/TLS connection path / UDP connection path / TLS handshake callbacks / Plugin dispatch" in this rule. New trait impls must update the tables above; otherwise the next review-ticket triage will miss them.
 
 ---
 
-## Known items to be cleaned up
+## Resolved cleanup log (historical)
 
-The following issues have been identified in existing code; fix them while modifying the related files:
+All previously-identified hot-path tracing / sensitive-data items below have been cleared.
+This table is kept as a historical record; there are no remaining open items in it.
 
 | File | Issue | Fix | Status |
 |------|------|---------|------|
@@ -307,5 +310,5 @@ The following issues have been identified in existing code; fix them while modif
 | ~~`connection_filter_bridge.rs`~~ | ~~Connection-filter debug/info~~ | ~~Remove all~~ | Fixed |
 | ~~`grpc/match_unit.rs`~~ | ~~Request-level warn~~ | ~~Remove~~ | Fixed |
 | ~~`preflight_handler.rs`~~ | ~~preflight debug~~ | ~~Remove~~ | Fixed |
-| ~~Access log `ctx_map`~~ | ~~Full ctx_map serialization~~ | Field removed from access log entry | Fixed |
-| ~~LDAP/JWT auth plugin username~~ | ~~username flowing into stage_logs~~ | Wired into the `[access_log_sensitive]` global masking switch with explicit `sensitive(...)` markers | Fixed |
+| ~~Access log `ctx_map`~~ | ~~Sensitive claim keys (`jwt_claims` / `oidc_claims` / `jwe_payload`) flattened verbatim into the access log~~ | `entry.rs` `AllowlistedCtx` is deny-by-default: ctx vars reach the log only via the per-route opt-in allowlist (`edgion.io/log-ctx-keys` or `edgion.io/log-keys` `type: ctx`), and the three sensitive keys stay hard-blocked even if allow-listed | Fixed |
+| ~~LDAP/JWT auth plugin username~~ | ~~username flowing into stage_logs~~ | Wired into the `access_log_sensitive` global masking switch with explicit `sensitive(...)` markers | Fixed |

@@ -1,0 +1,19 @@
+# BasicAuth dynamic test - update phase: bob's secretRef removed.
+# Expected behavior after hot-reload: bob credentials → 401, alice still 200.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: basic-auth-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: BasicAuth
+      config:
+        realm: "Dynamic Test Realm"
+        hideCredentials: false
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: basic-auth-alice
+                namespace: edgion-default

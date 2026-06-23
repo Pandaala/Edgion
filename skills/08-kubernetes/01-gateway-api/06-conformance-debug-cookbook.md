@@ -48,8 +48,8 @@ Both manifest files must be applied **before** the gateway pod starts (Edgion
 binds ports at startup only):
 
 ```bash
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway.yaml
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway-tls.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway-tls.yaml
 ```
 
 Verify key Gateways exist:
@@ -91,8 +91,8 @@ dynamically created Gateways.
   pod** so ports are re-bound:
 
 ```bash
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway.yaml
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway-tls.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway-tls.yaml
 kubectl rollout restart deployment/edgion-gateway -n edgion-system
 ```
 
@@ -109,8 +109,8 @@ HTTP Gateway → no port-80 bind → every HTTP sub-test burns through its full
 **Fix:** Apply **both** manifest files before starting the gateway:
 
 ```bash
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway.yaml
-kubectl apply -f examples/gateway-api-conformance/manifests/conformance-gateway-tls.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway.yaml
+kubectl apply -f edgion-tests/conformance/manifests/conformance-gateway-tls.yaml
 ```
 
 Then restart the gateway pod to pick up the new ports.
@@ -244,7 +244,7 @@ resources exist in the cluster.
 authority` or `connection refused`. Controller logs show `Graceful shutdown timed
 out 25s after signal, forcing exit` every ~27 seconds.
 
-**Root cause:** `src/core/controller/cli/mod.rs` started the 25s shutdown timer
+**Root cause:** `edgion-controller/src/cli/mod.rs` started the 25s shutdown timer
 at service boot, not at signal receipt, causing the controller to exit 25s after
 start regardless of workload.
 
@@ -429,3 +429,8 @@ kubectl exec -n edgion-system "$GW_POD" -- tail -20 /usr/local/edgion/logs/tls_a
 kubectl exec -n edgion-system "$GW_POD" -- tail -50 /usr/local/edgion/logs/edgion-gateway.log
 kubectl logs -n edgion-system "$GW_POD" --tail=50
 ```
+
+## Related
+
+- Per-profile failure modes via the rv/sv/access-log tracing chain + `orbstack-dev.sh` log commands: [`../../09-misc/debugging-conformance.md`](../../09-misc/debugging-conformance.md)
+- Cross-test leakage / timeline correlation: [`05-batch-conformance-debugging.md`](05-batch-conformance-debugging.md)

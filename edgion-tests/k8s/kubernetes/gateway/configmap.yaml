@@ -1,0 +1,69 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edgion-gateway-config
+  namespace: edgion-system
+  labels:
+    app: edgion-gateway
+    app.kubernetes.io/name: edgion-gateway
+    app.kubernetes.io/component: gateway
+data:
+  edgion-gateway.yaml: |
+    # Edgion Gateway Configuration for Kubernetes Integration Testing
+    work_dir: /usr/local/edgion
+
+    gateway:
+      # Controller gRPC server address (use K8s service DNS)
+      server_addr: http://edgion-controller-leader.edgion-system.svc.cluster.local:12151
+      # Test-only admin API access for suites that run inside test-client pods.
+      # Production defaults remain loopback-only unless explicitly configured.
+      admin_listen: "0.0.0.0:12001"
+      # Probe endpoints listen on 0.0.0.0:12000.
+
+    logging:
+      log_dir: logs
+      log_prefix: edgion-gateway
+      log_level: "debug,pingora_proxy=error,pingora_core=error"
+      json_format: true
+      console: false
+      buffer_size: 10000
+
+    server:
+      # threads: 4
+      # work_stealing: true
+      # grace_period_seconds: 30
+      # graceful_shutdown_timeout_seconds: 10
+      # upstream_keepalive_pool_size: 128
+
+    access_log:
+      enabled: true
+      output:
+        localFile:
+          path: logs/edgion_access.log
+          rotation:
+            strategy: daily
+            max_files: 7
+            check_interval_secs: 60
+
+    ssl_log:
+      enabled: true
+      output:
+        localFile:
+          path: logs/ssl.log
+          rotation:
+            strategy:
+              size: 104857600
+            max_files: 5
+            check_interval_secs: 60
+
+    tcp_log:
+      enabled: false
+      output:
+        localFile:
+          path: logs/tcp.log
+
+    udp_log:
+      enabled: false
+      output:
+        localFile:
+          path: logs/udp.log

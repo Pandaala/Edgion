@@ -157,7 +157,7 @@ resource.pre_parse()                        # event_dispatch.rs
 | DynamicExternalUpstream | `dynamic_external_upstream` | Dynamic external upstream (specify external address at runtime) |
 | DynamicInternalUpstream | `dynamic_internal_upstream` | Dynamic internal upstream (select K8s Service at runtime) |
 | DirectEndpoint | `direct_endpoint` | Specify a backend endpoint address directly |
-| RegionRoute | `region_route` | Multi-region traffic routing: references a ServiceRegionRoute PluginMetaData (`serviceRegionRouteRef`) → clusterRef → ClusterRegionRoute PluginMetaData. The Gateway queries PluginMetaDataGatewayStore at runtime; uses ordered routeRules (RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange) + hashKeyGet passthrough + hashCalc writeBack + failoverTo (static redirect). No baseInfo, no auto failover. |
+| RegionRoute | `region_route` | Multi-region traffic routing: references a ServiceRegionRoute EdgionConfigData (`serviceRegionRouteRef`) → clusterRef → ClusterRegionRoute EdgionConfigData. The Gateway queries EdgionConfigDataGatewayStore at runtime; uses ordered routeRules (RouteByDirectRegion / RouteByKeyConfMatch / RouteByHashRange) + hashKeyGet passthrough + hashCalc writeBack + failoverTo (static redirect). No baseInfo, no auto failover. |
 
 ### Other (8)
 
@@ -174,7 +174,7 @@ resource.pre_parse()                        # event_dispatch.rs
 
 ## DSL script engine (DslPlugin)
 
-EdgionDSL is a lightweight request/response rule engine built on a custom bytecode VM (`src/core/gateway/plugins/http/dsl/`, ~4700 lines). It implements both `RequestFilter` and `UpstreamResponseFilter`; the UpstreamResponseFilter path bridges the sync trait into the `async fn execute` VM via `tokio::task::block_in_place`. Panics are isolated by `vm::execute_safe` (`AssertUnwindSafe + catch_unwind`), and a layered sandbox caps source size (≤64 KB), AST nodes (≤2000), bytecode size (≤256 KB), and runtime budgets (steps / loop / call / stack / string / list / map).
+EdgionDSL is a lightweight request/response rule engine built on a custom bytecode VM (`edgion-gateway/src/plugins/http/dsl/`, ~4700 lines). It implements both `RequestFilter` and `UpstreamResponseFilter`; the UpstreamResponseFilter path bridges the sync trait into the `async fn execute` VM via `tokio::task::block_in_place`. Panics are isolated by `vm::execute_safe` (`AssertUnwindSafe + catch_unwind`), and a layered sandbox caps source size (≤64 KB), AST nodes (≤2000), bytecode size (≤256 KB), and runtime budgets (steps / loop / call / stack / string / list / map).
 
 The full architecture — data flow, source layout, plugin entry points, async/sync bridging, panic isolation, and `DslRuntime` lifecycle — lives in [`dsl-engine.md`](dsl-engine.md). User-facing syntax / builtin signatures / runtime tuning are documented in `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/`.
 
@@ -198,14 +198,14 @@ Stream plugins run at the TCP/UDP layer and use a two-stage architecture:
 ## Directory layout
 
 ```
-src/core/gateway/plugins/
+edgion-gateway/src/plugins/
 ├── http/                          # HTTP plugin directory (28; with DebugAccessLogToHeader in gateway_api_filters/, total 29)
 │   ├── basic_auth/                # one subdirectory per plugin
 │   ├── jwt_auth/
 │   ├── cors/
 │   ├── dsl/                       # DSL engine (with lang/ subdirectory: AST, compiler, VM)
 │   ├── ...
-│   ├── common/                    # shared plugin utilities (auth_common, jwt_common)
+│   ├── common/                    # shared plugin utilities (auth_common, http_client)
 │   ├── conf_handler_impl.rs       # EdgionPlugins ConfHandler implementation
 │   └── plugin_store.rs            # HTTP plugin resource store
 ├── stream/                        # TCP/UDP layer plugins

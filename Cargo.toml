@@ -1,153 +1,132 @@
-[package]
-name = "edgion"
+[workspace]
+members = ["edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller", "edgion-tests"]
+# `edgion-tests` is the ~56k-line end-to-end harness. It is a member (so
+# `cargo build -p edgion-tests` works and CI can target it), but is kept out of
+# `default-members` so a bare `cargo build` / `cargo check --all-targets` for
+# production does NOT compile it. Build it explicitly with `-p edgion-tests`.
+default-members = ["edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller"]
+# Virtual manifest: after the crate split there is no root `edgion` package — the
+# three binaries (`edgion-gateway`, `edgion-controller`, `edgion-cli`) are peers
+# and no single package owns the workspace. A virtual manifest has no
+# `package.edition` to infer the resolver from, so resolver 2 MUST be stated
+# explicitly. Resolver 1 would union features across the dependency graph and
+# could enable both `boringssl` and `rustls` on pingora-core simultaneously (they
+# are mutually exclusive) — v2 preserves per-target feature selection. The
+# mutually-exclusive TLS/allocator features now live on the leaf crates
+# (`edgion-gateway`/`edgion-controller`/`edgion-cli`), never at a root package.
+resolver = "2"
+
+# Shared package metadata. Members inherit via `<key>.workspace = true`.
+# `license` is intentionally omitted for now (no member declared one before this
+# change — add it here once confirmed against the LICENSE file). `publish` stays
+# per-member (`edgion-tests` sets `publish = false`).
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 authors = ["pandalaa"]
 
-[lib]
-name = "edgion"
-path = "src/lib.rs"
+# Centralized lint policy. Members opt in with `[lints] workspace = true`.
+# Unlike `cargo clippy --all-targets` (a CLI invocation), these levels apply on
+# every `cargo build`/`check` and in the IDE, so the bar is enforced uniformly
+# without anyone having to remember a flag. CI does not pass `-D warnings`, so
+# these are advisory warnings, not hard build failures.
+#
+# Deliberately NOT setting `unsafe_code`: the gateway/common crates carry
+# legitimate `unsafe` (BoringSSL FFI, allocator hooks), so a global deny/warn
+# would only generate false positives.
+# `unreachable_pub` and `unused_qualifications` were evaluated and dropped: they
+# fired ~583 times across the existing code (tidiness-only, low bug value) and
+# cleaning them up was not worth the churn. Only zero-noise lints are kept.
+[workspace.lints.rust]
+unused_lifetimes = "warn"
 
-[[bin]]
-name = "edgion-gateway"
-path = "src/bin/edgion_gateway.rs"
+[workspace.lints.clippy]
+# A curated, high-signal / low-false-positive tier above clippy's defaults.
+await_holding_lock    = "warn"  # holding a lock across `.await` — deadlock-prone in a proxy
+rc_buffer             = "warn"
+inefficient_to_string = "warn"
+implicit_clone        = "warn"
+manual_let_else       = "warn"
 
-[[bin]]
-name = "edgion-controller"
-path = "src/bin/edgion_controller.rs"
+# Single source of truth for dependency versions. Members opt in with
+# `<dep>.workspace = true`; member-specific features are additive on top, and
+# `optional` is set at the member (workspace deps cannot carry `optional`).
+[workspace.dependencies]
+# Internal crates (path is relative to the workspace root). Not published, so
+# path-only — no version pin.
+edgion-resources  = { path = "edgion-resources" }
+edgion-common     = { path = "edgion-common" }
+# default-features = false so that a crate depending on this workspace dep
+# (e.g. edgion-tests, which needs only log_consts) can select a single TLS
+# backend without also activating boringssl. The gateway binary itself still
+# selects its own defaults via its own [features] default list.
+edgion-gateway    = { path = "edgion-gateway", default-features = false }
+edgion-controller = { path = "edgion-controller" }
+edgion-cli        = { path = "edgion-cli" }
 
-[[bin]]
-name = "edgion-cli"
-path = "src/bin/edgion_ctl.rs"
-
-[[bin]]
-name = "edgion-center"
-path = "src/bin/edgion_center.rs"
-
-[[bin]]
-name = "cache_residue"
-path = "examples/code/validator/cache_residue.rs"
-
-[[example]]
-name = "build_test_proto"
-path = "examples/code/build_test_proto.rs"
-
-[[example]]
-name = "test_server"
-path = "examples/code/server/test_server.rs"
-
-[[example]]
-name = "test_client"
-path = "examples/code/client/test_client.rs"
-
-[[example]]
-name = "test_client_direct"
-path = "examples/code/client_direct/test_client_direct.rs"
-
-[[example]]
-name = "resource_diff"
-path = "examples/code/validator/resource_diff.rs"
-
-[[example]]
-name = "config_load_validator"
-path = "examples/code/validator/config_load_validator.rs"
-
-[features]
-# Default features
-default = ["allocator-jemalloc", "boringssl"]
-
-# Memory allocator selection (mutually exclusive)
-allocator-jemalloc = ["tikv-jemallocator"]
-allocator-mimalloc = ["mimalloc"]
-allocator-system = []
-
-# TLS backend selection (mutually exclusive)
-boringssl = [
-    "pingora-core/boringssl",
-    "pingora-proxy/boringssl",
-    "dep:boring-sys",
-    "dep:boring",
-]
-
-rustls = [
-    "pingora-core/rustls",
-    "pingora-proxy/rustls",
-]
-
-# Legacy route tests using deprecated ZtraceHttpRoute (disabled by default)
-legacy_route_tests = []
-
-[dependencies]
-# Memory allocators (optional, controlled by features)
-tikv-jemallocator = { version = "0.6", optional = true }
-mimalloc = { version = "0.1", default-features = false, optional = true }
-
-# Core async runtime and error handling
+# Async runtime / error handling
 tokio = { version = "1.49", features = ["full"] }
 tokio-util = "0.7"
 tokio-stream = "0.1"
-anyhow = "1.0"
+tokio-rustls = "0.26"
 async-trait = "0.1"
+anyhow = "1.0"
 thiserror = "2.0.18"
+futures = "0.3.31"
 
-# Serialization/Deserialization
+# Serialization / schema
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.9"
-toml = "0.9"
+schemars = "=1.2.1"
 jsonschema = { version = "0.40", default-features = false }
 
-# Kubernetes conf_client and types
+# Kubernetes
 kube = { version = "2.0.1", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.26.1", features = ["latest", "schemars"] }
-schemars = { version = "1" }
 
-# gRPC (config sync)
+# gRPC / protobuf
 tonic = { version = "0.12", features = ["tls", "tls-webpki-roots"] }
-# rustls （tonic TLS ）
-rustls = { version = "0.23", features = ["ring"] }
-tokio-rustls = "0.26"
-# System CA roots for building custom rustls ClientConfig (Redis LinkSys TLS)
-rustls-native-certs = "0.8"
-x509-parser = { version = "0.18", features = ["verify"] }  # Certificate parsing and signature verification
 tonic-reflection = "0.12"
+tonic-build = "0.12"
 prost = "0.13"
 
-# File system monitoring
-notify = "8.2"
-walkdir = "2"
-futures = "0.3.31"
+# TLS / certificates
+rustls = { version = "0.23", features = ["ring"] }
+rustls-native-certs = "0.8"
+x509-parser = { version = "0.18", features = ["verify"] }
+rcgen = { version = "0.14.7", features = ["x509-parser"] }
+instant-acme = "0.8.4"
+# BoringSSL bindings for custom TLS callbacks — pulled in (optional) only by the
+# `boringssl` feature of the crates that hold the callback code.
+boring = "4"
+boring-sys = "4"
 
-# HTTP server
+# Pingora. IMPORTANT: declared WITHOUT a TLS backend feature. Workspace-dep
+# features are additive, so the backend each binary crate selects (via its own
+# `[features]` forwarding `pingora-core/boringssl` etc.) is unioned in — putting
+# `boringssl`/`rustls` here would force it onto every member.
+pingora-core = { version = "0.8.1", features = ["connection_filter"] }
+pingora-http = "0.8.1"
+pingora-proxy = "0.8.1"
+pingora-limits = "0.8.1"
+pingora-load-balancing = "0.8.1"
+pingora-ketama = "0.8.1"
+
+# HTTP server / client
 axum = { version = "0.8.8", features = ["macros", "ws"] }
+axum-server = { version = "0.8", features = ["tls-rustls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
+http = "1.4.0"
+h2 = "0.4"
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
+tower = { version = "0.5", features = ["util"] }
+tokio-tungstenite = "0.28"
+proxy-header = "0.1.2"
+percent-encoding = "2.3"
+cookie = "0.18.1"
 
-# Utilities
-bytes = "1.11.1"
-base64 = "0.22"
-chrono = "0.4"
-parking_lot = "0.12"
-uuid = { version = "1.19", features = ["v4"] }
-arc-swap = "1.8"
-dashmap = "6.1"
-regex = "1.12"
-rand = "0.9"
-smallvec = "1.15"
-indexmap = "2"
-nom = "7"
-bcrypt = "0.18"
-sha2 = "0.10"
-crc32fast = "1.4"
-hmac = "0.12"
-aes-gcm = "0.10"
-hex = "0.4"
-jsonwebtoken = "9"
-
-# Pingora
-pingora-core = { version = "0.8.0", features = ["connection_filter"] }
-pingora-http = "0.8.0"
-pingora-limits = "0.8.0"
-pingora-load-balancing = "0.8.0"
-pingora-proxy = { version = "0.8.0" }
+# Storage / datastores
 etcd-client = { version = "0.18", features = ["tls"] }
 fred = { version = "10", default-features = false, features = [
     "enable-rustls",       # TLS via rustls (consistent with Edgion)
@@ -158,60 +137,81 @@ fred = { version = "10", default-features = false, features = [
     "i-lists",             # List commands (RPUSH, LPOP, LLEN, LTRIM)
     "partial-tracing",     # Tracing integration
 ] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+# Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
+ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
+rskafka = { version = "0.5", default-features = false, features = ["transport-tls"] }
 
-# BoringSSL bindings for custom TLS callbacks (optional, only for boringssl feature)
-boring-sys = { version = "4", optional = true }
-boring = { version = "4", optional = true }
-
-# Metrics
-metrics = "0.24"
-metrics-exporter-prometheus = "0.18"
-metrics-util = "0.20"
-
-# CLI
-clap = { version = "4.5", features = ["derive"] }
-rpassword = "7"
+# Crypto / encoding
+base64 = "0.22"
+hex = "0.4"
+sha1 = "0.10.6"
+sha2 = "0.10"
+md-5 = "0.10"
+hmac = "0.12"
+aes-gcm = "0.10"
+crc32fast = "1.4"
+subtle = "2"
+jsonwebtoken = "9"
 zeroize = { version = "1", features = ["derive"] }
+
+# Observability
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
-http = "1.4.0"
-percent-encoding = "2.3"
+metrics = "0.24"
+metrics-exporter-prometheus = "0.18"
+metrics-util = { version = "0.20", features = ["debugging"] }
+opentelemetry      = { version = "0.31", features = ["logs"] }
+opentelemetry_sdk  = { version = "0.31", features = ["logs"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["logs", "grpc-tonic"] }
 
-# Test client dependencies
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
-
-# CLI table formatting
+# CLI / terminal
+clap = { version = "4.5", features = ["derive", "env"] }
+rpassword = "7"
 tabled = "0.20"
-
-rusqlite = { version = "0.31", features = ["bundled"] }
-md-5 = "0.10"
-cookie = "0.18.1"
-instant-acme = "0.8.4"
-rcgen = { version = "0.14.7", features = ["x509-parser"] }
-time = { version = "0.3", features = ["std"] }
-sha1 = "0.10.6"
-# Use rustls backend to avoid OpenSSL/boringssl linker conflicts in multi-arch builds.
-ldap3 = { version = "0.12", default-features = false, features = ["tls-rustls-ring"] }
-pingora-ketama = "0.8.0"
-tower = { version = "0.5", features = ["util"] }
-
-[build-dependencies]
-tonic-build = "0.12"
-
-[dev-dependencies]
-tempfile = "3"
-h2 = "0.4"
-tokio-tungstenite = "0.28"
-base64 = "0.22"
-tonic-build = "0.12"
-time = { version = "0.3", features = ["std"] }
-mockall = "0.14.0"
 colored = "2.2"
 console = "0.16"
-axum-server = { version = "0.8", features = ["tls-rustls"] }
-proxy-header = "0.1.2"
-tower = "0.5"
-hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
+
+# Memory allocators (made `optional` at the binary crates that set the allocator)
+tikv-jemallocator = "0.6"
+mimalloc = { version = "0.1", default-features = false }
+
+# Utilities
+bytes = "1.11.1"
+chrono = "0.4"
+time = { version = "0.3", features = ["std"] }
+uuid = { version = "1.19", features = ["v4"] }
+parking_lot = "0.12"
+arc-swap = "1.8"
+dashmap = "6.1"
+indexmap = "2"
+smallvec = "1.15"
+regex = "1.12"
+rand = "0.9"
+nom = "7"
+notify = "8.2"
+walkdir = "2"
+
+# Dev / test
+tempfile = "3"
 wiremock = "0.6"
+mockall = "0.14.0"
 proptest = "1"
+expect-test = "1.5"
+
+# Dedicated profile for shipped/release artifacts. Plain `release` stays lean so
+# day-to-day dev, CI, and profiling iterate fast; only the final binaries built
+# for distribution pay the LTO + single-codegen-unit cost. Build with
+# `cargo build --profile production` (point the Dockerfile/release pipeline at it).
+#
+# `lto = "thin"`: cross-crate inlining (edgion ↔ pingora hot paths) at a fraction
+#   of `fat` LTO's link time/memory.
+# `codegen-units = 1`: whole-crate optimization (no intra-crate parallelism).
+# `debug = 1`: keep line tables so production flamegraphs/perf still map to
+#   source — note LTO inlining still merges frames; this only preserves symbols.
+[profile.production]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+debug = 1

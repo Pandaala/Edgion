@@ -1,189 +1,122 @@
-# Admin Credential Bootstrap (Auth Bootstrap)
+# Admin Token Bootstrap (Auth Bootstrap)
 
-Describes where the Controller / Center admin credentials come from at startup and the configuration paths available to operators.
+Describes where the Controller's Admin API token comes from at startup and the options available to operators. Authentication is **token-only** (2026-06-12): a single Istio-style pre-shared bearer token. The former browser-login stack (username/password `local_auth` + OIDC `auth` admin) was removed.
+
+> The federation Center has been extracted to the separate EdgionCenter repository; its auth bootstrap is documented there, not here.
 
 ## Behavior Overview
 
-| Component | No `[local_auth]` + No `[auth]` | With `[local_auth]` | With `[auth]` OIDC |
-|-----------|---|---|---|
-| Controller | Auto-generates Secret `edgion-admin-credentials` (K8s mode) or writes to the conf directory (local mode); log in with the generated password | Static credentials from the configuration file | OIDC flow |
-| Center | **Server starts + business routes always 503** + WARN log at startup | Static credentials from the configuration file | OIDC flow |
+| Component | No token configured | With a token configured |
+|-----------|---------------------|-------------------------|
+| Controller | **Server starts + business routes always 503** + WARN log at startup | Admin API accepts the pre-shared bearer token (allow-all) |
 
-**Key difference**: Controller supports "zero-config startup" (Secret auto-generation is retained); Center requires the operator to provide credentials explicitly.
+The operator must supply the token explicitly — there is **no auto-generation**.
 
-### Center's 503 Semantics (fail-close)
+### 503 Semantics (fail-close)
 
-Center has no auto-generation capability. When neither `[local_auth]` nor `[auth]` is configured:
-- `require_auth` derives to `true` (safe default: avoids leaving the admin API exposed).
-- No auth provider is ready.
-- `unified_auth_middleware` takes the "fail-close" branch and returns `503 Service Unavailable` (with `Retry-After: 10`).
-- `/health`, `/ready`, `/metrics`, `/api/v1/auth/status` remain accessible (skip_paths + early-return paths).
-- The startup log prints WARN: `No authentication configured. Admin endpoints will return 503 until you configure [local_auth] or [auth] in your TOML.`
+When no token is configured (neither `EDGION_ADMIN_TOKEN` / `admin_token` nor any `cli_tokens`):
 
-## Controller: Reading the Auto-generated Credentials
+- `require_token_configured_gate` (admin app only) returns `503 Service Unavailable` on every business route.
+- A startup WARN is logged: `no admin/cli token configured; Admin API business routes fail closed with 503 until EDGION_ADMIN_TOKEN (or a cli_token) is set`.
+- `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible (the static public set). `/api/v1/auth/status` reports `status: Initializing`.
+- The controller never panics or exits.
 
-### K8s Mode
+## Controller: Providing the Admin Token
+
+The Controller resolves the admin token from two sources (highest precedence first); a blank/whitespace value is treated as **not configured**.
+
+### Option A: Env var from a K8s Secret (recommended for Kubernetes)
+
+Inject `EDGION_ADMIN_TOKEN` via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret (key `token`) in the controller Deployment.
+
+**RBAC prerequisite**: the Controller ServiceAccount needs only `secrets: [get, list, watch]` — the `create` verb is not required (no auto-generation).
 
 ```bash
+# Read the current admin token
 kubectl -n edgion-system get secret edgion-admin-credentials \
-    -o jsonpath='{.data.password}' | base64 -d
+    -o jsonpath='{.data.token}' | base64 -d
 ```
 
-### Local Mode
+### Option B: `admin_token` in a Secret-mounted config file
 
-```bash
-cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml
-```
-
-### Changing the Password
-
-After `kubectl edit secret edgion-admin-credentials`, the Controller's secret retry loop hot-reloads
-`UnifiedAuthState` (semantics are stable under the CancellationToken shutdown signal; see the structural regression in fix #01 round 3).
-
-## Center: How to Provide Admin Credentials
-
-### Option A: `local_auth` local username/password (YAML)
+Store the controller YAML config in a K8s Secret (not a ConfigMap — it holds a secret token) and mount it into the pod. The `admin_token` field is used directly when `EDGION_ADMIN_TOKEN` is absent.
 
 ```yaml
-local_auth:
-  enabled: true
-  username: admin
-  # bcrypt hash. Generate via: htpasswd -bnBC 10 "" <your-password> | tr -d ':\n'
-  # Or use a plaintext password field (deploy/center-test/deploy.yaml has a test example)
-  password: "<your-password>"
-  jwt_secret: "<a sufficiently long random string, at least 32 characters>"
-  jwt_expiry_hours: 24
-  skip_paths:
-    - "/health"
-    - "/ready"
+admin_token: "edg_…"
 ```
 
-### Option B: `auth` OIDC
+> **Warning**: do not store `admin_token` in a ConfigMap. Use the env var (Option A) or a Secret-mounted config file.
 
-```yaml
-auth:
-  enabled: true
-  discovery: "https://your-oidc-provider/.well-known/openid-configuration"
-  client_id: "..."
-  # ...
-```
+### Behavior when nothing is configured
 
-### Consequences of Configuring Nothing (fail-close via 503)
+If neither source provides a non-blank token (and no `cli_tokens` are configured either), the controller starts successfully but all Admin API business routes return `503 Service Unavailable` (fail-close) with a startup WARN. `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible.
 
-Center starts successfully, but:
-- All `/api/v1/*` business paths are rejected with 503.
-- `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` remain accessible.
-- The startup log prints WARN (see above).
+## Token model
 
-The operator can supply the configuration and restart afterward.
+- The admin token maps to an **allow-all wildcard** (`*`/`*`) RBAC policy — it is a `Role::Restricted` carrying that policy, held on the `Authorizer` via `set_admin_token`. There is no separate "superuser" role.
+- It **survives reloads**: `Authorizer::apply` re-merges the admin-token entry into the cli-token map on every reload.
+- **Scoped, role-limited** tokens for automation are configured separately under `[cli_tokens]` (each with a fine-grained `rbac.allow` policy). See `skills/02-features/02-config/00-controller-config.md`.
 
-### Consequences of Explicitly Disabling All Providers (no-auth mode, **dangerous**)
+## Admin API network exposure
 
-If the operator **explicitly** sets all providers to `enabled: false`, for example:
+The Admin API is plaintext HTTP (no TLS listener). Its security relies on
+network controls plus the bearer token. Secure defaults:
 
-```yaml
-local_auth:
-  enabled: false
-auth:
-  enabled: false
-```
+- `admin_listen` defaults to `127.0.0.1:12101` (loopback). Cluster/remote access
+  requires explicitly setting `0.0.0.0` AND restricting reach via `allow_admin_ips`
+  and/or a Kubernetes NetworkPolicy. K8s sample configs set `0.0.0.0` explicitly
+  because the ClusterIP Service forwards to the Pod IP.
+- `allow_admin_ips` is empty by default (allow all). Set it to the trusted
+  peer CIDRs; matched against the TCP peer IP only.
 
-Then:
-- `require_auth = false` (respecting the operator's opt-out intent).
-- `unified_auth_middleware` directly passes through all requests.
-- **All `/api/v1/*` business paths are accessible without a token** — the admin API is **completely open**.
-- Startup WARN: `Admin API is running in NO-AUTH mode: ...` (since 2026-04-20).
+When the controller starts bound to a non-loopback address with an empty
+`allow_admin_ips`, it logs a high-severity WARN and sets the gauge:
 
-This is a legitimate "pure no-auth mode" (e.g., internal-network isolation + authentication handled by another gateway layer), but it is **very easy to trigger by mistake** (e.g., the operator wants to "temporarily disable local_auth and use OIDC only" but accidentally disables both). If your deployment really takes this path:
+    edgion_system_error_state{component="admin_api", reason="insecure_admin_exposure"} = 1
 
-1. Explicitly state in the deployment documentation that this is "no-auth mode, relying on layer X for authentication".
-2. Do not place this YAML on a Center exposed to the public internet.
+Example Alertmanager rule:
 
-If you simply want to **switch** to OIDC-only, the correct approach is:
-- **Remove** the `local_auth` section entirely (or leave only `enabled: false`).
-- Configure the `auth` section with `enabled: true` + a valid discovery.
-- Then `oidc_intent = true`, `require_auth = true`, and the normal OIDC flow runs.
+    edgion_system_error_state{reason="insecure_admin_exposure"} > 0 for 5m
 
-## K8s Deployment: Mounting Center YAML via Secret
+The detection is observability-only — it never blocks startup. A hardening
+NetworkPolicy template ships at `cicd/deploy/kubernetes/controller/optional/networkpolicy.yaml`.
 
-Recommended pattern: store the Center YAML configuration (including the `local_auth:` section) as a K8s Secret and mount it into the Center Pod as the main configuration file.
+## Token Revocation / Rotation
 
-Reference: `deploy/center-test/deploy.yaml`.
+The pre-shared token is stateless — there is no session, cookie, or server-side blacklist. To revoke access:
 
-## JWT Revocation Semantics (`[local_auth]` mode)
+1. **Rotate the admin token**: update the `edgion-admin-credentials` Secret (key `token`) and perform a rolling restart (`kubectl rollout restart deployment/edgion-controller -n edgion-system`). The old token stops working immediately on the new pods.
+2. **Revoke a scoped cli token**: remove (or change) its `cli_tokens[].token_sha256` entry and `POST /api/v1/reload` — no restart needed (the token table is hot-reloadable; the admin token survives the reload).
 
-**Current state**: local admin JWTs are **stateless** — Edgion has no server-side token blacklist; `POST /api/v1/auth/logout` only clears the browser cookie (`Max-Age=0`); **issued tokens remain valid until they reach `exp`**.
+Rotating the admin token is the fastest bulk revocation; routine per-client scoping should use `[cli_tokens]` instead of sharing the admin token.
 
-Upper bound on the exposure window = `jwt_expiry_hours` (default `24`).
+## CLI workflow
 
-### This Is an Intentional Stateless Trade-off
+`edgion-cli` is token-only. It resolves the bearer token by precedence `--token` → `EDGION_TOKEN` → `~/.edgion/token` (`resolve_token`), with no auto-login or `/api/v1/auth/me` probe. `edgion-cli login --token <edg_…>` simply persists the token to `~/.edgion/token`. See `skills/01-architecture/04-ctl/01-commands.md`.
 
-Same pattern as **Argo CD local administrator** / **Kubernetes Dashboard built-in token**. Introducing a server-side blacklist runs into two architectural difficulties:
+## Migration (BREAKING) — token-only auth
 
-| Approach | Problem |
-|----------|---------|
-| In-memory blacklist (`HashSet<jti>`) | In multi-instance HA deployments each instance is independent — logout hits instance A while subsequent requests hit instance B → B does not know about the revocation = **illusory defense**; process restarts wipe it. |
-| Redis blacklist | Introduces a hard Redis dependency on the admin API path + 1 RT latency per request + a fail-open vs. fail-close dilemma when Redis is unavailable. |
+Deployments that relied on the old username/password or OIDC admin login will receive Admin-API 503 after upgrading until a token is provided. Migration:
 
-So Edgion chooses "stateless JWT + provide revocation through other means".
+1. **Mint a token** with `edgion-cli gen-token` (or any sufficiently random string), store it in the `edgion-admin-credentials` Secret under key `token`, and wire it into the controller Deployment as `EDGION_ADMIN_TOKEN` via `secretKeyRef`.
+2. **Or** set `admin_token` in a Secret-mounted config file.
+3. Update clients: replace any username/password or cookie flow with a `Authorization: Bearer <token>` header (or `edgion-cli login --token`).
 
-### When Real Revocation Is Needed: **Use OIDC Federation**
+Removed config keys: `local_auth` (username/password/jwt_secret/cookie_secure), `auth` (OIDC admin), and the `EDGION_ADMIN_USERNAME` / `EDGION_ADMIN_PASSWORD` / `EDGION_ADMIN_JWT_SECRET` env vars. The Admin API endpoints `/api/v1/auth/login`, `/api/v1/auth/logout`, and `/api/v1/auth/me` are gone; only the public `GET /api/v1/auth/status` remains.
 
-`unified_auth` supports configuring OIDC in the `[auth]` section (Keycloak / Auth0 / Okta / Azure AD / Google, etc.):
-- Revoke a user session or refresh token at the IdP → all access tokens based on that session become invalid.
-- Unified session lifecycle management, revocation, and audit logs at the IdP.
-- This is the **industry-standard path** when production-grade revocation is genuinely required for "management-side authentication".
-
-Switch example (either Controller or Center):
-
-```yaml
-# Disable local_auth, switch to OIDC
-local_auth:
-  enabled: false
-auth:
-  enabled: true
-  discovery: "https://idp.example.com/.well-known/openid-configuration"
-  client_id: "edgion-admin"
-  client_secret_ref:
-    name: oidc-admin-secret
-  # ...
-```
-
-### If You Must Use `[local_auth]`: Shorten the Exposure Window
-
-For deployments that cannot yet use OIDC:
-
-```yaml
-local_auth:
-  enabled: true
-  # ...
-  jwt_expiry_hours: 4       # Production recommendation: 1-4 hours rather than the default 24h
-```
-
-**About the CLI workflow**: `edgion-cli`'s `ensure_auth()` automatically **re-logs in** after the token expires or the controller restarts (provided that credentials can be parsed from the configuration file). Shortening `jwt_expiry_hours` does not break the CLI user experience; it only makes the browser dashboard scenario re-prompt for login more often.
-
-### Standard Operations for Decommissioning (Alternatives to "Revocation")
-
-Since per-token revocation is unavailable, when handling operator departures / privilege removal:
-
-1. **Change the password**: `kubectl edit secret edgion-admin-credentials` to modify the `password` field → the Controller secret retry loop hot-reloads `UnifiedAuthState` → all future logins must use the new password (but **issued tokens** still remain valid until `exp`).
-2. **Rotate `jwt_secret`**: modify the `jwt_secret` field in the Secret → all issued tokens become invalid immediately (**one-click revoke all**, but it also kicks off all currently logged-in administrators).
-3. **Wait for the window to expire**: if `jwt_expiry_hours` has been shortened to 1-4h, this is also acceptable.
-
-**Option 2 (rotate jwt_secret) is the fastest "bulk revocation"**, suitable for emergencies; routine personnel changes should be paired with OIDC federation.
+> For data-plane OIDC/JWT on the **gateway** (the `openid_connect` / `jwt_auth` plugins), nothing changed — those are unrelated to Admin API auth.
 
 ## Related Regression Tests
 
-- `examples/test/scripts/integration/test_center_no_auth.sh` —
-  Integration-layer structural regression for Center starting without auth configured + 503 on `/api/v1/controllers` business paths + WARN log.
-  Included in the prerequisites of `run_integration.sh`.
+- `edgion-tests/integration/scripts/integration/test_controller_no_auth.sh` —
+  Integration-layer structural regression: no token configured → `/health`+`/ready` 200, business route 503, startup WARN; a second positive case exports `EDGION_ADMIN_TOKEN` and asserts an authenticated request succeeds.
 
 ## History
 
-- 2026-04-20: Center removed the default `admin/edgion1234` fallback (BREAKING).
-  - Root cause: the bug 1 in fix #01 round 2 (`LocalAuthConfig::default()` panicked at startup) was rooted in
-    the Center's `or_else(|| Some(edgion1234))` fallback constructing credentials for the operator that did not
-    satisfy fix #01's strengthened validate.
-  - Fix: Center no longer provides a fallback; the operator must explicitly configure `[local_auth]` or `[auth]`,
-    otherwise the admin API returns 503 across the board.
-  - Related spec: `docs/superpowers/specs/2026-04-20-admin-server-unification-design.md`.
+- 2026-06-12: Admin API auth switched to **token-only** (BREAKING). Removed the browser-login stack
+  (`local_auth`, `unified_auth`, OIDC admin `auth`, the `/api/v1/auth/{login,logout,me}` endpoints,
+  `Role::Superuser`). The operator now supplies a single Istio-style pre-shared bearer token via
+  `EDGION_ADMIN_TOKEN` / `admin_token`; it maps to an allow-all wildcard policy and survives reloads.
+  No token configured → server boots, business routes 503, startup WARN.
+- 2026-06-01: Controller removed admin-credential auto-generation (BREAKING) — superseded by the
+  token-only switch above.

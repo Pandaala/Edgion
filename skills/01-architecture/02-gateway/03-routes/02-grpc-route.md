@@ -12,7 +12,7 @@ gRPC routing is implemented based on the Gateway API `GRPCRoute` CRD. Service- a
 ## Module structure
 
 ```
-src/core/gateway/routes/grpc/
+edgion-gateway/src/routes/grpc/
 ├── mod.rs                # module entry and type exports
 ├── conf_handler_impl.rs  # ConfHandler<GRPCRoute> implementation
 ├── match_engine.rs       # GrpcMatchEngine: service/method route matching
@@ -55,6 +55,8 @@ The gRPC-Web protocol is identified during the `early_request_filter` phase via 
 
 - `application/grpc` → marked as `grpc`.
 - `application/grpc-web` or `application/grpc-web+proto` → marked as `grpc-web`.
+
+Content-Type matching is case-insensitive (RFC 9110 §8.3.1), so `Application/Grpc` and `APPLICATION/GRPC-WEB+PROTO` match too. The shared helpers live in `proxy_http::content_type`.
 
 The result is stored in `ctx.request_info.discover_protocol`. The `is_grpc_protocol` helper checks this field; gRPC and gRPC-Web share the same route-matching logic.
 
@@ -115,15 +117,15 @@ Edgion honors the client-supplied `grpc-timeout` header end-to-end:
 5. Retry-decision sites (`pg_fail_to_connect`, `pg_error_while_proxy`, `pg_upstream_response_filter` status-code retry branch) treat `request_timeout_exceeded() || grpc_deadline_exceeded()` as the unified "deadline blown — do not retry" guard, so a tight client deadline blocks LB picks and circuit-breaker counter increments the caller has already given up on.
 6. `pg_upstream_peer` retry backoff bounds the sleep by `min(request_remaining, grpc_remaining)` and re-checks both deadlines after the sleep; required so that a `retry.backoff` coarser than the client `grpc-timeout` cannot extend gateway work past the caller's deadline.
 
-Coverage spans pure gRPC (`application/grpc`) and gRPC-Web (`application/grpc-web*`). Malformed headers fall back to the route-level `request_timeout` (no behavior change). See `skills/04-review/h2-grpc/h2-grpc-03-timeout-honored.md` for the decision context.
+Coverage spans pure gRPC (`application/grpc`) and gRPC-Web (`application/grpc-web*`). Malformed headers fall back to the route-level `request_timeout` (no behavior change). See `skills/04-review/h2-grpc/timeout-honored.md` for the decision context.
 
 ## Key source files
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/routes/grpc/match_engine.rs` | GrpcMatchEngine, parse_grpc_path |
-| `src/core/gateway/routes/grpc/match_unit.rs` | GrpcRouteRuleUnit, GrpcMatchInfo |
-| `src/core/gateway/routes/grpc/routes_mgr.rs` | GlobalGrpcRouteManagers, GrpcRouteRules |
-| `src/core/gateway/routes/grpc/conf_handler_impl.rs` | ConfHandler<GRPCRoute> implementation |
-| `src/core/gateway/routes/grpc/integration.rs` | try_match_grpc_route, handle_grpc_upstream |
-| `src/core/gateway/routes/grpc/grpc_timeout.rs` | parse_grpc_timeout, format_grpc_timeout |
+| `edgion-gateway/src/routes/grpc/match_engine.rs` | GrpcMatchEngine, parse_grpc_path |
+| `edgion-gateway/src/routes/grpc/match_unit.rs` | GrpcRouteRuleUnit, GrpcMatchInfo |
+| `edgion-gateway/src/routes/grpc/routes_mgr.rs` | GlobalGrpcRouteManagers, GrpcRouteRules |
+| `edgion-gateway/src/routes/grpc/conf_handler_impl.rs` | ConfHandler<GRPCRoute> implementation |
+| `edgion-gateway/src/routes/grpc/integration.rs` | try_match_grpc_route, handle_grpc_upstream |
+| `edgion-gateway/src/routes/grpc/grpc_timeout.rs` | parse_grpc_timeout, format_grpc_timeout |

@@ -1,26 +1,56 @@
 # UDPRoute 后端配置
 
-UDPRoute 通过 `backendRefs` 将流量转发到目标 Service。
+UDPRoute 将 UDP 数据报转发到一个或多个 Kubernetes Service。来自同一客户端的数据报在会话期间固定到同一后端；对端点的负载均衡是自动完成的。
 
-## 示例
+## 基本示例
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: UDPRoute
 metadata:
-  name: game-route
-  namespace: gateway-system
+  name: dns-route
+  namespace: production
 spec:
   parentRefs:
-    - name: edge-gw
-      sectionName: udp-game
+    - name: main-gateway
+      sectionName: dns
   rules:
     - backendRefs:
-        - name: game-udp
-          port: 30000
+        - name: dns-service
+          port: 53
 ```
 
-## 实践建议
+## 后端字段
 
-1. 尽量保证后端实例稳定，避免频繁漂移。
-2. 对延迟敏感业务，关注网络路径和丢包率。
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `name` | String | **必填** | 目标 Kubernetes Service 名称 |
+| `port` | Integer | **必填** | 发送数据报的 Service 端口 |
+| `weight` | Integer | `1` | 发往此后端的会话相对份额 |
+| `namespace` | String | UDPRoute 所在命名空间 | Service 命名空间；跨命名空间需要 `ReferenceGrant` |
+| `kind` | String | `Service` | 后端对象类型 |
+
+## 会话与超时
+
+UDP 是无连接协议，因此网关按客户端源地址跟踪一个逻辑会话，并将其固定到某个后端。空闲会话在不活跃超时（60 秒）后被回收，此后来自该客户端的下一个数据报可能被负载均衡到不同的后端。
+
+## 带权重的后端
+
+列出多个 `backendRefs` 可按权重（比例，非百分比）在后端之间分配会话：
+
+```yaml
+spec:
+  rules:
+    - backendRefs:
+        - name: dns-primary
+          port: 53
+          weight: 2
+        - name: dns-secondary
+          port: 53
+          weight: 1
+```
+
+## 相关文档
+
+- [UDPRoute 总览](../overview.md)
+- [跨命名空间引用](../../../ops-guide/infrastructure/reference-grant.md)

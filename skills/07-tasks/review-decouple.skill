@@ -1,0 +1,77 @@
+---
+name: review-decouple
+description: Use when the user invokes /review-decouple or asks to "review the decouple changes / a decoupled resource" — runs an INDEPENDENT adversarial review of a types two-type (schema/compiled) split diff against the locked invariants, emits a verdict + findings, and does NOT fix or commit. Equivalent phrases in other languages trigger it too.
+---
+
+# Review-Decouple Workflow (independent verification of a two-type split)
+
+A **second, independent** review pass over a decouple change (one resource or the whole set),
+separate from the in-flight Step-4 review inside `/decouple`. Read-mostly: it produces a verdict
+and findings; it does NOT edit, fix, or commit.
+
+## Iron Law
+
+```
+REVIEW ONLY — no code edits, no commit
+EVERY HIGH-RISK DIMENSION GETS AN EXPLICIT VERDICT (no "looks fine" hand-waving)
+DEFAULT TO SUSPICION — try to PROVE a regression exists before concluding it doesn't
+```
+
+## Input
+
+`$ARGUMENTS` = a resource name (`grpc`/`l4`/`tcp`/`plugins`/…), a commit/range, or empty.
+- name → review that resource's decouple diff (working tree or its commit).
+- commit/range → `git show`/`git diff` that.
+- empty → review the current uncommitted `git diff`, scoped to `src/types` + the touched gateway files.
+
+First, read `tasks/todo/types-decouple-from-gateway-controller.md` (architecture + HTTP recipe +
+5 invariants) so the review is against the locked design, not your guess.
+
+## What to verify — the high-risk dimensions (each gets an explicit verdict)
+
+1. **Per-rule sharing topology (THE bug magnet).** Prove `compile_<rule>` (or the per-rule
+   compile) is called EXACTLY ONCE per rule — trace every call site. The resulting
+   `Arc<PluginRuntime>` (rule-level AND each backend's) must be Arc-shared into all H×K units,
+   NEVER rebuilt per match-item/hostname. A per-unit build splits in-memory RateLimit CMS state
+   N× → effective limit becomes N×. This is the single highest-value check.
+2. **Selector scope.** `backend_finder` built per (rule, hostname/listener) — matches today's
+   WRR cursor scope. Confirm item order + weights (`weight.or(Some(1))`) are identical to the old
+   path, so WRR distribution is unchanged.
+3. **Behavior-neutrality.** Field reads ride `Deref` unchanged; the per-request schema mutation
+   (e.g. `backend_tls_policy`) uses explicit `.schema.`; jump/direct writes wrap into the compiled
+   type with the correct (usually empty) runtime; `ctx.selected_*backend` type change ripples
+   cleanly.
+4. **Shared-file / cross-resource trap.** ONLY this resource's arms changed — the gRPC
+   `(_, Some(unit))` arm and other route types' `.rule.plugin_runtime` were NOT touched (or were
+   correctly handled by their own task). grep to confirm.
+5. **Schema purity & wire/CRD safety.** `grep -rnE "crate::core::(gateway|controller)"` over this
+   resource's `src/types` files is EMPTY. The removed fields were `#[serde(skip)]`+`#[schemars(skip)]`
+   and the holder structs don't derive `PartialEq/Eq/Hash` → wire format + CRD/OpenAPI unchanged.
+6. **Clone / panic / edge cases.** Unit never value-cloned in a way that wrongly shares state;
+   `rule_runtimes[idx]` can't panic; empty-backends / empty-matches / default-match handled.
+7. **Regression-test coverage.** Is there an integration test that PINS the per-rule-shared-state
+   invariant — a rule with ≥2 match-items (or ≥2 hostnames) + a per-rule stateful plugin
+   (RateLimit), asserting the limit is enforced GLOBALLY (one shared window), not per-match? If
+   absent, raise it as a finding (the existing rate-limit tests are single-match and would NOT
+   catch a future per-unit regression).
+
+## Method
+
+1. Dispatch **2–3 subagents IN PARALLEL** over the diff, each with the full context above:
+   one **correctness** (topology + behavior-neutrality), one **adversarial** (try to break it:
+   state-splitting, the shared-file trap, clone/borrow, WRR order), optionally one **test-gap**
+   (does the suite cover the invariant; what scenario is missing).
+2. Collect verdicts. For each dimension: ✅ pass / ⚠️ concern / ❌ blocker, with file:line evidence.
+3. Cross-check the subagents — if they disagree, dig in yourself before concluding.
+
+## Output
+
+A consolidated report:
+- **Overall verdict**: ship / fix-then-ship / blocker.
+- Per-dimension verdict table with file:line evidence.
+- Any blocker or concern written up concretely (and, if the user wants a tracked pool, as
+  `tasks/review-decouple/<resource>-NN-<slug>.md` finding files for `/fix-issue` to consume).
+- The recommended regression test (dimension 7) if missing.
+
+Do NOT fix anything here. Hand the findings to the user. End with a one-line status:
+`[review-decouple] <resource> · verdict: ship/fix/blocker · findings: N · committed: NO`.

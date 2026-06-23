@@ -1,0 +1,128 @@
+# Bonus scenario 9: ctx-set-integration
+# ---------------------------------------------------------------------------
+# Consumer feeds dynamic values into the gateway context via ctx-set, then the
+# webhook references them with ${ctx:NAME} templates. Two earlier ctx-set vars
+# (action, user_id) are computed, then a third var calls a webhook whose
+# request templates interpolate ${ctx:action} into the path and ${ctx:user_id}
+# into a custom header.
+# Backend via Service + EndpointSlice.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh9-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: wh9-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: wh9-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh9-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh9-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/${ctx:action}"
+      method:
+        template: "GET"
+      headers:
+        custom:
+          - name: X-Resolved-User
+            template: "${ctx:user_id}"
+    timeoutMs: 5000
+    successStatusCodes: [200]
+    allowDegradation: false
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh9-ctx-set
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          # 1. Static action fed into ctx (top-level `value` field).
+          - name: action
+            value: "resolve"
+          # 2. Dynamic user id pulled from the incoming header into ctx.
+          - name: user_id
+            from:
+              type: header
+              name: X-User-Id
+            default: "anon"
+          # 3. Webhook call whose templates interpolate the two ctx vars above.
+          - name: wh9_result
+            from:
+              type: webhook
+              webhookRef: "edgion-default/wh9-resolver"
+              extract:
+                # X-Resolved-User is a custom template header "${ctx:user_id}".
+                # Reading it back proves the ${ctx:...} template was substituted into
+                # the outbound header. A non-default value also implies the path
+                # template "/webhook/${ctx:action}" resolved to "/webhook/resolve"
+                # (otherwise the request would not have reached the echo handler).
+                source: body
+                path: "data.echo_headers.x-resolved-user"
+            default: "fallback"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh9-route
+  namespace: edgion-default
+  annotations:
+    edgion.io/log-ctx-keys: "wh9_result"
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh9.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh9
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh9-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

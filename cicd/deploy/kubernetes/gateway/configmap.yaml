@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: edgion-gateway-config
+  namespace: edgion-system
+  labels:
+    app: edgion-gateway
+data:
+  edgion-gateway.yaml: |
+    work_dir: /usr/local/edgion
+
+    gateway:
+      server_addr: https://edgion-controller-leader.edgion-system.svc.cluster.local:12151
+      # Admin API stays loopback (default 127.0.0.1:12001); not exposed cluster-wide.
+      # Liveness/readiness are served on the dedicated probe port (default
+      # 0.0.0.0:12000), which the kubelet httpGet probes hit over the pod IP.
+
+    logging:
+      log_dir: logs
+      log_prefix: edgion-gateway
+      log_level: "info,pingora_proxy=error,pingora_core=error"
+      json_format: true
+      console: false
+      buffer_size: 10000
+
+    server:
+      # threads: 4
+      # work_stealing: true
+      # grace_period_seconds: 30
+      # graceful_shutdown_timeout_seconds: 10
+      # upstream_keepalive_pool_size: 128
+
+    access_log:
+      enabled: true
+      output:
+        localFile:
+          path: logs/edgion_access.log
+          rotation:
+            strategy: daily
+            max_files: 7
+            check_interval_secs: 60
+
+    ssl_log:
+      enabled: true
+      output:
+        localFile:
+          path: logs/ssl.log
+          rotation:
+            strategy:
+              size: 104857600
+            max_files: 5
+            check_interval_secs: 60
+
+    tcp_log:
+      enabled: false
+
+    udp_log:
+      enabled: false
+
+    # mTLS client config for the conf_sync channel. With auto_ca the Controller's
+    # internal CA provisions the `edgion-conf-sync-certs` Secret (mounted at
+    # /etc/edgion/conf-sync-certs); the Gateway loads its client cert from those files.
+    # auto_ca is ENFORCED on the data plane: the Gateway will not run this channel in
+    # plaintext. If the Secret is not yet provisioned at cold start it retries within the
+    # startup-probe budget (the volume is `optional`); it never downgrades to plaintext.
+    # The tls block below is REQUIRED under auto_ca (auto_ca implies mTLS).
+    conf_sync_security:
+      auto_ca: true
+      tls:
+        cert: /etc/edgion/conf-sync-certs/client.crt
+        key: /etc/edgion/conf-sync-certs/client.key
+        ca: /etc/edgion/conf-sync-certs/ca.crt

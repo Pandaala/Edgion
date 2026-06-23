@@ -19,7 +19,7 @@ Symptoms:
 
 Use first:
 - `edgion-cli --target center/server/client`
-- `examples/resource_diff`
+- `resource_diff`
 - Controller/Gateway Admin API
 
 ### 2. Routing / plugin runtime issues
@@ -42,7 +42,7 @@ Symptoms:
 - Retry count differs from expectation
 
 Use first:
-- `http://127.0.0.1:5901/metrics`
+- `http://127.0.0.1:12090/metrics`
 - `MetricsClient`
 - `resource_diff`
 
@@ -51,7 +51,7 @@ Use first:
 ### Preserve the scene and run a single case
 
 ```bash
-./examples/test/scripts/integration/run_integration.sh --keep-alive -r <Resource> -i <Item>
+./edgion-tests/integration/scripts/integration/run_integration.sh --keep-alive -r <Resource> -i <Item>
 ```
 
 Good for:
@@ -62,17 +62,17 @@ Good for:
 ### Skip compile for fast iteration
 
 ```bash
-./examples/test/scripts/integration/run_integration.sh --no-prepare --keep-alive -r <Resource> -i <Item>
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare --keep-alive -r <Resource> -i <Item>
 ```
 
 ### Manually start the full test environment
 
 ```bash
-./examples/test/scripts/utils/start_all_with_conf.sh
+./edgion-tests/integration/scripts/utils/start_all_with_conf.sh
 ```
 
 This will:
-- Create `integration_testing/testing_YYYYMMDD_HHMMSS/`
+- Create `tmp/integration_testing/testing_YYYYMMDD_HHMMSS/`
 - Export `EDGION_WORK_DIR`
 - Start `test_server`
 - Start the controller
@@ -85,24 +85,26 @@ This will:
 ### Controller
 
 ```bash
-curl -sf http://127.0.0.1:5800/health
-curl -sf http://127.0.0.1:5800/ready
-curl -sf http://127.0.0.1:5800/api/v1/server-info
+# health/ready are on the dedicated probe port 12100; metrics on 12190; admin/business on 12101
+curl -sf http://127.0.0.1:12100/health
+curl -sf http://127.0.0.1:12100/ready
+curl -sf http://127.0.0.1:12190/metrics
+curl -sf http://127.0.0.1:12101/api/v1/server-info
 ```
 
 ### Gateway
 
 ```bash
-curl -sf http://127.0.0.1:5900/health
-curl -sf http://127.0.0.1:5900/ready
-curl -sf http://127.0.0.1:5900/api/v1/server-info
-curl -sf http://127.0.0.1:5901/health
+curl -sf http://127.0.0.1:12000/health
+curl -sf http://127.0.0.1:12000/ready
+curl -sf http://127.0.0.1:12001/api/v1/server-info
+curl -sf http://127.0.0.1:12090/metrics
 ```
 
-Things to remember about the current implementation:
-- The Gateway Admin API port is currently fixed at `5900`
-- The Gateway Metrics API port is currently fixed at `5901`
-- The `gateway.admin_listen` field exists in the config struct, but the startup logic does not use it yet
+Things to remember:
+- The Gateway probe port (liveness/readiness) is `12000` (default `0.0.0.0:12000`), configurable via `gateway.probe_listen` in the config file or `--probe-listen` on the command line
+- The Gateway Admin API default port is `12001` (loopback-only), configurable via `gateway.admin_listen` or `--admin-listen`; serves `/configclient`, `/api/v1/server-info`, and other internal endpoints
+- The Gateway Metrics API port is `12090` (independent listener)
 
 ## Step 2: use the center / server / client three views to locate the issue layer
 
@@ -126,15 +128,15 @@ Decision rules:
 For batch comparison, just run:
 
 ```bash
-./target/debug/examples/resource_diff
+./target/debug/resource_diff
 ```
 
 Or specify the addresses:
 
 ```bash
-./target/debug/examples/resource_diff \
-  --controller-url http://127.0.0.1:5800 \
-  --gateway-url http://127.0.0.1:5900
+./target/debug/resource_diff \
+  --controller-url http://127.0.0.1:12101 \
+  --gateway-url http://127.0.0.1:12001
 ```
 
 ## Step 3: check key Admin APIs
@@ -152,8 +154,8 @@ Examples (all Controller-side endpoints require a Bearer token when authenticati
 
 ```bash
 TOKEN=$(cat ~/.edgion/token)
-curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:5800/configserver/httproute/list | jq .
-curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:5800/configserver/httproute?namespace=default&name=my-route" | jq .
+curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:12101/configserver/httproute/list | jq .
+curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:12101/configserver/httproute?namespace=default&name=my-route" | jq .
 ```
 
 ### Gateway side
@@ -166,8 +168,8 @@ curl -s -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:5800/configserver/ht
 Examples:
 
 ```bash
-curl -s http://127.0.0.1:5900/configclient/httproute/list | jq .
-curl -s http://127.0.0.1:5900/api/v1/debug/store-stats | jq .
+curl -s http://127.0.0.1:12001/configclient/httproute/list | jq .
+curl -s http://127.0.0.1:12001/api/v1/debug/store-stats | jq .
 ```
 
 `store-stats` is especially good for seeing:
@@ -186,8 +188,8 @@ Prerequisite: the Gateway must start with `--integration-testing-mode`.
 2. Then query:
 
 ```bash
-curl -s http://127.0.0.1:5900/api/v1/testing/status | jq .
-curl -s http://127.0.0.1:5900/api/v1/testing/access-log/<trace-id> | jq .
+curl -s http://127.0.0.1:12001/api/v1/testing/status | jq .
+curl -s http://127.0.0.1:12001/api/v1/testing/access-log/<trace-id> | jq .
 ```
 
 ### Focus on these fields
@@ -202,14 +204,14 @@ curl -s http://127.0.0.1:5900/api/v1/testing/access-log/<trace-id> | jq .
 For plugin issues, `stage_logs` is the most useful; for upstream issues, look first at `backend.upstreams` and `errors`.
 
 A ready-made client on the code side:
-- `examples/code/client/access_log_client.rs`
+- `edgion-tests/src/client/access_log_client.rs`
 
 ## Step 5: check Metrics
 
 The metrics service is at:
 
 ```bash
-curl -s http://127.0.0.1:5901/metrics
+curl -s http://127.0.0.1:12090/metrics
 ```
 
 Good for verifying:
@@ -232,9 +234,9 @@ In an integration test scene, the most commonly used are:
 
 For a scene generated by `run_integration.sh`, look first at:
 
-- `integration_testing/<timestamp>/logs/`
-- `integration_testing/<timestamp>/test_logs/`
-- `integration_testing/<timestamp>/report.log`
+- `tmp/integration_testing/<timestamp>/logs/`
+- `tmp/integration_testing/<timestamp>/test_logs/`
+- `tmp/integration_testing/<timestamp>/report.log`
 
 ## Step 7: remote K8s cluster scene (without rebuilding the image)
 
@@ -343,16 +345,16 @@ Distinguish:
 
 ## If it is a configuration-layer issue
 
-Many "why my TOML / work_dir / conf_dir change didn't take effect" issues are not about debugging but about choosing the wrong configuration layer.
+Many "why my YAML / work_dir / conf_dir change didn't take effect" issues are not about debugging but about choosing the wrong configuration layer.
 For those, jump to:
 
 - [../02-features/02-config/SKILL.md](../02-features/02-config/SKILL.md)
 
 ## Code entry-point quick reference
 
-- Controller Admin API: `src/core/controller/api/`
-- Gateway Admin API: `src/core/gateway/api/mod.rs`
-- `edgion-cli`: `src/core/ctl/cli/`
-- Gateway startup entry: `src/core/gateway/cli/mod.rs`
-- Controller startup entry: `src/core/controller/cli/mod.rs`
-- Resource sync verification tool: `examples/code/validator/resource_diff.rs`
+- Controller Admin API: `edgion-controller/src/api/`
+- Gateway Admin API: `edgion-gateway/src/api/mod.rs`
+- `edgion-cli`: `edgion-cli/src/cli/`
+- Gateway startup entry: `edgion-gateway/src/cli/mod.rs`
+- Controller startup entry: `edgion-controller/src/cli/mod.rs`
+- Resource sync verification tool: `edgion-tests/src/validator/resource_diff.rs`

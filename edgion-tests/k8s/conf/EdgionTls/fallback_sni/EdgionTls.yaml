@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: fallback-sni
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: fallback-sni-gateway
+    namespace: edgion-test
+    sectionName: https-fallback
+  hosts:
+  - default.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

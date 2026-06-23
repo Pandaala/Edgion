@@ -2,7 +2,7 @@
 
 This document is for contributors who need to extend `EdgionStreamPlugins`. It explains where stream plugins fit in Edgion, how the two-stage runtime works, and which wiring points humans most often miss.
 
-> The primary AI / agent workflow now lives in [../../../skills/01-architecture/02-gateway/13-stream-plugin-dev.md](../../../skills/01-architecture/02-gateway/13-stream-plugin-dev.md).
+> The primary AI / agent workflow now lives in [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/13-stream-plugin-dev.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/13-stream-plugin-dev.md).
 > This document remains the human-facing background guide, implementation boundary explanation, and manual review checklist.
 
 ## What This Plugin Family Is For
@@ -49,6 +49,16 @@ Typical cases:
 - policies based on SNI or mTLS state
 - logic that should run only after a specific `TLSRoute` matches
 
+#### Compatibility Fallback to Stage 1
+
+`run_tls_route_plugins` (`src/core/gateway/routes/tls/mod.rs`) tries the Stage 2 runtime first. If the referenced `EdgionStreamPlugins` resource has an empty `tlsRoutePlugins` list — typically a legacy resource that only declares Stage 1 `plugins` — the runtime falls back to evaluating the Stage 1 (`ConnectionFilter`) policies at the TLS route level so that IP-restriction-style rules attached only to `plugins` still take effect.
+
+Operational notes:
+
+- The fallback is reported through the access log, not through `tracing`. Allowed connections record `stream plugin allowed (compat)`; denied connections set `ctx.err_log = "stream plugin denied (compat): <reason>"`. Grep the TLS access log (`tls.log`) for the `(compat)` suffix to confirm which stage ran.
+- The compat path is hot-path silent on purpose; no `tracing::*` event is emitted when it activates, in line with the "zero tracing on the data plane" rule (`skills/03-coding/01-log-safety.md` Iron Rule 3).
+- **Silent-stop hazard on upgrade**: if you later extend an existing `EdgionStreamPlugins` resource by adding a `tlsRoutePlugins` entry, the Stage 1 compat fallback will silently stop running at TLS route level on the next hot reload — Stage 2 takes precedence and the legacy `plugins` list is no longer consulted from `run_tls_route_plugins`. Plan the migration accordingly: either replicate the policy under `tlsRoutePlugins` before adding the first Stage 2 entry, or accept the behaviour change and verify against tcp.log / tls.log after reload.
+
 ## Key Architecture Path
 
 ```mermaid
@@ -72,10 +82,10 @@ The usual failure is not “forgot to implement a trait.” It is one of the mid
 
 When adding or extending a stream plugin, start with:
 
-- `src/types/resources/edgion_stream_plugins/mod.rs`
-- `src/types/resources/edgion_stream_plugins/stream_plugins.rs`
-- `src/types/resources/edgion_stream_plugins/tls_route_plugins.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resources/edgion_stream_plugins/mod.rs`
+- `edgion-resources/src/resources/edgion_stream_plugins/stream_plugins.rs`
+- `edgion-resources/src/resources/edgion_stream_plugins/tls_route_plugins.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 These currently own:
 
@@ -138,7 +148,7 @@ The repository historically had older forms such as `edgion.io/stream-plugins`. 
 
 If you want an AI tool to implement it, start from the skill entry instead:
 
-- [../../../skills/01-architecture/02-gateway/13-stream-plugin-dev.md](../../../skills/01-architecture/02-gateway/13-stream-plugin-dev.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/13-stream-plugin-dev.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/02-gateway/13-stream-plugin-dev.md)
 
 ## Testing And Verification
 
@@ -162,9 +172,9 @@ At minimum, cover three layers.
 
 Existing examples and integration fixtures are mainly under:
 
-- `examples/test/conf/Gateway/StreamPlugins/`
-- `examples/test/conf/TCPRoute/StreamPlugins/`
-- `examples/test/conf/TLSRoute/StreamPlugins/`
+- `edgion-tests/integration/conf/Gateway/StreamPlugins/`
+- `edgion-tests/integration/conf/TCPRoute/StreamPlugins/`
+- `edgion-tests/integration/conf/TLSRoute/StreamPlugins/`
 
 ## Manual Review Checklist
 

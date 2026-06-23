@@ -12,11 +12,11 @@ Use `TLSRoute` as the reference pattern when the new resource:
 
 ### 1. Resource Type And Registration
 
-- `src/types/resources/tls_route.rs`
-- `src/types/resources/mod.rs`
-- `src/types/resource/kind.rs`
-- `src/types/resource/defs.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resources/tls_route.rs`
+- `edgion-resources/src/resources/mod.rs`
+- `edgion-resources/src/resource/kind.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 Why it matters:
 
@@ -26,10 +26,10 @@ Why it matters:
 
 ## 2. Controller Processing
 
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/tls_route.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
-- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/tls_route.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What `TlsRouteHandler` demonstrates:
 
@@ -44,8 +44,8 @@ If your new resource also looks up `Gateway` inside `parse()`, this is the patte
 
 ## 3. Controller CRUD And K8s Writer
 
-- `src/core/controller/api/namespaced_handlers.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`
+- `edgion-controller/src/api/namespaced_handlers.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/storage.rs`
 
 Why it matters:
 
@@ -56,9 +56,9 @@ If you forget either one, the type may compile but still be unusable through exp
 
 ## 4. Gateway Sync And Runtime
 
-- `src/core/gateway/conf_sync/conf_client/config_client.rs`
-- `src/core/gateway/routes/tls/conf_handler_impl.rs`
-- `src/core/gateway/api/mod.rs`
+- `edgion-gateway/src/conf_sync/conf_client/config_client.rs`
+- `edgion-gateway/src/routes/tls/conf_handler_impl.rs`
+- `edgion-gateway/src/api/mod.rs`
 
 What this pattern shows:
 
@@ -71,7 +71,7 @@ If your new resource must affect request-time behavior, this is the part that di
 ## 5. Manifests And Tests
 
 - `config/crd/gateway-api/gateway-api-experimental-v1.5.0.yaml`
-- `examples/test/conf/TLSRoute/`
+- `edgion-tests/integration/conf/TLSRoute/`
 
 What to copy:
 

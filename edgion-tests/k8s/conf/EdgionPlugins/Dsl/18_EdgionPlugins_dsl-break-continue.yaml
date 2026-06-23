@@ -1,0 +1,28 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-break-continue
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "break-continue"
+        source: |
+          let items = split("a,skip,b,target,c", ",")
+          let mut found = "none"
+          let mut skipped = 0
+          for item in items {
+              if item == "skip" {
+                  skipped = skipped + 1
+                  continue
+              }
+              if item == "target" {
+                  found = item
+                  break
+              }
+          }
+          resp.set_header("X-Found", found)
+          resp.set_header("X-Skipped", to_str(skipped))
+        errorPolicy: deny

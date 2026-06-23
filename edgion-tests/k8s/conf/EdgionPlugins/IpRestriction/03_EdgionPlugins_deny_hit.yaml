@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ip-restriction-deny-hit
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - enable: true
+    type: IpRestriction
+    config:
+      ipSource: remoteAddr
+      defaultAction: allow
+      deny:
+      - name: blocked
+        cidrs:
+        - 10.0.0.0/8
+      status: 403
+      message: IP is blocked

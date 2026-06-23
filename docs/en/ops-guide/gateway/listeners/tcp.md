@@ -1,57 +1,139 @@
 # TCP Listener
 
-This document explains how to configure a TCP listener on a Gateway and bind TCPRoutes to the corresponding port.
+A Layer 4 listener that forwards raw TCP connections and attaches `TCPRoute`.
 
-## Use Cases
+## Overview
 
-- Proxying Layer 4 TCP protocols such as MySQL, Redis, MQTT, etc.
-- Attaching multiple TCPRoutes to the same Gateway using `sectionName`.
+A TCP listener binds a port with `protocol: TCP` and forwards the connection to a backend
+without inspecting application-layer data. Use it for non-HTTP protocols — databases, message
+brokers, or any custom TCP service. Because TCP routing is L4, there is no `hostname` matching
+and no TLS termination at the listener.
 
-## Basic Configuration
+## Configuration
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: edge-gw
-  namespace: gateway-system
+  name: tcp-gateway
+  namespace: edgion-system
 spec:
   gatewayClassName: edgion
   listeners:
-    - name: tcp-redis
+    - name: postgres
+      port: 5432
       protocol: TCP
-      port: 6379
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: TCPRoute
+```
+
+## Field reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique listener name within the Gateway. |
+| `port` | int | Yes | Port to bind. |
+| `protocol` | enum | Yes | Must be `TCP`. |
+| `hostname` | string | No | Not used for TCP; L4 has no host concept and the value is ignored. |
+| `allowedRoutes.namespaces.from` | enum | No | `Same` (default), `All`, or `Selector`. |
+| `allowedRoutes.kinds` | list | No | `TCPRoute` (default for `TCP`). |
+
+A TCP listener has no `tls` block; TLS is not terminated at the listener. For encrypted
+forwarding, use a `TLS` listener in `Passthrough` mode (see below).
+
+## Scenarios
+
+### Forward a database port
+
+Expose a PostgreSQL backend through the gateway.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: db-gateway
+  namespace: edgion-system
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: postgres
+      port: 5432
+      protocol: TCP
       allowedRoutes:
         namespaces:
           from: Same
 ```
 
-## Binding with TCPRoute
+### Multiple TCP services on one Gateway
+
+Bind several ports, one listener per service.
 
 ```yaml
-apiVersion: gateway.networking.k8s.io/v1alpha2
-kind: TCPRoute
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
 metadata:
-  name: redis-route
-  namespace: gateway-system
+  name: l4-gateway
+  namespace: edgion-system
 spec:
-  parentRefs:
-    - name: edge-gw
-      sectionName: tcp-redis
-  rules:
-    - backendRefs:
-        - name: redis
-          port: 6379
+  gatewayClassName: edgion
+  listeners:
+    - name: redis
+      port: 6379
+      protocol: TCP
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: mysql
+      port: 3306
+      protocol: TCP
+      allowedRoutes:
+        namespaces:
+          from: Same
 ```
 
-## Notes
+### Accept TCP routes from another namespace
 
-1. `listener.protocol` must be `TCP`.
-2. `TCPRoute.parentRefs.sectionName` must match the listener `name`.
-3. Cross-namespace binding requires a `ReferenceGrant`.
+Let a `TCPRoute` owned by an app team attach to a shared L4 listener.
 
-## Related Documentation
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: shared-tcp-gateway
+  namespace: edgion-system
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: broker
+      port: 9092
+      protocol: TCP
+      allowedRoutes:
+        namespaces:
+          from: Selector
+          selector:
+            matchLabels:
+              edgion.io/tcp-tenant: "true"
+        kinds:
+          - kind: TCPRoute
+```
 
-- [Gateway Resource Overview](../overview.md)
-- [TCPRoute and Stream Plugins](../../../user-guide/tcp-route/stream-plugins.md)
-- [Cross-Namespace Reference](../../infrastructure/reference-grant.md)
+## Edge cases and caveats
+
+- **No hostname routing**: TCP is L4, so `hostname` does not apply. A `TCPRoute` selects its
+  backend, not a host. To route by SNI, use a `TLS` listener instead.
+- **No TLS termination**: a TCP listener does not terminate TLS. For encrypted backends, use
+  protocol `TLS` with `tls.mode: Passthrough` and a `TLSRoute` — see
+  [../../../user-guide/tls-route/overview.md](../../../user-guide/tls-route/overview.md).
+- **One backend per port**: because there is no L7 matching, typically one `TCPRoute` (one
+  backend) attaches per TCP listener; run multiple services on distinct ports.
+- **Cross-namespace AllowedRoutes**: default `from: Same`; widen with `from: All` or
+  `from: Selector`.
+
+## Related documents
+
+- [Listeners overview](README.md)
+- [HTTPS listener](https.md)
+- [TLS routing (Passthrough)](../../../user-guide/tls-route/overview.md)

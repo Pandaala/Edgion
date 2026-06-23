@@ -1,0 +1,20 @@
+# EdgionPlugins in edgion-test referencing edgion-default/ecd-refgrant-cluster-data via denyRefs.
+# The target EdgionConfigData has visibility:Cluster, which bypasses the ReferenceGrant
+# requirement entirely.  The controller must set ResolvedRefs=True even without a grant.
+#
+# Scenario 3 (visibility_cluster_bypasses_grant) uses this resource.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-cluster-ref-cross-ns
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        defaultAction: allow
+        denyRefs:
+          - name: ecd-refgrant-cluster-data
+            namespace: edgion-default

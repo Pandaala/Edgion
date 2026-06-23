@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: fault-ratio-zero
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - enable: true
+    type: FaultInjection
+    config:
+      delay:
+        ratio: 0.0
+        fixedMs: 200
+      abort:
+        ratio: 0.0
+        statusCode: 503

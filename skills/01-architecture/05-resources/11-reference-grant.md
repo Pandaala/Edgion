@@ -11,9 +11,9 @@ ReferenceGrant is a Gateway API standard resource that authorizes cross-namespac
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs`
-- Authorization store: `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_grant/`
-- Type definitions: `src/types/resources/reference_grant.rs`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs`
+- Authorization store: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/`
+- Type definitions: `edgion-resources/src/resources/reference_grant.rs`
 
 ## Not synced to Gateway
 
@@ -57,3 +57,16 @@ ReferenceGrant validation can be disabled by configuration (`is_reference_grant_
 | ReferenceGrant → TLSRoute | TLSRoute | CrossNsRefManager + event dispatch | Same as above |
 | ReferenceGrant → UDPRoute | UDPRoute | CrossNsRefManager + event dispatch | Same as above |
 | ReferenceGrant → Gateway | Gateway | CrossNsRefManager + event dispatch | On change, requeue Gateways with cross-namespace certificateRefs |
+| ReferenceGrant → EdgionPlugins | EdgionPlugins | CrossNsRefManager + event dispatch | On change, requeue EdgionPlugins with cross-namespace EdgionConfigData refs (`allowRefs`/`denyRefs`, `overrideRef`, `GlobalAccessControl.activeProfileRef`). Grant shape: `from {group: edgion.io, kind: EdgionPlugins}`, `to {group: edgion.io, kind: EdgionConfigData}`. |
+| ReferenceGrant → EdgionStreamPlugins | EdgionStreamPlugins | CrossNsRefManager + event dispatch | On change, requeue EdgionStreamPlugins with cross-namespace EdgionConfigData refs (`allowRefs`/`denyRefs`, `activeProfileRef`). Grant shape: `from {group: edgion.io, kind: EdgionStreamPlugins}`, `to {group: edgion.io, kind: EdgionConfigData}`. |
+
+## EdgionConfigData `spec.visibility` interaction
+
+`ReferenceGrant` enforcement for EdgionConfigData refs is complemented by the target's
+`spec.visibility` field:
+
+- `Namespace` (default): cross-ns refs require a matching `ReferenceGrant` in the target namespace.
+- `Cluster`: any namespace may reference without a grant (no grant is consulted).
+- Same-namespace refs are always allowed regardless of `visibility`.
+
+See [15-edgion-config-data.md — Cross-Namespace Reference Grants](15-edgion-config-data.md#cross-namespace-reference-grants) for the full mechanism, data-plane fail semantics, and status reason strings.

@@ -36,7 +36,7 @@ description: Resource taxonomy and processing — common processing flow, per-re
 | **Plugins and extensions** | | |
 | [13-edgion-plugins.md](13-edgion-plugins.md) | EdgionPlugins resource | Understanding plugin configuration |
 | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) | EdgionStreamPlugins resource | Understanding Stream plugins |
-| [15-plugin-metadata.md](15-plugin-metadata.md) | PluginMetaData resource | Understanding plugin metadata |
+| [15-edgion-config-data.md](15-edgion-config-data.md) | EdgionConfigData resource + overlay model | Understanding EdgionConfigData, base+overlay architecture, fail-to-base, variant taxonomy |
 | **Backends and services** | | |
 | [16-service-endpoints.md](16-service-endpoints.md) | Service + EndpointSlice + Endpoint | Backend discovery |
 | **ACME** | | |
@@ -69,7 +69,8 @@ Gateway ──► Secret (TLS certificates)
 
 HTTPRoute/GRPCRoute ──► EdgionPlugins (HTTP plugins)
                     ──► EdgionStreamPlugins (Stream plugins)
-                    ──► PluginMetaData (plugin metadata)
+
+EdgionPlugins/EdgionStreamPlugins ──► EdgionConfigData (overlay/data primitive via overrideRef)
 
 Cross-namespace references ──► ReferenceGrant
 

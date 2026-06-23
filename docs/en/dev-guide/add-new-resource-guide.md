@@ -2,7 +2,7 @@
 
 This document records how to add a new Kubernetes resource type in Edgion. With the unified macro system, adding new resources becomes much simpler.
 
-> The primary AI / agent workflow now lives in [../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md](../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md).
+> The primary AI / agent workflow now lives in [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/09-add-new-resource/00-guide.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/09-add-new-resource/00-guide.md).
 > This document remains the human-facing background guide and manual checklist.
 > For classified examples, use the references linked from that workflow: `route-like`, `controller-only`, `plugin-like`, and `cluster-scoped`.
 
@@ -38,11 +38,11 @@ Adding a new resource type usually requires touching these core locations:
 
 ### Must Modify
 
-1. **`src/types/resources/<resource>.rs`** - Define the resource type
-2. **`src/types/resources/mod.rs`** - Export the new module
-3. **`src/types/resource/kind.rs`** - Add the `ResourceKind` variant and name mapping
-4. **`src/types/resource/defs.rs`** - Add metadata in `define_resources!`
-5. **`src/types/resource/meta/impls.rs`** - Implement `ResourceMeta` via `impl_resource_meta!`
+1. **`edgion-resources/src/resources/<resource>.rs`** - Define the resource type
+2. **`edgion-resources/src/resources/mod.rs`** - Export the new module
+3. **`edgion-resources/src/resource/kind.rs`** - Add the `ResourceKind` variant and name mapping
+4. **`edgion-resources/src/resource/defs.rs`** - Add metadata in `define_resources!`
+5. **`edgion-resources/src/resource/meta/impls.rs`** - Implement `ResourceMeta` via `impl_resource_meta!`
 6. **`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs`** - Implement `ProcessorHandler`
 7. **`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/mod.rs`** - Re-export the handler
 8. **`src/core/controller/conf_mgr/conf_center/file_system/controller.rs`** - Register the FileSystem-mode processor
@@ -56,7 +56,7 @@ Adding a new resource type usually requires touching these core locations:
 13. **`src/core/gateway/api/mod.rs`** - If Gateway Admin API should expose it
 14. **`src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`** - If Kubernetes-mode dynamic CRUD should support it
 15. **`config/crd/`** - CRD manifests or upstream CRD updates
-16. **Tests and example configs** - `examples/test/`, YAML fixtures, integration tests
+16. **Tests and example configs** - `edgion-tests/`, YAML fixtures, integration tests
 
 ---
 
@@ -77,8 +77,8 @@ If you are unsure, trace the closest existing resource end to end instead of des
 
 Usually update:
 
-- `src/types/resources/<resource>.rs` or `src/types/resources/<resource>/mod.rs`
-- `src/types/resources/mod.rs`
+- `edgion-resources/src/resources/<resource>.rs` or `edgion-resources/src/resources/<resource>/mod.rs`
+- `edgion-resources/src/resources/mod.rs`
 
 Key things to align:
 
@@ -91,9 +91,9 @@ Key things to align:
 
 These are the core files for all new resources:
 
-- `src/types/resource/kind.rs`
-- `src/types/resource/defs.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resource/kind.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 Current responsibilities:
 
@@ -206,7 +206,7 @@ Keep these aligned with the Rust type:
 At minimum, cover:
 
 - Rust unit tests
-- integration tests under `examples/test/`
+- integration tests under `edgion-tests/`
 - controller / gateway API validation when new endpoints are exposed
 
 For route-like, plugin-like, or dependency-heavy resources, integration tests are usually the most important safety net.
@@ -238,9 +238,9 @@ The most common missing segments are:
 
 | Name | Location | Purpose |
 |------|----------|---------|
-| `ResourceKind` | `src/types/resource/kind.rs` | Enum entry point and string mapping for the new resource |
-| `define_resources!` | `src/types/resource/defs.rs` | Single source of truth for scope, cache fields, capacities, and registry behavior |
-| `impl_resource_meta!` | `src/types/resource/meta/impls.rs` | Integrates the resource into `ResourceMeta` |
+| `ResourceKind` | `edgion-resources/src/resource/kind.rs` | Enum entry point and string mapping for the new resource |
+| `define_resources!` | `edgion-resources/src/resource/defs.rs` | Single source of truth for scope, cache fields, capacities, and registry behavior |
+| `impl_resource_meta!` | `edgion-resources/src/resource/meta/impls.rs` | Integrates the resource into `ResourceMeta` |
 | `ProcessorHandler<T>` | `src/core/controller/conf_mgr/sync_runtime/resource_processor/handler.rs` | Controller-side filter / validate / parse / status / requeue logic |
 | `ConfHandler<T>` | `src/core/common/conf_sync/traits.rs` | Gateway-side full-set / partial-update logic |
 | `ConfigClient` | `src/core/gateway/conf_sync/conf_client/config_client.rs` | Gateway cache wiring and change dispatch |
@@ -264,7 +264,7 @@ So “it compiles” is not enough to prove the resource is fully wired.
 
 ### Q: How is `enum_value` assigned?
 
-A: Check the highest value currently used in `src/types/resource/kind.rs` and `src/types/resource/defs.rs`, then add the next consistent value in both places.
+A: Check the highest value currently used in `edgion-resources/src/resource/kind.rs` and `edgion-resources/src/resource/defs.rs`, then add the next consistent value in both places.
 
 ### Q: When is `preparse()` needed?
 
@@ -310,7 +310,7 @@ Before submitting, verify:
 - [Kubernetes Custom Resources](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/)
 - [kube-rs Documentation](https://docs.rs/kube/latest/kube/)
 - [Gateway API Specification](https://gateway-api.sigs.k8s.io/)
-- [../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md](../../../skills/01-architecture/01-controller/09-add-new-resource/00-guide.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/09-add-new-resource/00-guide.md](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/09-add-new-resource/00-guide.md)
 
 ---
 

@@ -1,0 +1,16 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: key-auth-anon-only
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: KeyAuth
+      config:
+        keySources:
+          - type: header
+            name: "X-API-Key"
+        anonymous: "guest"
+        realm: "Anon-only API"
+        # secretGroups deliberately absent -- anonymous-only deployment

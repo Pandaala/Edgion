@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-range-iterate
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "range-iterate"
+        source: |
+          let r = range(1, 4)
+          let mut sum = 0
+          for item in r {
+              sum = sum + to_int(item)
+          }
+          req.set_header("X-Range-Sum", to_str(sum))
+          req.set_header("X-Range-Len", to_str(len(r)))
+          resp.set_header("X-Range-Sum", to_str(sum))
+          resp.set_header("X-Range-Len", to_str(len(r)))
+        errorPolicy: deny

@@ -1,0 +1,21 @@
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: mtls-ca-garbage
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: mtls-failclose-gateway
+    namespace: edgion-test
+    sectionName: https-mtls-failclose
+  hosts:
+  - mtls-ca-garbage.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: garbage-ca
+      namespace: edgion-test
+    verifyDepth: 1

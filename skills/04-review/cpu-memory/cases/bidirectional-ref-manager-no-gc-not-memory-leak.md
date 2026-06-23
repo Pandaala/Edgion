@@ -7,7 +7,7 @@ description: Use when reviewing findings that flag BidirectionalRefManager, Secr
 
 # `BidirectionalRefManager` Lacking GC / Expiry Mechanism is Not a Memory Leak
 
-**False-positive scenario**: the audit flags `BidirectionalRefManager` in `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_manager.rs` (forward `source_key → Set<V>` + reverse `value_key → Set<source_key>`) for not having `gc` / `cleanup` / `purge` / `expire` methods; "if delete events are lost or processing fails, refs will linger forever"; suggests adding a `gc(existing_values)` periodic task to validate. Typical examples: `SecretRefManager`, `ServiceRefManager`, `CrossNamespaceRefManager`, `BackendTLSPolicyTargetManager`, `stream_plugin_ref_mgr`.
+**False-positive scenario**: the audit flags `BidirectionalRefManager` in `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_manager.rs` (forward `source_key → Set<V>` + reverse `value_key → Set<source_key>`) for not having `gc` / `cleanup` / `purge` / `expire` methods; "if delete events are lost or processing fails, refs will linger forever"; suggests adding a `gc(existing_values)` periodic task to validate. Typical examples: `SecretRefManager`, `ServiceRefManager`, `CrossNamespaceRefManager`, `BackendTLSPolicyTargetManager`, `stream_plugin_ref_mgr`.
 
 **Reality**:
 

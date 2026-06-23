@@ -1,6 +1,6 @@
 # LDAP Auth Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > LdapAuth is an LDAP directory authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 
@@ -42,17 +42,17 @@ Use cases:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `ldapHost` | String | None | LDAP host, required |
+| `ldapHost` | String | **Required** | LDAP host |
 | `ldapPort` | Integer | `389` | LDAP port |
 | `ldaps` | Boolean | `false` | Whether to enable LDAPS |
 | `startTls` | Boolean | `false` | Whether to enable StartTLS (mutually exclusive with `ldaps`) |
 | `verifyLdapHost` | Boolean | `true` | Whether to verify the certificate hostname |
-| `baseDn` | String | None | Base DN, required |
-| `attribute` | String | None | User attribute, required (e.g., `uid`/`cn`) |
-| `bindDnTemplate` | String | None | Custom Bind DN template, must contain `{username}` |
+| `baseDn` | String | **Required** | Base DN |
+| `attribute` | String | **Required** | User attribute (e.g., `uid` / `cn`) |
+| `bindDnTemplate` | String | none | Custom Bind DN template, must contain `{username}` |
 | `headerType` | String | `ldap` | Authentication header scheme name |
 | `hideCredentials` | Boolean | `false` | Whether to remove the authentication header before forwarding |
-| `anonymous` | String | None | Anonymous username (when configured, allows unauthenticated requests) |
+| `anonymous` | String | none | Anonymous username (when configured, allows unauthenticated requests) |
 | `realm` | String | `API Gateway` | `WWW-Authenticate` realm |
 | `cacheTtl` | Integer | `60` | Authentication cache TTL (seconds), `0` disables caching |
 | `timeout` | Integer | `10000` | LDAP timeout (milliseconds) |
@@ -67,10 +67,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ldap-auth
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: LdapAuth
       config:
         ldapHost: ldap.example.com
@@ -88,10 +87,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ldap-auth-basic-scheme
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: LdapAuth
       config:
         ldapHost: ldap.example.com
@@ -113,10 +111,9 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: ldap-auth-anon
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
-    - enable: true
       type: LdapAuth
       config:
         ldapHost: ldap.example.com
@@ -148,6 +145,8 @@ When allowing anonymous access, the following headers are injected:
 - Enable account lockout and brute-force protection policies on the LDAP server
 
 > **Accepted tradeoff — cache-hit timing.** A cached credential returns faster than an uncached one (which performs a full LDAP bind). This timing difference only reveals *cache state* (whether an exact `(username, password)` pair was authenticated recently); credential validity is already conveyed by the `200`/`401` status, and triggering a cache hit requires already knowing the full valid credential. No response jitter is added — it would penalize every legitimate authenticated request. Operators who must hide cache membership can set `cacheTtl: 0` to disable caching, and can stack the `RateLimit` plugin to throttle probing.
+
+> **Accepted tradeoff — per-request LDAP connection.** Each cache-miss authentication opens a new TCP (and optional TLS) connection to the LDAP server, runs `simple_bind`, and unbinds immediately. There is no connection pool, because LDAP `simple_bind` is session-rebinding (a successful bind mutates the connection's authenticated identity for the rest of that TCP session): a naive pool that hands sockets across users carries a real cross-identity-leak risk that is strictly worse than the ephemeral-port pressure it would relieve. For high-throughput deployments, keep `cacheTtl` non-zero (60–300 s recommended) so steady-state traffic is absorbed by the in-process cache, and stack `RateLimit` to bound cache-miss bursts. Setting `cacheTtl: 0` means **every** request opens an LDAP connection — only choose it when the LDAP server is sized for that load.
 
 ## Related Documentation
 

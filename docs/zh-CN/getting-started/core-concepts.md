@@ -15,7 +15,7 @@ Edgion 不是把所有事情都塞在一个进程里。
 
 - [开发指南 / 架构概览](../dev-guide/architecture-overview.md)
 
-## 2. GatewayClass 决定“谁来管理 Gateway”
+## 2. GatewayClass 决定"谁来管理 Gateway"
 
 `GatewayClass` 是控制面入口。
 
@@ -25,19 +25,18 @@ Edgion 不是把所有事情都塞在一个进程里。
 controllerName: edgion.io/gateway-controller
 ```
 
-这表示这个 `GatewayClass` 由 Edgion 控制器接管。
+这告诉 Gateway API，Edgion 是负责这个 class 的控制器。
 
-## 3. Gateway 定义流量入口
+## 3. Gateway 和 Listener 定义流量入口
 
-`Gateway` 决定：
+`Gateway` 是流量入口声明，由一个或多个 **listener** 组成，每个 listener 定义：
 
-- 开哪些 listener
-- 每个 listener 用什么协议
+- 使用哪种协议（HTTP、HTTPS、TLS、TCP、UDP）
 - 监听哪个端口
 - 是否需要 TLS
-- 允许哪些 route 绑定
+- 允许哪些路由绑定
 
-可以把它理解成“流量入口声明”。
+路由通过 `sectionName` 按名称绑定到特定的 listener。更多内容见：[Gateway 总览](../ops-guide/gateway/overview.md)。
 
 ## 4. Route 资源定义怎么匹配和怎么转发
 
@@ -66,11 +65,11 @@ controllerName: edgion.io/gateway-controller
 
 这些扩展通常用于：
 
-- HTTP/TCP/TLS 插件
-- 更细粒度的 TLS 能力
-- Gateway 级高级配置
+- HTTP 和 stream（TCP/UDP）插件——见 [过滤器总览](../user-guide/http-route/filters/overview.md)
+- 更细粒度的 TLS 能力——见 [EdgionTls](../ops-guide/gateway/tls/edgion-tls.md)
+- Gateway 级高级配置——见 [EdgionGatewayConfig 参考](../ops-guide/configuration/edgion-gateway-config.md)
 
-如果你看到文档里的 `🔌 Edgion 扩展` 标记，说明它不是标准 Gateway API 的一部分。
+如果你看到文档里的 `🔌 Edgion extension` 标记，说明它不是标准 Gateway API 的一部分。
 
 ## 6. 学习顺序建议
 

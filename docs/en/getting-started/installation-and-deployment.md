@@ -18,15 +18,19 @@ As a practical default:
 
 ## Kubernetes quick entry
 
-The repository root README currently points to this shortest path:
+The repository ships a one-shot deployment script that installs the CRDs, controller, gateway, and base configuration:
 
 ```bash
-deploy/kubernetes/scripts/deploy.sh -y
+cicd/deploy/kubernetes/scripts/deploy.sh -y
 ```
 
-This path installs the CRDs, controller, gateway, and base configuration.
+If you only need the CRDs first, run:
 
-Before doing that, it is worth checking:
+```bash
+cicd/deploy/kubernetes/scripts/install_crds.sh
+```
+
+Before deploying, it is worth checking:
 
 - Gateway API CRDs are available in the cluster
 - you have `kubectl` access to the target namespace(s)
@@ -40,11 +44,13 @@ Recommended next reading:
 
 ## Standalone quick entry
 
-The repository root README currently points to this shortest path:
+The repository ships a start script that launches the controller and gateway as local processes with the bundled file-system config:
 
 ```bash
-deploy/standalone/start.sh
+cicd/deploy/standalone/start.sh
 ```
+
+By default it uses `/usr/local/edgion` as the working directory; pass `--work-dir <path>` to change it, and `--foreground` to keep both processes attached to the terminal.
 
 This mode is a good fit for:
 
@@ -62,14 +68,54 @@ The repository already contains a few useful starting points:
 
 - `config/edgion-controller.yaml`
 - `config/edgion-gateway.yaml`
-- `examples/k8stest/conf/`
-- `examples/test/conf/`
+- `edgion-tests/k8s/conf/`
+- `edgion-tests/integration/conf/`
 
 A practical reading pattern is:
 
-- Kubernetes examples: `examples/k8stest/conf/`
-- local integration and file-system mode: `examples/test/conf/`
+- Kubernetes examples: `edgion-tests/k8s/conf/`
+- local integration and file-system mode: `edgion-tests/integration/conf/`
 - process-level configuration: `config/*.yaml`
+
+## Admin API authentication
+
+Authentication is **mandatory** for the Controller and Center Admin APIs — all `/api/v1/*` business routes require a valid credential.
+
+### Controller
+
+The Controller Admin API uses **token-only** (Istio-style) authentication. A pre-shared
+admin token must be supplied explicitly — the Controller no longer auto-generates one. The
+recommended Kubernetes approach is to run `deploy.sh`, which idempotently creates the
+`edgion-admin-credentials` Secret (single `token` key) and wires it into the controller
+Deployment as the `EDGION_ADMIN_TOKEN` env var.
+
+Retrieve the token after running `deploy.sh`:
+
+```bash
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+Then authorize the CLI with it:
+```bash
+edgion-cli login --token <TOKEN>
+```
+
+When no admin token (and no `cli_tokens`) is configured, the server starts but all Admin API
+business routes return **503 fail-close** until a token is provided. See
+[Controller Configuration](../ops-guide/configuration/controller-config.md#authentication)
+for the full token bootstrap options.
+
+### Center
+
+Center has **no** auto-generation. The operator must provide either `local_auth` or `auth` in the Center configuration. If neither is configured:
+
+- `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible.
+- All other business routes return **503 fail-close** until credentials are configured.
+
+Setting `enabled: false` is **ignored** with a WARN log — authentication cannot be disabled.
+
+For full configuration details see the [Controller Configuration reference](../ops-guide/configuration/controller-config.md#authentication).
 
 ## What to do next
 

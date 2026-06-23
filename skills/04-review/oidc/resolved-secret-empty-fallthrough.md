@@ -7,7 +7,7 @@ description: Use when reviewing OIDC resolve_session_secret / resolve_client_sec
 
 ## Conclusion
 
-`resolve_session_secret` and `resolve_client_secret` (`src/core/gateway/plugins/http/openid_connect/session_cookie.rs`) deliberately use a two-level check — `if let Some(ref resolved) = self.config.resolved_session_secret { if !resolved.is_empty() { return Ok(resolved.clone()); } }` — so that an empty resolved secret falls through to the `session_secret_ref` / `client_secret_ref` Secret-store path instead of being used as a cipher key. This is **correct, safe behavior**, not a bug.
+`resolve_session_secret` and `resolve_client_secret` (`edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs`) deliberately use a two-level check — `if let Some(ref resolved) = self.config.resolved_session_secret { if !resolved.is_empty() { return Ok(resolved.clone()); } }` — so that an empty resolved secret falls through to the `session_secret_ref` / `client_secret_ref` Secret-store path instead of being used as a cipher key. This is **correct, safe behavior**, not a bug.
 
 Fix suggestions of the form "`Some("")` silently bypasses the already-resolved secret", "flatten to `Option::filter` / `match Some(v) if !v.is_empty()` to remove the ambiguity", or "add a build-time validation rejecting an explicitly-set empty resolved secret" are **not accepted** (cosmetic churn against an unreachable state).
 
@@ -15,7 +15,7 @@ Fix suggestions of the form "`Some("")` silently bypasses the already-resolved s
 
 **1. `Some("")` is unreachable through every real path**
 
-- **Controller resolution**: `resolved_session_secret` / `resolved_client_secret` are populated only by `read_secret_utf8` (`src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/mod.rs:33`), which returns `None` for any value where `value.trim().is_empty()`. It yields `Some(non-empty)` or `None` — never `Some("")`. (`resolve_credential/openid_connect.rs` resets both to `None` first, then assigns only from `read_secret_utf8`.)
+- **Controller resolution**: `resolved_session_secret` / `resolved_client_secret` are populated only by `read_secret_utf8` (`edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/mod.rs:33`), which returns `None` for any value where `value.trim().is_empty()`. It yields `Some(non-empty)` or `None` — never `Some("")`. (`resolve_credential/openid_connect.rs` resets both to `None` first, then assigns only from `read_secret_utf8`.)
 - **Wire format**: the field carries `#[serde(skip_serializing_if = "Option::is_none")]`; the controller only ever serializes a non-empty value, so the gateway never receives `Some("")` over ConfigSync.
 - **CRD input**: the field is `#[schemars(skip)]` ("Runtime field, controller-populated"), so it is absent from the OpenAPI schema and K8s structural-schema pruning strips any user-supplied value — an operator cannot inject `Some("")`.
 - **Default impl**: `OpenidConnectConfig::default()` sets both to `None`.
@@ -45,5 +45,5 @@ Re-open only if:
 ## Reference Cases
 
 - F-B03 (Round B adjacent-scope scan, closed 2026-05-22) — `tasks/issues/plugins-http-FB03-oidc-session-secret-some-empty-bypass.md`, closed as accepted-tradeoff with no code change.
-- Source: `src/core/gateway/plugins/http/openid_connect/session_cookie.rs:11-16,57-62`
-- Upstream filter: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/mod.rs:33-45`
+- Source: `edgion-gateway/src/plugins/http/openid_connect/session_cookie.rs:11-16,57-62`
+- Upstream filter: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/plugins/resolve_credential/mod.rs:33-45`

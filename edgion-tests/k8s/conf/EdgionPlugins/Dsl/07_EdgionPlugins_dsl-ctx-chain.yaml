@@ -1,0 +1,41 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-ctx-chain
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "ctx-chain-1"
+        source: |
+          let tenant = req.header("X-Tenant")
+          if tenant != nil {
+              ctx.set("tenant", tenant)
+              req.remove_header("X-Tenant")
+          }
+        errorPolicy: deny
+    - enable: true
+      type: Dsl
+      config:
+        name: "ctx-chain-2"
+        source: |
+          let tenant = ctx.get("tenant")
+          if tenant != nil {
+              req.set_header("X-Internal-Tenant", tenant)
+              resp.set_header("X-Internal-Tenant", tenant)
+              ctx.set("processed", "true")
+          }
+        errorPolicy: deny
+    - enable: true
+      type: Dsl
+      config:
+        name: "ctx-chain-3"
+        source: |
+          let ok = ctx.get("processed")
+          if ok != nil {
+              req.append_header("X-Pipeline", "dsl-ok")
+              resp.set_header("X-Pipeline", "dsl-ok")
+          }
+        errorPolicy: deny

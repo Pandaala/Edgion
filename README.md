@@ -108,7 +108,7 @@ graph TD;
 
 | Component | Binary | Role |
 |-----------|--------|------|
-| **Center** | `edgion-center` | Federated control plane. Connects multiple Controllers across clusters or regions, enabling global routing policies and cross-cluster visibility. |
+| **Center** | `edgion-center` *(separate repo: **EdgionCenter**)* | Federated control plane. Connects multiple Controllers across clusters or regions, enabling global routing policies and cross-cluster visibility. Maintained and built in the standalone EdgionCenter repository; this repo's Controller connects to it as a federation client. |
 | **Controller** | `edgion-controller` | Watches Kubernetes CRDs or local YAML, validates and pre-parses resources, streams configuration to Gateways via gRPC. Handles ACME and status updates. |
 | **Gateway** | `edgion-gateway` | Stateless data plane built on Pingora. Receives config from Controller, executes routing, plugin chains, load balancing, TLS, and access logging. |
 | **CLI** | `edgion-cli` | Management tool for inspecting and operating Controller and Gateway instances. |
@@ -300,7 +300,7 @@ The following deployment modes are supported:
 
 - **Standalone (Bare-Metal / VM)** — Runs Controller and Gateway as native processes without Kubernetes. Configuration is sourced from local YAML files or etcd.
 
-- **All-in-One Container** — A single container image bundling Controller, Gateway, and the management frontend. Designed for quick evaluation, demos, and single-node environments.
+- **Controller-Gateway Container** — A single container image bundling Controller and Gateway. Designed for quick evaluation, demos, and single-node environments. The management frontend is deployed separately.
 
 ## Documentation
 

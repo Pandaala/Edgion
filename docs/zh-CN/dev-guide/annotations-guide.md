@@ -4,13 +4,13 @@
 
 如果你是在改代码、排查问题或更新文档，建议先看 agent 侧入口：
 
-- [05-annotations-reference.md](../../../skills/02-features/05-annotations/00-annotations-overview.md)
+- [05-annotations-reference.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/00-annotations-overview.md)
 
 详细键表拆在这些 reference 里：
 
-- [annotations-metadata.md](../../../skills/02-features/05-annotations/references/annotations-metadata.md)
-- [annotations-options-and-labels.md](../../../skills/02-features/05-annotations/references/annotations-options-and-labels.md)
-- [annotations-system-and-test-keys.md](../../../skills/02-features/05-annotations/references/annotations-system-and-test-keys.md)
+- [annotations-metadata.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/references/annotations-metadata.md)
+- [annotations-options-and-labels.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/references/annotations-options-and-labels.md)
+- [annotations-system-and-test-keys.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/references/annotations-system-and-test-keys.md)
 
 ## 先看“放在哪”，再看“叫什么”
 
@@ -45,6 +45,9 @@
 | `edgion.io/edgion-stream-plugins` | `TCPRoute` / `TLSRoute` | 解析 `EdgionStreamPlugins` 引用 |
 | `edgion.io/proxy-protocol` | `TLSRoute` | 当前实现只识别 `"v2"` |
 | `edgion.io/max-connect-retries` | `TLSRoute` | 上游连接尝试次数，默认 2 次，最高 5 次 |
+| `edgion.io/tcp-keepalive-time` | `TCPRoute` / `TLSRoute` | 上游 L4 连接在发送首个 keepalive 探针前的空闲秒数（正整数，1–7200）。设置该值即启用 keepalive；不设置则禁用（默认行为） |
+| `edgion.io/tcp-keepalive-interval` | `TCPRoute` / `TLSRoute` | 相邻 keepalive 探针之间的间隔秒数（1–75）。仅在设置了 `tcp-keepalive-time` 时生效；缺失或非法值 = 75（操作系统默认值） |
+| `edgion.io/tcp-keepalive-probes` | `TCPRoute` / `TLSRoute` | 连续探测失败多少次后判定连接已断开（1–20）。仅在设置了 `tcp-keepalive-time` 时生效；缺失或非法值 = 9（操作系统默认值） |
 | `edgion.io/expose-client-cert` | `EdgionTls` | 把 mTLS 客户端证书信息暴露给插件层 |
 | `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | 主动健康检查 YAML 配置（type: http/tcp/grpc） |
 

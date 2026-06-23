@@ -44,7 +44,6 @@ spec:
                     namespace:
                       type: string
                       description: "Namespace of the Secret (defaults to EdgionAcme namespace)"
-                  additionalProperties: false
                 domains:
                   type: array
                   description: "Domain names to obtain certificates for"
@@ -87,11 +86,21 @@ spec:
                 externalAccountBinding:
                   type: object
                   description: "External Account Binding for ACME providers that require it"
+                  required:
+                    - keyId
+                    - keySecretRef
                   properties:
                     keyId:
                       type: string
-                    hmacKey:
-                      type: string
+                    keySecretRef:
+                      type: object
+                      required:
+                        - name
+                      properties:
+                        name:
+                          type: string
+                        namespace:
+                          type: string
                 storage:
                   type: object
                   description: "Certificate storage configuration"
@@ -119,21 +128,6 @@ spec:
                       items:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
-                activeChallenges:
-                  type: array
-                  description: "Active HTTP-01 challenges (filled by Controller at runtime)"
-                  items:
-                    type: object
-                    properties:
-                      domain:
-                        type: string
-                      token:
-                        type: string
-                      keyAuthorization:
-                        type: string
-                      expireAt:
-                        type: integer
-                        format: int64
                 dnsCredentialSecret:
                   type: object
                   description: "DNS provider credential Secret (resolved by Controller)"
@@ -198,6 +192,21 @@ spec:
                   type: string
                 accountUri:
                   type: string
+                activeChallenges:
+                  type: array
+                  description: "Active HTTP-01 challenge tokens (written by Controller via /status subresource)"
+                  items:
+                    type: object
+                    properties:
+                      domain:
+                        type: string
+                      token:
+                        type: string
+                      keyAuthorization:
+                        type: string
+                      expireAt:
+                        type: integer
+                        format: int64
       subresources:
         status: {}
       additionalPrinterColumns:

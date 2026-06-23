@@ -1,0 +1,41 @@
+# JwtClaim source: JwtAuth verifies the token and stores claims in ctx,
+# then RequestRestriction allowlists on the verified JWT claim realm_access.roles.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-jwt-claim
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    # 1. Verify the JWT and publish its decoded claims to ctx var "jwt_claims".
+    - enable: true
+      type: JwtAuth
+      config:
+        issuerGroups:
+          - name: default
+            issuers:
+              - "https://rr.example"
+            secretRefs:
+              - name: rr-jwt-secret
+                namespace: edgion-default
+        algorithm: HS256
+        header: authorization
+        keyClaimName: key
+        hideCredentials: false
+        storeClaimsInCtx: true
+    # 2. Allowlist on the verified claim. realm_access.roles is a JSON array;
+    #    "any element matches" semantics admit a token whose roles contain "admin".
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Whitelist
+        ruleGroups:
+          - rules:
+              - name: "require-admin-role"
+                source: JwtClaim
+                key: "realm_access.roles"
+                values:
+                  - "admin"
+                onMissing: NoMatch
+        status: 403
+        message: "Missing required role"

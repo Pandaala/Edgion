@@ -1,6 +1,6 @@
 # Edgion 技术白皮书
 
-> 本文档面向架构师和技术决策者，深入阐述 Edgion 的核心架构设计、关键技术选型（Rust / Pingora / Gateway API）的决策依据，以及各子系统的实现原理。如需产品功能概览，请参见 [GitHub README](../../../README.md)。
+> 本文档面向架构师和技术决策者，深入阐述 Edgion 的核心架构设计、关键技术选型（Rust / Pingora / Gateway API）的决策依据，以及各子系统的实现原理。如需产品功能概览，请参见 [GitHub README](https://github.com/Pandaala/Edgion/blob/main/README.md)。
 
 ---
 
@@ -434,14 +434,14 @@ Edgion 定义了 21 个 Prometheus 指标，覆盖 Google SRE 四大黄金信号
 
 | 指标名 | 类型 | 说明 |
 |--------|------|------|
-| `edgion_requests_total` | Counter | 已处理请求总数 |
 | `edgion_ctx_created_total` | Counter | 创建的请求上下文总数 |
-| `edgion_backend_requests_total` | Counter | 后端请求总数，携带 gateway/route/backend/protocol/status 等多维 label |
+| `edgion_backend_requests_total` | Counter | 后端请求总数，携带 gateway/route/backend/protocol/status 等多维 label（请求总量用 `sum(...)` 聚合得到） |
 | `edgion_mirror_requests_total` | Counter | 镜像请求总数，按 status label 分组 |
 | `edgion_gateway_request_bytes_total` | Counter | 下行到上游的请求字节总数 |
 | `edgion_gateway_response_bytes_total` | Counter | 上游到下行的响应字节总数 |
 | `edgion_config_reload_signals_total` | Counter | 从 Controller 接收的配置重载信号总数 |
 | `edgion_config_relist_total` | Counter | 配置全量重新拉取次数 |
+| `edgion_config_event_parse_errors_total` | Counter | watch 事件 JSON 解析失败次数（按资源 `kind` 打 label） |
 | `edgion_status_update_total` | Counter | K8s Status 更新尝试总数 |
 | `edgion_status_update_skipped_total` | Counter | K8s Status 更新跳过次数（无变更） |
 
@@ -451,7 +451,6 @@ Edgion 定义了 21 个 Prometheus 指标，覆盖 Google SRE 四大黄金信号
 
 | 指标名 | 类型 | 说明 |
 |--------|------|------|
-| `edgion_requests_failed_total` | Counter | 失败请求总数 |
 | `edgion_status_update_failed_total` | Counter | K8s Status 更新失败总数 |
 | `edgion_access_log_dropped_total` | Counter | HTTP 访问日志丢弃条数（Channel 满） |
 | `edgion_ssl_log_dropped_total` | Counter | SSL 日志丢弃条数 |
@@ -633,4 +632,4 @@ Edgion 正在积极演进，以下是近期和中期的重点方向：
 
 Edgion 是一个持续演进的开源项目。我们相信，基于 Rust 的内存安全保证、Pingora 的生产级网络引擎、Gateway API 的标准化配置模型，以及自研 DSL 引擎的安全可编程能力，Edgion 能够为云原生时代的 API 网关需求提供一个兼具安全性、性能和灵活性的答案。
 
-返回 [Edgion 推广首页](./README.md) | [项目主页](../../../README.md)
+返回 [Edgion 推广首页](./README.md) | [项目主页](https://github.com/Pandaala/Edgion/blob/main/README.md)

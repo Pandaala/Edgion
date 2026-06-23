@@ -1,0 +1,17 @@
+# IpList EdgionConfigData in edgion-test — same namespace as the EdgionPlugins that
+# references it.  Same-namespace refs always resolve; no ReferenceGrant is needed
+# regardless of the validation flag setting.
+# Scenario 4 (same_ns_ref_always_resolves) uses this.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: ecd-same-ns-data
+  namespace: edgion-test
+spec:
+  data:
+    type: IpList
+    config:
+      items:
+        - name: loopback
+          cidrs:
+            - "127.0.0.0/8"

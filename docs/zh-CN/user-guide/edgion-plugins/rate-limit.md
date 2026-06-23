@@ -29,7 +29,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-basic
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -216,9 +216,9 @@ Cluster 模式在 Controller 不可用时会自动降级，保证服务不中断
 | 场景 | gateway_count | 行为 |
 |------|---------------|------|
 | Controller 正常推送 | 动态值（如 4） | 正常集群限流 |
-| Controller 断开，TOML 配置了 `gateway_instance_count` | 静态值（如 4） | 使用静态 fallback |
-| Controller 断开，无 TOML 配置 | 1 | 等同 Instance scope（skewTolerance 仍生效） |
-| Gateway 刚启动，尚未连接 Controller | 1 或 TOML 值 | 优雅启动 |
+| Controller 断开，YAML 配置了 `gateway_instance_count` | 静态值（如 4） | 使用静态 fallback |
+| Controller 断开，无 YAML 配置 | 1 | 等同 Instance scope（skewTolerance 仍生效） |
+| Gateway 刚启动，尚未连接 Controller | 1 或 YAML 值 | 优雅启动 |
 
 ### 响应头说明
 
@@ -241,7 +241,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-by-ip
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -261,7 +261,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-by-api-key
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -284,7 +284,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-composite
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -307,7 +307,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-cluster
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -328,7 +328,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-cluster-strict
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -350,7 +350,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-cluster-sticky
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -378,7 +378,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: rate-limit-custom-reject
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimit
@@ -394,20 +394,20 @@ spec:
 
 使用 503 状态码和自定义消息，不显示限流头。
 
-## 全局配置（TOML）
+## 全局配置（YAML）
 
-在 Gateway 的 TOML 配置文件中可以设置 RateLimit 的全局参数：
+在 Gateway 的 YAML 配置文件中可以设置 RateLimit 的全局参数：
 
-```toml
-[rate_limit]
-# CMS 默认精度（K 单位，1K = 1024 slots，默认 64K ≈ 4MB）
-default_estimator_slots_k = 64
+```yaml
+rate_limit:
+  # CMS 默认精度（K 单位，1K = 1024 slots，默认 64K ≈ 4MB）
+  default_estimator_slots_k: 64
 
-# CMS 最大精度（K 单位，默认 1024K ≈ 64MB）
-max_estimator_slots_k = 1024
+  # CMS 最大精度（K 单位，默认 1024K ≈ 64MB）
+  max_estimator_slots_k: 1024
 
-# Cluster scope 静态 fallback（Controller 不可用时使用，默认 1）
-gateway_instance_count = 4
+  # Cluster scope 静态 fallback（Controller 不可用时使用，默认 1）
+  gateway_instance_count: 4
 ```
 
 ### CMS 精度与内存
@@ -464,7 +464,7 @@ flowchart TD
 
 ## 注意事项
 
-1. **Cluster 模式依赖 Controller**：如果 Controller 不可用，gateway_count 回退为 1 或 TOML 静态值
+1. **Cluster 模式依赖 Controller**：如果 Controller 不可用，gateway_count 回退为 1 或 YAML 静态值
 2. **CMS 有界高估**：限流阈值附近可能有微小的误差（始终偏保守），精度可通过 `estimatorSlotsK` 调节
 3. **scope 和 skewTolerance 验证**：`skewTolerance` 超出 1.0~2.0 范围会被自动截断；Cluster scope 要求 `rate >= 2`
 4. **插件实例独立**：不同的 RateLimit 插件实例有各自独立的 CMS 状态，互不影响

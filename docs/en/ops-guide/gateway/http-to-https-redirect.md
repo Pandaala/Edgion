@@ -1,58 +1,112 @@
-# HTTP to HTTPS Redirect Guide
+# HTTP to HTTPS Redirect
 
-> **🔌 Edgion Extension**
-> 
-> This feature is implemented through Edgion custom Annotations and is not part of the standard Gateway API specification.
+Automatically redirect plaintext HTTP requests to their HTTPS equivalent.
 
-This guide explains how to enable global HTTP to HTTPS redirection via Gateway annotations.
+> **🔌 Edgion extension**
+>
+> This redirect is configured through the `edgion.io/http-to-https-redirect` Gateway annotation; it is not part of standard Gateway API.
 
-## Feature Overview
+## Overview
 
-When this feature is enabled, all requests sent to HTTP ports will be automatically redirected to HTTPS, similar to the following nginx configuration:
+Set the `edgion.io/http-to-https-redirect` annotation on a Gateway to make Edgion answer
+plaintext HTTP requests with a `301 Moved Permanently` redirect to the matching `https://`
+URL. This is the common way to enforce TLS without dropping clients that still connect over
+port 80. The redirect preserves the full path and query string and runs at the earliest stage
+of request processing — no plugins or route matching execute.
 
-```nginx
-return 301 https://$host$request_uri;
-```
+The annotation accepts `"true"` or `"false"`; the default is `"false"`, in which case HTTP
+requests route normally.
 
-## Quick Start
+## Configuration
 
-### Enable Redirect
-
-Add an annotation to the Gateway resource:
+Apply the annotation at the Gateway level. It covers every `HTTP` listener on the Gateway:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: my-gateway
-  namespace: default
+  name: main-gateway
+  namespace: edgion-system
   annotations:
     edgion.io/http-to-https-redirect: "true"
 spec:
   gatewayClassName: edgion
   listeners:
-    # HTTP listener - will automatically redirect to HTTPS
+    # HTTP listener: requests are redirected to HTTPS
     - name: http
       port: 80
       protocol: HTTP
-    # HTTPS listener - handles requests normally
+      allowedRoutes:
+        namespaces:
+          from: Same
+    # HTTPS listener: serves requests normally
     - name: https
       port: 443
       protocol: HTTPS
+      hostname: app.example.com
       tls:
+        mode: Terminate
         certificateRefs:
-          - name: my-tls-secret
+          - name: app-example-com-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
 ```
 
-### Custom HTTPS Port
+## Annotation reference
 
-If the HTTPS service runs on a non-standard port, you can specify the redirect target port:
+| Annotation | Type | Default | Description |
+|------------|------|---------|-------------|
+| `edgion.io/http-to-https-redirect` | String | `"false"` | When `"true"`, every `HTTP` listener on the Gateway returns a `301` redirect to the `https://` equivalent. |
+| `edgion.io/https-redirect-port` | String | `"443"` | Target port for the HTTPS redirect, used when the HTTPS service runs on a non-standard port. |
+
+## Scenarios
+
+### Redirect all HTTP traffic to standard HTTPS
+
+The annotation turns every `HTTP` listener into a redirect to port 443.
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: my-gateway
+  name: site-gateway
+  namespace: edgion-system
+  annotations:
+    edgion.io/http-to-https-redirect: "true"
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: http
+      port: 80
+      protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: app.example.com
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: app-example-com-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+```
+
+### Redirect to a non-standard HTTPS port
+
+When HTTPS is served on a custom port, set `edgion.io/https-redirect-port` so the `Location`
+header points at the right port.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: custom-port-gateway
+  namespace: edgion-system
   annotations:
     edgion.io/http-to-https-redirect: "true"
     edgion.io/https-redirect-port: "8443"
@@ -62,75 +116,67 @@ spec:
     - name: http
       port: 8080
       protocol: HTTP
+      allowedRoutes:
+        namespaces:
+          from: Same
     - name: https
       port: 8443
       protocol: HTTPS
+      hostname: app.example.com
       tls:
+        mode: Terminate
         certificateRefs:
-          - name: my-tls-secret
+          - name: app-example-com-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
 ```
 
-## Annotation Reference
+### Per-path redirect with an HTTPRoute filter
 
-> **🔌 Edgion Extension Annotations**
-> 
-> The following Annotations use the `edgion.io/` prefix and are extension configurations for Edgion Gateway.
+The Gateway annotation is all-or-nothing across HTTP listeners. For path-level control, leave
+the annotation off and use a `RequestRedirect` filter on an HTTPRoute instead.
 
-| Annotation | Type | Default | Description |
-|------------|------|---------|-------------|
-| `edgion.io/http-to-https-redirect` | string | `"false"` | Set to `"true"` to enable HTTP to HTTPS redirect |
-| `edgion.io/https-redirect-port` | string | `"443"` | HTTPS redirect target port |
-
-## How It Works
-
-1. When the Gateway is configured with `edgion.io/http-to-https-redirect: "true"`
-2. All HTTP protocol listeners use a lightweight redirect handler
-3. Upon receiving a request, it immediately returns a `301 Moved Permanently` response
-4. The `Location` header is set to the corresponding HTTPS URL
-
-### Example Request/Response
-
-**Request:**
-```
-GET /api/users?page=1 HTTP/1.1
-Host: example.com
-```
-
-**Response:**
-```
-HTTP/1.1 301 Moved Permanently
-Location: https://example.com/api/users?page=1
-Content-Length: 0
-Connection: close
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: redirect-route
+  namespace: edgion-system
+spec:
+  parentRefs:
+    - name: site-gateway
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /secure/
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
 ```
 
-## Notes
+## Edge cases and caveats
 
-1. **Only affects HTTP listeners**: This annotation only applies to listeners with `protocol: HTTP`. HTTPS listeners are not affected
+- **Quote the value**: write `"true"` so YAML does not parse it as a boolean.
+- **Gateway-wide, not per-listener**: once enabled, *all* `HTTP` listeners on the Gateway
+  redirect. There is no per-listener override; use an HTTPRoute `RequestRedirect` filter for
+  finer control.
+- **HTTP listeners only**: the annotation affects only `protocol: HTTP` listeners. `HTTPS`,
+  `TLS`, `TCP`, and `UDP` listeners are unaffected.
+- **301 is cached**: browsers cache the permanent redirect, so test with a fresh client when
+  iterating.
+- **Provide a matching HTTPS listener**: the redirect targets `https://<host>` (on
+  `https-redirect-port`); make sure something is listening there or clients hit a dead port.
+- **Query and path preserved**: the full URI, including query parameters, is carried into the
+  `Location` header.
 
-2. **Gateway-wide**: Once enabled, all HTTP listeners under the Gateway will redirect. Per-listener configuration is not supported
+## Related documents
 
-3. **No business logic**: The redirect occurs at the earliest stage of request processing, without executing any plugins or route matching
-
-4. **SEO friendly**: Uses 301 permanent redirect, so search engines will automatically update their indexes
-
-## FAQ
-
-### Q: How to enable redirect only for specific paths?
-
-A: This feature provides global redirection and does not support path-level control. For finer-grained control, configure the RequestRedirect filter in HTTPRoute.
-
-### Q: Does the redirect preserve query parameters?
-
-A: Yes, the complete URI (including path and query parameters) is preserved.
-
-### Q: What is the performance impact?
-
-A: The redirect handler is very lightweight and does not involve any upstream connections or complex route matching, resulting in minimal performance overhead.
-
-## Related Documentation
-
-- [TLS Termination](./tls/tls-termination.md)
-- [HTTPS Listener](./listeners/https.md)
-- [Gateway Resource Overview](./overview.md)
-- [EdgionTls Extension](./tls/edgion-tls.md)
+- [HTTPS listener](listeners/https.md)
+- [HTTP listener](listeners/http.md)
+- [Preflight policy](preflight-policy.md)
+- [Gateway overview](overview.md)

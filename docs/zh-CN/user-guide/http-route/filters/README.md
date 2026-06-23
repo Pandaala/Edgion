@@ -7,6 +7,7 @@
   - [ResponseHeaderModifier](./gateway-api/response-header-modifier.md)
   - [RequestRedirect](./gateway-api/request-redirect.md)
   - [URLRewrite](./gateway-api/url-rewrite.md)
+  - [RequestMirror](./gateway-api/request-mirror.md)
 - Edgion 扩展过滤器 🔌
   - [AllEndpointStatus](./edgion-plugins/all-endpoint-status.md)
   - [BandwidthLimit](./edgion-plugins/bandwidth-limit.md)
@@ -15,7 +16,7 @@
   - [CSRF](./edgion-plugins/csrf.md)
   - [CtxSet](./edgion-plugins/ctx-setter.md)
   - [DirectEndpoint](./edgion-plugins/direct-endpoint.md)
-  - [DSL](./edgion-plugins/dsl/)
+  - [DSL](./edgion-plugins/dsl/README.md)
   - [DynamicUpstream](./edgion-plugins/dynamic-upstream.md)
   - [ForwardAuth](./edgion-plugins/forward-auth.md)
   - [HeaderCertAuth](./edgion-plugins/header-cert-auth.md)

@@ -18,14 +18,41 @@ backendRefs:
 
 ## Configuration Reference
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| weight | int | | 1 | Weight value (0-1000000) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `weight` | Integer | `1` | Relative traffic share for this backend within the rule |
+
+## How weights are distributed
+
+Weights are **relative**, not percentages. Each backend receives `weight / (sum of weights)` of the rule's traffic. The values `90`/`10` and `9`/`1` distribute traffic identically.
 
 ## Default Behavior
 
-- When `weight` is not specified, the default value is `1`
-- A backend with `weight: 0` receives no traffic (useful for blue-green deployment switching)
+- When `weight` is omitted, it defaults to `1`. With multiple backends and no explicit weights, traffic is split evenly.
+- A backend with `weight: 0` receives no traffic but stays in the configuration — handy for parking the idle side of a blue-green pair.
+
+## All-or-none weight rule
+
+Within a single rule, **either every `backendRef` sets a `weight`, or none of them do**. Mixing weighted and unweighted backends in the same rule is rejected and the rule's backends fail to resolve.
+
+```yaml
+# ❌ Invalid: one backend has a weight, the other does not
+backendRefs:
+  - name: app-v1
+    port: 8080
+    weight: 90
+  - name: app-v2
+    port: 8080
+
+# ✅ Valid: both backends set a weight
+backendRefs:
+  - name: app-v1
+    port: 8080
+    weight: 90
+  - name: app-v2
+    port: 8080
+    weight: 10
+```
 
 ## Examples
 
@@ -38,7 +65,7 @@ metadata:
   name: canary-release
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     - backendRefs:
         - name: app-stable
@@ -89,7 +116,14 @@ rules:
         port: 8080
 ```
 
+## Notes
+
+- If every backend in a rule has `weight: 0`, no backend is selectable and requests to that rule return a 5xx. Always keep at least one backend with a non-zero weight.
+- Weights control how the rule's traffic is shared; they do not change which backend a specific in-flight connection retries to. Health-checked or circuit-broken endpoints are still skipped regardless of weight.
+
 ## Related Documentation
 
 - [Service Reference](./service-ref.md)
-- Canary and blue-green rollout patterns currently build on the weight configuration described on this page.
+- [Backend TLS](./backend-tls.md)
+- [Backend Active Health Check](./health-check.md)
+- [Circuit Breaker](./circuit-breaker.md)

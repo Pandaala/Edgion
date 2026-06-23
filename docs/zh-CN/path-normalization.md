@@ -1,7 +1,5 @@
 # Path Normalization（路径规范化）
 
-> 详细技术规格：`docs/superpowers/specs/2026-04-26-uri-normalization-design.md`
-
 Edgion 在每个请求入口强制执行路径规范化，消除路径类访问控制规则可被 percent-encoding / 双斜杠 / dot-segment / path-parameter 绕过的缺口。**此功能始终启用，没有全局开关。**
 
 ---
@@ -10,10 +8,10 @@ Edgion 在每个请求入口强制执行路径规范化，消除路径类访问�
 
 典型攻击示例：
 
-- 配置 `RequestRestriction` 插件 `deny: ["/admin"]`
+- 配置 `RequestRestriction` 插件拦截 `/admin`（`Path` 规则 `values: ["/admin"]`）
 - 攻击者请求 `/%61dmin`（`/admin` 的 percent-encoding 形态）
 - 未规范化时：字符串精确比较 `/%61dmin ≠ /admin` → 绕过成功
-- 规范化后：`/%61dmin` → `/admin` → 命中 deny 规则 → 拒绝
+- 规范化后：`/%61dmin` → `/admin` → 命中拦截规则 → 拒绝
 
 ---
 
@@ -54,15 +52,14 @@ spec:
 ### Access Log 中的原始 URI 输出
 
 默认情况下 access log 仅输出规范化后的 `path` 字段，不输出任何 raw 形态字段、不输出 query。
-若需要审计客户端原始完整 URI，开启 Gateway 侧 TOML 选项：
+若需要审计客户端原始完整 URI，开启 Gateway 侧 YAML 选项：
 
-```toml
-[access_log_options]
-include_raw_uri = true
+```yaml
+access_log_options:
+  include_raw_uri: true
 ```
 
-启用后 access log JSON 多一个字段 `request_uri`，值为客户端入口完整 raw URI（raw path
-+ raw query）。详见 `skills/03-coding/observability/00-access-log.md`。
+启用后 access log JSON 多一个字段 `request_uri`，值为客户端入口完整 raw URI（raw path + raw query）。详见 [Access Log](ops-guide/observability/access-log.md)。
 
 ---
 
@@ -127,16 +124,16 @@ path:
 
 ### 3. `RestrictionSource::Path` 配置
 
-`Path` 视图的 `deny` / `allow` 列表加载时会被规范化（与请求侧匹配同一空间）。若有 `/admin/` 之类 trailing slash，会被规范化为 `/admin`——INFO 日志会记录此转换，不静默。
+`Path` source 规则的 `values` 加载时会被规范化（与请求侧匹配同一空间）。若有 `/admin/` 之类 trailing slash，会被规范化为 `/admin`——INFO 日志会记录此转换，不静默。
 
 若需要按字面 raw 拒绝，改用 `RestrictionSource::RequestPath`。
 
-### 4. `;param` 对 allow-list 类规则的副作用
+### 4. `;param` 对白名单规则的副作用
 
 path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类绕过）。
 
-- 影响 **deny 类规则**：`/admin/..;jsessionid=x/secret` 在 ACL 视图为 `/secret`，能正确命中 `deny: /secret` ✓
-- 影响 **allow 类规则**：请求 `/api/users;v=1/data` 在 ACL 视图为 `/api/users/data`——若配置 `allow: /api/users` exact，**不命中**
+- 影响 **黑名单分组**（`mode: Blacklist`）：`/admin/..;jsessionid=x/secret` 在 ACL 视图为 `/secret`，能正确命中 `Path` 规则的 `values: ["/secret"]` ✓
+- 影响 **白名单分组**（`mode: Whitelist`）：请求 `/api/users;v=1/data` 在 ACL 视图为 `/api/users/data`——若配置 `Path` 规则 `values: ["/api/users"]` exact，**不命中**
 
 上游仍收到含 `;param` 的 raw path，依赖 `;jsessionid` 的应用不受影响。
 
@@ -149,13 +146,15 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
 ```yaml
 - type: RequestRestriction
   config:
-    rules:
-      - name: block-admin
-        source: Path                # current 视图，覆盖所有编码变体
-        deny:
-          - "/admin"
-          - "/internal"
-        onMissing: Allow
+    mode: Blacklist
+    ruleGroups:
+      - rules:
+          - name: block-admin
+            source: Path             # current 视图，覆盖所有编码变体
+            values:
+              - "/admin"
+              - "/internal"
+            onMissing: NoMatch
 ```
 
 ### 审计日志记录客户端原始 URI
@@ -172,8 +171,7 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
 
 ## 相关文档
 
-- 技术规格：`docs/superpowers/specs/2026-04-26-uri-normalization-design.md`
-- 配置参考：`skills/02-features/02-config/02-edgion-gateway-config.md`（`spec.pathNormalization`）
+- [EdgionGatewayConfig](ops-guide/configuration/edgion-gateway-config.md)——`spec.pathNormalization` 配置参考
 - RequestRestriction 插件：[user-guide/http-route/filters/edgion-plugins/request-restriction.md](user-guide/http-route/filters/edgion-plugins/request-restriction.md)
 
 ---
@@ -187,7 +185,7 @@ Edgion v4 起默认把规范化后的 path 转发到上游，与 Envoy / Kong �
 | 0 | rewrite 类插件已写过 path | `url_rewrite` / `proxy_rewrite` / DSL `req.set_uri` 等 | 用 rewrite 后的 path（终态） |
 | 1 | per-route 注解 `edgion.io/forward-raw-path` | HTTPRoute `metadata.annotations` | `"true"` 强制 raw / `"false"` 强制 normalized |
 | 2 | 网关互转（region_route） | `region_route` 插件 | raw（避免与对端二次规范化冲突） |
-| 3 | 全局开关 `forward_normalized_path` | `[path_normalization]` 配置段 | `true`（normalized）|
+| 3 | 全局开关 `forward_normalized_path` | `path_normalization` 配置段 | `true`（normalized）|
 | 默认 | 兜底 | — | normalized |
 
 ### 与 Envoy / Kong 对比
@@ -196,7 +194,7 @@ Edgion v4 起默认把规范化后的 path 转发到上游，与 Envoy / Kong �
 |---|---|---|
 | Envoy `normalize_path` | normalized | 是 |
 | Kong Traditional router | normalized | 是 |
-| **Edgion v4** | **normalized**（v4 与业界对齐）| 是（`forward_normalized_path = false`）|
+| **Edgion v4** | **normalized**（v4 与业界对齐）| 是（`forward_normalized_path: false`）|
 | Edgion v3.1 及更早 | raw | — |
 
 ### 升级注意
@@ -204,15 +202,15 @@ Edgion v4 起默认把规范化后的 path 转发到上游，与 Envoy / Kong �
 如果你的上游服务对 path 字面敏感（例如对 `%2F` 字面有特定路由逻辑），升级到 v4 后默认会收到 decode 后的形态。两种解决：
 
 1. **per-route opt-out**：在受影响的 HTTPRoute 加 `edgion.io/forward-raw-path: "true"` 注解
-2. **全局回退**：在 `[path_normalization]` 设 `forward_normalized_path = false`（影响所有路由）
+2. **全局回退**：在 `path_normalization` 设 `forward_normalized_path: false`（影响所有路由）
 
 ### `;param` 兼容场景
 
 如果你的上游应用依赖 path-parameter（如 `;jsessionid=xxx`），可启用：
 
-```toml
-[path_normalization]
-preserve_path_parameters = true
+```yaml
+path_normalization:
+  preserve_path_parameters: true
 ```
 
 注意：开启后 `..;/` 类绕过攻击不再被默认拦截（参见 spec §14.4）。建议同时用 `RestrictionSource::RequestPath` regex 拦截 `;` 字符的可疑模式。

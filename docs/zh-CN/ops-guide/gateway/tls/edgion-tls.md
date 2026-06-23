@@ -1,21 +1,24 @@
-# EdgionTls 用户指南
+# EdgionTls
 
 > **🔌 Edgion 扩展**
-> 
-> `EdgionTls` 是 Edgion 自定义 CRD，提供比标准 Gateway API 更丰富的 TLS 和 mTLS 配置选项。
+>
+> `EdgionTls` 是 Edgion 自定义 CRD（`edgion.io/v1`），提供 Gateway API 之外的 TLS 功能：双向 TLS（mTLS）、最低 TLS 版本和 OpenSSL 格式密码套件列表。不属于标准 Gateway API 规范。
 
-## 什么是 EdgionTls？
+EdgionTls 将服务端证书绑定到一个或多个 Gateway 监听器，并控制 TLS 握手行为。当标准 Gateway API 的 `tls.certificateRefs` 无法满足需求时使用——例如需要客户端证书验证、固定最低 TLS 版本或限制密码套件。
 
-EdgionTls 是 Edgion Gateway 的 TLS 证书管理资源，用于为 Gateway 配置 HTTPS 服务器证书和 mTLS（双向 TLS 认证）。
+## 概述
 
-**主要功能**：
-- 🔒 **HTTPS 支持**：为域名配置 TLS 证书，启用 HTTPS
-- 🔐 **mTLS 认证**：支持客户端证书验证，实现双向认证
-- 🌐 **通配符证书**：支持 `*.example.com` 格式的通配符域名
-- 🔄 **证书热更新**：无需重启即可更新证书
-- ✅ **自动验证**：自动检查证书有效期、SAN 匹配等
+EdgionTls 通过 `parentRefs` 附加到 Gateway 监听器，并按 `hosts` 列表中的 SNI 匹配传入连接。匹配时，Gateway 使用 `secretRef` 中的证书并应用已配置的握手选项：
 
----
+```
+Client --[TLS + SNI]--> Gateway listener
+                          └─ EdgionTls (hosts match) -> serve secretRef cert,
+                             enforce clientAuth / minTlsVersion / ciphers
+```
+
+要让监听器使用 EdgionTls 解析证书，需在 Gateway 的监听器选项中设置 `edgion.io/cert-provider: "edgion-tls"`。详见[在监听器上选择 EdgionTls](#在监听器上选择-edgiontls)。
+
+如需自动签发和续期证书，可将 EdgionTls 与 [EdgionAcme](./acme.md) 配合使用——ACME 可自动创建和更新 EdgionTls。
 
 ## 快速开始
 
@@ -26,921 +29,463 @@ apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: example-tls
-  namespace: default
+  namespace: production
 spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
   hosts:
     - example.com
   secretRef:
-    name: example-tls-secret
-    namespace: default
+    name: example-com-tls
+    namespace: production
 ```
 
-### 创建 TLS Secret
+### 创建证书 Secret
 
 ```bash
-# 方式 1：使用 kubectl 创建（推荐）
-kubectl create secret tls example-tls-secret \
+kubectl create secret tls example-com-tls \
   --cert=path/to/tls.crt \
   --key=path/to/tls.key \
-  -n default
-
-# 方式 2：使用 YAML 文件
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Secret
-metadata:
-  name: example-tls-secret
-  namespace: default
-type: kubernetes.io/tls
-data:
-  tls.crt: $(cat tls.crt | base64)
-  tls.key: $(cat tls.key | base64)
-EOF
+  -n production
 ```
 
-### 验证配置
+Secret 必须是 `kubernetes.io/tls` 类型，包含 `tls.crt` 和 `tls.key` 键。⚠️ **切勿将真实私钥提交到版本控制或文档中。**
+
+### 验证
 
 ```bash
-# 查看 EdgionTls 资源
-kubectl get edgiontls -n default
-
-# 测试 HTTPS 访问
-curl https://example.com
+kubectl get edgiontls -n production
+curl -v https://example.com
 ```
 
----
+### 在监听器上选择 EdgionTls
 
-## 配置参数详解
+EdgionTls 通过 `parentRefs` 附加，但监听器本身也需要主动开启 EdgionTls 作为证书来源。在监听器选项中设置 `edgion.io/cert-provider` 为 `edgion-tls`，Gateway 将从匹配的 EdgionTls 解析证书（及握手选项），而不使用标准的 `tls.certificateRefs`：
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: main-gateway
+  namespace: production
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: "example.com"
+      tls:
+        mode: Terminate
+        # 从 EdgionTls 解析证书和握手选项。
+        options:
+          edgion.io/cert-provider: "edgion-tls"
+        # EdgionTls 提供证书时，certificateRefs 可以为空。
+        certificateRefs: []
+```
+
+## 配置参数
 
 ### 基础参数
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `parentRefs` | Array | 可选 | - | 绑定的 Gateway 列表 |
-| `hosts` | Array | **必填** | - | 主机名列表，支持通配符（如 `*.example.com`） |
-| `secretRef` | Object | **必填** | - | 服务器证书 Secret 引用 |
-| `clientAuth` | Object | 可选 | - | mTLS 客户端认证配置 |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `parentRefs` | Array\<Object\> | none | 此配置附加的 Gateway 监听器，使用 `name` + `sectionName` 指定目标监听器 |
+| `hosts` | Array\<String\> | **必填** | 此证书服务的主机名，支持单个最左侧标签通配符，如 `*.example.com` |
+| `secretRef` | Object | **必填** | 持有服务端证书的 `kubernetes.io/tls` Secret，跨命名空间需要 `ReferenceGrant` |
+| `clientAuth` | Object | none | mTLS 客户端证书验证；见下表 |
+| `minTlsVersion` | Enum | none（BoringSSL 默认 = TLS 1.2+） | 最低接受的 TLS 版本。可选值：`TLS1_0` \| `TLS1_1` \| `TLS1_2` \| `TLS1_3` |
+| `ciphers` | Array\<String\> | none（BoringSSL 默认） | TLS 1.2 及以下的 OpenSSL 格式密码套件列表，如 `ECDHE-RSA-AES256-GCM-SHA384` |
 
-### clientAuth 参数（mTLS 配置）
+> **没有** `maxTlsVersion` 字段，密码套件是扁平的 OpenSSL 格式列表，没有"profile"选择器。请只配置上表中列出的字段。
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `mode` | String | 可选 | `Terminate` | 认证模式：`Terminate`（单向）/ `Mutual`（强制双向）/ `OptionalMutual`（可选双向） |
-| `caSecretRef` | Object | 条件必填* | - | 客户端 CA 证书 Secret 引用 |
-| `verifyDepth` | Integer | 可选 | `1` | 证书链验证深度（1-9），用于中间 CA 场景 |
-| `allowedSans` | Array | 可选 | - | 允许的客户端证书 SAN 白名单 |
-| `allowedCns` | Array | 可选 | - | 允许的客户端证书 CN 白名单 |
+#### `minTlsVersion` 取值说明
 
-*当 `mode` 为 `Mutual` 或 `OptionalMutual` 时，`caSecretRef` 必填
+| 值 | TLS 版本 | 建议 |
+|----|---------|------|
+| `TLS1_0` | TLS 1.0 | RFC 8996 已废弃——仅限旧客户端，风险自担 |
+| `TLS1_1` | TLS 1.1 | RFC 8996 已废弃——仅限旧客户端，风险自担 |
+| `TLS1_2` | TLS 1.2 | 现代部署的推荐基线 |
+| `TLS1_3` | TLS 1.3 | 最强安全性；所有客户端都支持时使用 |
 
----
+未设置 `minTlsVersion` 时，使用 BoringSSL 默认值（TLS 1.2+），这是安全的选择。
 
-## 完整配置示例
+### 安全参数——`clientAuth`（mTLS）
 
-### 示例 1：单向 TLS（基础 HTTPS）
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `clientAuth.mode` | Enum | `Terminate` | 验证模式。可选值：`Terminate` \| `Mutual` \| `OptionalMutual` |
+| `clientAuth.caSecretRef` | Object | none | CA 证书 Secret（必须包含 `ca.crt` 键）。**`mode` 为 `Mutual` 或 `OptionalMutual` 时必填** |
+| `clientAuth.verifyDepth` | Integer | `1` | 证书链验证深度（1–9），中间 CA 链场景需增大 |
+| `clientAuth.allowedSans` | Array\<String\> | none | 客户端证书 SAN 允许列表，支持通配符 |
+| `clientAuth.allowedCns` | Array\<String\> | none | 客户端证书 Common Name 允许列表（精确匹配） |
+
+#### `clientAuth.mode` 取值说明
+
+| 值 | 含义 |
+|----|------|
+| `Terminate` | 单向 TLS：只验证服务端证书（默认） |
+| `Mutual` | 双向 TLS：客户端**必须**提供有效证书，否则握手被拒绝 |
+| `OptionalMutual` | 客户端证书可选，但提供时会被验证 |
+
+## 常见配置场景
+
+### 1. 单向 TLS（基础 HTTPS）
+
+最简单的生产配置——只验证服务端证书，多个主机：
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: basic-https
-  namespace: edge
+  namespace: production
 spec:
   parentRefs:
-    - name: example-gateway
-      namespace: edge
+    - name: main-gateway
+      sectionName: https
   hosts:
     - api.example.com
     - www.example.com
   secretRef:
-    name: server-tls
-    namespace: edge
+    name: example-com-tls
+    namespace: production
 ```
 
-**使用场景**：标准 HTTPS 网站，只验证服务器证书。
+### 2. 强制双向 TLS（Mutual）
 
----
-
-### 示例 2：强制双向 TLS（Mutual）
+每个客户端必须提供由受信任 CA 签发的证书：
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: mtls-mutual
-  namespace: edge
+  name: mtls-required
+  namespace: production
 spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
   hosts:
     - api.example.com
   secretRef:
-    name: server-tls
-    namespace: edge
+    name: example-com-tls
+    namespace: production
   clientAuth:
     mode: Mutual
     caSecretRef:
       name: client-ca
-      namespace: edge
+      namespace: production
     verifyDepth: 1
 ```
 
-**使用场景**：API 网关对接微服务，所有客户端必须提供有效证书。
+创建 CA Secret（`ca.crt` 键是必需的）：
 
-**创建 CA Secret**：
 ```bash
 kubectl create secret generic client-ca \
   --from-file=ca.crt=path/to/client-ca.pem \
-  -n edge
+  -n production
 ```
 
-**测试访问**：
+测试：
+
 ```bash
-# 带客户端证书访问
+# 带客户端证书访问（接受）
 curl --cert client.crt --key client.key https://api.example.com
 
-# 不带证书访问（会被拒绝）
+# 不带证书访问（在 TLS 握手时被拒绝）
 curl https://api.example.com
-# 预期：TLS handshake failed
 ```
 
----
+### 3. 可选双向 TLS（OptionalMutual）
 
-### 示例 3：可选双向 TLS（OptionalMutual）
+允许匿名客户端，但提供证书时进行验证——适用于部分已认证客户端享有额外权限的场景：
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: mtls-optional
-  namespace: edge
+  namespace: production
 spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
   hosts:
     - secure.example.com
   secretRef:
-    name: server-tls
-    namespace: edge
+    name: example-com-tls
+    namespace: production
   clientAuth:
     mode: OptionalMutual
     caSecretRef:
       name: client-ca
-      namespace: edge
+      namespace: production
 ```
 
-**使用场景**：混合场景，允许普通用户访问，但为提供证书的客户端提供额外权限。
+### 4. mTLS + SAN / CN 允许列表
 
-**特点**：
-- ✅ 不带证书的请求也能通过
-- ✅ 带有效证书的请求会被识别（可在上游服务中区分）
-
----
-
-### 示例 4：mTLS + SAN 白名单
+在 CA 验证之上，进一步通过 SAN 或 CN 限制允许的客户端：
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: mtls-san-whitelist
-  namespace: edge
+  name: mtls-allowlist
+  namespace: production
 spec:
+  parentRefs:
+    - name: internal-gateway
+      sectionName: https
   hosts:
     - admin.example.com
   secretRef:
-    name: server-tls
+    name: admin-example-com-tls
+    namespace: production
   clientAuth:
     mode: Mutual
     caSecretRef:
       name: client-ca
-    verifyDepth: 1
+      namespace: production
     allowedSans:
       - "client1.example.com"
       - "*.internal.example.com"
+    allowedCns:
+      - "AdminClient"
 ```
 
-**使用场景**：管理接口，只允许特定客户端访问。
+客户端只有在证书由 `client-ca` 签发**且** SAN/CN 匹配允许列表时才被接受。建议使用 `allowedSans` 而非 `allowedCns`——基于 CN 的身份标识已被废弃。
 
-**验证逻辑**：
-1. 客户端证书必须由 `client-ca` 签发 ✅
-2. 客户端证书的 SAN 必须匹配白名单 ✅
-3. 两个条件都满足才允许访问
-
----
-
-### 示例 5：mTLS + CN 白名单
+要将已验证的客户端证书身份传递到后端（供后端或插件使用），在 EdgionTls 的 metadata 中添加注解 `edgion.io/expose-client-cert: "true"`：
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: mtls-cn-whitelist
-  namespace: edge
+  name: mtls-allowlist
+  namespace: production
+  annotations:
+    edgion.io/expose-client-cert: "true"
 spec:
+  parentRefs:
+    - name: internal-gateway
+      sectionName: https
   hosts:
     - admin.example.com
   secretRef:
-    name: server-tls
+    name: admin-example-com-tls
+    namespace: production
   clientAuth:
     mode: Mutual
     caSecretRef:
       name: client-ca
-    allowedCns:
-      - "AdminClient"
-      - "SuperUser"
+      namespace: production
 ```
 
-**使用场景**：基于客户端证书 CN（Common Name）进行访问控制。
+### 5. 中间 CA 证书链（verifyDepth）
 
----
-
-### 示例 6：中间 CA 证书链（verifyDepth=2）
+当客户端证书由根 CA 下的中间 CA 签发时，需要增大验证深度：
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: mtls-intermediate-ca
-  namespace: edge
+  namespace: production
 spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
   hosts:
     - enterprise.example.com
   secretRef:
-    name: server-tls
+    name: enterprise-example-com-tls
+    namespace: production
   clientAuth:
     mode: Mutual
     caSecretRef:
       name: root-ca
-    verifyDepth: 2  # 支持中间 CA
+      namespace: production
+    # 允许叶证书与根 CA 之间有一层中间 CA。
+    verifyDepth: 2
 ```
 
-**证书链结构**：
+证书链结构和深度：
+
+```text
+[Client cert] <- [Intermediate CA] <- [Root CA]
 ```
-[客户端证书] <- [中间 CA] <- [Root CA]
-```
 
-**说明**：
-- `verifyDepth: 1` - 只验证直接签发（默认）
-- `verifyDepth: 2` - 支持一层中间 CA
-- `verifyDepth: 3` - 支持两层中间 CA
-- CA Secret 的 `ca.crt` 可以包含多张证书的 PEM bundle（根证书加一张或多张中间证书）；bundle 中的每一张证书都会被加入客户端信任库。
+- `verifyDepth: 1`——仅限直接签发（默认）
+- `verifyDepth: 2`——一层中间 CA
+- `verifyDepth: 3`——两层中间 CA
 
----
+CA Secret 的 `ca.crt` 可以包含多张证书的 PEM bundle（根证书加中间证书）；bundle 中的每张证书都会加入客户端信任库。
 
-### 示例 7：通配符证书 + 多主机
+### 6. 仅 TLS 1.3
+
+将最低版本固定为 TLS 1.3，适用于仅限现代客户端的端点：
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: wildcard-cert
-  namespace: edge
-spec:
-  hosts:
-    - "*.api.example.com"
-    - "*.admin.example.com"
-    - example.com
-  secretRef:
-    name: wildcard-tls
-```
-
-**覆盖范围**（RFC 6125 §6.4.3 — 通配符仅匹配单标签）：
-- ✅ `v1.api.example.com`
-- ✅ `v2.api.example.com`
-- ✅ `dashboard.admin.example.com`
-- ✅ `example.com`
-
-**不覆盖**：
-- `api.example.com` — 通配符不覆盖基础域名本身
-- `deep.sub.api.example.com` — 多级子域名超出 RFC 6125 单标签限制；Gateway API 路由匹配接受该主机名，但符合 RFC 6125 的客户端 TLS 库会拒绝握手，因为 `*.api.example.com` 仅覆盖一个标签
-
----
-
-### 示例 8：多 Gateway 绑定
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionTls
-metadata:
-  name: multi-gateway-tls
-  namespace: edge
+  name: tls13-only
+  namespace: production
 spec:
   parentRefs:
-    - name: public-gateway
-      namespace: edge
-    - name: internal-gateway
-      namespace: edge
+    - name: main-gateway
+      sectionName: https
   hosts:
-    - shared.example.com
+    - secure.example.com
   secretRef:
-    name: shared-tls
+    name: secure-example-com-tls
+    namespace: production
+  minTlsVersion: TLS1_3
 ```
 
-**使用场景**：同一个域名在多个 Gateway 上使用相同的证书。
+仅支持 TLS 1.2 或更低版本的客户端将无法完成握手。注意 TLS 1.3 密码套件由 BoringSSL 固定，不能通过 `ciphers` 字段更改。
 
----
+### 7. 自定义密码套件（TLS 1.2）
 
-## 证书管理最佳实践
-
-### 开发环境：生成自签名证书
-
-#### 1. 生成服务器证书
-
-```bash
-# 生成私钥
-openssl genrsa -out server-key.pem 2048
-
-# 生成证书签名请求（CSR）
-openssl req -new -key server-key.pem -out server.csr \
-  -subj "/CN=example.com"
-
-# 生成自签名证书（有效期 365 天）
-openssl x509 -req -in server.csr -signkey server-key.pem \
-  -out server-cert.pem -days 365 \
-  -extensions v3_req -extfile <(cat <<EOF
-[v3_req]
-subjectAltName = DNS:example.com,DNS:*.example.com
-EOF
-)
-
-# 创建 Secret
-kubectl create secret tls server-tls \
-  --cert=server-cert.pem \
-  --key=server-key.pem \
-  -n edge
-```
-
-#### 2. 生成客户端证书（用于 mTLS）
-
-```bash
-# 生成 CA 证书
-openssl genrsa -out ca-key.pem 2048
-openssl req -x509 -new -nodes -key ca-key.pem \
-  -sha256 -days 365 -out ca.pem \
-  -subj "/CN=Client CA"
-
-# 生成客户端私钥
-openssl genrsa -out client-key.pem 2048
-
-# 生成客户端 CSR
-openssl req -new -key client-key.pem -out client.csr \
-  -subj "/CN=AdminClient"
-
-# 使用 CA 签发客户端证书
-openssl x509 -req -in client.csr -CA ca.pem -CAkey ca-key.pem \
-  -CAcreateserial -out client-cert.pem -days 365 -sha256 \
-  -extensions v3_req -extfile <(cat <<EOF
-[v3_req]
-subjectAltName = DNS:client1.example.com
-EOF
-)
-
-# 创建 CA Secret
-kubectl create secret generic client-ca \
-  --from-file=ca.crt=ca.pem \
-  -n edge
-```
-
----
-
-### 生产环境：Let's Encrypt 集成
-
-推荐使用 **cert-manager** 自动管理 Let's Encrypt 证书：
-
-```yaml
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: example-com-cert
-  namespace: edge
-spec:
-  secretName: server-tls
-  issuerRef:
-    name: letsencrypt-prod
-    kind: ClusterIssuer
-  dnsNames:
-    - example.com
-    - "*.example.com"
-```
-
----
-
-### 证书轮换策略
-
-#### 方式 1：滚动更新（推荐）
-
-```bash
-# 1. 创建新证书 Secret
-kubectl create secret tls server-tls-new \
-  --cert=new-cert.pem \
-  --key=new-key.pem \
-  -n edge
-
-# 2. 更新 EdgionTls 引用
-kubectl patch edgiontls example-tls -n edge \
-  --type=merge -p '{"spec":{"secretRef":{"name":"server-tls-new"}}}'
-
-# 3. 验证新证书生效
-curl -v https://example.com 2>&1 | grep "expire date"
-
-# 4. 删除旧证书
-kubectl delete secret server-tls -n edge
-```
-
-#### 方式 2：原地更新
-
-```bash
-# 直接更新 Secret 内容
-kubectl create secret tls server-tls \
-  --cert=new-cert.pem \
-  --key=new-key.pem \
-  -n edge \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
----
-
-### Secret 命名规范
-
-推荐命名格式：`<domain>-tls` 或 `<service>-<env>-tls`
-
-**示例**：
-- ✅ `api-example-com-tls`
-- ✅ `admin-prod-tls`
-- ✅ `wildcard-example-tls`
-- ❌ `cert1`, `tls-secret`（不够描述性）
-
----
-
-### 证书过期监控
-
-使用 Prometheus + Alertmanager 监控证书过期时间：
-
-```yaml
-# Prometheus 规则示例
-groups:
-  - name: tls_expiry
-    rules:
-      - alert: TLSCertExpiringSoon
-        expr: (edgion_tls_cert_expiry_seconds - time()) < 604800  # 7 days
-        annotations:
-          summary: "TLS certificate expiring soon"
-          description: "Certificate {{ $labels.namespace }}/{{ $labels.name }} expires in less than 7 days"
-```
-
----
-
-## mTLS 使用场景
-
-### 1. API 网关对接微服务
-
-```mermaid
-graph LR
-    A[外部客户端] -->|mTLS| B[Edgion Gateway]
-    B -->|HTTP| C[微服务 A]
-    B -->|HTTP| D[微服务 B]
-```
-
-**配置要点**：
-- 使用 `Mutual` 模式，强制验证客户端证书
-- 配置 `allowedSans` 限制允许的客户端
-
----
-
-### 2. B2B API 集成
-
-**场景**：为不同的合作伙伴颁发不同的客户端证书
-
-```yaml
-clientAuth:
-  mode: Mutual
-  caSecretRef:
-    name: partner-ca
-  allowedCns:
-    - "PartnerA"
-    - "PartnerB"
-    - "PartnerC"
-```
-
----
-
-### 3. IoT 设备认证
-
-**场景**：每个 IoT 设备持有唯一的客户端证书
-
-```yaml
-clientAuth:
-  mode: Mutual
-  caSecretRef:
-    name: iot-device-ca
-  allowedSans:
-    - "device-*.iot.example.com"
-```
-
----
-
-### 4. 内部管理接口保护
-
-```yaml
-clientAuth:
-  mode: Mutual
-  caSecretRef:
-    name: admin-ca
-  allowedCns:
-    - "AdminUser"
-  allowedSans:
-    - "admin.internal.example.com"
-```
-
----
-
-## 故障排查
-
-| 问题现象 | 可能原因 | 解决方法 |
-|----------|----------|----------|
-| **502 Bad Gateway** | 证书无效或过期 | 检查证书有效期：`openssl x509 -in cert.pem -noout -dates` |
-| **TLS handshake failed** | SAN/CN 不匹配 | 检查证书 SAN：`openssl x509 -in cert.pem -noout -text \| grep DNS` |
-| **Client certificate required** | mTLS 模式下客户端未提供证书 | 确认客户端使用 `--cert` 和 `--key` 参数 |
-| **Certificate chain too long** | `verifyDepth` 不足 | 增大 `verifyDepth` 值（如 2 或 3） |
-| **CA verification failed** | CA Secret 不存在或格式错误 | 检查 Secret：`kubectl get secret client-ca -n edge -o yaml` |
-| **Secret not found** | `secretRef` 引用的 Secret 不存在 | 创建 Secret 或修正引用 |
-| **Invalid SAN pattern** | `allowedSans` 包含空字符串 | 移除空白的 SAN 配置 |
-| **证书不生效** | EdgionTls 未绑定到 Gateway | 检查 `parentRefs` 配置 |
-
----
-
-## 安全注意事项
-
-### 1. 私钥保护
-
-- ✅ **使用 Kubernetes Secret** 存储私钥（自动加密）
-- ✅ **配置 RBAC**：限制 Secret 访问权限
-- ❌ **不要**将私钥提交到 Git 仓库
-- ❌ **不要**在日志中打印私钥内容
-
-```yaml
-# RBAC 示例：只允许特定 ServiceAccount 访问 Secret
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: tls-secret-reader
-  namespace: edge
-rules:
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames: ["server-tls", "client-ca"]
-    verbs: ["get"]
-```
-
----
-
-### 2. 证书吊销
-
-**方式 1：删除 CA Secret**（影响所有客户端）
-```bash
-kubectl delete secret client-ca -n edge
-```
-
-**方式 2：更新 `allowedCns` 白名单**（精细控制）
-```yaml
-clientAuth:
-  allowedCns:
-    - "ValidClient"
-    # 移除 "RevokedClient"
-```
-
----
-
-### 3. TLS 版本建议
-
-Edgion Gateway 默认支持 **TLS 1.2** 和 **TLS 1.3**，已禁用不安全的 TLS 1.0/1.1。
-
----
-
-### 4. 密码套件选择
-
-推荐使用现代密码套件（Edgion 默认配置）：
-- ✅ `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`
-- ✅ `TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384`
-- ✅ `TLS_AES_128_GCM_SHA256` (TLS 1.3)
-- ❌ `TLS_RSA_WITH_3DES_EDE_CBC_SHA`（已禁用）
-
----
-
-## 性能优化
-
-### 1. 证书缓存
-
-Edgion Gateway 自动缓存已验证的证书，无需额外配置。
-
----
-
-### 2. Session 复用
-
-TLS Session 复用默认启用，可减少握手开销。
-
----
-
-### 3. OCSP Stapling
-
-**当前状态**：规划中，未来版本将支持。
-
----
-
-## 参考资源
-
-- [Gateway API 标准](https://gateway-api.sigs.k8s.io/)
-- [Kubernetes TLS Secret 规范](https://kubernetes.io/docs/concepts/configuration/secret/#tls-secrets)
-- [OpenSSL 命令参考](https://www.openssl.org/docs/man1.1.1/man1/openssl.html)
-- [Let's Encrypt 文档](https://letsencrypt.org/docs/)
-- [cert-manager 文档](https://cert-manager.io/docs/)
-
----
-
-## 高级配置
-
-### TLS 版本控制
-
-设置最小 TLS 版本，类似 Cloudflare 的 Minimum TLS Version 设置。
-
-**配置示例**：
+使用 OpenSSL 名称限制 TLS 1.2 密码套件：
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: tls-version-control
-  namespace: default
+  name: custom-ciphers
+  namespace: production
 spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
   hosts:
     - secure.example.com
   secretRef:
-    name: secure-tls-secret
-    namespace: default
-  minTlsVersion: TLS1_2  # 最小 TLS 版本
-```
-
-**支持的版本**：
-
-| 值 | 说明 | 推荐度 |
-|-----|------|--------|
-| `TLS1_0` | TLS 1.0 | ⚠️ 不推荐（已废弃） |
-| `TLS1_1` | TLS 1.1 | ⚠️ 不推荐（已废弃） |
-| `TLS1_2` | TLS 1.2 | ✅ 推荐 |
-| `TLS1_3` | TLS 1.3 | ✅ 最安全 |
-
-**使用场景**：
-- 🔒 **仅 TLS 1.3**: 设置 `minTlsVersion: TLS1_3`，适用于现代客户端
-- 🔄 **兼容模式**: 设置 `minTlsVersion: TLS1_2`（推荐）
-- ⚠️ **旧客户端兼容**: 设置 `minTlsVersion: TLS1_0`（不推荐）
-
-不配置时使用 BoringSSL 默认值。
-
----
-
-### 密码套件配置
-
-控制允许的加密算法，类似 Nginx 的 `ssl_ciphers` 指令。
-
-**配置示例**：
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionTls
-metadata:
-  name: cipher-config
-  namespace: default
-spec:
-  hosts:
-    - secure.example.com
-  secretRef:
-    name: secure-tls-secret
-    namespace: default
+    name: secure-example-com-tls
+    namespace: production
+  minTlsVersion: TLS1_2
   ciphers:
-    - ECDHE-RSA-AES256-GCM-SHA384
+    - ECDHE-ECDSA-AES128-GCM-SHA256
     - ECDHE-RSA-AES128-GCM-SHA256
+    - ECDHE-ECDSA-AES256-GCM-SHA384
+    - ECDHE-RSA-AES256-GCM-SHA384
+    - ECDHE-ECDSA-CHACHA20-POLY1305
     - ECDHE-RSA-CHACHA20-POLY1305
 ```
 
-**重要说明**：
+`ciphers` 字段仅影响 TLS 1.2 及以下。TLS 1.3 的套件是固定的：`TLS_AES_128_GCM_SHA256`、`TLS_AES_256_GCM_SHA384`、`TLS_CHACHA20_POLY1305_SHA256`。
 
-| TLS 版本 | cipher 是否可配置 | 说明 |
-|---------|------------------|------|
-| TLS 1.0 | ✅ 可配置 | 通过 `ciphers` 字段配置 |
-| TLS 1.1 | ✅ 可配置 | 通过 `ciphers` 字段配置 |
-| TLS 1.2 | ✅ 可配置 | 通过 `ciphers` 字段配置 |
-| TLS 1.3 | ❌ 不可配置 | BoringSSL 硬编码 |
+### 8. 多 Gateway 绑定
 
-**TLS 1.3 固定使用以下 cipher**（无法更改）：
-- `TLS_AES_128_GCM_SHA256`
-- `TLS_AES_256_GCM_SHA384`
-- `TLS_CHACHA20_POLY1305_SHA256`
-
-**推荐的 TLS 1.2 cipher 列表**：
-```yaml
-ciphers:
-  - ECDHE-ECDSA-AES128-GCM-SHA256
-  - ECDHE-RSA-AES128-GCM-SHA256
-  - ECDHE-ECDSA-AES256-GCM-SHA384
-  - ECDHE-RSA-AES256-GCM-SHA384
-  - ECDHE-ECDSA-CHACHA20-POLY1305
-  - ECDHE-RSA-CHACHA20-POLY1305
-```
-
-不配置时使用 BoringSSL 默认 cipher
-
----
-
-### SAN/CN 白名单验证
-
-对客户端证书的 Subject Alternative Names (SAN) 或 Common Name (CN) 进行白名单验证。
-
-**配置示例**：
+从多个 Gateway 提供同一证书：
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: mtls-san-whitelist
-  namespace: default
-spec:
-  hosts:
-    - api.example.com
-  secretRef:
-    name: api-tls-secret
-    namespace: default
-  clientAuth:
-    mode: Mutual
-    caSecretRef:
-      name: client-ca
-      namespace: default
-    verifyDepth: 2
-    allowedSans:
-      - "client1.example.com"
-      - "client2.example.com"
-      - "*.internal.example.com"  # 支持通配符
-    allowedCns:
-      - "TrustedClient"
-      - "AdminUser"
-```
-
-**字段说明**：
-- `allowedSans`: SAN 白名单，支持通配符（`*.example.com`）
-- `allowedCns`: CN 白名单，精确匹配
-
-**验证流程**：
-1. TLS 握手时验证 CA 和证书链
-2. 应用层提取客户端证书信息
-3. 检查 SAN/CN 是否在白名单中
-4. 不匹配返回 403 Forbidden
-
-**注意事项**：
-- ⚠️ SAN/CN 白名单验证当前需要架构增强才能完全生效
-- 📝 需要在 TLS 层提取证书信息并传递到应用层
-- 🔄 推荐使用 SAN 而非 CN（CN 已被废弃）
-
----
-
-### 组合配置示例
-
-结合多个高级功能的完整配置：
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionTls
-metadata:
-  name: advanced-tls-config
+  name: shared-tls
   namespace: production
 spec:
+  parentRefs:
+    - name: public-gateway
+      sectionName: https
+    - name: internal-gateway
+      sectionName: https
   hosts:
-    - secure-api.example.com
+    - shared.example.com
   secretRef:
-    name: api-tls-secret
+    name: shared-example-com-tls
     namespace: production
-  # mTLS 配置
-  clientAuth:
-    mode: Mutual
-    caSecretRef:
-      name: client-ca
-      namespace: production
-    verifyDepth: 3
-    allowedSans:
-      - "*.trusted-clients.example.com"
-  # TLS 版本控制
-  tlsVersions:
-    minVersion: TLS1_2
-    maxVersion: TLS1_3
-  # 密码套件
-  cipherSuites:
-    profile: Intermediate
 ```
 
----
+## 证书管理
 
-## 常见问题 (FAQ)
-
-### Q1: 如何查看证书详细信息？
+### 滚动证书轮换（推荐）
 
 ```bash
-# 从 Secret 中提取证书
-kubectl get secret server-tls -n edge -o jsonpath='{.data.tls\.crt}' | base64 -d > cert.pem
+# 1. 创建新证书 Secret
+kubectl create secret tls example-com-tls-new \
+  --cert=new-cert.pem --key=new-key.pem -n production
 
-# 查看证书详情
+# 2. 将 EdgionTls 指向新 Secret
+kubectl patch edgiontls example-tls -n production \
+  --type=merge -p '{"spec":{"secretRef":{"name":"example-com-tls-new"}}}'
+
+# 3. 确认新证书已生效
+curl -v https://example.com 2>&1 | grep "expire date"
+
+# 4. 删除旧 Secret
+kubectl delete secret example-com-tls -n production
+```
+
+### 原地更新
+
+```bash
+kubectl create secret tls example-com-tls \
+  --cert=new-cert.pem --key=new-key.pem -n production \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+如需全自动签发和续期，请使用 [EdgionAcme](./acme.md)。
+
+## 常见问题
+
+### Q1：如何查看 Secret 中存储的证书？
+
+**A**：使用 `kubectl` 和 `openssl` 提取并解码：
+
+```bash
+kubectl get secret example-com-tls -n production \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d > cert.pem
 openssl x509 -in cert.pem -noout -text
 ```
 
----
+### Q2：通配符覆盖多少子域名层级？
 
-### Q2: 通配符证书能覆盖多少层级？
+**A**：精确地只有一个标签。`*.example.com` 匹配 `api.example.com`，但不匹配顶级域名 `example.com`，也不匹配 `deep.sub.example.com`。`hosts` 中只允许单个最左侧标签的通配符——如 `*.*.example.com`、`foo*.example.com` 或 `a.*.example.com` 等格式会在配置加载时因 `InvalidSanPattern` 错误而被拒绝（RFC 6125 §6.4.3）。
 
-通配符 `*.example.com` 只覆盖**一层**子域名：
-- ✅ `api.example.com`
-- ❌ `v1.api.example.com`（需要 `*.*.example.com`）
+### Q3：`Mutual` 和 `OptionalMutual` 有什么区别？
 
----
+**A**：`Mutual` 在客户端未提供（或提供了无效）证书时拒绝握手。`OptionalMutual` 允许匿名客户端通过，但提供证书时仍会验证。对于部分客户端已认证、部分未认证的混合流量使用 `OptionalMutual`。
 
-### Q3: 如何测试 mTLS 配置？
+### Q4：mTLS 可以使用自签名 CA 吗？
 
-```bash
-# 测试强制 mTLS
-curl --cert client.crt --key client.key https://api.example.com
+**A**：可以——这在开发和内部服务中很常见。将 CA 的 `ca.crt` 放入 `caSecretRef` 引用的 Secret 中。对于公开的服务端证书，请使用受信任的 CA（例如通过 [EdgionAcme](./acme.md) 和 Let's Encrypt）。
 
-# 查看 TLS 握手详情
-openssl s_client -connect api.example.com:443 \
-  -cert client.crt -key client.key -showcerts
-```
+### Q5：如何仅允许 TLS 1.3？
 
----
+**A**：设置 `minTlsVersion: TLS1_3`。没有 `maxTlsVersion` 字段——将最低版本固定为 TLS 1.3 实际上使监听器仅接受 TLS 1.3，因为不存在更高版本。仅支持 TLS 1.2 或以下的客户端将收到握手失败错误。
 
-### Q4: 可以使用自签名 CA 吗？
+### Q6：我的 mTLS 握手失败了——从哪里开始排查？
 
-可以！在开发环境中推荐使用自签名 CA。生产环境建议使用受信任的 CA（如 Let's Encrypt）。
+**A**：按顺序验证：（1）客户端实际上发送了 `--cert`/`--key`；（2）客户端证书由 `caSecretRef` 中的 CA 签发，且 `ca.crt` 键存在；（3）`verifyDepth` 对证书链足够大；（4）如果设置了 `allowedSans`/`allowedCns`，客户端证书与允许列表匹配。
 
----
+## 故障排查
 
-### Q5: 如何实现证书自动续期？
+| 症状 | 可能原因 | 解决方法 |
+|------|---------|---------|
+| `Secret not found` | `secretRef` 指向不存在的 Secret | 创建 Secret 或修正引用 |
+| 已知良好证书的 TLS 握手失败 | SNI 主机不在 `hosts` 中，或通配符深度太深 | 将主机添加到 `hosts`；记住通配符只覆盖一个标签 |
+| `Client certificate required` | `mode: Mutual` 且客户端未发送证书 | 让客户端发送 `--cert`/`--key`，或使用 `OptionalMutual` |
+| CA 验证失败 | `caSecretRef` Secret 缺少 `ca.crt` 键 | 使用 `--from-file=ca.crt=...` 重新创建 Secret |
+| 证书链太长 | `verifyDepth` 对中间 CA 链不够大 | 增大 `verifyDepth`（2 或 3） |
+| `InvalidSanPattern` | `hosts` 或 `allowedSans` 中包含多标签 / 部分 / 非最左侧通配符 | 使用单个最左侧标签的通配符，如 `*.example.com` |
+| 证书不生效 | EdgionTls 未附加到监听器 | 检查 `parentRefs`（`name` + `sectionName`） |
 
-使用 **cert-manager** + **Let's Encrypt**，可实现全自动续期：
+## 获取帮助
 
-```yaml
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: admin@example.com
-    privateKeySecretRef:
-      name: letsencrypt-prod
-    solvers:
-      - http01:
-          ingress:
-            class: nginx
-```
+如遇问题：
 
----
+1. 检查上方的常见问题和故障排查章节
+2. 检查网关日志
+3. 在 GitHub 提交 issue
 
-### Q6: 如何只允许 TLS 1.3 连接？
+## 相关文档
 
-设置 `minVersion` 和 `maxVersion` 都为 `TLS1_3`：
-
-```yaml
-tlsVersions:
-  minVersion: TLS1_3
-  maxVersion: TLS1_3
-```
-
-**Q: 客户端使用 TLS 1.2 连接 TLS 1.3 only 的服务会怎样？**
-
-A: 连接会被拒绝，客户端收到 TLS 握手失败错误。
-
----
-
-### Q7: 密码套件配置当前为什么不完全生效？
-
-由于 Pingora 框架的限制，动态 SNI 场景下无法在握手时设置密码套件。这需要 Pingora API 增强。当前配置会被记录但不会立即应用。
-
-**Q: 应该选择哪个密码套件配置文件？**
-
-A:
-- **大多数场景**: 使用 `Intermediate`（默认）
-- **仅现代客户端**: 使用 `Modern`
-- **必须支持旧客户端**: 使用 `Old`（不推荐）
-
----
-
-### Q8: SAN 白名单和 CN 白名单有什么区别？
-
-- **SAN (Subject Alternative Names)**: 现代标准，支持多个域名/IP，推荐使用
-- **CN (Common Name)**: 旧标准，仅支持单个域名，已被废弃
-
-**Q: SAN 白名单验证当前为什么不完全生效？**
-
-A: 由于 Pingora 架构限制，无法在 HTTP 请求阶段直接访问 SSL 连接。需要在 TLS 层提取证书信息并传递到应用层。这需要架构增强。
-
-**Q: 通配符白名单如何工作？**
-
-A: `*.example.com` 匹配 `sub.example.com`，但不匹配 `example.com` 或 `sub.sub.example.com`（仅一级子域名）。
-
----
-
-**需要帮助？** 请访问 [Edgion GitHub Issues](https://github.com/your-org/edgion/issues) 提交问题。
-
+- [TLS 终结](./tls-termination.md)
+- [ACME 自动证书](./acme.md)
+- [HTTPS 监听器](../listeners/https.md)
+- [TCP / TLS 监听器](../listeners/tcp.md)

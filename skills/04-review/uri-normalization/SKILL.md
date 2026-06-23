@@ -66,8 +66,8 @@ let path = ctx.path();                  // ctx canonical
 
 **Allowlist** (the following locations may read directly without report):
 
-- The ctx path/uri method implementations themselves inside `src/types/ctx.rs`
-- The entry-snapshot code block in `pg_early_request_filter.rs` (path normalization entry layer)
+- The ctx path/uri method implementations themselves inside `edgion-gateway/src/ctx.rs`
+- The entry-snapshot code block in `pg_request_filter.rs::build_request_metadata` (the `raw_path` / `raw_query` capture feeding the path-normalization entry layer)
 - ACME / well-known protocol handling code (`/.well-known/` path dispatch)
 - pingora default forwarding logic paths
 - The session trait implementations inside `session_adapter.rs` (adapter implementations of `get_path` etc.)
@@ -86,11 +86,11 @@ self.inner.req_header_mut().set_uri(parsed);
 
 **Two legal locations starting from v4** (and each must be immediately followed by `ctx.uri_finalized = true`):
 
-1. `src/core/gateway/plugins/runtime/session_adapter.rs::set_upstream_uri`
+1. `edgion-gateway/src/plugins/runtime/session_adapter.rs::set_upstream_uri`
    - Triggered by rewrite plugins (url_rewrite / proxy_rewrite / DSL `req.set_uri` / Gateway API URLRewrite filter)
    - Write order: `set_uri(parsed)` → `refresh_normalized_path(req, cfg)` → `uri_finalized = true`
 
-2. `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer_http` single-point decision block (newly added in v4)
+2. `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs::upstream_peer_http` single-point decision block (newly added in v4)
    - Entry check `!ctx.uri_finalized`
    - Write order (only the `want_raw=false` branch calls set_uri): `set_uri(normalized)` → `uri_finalized = true` (set unconditionally)
 

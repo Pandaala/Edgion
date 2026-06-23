@@ -9,7 +9,7 @@ description: Use when understanding how Edgion works internally — Controller/G
 
 ## Overall architecture
 
-Edgion is a single-Crate, four-binary project. **Controller decides, Gateway executes, Ctl operates, Center federates.**
+Edgion is a single-Crate, three-binary project. **Controller decides, Gateway executes, Ctl operates.**
 
 ```mermaid
 flowchart TD
@@ -21,7 +21,7 @@ flowchart TD
         WQ --> RP["ResourceProcessor\n(validate/preparse/parse)"]
         RP --> SC["ServerCache"]
         CrossRef["Cross-resource dependencies\nSecretRefManager\nServiceRefManager\nCrossNamespaceRefManager\nRequeueChain"]
-        CtrlServices["Admin API (:5800)\nConfigSyncServer (:50051)\nACME Service (optional, Leader only)"]
+        CtrlServices["Admin API (:12101)\nConfigSyncServer (:12151)\nACME Service (optional, Leader only)"]
     end
 
     SC -- "gRPC Watch/List" --> SyncClient
@@ -36,15 +36,11 @@ flowchart TD
         PingoraServer --- ProxyHttp
         PingoraServer --- StreamRoutes
         TLS["TLS subsystem\nDownstream TLS (client → gateway)\nUpstream TLS (gateway → backend mTLS)"]
-        GwServices["Admin API (:5900)\nMetrics (:5901)"]
+        GwServices["Admin API (:12001 default)\nProbe (:12000)\nMetrics (:12090)"]
     end
 
     subgraph CLI["edgion-cli (CLI tool)"]
         CliOps["apply/delete/get/reload\n3 targets: center/server/client"]
-    end
-
-    subgraph Center["edgion-center (federation center)"]
-        CenterNode["Aggregates resources across federated controllers\nServes Center API"]
     end
 
     CLI -- "HTTP API" --> Controller
@@ -54,13 +50,13 @@ flowchart TD
 
 | What you want to learn | Start here |
 |-----------|-----------|
-| Project at a glance, code organization, conventions shared by the four binaries | [00-common/](00-common/SKILL.md) |
+| Project at a glance, code organization, conventions shared by the in-repo binaries | [00-common/](00-common/SKILL.md) |
 | How the Controller processes resources internally | [01-controller/](01-controller/SKILL.md) |
+| Controller authentication & authorization (admin login, cli tokens, RBAC, 401/403 debugging) | [01-controller/11-authentication-authorization.md](01-controller/11-authentication-authorization.md) |
 | How the Gateway processes requests | [02-gateway/](02-gateway/SKILL.md) |
 | How Controller and Gateway sync | [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) |
 | edgion-cli commands and target modes | [04-ctl/](04-ctl/SKILL.md) |
 | The full processing chain for a specific resource | [05-resources/](05-resources/SKILL.md) |
-| How edgion-center federates multi-cluster Controllers | [06-center/](06-center/SKILL.md) |
 | Troubleshoot route mismatch | [02-gateway/03-routes/](02-gateway/03-routes/SKILL.md) |
 | Troubleshoot TLS certificate issues | [02-gateway/04-tls/](02-gateway/04-tls/SKILL.md) |
 | Troubleshoot gRPC sync issues | [03-controller-gateway-link/00-overview.md](03-controller-gateway-link/00-overview.md) |
@@ -77,7 +73,7 @@ flowchart TD
 
 ### [00-common/](00-common/SKILL.md) — Common conventions
 
-Foundational conventions shared by all four binaries: project overview, command line / directory / config-path conventions, Core module layering, and the resource system (`define_resources!` macro).
+Foundational conventions shared by the in-repo binaries: project overview, command line / directory / config-path conventions, crate layering, and the resource system (`define_resources!` macro).
 
 ### [01-controller/](01-controller/SKILL.md) — edgion-controller architecture
 
@@ -87,15 +83,16 @@ Internal architecture of the control plane, broken down by module:
 |------|--------|
 | Overall architecture | ConfMgr facade, ProcessorRegistry |
 | Startup / shutdown | Leader election, HA mode, event-driven main loop |
-| Admin API | port :5800, CRUD, health/ready |
+| Admin API | port :12101, CRUD, health/ready |
 | ConfigCenter | ConfCenter trait, FileSystem / Kubernetes implementations |
-| Workqueue | deduplication, exponential backoff, dirty requeue |
-| ResourceProcessor | 11-step processing pipeline, 23 Handler kinds |
+| Workqueue | deduplication, delayed (coalesced) requeue, dirty requeue |
+| ResourceProcessor | 11-step processing pipeline, 20 Handler kinds |
 | Requeue | cross-resource linkage, TriggerChain cycle detection |
 | CacheServer | ServerCache + EventStore, gRPC data source |
 | ACME | Let's Encrypt automated certificates, Leader only |
 | Adding a new resource | workflow + 4 template categories (route-like / controller-only / plugin-like / cluster-scoped) |
 | Status management | update_status implementation conventions, known pitfalls |
+| Authentication & authorization | token-only admin authn (Istio-style bearer), cli token RBAC, Role/Verb/CenterPolicy, middleware onion, default Center policy |
 
 ### [02-gateway/](02-gateway/SKILL.md) — edgion-gateway architecture
 
@@ -137,23 +134,10 @@ For resource Schema (field definitions, default values) see [02-features/03-reso
 | Core configuration | Gateway, GatewayClass, EdgionGatewayConfig |
 | Routes | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute |
 | Security / policy | EdgionTls, Secret, ReferenceGrant, BackendTLSPolicy |
-| Plugins / extensions | EdgionPlugins, EdgionStreamPlugins, PluginMetaData |
-| Backends / services | Service, EndpointSlice, Endpoint |
+| Plugins / extensions | EdgionPlugins, EdgionStreamPlugins, EdgionConfigData |
+| Backends / services | Service, EndpointSlice |
 | Automation | EdgionAcme |
 | Infrastructure | LinkSys |
-
-### [06-center/](06-center/SKILL.md) — edgion-center architecture
-
-Federation center: accepts gRPC streams from multiple Controllers, reverse-Watch
-aggregates PluginMetaData, persists controller registry to SQLite, and exposes an
-HTTP Admin API.
-
-| Module | Keywords |
-|--------|---------|
-| Overview | Deployment shape, ports, TLS posture, startup lifecycle, failure modes |
-| Federation gRPC server | `RegisterRequest` validation caps, bidirectional stream protocol, error handling |
-| Aggregator / watch cache | `ResourceAggregator`, `CenterWatchCache`, `CenterMetaDataStore`, reverse-Watch data flow |
-| Persistence | SQLite `controllers` table, `CenterDb`, Admin API, Docker build notes |
 
 ### [06-gateway-api.md](06-gateway-api.md) — Gateway API conformance
 

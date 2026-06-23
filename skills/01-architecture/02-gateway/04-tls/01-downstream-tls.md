@@ -186,8 +186,8 @@ Implementation notes:
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | TlsCallback, SslCtx, certificate application |
-| `src/core/gateway/tls/store/cert_matcher.rs` | TlsCertMatcher (EdgionTls listener+SNI matching) |
-| `src/core/gateway/runtime/matching/tls.rs` | GatewayTlsMatcher (Gateway fallback matching) |
-| `src/core/gateway/tls/runtime/backend/cert_extractor.rs` | Client certificate info extraction |
-| `src/core/gateway/tls/boringssl/mtls_verify_callback.rs` | BoringSSL mTLS verification callback |
+| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | TlsCallback, SslCtx, certificate application |
+| `edgion-gateway/src/tls/store/cert_matcher.rs` | TlsCertMatcher (EdgionTls listener+SNI matching) |
+| `edgion-gateway/src/runtime/matching/tls.rs` | GatewayTlsMatcher (Gateway fallback matching) |
+| `edgion-gateway/src/tls/runtime/backend/cert_extractor.rs` | Client certificate info extraction |
+| `edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs` | BoringSSL mTLS verification callback |

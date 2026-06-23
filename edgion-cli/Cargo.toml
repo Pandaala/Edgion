@@ -1,0 +1,62 @@
+[package]
+name = "edgion-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+
+[lib]
+name = "edgion_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "edgion-cli"
+path = "src/bin/edgion_ctl.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Default features: jemalloc allocator (selected in the binary).
+default = ["allocator-jemalloc"]
+
+# Memory allocator selection (mutually exclusive) — lives with the binary.
+allocator-jemalloc = ["tikv-jemallocator"]
+allocator-mimalloc = ["mimalloc"]
+allocator-system = []
+
+[dependencies]
+edgion-common.workspace = true
+edgion-resources.workspace = true
+
+# Memory allocators (optional, controlled by features)
+tikv-jemallocator = { workspace = true, optional = true }
+mimalloc = { workspace = true, optional = true }
+
+tokio.workspace = true
+anyhow.workspace = true
+
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+
+kube.workspace = true
+k8s-openapi.workspace = true
+
+reqwest.workspace = true
+
+base64.workspace = true
+hex.workspace = true
+chrono.workspace = true
+rand.workspace = true
+sha2.workspace = true
+time.workspace = true
+rcgen.workspace = true
+rpassword.workspace = true
+zeroize.workspace = true
+tabled.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true
+tempfile.workspace = true

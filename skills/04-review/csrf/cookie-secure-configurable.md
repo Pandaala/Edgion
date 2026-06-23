@@ -15,11 +15,11 @@ Fix suggestions of the form "auto-derive `Secure` from `x-forwarded-proto`" are 
 
 **1. Configurable, default-secure**
 
-`set_csrf_cookie` builds the cookie with `.secure(self.config.cookie_secure)` (`src/core/gateway/plugins/http/csrf/plugin.rs`). The default is `true`, so the secure-by-default behavior is preserved; operators terminating TLS upstream (LB/sidecar) or running mesh-internal plain HTTP set `cookieSecure: false`.
+`set_csrf_cookie` builds the cookie with `.secure(self.config.cookie_secure)` (`edgion-gateway/src/plugins/http/csrf/plugin.rs`). The default is `true`, so the secure-by-default behavior is preserved; operators terminating TLS upstream (LB/sidecar) or running mesh-internal plain HTTP set `cookieSecure: false`.
 
 **2. Plain `bool`, consistent with OIDC**
 
-The chosen shape mirrors the existing OIDC `session_cookie_secure: bool` precedent (`src/types/resources/edgion_plugins/plugin_configs/openid_connect.rs`). A plain operator-set flag is explicit and does not trust the client-suppliable `x-forwarded-proto` header.
+The chosen shape mirrors the existing OIDC `session_cookie_secure: bool` precedent (`edgion-resources/src/resources/edgion_plugins/plugin_configs/openid_connect.rs`). A plain operator-set flag is explicit and does not trust the client-suppliable `x-forwarded-proto` header.
 
 ## Fix Suggestions Not Accepted
 
@@ -35,7 +35,7 @@ Re-open only if:
 
 ## Reference Cases
 
-- cookie-auth-04 (RFC 6265bis §4.1.2.5 / §5.2.5), closed 2026-05-20 — see [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)
+- cookie-auth-04 (RFC 6265bis §4.1.2.5 / §5.2.5), closed 2026-05-20
 - Verifier: `tasks/todo/rfc-review/_raw/verification-a5.md → V-A5-04`
-- Config field: `src/types/resources/edgion_plugins/plugin_configs/csrf.rs`
+- Config field: `edgion-resources/src/resources/edgion_plugins/plugin_configs/csrf.rs`
 - Docs: `docs/en/user-guide/http-route/filters/edgion-plugins/csrf.md`

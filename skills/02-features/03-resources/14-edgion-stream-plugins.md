@@ -29,6 +29,11 @@ spec:
             - "192.168.1.0/24"
           denylist:
             - "10.0.0.100"
+          # allowRefs/denyRefs (optional): reference central IpList EdgionConfigData objects;
+          # merged into the same allow/deny pools as inline entries.
+          # namespace defaults to this EdgionStreamPlugins resource's namespace if omitted.
+          allowRefs:
+            - name: corp-allowlist   # references an IpList EdgionConfigData named "corp-allowlist"
 
   # Stage 2: TlsRoute (post-TLS handshake, SNI/certificate information available)
   tlsRoutePlugins:
@@ -38,6 +43,7 @@ spec:
         config:
           allowlist:
             - "172.16.0.0/12"
+          # allowRefs/denyRefs also available here (same semantics as Stage 1)
 ```
 
 ## Two-Stage Model
@@ -66,13 +72,21 @@ metadata:
 metadata:
   annotations:
     edgion.io/edgion-stream-plugins: "default/tls-plugins"
+
+# UDPRoute level — Stage 1 only (no TLS handshake)
+metadata:
+  annotations:
+    edgion.io/edgion-stream-plugins: "default/udp-plugins"
 ```
+
+On `UDPRoute` the binding runs only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based, evaluated at session creation, fail-close); `tlsRoutePlugins` never apply because UDP has no TLS handshake. The F-016 session fast-path skips the route pipeline for established sessions, so the check runs on the first packet of each session (a denied client never establishes a session), matching TCP's per-connection model.
 
 ## Currently Supported Stream Plugins
 
 | Type | Stage | Description |
 |------|-------|-------------|
-| `IpRestriction` | Stage 1 + Stage 2 | IP allow/deny list (CIDR supported) |
+| `IpRestriction` | Stage 1 + Stage 2 | IP allow/deny list (CIDR supported); rules may be inline (`allowlist`/`denylist`) or referenced from a central `IpList` EdgionConfigData via `allowRefs`/`denyRefs` (merged into the same pools; a missing/disabled referenced IpList causes allowRef to fail closed). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with valid entries. Bad entries surface as `PartiallyInvalid` status (reason `RuleInvalid`; `Accepted` stays `True`). A skipped inline deny entry increments `edgion_ip_deny_entries_skipped_total{scope="stream_l4"|"tls_route"}`. |
+| `GlobalConnectionIpRestriction` | Stage 1 + Stage 2 | EdgionConfigData-referenced IP restriction. The plugin config only holds `overrideRef` (namespace inherited from the parent EdgionStreamPlugins if omitted); the actual rules live in a `GlobalConnectionIpRestriction` EdgionConfigData. Each profile may also carry `allowRefs`/`denyRefs` referencing central `IpList` EdgionConfigDatas. Per-profile `ProfileRules` inline `allow`/`deny` are also partial-good (same skipping behavior); exception: `Some(vec![])` (a present-but-empty inline list) is still rejected (structural guard). Center-managed and synced across multiple Controllers. |
 
 ## Differences from HTTP Plugins
 

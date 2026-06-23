@@ -7,7 +7,7 @@ description: Resource system architecture — define_resources! macro, ResourceM
 
 ## Single source of truth — `define_resources!`
 
-All resources are declared centrally in `src/types/resource/defs.rs` via the `define_resources!` macro:
+All resources are declared centrally in `edgion-resources/src/resource/defs.rs` via the `define_resources!` macro:
 
 ```rust
 define_resources! {
@@ -43,9 +43,9 @@ pub trait ResourceMeta {
 
 ## ResourceKind enum
 
-The auto-generated enum contains all 21 resource types:
+The auto-generated enum contains all 20 resource types:
 
-`GatewayClass`, `EdgionGatewayConfig`, `Gateway`, `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `TLSRoute`, `UDPRoute`, `Service`, `EndpointSlice`, `Endpoint`, `Secret`, `EdgionTls`, `EdgionPlugins`, `EdgionStreamPlugins`, `PluginMetaData`, `LinkSys`, `ReferenceGrant`, `BackendTLSPolicy`, `EdgionAcme`, `ConfigMap`
+`GatewayClass`, `EdgionGatewayConfig`, `Gateway`, `HTTPRoute`, `GRPCRoute`, `TCPRoute`, `TLSRoute`, `UDPRoute`, `Service`, `EndpointSlice`, `Secret`, `EdgionTls`, `EdgionPlugins`, `EdgionStreamPlugins`, `EdgionConfigData`, `LinkSys`, `ReferenceGrant`, `BackendTLSPolicy`, `EdgionAcme`, `ConfigMap`
 
 ## Full resource type table
 
@@ -61,14 +61,13 @@ The auto-generated enum contains all 21 resource types:
 | | UDPRoute | ✗ | ✓ | UDP routing rules |
 | **Backends / services** | Service | ✗ | ✓ | Kubernetes Service |
 | | EndpointSlice | ✗ | ✓ | Kubernetes EndpointSlice |
-| | Endpoint | ✗ | ✓ | Kubernetes Endpoint (legacy) |
 | **Security / policy** | EdgionTls | ✗ | ✓ | TLS certificate configuration |
 | | Secret | ✗ | **✗** | Kubernetes Secret (not synced) |
 | | ReferenceGrant | ✗ | **✗** | Cross-namespace reference authorization (not synced) |
 | | BackendTLSPolicy | ✗ | ✓ | Backend TLS policy |
 | **Plugins / extensions** | EdgionPlugins | ✗ | ✓ | HTTP-layer plugin definitions |
 | | EdgionStreamPlugins | ✗ | ✓ | Stream-layer plugin definitions |
-| | PluginMetaData | ✗ | ✓ | Plugin metadata |
+| | EdgionConfigData | ✗ | ✓ | Plugin metadata |
 | **ACME** | EdgionAcme | ✗ | ✓ | ACME automated certificates |
 | **Infrastructure** | LinkSys | ✗ | ✓ | External system connectors |
 | | ConfigMap | ✗ | ✗ | Kubernetes ConfigMap (not synced to Gateway) |

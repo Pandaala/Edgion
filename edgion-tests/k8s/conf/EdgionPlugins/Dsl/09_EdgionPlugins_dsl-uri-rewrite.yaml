@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-uri-rewrite
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "uri-rewrite"
+        source: |
+          let p = req.path
+          if p.contains("/v1/") {
+              let rewritten = regex_replace(p, "/v1/", "/api/")
+              req.set_uri(rewritten)
+              resp.set_header("X-Rewritten", "true")
+              resp.set_header("X-New-Path", rewritten)
+          }
+        errorPolicy: deny

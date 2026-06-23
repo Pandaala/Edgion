@@ -76,7 +76,7 @@ stringData:
 | `lifetimeGracePeriod` | Integer | `0` | exp/nbf 时钟偏差容忍（秒） |
 | `base64Secret` | Boolean | `false` | HS* 密钥是否经过 base64 编码 |
 | `maximumExpiration` | Integer | `0` | 最大允许的 exp 时长（秒，从当前时间起）。`0` 表示不限制 |
-| `storeClaimsInCtx` | Boolean | `false` | 是否将解码后的 claims 存储到 ctx 变量 `jwt_claims` |
+| `storeClaimsInCtx` | Boolean | `false` | 是否将解码后的 claims 存储到 ctx 变量 `jwt_claims`(供下游插件通过 `get_ctx_var` 读取;已从访问日志中排除,claims 不会被持久化) |
 | `claimsToHeaders` | Object | 无 | 将 JWT claim 名映射到上游请求头名称 |
 
 **约束**：未设置 `anonymous` 时必须配置 `issuerGroups`。

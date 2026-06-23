@@ -8,18 +8,18 @@ Use this for tasks such as:
 
 ## Read these real entry points first
 
-- [../../../src/types/resources/edgion_plugins/mod.rs](../../../src/types/resources/edgion_plugins/mod.rs)
-- [../../../src/types/resources/edgion_plugins/entry.rs](../../../src/types/resources/edgion_plugins/entry.rs)
-- [../../../src/types/resources/edgion_plugins/edgion_plugin.rs](../../../src/types/resources/edgion_plugins/edgion_plugin.rs)
-- [../../../src/core/gateway/plugins/runtime/plugin_runtime.rs](../../../src/core/gateway/plugins/runtime/plugin_runtime.rs)
-- [../../../src/core/gateway/plugins/runtime/conditional_filter.rs](../../../src/core/gateway/plugins/runtime/conditional_filter.rs)
-- [../../../src/core/gateway/plugins/runtime/traits/session.rs](../../../src/core/gateway/plugins/runtime/traits/session.rs)
-- [../../../src/core/gateway/plugins/runtime/log.rs](../../../src/core/gateway/plugins/runtime/log.rs)
-- [../../../src/core/gateway/plugins/http/mod.rs](../../../src/core/gateway/plugins/http/mod.rs)
-- [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
-- [../../../src/core/gateway/plugins/http/conf_handler_impl.rs](../../../src/core/gateway/plugins/http/conf_handler_impl.rs)
-- [../../../src/core/gateway/plugins/http/plugin_store.rs](../../../src/core/gateway/plugins/http/plugin_store.rs)
-- [../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs)
+- [../../../edgion-resources/src/resources/edgion_plugins/mod.rs](../../../edgion-resources/src/resources/edgion_plugins/mod.rs)
+- [../../../edgion-resources/src/resources/edgion_plugins/entry.rs](../../../edgion-resources/src/resources/edgion_plugins/entry.rs)
+- [../../../edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs](../../../edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs)
+- [../../../edgion-gateway/src/plugins/runtime/plugin_runtime.rs](../../../edgion-gateway/src/plugins/runtime/plugin_runtime.rs)
+- [../../../edgion-gateway/src/plugins/runtime/conditional_filter.rs](../../../edgion-gateway/src/plugins/runtime/conditional_filter.rs)
+- [../../../edgion-gateway/src/plugins/runtime/traits/session.rs](../../../edgion-gateway/src/plugins/runtime/traits/session.rs)
+- [../../../edgion-gateway/src/plugins/runtime/log.rs](../../../edgion-gateway/src/plugins/runtime/log.rs)
+- [../../../edgion-gateway/src/plugins/http/mod.rs](../../../edgion-gateway/src/plugins/http/mod.rs)
+- [../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
+- [../../../edgion-gateway/src/plugins/http/conf_handler_impl.rs](../../../edgion-gateway/src/plugins/http/conf_handler_impl.rs)
+- [../../../edgion-gateway/src/plugins/http/plugin_store.rs](../../../edgion-gateway/src/plugins/http/plugin_store.rs)
+- [../../../edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs)
 
 ## Key mental model
 
@@ -91,20 +91,20 @@ If you don't need upstream response info, don't push the logic into a later phas
 
 You typically touch at least these locations:
 
-1. `src/types/resources/edgion_plugins/plugin_configs/<your_plugin>.rs`
-2. `src/types/resources/edgion_plugins/plugin_configs/mod.rs`
-3. `src/types/resources/edgion_plugins/mod.rs`
-4. `src/types/resources/edgion_plugins/edgion_plugin.rs`
-5. `src/core/gateway/plugins/http/<your_plugin>/mod.rs`
-6. `src/core/gateway/plugins/http/<your_plugin>/plugin.rs`
-7. `src/core/gateway/plugins/http/mod.rs`
-8. `src/core/gateway/plugins/runtime/plugin_runtime.rs`
+1. `edgion-resources/src/resources/edgion_plugins/plugin_configs/<your_plugin>.rs`
+2. `edgion-resources/src/resources/edgion_plugins/plugin_configs/mod.rs`
+3. `edgion-resources/src/resources/edgion_plugins/mod.rs`
+4. `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`
+5. `edgion-gateway/src/plugins/http/<your_plugin>/mod.rs`
+6. `edgion-gateway/src/plugins/http/<your_plugin>/plugin.rs`
+7. `edgion-gateway/src/plugins/http/mod.rs`
+8. `edgion-gateway/src/plugins/runtime/plugin_runtime.rs`
 
 ### If the plugin depends on a Secret
 
 Continue with:
 
-- [../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
+- [../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs](../../../edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs)
 
 This handler currently covers:
 
@@ -126,7 +126,7 @@ If your new plugin also depends on a Secret, add Secret resolution and `secret_r
 
 Typically located in:
 
-- `src/types/resources/edgion_plugins/plugin_configs/`
+- `edgion-resources/src/resources/edgion_plugins/plugin_configs/`
 
 Notes for the configuration struct:
 
@@ -140,7 +140,7 @@ If you can reuse an existing configuration, do not copy a near-duplicate schema.
 
 Modify:
 
-- [../../../src/types/resources/edgion_plugins/edgion_plugin.rs](../../../src/types/resources/edgion_plugins/edgion_plugin.rs)
+- [../../../edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs](../../../edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs)
 
 At minimum, add:
 
@@ -152,8 +152,8 @@ At minimum, add:
 
 Typically located in:
 
-- `src/core/gateway/plugins/http/<your_plugin>/mod.rs`
-- `src/core/gateway/plugins/http/<your_plugin>/plugin.rs`
+- `edgion-gateway/src/plugins/http/<your_plugin>/mod.rs`
+- `edgion-gateway/src/plugins/http/<your_plugin>/plugin.rs`
 
 Good references in the current repo:
 
@@ -166,7 +166,7 @@ Good references in the current repo:
 
 Must read:
 
-- [../../../src/core/gateway/plugins/runtime/plugin_runtime.rs](../../../src/core/gateway/plugins/runtime/plugin_runtime.rs)
+- [../../../edgion-gateway/src/plugins/runtime/plugin_runtime.rs](../../../edgion-gateway/src/plugins/runtime/plugin_runtime.rs)
 
 The current real entry point is this file, not the old `runtime.rs` referenced by stale docs.
 
@@ -200,6 +200,31 @@ If your plugin depends on Secrets but is not wired into this chain, you usually 
 - Status may even pass.
 - But the runtime never gets the actual credentials.
 
+### 6b. If the plugin uses EdgionConfigData refs (`allowRefs`/`denyRefs`, `overrideRef`, or `activeProfileRef`)
+
+Cross-namespace EdgionConfigData refs require controller-side handling for the
+`ReferenceGrant` / `visibility` gate:
+
+1. **Register refs** in `EdgionPluginsHandler.parse()`: call the shared ref-registration helper
+   (see `register_ip_allow_deny_refs` and the `overrideRef` / `activeProfileRef` patterns) to
+   record the reverse dependency in `EdgionConfigDataRefManager`. This ensures the EdgionPlugins
+   resource is requeued when the referenced EdgionConfigData changes (including when a grant is
+   added or removed).
+2. **Mark `ref_denied`**: after registration, call the `set_ref_denied` helper (checks
+   `is_reference_grant_validation_enabled()`, target `visibility`, and the `ReferenceGrantStore`)
+   to stamp `ref_denied` on any cross-namespace ref that is not permitted.
+3. **Check `ref_denied` in `update_status`**: map `ref_denied` → `ResolvedRefsError::RefNotPermitted`
+   (reason `RefNotPermitted`) before emitting the `ResolvedRefs` condition.
+4. **Gateway data-plane**: when consuming the ref, check `ref_denied`; if set, apply the correct
+   fail behavior: `allowRef` → deny-all fail-closed; `denyRef` → under-block (omit that deny set);
+   `overrideRef` / `activeProfileRef` → fall to base.
+
+**Cross-namespace `allowRefs`/`denyRefs` — key semantics for operators:**
+A denied `allowRef` is deny-all fail-closed (whitelist intent preserved); a denied `denyRef` is
+under-block (the deny set is missing). Operators who want cross-ns IpList refs must either set
+`spec.visibility: Cluster` on the target or author a `ReferenceGrant` in the target namespace.
+See [15-edgion-config-data.md — Cross-Namespace Reference Grants](../../01-architecture/05-resources/15-edgion-config-data.md#cross-namespace-reference-grants).
+
 ### 7. Finally, add user docs and tests
 
 If the plugin is a user-facing capability, in addition to skill / dev-guide, also consider user-guide:
@@ -216,7 +241,7 @@ If the plugin is a user-facing capability, in addition to skill / dev-guide, als
 
 The actual conditional-execution wrapper is in:
 
-- [../../../src/core/gateway/plugins/runtime/conditional_filter.rs](../../../src/core/gateway/plugins/runtime/conditional_filter.rs)
+- [../../../edgion-gateway/src/plugins/runtime/conditional_filter.rs](../../../edgion-gateway/src/plugins/runtime/conditional_filter.rs)
 
 Important distinction:
 
@@ -271,13 +296,13 @@ The Controller admin API still keeps a diagnostic endpoint to enumerate residual
 GET /api/v1/diagnostics/nested_ext_ref_usage
 ```
 
-Implementation: `src/core/controller/api/diagnostics_handlers.rs`.
+Implementation: `edgion-controller/src/api/diagnostics_handlers.rs`.
 
 ## `ExtensionRef` execution chain
 
 If the plugin is referenced by a route through `ExtensionRef`, focus on:
 
-- [../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../src/core/gateway/plugins/runtime/gateway_api_filters/extension_ref.rs)
+- [../../../edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs](../../../edgion-gateway/src/plugins/runtime/gateway_api_filters/extension_ref.rs)
 
 Current behavior:
 
@@ -356,7 +381,7 @@ Both must immediately be followed by `ctx.uri_finalized = true`. Any third site 
 
 The most-used read/write entry points are at:
 
-- [../../../src/core/gateway/plugins/runtime/traits/session.rs](../../../src/core/gateway/plugins/runtime/traits/session.rs)
+- [../../../edgion-gateway/src/plugins/runtime/traits/session.rs](../../../edgion-gateway/src/plugins/runtime/traits/session.rs)
 
 High-frequency APIs:
 
@@ -371,14 +396,14 @@ High-frequency APIs:
 
 If the plugin will call external HTTP services, prefer reusing:
 
-- `src/core/gateway/plugins/http/common/http_client.rs`
-- `src/core/gateway/plugins/http/common/auth_common.rs`
+- `edgion-gateway/src/plugins/http/common/http_client.rs`
+- `edgion-gateway/src/plugins/http/common/auth_common.rs`
 
 ## `PluginLog` rules
 
 Entry point:
 
-- [../../../src/core/gateway/plugins/runtime/log.rs](../../../src/core/gateway/plugins/runtime/log.rs)
+- [../../../edgion-gateway/src/plugins/runtime/log.rs](../../../edgion-gateway/src/plugins/runtime/log.rs)
 
 Keep the rules simple:
 
@@ -430,7 +455,7 @@ This is a general repo-wide convention; stay consistent with existing plugins.
 
 ## Validation
 
-All plugin configs must `impl PluginValidation` (trait defined in `src/types/resources/edgion_plugins/plugin_validation.rs`):
+All plugin configs must `impl PluginValidation` (trait defined in `edgion-resources/src/resources/edgion_plugins/plugin_validation.rs`):
 
 ```rust
 use crate::types::resources::edgion_plugins::PluginValidation;
@@ -450,7 +475,7 @@ impl PluginValidation for MyPluginConfig {
 - Implementation must be stateless (`&self`, no side effects) — safe to call during controller preparse
 - **Do not** introduce `validation_error: Option<String>` cached fields — this legacy pattern causes preparse path to miss errors (see t1-002 root cause)
 - If config needs runtime compilation (regex / template / DashMap), keep that logic in `compile()` / constructors returning `Result<(), String>` — **separate field validation from compilation**
-- Add the new arm to `EdgionPlugin::validation_error()` match in `src/types/resources/edgion_plugins/edgion_plugin.rs` — the exhaustive match enforces this at compile time (missing arm = compile error)
+- Add the new arm to `EdgionPlugin::validation_error()` match in `edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs` — the exhaustive match enforces this at compile time (missing arm = compile error)
 
 **Required regression test (add to every new plugin):**
 ```rust
@@ -478,15 +503,15 @@ Cover these four layers in priority order:
 
 Verifying initial state is not enough — add a dynamic scenario that exercises the "YAML update → runtime behavior change" path. Templates: remove a credential (BasicAuth) or switch an enum field (RateLimit `onMissingKey`).
 
-- Look at existing scenarios to get started: `examples/code/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`.
-- conf directory convention: `examples/test/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/` (`load_conf.sh` automatically skips `updates/` and `delete/`).
+- Look at existing scenarios to get started: `edgion-tests/src/client/dynamic/scenarios/basic_auth_dynamic.rs` / `rate_limit_dynamic.rs`.
+- conf directory convention: `edgion-tests/integration/conf/EdgionPlugins/<Plugin>/DynamicTest/{initial,updates}/` (`load_conf.sh` automatically skips `updates/` and `delete/`).
 - For the detailed steps, CLI entry, and registration sites: [../../05-testing/01-integration-testing.md "Dynamic (hot reload) testing" section](../../05-testing/01-integration-testing.md).
 
 > **Pitfalls**: state-cached fields such as RateLimit sliding-window counters can false-pass on hot reload (the old cache hits). Prefer verifying **logic-branch** changes such as "the entire ref is removed" or "an enum field is toggled" — do not just verify "password content modified" or "a rate value changed". (BasicAuth no longer keeps a result cache after bcrypt was dropped, so the structural-reload pattern is now mostly a regression-safety template for it rather than a cache-bypass workaround.)
 
 Other references:
 
-- `src/types/resources/edgion_plugins/tests.rs`
+- `edgion-resources/src/resources/edgion_plugins/tests.rs`
 - Each plugin's own `plugin.rs` / `tests.rs`
 - [../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)
 

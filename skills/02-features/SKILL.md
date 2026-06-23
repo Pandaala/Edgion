@@ -19,8 +19,8 @@ description: Use when looking up configuration schemas, resource field definitio
 
 | # | Directory | Purpose |
 |---|-----------|---------|
-| 01 | [binary-and-deployment/](01-binary-and-deployment/SKILL.md) | Startup of the four binaries, CLI arguments, deployment patterns, Feature Flags |
-| 02 | [config/](02-config/SKILL.md) | Controller/Gateway TOML configuration schemas, EdgionGatewayConfig CRD schema |
+| 01 | [binary-and-deployment/](01-binary-and-deployment/SKILL.md) | Startup of the in-repo binaries, CLI arguments, deployment patterns, Feature Flags |
+| 02 | [config/](02-config/SKILL.md) | Controller (YAML) and Gateway (YAML) configuration schemas, EdgionGatewayConfig CRD schema |
 | 03 | [resources/](03-resources/SKILL.md) | **All resource feature schemas**: Gateway, Route, TLS, Plugin, Backend, LinkSys |
 | 04 | [observability/](04-observability/SKILL.md) | Observability features: Access Log configuration, Metrics endpoints, protocol logs |
 | 05 | [annotations/](05-annotations/SKILL.md) | Annotations and Options reference: complete list of all `edgion.io/*` keys |
@@ -30,7 +30,7 @@ description: Use when looking up configuration schemas, resource field definitio
 | You want to… | Start here |
 |--------------|-----------|
 | Learn how to start Controller/Gateway | [01-binary-and-deployment/](01-binary-and-deployment/SKILL.md) |
-| Modify TOML configuration files | [02-config/](02-config/SKILL.md) |
+| Modify YAML configuration files | [02-config/](02-config/SKILL.md) |
 | Configure a Gateway Listener | [03-resources/01-gateway.md](03-resources/01-gateway.md) |
 | Configure HTTP routing rules | [03-resources/04-httproute.md](03-resources/04-httproute.md) |
 | Configure gRPC routing | [03-resources/05-grpcroute.md](03-resources/05-grpcroute.md) |
@@ -68,4 +68,4 @@ Edgion extension resources (API group: `edgion.io`):
 | EdgionStreamPlugins | `edgion.io/v1` | TCP/TLS layer plugin configuration |
 | EdgionAcme | `edgion.io/v1` | ACME automatic certificate management |
 | LinkSys | `edgion.io/v1` | External system connector |
-| PluginMetaData | `edgion.io/v1` | Plugin metadata |
+| EdgionConfigData | `edgion.io/v1` | Plugin metadata |

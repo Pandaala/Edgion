@@ -1,159 +1,143 @@
-# Preflight Request Handling Policy
+# Preflight Policy
 
-> **🔌 Edgion Extension**
-> 
-> The preflight policy is configured through the `EdgionGatewayConfig` CRD and is an Edgion extension feature.
+How Edgion handles CORS preflight (`OPTIONS`) requests at the gateway.
 
-## What is Preflight?
+> **🔌 Edgion extension**
+>
+> The preflight policy is configured through the `EdgionGatewayConfig` CRD (`spec.preflightPolicy`); it is not part of standard Gateway API.
 
-Preflight is an OPTIONS request automatically sent by browsers before making cross-origin requests, used to check if the server allows the actual request.
+## Overview
 
-**Example**:
-- The browser wants to send a `POST` request to `https://api.example.com`
-- The browser first automatically sends an `OPTIONS` request to check permissions
-- The server returns allowed methods and header information
-- The browser then sends the actual `POST` request
+Browsers send a CORS preflight `OPTIONS` request before certain cross-origin calls. Edgion
+answers these preflights at the edge so they do not have to reach every backend. By default
+this works without any configuration: if the route has a CORS plugin, Edgion replies using
+that CORS configuration; otherwise it replies `204 No Content`.
 
-## Default Behavior
+You only need `preflightPolicy` if you want to change *which* `OPTIONS` requests are treated
+as preflight, or the default status code. It is set on the `EdgionGatewayConfig` referenced by
+your GatewayClass — not via an annotation.
 
-Edgion Gateway **automatically handles all preflight requests** without additional configuration.
+## Configuration
 
-- If the route has a CORS plugin configured, it responds using the CORS configuration
-- If there is no CORS plugin, it returns `204 No Content`
-
-## Custom Configuration (Optional)
-
-If you need to customize preflight handling behavior, configure it in `EdgionGatewayConfig`:
+`preflightPolicy` is a field of `EdgionGatewayConfig.spec`. Reference the config from a
+GatewayClass via `parametersRef`:
 
 ```yaml
-apiVersion: edgion.io/v1
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: edgion
+spec:
+  controllerName: edgion.io/gateway-controller
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: default-config
+---
+apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
-  name: edgion-gateway-config
+  name: default-config
 spec:
   preflightPolicy:
-    mode: cors-standard        # or all-options
-    statusCode: 204            # default status code
+    # Which OPTIONS requests count as preflight
+    mode: cors-standard
+    # Status code used when no CORS plugin is attached to the route
+    statusCode: 204
 ```
 
-## Configuration Parameters
+## Field reference
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `mode` | String | `cors-standard` | Preflight detection mode, see below |
-| `statusCode` | Integer | `204` | Default response status code when CORS is not configured |
+| `mode` | Enum | `cors-standard` | Which `OPTIONS` requests are treated as preflight. Allowed values: `cors-standard` \| `all-options` |
+| `statusCode` | Integer | `204` | Preflight response status code used when no CORS plugin is attached to the route |
 
-### mode Options
+### `mode` values
 
-#### `cors-standard` (Recommended)
+| Value | Meaning |
+|-------|---------|
+| `cors-standard` | Strict CORS detection: the request must be `OPTIONS` and carry both `Origin` and `Access-Control-Request-Method`. Standard browser behavior. |
+| `all-options` | Treat every `OPTIONS` request as preflight, without checking CORS headers. For non-standard clients that omit CORS headers. |
 
-Strict detection conforming to the CORS standard:
+## Default behavior
 
-- Request method must be `OPTIONS`
-- Must include the `Origin` header
-- Must include the `Access-Control-Request-Method` header
+Edgion handles preflight automatically; the default `preflightPolicy` is `mode: cors-standard`
+with `statusCode: 204`. If a route references a CORS plugin, the preflight response follows the
+CORS rules; otherwise Edgion returns the configured `statusCode`.
 
-**Use case**: Standard browser cross-origin requests
+## Scenarios
 
-#### `all-options`
+### Use the default (no configuration)
 
-Treats all `OPTIONS` requests as preflight:
-
-- Handles any request with the `OPTIONS` method
-- Does not check other headers
-
-**Use cases**:
-- Certain non-standard clients
-- Need to uniformly handle all OPTIONS requests
-
-## Usage Examples
-
-### Scenario 1: Using Default Configuration (No Configuration Needed)
-
-In most cases, the default configuration is sufficient, requiring no additional setup.
-
-### Scenario 2: Custom Preflight Detection Mode
+For most deployments you do not configure `preflightPolicy` at all. Standard browser CORS
+preflights are detected and answered automatically.
 
 ```yaml
-apiVersion: edgion.io/v1
+apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
-  name: edgion-gateway-config
+  name: default-config
+spec:
+  # No preflightPolicy block — defaults apply (mode cors-standard, statusCode 204)
+  server:
+    threads: 0
+```
+
+### Treat all OPTIONS as preflight
+
+Use `all-options` when some clients send `OPTIONS` without standard CORS headers.
+
+```yaml
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: default-config
 spec:
   preflightPolicy:
     mode: all-options
 ```
 
-### Scenario 3: Custom Default Status Code
+### Customize the default status code
+
+Reply with `200` instead of `204` for clients that mishandle empty `204` responses.
 
 ```yaml
-apiVersion: edgion.io/v1
+apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
-  name: edgion-gateway-config
+  name: default-config
 spec:
   preflightPolicy:
+    mode: cors-standard
     statusCode: 200
 ```
 
 ## Relationship with CORS
 
-The preflight policy behavior depends on how CORS is configured on the route:
+How preflight interacts with CORS depends on how CORS is configured on the route:
 
-### Gateway API Native CORS Filter (`type: CORS`)
+- **Gateway API native `type: CORS` filter** — the preflight handler does **not** intervene;
+  preflight is handled inside the route-level filter chain. `preflightPolicy` has no effect on
+  this path.
+- **EdgionPlugins CORS plugin (via `ExtensionRef`)** — the preflight handler runs first,
+  finds the route's CORS configuration, and answers using it. If no CORS configuration is
+  found, it returns the configured `statusCode`.
 
-When a route has a native `type: CORS` filter, the **preflight handler does not intervene**. Preflight requests are handled directly by the route-level `GapiCorsFilter` plugin. The `preflightPolicy` configuration has no effect on this path.
+## Edge cases and caveats
 
-### EdgionPlugins CORS Plugin
+- `preflightPolicy` lives in `EdgionGatewayConfig`, not in a Gateway annotation. Setting it on
+  a Gateway has no effect.
+- The policy applies to the entire GatewayClass that references the `EdgionGatewayConfig`, not
+  to a single Gateway or listener.
+- This policy controls only the `OPTIONS` short-circuit. It does not add `Access-Control-Allow-*`
+  headers to actual cross-origin responses; a CORS plugin or the backend remains responsible
+  for those.
+- Changes apply dynamically when the `EdgionGatewayConfig` is updated — no Gateway restart.
 
-When a route references an EdgionPlugins CORS plugin via `ExtensionRef`, the preflight handler works **in conjunction with** it:
+## Related documents
 
-1. **Preflight Handler executes first**: Intercepts preflight requests before all plugins
-2. **Automatically looks up CORS configuration**: Searches for CORS plugin configuration in the route's EdgionPlugins
-3. **Uses CORS response**: If CORS configuration is found, responds according to CORS rules
-4. **Default response**: If no CORS configuration is found, returns the configured default status code
-
-**Example flow**:
-
-```
-Browser OPTIONS request
-    |
-Route has native type: CORS filter?
-    |-- Yes -> Skip Preflight Handler, GapiCorsFilter handles it
-    +-- No  -> Preflight Handler intercepts
-                  |
-              Route has EdgionPlugins CORS config?
-                  |-- Yes -> Respond using CORS configuration
-                  +-- No  -> Return 204 No Content
-```
-
-## FAQ
-
-### Q: Do I need to configure preflight?
-
-**A:** In most cases, no. The default configuration already correctly handles standard CORS preflight requests.
-
-### Q: When should I use `all-options` mode?
-
-**A:** When you encounter the following situations:
-- Certain clients send OPTIONS requests without standard CORS headers
-- Need to uniformly handle all OPTIONS requests, regardless of whether they are CORS preflight
-
-### Q: Will preflight responses go through other plugins?
-
-**A:** It depends on how CORS is configured:
-- **EdgionPlugins CORS**: No. Preflight is intercepted by the preflight handler before all plugins.
-- **Native `type: CORS` filter**: Preflight is handled by GapiCorsFilter within the route-level plugin chain. Filters listed before CORS in the HTTPRoute `filters` array will execute first. It is recommended to place the CORS filter at the beginning of the filters list.
-
-### Q: How to view preflight request processing logs?
-
-**A:** Preflight requests are recorded in `edgion_access.log` and can be filtered by the HTTP method `OPTIONS`:
-
-```bash
-grep "OPTIONS" logs/edgion_access.log
-```
-
-## Related Documentation
-
-- [CORS Plugin Configuration](../../user-guide/http-route/filters/edgion-plugins/cors.md)
-- [Resource Architecture Overview (Dev Guide)](../../dev-guide/resource-architecture-overview.md)
+- [EdgionGatewayConfig](../configuration/edgion-gateway-config.md)
+- [GatewayClass](gateway-class.md)
+- [CORS plugin](../../user-guide/http-route/filters/edgion-plugins/cors.md)
+- [Gateway overview](overview.md)

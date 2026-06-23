@@ -1,0 +1,29 @@
+# EdgionPlugins in edgion-test: IpRestriction whitelist-with-inline-deny config.
+#
+# allowRefs cross-namespace reference (no ReferenceGrant in edgion-default):
+#   → controller sets ResolvedRefs=False(RefNotPermitted).
+#
+# Also carries an inline deny list (10.0.0.0/8) so the fixture reflects a
+# realistic whitelist-with-inline-deny config: the "allow" source comes from
+# the cross-ns EdgionConfigData ref, while the "deny" list is authored inline.
+#
+# Scenario 2 (allow_refs_no_grant_ref_not_permitted) uses this resource.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ecd-allow-refs-cross-ns
+  namespace: edgion-test
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        defaultAction: allow
+        deny:
+          - name: blocked-ranges
+            cidrs:
+              - "10.0.0.0/8"
+        allowRefs:
+          - name: ecd-refgrant-blocklist
+            namespace: edgion-default

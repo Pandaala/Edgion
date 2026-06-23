@@ -2,17 +2,17 @@
 
 EdgionGatewayConfig is a cluster-scoped CRD (`edgion.io/v1alpha1`) that configures runtime behavior at the GatewayClass level. It is referenced via `GatewayClass.spec.parametersRef` and takes effect dynamically without restarting the Gateway process.
 
-## Difference from Gateway TOML
+## Difference from Gateway YAML
 
-| Layer | Gateway TOML | EdgionGatewayConfig |
+| Layer | Gateway YAML | EdgionGatewayConfig |
 |-------|-------------|---------------------|
 | Scope | Single Gateway process | Entire GatewayClass |
 | How changes apply | Requires process restart | Dynamic (CRD update) |
 | Typical use | Process connection params, log paths, rate limit precision | Timeout policies, security rules, global plugins, real IP extraction |
 
-**When to use TOML vs EdgionGatewayConfig:**
-- Change the Controller gRPC address → Gateway TOML `[gateway].server_addr`
-- Change Admin / Metrics ports → Gateway TOML (process startup layer)
+**When to use Gateway YAML vs EdgionGatewayConfig:**
+- Change the Controller gRPC address → Gateway YAML `gateway.server_addr`
+- Change Admin / Metrics ports → Gateway YAML (process startup layer)
 - Configure HTTP timeouts, real IP, global plugins → EdgionGatewayConfig
 
 ## How to Associate
@@ -80,7 +80,12 @@ spec:
     statusCode: 204
 
   enableReferenceGrantValidation: false
+
+  linkSys:
+    webhookMaxResponseBytes: 16384   # Hard cap for LinkSys webhook response body (16 KiB)
 ```
+
+> Note: URI path normalization (`%2F` rejection, invalid percent-encoding rejection, etc.) is **not** part of EdgionGatewayConfig — it is configured in the Gateway YAML `path_normalization` section. See [Gateway Configuration](./gateway-config.md).
 
 ## Configuration Parameters
 
@@ -113,11 +118,35 @@ spec:
 | `defaultRequestTimeout` | `Duration` | `60s` | Total request timeout including retries |
 | `defaultIdleTimeout` | `Duration` | `300s` | Connection pool idle timeout |
 
+### spec.tcpTimeout
+
+Timeouts for L4 relays — plain TCP, TLS-terminated, and TLS-passthrough. UDP has its own session model and is not affected.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `idleTimeout` | Duration string | `1h` | Closes a relay that makes no byte progress in either direction for this window. The clock resets on any completed read or advancing partial write, so active and slow-but-draining transfers are not severed. |
+| `connectTimeout` | Duration string | `10s` | Upper bound for establishing the upstream TCP connection (the TCP handshake). In all three relay types the upstream connect is plain TCP, so this bounds the connect itself, not a TLS handshake. A backend that silently drops SYNs (firewall, not-yet-ready pod) fails fast instead of stranding the downstream connection until the OS TCP retransmit timeout (~2m) fires. |
+
+**Secure by default:** If you omit the entire `tcpTimeout` section, the `1h` idle timeout and `10s` connect timeout still apply — every L4 relay is bounded without configuration.
+
+**Opt-out and risk:** Set `idleTimeout: "0"` (or `"0s"`) to disable the idle timeout (unbounded relay). This re-opens a resource-exhaustion risk: a stalled or trickle-sending peer can hold a relay — and its socket, task, and buffers — open indefinitely, with no in-process connection cap. Only disable it if a higher layer bounds connection lifetime. Setting `connectTimeout: "0"` likewise removes the application-level connect bound, falling back to the OS TCP retransmit timeout (~2m on Linux).
+
+> **Known limitation:** An idle timeout does not stop a determined trickle attacker (a byte every N seconds resets the clock, on either the read or write half). Bounding that would require a total-duration cap, which would sever legitimate long-idle connections (DB pools, message queues, long-poll, SSH) and is not a sane default.
+
+```yaml
+spec:
+  tcpTimeout:
+    idleTimeout: 1h
+    connectTimeout: 10s
+```
+
 ### spec.maxRetries
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `maxRetries` | `Integer` | `3` | Maximum retry attempts on upstream connection failure |
+
+> The older `httpTimeout.backend.defaultMaxRetries` field is **deprecated**. If present, its value is ignored and a warning is logged at config load; use the top-level `maxRetries` instead.
 
 ### spec.realIp
 
@@ -164,6 +193,16 @@ globalPluginsRef:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enableReferenceGrantValidation` | `Boolean` | `false` | Enforce ReferenceGrant validation for cross-namespace references |
+
+### spec.linkSys
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `webhookMaxResponseBytes` | `Integer` | `16384` | Hard upper bound (bytes) for a LinkSys webhook response body. Each call's response is clamped to `min(per-resource maxResponseBytes, this value)`. Raise both values together when an external API legitimately returns a larger payload |
+
+Changes to `linkSys` take effect immediately through EdgionGatewayConfig partial-update — no Gateway restart required.
+
+Because EdgionGatewayConfig is cluster-scoped, multiple instances may coexist. The Gateway derives a single process-global value deterministically across all instances rather than letting whichever was applied last win: `webhookMaxResponseBytes` uses the **strictest** (`min`) value. When the last instance carrying `linkSys` is deleted, the global resets to the default (`16384`). The same deterministic aggregation applies to `loadBalancing.panicThreshold`, which uses the **highest** (`max`) value across instances and resets to `0` (panic mode disabled) when none is configured.
 
 ## Common Scenarios
 

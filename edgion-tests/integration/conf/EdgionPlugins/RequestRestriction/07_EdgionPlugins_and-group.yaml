@@ -1,0 +1,26 @@
+# 7. AND within a group: deny only when BOTH predicates hold
+#    (X-Env: prod) AND (path matches /admin/) => deny. Either predicate false => pass.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-and-group
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Blacklist
+        ruleGroups:
+          - rules:
+              - name: "is-prod"
+                source: Header
+                key: "X-Env"
+                values:
+                  - "prod"
+              - name: "is-admin-path"
+                source: Path
+                regex:
+                  - ".*/admin/.*"
+        status: 403
+        message: "Admin access denied in prod"

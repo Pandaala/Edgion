@@ -1,0 +1,20 @@
+# Blacklist mode where the test client's IP (127.0.0.1) IS in the deny list.
+# Confirms the compiled deny_matcher blocks access (403) even with default_action allow.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ip-restriction-deny-hit
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        defaultAction: allow
+        deny:
+          - name: blocked
+            cidrs:
+              - "127.0.0.1/32"
+        status: 403
+        message: "IP is blocked"

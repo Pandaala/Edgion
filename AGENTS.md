@@ -5,7 +5,17 @@
 Edgion is a Kubernetes gateway built on Rust + Pingora, using a Controller–Gateway split architecture with gRPC-based configuration sync.
 It supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, and WebSocket, and includes a plugin system, load balancing, and TLS/mTLS.
 
-**Four binaries**: Controller (handles K8s resources), Gateway (data-plane proxy), edgion-cli (CLI debugging tool), Center (federation center).
+**Three binaries**: Controller (handles K8s resources), Gateway (data-plane proxy), edgion-cli (CLI debugging tool). The federation Center has been extracted to the separate EdgionCenter repository.
+
+**Workspace layout** (Cargo workspace, resolver 2): the code is split across crates rather than one root crate —
+- `edgion-resources` — shared resource/config schema (leaf).
+- `edgion-common` — shared infra: config loader, observability/log bootstrap, secret store, link-system core (+ etcd provider), TLS validation, auth, conf_sync/fed_sync proto codegen. Depends on `edgion-resources`. Backend-agnostic (TLS backend flows in via workspace `pingora-core` feature unification). Exposes a `test-util` feature for cross-crate test helpers.
+- `edgion-gateway` — data plane; the `edgion-gateway` binary lives here. Owns `boringssl`/`rustls` + allocator features.
+- `edgion-controller` — control plane; the `edgion-controller` binary lives here. Depends only on `edgion-common`/`edgion-resources` — **not** on `edgion-gateway`. Plugin validation on resource ingest runs the schema-layer `EdgionPlugins::validate_plugins` (in `edgion-resources`), which reproduces the gateway `compile_plugins` preparse errors minus the DSL deep checks (Rhai compile / VM init, gateway-only). The former `controller → gateway` edge is gone, so the workspace dependency graph is a clean DAG (`resources → common → {gateway, controller, cli}`).
+- `edgion-cli` — the `edgion-cli` binary + lib; depends only on `edgion-common`/`edgion-resources`.
+- `edgion-tests` — the end-to-end integration-test harness; a workspace member kept out of `default-members`. Owns the test/helper bins (`test_server`, `test_client`, `cache_residue`, …). There is **no** root `edgion` package — the workspace root is a virtual manifest.
+
+Each binary crate sets its own `#[global_allocator]`; libraries set none. Because each binary is its own package, the precise form is `cargo build -p <crate> --bin <name>`. The three main binaries (`edgion-gateway`, `edgion-controller`, `edgion-cli`) are all in `default-members`, so a bare `cargo build --bin <name>` from the workspace root *does* resolve them. The bins that do NOT resolve bare are the ones in `edgion-tests` (`test_server`, `test_client`), since that crate is deliberately excluded from `default-members` — build those with `cargo build -p edgion-tests --bin <name>`.
 
 **Feature Flags** (mutually exclusive — pay attention at build time):
 - TLS backend: `boringssl` (default) | `rustls`
@@ -76,18 +86,19 @@ The task templates, lifecycle stages, stage→Skills mapping, and trimming rules
 ## Common commands
 
 ```bash
-# Full check
-cargo check --all-targets
+# Full check (--workspace also covers `edgion-tests`, which is a workspace
+# member but kept out of `default-members`; without it, check/clippy skip it)
+cargo check --workspace --all-targets
 cargo fmt --all -- --check
-cargo clippy --all-targets
+cargo clippy --workspace --all-targets
 cargo test --all
-make check-agent-docs
+python3 cicd/checks/validate_agent_docs.py
 
 # Targeted integration test
-./examples/test/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r <Resource> -i <Item>
 
 # Full integration test
-./examples/test/scripts/integration/run_integration.sh
+./edgion-tests/integration/scripts/integration/run_integration.sh
 ```
 
 ## Pre-commit checks (trigger phrases)
@@ -95,9 +106,11 @@ make check-agent-docs
 When the user says "run check", "check the code", "format the code", "run CI", "pre-commit check", or anything similar, run the following in order:
 
 1. **Format**: `cargo fmt --all` (apply directly — not `--check`)
-2. **Compile check**: `cargo check --all-targets`
-3. **Lint**: `cargo clippy --all-targets`
-4. **Doc consistency**: `make check-agent-docs`
+2. **Compile check**: `cargo check --workspace --all-targets`
+3. **Lint**: `cargo clippy --workspace --all-targets`
+4. **Doc consistency**: `python3 cicd/checks/validate_agent_docs.py`
+
+> `--workspace` is intentional: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip it. `--workspace` brings it back into the fast check/clippy signal (matching what `cargo test --all` already compiles).
 
 Steps 2/3/4 may run in parallel. If any step fails, report the error immediately and try to fix it; after fixing, re-run that step. Once all pass, summarize the result.
 
@@ -110,8 +123,19 @@ Steps 2/3/4 may run in parallel. If any step fails, report the error immediately
 - Log ID and observability conventions are in `skills/03-coding/`.
 - Do not introduce security vulnerabilities (injection, XSS, and other OWASP Top 10).
 - Keep changes minimal — do not refactor or add features that were not requested.
-- **Written content language**: everything written to disk must be English (code, comments, doc comments, TODO/FIXME, log/error literals, commit messages, `skills/` and `docs/en/` documentation). The only exception is Chinese user-facing documentation under `docs/zh/`.
+- **Written content language**: everything written to disk must be English (code, comments, doc comments, TODO/FIXME, log/error literals, commit messages, `skills/` and `docs/en/` documentation). The only exception is Chinese user-facing documentation under `docs/zh-CN/`.
 - **No smuggling past the English-only lint**: judge by runtime meaning, not source bytes. If a value's decoded form lands on a blocked codepoint, it's smuggling — whether spelled as `\u{...}`, YAML/JSON `\uXXXX`, percent-encoded UTF-8 (`%E4%B8%AD`, `%D1%80`, ...), runtime byte/hex/base64 construction, or `include_bytes!` / external file. Use an English equivalent that exercises the same code path: percent-decoding can be tested with a space (`hello world` ↔ `hello%20world`) or reserved char (`foo&bar` ↔ `foo%26bar`); multi-byte UTF-8 coverage with lint-permitted chars (`é`, `ñ`, `€`, `©`, `π`).
+
+## CRD schema ↔ struct invariants (periodic inspection)
+
+Resource structs in `edgion-resources/src/resources/` serve two paths: the **K8s CR path** (the hand-written CRD under `config/crd/edgion-crd/` is a *structural* schema, so the API server **prunes** any field the CRD does not declare — a silently-pruned field becomes a no-op with no admission error) and the **controller→gateway conf_sync path** (serde serializes the *full* struct, including controller-resolved values, to the data plane). This creates a standing invariant for every serialized field:
+
+- **Operator-facing field** (a human sets it in a CR) → MUST appear in the CRD YAML. For the two fully-structural resources (`EdgionGatewayConfig`, `EdgionTls`) this is enforced automatically by the guard below; for the others it is enforced by review.
+- **Non-operator field** (controller-resolved host/port/listener, an internal cache, or a resolved **secret** carried to the data plane) → MUST carry `#[schemars(skip)]` so it never enters the CRD schema. Keep it serialized for conf_sync (do NOT use `#[serde(skip)]` if the gateway needs the value; use `#[serde(skip)]` only for pure in-process caches the gateway re-derives). A resolved **secret value** additionally uses the `crate::redact::{redact_opt, redact_required}` serde adapter so the admin `/configclient` output shows `"[redacted]"` while conf_sync still ships the real value. A resolver-only struct that holds secret material should NOT derive `JsonSchema` at all (defense-in-depth against a future schema-visible embedding).
+
+**Automated guard:** `edgion-resources/tests/crd_coverage.rs` — run it manually via `./cicd/checks/check_crd_coverage.sh`, or it rides CI's `cargo test --all`. It compares `schema_for!(<SpecType>)` against the committed CRD for `EdgionGatewayConfig` + `EdgionTls`, both directions: Direction-1 = struct field missing from the CRD (the silent-pruning bug); Direction-2 = stale CRD field with no struct backing. Intentional omissions (e.g. a deprecated field) live in the test's allowlist with a reason.
+
+**Limits to check by inspection (the guard does NOT):** it checks field *presence*, not types/patterns; and it covers only the two structural CRDs. The five tagged-enum CRDs (plugins, stream_plugins, acme, link_sys, edgion_config_data) model their config as `x-kubernetes-preserve-unknown-fields` and are NOT field-guarded — for them the `#[schemars(skip)]` + redact discipline above is the only safeguard. One narrow exception: the EdgionPlugins CRD's per-stage `type` discriminator enums ARE drift-guarded by `edgion-resources/tests/plugin_crd_type_coverage.rs`, which compares the committed stage enums against `schema_for!(EdgionPlugin)` (Direction-1 = a variant absent from every stage enum, i.e. un-appliable; Direction-2 = a dead/duplicate enum entry naming no real variant). Per the lenient-admission policy it does NOT enforce strict per-stage scoping — a plugin valid only at another stage is caught later by the `Accepted=False` status condition, not at admission. The `config` sub-schemas of all five remain unguarded. When adding or renaming a struct field on any resource, re-run the guard and re-check this invariant; audit `serialize`d secret/resolved fields for a missing `#[schemars(skip)]`.
 
 ## Git constraints
 
@@ -119,14 +143,15 @@ Steps 2/3/4 may run in parallel. If any step fails, report the error immediately
 
 ## Authentication system
 
-- **Controller default behavior**: When `[local_auth]` is not configured, a random password is auto-generated and stored in the `edgion-admin-credentials` Secret (namespace: `edgion-system`). Both K8s mode and local mode are supported.
-- **Center default behavior**: **No auto-generation**. The operator must provide either `[local_auth]` or `[auth]`. If neither is provided, the server still starts; `/health`, `/ready`, `/metrics`, and `/api/v1/auth/status` remain accessible, but all business routes reject with 503 (fail-close via `initializing_response`, not panic/exit). See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
-- **View the password**: `cat {conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
-- **API authentication**: Bearer token or httpOnly Cookie.
-- **CLI authentication**: `edgion-cli login`, or auto-login by detecting the configuration file.
-- **Authentication endpoints**: `/api/v1/auth/login`, `/api/v1/auth/logout`, `/api/v1/auth/status`, `/api/v1/auth/me`.
-- **Module locations**: `src/core/common/local_auth/`, `src/core/common/unified_auth/`, `src/core/common/api/compose.rs`.
-- **Configuration**: the `[local_auth]` TOML section (optional; see `skills/02-features/02-config/00-controller-config.md`).
+- **Controller behavior (token-only, Istio-style)**: **No auto-generation.** Admin API auth is a single pre-shared bearer token. The operator supplies it via (highest precedence first): (1) env var `EDGION_ADMIN_TOKEN` injected from a K8s Secret (`edgion-admin-credentials`, key `token`) via `secretKeyRef` (recommended for Kubernetes); (2) the `admin_token` config field in a Secret-mounted config file. A blank token = not configured. The token maps to an allow-all wildcard RBAC policy and survives reloads. When no token (and no `cli_tokens`) is configured, the server starts and returns 503 fail-close on all Admin API business routes with a startup WARN — no panic, no `exit(1)`. There is no username/password and no OIDC admin login. See `skills/02-features/02-config/03-auth-bootstrap.md` for the full behavior matrix and migration guide.
+- **Scoped automation tokens**: configure role-limited tokens via `cli_tokens` (each with a fine-grained RBAC policy; hot-reloadable). See `skills/02-features/02-config/00-controller-config.md`.
+- **View the K8s token**: `kubectl -n edgion-system get secret edgion-admin-credentials -o jsonpath='{.data.token}' | base64 -d`
+- **API authentication**: Bearer token only (`Authorization: Bearer <token>`) — no cookie, no session.
+- **CLI authentication**: `edgion-cli login --token <T>` persists the token to `~/.edgion/token`; token precedence `--token` → `EDGION_TOKEN` → `~/.edgion/token`. No username/password, no OIDC.
+- **Authentication endpoints**: only public `GET /api/v1/auth/status` (`{ auth_required, mode: "token", status }`). The former `/api/v1/auth/login`, `/logout`, `/me` were removed.
+- **Module locations**: `edgion-controller/src/api/cli_token_middleware.rs` (token authn), `edgion-controller/src/authz/mod.rs` (`Authorizer` + admin token), `edgion-controller/src/api/mod.rs` (onion + 503 gate + status handler), `edgion-controller/src/cli/mod.rs` (token resolution). The controller authz skip-set (canonical public paths) lives in `edgion-controller/src/api/public_paths.rs`. The gateway OIDC plugin's JWKS/discovery provider and JWT/JWK helpers live in `edgion-gateway/src/plugins/http/openid_connect/` (`jwks_provider.rs`, `jwt_common.rs`). `edgion-common` no longer carries any auth-specific module.
+- **Configuration**: the `admin_token` field + `cli_tokens` list (see `skills/02-features/02-config/00-controller-config.md`).
+- **Gateway data-plane auth plugins** (`openid_connect`, `jwt_auth`, `basic_auth`, `header_cert_auth`, ...) are unrelated to Admin API auth and are unchanged.
 
 ## Knowledge source rules
 

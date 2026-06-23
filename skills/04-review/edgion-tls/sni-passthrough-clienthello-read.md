@@ -84,7 +84,6 @@ the bound.
 
 ## Reference
 
-- Source: `src/core/gateway/routes/tls/sni_parser.rs`, `src/core/gateway/routes/tls/passthrough_proxy.rs::read_client_hello`
-- Closure: [CLOSED-FINDINGS.md](../CLOSED-FINDINGS.md)
+- Source: `edgion-gateway/src/routes/tls/sni_parser.rs`, `edgion-gateway/src/routes/tls/passthrough_proxy.rs::read_client_hello`
 - Envoy reference: `source/extensions/filters/listener/tls_inspector/tls_inspector.{cc,h}` and `api/envoy/config/listener/v3/listener.proto` (`listener_filters_timeout`)
 - RFC: RFC 8446 §5.1 (record layer), RFC 6066 §3 (SNI extension)

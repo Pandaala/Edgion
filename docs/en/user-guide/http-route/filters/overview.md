@@ -1,88 +1,118 @@
-# Filters Overview
+# HTTPRoute Filters
 
-Filters are used to modify requests or responses during the routing process.
+Filters let you modify or act on a request as it flows through an HTTPRoute rule — rewriting headers, redirecting, mirroring traffic, enforcing authentication, rate limiting, and more. Edgion supports two families of filters: the **standard Gateway API filters** and the **Edgion extension plugins** attached through `ExtensionRef`.
 
-## Filter Types
+## The two filter families
 
-### Gateway API Standard Filters
+### Standard Gateway API filters
 
-| Type | Description | Documentation |
-|------|-------------|---------------|
-| RequestHeaderModifier | Modify request headers | [Details](./gateway-api/request-header-modifier.md) |
-| ResponseHeaderModifier | Modify response headers | [Details](./gateway-api/response-header-modifier.md) |
-| RequestRedirect | Request redirect | [Details](./gateway-api/request-redirect.md) |
-| URLRewrite | URL rewrite | [Details](./gateway-api/url-rewrite.md) |
-| RequestMirror | Request mirroring | [Details](./gateway-api/request-mirror.md) |
+These are part of the Gateway API specification and are configured inline in `rules[].filters` (or `rules[].backendRefs[].filters`) with a `type` field:
 
-### Edgion Extension Filters
+| Filter `type` | What it does | Stage |
+|---------------|--------------|-------|
+| `RequestHeaderModifier` | Set, add, or remove request headers before forwarding | Request |
+| `ResponseHeaderModifier` | Set, add, or remove response headers before returning | Response |
+| `RequestRedirect` | Return a 301/302 redirect instead of proxying | Request (terminating) |
+| `URLRewrite` | Rewrite the request hostname and/or path before forwarding | Request |
+| `RequestMirror` | Copy a fraction of traffic to a second backend (fire-and-forget) | Request (non-blocking) |
 
-> **🔌 Edgion Extension**
-> 
-> The following plugins are implemented via the `EdgionPlugins` CRD and are Edgion extension features.
-
-Referenced through `ExtensionRef` to EdgionPlugins resources:
-
-| Plugin | Description | Documentation |
-|--------|-------------|---------------|
-| AllEndpointStatus | Query all backend endpoint statuses | [Details](./edgion-plugins/all-endpoint-status.md) |
-| BandwidthLimit | Bandwidth throttling | [Details](./edgion-plugins/bandwidth-limit.md) |
-| BasicAuth | HTTP basic authentication | [Details](./edgion-plugins/basic-auth.md) |
-| CORS | Cross-origin resource sharing | [Details](./edgion-plugins/cors.md) |
-| CSRF | CSRF protection | [Details](./edgion-plugins/csrf.md) |
-| CtxSet | Context variable extraction | [Details](./edgion-plugins/ctx-setter.md) |
-| DirectEndpoint | Direct connection to a specific endpoint | [Details](./edgion-plugins/direct-endpoint.md) |
-| DSL | DSL scripting engine | [Details](./edgion-plugins/dsl/) |
-| DynamicUpstream | Dynamic upstream selection | [Details](./edgion-plugins/dynamic-upstream.md) |
-| ForwardAuth | External authentication delegation | [Details](./edgion-plugins/forward-auth.md) |
-| HeaderCertAuth | Header/certificate authentication | [Details](./edgion-plugins/header-cert-auth.md) |
-| HmacAuth | HMAC signature verification | [Details](./edgion-plugins/hmac-auth.md) |
-| IpRestriction | IP allowlist/denylist | [Details](./edgion-plugins/ip-restriction.md) |
-| JweDecrypt | JWE Token decryption | [Details](./edgion-plugins/jwe-decrypt.md) |
-| JwtAuth | JWT authentication | [Details](./edgion-plugins/jwt-auth.md) |
-| KeyAuth | API Key authentication | [Details](./edgion-plugins/key-auth.md) |
-| LdapAuth | LDAP directory authentication | [Details](./edgion-plugins/ldap-auth.md) |
-| Mock | Mock response | [Details](./edgion-plugins/mock.md) |
-| OpenidConnect | OpenID Connect authentication | [Details](./edgion-plugins/openid-connect.md) |
-| ProxyRewrite | Proxy rewrite | [Details](./edgion-plugins/proxy-rewrite.md) |
-| RateLimit | Rate limiting | [Details](./edgion-plugins/rate-limit.md) |
-| RealIp | Client real IP extraction | [Details](./edgion-plugins/real-ip.md) |
-| RegionRoute | Region-based routing | [Details](./edgion-plugins/region-route.md) |
-| RequestMirror | Request mirroring | [Details](./edgion-plugins/request-mirror.md) |
-| RequestRestriction | Request filtering | [Details](./edgion-plugins/request-restriction.md) |
-| ResponseRewrite | Response rewrite | [Details](./edgion-plugins/response-rewrite.md) |
-
-## Filter Execution Order
-
-```
-Request → RequestHeaderModifier → ExtensionRef(plugins) → URLRewrite → Backend
-Backend → ResponseHeaderModifier → Response
-```
-
-## Configuration Examples
-
-### Using Standard Filters
+A minimal example that injects a header:
 
 ```yaml
-filters:
-  - type: RequestHeaderModifier
-    requestHeaderModifier:
-      add:
-        - name: X-Gateway
-          value: edgion
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: example-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: main-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      filters:
+        - type: RequestHeaderModifier
+          requestHeaderModifier:
+            set:
+              - name: X-Gateway
+                value: edgion
+      backendRefs:
+        - name: api-service
+          port: 8080
 ```
 
-### Using Edgion Plugins
+### Edgion extension plugins (via ExtensionRef)
+
+Everything beyond the five standard filters — CORS, JWT/Basic/Key/LDAP/HMAC auth, rate limiting, IP restriction, mocking, proxy rewrite, DSL scripting, and more — is provided as an `EdgionPlugins` custom resource. You attach it to a route with the standard Gateway API `ExtensionRef` filter:
 
 ```yaml
-filters:
-  - type: ExtensionRef
-    extensionRef:
-      group: edgion.io
-      kind: EdgionPlugins
-      name: my-cors-plugin
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-route
+  namespace: production
+spec:
+  parentRefs:
+    - name: main-gateway
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: api-guard
+      backendRefs:
+        - name: api-service
+          port: 8080
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: api-guard
+  namespace: production
+spec:
+  requestPlugins:
+    - type: Cors
+      config:
+        allowOrigins: "https://app.example.com"
 ```
 
-## Related Documentation
+The full plugin catalog lives under [Edgion extension plugins](./edgion-plugins/README.md).
 
+## Filter scope
+
+Filters can be declared at two scopes:
+
+| Scope | Where | Applies to |
+|-------|-------|-----------|
+| Rule scope | `rules[].filters` | Every request matching the rule |
+| BackendRef scope | `rules[].backendRefs[].filters` | Only requests routed to that backend |
+
+BackendRef-scoped filters are useful for canary deployments — for example, adding an `X-Canary` header only on the requests sent to the canary backend.
+
+## Mutual exclusion: URLRewrite vs RequestRedirect
+
+`URLRewrite` and `RequestRedirect` are **mutually exclusive** and cannot appear in the same rule. The conflict is detected at three levels:
+
+1. Both appear in `rule.filters`.
+2. Both appear in one `backendRef.filters`.
+3. One appears in `rule.filters` and the other in `backendRef.filters` (cross-level).
+
+A rule that violates this is marked `PartiallyInvalid`: that rule is disabled, but the other valid rules in the HTTPRoute keep working.
+
+## Execution order
+
+When a request picks up filters from global config, the route rule, and a backendRef, they run in a defined precedence and across defined proxy phases. See [Plugin Composition and Execution Order](./plugin-composition.md) for the full model, including how `ExtensionRef` plugins interleave with standard filters.
+
+## Related documents
+
+- [Plugin Composition and Execution Order](./plugin-composition.md)
 - [HTTPRoute Overview](../overview.md)
-- [Backend Configuration](../backends/README.md)
+- [RequestHeaderModifier](./gateway-api/request-header-modifier.md)
+- [Edgion extension plugins](./edgion-plugins/README.md)

@@ -1,0 +1,17 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: test-tcp
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: tcp-test-gateway
+      namespace: edgion-test
+      sectionName: tcp
+      port: 31090
+  rules:
+    - backendRefs:
+        - name: test-tcp
+          port: 30010
+          weight: 100
+

@@ -10,16 +10,16 @@ description: Debugging and troubleshooting skill for Edgion. Use when local code
 
 ## File list
 
-| File | Topic | Status |
-|------|------|------|
-| [00-debugging.md](00-debugging.md) | Daily development debugging, Admin API, edgion-cli, Access Log Store, Metrics, quick lookup | Refactored |
+| File | Topic |
+|------|------|
+| [00-debugging.md](00-debugging.md) | Daily development debugging, Admin API, edgion-cli, Access Log Store, Metrics, quick lookup |
 
 ## Quick entry points
 
 ### Fastest local debugging
 
 ```bash
-./examples/test/scripts/integration/run_integration.sh --keep-alive -r <Resource> -i <Item>
+./edgion-tests/integration/scripts/integration/run_integration.sh --keep-alive -r <Resource> -i <Item>
 ```
 
 ### Three views to locate the issue layer

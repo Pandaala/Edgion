@@ -9,42 +9,46 @@ description: Logging system: Access Log, SSL/TCP/TLS/UDP protocol logs, system l
 
 | Type | Purpose | Configuration Location | Default Path |
 |------|---------|------------------------|--------------|
-| System log | Control plane/data plane runtime logs | `[logging]` | `logs/edgion-{type}.log` |
-| Access Log | HTTP/gRPC request log (JSON) | `[access_log]` | `logs/edgion_access.log` |
-| SSL Log | HTTPS connection log | `[ssl_log]` | `logs/ssl.log` |
-| TCP Log | TCP proxy log | `[tcp_log]` | `logs/tcp_access.log` |
-| TLS Log | TLS proxy log | `[tls_log]` | `logs/tls_access.log` |
-| UDP Log | UDP proxy log | `[udp_log]` | `logs/udp_access.log` |
+| System log | Control plane/data plane runtime logs | `logging` | `logs/edgion-{type}.log` |
+| Access Log | HTTP/gRPC request log (JSON) | `access_log` | `logs/edgion_access.log` |
+| SSL Log | HTTPS connection log | `ssl_log` | `logs/ssl.log` |
+| TCP Log | TCP proxy log | `tcp_log` | `logs/tcp_access.log` |
+| TLS Log | TLS proxy log | `tls_log` | `logs/tls_access.log` |
+| UDP Log | UDP proxy log | `udp_log` | `logs/udp_access.log` |
 
 ## Access Log
 
 Access Log is Edgion's core observability mechanism. Every request produces one JSON-formatted log entry, with enough information to diagnose problems.
 
-### Key Fields
+### Fields
+
+Each entry is serialized from `AccessLogEntry` (`edgion-gateway/src/observe/access_log/entry.rs`). At a glance the most commonly inspected fields are:
 
 | Field | Description |
 |-------|-------------|
-| `sv` | Server Version (Controller → Gateway sync version) |
-| `request_id` | Unique request ID |
-| `method` | HTTP method |
-| `path` | Request path |
+| `ts` | Entry timestamp (epoch milliseconds) |
+| `host` / `path` | Request host and normalized current path |
 | `status` | Response status code |
-| `duration_ms` | Request duration (milliseconds) |
-| `upstream_addr` | Backend address |
-| `route_name` | Name of the matched route |
-| `stage_logs` | Plugin execution log (≤ 40 bytes per plugin) |
+| `match_info.sv` | Controller → Gateway sync version (omitted when 0) |
+| `info` / `errors` | Gateway-internal normal events / exception reasons |
+| `stage_logs` | Per-plugin execution log (compact, ≤ 40 bytes per entry) |
+| `upstreams` | Upstream connection details (ip, port, timing phases, retry) |
+| `request_uri` | **Optional** raw client-entry URI; emitted only when `access_log_options.includeRawUri: true` |
+
+For the complete, authoritative field list (real client IP, trace id, SNI, TLS id, protocol discovery, plugin `PluginLog` format, etc.) see the canonical reference [../../03-coding/observability/00-access-log.md](../../03-coding/observability/00-access-log.md). Do not re-list field names here — that doc tracks `entry.rs` directly.
 
 ### Configuration Example
 
-```toml
-[access_log]
-enabled = true
-[access_log.output.localFile]
-path = "logs/edgion_access.log"
-queue_size = 80000
-[access_log.output.localFile.rotation]
-strategy = "daily"
-max_files = 7
+```yaml
+access_log:
+  enabled: true
+  output:
+    localFile:
+      path: logs/edgion_access.log
+      queue_size: 80000
+      rotation:
+        strategy: daily
+        max_files: 7
 ```
 
 ## Protocol Logs
@@ -53,19 +57,20 @@ SSL/TCP/TLS/UDP logs share the same configuration schema (see the business log s
 
 ### Enable/Disable
 
-```toml
-[tcp_log]
-enabled = true      # Enable TCP log
-[tcp_log.output.localFile]
-path = "logs/tcp_access.log"
+```yaml
+tcp_log:
+  enabled: true        # Enable TCP log
+  output:
+    localFile:
+      path: logs/tcp_access.log
 ```
 
 ## System Log
 
 The system log uses the Rust `tracing` framework and supports module-level filtering:
 
-```toml
-[logging]
-log_level = "info,edgion::core::gateway::routes=debug"  # Debug for a specific module
-json_format = true                                        # Structured JSON
+```yaml
+logging:
+  log_level: "info,edgion::core::gateway::routes=debug"  # Debug for a specific module
+  json_format: true                                       # Structured JSON
 ```

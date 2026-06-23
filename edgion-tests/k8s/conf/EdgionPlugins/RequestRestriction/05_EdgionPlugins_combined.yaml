@@ -1,0 +1,35 @@
+# 5.  - 
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-combined
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Blacklist
+        ruleGroups:
+          - rules:
+              - name: "block-bots"
+                source: Header
+                key: "User-Agent"
+                regex:
+                  - "(?i).*Bot.*"
+          - rules:
+              - name: "block-admin"
+                source: Path
+                regex:
+                  - ".*/admin/.*"
+                  - ".*/internal/.*"
+          - rules:
+              - name: "block-debug-cookie"
+                source: Cookie
+                key: "debug"
+                values:
+                  - "true"
+                  - "1"
+        status: 403
+        message: "Access denied by security policy"
+

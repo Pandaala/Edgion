@@ -1,0 +1,29 @@
+# 4. Header  -  X-Auth-Token
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: request-restriction-header-required
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Blacklist
+        ruleGroups:
+          - rules:
+              - name: "bad-token"
+                source: Header
+                key: "X-Auth-Token"
+                values:
+                  - "invalid"
+                  - "expired"
+                onMissing: NoMatch
+          - rules:
+              - name: "missing-token"
+                source: Header
+                key: "X-Auth-Token"
+                onMissing: Match
+        status: 401
+        message: "Authentication required"
+

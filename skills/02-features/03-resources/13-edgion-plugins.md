@@ -1,6 +1,6 @@
 ---
 name: http-plugin-catalog
-description: Full EdgionPlugins CRD schema and catalog of 28 HTTP plugins.
+description: Full EdgionPlugins CRD schema and catalog of 33 HTTP plugins.
 ---
 
 # EdgionPlugins — HTTP Plugins
@@ -51,7 +51,7 @@ spec:
 |------|-------------|
 | `Cors` | CORS cross-origin resource sharing |
 | `Csrf` | CSRF protection |
-| `IpRestriction` | IP allow/deny list (CIDR supported) |
+| `IpRestriction` | IP allow/deny list (CIDR supported). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with the valid entries. Bad entries surface as a `PartiallyInvalid` status condition (reason `RuleInvalid`); `Accepted` stays `True`. A skipped inline deny entry also increments `edgion_ip_deny_entries_skipped_total{scope="http"}`. |
 | `RequestRestriction` | Request restrictions (header/body rules) |
 
 ### Traffic Control
@@ -75,6 +75,7 @@ spec:
 | `ResponseRewrite` | Response rewrite (status code/headers/body) |
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
+| `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation + immediate-response short-circuit. MVP is header-only (no body); peer of `ForwardAuth`. Runs in the `RequestFilter` and async `UpstreamResponse` stages. |
 
 ### Routing/Backend
 
@@ -84,6 +85,7 @@ spec:
 | `DynamicInternalUpstream` | Dynamic internal upstream |
 | `DynamicExternalUpstream` | Dynamic external upstream |
 | `AllEndpointStatus` | All-endpoint status query |
+| `RegionRoute` | Multi-region traffic routing. The EdgionPlugins config only holds a `serviceRegionRouteRef`; all routing rules live in EdgionConfigData (ServiceRegionRoute → ClusterRegionRoute), resolved at plugin-build time. See `05-resources/15-edgion-config-data.md`. |
 
 > Note: `EdgionPlugin::ExtensionRef` (the nested form) has been removed. Multi-plugin reuse is achieved via an aggregate EdgionPlugins resource or by listing multiple ExtensionRef entries side-by-side in the HTTPRoute filter list. See `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
 
@@ -104,7 +106,7 @@ HTTP plugins execute across Pingora's 4 stages:
 | `RequestFilter` | After the request is received and before backend selection | Auth, RateLimit, CORS, IP restriction |
 | `UpstreamResponseFilter` | After upstream response headers are received | ResponseHeaderModifier |
 | `UpstreamResponseBodyFilter` | After upstream response body is received | ResponseRewrite (body modification) |
-| `UpstreamResponse` | After the upstream response completes | Logging |
+| `UpstreamResponse` | After the upstream response headers arrive (async) | `ExtProc` (response-header processing); logic needing async access to the response |
 
 ## Secret Dependencies
 

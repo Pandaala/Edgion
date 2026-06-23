@@ -1,0 +1,29 @@
+# Negative scenario for tls-F002: operator-configured cipher list contains a
+# name BoringSSL does not recognize. SSL_set_strict_cipher_list returns 0 and
+# the cipher branch in apply_edgion_tls_cert must fail-closed (set err_log +
+# return) so the handshake aborts; otherwise the listener would silently
+# negotiate from BoringSSL's full default suite, defeating the operator's
+# restrictive policy.
+#
+# Bound to the existing https-strict listener (port 31197) via SNI so no new
+# listener/port is needed. minTlsVersion: TLS1_2 is required because BoringSSL
+# applies SSL_set_strict_cipher_list to TLS 1.2 and below only (TLS 1.3 suites
+# are hardcoded and bypass this path).
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: cipher-badname
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: cipher-gateway
+      namespace: edgion-test
+      sectionName: https-strict
+  hosts:
+    - cipher-badname.wildcard.example.com
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test
+  minTlsVersion: TLS1_2
+  ciphers:
+    - "THIS-CIPHER-DOES-NOT-EXIST-IN-BORINGSSL"

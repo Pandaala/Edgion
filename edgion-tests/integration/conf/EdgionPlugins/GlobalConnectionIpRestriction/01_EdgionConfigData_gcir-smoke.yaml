@@ -1,0 +1,20 @@
+# Selector EdgionConfigData — integration test fixture
+#
+# Verifies that EdgionConfigData with type=Selector (the variant referenced by the
+# GlobalConnectionIpRestriction stream plugin's activeProfileRef) is correctly parsed,
+# stored, and accepted by the controller via the configserver API. A Selector only names
+# the active profile; the rule data (profiles) lives inline in the plugin config.
+#
+# This fixture is loaded by the EdgionPlugins/GlobalConnectionIpRestriction integration test
+# and verified via the configserver API (accepted condition + data type check).
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gcir-smoke
+  namespace: edgion-test
+spec:
+  data:
+    type: Selector
+    config:
+      active: p1
+      description: "smoke-test selector for GlobalConnectionIpRestriction"

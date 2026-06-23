@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: trace-context-nogen
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: TraceContext
+      config:
+        generateWhenMissing: false

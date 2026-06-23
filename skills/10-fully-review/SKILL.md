@@ -31,14 +31,16 @@ description: Use when running or preparing a global codebase review pass that pr
      Severity / Location / Summary / Details / Impact / Suggested fix / Notes
 5. Collect all finding files into tasks/review-N-<slug>/ and generate INDEX.md
    (columns: ID, Severity, Dimension, Title).
-6. Cross-check every finding against CLOSED-FINDINGS.md; findings that match a closed
-   entry are dropped or annotated "already closed".
+6. Cross-check every finding against already-closed findings (recorded one-file-per-finding
+   under `skills/04-review/<topic>/`; use `grep`/`ls` to find them); findings that match a
+   closed entry are dropped or annotated "already closed".
 ```
 
 ### Scope-split example (review-2 pattern)
 
-Six subtrees: `src/core/center/`, `src/core/controller/`, `src/core/gateway/runtime/`,
-`src/core/gateway/plugins/`, `src/core/gateway/routes/`, `src/core/common/ + types/`.
+Six subtrees: `edgion-controller/src/`, `edgion-gateway/src/runtime/`,
+`edgion-gateway/src/plugins/`, `edgion-gateway/src/routes/`, `edgion-common/src/`,
+and `edgion-resources/src/`.
 
 ---
 
@@ -54,6 +56,8 @@ Six subtrees: `src/core/center/`, `src/core/controller/`, `src/core/gateway/runt
 
 ---
 
-## Closed-findings log
+## Closed findings
 
-Single source of truth: [04-review/CLOSED-FINDINGS.md](../04-review/CLOSED-FINDINGS.md). Append after each global pass when items are confirmed closed.
+Closed findings are recorded one-file-per-finding, scattered by topic across the
+`skills/04-review/` subdirectories; use `grep`/`ls` to find them. After each global pass,
+record newly closed items as a finding file under the relevant topic directory.

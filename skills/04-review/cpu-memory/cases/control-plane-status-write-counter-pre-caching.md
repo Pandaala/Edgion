@@ -7,7 +7,7 @@ description: Use when reviewing findings that suggest pre-caching Counter handle
 
 # Control-Plane Status-Write Counter Handle Pre-Caching is Not Worth It
 
-**False-positive scenario**: criticizing `record_status_write` / `record_status_write_error` / `record_status_write_skipped` in `src/core/controller/conf_mgr/sync_runtime/metrics.rs` for calling the `counter!` macro per invocation (two `String` allocations + registry hash lookup per call). Suggested fix is to mirror the sibling `ResourceMetrics` struct and pre-cache `Counter` handles per `(kind, backend, result)`.
+**False-positive scenario**: criticizing `record_status_write` / `record_status_write_error` / `record_status_write_skipped` in `edgion-controller/src/conf_mgr/sync_runtime/metrics.rs` for calling the `counter!` macro per invocation (two `String` allocations + registry hash lookup per call). Suggested fix is to mirror the sibling `ResourceMetrics` struct and pre-cache `Counter` handles per `(kind, backend, result)`.
 
 **Reality**:
 - These helpers are **controller-plane**, fired on reconcile events that produce a status change — not per request. Even under mass-reconcile the ceiling is ~10–100/sec, dwarfed by the K8s API PATCH (ms-scale) that immediately follows.

@@ -14,12 +14,12 @@ These three Kubernetes core resources together form the backend service-discover
 ## Source code locations
 
 - Controller Handlers:
-  - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/service.rs`
-  - `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/endpoint_slice.rs`
+  - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/service.rs`
+  - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/endpoint_slice.rs`
   - Endpoints handler — formerly at `controller/conf_mgr/sync_runtime/resource_processor/handlers/endpoints.rs`; removed in commit `43acc97`, 2026-05-06
 - Gateway ConfHandlers:
-  - `src/core/gateway/backends/discovery/services/conf_handler_impl.rs`
-  - `src/core/gateway/backends/discovery/endpoint_slice/conf_handler_impl.rs`
+  - `edgion-gateway/src/backends/discovery/services/conf_handler_impl.rs`
+  - `edgion-gateway/src/backends/discovery/endpoint_slice/conf_handler_impl.rs`
   - Endpoint ConfHandler — formerly at `gateway/backends/discovery/endpoint/conf_handler_impl.rs`; removed in commit `43acc97`, 2026-05-06
 
 ## Service

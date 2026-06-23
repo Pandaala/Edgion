@@ -1,0 +1,29 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: debug-access-log-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Cors
+      config:
+        allowOrigins: "*"
+        allowMethods: "GET,POST"
+        allowHeaders: "Content-Type"
+    - enable: true
+      type: Csrf
+      config:
+        secretRef:
+          name: csrf-key
+          namespace: edgion-default
+        name: "X-CSRF-Token"
+        expires: 7200
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: ResponseHeaderModifier
+      config:
+        add:
+          - name: "X-Test-Header"
+            value: "test-value"
+

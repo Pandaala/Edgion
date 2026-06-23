@@ -16,15 +16,14 @@ The `ha_mode` configuration option supports two multi-replica modes for differen
 
 ### Configuration
 
-```toml
-[conf_center]
-type = "kubernetes"
-gateway_class = "edgion"
-ha_mode = "leader-only"    # or "all-serve"
-
-[conf_center.leader_election]
-lease_name = "edgion-controller-leader"
-lease_namespace = "edgion-system"
+```yaml
+conf_center:
+  type: kubernetes
+  gateway_class: edgion
+  ha_mode: leader-only    # or "all-serve"
+  leader_election:
+    lease_name: edgion-controller-leader
+    lease_namespace: edgion-system
 ```
 
 ## Architecture Comparison
@@ -142,8 +141,8 @@ This is the correct design behavior: it ensures the Gateway is fully consistent 
 
 | HA mode | Gateway configuration | Description |
 |---------|----------------------|-------------|
-| leader-only | `server_addr = "http://edgion-controller-leader.edgion-system.svc:50051"` | Connect only to the leader |
-| all-serve | `server_addr = "http://edgion-controller.edgion-system.svc:50051"` | Any replica |
+| leader-only | `server_addr = "http://edgion-controller-leader.edgion-system.svc:12151"` | Connect only to the leader |
+| all-serve | `server_addr = "http://edgion-controller.edgion-system.svc:12151"` | Any replica |
 
 ## K8s Service Topology
 
@@ -201,6 +200,6 @@ rules:
 
 ## Key Files
 
-- `src/core/controller/conf_mgr/conf_center/kubernetes/center.rs` — `run_leader_only_lifecycle`, `run_all_serve_lifecycle`, `run_main_flow`, `run_serving_flow`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/leader_election.rs` — `LeaderElection`, `LeaderHandle`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/config.rs` — `HaMode` enum
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs` — `run_leader_only_lifecycle`, `run_all_serve_lifecycle`, `run_main_flow`, `run_serving_flow`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/leader_election.rs` — `LeaderElection`, `LeaderHandle`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/config.rs` — `HaMode` enum

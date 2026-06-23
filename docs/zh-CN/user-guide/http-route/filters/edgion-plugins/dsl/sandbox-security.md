@@ -53,7 +53,6 @@ VM 使用栈来计算表达式。深度嵌套的表达式（如多层函数调�
 ```yaml
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "my-script"

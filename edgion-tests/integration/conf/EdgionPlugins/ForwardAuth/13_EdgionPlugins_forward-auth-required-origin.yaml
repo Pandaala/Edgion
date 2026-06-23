@@ -1,0 +1,39 @@
+# ForwardAuth required-origin test: X-Tenant-Id is a Required origin header.
+# When the incoming request lacks X-Tenant-Id, collect_headers returns Err,
+# build_request propagates it as Err(Connect), and outbound_call returns
+# Err(Connect). With allowDegradation=false the gateway short-circuits with
+# statusOnError (500) instead of forwarding to the upstream backend.
+#
+# Reuses the shared auth-svc Service declared in 01_EdgionPlugins_forward-auth-basic.yaml.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-required-origin
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-svc
+          namespace: edgion-default
+          port: 30040
+        timeoutMs: 5000
+        request:
+          path:
+            template: "/verify"
+          method:
+            template: "GET"
+          headers:
+            origin:
+              - name: X-Tenant-Id
+                presence: required
+              - name: Authorization
+                presence: skipIfMissing
+        decision:
+          upstreamHeaders:
+            - X-User-ID
+          clientHeaders: []
+          allowDegradation: false
+          statusOnError: 500

@@ -12,7 +12,7 @@ A standard workflow for driving Gateway API conformance tests through one item a
 The OrbStack environment is set up via `setup-orbstack.sh`. If not yet set up:
 
 ```bash
-cd examples/gateway-api-conformance
+cd edgion-tests/conformance
 ./scripts/setup-orbstack.sh
 ```
 
@@ -21,7 +21,7 @@ cd examples/gateway-api-conformance
 ### 1. Environment check
 
 ```bash
-cd examples/gateway-api-conformance
+cd edgion-tests/conformance
 ./scripts/orbstack-dev.sh status
 ```
 
@@ -51,7 +51,7 @@ Users can also specify a particular test directly.
 
 Analyze the chosen test. Read:
 
-1. Test source → `examples/gateway-api-conformance/conformance_test.go` and the upstream `sigs.k8s.io/gateway-api/conformance/tests/<test-name>.go` (grep directly by test name)
+1. Test source → `edgion-tests/conformance/conformance_test.go` and the upstream `sigs.k8s.io/gateway-api/conformance/tests/<test-name>.go` (grep directly by test name)
 2. Known not-implemented items → `skills/08-kubernetes/01-gateway-api/01-not-implemented.md`
 3. Controller implementation → `skills/01-architecture/01-controller/`
 4. Gateway data plane → `skills/01-architecture/02-gateway/`
@@ -75,7 +75,7 @@ Required changes: <if any>
 Or use Go test directly (more flexible regex matching):
 
 ```bash
-cd examples/gateway-api-conformance
+cd edgion-tests/conformance
 go test ./... -run "TestConformance/<TestName>" -v -timeout 10m -count=1 \
   -args -gateway-class=edgion -allow-crds-mismatch
 ```
@@ -141,6 +141,6 @@ For the detailed troubleshooting cookbook, see [06-conformance-debug-cookbook.md
 
 ## Related files
 
-- Test entry point: `examples/gateway-api-conformance/conformance_test.go`
-- Run script: `examples/gateway-api-conformance/scripts/run.sh`
+- Test entry point: `edgion-tests/conformance/conformance_test.go`
+- Run script: `edgion-tests/conformance/scripts/run.sh`
 - Not-implemented items: `skills/08-kubernetes/01-gateway-api/01-not-implemented.md`

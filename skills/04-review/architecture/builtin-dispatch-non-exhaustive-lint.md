@@ -1,6 +1,6 @@
 ---
 name: builtin-dispatch-non-exhaustive-lint
-description: Use when reviewing DSL `BuiltinId` dispatch findings that propose enabling `#![warn(non_exhaustive_omitted_patterns)]` on `lang/builtins.rs` or `lang/compiler/builtins.rs` to catch forgotten arms when new `BuiltinId` variants are added.
+description: Use when reviewing DSL `BuiltinId` dispatch findings that propose enabling `#![warn(non_exhaustive_omitted_patterns)]` on `lang/builtins.rs` or `lang/compiler/builtins.rs` to catch forgotten arms when new `BuiltinId` variants are added, OR that report the Redis-builtin predicate (`is_redis_builtin` / `is_redis_builtin_id`) as duplicated, OR that propose converting `BuiltinId::is_redis_builtin` to an exhaustive `match`.
 ---
 
 # `non_exhaustive_omitted_patterns` Lint on `BuiltinId` Dispatch — NOT-AN-ISSUE
@@ -15,7 +15,7 @@ Fix suggestions of the form "add `#![warn(non_exhaustive_omitted_patterns)]` to 
 
 **1. The `non_exhaustive_omitted_patterns` lint is scoped to external `#[non_exhaustive]` types**
 
-Per the Rust reference, the lint detects a wildcard pattern that is reachable in a match on a `#[non_exhaustive]` enum or struct **from a different crate**. Within the defining crate `#[non_exhaustive]` is treated as exhaustive, and the lint is suppressed. `BuiltinId` lives in `src/core/gateway/plugins/http/dsl/lang/bytecode.rs` alongside its match sites in the same `edgion` crate, so even if the enum were re-marked `#[non_exhaustive]` the lint would still not fire on these dispatch files.
+Per the Rust reference, the lint detects a wildcard pattern that is reachable in a match on a `#[non_exhaustive]` enum or struct **from a different crate**. Within the defining crate `#[non_exhaustive]` is treated as exhaustive, and the lint is suppressed. `BuiltinId` lives in `edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs` alongside its match sites in the same `edgion` crate, so even if the enum were re-marked `#[non_exhaustive]` the lint would still not fire on these dispatch files.
 
 **2. Native exhaustiveness checking is the real lever**
 
@@ -49,8 +49,29 @@ Re-open this decision only if:
 - A new `BuiltinId` dispatch site is added that legitimately needs a `_ =>` catch-all (e.g., a generic fallback dispatcher), at which point the trade-off becomes specific to that site.
 - The `BuiltinId` enum is moved to a separate crate (e.g., a published `edgion-dsl-bytecode` crate consumed by external integrations), where `#[non_exhaustive]` + the lint would start to bite.
 
+## Related: Redis-predicate consolidation (F-004, 2026-05-26)
+
+The two byte-for-byte-identical private predicates that enumerated the 13 `Redis*`
+variants — `is_redis_builtin` in `lang/vm.rs` (VM dispatch loop) and
+`is_redis_builtin_id` in `plugin.rs` (compile-time link-name check) — have been
+consolidated into a single inherent method `BuiltinId::is_redis_builtin(self) -> bool`
+in `bytecode.rs`, the same module as the enum. Both call sites now invoke it, so a new
+`Redis*` variant only has to be reflected in one place.
+
+The method body stays a `matches!` (non-exhaustive) **intentionally**, not an exhaustive
+`match` returning `bool`: a boolean predicate has no `_ =>` arm to remove, so making it
+"exhaustive" would force every future *non-Redis* variant addition to also touch this
+predicate (adding a `BuiltinId::X => false` arm) for zero protection on the Redis set it
+guards. This is the same stance as the rest of this rule — compile-time safety comes from
+explicit non-`_` lists at the actual dispatch matches (`call_builtin_redis`) plus tests,
+not from type-system gymnastics on a side predicate.
+
+Re-reports of the form "`is_redis_builtin` / `is_redis_builtin_id` are duplicated" are now
+moot (single source). Suggestions to "convert `BuiltinId::is_redis_builtin` to an
+exhaustive `match`" are **not accepted** for the reason above.
+
 ## Reference Cases
 
 - `tasks/todo/dsl-vm-rhai-research/issues/issue-14-enable-non-exhaustive-lint.md` — closed via the explicit-list rewrite of `call_builtin_redis`
 - `tasks/todo/dsl-vm-rhai-research/04-builtin-registration.md` §"Quick improvements worth doing now" — original proposal (now superseded by this rule and the issue-14 fix)
-- `src/core/gateway/plugins/http/dsl/lang/builtins.rs::call_builtin_redis` — reference implementation of explicit non-Redis variant listing (the pattern any future BuiltinId-matching dispatcher should follow)
+- `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs::call_builtin_redis` — reference implementation of explicit non-Redis variant listing (the pattern any future BuiltinId-matching dispatcher should follow)

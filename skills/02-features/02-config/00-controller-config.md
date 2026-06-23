@@ -10,10 +10,10 @@ description: Full schema for the edgion-controller YAML configuration.
 ## Files to Reference
 
 - Sample configuration: `config/edgion-controller.yaml`
-- Configuration structure: `src/core/common/config/mod.rs`
-- `conf_center` top level: `src/core/controller/conf_mgr/conf_center/config.rs`
-- FileSystem mode: `src/core/controller/conf_mgr/conf_center/file_system/config.rs`
-- Kubernetes mode: `src/core/controller/conf_mgr/conf_center/kubernetes/config.rs`
+- Configuration structure: `edgion-controller/src/config/mod.rs`
+- `conf_center` top level: `edgion-controller/src/conf_mgr/conf_center/config.rs`
+- FileSystem mode: `edgion-controller/src/conf_mgr/conf_center/file_system/config.rs`
+- Kubernetes mode: `edgion-controller/src/conf_mgr/conf_center/kubernetes/config.rs`
 
 ## Full Schema
 
@@ -22,9 +22,20 @@ description: Full schema for the edgion-controller YAML configuration.
 # Priority: CLI --work-dir > ENV EDGION_WORK_DIR > this value > "."
 work_dir: "."
 
+# Local admin token (Istio-style pre-shared bearer). Grants allow-all access to
+# the Admin API. EDGION_ADMIN_TOKEN env var takes precedence; blank = not configured.
+# Prefer the env var (from a K8s Secret) over an in-file value.
+# admin_token: "edg_…"
+
 server:
-  grpc_listen: "0.0.0.0:50051"    # gRPC listen address (ConfigSyncServer)
-  admin_listen: "0.0.0.0:5800"    # Admin HTTP API address
+  grpc_listen: "0.0.0.0:12151"    # gRPC listen address (ConfigSyncServer)
+  admin_listen: "127.0.0.1:12101"  # Admin HTTP API address (/api/v1, /configclient); default loopback
+  # probe_listen: "0.0.0.0:12100"   # Liveness/readiness (/health, /ready); default 0.0.0.0:12100
+  # metrics_listen: "0.0.0.0:12190" # Prometheus metrics (/metrics); default 0.0.0.0:12190
+  # allow_admin_ips:                 # Optional IP allowlist for the Admin API listener; unset/empty = allow all
+  #   - "10.0.0.0/8"
+  #   - "127.0.0.1/32"
+  #   - "::1/128"
 
 logging:
   log_dir: logs                    # Log directory
@@ -92,10 +103,13 @@ conf_center:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `grpc_listen` | `String` | `0.0.0.0:50051` | ConfigSyncServer gRPC address |
-| `admin_listen` | `String` | `0.0.0.0:5800` | Admin API HTTP address |
+| `grpc_listen` | `String` | `0.0.0.0:12151` | ConfigSyncServer gRPC address |
+| `admin_listen` | `String` | `127.0.0.1:12101` | Admin HTTP API address — serves `/api/v1/*` and `/configclient`. Defaults to loopback; set to `0.0.0.0` for cluster-wide access and pair with `allow_admin_ips` and/or a NetworkPolicy (see [Admin API network exposure](./03-auth-bootstrap.md#admin-api-network-exposure)). |
+| `probe_listen` | `String` | `0.0.0.0:12100` | Probe listener — serves `/health` (liveness) and `/ready` (readiness) |
+| `metrics_listen` | `String` | `0.0.0.0:12190` | Metrics listener — serves `/metrics` (Prometheus) |
+| `allow_admin_ips` | `Vec<String>` | `[]` (allow all) | CIDR allowlist for the Admin API listener. **Unset or empty = allow all** (backward compatible). Matched against the **TCP peer address only**; `X-Forwarded-For` is never trusted, so it is meaningful only for direct connections to the admin socket (behind an L7 proxy it degrades to matching the proxy IP). Probe/metrics run on dedicated ports and are unaffected. Dual-stack: when the listener binds `::`, list CIDRs for both families; NAT64 `64:ff9b::/96` embedded IPv4 is not extracted. **Recommended whenever `admin_listen` is bound to a non-loopback address**; leaving it empty in that case triggers the `insecure_admin_exposure` gauge (see [Admin API network exposure](./03-auth-bootstrap.md#admin-api-network-exposure)). Example: `["10.0.0.0/8", "127.0.0.1/32", "::1/128"]` |
 
-> Note: in everyday development, `config/edgion-controller.yaml` is loaded by default, so what you typically see is `5800`, not the code fallback `8080`.
+> **Admin API transport is plaintext HTTP.** The Controller Admin API listener is always served over plain HTTP — there is no `admin_tls` config surface. Transport security is delegated to the deployment environment: bind it to a private interface, restrict peers with `allow_admin_ips`, and rely on Kubernetes ClusterIP / NetworkPolicy. Authentication is still enforced independently via the Bearer token (see [auth bootstrap](./03-auth-bootstrap.md)); a request reaching a plaintext socket without a valid token is rejected.
 
 ### [logging]
 
@@ -184,73 +198,27 @@ CLI special cases:
 | `blocked_annotations` | `Vec<String>` | Common large kubectl/helm annotations | Annotations removed before entering memory |
 | `remove_managed_fields` | `bool` | `true` | Reduce object size |
 
-## `[auth]` — OIDC Authentication (Admin API)
+## `admin_token` — Admin API Authentication
 
-When enabled, the Admin API requires an OIDC JWT Bearer token. Defined in `src/core/common/auth/config.rs::AdminAuthConfig`, packed by `UnifiedAuthState::from_configs` into the unified auth state, and ultimately mounted via `common::api::compose_admin_routes` with `unified_auth_middleware`.
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `enabled` | `bool` | `true` (enabled when the section is present) | Enable OIDC |
-| `discovery` | `String` | — | **Required**. OIDC discovery URL (`/.well-known/openid-configuration`) |
-| `audiences` | `Vec<String>` | `[]` | Expected JWT `aud` claim values; an empty array skips the check |
-| `issuers` | `Vec<String>` | `[]` | Expected JWT `iss` values; when empty, validated against the discovery document's issuer |
-| `allowed_algorithms` | `Vec<String>` | `[RS256, RS384, RS512, ES256, ES384]` | Allowed signing algorithms |
-| `clock_skew_seconds` | `u64` | `120` | JWT timestamp tolerance (seconds) |
-| `jwks_cache_ttl` | `u64` | `300` | JWKS cache TTL (seconds) |
-| `jwks_min_refresh_interval` | `u64` | `10` | Minimum JWKS refresh interval (seconds), used as debouncing |
-| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | Path prefixes that skip authentication |
-| `ssl_verify` | `bool` | `true` | Whether to verify TLS certificates when fetching discovery/JWKS; production must be `true` |
-| `discovery_max_response_bytes` | `usize` | `65536` (64 KB) | Upper bound for the OIDC discovery response body; prevents DoS, compliant IdPs typically < 4 KB |
-| `jwks_max_response_bytes` | `usize` | `1048576` (1 MB) | Upper bound for the JWKS response body; typical JWKS < 10 KB |
-
-```yaml
-auth:
-  discovery: "https://keycloak.example.com/realms/edgion/.well-known/openid-configuration"
-  audiences: [edgion-admin]
-  # Defaults are sufficient for the vast majority of scenarios; the following two lines are usually unnecessary
-  # discovery_max_response_bytes: 65536
-  # jwks_max_response_bytes: 1048576
-```
-
-> `[auth]` and `[local_auth]` may coexist; requests are tried in unified_auth middleware order (OIDC → local). See `skills/01-architecture/01-controller/02-admin-api.md` for details.
-
-## `[local_auth]` — Local Authentication
-
-Built-in username/password authentication that issues HS256 JWTs. When **Controller** is not configured, random credentials are auto-generated and stored in a Secret
-(Center behavior differs, see the reference below).
+The Admin API uses **token-only** authentication (Istio-style pre-shared bearer token). There is no OIDC admin, no username/password, and no httpOnly cookie. The operator supplies a single admin token that grants allow-all (wildcard `*`/`*` RBAC policy) access to the Admin API.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `enabled` | `bool` | `true` | Enable local authentication |
-| `username` | `String` | `"admin"` | Username |
-| `password` | `String` | `""` | Password (empty = needs auto-generation) |
-| `jwt_secret` | `String` | `""` | JWT signing secret (empty = needs auto-generation) |
-| `jwt_expiry_hours` | `u64` | `24` | Token expiration (hours) |
-| `skip_paths` | `Vec<String>` | `["/health", "/ready"]` | Path prefixes that skip authentication |
+| `admin_token` | `Option<String>` | `None` | Raw bearer token. A blank/whitespace value is treated as **not configured**. The `EDGION_ADMIN_TOKEN` env var takes precedence over this field. Maps to an allow-all wildcard policy; survives reloads. |
+
+The token is resolved from two sources (highest precedence first):
+
+1. **Env var** `EDGION_ADMIN_TOKEN`, injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret (key `token`; recommended for Kubernetes).
+2. **`admin_token`** config field (a Secret-mounted config file).
 
 ```yaml
-local_auth:
-  enabled: true
-  username: admin
-  password: my-secure-password
-  jwt_secret: my-jwt-signing-secret
-  jwt_expiry_hours: 24
+# Prefer the env var over an in-file value:
+admin_token: "edg_…"
 ```
 
-### Auto-generated Credentials (Controller only)
+When **no** token is configured (neither `EDGION_ADMIN_TOKEN`/`admin_token` nor any `cli_tokens`), the server still boots, but all Admin API business routes return `503` fail-close with a startup WARN. `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` remain accessible. Scoped, role-limited tokens are configured separately under [`[cli_tokens]`](#cli_tokens--static-cli-tokens-admin-api-access).
 
-When the Controller has neither `[auth]` (OIDC) nor `[local_auth]`:
-
-1. On startup the Controller checks Secret `edgion-admin-credentials` (namespace: `edgion-system`) via CenterApi
-2. If it does not exist → generate a random 20-character password + 32-character JWT secret → create the Secret
-3. If it exists → read the credentials and continue startup
-4. FileSystem mode: `{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
-5. K8s mode: create a real Secret via the K8s API
-
-> **Center behavior differs**: Center has no Secret auto-generation path. With neither `[local_auth]` nor `[auth]`,
-> Center starts but rejects all business routes with 503 (fail-close via the
-> `unified_auth_middleware` initializing branch). See
-> `skills/02-features/02-config/03-auth-bootstrap.md` for details.
+See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and migration guide.
 
 ## `[center]` — Federation Client
 
@@ -258,7 +226,7 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `address` | `String` | **Required** | gRPC address of the Center server (e.g. `https://center.example.com:50052`) |
+| `address` | `String` | **Required** | gRPC address of the Center server (e.g. `https://center.example.com:12251`) |
 | `name` | `String` | **Required** | Logical name of this Controller, reported to Center |
 | `cluster` | `String` | **Required** | Cluster name, used for routing and aggregation |
 | `enabled` | `bool` | `true` | Hot-reloadable kill-switch. `false` stops the federation client without a restart. Reloaded via `POST /api/v1/reload`. |
@@ -266,7 +234,7 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 | `tag` | `Vec<String>` | `[]` | Arbitrary extension tags reported to Center. |
 | `ping_interval_secs` | `u64` | `30` | Heartbeat interval in seconds for the federation keep-alive ping. |
 | `security` | `ConfSyncSecurityConfig` | — | mTLS certificates for the gRPC channel (same format as `conf_sync_security`). Required -- federation fails closed without it. |
-| `rbac` | `FedRbacConfig?` | `null` | Default-deny RBAC for Center operations. **Absent => Center is authorized to do nothing.** |
+| `rbac` | `FedRbacConfig?` | `null` | RBAC for Center operations. **Absent => built-in default policy applies (read `get`/`list`/`watch`/`list-keys` on all ResourceKinds except `Secret`; write `create`/`update`/`delete` on `EdgionConfigData`; `get`/`list`/`failover` on the synthetic `RegionRoute`). Present => the explicit rules fully override the default.** |
 
 ### `[center.rbac]` -- Federation RBAC
 
@@ -275,7 +243,7 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 | What | Allowed |
 |------|---------|
 | Read (`get`, `list`, `watch`, `list-keys`) | All resource kinds **except** `Secret` (EdgionTls IS readable; only the Secret kind is excluded for credential safety) |
-| Write (`create`, `update`, `delete`) | `PluginMetaData` only (drives IP-restriction sync + region-route sync; grants write to ALL plugin metadata) |
+| Write (`create`, `update`, `delete`) | `EdgionConfigData` only (drives IP-restriction sync + region-route sync; grants write to ALL plugin metadata) |
 | `get`, `list`, `failover` | `RegionRoute` (synthetic label): get/list allow the aggregate read endpoints; failover covers the POST failover endpoint |
 | Everything else (`reload`, `server-info`, `diagnostics`, etc.) | Denied |
 
@@ -287,7 +255,7 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   name: "ctrl-1"
   cluster: "prod"
   enabled: true
@@ -301,7 +269,7 @@ center:
   rbac:
     allow:
       - verbs: [get, list, watch, create, update, delete]
-        kinds: [PluginMetaData]
+        kinds: [EdgionConfigData]
       - verbs: [failover]
         kinds: [RegionRoute]
       - verbs: [reload]
@@ -310,7 +278,7 @@ center:
 
 | Rule | Covers |
 |------|--------|
-| `get/list/watch/create/update/delete` on `PluginMetaData` | IP-restriction plugin sync + region-route sync; `list` also serves Center blind-proxy UI list pages |
+| `get/list/watch/create/update/delete` on `EdgionConfigData` | IP-restriction plugin sync + region-route sync; `list` also serves Center blind-proxy UI list pages |
 | `failover` on `RegionRoute` | Regional failover endpoint |
 | `reload` on `*` | Config reload (non-resource, wildcard kind is safe for write verbs) |
 
@@ -322,11 +290,57 @@ center:
 
 `FedAllowRule.verbs` accepts: `get`, `list`, `list-keys`, `watch`, `create`, `update`, `delete`, `failover`, `acme-trigger`, `reload`, `server-info`, `diagnostics`, `wipe-all`, `debug`.
 
-> **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `PluginMetaData`, `HTTPRoute`, `RegionRoute`). Lowercase or alias spellings (e.g. `pluginmetadata`) are matched case-sensitively against the normalized request kind and will silently never match. Verbs are case-insensitive.
+> **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `EdgionConfigData`, `HTTPRoute`, `RegionRoute`). Lowercase or alias spellings (e.g. `edgionconfigdata`) are matched case-sensitively against the normalized request kind and will silently never match. Verbs are case-insensitive.
 
-## `[path_normalization]` — Path Normalization (Gateway-side configuration)
+## `[cli_tokens]` — Static CLI Tokens (Admin API Access)
 
-Path normalization configuration is read on the Gateway side (`src/core/gateway/path_normalization/config.rs`); the Controller config does not directly own this section, but skills documentation records it here for unified reference.
+Static Bearer tokens that grant role-scoped access to the Controller Admin API. Each entry binds a token to a fine-grained RBAC policy using the same `(verb, kind)` model as `[center].rbac`. Tokens are never stored in plaintext — only their SHA-256 hex digest is persisted. Hot-reloadable.
+
+**Source:** `edgion-controller/src/config/mod.rs` (`CliTokenConfig`).
+
+### Field Reference
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `String` | **Required** | Human-readable label used in audit/log fields. Must match `[A-Za-z0-9_.-]+`. |
+| `token_sha256` | `String` | **Required** | SHA-256 hex digest (64 lowercase hex chars) of the raw bearer token. Never store the token itself. Mint via `edgion-cli gen-token`. |
+| `rbac` | `FedRbacConfig` | deny-all | RBAC allow-rules for this token. Absent or empty ⇒ deny-all. Same `verbs × kinds` schema as `[center].rbac`. |
+
+### Config Example
+
+```yaml
+cli_tokens:
+  # Read-only token — safe for monitoring/CI pipelines that only inspect routes
+  - name: monitor-bot
+    # Mint the token with: edgion-cli gen-token
+    # Paste the SHA-256 line here; distribute the edg_… token to the consumer.
+    token_sha256: "0000000000000000000000000000000000000000000000000000000000000000"
+    rbac:
+      allow:
+        # Enumerate concrete kinds; NEVER use kinds: ["*"] with read verbs
+        # (wildcard read exposes Secret and EdgionTls private-key material).
+        - verbs: [get, list]
+          kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service, EdgionGatewayConfig, EdgionTls]
+
+  # Scoped read-write token — manages plugin metadata and can trigger reload
+  - name: plugin-manager
+    token_sha256: "1111111111111111111111111111111111111111111111111111111111111111"
+    rbac:
+      allow:
+        - verbs: [get, list, watch, create, update, delete]
+          kinds: [EdgionConfigData]
+        # reload is a write-only verb; kinds: ["*"] is safe here (no read surface)
+        - verbs: [reload]
+          kinds: ["*"]
+```
+
+> **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `EdgionConfigData`, `HTTPRoute`). Lowercase spellings silently never match.
+>
+> **Full operator guide:** see `docs/en/ops-guide/federation-rbac.md#cli-token-rbac` for the gen-token workflow, security notes, and rotation instructions.
+
+## `path_normalization` — Path Normalization (Gateway-side configuration)
+
+Path normalization configuration is read on the Gateway side (`edgion-resources/src/path_normalization/config.rs`); the Controller config does not directly own this section, but skills documentation records it here for unified reference.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|

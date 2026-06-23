@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package fed_sync;
+
+// ── Center → Controller: request list/watch of a resource kind ──
+
+message FedWatchRequest {
+    string request_id    = 1;  // UUID for correlating responses
+    string kind          = 2;  // Resource kind, e.g. "EdgionConfigData"
+    uint64 from_version  = 3;  // 0 = full list + watch; >0 = resume watch
+}
+
+// ── Controller → Center: full list response ──
+
+message FedWatchListResponse {
+    string request_id    = 1;  // Echo FedWatchRequest.request_id
+    string data          = 2;  // JSON-serialized full list
+    uint64 sync_version  = 3;  // Current version
+    string server_id     = 4;  // ConfigSyncServer instance ID (restart detection)
+}
+
+// ── Controller → Center: incremental watch events ──
+
+message FedWatchEventResponse {
+    string request_id    = 1;  // Echo FedWatchRequest.request_id
+    string data          = 2;  // JSON-serialized event array
+    uint64 sync_version  = 3;  // Current version
+    string server_id     = 4;  // ConfigSyncServer instance ID
+    string error         = 5;  // Non-empty = error code
+}
+
+// Persistent bidirectional stream from Controller (client) to Center (server).
+// The first message from Controller must be a RegisterRequest.
+service FederationSync {
+    rpc Sync(stream ControllerMessage) returns (stream CenterMessage);
+}
+
+// ── Controller → Center ──────────────────────────────────────
+
+message ControllerMessage {
+    oneof payload {
+        RegisterRequest      register              = 1;  // First message: register self info
+        Pong                 pong                  = 2;  // Heartbeat response
+        CommandResponse      command_response      = 4;  // Response to a command from center
+        HttpProxyResponse    http_proxy_response   = 5;  // HTTP proxy response
+        FedWatchListResponse watch_list_response   = 6;  // Reverse list/watch: full list response
+        FedWatchEventResponse watch_event_response = 7;  // Reverse list/watch: incremental event response
+        StatsReport          stats_report          = 8;  // Resource count snapshot pushed by controller
+    }
+}
+
+message RegisterRequest {
+    string          controller_id   = 1;  // Stable identifier: cluster + name concatenated; unchanged across restarts
+    string          cluster         = 2;  // Cluster identifier (fixed string)
+    repeated string env             = 3;  // Environment label list
+    repeated string tag             = 4;  // Extended label list
+    repeated string supported_kinds = 5;  // List of resource kinds held by this controller (excluding no_sync_kinds)
+}
+
+message Pong {
+    uint64 timestamp = 1;  // echo Ping.timestamp, millisecond timestamp
+}
+
+message CommandResponse {
+    string request_id = 1;
+    bool   success    = 2;
+    string message    = 3;  // Error message on failure
+}
+
+// ── Center → Controller ──────────────────────────────────────
+
+message CenterMessage {
+    oneof payload {
+        RegisterAck      register_ack  = 1;  // Registration acknowledgement
+        Ping             ping          = 2;  // Heartbeat
+        CommandRequest   command       = 4;  // Dispatched command
+        HttpProxyRequest http_proxy    = 5;  // HTTP proxy request (Center forwards a frontend request)
+        FedWatchRequest  watch_request = 6;  // Request controller to perform reverse list/watch
+    }
+}
+
+message RegisterAck {
+    // session_id is a Center-internal concept used only for log tracing; the controller does not need to echo it back
+    string session_id = 1;
+}
+
+message Ping {
+    uint64 timestamp = 1;  // Millisecond timestamp
+}
+
+message CommandRequest {
+    string request_id = 1;
+    oneof command {
+        ReloadCommand reload = 2;
+        ApplyCommand  apply  = 3;
+        DeleteCommand delete = 4;
+    }
+}
+
+message ReloadCommand {}
+
+message ApplyCommand {
+    string kind = 1;
+    string data = 2;  // Resource JSON (ConfCenter raw format)
+}
+
+message DeleteCommand {
+    string kind      = 1;
+    string namespace = 2;
+    string name      = 3;
+}
+
+// ── HTTP Proxy (Center <-> Controller HTTP tunnel) ────────────
+
+// Center -> Controller: encapsulates a frontend HTTP request and sends it over the gRPC stream
+message HttpProxyRequest {
+    string              request_id = 1;  // UUID, used to correlate the response
+    string              method     = 2;  // HTTP method: GET, POST, PUT, DELETE
+    string              path       = 3;  // Request path, e.g. /api/v1/namespaced/httproute
+    map<string, string> headers    = 4;  // HTTP request headers
+    bytes               body       = 5;  // Request body
+}
+
+// Controller -> Center: encapsulates the result of executing the internal route and returns it
+message HttpProxyResponse {
+    string              request_id  = 1;  // echo HttpProxyRequest.request_id
+    uint32              status_code = 2;  // HTTP status code: 200, 404, 500, ...
+    map<string, string> headers     = 3;  // HTTP response headers
+    bytes               body        = 4;  // Response body
+}
+
+// ── Stats Report (Controller -> Center) ───────────────────────
+
+// StatsReport: Controller-side resource counts pushed to Center.
+// Sent at registration and whenever counts change (coalesced to 5s).
+message StatsReport {
+    map<string, uint32> per_kind = 1;  // {"HTTPRoute": 205, "Gateway": 97, ...}
+    uint32              total    = 2;  // Sum of per_kind values
+}

@@ -344,8 +344,8 @@ spec:
   requestPlugins:
     - type: Cors
       config:
-        allow_origins: "*"
-        allow_methods: "GET,POST,PUT,DELETE"
+        allowOrigins: "*"
+        allowMethods: "GET,POST,PUT,DELETE"
   upstreamResponseFilterPlugins:
     - type: ResponseRewrite
       config:

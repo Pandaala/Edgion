@@ -1,0 +1,32 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: invalid-ca-cert-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  tls:
+    frontend:
+      default:
+        validation:
+          caCertificateRefs:
+          - name: fv-client-ca
+            kind: Secret
+            group: ''
+      perPort:
+      - port: 31338
+        tls:
+          validation:
+            caCertificateRefs:
+            - name: does-not-exist
+              kind: Secret
+              group: ''
+  listeners:
+  - name: https-invalid-ca
+    hostname: fv-mtls.example.com
+    protocol: HTTPS
+    port: 31338
+    tls:
+      mode: Terminate
+      certificateRefs:
+      - name: fv-server-cert

@@ -2,7 +2,7 @@
 
 This document is for contributors who maintain GitHub Actions, publish Docker images, or need to reproduce CI behavior locally. It explains the current Edgion CI / release structure, the shared local action, command boundaries, and the highest-risk change points.
 
-> The primary AI / agent workflow now lives in [../../../skills/09-misc/cicd/02-github-workflow.md](../../../skills/09-misc/cicd/02-github-workflow.md).
+> The primary AI / agent workflow now lives in [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md).
 > This document remains the human-facing background guide, release-flow explanation, and manual review checklist.
 
 ## The Two Main Workflow Families
@@ -68,17 +68,18 @@ So if you edit this action, treat it as shared infrastructure rather than a priv
 
 The current `ci.yml` check order is:
 
-1. `cargo check --all-targets`
+1. `cargo check --workspace --all-targets`
 2. `cargo fmt --all -- --check`
-3. `make check-agent-docs`
-4. `cargo clippy --all-targets`
+3. `python3 cicd/checks/validate_agent_docs.py`
+4. `cargo clippy --workspace --all-targets`
 5. `cargo test --all`
 6. summary job `ci-success`
 
 A few details are easy to misunderstand:
 
 - the current CI commands do not automatically expand to `--all-features`
-- `make check-agent-docs` is the guardrail for `AGENTS.md`, `skills/`, and the dev-guide entry layer
+- `check` and `clippy` use `--workspace` so they also cover `edgion-tests` (a workspace member excluded from `default-members`); a bare `--all-targets` would skip the harness
+- `python3 cicd/checks/validate_agent_docs.py` is the guardrail for `AGENTS.md`, `skills/`, and the dev-guide entry layer
 - the `fmt` job does not install system dependencies and does not use Cargo cache
 - `ci-success` exists to provide a stable branch-protection result, not to re-run checks
 
@@ -111,7 +112,7 @@ Purpose:
 Purpose:
 
 - download the binary artifacts from the previous stage
-- build runtime images via `docker/Dockerfile.runtime`
+- build runtime images via `cicd/docker/Dockerfile.runtime`
 - push architecture-specific tags
 
 ### 4. `merge-manifests`
@@ -137,10 +138,10 @@ For this repository, command ownership works best in layers:
 If you only want to reproduce the current CI checks locally, start with:
 
 ```bash
-cargo check --all-targets
+cargo check --workspace --all-targets
 cargo fmt --all -- --check
-make check-agent-docs
-cargo clippy --all-targets
+python3 cicd/checks/validate_agent_docs.py
+cargo clippy --workspace --all-targets
 cargo test --all
 ```
 
@@ -184,16 +185,15 @@ Local debugging commands can be more flexible. CI commands should stay stable, c
 
 Start from the skill entry:
 
-- [../../../skills/09-misc/cicd/02-github-workflow.md](../../../skills/09-misc/cicd/02-github-workflow.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md)
 
 If the task also touches feature combinations or build dependencies, continue with:
 
-- [../../../skills/02-features/01-binary-and-deployment/02-feature-flags.md](../../../skills/02-features/01-binary-and-deployment/02-feature-flags.md)
-- [../../../skills/09-misc/cicd/00-local-build.md](../../../skills/09-misc/cicd/00-local-build.md)
-- [../../../skills/09-misc/cicd/01-docker-build.md](../../../skills/09-misc/cicd/01-docker-build.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/02-features/01-binary-and-deployment/02-feature-flags.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/01-binary-and-deployment/02-feature-flags.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/00-local-build.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/00-local-build.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/01-docker-build.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/01-docker-build.md)
 
 ## Related Docs
 
 - [AI Collaboration and Skill Usage Guide](./ai-agent-collaboration.md)
 - [Knowledge Source Map and Maintenance Rules](./knowledge-source-map.md)
-- [Makefile](../../../Makefile)

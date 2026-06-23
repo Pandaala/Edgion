@@ -1,6 +1,6 @@
 ---
 name: binaries
-description: Entry points of the four binaries, full CLI argument reference, work_dir priority rules.
+description: Entry points of the in-repo binaries, full CLI argument reference, work_dir priority rules.
 ---
 
 # Binary Entry Points and CLI Arguments
@@ -9,12 +9,13 @@ description: Entry points of the four binaries, full CLI argument reference, wor
 
 | Binary | Purpose | Default Ports | Entry |
 |--------|---------|---------------|-------|
-| `edgion-controller` | Control plane: resource ingestion/validation/processing/distribution | gRPC `:50051`, Admin `:5800` | `src/bin/edgion_controller.rs` |
-| `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:5900`, Metrics `:5901` | `src/bin/edgion_gateway.rs` |
-| `edgion-cli` | CLI tool: resource CRUD and operations | — | `src/bin/edgion_ctl.rs` |
-| `edgion-center` | Federation center: aggregates resources across federated controllers, serves Center API | — | `src/bin/edgion_center.rs` |
+| `edgion-controller` | Control plane: resource ingestion/validation/processing/distribution | gRPC `:12151`, Admin `:12101`, Probe `:12100`, Metrics `:12190` | `edgion-controller/src/bin/edgion_controller.rs` |
+| `edgion-gateway` | Data plane: high-performance proxy (based on Pingora) | Admin `:12001` (loopback, configurable), Probe `:12000` (outward, liveness+readiness), Metrics `:12090` (outward) | `edgion-gateway/src/bin/edgion_gateway.rs` |
+| `edgion-cli` | CLI tool: resource CRUD and operations | — | `edgion-cli/src/bin/edgion_ctl.rs` |
 
-All four binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work: install the rustls crypto provider → parse arguments → `run()`.
+> The federation center (`edgion-center`) has been extracted to the separate EdgionCenter repository and is no longer built from this monorepo.
+
+All three binaries follow the **thin entry point** pattern — `src/bin/*.rs` does the minimum amount of work: install the rustls crypto provider → parse arguments → `run()`.
 
 ## work_dir Priority
 
@@ -38,10 +39,10 @@ edgion-controller [OPTIONS]
 |----------|-------|------|---------|-------------|
 | `--work-dir` | `-w` | `PathBuf` | `"."` | Working directory |
 | `--config-file` | `-c` | `String` | `config/edgion-controller.yaml` | YAML configuration file path |
-| `--conf-dir` | — | `PathBuf` | — | Configuration directory for FileSystem mode (overrides conf_center.conf_dir in TOML) |
+| `--conf-dir` | — | `PathBuf` | — | Configuration directory for FileSystem mode (overrides conf_center.conf_dir in YAML) |
 | `--test-mode` | — | `bool` | `false` | Enable test mode (metrics testing features) |
-| `--grpc-listen` | — | `String` | `0.0.0.0:50051` | gRPC listen address |
-| `--admin-listen` | — | `String` | `0.0.0.0:5800` | Admin HTTP API address |
+| `--grpc-listen` | — | `String` | `0.0.0.0:12151` | gRPC listen address |
+| `--admin-listen` | — | `String` | `127.0.0.1:12101` (loopback; set `0.0.0.0` + `allow_admin_ips` for cluster/remote access) | Admin HTTP API address |
 | `--log-dir` | — | `String` | `logs` | Log directory |
 | `--log-level` | — | `String` | `info` | Log level: trace/debug/info/warn/error |
 | `--json-format` | — | `bool` | `false` | JSON-formatted log |
@@ -71,8 +72,9 @@ edgion-gateway [OPTIONS]
 |----------|-------|------|---------|-------------|
 | `--work-dir` | `-w` | `PathBuf` | `"."` | Working directory |
 | `--config-file` | `-c` | `String` | `config/edgion-gateway.yaml` | YAML configuration file path |
-| `--server-addr` | — | `String` | **Required** | Controller gRPC address (e.g., `http://127.0.0.1:50051`) |
-| `--admin-listen` | — | `String` | — | Admin API address (note: currently fixed at `:5900`) |
+| `--server-addr` | — | `String` | **Required** | Controller gRPC address (e.g., `http://127.0.0.1:12151`) |
+| `--admin-listen` | — | `String` | `127.0.0.1:12001` | Admin API listen address (default: `127.0.0.1:12001`, loopback-only; sensitive endpoints not exposed cluster-wide) |
+| `--probe-listen` | — | `String` | `0.0.0.0:12000` | Liveness/readiness probe listen address (serves `/health` and `/ready` only; binds 0.0.0.0 so kubelet can reach the pod IP) |
 | `--threads` | — | `usize` | CPU core count | Pingora worker thread count |
 | `--work-stealing` | — | `bool` | `true` | Tokio task stealing |
 | `--grace-period` | — | `u64` | `30` | Graceful shutdown wait time in seconds |
@@ -83,16 +85,16 @@ edgion-gateway [OPTIONS]
 | `--log-dir` | — | `String` | `logs` | System log directory |
 | `--log-level` | — | `String` | `info` | Log level |
 | `--json-format` | — | `bool` | `false` | JSON-formatted log |
-| `--integration-testing-mode` | — | `bool` | `false` | Integration testing mode (**must not be used in production**) |
+| `--integration-testing-mode` | — | `bool` | `false` | Integration testing mode (**must not be used in production**). Refused at startup unless `EDGION_ALLOW_INTEGRATION_TESTING_MODE` is also set to a truthy value (`1`/`true`/`yes`/`on`). |
 
 ### Startup Examples
 
 ```bash
 # Connect to a local Controller
-edgion-gateway --server-addr http://127.0.0.1:50051
+edgion-gateway --server-addr http://127.0.0.1:12151
 
 # Production deployment
-edgion-gateway -c config/edgion-gateway.yaml --server-addr http://controller:50051 --threads 8
+edgion-gateway -c config/edgion-gateway.yaml --server-addr http://controller:12151 --threads 8
 ```
 
 ---
@@ -108,16 +110,16 @@ edgion-cli [OPTIONS] <COMMAND>
 | Argument | Short | Type | Default | Description |
 |----------|-------|------|---------|-------------|
 | `--target` | `-t` | `center\|server\|client` | `center` | Target API |
-| `--server` | — | `String` | — | Service address (e.g., `http://localhost:5800`) |
+| `--server` | — | `String` | — | Service address (e.g., `http://localhost:12101`) |
 | `--socket` | — | `PathBuf` | — | Unix socket path |
 
 ### Target Modes
 
 | Target | Connection Port | Operations | Typical Scenario |
 |--------|-----------------|------------|------------------|
-| `center` | Controller `:5800` | Full CRUD | Resource management (default) |
-| `server` | Controller `:5800` | Read-only query | Inspect ServerCache state |
-| `client` | Gateway `:5900` | Read-only query | Inspect Gateway-side cache |
+| `center` | Controller `:12101` | Full CRUD | Resource management (default) |
+| `server` | Controller `:12101` | Read-only query | Inspect ServerCache state |
+| `client` | Gateway `:12001` | Read-only query | Inspect Gateway-side cache |
 
 ### Subcommands
 
@@ -138,7 +140,7 @@ edgion-cli delete -f route.yaml
 edgion-cli reload
 
 # Inspect Gateway-side cache
-edgion-cli -t client --server http://localhost:5900 get httproute
+edgion-cli -t client --server http://localhost:12001 get httproute
 ```
 
 ### Subcommand Argument Schemas

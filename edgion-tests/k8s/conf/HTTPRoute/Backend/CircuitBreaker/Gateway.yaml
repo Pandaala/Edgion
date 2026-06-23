@@ -1,0 +1,14 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cb-gw
+  namespace: edgion-default
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+  - name: http
+    port: 31302
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Same

@@ -19,13 +19,13 @@ pub fn run(&self) -> Result<()> {
 }
 ```
 
-### Step 1: Load TOML configuration
+### Step 1: Load YAML configuration
 
 ```rust
 let config = EdgionGatewayConfig::load(self.config.clone())?;
 ```
 
-`EdgionGatewayConfig::load()` merges CLI arguments and the TOML configuration file. The configuration structure is defined in `cli/config.rs` and includes sections such as server, access_log, ssl_log, tcp_log, tls_log, udp_log, rate_limit, all_endpoint_status.
+`EdgionGatewayConfig::load()` merges CLI arguments and the YAML configuration file. The configuration structure is defined in `cli/config.rs` and includes sections such as server, access_log, ssl_log, tcp_log, tls_log, udp_log, rate_limit, all_endpoint_status.
 
 ### Step 2: Initialize the working directory
 
@@ -73,7 +73,7 @@ The `GetServerInfo` gRPC call returns:
 - `supported_kinds`: list of resource kinds supported by the Controller, used for selective Watch.
 - `server_id`: Controller instance identifier, used for version consistency checks.
 
-It also initializes integration testing mode and the global testing mode (controlled by the `--integration-testing-mode` CLI flag).
+It also initializes integration testing mode and the global testing mode (controlled by the `--integration-testing-mode` CLI flag). The flag is gated earlier in `run_after_logging`: startup fails closed unless `EDGION_ALLOW_INTEGRATION_TESTING_MODE` is also set to a truthy value, and when the mode is active the gateway raises `edgion_system_error_state{component="gateway_runtime", reason="integration_testing_mode"}`. The Prometheus recorder is installed up-front in the same function so this (and other startup-time degraded-state marks like `skip_tls`) is captured rather than dropped before the metrics server task starts.
 
 ### Step 7: Start watching resources
 
@@ -89,11 +89,12 @@ Based on the `supported_kinds` list returned by the Controller, start a gRPC Wat
 runtime.block_on(Self::start_auxiliary_services(config_client.clone()));
 ```
 
-`start_auxiliary_services()` starts four components:
+`start_auxiliary_services()` starts five components:
 1. **BackendCleaner**: `BackendCleaner::new().start()`, cleans up stale backend state for LeastConnection LB.
 2. **Health Check Manager**: `get_hc_config_store()` + `get_health_check_manager()` initialize the health-check configuration store and manager.
-3. **Admin API**: `tokio::spawn(api::serve(config_client, 5900))`, port 5900.
-4. **Metrics API**: `tokio::spawn(metrics::serve(5901))`, port 5901, exposes Prometheus metrics.
+3. **Admin API**: `tokio::spawn(api::serve(config_client, admin_listen))`, listens on the address from `gateway.admin_listen` (default `127.0.0.1:12001`, loopback-only; serves `/configclient`, `/api/v1/server-info`, and other sensitive endpoints).
+4. **Probe server**: `tokio::spawn(api::serve_probe_with_shutdown(config_client, probe_listen, ...))`, listens on the address from `gateway.probe_listen` (default `0.0.0.0:12000`); serves `/health` and `/ready` only; binds all interfaces so kubelet can reach the pod IP. Not included in the gateway Service.
+5. **Metrics API**: `tokio::spawn(metrics::serve(12090))`, port 12090, exposes Prometheus metrics.
 
 ### Step 9: Wait for all caches to be ready
 
@@ -135,7 +136,7 @@ let pingora_server = runtime.block_on(async {
 
 Phase 1 runs within the Tokio Runtime context (`spawn_blocking` ensures UDP listeners can use a Tokio UDP socket):
 
-1. **Create ServerConf**: read `threads` (default = CPU cores), `work_stealing` (default true), `grace_period_seconds` (default 30), `graceful_shutdown_timeout_seconds` (default 10), and `upstream_keepalive_pool_size` (default 128) from the TOML configuration.
+1. **Create ServerConf**: read `threads` (default = CPU cores), `work_stealing` (default true), `grace_period_seconds` (default 30), `graceful_shutdown_timeout_seconds` (default 10), and `upstream_keepalive_pool_size` (default 128) from the YAML configuration.
 2. **Bootstrap**: `Server::new_with_opt_and_conf(None, server_conf)` + `pingora_server.bootstrap()`.
 3. **Create GatewayBase**: `GatewayBase::new(config_client)`.
 4. **Get the Gateway list**: `config_client.list_gateways().data`.
@@ -188,3 +189,17 @@ Shutdown relies on Pingora's built-in graceful shutdown mechanism:
 5. After the grace period expires, enter the graceful shutdown timeout (default 10 seconds), forcibly closing remaining connections.
 6. `run_forever()` returns, the main thread exits.
 7. The background Tokio thread terminates automatically when the process exits.
+
+## Known limitation: listener port set is frozen at startup
+
+Listener sockets are bound exactly once, during Phase 1 (`create_and_configure_server()` → `gateway_base.configure_listeners()`). The `Server` is then consumed by `run_forever()` (`cli/pingora.rs`), so nothing in the runtime path holds a handle that could `bind()`/`listen()` a new socket or drain an old one.
+
+When a Gateway resource changes at runtime, `GatewayHandler::partial_update()` (`runtime/handler.rs`) rebuilds only the routing data structures (the `ListenerGatewayInfoStore`/PGIS and the per-listener route managers). It does **not** touch listener sockets. The consequences:
+
+- **Adding a port** to a live Gateway updates routing but leaves the new port unbound — traffic to it is silently dropped.
+- **Removing a port** leaves its socket bound and accepting connections that route to nothing.
+- **TLS certificate updates are exempt**: they hot-reload via ArcSwap on the existing socket, so cert rotation works without restart.
+
+Therefore any change to the listener **port set** requires a full gateway process restart (e.g. a Kubernetes rolling restart). The `"Gateway updated (routes/TLS hot-reloaded; listener port add/remove requires a process restart)"` log line in `partial_update` reflects this.
+
+Lifting the limitation depends on Pingora's `Server` API gaining support for adding `Service`s after `run_forever()` has started; until then, restart is the documented operator workflow for port changes.

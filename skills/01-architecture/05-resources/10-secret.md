@@ -11,10 +11,10 @@ Secret is a Kubernetes core resource. In Edgion it stores TLS certificates, auth
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/secret.rs`
-- Credential resolution layer (Controller + Gateway shared): `src/types/credentials/`
-- Controller-side credential pipeline: `src/core/controller/conf_mgr/sync_runtime/resource_processor/credential/`
-- Gateway-side credential four-state: `src/core/gateway/link_sys/credential.rs`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/secret.rs`
+- Credential resolution layer (Controller + Gateway shared): `edgion-resources/src/credentials/`
+- Controller-side credential pipeline: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/`
+- Gateway-side credential four-state: `edgion-common/src/link_sys_core/credential.rs`
 
 ## Controller-side processing
 
@@ -36,7 +36,7 @@ A process-level global cache: `SecretHandler.parse` writes; other Handlers (Gate
 
 ## Secret → Material resolution layer
 
-The `SecretMaterialResolver` trait under `src/types/credentials/` maps `Secret.data` (`BTreeMap<String, ByteString>`) into a strongly-typed `Material`. Controller and Gateway **share the same set of resolvers**, avoiding duplicated implementations on either end.
+The `SecretMaterialResolver` trait under `edgion-resources/src/credentials/` maps `Secret.data` (`BTreeMap<String, ByteString>`) into a strongly-typed `Material`. Controller and Gateway **share the same set of resolvers**, avoiding duplicated implementations on either end.
 
 ### trait
 
@@ -124,7 +124,7 @@ async fn resolve_for_spec(...) -> Vec<ResolvedRefsError> {
 **Why mandatory**:
 
 1. **Gateway API message contract**: `status.conditions[ResolvedRefs].message` is an aggregated message. When a single LinkSys has both auth and tls Secrets misconfigured, the operator must see all errors in one reconcile, otherwise "fix auth, reconcile, find tls is still wrong, fix again" wastes another round-trip.
-2. **`pick_resolved_refs_reason` priority table only works this way**: `status_utils::pick_resolved_refs_reason` orders reasons by severity (`InvalidKind` > `RefNotPermitted` > `InvalidSecretType` > `PluginMetaDataNotFound` > `BackendNotFound` > `SecretNotFound` > `DecodeError` > `MissingKeys`). Fail-fast emits only one error each time, making the priority table useless.
+2. **`pick_resolved_refs_reason` priority table only works this way**: `status_utils::pick_resolved_refs_reason` orders reasons by severity (`InvalidKind` > `RefNotPermitted` > `InvalidSecretType` > `EdgionConfigDataNotFound` > `BackendNotFound` > `SecretNotFound` > `DecodeError` > `MissingKeys`). Fail-fast emits only one error each time, making the priority table useless.
 3. **Half-finished spec is safe**: failure branches leave `auth.secret: None` / `tls.certs.secret: None`, which will not be consumed because the Gateway side only `build_link_sys_instance_from_status` → builds a client when `ResolvedRefs=True` (see I4/I5, the four-state `CredentialState`).
 
 **When adding a new Handler / new field**: any function shaped like `resolve_for_spec` that resolves refs in multiple places should add a `test_<foo>_and_<bar>_both_fail_collects_both_errors` unit test asserting `errors.len() == 2`, the picked reason is correct, and the message contains both segments — preventing future contributors from accidentally reverting to fail-fast. Historical reference: `tasks/fix-change/M7-linksys-multi-error-collect.md` (the full change moving LinkSys away from fail-fast).

@@ -1,0 +1,31 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-resp-status-conditional
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "resp-status-strip-prefix"
+        source: |
+          let p = req.path
+          let prefix = "/test/dsl-resp-status-conditional"
+          if p.starts_with(prefix) {
+              req.set_uri(substr(p, len(prefix), len(p)))
+          }
+        errorPolicy: deny
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "resp-status-conditional"
+        source: |
+          let s = resp.status
+          if s != nil {
+              if s == 404 {
+                  resp.set_header("X-Not-Found", "true")
+              }
+          }
+        errorPolicy: deny

@@ -71,4 +71,4 @@
 3. 非 Gateway API 标准能力，在文档开头明确标记为 Edgion 扩展。
 4. 对影响请求行为的隐式逻辑（默认值、执行顺序、自动补全）必须显式说明。
 5. 用户文档和开发文档分别写：一个讲“怎么配”，一个讲“怎么实现”。
-6. 修改 `AGENTS.md`、`skills/` 或这些 dev-guide 入口文档后，执行 `make check-agent-docs`。
+6. 修改 `AGENTS.md`、`skills/` 或这些 dev-guide 入口文档后，执行 `python3 cicd/checks/validate_agent_docs.py`。

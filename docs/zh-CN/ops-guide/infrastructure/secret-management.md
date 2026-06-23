@@ -1,36 +1,121 @@
 # Secret 管理
 
-本文档说明 Edgion 在 TLS、认证插件、后端连接中对 Kubernetes Secret 的使用与运维建议。
+Edgion 将 Kubernetes Secret 用于 TLS 证书、插件凭据和 Controller 管理员 Token。本页介绍 Secret 的引用方式、涉及的 Secret 类型、管理员凭据 Secret 以及运维建议。
 
-## Secret 常见用途
+## Edgion 使用 Secret 的场景
 
-- Gateway TLS 证书：`listeners[].tls.certificateRefs`
-- 插件密钥：如 `jwt-auth`、`openid-connect`、`basic-auth`
-- 后端认证材料：如 mTLS 客户端证书
+| 用途 | 引用位置 | 典型 Secret 类型 |
+|------|---------|-----------------|
+| Gateway TLS 证书 | Gateway 的 `listeners[].tls.certificateRefs` | `kubernetes.io/tls` |
+| 扩展 TLS（mTLS、密码套件、OCSP） | `EdgionTls.spec.secretRef` 和 `clientAuth.caSecretRef` | `kubernetes.io/tls`（服务端）、`Opaque`（CA） |
+| 插件凭据 | `jwt-auth`、`basic-auth`、`openid-connect` 等插件 | `Opaque` |
+| 后端认证 | 后端 mTLS 客户端证书 | `kubernetes.io/tls` |
+| Controller 管理员 Token | 运维人员创建的 `edgion-admin-credentials`（单个 `token` 键，注入为 `EDGION_ADMIN_TOKEN` 环境变量） | `Opaque` |
+
+### TLS 证书 Secret
+
+标准 Kubernetes TLS Secret 包含 `tls.crt` 和 `tls.key`：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: my-tls-secret
+  namespace: production
+type: kubernetes.io/tls
+data:
+  tls.crt: <base64-encoded-cert>
+  tls.key: <base64-encoded-key>
+```
+
+用于 mTLS 客户端验证的 CA Secret 持有 CA 证书，通常是包含 `ca.crt` 键的 `Opaque` Secret：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: client-ca
+  namespace: production
+type: Opaque
+data:
+  ca.crt: <base64-encoded-ca-cert>
+```
+
+⚠️ 切勿将真实证书或密钥材料提交到源代码控制。上方所有值均为占位符。
+
+## 管理员 Token（`edgion-admin-credentials`）
+
+Controller Admin API 采用**纯 Token** 认证。它从 `edgion-admin-credentials` Secret（命名空间：`edgion-system`）读取单个预共享管理员 Token，该 Secret 仅包含一个键 `token`。
+该 Secret 必须由运维人员创建——Controller 不再自动生成。
+
+Kubernetes 推荐方式是使用 `deploy.sh`，该脚本会幂等地创建 Secret 并将其作为 `EDGION_ADMIN_TOKEN` 环境变量注入到 controller Deployment（通过 `token` 键上的 `valueFrom.secretKeyRef`）：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: edgion-admin-credentials
+  namespace: edgion-system
+type: Opaque
+data:
+  token: <base64-encoded-admin-token>
+```
+
+```bash
+# 运行 deploy.sh 后读取管理员 Token
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+也可以直接通过 Controller 配置中的顶层 `admin_token` 字段设置 Token（优先从 Secret 注入环境变量，而非明文配置）。
+
+若未配置管理员 Token（且未设置 `cli_tokens`），服务器仍可启动，但所有 Admin API 业务路由返回 **503 fail-close**。
+`/health`、`/ready`、`/metrics` 和 `/api/v1/auth/status` 保持可访问。
+
+完整引导矩阵参见 `skills/02-features/02-config/03-auth-bootstrap.md`。
 
 ## 管理建议
 
 1. 按用途拆分 Secret，不要把无关凭据塞进一个对象。
-2. 使用最小权限 RBAC，限制 Secret 可见范围。
+2. 使用最小权限 RBAC，限制各 Secret 的可见范围。
 3. 在生产环境启用 Secret 轮换策略。
-4. 变更后观察资源状态与网关日志，确认已生效。
+4. 变更 Secret 后，观察引用资源的状态和网关日志，确认变更已生效。
 
-## 排障
+## 故障排查
 
-### 症状：Gateway/Route 状态异常
+### 引用 Secret 后 Gateway 或 Route 状态异常
 
-- 检查 Secret 名称与命名空间是否正确。
-- 检查 `ReferenceGrant` 是否允许跨命名空间引用。
-- 检查 Secret key 名称是否与插件字段一致。
+- 确认 Secret 名称和命名空间正确。
+- 当 Secret 在其他命名空间时，确认 [ReferenceGrant](./reference-grant.md) 已授权该引用。
+- 确认 Secret 键名与消费方期望一致（TLS 使用 `tls.crt`/`tls.key`，CA 使用 `ca.crt`，插件使用各自特定的键）。
 
-### 症状：TLS 握手失败
+### TLS 握手失败
 
-- 检查证书链与私钥是否匹配。
-- 检查证书是否过期。
-- 检查 SNI 与证书 SAN 是否匹配。
+- 确认证书链与私钥匹配。
+- 确认证书未过期。
+- 确认客户端发送的 SNI 与证书 SAN 匹配。
+
+### Admin API 返回 401/403/503
+
+- 从 `edgion-admin-credentials` 获取 Token（见上文——由 `deploy.sh` 创建），或显式配置 `admin_token`。503 表示既未配置管理员 Token 也未配置 `cli_tokens`；401 表示提供的 Token 未知；403 表示该 Token 的 RBAC 策略拒绝该操作。
+
+## 常见问题
+
+### Q1：Controller 管理员 Token 存储在哪里？
+
+**A**：存储在 `edgion-system` 命名空间的 `edgion-admin-credentials` Secret（单个 `token` 键）中，由运维人员通过 `deploy.sh` 创建。controller Deployment 将 `token` 值以 `EDGION_ADMIN_TOKEN` 环境变量形式注入。Controller 不再自动生成该 Secret。
+
+### Q2：可以引用其他命名空间的 Secret 吗？
+
+**A**：可以，但必须在 Secret 所在命名空间创建 `ReferenceGrant` 以授权引用。详见[跨命名空间引用](./reference-grant.md)。
+
+### Q3：我的插件报告缺少凭据，但 Secret 已存在。为什么？
+
+**A**：Secret 内部的键名必须与插件期望的字段名匹配。查阅插件文档了解所需键，并确认它们在 Secret 的 `data` 中存在（且为 base64 编码）。
 
 ## 相关文档
 
 - [TLS 终结](../gateway/tls/tls-termination.md)
-- [EdgionTls 扩展](../gateway/tls/edgion-tls.md)
+- [EdgionTls](../gateway/tls/edgion-tls.md)
+- [mTLS 配置](./mtls.md)
 - [跨命名空间引用](./reference-grant.md)

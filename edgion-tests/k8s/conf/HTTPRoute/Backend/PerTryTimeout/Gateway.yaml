@@ -1,0 +1,14 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: per-try-timeout-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 31391
+    allowedRoutes:
+      namespaces:
+        from: All

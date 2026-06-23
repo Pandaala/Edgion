@@ -1,0 +1,27 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: retry-on-status
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: retry-on-status-gateway
+    namespace: edgion-test
+  hostnames:
+  - retry-on-status.example.com
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /
+    retry:
+      attempts: 3
+      codes:
+      - 502
+      - 503
+    timeouts:
+      request: 10s
+    backendRefs:
+    - name: test-http
+      namespace: edgion-test
+      port: 30001

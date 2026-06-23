@@ -60,5 +60,5 @@ Re-open this decision only if **any** of the following is observed:
 - `skills/03-coding/01-log-safety.md` — Iron rule 3 (zero tracing on the data plane), Plugin dispatch entry list.
 - `skills/04-review/observability/observability-review-rule.md` — Iron Rule: Zero Tracing on the Data Plane (review-side checklist).
 - `skills/04-review/observability/dsl-error-line-number-declined.md` — sibling decision; the `push_err(&'static str)` invariant rationale also forbids smuggling dynamic content via PluginLog.
-- `src/core/gateway/plugins/http/dsl/lang/vm.rs` — `Vm::execute` body; `execute_safe` `Ok(Err(runtime_err))` arm (the `log.push_err(kind)` line is the boundary, not a launching point).
-- `src/core/gateway/plugins/http/dsl/plugin.rs` — confirmed-OK `tracing::error!` call sites at lines ~201/208/219/226 are all on the plugin-construction / VM-init path (config load, not data plane); those are not affected by this rule.
+- `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` — `Vm::execute` body; `execute_safe` `Ok(Err(runtime_err))` arm (the `log.push_err(kind)` line is the boundary, not a launching point).
+- `edgion-gateway/src/plugins/http/dsl/plugin.rs` — confirmed-OK `tracing::error!` call sites at lines ~201/208/219/226 are all on the plugin-construction / VM-init path (config load, not data plane); those are not affected by this rule.

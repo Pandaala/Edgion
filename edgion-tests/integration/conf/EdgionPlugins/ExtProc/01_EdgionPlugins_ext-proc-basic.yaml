@@ -1,0 +1,33 @@
+# ExtProc basic test: request-header + response-header processing.
+# Fake ext_proc gRPC server runs at 127.0.0.1:30041 (test_server --ext-proc-port).
+#
+# Behavior driven by the fake processor:
+#   - request phase: adds `x-ext-proc-req: seen` (visible to the backend), unless
+#     the request carries `x-ext-proc-block` (then it returns 403).
+#   - response phase: adds `x-ext-proc-resp: seen` (visible to the client).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-basic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+        failureModeAllow: false
+  upstreamResponsePlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30041"
+          timeoutMs: 2000
+        processingMode:
+          responseHeaderMode: SEND
+        failureModeAllow: false

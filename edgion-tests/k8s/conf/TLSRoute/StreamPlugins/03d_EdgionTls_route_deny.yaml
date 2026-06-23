@@ -1,0 +1,16 @@
+# EdgionTls certificate for tls-route-plugins-deny listener
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: tls-sp-route-deny-cert
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: tls-stream-plugins-gw
+      namespace: edgion-test
+      sectionName: tls-route-plugins-deny
+  hosts:
+    - "*.sp-route-deny.example.com"
+  secretRef:
+    name: edge-tls
+    namespace: edgion-test

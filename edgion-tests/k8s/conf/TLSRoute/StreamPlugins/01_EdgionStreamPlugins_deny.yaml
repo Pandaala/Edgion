@@ -1,0 +1,15 @@
+# EdgionStreamPlugins: deny all IPs (K8s)
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tls-deny-all
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        deny:
+          - name: deny-all
+            cidrs:
+              - "0.0.0.0/0"
+        defaultAction: deny

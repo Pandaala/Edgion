@@ -1,273 +1,400 @@
-# Stream Plugins User Guide
+# Stream Plugins
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
-> `EdgionStreamPlugins` is an Edgion custom CRD that provides access control for stream-style connections.
+> Stream plugins are connection-level (L4) plugins provided by the `EdgionStreamPlugins` CRD; they run before HTTP parsing and are not part of standard Gateway API.
 
-Get started with Edgion's stream plugin functionality.
+Stream plugins apply access control to raw TCP/TLS/UDP connections at Pingora's
+ConnectionFilter stage. They decide whether a connection (or, for UDP, a
+session) is allowed before any payload is forwarded.
 
-## What are Stream Plugins?
+## How attachment works
 
-Stream Plugins provide access control and security policies for stream-style connections, such as IP restriction and early connection rejection.
+Stream plugins are **not** inline in the route. You define an
+`EdgionStreamPlugins` resource and reference it from the route with the
+`edgion.io/edgion-stream-plugins` annotation. The annotation value is
+`namespace/name` (or just `name` when the plugin lives in the same namespace as
+the route).
 
-**Supported Protocols**:
-- Gateway listener-level connection filtering
-- TCPRoute
-- TLSRoute
+```yaml
+metadata:
+  annotations:
+    edgion.io/edgion-stream-plugins: "edgion-test/tcp-ip-restriction-deny"
+```
 
-**Currently Supported Plugins**:
-- **IP Restriction** - Access control based on client IP address
+The same annotation works on `TCPRoute`, `TLSRoute`, `UDPRoute`, and at the
+Gateway listener level. On `UDPRoute` only the Stage-1 ConnectionFilter
+(`spec.plugins`) runs, because UDP has no TLS handshake.
 
----
+## Supported plugins
 
-## Quick Start
+| Type | Config object | Description |
+|------|---------------|-------------|
+| `IpRestriction` | inline rules | IP allow/deny groups embedded directly in the plugin. |
+| `GlobalConnectionIpRestriction` | inline config + optional `activeProfileRef` | Full IP rule set (named `profiles`) inline in the plugin; an optional `Selector` EdgionConfigData hot-swaps **which profile is active**. Center-managed and synced across Controllers. |
+| `ConnectionRateLimit` | `config` object | Redis-backed per-source-IP connection rate limiting at the pre-TLS accept path. See the [ConnectionRateLimit section](#connectionratelimit-pre-tls-connection-rate-limiting) below. |
 
-### Step 1: Create Plugin Configuration
+Each entry under `spec.plugins` has an optional `enable` flag (default `true`),
+a `type`, and a `config` object.
 
-Create an `EdgionStreamPlugins` resource:
+### `IpRestriction` config
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `allow` | Array\<Object\> | none | Allow groups; each is `{name, cidrs}`. A non-empty `allow` turns on whitelist mode. |
+| `deny` | Array\<Object\> | none | Deny groups; each is `{name, cidrs}`. Evaluated before `allow`. |
+| `allowRefs` | Array\<Object\> | none | References to central `IpList` EdgionConfigData whose CIDRs merge into the allowlist. Each ref is `{name, namespace?}`; `namespace` defaults to the parent `EdgionStreamPlugins` namespace. Configuring any `allowRefs` puts the plugin in whitelist mode. A missing or disabled IpList fails closed (deny-all) and is reported via `ResolvedRefs=False`. |
+| `denyRefs` | Array\<Object\> | none | Same as `allowRefs` but merges into the denylist. A missing or disabled IpList under-blocks (still reported via `ResolvedRefs=False`). |
+| `defaultAction` | Enum | `allow` | Action when no rule matches. Allowed values: `allow` \| `deny`. |
+
+At least one of `allow`/`deny` or `allowRefs`/`denyRefs` must be non-empty.
+
+#### Group sub-fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | String | **Required** | Group name, unique within the plugin (admin label only). |
+| `cidrs` | Array\<String\> | **Required** | CIDR strings or bare IPs (bare IPs become `/32` or `/128`). |
+| `description` | String | none | Optional human-readable note. |
+
+Evaluation order: `deny` first, then `allow`, then `defaultAction`. For raw TCP
+a denied connection is simply closed (no protocol-level response exists at L4).
+
+### `GlobalConnectionIpRestriction` config
+
+This plugin carries its **complete** IP rule set inline (git-owned). The only
+hot-swappable input is *which profile is active*, supplied by an optional
+`Selector` EdgionConfigData referenced via `activeProfileRef`.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enable` | Boolean | **Required** | Kill switch. `false` disables the plugin (all connections allowed). |
+| `activeProfile` | String | **Required** | Default active profile name; must exist in `profiles`. |
+| `profiles` | Map\<String, Object\> | **Required** | Named rule sets. Each profile is `{ defaultAction, allow?, deny?, allowRefs?, denyRefs? }` (same group shape as `IpRestriction`). Each profile may also reference central IpLists via per-profile `allowRefs`/`denyRefs` (distinct from `activeProfileRef`, which selects which profile is active, not an IpList). |
+| `description` | String | none | Optional human-readable note. |
+| `activeProfileRef.name` | String | none | Optional. Name of a `Selector` EdgionConfigData that overrides which profile is active. |
+| `activeProfileRef.namespace` | String | parent ESP namespace | Namespace of the Selector; inherited from the parent `EdgionStreamPlugins` if omitted. |
+
+The referenced `Selector` carries only `active: <profileName>` (plus an optional
+`description`). At connection time the effective profile is the selector's `active`
+when it names one of the plugin's `profiles`; otherwise — selector absent, disabled,
+wrong type, `active: null`, or an unknown profile name — the plugin falls back to the
+inline `activeProfile` (**fail-to-base**). A selector can only switch among the
+git-owned profiles; it can never inject rules or disable the plugin.
+
+## Quick start (inline IpRestriction)
+
+### Step 1: Define the plugin
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
-  name: ip-filter
-  namespace: default
+  name: tcp-ip-restriction-allow
+  namespace: edgion-test
 spec:
   plugins:
     - type: IpRestriction
       config:
-        ipSource: remoteAddr      # Use actual connection IP
-        allow:                     # Allowlist
-          - "10.0.0.0/8"
-          - "192.168.1.0/24"
-        deny:                      # Denylist (higher priority)
-          - "10.0.0.100"
-        defaultAction: deny        # Default deny
-        message: "Access denied"
+        allow:
+          - name: allowed-clients
+            cidrs:
+              - "10.0.0.0/8"          # internal network only
+        defaultAction: deny           # reject everything not allowed
 ```
 
-### Step 2: Reference in Route
-
-Reference the plugin in the TCPRoute `annotations`:
+### Step 2: Reference it from the route
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
-  name: my-tcp-route
-  namespace: default
+  name: redis-route
+  namespace: edgion-test
   annotations:
-    edgion.io/edgion-stream-plugins: ip-filter  # Reference plugin name
+    edgion.io/edgion-stream-plugins: "edgion-test/tcp-ip-restriction-allow"
 spec:
   parentRefs:
-    - name: my-gateway
-      sectionName: tcp-6379
+    - name: stream-gateway
+      sectionName: tcp-redis
   rules:
     - backendRefs:
-        - name: redis-service
+        - name: redis-primary
           port: 6379
 ```
 
-### Step 3: Apply Configuration
+### Step 3: Apply
 
 ```bash
 kubectl apply -f stream-plugins.yaml
 kubectl apply -f tcp-route.yaml
 ```
 
-Done! Now only IPs in the allowlist can access your TCP service.
+Only clients in `10.0.0.0/8` can now reach the Redis service.
 
----
+## Center-managed active profile (GlobalConnectionIpRestriction)
 
-## IP Restriction Configuration Details
-
-### Basic Configuration Fields
-
-| Field | Type | Description | Required |
-|-------|------|-------------|----------|
-| `ipSource` | string | IP source: `remoteAddr` (connection IP) | Yes |
-| `allow` | []string | IP allowlist (CIDR format) | No |
-| `deny` | []string | IP denylist (higher priority than allowlist) | No |
-| `defaultAction` | string | Default action: `allow` or `deny` | Yes |
-| `message` | string | Message when access is denied | No |
-
-### Evaluation Logic
-
-```
-1. Check deny list → deny if matched
-2. Check allow list → allow if matched
-3. Apply defaultAction
-```
-
----
-
-## Use Cases
-
-### Scenario 1: Database Access Control
-
-Only allow internal IPs to access Redis:
+Author the **full** rule set once, inline in the plugin (git-owned, reviewed). Then
+let Center sync a small `Selector` EdgionConfigData that picks **which profile is
+active** across multiple Controllers — without ever shipping the rules themselves.
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionStreamPlugins
 metadata:
-  name: redis-security
+  name: gcir-stream
+  namespace: edgion-test
 spec:
   plugins:
-    - type: IpRestriction
+    - type: GlobalConnectionIpRestriction
       config:
-        ipSource: remoteAddr
-        allow:
-          - "10.0.0.0/8"      # Internal network
-        defaultAction: deny
-```
-
-### Scenario 2: Block Specific IPs
-
-Allow everyone access but block malicious IPs:
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionStreamPlugins
-metadata:
-  name: block-bad-ips
-spec:
-  plugins:
-    - type: IpRestriction
-      config:
-        ipSource: remoteAddr
-        deny:
-          - "1.2.3.4"
-          - "5.6.7.0/24"
-        defaultAction: allow
-```
-
-### Scenario 3: Shared Policy Across Multiple Routes
-
-A single plugin configuration reused by multiple routes:
-
-```yaml
-# Define once
-apiVersion: edgion.io/v1
-kind: EdgionStreamPlugins
-metadata:
-  name: common-policy
-spec:
-  plugins:
-    - type: IpRestriction
-      config:
-        allow: ["10.0.0.0/8"]
-        defaultAction: deny
-
+        enable: true                    # kill switch (false disables the plugin)
+        activeProfile: locked           # git-default profile (safe)
+        profiles:
+          locked:
+            defaultAction: deny
+            allow:
+              - name: office
+                cidrs: ["10.0.0.0/8"]
+          open:
+            defaultAction: deny
+            allow:
+              - name: any
+                cidrs: ["0.0.0.0/0"]
+        activeProfileRef:               # optional: hot-swap the active profile
+          name: gcir-active
+          # namespace omitted: inherits parent ESP namespace (edgion-test)
 ---
-# TCP route uses it
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: gcir-active
+  namespace: edgion-test
+spec:
+  enable: true
+  data:
+    type: Selector
+    config:
+      active: open                      # switch to "open"; null/absent → base default (locked)
+      description: "temporarily widen access"
+---
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
+  name: gcir-route
+  namespace: edgion-test
   annotations:
-    edgion.io/edgion-stream-plugins: common-policy
-# ...
-
----
-# TLSRoute can also use it
-apiVersion: gateway.networking.k8s.io/v1alpha2
-kind: TLSRoute
-metadata:
-  annotations:
-    edgion.io/edgion-stream-plugins: common-policy
-# ...
+    edgion.io/edgion-stream-plugins: "edgion-test/gcir-stream"
+spec:
+  parentRefs:
+    - name: stream-gateway
+      sectionName: tcp-redis
+  rules:
+    - backendRefs:
+        - name: redis-primary
+          port: 6379
 ```
 
----
+To widen or tighten access you switch `active` to a different **pre-authored**
+profile; the selector cannot inject new rules or open everything — that must be a
+reviewed profile in git. If the Selector is removed or names an unknown profile,
+the plugin falls back to the inline `activeProfile` (`locked`).
 
-## Cross-Namespace References
+## Cross-namespace reference
 
-Plugins and routes can be in different namespaces using the `namespace/name` format:
+Point at a plugin in another namespace using `namespace/name`:
 
 ```yaml
-# Plugin in the security namespace
-apiVersion: edgion.io/v1
-kind: EdgionStreamPlugins
-metadata:
-  name: global-policy
-  namespace: security
-spec:
-  plugins:
-    - type: IpRestriction
-      config:
-        allow: ["10.0.0.0/8"]
-        defaultAction: deny
-
----
-# Route in the app namespace, cross-namespace reference
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
   name: app-route
   namespace: app
   annotations:
-    edgion.io/edgion-stream-plugins: security/global-policy  # Cross-namespace
+    edgion.io/edgion-stream-plugins: "security/common-policy"
 spec:
-  # ...
+  parentRefs:
+    - name: stream-gateway
+      sectionName: tcp-redis
+  rules:
+    - backendRefs:
+        - name: redis-primary
+          port: 6379
 ```
 
----
+## Edge cases
+
+### Same annotation on a UDPRoute
+
+`UDPRoute` accepts the identical annotation. Only Stage-1 (`spec.plugins`) runs;
+the IP check is evaluated on the first datagram of each session (fail-close), so
+a denied client never establishes a session.
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata:
+  name: udp-route-with-plugins
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "edgion-test/udp-ip-restriction-deny"
+spec:
+  parentRefs:
+    - name: stream-gateway
+      sectionName: udp-plugins
+  rules:
+    - backendRefs:
+        - name: udp-echo-backend
+          port: 9300
+```
+
+### Deny a single host inside an allowed range
+
+`deny` is evaluated before `allow`, so you can permit a broad CIDR while carving
+out one address. Group names are arbitrary labels used only for organization.
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: carve-out
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        allow:
+          - name: internal
+            cidrs:
+              - "10.0.0.0/8"
+        deny:
+          - name: quarantine
+            cidrs:
+              - "10.6.6.6/32"        # blocked even though it is inside 10.0.0.0/8
+        defaultAction: deny
+```
+
+## ConnectionRateLimit: pre-TLS connection rate limiting
+
+`ConnectionRateLimit` bounds the rate of new inbound connections per source IP.
+The Redis check runs **before** the TLS handshake (Pingora's `ConnectionFilter`
+stage), so it can shed connections before any TLS resources are allocated.
+
+### Why `redisTimeout` is hard-capped at 1 s
+
+The rate-limit check runs on the inbound pre-TLS accept path and holds the
+accepted file descriptor — and the Pingora task that owns it — open for the
+duration of the Redis round-trip. A Redis **connection pool does not remove
+this backpressure**: the pool is *outbound* (Gateway → Redis); the pileup is
+*inbound* (client fds held while awaiting a Redis response). During a Redis
+brownout, every new inbound connection stalls for up to `redisTimeout` before
+`onRedisFailure` takes over. The 1 s hard cap limits how long stalled inbound
+fds can accumulate.
+
+> **`perSourceIp` has no local backstop.** Unlike the `perListener` dimension
+> (which has a local token bucket that stays live even when Redis is
+> unreachable), `perSourceIp` has no in-process fallback — every accepted
+> connection must reach Redis. Set `onRedisFailure` explicitly if you need
+> fail-close behavior.
+
+### Config fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `redisRef` | String | **Required** | Redis LinkSys reference in `"namespace/name"` format. |
+| `algorithm` | Enum | `SlidingWindow` | Rate-limiting algorithm: `SlidingWindow` \| `FixedWindow` \| `TokenBucket`. |
+| `redisTimeout` | String | `"100ms"` | Wall-clock deadline for the accept-path Redis call. Hard-capped at `1s`. When exceeded, `onRedisFailure` applies. |
+| `perListener` | Object | none | Per-listener rate limit with a local token-bucket backstop (available even when Redis is unreachable). |
+| `perSourceIp` | Object | none | Per-source-IP rate limit. Requires Redis — no local backstop. See caution above. |
+
+#### `perSourceIp` / `perListener` sub-fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `rate` | Integer | **Required** | Maximum new connections per interval. |
+| `interval` | String | **Required** | Time window, e.g. `"1s"`, `"1m"`. |
+| `redisDistributed` | Boolean | `false` | (`perListener` only) When `true`, also enforces the cap fleet-wide via Redis in addition to the local gate. |
+| `onRedisFailure` | Enum | `Allow` (`perSourceIp`) / `Deny` (`perListener`) | Behavior when Redis is unavailable or `redisTimeout` elapses. `Allow` = fail-open; `Deny` = fail-close. |
+
+### Observability
+
+The metric `edgion_connection_rate_limit_redis_failure_total` with labels
+`dimension` (`listener` or `source_ip`) and `cause` (`unavailable` or
+`runtime`) increments on every L4 Redis failure, regardless of the
+`onRedisFailure` setting. This keeps fail-open behavior visible in Prometheus.
+
+PromQL alert example:
+
+```promql
+rate(edgion_connection_rate_limit_redis_failure_total{dimension="source_ip"}[5m]) > 0
+# L4 limiter silently failing open
+```
+
+### Example
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: conn-rate-limit
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: ConnectionRateLimit
+      config:
+        redisRef: "default/shared-redis"
+        algorithm: SlidingWindow
+        redisTimeout: "200ms"     # default 100ms; hard-capped at 1s
+        perListener:
+          rate: 10000
+          interval: "1s"
+          redisDistributed: false
+          # onRedisFailure: Deny  # default for perListener
+        perSourceIp:
+          rate: 50
+          interval: "1s"
+          # onRedisFailure: Allow # default for perSourceIp
+```
+
+Attach to a route as with any stream plugin:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: rate-limited-route
+  namespace: edgion-test
+  annotations:
+    edgion.io/edgion-stream-plugins: "edgion-test/conn-rate-limit"
+spec:
+  parentRefs:
+    - name: stream-gateway
+      sectionName: tcp-app
+  rules:
+    - backendRefs:
+        - name: app-service
+          port: 8080
+```
 
 ## Troubleshooting
 
-### Plugin Not Taking Effect
-
-**Checklist**:
+### Plugin not taking effect
 
 1. Confirm the plugin resource exists:
    ```bash
    kubectl get edgionstreamplugins -A
    ```
-
-2. Check if the annotation is correct:
+2. Check the annotation value (must be `name` or `namespace/name`):
    ```bash
-   kubectl get tcproute <name> -o yaml | grep annotations -A 2
+   kubectl get tcproute <name> -o yaml | grep -A2 annotations
    ```
-   The current primary key is `edgion.io/edgion-stream-plugins`.
-
 3. Check the Gateway logs:
    ```bash
    kubectl logs <gateway-pod> | grep -i "stream plugin"
    ```
 
-4. Verify namespace matching:
-   - Same namespace: use the plugin name directly
-   - Cross-namespace: use `namespace/name` format
+### Connection refused unexpectedly
 
-### Connection Refused
-
-Check if the IP is in the allowlist:
-
-```bash
-# Check your IP
-curl ifconfig.me
-
-# Check plugin configuration
-kubectl get edgionstreamplugins <name> -o yaml
-```
-
----
-
-## Performance Considerations
-
-- IP checks are performed at connection establishment and do not affect data transfer performance
-- Uses CIDR matching algorithms for fast lookups
-- Plugin configurations are hot-reloaded without Gateway restarts
-
----
-
-## Next Steps
-
-- [Full Annotations Reference](../../dev-guide/annotations-guide.md)
-- [Adding Custom Plugins](../../dev-guide/add-new-resource-guide.md)
-- [Architecture Overview](../../dev-guide/architecture-overview.md)
-
----
-
-**Version**: Edgion v0.1.0
-**Last Updated**: 2025-12-25
+`deny` wins over `allow`, and `defaultAction: deny` rejects anything not listed.
+Verify your client IP falls inside an `allow` group's `cidrs` and is not caught
+by a `deny` group.

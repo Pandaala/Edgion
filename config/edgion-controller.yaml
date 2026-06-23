@@ -7,7 +7,7 @@
 #      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.yaml
 #
 #   2.  conf_dir:
-#      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.yaml --conf-dir ./examples/test/conf
+#      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.yaml --conf-dir ./edgion-tests/integration/conf
 #
 #   3. :
 #      ./edgion-controller --config-file /usr/local/edgion/config/edgion-controller.yaml --log-level debug
@@ -46,11 +46,16 @@ work_dir: "."
 server:
   # gRPC
   #  Gateway
-  grpc_listen: "0.0.0.0:50051"
+  grpc_listen: "0.0.0.0:12151"
 
-  # Admin HTTP
-  # ， Web Dashboard
-  admin_listen: "0.0.0.0:5800"
+  # Admin HTTP API (/api/v1, /configclient); used by edgion-cli and Web Dashboard.
+  # Secure default: loopback only. For cluster/remote access set 0.0.0.0 AND set
+  # allow_admin_ips (and/or a NetworkPolicy) — exposing the admin plane is an
+  # explicit operator choice.
+  admin_listen: "127.0.0.1:12101"
+
+  # probe_listen: "0.0.0.0:12100"    # Liveness/readiness (/health, /ready); default 0.0.0.0:12100
+  # metrics_listen: "0.0.0.0:12190"  # Prometheus metrics (/metrics); default 0.0.0.0:12190
 
 logging:
   #
@@ -92,7 +97,7 @@ logging:
 # FileSystem mode example:
 # conf_center:
 #   type: file_system
-#   conf_dir: examples/test/conf  # In the current implementation relative paths resolve against the process cwd; use an absolute path for more stable behavior
+#   conf_dir: edgion-tests/integration/conf  # In the current implementation relative paths resolve against the process cwd; use an absolute path for more stable behavior
 #
 # Kubernetes mode example (production):
 # conf_center:
@@ -118,7 +123,7 @@ logging:
 # ============================================================================
 conf_center:
   type: file_system
-  conf_dir: examples/test/conf
+  conf_dir: edgion-tests/integration/conf
 
 debug:
   #
@@ -138,7 +143,7 @@ conf_sync:
 # Omit this section entirely if you are not using federation.
 #
 # center:
-#   address: "https://center.example.com:50052"
+#   address: "https://center.example.com:12251"
 #   name: "ctrl-1"
 #   cluster: "prod"
 #
@@ -160,7 +165,7 @@ conf_sync:
 #   # ABSENT => built-in default policy applies:
 #   #   - read (get/list/watch/list-keys) on ALL resource kinds EXCEPT Secret
 #   #     (EdgionTls IS readable; only the Secret kind is excluded for credential safety)
-#   #   - write (create/update/delete) on PluginMetaData only
+#   #   - write (create/update/delete) on EdgionConfigData only
 #   #     (drives IP-restriction sync + region-route sync; grants write to ALL plugin
 #   #     metadata, not only region/ip -- this limitation is intentional for simplicity)
 #   #   - get, list, and failover on RegionRoute (synthetic label, not a ResourceKind):
@@ -174,8 +179,8 @@ conf_sync:
 #   # than the default. See docs/en/ops-guide/federation-rbac.md for examples.
 #   #
 #   # IMPORTANT -- kind casing: kinds MUST use the canonical PascalCase resource
-#   # Kind name (e.g. PluginMetaData, HTTPRoute, RegionRoute). Lowercase or alias
-#   # spellings (e.g. pluginmetadata) silently never match any request. Verbs are
+#   # Kind name (e.g. EdgionConfigData, HTTPRoute, RegionRoute). Lowercase or alias
+#   # spellings (e.g. edgionconfigdata) silently never match any request. Verbs are
 #   # case-insensitive (get, GET, Get all work).
 #   #
 #   # WARNING: NEVER use kinds: ["*"] with get / list / watch.
@@ -188,17 +193,70 @@ conf_sync:
 #   rbac:
 #     allow:
 #       - verbs: [get, list, watch, create, update, delete]
-#         kinds: [PluginMetaData]
+#         kinds: [EdgionConfigData]
 #       - verbs: [failover]
 #         kinds: [RegionRoute]
 #       - verbs: [reload]
 #         kinds: ["*"]
 
 # ============================================================================
+# Static CLI Tokens (cli_tokens)
+# ============================================================================
+# Role-scoped Bearer tokens for the Controller Admin API.
+# Intended for CI/automation that must call the Admin API non-interactively.
+# Tokens are SHA-256-stored; the raw token is never persisted.
+#
+# Workflow:
+#   1. Run: edgion-cli gen-token
+#      The command prints an "edg_..." token and its SHA-256 digest.
+#   2. Paste the SHA-256 value into token_sha256 below.
+#   3. Distribute the "edg_..." token to the consumer (use --token or EDGION_TOKEN).
+#   4. Apply the config: POST /api/v1/reload  (hot-reloadable, no restart needed).
+#
+# RBAC rules use the same (verb, kind) model as [center].rbac.
+# See docs/en/ops-guide/federation-rbac.md#cli-token-rbac for the full guide.
+#
+# SECURITY — read before enabling:
+#   - NEVER use kinds: ["*"] with get / list / list-keys: exposes Secret and
+#     EdgionTls private-key material via the blind proxy. Enumerate concrete kinds.
+#   - verbs: ["*"] is equivalent to Superuser — grant narrowly.
+#   - Rotate by replacing token_sha256 + running reload (no restart).
+#   - --token / EDGION_TOKEN do NOT touch ~/.edgion/token (ephemeral per-invocation).
+#
+# cli_tokens:
+#   # Read-only token — safe for monitoring / read-only CI pipelines.
+#   - name: monitor-bot
+#     token_sha256: "<64 lowercase hex chars from edgion-cli gen-token>"
+#     rbac:
+#       allow:
+#         # Enumerate concrete kinds; do NOT use kinds: ["*"] with read verbs.
+#         - verbs: [get, list]
+#           kinds: [HTTPRoute, GRPCRoute, TCPRoute, Service,
+#                   EdgionGatewayConfig, EdgionTls, EdgionConfigData]
+#
+#   # Scoped read-write token — manages plugin metadata + reload only.
+#   - name: plugin-manager
+#     token_sha256: "<64 lowercase hex chars from edgion-cli gen-token>"
+#     rbac:
+#       allow:
+#         - verbs: [get, list, watch, create, update, delete]
+#           kinds: [EdgionConfigData]
+#         # reload is write-only; kinds: ["*"] is safe here (no read surface).
+#         - verbs: [reload]
+#           kinds: ["*"]
+
+# ============================================================================
 # conf_sync Channel Security (mTLS)
 # ============================================================================
-# Omit this section entirely to keep plaintext gRPC (backward compatible).
-# When configured, Controller requires valid certificates to start gRPC listener.
+# PRODUCTION: enable mTLS. This channel carries resolved Secrets (TLS private
+# keys, backend credentials) from Controller to Gateway. Following the Istio
+# principle that certificate/secret distribution is never served over plaintext,
+# the shipped Kubernetes manifests (cicd/deploy/kubernetes/) default to mTLS.
+#
+# Omitting this section keeps plaintext gRPC (LOCAL DEV / NON-PRODUCTION only).
+# When omitted, Controller and Gateway both log an ERROR and raise the metric
+# edgion_system_error_state{reason="plaintext_default"} so the degraded state
+# is visible in monitoring.
 #
 # --- Option A: Legacy single-cert format (backward compatible) ---
 # conf_sync_security:

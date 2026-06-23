@@ -1,87 +1,72 @@
 # mTLS 配置
 
 > **🔌 Edgion 扩展**
-> 
-> mTLS 配置通过 `EdgionTls` CRD 实现，这是 Edgion 的扩展功能，不属于标准 Gateway API 规范。
+>
+> 下行（客户端→Gateway）的 mTLS 通过 `EdgionTls` CRD 配置，不属于标准 Gateway API 规范。
 
-配置双向 TLS（Mutual TLS）认证。
+配置双向 TLS（mTLS），使 Gateway 在呈现自身服务端证书的同时也验证客户端证书。Edgion 在两个独立的地方支持 mTLS：**数据面**（客户端 → Gateway）通过 `EdgionTls` 配置，**控制面**（Controller ↔ Gateway gRPC）通过 `conf_sync_security` 配置。
 
 ## 概述
 
-mTLS 要求客户端和服务器双方都验证对方的证书：
+单向 TLS 中，客户端验证服务端。mTLS 添加了反向检查：服务端也根据受信任 CA 验证客户端证书。
 
 ```
-Client [cert] ←→ [verify] Gateway [cert] ←→ [verify] Client
+one-way TLS:   client ──verify server cert──► Gateway
+mTLS:          client ──verify server cert──► Gateway
+               client ◄──verify client cert── Gateway
 ```
 
-## 配置方式
+完整的 `EdgionTls` schema（TLS 版本控制、密码套件、OCSP、会话管理）详见 [EdgionTls](../gateway/tls/edgion-tls.md)。本页重点介绍与 mTLS 相关的字段。
 
-使用 EdgionTls 资源配置 mTLS：
+## 配置
+
+在 `EdgionTls` 资源中添加 `clientAuth` 块，并将其附加到 HTTPS 监听器，即可启用 mTLS。
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: mtls-config
+  namespace: production
 spec:
+  hosts:
+    - "api.example.com"
   secretRef:
-    name: server-tls
+    name: my-tls-secret              # 服务端证书
   clientAuth:
-    mode: Require  # 要求客户端证书
-    caCertificateRefs:
-      - name: client-ca
+    mode: Mutual                     # 要求有效的客户端证书
+    caSecretRef:
+      name: client-ca                # 签发受信任客户端证书的 CA
 ```
 
-## 配置参考
+### clientAuth 参数参考
 
-### clientAuth
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `mode` | Enum | `Terminate` | 客户端认证模式（见下文） |
+| `caSecretRef` | Object | none | CA 证书 Secret。`mode` 为 `Mutual` 或 `OptionalMutual` 时**必填** |
+| `verifyDepth` | Integer | `1` | 证书链验证深度（1-9） |
+| `allowedSans` | Array\<String\> | none | Subject Alternative Name 允许列表 |
+| `allowedCns` | Array\<String\> | none | Common Name 允许列表 |
 
-| 字段 | 类型 | 必填 | 说明 |
-|------|------|------|------|
-| mode | String | | None/Request/Require |
-| caCertificateRefs | array | | 客户端 CA 证书 |
-
-### clientAuth.mode
+#### `clientAuth.mode` 取值说明
 
 | 模式 | 说明 |
 |------|------|
-| None | 不验证客户端证书（默认） |
-| Request | 请求客户端证书但不强制 |
-| Require | 强制要求客户端证书 |
+| `Terminate` | 单向 TLS：只验证服务端证书（默认） |
+| `Mutual` | 双向 TLS：客户端**必须**提供有效证书 |
+| `OptionalMutual` | 可选双向 TLS：客户端证书可选，但提供时会被验证 |
 
-## CA 证书 Secret
+### 将 EdgionTls 附加到监听器
 
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: client-ca
-type: Opaque
-data:
-  ca.crt: <base64-encoded-ca-cert>
-```
-
-## 示例
-
-### 示例 1: 强制 mTLS
+在 HTTPS 监听器的 `certificateRefs` 中引用 `EdgionTls` 资源，并设置 `cert-provider` 选项，使 Gateway 使用扩展 TLS 栈：
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: EdgionTls
-metadata:
-  name: strict-mtls
-spec:
-  secretRef:
-    name: server-tls
-  clientAuth:
-    mode: Require
-    caCertificateRefs:
-      - name: trusted-client-ca
----
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: mtls-gateway
+  name: main-gateway
+  namespace: production
 spec:
   gatewayClassName: edgion
   listeners:
@@ -89,43 +74,153 @@ spec:
       port: 443
       protocol: HTTPS
       tls:
+        options:
+          edgion.io/cert-provider: "edgion-tls"
+        certificateRefs:
+          - group: edgion.io
+            kind: EdgionTls
+            name: mtls-config
+```
+
+## CA 证书 Secret
+
+CA Secret 持有签发受信任客户端证书的 CA 证书：
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: client-ca
+  namespace: production
+type: Opaque
+data:
+  ca.crt: <base64-encoded-ca-cert>
+```
+
+⚠️ 切勿将真实证书或密钥材料提交到源代码控制。上方的值均为占位符。
+
+## 常见场景
+
+### 1. 严格 mTLS（强制要求客户端证书）
+
+每个客户端必须提供由受信任 CA 签发的证书，否则握手被拒绝：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: strict-mtls
+  namespace: production
+spec:
+  hosts:
+    - "api.example.com"
+  secretRef:
+    name: my-tls-secret
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: client-ca
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: main-gateway
+  namespace: production
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      tls:
+        options:
+          edgion.io/cert-provider: "edgion-tls"
         certificateRefs:
           - group: edgion.io
             kind: EdgionTls
             name: strict-mtls
 ```
 
-### 示例 2: 可选 mTLS
+### 2. 可选 mTLS（提供时验证）
+
+允许已认证和匿名客户端同时访问，但验证任何提供的证书——适合分阶段推出时使用：
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: optional-mtls
+  namespace: production
 spec:
+  hosts:
+    - "api.example.com"
   secretRef:
-    name: server-tls
+    name: my-tls-secret
   clientAuth:
-    mode: Request  # 请求但不强制
-    caCertificateRefs:
-      - name: trusted-client-ca
+    mode: OptionalMutual
+    caSecretRef:
+      name: client-ca
 ```
 
-## 客户端配置
+### 3. 限制允许的客户端身份
 
-使用 curl 测试 mTLS：
+在 `Mutual` 模式上进一步通过允许的客户端 SAN 或 CN 进行限制：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionTls
+metadata:
+  name: restricted-mtls
+  namespace: production
+spec:
+  hosts:
+    - "api.example.com"
+  secretRef:
+    name: my-tls-secret
+  clientAuth:
+    mode: Mutual
+    caSecretRef:
+      name: client-ca
+    verifyDepth: 2
+    allowedSans:
+      - "client.example.com"
+    allowedCns:
+      - "Trusted Client"
+```
+
+## 使用 curl 测试
 
 ```bash
 curl --cert client.crt --key client.key \
      --cacert server-ca.crt \
-     https://example.com/api
+     https://api.example.com/api
 ```
+
+`mode: Mutual` 时，没有有效客户端证书的客户端在 TLS 握手阶段被拒绝。
+
+## 常见问题
+
+### Q1：握手失败，提示"certificate required"。什么原因？
+
+**A**：监听器处于 `Mutual` 模式，客户端未提供证书，或提供的证书不是由 `caSecretRef` 中 CA 签发的。请确认客户端证书链接到该 CA，且 `caSecretRef` 指向正确的 Secret。
+
+### Q2：我的 `EdgionTls` 资源被忽略了——Gateway 使用了普通证书。为什么？
+
+**A**：监听器必须通过 `tls.options."edgion.io/cert-provider": "edgion-tls"` 主动开启。没有该选项，监听器会回退到内置的 `certificateRefs` 处理，`EdgionTls` 的扩展字段（包括 `clientAuth`）不会生效。
+
+### Q3：如何将已验证的客户端身份传递给后端？
+
+**A**：在 `EdgionTls` 资源上设置注解 `edgion.io/expose-client-cert: "true"`。Gateway 随后会通过请求头将客户端证书信息转发给后端。
+
+### Q4：证书 Secret 在其他命名空间。需要什么？
+
+**A**：在 Secret 所在命名空间创建 `ReferenceGrant` 以授权引用。详见[跨命名空间引用](./reference-grant.md)。
 
 ---
 
 ## 控制面 mTLS（conf_sync gRPC）
 
-除了数据面 mTLS（客户端 ↔ Gateway）外，Edgion 还支持 **控制面 gRPC 通道**（Controller ↔ Gateway 的 `conf_sync`）的 mTLS。这可以保护配置同步流量免受窃听和伪造。
+除了数据面 mTLS（客户端 ↔ Gateway）外，Edgion 还支持 **Controller 与 Gateway 之间 gRPC 通道**（`conf_sync`）的 mTLS。这可以保护配置同步流量免受窃听和伪造。
 
 ### 生成证书
 
@@ -283,6 +378,7 @@ conf_sync mTLS enabled for gRPC client
 
 ## 相关文档
 
+- [EdgionTls](../gateway/tls/edgion-tls.md)
 - [TLS 终结](../gateway/tls/tls-termination.md)
 - [后端 TLS](../../user-guide/http-route/backends/backend-tls.md)
 - [edgion-cli gen-certs](../edgion-cli.md)

@@ -5,10 +5,10 @@
 ```
 docs/
 ├── README.md              # Project-level README (language entry point)
-├── DIRECTORY.md           # Full directory-tree index (shared by AI and humans)
+├── .vitepress/            # VitePress site config, nav, and sidebars
 ├── en/                    # English documentation
 ├── zh-CN/                 # Chinese documentation
-├── ja/                    # Japanese documentation (reserved)
+│                          # (ja/ Japanese is reserved but not yet created — see 03-i18n-rules.md)
 ├── refactoring/           # Internal refactoring design docs (not user-facing)
 ├── review/                # Code review records (not user-facing)
 └── superpowers/           # Design proposals and plans (not user-facing)
@@ -18,7 +18,8 @@ The internal structure of `en/` and `zh-CN/` must be fully symmetric.
 
 ## Four-layer system
 
-Each language directory has four layers, targeting different audiences and stages:
+Each language directory has four audience layers, plus two auxiliary directories
+(`migrations/`, `promotion/`):
 
 | Layer | Directory | Audience | Positioning |
 |-------|-----------|----------|-------------|
@@ -26,6 +27,8 @@ Each language directory has four layers, targeting different audiences and stage
 | 2 | `user-guide/` | Daily users | Usage guide organized by feature; Route types, plugins, match rules, backend configuration |
 | 3 | `ops-guide/` | Operators | Gateway operations: Gateway configuration, TLS, listeners, observability, infrastructure |
 | 4 | `dev-guide/` | Developers / contributors | Architecture overview, plugin development, resource registration, logging, CI/CD |
+| aux | `migrations/` | Upgraders | Version-to-version migration guides (breaking changes, config/API renames) |
+| aux | `promotion/` | Evaluators | Promotional material (white papers, intro pieces); exists in both `en/` and `zh-CN/` |
 
 ### Layer boundaries
 
@@ -67,9 +70,11 @@ Requirements:
 - The table lists every document in the directory with a one-sentence description
 - If subdirectories exist, list them too and mark them as "directory"
 
-## DIRECTORY.md sync rules
+## Navigation sync rules
 
-`docs/DIRECTORY.md` is the full index of the entire documentation tree.
+Directory-level `README.md` files are the local navigation source for each
+documentation directory. `docs/.vitepress/config.ts` is the site navigation
+source for VitePress nav bars and sidebars.
 
 **Triggers an update**:
 - Adding a documentation file
@@ -80,7 +85,9 @@ Requirements:
 **Does not trigger an update**:
 - Modifying only file content (paths unchanged)
 
-**How to update**: Maintained manually. PRs that change documentation structure must update DIRECTORY.md in sync.
+**How to update**: PRs that change documentation structure must update the
+containing directory's `README.md` and, when the page is user-facing navigation,
+the matching VitePress sidebar/nav entry.
 
 ## Placement decision tree for new documents
 
@@ -112,8 +119,11 @@ The document you're writing is about…
 ├── Development / contribution guide (architecture, plugin development, CI)?
 │   └── dev-guide/
 │
+├── Version migration / upgrade guide (breaking changes, config/API renames)?
+│   └── migrations/
+│
 └── Promotional material (white papers, intro pieces)?
-    └── promotion/ (zh-CN only)
+    └── promotion/ (en + zh-CN)
 ```
 
 ## Relationship with skills/

@@ -1,0 +1,34 @@
+# Path Normalization - RequestRestriction plugin
+# Rule 1 (Path source): deny /admin after normalization — blocks /%61dmin, /admin%2F, etc.
+# Rule 2 (RequestPath source): deny literal %2F in raw entry path — audit-style raw match
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: path-norm-request-restriction-deny
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RequestRestriction
+      config:
+        mode: Blacklist
+        ruleGroups:
+          - rules:
+              # Path source: compared against normalized current path.
+              # Covers /%61dmin, /admin%2F, /admin//x, /admin/..;jsessionid=x/admin, etc.
+              - name: "block-admin-normalized"
+                source: Path
+                values:
+                  - "/admin"
+                onMissing: NoMatch
+          - rules:
+              # RequestPath source: compared against entry-time raw path (not normalized).
+              # Use this for audit-style rules that target specific raw encoding patterns.
+              # regex is never normalized — operator writes patterns in raw form.
+              - name: "block-literal-encoded-slash"
+                source: RequestPath
+                regex:
+                  - "%2[fF]"
+                onMissing: NoMatch
+        status: 403
+        message: "Access denied by path normalization policy"

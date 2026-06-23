@@ -1,0 +1,71 @@
+# ForwardAuth basic test: forward all headers to auth service
+# Auth service: fake auth server at 127.0.0.1:30040
+#
+# Test scenario:
+#   - request.headers omitted -> forwardAll=true default (forward ALL headers)
+#   - decision.upstreamHeaders: copy X-User-ID, X-User-Role, X-User-Email from auth response
+#   - decision.clientHeaders: copy WWW-Authenticate, X-Auth-Error-Code on auth failure
+#
+# Service + EndpointSlice declared here; shared by all EdgionPlugins files in this suite.
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30040
+      targetPort: 30040
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: auth-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: auth-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30040
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-basic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-svc
+          namespace: edgion-default
+          port: 30040
+        timeoutMs: 5000
+        request:
+          path:
+            template: "/verify"
+          method:
+            template: "GET"
+          headers:
+            forwardAll: true
+        decision:
+          upstreamHeaders:
+            - X-User-ID
+            - X-User-Role
+            - X-User-Email
+            - X-Saw-Custom-Hop      # propagate hop-by-hop stripping probe (test C)
+            - X-Saw-Visible-Header  # propagate hop-by-hop stripping probe (test C)
+          clientHeaders:
+            - WWW-Authenticate
+            - X-Auth-Error-Code

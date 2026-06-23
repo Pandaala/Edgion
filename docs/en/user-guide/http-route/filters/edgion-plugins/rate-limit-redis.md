@@ -1,7 +1,7 @@
 # RateLimitRedis Plugin
 
-> **🔌 Edgion Extension**
->  
+> **🔌 Edgion extension**
+> 
 > RateLimitRedis is a Redis-backed cluster-wide precise rate limiting plugin provided by the `EdgionPlugins` CRD and is not part of the standard Gateway API.
 
 ## What is RateLimitRedis?
@@ -16,7 +16,7 @@ The [RateLimit plugin](rate-limit.md) uses an in-process Count-Min Sketch algori
 | Latency | Nanoseconds | 0.1–1 ms (network RTT) |
 | Accuracy | Approximate (CMS error) | Exact |
 | Scope | Per-instance | Cluster-wide |
-| External dependency | None | Requires Redis |
+| External dependency | none | Requires Redis |
 | On Redis failure | N/A | Configurable: Allow / Deny |
 | Use case | High throughput, tolerates approximation | Exact quotas, cluster-wide enforcement |
 
@@ -29,10 +29,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-with-redis-limit
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -54,7 +54,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: redis-rate-limit
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimitRedis
@@ -69,7 +69,7 @@ spec:
 
 ### Prerequisites
 
-`redisRef` must point to an existing `LinkSys` resource of type Redis. Ensure the corresponding LinkSys is created in the same or target namespace before applying this plugin.
+`redisRef` must point to an existing `LinkSys` Redis connector, in `"namespace/name"` format. Ensure the corresponding LinkSys is created before applying this plugin. For how to define a Redis connector, see [Infrastructure Connectors](../../../../ops-guide/infrastructure/connectors.md).
 
 ### Default Behavior
 
@@ -91,17 +91,18 @@ spec:
 | `policies` | Array\<Object\> | — (required) | Rate limiting policy list. At least 1, maximum 10. See Policy Configuration below |
 | `key` | Array\<Object\> | `[{type: clientIp}]` | Rate limiting dimension list. Multiple keys are joined with `_`. See Key Configuration below |
 | `onMissingKey` | Enum | `Allow` | Behavior when key cannot be extracted. Values: `Allow` \| `Deny` |
-| `defaultKey` | String | None | Default key value when extraction fails, takes precedence over `onMissingKey` |
+| `defaultKey` | String | none | Default key value when extraction fails, takes precedence over `onMissingKey` |
 | `rejectStatus` | Integer | `429` | HTTP status code on rejection (100–599) |
-| `rejectMessage` | String | None | JSON response body on rejection |
+| `rejectMessage` | String | none | JSON response body on rejection |
 | `showLimitHeaders` | Boolean | `true` | Whether to return rate limit response headers |
-| `headerNames` | Object | None | Custom response header names. See HeaderNames Configuration below |
+| `headerNames` | Object | none | Custom response header names. See HeaderNames Configuration below |
 
 ### Redis Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `onRedisFailure` | Enum | `Allow` | Behavior when Redis is unavailable. Values: `Allow` (fail-open) \| `Deny` (fail-close) |
+| `onRedisFailure` | Enum | `Allow` | Policy applied when Redis is unavailable **or** when `requestTimeout` elapses. Covers both (a) Redis detectably down — fast-eject with zero I/O, and (b) Redis healthy but slow/erroring — bounded wait then give up. Both cases route through this single policy. Values: `Allow` (fail-open) \| `Deny` (fail-close) |
+| `requestTimeout` | String | unset | Optional wall-clock deadline for the complete multi-policy Redis check (e.g. `"500ms"`). When unset, no aggregate timeout is applied; the per-command timeout from the LinkSys Redis CRD still applies. When set and the deadline elapses, `onRedisFailure` applies |
 | `keyPrefix` | String | `"edgion:rl:"` | Redis key prefix. Must end with `:` and contain only printable ASCII characters |
 | `maxKeyLen` | Integer | `4096` | Maximum byte length of the key portion in Redis keys (64–65536). Prevents Redis OOM from maliciously long key values |
 
@@ -169,10 +170,10 @@ Customize rate limit response header names. Only explicitly configured fields ap
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `limit` | String | None | Rate limit header name (default: `X-RateLimit-Limit`) |
-| `remaining` | String | None | Remaining quota header name (default: `X-RateLimit-Remaining`) |
-| `reset` | String | None | Window reset time header name (default: `X-RateLimit-Reset`). Only emitted on rejection (429) responses — the Redis Lua scripts do not return a window-reset timestamp for allowed requests |
-| `retryIn` | String | None | Human-readable retry time (e.g., `"1.5s"`) |
+| `limit` | String | none | Rate limit header name (default: `X-RateLimit-Limit`) |
+| `remaining` | String | none | Remaining quota header name (default: `X-RateLimit-Remaining`) |
+| `reset` | String | none | Window reset time header name (default: `X-RateLimit-Reset`). Only emitted on rejection (429) responses — the Redis Lua scripts do not return a window-reset timestamp for allowed requests |
+| `retryIn` | String | none | Human-readable retry time (e.g., `"1.5s"`) |
 
 ---
 
@@ -187,10 +188,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-cluster-limit
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -212,7 +213,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: cluster-rate-limit
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimitRedis
@@ -235,10 +236,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: api-multi-policy
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "api.example.com"
   rules:
@@ -260,7 +261,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: multi-policy-limit
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimitRedis
@@ -289,10 +290,10 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: secure-api
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
     - "secure-api.example.com"
   rules:
@@ -314,7 +315,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: secure-redis-limit
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RateLimitRedis
@@ -343,7 +344,7 @@ spec:
 
 ### Q1: What is the format of `redisRef`?
 
-**A**: The format is `"namespace/name"`, referring to a `LinkSys` resource of type Redis. For example: `"default/shared-redis"`. Only alphanumeric characters, `-`, and `_` are allowed — no special characters or extra separators.
+**A**: The format is `"namespace/name"`, referring to a `LinkSys` Redis connector. For example: `"default/shared-redis"`. Each segment (namespace and name) may contain only alphanumeric characters, `-`, and `_` — no special characters or extra separators. The reference must resolve to an existing LinkSys; see [Infrastructure Connectors](../../../../ops-guide/infrastructure/connectors.md).
 
 ### Q2: What is the minimum `interval`?
 
@@ -366,6 +367,7 @@ spec:
 ## Related Documentation
 
 - [RateLimit Plugin](rate-limit.md) — In-process approximate rate limiting (high performance, low latency)
+- [Infrastructure Connectors](../../../../ops-guide/infrastructure/connectors.md) — Defining the Redis `LinkSys` referenced by `redisRef`
 - [IpRestriction Plugin](ip-restriction.md) — IP-based access control
 - [KeyAuth Plugin](key-auth.md) — API Key authentication
 - [JwtAuth Plugin](jwt-auth.md) — JWT authentication

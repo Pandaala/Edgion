@@ -1,6 +1,6 @@
 # RealIp Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > RealIp is a real client IP extraction plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 
@@ -27,7 +27,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-basic
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RealIp
@@ -252,7 +252,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-basic
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RealIp
@@ -272,7 +272,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-cloudflare
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RealIp
@@ -301,7 +301,7 @@ apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
   name: real-ip-multi-tier
-  namespace: default
+  namespace: production
 spec:
   requestPlugins:
     - type: RealIp

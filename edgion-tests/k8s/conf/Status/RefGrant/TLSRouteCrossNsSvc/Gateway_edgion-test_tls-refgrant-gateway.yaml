@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: tls-refgrant-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+  - name: tls
+    protocol: TLS
+    port: 31342
+    tls:
+      mode: Passthrough
+    allowedRoutes:
+      namespaces:
+        from: All

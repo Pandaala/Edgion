@@ -1,12 +1,14 @@
-# GatewayClass 配置
+# GatewayClass
 
-GatewayClass 定义了 Gateway 的实现类型，类似于 IngressClass。
+绑定 Edgion 控制器，并可选择指定调优参数集。
 
-> **🔌 Edgion 扩展**
-> 
-> `parametersRef` 可引用 `EdgionGatewayConfig` CRD 进行高级配置，这是 Edgion 扩展功能。
+## 概述
 
-## 资源结构
+`GatewayClass` 是集群作用域的资源，用于告知 Kubernetes 哪个控制器管理一类 Gateway。要在 Edgion 上运行 Gateway，需要创建一个 `controllerName` 与 Edgion 控制器匹配的 GatewayClass，然后在 Gateway 上设置 `gatewayClassName` 引用它。GatewayClass 还可以通过 `parametersRef` 指向 `EdgionGatewayConfig` 来调优数据面行为。
+
+Edgion 采用 1 控制器 : 1 GatewayClass 模型：单个 Edgion 实例管理一个 GatewayClass。`parametersRef` 是可选的——未设置时 Gateway 使用内置默认值；设置时必须引用 `edgion.io/EdgionGatewayConfig`。
+
+## 配置
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -15,31 +17,36 @@ metadata:
   name: edgion
 spec:
   controllerName: edgion.io/gateway-controller
-  parametersRef:              # 可选：引用配置参数
-    group: edgion.io
-    kind: EdgionGatewayConfig
-    name: default-config
 ```
 
-## 配置参考
+## 字段参考
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| controllerName | string | ✓ | 控制器标识 |
-| parametersRef | object | | 配置参数引用 |
-| description | string | | 描述信息 |
+| `spec.controllerName` | String | 是 | 必须精确为 `edgion.io/gateway-controller`。Edgion 控制器只协调具有此值的 GatewayClass。 |
+| `spec.parametersRef` | Object | 否 | 指向调优网关行为的 `EdgionGatewayConfig` 的引用。设置后 `group` 必须为 `edgion.io`，`kind` 必须为 `EdgionGatewayConfig`，否则 GatewayClass 将被拒绝（`Accepted: False`）。 |
+| `spec.parametersRef.group` | String | 否 | 参数资源的 API group：`edgion.io`。 |
+| `spec.parametersRef.kind` | String | 否 | `EdgionGatewayConfig`。 |
+| `spec.parametersRef.name` | String | 否 | `EdgionGatewayConfig` 资源的名称。 |
+| `spec.description` | String | 否 | 人类可读的描述。 |
 
-## Edgion 控制器名称
+`EdgionGatewayConfig` 是集群作用域的，因此 `parametersRef` 不包含 `namespace` 字段。
 
-Edgion 使用的控制器名称：
+## controllerName
 
-```yaml
-controllerName: edgion.io/gateway-controller
+Edgion 控制器名称是固定常量：
+
+```
+edgion.io/gateway-controller
 ```
 
-## 示例
+`controllerName` 不匹配此值的 GatewayClass 将被 Edgion 忽略。这允许集群同时运行多个 Gateway API 实现而不冲突。
 
-### 示例 1: 基本配置
+## 配置场景
+
+### 无参数的基础 class
+
+最简单的配置。引用此 class 的 Gateway 将使用 Edgion 默认值。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -48,96 +55,73 @@ metadata:
   name: edgion
 spec:
   controllerName: edgion.io/gateway-controller
+  description: "Edgion Gateway powered by Pingora"
 ```
 
-### 示例 2: 带参数配置
+### 带调优参数的 class
+
+> **🔌 Edgion 扩展**
+>
+> 通过 `parametersRef` 引用 `EdgionGatewayConfig` CRD 是 Edgion 扩展功能，不属于标准 Gateway API。
+
+挂载 `EdgionGatewayConfig` 以调优该 class 中所有 Gateway 的数据面行为。
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
-  name: edgion-custom
+  name: edgion
 spec:
   controllerName: edgion.io/gateway-controller
   parametersRef:
     group: edgion.io
     kind: EdgionGatewayConfig
-    name: custom-config
+    name: prod-gateway-config
 ---
 apiVersion: edgion.io/v1alpha1
 kind: EdgionGatewayConfig
 metadata:
-  name: custom-config
+  name: prod-gateway-config
 spec:
   server:
-    threads: 4
+    threads: 0
     gracePeriodSeconds: 30
+  httpTimeout:
+    backend:
+      defaultConnectTimeout: "5s"
+      defaultRequestTimeout: "60s"
 ```
 
-## EdgionGatewayConfig 参考
+完整可调字段详见 [EdgionGatewayConfig](../configuration/edgion-gateway-config.md)。
 
-`EdgionGatewayConfig` 是 Edgion 扩展的 CRD，通过 GatewayClass 的 `parametersRef` 引用，提供网关级别的高级配置。
+### 无需重建 Gateway 即可切换参数
 
-### spec.server
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| threads | integer | CPU 核数 | Worker 线程数 |
-| workStealing | boolean | true | 启用 work-stealing 调度 |
-| gracePeriodSeconds | integer | 30 | 优雅关闭宽限期（秒） |
-| gracefulShutdownTimeoutS | integer | 10 | 优雅关闭超时（秒） |
-| upstreamKeepalivePoolSize | integer | 128 | 上游 keepalive 连接池大小 |
-| enableCompression | boolean | false | 启用下游响应压缩 |
-| downstreamKeepaliveRequestLimit | integer | 1000 | 下游连接复用请求数上限 |
-
-#### downstreamKeepaliveRequestLimit
-
-限制单个下游 TCP 连接可以服务的最大 HTTP 请求数，达到上限后关闭连接。等价于 Nginx 的 [`keepalive_requests`](https://nginx.org/en/docs/http/ngx_http_core_module.html#keepalive_requests)。
-
-- **Per-connection**：每个 TCP 连接有独立的计数器，非全局限制
-- **仅 HTTP/1.1**：HTTP/2 多路复用不受此限制
-- **默认 1000**：与 Nginx 一致。设为 `0` 可禁用限制
-
-**作用**：防止单连接长期占用导致的内存累积和负载不均衡。
-
-### spec.httpTimeout
-
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| client.readTimeout | duration | 60s | 客户端读超时 |
-| client.writeTimeout | duration | 60s | 客户端写超时 |
-| client.keepaliveTimeout | duration | 75s | HTTP keepalive 超时 |
-| backend.defaultConnectTimeout | duration | 5s | 后端连接超时 |
-| backend.defaultRequestTimeout | duration | 60s | 后端请求超时 |
-| backend.defaultIdleTimeout | duration | 300s | 后端连接池空闲超时 |
-
-### 完整示例
+由于 Gateway 通过名称引用 class，可以将 `parametersRef` 指向不同的 `EdgionGatewayConfig`，从而一次性将新调优推送到该 class 中的所有 Gateway。
 
 ```yaml
-apiVersion: edgion.io/v1alpha1
-kind: EdgionGatewayConfig
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
 metadata:
-  name: production-config
+  name: edgion
 spec:
-  server:
-    threads: 4
-    workStealing: true
-    gracePeriodSeconds: 30
-    upstreamKeepalivePoolSize: 256
-    downstreamKeepaliveRequestLimit: 1000
-  httpTimeout:
-    client:
-      readTimeout: 60s
-      writeTimeout: 60s
-      keepaliveTimeout: 75s
-    backend:
-      defaultConnectTimeout: 5s
-      defaultRequestTimeout: 60s
-      defaultIdleTimeout: 300s
+  controllerName: edgion.io/gateway-controller
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: tuned-gateway-config
 ```
+
+## 边界情况与注意事项
+
+- `controllerName` 在 Gateway API 中是不可变的；如需更换控制器，必须删除并重新创建 GatewayClass。
+- 如果 `controllerName` 与 `edgion.io/gateway-controller` 不完全匹配，Edgion 永远不会设置 `Accepted` 状态，引用该 class 的 Gateway 将保持未编程状态。
+- `parametersRef` 的 `group` 或 `kind` 错误时会以 `Accepted: False` 拒绝；未设置 `parametersRef` 是有效的，将回退到默认值。
+- `EdgionGatewayConfig` 是集群作用域的，因此 `parametersRef` 不包含 `namespace`。
+- `EdgionGatewayConfig` 的更改动态生效（无需重启 Gateway）；详见其页面中关于热重载的字段说明。
 
 ## 相关文档
 
-- [Gateway 资源总览](./overview.md)
-- [监听器配置](./listeners/)
-- [TLS 配置](./tls/)
+- [Gateway 总览](overview.md)
+- [监听器](listeners/README.md)
+- [EdgionGatewayConfig](../configuration/edgion-gateway-config.md)
+- [Preflight 策略](preflight-policy.md)

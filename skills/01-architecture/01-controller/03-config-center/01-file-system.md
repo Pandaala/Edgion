@@ -80,7 +80,7 @@ start(shutdown_handle)
     │   ├── wait_kinds_ready(phase1_kinds, 15s)
     │   ├── Phase 2: spawn dependent resource controllers
     │   │   (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, EdgionTls,
-    │   │    BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, PluginMetaData,
+    │   │    BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData,
     │   │    LinkSys, EdgionAcme, EdgionGatewayConfig)
     │   └── FileSystemWatcher.run()
     │       ├── init_phase: scan directory → group by kind → Init/InitApply/InitDone
@@ -153,7 +153,7 @@ Like KubernetesCenter, FileSystemCenter uses a two-phase initialization:
 | Phase | Resources | Description |
 |-------|-----------|-------------|
 | Phase 1 (base) | GatewayClass, Gateway, Secret, ReferenceGrant, Service, EndpointSlice | Other resources need to query these base resources during `parse()` |
-| Phase 2 (dependent) | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls, BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, PluginMetaData, LinkSys, EdgionAcme, EdgionGatewayConfig | Started after Phase 1 completes |
+| Phase 2 (dependent) | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls, BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData, LinkSys, EdgionAcme, EdgionGatewayConfig | Started after Phase 1 completes |
 
 Phase 2 waits for all Phase 1 kinds to be marked ready in `PROCESSOR_REGISTRY` (after a 15-second timeout, it falls back to parallel initialization).
 
@@ -204,11 +204,11 @@ Recommended principles:
 
 ## Key Files
 
-- `src/core/controller/conf_mgr/conf_center/file_system/center.rs` — `FileSystemCenter` (lifecycle)
-- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs` — `FileSystemController` (spawns resource controllers)
-- `src/core/controller/conf_mgr/conf_center/file_system/storage.rs` — `FileSystemStorage` (CenterApi implementation)
-- `src/core/controller/conf_mgr/conf_center/file_system/file_watcher.rs` — `FileSystemWatcher` (file watching + event dispatch)
-- `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs` — `FileSystemResourceController`
-- `src/core/controller/conf_mgr/conf_center/file_system/status.rs` — `FileSystemStatusHandler` (.status file I/O)
-- `src/core/controller/conf_mgr/conf_center/file_system/event.rs` — `FileSystemEvent` enum
-- `src/core/controller/conf_mgr/conf_center/file_system/config.rs` — `FileSystemConfig`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/center.rs` — `FileSystemCenter` (lifecycle)
+- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs` — `FileSystemController` (spawns resource controllers)
+- `edgion-controller/src/conf_mgr/conf_center/file_system/storage.rs` — `FileSystemStorage` (CenterApi implementation)
+- `edgion-controller/src/conf_mgr/conf_center/file_system/file_watcher.rs` — `FileSystemWatcher` (file watching + event dispatch)
+- `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs` — `FileSystemResourceController`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/status.rs` — `FileSystemStatusHandler` (.status file I/O)
+- `edgion-controller/src/conf_mgr/conf_center/file_system/event.rs` — `FileSystemEvent` enum
+- `edgion-controller/src/conf_mgr/conf_center/file_system/config.rs` — `FileSystemConfig`

@@ -1,132 +1,165 @@
 # HTTPS Listener
 
-Configure an HTTPS protocol listener to enable TLS termination.
+A TLS-terminating listener that decrypts traffic at the gateway and attaches `HTTPRoute` (or
+`GRPCRoute`).
 
-## Basic Configuration
+## Overview
 
-```yaml
-listeners:
-  - name: https
-    port: 443
-    protocol: HTTPS
-    tls:
-      mode: Terminate
-      certificateRefs:
-        - name: tls-secret
-```
+An HTTPS listener binds a port with `protocol: HTTPS` and a `tls` block in `Terminate` mode.
+The gateway presents a certificate, decrypts the connection, and routes the plaintext request
+to a backend. This is the standard way to serve public HTTPS and h2 gRPC over TLS.
 
-## Configuration Reference
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| name | string | Yes | Listener name |
-| port | int | Yes | Listening port |
-| protocol | string | Yes | Protocol (HTTPS) |
-| tls | object | Yes | TLS configuration |
-| hostname | string | | Hostname filter |
-
-### TLS Configuration
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| mode | enum | | `Terminate` (default) or `Passthrough`; any other value is rejected by the CRD |
-| certificateRefs | array | Yes | Certificate Secret references |
-| options | map | | TLS options |
-
-## TLS Modes
-
-### Terminate - TLS Termination
-
-The Gateway decrypts TLS and forwards plaintext to the backend:
-
-```yaml
-tls:
-  mode: Terminate
-  certificateRefs:
-    - name: tls-secret
-```
-
-### Passthrough - TLS Passthrough
-
-The Gateway does not decrypt and forwards directly to the backend:
-
-```yaml
-tls:
-  mode: Passthrough
-```
-
-## Certificate Secret
-
-```yaml
-apiVersion: v1
-kind: Secret
-metadata:
-  name: tls-secret
-type: kubernetes.io/tls
-data:
-  tls.crt: <base64-encoded-cert>
-  tls.key: <base64-encoded-key>
-```
-
-## Examples
-
-### Example 1: Basic HTTPS
+## Configuration
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: https-gateway
+  name: web-gateway
+  namespace: edgion-system
 spec:
   gatewayClassName: edgion
   listeners:
     - name: https
       port: 443
       protocol: HTTPS
+      hostname: app.example.com
       tls:
+        mode: Terminate
         certificateRefs:
-          - name: wildcard-tls
+          - name: app-example-com-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+        kinds:
+          - kind: HTTPRoute
 ```
 
-### Example 2: Multi-Domain Certificates
+## Field reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Unique listener name within the Gateway. |
+| `port` | int | Yes | Port to bind (commonly `443`). |
+| `protocol` | enum | Yes | Must be `HTTPS`. |
+| `hostname` | string | No | SNI / Host match. Supports wildcard `*.example.com`. |
+| `tls.mode` | enum | Yes | Must be `Terminate` for HTTPS. |
+| `tls.certificateRefs` | list | Yes | Secret references holding the certificate and key. |
+| `allowedRoutes.namespaces.from` | enum | No | `Same` (default), `All`, or `Selector`. |
+| `allowedRoutes.kinds` | list | No | `HTTPRoute` (default) or `GRPCRoute`. |
+
+## Scenarios
+
+### Terminate TLS for one host
+
+A single HTTPS listener with one certificate.
 
 ```yaml
-listeners:
-  - name: https-api
-    port: 443
-    protocol: HTTPS
-    hostname: "api.example.com"
-    tls:
-      certificateRefs:
-        - name: api-tls
-  - name: https-web
-    port: 443
-    protocol: HTTPS
-    hostname: "www.example.com"
-    tls:
-      certificateRefs:
-        - name: web-tls
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: app-gateway
+  namespace: edgion-system
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: app.example.com
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: app-example-com-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
 ```
 
-### Example 3: HTTP Auto-Redirect to HTTPS
+### Serve multiple hosts on port 443 (SNI)
+
+Two HTTPS listeners share port `443`, distinguished by `hostname` and each with its own
+certificate.
 
 ```yaml
-listeners:
-  - name: http
-    port: 80
-    protocol: HTTP
-  - name: https
-    port: 443
-    protocol: HTTPS
-    tls:
-      certificateRefs:
-        - name: tls-secret
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: multi-host-gateway
+  namespace: edgion-system
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: https-app
+      port: 443
+      protocol: HTTPS
+      hostname: app.example.com
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: app-example-com-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+    - name: https-api
+      port: 443
+      protocol: HTTPS
+      hostname: api.example.com
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: api-example-com-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
 ```
 
-Use HTTPRoute's RequestRedirect filter to implement the redirect.
+### Wildcard certificate for a subdomain
 
-## Related Documentation
+Serve any single-label subdomain with one wildcard certificate.
 
-- [HTTP Listener](./http.md)
-- [TLS Termination](../tls/tls-termination.md)
-- [EdgionTls Extension](../tls/edgion-tls.md)
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: wildcard-gateway
+  namespace: edgion-system
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: https-wildcard
+      port: 443
+      protocol: HTTPS
+      hostname: "*.example.com"
+      tls:
+        mode: Terminate
+        certificateRefs:
+          - name: wildcard-example-com-tls
+      allowedRoutes:
+        namespaces:
+          from: Same
+```
+
+## Edge cases and caveats
+
+- **Terminate only**: HTTPS listeners use `tls.mode: Terminate`. For end-to-end encryption
+  without decrypting at the gateway, use a `TLS` listener with `Passthrough` and a `TLSRoute`
+  — see [../../../user-guide/tls-route/overview.md](../../../user-guide/tls-route/overview.md).
+- **certificateRefs required**: `Terminate` mode needs at least one certificate Secret;
+  without it the listener cannot complete the handshake.
+- **Hostname / SNI selection**: when multiple HTTPS listeners share a port, the client's SNI
+  picks the listener; the most specific `hostname` wins, and a wildcard matches one label.
+- **Cross-namespace certificate refs**: a `certificateRef` in another namespace requires a
+  `ReferenceGrant` in the Secret's namespace.
+- **Cross-namespace AllowedRoutes**: default `from: Same`; widen with `from: All` or
+  `from: Selector`.
+- **gRPC over TLS**: include `GRPCRoute` in `allowedRoutes.kinds` to serve h2 gRPC. See
+  [grpc.md](grpc.md).
+
+## Related documents
+
+- [Listeners overview](README.md)
+- [HTTP listener](http.md)
+- [gRPC listener](grpc.md)
+- [HTTP to HTTPS redirect](../http-to-https-redirect.md)
+- [TLS routing (Passthrough)](../../../user-guide/tls-route/overview.md)

@@ -7,11 +7,11 @@ description: Decide on jwt_auth `load_credentials_from_secret` "4-path duplicati
 
 **Audit date**: 2026-04-26
 **Linked issue**: P2-12 (closed, not fixed)
-**Conclusion**: **The 4 branches of `src/core/gateway/plugins/http/jwt_auth/credentials.rs::JwtAuth::load_credentials_from_secret` keep their current shape; "extract helper / eliminate duplication / shorten the main function" fix suggestions are not accepted.**
+**Conclusion**: **The 4 branches of `edgion-gateway/src/plugins/http/jwt_auth/credentials.rs::JwtAuth::load_credentials_from_secret` keep their current shape; "extract helper / eliminate duplication / shorten the main function" fix suggestions are not accepted.**
 
 ## Code Involved
 
-- `src/core/gateway/plugins/http/jwt_auth/credentials.rs:66-186`
+- `edgion-gateway/src/plugins/http/jwt_auth/credentials.rs:66-186`
   - Branch 1: `config.resolved_credential` (controller-pre-resolved single credential)
   - Branch 2: `config.resolved_credentials` (controller-pre-resolved multi-credential map)
   - Branch 3: `config.secret_ref` (fallback: get single credential from K8s Secret)

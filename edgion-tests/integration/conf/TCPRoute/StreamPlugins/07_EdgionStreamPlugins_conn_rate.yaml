@@ -1,0 +1,16 @@
+# EdgionStreamPlugins: ConnectionRateLimit local-only per-listener gate.
+# Validates that excess connection establishments within the interval are
+# rejected at L4 (pre-TLS, pre-HTTP) by the local token-bucket gate without
+# needing Redis.
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tcp-conn-rate-local
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: ConnectionRateLimit
+      config:
+        perListener:
+          rate: 2
+          interval: "1s"

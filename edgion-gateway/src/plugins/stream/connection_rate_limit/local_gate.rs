@@ -1,0 +1,154 @@
+//! Process-global per-listener-port local rate gate (token bucket).
+//!
+//! This is Stage 1 of the connection-rate plugin: a dependency-free backstop
+//! that survives config hot-reload (keyed by listener port in a process-global
+//! registry) so a reload does not reset the bucket. No tracing on this path.
+
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock, Mutex};
+
+/// Token-bucket gate. `capacity == rate`, refilled `rate` tokens per `interval_ms`.
+/// Tokens are stored scaled by 1000 (milli-tokens) in an atomic to keep the hot
+/// path lock-light; the refill clock uses a short mutex only on refill.
+pub struct LocalRateGate {
+    rate: AtomicU64,         // tokens per interval (== capacity)
+    interval_ms: AtomicU64,  // refill interval
+    milli_tokens: AtomicU64, // current tokens * 1000
+    last_refill_ms: AtomicU64,
+    refill_lock: Mutex<()>,
+}
+
+impl LocalRateGate {
+    pub fn new(rate: u64, interval_ms: u64) -> Self {
+        Self {
+            rate: AtomicU64::new(rate.max(1)),
+            interval_ms: AtomicU64::new(interval_ms.max(1)),
+            milli_tokens: AtomicU64::new(rate.max(1) * 1000),
+            last_refill_ms: AtomicU64::new(0),
+            refill_lock: Mutex::new(()),
+        }
+    }
+
+    /// Update rate/interval in place (hot reload).
+    ///
+    /// - Rate raised: immediately credit the capacity-delta so the bucket
+    ///   reflects the new limit without waiting for the next refill tick.
+    /// - Rate lowered: clamp current tokens to the new capacity.
+    /// Current tokens are never reset to zero; the registry slot is preserved.
+    pub fn update_params(&self, rate: u64, interval_ms: u64) {
+        let new_rate = rate.max(1);
+        let old_rate = self.rate.swap(new_rate, Ordering::Relaxed);
+        self.interval_ms.store(interval_ms.max(1), Ordering::Relaxed);
+        let new_cap = new_rate * 1000;
+        let old_cap = old_rate * 1000;
+        let cur = self.milli_tokens.load(Ordering::Relaxed);
+        if new_cap > old_cap {
+            // Rate raised: add the capacity difference so callers benefit immediately.
+            let next = (cur + (new_cap - old_cap)).min(new_cap);
+            self.milli_tokens.store(next, Ordering::Relaxed);
+        } else if cur > new_cap {
+            // Rate lowered: clamp to the new capacity.
+            self.milli_tokens.store(new_cap, Ordering::Relaxed);
+        }
+    }
+
+    /// Try to consume one connection token at `now_ms`. Returns true if admitted.
+    pub fn try_acquire_at(&self, now_ms: u64) -> bool {
+        self.refill(now_ms);
+        loop {
+            let cur = self.milli_tokens.load(Ordering::Acquire);
+            if cur < 1000 {
+                return false;
+            }
+            if self
+                .milli_tokens
+                .compare_exchange(cur, cur - 1000, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return true;
+            }
+        }
+    }
+
+    fn refill(&self, now_ms: u64) {
+        let _guard = self.refill_lock.lock().unwrap();
+        let last = self.last_refill_ms.load(Ordering::Relaxed);
+        if last == 0 {
+            self.last_refill_ms.store(now_ms, Ordering::Relaxed);
+            return;
+        }
+        if now_ms <= last {
+            return;
+        }
+        let elapsed = now_ms - last;
+        let rate = self.rate.load(Ordering::Relaxed);
+        let interval = self.interval_ms.load(Ordering::Relaxed).max(1);
+        let refill = (elapsed as u128 * rate as u128 * 1000 / interval as u128) as u64;
+        if refill == 0 {
+            return; // not enough time elapsed for a whole milli-token; keep last unchanged
+        }
+        let cap = rate * 1000;
+        let cur = self.milli_tokens.load(Ordering::Relaxed);
+        let next = (cur + refill).min(cap);
+        self.milli_tokens.store(next, Ordering::Relaxed);
+        self.last_refill_ms.store(now_ms, Ordering::Relaxed);
+    }
+}
+
+static LOCAL_GATES: LazyLock<Mutex<HashMap<u16, Arc<LocalRateGate>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Look up (or create) the process-global gate for `listener_port`, updating its
+/// rate/interval to the latest config so hot-reload changes apply without losing
+/// the registry slot or the current token state.
+pub fn get_or_update_local_gate(listener_port: u16, rate: u64, interval_ms: u64) -> Arc<LocalRateGate> {
+    let mut map = LOCAL_GATES.lock().unwrap();
+    if let Some(g) = map.get(&listener_port) {
+        g.update_params(rate, interval_ms);
+        return g.clone();
+    }
+    let g = Arc::new(LocalRateGate::new(rate, interval_ms));
+    map.insert(listener_port, g.clone());
+    g
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_up_to_capacity_then_denies() {
+        let gate = LocalRateGate::new(3, 1000);
+        let t0 = 1_000_000u64;
+        assert!(gate.try_acquire_at(t0));
+        assert!(gate.try_acquire_at(t0));
+        assert!(gate.try_acquire_at(t0));
+        assert!(!gate.try_acquire_at(t0)); // 4th in same instant denied
+    }
+
+    #[test]
+    fn refills_over_time() {
+        let gate = LocalRateGate::new(2, 1000); // 2 per 1000ms
+        let t0 = 1_000_000u64;
+        assert!(gate.try_acquire_at(t0));
+        assert!(gate.try_acquire_at(t0));
+        assert!(!gate.try_acquire_at(t0));
+        // after a full interval, fully refilled
+        assert!(gate.try_acquire_at(t0 + 1000));
+        assert!(gate.try_acquire_at(t0 + 1000));
+        assert!(!gate.try_acquire_at(t0 + 1000));
+    }
+
+    #[test]
+    fn update_params_changes_rate_without_losing_registry_entry() {
+        let port = 65000u16;
+        let g1 = get_or_update_local_gate(port, 1, 1000);
+        let t0 = 2_000_000u64;
+        assert!(g1.try_acquire_at(t0));
+        assert!(!g1.try_acquire_at(t0));
+        // hot reload raises the rate; same registry slot, new capacity applies
+        let g2 = get_or_update_local_gate(port, 5, 1000);
+        assert!(Arc::ptr_eq(&g1, &g2));
+        assert!(g2.try_acquire_at(t0)); // capacity raised to 5, more tokens available
+    }
+}

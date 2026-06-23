@@ -57,7 +57,7 @@ sessionPersistence:
     lifetimeType: Permanent
 ```
 
-Cookie attributes: `Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`
+Cookie attributes: `Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`. The `Secure` attribute is added automatically when the request arrives over TLS. `Max-Age` is emitted only for `lifetimeType: Permanent` with an `absoluteTimeout`.
 
 ### Header
 
@@ -113,7 +113,7 @@ metadata:
   name: session-sticky
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     - sessionPersistence:
         type: Cookie
@@ -135,7 +135,7 @@ metadata:
   name: session-strict
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     - sessionPersistence:
         type: Header

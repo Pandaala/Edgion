@@ -34,8 +34,10 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 |-----------|---------|
 | **System architecture** — relationship between the four Controller/Gateway/Center/Ctl binaries, internal modules, development guides | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
 | **Binary startup and deployment** — CLI arguments, deployment modes | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
-| **TOML config Schema** — Controller/Gateway configuration | [02-features/02-config/](02-features/02-config/SKILL.md) |
+| **Config Schema** — Controller (YAML) / Gateway (YAML) configuration | [02-features/02-config/](02-features/02-config/SKILL.md) |
+| **Controller authentication & authorization** — admin login, cli token RBAC, the (verb,kind) engine, middleware onion, default Center policy | [01-architecture/01-controller/11-authentication-authorization.md](01-architecture/01-controller/11-authentication-authorization.md) |
 | **Resource feature Schema** — Gateway/Route/TLS/Plugin/Backend/LinkSys | [02-features/03-resources/](02-features/03-resources/SKILL.md) |
+| **Webhook provider** — backendRef target, request-templating allow-list (origin/custom + presence), consumer `path_override` API, secret resolution flow | [01-architecture/03-controller-gateway-link/webhook.md](01-architecture/03-controller-gateway-link/webhook.md) |
 | **Observability** — Access Log, Metrics, protocol logs | [02-features/04-observability/](02-features/04-observability/SKILL.md) |
 | **Annotation reference** — all edgion.io/* keys | [02-features/05-annotations/](02-features/05-annotations/SKILL.md) |
 | **Coding conventions** — log IDs, log safety, observability | [03-coding/SKILL.md](03-coding/SKILL.md) |
@@ -45,7 +47,6 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 | **User documentation conventions** — writing conventions for authoring/reviewing docs/ documentation | [11-doc/SKILL.md](11-doc/SKILL.md) |
 | **Pre-commit / local checks** (fmt + check + clippy + check-agent-docs) | [09-misc/SKILL.md](09-misc/SKILL.md) |
 | **GitHub Actions / Docker / Release** — tag pushes, Docker images, release-notes files | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |
-| **Center architecture** — federation gRPC, reverse Watch, CenterWatchCache, CenterMetaDataStore, SQLite persistence | [01-architecture/06-center/SKILL.md](01-architecture/06-center/SKILL.md) |
 | **Dev-deployment hot-swap** — native image + shell loop + cross-compilation + kubectl cp | [09-misc/03-dev-deploy-hot-replace.md](09-misc/03-dev-deploy-hot-replace.md) |
 
 > For finer-grained locators inside the architecture (Controller/Gateway/Link/resources/plugin development/route matching, etc.) see [01-architecture/SKILL.md](01-architecture/SKILL.md).
@@ -114,6 +115,7 @@ See [`07-tasks/SKILL.md`](07-tasks/SKILL.md) for the full lifecycle phase table 
 
 ## User documentation
 
-Located under `docs/`, organized by language (en, zh-CN, ja). The complete directory tree is in [docs/DIRECTORY.md](../docs/DIRECTORY.md).
+Located under `docs/`, organized by language (en, zh-CN). Directory-level `README.md`
+files and `docs/.vitepress/config.ts` are the maintained navigation sources.
 
 When authoring or reviewing user documentation, follow the writing conventions in [11-doc/SKILL.md](11-doc/SKILL.md).

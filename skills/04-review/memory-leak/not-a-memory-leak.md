@@ -9,8 +9,8 @@ description: Use when reviewing a flagged memory leak in long-running code paths
 
 Applicable locations:
 
-- `src/core/gateway/backends/discovery/endpoint_slice/`
-- `src/core/gateway/backends/discovery/endpoint/`
+- `edgion-gateway/src/backends/discovery/endpoint_slice/`
+- `edgion-gateway/src/backends/discovery/endpoint/`
 
 Verdict:
 

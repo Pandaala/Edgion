@@ -1,0 +1,17 @@
+# IpRestriction plugin using allowRefs to reference the central ipref-allowlist.
+# The test client's IP (127.0.0.1) is covered by 127.0.0.0/8 → expect 200.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ip-restriction-allow-ref-hit
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        allowRefs:
+          - name: ipref-allowlist
+        status: 403
+        message: "IP not in referenced allow list"

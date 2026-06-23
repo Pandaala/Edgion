@@ -16,9 +16,9 @@ GatewayClass is a cluster-scoped resource that identifies the Gateway controller
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/gateway_class.rs`
-- Gateway ConfHandler: `src/core/gateway/config/gateway_class/conf_handler_impl.rs`
-- Type definitions: `src/types/resources/gateway_class.rs`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway_class.rs`
+- Gateway ConfHandler: `edgion-gateway/src/config/gateway_class/conf_handler_impl.rs`
+- Type definitions: `edgion-resources/src/resources/gateway_class.rs`
 
 ## Controller-side processing
 
@@ -41,7 +41,7 @@ No special handling; passes through directly.
 
 ## Gateway-side processing
 
-After GatewayClass is synced to the Gateway side, it is stored in GatewayConfigStore and used for class-matching validation of Gateway resources.
+After GatewayClass is synced to the Gateway side, it is stored in the GatewayClass cache (`edgion-gateway/src/config/gateway_class/`) and used for class-matching validation of Gateway resources.
 
 ## Cross-resource relationships
 

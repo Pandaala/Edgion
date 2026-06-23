@@ -9,7 +9,7 @@ Controller and Gateway sync configuration via the `ConfigSync` gRPC service. Aft
 
 ## Proto definition
 
-The proto file lives at `src/core/common/conf_sync/proto/config_sync.proto`:
+The proto file lives at `edgion-common/src/conf_sync/proto/config_sync.proto`:
 
 ```protobuf
 service ConfigSync {
@@ -85,7 +85,7 @@ The version-tracking mechanism guarantees:
 
 ## Resource change events
 
-Resource changes are represented by the `ResourceChange` enum, defined in `src/core/common/conf_sync/traits.rs`:
+Resource changes are represented by the `ResourceChange` enum, defined in `edgion-common/src/conf_sync/traits.rs`:
 
 | Event type | Phase | Description |
 |---------|------|------|
@@ -121,7 +121,7 @@ Both gRPC channels support optional mTLS encryption:
 ### Configuration structure
 
 ```rust
-// src/core/common/config/mod.rs
+// edgion-common/src/conf_sync/config.rs
 pub struct ConfSyncSecurityConfig {
     pub active: Option<String>,          // Name of the active certificate set
     pub certs: Vec<ConfSyncTlsConfig>,   // Multi-cert sets ([[...certs]] array)
@@ -171,7 +171,7 @@ conf_sync_security:
       ca: certs/grpc/new-ca/ca.crt
 ```
 
-**Center federation channel (Center server side, `config/edgion-center.yaml`):**
+**Center federation channel (Center server side, configured in the separate EdgionCenter repository):**
 ```yaml
 grpc_security:
   active: primary
@@ -185,7 +185,7 @@ grpc_security:
 **Controller federation client (`config/edgion-controller.yaml`):**
 ```yaml
 center:
-  address: "https://center.example.com:50052"
+  address: "https://center.example.com:12251"
   security:
     active: primary
     certs:
@@ -206,7 +206,7 @@ center:
 
 ### Shared TLS loading layer
 
-TLS file reading logic is centralized in `src/core/common/grpc_tls.rs`:
+TLS file reading logic is centralized in `edgion-common/src/grpc_tls.rs`:
 
 | Function | Purpose |
 |------|------|
@@ -237,31 +237,31 @@ The `edgion-cli gen-certs` subcommand uses rcgen to generate a complete certific
 - **File mode**: certificates are written to the `<output_dir>/<cert-name>/` subdirectory, supporting multiple certificate sets coexisting
 - **K8s mode**: Secrets are named `{prefix}-controller-tls-{cert-name}` / `{prefix}-gateway-tls-{cert-name}`
 
-Certificate generation logic: `src/core/ctl/certs/mod.rs`
-Subcommand entry: `src/core/ctl/cli/commands/gen_certs.rs`
+Certificate generation logic: `edgion-cli/src/certs/mod.rs`
+Subcommand entry: `edgion-cli/src/cli/commands/gen_certs.rs`
 
 ### Integration testing
 
-`examples/test/scripts/conf-sync/run_conf_sync_mtls_test.sh` — end-to-end mTLS test, verifying certificate generation → configuration injection → mTLS startup → configuration sync → plaintext rejection. See [05-testing/04-conf-sync-leak-testing.md](../../05-testing/04-conf-sync-leak-testing.md) for details.
+`edgion-tests/integration/scripts/conf-sync/run_conf_sync_mtls_test.sh` — end-to-end mTLS test, verifying certificate generation → configuration injection → mTLS startup → configuration sync → plaintext rejection. See [05-testing/04-conf-sync-leak-testing.md](../../05-testing/04-conf-sync-leak-testing.md) for details.
 
 ## Module distribution
 
 | Module | Path | Responsibility |
 |------|------|------|
-| **common/conf_sync** | `src/core/common/conf_sync/` | Proto definitions, shared traits (`CacheEventDispatch`, `ConfHandler`, `ResourceChange`), shared event/list/Watch types |
-| **common/config** | `src/core/common/config/mod.rs` | `ConfSyncSecurityConfig`, `ConfSyncTlsConfig` configuration structs |
-| **controller/conf_sync** | `src/core/controller/conf_sync/` | Server-side implementation: `ConfigSyncServer`, `ConfigSyncGrpcServer` (with mTLS), `ClientRegistry`, `WatchObj` trait |
-| **gateway/conf_sync** | `src/core/gateway/conf_sync/` | Client-side implementation: `ConfigSyncClient` (with mTLS), `ClientCache<T>`, `CacheData`, event_dispatch |
-| **ctl/certs** | `src/core/ctl/certs/mod.rs` | Certificate generation (rcgen): `generate_certs()` → `CertBundle` |
+| **common/conf_sync** | `edgion-common/src/conf_sync/` | Proto definitions, shared traits (`CacheEventDispatch`, `ConfHandler`, `ResourceChange`), shared event/list/Watch types |
+| **common/conf_sync::config** | `edgion-common/src/conf_sync/config.rs` | `ConfSyncSecurityConfig`, `ConfSyncTlsConfig` configuration structs |
+| **controller/conf_sync** | `edgion-controller/src/conf_sync/` | Server-side implementation: `ConfigSyncServer`, `ConfigSyncGrpcServer` (with mTLS), `ClientRegistry`, `WatchObj` trait |
+| **gateway/conf_sync** | `edgion-gateway/src/conf_sync/` | Client-side implementation: `ConfigSyncClient` (with mTLS), `ClientCache<T>`, `CacheData`, event_dispatch |
+| **ctl/certs** | `edgion-cli/src/certs/mod.rs` | Certificate generation (rcgen): `generate_certs()` → `CertBundle` |
 
 ### Key files
 
-- `src/core/common/conf_sync/proto/config_sync.proto` — Proto definitions
-- `src/core/common/conf_sync/traits.rs` — `ResourceChange`, `CacheEventDispatch`, `ConfHandler`
-- `src/core/controller/conf_sync/conf_server/config_sync_server.rs` — `ConfigSyncServer`
-- `src/core/controller/conf_sync/conf_server/grpc_server.rs` — `ConfigSyncGrpcServer`, `ConfigSyncServerProvider`
-- `src/core/controller/conf_sync/conf_server/client_registry.rs` — `ClientRegistry`
-- `src/core/controller/conf_sync/conf_server/traits.rs` — `WatchObj`, `WatchResponseSimple`
-- `src/core/gateway/conf_sync/conf_client/grpc_client.rs` — `ConfigSyncClient`
-- `src/core/gateway/conf_sync/cache_client/cache.rs` — `ClientCache<T>`, `DynClientCache`
-- `src/core/gateway/conf_sync/cache_client/event_dispatch.rs` — Event dispatch logic
+- `edgion-common/src/conf_sync/proto/config_sync.proto` — Proto definitions
+- `edgion-common/src/conf_sync/traits.rs` — `ResourceChange`, `CacheEventDispatch`, `ConfHandler`
+- `edgion-controller/src/conf_sync/conf_server/config_sync_server.rs` — `ConfigSyncServer`
+- `edgion-controller/src/conf_sync/conf_server/grpc_server.rs` — `ConfigSyncGrpcServer`, `ConfigSyncServerProvider`
+- `edgion-controller/src/conf_sync/conf_server/client_registry.rs` — `ClientRegistry`
+- `edgion-controller/src/conf_sync/conf_server/traits.rs` — `WatchObj`, `WatchResponseSimple`
+- `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs` — `ConfigSyncClient`
+- `edgion-gateway/src/conf_sync/cache_client/cache.rs` — `ClientCache<T>`, `DynClientCache`
+- `edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs` — Event dispatch logic

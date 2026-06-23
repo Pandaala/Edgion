@@ -144,6 +144,14 @@ const enSidebar = [
         ],
       },
       {
+        text: 'TLS Route',
+        collapsed: true,
+        items: [
+          { text: 'Overview', link: '/en/user-guide/tls-route/overview' },
+          { text: 'Backends', link: '/en/user-guide/tls-route/backends/overview' },
+        ],
+      },
+      {
         text: 'Edgion Plugins (Route-Level)',
         collapsed: true,
         items: [
@@ -207,8 +215,19 @@ const enSidebar = [
           { text: 'mTLS', link: '/en/ops-guide/infrastructure/mtls' },
           { text: 'Reference Grant', link: '/en/ops-guide/infrastructure/reference-grant' },
           { text: 'Secret Management', link: '/en/ops-guide/infrastructure/secret-management' },
+          { text: 'Connectors (LinkSys)', link: '/en/ops-guide/infrastructure/connectors' },
         ],
       },
+      {
+        text: 'Configuration Reference',
+        collapsed: true,
+        items: [
+          { text: 'Controller Config', link: '/en/ops-guide/configuration/controller-config' },
+          { text: 'Gateway Config', link: '/en/ops-guide/configuration/gateway-config' },
+          { text: 'EdgionGatewayConfig CRD', link: '/en/ops-guide/configuration/edgion-gateway-config' },
+        ],
+      },
+      { text: 'Federation & RBAC', link: '/en/ops-guide/federation-rbac' },
       { text: 'Edgion CLI', link: '/en/ops-guide/edgion-cli' },
     ],
   },
@@ -458,13 +477,6 @@ export default defineConfig({
   title: 'Edgion',
   description: 'High-performance Kubernetes Gateway built on Pingora and Gateway API',
   base: '/Edgion/',
-
-  // Suppress build failure from pre-existing dead links across the docs:
-  // categories include links to skills/, examples/, localhost dev endpoints,
-  // incorrect relative paths between http-route/filters/ and user-guide/edgion-plugins/,
-  // and /index suffixes on directory README links.
-  // TODO: fix these broken links incrementally as docs are reviewed.
-  ignoreDeadLinks: true,
 
   // Exclude internal / non-public directories from being processed
   srcExclude: [

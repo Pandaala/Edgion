@@ -1,6 +1,6 @@
 # Bandwidth Limit Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > BandwidthLimit is a bandwidth throttling plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 
@@ -17,7 +17,6 @@ metadata:
   name: bandwidth-limit-plugin
 spec:
   upstreamResponseBodyFilterPlugins:
-    - enable: true
       type: BandwidthLimit
       config:
         rate: "100kb"
@@ -29,9 +28,9 @@ spec:
 
 ## Configuration Reference
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `rate` | String | Yes | none | Bandwidth limit value |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `rate` | String | **Required** | Bandwidth limit value (see Rate Format below) |
 
 ### Rate Format
 
@@ -50,7 +49,6 @@ spec:
 
 ```yaml
 upstreamResponseBodyFilterPlugins:
-  - enable: true
     type: BandwidthLimit
     config:
       rate: "1mb"
@@ -60,11 +58,38 @@ upstreamResponseBodyFilterPlugins:
 
 ```yaml
 upstreamResponseBodyFilterPlugins:
-  - enable: true
     type: BandwidthLimit
     config:
       rate: "50kb"
 ```
+
+### Scenario 3: Fractional Rate
+
+Decimal values are supported and the unit is case-insensitive:
+
+```yaml
+upstreamResponseBodyFilterPlugins:
+    type: BandwidthLimit
+    config:
+      # 1.5 MB/s = 1572864 bytes/s
+      rate: "1.5mb"
+```
+
+---
+
+## FAQ
+
+### Q1: What rate formats are accepted?
+
+**A**: A plain byte count (`"1024"` or `"1024b"`), or a number with a `kb` / `mb` / `gb` suffix (`"512kb"`, `"1mb"`, `"1gb"`). Decimals are allowed (`"1.5mb"`) and the suffix is case-insensitive (`"512KB"` works). The value is required and must parse to a positive number — an empty, zero, or unparseable rate fails validation.
+
+### Q2: Why does total bandwidth exceed the configured rate?
+
+**A**: The cap is applied **per response stream**, not per connection or globally. With HTTP/2 multiplexing, N concurrent streams on one connection can each receive the full `rate`, so aggregate connection bandwidth can reach N × `rate`. There is no shared token bucket across routes, connections, or pods — for aggregate caps use an external mechanism (LB QoS, kernel `tc`, or a service-mesh policy).
+
+### Q3: Why does my BandwidthLimit have no effect?
+
+**A**: It must be placed in the `upstreamResponseBodyFilterPlugins` phase. Putting it in `requestPlugins` or `upstreamResponseFilterPlugins` has no effect, because the throttle works by delaying upstream response body chunks.
 
 ---
 
@@ -93,7 +118,7 @@ metadata:
   name: download-route
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   rules:
     - matches:
         - path:
@@ -115,7 +140,6 @@ metadata:
   name: bandwidth-limit-plugin
 spec:
   upstreamResponseBodyFilterPlugins:
-    - enable: true
       type: BandwidthLimit
       config:
         rate: "500kb"

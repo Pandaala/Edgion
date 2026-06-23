@@ -28,6 +28,7 @@
 - [Secret 管理](./infrastructure/secret-management.md)：证书与凭据管理。
 - [跨命名空间引用 (ReferenceGrant)](./infrastructure/reference-grant.md)：跨命名空间资源授权。
 - [mTLS 配置](./infrastructure/mtls.md)：网关到后端的双向 TLS。
+- [连接器 (LinkSys) 🔌](./infrastructure/connectors.md)：外部系统集成（Redis、Etcd、Elasticsearch、Webhook、Kafka）。
 
 ### 可观测性
 
@@ -36,9 +37,13 @@
 
 ### 配置参考
 
-- [Controller 配置](./configuration/controller-config.md)：Controller TOML 进程配置参数。
-- [Gateway 配置](./configuration/gateway-config.md)：Gateway TOML 进程配置参数。
+- [Controller 配置](./configuration/controller-config.md)：Controller YAML 进程配置参数。
+- [Gateway 配置](./configuration/gateway-config.md)：Gateway YAML 进程配置参数。
 - [EdgionGatewayConfig](./configuration/edgion-gateway-config.md)：GatewayClass 级运行时配置（超时、真实 IP、全局插件等）。
+
+### 联邦
+
+- [联邦 RBAC](./federation-rbac.md)：授权 Center 对 Controller 进行操作——内置默认策略、示例与安全说明。同时涵盖 [CLI Token RBAC](./federation-rbac.md#cli-token-rbac)（用于 CI/自动化的静态 Bearer Token）。
 
 ### 运维工具
 

@@ -11,8 +11,8 @@ EdgionStreamPlugins is Edgion's custom-extension resource that defines Stream/TC
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs`
-- Type definitions: `src/types/resources/edgion_stream_plugins/`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_stream_plugins.rs`
+- Type definitions: `edgion-resources/src/resources/edgion_stream_plugins/`
 
 ## Controller-side processing
 
@@ -22,19 +22,23 @@ Scan the Stage 1 `plugins` array and detect legacy HTTP fields written into the 
 
 ### parse
 
-- **Cross-PM ref registration**: first `clear_refs_from` clears this resource's old refs in `plugin_metadata_refs`, then iterate each Stage 1 `EdgionStreamPlugin::GlobalConnectionIpRestriction` entry, registering `plugin_metadata_ref.namespace/name` as the cluster_pm_key with value `"EdgionStreamPlugins:<this_ns>/<this_name>"`
+- **Cross-PM ref registration**: first `clear_refs_from` clears this resource's old refs in `edgion_config_data_refs`, then iterate each Stage 1 `EdgionStreamPlugin::GlobalConnectionIpRestriction` entry, registering `edgion_config_data_ref.namespace/name` as the cluster_pm_key with value `"EdgionStreamPlugins:<this_ns>/<this_name>"`
 - This way, when the referenced GCIR PM changes, the PM handler's `requeue_pm_referrers` will requeue this ESP and refresh ResolvedRefs
 
 ### on_delete
 
-- `clear_refs_from` clears all registrations of this resource in `plugin_metadata_refs`
+- `clear_refs_from` clears all registrations of this resource in `edgion_config_data_refs`
 
 ### update_status
 
-Uses `k8s_openapi::Condition`, writing two conditions:
+Uses `k8s_openapi::Condition`, writing three conditions:
 
-- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False/`LegacySchemaDeprecated` for legacy-schema errors; False/`Invalid` for other errors
-- **`ResolvedRefs`**: iterate each Stage 1 `GlobalConnectionIpRestriction` entry, requiring the PM referenced by `plugin_metadata_ref` to exist with `spec.metadata.type = GlobalConnectionIpRestriction`. Any failure → `ResolvedRefsError::PluginMetaDataNotFound`, reason `InvalidPluginMetaDataRef`. Stage 2 `tls_route_plugins` are currently all inline configurations with no external refs
+- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False/`LegacySchemaDeprecated` for legacy-schema errors; False/`Invalid` for other errors. Stays `True` even when inline IP lists have bad entries (partial-good; see `PartiallyInvalid` below).
+- **`ResolvedRefs`**: iterates all EdgionConfigData references:
+  - `GlobalConnectionIpRestriction.activeProfileRef` (→ Selector): must exist as a `Selector` EdgionConfigData. If `ref_denied` is set (cross-ns without grant / target `visibility: Namespace` without a `ReferenceGrant`): reason `RefNotPermitted`. If missing or wrong-type: reason `InvalidEdgionConfigDataRef`.
+  - `IpRestriction.allowRefs`/`denyRefs` (Stage 1 + Stage 2) and GCIR per-profile `ProfileRules.allowRefs`/`denyRefs` (→ IpList): each named `IpList` EdgionConfigData must exist and be enabled. Denied cross-ns ref → reason `RefNotPermitted`; missing/disabled/wrong-type → reason `InvalidEdgionConfigDataRef`.
+  - Stage 2 `tls_route_plugins` `IpRestriction` entries are checked here as well.
+- **`PartiallyInvalid`**: set when `IpRestriction` (Stage 1 or Stage 2) or GCIR `ProfileRules` inline `allow`/`deny` groups contain bad entries (invalid CIDR, empty group, cross-group duplicate CIDR, duplicate/invalid group name). `status=True`/`reason=RuleInvalid` when bad entries exist (message lists them); `status=False`/`reason=AllRulesValid` when clean. The plugin still loads — valid entries compile and the connection filter operates normally. A skipped inline **deny** entry from `IpRestriction` (Stage 1 or Stage 2) increments `edgion_ip_deny_entries_skipped_total{scope="stream_l4"|"tls_route"}` (IpRestriction HTTP/L4/TLS-route only; GCIR per-profile deny is not metered by this counter — it uses `record_conn_ip_restriction_event`). Blacklist hole = loud metric. Exception: if the structural guards fire (both allow+deny empty with no refs, or GCIR `ProfileRules` `Some(vec![])` on an inline allow/deny), `Accepted` is set `False/Invalid` — those are structural misconfigurations, not bad-CIDR cases.
 
 ## Gateway-side processing
 
@@ -50,4 +54,5 @@ These plugins run at the TCP-connection level and do not require HTTP protocol p
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
 | EdgionStreamPlugins ← Route resources | HTTPRoute/GRPCRoute/TCPRoute/TLSRoute | association reference | Route resources may reference Stream plugins |
-| EdgionStreamPlugins → PluginMetaData | PluginMetaData | `GlobalConnectionIpRestriction.pluginMetadataRef` | References a GCIR PM; a reverse-requeue index is built via `plugin_metadata_refs`, so PM changes re-process ESP |
+| EdgionStreamPlugins → EdgionConfigData | EdgionConfigData | `GlobalConnectionIpRestriction.activeProfileRef` (→ Selector) | Cross-ns refs gated by ReferenceGrant + target `visibility`; denied ref → `ref_denied` → `ResolvedRefs=False/RefNotPermitted` |
+| EdgionStreamPlugins → EdgionConfigData | EdgionConfigData | `IpRestriction.allowRefs`/`denyRefs` (Stage 1 + Stage 2); GCIR per-profile `ProfileRules.allowRefs`/`denyRefs` (→ IpList) | Cross-ns refs gated by ReferenceGrant + target `visibility`; denied cross-ns ref → `RefNotPermitted`; missing/disabled/wrong-type → `InvalidEdgionConfigDataRef` |

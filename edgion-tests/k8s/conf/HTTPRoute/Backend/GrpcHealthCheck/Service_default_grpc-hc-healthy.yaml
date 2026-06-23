@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpc-hc-healthy
+  namespace: edgion-default
+  annotations:
+    edgion.io/health-check: "active:\n  type: grpc\n  port: 30021\n  interval: 1s\n\
+      \  timeout: 1s\n  healthyThreshold: 1\n  unhealthyThreshold: 1\n"
+spec:
+  ports:
+  - port: 30001
+    targetPort: 30001
+    protocol: TCP
+  selector:
+    app: edgion-test-server

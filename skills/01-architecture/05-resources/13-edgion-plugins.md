@@ -11,10 +11,10 @@ EdgionPlugins is Edgion's custom-extension resource that defines HTTP-layer plug
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
-- Gateway ConfHandler: `src/core/gateway/plugins/http/conf_handler_impl.rs`
-- Plugin type definitions: `src/types/resources/edgion_plugins/`
-- Plugin config types: `src/types/resources/edgion_plugins/plugin_configs/`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_plugins.rs`
+- Gateway ConfHandler: `edgion-gateway/src/plugins/http/conf_handler_impl.rs`
+- Plugin type definitions: `edgion-resources/src/resources/edgion_plugins/`
+- Plugin config types: `edgion-resources/src/resources/edgion_plugins/plugin_configs/`
 
 ## Controller-side processing
 
@@ -40,8 +40,12 @@ Clear all references for this EdgionPlugins in SecretRefManager.
 
 Two Gateway-API-style conditions (`k8s_openapi::Condition` type):
 
-- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist
-- **`ResolvedRefs`**: via `SecretRefManager::get_dependencies(ep_key)`, aggregate **all** Secret references registered by this EP during parse, and check `secret_store.get(ns, name)` one by one. Any unresolved Secret → `ResolvedRefsError::SecretNotFound` (reason mapped to `BackendNotFound`); the message lists all missing `ns/name`. When all references resolve → True
+- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False (reason=Invalid) when errors exist. Stays `True` even when inline IP lists have bad entries (partial-good; see `PartiallyInvalid` below).
+- **`ResolvedRefs`**: checks Secret references and EdgionConfigData cross-namespace refs:
+  - Secret refs: aggregate via `SecretRefManager::get_dependencies(ep_key)`, check `secret_store.get(ns, name)` one by one. Any unresolved Secret → `ResolvedRefsError::SecretNotFound` (reason `BackendNotFound`); the message lists all missing `ns/name`.
+  - EdgionConfigData cross-ns refs (`overrideRef`, `GlobalAccessControl.activeProfileRef`, `allowRefs`/`denyRefs`): if `ref_denied` is set on the ref (cross-ns without a matching `ReferenceGrant` and target `visibility ≠ Cluster`), → `ResolvedRefsError::RefNotPermitted` (reason `RefNotPermitted`). If the target is missing/disabled/wrong-type → reason `InvalidEdgionConfigDataRef`.
+  - When all references resolve → True
+- **`PartiallyInvalid`**: set when `IpRestriction` inline `allow`/`deny` groups contain bad entries (invalid CIDR, empty group, cross-group duplicate CIDR, duplicate/invalid group name). `status=True`/`reason=RuleInvalid` when bad entries exist (message lists them); `status=False`/`reason=AllRulesValid` when clean. The plugin still loads — valid entries compile and the plugin accepts requests normally. A skipped inline **deny** entry additionally increments `edgion_ip_deny_entries_skipped_total{scope="http"}` (blacklist hole = loud metric). The exception: if **both** `allow` and `deny` are completely absent or empty and no `allowRefs`/`denyRefs` are configured, `validate_and_init` returns `Err` and the plugin sets `init_failed` (deny-all fail-closed); this is a structural misconfiguration, not a bad-CIDR case.
 
 Note: `ResolvedRefs` currently checks only Secret **existence**, not whether the Secret contains the required keys (e.g., a BasicAuth Secret missing the `username` field). The latter only emits `tracing::warn!` during parse and is not reflected in the condition.
 
@@ -54,6 +58,8 @@ After EdgionPlugins is synced to the Gateway side, it is stored in plugin-config
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
 | EdgionPlugins → Secret | Secret | secret_refs (multiple plugins) | Authentication plugins reference credentials in Secrets |
+| EdgionPlugins → EdgionConfigData | EdgionConfigData | `overrideRef` (RegionRouteConfig → RegionRouteOverride), `GlobalAccessControl.activeProfileRef` (→ Selector), `IpRestriction.allowRefs`/`denyRefs` (→ IpList) | Cross-ns refs gated by ReferenceGrant + target `visibility`; denied cross-ns ref → `ref_denied` → `ResolvedRefs=False/RefNotPermitted` |
 | EdgionPlugins ← HTTPRoute | HTTPRoute | ExtensionRef filter | HTTPRoute references the plugin via ExtensionRef |
 | EdgionPlugins ← GRPCRoute | GRPCRoute | ExtensionRef filter | GRPCRoute references the plugin via ExtensionRef |
 | EdgionPlugins ← SecretRefManager | Secret | cascading requeue | Secret changes automatically re-process EdgionPlugins |
+| EdgionPlugins ← EdgionConfigDataRefManager | EdgionConfigData | cascading requeue | EdgionConfigData changes automatically re-process EdgionPlugins (recomputes ref_denied + status) |

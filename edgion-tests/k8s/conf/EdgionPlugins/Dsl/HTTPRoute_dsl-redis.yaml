@@ -1,0 +1,112 @@
+# HTTPRoutes for DSL redis.* builtins integration tests
+# Scenario 25a: redis.set + redis.get round-trip
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-redis-roundtrip-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-redis.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/dsl-redis/roundtrip
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-redis-roundtrip
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# Scenario 25b: redis.incr counter
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-redis-incr-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-redis.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/dsl-redis/incr
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-redis-incr
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# Scenario 25c: redis.hset + redis.hgetall hash round-trip
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-redis-hash-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-redis.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/dsl-redis/hash
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-redis-hash
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+---
+# Scenario 25d: linkSysRefs declared but backing resource absent → fail-open
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dsl-redis-missing-ref-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "dsl-redis.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/dsl-redis/missing-ref
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: dsl-redis-missing-ref
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

@@ -1,0 +1,50 @@
+# Canonical Gateway API feature list advertised by Edgion.
+#
+# Single source of truth: edgion-resources `SUPPORTED_FEATURES`
+# (edgion-resources/src/resources/gateway_class.rs).
+# The controller writes these into GatewayClass.status.supportedFeatures, and
+# the Go conformance suite (conformance_test.go) reads this file to derive its
+# declared feature set, so the two cannot silently drift.
+#
+# Format: one feature name per line, sorted ascending. Blank lines and lines
+# starting with '#' are ignored. Do not edit by hand — keep it byte-equal to
+# SUPPORTED_FEATURES (guarded by the `shared_list_file_matches_supported_features`
+# unit test in edgion-resources).
+#
+# Note: TCPRoute and UDPRoute are advertised by Edgion but are not part of any
+# Gateway API conformance profile (absent from features.AllFeatures), so the Go
+# suite keeps them in an explicit allowlist and does not declare them as
+# conformance features.
+BackendTLSPolicy
+BackendTLSPolicySANValidation
+GRPCRoute
+Gateway
+GatewayHTTPListenerIsolation
+GatewayHTTPSListenerDetectMisdirectedRequests
+HTTPRoute
+HTTPRoute303RedirectStatusCode
+HTTPRoute307RedirectStatusCode
+HTTPRoute308RedirectStatusCode
+HTTPRouteBackendProtocolH2C
+HTTPRouteBackendProtocolWebSocket
+HTTPRouteBackendRequestHeaderModification
+HTTPRouteBackendTimeout
+HTTPRouteCORS
+HTTPRouteDestinationPortMatching
+HTTPRouteHostRewrite
+HTTPRouteMethodMatching
+HTTPRouteNamedRouteRule
+HTTPRoutePathRedirect
+HTTPRoutePathRewrite
+HTTPRoutePortRedirect
+HTTPRouteQueryParamMatching
+HTTPRouteRequestMirror
+HTTPRouteRequestPercentageMirror
+HTTPRouteRequestTimeout
+HTTPRouteResponseHeaderModification
+HTTPRouteSchemeRedirect
+ReferenceGrant
+TCPRoute
+TLSRoute
+TLSRouteModeTerminate
+UDPRoute

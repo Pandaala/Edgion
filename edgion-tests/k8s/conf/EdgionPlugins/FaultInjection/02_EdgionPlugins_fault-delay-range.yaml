@@ -1,0 +1,14 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: fault-delay-range
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - enable: true
+    type: FaultInjection
+    config:
+      delay:
+        ratio: 1.0
+        minMs: 100
+        maxMs: 500

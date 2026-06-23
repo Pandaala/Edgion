@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cert-refgrant-no-grant
+  namespace: edgion-default
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+  - name: https-no-grant
+    protocol: HTTPS
+    port: 31334
+    tls:
+      certificateRefs:
+      - kind: Secret
+        name: no-grant-cert
+        namespace: backend

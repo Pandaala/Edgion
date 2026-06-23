@@ -1,6 +1,6 @@
 # Direct Endpoint Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > DirectEndpoint is a direct endpoint routing plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 
@@ -19,7 +19,6 @@ metadata:
   name: direct-endpoint-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: DirectEndpoint
       config:
         from:
@@ -31,19 +30,19 @@ spec:
 
 ## Configuration Reference
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `from` | Object | Yes | `{type:"header",name:"X-Target-Endpoint"}` | Endpoint value source |
-| `from.type` | String | Yes | `header` | Source type: `header` / `query` / `cookie` / `ctx` |
-| `from.name` | String | Yes | `X-Target-Endpoint` | Source name |
-| `extract` | Object | No | none | Extraction rules |
-| `extract.regex` | String | Yes | none | Regular expression |
-| `extract.group` | Integer | Yes | none | Capture group index |
-| `port` | Integer | No | none | Override port number |
-| `onMissing` | String | No | `Fallback` | Behavior when value is missing: `Fallback` / `Reject` |
-| `onInvalid` | String | No | `Reject` | Behavior when value is invalid: `Reject` / `Fallback` |
-| `inheritTls` | Boolean | No | `true` | Inherit route's TLS configuration |
-| `debugHeader` | Boolean | No | `false` | Add debug header to response |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `from` | Object | **Required** | Endpoint value source (see sub-fields) |
+| `from.type` | String | `header` | Source type: `header` / `query` / `cookie` / `ctx` |
+| `from.name` | String | `X-Target-Endpoint` | Source name |
+| `extract` | Object | none | Extraction rules |
+| `extract.regex` | String | **Required** (within `extract`) | Regular expression applied to the raw value |
+| `extract.group` | Integer | `1` | Capture group index (`0` = full match) |
+| `port` | Integer | none | Port to use when the value carries no `ip:port` and the backendRef has none |
+| `onMissing` | Enum | `Fallback` | Behavior when the value is missing. Allowed values: `Fallback` (normal LB) / `Reject` (400) |
+| `onInvalid` | Enum | `Reject` | Behavior when the endpoint is not in any backendRef. Allowed values: `Reject` (403) / `Fallback` |
+| `inheritTls` | Boolean | `true` | Inherit TLS from the matched backendRef's BackendTLSPolicy |
+| `debugHeader` | Boolean | `false` | When `true`, sets the `X-Direct-Endpoint` request header (sent to the upstream) indicating the targeted endpoint |
 
 ---
 
@@ -100,8 +99,9 @@ requestPlugins:
 ## Behavior Details
 
 - The specified endpoint IP must belong to the Endpoints list of a Service in the current route's `backendRefs`
-- If the endpoint doesn't belong to any backend, it is handled as `onInvalid`
-- With `debugHeader: true`, the response includes an `X-Direct-Endpoint` header indicating the actual routed endpoint
+- If the endpoint doesn't belong to any backend, it is handled as `onInvalid` (default `Reject` with 403)
+- The port is resolved in priority order: (1) port embedded in the value (`ip:port`), (2) the `port` field, (3) the matched backendRef's port. If none are available, the plugin returns an error
+- With `debugHeader: true`, the `X-Direct-Endpoint` request header is added and forwarded to the upstream, indicating the actual routed endpoint
 - `Fallback` mode falls back to normal load balancing selection
 
 ---
@@ -117,16 +117,22 @@ requestPlugins:
 kubectl get endpoints <service-name> -o yaml
 ```
 
-### Problem 2: Returns 400 Error
+### Problem 2: Returns 400 Bad Request
 
-**Cause**: `onInvalid` is set to `Reject` and the provided value has invalid format.
+**Cause**: The endpoint value is missing from the request and `onMissing` is set to `Reject`.
 
-**Solution**: Ensure a valid IP address format is provided.
+**Solution**: Provide the configured source (header/query/cookie/ctx), or set `onMissing: fallback` to use normal load balancing when the value is absent.
+
+### Problem 3: Returns 403 Forbidden
+
+**Cause**: The resolved endpoint is not part of any of the route's `backendRefs` and `onInvalid` is `Reject` (the default).
+
+**Solution**: Confirm the endpoint IP belongs to a backend Service's Endpoints, or set `onInvalid: fallback`.
 
 ---
 
 ## Related Docs
 
 - [Dynamic Upstream](./dynamic-upstream.md)
-- [Load Balancing Algorithms](../../lb-algorithms.md)
 - [Backends](../../backends/README.md)
+- [Filters Overview](../overview.md)

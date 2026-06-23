@@ -11,8 +11,8 @@ EdgionTls is Edgion's custom-extension resource that provides richer TLS certifi
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls.rs`
-- Type definitions: `src/types/resources/edgion_tls.rs`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_tls.rs`
+- Type definitions: `edgion-resources/src/resources/edgion_tls.rs`
 
 ## Controller-side processing
 

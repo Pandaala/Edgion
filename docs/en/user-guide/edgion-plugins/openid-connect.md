@@ -1,6 +1,6 @@
 # OpenID Connect Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > OpenidConnect is an OIDC/OAuth2 authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 
@@ -25,12 +25,18 @@
 |-----------|------|---------|-------------|
 | `discovery` | String | — (required) | OIDC Discovery endpoint URL, must start with `http://` or `https://` |
 | `clientId` | String | — (required) | OAuth2 Client ID |
-| `clientSecretRef` | Object | None | Reference to a K8s Secret containing the client secret |
+| `clientSecretRef` | Object | none | Reference to a K8s Secret containing the client secret |
 | `bearerOnly` | Boolean | `false` | Only validate Bearer Tokens, do not enable browser login flow |
 | `unauthAction` | Enum | `Auth` | Behavior on unauthenticated requests. Values: `Auth` (trigger login) | `Deny` (return 401) | `Pass` (pass through) |
 | `scope` | String | `"openid"` | OIDC request scope |
-| `requiredScopes` | Array\<String\> | None | Required scopes; token missing any will be rejected |
+| `requiredScopes` | Array\<String\> | None | Required scopes; a token missing any is rejected. **Only enforced when `bearerOnly: true`** (see note below) |
 | `realm` | String | `"edgion"` | Realm value in the `WWW-Authenticate` response header |
+
+> **Note on `requiredScopes`:** scope enforcement only applies in bearer-only mode
+> (`bearerOnly: true`). In the default session/login mode (`bearerOnly: false`, which
+> includes `unauthAction: Auth`), `requiredScopes` is accepted at config time but **not**
+> enforced at runtime — every authenticated user passes regardless of the token's scopes.
+> To restrict access by scope, set `bearerOnly: true`.
 
 ### Authentication Flow Parameters
 
@@ -38,17 +44,17 @@
 |-----------|------|---------|-------------|
 | `usePkce` | Boolean | `false` | Whether to enable PKCE (Proof Key for Code Exchange). **Strongly recommended `true` for production deployments** — see [Recommended Security Switches](#recommended-security-switches) |
 | `useNonce` | Boolean | `false` | Whether to include nonce in authorization requests. **Strongly recommended `true` for production deployments** — see [Recommended Security Switches](#recommended-security-switches) |
-| `redirectUri` | String | None | Custom callback URI, must be an absolute path or absolute URL |
-| `authorizationParams` | Object | None | Extra parameters appended to the authorization request (cannot contain reserved keys like `response_type`, `client_id`, etc.) |
+| `redirectUri` | String | none | Custom callback URI, must be an absolute path or absolute URL |
+| `authorizationParams` | Object | none | Extra parameters appended to the authorization request (cannot contain reserved keys like `response_type`, `client_id`, etc.) |
 | `revokeTokensOnLogout` | Boolean | `false` | Whether to call the Token Revocation endpoint on logout |
 | `logoutPath` | String | `"/logout"` | Path that triggers logout, must start with `/` |
-| `postLogoutRedirectUri` | String | None | Redirect URI after logout |
+| `postLogoutRedirectUri` | String | none | Redirect URI after logout |
 
 ### Session Parameters
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `sessionSecretRef` | Object | None | Reference to a K8s Secret containing the session encryption key (required when `unauthAction=Auth`) |
+| `sessionSecretRef` | Object | none | Reference to a K8s Secret containing the session encryption key (required when `unauthAction=Auth`) |
 | `sessionCookieName` | String | `"edgion_oidc_session"` | Session cookie name |
 | `sessionLifetime` | Integer | `3600` | Session lifetime (seconds) |
 | `sessionCookieSameSite` | String | `"Lax"` | Cookie SameSite attribute. Values: `Strict` | `Lax` | `None` |
@@ -63,16 +69,16 @@
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `verificationMode` | Enum | `Auto` | Verification mode. Values: `Auto` | `JwksOnly` | `IntrospectionOnly` |
-| `tokenSigningAlg` | String | None | Specify token signing algorithm (cannot be `none`) |
-| `allowedSigningAlgs` | Array\<String\> | None | Allowed signing algorithms list (cannot contain `none`) |
+| `tokenSigningAlg` | String | none | Specify token signing algorithm (cannot be `none`) |
+| `allowedSigningAlgs` | Array\<String\> | none | Allowed signing algorithms list (cannot contain `none`) |
 | `useJwks` | Boolean | `true` | Whether to use JWKS for local verification |
 | `sslVerify` | Boolean | `true` | Whether to verify the OIDC Provider's TLS certificate |
-| `issuers` | Array\<String\> | None | Allowed issuer list |
-| `audiences` | Array\<String\> | None | Allowed audience list |
+| `issuers` | Array\<String\> | none | Allowed issuer list |
+| `audiences` | Array\<String\> | none | Allowed audience list |
 | `clockSkewSeconds` | Integer | `120` | Clock skew tolerance (seconds) |
 | `jwksCacheTtl` | Integer | `300` | JWKS cache TTL (seconds) |
 | `jwksMinRefreshInterval` | Integer | `10` | Minimum JWKS refresh interval (seconds) |
-| `introspectionEndpoint` | String | None | Custom introspection endpoint URL |
+| `introspectionEndpoint` | String | none | Custom introspection endpoint URL |
 | `introspectionEndpointAuthMethod` | Enum | `client_secret_basic` | Introspection endpoint auth method. Values: `client_secret_basic` | `client_secret_post` |
 | `introspectionCacheTtl` | Integer | `0` | Introspection result cache TTL (seconds), `0` disables |
 | `tokenEndpointAuthMethod` | Enum | `client_secret_basic` | Token endpoint auth method. Values: `client_secret_basic` | `client_secret_post` |
@@ -85,8 +91,8 @@
 | `setIdTokenHeader` | Boolean | `false` | Whether to pass the ID token to upstream |
 | `setUserinfoHeader` | Boolean | `false` | Whether to pass userinfo to upstream |
 | `accessTokenInAuthorizationHeader` | Boolean | `false` | Whether to set the access token in the upstream `Authorization: Bearer` header |
-| `claimsToHeaders` | Object | None | Claims-to-header mapping (supports dot-notation, e.g., `user.name`) |
-| `storeClaimsInCtx` | Boolean | `false` | Whether to store claims in context variables |
+| `claimsToHeaders` | Object | none | Claims-to-header mapping (supports dot-notation, e.g., `user.name`) |
+| `storeClaimsInCtx` | Boolean | `false` | Whether to store claims in the ctx variable `oidc_claims` (read by downstream plugins via `get_ctx_var`; excluded from the access log so claims are not persisted) |
 | `maxHeaderValueBytes` | Integer | `4096` | Maximum size per mapped header value in bytes |
 | `maxTotalHeaderBytes` | Integer | `16384` | Maximum total size for all mapped headers in bytes |
 
@@ -154,15 +160,13 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-    - plugin:
-        type: OpenidConnect
-        config:
-          discovery: "https://idp.example.com/.well-known/openid-configuration"
-          clientId: "my-api"
-          bearerOnly: true
-          verificationMode: JwksOnly
-          unauthAction: Deny
-      enabled: true
+    - type: OpenidConnect
+      config:
+        discovery: "https://idp.example.com/.well-known/openid-configuration"
+        clientId: "my-api"
+        bearerOnly: true
+        verificationMode: JwksOnly
+        unauthAction: Deny
 ```
 
 ## Web Login Example (Code Flow + PKCE)
@@ -175,20 +179,18 @@ metadata:
   namespace: production
 spec:
   requestPlugins:
-    - plugin:
-        type: OpenidConnect
-        config:
-          discovery: "https://idp.example.com/.well-known/openid-configuration"
-          clientId: "web-app"
-          clientSecretRef:
-            name: oidc-client-secret
-          bearerOnly: false
-          unauthAction: Auth
-          usePkce: true
-          useNonce: true
-          sessionSecretRef:
-            name: oidc-session-secret
-      enabled: true
+    - type: OpenidConnect
+      config:
+        discovery: "https://idp.example.com/.well-known/openid-configuration"
+        clientId: "web-app"
+        clientSecretRef:
+          name: oidc-client-secret
+        bearerOnly: false
+        unauthAction: Auth
+        usePkce: true
+        useNonce: true
+        sessionSecretRef:
+          name: oidc-session-secret
 ```
 
 ## Secret Constraints

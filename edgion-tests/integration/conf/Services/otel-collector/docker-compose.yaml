@@ -1,0 +1,20 @@
+# OpenTelemetry Collector single-node instance for OTLP log output integration testing.
+# Started/stopped by run_otlp_test.sh.
+#
+# The collector receives OTLP/gRPC on port 4317 and writes log records as NDJSON
+# to a host-mounted directory so the test script can parse and assert on them.
+services:
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.154.0
+    container_name: edgion-test-otel-collector
+    ports:
+      - "14317:4317"
+      - "13133:13133"
+    volumes:
+      - ./collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - otel-logs:/var/log/otel
+    restart: "no"
+
+volumes:
+  otel-logs:
+    driver: local

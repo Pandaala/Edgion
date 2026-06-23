@@ -1,0 +1,11 @@
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: ls-status-redis-valid
+  namespace: edgion-test
+spec:
+  type: redis
+  config:
+    endpoints:
+    - redis://127.0.0.1:16379
+    db: 0

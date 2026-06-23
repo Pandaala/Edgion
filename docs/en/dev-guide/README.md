@@ -70,4 +70,4 @@ If a topic involves multiple reader types, write separate documents and cross-re
 3. For capabilities that are not part of the standard Gateway API, clearly mark them as Edgion extensions at the beginning of the document.
 4. Implicit logic that affects request behavior (defaults, execution order, auto-completion) must be explicitly documented.
 5. Write user documentation and developer documentation separately: one covers "how to configure", the other covers "how it's implemented".
-6. After changing `AGENTS.md`, `skills/`, or these dev-guide entry docs, run `make check-agent-docs`.
+6. After changing `AGENTS.md`, `skills/`, or these dev-guide entry docs, run `python3 cicd/checks/validate_agent_docs.py`.

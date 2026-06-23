@@ -251,7 +251,7 @@ See `docs/zh-CN/user-guide/http-route/filters/plugin-composition.md` and `docs/z
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `request` | `Duration` | EdgionGatewayConfig global value | End-to-end request timeout (**including retries**) |
-| `backendRequest` | `Duration` | EdgionGatewayConfig global value | Per-backend request timeout (must not exceed `request`) |
+| `backendRequest` | `Duration` | EdgionGatewayConfig global value | Per-backend request timeout (must not exceed `request`). When the rule has a retry policy, acts as the GEP-1731 per-try timeout: an attempt exceeding it is canceled and retried |
 
 > **Constraint**: `backendRequest` must not exceed `request`. If the configured `backendRequest` is greater than `request`, it is automatically clamped to `request`, ensuring that a single backend request timeout does not exceed the end-to-end limit.
 
@@ -264,6 +264,15 @@ See `docs/zh-CN/user-guide/http-route/filters/plugin-composition.md` and `docs/z
 | `codes` | `Vec<i32>` | — | HTTP status codes that trigger a retry (100-599) |
 
 > **Priority**: `rule.retry.attempts` > `EdgionGatewayConfig.spec.maxRetries` (global default). Connection failures and status-code retries share the same attempts counter. The `backendRequest` timeout simultaneously serves as the route-level override for Pingora `connection_timeout` / `read_timeout` / `write_timeout`.
+
+> **Per-try timeout**: with a retry policy present, `timeouts.backendRequest`
+> bounds each attempt and a timed-out attempt is retried while nothing has
+> been sent downstream yet (recorded as
+> `EdgionStatus::BackendRequestTimeoutRetry`, 504_03, in the access-log error
+> chain). Deadline-sourced timeouts (`request` / client `grpc-timeout`) are
+> never retried. Implemented in `configure_peer_timeouts`
+> (`pg_upstream_peer.rs`, `fold_peer_timeouts`) + `error_while_proxy` Case
+> 1.5. Integration scenario: `HTTPRoute/Backend/PerTryTimeout`.
 
 ## Session Persistence Schema
 

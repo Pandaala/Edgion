@@ -1,0 +1,26 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: path-norm-request-restriction-deny
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - enable: true
+    type: RequestRestriction
+    config:
+      mode: Blacklist
+      ruleGroups:
+      - rules:
+        - name: block-admin-normalized
+          source: Path
+          values:
+          - /admin
+          onMissing: NoMatch
+      - rules:
+        - name: block-literal-encoded-slash
+          source: RequestPath
+          regex:
+          - '%2[fF]'
+          onMissing: NoMatch
+      status: 403
+      message: Access denied by path normalization policy

@@ -1,0 +1,68 @@
+# ExtProc + ForwardAuth coexistence: both external-call plugins on the same
+# request chain, in order. ForwardAuth (auth server 30040) validates first; then
+# ext_proc (30041) adds its request header. Proves the two plugins coexist and
+# both apply (backend should see X-User-ID from ForwardAuth AND x-ext-proc-req
+# from ExtProc).
+#
+# Each suite is loaded in isolation, so the auth-svc Service+EndpointSlice
+# (also declared in EdgionPlugins/ForwardAuth/01_..._basic.yaml) must be
+# inlined here too — without it ForwardAuth's backendRef resolves to no
+# endpoint and the chain short-circuits with 503.
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30040
+      targetPort: 30040
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: auth-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: auth-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30040
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ext-proc-coexist
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target: { name: auth-svc, namespace: edgion-default, port: 30040 }
+        timeoutMs: 5000
+        request:
+          path:   { template: "/verify" }
+          method: { template: "GET" }
+          headers:
+            forwardAll: true
+        decision:
+          upstreamHeaders: [X-User-ID]
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+        failureModeAllow: false

@@ -229,25 +229,24 @@ If a single iteration runs stably for more than 5 minutes, the count is reset to
 
 ## Configuration Reference
 
-```toml
-[conf_center]
-type = "kubernetes"
-gateway_class = "edgion"
-controller_name = "edgion.io/gateway-controller"
-ha_mode = "leader-only"            # or "all-serve"
-
-[conf_center.leader_election]
-lease_name = "edgion-controller-leader"
-lease_namespace = "edgion-system"
-lease_duration_secs = 15
-renew_deadline_secs = 10
-retry_period_secs = 2
+```yaml
+conf_center:
+  type: kubernetes
+  gateway_class: edgion
+  controller_name: edgion.io/gateway-controller
+  ha_mode: leader-only            # or "all-serve"
+  leader_election:
+    lease_name: edgion-controller-leader
+    lease_namespace: edgion-system
+    lease_duration_secs: 15
+    renew_deadline_secs: 10
+    retry_period_secs: 2
 ```
 
 ## Key Files
 
-- `src/core/controller/conf_mgr/conf_center/kubernetes/center.rs` — lifecycle core (`start`, `run_main_flow`, `run_serving_flow`)
-- `src/core/controller/conf_mgr/conf_center/kubernetes/leader_election.rs` — leader election implementation
-- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs` — `KubernetesController` (spawns resource controllers)
-- `src/core/controller/conf_mgr/conf_center/kubernetes/config.rs` — `KubernetesConfig`, `HaMode`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `ResourceController<K>`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs` — lifecycle core (`start`, `run_main_flow`, `run_serving_flow`)
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/leader_election.rs` — leader election implementation
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs` — `KubernetesController` (spawns resource controllers)
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/config.rs` — `KubernetesConfig`, `HaMode`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` — `ResourceController<K>`

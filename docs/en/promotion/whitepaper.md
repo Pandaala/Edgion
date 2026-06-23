@@ -1,6 +1,6 @@
 # Edgion Technical Whitepaper
 
-> This document is intended for architects and technical decision-makers. It covers the core architecture design, the rationale behind key technology choices (Rust / Pingora / Gateway API), and the implementation principles of each subsystem. For a product feature overview, see the [GitHub README](../../../README.md).
+> This document is intended for architects and technical decision-makers. It covers the core architecture design, the rationale behind key technology choices (Rust / Pingora / Gateway API), and the implementation principles of each subsystem. For a product feature overview, see the [GitHub README](https://github.com/Pandaala/Edgion/blob/main/README.md).
 
 ---
 
@@ -431,14 +431,14 @@ The labels for `edgion_gateway_request_duration_ms` are driven by the `RequestDu
 
 | Metric Name | Type | Description |
 |-------------|------|-------------|
-| `edgion_requests_total` | Counter | Total number of processed requests |
 | `edgion_ctx_created_total` | Counter | Total number of request contexts created |
-| `edgion_backend_requests_total` | Counter | Total number of backend requests, with multi-dimensional labels including gateway/route/backend/protocol/status |
+| `edgion_backend_requests_total` | Counter | Total number of backend requests, with multi-dimensional labels including gateway/route/backend/protocol/status (use `sum(...)` for the aggregate request total) |
 | `edgion_mirror_requests_total` | Counter | Total number of mirror requests, grouped by status label |
 | `edgion_gateway_request_bytes_total` | Counter | Total request bytes sent downstream to upstream |
 | `edgion_gateway_response_bytes_total` | Counter | Total response bytes sent from upstream to downstream |
 | `edgion_config_reload_signals_total` | Counter | Total number of configuration reload signals received from the Controller |
 | `edgion_config_relist_total` | Counter | Number of full configuration re-fetches |
+| `edgion_config_event_parse_errors_total` | Counter | Number of watch-event JSON parse failures (labeled by resource `kind`) |
 | `edgion_status_update_total` | Counter | Total number of K8s Status update attempts |
 | `edgion_status_update_skipped_total` | Counter | Number of K8s Status update skips (no changes) |
 
@@ -448,7 +448,6 @@ The labels for `edgion_gateway_request_duration_ms` are driven by the `RequestDu
 
 | Metric Name | Type | Description |
 |-------------|------|-------------|
-| `edgion_requests_failed_total` | Counter | Total number of failed requests |
 | `edgion_status_update_failed_total` | Counter | Total number of K8s Status update failures |
 | `edgion_access_log_dropped_total` | Counter | Number of HTTP access log entries dropped (channel full) |
 | `edgion_ssl_log_dropped_total` | Counter | Number of SSL log entries dropped |
@@ -627,4 +626,4 @@ Edgion is under active development. The following are key priorities for the nea
 
 Edgion is a continuously evolving open-source project. We believe that Rust's memory-safety guarantees, Pingora's production-grade networking engine, the Gateway API's standardized configuration model, and the safe programmability of the self-developed DSL engine together position Edgion to deliver an answer to cloud-native API gateway requirements that is secure, performant, and flexible.
 
-Return to [Edgion Promotion Home](./README.md) | [Project Home](../../../README.md)
+Return to [Edgion Promotion Home](./README.md) | [Project Home](https://github.com/Pandaala/Edgion/blob/main/README.md)

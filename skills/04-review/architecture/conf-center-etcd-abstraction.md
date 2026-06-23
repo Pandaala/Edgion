@@ -11,23 +11,23 @@ description: Use when reviewing ConfCenter etcd abstraction boundary findings; d
 
 ## Code Involved
 
-- `src/core/controller/conf_mgr/conf_center/etcd/config.rs:140-211`
+- `edgion-controller/src/conf_mgr/conf_center/etcd/config.rs:140-211`
   (`EtcdConfig::to_client_config`)
-- `src/core/controller/conf_mgr/conf_center/etcd/center.rs:47-48`
+- `edgion-controller/src/conf_mgr/conf_center/etcd/center.rs:47-48`
   (`EtcdCenter::new` directly news `EtcdLinkClient`)
-- `src/core/gateway/link_sys/providers/etcd/config_mapping.rs:38`
-  (`build_connect_options` signature serves both the CRD flow and the TOML flow)
+- `edgion-common/src/link_sys_core/providers/etcd/config_mapping.rs:38`
+  (`build_connect_options` signature serves both the CRD flow and the file-config flow)
 
 ## Three Points That Look Like Issues (none will be fixed)
 
 ### 1. ConfCenter Synthesizes a Fake `Secret` / `SecretObjectReference` ("abstraction leak")
 
-`config.rs:140-211` directly `use k8s_openapi::Secret` and `link_sys::TlsConfig`, and constructs a placeholder `secret_ref` (`name: "conf-center-toml"`) + an embedded synthetic `Secret`.
+`config.rs:140-211` directly `use k8s_openapi::Secret` and `link_sys::TlsConfig`, and constructs a placeholder `secret_ref` (`name: "conf-center-yaml"`) + an embedded synthetic `Secret`.
 
 **Why it is written this way**: to reuse the Gateway-side `build_connect_options` code path that handles TLS/auth, avoiding writing a second processing logic. The code comment already explicitly notes *"synthetic placeholder — secret_ref not used by the provider"*.
 
 **Why it will not be fixed**:
-- Only 2 callers (CRD flow + TOML flow); no third connection source has appeared
+- Only 2 callers (CRD flow + file-config flow); no third connection source has appeared
 - Fixing would require rewriting the `build_connect_options` signature + designing `EtcdLinkClient` reconnect semantics (the reconnect path at `client.rs:126, 205` reuses the stored `EtcdClientConfig`; after changing the DTO you must think through how Secret updates are injected)
 - This is precisely the just-fixed I4 silent regression (see "regression of the fix-change effort" in the `to_client_config` comment) — touching a just-fixed critical path for "elegance" is not worthwhile
 - No runtime risk (not a memory/data leak, purely a design smell)

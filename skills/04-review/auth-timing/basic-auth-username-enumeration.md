@@ -11,6 +11,8 @@ The response-time difference between the "username does not exist" and "username
 
 After bcrypt was removed from the plugin (the data plane now only verifies `{SHA}` / `$apr1$` / `$1$`, all sub-microsecond), the absolute time difference is much smaller, but the user-existence signal is still observable on a LAN, and is enough to drive offline brute-force against any leaked hash. The reasoning below still applies.
 
+The discriminating signal is **not only** the hash-compute time. The known-user path runs `tokio::task::spawn_blocking(verify).await` (`plugin.rs:127`) — blocking-pool scheduling + thread handoff + `.await` round-trip — while the unknown-user path returns synchronously at the `HashMap` miss (`plugin.rs:122`). That dispatch overhead is present for every known user and absent for every unknown one, so even the cheapest `{SHA}` hash leaves a measurable delta. This refinement does **not** change the conclusion: the rejected fix would have to wrap the dummy verify in the *same* `spawn_blocking` to be equalizing, which schedules a blocking-pool task for every bogus-username probe — strictly *more* CPU/thread-pool amplification under enumeration traffic than the hash-only objection, and a uniform `authFailureDelayMs` floor masks both the compute-time and the dispatch-overhead source at once.
+
 ## Reasons
 
 - **Dummy verify is an anti-pattern in gateway scenarios**: even with cheap hashes, running an extra verify for unknown users amplifies wasted CPU under enumeration traffic; with bcrypt-class hashes it is even worse (~200ms / 1 core per probe)
@@ -25,6 +27,7 @@ When a review/audit report contains the following patterns, close as "no code fi
 1. "basic_auth returns directly when username does not exist; verify not executed" / "username enumeration timing side channel"
 2. "Recommend dummy hash verify on a fixed hash to eliminate timing differences"
 3. "Should set `auth_failure_delay_ms` default to 500ms" (a breaking default change; not auto-applied)
+4. "The discriminating signal is the `spawn_blocking` dispatch overhead (thread handoff / scheduling), not just hash-compute time" — same finding, same conclusion (see Conclusion section); the equalizing dummy verify would have to go through the same `spawn_blocking`, amplifying blocking-pool work per probe.
 
 Verify three points before closing:
 
@@ -36,6 +39,6 @@ All three satisfied → not a real issue; point to the M4 FIXED (doc-only) decis
 
 ## Background Notes
 
-- Decision date: 2026-04-21 (original); refreshed when bcrypt was removed from the data plane
+- Decision date: 2026-04-21 (original); refreshed when bcrypt was removed from the data plane; refreshed again 2026-05-26 for the F-005 re-report (spawn_blocking dispatch-overhead framing — same conclusion)
 - Decision source: `tasks/security-audit/` M4 entry, chose Option C
 - Related finding: H8 (admin login username comparison is not CT) in this audit belongs to the admin API path rather than the plugin path; this conclusion does not apply; needs separate evaluation

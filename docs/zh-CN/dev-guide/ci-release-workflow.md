@@ -2,7 +2,7 @@
 
 本文档面向维护 GitHub Actions、发布 Docker 镜像、或需要在本地复现 CI 行为的贡献者，说明当前 Edgion 的 CI / release 结构、共享 action、命令边界和常见改动风险。
 
-> 面向 AI / Agent 的主 workflow 入口现在是 [../../../skills/09-misc/cicd/02-github-workflow.md](../../../skills/09-misc/cicd/02-github-workflow.md)。
+> 面向 AI / Agent 的主 workflow 入口现在是 [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md)。
 > 本文档保留给人看的背景说明、发布流程解读和人工审查清单。
 
 ## 当前有哪两条主线
@@ -68,17 +68,18 @@ CI 和 release 现在都依赖同一个本地 action：
 
 当前 `ci.yml` 的主检查顺序是：
 
-1. `cargo check --all-targets`
+1. `cargo check --workspace --all-targets`
 2. `cargo fmt --all -- --check`
-3. `make check-agent-docs`
-4. `cargo clippy --all-targets`
+3. `python3 cicd/checks/validate_agent_docs.py`
+4. `cargo clippy --workspace --all-targets`
 5. `cargo test --all`
 6. 汇总 job `ci-success`
 
 这里有几个容易被误解的点：
 
 - 当前 CI 命令没有默认扩大到 `--all-features`
-- `make check-agent-docs` 专门负责兜住 `AGENTS.md`、`skills/` 和 dev-guide 入口层的一致性
+- `check` 和 `clippy` 带 `--workspace`，目的是把 `edgion-tests`（一个被排除在 `default-members` 之外的 workspace 成员）也覆盖进来；若只用 `--all-targets`，会漏掉这个测试框架
+- `python3 cicd/checks/validate_agent_docs.py` 专门负责兜住 `AGENTS.md`、`skills/` 和 dev-guide 入口层的一致性
 - `fmt` job 不安装系统依赖，也不开 Cargo cache
 - `ci-success` 的作用是给 branch protection 一个稳定汇总结果，不是重复跑检查
 
@@ -111,7 +112,7 @@ CI 和 release 现在都依赖同一个本地 action：
 作用：
 
 - 下载前一步的二进制产物
-- 用 `docker/Dockerfile.runtime` 打 runtime 镜像
+- 用 `cicd/docker/Dockerfile.runtime` 打 runtime 镜像
 - 按架构推送镜像 tag
 
 ### 4. `merge-manifests`
@@ -137,10 +138,10 @@ CI 和 release 现在都依赖同一个本地 action：
 如果你只是想本地复现当前 CI，优先跑：
 
 ```bash
-cargo check --all-targets
+cargo check --workspace --all-targets
 cargo fmt --all -- --check
-make check-agent-docs
-cargo clippy --all-targets
+python3 cicd/checks/validate_agent_docs.py
+cargo clippy --workspace --all-targets
 cargo test --all
 ```
 
@@ -186,16 +187,15 @@ cargo test --all
 
 直接从 skill 入口开始最稳：
 
-- [../../../skills/09-misc/cicd/02-github-workflow.md](../../../skills/09-misc/cicd/02-github-workflow.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/02-github-workflow.md)
 
 如果任务还涉及 feature 组合或构建依赖，再补看：
 
-- [../../../skills/02-features/01-binary-and-deployment/02-feature-flags.md](../../../skills/02-features/01-binary-and-deployment/02-feature-flags.md)
-- [../../../skills/09-misc/cicd/00-local-build.md](../../../skills/09-misc/cicd/00-local-build.md)
-- [../../../skills/09-misc/cicd/01-docker-build.md](../../../skills/09-misc/cicd/01-docker-build.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/02-features/01-binary-and-deployment/02-feature-flags.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/01-binary-and-deployment/02-feature-flags.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/00-local-build.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/00-local-build.md)
+- [https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/01-docker-build.md](https://github.com/Pandaala/Edgion/blob/main/skills/09-misc/cicd/01-docker-build.md)
 
 ## 相关文档
 
 - [AI 协作与 Skills 使用指南](./ai-agent-collaboration.md)
 - [知识来源映射与维护规则](./knowledge-source-map.md)
-- [Makefile](../../../Makefile)

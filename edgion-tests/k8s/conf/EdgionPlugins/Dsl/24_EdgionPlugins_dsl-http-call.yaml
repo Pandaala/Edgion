@@ -1,0 +1,26 @@
+# DSL Plugin - http.call integration test
+#
+# Scenario:
+#   The DSL script calls the test backend's /health endpoint via http.call.
+#   If status == 200, it sets X-Call-Result: "ok" as a response header (visible to the test client).
+#   If the call fails (status == 0), it sets X-Call-Result: "fail".
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-http-call
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "http-call-demo"
+        source: |
+          let http_resp = http.call("GET", "http://edgion-test-server.edgion-test.svc.cluster.local:30001/health", nil, 2000)
+          if http_resp["status"] == 200 {
+            resp.set_header("X-Call-Result", "ok")
+          } else {
+            resp.set_header("X-Call-Result", "fail")
+          }
+        errorPolicy: deny
+        httpMaxTimeoutMs: 3000

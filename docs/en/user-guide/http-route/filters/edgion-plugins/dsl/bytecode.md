@@ -91,7 +91,6 @@ metadata:
   name: auth-check
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "auth-check"
@@ -111,7 +110,6 @@ metadata:
   name: auth-check
 spec:
   requestPlugins:
-    - enable: true
       type: Dsl
       config:
         name: "auth-check"

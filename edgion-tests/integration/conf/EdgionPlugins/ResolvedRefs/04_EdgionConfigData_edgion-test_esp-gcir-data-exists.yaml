@@ -1,0 +1,12 @@
+# Selector EdgionConfigData — must be loaded BEFORE the ESP that references it.
+# The GlobalConnectionIpRestriction plugin's activeProfileRef must resolve to a Selector.
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: esp-gcir-data-exists
+  namespace: edgion-test
+spec:
+  data:
+    type: Selector
+    config:
+      active: main

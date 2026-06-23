@@ -1,0 +1,133 @@
+[package]
+name = "edgion-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+# Internal end-to-end test harness — never published, and deliberately kept out
+# of the workspace `default-members` so a normal `cargo build` / `cargo build
+# --workspace` does NOT compile these ~56k lines. CI builds it explicitly with
+# `cargo build -p edgion-tests`.
+publish = false
+
+[lib]
+name = "edgion_tests"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+# Executable entrypoints. They live next to the shared framework modules under
+# `src/` and consume them via the `edgion_tests` library crate.
+[[bin]]
+name = "test_client"
+path = "src/client/test_client.rs"
+
+[[bin]]
+name = "test_client_direct"
+path = "src/client_direct/test_client_direct.rs"
+
+[[bin]]
+name = "test_server"
+path = "src/server/test_server.rs"
+
+[[bin]]
+name = "resource_diff"
+path = "src/validator/resource_diff.rs"
+
+[[bin]]
+name = "config_load_validator"
+path = "src/validator/config_load_validator.rs"
+
+[[bin]]
+name = "cache_residue"
+path = "src/validator/cache_residue.rs"
+
+[[bin]]
+name = "build_test_proto"
+path = "src/build_test_proto.rs"
+
+[dependencies]
+# Internal path deps. `edgion-controller` is pulled in only for the ACME suite
+# (option A — drives the controller's ACME client directly); `edgion-cli` drives
+# config via the CLI client; `edgion-resources` provides shared schema types.
+# `edgion-gateway` is pulled in only for its stable log-token constants
+# (region_route::log_consts); default-features disabled so we do not activate
+# boringssl — rustls is selected here to keep it consistent with the rest of
+# this crate which already depends on rustls directly.
+edgion-resources.workspace = true
+edgion-controller.workspace = true
+edgion-cli.workspace = true
+edgion-gateway = { workspace = true, features = ["boringssl"] }
+# `edgion-common` provides the generated ext_proc proto types/server stub used by
+# the fake external-processor in the test server.
+edgion-common.workspace = true
+
+# Async runtime / error handling
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-stream.workspace = true
+tokio-rustls.workspace = true
+async-trait.workspace = true
+anyhow.workspace = true
+
+# Serialization
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+
+# HTTP / gRPC test origin + clients. This crate uses rustls directly and so
+# sidesteps the gateway's mutually-exclusive boringssl/rustls feature dance.
+axum.workspace = true
+axum-server.workspace = true
+tonic.workspace = true
+tonic-reflection.workspace = true
+prost.workspace = true
+# Used by the `build_test_proto` helper binary to regenerate the gRPC stubs.
+tonic-build.workspace = true
+reqwest.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
+h2.workspace = true
+http.workspace = true
+tokio-tungstenite.workspace = true
+proxy-header.workspace = true
+
+# CLI / output formatting
+clap.workspace = true
+colored.workspace = true
+console.workspace = true
+
+# Crypto / encoding helpers used by the plugin suites
+base64.workspace = true
+hex.workspace = true
+crc32fast.workspace = true
+jsonwebtoken.workspace = true
+hmac.workspace = true
+aes-gcm.workspace = true
+sha2.workspace = true
+sha1.workspace = true
+x509-parser.workspace = true
+
+# Certificates / TLS test material
+rcgen.workspace = true
+instant-acme.workspace = true
+ldap3.workspace = true
+
+# Misc utilities
+chrono.workspace = true
+time.workspace = true
+cookie.workspace = true
+uuid.workspace = true
+regex.workspace = true
+rand.workspace = true
+percent-encoding.workspace = true
+parking_lot.workspace = true
+futures.workspace = true
+bytes.workspace = true
+tower.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+wiremock.workspace = true
+tempfile.workspace = true

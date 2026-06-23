@@ -1,0 +1,15 @@
+# Allow phase: defaultAction deny but localhost (127.0.0.0/8) is allow-listed.
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tcp-sp-reload-esp
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: IpRestriction
+      config:
+        defaultAction: deny
+        allow:
+          - name: localhost
+            cidrs:
+              - "127.0.0.0/8"

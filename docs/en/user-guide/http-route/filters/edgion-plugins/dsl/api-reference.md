@@ -323,7 +323,7 @@ if not req.has_header("X-Request-Id") {
 
 Returns the protocol type identifier of the current request. Possible values are:
 - `"http"` — Ordinary HTTP/1.1 or HTTP/2 request
-- `"grpc"` — gRPC request (`Content-Type: application/grpc`)
+- `"grpc"` — gRPC request (`Content-Type: application/grpc`, matched case-insensitively)
 - `"grpc-web"` — gRPC-Web request
 - `"websocket"` — WebSocket upgrade request
 
@@ -825,6 +825,8 @@ Returns the number of Unicode characters in a string (not bytes), or the number 
 
 **Constraints**: Only `Str`, `Nil`, and `List` are supported; other types trigger a type error.
 
+> **Note (unit mismatch with `max_string_len`)**: `len()` reports **Unicode character count**, while the sandbox `max_string_len` limit (default 8192) and the resulting `string too long (N bytes > L bytes)` error are measured in **UTF-8 bytes**. For ASCII strings the two numbers are equal; for strings containing multi-byte characters (e.g. CJK, emoji) the byte length can be up to 4× the character length, so a `len(s) < max_string_len` guard does not guarantee that a subsequent concatenation or builtin call will pass the byte-length check.
+
 **Example**:
 ```
 let token = req.header("X-Api-Key")
@@ -1100,14 +1102,18 @@ if value != nil {
 
 **Signature**: `url_decode(s)` → `Str`
 
-Decodes a URL-encoded string. `%XX` sequences are restored to their corresponding characters, and `+` is restored to a space (compatible with `application/x-www-form-urlencoded`). Invalid `%XX` sequences are preserved as-is.
+Decodes a URL-encoded string using `application/x-www-form-urlencoded` semantics: `%XX` sequences are restored to their corresponding characters, **and `+` is converted to a space**. Invalid `%XX` sequences are preserved as-is.
+
+> **Semantics**: this builtin matches form-body / query-string decoding, **not** RFC 3986 path decoding. In RFC 3986 a literal `+` in a path is a reserved character and must be preserved; this builtin treats it as a space. The behavior intentionally mirrors the gateway's shared `uri_utils::url_decode` helper used by route matching and consistent-hash arg-name comparison, so DSL and routing layer agree on the same decoded form for query data.
+>
+> **Security warning — do not use on URL paths for ACL / allowlist comparisons.** If you call `url_decode(req.path())` and compare the result against an allowlist that contains a literal `+`, an attacker can substitute `%20` (or vice versa) and the two distinct paths will compare equal. For path normalization in security contexts, compare against `req.path()` directly (already pingora-normalized) or use string operations (`starts_with`, `regex_match`) that do not collapse `+` and space. There is currently no RFC 3986 path-decoding builtin; the recommended path-ACL pattern is to write rules against the raw (already-normalized) path.
 
 **Parameters**:
-- `s` (Str) — URL-encoded string
+- `s` (Str) — URL-encoded string (intended for query strings or form bodies)
 
 **Return value**: Decoded string
 
-**Example**:
+**Example** (query-string decoding — the intended use):
 ```
 let raw = req.query("callback")
 if raw != nil {
@@ -1404,11 +1410,11 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 
 **Constraints**:
 - Only `http` and `https` URL schemes are accepted; other schemes (e.g. `file://`, `ftp://`) return `status = 0`.
-- When `httpBlockPrivateIps: true`, requests to loopback, private, and link-local addresses return `status = 0`.
-- The response body is truncated at `httpMaxResponseBodyBytes` (default 1 MiB).
+- When `httpBlockPrivateIps: true`, requests whose URL host is a loopback, private, or link-local **IP literal** return `status = 0`. The guard inspects the URL host string only — it does **not** resolve DNS names, so a hostname that resolves to a private address is not blocked by this flag. Use network-level egress controls (NetworkPolicy) as the primary defense for hostname-based SSRF.
+- The response body is truncated at `min(httpMaxResponseBodyBytes, max_string_len)` (defaults: 1 MiB and 8 KiB respectively). The stricter of the two caps wins, so the body returned to the script is bounded by the same `max_string_len` that applies to every other DSL string value. Truncation is silent — the call still succeeds and the call still does not raise.
 - The response `headers` Map is silently truncated to the first `max_map_size` entries (SSRF / large-response-header guard); the call still succeeds.
 - The actual timeout applied is `min(timeout_ms, httpMaxTimeoutMs)`.
-- At most 10 redirects are followed (global client setting).
+- At most 10 redirects are followed (global client setting). When `httpBlockPrivateIps: true`, the same IP-literal guard is re-applied to **every** redirect hop, so a 30x to a blocked address yields `status = 0` instead of silently following.
 
 **Configuration fields** (inside `config`):
 
@@ -1416,7 +1422,7 @@ Sends an outbound HTTP request from the gateway to an arbitrary HTTP/HTTPS endpo
 |-------|------|---------|-------------|
 | `httpMaxTimeoutMs` | Integer | `5000` | Hard cap on per-call timeout (ms) |
 | `httpMaxResponseBodyBytes` | Integer | `1048576` | Maximum response body size (bytes); body is truncated if exceeded |
-| `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local IP addresses (SSRF guard) |
+| `httpBlockPrivateIps` | Boolean | `false` | Block outbound calls to private/loopback/link-local IP addresses (SSRF guard). IP literals only — hostnames are not resolved (see note above). |
 
 **Example — call a health endpoint and branch on status**:
 ```
@@ -1470,6 +1476,8 @@ All `redis.*` functions are backed by a pre-configured LinkSys Redis connection 
 **Signature**: `redis.get(link, key)` → `Map { ok: Bool, value: Str | Nil, error: Str | Nil }`
 
 Reads the value of a string key. Returns `value: nil` when the key does not exist.
+
+The returned `value` is silently truncated at `max_string_len` (default 8 KiB, the same cap that applies to every other DSL string value); the call still succeeds and does not raise. Operators who need to read larger values must raise `max_string_len`.
 
 **Parameters**:
 - `link` (Str) — Alias name from `linkSysRefs[].name`
@@ -1611,6 +1619,8 @@ Atomically increments the integer value of a key by `delta`. `delta` may be nega
 
 Gets the value of a hash field. Returns `value: nil` when the key or field does not exist.
 
+The returned `value` is silently truncated at `max_string_len` (default 8 KiB), the same as `redis.get`.
+
 **Parameters**:
 - `link` (Str) — Alias name from `linkSysRefs[].name`
 - `key` (Str) — Hash key name
@@ -1649,7 +1659,7 @@ Deletes a field from a hash. Returns `value: true` if the field existed and was 
 
 **Signature**: `redis.hgetall(link, key)` → `Map { ok: Bool, value: Map, error: Str | Nil }`
 
-Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned on a connection error, or when the hash contains more entries than the `max_map_size` limit (in which case the oversize `Map` is not constructed and `error` describes the actual size and limit).
+Gets all fields and values of a hash. Returns an empty `Map` when the key does not exist. `ok: false` is returned on a connection error, or when the hash contains more entries than the `max_map_size` limit (in which case the oversize `Map` is not constructed and `error` describes the actual size and limit). Each entry's key and value string is independently truncated at `max_string_len` (default 8 KiB), the same as `redis.get`; the call still succeeds.
 
 **Parameters**:
 - `link` (Str) — Alias name from `linkSysRefs[].name`

@@ -1,0 +1,21 @@
+# Whitelist mode where the test client's IP (127.0.0.1) is NOT in the allow list.
+# This is the fr-types-01 regression case: before the fix the matchers were never
+# compiled, so evaluate_ip_access fell through to Default(Allow) and the request was
+# silently allowed (fail-open). After the fix the IP is denied with 403.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ip-restriction-allow-miss
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: IpRestriction
+      config:
+        ipSource: remoteAddr
+        allow:
+          - name: office
+            cidrs:
+              - "10.0.0.0/8"
+        status: 403
+        message: "IP not in allow list"

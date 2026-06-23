@@ -1,23 +1,28 @@
 ---
 name: gateway-tls-route
-description: TLS route — SNI matching, per-listener route table, TLS proxy implementation.
+description: TLS route — SNI matching, per-listener route table, terminate vs passthrough proxies.
 ---
 
 # TLS route
 
 ## Overview
 
-TLSRoute implements the TLS passthrough routing capability of the Gateway API. Unlike TCPRoute, TLSRoute uses SNI (Server Name Indication) during the TLS handshake to do hostname-based routing and forwards the TLS connection unchanged to the backend (without terminating TLS).
+TLSRoute implements the SNI-based layer-4 routing capability of the Gateway API. It uses SNI (Server Name Indication) for hostname-based routing and supports two listener modes, selected by the Gateway Listener's `tls.mode`:
+
+- **Terminate** (default): the Gateway terminates TLS and forwards plain TCP to the backend. SNI is read from the completed TLS handshake.
+- **Passthrough**: the Gateway does not terminate TLS; it parses SNI from the raw ClientHello and transparently relays all bytes (including the original ClientHello) to the backend.
 
 ## Module structure
 
 ```
-src/core/gateway/routes/tls/
+edgion-gateway/src/routes/tls/
 ├── mod.rs                  # module entry and type exports
 ├── conf_handler_impl.rs    # ConfHandler<TLSRoute> implementation
 ├── routes_mgr.rs           # TlsRouteManager / GlobalTlsRouteManagers
 ├── gateway_tls_routes.rs   # TlsRouteTable: per-listener TLS route table (SNI-indexed)
-└── proxy.rs                # EdgionTlsTcpProxy: TLS passthrough proxy implementation
+├── proxy.rs                # EdgionTlsTcpProxy: TLS-terminate-to-TCP proxy
+├── passthrough_proxy.rs    # EdgionTlsPassthroughProxy: TLS passthrough proxy (no termination)
+└── sni_parser.rs           # raw-ClientHello SNI extraction (used by passthrough mode)
 ```
 
 ## SNI matching
@@ -43,51 +48,49 @@ Match priority:
 2. Routes without a hostname go into `catch_all_routes`.
 3. Insert the bucketed result into the `HashHost` matcher.
 
-## Per-listener route management
+## Route management, bucketing, rebuild, ConfHandler
 
-`GlobalTlsRouteManagers` follows the unified per-listener management pattern:
+`GlobalTlsRouteManagers` (`route_cache` + `by_listener → TlsRouteManager → ArcSwap<TlsRouteTable>`) follows the shared L4 per-listener management pattern — listener bucketing via `resolved_listeners`, `rebuild_all`/`rebuild_affected`, and `full_set`/`partial_update` ConfHandler semantics. The TLS delta is the SNI-indexed `TlsRouteTable` (above) instead of a flat `Vec`. See [SKILL.md → Shared L4 per-listener management](SKILL.md#shared-l4-per-listener-management-tcp--tls--udp).
 
-```
-GlobalTlsRouteManagers
-├── route_cache: DashMap<String, Arc<TLSRoute>>        # global route cache
-└── by_listener: DashMap<ListenerKey, Arc<TlsRouteManager>>
-    └── TlsRouteManager
-        └── route_table: ArcSwap<TlsRouteTable>        # per-listener snapshot
-```
+## TLS proxies
 
-### Listener bucketing
+TLSRoute is served by two distinct proxy implementations; the listener `tls.mode` selects which one `add_listener` builds (`listener_builder.rs`: `add_tls_terminate_to_tcp_listener` vs `add_tls_passthrough_listener`).
 
-Routes are distributed to the matching listener via `resolved_listeners` (Controller-precomputed). Routes without `resolved_listeners` log a warning and are skipped.
+### EdgionTlsTcpProxy (Terminate mode, `proxy.rs`)
 
-### Rebuild strategy
-
-- `rebuild_all_listener_managers`: full rebuild of all listeners; cleans up stale listeners with no routes.
-- `rebuild_affected_listener_managers`: rebuild only affected listeners (used by incremental updates).
-
-## TLS passthrough proxy
-
-`EdgionTlsTcpProxy` is the core implementation of the TLS passthrough proxy:
+TLS-terminate-to-TCP proxy. Doc-comment: "TLS-to-TCP proxy service for Gateway TLS listeners."
 
 - Holds an `Arc<TlsRouteManager>` and gets the current snapshot via `load_route_table()`.
-- Extracts the SNI from ClientHello during the TLS handshake.
+- **Terminates** the TLS handshake; extracts the SNI from the established connection via `ssl_ref.servername(NameType::HOST_NAME)` and tracks `is_mtls` in `TlsContext`.
 - Calls `TlsRouteTable::match_route(sni_hostname)` to select a route.
-- Selects a backend from the route's `backend_refs` and establishes an upstream TCP connection.
-- Forwards TLS traffic transparently in both directions; TLS is not terminated.
+- Selects a backend from the route's `backend_refs` and establishes an upstream **plain TCP** connection.
+- Relays decrypted traffic bidirectionally (downstream is TLS-terminated, upstream is TCP).
 
-## Relationship with the TLS subsystem
+### EdgionTlsPassthroughProxy (Passthrough mode, `passthrough_proxy.rs`)
 
-TLSRoute and the TLS subsystem (the `tls/` module) serve different scenarios:
+TLS passthrough proxy. Doc-comment: "Forwards raw TLS traffic to backends without termination."
 
-- **TLSRoute**: TLS passthrough — the Gateway does not terminate TLS and routes by SNI to the backend.
-- **TLS subsystem**: TLS termination — the Gateway terminates the TLS handshake, decrypts, and routes by HTTP/gRPC.
+- Does **not** terminate TLS. Accumulates the ClientHello record and extracts SNI via `sni_parser::extract_sni` (no handshake performed).
+- Matches a route by SNI, selects a backend, and transparently relays all bytes — including the original ClientHello — to the upstream.
+- Because TLS is not terminated, there is no `is_mtls` context (the passthrough call site passes `is_mtls = false`).
 
-They can coexist on the same port — the Gateway Listener's `tls.mode` determines which mode is used.
+Both proxies invoke the Stage-2 stream plugins via `run_tls_route_plugins` (see `13-stream-plugin-dev.md`).
+
+## Relationship with the TLS termination subsystem
+
+TLSRoute (Terminate/Passthrough) and the HTTP/gRPC TLS subsystem (the `tls/` module) serve different scenarios:
+
+- **TLSRoute Terminate**: the Gateway terminates TLS and forwards **plain TCP** to the backend (layer-4, TLSRoute semantics).
+- **TLSRoute Passthrough**: the Gateway forwards encrypted TLS unchanged to the backend, routing by SNI.
+- **HTTP/gRPC TLS subsystem** (`HTTPS` listeners): the Gateway terminates TLS, decrypts, and routes by HTTP/gRPC.
 
 ## Key source files
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/routes/tls/routes_mgr.rs` | GlobalTlsRouteManagers, TlsRouteManager |
-| `src/core/gateway/routes/tls/gateway_tls_routes.rs` | TlsRouteTable (SNI matching) |
-| `src/core/gateway/routes/tls/proxy.rs` | EdgionTlsTcpProxy |
-| `src/core/gateway/routes/tls/conf_handler_impl.rs` | ConfHandler<TLSRoute> implementation |
+| `edgion-gateway/src/routes/tls/routes_mgr.rs` | GlobalTlsRouteManagers, TlsRouteManager |
+| `edgion-gateway/src/routes/tls/gateway_tls_routes.rs` | TlsRouteTable (SNI matching) |
+| `edgion-gateway/src/routes/tls/proxy.rs` | EdgionTlsTcpProxy (TLS-terminate-to-TCP) |
+| `edgion-gateway/src/routes/tls/passthrough_proxy.rs` | EdgionTlsPassthroughProxy (TLS passthrough) |
+| `edgion-gateway/src/routes/tls/sni_parser.rs` | raw-ClientHello SNI extraction (passthrough) |
+| `edgion-gateway/src/routes/tls/conf_handler_impl.rs` | ConfHandler<TLSRoute> implementation |

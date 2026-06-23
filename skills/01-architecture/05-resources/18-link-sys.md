@@ -15,15 +15,15 @@ LinkSys defines external system connectors (Redis / Etcd / Elasticsearch / Webho
 
 | Purpose | Path |
 |------|------|
-| Controller Handler | `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs` |
-| Credential pipeline (Controller) | `src/core/controller/conf_mgr/sync_runtime/resource_processor/credential/` |
-| Resource type definitions | `src/types/resources/link_sys/` (mod.rs, redis.rs, etcd.rs, elasticsearch.rs, webhook.rs, common.rs) |
-| Shared SecretObjectReference / SecretSlot / TLS types | `src/types/resources/common/{secret_object_ref,secret_slot,tls}.rs` |
-| Credential resolution layer (Controller + Gateway shared) | `src/types/credentials/` (materials / resolver / resolvers) |
-| Gateway credential four-state | `src/core/gateway/link_sys/credential.rs` |
-| Gateway TLS assembly | `src/core/gateway/link_sys/tls.rs` |
-| Gateway runtime Store | `src/core/gateway/link_sys/runtime/store.rs` |
-| Provider clients | `src/core/gateway/link_sys/providers/{redis,etcd,elasticsearch}/` |
+| Controller Handler | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs` |
+| Credential pipeline (Controller) | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/` |
+| Resource type definitions | `edgion-resources/src/resources/link_sys/` (mod.rs, redis.rs, etcd.rs, elasticsearch.rs, webhook.rs, common.rs) |
+| Shared SecretObjectReference / SecretSlot / TLS types | `edgion-resources/src/resources/common/{secret_object_ref,secret_slot,tls}.rs` |
+| Credential resolution layer (Controller + Gateway shared) | `edgion-resources/src/credentials/` (materials / resolver / resolvers) |
+| Gateway credential four-state | `edgion-common/src/link_sys_core/credential.rs` |
+| Gateway TLS assembly | `edgion-common/src/link_sys_core/tls.rs` |
+| Gateway runtime Store | `edgion-gateway/src/link_sys/runtime/store.rs` |
+| Provider clients | `edgion-gateway/src/link_sys/providers/{redis,etcd,elasticsearch}/` |
 
 ## Recommended `use` paths (avoiding name confusion)
 
@@ -44,7 +44,7 @@ The module path `crate::types::link_sys` **no longer exists**. If you still see 
 - `config`'s type is determined by `type`: `redis` → `RedisClientConfig`, `etcd` → `EtcdClientConfig`, `elasticsearch` → `ElasticsearchClientConfig`, `webhook` → `WebhookServiceConfig`, `kafka` → `KafkaClientConfig` (placeholder)
 - The legacy nested `spec.config.type` / `spec.config.config` form is no longer accepted
 
-`SecretObjectReference` (`src/types/resources/common/secret_object_ref.rs`), `SecretSlot` (`src/types/resources/common/secret_slot.rs`), and `TlsConfig` / `TlsCerts` (`src/types/resources/common/tls.rs`) have been extracted from each provider module into a shared common module to avoid multiple near-duplicate copies. `SecretObjectReference` carries `group / kind / name / namespace` (the first two are optional, defaulting to `core/Secret`), reserving room for non-Secret credential sources (Vault / ExternalSecret) in the future. `SecretSlot` is the `{ secret_ref: SecretObjectReference, secret: Option<Secret> }` slot, embedded into each `*Auth` via `#[serde(flatten)]`, with no change in YAML form. The LinkSys subcrates keep stable paths via `pub use`.
+`SecretObjectReference` (`edgion-resources/src/resources/common/secret_object_ref.rs`), `SecretSlot` (`edgion-resources/src/resources/common/secret_slot.rs`), and `TlsConfig` / `TlsCerts` (`edgion-resources/src/resources/common/tls.rs`) have been extracted from each provider module into a shared common module to avoid multiple near-duplicate copies. `SecretObjectReference` carries `group / kind / name / namespace` (the first two are optional, defaulting to `core/Secret`), reserving room for non-Secret credential sources (Vault / ExternalSecret) in the future. `SecretSlot` is the `{ secret_ref: SecretObjectReference, secret: Option<Secret> }` slot, embedded into each `*Auth` via `#[serde(flatten)]`, with no change in YAML form. The LinkSys subcrates keep stable paths via `pub use`.
 
 ## Controller-side processing
 
@@ -53,7 +53,7 @@ The module path `crate::types::link_sys` **no longer exists**. If you still see 
 - Calls `LinkSys::validate_config()`:
   - Redis/Etcd/Elasticsearch with empty `endpoints` → error
   - Redis with `topology.mode=sentinel` but no `sentinel` sub-object / `mode=cluster` but no `cluster` sub-object → error
-  - Webhook: invalid URI, invalid method, `statusOnError` out of range, `maxResponseBytes` over the cap → error
+  - Webhook (redesigned): `target.backendRef` missing `port` or unsupported `kind`; `request` template parse error; a field name in both `origin` and `custom`, duplicate names within a block, or a `headers.origin: [{name: Cookie}]` / non-empty `cookies` conflict; `statusOnError` out of range; `maxResponseBytes` over the cap → error. See [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
 - Unimplemented providers (e.g., `Kafka`) **do not** produce errors and stay `Accepted=True` (the schema is valid; the backend is simply not yet wired up — this avoids flipping existing resources to Invalid on upgrade).
 
 ### parse — credential resolution
@@ -61,7 +61,7 @@ The module path `crate::types::link_sys` **no longer exists**. If you still see 
 Unlike the older "pass through directly", the new parse goes through the full **credential pipeline** (`resource_processor/credential/pipeline.rs`):
 
 1. Via `AuthSpec` / `TlsSpec` traits + the generic `drive_standard`, walks every `SecretObjectReference` in the spec uniformly:
-   - The `AuthSpec` trait binds "declaration → resolver selection → material extraction" to a concrete `*Auth` type (Redis/Etcd's `RedisAuth`/`EtcdAuth`; ES/Webhook's tagged-enum variants)
+   - The `AuthSpec` trait binds "declaration → resolver selection → material extraction" to a concrete `*Auth` type (Redis/Etcd's `RedisAuth`/`EtcdAuth`; Elasticsearch's tagged-enum variants). **Webhook no longer participates here:** after the redesign its top-level `auth` is a deprecated shim and the handler's `SystemConfig::Webhook` arm resolves only TLS; outbound credentials are `request.headers.custom` entries using `template: "... ${secretRef:ns/name:key} ..."` — the handler scans `collect_secret_ref_names`, fetches each Secret via `fetch_secret` (ReferenceGrant enforced for cross-namespace), and embeds resolved values in `spec.resolved_secrets`, which rides the normal conf_sync path to the gateway (see [webhook.md](../03-controller-gateway-link/webhook.md))
    - The `TlsSpec` trait handles each provider's optional `tls.certs.secretRef` (`TlsConfig` already implements this trait, reusable directly)
    - `resolve_for_spec` calls `drive_standard::<A: AuthSpec, T: TlsSpec>` to fold over all ref handling
    - Adding a new backend just needs: (1) impl `AuthSpec`; (2) add a `SystemConfig` variant; (3) add one line of `drive_standard(...)` in `resolve_for_spec`; (4) if it has TLS, `TlsConfig` already impls `TlsSpec` and can be reused directly
@@ -118,11 +118,11 @@ enum CredentialState<M> {
 Constraints:
 - `Debug` is **redacted**: the `Resolved` variant does not print Material; this way `tracing::info!(state=?state)` never leaks passwords.
 - `is_buildable()` returns true only for `NotRequired` / `Resolved`. The provider's dispatch path is fail-fast: `Pending` / `Invalid` `bail!` directly, and **never** degrades to "empty credentials / anonymous connection" (a historical silent-degrade bug).
-- For tagged-enum auth (ES / Webhook), wrap with the generic `CredentialState<ResolvedCredential>`, with `ResolvedCredential` further dispatching by variant.
+- For tagged-enum auth (Elasticsearch), wrap with the generic `CredentialState<ResolvedCredential>`, with `ResolvedCredential` further dispatching by variant. (Webhook is no longer a tagged-enum-auth provider — its outbound credentials are per-field `request.headers.custom` secret sources resolved in the webhook provider, not via `CredentialState`.)
 
 ### TLS assembly
 
-`src/core/gateway/link_sys/tls.rs` plugs `TlsConfig` + the resolved `TlsMaterial` into each provider's TLS configuration:
+`edgion-common/src/link_sys_core/tls.rs` plugs `TlsConfig` + the resolved `TlsMaterial` into each provider's TLS configuration:
 - `ca_pem`: if `TlsCerts.caCert` inline is present, use the inline value; otherwise use the material's `ca_pem`.
 - `client_cert_pem` / `client_key_pem`: prefer material (via secretRef); the private key is `Zeroizing<Vec<u8>>`.
 - `insecureSkipVerify` is handled per provider capability: etcd ignores and warns; Redis/ES/Webhook honor it.

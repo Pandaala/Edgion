@@ -29,6 +29,8 @@ Baseline comparison (not absolute-zero) accounts for pre-existing resources from
 |--------|---------|----------|
 | `run_conf_sync_test.sh` | Basic: N cycles of full inject → verify → delete → verify | ~25s (5 cycles) |
 | `run_conf_sync_advanced_test.sh` | Advanced: 10 edge-case scenarios (orphan, wildcard, out-of-order, rapid-fire, etc.) | ~100s |
+| `run_controller_reconnect_test.sh` | Gateway recovers gracefully when the Controller dies and restarts (config not dropped, then reconverges) | — |
+| `run_controller_stress_restart_test.sh` | Controller reconverges 200+ HTTPRoute / 50+ BackendTLSPolicy after a restart with no Gateway-side resource loss | — |
 
 Both scripts are **self-contained** — they auto-start and auto-stop the environment via `start_all_with_conf.sh` / `kill_all.sh`.
 
@@ -36,16 +38,16 @@ Both scripts are **self-contained** — they auto-start and auto-stop the enviro
 
 ```bash
 # Basic test (full lifecycle: start → test → stop)
-./examples/test/scripts/conf-sync/run_conf_sync_test.sh
+./edgion-tests/integration/scripts/conf-sync/run_conf_sync_test.sh
 
 # Advanced test
-./examples/test/scripts/conf-sync/run_conf_sync_advanced_test.sh
+./edgion-tests/integration/scripts/conf-sync/run_conf_sync_advanced_test.sh
 
 # Attach to already-running environment (skip start/stop)
-./examples/test/scripts/conf-sync/run_conf_sync_test.sh --no-start --keep-alive
+./edgion-tests/integration/scripts/conf-sync/run_conf_sync_test.sh --no-start --keep-alive
 
 # Stress test (50 cycles)
-./examples/test/scripts/conf-sync/run_conf_sync_test.sh --stress
+./edgion-tests/integration/scripts/conf-sync/run_conf_sync_test.sh --stress
 ```
 
 ## Resource Coverage
@@ -93,8 +95,8 @@ Returns counts from all derived stores. Key fields:
   "udp_routes":  { "routes_by_key": 0 },
   "tls_routes":  { "route_cache": 0 },
   "tls_store":   { "entries": 0 },
-  "plugin_store": { "plugins": 0 },
-  "stream_plugin_store": { "plugins": 0 },
+  "plugin_store_v2":        { "total": 0, "by_kind": {} },
+  "stream_plugin_store_v2": { "total": 0, "by_kind": {} },
   "backend_tls_policy": { "policies": 0, "reverse_index_targets": 0 },
   "policy_store": { "total_services": 0 }
 }
@@ -103,7 +105,7 @@ Returns counts from all derived stores. Key fields:
 ## File Layout
 
 ```
-examples/test/conf/conf-sync-leak-test/
+edgion-tests/integration/conf/conf-sync-leak-test/
 ├── base/
 │   └── Gateway.yaml                      # Multi-protocol Gateway (HTTP/gRPC/TCP/UDP/TLS)
 └── inject/
@@ -123,12 +125,14 @@ examples/test/conf/conf-sync-leak-test/
     ├── Service_leak-svc.yaml
     └── EndpointSlice_leak-svc.yaml
 
-examples/test/scripts/conf-sync/
+edgion-tests/integration/scripts/conf-sync/
 ├── run_conf_sync_test.sh                 # Basic cyclic test
 ├── run_conf_sync_advanced_test.sh        # Advanced scenario test
-└── run_conf_sync_mtls_test.sh            # mTLS end-to-end test
+├── run_conf_sync_mtls_test.sh            # mTLS end-to-end test
+├── run_controller_reconnect_test.sh      # Gateway survives Controller restart/reconnect
+└── run_controller_stress_restart_test.sh # Controller reconverges 200+ routes after restart
 
-examples/test/scripts/gen_certs/
+edgion-tests/integration/scripts/gen_certs/
 └── generate_conf_sync_certs.sh           # Uses edgion-cli gen-certs for conf_sync mTLS certs
 ```
 
@@ -137,17 +141,17 @@ examples/test/scripts/gen_certs/
 `run_conf_sync_mtls_test.sh` tests the conf_sync gRPC mTLS feature end-to-end:
 
 1. Generates two cert sets (`primary`, `secondary`) via `edgion-cli gen-certs --cert-name <name> --output file`
-2. Creates TOML configs with multi-cert `[[conf_sync_security.certs]]` format (`active = "primary"`, secondary pre-staged but inactive)
+2. Creates YAML configs with multi-cert `conf_sync_security.certs` list (`active = "primary"`, secondary pre-staged but inactive)
 3. Starts Controller with server TLS + client CA verification
 4. Starts Gateway with client cert + server CA trust
 5. Verifies: mTLS log entries, health, readiness, server_id match, resource sync, plaintext rejection
 
 ```bash
 # Full run
-./examples/test/scripts/conf-sync/run_conf_sync_mtls_test.sh
+./edgion-tests/integration/scripts/conf-sync/run_conf_sync_mtls_test.sh
 
 # Keep services running after test for manual inspection
-./examples/test/scripts/conf-sync/run_conf_sync_mtls_test.sh --keep-alive
+./edgion-tests/integration/scripts/conf-sync/run_conf_sync_mtls_test.sh --keep-alive
 ```
 
 ## Adding New Resources to Coverage
@@ -157,5 +161,5 @@ examples/test/scripts/gen_certs/
 3. Add the ConfigClient kind to the `kinds` array in `capture_baseline()`, `verify_configclient_empty()`, `verify_configs_present()`
 4. If the resource has a dedicated derived store:
    - Add a `stats()` method to the store (return a `#[derive(serde::Serialize)]` struct)
-   - Register it in `StoreStatsResponse` and `store_stats()` in `src/core/gateway/api/mod.rs`
+   - Register it in `StoreStatsResponse` and `store_stats()` in `edgion-gateway/src/api/mod.rs`
    - Add the field path to `check_fields` in `verify_store_stats_empty()`

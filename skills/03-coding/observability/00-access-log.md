@@ -30,14 +30,14 @@ Each access log entry must contain enough information for an operator to locate 
 
 ## AccessLogEntry fields
 
-`src/core/gateway/observe/access_log/entry.rs` — produced by `AccessLogEntry::from_context(ctx)` during the `logging()` phase of `pg_logging.rs`:
+`edgion-gateway/src/observe/access_log/entry.rs` — produced by `AccessLogEntry::from_context(ctx)` during the `logging()` phase of `pg_logging.rs`:
 
 | Field | Meaning |
 |------|------|
 | `client-addr` | Direct TCP IP |
 | `remote-addr` | Real client IP (after RealIp plugin processing) |
 | `host` / `path` | Request host and the **normalized** current path (no query) |
-| `request_uri` | **Optional** — client-entry **raw URI** (raw path + raw query); only emitted when `[access_log_options] include_raw_uri = true` |
+| `request_uri` | **Optional** — client-entry **raw URI** (raw path + raw query); only emitted when `access_log_options.includeRawUri: true` |
 | `x-trace-id` | trace id (passed from client or auto-generated UUID) |
 | `status` | Final response status code |
 | `sni` | TLS SNI (HTTPS connections) |
@@ -47,7 +47,7 @@ Each access log entry must contain enough information for an operator to locate 
 | `errors` | Gateway-internal exception/reject/failure reasons |
 | `match_info.sv` | sync_version — gRPC sync version, used to correlate control-plane logs (omitted when 0). See [../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md) |
 | stage_logs | Per-phase plugin logs (see PluginLog below) |
-| upstreams | Upstream connection details (ip, port, ct/ht/bt/et, retry) |
+| upstreams | Upstream connection details (ip, port, ct/ht/bt/et); per-attempt retry reason in `err`: etype strings / `RetryOnStatus` / `ConnectionReuseRetry`. Client-disconnect waste is marked request-level via `errors: ["ClientClosed"]` |
 
 ### When to add a new field
 
@@ -63,6 +63,37 @@ Each access log entry must contain enough information for an operator to locate 
 **Bad examples**:
 - Putting the full request body into the access log
 - Expanding every header into the access log
+
+### Context variables (`ctx_map`) in the access log — opt-in only
+
+Plugin-set context variables (`CtxSet`, DSL `ctx.set`, `KeySet { Ctx }`, the
+webhook KeyGet result, …) are **not** logged by default. To project specific
+ctx vars into the access log, allow-list their keys on the HTTPRoute / GRPCRoute.
+Two equivalent carriers exist (they union):
+
+```yaml
+metadata:
+  annotations:
+    # Shorthand: comma-separated ctx-var names.
+    edgion.io/log-ctx-keys: "tenant_id,tier"
+    # Unified carrier: JSON array, also covers label/annotation projection.
+    edgion.io/log-keys: '[{"key":"tenant_id","type":"ctx"},{"key":"tier","type":"ctx"}]'
+```
+
+The unified `edgion.io/log-keys` carrier additionally supports projecting the
+value of an existing `metadata.labels` / `metadata.annotations` key into
+`rsc.labels` via `type: label` / `type: annotation` (a more flexible alternative
+to the `edgion.io/log-label.<suffix>` prefix, which gives the value inline). All
+three carriers merge; malformed `log-keys` entries are skipped individually.
+
+Only the named keys are flattened into the entry (e.g. `"tenant_id":"acme"`).
+This is deny-by-default: with no annotation, no ctx var is logged. Resolution
+happens once at route build time (`resolve_log_ctx_keys`); the per-request log
+path only filters by the resolved set. Known-sensitive keys
+(`ACCESS_LOG_BLOCKED_CTX_KEYS`: `jwt_claims` / `oidc_claims` / `jwe_payload`)
+are dropped even if explicitly allow-listed — defense-in-depth so claims /
+decrypted payloads can never reach the log. Implementation: `AllowlistedCtx` in
+`edgion-gateway/src/observe/access_log/entry.rs`.
 
 ---
 
@@ -96,7 +127,7 @@ Each plugin writes a compact execution summary to the access log via `log: &mut 
 **API**:
 
 ```rust
-// Defined at: src/core/gateway/plugins/runtime/log.rs
+// Defined at: edgion-gateway/src/plugins/runtime/log.rs
 impl PluginLog {
     pub fn push_err(&mut self, kind: &'static str) -> bool;   // Routes through the dual-tier buffer
 }
@@ -321,9 +352,9 @@ The JSON access log emits only the **normalized** path by default; no raw-form f
 
 When "the full URI sent by the client" (with query) is needed, enable the global option:
 
-```toml
-[access_log_options]
-include_raw_uri = true
+```yaml
+access_log_options:
+  includeRawUri: true
 ```
 
 An additional `request_uri` field is emitted, valued as entry raw path + entry raw query:
@@ -345,11 +376,11 @@ Field semantics:
 
 ## Key Files
 
-- `src/types/ctx.rs` — `EdgionHttpContext`, `MatchInfo` (with `sv` field), `MatchedInfo` (with `sv` field)
-- `src/core/gateway/observe/access_log/entry.rs` — `AccessLogEntry`
-- `src/core/gateway/observe/access_log/logger.rs` — `AccessLogger`
-- `src/core/gateway/observe/logs/logger_factory.rs` — `create_async_logger()`
-- `src/core/gateway/plugins/runtime/log.rs` — `PluginLog`, `LogBuffer` (128-byte SmallVec, tier 1) + `ULogBuffer` (512-byte overflow, tier 2)
+- `edgion-gateway/src/ctx.rs` — `EdgionHttpContext`, `MatchInfo` (with `sv` field), `MatchedInfo` (with `sv` field)
+- `edgion-gateway/src/observe/access_log/entry.rs` — `AccessLogEntry`
+- `edgion-gateway/src/observe/access_log/logger.rs` — `AccessLogger`
+- `edgion-gateway/src/observe/logs/logger_factory.rs` — `create_async_logger()`
+- `edgion-gateway/src/plugins/runtime/log.rs` — `PluginLog`, `LogBuffer` (128-byte SmallVec, tier 1) + `ULogBuffer` (512-byte overflow, tier 2)
 
 ---
 
@@ -417,3 +448,19 @@ Within the per-request call chain (filter-entry synchronous call stack):
 
 Locations where tracing::*! may stay: plugin constructors / new() / config load / background tasks
 (JWKS rotation, cache refresh timer, Redis reconnect) / module initialization.
+
+---
+
+## Plugin access-log token contract
+
+When integration tests assert on access-log substrings of a plugin and the format is non-trivial, mirror those substrings into a sibling `log_consts.rs` module with a `#[cfg(test)] include_str!`-based guard. Reference implementation: `edgion-gateway/src/plugins/http/region_route/log_consts.rs`.
+
+**Apply this when:**
+- An integration test broke because the plugin's log format changed under the assertion (drift incident).
+- Adding a new plugin whose access log is part of the integration contract.
+
+**Do NOT pre-apply** to stable plugins that have never drifted — the convention is reactive.
+
+**Rule for what becomes a token:** const-ize a substring iff some integration test asserts it today, AND the substring is plugin-contract (not fixture-controlled and not a single high-collision character like `→` or `=`). The plugin source keeps literal fmt strings; the const layer is purely a test-side contract anchored by an `include_str!` source-grep test.
+
+Spec: `docs/superpowers/specs/2026-06-16-plugin-log-tokens-design.md`.

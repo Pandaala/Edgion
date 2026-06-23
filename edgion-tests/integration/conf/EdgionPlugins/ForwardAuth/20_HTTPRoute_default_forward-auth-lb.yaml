@@ -1,0 +1,27 @@
+# HTTPRoute for forward-auth-lb test (multi-endpoint round-robin smoke test)
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: forward-auth-lb-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "forward-auth-lb.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: forward-auth-lb
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

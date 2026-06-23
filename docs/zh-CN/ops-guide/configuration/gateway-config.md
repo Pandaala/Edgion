@@ -10,8 +10,9 @@ edgion-gateway 通过 YAML 文件启动，默认路径为 `config/edgion-gateway
 work_dir: "."
 
 gateway:
-  server_addr: "http://127.0.0.1:50051"  # 必填：Controller gRPC 地址
-  admin_listen: "0.0.0.0:5900"           # Admin API（注意：当前固定 :5900，此字段暂未生效）
+  server_addr: "http://127.0.0.1:12151"  # 必填：Controller gRPC 地址
+  admin_listen: "127.0.0.1:12001"        # Admin API 监听地址（默认：127.0.0.1:12001，仅 loopback）
+  # probe_listen: "0.0.0.0:12000"        # 存活/就绪探针端口（默认：0.0.0.0:12000）；绑定 0.0.0.0 以便 kubelet 可通过 Pod IP 访问
 
 # ─── gRPC 通道安全（可选 mTLS）────────────────────────────────────
 # conf_sync_security:
@@ -95,14 +96,27 @@ access_log_sensitive:
 
 ## 配置参数
 
-### [gateway]
+### gateway
+
+Gateway 采用**三端口模型**：
+
+| 端口 | 默认绑定 | 用途 |
+|------|---------|------|
+| Admin | `127.0.0.1:12001` | Admin API（`/configclient`、`/api/v1/server-info` 等）——仅 loopback，不对外暴露 |
+| Probe | `0.0.0.0:12000` | 存活/就绪探针（`/health`、`/ready`）——绑定所有接口，以便 kubelet 通过 Pod IP 探活 |
+| Metrics | `0.0.0.0:12090` | Prometheus 指标——独立监听器，对外暴露 |
+
+探针端口**不会**加入 gateway Service；kubelet 直接通过 Pod IP 探测 12000 端口。
+
+> **运维变更提示（Breaking Change）**：不再支持通过 Pod IP 或 Kubernetes Service 远程访问 gateway admin API（`/configclient`、`/api/v1/server-info`）。请改用 `kubectl port-forward pod/<gw-pod> 12001:12001`（连接到 Pod 的 loopback）或 `kubectl exec`；**不要**通过 gateway Service 访问。`edgion-cli --target client` 默认连接 `localhost:12001`，不受影响。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `server_addr` | `String` | **必填** | Controller gRPC 地址，如 `http://127.0.0.1:50051` |
-| `admin_listen` | `String` | — | Admin API 地址（**注意：当前固定 `:5900`，此字段暂未生效**；Gateway Metrics API 固定 `:5901`） |
+| `server_addr` | `String` | **必填** | Controller gRPC 地址，如 `http://127.0.0.1:12151` |
+| `admin_listen` | `String` | `127.0.0.1:12001` | Admin API 监听地址，默认绑 loopback（`127.0.0.1:12001`）——敏感端点（`/configclient`、`/api/v1/server-info`）不对集群暴露。远程访问请使用 `kubectl port-forward pod/<name> 12001:12001`。 |
+| `probe_listen` | `String` | `0.0.0.0:12000` | 存活/就绪探针监听地址，绑定所有接口以便 kubelet 通过 Pod IP 访问。仅提供 `/health` 和 `/ready`，不加入 gateway Service。 |
 
-### [conf_sync_security.tls]
+### conf_sync_security.tls
 
 可选配置。启用后 Gateway 使用 mTLS 连接 Controller gRPC；不配置此 section 时，gRPC 以明文连接。
 
@@ -113,9 +127,9 @@ access_log_sensitive:
 | `ca` | `String` | — | CA 证书路径，用于验证 Controller 服务端证书 |
 | `skip_tls` | `Boolean` | `false` | 紧急降级开关，`true` 时跳过 TLS 以明文连接，会输出 ERROR 日志 |
 
-启用 mTLS 时，`[gateway].server_addr` 的 URI scheme 会自动切换为 `https://`。证书可通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
+启用 mTLS 时，`gateway.server_addr` 的 URI scheme 会自动切换为 `https://`。证书可通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
 
-### [logging]
+### logging
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -126,7 +140,7 @@ access_log_sensitive:
 | `console` | `Boolean` | `true` | 是否同时输出到控制台 |
 | `buffer_size` | `Integer` | `10000` | 异步日志缓冲区大小 |
 
-### [server]
+### server
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -147,11 +161,11 @@ access_log_sensitive:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | `Boolean` | — | 是否启用此类日志 |
-| `output.localFile.path` | `String` | — | 日志文件路径（相对 work_dir），与 `[logging].log_dir` 无关 |
+| `output.localFile.path` | `String` | — | 日志文件路径（相对 work_dir），与 `logging.log_dir` 无关 |
 | `output.localFile.queue_size` | `Integer` | CPU 核心数 × 10000 | 写入队列大小 |
 | `output.localFile.rotation.strategy` | `Enum` | — | 轮转策略（见下表） |
 | `output.localFile.rotation.max_files` | `Integer` | — | 保留的轮转文件数，`0` 表示无限 |
-| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | 轮转检查间隔秒数 |
+| `output.localFile.rotation.check_interval_secs` | `Integer` | `30` | 时间型策略（`daily` / `hourly`）的检查间隔秒数。`Size` 策略在每批写入后检查，不受此字段影响。 |
 
 **`rotation.strategy` 可选值：**
 
@@ -160,9 +174,9 @@ access_log_sensitive:
 | `"daily"` | 每日零点轮转 |
 | `"hourly"` | 每小时轮转 |
 | `"never"` | 不轮转 |
-| `{ Size = 104857600 }` | 按文件大小轮转（字节），默认 100 MB |
+| `{ Size: 104857600 }` | 按文件大小轮转（字节），默认 100 MB |
 
-### [rate_limit]
+### rate_limit
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -170,7 +184,7 @@ access_log_sensitive:
 | `max_estimator_slots_k` | `Integer` | `1024` | CMS 最大 slot 数上限 |
 | `gateway_instance_count` | `Integer` | `1` | Gateway 实例数，集群限流时作为分母，**集群部署时必须设置正确值** |
 
-### [access_log_sensitive]
+### access_log_sensitive
 
 控制 access log、ssl.log、plugin log 中已标注敏感字段的脱敏行为。**默认关闭**——所有敏感字段以明文输出，与历史行为一致。
 
@@ -203,7 +217,7 @@ access_log_sensitive:
 
 ```yaml
 gateway:
-  server_addr: "http://10.0.0.5:50051"
+  server_addr: "http://10.0.0.5:12151"
 ```
 
 ### 开启业务日志按日轮转
@@ -256,7 +270,7 @@ access_log_sensitive:
 
 ```yaml
 gateway:
-  server_addr: "http://10.0.0.5:50051"  # scheme 会自动切换为 https://
+  server_addr: "http://10.0.0.5:12151"  # scheme 会自动切换为 https://
 
 conf_sync_security:
   tls:

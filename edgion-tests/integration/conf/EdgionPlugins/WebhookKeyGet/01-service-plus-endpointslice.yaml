@@ -1,0 +1,118 @@
+# Scenario 1: service-plus-endpointslice
+# ---------------------------------------------------------------------------
+# Backend resolved via Service + EndpointSlice (the EpSliceStore call-time path).
+# The gateway reads ready pod addresses from the shared EpSliceStore populated by
+# the EndpointSlice below; the Service is loaded for completeness.
+#
+# Webhook forwards a single origin header transparently (X-Tenant-Id) and adds one
+# custom literal header. Method/path omitted -> frozen incoming values reused.
+#
+# Flow: HTTPRoute -> EdgionPlugins(CtxSet webhook KeyGet) -> LinkSys webhook
+#       -> Service "wh1-svc" -> EndpointSlice ready addr 127.0.0.1:30001
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh1-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: wh1-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: wh1-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh1-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh1-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+      headers:
+        origin:
+          - name: X-Tenant-Id
+        custom:
+          - name: X-Caller
+            value: "edgion-gateway"
+    timeoutMs: 5000
+    successStatusCodes: [200]
+    allowDegradation: false
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh1-ctx-set
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: wh1_user_id
+            from:
+              type: webhook
+              webhookRef: "edgion-default/wh1-resolver"
+              extract:
+                source: body
+                path: "data.user_id"
+            default: "fallback-user"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh1-route
+  namespace: edgion-default
+  annotations:
+    edgion.io/log-ctx-keys: "wh1_user_id"
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh1.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh1
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh1-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

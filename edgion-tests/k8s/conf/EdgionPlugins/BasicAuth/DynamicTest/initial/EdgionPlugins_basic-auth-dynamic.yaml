@@ -1,0 +1,20 @@
+# BasicAuth dynamic test - initial phase: both alice and bob allowed.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: basic-auth-dynamic
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: BasicAuth
+      config:
+        realm: "Dynamic Test Realm"
+        hideCredentials: false
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: basic-auth-alice
+                namespace: edgion-default
+              - name: basic-auth-bob
+                namespace: edgion-default

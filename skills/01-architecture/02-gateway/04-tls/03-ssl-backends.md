@@ -22,7 +22,7 @@ The two features are mutually exclusive: in conditional compilation, `#[cfg(all(
 ## BoringSSL backend
 
 ```
-src/core/gateway/tls/boringssl/
+edgion-gateway/src/tls/boringssl/
 ├── mod.rs
 └── mtls_verify_callback.rs   # mTLS custom verify callback
 ```
@@ -54,7 +54,7 @@ BoringSSL's `SSL_set_ex_data` / `SSL_get_ex_data` are used to pass per-connectio
 ## OpenSSL backend
 
 ```
-src/core/gateway/tls/openssl/
+edgion-gateway/src/tls/openssl/
 └── mod.rs   # placeholder module (currently empty)
 ```
 
@@ -109,8 +109,8 @@ This ensures backend-related code is not compiled when no SSL backend is enabled
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/tls/mod.rs` | Module entry, feature-flag conditional compilation |
-| `src/core/gateway/tls/boringssl/mtls_verify_callback.rs` | BoringSSL mTLS verify callback |
-| `src/core/gateway/tls/boringssl/mod.rs` | BoringSSL backend module (primary production backend) |
-| `src/core/gateway/tls/runtime/backend/backend_api.rs` | Unified backend API |
-| `src/core/gateway/tls/runtime/gateway/tls_pingora.rs` | Conditionally compiled SSL ex_data operations |
+| `edgion-gateway/src/tls/mod.rs` | Module entry, feature-flag conditional compilation |
+| `edgion-gateway/src/tls/boringssl/mtls_verify_callback.rs` | BoringSSL mTLS verify callback |
+| `edgion-gateway/src/tls/boringssl/mod.rs` | BoringSSL backend module (primary production backend) |
+| `edgion-gateway/src/tls/runtime/backend/backend_api.rs` | Unified backend API |
+| `edgion-gateway/src/tls/runtime/gateway/tls_pingora.rs` | Conditionally compiled SSL ex_data operations |

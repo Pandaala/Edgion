@@ -1,0 +1,22 @@
+# EdgionStreamPlugins: ConnectionRateLimit with a Redis-backed perSourceIp
+# dimension. Exercises the L4 Redis path (perSourceIp has NO local backstop),
+# the configurable redisTimeout, and the redis-failure classification metric.
+apiVersion: edgion.io/v1
+kind: EdgionStreamPlugins
+metadata:
+  name: tcp-conn-rate-redis
+  namespace: edgion-test
+spec:
+  plugins:
+    - type: ConnectionRateLimit
+      config:
+        redisRef: "default/redis-test"
+        algorithm: SlidingWindow
+        keyPrefix: "edgion:it:crl:"
+        redisTimeout: "500ms"
+        perSourceIp:
+          rate: 3
+          # 5s window (not 1s) so the test's sequential connects cannot straddle
+          # a window roll on a slow-but-healthy Redis — keeps the assertion stable.
+          interval: "5s"
+          onRedisFailure: Allow

@@ -32,7 +32,7 @@ desktop.ini
 # Logs and runtime files
 logs/
 *.log
-examples/testing/logs_*/
+integration_testing/
 runtime/
 
 # Test reports
@@ -41,8 +41,8 @@ test_report.json
 *.txt
 
 # Test certificates (auto-generated)
-examples/testing/certs/
-examples/conf/Secret_*.yaml
+edgion-tests/certs/
+edgion-tests/integration/conf/Secret_*.yaml
 
 # Documentation (not needed in image)
 docs/
@@ -58,12 +58,11 @@ docs/
 .dockerignore
 docker-compose*.yml
 
-# Development tools
-build-image.sh
-Makefile
-scripts/
+# Development tools (build/check scripts — not needed in image build context)
+cicd/*.sh
+cicd/checks/
 
-# Testing only (keep examples/ for test_server/test_client builds)
+# Testing only (keep edgion-tests/ for test_server/test_client builds)
 tests/
 
 # License files
@@ -74,6 +73,3 @@ LICENSE-*
 *.bak
 *.backup
 *.old
-
-# All-in-one cloned dashboard repo (only docker/.all-in-one-dist is needed in context)
-docker/.all-in-one-dashboard/

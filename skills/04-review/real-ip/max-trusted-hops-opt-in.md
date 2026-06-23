@@ -60,6 +60,6 @@ This decision belongs to the same category as the following review rules: "**Edg
 - Decision date: 2026-04-22
 - Decision source: `tasks/security-audit/02-access-control.md` M12 (Option B — code + doc)
 - Implementation files:
-  - `src/types/resources/edgion_plugins/plugin_configs/real_ip.rs`
-  - `src/core/common/utils/real_ip_extractor.rs`
+  - `edgion-resources/src/resources/edgion_plugins/plugin_configs/real_ip.rs`
+  - `edgion-gateway/src/util/real_ip_extractor.rs`
 - New tests: `test_max_trusted_hops_caps_recursive_traversal`, `test_max_trusted_hops_does_not_block_real_client_within_window`, `test_max_trusted_hops_ignored_in_non_recursive_mode`

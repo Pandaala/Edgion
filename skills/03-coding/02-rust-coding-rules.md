@@ -125,17 +125,17 @@ When in doubt, prefer graceful-degrade — Edgion is a gateway, a panicked reque
 
 ## Rule 6: prefer canonical utilities over local copies
 
-Before writing a parsing / formatting / validation helper, search `src/core/common/utils/` and `src/types/common/` for an existing one. Re-using the canonical implementation keeps behavior consistent and lets future fixes propagate to all call sites.
+Before writing a parsing / formatting / validation helper, search `edgion-common/src/utils/` and `edgion-resources/src/common/` for an existing one. Re-using the canonical implementation keeps behavior consistent and lets future fixes propagate to all call sites.
 
 Known canonical helpers (non-exhaustive):
 
 | Helper | Location | Notes |
 |--------|----------|-------|
-| `parse_duration` | `src/core/common/utils/duration.rs` | Returns `Result<Duration, ParseDurationError>`; supports `ms/s/m/h/d` and combined forms like `"1h30m"`, `"2d12h"`; rejects negatives. **Do not** reimplement — RateLimit had its own copy that diverged in unit set, error type, and combined-format support, then had to be migrated back. |
-| `MetadataFilter` matching | `src/core/common/utils/metadata_filter.rs` | K8s label / namespace selector evaluation |
-| Real-IP extraction | `src/core/common/utils/real_ip_extractor.rs` | Trusted proxy / `X-Forwarded-For` parsing |
+| `parse_duration` | `edgion-resources/src/duration.rs` | Returns `Result<Duration, ParseDurationError>`; supports `ms/s/m/h/d` and combined forms like `"1h30m"`, `"2d12h"`; rejects negatives. **Do not** reimplement — RateLimit had its own copy that diverged in unit set, error type, and combined-format support, then had to be migrated back. |
+| `MetadataFilter` matching | `edgion-controller/src/conf_mgr/metadata_filter.rs` | K8s label / namespace selector evaluation |
+| Real-IP extraction | `edgion-gateway/src/util/real_ip_extractor.rs` | Trusted proxy / `X-Forwarded-For` parsing |
 
-If you genuinely need different behavior, **extend the canonical** (add a unit, a flag, a new variant) rather than forking. Layering note: `src/types/` may import from `src/core/common/utils/` — there is no cycle.
+If you genuinely need different behavior, **extend the canonical** (add a unit, a flag, a new variant) rather than forking. Layering note: `edgion-resources/src/` may import from `edgion-common/src/utils/` — there is no cycle.
 
 ## Checklist
 

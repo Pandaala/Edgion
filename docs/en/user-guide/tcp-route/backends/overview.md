@@ -1,26 +1,75 @@
 # TCPRoute Backend Configuration
 
-TCPRoute uses `backendRefs` to point to Layer 4 backend services.
+A TCPRoute forwards a raw TCP stream to one or more Kubernetes Services. Load balancing across the Service endpoints is automatic; when several backends are listed, traffic is split by weight.
 
-## Example
+## Basic example
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1alpha2
 kind: TCPRoute
 metadata:
-  name: mysql-route
-  namespace: gateway-system
+  name: database-route
+  namespace: production
 spec:
   parentRefs:
-    - name: edge-gw
-      sectionName: tcp-mysql
+    - name: main-gateway
+      sectionName: postgres
   rules:
     - backendRefs:
-        - name: mysql
-          port: 3306
+        - name: database-service
+          port: 5432
 ```
 
-## Notes
+## Backend fields
 
-1. TCPRoute does not support HTTP-layer filters.
-2. For more complex Layer 4 control, use Stream Plugins.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | String | **Required** | Target Kubernetes Service name |
+| `port` | Integer | **Required** | Service port to connect to |
+| `weight` | Integer | `1` | Relative share of connections sent to this backend |
+| `namespace` | String | TCPRoute namespace | Service namespace; cross-namespace requires a `ReferenceGrant` |
+| `kind` | String | `Service` | Backend object kind |
+
+## Weighted backends
+
+List multiple `backendRefs` to split new connections across backends. Weight is a ratio, not a percentage — `weight: 3` and `weight: 1` send roughly 75% / 25% of connections:
+
+```yaml
+spec:
+  rules:
+    - backendRefs:
+        - name: database-primary
+          port: 5432
+          weight: 3
+        - name: database-canary
+          port: 5432
+          weight: 1
+```
+
+A backend with `weight: 0` receives no new connections, which is useful for draining a backend before removing it.
+
+## Cross-namespace backends
+
+To forward to a Service in another namespace, set `namespace` on the `backendRef` and create a `ReferenceGrant` in the target namespace that permits `TCPRoute` to reference `Service`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1beta1
+kind: ReferenceGrant
+metadata:
+  name: allow-tcp-to-db
+  namespace: data
+spec:
+  from:
+    - group: gateway.networking.k8s.io
+      kind: TCPRoute
+      namespace: production
+  to:
+    - group: ""
+      kind: Service
+```
+
+## Related documents
+
+- [TCPRoute Overview](../overview.md)
+- [Stream Plugins](../stream-plugins.md)
+- [Cross-Namespace Reference](../../../ops-guide/infrastructure/reference-grant.md)

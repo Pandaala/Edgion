@@ -101,7 +101,8 @@ spec:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `onRedisFailure` | Enum | `Allow` | Redis 不可用时的行为。可选值：`Allow`（放行）\| `Deny`（拒绝） |
+| `onRedisFailure` | Enum | `Allow` | Redis 不可用**或** `requestTimeout` 超时时执行的策略。涵盖两种情况：(a) Redis 可检测到已宕机——零 I/O 快速弹出；(b) Redis 健康但响应慢或报错——有界等待后放弃。两种情况均通过此单一策略处理。可选值：`Allow`（放行）\| `Deny`（拒绝） |
+| `requestTimeout` | String | 未设置 | 可选的多策略 Redis 检查总体耗时上限（例如 `"500ms"`）。未设置时不设置聚合超时，仍适用 LinkSys Redis CRD 中的单命令超时。设置后若超时，则执行 `onRedisFailure` 策略 |
 | `keyPrefix` | String | `"edgion:rl:"` | Redis key 前缀，必须以 `:` 结尾，仅 ASCII 可打印字符 |
 | `maxKeyLen` | Integer | `4096` | key 部分的最大字节数（64–65536），防止恶意超长 key 导致 Redis OOM |
 

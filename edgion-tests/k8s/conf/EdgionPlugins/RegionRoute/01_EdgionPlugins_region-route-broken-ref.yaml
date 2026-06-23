@@ -1,0 +1,34 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: region-route-broken-ref
+  namespace: edgion-default
+spec:
+  requestPlugins:
+  - type: RegionRoute
+    config:
+      regions:
+      - name: virginia
+        hashRange:
+        - 0
+        - 599
+        backendEndpoint: 127.0.0.1:30001
+        tls: false
+      - name: ohio
+        hashRange:
+        - 600
+        - 999
+        backendEndpoint: 127.0.0.1:30002
+        tls: false
+      keyGet:
+      - type: header
+        name: X-Account-Id
+      routeRules:
+      - type: RouteByDirectRegion
+        keyFrom:
+        - type: header
+          name: X-Direct-Region
+      - type: RouteByHashRange
+      overrideRef:
+        name: no-such-region-route-overlay
+        namespace: edgion-default

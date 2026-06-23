@@ -53,7 +53,7 @@ Use this checklist when reviewing documents under `docs/`. Ordered by priority: 
 
 - [ ] **Section order correct**: follows progressive complexity (overview → configuration → scenarios → advanced → FAQ → links)
 - [ ] **README.md updated**: for new documents, the README.md of the containing directory is updated
-- [ ] **DIRECTORY.md updated**: when adding / removing / moving documents, DIRECTORY.md is in sync
+- [ ] **Site navigation updated**: when adding / removing / moving user-facing documents, VitePress sidebar/nav entries are in sync
 
 ## Security review
 

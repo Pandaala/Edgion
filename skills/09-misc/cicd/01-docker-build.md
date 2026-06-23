@@ -6,18 +6,22 @@ description: Use when building Edgion images with Docker, understanding the mult
 
 Use this skill to answer:
 
-- How the multi-stage build in `docker/Dockerfile` actually flows
+- How the multi-stage build in `cicd/docker/Dockerfile` actually flows
 - What layer `cargo-chef` caches
 - What the build args `BINARY`, `BUILD_TYPE`, and `FEATURES` each affect
-- When to use `docker/Dockerfile` vs. `docker/Dockerfile.runtime`
+- When to use `cicd/docker/Dockerfile` vs. `cicd/docker/Dockerfile.runtime`
 
 ## Main files
 
-- `docker/Dockerfile`
-- `docker/Dockerfile.builder`
-- `docker/Dockerfile.runtime`
+- `cicd/docker/Dockerfile` — multi-stage source build (covered in detail below)
+- `cicd/docker/Dockerfile.builder` — standalone build-environment image
+- `cicd/docker/Dockerfile.runtime` — packages a pre-built artifact into a runtime image
 
-## The 4 stages of `docker/Dockerfile`
+Other variants in `cicd/docker/` (not detailed here):
+
+- `cicd/docker/Dockerfile.controller-gateway` (+ `cicd/docker/controller-gateway-entrypoint.sh`) — packages pre-built binaries (controller + gateway + cli) into one standalone backend image (no dashboard/nginx). Driven by `build-image.sh --controller-gateway`
+
+## The 4 stages of `cicd/docker/Dockerfile`
 
 ### 1. `chef`
 
@@ -73,7 +77,7 @@ Caching meaning:
 docker build \
   --build-arg BINARY=edgion-gateway \
   -t edgion/edgion-gateway:local \
-  -f docker/Dockerfile .
+  -f cicd/docker/Dockerfile .
 ```
 
 ### Build the controller
@@ -82,17 +86,23 @@ docker build \
 docker build \
   --build-arg BINARY=edgion-controller \
   -t edgion/edgion-controller:local \
-  -f docker/Dockerfile .
+  -f cicd/docker/Dockerfile .
 ```
 
-### Build an example
+### Build a test-harness binary
+
+`BUILD_TYPE=example` is the build-arg token for the edgion-tests harness
+binaries (`test_server` / `test_client`). They are no longer cargo examples —
+they are `[[bin]]` targets of the `edgion-tests` crate, built internally with
+`cargo build -p edgion-tests --bin <name>` (no `--features` flag, since the crate
+defines none). The build-arg interface below is unchanged.
 
 ```bash
 docker build \
   --build-arg BUILD_TYPE=example \
   --build-arg BINARY=test_server \
   -t edgion/edgion-test-server:local \
-  -f docker/Dockerfile .
+  -f cicd/docker/Dockerfile .
 ```
 
 ### Switch features
@@ -102,10 +112,10 @@ docker build \
   --build-arg BINARY=edgion-gateway \
   --build-arg FEATURES="allocator-jemalloc,rustls" \
   -t edgion/edgion-gateway:rustls \
-  -f docker/Dockerfile .
+  -f cicd/docker/Dockerfile .
 ```
 
-## When to use `docker/Dockerfile.runtime`
+## When to use `cicd/docker/Dockerfile.runtime`
 
 This file is not a source-build image; it "packages an already-built artifact into a runtime image".
 
@@ -122,14 +132,14 @@ Key arguments:
 | `BINARY` | `gateway` / `controller` or example name |
 | `BUILD_TYPE` | `bin` or `example` |
 | `BINARY_PATH` | Pre-built artifact directory |
-| `RUNTIME_BASE` | Runtime base image, defaults to `ubuntu:24.04` |
+| `RUNTIME_BASE` | Runtime base image, defaults to `debian:bookworm-slim` |
 | `EXTRA_PACKAGES` | Extra runtime apt packages |
 
 Example:
 
 ```bash
 docker build \
-  -f docker/Dockerfile.runtime \
+  -f cicd/docker/Dockerfile.runtime \
   --build-arg BINARY=gateway \
   --build-arg BUILD_TYPE=bin \
   --build-arg BINARY_PATH=target/release \
@@ -138,7 +148,7 @@ docker build \
 
 ## Multi-architecture and the builder image
 
-`docker/Dockerfile.builder` is a standalone "build environment image", more suitable for:
+`cicd/docker/Dockerfile.builder` is a standalone "build environment image", more suitable for:
 
 - Building Linux targets from any host
 - Multi-architecture build experiments
@@ -147,7 +157,7 @@ docker build \
 Example approach:
 
 ```bash
-docker build --platform linux/arm64 -t edgion-builder -f docker/Dockerfile.builder .
+docker build --platform linux/arm64 -t edgion-builder -f cicd/docker/Dockerfile.builder .
 docker run --rm --platform linux/arm64 -v "$(pwd)":/project edgion-builder \
   cargo build --release --target aarch64-unknown-linux-gnu
 ```

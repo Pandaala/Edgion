@@ -1,31 +1,58 @@
 # GRPCRoute Backend Configuration
 
-GRPCRoute specifies gRPC backend services through `backendRefs`.
+A GRPCRoute forwards gRPC calls to one or more Kubernetes Services that speak gRPC over HTTP/2. Load balancing across the Service endpoints is automatic; when several backends are listed, traffic is split by weight.
 
-## Minimal Example
+## Basic example
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: GRPCRoute
 metadata:
-  name: order-route
-  namespace: gateway-system
+  name: user-service-route
+  namespace: production
 spec:
   parentRefs:
-    - name: edge-gw
+    - name: main-gateway
   rules:
     - backendRefs:
-        - name: order-service
-          port: 50051
-          weight: 100
+        - name: grpc-service
+          port: 9000
 ```
 
-## Recommendations
+## Backend fields
 
-1. For canary release scenarios, use `weight` for traffic splitting.
-2. If backend TLS is needed, manage certificates uniformly following the approach described in the HTTPRoute backend TLS documentation.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | String | **Required** | Target Kubernetes Service name (must serve gRPC over HTTP/2) |
+| `port` | Integer | **Required** | Service port to connect to |
+| `weight` | Integer | `1` | Relative share of traffic sent to this backend |
+| `namespace` | String | GRPCRoute namespace | Service namespace; cross-namespace requires a `ReferenceGrant` |
+| `kind` | String | `Service` | Backend object kind |
 
-## Related Documentation
+## Weighted backends
 
-- [Service Reference (HTTPRoute)](../../http-route/backends/service-ref.md)
-- [Weight Configuration (HTTPRoute)](../../http-route/backends/weight.md)
+List multiple `backendRefs` to split calls across backends by weight (a ratio, not a percentage) — useful for canary rollouts of a new service version:
+
+```yaml
+spec:
+  rules:
+    - backendRefs:
+        - name: user-service-stable
+          port: 9000
+          weight: 9
+        - name: user-service-canary
+          port: 9000
+          weight: 1
+```
+
+A backend with `weight: 0` receives no new calls.
+
+## Cross-namespace backends
+
+To forward to a Service in another namespace, set `namespace` on the `backendRef` and create a `ReferenceGrant` in the target namespace permitting `GRPCRoute` to reference `Service`.
+
+## Related documents
+
+- [GRPCRoute Overview](../overview.md)
+- [GRPCRoute Matching Rules](../matches/overview.md)
+- [Cross-Namespace Reference](../../../ops-guide/infrastructure/reference-grant.md)

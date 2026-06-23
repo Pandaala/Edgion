@@ -5,15 +5,11 @@
 >
 > For hot-path constraints and sensitive-information rules see [../01-log-safety.md](../01-log-safety.md).
 
-## Information layering: three log layers, each in its own role
+## Information layering
 
-| Layer | Tool | Target audience | Retention |
-|------|------|---------|---------|
-| Request granularity | access log (JSON) | Ops troubleshooting, audit | days~weeks |
-| System events | `tracing::info/warn/error` | Developer debugging, alerts | hours~days |
-| Performance aggregation | Prometheus metrics | SRE, Grafana | months |
-
-**Principle**: the access log focuses on request granularity; system logs focus on component events; metrics focus on trend aggregation. They complement each other — do not use the access log as a system log, and do not store raw request details in metrics.
+The three-layer model (access log / `tracing` system events / Prometheus metrics) and the
+"they complement each other" principle are defined once in [../SKILL.md](../SKILL.md#information-layering).
+This document covers the **System events** layer (`tracing::*`) in detail.
 
 ---
 

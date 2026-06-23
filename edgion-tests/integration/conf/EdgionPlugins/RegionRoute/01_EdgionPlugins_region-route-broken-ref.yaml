@@ -1,0 +1,39 @@
+# RegionRoute - broken overrideRef (overlay model)
+#
+# The RegionRoute plugin has a valid base config (regions + routeRules) but its
+# overrideRef points at a RegionRouteOverride EdgionConfigData named "no-such-region-route-overlay"
+# which is intentionally NOT created.
+#
+# Fail-to-base semantics: overlay absent -> base regions are used directly; the plugin
+# records an overlay_missing counter and logs "overlay_missing" in the access log.
+# Traffic is still routed using the base region table (not a 500 error).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: region-route-broken-ref
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        regions:
+          - name: virginia
+            hashRange: [0, 599]
+            backendEndpoint: "127.0.0.1:30001"
+            tls: false
+          - name: ohio
+            hashRange: [600, 999]
+            backendEndpoint: "127.0.0.1:30002"
+            tls: false
+        keyGet:
+          - type: header
+            name: X-Account-Id
+        routeRules:
+          - type: RouteByDirectRegion
+            keyFrom:
+              - type: header
+                name: X-Direct-Region
+          - type: RouteByHashRange
+        overrideRef:
+          name: "no-such-region-route-overlay"
+          namespace: edgion-default

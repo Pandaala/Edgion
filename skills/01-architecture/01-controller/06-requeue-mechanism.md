@@ -86,15 +86,34 @@ Core components:
 - `attached_route_tracker.rs` — attachment-state storage
 - `handlers/mod.rs` — `update_attached_route_tracker()`, `requeue_parent_gateways()`
 
+### 6. EdgionGatewayConfig → GatewayClass (params revalidation)
+
+**Purpose**: keep the GatewayClass `ResolvedRefs` / `Accepted` conditions in sync with whether the `EdgionGatewayConfig` named by `parametersRef` exists (controller-07)
+
+| Direction | Trigger | Target resources | Mechanism |
+|---|---|---|---|
+| EdgionGatewayConfig → GatewayClass | EGC create/update/delete | GatewayClass | `EdgionGatewayConfigHandler::{on_change,on_delete}` requeue **all** GatewayClasses (brute-force; cardinality ~1–3) so each re-resolves `parametersRef` |
+| Post-init | `trigger_gatewayclass_params_revalidation()` | All GatewayClasses | One-shot run covering the case where a GatewayClass is processed before its EGC during init |
+
+**Key files**:
+- `handlers/edgion_gateway_config.rs` — on_change/on_delete: `requeue_all_gateway_classes()`
+- `handlers/gateway_class.rs` — `update_status()` resolves `parametersRef` existence via the processor registry
+- `ref_grant/revalidation_listener.rs` — `trigger_gatewayclass_params_revalidation()`
+
+> This is **EGC → GatewayClass**, distinct from the still-rejected **EGC → Gateway** requeue (see the
+> note below). The GatewayClass handler now derives status from the EGC, so the requeue is no longer
+> a no-op — exactly the re-evaluation trigger anticipated by the controller-06 finding.
+
 ## Post-Init Revalidation (CachesReady)
 
-After all Processors complete `on_init_done()`, three revalidation functions run to resolve resource arrival-order issues from the init phase:
+After all Processors complete `on_init_done()`, four revalidation functions run to resolve resource arrival-order issues from the init phase:
 
 | # | Function | Effect |
 |---|---|---|
 | 1 | `trigger_full_cross_ns_revalidation()` | Requeue all resources with cross-namespace references |
 | 2 | `trigger_gateway_secret_revalidation()` | Requeue all Gateways |
 | 3 | `trigger_gateway_route_revalidation()` | Requeue all routes registered in gateway_route_index |
+| 4 | `trigger_gatewayclass_params_revalidation()` | Requeue all GatewayClasses to re-resolve `parametersRef` |
 
 Call sites:
 - `kubernetes/center.rs` (main initialization + HA all-serve reload)
@@ -117,8 +136,16 @@ Call sites:
 | ConfigMap | yes | yes | no requeue dependency |
 | EndpointSlice | — | — | stored directly; consumed by Gateway on demand |
 | Endpoints | — | — | stored directly; consumed by Gateway on demand |
-| GatewayClass | — | — | referenced by Gateway; no requeue |
-| EdgionGatewayConfig | — | — | referenced by Gateway; no requeue |
+| GatewayClass | — | — | requeue **target** of EdgionGatewayConfig (path 6); resolves its own `parametersRef` in `update_status` |
+| EdgionGatewayConfig | yes | yes | requeues all GatewayClasses (path 6); still no requeue toward Gateway (see note) |
+
+> **Note (EdgionGatewayConfig / GatewayClass → Gateway "no requeue" is intentional):** both resources
+> are independently synced to the data plane and consumed directly at listener-build time
+> (`edgion-gateway/src/runtime/server/base.rs:110-129`), and the controller-side `GatewayHandler`
+> derives no status from them, so requeuing a **Gateway** on their change would be a no-op. See
+> `skills/04-review/handler-requeue/controller-06-gatewayclass-egc-no-gateway-requeue.md`. This is
+> orthogonal to path 6 (EGC → **GatewayClass**), which is a real requeue because the GatewayClass
+> handler does derive `ResolvedRefs`/`Accepted` from the EGC's existence (controller-07).
 
 ## Cycle Safety
 

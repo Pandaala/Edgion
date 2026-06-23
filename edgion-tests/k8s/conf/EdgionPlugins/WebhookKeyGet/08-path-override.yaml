@@ -1,0 +1,129 @@
+# Scenario 8: path-override (K8s mode)
+# ---------------------------------------------------------------------------
+# wh8-resolver declares path.template "/webhook/default" with allowOverride: true;
+# the consumer passes pathOverride "/webhook/override" and it is honored.
+# wh8-resolver-nooverride forbids override -> the pathOverride is ignored.
+# Backend via Service (real selector) + auto EndpointSlice.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh8-svc
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+  type: ClusterIP
+---
+# Webhook that ALLOWS path override.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh8-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh8-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/default"
+        allowOverride: true
+      method:
+        template: "GET"
+    timeoutMs: 5000
+    successStatusCodes: [200]
+    allowDegradation: false
+    maxResponseBytes: 4096
+---
+# Webhook that does NOT allow path override (pathOverride must be ignored).
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh8-resolver-nooverride
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh8-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/default"
+        allowOverride: false
+      method:
+        template: "GET"
+    timeoutMs: 5000
+    successStatusCodes: [200]
+    allowDegradation: false
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh8-ctx-set
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          # Override honored: webhook allows it.
+          - name: wh8_overridden
+            from:
+              type: webhook
+              webhookRef: "edgion-default/wh8-resolver"
+              pathOverride: "/webhook/override"
+              extract:
+                source: body
+                path: "data.path"
+            default: "no-override"
+          # Override ignored: webhook forbids it -> default path used.
+          - name: wh8_ignored
+            from:
+              type: webhook
+              webhookRef: "edgion-default/wh8-resolver-nooverride"
+              pathOverride: "/webhook/override"
+              extract:
+                source: body
+                path: "data.path"
+            default: "no-override"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh8-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh8.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh8
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh8-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

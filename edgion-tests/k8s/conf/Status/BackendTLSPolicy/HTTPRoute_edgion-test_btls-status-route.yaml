@@ -1,0 +1,53 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: btls-status-route
+  namespace: edgion-test
+spec:
+  parentRefs:
+  - name: btls-status-gateway
+    namespace: edgion-test
+    sectionName: http
+  rules:
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /system-ca
+    backendRefs:
+    - name: test-backend-system-ca
+      port: 8080
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /configmap-ca
+    backendRefs:
+    - name: test-backend-configmap-ca
+      port: 8080
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /both
+    backendRefs:
+    - name: test-backend-both
+      port: 8080
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /neither
+    backendRefs:
+    - name: test-backend-neither
+      port: 8080
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /configmap-missing
+    backendRefs:
+    - name: test-backend-configmap-missing
+      port: 8080
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /tls-system-ca
+    backendRefs:
+    - name: test-backend-tls-system-ca
+      port: 8080

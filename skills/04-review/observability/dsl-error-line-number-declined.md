@@ -47,6 +47,6 @@ Re-open this decision only if **any** of the following is observed:
 - `tasks/todo/dsl-vm-rhai-research/issues/issue-13-runtime-error-line-in-access-log.md` — declined 2026-05-16.
 - `tasks/todo/dsl-vm-rhai-research/03-source-position-errors.md` — parent report; §5.2.5 enumerates the constraints; §1.6 documents the user pain point.
 - `skills/03-coding/01-log-safety.md` — Iron rule 1 (the `push_err(&'static str)` invariant) and `observability/00-access-log.md` (the API spec).
-- `src/core/gateway/plugins/http/dsl/lang/vm.rs` — `execute_safe` error-kind match; `RuntimeError` variant set.
-- `src/core/gateway/plugins/runtime/log.rs` — `PluginLog::push_err` signature and `push_err_sensitive` API.
+- `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` — `execute_safe` error-kind match; `RuntimeError` variant set.
+- `edgion-gateway/src/plugins/runtime/log.rs` — `PluginLog::push_err` signature and `push_err_sensitive` API.
 - Related declined-but-distinct work: `issue-11` (parser Span propagation) and `issue-12` (`CompiledScript::source_map` RLE) lose their primary consumer with this decision but may still be useful for compile-time / validator error messages; evaluate independently.

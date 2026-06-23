@@ -1,0 +1,17 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-resp-set-status
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "resp-set-status"
+        source: |
+          if resp.status == 200 {
+            resp.set_status(201)
+            resp.set_header("X-Status-Rewritten", "true")
+          }
+        errorPolicy: deny

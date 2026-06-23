@@ -1,12 +1,12 @@
 # Edgion K8s Integration Testing Guide
 
-> See `/Users/caohao/ws1/Edgion/skills/integration-testing.md` for the base workflow. This file only covers **the differences and modifications required for the Kubernetes scenario**.
+> See [`01-integration-testing.md`](01-integration-testing.md) for the base workflow. This file only covers **the differences and modifications required for the Kubernetes scenario**.
 
 ## 1. Goal and scope
 
 This guide is for migrating the existing local-process integration tests to a K8s environment. The focus is on:
 
-- Configuration layer: `examples/test/conf` -> `examples/k8stest/conf`
+- Configuration layer: `edgion-tests/integration/conf` -> `edgion-tests/k8s/conf`
 - Execution layer: local processes -> K8s Deployments/Services
 - Assertion layer: fixed IP/port assumptions -> Service/EndpointSlice dynamic behavior
 
@@ -51,9 +51,9 @@ Recommended K8s mode:
 
 ## 4. Current state of the repo
 
-### 4.1 `examples/k8stest/conf` is now the K8s test baseline
+### 4.1 `edgion-tests/k8s/conf` is now the K8s test baseline
 
-K8s integration tests now use `examples/k8stest/conf` as the sole configuration source and remain mostly isomorphic to the shared suites of `examples/test/conf`. Note that a small class of **runtime-managed Secret templates** in the K8s directory keep `data: {}` empty in the file itself; the actual content is generated under `examples/k8stest/generated/secrets/` during the prepare phase before being applied.
+K8s integration tests now use `edgion-tests/k8s/conf` as the sole configuration source and remain mostly isomorphic to the shared suites of `edgion-tests/integration/conf`. Note that a small class of **runtime-managed Secret templates** in the K8s directory keep `data: {}` empty in the file itself; the actual content is generated under `edgion-tests/k8s/generated/secrets/` during the prepare phase before being applied.
 
 Constraints to keep in mind:
 
@@ -63,13 +63,13 @@ Constraints to keep in mind:
 
 ### 4.2 The execution chain and config source are settled
 
-`/Users/caohao/ws1/Edgion/examples/k8stest/scripts/run_k8s_integration.sh` is now the sole entry point for K8s integration tests. prepare / conf apply / test-client batch all run around `examples/k8stest/conf` and no longer rely on an external deploy repo loading `examples/test/conf`.
+`edgion-tests/k8s/scripts/run_k8s_integration.sh` is now the sole entry point for K8s integration tests. prepare / conf apply / test-client batch all run around `edgion-tests/k8s/conf` and no longer rely on an external deploy repo loading `edgion-tests/integration/conf`.
 
 ## 5. What must be changed for new conf (landing checklist)
 
 ### 5.1 Directory and naming alignment (P0)
 
-- Add same-named suite directories under `examples/k8stest/conf` that match `examples/test/conf`.
+- Add same-named suite directories under `edgion-tests/k8s/conf` that match `edgion-tests/integration/conf`.
 - `LBPolicy` is split or mapped to:
   - `HTTPRoute/Backend/LBRoundRobin`
   - `HTTPRoute/Backend/LBConsistentHash`
@@ -117,7 +117,7 @@ The following types of suites must be rewritten to be "environment-agnostic":
 
 - No hard-coded `http://127.0.0.1:<port>`.
 - Use `TestContext` uniformly (`ctx.target_host` + `ctx.*_port`) to construct URLs.
-- Use `ctx.metrics_client()` for metric scraping; do not hard-code `127.0.0.1:5901`.
+- Use `ctx.metrics_client()` for metric scraping; do not hard-code `127.0.0.1:12090`.
 
 ### 6.2 Key suite rework (P0/P1)
 
@@ -153,7 +153,7 @@ Roll out in stages:
 
 Corresponding script:
 
-- `/Users/caohao/ws1/Edgion/examples/k8stest/scripts/run_k8s_integration.sh`
+- `edgion-tests/k8s/scripts/run_k8s_integration.sh`
   - `--prepare-only`: only prepare the environment
   - `--skip-prepare`: only run tests
 
@@ -161,17 +161,17 @@ Corresponding script:
 
 The following directories still contain `127.0.0.1/localhost/fixed admin port` assumptions and should be reworked first:
 
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/http_route/backend/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/edgion_plugins/direct_endpoint/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/edgion_plugins/all_endpoint_status/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/edgion_plugins/dynamic_external_upstream/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/gateway/allowed_routes/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/gateway/listener_hostname/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/gateway/combined/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/gateway/dynamic/*`
-- `/Users/caohao/ws1/Edgion/examples/code/client/suites/tcp_route/stream_plugins/*`
+- `edgion-tests/src/client/suites/http_route/backend/*`
+- `edgion-tests/src/client/suites/edgion_plugins/direct_endpoint/*`
+- `edgion-tests/src/client/suites/edgion_plugins/all_endpoint_status/*`
+- `edgion-tests/src/client/suites/edgion_plugins/dynamic_external_upstream/*`
+- `edgion-tests/src/client/suites/gateway/allowed_routes/*`
+- `edgion-tests/src/client/suites/gateway/listener_hostname/*`
+- `edgion-tests/src/client/suites/gateway/combined/*`
+- `edgion-tests/src/client/suites/gateway/dynamic/*`
+- `edgion-tests/src/client/suites/tcp_route/stream_plugins/*`
 
-## 9. Mapping to the original document
+## 9. Mapping to the base workflow
 
-- Original flow and test framework: `/Users/caohao/ws1/Edgion/skills/integration-testing.md`
+- Base flow and test framework: [`01-integration-testing.md`](01-integration-testing.md)
 - This document only adds K8s-specific differences, the K8s conf checklist, and suite rework items.

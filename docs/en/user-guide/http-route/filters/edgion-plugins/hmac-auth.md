@@ -1,6 +1,6 @@
 # HMAC Auth Plugin
 
-> **🔌 Edgion Extension**
+> **🔌 Edgion extension**
 > 
 > HmacAuth is an HMAC signature authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 
@@ -39,7 +39,6 @@ metadata:
   name: hmac-auth-plugin
 spec:
   requestPlugins:
-    - enable: true
       type: HmacAuth
       config:
         secretGroups:
@@ -55,31 +54,29 @@ spec:
 
 ## Configuration Reference
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `secretGroups` | Array | Yes* | none | Named groups of credential Secrets (see sub-table below) |
-| `algorithms` | Array | No | `["hmac-sha256","hmac-sha384","hmac-sha512"]` | Allowed signing algorithms |
-| `clockSkew` | Integer | No | `300` | Allowed clock skew in seconds |
-| `enforceHeaders` | Array | No | none | Headers that must be included in signature |
-| `validateRequestBody` | Boolean | No | `false` | Whether to validate request body Digest |
-| `hideCredentials` | Boolean | No | `false` | Remove authentication headers |
-| `anonymous` | String | No | none | Anonymous username |
-| `realm` | String | No | `"edgion"` | Authentication realm |
-| `authFailureDelayMs` | Integer | No | `0` | Auth failure response delay (ms) |
-| `minSecretLength` | Integer | No | `32` | Minimum secret key length |
-| `secretField` | String | No | `"secret"` | Secret field name in K8s Secret |
-| `usernameField` | String | No | `"username"` | Username field name in K8s Secret |
-| `upstreamHeaderFields` | Array | No | `[]` | Extra headers to forward upstream |
-
-\* Required when `anonymous` is not set.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `secretGroups` | Array\<Object\> | **Required** (unless `anonymous` is set) | Named groups of credential Secrets (see sub-table below) |
+| `algorithms` | Array\<String\> | `["hmac-sha256","hmac-sha384","hmac-sha512"]` | Allowed signing algorithms |
+| `clockSkew` | Integer | `300` | Allowed clock skew in seconds |
+| `enforceHeaders` | Array\<String\> | none | Headers that must be included in signature |
+| `validateRequestBody` | Boolean | `false` | Whether to validate request body Digest |
+| `hideCredentials` | Boolean | `false` | Remove authentication headers |
+| `anonymous` | String | none | Anonymous username |
+| `realm` | String | `"edgion"` | Authentication realm |
+| `authFailureDelayMs` | Integer | `0` | Auth failure response delay (ms) |
+| `minSecretLength` | Integer | `32` | Minimum secret key length |
+| `secretField` | String | `"secret"` | Secret field name in K8s Secret |
+| `usernameField` | String | `"username"` | Username field name in K8s Secret |
+| `upstreamHeaderFields` | Array\<String\> | `[]` | Extra headers to forward upstream |
 
 ### `secretGroups` sub-table (`HmacAuthSecretGroup`)
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `name` | String | Yes | Group name (Kubernetes label-value charset, max 63 chars) |
-| `description` | String | No | Human-readable description (not used at runtime) |
-| `secretRefs` | Array | Yes | Kubernetes Secret references for this group (at least 1) |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `name` | String | **Required** | Group name (Kubernetes label-value charset, max 63 chars) |
+| `description` | String | none | Human-readable description (not used at runtime) |
+| `secretRefs` | Array\<Object\> | **Required** | Kubernetes Secret references for this group (at least 1) |
 
 ---
 
@@ -89,7 +86,6 @@ spec:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HmacAuth
     config:
       secretGroups:
@@ -105,7 +101,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HmacAuth
     config:
       secretGroups:
@@ -124,7 +119,6 @@ requestPlugins:
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HmacAuth
     config:
       secretGroups:
@@ -230,7 +224,6 @@ duplicate. The plugin continues serving requests normally.
 
 ```yaml
 requestPlugins:
-  - enable: true
     type: HmacAuth
     config:
       secretGroups:

@@ -1,28 +1,38 @@
 ---
 name: controller-admin-api
-description: edgion-controller Admin HTTP API (Axum :5800) — full endpoint list, AdminState, health check, CRUD, and ConfigServer endpoints.
+description: edgion-controller HTTP listeners — Admin API (:12101), probe listener (:12100), and metrics listener (:12190) — full endpoint list, AdminState, CRUD, and ConfigServer endpoints.
 ---
 
-# Admin API (:5800)
+# Admin API (:12101)
 
-The Controller exposes an HTTP Admin API via Axum, listening on port 5800, used by the edgion-cli command-line tool and operations workflows.
+The Controller exposes three HTTP listeners:
 
-## Router Composition (compose_admin_routes)
+| Listener | Config field | Default | Serves |
+|----------|-------------|---------|--------|
+| Probe | `probe_listen` | `0.0.0.0:12100` | `/health`, `/ready` |
+| Metrics | `metrics_listen` | `0.0.0.0:12190` | `/metrics` |
+| Admin | `admin_listen` | `127.0.0.1:12101` (loopback; set `0.0.0.0` + `allow_admin_ips` for cluster/remote access) | `/api/v1/*`, `/configclient` |
 
-Controller and Center share a single admin-router composition entry: `src/core/common/api/compose.rs::compose_admin_routes(business, auth_state, local_auth_intent)`.
+The Admin API listens on port 12101 (default) via Axum, used by the edgion-cli command-line tool and operations workflows. `/health` and `/ready` are served exclusively on the **probe listener** (`:12100`); `/metrics` is served exclusively on the **metrics listener** (`:12190`). Neither endpoint is available on `:12101`.
 
-The internal composition order is fixed (callers cannot influence it):
+## Router Composition (token-only middleware onion)
 
-1. `business` (per-component business routes)
-2. `/api/v1/auth/{login, logout, me}` (mounted when `local_auth_intent = true`)
-3. `/api/v1/auth/status` (always mounted — fix #01 round 3 regression point; CLI `ensure_auth` requires it to be reachable at all times)
-4. `unified_auth` middleware (wraps every route; `skip_paths` is provided by `auth_state`)
+The Admin API server is assembled in `edgion-controller/src/api/mod.rs::serve_with_shutdown`. The runtime middleware order (outermost first) is:
 
-**Final-state contract**: the returned `Router` is final. Callers must not call `.route()` / `.layer()` on it again — any addition would bypass the auth middleware and is equivalent to the P0 bug from fix #01 round 2. New admin routes should be added to the `business` parameter before calling `compose_admin_routes`.
+```text
+IP allowlist → cache_control_no_store → require_token_configured_gate (503) → cli_token_pre_authn → [authz_layer route_layer] → handler
+```
+
+1. **`business`** — the per-component business routes from `create_admin_router`, wrapped with `authz_layer` as a `route_layer` (matched routes only, never the 404 fallback).
+2. **`/api/v1/auth/status`** — merged *after* the `authz_layer` `route_layer` so it stays reachable without a token (CLI `ensure_auth` requires it at all times).
+3. **`cli_token_pre_authn`** — the sole authn layer: a recognized Bearer token injects `Role::Restricted`; an absent/unknown token injects nothing.
+4. **`require_token_configured_gate`** — returns `503` on business routes when no token (admin or cli) is configured; skips the static public paths.
+5. **`cache_control_no_store`** — blanket `Cache-Control: no-store`.
+6. **IP allowlist** — outermost; mounted only when `allow_admin_ips` is non-empty.
+
+Authentication is **token-only** (Istio-style pre-shared bearer; Bearer header only). The full model — `Role`/`Verb`/`CenterPolicy`, the local admin token, and federation mTLS — is in [11-authentication-authorization.md](11-authentication-authorization.md).
 
 **CORS note**: the Admin API does not include a CORS layer. For local debugging, `edgion-dashboard`'s Vite `server.proxy` handles it (see `edgion-dashboard/vite.config.ts`); in production, the dashboard is embedded into the Controller and served from the same origin. If a separate-origin deployment is required in the future, introduce a precise origin allowlist (corresponds to the H1 fix record).
-
-The three helpers (`add_local_auth_routes`, `add_auth_status_route`, `wrap_with_unified_auth_layer`) have been demoted to `pub(crate)`; direct external invocation is no longer supported. Use `compose_admin_routes` exclusively.
 
 ## AdminState — Shared State
 
@@ -51,12 +61,19 @@ Helper methods:
 
 ## Full Endpoint List
 
-### Health and Status
+### Health and Status (Probe Listener :12100)
+
+The following endpoints are served on the **probe listener** (`:12100`, `probe_listen`), **not** on the Admin API port:
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/health` | Liveness probe. Returns `200` as soon as the service starts; response body `{"success":true,"data":"OK"}` |
 | GET | `/ready` | Readiness probe. Returns `200` once ConfigSyncServer is ready, otherwise `503` |
+
+### Admin API Status (Admin Listener :12101)
+
+| Method | Path | Description |
+|--------|------|-------------|
 | GET | `/api/v1/server-info` | Get the current `server_id` and ready state. After reload `server_id` changes, which can be used to confirm the reload took effect |
 
 ### Reload
@@ -154,16 +171,31 @@ Error responses use standard HTTP status codes (no JSON body):
 
 ## Health and Readiness Semantics
 
-| Probe | Endpoint | Semantics | K8s usage |
-|-------|----------|-----------|-----------|
-| Liveness | `/health` | Returns 200 as long as the process is alive | `livenessProbe` — failing causes the Pod to restart |
-| Readiness | `/ready` | Returns 200 after ConfigSyncServer initialization is complete and all Processors are ready | `readinessProbe` — when not ready, the pod is removed from the Service endpoints |
+Both probes are served on the **probe listener** (`:12100`, `probe_listen`). Use `httpGet.port: 12100` in your Kubernetes pod spec.
+
+| Probe | Endpoint | Listener | Semantics | K8s usage |
+|-------|----------|----------|-----------|-----------|
+| Liveness | `/health` | `:12100` (`probe_listen`) | Returns 200 as long as the process is alive | `livenessProbe` — failing causes the Pod to restart |
+| Readiness | `/ready` | `:12100` (`probe_listen`) | Returns 200 after ConfigSyncServer initialization is complete and all Processors are ready | `readinessProbe` — when not ready, the pod is removed from the Service endpoints |
+
+Example Kubernetes probe configuration:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health
+    port: 12100
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: 12100
+```
 
 Readiness is determined via `AdminState::is_ready()` -> `ConfMgr::is_ready()` -> `ConfCenter::is_ready()`, ultimately checking whether ConfigSyncServer has been created.
 
 ## Write-path readiness gate
 
-The router applies `require_ready_middleware` (in `src/core/controller/api/mod.rs`) as a `route_layer` over the resource-CRUD write endpoints:
+The router applies `require_ready_middleware` (in `edgion-controller/src/api/mod.rs`) as a `route_layer` over the resource-CRUD write endpoints:
 
 - `POST /api/v1/cluster/{kind}` / `PUT /api/v1/cluster/{kind}/{name}` / `DELETE /api/v1/cluster/{kind}/{name}`
 - `POST /api/v1/namespaced/{kind}/{namespace}` / `PUT /api/v1/namespaced/{kind}/{namespace}/{name}` / `DELETE /api/v1/namespaced/{kind}/{namespace}/{name}`
@@ -173,7 +205,7 @@ While the controller is in init or reload (`is_ready() == false`), these endpoin
 Endpoints intentionally not gated:
 
 - `GET` endpoints on `/api/v1/...` (reads may return partial data during init — explicit operator/debug choice).
-- `/health`, `/ready`, `/metrics`, `/api/v1/auth/*` — probes and auth must stay reachable.
+- `/api/v1/auth/*` — auth must stay reachable. (`/health`, `/ready`, `/metrics` are on separate listeners and are not routed through the Admin API router at all.)
 - `/api/v1/reload` — `request_reload` itself returns an error when the center is not started, and reload is the mechanism for recovering from a stuck init.
 - `/api/v1/services/acme/.../trigger` — notify-only, does not touch the storage layer.
 - `/api/v1/diagnostics/...` and `/api/v1/server-info` — read-only diagnostic surface.
@@ -181,7 +213,7 @@ Endpoints intentionally not gated:
 
 **Known gaps** (write paths that touch `ConfCenter` but are not yet covered by this gate, tracked separately):
 
-- `POST /api/v1/cluster-region-routes/failover` and `POST /api/v1/service-region-routes/failover` — `region_route_handlers::patch_plugin_metadata_failover` calls `ConfCenter::update_one` on `PluginMetaData` but does not flow through `parse_resource_and_update_version`. Shares the same init-race risk; out of scope for the initial fix.
+- `POST /api/v1/cluster-region-routes/failover` and `POST /api/v1/service-region-routes/failover` — `region_route_handlers::patch_edgion_config_data_failover` calls `ConfCenter::update_one` on `EdgionConfigData` but does not flow through `parse_resource_and_update_version`. Shares the same init-race risk; out of scope for the initial fix.
 - `POST /api/v1/admin/wipe-all` — test-mode-only (gated by `is_test_mode()`), calls `delete_one` per kind. No production exposure.
 
 ## Interaction with edgion-cli
@@ -216,53 +248,49 @@ Mapping from `ConfWriterError` to HTTP status codes:
 
 ## Authentication System
 
-The Admin API integrates a unified authentication middleware that supports OIDC and local JWT modes.
+The Admin API uses **token-only** authentication (2026-06-12): a single pre-shared bearer token (Istio-style), supplied in the `Authorization: Bearer <token>` header. There is no username/password login, no OIDC admin, no httpOnly cookie, and no session. The former browser-login stack (`local_auth` / `unified_auth`) was removed.
 
-### Authentication Middleware (unified_auth)
+> This section covers **authentication** (who you are) only. For **authorization** (the `(verb, kind)` RBAC engine, the `Role` model, cli tokens, the local admin token, and the full middleware onion), see [11-authentication-authorization.md](11-authentication-authorization.md).
 
-Module location: `src/core/common/unified_auth/mod.rs`
+### Authentication Middleware (cli_token_pre_authn)
+
+Module location: `edgion-controller/src/api/cli_token_middleware.rs` — the sole Admin API authn layer.
 
 Request authentication order:
 
-1. Match against `skip_paths` (defaults: `/health`, `/ready`) → pass through directly
-2. Public auth endpoints (`/api/v1/auth/*`) → pass through directly
-3. Try OIDC Bearer token validation (requires `[auth]` to be configured)
-4. Try local JWT (HS256) Bearer token validation
-5. Try reading the token from the httpOnly Cookie → validate as above
-6. All fail → return `401 Unauthorized`
+1. Static public paths (`/health`, `/ready`, `/metrics`, `/api/v1/auth/status`) → pass through (probes are also served on dedicated listeners).
+2. Read the `Authorization: Bearer <token>` header (case-insensitive; no cookie).
+3. Hash the token (`sha256_hex`) and look it up in the `Authorizer` token map (`cli_lookup`). On a hit, inject `Role::Restricted` + `CliTokenIdentity`.
+4. On a miss or no bearer, inject nothing — `authz_layer` then denies any non-public route with `403`.
 
 ### Authentication Endpoints
 
+The only auth endpoint is the public status probe; login/logout/me are gone.
+
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| POST | `/api/v1/auth/login` | not required | Username/password login; the response body contains the token, and an httpOnly Cookie is also set |
-| POST | `/api/v1/auth/logout` | not required | Clear the httpOnly Cookie |
-| GET | `/api/v1/auth/status` | not required (public) | Return the current auth mode (local/oidc/disabled) |
-| GET | `/api/v1/auth/me` | required | Return the currently logged-in user info |
+| GET | `/api/v1/auth/status` | not required (public) | Return `{ auth_required, mode: "token", status }` where `status` is `Ready` (a token is registered) / `Initializing` (none yet) / `Disabled` |
 
-### httpOnly Cookie
+### Admin Token Bootstrap (Controller)
 
-After a successful login, the response sets an httpOnly JWT Cookie. Browsers automatically attach it on subsequent requests, so the front end does not need to manage tokens manually. This is suitable for the Dashboard front end.
+There is no credential auto-generation. The operator supplies a single admin token; when none is configured, the server starts but all Admin API business routes return `503` fail-close (via `require_token_configured_gate`) with a startup WARN.
 
-### Auto-generated Credentials (Controller only)
+The token is read from the following sources (highest precedence first):
 
-When the Controller's TOML/YAML has neither `[auth]` (OIDC) nor `[local_auth]` configured:
+1. **Env var** `EDGION_ADMIN_TOKEN`, injected via `valueFrom.secretKeyRef` from the `edgion-admin-credentials` Secret (key `token`; recommended for Kubernetes).
+2. **`admin_token`** config field (a Secret-mounted config file).
 
-1. At startup, the Controller checks the Secret `edgion-admin-credentials` (namespace: `edgion-system`) via CenterApi
-2. If absent → generate a 20-character random password + 32-character JWT secret → create the Secret
-3. If present → read the credentials and continue starting up
-4. FileSystem mode storage location: `{conf_dir}/Secret_edgion-system_edgion-admin-credentials.yaml`
-5. K8s mode: creates a real Secret via the K8s API
-6. `secret_retry_loop` uses a `tokio_util::sync::CancellationToken` to listen for shutdown when the Secret is delayed in becoming ready (instead of `broadcast::Receiver<()>`), avoiding the case where the sender is dropped early and the polling exits immediately (fix #01 round 3 regression point)
+A blank/whitespace token is treated as not configured. The admin token maps to an allow-all wildcard RBAC policy and survives reloads (re-merged by `Authorizer::apply`). When nothing is configured: server starts, business routes return `503`, and `/health` / `/ready` / `/metrics` / `/api/v1/auth/status` remain accessible.
 
-> **Note**: Center has no auto-generation path. With neither `[local_auth]` nor `[auth]`, Center starts but all business routes return 503. See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
+See `skills/02-features/02-config/03-auth-bootstrap.md` for the full matrix and migration guide.
 
 ### Module Locations
 
 | Module | Path |
 |--------|------|
-| Local auth (config/handlers/middleware/secret) | `src/core/common/local_auth/` |
-| Unified auth middleware (OIDC + local) | `src/core/common/unified_auth/mod.rs` |
+| Token authn middleware (`cli_token_pre_authn`) | `edgion-controller/src/api/cli_token_middleware.rs` |
+| Authz engine + admin-token entry (`Authorizer`) | `edgion-controller/src/authz/mod.rs` |
+| Admin token resolution (`EDGION_ADMIN_TOKEN` / `admin_token`) | `edgion-controller/src/cli/mod.rs` |
 
 ## Startup Modes
 

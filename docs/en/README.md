@@ -1,6 +1,6 @@
 # Edgion Documentation
 
-Edgion is a high-performance API Gateway built on Pingora and the Kubernetes Gateway API standard. For the full project overview, see the [GitHub README](../../README.md).
+Edgion is a high-performance API Gateway built on Pingora and the Kubernetes Gateway API standard. For the full project overview, see the [GitHub README](https://github.com/Pandaala/Edgion/blob/main/README.md).
 
 ## Guides
 

@@ -1,221 +1,190 @@
-# 负载均衡策略配置指南
+# 负载均衡算法
 
-> **🔌 Edgion 扩展**
+> **🔌 Edgion extension**
 > 
-> 通过 `ExtensionRef` 配置负载均衡算法是 Edgion 的扩展功能。
+> 选择非默认的负载均衡算法是 Edgion 的扩展功能，通过 `backendRefs[].filters` 上的 `LBPolicy*` ExtensionRef 实现；这不是标准 Gateway API 的一部分。
 
-本文档说明如何通过 HTTPRoute 的 `extensionRef` 配置负载均衡算法。
-
-## 概述
-
-Edgion 默认使用 **RoundRobin（加权轮询）** 负载均衡算法。您可以通过以下方式为特定服务启用其他算法：
-
-- **ConsistentHash (Ketama)**: 一致性哈希算法，适用于缓存场景
-- **LeastConnection**: 最少连接算法，适用于长连接场景
-- **EWMA**: 基于指数加权移动平均的延迟感知算法，适用于后端延迟差异大的场景
+Edgion 将请求分发到后端的各个 endpoint。默认使用加权轮询；你可以为某个后端选择一致性哈希、最少连接或基于延迟感知的 EWMA 算法。
 
 ## 支持的算法
 
-| 算法名称 | 别名 | 说明 | 适用场景 |
-|---------|------|------|----------|
-| `ketama` | `consistent-hash`, `consistent` | 一致性哈希（Ketama），相同 key 始终路由到同一后端 | 缓存、会话保持 |
-| `leastconn` | `least-connection`, `leastconnection`, `least_connection` | 选择活跃连接数最少的后端 | gRPC streaming、WebSocket、长连接 |
-| `ewma` | - | 选择 EWMA 延迟最低的后端 | 后端延迟差异大、混合机型 |
+| 算法 | 选择方式 | 适用场景 |
+|------|----------|----------|
+| RoundRobin（默认） | 跨健康 endpoint 的加权轮询 | 通用 HTTP 流量 |
+| ConsistentHash | 将请求属性哈希到 Ketama 环 | 缓存亲和性、按 key 粘性路由 |
+| LeastConnection | 选择活跃连接数最少的 endpoint | 长连接（gRPC stream、WebSocket） |
+| EWMA | 选择指数加权移动平均延迟最低的 endpoint | 延迟不均匀的异构后端 |
 
-不配置时默认使用 **RoundRobin**，支持权重（`weight`）。
+未配置策略时，使用默认的加权轮询选择器。
 
 ## 配置方式
 
-在 HTTPRoute 的 filter 中通过 `extensionRef.name` 指定负载均衡算法。算法配置会自动应用到该 rule 的所有 backendRefs。
+负载均衡策略声明为 **backendRef 上的** `ExtensionRef` filter（不是规则上的 filter）。该 filter 使用 `group: edgion.io` 和 `LBPolicy*` 中的某个 `kind`。这些 ExtensionRef 通过 `kind` 识别，在插件处理之前消费，因此不会进入插件流水线。
 
-### 基本示例
+| `kind` | 含义 | `name` 字段 |
+|--------|------|-------------|
+| `LBPolicyConsistentHash` | 一致性哈希 | 选择哈希 key（见下文） |
+| `LBPolicyLeastConn` | 最少连接 | `default`（值被忽略） |
+| `LBPolicyEwma` | EWMA 延迟选择 | `default`（值被忽略） |
+
+`group` 也可以留空（core API group）——这等同于 `edgion.io`。其他 group 或无法识别的 `kind` 会被忽略，后端保持默认的 RoundRobin 算法。
+
+### 最简示例：最少连接
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: my-route
-  namespace: default
+  name: api-route
+  namespace: production
 spec:
   parentRefs:
-    - name: my-gateway
+    - name: main-gateway
   hostnames:
-    - api.example.com
+    - "api.example.com"
   rules:
-    - filters:
-        - type: ExtensionRef
-          extensionRef:
-            name: ketama
-      backendRefs:
-        - name: my-service
+    - backendRefs:
+        - name: api-service
           port: 8080
+          filters:
+            - type: ExtensionRef
+              extensionRef:
+                group: edgion.io
+                kind: LBPolicyLeastConn
+                name: default
 ```
 
 ## 算法详解
 
 ### RoundRobin（默认）
 
-- 加权轮询：`weight` 越大，被选中的概率越高
-- 单个原子计数器递增，无锁选择
-- 支持 backend 健康过滤和 fallback
+- 加权轮询：backendRef 上较高的 `weight` 将按比例获得更多流量。
+- 无锁 O(1) 选择，带后端健康过滤和降级到健康 endpoint 的机制。
+- weight 被解读为**比例**——只有后端之间的相对比重有意义，绝对值无关。`[2, 4]` 与 `[1, 2]` 的行为完全相同。非常大的 weight 会被（通过 GCD）约简，若仍然很大则按比例缩小，有效比例精度约为 1/10,000（0.01%）。这仅影响比该精度更细的分流，远低于任何实际的灰度配置。
 
 ### ConsistentHash
 
-- 基于 Ketama 算法的一致性哈希环
-- 相同的 hash key 在 backend 不变时始终映射到相同的 backend
-- 当 backend 变化时，只有约 1/N 的 key 重新映射
-- hash key 可从 Header / Cookie / Query / 源 IP 中提取
-- 当无法提取 hash key 时，自动降级为 RoundRobin
+- 基于 Ketama 的一致性哈希环：只要 endpoint 集合不变，相同的哈希 key 始终映射到同一个 endpoint。
+- 当 endpoint 变化时，只有约 1/N 的 key 重新映射。
+- 哈希 key 来自由 `name` 字段选择的请求属性。
+- 如果所选属性**在某个请求中缺失**（例如指定的请求头不存在），则哈希 key 为空，该请求降级为轮询选择。
 
-**ConsistentHash 的 hashOn 配置**：
+`name` 字段使用 `<source>.<key>` 格式选择哈希 key：
+
+| `name` 值 | 哈希 key |
+|-----------|---------|
+| `header.<HeaderName>` | 该请求头的值 |
+| `cookie.<CookieName>` | 该 cookie 的值 |
+| `arg.<QueryParam>` | 该查询参数的值 |
+
+`<source>` 前缀必须是 `header`、`cookie` 或 `arg`。无法解析为这三种格式之一的 `name` 会导致策略被**忽略**，后端保持默认的 RoundRobin 算法。
 
 ```yaml
-extensionRef:
-  name: ketama:header:X-User-Id    # 按 Header 哈希
-  # 或: ketama:cookie:session_id   # 按 Cookie 哈希
-  # 或: ketama:query:user_id       # 按 Query 参数哈希
-  # 或: ketama:source_ip           # 按源 IP 哈希
-  # 或: ketama                     # 默认按源 IP 哈希
+backendRefs:
+  - name: cache-service
+    port: 6379
+    filters:
+      - type: ExtensionRef
+        extensionRef:
+          group: edgion.io
+          kind: LBPolicyConsistentHash
+          # 按 X-User-Id 头进行哈希
+          name: header.X-User-Id
 ```
 
 ### LeastConnection
 
-- 选择当前活跃连接数最少的 backend
-- service 级别隔离：同一个 IP 在不同 service 下独立计数
-- 请求开始时 +1，请求完成时 -1
-- 新 backend 因连接数为 0 被优先选中
-- 被移除的 backend 优雅 drain：不接受新请求，等待已有请求完成
+- 选择活跃连接数最少的 endpoint。
+- 连接计数以 service 为作用域：同一个 endpoint IP 在不同 service 下独立计数。
+- 请求连接时计数加一，请求完成时减一；重试请求的计数正确递减，不会造成计数泄漏。
+- 新加入的 endpoint（计数为 0）优先被选中；被移除的 endpoint 优雅 drain——不接受新请求，已有请求正常完成。
 
 ### EWMA
 
-- 选择 EWMA 延迟最低的 backend
-- EWMA 公式：`new = alpha × latency + (1 - alpha) × old`，默认 alpha = 10%
-- 每次请求完成后更新延迟值
-- 新 backend 默认延迟 1ms，会被短暂优先选中，随后收敛到真实延迟
-- service 级别隔离
+- 选择指数加权移动平均延迟最低的 endpoint。
+- 更新公式：`new = alpha × latency + (1 - alpha) × old`，默认 alpha 为 10%。
+- 每次请求完成时折算延迟；重试请求丢弃其采样，不污染前一个 endpoint 的平均值。
+- 新 endpoint 初始延迟为 1ms（短暂优先），随后收敛到真实延迟。
+- 状态以 service 为作用域。
 
-## 工作原理
+## 配置场景
 
-1. **策略提取**：当 HTTPRoute 被创建或更新时，Edgion 扫描所有 `ExtensionRef` 类型的 filter
-2. **算法解析**：从 `extensionRef.name` 中解析算法名称
-3. **服务映射**：将算法应用到该 rule 的所有 backendRefs 指定的服务
-4. **策略存储**：将服务到算法的映射存储到全局 PolicyStore 中
-5. **按需加载**：请求到达时，根据服务的策略选择对应的负载均衡算法
-
-## 生命周期管理
-
-- **引用计数**：PolicyStore 跟踪每个服务被多少个 HTTPRoute 引用
-- **自动清理**：当最后一个引用该服务的 HTTPRoute 被删除时，对应的策略自动清理
-- **缓存管理**：backend 列表变化时自动清除对应的 LB 缓存（RR 选择器、CH 哈希环），下次请求自动重建
-- **运行时状态清理**：Service 删除时自动清理所有运行时状态（连接计数、EWMA 值等）
-
-## 示例场景
-
-### 场景 1: 缓存服务使用一致性哈希
+### 缓存服务按 cookie 一致性哈希
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: cache-route
-  namespace: default
+  namespace: production
 spec:
   parentRefs:
-    - name: gateway
-  rules:
-    - filters:
-        - type: ExtensionRef
-          extensionRef:
-            name: ketama:header:X-Cache-Key
-      backendRefs:
-        - name: redis-cache
-          port: 6379
-```
-
-### 场景 2: API 服务使用最少连接
-
-```yaml
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: api-routes
-  namespace: prod
-spec:
-  parentRefs:
-    - name: api-gateway
+    - name: main-gateway
   hostnames:
-    - api.mycompany.com
+    - "cache.example.com"
   rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /users
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            name: leastconn
-      backendRefs:
-        - name: user-api
-          port: 8080
+    - backendRefs:
+        - name: cache-service
+          port: 6379
+          filters:
+            - type: ExtensionRef
+              extensionRef:
+                group: edgion.io
+                kind: LBPolicyConsistentHash
+                name: cookie.session_id
 ```
 
-### 场景 3: gRPC 服务使用 EWMA
+### gRPC 服务使用 EWMA
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: grpc-route
-  namespace: prod
+  namespace: production
 spec:
   parentRefs:
-    - name: api-gateway
+    - name: main-gateway
   rules:
     - matches:
         - path:
             type: PathPrefix
             value: /grpc
-      filters:
-        - type: ExtensionRef
-          extensionRef:
-            name: ewma
       backendRefs:
         - name: grpc-service
           port: 50051
+          filters:
+            - type: ExtensionRef
+              extensionRef:
+                group: edgion.io
+                kind: LBPolicyEwma
+                name: default
+```
+
+### 默认算法的加权灰度发布
+
+不需要策略 filter——加权轮询是默认行为：
+
+```yaml
+rules:
+  - backendRefs:
+      - name: stable-service
+        port: 8080
+        weight: 90
+      - name: canary-service
+        port: 8080
+        weight: 10
 ```
 
 ## 注意事项
 
-1. **算法格式**：`extensionRef.name` 中的算法名称不区分大小写
-2. **单一配置**：每个 rule 只能配置一个负载均衡算法
-3. **作用范围**：算法配置会应用到同一个 rule 中所有的 backendRefs
-4. **默认行为**：未配置策略的服务使用默认的 RoundRobin 算法
-5. **Backend 权重**：所有算法都支持 `weight` 配置
-6. **健康检查集成**：所有算法都自动集成健康检查过滤
+- **作用范围**：策略应用于其所附加的 backendRef 命名的 service。
+- **共享 service**：当多条路由对同一 service 附加不同策略时，该 service 会应用这些策略的并集；LB 层在每次请求时选择合适的策略。只有当最后一条引用该 service 的路由被删除时，策略才会被移除。
+- **健康检查**：所有算法都会自动过滤掉不健康的 endpoint。
+- **权重**：所有算法都遵从 backendRef 上的 `weight` 字段。
 
-## 故障排查
+## 相关文档
 
-查看日志中的相关信息：
-
-```bash
-# 查看策略提取日志
-kubectl logs <edgion-pod> | grep "LB policy"
-
-# 查看策略应用日志
-kubectl logs <edgion-pod> | grep "Added LB policies"
-
-# 查看策略清理日志
-kubectl logs <edgion-pod> | grep "Removed LB policies"
-
-# 查看 backend draining 日志
-kubectl logs <edgion-pod> | grep "Backend marked as draining"
-
-# 查看 service 运行时状态清理日志
-kubectl logs <edgion-pod> | grep "Removed service runtime state"
-```
-
-常见问题：
-
-- **策略未生效**：检查 `extensionRef.name` 中的算法名称是否正确
-- **算法名称错误**：使用支持的算法名称或别名（参见上面的算法表格）
-- **ConsistentHash 不稳定**：检查 hash key 是否为空（空时会降级为 RR）
+- [后端配置](./backends/README.md)
+- [会话保持](./resilience/session-persistence.md)
+- [HTTPRoute 总览](./overview.md)

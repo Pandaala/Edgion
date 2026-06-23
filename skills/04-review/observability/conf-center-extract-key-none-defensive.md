@@ -19,7 +19,7 @@ Findings of the form **"`extract_key_from_path` / `extract_key_from_etcd_key` re
 
 The watcher pre-filters before any controller sees the event:
 
-- Init scan — `src/core/controller/conf_mgr/conf_center/file_system/file_watcher.rs:186` calls `parse_resource_filename`; non-conforming names (e.g. `my-route.yaml`, `kustomization.yaml`) are dropped at `tracing::trace!` before being grouped by kind.
+- Init scan — `edgion-controller/src/conf_mgr/conf_center/file_system/file_watcher.rs:186` calls `parse_resource_filename`; non-conforming names (e.g. `my-route.yaml`, `kustomization.yaml`) are dropped at `tracing::trace!` before being grouped by kind.
 - Runtime dispatch — `file_watcher.rs:435` does the same in `dispatch_file_event` and additionally routes to a per-kind sender by `info.kind` (line 447). A file delivered to the `HTTPRoute` controller is therefore guaranteed to be `HTTPRoute_*_*.yaml`.
 
 By the time `extract_key_from_path(&path, expected_kind)` runs in `resource_controller.rs`, both `parts.len() == 3` and `parts[0] == expected_kind` hold by construction. The None branch survives only as a defensive fallback against future refactors.
@@ -48,6 +48,6 @@ When a review reports "extract_key_* returns None silently, add log/metric":
 - Decision date: 2026-05-16
 - Source finding: `P3-c3a-018` (cited file:line `file_system/resource_controller.rs:637-658` was already stale; the current function lives at `:671`).
 - Related files:
-  - `src/core/controller/conf_mgr/conf_center/file_system/file_watcher.rs` (filtering layer)
-  - `src/core/controller/conf_mgr/conf_center/file_system/resource_controller.rs::extract_key_from_path`
-  - `src/core/controller/conf_mgr/conf_center/etcd/resource_controller.rs::extract_key_from_etcd_key`
+  - `edgion-controller/src/conf_mgr/conf_center/file_system/file_watcher.rs` (filtering layer)
+  - `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs::extract_key_from_path`
+  - `edgion-controller/src/conf_mgr/conf_center/etcd/resource_controller.rs::extract_key_from_etcd_key`

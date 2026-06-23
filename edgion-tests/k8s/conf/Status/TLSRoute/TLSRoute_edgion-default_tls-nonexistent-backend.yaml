@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: TLSRoute
+metadata:
+  name: tls-nonexistent-backend
+  namespace: edgion-default
+spec:
+  parentRefs:
+  - name: tlsroute-status-gateway
+    namespace: edgion-test
+    sectionName: tls
+  hostnames:
+  - missing.tls-status.example.com
+  rules:
+  - backendRefs:
+    - name: does-not-exist
+      port: 30051

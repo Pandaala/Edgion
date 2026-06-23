@@ -1,943 +1,492 @@
-# EdgionTls User Guide
+# EdgionTls
 
-> **🔌 Edgion Extension**
-> 
-> `EdgionTls` is an Edgion custom CRD that provides richer TLS and mTLS configuration options than the standard Gateway API.
+> **🔌 Edgion extension**
+>
+> `EdgionTls` is an Edgion custom CRD (`edgion.io/v1`) that adds TLS capabilities beyond the Gateway API: mutual TLS (mTLS), a minimum TLS version, and an OpenSSL-format cipher list. It is not part of standard Gateway API.
 
-## What is EdgionTls?
+EdgionTls binds a server certificate to one or more Gateway listeners and controls how the TLS handshake behaves. Use it when the standard Gateway API `tls.certificateRefs` is not enough — for example when you need client-certificate verification, want to pin a minimum TLS version, or must constrain the cipher suites.
 
-EdgionTls is a TLS certificate management resource for Edgion Gateway, used to configure HTTPS server certificates and mTLS (Mutual TLS authentication) for the Gateway.
+## Overview
 
-**Key Features**:
-- **HTTPS Support**: Configure TLS certificates for domains to enable HTTPS
-- **mTLS Authentication**: Support client certificate verification for mutual authentication
-- **Wildcard Certificates**: Support `*.example.com` wildcard domain format
-- **Hot Certificate Reload**: Update certificates without restart
-- **Auto Validation**: Automatically check certificate expiry, SAN matching, etc.
+EdgionTls attaches to a Gateway listener via `parentRefs` and matches incoming connections by SNI against its `hosts` list. On a match, the Gateway uses the certificate from `secretRef` and applies the handshake options you configured:
 
----
+```
+Client --[TLS + SNI]--> Gateway listener
+                          └─ EdgionTls (hosts match) -> serve secretRef cert,
+                             enforce clientAuth / minTlsVersion / ciphers
+```
+
+To make a listener resolve its certificate from EdgionTls instead of the standard `tls.certificateRefs`, set the listener option `edgion.io/cert-provider: "edgion-tls"` on the Gateway. See [Selecting EdgionTls on a listener](#selecting-edgiontls-on-a-listener).
+
+For automatic certificate issuance and renewal, pair EdgionTls with [EdgionAcme](./acme.md) — ACME can create and keep an EdgionTls up to date for you.
 
 ## Quick Start
 
-### Simplest HTTPS Configuration
+### Simplest HTTPS configuration
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: example-tls
-  namespace: default
+  namespace: production
 spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
   hosts:
     - example.com
   secretRef:
-    name: example-tls-secret
-    namespace: default
+    name: example-com-tls
+    namespace: production
 ```
 
-### Creating a TLS Secret
+### Creating the certificate Secret
 
 ```bash
-# Method 1: Create with kubectl (recommended)
-kubectl create secret tls example-tls-secret \
+kubectl create secret tls example-com-tls \
   --cert=path/to/tls.crt \
   --key=path/to/tls.key \
-  -n default
-
-# Method 2: Using a YAML file
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Secret
-metadata:
-  name: example-tls-secret
-  namespace: default
-type: kubernetes.io/tls
-data:
-  tls.crt: $(cat tls.crt | base64)
-  tls.key: $(cat tls.key | base64)
-EOF
+  -n production
 ```
 
-### Verify Configuration
+The Secret must be of type `kubernetes.io/tls` with `tls.crt` and `tls.key` keys. ⚠️ **Never store real private keys in version control or documentation.**
+
+### Verify
 
 ```bash
-# View EdgionTls resources
-kubectl get edgiontls -n default
-
-# Test HTTPS access
-curl https://example.com
+kubectl get edgiontls -n production
+curl -v https://example.com
 ```
 
----
+### Selecting EdgionTls on a listener
 
-## Configuration Parameters
+EdgionTls attaches through `parentRefs`, but the listener itself must opt in to using EdgionTls as its certificate source. Set the listener option `edgion.io/cert-provider` to `edgion-tls` so the Gateway resolves the certificate (and handshake options) from the matching EdgionTls rather than from the standard `tls.certificateRefs`:
 
-### Basic Parameters
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: main-gateway
+  namespace: production
+spec:
+  gatewayClassName: edgion
+  listeners:
+    - name: https
+      port: 443
+      protocol: HTTPS
+      hostname: "example.com"
+      tls:
+        mode: Terminate
+        # Resolve the certificate and handshake options from EdgionTls.
+        options:
+          edgion.io/cert-provider: "edgion-tls"
+        # certificateRefs may be empty when EdgionTls supplies the certificate.
+        certificateRefs: []
+```
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `parentRefs` | Array | Optional | - | List of bound Gateways |
-| `hosts` | Array | **Required** | - | List of hostnames, supports wildcards (e.g., `*.example.com`) |
-| `secretRef` | Object | **Required** | - | Server certificate Secret reference |
-| `clientAuth` | Object | Optional | - | mTLS client authentication configuration |
+## Configuration parameters
 
-### clientAuth Parameters (mTLS Configuration)
+### Basic parameters
 
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| `mode` | String | Optional | `Terminate` | Auth mode: `Terminate` (one-way) / `Mutual` (mandatory mutual) / `OptionalMutual` (optional mutual) |
-| `caSecretRef` | Object | Conditional* | - | Client CA certificate Secret reference |
-| `verifyDepth` | Integer | Optional | `1` | Certificate chain verification depth (1-9), for intermediate CA scenarios |
-| `allowedSans` | Array | Optional | - | Allowed client certificate SAN whitelist |
-| `allowedCns` | Array | Optional | - | Allowed client certificate CN whitelist |
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `parentRefs` | Array\<Object\> | none | Gateway listeners this config attaches to. Use `name` + `sectionName` to target a specific listener |
+| `hosts` | Array\<String\> | **Required** | Hostnames this certificate serves. Supports a single left-most-label wildcard, e.g. `*.example.com` |
+| `secretRef` | Object | **Required** | `kubernetes.io/tls` Secret holding the server certificate. Cross-namespace requires a `ReferenceGrant` |
+| `clientAuth` | Object | none | mTLS client-certificate verification; see the table below |
+| `minTlsVersion` | Enum | none (BoringSSL default = TLS 1.2+) | Minimum accepted TLS version. Allowed values: `TLS1_0` \| `TLS1_1` \| `TLS1_2` \| `TLS1_3` |
+| `ciphers` | Array\<String\> | none (BoringSSL defaults) | OpenSSL-format cipher list for TLS 1.2 and below, e.g. `ECDHE-RSA-AES256-GCM-SHA384` |
 
-*`caSecretRef` is required when `mode` is `Mutual` or `OptionalMutual`
+> There is **no** `maxTlsVersion` field, and ciphers are a flat OpenSSL-format list — there is no cipher "profile" selector. Configure only the fields listed above.
 
----
+#### `minTlsVersion` values
 
-## Full Configuration Examples
+| Value | TLS version | Recommendation |
+|-------|-------------|----------------|
+| `TLS1_0` | TLS 1.0 | Deprecated by RFC 8996 — legacy clients only, at your own risk |
+| `TLS1_1` | TLS 1.1 | Deprecated by RFC 8996 — legacy clients only, at your own risk |
+| `TLS1_2` | TLS 1.2 | Recommended baseline for modern deployments |
+| `TLS1_3` | TLS 1.3 | Strongest; use when all clients support it |
 
-### Example 1: One-Way TLS (Basic HTTPS)
+When `minTlsVersion` is unset, BoringSSL's default (TLS 1.2+) applies, which is the safe path.
+
+### Security parameters — `clientAuth` (mTLS)
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `clientAuth.mode` | Enum | `Terminate` | Verification mode. Allowed values: `Terminate` \| `Mutual` \| `OptionalMutual` |
+| `clientAuth.caSecretRef` | Object | none | CA certificate Secret (must contain a `ca.crt` key). **Required when `mode` is `Mutual` or `OptionalMutual`** |
+| `clientAuth.verifyDepth` | Integer | `1` | Certificate-chain verification depth (1–9). Increase for intermediate-CA chains |
+| `clientAuth.allowedSans` | Array\<String\> | none | Allowlist of client-certificate SANs; supports wildcards |
+| `clientAuth.allowedCns` | Array\<String\> | none | Allowlist of client-certificate Common Names (exact match) |
+
+#### `clientAuth.mode` values
+
+| Value | Meaning |
+|-------|---------|
+| `Terminate` | One-way TLS: only the server certificate is verified (default) |
+| `Mutual` | Mutual TLS: the client **must** present a valid certificate or the handshake is rejected |
+| `OptionalMutual` | The client certificate is optional, but if presented it is verified |
+
+## Common configuration scenarios
+
+### 1. One-way TLS (basic HTTPS)
+
+The simplest production setup — verify only the server certificate, on multiple hosts:
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: basic-https
-  namespace: edge
+  namespace: production
 spec:
   parentRefs:
-    - name: example-gateway
-      namespace: edge
+    - name: main-gateway
+      sectionName: https
   hosts:
     - api.example.com
     - www.example.com
   secretRef:
-    name: server-tls
-    namespace: edge
+    name: example-com-tls
+    namespace: production
 ```
 
-**Use case**: Standard HTTPS website, only verifying the server certificate.
+### 2. Required mutual TLS (`Mutual`)
 
----
-
-### Example 2: Mandatory Mutual TLS (Mutual)
+Every client must present a certificate signed by the configured CA:
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: mtls-mutual
-  namespace: edge
+  name: mtls-required
+  namespace: production
 spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
   hosts:
     - api.example.com
   secretRef:
-    name: server-tls
-    namespace: edge
+    name: example-com-tls
+    namespace: production
   clientAuth:
     mode: Mutual
     caSecretRef:
       name: client-ca
-      namespace: edge
+      namespace: production
     verifyDepth: 1
 ```
 
-**Use case**: API gateway connecting to microservices, all clients must provide a valid certificate.
+Create the CA Secret (the `ca.crt` key is required):
 
-**Creating the CA Secret**:
 ```bash
 kubectl create secret generic client-ca \
   --from-file=ca.crt=path/to/client-ca.pem \
-  -n edge
+  -n production
 ```
 
-**Testing access**:
+Test it:
+
 ```bash
-# Access with client certificate
+# With a client certificate (accepted)
 curl --cert client.crt --key client.key https://api.example.com
 
-# Access without certificate (will be rejected)
+# Without a certificate (rejected at the TLS handshake)
 curl https://api.example.com
-# Expected: TLS handshake failed
 ```
 
----
+### 3. Optional mutual TLS (`OptionalMutual`)
 
-### Example 3: Optional Mutual TLS (OptionalMutual)
+Allow anonymous clients, but verify a certificate when one is presented — useful when an upstream service grants extra privileges to identified clients:
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: mtls-optional
-  namespace: edge
+  namespace: production
 spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
   hosts:
     - secure.example.com
   secretRef:
-    name: server-tls
-    namespace: edge
+    name: example-com-tls
+    namespace: production
   clientAuth:
     mode: OptionalMutual
     caSecretRef:
       name: client-ca
-      namespace: edge
+      namespace: production
 ```
 
-**Use case**: Mixed scenarios, allowing regular users while providing additional privileges for clients that present certificates.
+### 4. mTLS with a SAN / CN allowlist
 
-**Characteristics**:
-- Requests without certificates can still pass
-- Requests with valid certificates will be identified (can be differentiated in upstream services)
-
----
-
-### Example 4: mTLS + SAN Whitelist
+On top of CA verification, restrict which clients are accepted by SAN or CN:
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: mtls-san-whitelist
-  namespace: edge
+  name: mtls-allowlist
+  namespace: production
 spec:
+  parentRefs:
+    - name: internal-gateway
+      sectionName: https
   hosts:
     - admin.example.com
   secretRef:
-    name: server-tls
+    name: admin-example-com-tls
+    namespace: production
   clientAuth:
     mode: Mutual
     caSecretRef:
       name: client-ca
-    verifyDepth: 1
+      namespace: production
     allowedSans:
       - "client1.example.com"
       - "*.internal.example.com"
+    allowedCns:
+      - "AdminClient"
 ```
 
-**Use case**: Admin interfaces, allowing only specific clients.
+A client is accepted only if its certificate is issued by `client-ca` **and** its SAN/CN matches the allowlist. Prefer `allowedSans` over `allowedCns` — CN-based identity is deprecated.
 
-**Validation logic**:
-1. Client certificate must be issued by `client-ca`
-2. Client certificate SAN must match the whitelist
-3. Both conditions must be met to allow access
-
----
-
-### Example 5: mTLS + CN Whitelist
+To pass the verified client-certificate identity downstream (to backends or plugins), add the annotation `edgion.io/expose-client-cert: "true"` to the EdgionTls metadata. After a successful mTLS handshake, the Gateway exposes the client certificate information for downstream use:
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: mtls-cn-whitelist
-  namespace: edge
+  name: mtls-allowlist
+  namespace: production
+  annotations:
+    edgion.io/expose-client-cert: "true"
 spec:
+  parentRefs:
+    - name: internal-gateway
+      sectionName: https
   hosts:
     - admin.example.com
   secretRef:
-    name: server-tls
+    name: admin-example-com-tls
+    namespace: production
   clientAuth:
     mode: Mutual
     caSecretRef:
       name: client-ca
-    allowedCns:
-      - "AdminClient"
-      - "SuperUser"
+      namespace: production
 ```
 
-**Use case**: Access control based on client certificate CN (Common Name).
+### 5. Intermediate-CA chain (`verifyDepth`)
 
----
-
-### Example 6: Intermediate CA Certificate Chain (verifyDepth=2)
+When client certificates are issued by an intermediate CA below the root, raise the verification depth:
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
   name: mtls-intermediate-ca
-  namespace: edge
+  namespace: production
 spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
   hosts:
     - enterprise.example.com
   secretRef:
-    name: server-tls
+    name: enterprise-example-com-tls
+    namespace: production
   clientAuth:
     mode: Mutual
     caSecretRef:
       name: root-ca
-    verifyDepth: 2  # Support intermediate CA
+      namespace: production
+    # Allow one intermediate CA between leaf and root.
+    verifyDepth: 2
 ```
 
-**Certificate chain structure**:
+Chain structure and depth:
+
+```text
+[Client cert] <- [Intermediate CA] <- [Root CA]
 ```
-[Client Certificate] <- [Intermediate CA] <- [Root CA]
-```
 
-**Details**:
-- `verifyDepth: 1` - Verify direct issuance only (default)
-- `verifyDepth: 2` - Support one intermediate CA
-- `verifyDepth: 3` - Support two intermediate CAs
-- The CA secret's `ca.crt` may hold a multi-certificate PEM bundle (root plus one or more intermediates); every certificate in the bundle is loaded into the client trust store.
+- `verifyDepth: 1` — direct issuance only (default)
+- `verifyDepth: 2` — one intermediate CA
+- `verifyDepth: 3` — two intermediate CAs
 
----
+The CA Secret's `ca.crt` may hold a multi-certificate PEM bundle (root plus intermediates); every certificate in the bundle is loaded into the client trust store.
 
-### Example 7: Wildcard Certificate + Multiple Hosts
+### 6. TLS 1.3 only
+
+Pin the minimum version to TLS 1.3 for modern-client-only endpoints:
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: wildcard-cert
-  namespace: edge
-spec:
-  hosts:
-    - "*.api.example.com"
-    - "*.admin.example.com"
-    - example.com
-  secretRef:
-    name: wildcard-tls
-```
-
-**Covered** (RFC 6125 §6.4.3 — single-label wildcard only):
-- `v1.api.example.com`
-- `v2.api.example.com`
-- `dashboard.admin.example.com`
-- `example.com`
-
-**Not covered**:
-- `api.example.com` — wildcard does not cover the base domain itself
-- `deep.sub.api.example.com` — multi-level subdomains exceed the RFC 6125 single-label
-  limit; Gateway API route matching accepts this hostname, but RFC 6125-compliant client
-  TLS libraries reject the handshake because `*.api.example.com` only covers one label
-
-> **Note:** Only a single, left-most-label wildcard is a valid `hosts` entry. Multi-label
-> patterns such as `*.*.example.com`, partial-label patterns such as `foo*.example.com`, and
-> non-leftmost patterns such as `a.*.example.com` are rejected at config-load time with an
-> `InvalidSanPattern` validation error (RFC 6125 §6.4.3 / RFC 5280 §4.2.1.6).
-
----
-
-### Example 8: Multi-Gateway Binding
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionTls
-metadata:
-  name: multi-gateway-tls
-  namespace: edge
+  name: tls13-only
+  namespace: production
 spec:
   parentRefs:
-    - name: public-gateway
-      namespace: edge
-    - name: internal-gateway
-      namespace: edge
+    - name: main-gateway
+      sectionName: https
   hosts:
-    - shared.example.com
+    - secure.example.com
   secretRef:
-    name: shared-tls
+    name: secure-example-com-tls
+    namespace: production
+  minTlsVersion: TLS1_3
 ```
 
-**Use case**: Using the same certificate for a domain across multiple Gateways.
+Clients that only support TLS 1.2 or lower will fail the handshake. Note that TLS 1.3 cipher suites are fixed by BoringSSL and cannot be changed with the `ciphers` field.
 
----
+### 7. Custom cipher list (TLS 1.2)
 
-## Certificate Management Best Practices
-
-### Development Environment: Generate Self-Signed Certificates
-
-#### 1. Generate Server Certificate
-
-```bash
-# Generate private key
-openssl genrsa -out server-key.pem 2048
-
-# Generate Certificate Signing Request (CSR)
-openssl req -new -key server-key.pem -out server.csr \
-  -subj "/CN=example.com"
-
-# Generate self-signed certificate (valid for 365 days)
-openssl x509 -req -in server.csr -signkey server-key.pem \
-  -out server-cert.pem -days 365 \
-  -extensions v3_req -extfile <(cat <<EOF
-[v3_req]
-subjectAltName = DNS:example.com,DNS:*.example.com
-EOF
-)
-
-# Create Secret
-kubectl create secret tls server-tls \
-  --cert=server-cert.pem \
-  --key=server-key.pem \
-  -n edge
-```
-
-#### 2. Generate Client Certificate (for mTLS)
-
-```bash
-# Generate CA certificate
-openssl genrsa -out ca-key.pem 2048
-openssl req -x509 -new -nodes -key ca-key.pem \
-  -sha256 -days 365 -out ca.pem \
-  -subj "/CN=Client CA"
-
-# Generate client private key
-openssl genrsa -out client-key.pem 2048
-
-# Generate client CSR
-openssl req -new -key client-key.pem -out client.csr \
-  -subj "/CN=AdminClient"
-
-# Sign client certificate with CA
-openssl x509 -req -in client.csr -CA ca.pem -CAkey ca-key.pem \
-  -CAcreateserial -out client-cert.pem -days 365 -sha256 \
-  -extensions v3_req -extfile <(cat <<EOF
-[v3_req]
-subjectAltName = DNS:client1.example.com
-EOF
-)
-
-# Create CA Secret
-kubectl create secret generic client-ca \
-  --from-file=ca.crt=ca.pem \
-  -n edge
-```
-
----
-
-### Production Environment: Let's Encrypt Integration
-
-It is recommended to use **cert-manager** for automatic Let's Encrypt certificate management:
-
-```yaml
-apiVersion: cert-manager.io/v1
-kind: Certificate
-metadata:
-  name: example-com-cert
-  namespace: edge
-spec:
-  secretName: server-tls
-  issuerRef:
-    name: letsencrypt-prod
-    kind: ClusterIssuer
-  dnsNames:
-    - example.com
-    - "*.example.com"
-```
-
----
-
-### Certificate Rotation Strategies
-
-#### Method 1: Rolling Update (Recommended)
-
-```bash
-# 1. Create new certificate Secret
-kubectl create secret tls server-tls-new \
-  --cert=new-cert.pem \
-  --key=new-key.pem \
-  -n edge
-
-# 2. Update EdgionTls reference
-kubectl patch edgiontls example-tls -n edge \
-  --type=merge -p '{"spec":{"secretRef":{"name":"server-tls-new"}}}'
-
-# 3. Verify new certificate is active
-curl -v https://example.com 2>&1 | grep "expire date"
-
-# 4. Delete old certificate
-kubectl delete secret server-tls -n edge
-```
-
-#### Method 2: In-Place Update
-
-```bash
-# Directly update Secret contents
-kubectl create secret tls server-tls \
-  --cert=new-cert.pem \
-  --key=new-key.pem \
-  -n edge \
-  --dry-run=client -o yaml | kubectl apply -f -
-```
-
----
-
-### Secret Naming Conventions
-
-Recommended format: `<domain>-tls` or `<service>-<env>-tls`
-
-**Examples**:
-- `api-example-com-tls`
-- `admin-prod-tls`
-- `wildcard-example-tls`
-- `cert1`, `tls-secret` (not descriptive enough)
-
----
-
-### Certificate Expiry Monitoring
-
-Use Prometheus + Alertmanager to monitor certificate expiry:
-
-```yaml
-# Prometheus rule example
-groups:
-  - name: tls_expiry
-    rules:
-      - alert: TLSCertExpiringSoon
-        expr: (edgion_tls_cert_expiry_seconds - time()) < 604800  # 7 days
-        annotations:
-          summary: "TLS certificate expiring soon"
-          description: "Certificate {{ $labels.namespace }}/{{ $labels.name }} expires in less than 7 days"
-```
-
----
-
-## mTLS Use Cases
-
-### 1. API Gateway to Microservices
-
-```mermaid
-graph LR
-    A[External Client] -->|mTLS| B[Edgion Gateway]
-    B -->|HTTP| C[Microservice A]
-    B -->|HTTP| D[Microservice B]
-```
-
-**Configuration points**:
-- Use `Mutual` mode to enforce client certificate verification
-- Configure `allowedSans` to restrict allowed clients
-
----
-
-### 2. B2B API Integration
-
-**Scenario**: Issue different client certificates for different partners
-
-```yaml
-clientAuth:
-  mode: Mutual
-  caSecretRef:
-    name: partner-ca
-  allowedCns:
-    - "PartnerA"
-    - "PartnerB"
-    - "PartnerC"
-```
-
----
-
-### 3. IoT Device Authentication
-
-**Scenario**: Each IoT device holds a unique client certificate
-
-```yaml
-clientAuth:
-  mode: Mutual
-  caSecretRef:
-    name: iot-device-ca
-  allowedSans:
-    - "device-*.iot.example.com"
-```
-
----
-
-### 4. Internal Admin Interface Protection
-
-```yaml
-clientAuth:
-  mode: Mutual
-  caSecretRef:
-    name: admin-ca
-  allowedCns:
-    - "AdminUser"
-  allowedSans:
-    - "admin.internal.example.com"
-```
-
----
-
-## Troubleshooting
-
-| Symptom | Possible Cause | Solution |
-|---------|---------------|----------|
-| **502 Bad Gateway** | Invalid or expired certificate | Check certificate validity: `openssl x509 -in cert.pem -noout -dates` |
-| **TLS handshake failed** | SAN/CN mismatch | Check certificate SAN: `openssl x509 -in cert.pem -noout -text \| grep DNS` |
-| **Client certificate required** | Client did not provide certificate in mTLS mode | Confirm client uses `--cert` and `--key` parameters |
-| **Certificate chain too long** | `verifyDepth` insufficient | Increase `verifyDepth` value (e.g., 2 or 3) |
-| **CA verification failed** | CA Secret does not exist or has wrong format | Check Secret: `kubectl get secret client-ca -n edge -o yaml` |
-| **Secret not found** | Secret referenced by `secretRef` does not exist | Create the Secret or correct the reference |
-| **Invalid SAN pattern** | `allowedSans` contains empty string | Remove blank SAN entries |
-| **Invalid wildcard pattern in `hosts`** | A `hosts` entry uses a multi-label/partial/non-leftmost wildcard (e.g. `*.*.example.com`) | Use a single leftmost-label wildcard such as `*.example.com` (RFC 6125 §6.4.3) |
-| **Certificate not taking effect** | EdgionTls not bound to Gateway | Check `parentRefs` configuration |
-
----
-
-## Security Considerations
-
-### 1. Private Key Protection
-
-- Use **Kubernetes Secrets** to store private keys (automatically encrypted)
-- **Configure RBAC**: Restrict Secret access permissions
-- **Do not** commit private keys to Git repositories
-- **Do not** print private key contents in logs
-
-```yaml
-# RBAC example: Allow only specific ServiceAccount to access Secrets
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: tls-secret-reader
-  namespace: edge
-rules:
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames: ["server-tls", "client-ca"]
-    verbs: ["get"]
-```
-
----
-
-### 2. Certificate Revocation
-
-**Method 1: Delete CA Secret** (affects all clients)
-```bash
-kubectl delete secret client-ca -n edge
-```
-
-**Method 2: Update `allowedCns` whitelist** (fine-grained control)
-```yaml
-clientAuth:
-  allowedCns:
-    - "ValidClient"
-    # Remove "RevokedClient"
-```
-
----
-
-### 3. TLS Version Recommendations
-
-Edgion Gateway supports **TLS 1.2** and **TLS 1.3** by default, with insecure TLS 1.0/1.1 disabled.
-
----
-
-### 4. Cipher Suite Selection
-
-Recommended modern cipher suites (Edgion defaults):
-- `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`
-- `TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384`
-- `TLS_AES_128_GCM_SHA256` (TLS 1.3)
-- `TLS_RSA_WITH_3DES_EDE_CBC_SHA` (disabled)
-
----
-
-## Performance Optimization
-
-### 1. Certificate Caching
-
-Edgion Gateway automatically caches validated certificates, no additional configuration needed.
-
----
-
-### 2. Session Resumption
-
-TLS session resumption is enabled by default, reducing handshake overhead.
-
----
-
-### 3. OCSP Stapling
-
-**Current status**: Planned for future versions.
-
----
-
-## Advanced Configuration
-
-### TLS Version Control
-
-Set the minimum TLS version, similar to Cloudflare's Minimum TLS Version setting.
-
-**Configuration example**:
+Constrain the TLS 1.2 cipher suites using OpenSSL names:
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: tls-version-control
-  namespace: default
+  name: custom-ciphers
+  namespace: production
 spec:
+  parentRefs:
+    - name: main-gateway
+      sectionName: https
   hosts:
     - secure.example.com
   secretRef:
-    name: secure-tls-secret
-    namespace: default
-  minTlsVersion: TLS1_2  # Minimum TLS version
-```
-
-**Supported versions**:
-
-| Value | Description | Recommendation |
-|-------|-------------|----------------|
-| `TLS1_0` | TLS 1.0 | Not recommended (deprecated) |
-| `TLS1_1` | TLS 1.1 | Not recommended (deprecated) |
-| `TLS1_2` | TLS 1.2 | Recommended |
-| `TLS1_3` | TLS 1.3 | Most secure |
-
-**Use cases**:
-- **TLS 1.3 only**: Set `minTlsVersion: TLS1_3`, for modern clients
-- **Compatibility mode**: Set `minTlsVersion: TLS1_2` (recommended)
-- **Legacy client compatibility**: Set `minTlsVersion: TLS1_0` (not recommended)
-
-Uses BoringSSL defaults when not configured.
-
----
-
-### Cipher Suite Configuration
-
-Control allowed encryption algorithms, similar to Nginx's `ssl_ciphers` directive.
-
-**Configuration example**:
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionTls
-metadata:
-  name: cipher-config
-  namespace: default
-spec:
-  hosts:
-    - secure.example.com
-  secretRef:
-    name: secure-tls-secret
-    namespace: default
+    name: secure-example-com-tls
+    namespace: production
+  minTlsVersion: TLS1_2
   ciphers:
-    - ECDHE-RSA-AES256-GCM-SHA384
+    - ECDHE-ECDSA-AES128-GCM-SHA256
     - ECDHE-RSA-AES128-GCM-SHA256
+    - ECDHE-ECDSA-AES256-GCM-SHA384
+    - ECDHE-RSA-AES256-GCM-SHA384
+    - ECDHE-ECDSA-CHACHA20-POLY1305
     - ECDHE-RSA-CHACHA20-POLY1305
 ```
 
-**Important notes**:
+The `ciphers` field only affects TLS 1.2 and below. For TLS 1.3, the suites are fixed:
+`TLS_AES_128_GCM_SHA256`, `TLS_AES_256_GCM_SHA384`, `TLS_CHACHA20_POLY1305_SHA256`.
 
-| TLS Version | Cipher configurable | Description |
-|-------------|-------------------|-------------|
-| TLS 1.0 | Yes | Via `ciphers` field |
-| TLS 1.1 | Yes | Via `ciphers` field |
-| TLS 1.2 | Yes | Via `ciphers` field |
-| TLS 1.3 | No | Hardcoded by BoringSSL |
+### 8. Multi-Gateway binding
 
-**TLS 1.3 uses the following fixed ciphers** (cannot be changed):
-- `TLS_AES_128_GCM_SHA256`
-- `TLS_AES_256_GCM_SHA384`
-- `TLS_CHACHA20_POLY1305_SHA256`
-
-**Recommended TLS 1.2 cipher list**:
-```yaml
-ciphers:
-  - ECDHE-ECDSA-AES128-GCM-SHA256
-  - ECDHE-RSA-AES128-GCM-SHA256
-  - ECDHE-ECDSA-AES256-GCM-SHA384
-  - ECDHE-RSA-AES256-GCM-SHA384
-  - ECDHE-ECDSA-CHACHA20-POLY1305
-  - ECDHE-RSA-CHACHA20-POLY1305
-```
-
-Uses BoringSSL default ciphers when not configured.
-
----
-
-### SAN/CN Whitelist Validation
-
-Whitelist validation for client certificate Subject Alternative Names (SAN) or Common Name (CN).
-
-**Configuration example**:
+Serve the same certificate from more than one Gateway:
 
 ```yaml
 apiVersion: edgion.io/v1
 kind: EdgionTls
 metadata:
-  name: mtls-san-whitelist
-  namespace: default
-spec:
-  hosts:
-    - api.example.com
-  secretRef:
-    name: api-tls-secret
-    namespace: default
-  clientAuth:
-    mode: Mutual
-    caSecretRef:
-      name: client-ca
-      namespace: default
-    verifyDepth: 2
-    allowedSans:
-      - "client1.example.com"
-      - "client2.example.com"
-      - "*.internal.example.com"  # Supports wildcards
-    allowedCns:
-      - "TrustedClient"
-      - "AdminUser"
-```
-
-**Field descriptions**:
-- `allowedSans`: SAN whitelist, supports wildcards (`*.example.com`)
-- `allowedCns`: CN whitelist, exact match
-
-**Validation flow**:
-1. Validate CA and certificate chain during TLS handshake
-2. Extract client certificate information at the application layer
-3. Check if SAN/CN is in the whitelist
-4. Return 403 Forbidden if no match
-
-**Notes**:
-- SAN/CN whitelist validation currently requires architecture enhancements to be fully effective
-- Certificate information needs to be extracted at the TLS layer and passed to the application layer
-- SAN is recommended over CN (CN has been deprecated)
-
----
-
-### Combined Configuration Example
-
-A complete configuration combining multiple advanced features:
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionTls
-metadata:
-  name: advanced-tls-config
+  name: shared-tls
   namespace: production
 spec:
+  parentRefs:
+    - name: public-gateway
+      sectionName: https
+    - name: internal-gateway
+      sectionName: https
   hosts:
-    - secure-api.example.com
+    - shared.example.com
   secretRef:
-    name: api-tls-secret
+    name: shared-example-com-tls
     namespace: production
-  # mTLS configuration
-  clientAuth:
-    mode: Mutual
-    caSecretRef:
-      name: client-ca
-      namespace: production
-    verifyDepth: 3
-    allowedSans:
-      - "*.trusted-clients.example.com"
-  # TLS version control
-  tlsVersions:
-    minVersion: TLS1_2
-    maxVersion: TLS1_3
-  # Cipher suites
-  cipherSuites:
-    profile: Intermediate
 ```
 
----
+## Certificate management
+
+### Rolling certificate rotation (recommended)
+
+```bash
+# 1. Create the new certificate Secret
+kubectl create secret tls example-com-tls-new \
+  --cert=new-cert.pem --key=new-key.pem -n production
+
+# 2. Point EdgionTls at the new Secret
+kubectl patch edgiontls example-tls -n production \
+  --type=merge -p '{"spec":{"secretRef":{"name":"example-com-tls-new"}}}'
+
+# 3. Confirm the new certificate is being served
+curl -v https://example.com 2>&1 | grep "expire date"
+
+# 4. Remove the old Secret
+kubectl delete secret example-com-tls -n production
+```
+
+### In-place update
+
+```bash
+kubectl create secret tls example-com-tls \
+  --cert=new-cert.pem --key=new-key.pem -n production \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+For fully automated issuance and renewal, use [EdgionAcme](./acme.md).
 
 ## FAQ
 
-### Q1: How to view certificate details?
+### Q1: How do I inspect the certificate a Secret holds?
+
+**A**: Extract and decode it with `kubectl` and `openssl`:
 
 ```bash
-# Extract certificate from Secret
-kubectl get secret server-tls -n edge -o jsonpath='{.data.tls\.crt}' | base64 -d > cert.pem
-
-# View certificate details
+kubectl get secret example-com-tls -n production \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d > cert.pem
 openssl x509 -in cert.pem -noout -text
 ```
 
----
+### Q2: How many subdomain levels does a wildcard cover?
 
-### Q2: How many levels does a wildcard certificate cover?
+**A**: Exactly one label. `*.example.com` matches `api.example.com` but not the apex `example.com` and not `deep.sub.example.com`. Only a single left-most-label wildcard is a valid `hosts` entry — patterns like `*.*.example.com`, `foo*.example.com`, or `a.*.example.com` are rejected at config-load time with an `InvalidSanPattern` error (RFC 6125 §6.4.3).
 
-The wildcard `*.example.com` covers only **one level** of subdomains:
-- `api.example.com`
-- `v1.api.example.com` (requires `*.*.example.com`)
+### Q3: What is the difference between `Mutual` and `OptionalMutual`?
 
----
+**A**: `Mutual` rejects the handshake when the client presents no (or an invalid) certificate. `OptionalMutual` lets anonymous clients through but still verifies a certificate when one is presented. Use `OptionalMutual` for mixed traffic where some clients are identified and others are not.
 
-### Q3: How to test mTLS configuration?
+### Q4: Can I use a self-signed CA for mTLS?
 
-```bash
-# Test mandatory mTLS
-curl --cert client.crt --key client.key https://api.example.com
+**A**: Yes — that is common for development and internal services. Put the CA's `ca.crt` in the Secret referenced by `caSecretRef`. For public-facing server certificates, use a trusted CA (for example via [EdgionAcme](./acme.md) and Let's Encrypt).
 
-# View TLS handshake details
-openssl s_client -connect api.example.com:443 \
-  -cert client.crt -key client.key -showcerts
-```
+### Q5: How do I allow only TLS 1.3?
 
----
+**A**: Set `minTlsVersion: TLS1_3`. There is no `maxTlsVersion` field — pinning the minimum to TLS 1.3 effectively makes the listener TLS-1.3-only, because no higher version exists. Clients limited to TLS 1.2 or below will receive a handshake failure.
 
-### Q4: Can I use a self-signed CA?
+### Q6: My mTLS handshake fails — where do I start?
 
-Yes! Self-signed CAs are recommended for development environments. For production, use a trusted CA (such as Let's Encrypt).
+**A**: Verify, in order: (1) the client actually sends `--cert`/`--key`; (2) the client certificate is signed by the CA in `caSecretRef` and its `ca.crt` key is present; (3) `verifyDepth` is high enough for the chain; (4) if you set `allowedSans`/`allowedCns`, the client certificate matches the allowlist.
 
----
+## Troubleshooting
 
-### Q5: How to implement automatic certificate renewal?
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `Secret not found` | `secretRef` points at a missing Secret | Create the Secret or correct the reference |
+| TLS handshake fails for a known-good cert | SNI host not in `hosts`, or wildcard depth too deep | Add the host to `hosts`; remember wildcards cover one label only |
+| `Client certificate required` | `mode: Mutual` and the client sent none | Have the client send `--cert`/`--key`, or use `OptionalMutual` |
+| CA verification fails | `caSecretRef` Secret missing the `ca.crt` key | Recreate the Secret with `--from-file=ca.crt=...` |
+| Chain too long | `verifyDepth` too small for the intermediate chain | Increase `verifyDepth` (2 or 3) |
+| `InvalidSanPattern` | A multi-label / partial / non-leftmost wildcard in `hosts` or `allowedSans` | Use a single leftmost-label wildcard such as `*.example.com` |
+| Certificate has no effect | EdgionTls not attached to the listener | Check `parentRefs` (`name` + `sectionName`) |
 
-Use **cert-manager** + **Let's Encrypt** for fully automatic renewal:
+## Get help
 
-```yaml
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt-prod
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: admin@example.com
-    privateKeySecretRef:
-      name: letsencrypt-prod
-    solvers:
-      - http01:
-          ingress:
-            class: nginx
-```
+If you run into problems:
 
----
+1. Check the FAQ and Troubleshooting sections above
+2. Check the gateway logs
+3. Open an issue on GitHub
 
-### Q6: How to allow only TLS 1.3 connections?
+## Related documents
 
-Set both `minVersion` and `maxVersion` to `TLS1_3`:
-
-```yaml
-tlsVersions:
-  minVersion: TLS1_3
-  maxVersion: TLS1_3
-```
-
-**Q: What happens when a client using TLS 1.2 connects to a TLS 1.3-only service?**
-
-A: The connection will be rejected, and the client will receive a TLS handshake failure error.
-
----
-
-### Q7: Why doesn't cipher suite configuration fully take effect currently?
-
-Due to limitations in the Pingora framework, cipher suites cannot be set during handshake in dynamic SNI scenarios. This requires Pingora API enhancements. The current configuration is recorded but not immediately applied.
-
-**Q: Which cipher suite profile should I choose?**
-
-A:
-- **Most scenarios**: Use `Intermediate` (default)
-- **Modern clients only**: Use `Modern`
-- **Must support legacy clients**: Use `Old` (not recommended)
-
----
-
-### Q8: What is the difference between SAN whitelist and CN whitelist?
-
-- **SAN (Subject Alternative Names)**: Modern standard, supports multiple domains/IPs, recommended
-- **CN (Common Name)**: Legacy standard, supports only a single domain, deprecated
-
-**Q: Why doesn't SAN whitelist validation fully take effect currently?**
-
-A: Due to Pingora architecture limitations, SSL connections cannot be directly accessed at the HTTP request stage. Certificate information needs to be extracted at the TLS layer and passed to the application layer. This requires architecture enhancements.
-
-**Q: How do wildcard whitelists work?**
-
-A: `*.example.com` matches `sub.example.com`, but does not match `example.com` or `sub.sub.example.com` (single-level subdomain only).
-
----
-
-**Need help?** Please visit [Edgion GitHub Issues](https://github.com/your-org/edgion/issues) to submit issues.
+- [TLS Termination](./tls-termination.md)
+- [ACME automatic certificates](./acme.md)
+- [HTTPS Listener](../listeners/https.md)
+- [TCP / TLS Listener](../listeners/tcp.md)

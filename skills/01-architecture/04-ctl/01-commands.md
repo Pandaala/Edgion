@@ -5,7 +5,7 @@ description: edgion-cli subcommand details — apply, get, delete, reload argume
 
 # edgion-cli subcommands
 
-edgion-cli provides 6 subcommands: apply (apply configuration), get (query resources), delete (delete resources), reload (reload resources), gen-certs (generate mTLS certificates), and login (authentication). apply, delete, and reload are only available with the center target; gen-certs does not depend on a target.
+edgion-cli provides 7 subcommands: apply (apply configuration), get (query resources), delete (delete resources), reload (reload resources), gen-certs (generate mTLS certificates), gen-token (mint a CLI token), and login (authentication). apply, delete, and reload are only available with the center target; gen-certs and gen-token do not depend on a target and do not contact the controller.
 
 ## apply
 
@@ -167,7 +167,7 @@ Calls `POST /api/v1/reload`. After the Controller receives the request:
 edgion-cli reload
 
 # Connect to a Controller at a specific address
-edgion-cli --server http://10.0.0.1:5800 reload
+edgion-cli --server http://10.0.0.1:12101 reload
 ```
 
 ## gen-certs
@@ -252,7 +252,7 @@ edgion-cli gen-certs --output k8s --cert-name primary
 ### Module structure
 
 ```
-src/core/ctl/
+edgion-cli/src/
 ├── certs/
 │   └── mod.rs                # generate_certs() → CertBundle (CA, Server, Client)
 └── cli/
@@ -260,53 +260,61 @@ src/core/ctl/
         └── gen_certs.rs      # GenCertsArgs, write_to_files(), write_to_k8s_secrets()
 ```
 
-## login — authentication
+## gen-token
 
-Authenticate with the Controller; the token is saved to a local file and automatically attached by subsequent commands.
+Mint a new CLI token and print it together with its SHA-256 digest. Does not contact the controller.
 
 ### Syntax
 
 ```bash
-edgion-cli login -u <username> -p <password>
-edgion-cli login  # Interactive entry
+edgion-cli gen-token
 ```
 
-The token is saved to `~/.edgion/token` and automatically attached by subsequent commands.
+### Implementation logic
+
+1. Generate 32 CSPRNG bytes, encode as URL-safe base64 (no padding), and prepend an `edg_` prefix to form the token.
+2. Compute the SHA-256 over the **full `edg_`-prefixed token** (the exact `Authorization: Bearer <token>` string the CLI sends).
+3. Print the token (used with `--token` or `EDGION_TOKEN`) and the SHA-256 (pasted into the controller `cli_tokens[].token_sha256`).
 
 ### Module location
 
 | Module | Path |
 |------|------|
-| CLI auto-authentication logic | `src/core/ctl/cli/auto_auth.rs` |
-| Token file management | `src/core/ctl/cli/token.rs` |
+| Token generation | `edgion-cli/src/cli/token.rs` (`gen_token`) |
 
-## Auto-authentication (ensure_auth)
+## login — persist a token
 
-Before executing a command, edgion-cli automatically detects authentication status without requiring a manual login:
+Authentication is **token-only** (Istio-style pre-shared bearer token). `login` simply persists the supplied token to `~/.edgion/token` (mode 0600) so subsequent commands pick it up automatically. There is no username/password exchange and no OIDC.
 
-1. Token already present → use it directly
-2. Query `/api/v1/auth/status` → skip if no authentication required
-3. Auto-detect the Controller configuration file (`--controller-config` / `EDGION_CONTROLLER_CONFIG` / default paths)
-4. Infer conf_dir from the configuration → read the Secret `edgion-admin-credentials` → auto-login
-5. Detection failed → prompt to run `edgion-cli login` manually
+### Syntax
 
-### Controller vs Center asymmetry
+```bash
+edgion-cli login --token <edg_…>
+```
 
-- **Controller**: Step 4 always succeeds — Controller auto-generates the
-  `edgion-admin-credentials` Secret at startup, so `ensure_auth` can read it directly.
-- **Center**: there is no automatic Secret generation path. Operators must explicitly
-  configure `[local_auth]` or `[auth]` in the Center YAML; without it Center returns
-  503 for all business routes, the CLI cannot auto-login (manual `edgion-cli login`
-  with credentials is required).
-  See `skills/02-features/02-config/03-auth-bootstrap.md` for details.
+`--token` is required (omitting it is a parse error). The token is saved to `~/.edgion/token`; the command optionally probes `/api/v1/auth/status` for a friendly warning but persists the token either way. To mint a token, use `edgion-cli gen-token`.
+
+### Module location
+
+| Module | Path |
+|------|------|
+| Token resolution (`resolve_token`) | `edgion-cli/src/cli/auto_auth.rs` |
+| Token file management | `edgion-cli/src/cli/token.rs` |
+| `login` command | `edgion-cli/src/cli/commands/login.rs` |
+
+## Token resolution (resolve_token)
+
+Before each request, edgion-cli resolves the bearer token to attach. There is no auto-login, no `/api/v1/auth/me` probe, and no Secret reading — just a fixed precedence (highest first):
+
+1. `--token` command-line flag (if supplied and non-empty)
+2. `EDGION_TOKEN` environment variable
+3. The cached token file at `~/.edgion/token`
+
+Empty values are treated as absent at every level; the token is wrapped in `Zeroizing` so its buffer is wiped on drop. If no token is found, the request is sent without an `Authorization` header (the controller will then `403`, or `503` if it has no token configured).
 
 ### `/api/v1/auth/status` is always reachable
 
-The `/api/v1/auth/status` endpoint is unconditionally mounted in `compose_admin_routes`
-(Controller and Center share the same composition entry; this is the regression
-point of fix #01 round 3). Even when Center returns 503 on all business routes
-under zero configuration, `/api/v1/auth/status` still returns 200 so the CLI's
-`ensure_auth` can query the authentication mode normally.
+The public `GET /api/v1/auth/status` endpoint is mounted outside the authz `route_layer`, so it returns `200` even when the controller has no token configured (reporting `status: Initializing`). This lets `edgion-cli login` probe the controller for a friendly warning without ever blocking token persistence.
 
 ### Configuration file auto-detection paths
 

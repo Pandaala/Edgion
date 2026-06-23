@@ -9,9 +9,9 @@ description: Full Cargo Feature Flags reference: allocator, TLS backend, mutual-
 
 - `Cargo.toml`
 - `src/lib.rs` (global allocator installation)
-- `src/core/gateway/runtime/server/listener_builder.rs` (TLS listener guards)
-- `src/core/gateway/tls/runtime/` (TLS runtime guards)
-- `src/bin/edgion_gateway.rs`, `src/bin/edgion_controller.rs`, `src/bin/edgion_ctl.rs`, `src/bin/edgion_center.rs` (rustls crypto provider initialization)
+- `edgion-gateway/src/runtime/server/listener_builder.rs` (TLS listener guards)
+- `edgion-gateway/src/tls/runtime/` (TLS runtime guards)
+- `edgion-gateway/src/bin/edgion_gateway.rs`, `edgion-controller/src/bin/edgion_controller.rs`, `edgion-cli/src/bin/edgion_ctl.rs` (rustls crypto provider initialization)
 
 ## Default Build
 
@@ -40,9 +40,9 @@ cargo build    # Equivalent to --features allocator-jemalloc,boringssl
 
 The Gateway TLS runtime code uses `#[cfg(feature = "boringssl")]` guards in several places:
 
-- `src/core/gateway/runtime/server/listener_builder.rs`
-- `src/core/gateway/tls/runtime/gateway/mod.rs`
-- `src/core/gateway/tls/runtime/backend/mod.rs`
+- `edgion-gateway/src/runtime/server/listener_builder.rs`
+- `edgion-gateway/src/tls/runtime/gateway/mod.rs`
+- `edgion-gateway/src/tls/runtime/backend/mod.rs`
 
 Practical impact:
 
@@ -62,12 +62,11 @@ On Windows/MSVC, even if `allocator-jemalloc` is specified, it is not actually i
 
 ## Binary Startup Notes
 
-All four binaries install the rustls crypto provider on startup:
+All three binaries install the rustls crypto provider on startup:
 
-- `src/bin/edgion_gateway.rs`
-- `src/bin/edgion_controller.rs`
-- `src/bin/edgion_ctl.rs` (binary name `edgion-cli`)
-- `src/bin/edgion_center.rs`
+- `edgion-gateway/src/bin/edgion_gateway.rs`
+- `edgion-controller/src/bin/edgion_controller.rs`
+- `edgion-cli/src/bin/edgion_ctl.rs` (binary name `edgion-cli`)
 
 This supports libraries in the repo that depend on rustls and **does not** override the Cargo feature matrix's choice of Gateway data-plane TLS backend.
 

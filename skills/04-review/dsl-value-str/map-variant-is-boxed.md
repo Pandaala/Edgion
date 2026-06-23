@@ -6,7 +6,7 @@ description: Use when reviewing DSL Value enum size or Map variant findings; doc
 # DSL `Value::Map` is intentionally Boxed — do not unbox
 
 **Date applied**: 2026-05-15
-**Status**: Implemented. `src/core/gateway/plugins/http/dsl/lang/value.rs` defines
+**Status**: Implemented. `edgion-gateway/src/plugins/http/dsl/lang/value.rs` defines
 `Map(Box<IndexMap<String, Value>>)`; the size invariant is locked by the
 `assert_value_size_invariant` unit test in the same file.
 **Triggering analysis**: `tasks/todo/dsl-vm-rhai-research/01-value-size-check.md` (deleted after fix).

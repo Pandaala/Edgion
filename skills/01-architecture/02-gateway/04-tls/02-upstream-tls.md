@@ -12,7 +12,7 @@ Upstream TLS handles the TLS connection from the Gateway to backend services. Wh
 ## Module structure
 
 ```
-src/core/gateway/tls/runtime/backend/
+edgion-gateway/src/tls/runtime/backend/
 ├── mod.rs               # module entry, conditional compilation (#[cfg(any(feature = "boringssl", feature = "openssl"))])
 ├── backend_api.rs       # unified backend API (BoringSSL/OpenSSL dispatch)
 └── cert_extractor.rs    # client certificate info extraction utility
@@ -114,9 +114,9 @@ The `tls/validation/` module provides certificate validity checks:
 
 | File | Responsibility |
 |------|----------------|
-| `src/core/gateway/tls/runtime/backend/backend_api.rs` | Unified backend API, set_mtls_verify_callback |
-| `src/core/gateway/tls/runtime/backend/cert_extractor.rs` | Certificate info extraction (subject / SAN / fingerprint) + `extract_sans_from_ssl` |
-| `src/core/gateway/tls/validation/backend_san.rs` | Backend certificate SAN validation (Hostname / URI matching) |
-| `src/core/gateway/tls/validation/cert.rs` | Certificate validity checks |
-| `src/core/gateway/tls/validation/mtls.rs` | mTLS-related validation |
-| `src/core/gateway/routes/http/proxy_http/pg_upstream_peer.rs` | BackendTLSPolicy lookup and upstream TLS connection |
+| `edgion-gateway/src/tls/runtime/backend/backend_api.rs` | Unified backend API, set_mtls_verify_callback |
+| `edgion-gateway/src/tls/runtime/backend/cert_extractor.rs` | Certificate info extraction (subject / SAN / fingerprint) + `extract_sans_from_ssl` |
+| `edgion-gateway/src/tls/validation/backend_san.rs` | Backend certificate SAN validation (Hostname / URI matching) |
+| `edgion-gateway/src/tls/validation/cert.rs` | Certificate validity checks |
+| `edgion-gateway/src/tls/validation/mtls.rs` | mTLS-related validation |
+| `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` | BackendTLSPolicy lookup and upstream TLS connection |

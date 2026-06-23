@@ -49,8 +49,8 @@ Key components:
 ### TCP/TLS/UDP routes
 
 Beyond HTTP/gRPC, the Gateway also supports:
-- **TCPRoute**: TCP layer-4 proxy, matched by port and SNI.
-- **TLSRoute**: TLS passthrough proxy, matched by SNI and forwards encrypted traffic directly.
+- **TCPRoute**: TCP layer-4 proxy, matched per-listener (first-match, no SNI/hostname dimension).
+- **TLSRoute**: SNI-based layer-4 proxy; supports Terminate (TLS→TCP) and Passthrough (encrypted forward) modes.
 - **UDPRoute**: UDP proxy.
 
 Each protocol has an independent `routes_mgr` (route manager) and `route_table`, both implemented with ArcSwap for lock-free hot updates.
@@ -58,8 +58,8 @@ Each protocol has an independent `routes_mgr` (route manager) and `route_table`,
 ## Module layout
 
 ```
-src/core/gateway/
-├── api/           # Admin API server (:5900), exposes runtime state queries
+edgion-gateway/src/
+├── api/           # Admin API server (default :12001, configurable via admin_listen), exposes runtime state queries
 ├── backends/      # Backend management
 │   ├── discovery/ # Backend discovery: Endpoint / EndpointSlice / Service stores
 │   ├── health/    # Health checks: annotation-driven probes, status store, manager scheduling
@@ -68,7 +68,7 @@ src/core/gateway/
 │   └── validation.rs
 ├── cache/         # LRU cache
 ├── cli/           # Startup entry (EdgionGatewayCli::run())
-│   ├── config.rs  # EdgionGatewayConfig TOML configuration structure
+│   ├── config.rs  # EdgionGatewayConfig YAML configuration structure
 │   ├── pingora.rs # Pingora Server creation and run (two-phase)
 │   └── log_config.rs
 ├── conf_sync/     # Configuration sync
@@ -104,14 +104,13 @@ src/core/gateway/
 ├── runtime/       # Pingora runtime
 │   ├── server/    # GatewayBase, listener_builder, error_response, server_header
 │   ├── matching/  # Gateway matching, TLS certificate matching (ArcSwap)
-│   ├── store/     # GatewayStore, GatewayConfigStore, ListenerGatewayInfoStore (ArcSwap)
+│   ├── store/     # GatewayStore, ListenerGatewayInfoStore (ArcSwap)
 │   ├── handler.rs # ConfHandler implementation for the Gateway resource
 │   └── gateway_info.rs
 ├── services/      # Auxiliary services
 │   └── acme/      # ACME automatic certificate issuance (challenge store)
 └── tls/           # TLS certificate management
-    ├── boringssl/ # BoringSSL backend
-    ├── openssl/   # OpenSSL backend
+    ├── boringssl/ # BoringSSL backend (the rustls backend is feature-gated, not a separate dir)
     ├── runtime/   # TLS callbacks (SNI matching, certificate selection)
     ├── store/     # Certificate storage
     └── validation/ # Certificate validation

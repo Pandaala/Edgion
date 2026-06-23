@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: trace-context-untrusted
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: TraceContext
+      config:
+        trustInbound: false

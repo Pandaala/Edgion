@@ -18,7 +18,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: my-backend
-  namespace: default
+  namespace: production
   annotations:
     edgion.io/health-check: |
       active:
@@ -58,24 +58,24 @@ active:
 
 `edgion.io/health-check` 的 YAML 结构：
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `active` | object | ❌ | 无 | 主动探测配置；不配置时不启用健康检查 |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `active` | Object | 无 | 主动探测配置；不配置时不启用健康检查 |
 
 `active` 子字段：
 
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `type` | `http` \| `tcp` \| `grpc` | ❌ | `http` | 探测类型 |
-| `path` | string | ❌ | `/` | HTTP 探测路径（仅 `http` 有效） |
-| `port` | uint16 | ❌ | 使用后端端口 | 探测端口覆盖 |
-| `interval` | duration string | ❌ | `10s` | 探测周期 |
-| `timeout` | duration string | ❌ | `3s` | 单次探测超时 |
-| `healthyThreshold` | uint32 | ❌ | `2` | 连续成功多少次恢复健康 |
-| `unhealthyThreshold` | uint32 | ❌ | `3` | 连续失败多少次标记不健康 |
-| `expectedStatuses` | `[]uint16` | ❌ | `[200]` | HTTP 期望状态码（仅 `http` 有效） |
-| `host` | string | ❌ | 无 | HTTP Host 头覆盖（仅 `http` 有效） |
-| `grpcServiceName` | string | ❌ | `""`（整个服务器） | gRPC Health Check 的 service name（仅 `grpc` 有效） |
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `type` | Enum | `http` | 探测类型。允许值：`http` / `tcp` / `grpc` |
+| `path` | String | `/` | HTTP 探测路径（仅 `http` 有效） |
+| `port` | Integer | 使用后端端口 | 探测端口覆盖 |
+| `interval` | Duration | `10s` | 探测周期 |
+| `timeout` | Duration | `3s` | 单次探测超时 |
+| `healthyThreshold` | Integer | `2` | 连续成功多少次恢复健康 |
+| `unhealthyThreshold` | Integer | `3` | 连续失败多少次标记不健康 |
+| `expectedStatuses` | Array\<Integer\> | `[200]` | HTTP 期望状态码（仅 `http` 有效） |
+| `host` | String | 无 | HTTP Host 头覆盖（仅 `http` 有效） |
+| `grpcServiceName` | String | `""`（整个服务器） | gRPC Health Check 的 service name（仅 `grpc` 有效） |
 
 ## 行为细节与优先级
 
@@ -136,7 +136,7 @@ apiVersion: v1
 kind: Endpoints
 metadata:
   name: legacy-backend
-  namespace: default
+  namespace: production
   annotations:
     edgion.io/health-check: |
       active:
@@ -189,11 +189,12 @@ metadata:
 
 ## 注意事项
 
-1. `expectedStatuses` 仅对 `http` 生效，`tcp` 和 `grpc` 模式会忽略该字段。
-2. `path` 必须以 `/` 开头，否则配置会被判定为无效并忽略。仅对 `http` 模式有效。
+1. `expectedStatuses` 仅对 `http` 生效，`tcp` 和 `grpc` 模式会忽略该字段。对于 `http`，列表必须非空且每个条目都是有效的 HTTP 状态码（100~599）。
+2. `path` 仅对 `http` 模式有效，不能为空；空 `path` 会使整个配置无效从而被忽略。请使用以斜杠开头的路径，例如 `/healthz`。
 3. `healthyThreshold` 和 `unhealthyThreshold` 必须大于等于 `1`。
-4. 未配置健康检查的服务不会做探测，默认按”健康”参与负载均衡。
-5. `grpcServiceName` 仅对 `grpc` 模式有效。空字符串（默认）表示检查整个服务器的健康状态。
+4. `interval` 和 `timeout` 必须解析为非零的 duration（例如 `10s`、`500ms`）；否则配置会被拒绝。
+5. 未配置健康检查的服务不会做探测，默认按”健康”参与负载均衡。
+6. `grpcServiceName` 仅对 `grpc` 模式有效。空字符串（默认）表示检查整个服务器的健康状态。
 
 ## 当前限制
 

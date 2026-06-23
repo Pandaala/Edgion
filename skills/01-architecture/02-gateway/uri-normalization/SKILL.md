@@ -101,8 +101,8 @@ Single-key entry-view access **does** exist (`get_query_param(name)` / `req.quer
 
 Allowlist (direct reads at the following sites are legitimate):
 
-- The ctx path/uri method implementations themselves in `src/types/ctx.rs`.
-- The entry-snapshot block in `pg_early_request_filter.rs` (path normalization entry layer).
+- The ctx path/uri method implementations themselves in `edgion-gateway/src/ctx.rs`.
+- The entry-snapshot block in `pg_request_filter.rs::build_request_metadata` (the `raw_path` / `raw_query` capture feeding the path-normalization entry layer).
 - ACME / well-known protocol handling code.
 - Pingora default forwarding logic paths.
 - The session trait implementations in `session_adapter.rs`.
@@ -151,10 +151,10 @@ ACL bypass protection **holds for** the following cases (within the guarantee sc
 
 Recommended for high-security scenarios:
 
-```toml
-[path_normalization]
-reject_escaped_slashes = true         # reject requests that contain %2F / %5C
-reject_invalid_percent_encoding = true # reject requests with non-UTF-8 / invalid hex percent-encoding
+```yaml
+path_normalization:
+  reject_escaped_slashes: true          # reject requests that contain %2F / %5C
+  reject_invalid_percent_encoding: true # reject requests with non-UTF-8 / invalid hex percent-encoding
 ```
 
 See spec §1.4 for the full security guarantee scope.

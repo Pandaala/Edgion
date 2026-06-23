@@ -1,0 +1,122 @@
+# Scenario 4: all-custom-literal
+# ---------------------------------------------------------------------------
+# No origin forwarding at all. Every header / arg is a custom literal value
+# fully constructed by the operator. Verifies the gateway sends exactly the
+# declared literals and forwards nothing implicitly from the incoming request.
+# Backend via Service + EndpointSlice.
+apiVersion: v1
+kind: Service
+metadata:
+  name: wh4-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30001
+      targetPort: 30001
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: wh4-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: wh4-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: wh4-resolver
+  namespace: edgion-default
+spec:
+  type: webhook
+  config:
+    target:
+      kind: Service
+      name: wh4-svc
+      namespace: edgion-default
+      port: 30001
+    request:
+      path:
+        template: "/webhook/resolve"
+      method:
+        template: "GET"
+      headers:
+        custom:
+          - name: X-Source
+            value: "edgion-gateway"
+          - name: X-Static-Tenant
+            value: "tenant-fixed"
+      args:
+        custom:
+          - name: source
+            value: "edgion"
+          - name: mode
+            value: "literal"
+    timeoutMs: 5000
+    successStatusCodes: [200]
+    allowDegradation: false
+    maxResponseBytes: 4096
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wh4-ctx-set
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: wh4_user_id
+            from:
+              type: webhook
+              webhookRef: "edgion-default/wh4-resolver"
+              extract:
+                # X-Source is a custom literal ("edgion-gateway"). Reading it back
+                # from the echo proves the custom value was injected and that an
+                # incoming X-Source was NOT leaked through (allow-list + override).
+                source: body
+                path: "data.echo_headers.x-source"
+            default: "fallback-user"
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: wh4-route
+  namespace: edgion-default
+  annotations:
+    edgion.io/log-ctx-keys: "wh4_user_id"
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "wh4.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/wh4
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: wh4-ctx-set
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

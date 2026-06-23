@@ -9,11 +9,11 @@
 ## Architecture Overview
 
 ```
-External Service (Docker)          Controller (Admin :5800)
+External Service (Docker)          Controller (Admin :12101)
   e.g. Redis :16379                  ├─ Receives LinkSys YAML via edgion-cli
                                      └─ Syncs to Gateway via gRPC
                                    
-Gateway (Admin :5900)              Test Script (bash)
+Gateway (Admin :12001)             Test Script (bash)
   ├─ ConfHandler creates             ├─ Starts external service (Docker)
   │   runtime client                 ├─ Starts Controller + Gateway
   ├─ Exposes testing API             ├─ Loads LinkSys config via edgion-cli
@@ -38,7 +38,7 @@ run_<type>_test.sh orchestrates the full flow:
 
 Step 0: Kill old    →  pkill -9 -f edgion-* (same as kill_all.sh)
 Step 1: Build       →  cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-cli
-Step 2: Work dir    →  mkdir integration_testing/<type>_testing_YYYYMMDD_HHMMSS/
+Step 2: Work dir    →  mkdir tmp/integration_testing/<type>_testing_YYYYMMDD_HHMMSS/
 Step 3: Start Infra →  docker compose up -d (e.g. Redis)
 Step 4: Start Edgion (same args as start_all_with_conf.sh)
   ├─ 4a: Start Controller (--work-dir, --conf-dir, --test-mode) → wait /ready
@@ -56,32 +56,32 @@ Step 7: Cleanup     →  kill processes, docker compose down
 
 ```bash
 # Targeted: run only the LinkSys/Redis suite (auto-starts Redis docker)
-./examples/test/scripts/integration/run_integration.sh --no-prepare -r LinkSys -i Redis
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare -r LinkSys -i Redis
 
 # Default fast sweep (also runs LinkSys/Redis with the lifecycle delete
 # assertion; --full-test only adds slow suites like LdapAuth and HealthCheckTransition)
-./examples/test/scripts/integration/run_integration.sh --no-prepare
+./edgion-tests/integration/scripts/integration/run_integration.sh --no-prepare
 
 # Run the assertions directly against an already-running stack (build skipped,
 # services up, LinkSys/Redis CRDs applied)
-bash ./examples/test/scripts/integration/link_sys/redis_assertions.sh
-bash ./examples/test/scripts/integration/link_sys/redis_assertions.sh --include-lifecycle
+bash ./edgion-tests/integration/scripts/integration/link_sys/redis_assertions.sh
+bash ./edgion-tests/integration/scripts/integration/link_sys/redis_assertions.sh --include-lifecycle
 ```
 
 **Etcd / Elasticsearch (still standalone):**
 
 ```bash
-./examples/test/scripts/integration/link_sys/run_etcd_test.sh           # full lifecycle
-./examples/test/scripts/integration/link_sys/run_etcd_test.sh --no-build
-./examples/test/scripts/integration/link_sys/run_etcd_test.sh --keep-alive
+./edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh           # full lifecycle
+./edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh --no-build
+./edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh --keep-alive
 
-./examples/test/scripts/integration/link_sys/run_es_test.sh
+./edgion-tests/integration/scripts/integration/link_sys/run_es_test.sh
 ```
 
 ## Directory Structure
 
 ```
-examples/test/
+edgion-tests/
 ├── conf/
 │   ├── base/                              # Base config (GatewayClass, EdgionGatewayConfig)
 │   ├── Services/
@@ -112,8 +112,8 @@ examples/test/
 │           └── run_<future>_test.sh       # ← Future: Kafka, etc.
 └── ...
 
-src/core/gateway/api/mod.rs               # Gateway Admin API with testing endpoints
-src/core/gateway/link_sys/providers/redis/ # Redis runtime client (tested by the script)
+edgion-gateway/src/api/mod.rs               # Gateway Admin API with testing endpoints
+edgion-gateway/src/link_sys/providers/redis/ # Redis runtime client (tested by the script)
 ```
 
 ## Gateway Admin API: LinkSys Testing Endpoints
@@ -190,14 +190,14 @@ On failure:
 
 1. **Create Docker Compose** — `conf/Services/<type>/docker-compose.yaml`
 2. **Write LinkSys CRD YAML** — `conf/LinkSys/<Type>/01_LinkSys_*.yaml`
-3. **Add Gateway Admin API testing endpoints** — `src/core/gateway/api/mod.rs`
+3. **Add Gateway Admin API testing endpoints** — `edgion-gateway/src/api/mod.rs`
 4. **Write test script** — `scripts/integration/link_sys/run_<type>_test.sh`
 5. **Build & test** — run the script
 6. **Update this skill doc** — add the new type's info
 
 ### Step 1: Docker Compose for External Service
 
-Create `examples/test/conf/Services/<type>/docker-compose.yaml`:
+Create `edgion-tests/integration/conf/Services/<type>/docker-compose.yaml`:
 
 ```yaml
 version: "3.8"
@@ -223,7 +223,7 @@ services:
 
 ### Step 2: LinkSys CRD YAML
 
-Create `examples/test/conf/LinkSys/<Type>/01_LinkSys_default_<name>.yaml`:
+Create `edgion-tests/integration/conf/LinkSys/<Type>/01_LinkSys_default_<name>.yaml`:
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -241,7 +241,7 @@ spec:
 
 ### Step 3: Gateway Admin API Testing Endpoints
 
-Add testing endpoints to `src/core/gateway/api/mod.rs` inside the `create_testing_router()` function. Follow the Redis pattern:
+Add testing endpoints to `edgion-gateway/src/api/mod.rs` inside the `create_testing_router()` function. Follow the Redis pattern:
 
 ```rust
 // In create_testing_router():
@@ -258,7 +258,7 @@ Add testing endpoints to `src/core/gateway/api/mod.rs` inside the `create_testin
 
 ### Step 4: Write Test Script
 
-Create `examples/test/scripts/integration/link_sys/run_<type>_test.sh`. Use `run_etcd_test.sh` or `run_es_test.sh` as a template (the previous Redis standalone has been merged into the main runner; if you ever want to merge a new type the same way, see `redis_assertions.sh` + the `is_redis_service_required` / `start_redis_service_if_needed` plumbing in `run_integration.sh` for the wiring pattern).
+Create `edgion-tests/integration/scripts/integration/link_sys/run_<type>_test.sh`. Use `run_etcd_test.sh` or `run_es_test.sh` as a template (the previous Redis standalone has been merged into the main runner; if you ever want to merge a new type the same way, see `redis_assertions.sh` + the `is_redis_service_required` / `start_redis_service_if_needed` plumbing in `run_integration.sh` for the wiring pattern).
 
 **Script structure:**
 
@@ -298,13 +298,13 @@ assert_failure()  # JSON .success == false
 
 ```bash
 # Full standalone run
-./examples/test/scripts/integration/link_sys/run_<type>_test.sh
+./edgion-tests/integration/scripts/integration/link_sys/run_<type>_test.sh
 
 # Iterating (skip build)
-./examples/test/scripts/integration/link_sys/run_<type>_test.sh --no-build
+./edgion-tests/integration/scripts/integration/link_sys/run_<type>_test.sh --no-build
 
 # Debug (keep alive)
-./examples/test/scripts/integration/link_sys/run_<type>_test.sh --keep-alive
+./edgion-tests/integration/scripts/integration/link_sys/run_<type>_test.sh --keep-alive
 ```
 
 **Optional: merge into the main runner** (Redis pattern). Once the standalone script is stable, you can fold its assertions into `run_integration.sh` so contributors get one entry point:
@@ -328,7 +328,7 @@ Add the new type's Docker port, YAML example, and API endpoint table to this ski
 docker ps -a | grep edgion-test
 
 # Check container logs
-cd examples/test/conf/Services/<type> && docker compose logs
+cd edgion-tests/integration/conf/Services/<type> && docker compose logs
 
 # Manual connectivity test
 docker exec edgion-test-redis redis-cli -a edgion-test-pwd ping
@@ -338,10 +338,10 @@ docker exec edgion-test-redis redis-cli -a edgion-test-pwd ping
 
 ```bash
 # Check if Controller accepted the CRD
-curl -s http://127.0.0.1:5800/api/v1/namespaced/LinkSys/default | jq .
+curl -s http://127.0.0.1:12101/api/v1/namespaced/LinkSys/default | jq .
 
 # Check if Gateway received it
-curl -s "http://127.0.0.1:5900/configclient/LinkSys?namespace=default&name=redis-test" | jq .
+curl -s "http://127.0.0.1:12001/configclient/LinkSys?namespace=default&name=redis-test" | jq .
 
 # Check controller logs for errors
 grep -i "error\|warn\|reject" <work-dir>/logs/controller.log
@@ -354,10 +354,10 @@ grep -i "error\|warn\|reject" <work-dir>/logs/controller.log
 grep -i "link_sys\|redis\|RedisLinkClient" <work-dir>/logs/gateway.log
 
 # Check if client is registered
-curl -s http://127.0.0.1:5900/api/v1/testing/link-sys/redis/clients | jq .
+curl -s http://127.0.0.1:12001/api/v1/testing/link-sys/redis/clients | jq .
 
 # Try a direct PING
-curl -s http://127.0.0.1:5900/api/v1/testing/link-sys/redis/default_redis-test/ping | jq .
+curl -s http://127.0.0.1:12001/api/v1/testing/link-sys/redis/default_redis-test/ping | jq .
 ```
 
 ### 4. Config Mismatch
@@ -369,8 +369,8 @@ Common issues:
 
 ```bash
 # Verify config matches
-cat examples/test/conf/LinkSys/Redis/01_LinkSys_default_redis-test.yaml
-cat examples/test/conf/Services/redis/docker-compose.yaml
+cat edgion-tests/integration/conf/LinkSys/Redis/01_LinkSys_default_redis-test.yaml
+cat edgion-tests/integration/conf/Services/redis/docker-compose.yaml
 ```
 
 ### 5. Testing Endpoints Not Available
@@ -379,7 +379,7 @@ The testing endpoints are **only** available when Gateway runs with `--integrati
 
 ```bash
 # This should return a valid response
-curl -s http://127.0.0.1:5900/api/v1/testing/link-sys/redis/clients | jq .
+curl -s http://127.0.0.1:12001/api/v1/testing/link-sys/redis/clients | jq .
 
 # If it returns 404, Gateway is not in integration testing mode
 grep "integration_testing" <work-dir>/logs/gateway.log
@@ -402,7 +402,7 @@ grep "integration_testing" <work-dir>/logs/gateway.log
 All logs are in the timestamped work directory:
 
 ```
-integration_testing/redis_testing_YYYYMMDD_HHMMSS/
+tmp/integration_testing/redis_testing_YYYYMMDD_HHMMSS/
 ├── logs/
 │   ├── controller.log    # Controller stderr
 │   └── gateway.log       # Gateway stderr (includes LinkSys handler logs)
@@ -416,9 +416,9 @@ integration_testing/redis_testing_YYYYMMDD_HHMMSS/
 | Item | Details |
 |------|---------|
 | **Runner integration** | Merged into `run_integration.sh` as the `LinkSys/Redis` suite (auto-discovered). Redis docker is auto-started via `start_redis_service_if_needed`. |
-| **Assertions driver** | `examples/test/scripts/integration/link_sys/redis_assertions.sh` (`--include-lifecycle` is always passed by the runner, so the lifecycle delete assertion runs in both fast and `--full-test` mode; the flag stays opt-in for direct invocations) |
-| **Docker** | `examples/test/conf/Services/redis/docker-compose.yaml` |
-| **Config** | `examples/test/conf/LinkSys/Redis/01_LinkSys_default_redis-test.yaml` |
+| **Assertions driver** | `edgion-tests/integration/scripts/integration/link_sys/redis_assertions.sh` (`--include-lifecycle` is always passed by the runner, so the lifecycle delete assertion runs in both fast and `--full-test` mode; the flag stays opt-in for direct invocations) |
+| **Docker** | `edgion-tests/integration/conf/Services/redis/docker-compose.yaml` |
+| **Config** | `edgion-tests/integration/conf/LinkSys/Redis/01_LinkSys_default_redis-test.yaml` |
 | **Docker port** | `16379:6379` |
 | **Password** | `edgion-test-pwd` (hardcoded for testing only) |
 | **Client name** | `default/redis-test` (URL: `default_redis-test`) |

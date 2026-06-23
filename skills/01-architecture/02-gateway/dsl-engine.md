@@ -9,6 +9,15 @@ description: DSL engine architecture — data flow, source layout, plugin entry 
 >
 > This page is the architecture entry for engine maintainers. User-facing syntax, builtin function signatures, and runtime tuning live in `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/` — do not duplicate them here.
 
+## 0. Design philosophy & scope boundary
+
+EdgionDSL is **not** a general-purpose embedded language (it deliberately stops short of Lua/JS). It runs in-process, on shared Pingora worker threads, and its bytecode is shipped controller→gateway as configuration. Its value is *flexible orchestration with a provable resource ceiling*, not *arbitrary computation*. Keep this boundary when evaluating any new capability:
+
+- **Orchestration logic** (read headers, branch on conditions, rewrite, compose/reuse predicates) → may live in the DSL, but prefer the lightest possible form.
+- **Computation / capability** (new protocols, heavy algorithms, external integrations, perf-sensitive paths) → push down into Rust as a `BuiltinId` (the `CallBuiltin` seam), never as a language feature. Adding a builtin is cheaper, safer, and more testable than growing the language.
+- **Decision rule**: ask "is X orchestration or computation?" Computation always becomes a Rust builtin.
+- **User-defined functions**: at most a restricted **expression-function + compile-time inlining** form (no call frame, no recursion, no in-body `return`/statements, no bytecode-format change → existing step/loop/call/stack budgets and the validator still cover it). Full block-style functions with a runtime call stack are intentionally deferred — they shift isolation cost (recursion/stack bounds, frame accounting, bytecode compat) onto our own sandbox, which Lambda/Lua externalize to a mature runtime + MicroVM. Do not chase Lua-like ergonomics here.
+
 ## 1. Data flow
 
 ```
@@ -40,7 +49,7 @@ Each stage rejects oversized or malformed input independently. Pre-compiled byte
 
 | Stage / role | File |
 |---|---|
-| Parser (nom combinators, parse budget 50_000, source ≤64 KB) | `src/core/gateway/plugins/http/dsl/lang/parser/` |
+| Parser (nom combinators, parse budget 50_000, source ≤64 KB) | `edgion-gateway/src/plugins/http/dsl/lang/parser/` |
 | AST node types | `lang/ast.rs` |
 | Compiler (type check, regex pre-compile, constant pool, max regex pattern length 1024 B) | `lang/compiler/` |
 | Compile-time entry that ties parser + compiler together | `lang/validator.rs` — `compile_dsl_source()` |
@@ -96,7 +105,7 @@ This pairs with the runtime limits in `VmLimits` (step / loop / call / stack / s
 `DslRuntime` is **constructed per-plugin-instance at config-resolve time**, not per-request and not lazily — see `plugin.rs::resolve_parts`. It is `Send + Sync` and stored by value in `DslPlugin` (`self.runtime: DslRuntime`), so the hot path is a simple `&self.runtime` borrow.
 
 ```rust
-// src/core/gateway/plugins/http/dsl/runtime.rs
+// edgion-gateway/src/plugins/http/dsl/runtime.rs
 pub struct DslRuntime {
     pub max_timeout_ms: u64,            // http.call wall-clock cap
     pub max_response_body_bytes: usize, // http.call body cap

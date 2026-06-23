@@ -1,0 +1,140 @@
+# HTTPRoute for RequestRestriction 
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: request-restriction-test-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: edgion-plugins-gateway
+      namespace: edgion-test
+  hostnames:
+    - "request-restriction.example.com"
+  rules:
+    # 1. Header 
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/header-deny
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-header-deny
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 2. Path 
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/path-allow
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-path-allow
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 3. Method 
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/method-allow
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-method-allow
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 4. Header 
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/header-required
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-header-required
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 5.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/combined
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-combined
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 6. Query source: decoded deny (unified-query-string-cache)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/query-deny
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-query-deny
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 7. AND within a group: (X-Env: prod) AND (path /admin/)
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/and-group
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-and-group
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001
+
+    # 8. JwtClaim source: JwtAuth -> RequestRestriction chain, allowlist on realm_access.roles
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test/jwt-claim
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: request-restriction-jwt-claim
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

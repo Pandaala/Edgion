@@ -11,11 +11,11 @@ Use `ReferenceGrant` as the reference pattern when the new resource:
 
 ### 1. Resource Type And Registration
 
-- `src/types/resources/reference_grant.rs`
-- `src/types/resources/mod.rs`
-- `src/types/resource/kind.rs`
-- `src/types/resource/defs.rs`
-- `src/types/resource/meta/impls.rs`
+- `edgion-resources/src/resources/reference_grant.rs`
+- `edgion-resources/src/resources/mod.rs`
+- `edgion-resources/src/resource/kind.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-resources/src/resource/meta/impls.rs`
 
 Important note:
 
@@ -24,9 +24,9 @@ Important note:
 
 ### 2. Default No-Sync Behavior
 
-- `src/types/resource/defs.rs`
-- `src/core/controller/conf_mgr/processor_registry.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/center.rs`
+- `edgion-resources/src/resource/defs.rs`
+- `edgion-controller/src/conf_mgr/processor_registry.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs`
 
 What this pattern shows:
 
@@ -38,10 +38,10 @@ If a new resource should remain controller-only by default, this is the key patt
 
 ### 3. Controller Processing
 
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs`
-- `src/core/controller/conf_mgr/sync_runtime/resource_processor/ref_grant/`
-- `src/core/controller/conf_mgr/conf_center/file_system/controller.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/controller.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/reference_grant.rs`
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/ref_grant/`
+- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What `ReferenceGrantHandler` demonstrates:
 
@@ -53,8 +53,8 @@ This is the right model for policy resources that influence how other resources 
 
 ### 4. Controller CRUD And K8s Writer
 
-- `src/core/controller/api/namespaced_handlers.rs`
-- `src/core/controller/conf_mgr/conf_center/kubernetes/storage.rs`
+- `edgion-controller/src/api/namespaced_handlers.rs`
+- `edgion-controller/src/conf_mgr/conf_center/kubernetes/storage.rs`
 
 Important reminder:
 
@@ -65,9 +65,9 @@ Do not confuse “not synced to Gateway” with “not manageable by the control
 
 ### 5. Gateway-Side Explicit Non-Wiring
 
-- `src/core/gateway/conf_sync/conf_client/config_client.rs`
-- `src/core/gateway/conf_sync/conf_client/grpc_client.rs`
-- `src/core/gateway/api/mod.rs`
+- `edgion-gateway/src/conf_sync/conf_client/config_client.rs`
+- `edgion-gateway/src/conf_sync/conf_client/grpc_client.rs`
+- `edgion-gateway/src/api/mod.rs`
 
 What this pattern shows:
 
@@ -80,8 +80,8 @@ This explicit non-wiring is useful because it prevents hidden waits, accidental 
 ### 6. Manifests And Tests
 
 - `config/crd/gateway-api/gateway-api-standard-v1.5.0.yaml`
-- `examples/test/conf/base/ReferenceGrant_edgion-test_allow-cross-ns.yaml`
-- `examples/test/conf/ref-grant-status/`
+- `edgion-tests/integration/conf/base/ReferenceGrant_edgion-test_allow-cross-ns.yaml`
+- `edgion-tests/integration/conf/ref-grant-status/`
 
 What to test:
 

@@ -1,0 +1,48 @@
+# ForwardAuth LB test: multi-endpoint round-robin smoke test (k8s variant).
+#
+# In k8s the Service uses a selector so the API server populates the
+# EndpointSlice from real pod IPs.  A single test-server pod provides
+# one ready endpoint; the multi-endpoint aspect is exercised in the
+# integration suite (which manually crafts a two-entry EndpointSlice).
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-svc-lb
+  namespace: edgion-default
+spec:
+  selector:
+    app: edgion-test-server
+  ports:
+    - name: http
+      port: 30040
+      targetPort: 30040
+      protocol: TCP
+  type: ClusterIP
+---
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: forward-auth-lb
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-svc-lb
+          namespace: edgion-default
+          port: 30040
+        timeoutMs: 5000
+        request:
+          path:
+            template: "/verify"
+          method:
+            template: "GET"
+          headers:
+            forwardAll: true
+        decision:
+          upstreamHeaders:
+            - X-User-ID
+          clientHeaders:
+            - WWW-Authenticate

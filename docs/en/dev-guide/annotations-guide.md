@@ -4,13 +4,13 @@ This document explains which `edgion.io/*` keys in Edgion are real `metadata.ann
 
 If you are changing code, debugging behavior, or updating docs, start with the agent-facing entry:
 
-- [05-annotations-reference.md](../../../skills/02-features/05-annotations/00-annotations-overview.md)
+- [05-annotations-reference.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/00-annotations-overview.md)
 
 The detailed key tables are split into these references:
 
-- [annotations-metadata.md](../../../skills/02-features/05-annotations/references/annotations-metadata.md)
-- [annotations-options-and-labels.md](../../../skills/02-features/05-annotations/references/annotations-options-and-labels.md)
-- [annotations-system-and-test-keys.md](../../../skills/02-features/05-annotations/references/annotations-system-and-test-keys.md)
+- [annotations-metadata.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/references/annotations-metadata.md)
+- [annotations-options-and-labels.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/references/annotations-options-and-labels.md)
+- [annotations-system-and-test-keys.md](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/05-annotations/references/annotations-system-and-test-keys.md)
 
 ## Start With Placement, Not Just The Key Name
 
@@ -45,6 +45,9 @@ If the placement is wrong, the code path and the documentation usually drift wit
 | `edgion.io/edgion-stream-plugins` | `TCPRoute` / `TLSRoute` | Resolves an `EdgionStreamPlugins` reference |
 | `edgion.io/proxy-protocol` | `TLSRoute` | Current implementation recognizes `"v2"` |
 | `edgion.io/max-connect-retries` | `TLSRoute` | Max upstream connection attempts; default 2, capped at 5 |
+| `edgion.io/tcp-keepalive-time` | `TCPRoute` / `TLSRoute` | Idle seconds before the first TCP keepalive probe on the upstream L4 connection. Presence (positive integer, 1–7200) enables keepalive; absent = disabled (default) |
+| `edgion.io/tcp-keepalive-interval` | `TCPRoute` / `TLSRoute` | Seconds between keepalive probes (1–75). Only applied when `tcp-keepalive-time` is set; absent or invalid = 75 (OS default) |
+| `edgion.io/tcp-keepalive-probes` | `TCPRoute` / `TLSRoute` | Number of failed probes before the connection is declared dead (1–20). Only applied when `tcp-keepalive-time` is set; absent or invalid = 9 (OS default) |
 | `edgion.io/expose-client-cert` | `EdgionTls` | Exposes mTLS client certificate info to the plugin/session layer |
 | `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | Active health-check YAML config (type: http/tcp/grpc) |
 

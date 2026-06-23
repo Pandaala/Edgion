@@ -11,10 +11,10 @@ UDPRoute defines L4 UDP-layer routing rules, forwarding UDP datagrams to backend
 
 ## Source code locations
 
-- Controller Handler: `src/core/controller/conf_mgr/sync_runtime/resource_processor/handlers/udp_route.rs`
-- Gateway ConfHandler: `src/core/gateway/routes/udp/conf_handler_impl.rs`
-- Route manager: `src/core/gateway/routes/udp/routes_mgr.rs` (GlobalUdpRouteManagers)
-- Type definitions: `src/types/resources/udp_route.rs`
+- Controller Handler: `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/udp_route.rs`
+- Gateway ConfHandler: `edgion-gateway/src/routes/udp/conf_handler_impl.rs`
+- Route manager: `edgion-gateway/src/routes/udp/routes_mgr.rs` (GlobalUdpRouteManagers)
+- Type definitions: `edgion-resources/src/resources/udp_route.rs`
 
 ## Controller-side processing
 

@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: edgion-gateway
+  namespace: edgion-system
+  labels:
+    app: edgion-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: edgion-gateway
+  ports:
+  # The admin API (12001) is loopback-only and intentionally NOT exposed here.
+  # The probe port (12000) is also kept out of the Service: kubelet probes the pod
+  # IP via the containerPort, so no Service entry is needed, and keeping it out
+  # prevents a LoadBalancer patch from publishing the readiness oracle externally.
+  - name: metrics
+    port: 12090
+    targetPort: 12090
+    protocol: TCP
+  - name: http
+    port: 80
+    targetPort: 80
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: 443
+    protocol: TCP
+  - name: http-8080
+    port: 8080
+    targetPort: 8080
+    protocol: TCP
+  - name: https-8443
+    port: 8443
+    targetPort: 8443
+    protocol: TCP

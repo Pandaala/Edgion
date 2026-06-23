@@ -19,8 +19,17 @@ edgion-cli [OPTIONS] <COMMAND>
 | `--target` | `-t` | 目标 API 类型 | `center` |
 | `--server` | - | 服务器地址 | 根据 target 自动选择 |
 | `--socket` | - | Unix socket 路径 | - |
+| `--token` | - | 静态 CLI Token（长选项，`-t` 已被 `--target` 占用） | - |
 | `--help` | `-h` | 显示帮助信息 | - |
 | `--version` | `-V` | 显示版本信息 | - |
+
+`edgion-cli` 采用**纯 Token**方式：使用单个 Bearer Token（Istio 风格）向 Controller Admin API 认证。CLI 中不再有用户名/密码登录，也没有 OIDC。Token 可以是本地管理员 Token，也可以是以 `edg_` 为前缀的 `cli_tokens` Token。Token 优先级（从高到低）：
+
+1. `--token <TOKEN>` 标志（仅长选项，`-t` 已被 `--target` 占用）
+2. `EDGION_TOKEN` 环境变量（避免 Token 暴露在 shell 历史记录中）
+3. 位于 `~/.edgion/token` 的缓存登录 Token，由 `edgion-cli login --token` 写入
+
+验证为惰性：第一个请求返回 `401`（未知 Token）或 `403`（权限不足）。唯一的公开认证端点是 `GET /api/v1/auth/status`。
 
 ## Target 类型
 
@@ -28,9 +37,9 @@ edgion-cli [OPTIONS] <COMMAND>
 
 | Target | 组件 | 默认端口 | 支持的命令 | 说明 |
 |--------|------|----------|------------|------|
-| `center` | Controller/ConfCenter | 5800 | get, apply, delete, reload | 完整 CRUD 操作 |
-| `server` | Controller/ConfigServer | 5800 | get (只读) | 查看 ConfigServer 缓存 |
-| `client` | Gateway/ConfigClient | 5900 | get (只读) | 查看 Gateway 缓存 |
+| `center` | Controller/ConfCenter | 12101 | get, apply, delete, reload | 完整 CRUD 操作 |
+| `server` | Controller/ConfigServer | 12101 | get (只读) | 查看 ConfigServer 缓存 |
+| `client` | Gateway/ConfigClient | 12001 | get (只读) | 查看 Gateway 缓存 |
 
 ### 使用示例
 
@@ -46,7 +55,7 @@ edgion-cli -t server get httproute -n prod
 
 # client - 查看 Gateway 的 ConfigClient 缓存
 edgion-cli -t client get httproute
-edgion-cli -t client --server http://gateway:5900 get service -n default
+edgion-cli -t client --server http://gateway:12001 get service -n default
 ```
 
 ## 命令详解
@@ -100,7 +109,7 @@ edgion-cli get service backend-svc -n default -o json
 | edgiontls | Edgion TLS 配置 |
 | edgionplugins | Edgion HTTP 插件配置 |
 | edgionstreamplugins | Edgion Stream 插件配置 |
-| pluginmetadata | 插件元数据 |
+| edgionconfigdata | 插件元数据 |
 | linksys | LinkSys 配置 |
 | referencegrant | ReferenceGrant |
 | backendtlspolicy | BackendTLSPolicy |
@@ -176,15 +185,16 @@ edgion-cli gen-certs [OPTIONS]
 |------|------|--------|
 | `--output` | 输出目标：`file`（写入文件）或 `k8s`（写入 K8s Secret） | `file` |
 | `--output-dir` | 输出目录（仅 `--output file` 时生效） | `certs/grpc/` |
+| `--cert-name` | 证书集名称，文件输出到 `<output-dir>/<cert-name>/` | `primary` |
 | `--ca-days` | CA 证书有效天数 | `3650` |
 | `--cert-days` | 服务端/客户端证书有效天数 | `365` |
 | `--server-san` | 额外 SAN 条目（可多次指定） | 默认包含 localhost、127.0.0.1、::1 |
 | `--force` | 强制覆盖已有证书 | `false` |
 
-**生成的文件:**
+**生成的文件**（存放于 `<output-dir>/<cert-name>/`）：
 
 ```
-<output-dir>/
+<output-dir>/<cert-name>/
 ├── ca.crt        # CA 证书
 ├── ca.key        # CA 私钥（仅签发用）
 ├── server.crt    # Controller 服务端证书
@@ -210,7 +220,54 @@ edgion-cli gen-certs --output file \
 edgion-cli gen-certs --output k8s
 ```
 
-生成证书后，在 TOML 文件中配置 mTLS。详见[控制面 mTLS](infrastructure/mtls.md#控制面-mtlsconf_sync-grpc)。
+生成证书后，在 YAML 配置文件中配置 mTLS。详见[控制面 mTLS](infrastructure/mtls.md#控制面-mtlsconf_sync-grpc)。
+
+### gen-token - 生成静态 CLI Token
+
+生成新的角色范围 CLI Token，用于访问 Controller Admin API。不依赖运行中的 Controller。输出包含以 `edg_` 为前缀的 Token 及其 SHA-256 十六进制摘要。
+
+```bash
+edgion-cli gen-token
+```
+
+**输出示例：**
+
+```
+Token (use with --token or EDGION_TOKEN):
+  edg_<URL-safe base64, 43 chars>
+
+SHA-256 (paste into controller cli_tokens[].token_sha256):
+  <64 lowercase hex chars>
+```
+
+**工作流程：**
+
+1. 运行 `edgion-cli gen-token` 生成 Token。
+2. 将 SHA-256 行粘贴到 Controller 配置文件的 `cli_tokens[].token_sha256` 中。
+3. 热重载：`edgion-cli reload`（或 `POST /api/v1/reload`）。
+4. 通过 Secret 管理器或环境变量将 `edg_...` Token 分发给消费方——切勿以明文存储于文件或 shell 历史记录中。
+5. 消费方通过 `--token edg_...` 或 `export EDGION_TOKEN=edg_...` 使用 Token。
+
+> **安全说明：** SHA-256 是对完整的 `edg_` 前缀 Token 计算的——即作为 `Authorization: Bearer` 值发送的完整字符串。Controller 配置中只存储 SHA-256 摘要，切勿存储原始 Token。
+
+如需 RBAC 配置、轮换说明及所有安全注意事项，请参见[联邦 RBAC — CLI Token RBAC](federation-rbac.md#cli-token-rbac)。
+
+### login - 持久化 Token
+
+将 Bearer Token 保存到 `~/.edgion/token`，使后续命令无需 `--token` 或 `EDGION_TOKEN` 即可认证。这是纯 Token 方式——没有用户名/密码或 OIDC 登录。
+
+```bash
+edgion-cli login --token <TOKEN>
+```
+
+`<TOKEN>` 可以是本地管理员 Token（从 `edgion-admin-credentials` Secret 读取），也可以是 `gen-token` 生成的以 `edg_` 为前缀的 `cli_tokens` Token。从 Kubernetes 读取管理员 Token：
+
+```bash
+kubectl -n edgion-system get secret edgion-admin-credentials \
+  -o jsonpath='{.data.token}' | base64 -d
+```
+
+仅当既未设置 `--token` 也未设置 `EDGION_TOKEN` 时才使用缓存的 Token（见[全局选项](#全局选项)下的优先级列表）。
 
 ## 连接配置
 
@@ -220,9 +277,9 @@ edgion-cli gen-certs --output k8s
 
 | Target | 默认地址 |
 |--------|----------|
-| center | http://localhost:5800 |
-| server | http://localhost:5800 |
-| client | http://localhost:5900 |
+| center | `http://localhost:12101` |
+| server | `http://localhost:12101` |
+| client | `http://localhost:12001` |
 
 ### 自定义连接
 
@@ -230,10 +287,10 @@ edgion-cli gen-certs --output k8s
 
 ```bash
 # 连接到远程 Controller
-edgion-cli --server http://controller.example.com:5800 get httproute
+edgion-cli --server http://controller.example.com:12101 get httproute
 
 # 连接到远程 Gateway
-edgion-cli -t client --server http://gateway.example.com:5900 get service
+edgion-cli -t client --server http://gateway.example.com:12001 get service
 ```
 
 ## 输出格式
@@ -270,14 +327,14 @@ edgion-cli -t client --server http://gateway.example.com:5900 get service
 如果连接失败，`edgion-cli` 会显示详细的错误信息和提示：
 
 ```
-Error: Request to http://localhost:5800/api/v1/namespaced/httproute failed
+Error: Request to http://localhost:12101/api/v1/namespaced/httproute failed
 
 Connection failed:
   - Is the controller running?
   - Check if the server address is correct
-  - Try: curl -v http://localhost:5800/api/v1/namespaced/httproute
+  - Try: curl -v http://localhost:12101/api/v1/namespaced/httproute
 
-Hint: edgion-cli is trying to connect to: http://localhost:5800
+Hint: edgion-cli is trying to connect to: http://localhost:12101
       Target: Center (controller)
       Use --server to specify a different address
 ```

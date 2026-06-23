@@ -1,7 +1,5 @@
 # Path Normalization
 
-> Detailed design spec: `docs/superpowers/specs/2026-04-26-uri-normalization-design.md`
-
 Edgion enforces path normalization at every request entry, eliminating bypass vectors against path-based access control rules (percent-encoding, double slashes, dot-segments, path-parameters). **This feature is always-on; there is no global enable/disable switch.**
 
 ---
@@ -10,7 +8,7 @@ Edgion enforces path normalization at every request entry, eliminating bypass ve
 
 Typical bypass attack:
 
-- Operator configures `RequestRestriction` plugin with `deny: ["/admin"]`
+- Operator configures `RequestRestriction` plugin to block `/admin` (a `Path` rule with `values: ["/admin"]`)
 - Attacker sends `/%61dmin` (percent-encoded form of `/admin`)
 - Without normalization: literal string compare `/%61dmin ≠ /admin` → bypass succeeds
 - With normalization: `/%61dmin` → `/admin` → matches deny rule → rejected
@@ -54,14 +52,14 @@ spec:
 ### Raw URI Output in Access Log
 
 By default the access log emits only the normalized `path` field — no raw form, no query.
-To audit the client's original full URI, enable the gateway-side TOML option:
+To audit the client's original full URI, enable the gateway-side YAML option:
 
-```toml
-[access_log_options]
-include_raw_uri = true
+```yaml
+access_log_options:
+  include_raw_uri: true
 ```
 
-This adds a `request_uri` field to access log JSON, containing the client entry full raw URI (raw path + raw query). See `skills/03-coding/observability/00-access-log.md`.
+This adds a `request_uri` field to access log JSON, containing the client entry full raw URI (raw path + raw query). See [Access Log](ops-guide/observability/access-log.md).
 
 ---
 
@@ -126,16 +124,16 @@ path:
 
 ### 3. `RestrictionSource::Path` configuration
 
-The `Path` view's `deny` / `allow` lists are normalized at config load time (so they live in the same normalized space as request-side matching). Things like `/admin/` (trailing slash) are normalized to `/admin` — an INFO log records the transformation, never silent.
+A `Path`-source rule's `values` are normalized at config load time (so they live in the same normalized space as request-side matching). Things like `/admin/` (trailing slash) are normalized to `/admin` — an INFO log records the transformation, never silent.
 
 If you need literal raw rejection, switch to `RestrictionSource::RequestPath`.
 
-### 4. `;param` side effect on allow-list rules
+### 4. `;param` side effect on whitelist rules
 
 Path normalization strips `;param=...` from each segment (defends against `..;/` bypass).
 
-- Affects **deny rules**: `/admin/..;jsessionid=x/secret` becomes `/secret` in the ACL view, correctly matching `deny: /secret` ✓
-- Affects **allow rules**: a request `/api/users;v=1/data` becomes `/api/users/data` in the ACL view — if you configured `allow: /api/users` (exact), it **won't match**
+- Affects **blacklist groups** (`mode: Blacklist`): `/admin/..;jsessionid=x/secret` becomes `/secret` in the ACL view, correctly matching a `Path` rule with `values: ["/secret"]` ✓
+- Affects **whitelist groups** (`mode: Whitelist`): a request `/api/users;v=1/data` becomes `/api/users/data` in the ACL view — if you configured a `Path` rule with `values: ["/api/users"]` (exact), it **won't match**
 
 The upstream still receives the raw path with `;param` intact; applications relying on `;jsessionid` are unaffected.
 
@@ -148,13 +146,15 @@ The upstream still receives the raw path with `;param` intact; applications rely
 ```yaml
 - type: RequestRestriction
   config:
-    rules:
-      - name: block-admin
-        source: Path                # current view, covers all encoding variants
-        deny:
-          - "/admin"
-          - "/internal"
-        onMissing: Allow
+    mode: Blacklist
+    ruleGroups:
+      - rules:
+          - name: block-admin
+            source: Path             # current view, covers all encoding variants
+            values:
+              - "/admin"
+              - "/internal"
+            onMissing: NoMatch
 ```
 
 ### Audit log records client raw URI
@@ -178,7 +178,7 @@ Starting with v4, Edgion forwards the normalized path to the upstream by default
 | 0 | rewrite plugin already wrote path | `url_rewrite` / `proxy_rewrite` / DSL `req.set_uri` etc. | use rewrite result (terminal) |
 | 1 | per-route annotation `edgion.io/forward-raw-path` | HTTPRoute `metadata.annotations` | `"true"` forces raw / `"false"` forces normalized |
 | 2 | gateway-to-gateway forwarding (region_route) | `region_route` plugin | raw (avoids double-normalization conflict with peer gateway) |
-| 3 | global switch `forward_normalized_path` | `[path_normalization]` config section | `true` (normalized) |
+| 3 | global switch `forward_normalized_path` | `path_normalization` config section | `true` (normalized) |
 | Default | fallthrough | — | normalized |
 
 ### Compared with Envoy / Kong
@@ -187,7 +187,7 @@ Starting with v4, Edgion forwards the normalized path to the upstream by default
 |---|---|---|
 | Envoy `normalize_path` | normalized | yes |
 | Kong Traditional router | normalized | yes |
-| **Edgion v4** | **normalized** (industry-aligned) | yes (`forward_normalized_path = false`) |
+| **Edgion v4** | **normalized** (industry-aligned) | yes (`forward_normalized_path: false`) |
 | Edgion v3.1 and earlier | raw | — |
 
 ### Upgrade Notes
@@ -195,15 +195,15 @@ Starting with v4, Edgion forwards the normalized path to the upstream by default
 If your upstream is sensitive to literal path form (e.g., your application has special routing logic for `%2F` literals), the v4 default will surface a behavior change — the upstream now receives the decoded form. Two solutions:
 
 1. **per-route opt-out**: add the `edgion.io/forward-raw-path: "true"` annotation to the affected HTTPRoute
-2. **global rollback**: set `forward_normalized_path = false` under `[path_normalization]` (affects all routes)
+2. **global rollback**: set `forward_normalized_path: false` under `path_normalization` (affects all routes)
 
 ### `;param` Compatibility Scenario
 
 If your upstream application depends on path-parameters (like `;jsessionid=xxx`), enable:
 
-```toml
-[path_normalization]
-preserve_path_parameters = true
+```yaml
+path_normalization:
+  preserve_path_parameters: true
 ```
 
 **Note**: enabling this opt-out removes the `..;/` style bypass from Edgion's default protection scope (see spec §14.4). It is recommended to additionally use `RestrictionSource::RequestPath` regex rules to reject suspicious patterns containing `;`.
@@ -212,6 +212,5 @@ preserve_path_parameters = true
 
 ## Related Documents
 
-- Design spec: `docs/superpowers/specs/2026-04-26-uri-normalization-design.md`
-- Configuration reference: `skills/02-features/02-config/02-edgion-gateway-config.md` (`spec.pathNormalization`)
+- [EdgionGatewayConfig](ops-guide/configuration/edgion-gateway-config.md) — `spec.pathNormalization` configuration reference
 - RequestRestriction plugin: [user-guide/http-route/filters/edgion-plugins/request-restriction.md](user-guide/http-route/filters/edgion-plugins/request-restriction.md)
