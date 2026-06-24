@@ -124,6 +124,34 @@ pub fn build_webhook_client(
     Some(builder.build().map_err(anyhow::Error::from))
 }
 
+/// Build a pooled outbound reqwest client with an explicit timeout policy.
+///
+/// Centralizes the pool + redirect policy shared by plugin outbound clients,
+/// while letting each caller pick its own connect timeout and decide whether to
+/// impose a client-level total timeout.
+///
+/// - `connect_timeout`: TCP/TLS connect deadline.
+/// - `total_timeout`: `Some(d)` sets reqwest's whole-request timeout; `None`
+///   omits it — for streaming-body callers that enforce their own deadline.
+///
+/// Always sets `redirect::none` (redirect-following is an SSRF surface) and
+/// `pool_max_idle_per_host(32)`. This is the request_mirror client shape; the
+/// other outbound sites (task 03) will extend the signature with redirect /
+/// proxy / pool parameters rather than call this unchanged.
+pub fn build_pooled_outbound_client(
+    connect_timeout: Duration,
+    total_timeout: Option<Duration>,
+) -> reqwest::Result<Client> {
+    let mut builder = Client::builder()
+        .pool_max_idle_per_host(32)
+        .connect_timeout(connect_timeout)
+        .redirect(reqwest::redirect::Policy::none());
+    if let Some(t) = total_timeout {
+        builder = builder.timeout(t);
+    }
+    builder.build()
+}
+
 /// Canonical hop-by-hop headers that MUST NOT be forwarded to upstream services.
 ///
 /// Per RFC 9110 §7.6.1 (which obsoletes RFC 2616 §13.5.1 and RFC 7230 §6.1).

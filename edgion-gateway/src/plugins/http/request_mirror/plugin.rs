@@ -12,7 +12,9 @@ use tokio_stream::StreamExt;
 
 use crate::backends::{resolve_target_port_key, select_roundrobin_backend_key, validate_endpoint_backend_addr};
 use crate::observe::metrics::record_mirror_metric;
-use crate::plugins::http::common::http_client::{connection_listed_hop_by_hop, is_hop_by_hop_or_listed};
+use crate::plugins::http::common::http_client::{
+    build_pooled_outbound_client, connection_listed_hop_by_hop, is_hop_by_hop_or_listed,
+};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{MirrorConfig, MirrorState};
 use edgion_resources::filters::PluginRunningResult;
@@ -46,12 +48,8 @@ impl RequestMirrorPlugin {
         }
 
         let connect_timeout = Duration::from_millis(cfg.connect_timeout_ms.max(1));
-        let client = reqwest::Client::builder()
-            .pool_max_idle_per_host(32)
-            .connect_timeout(connect_timeout)
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("failed to build RequestMirror reqwest client");
+        let client =
+            build_pooled_outbound_client(connect_timeout, None).expect("failed to build RequestMirror reqwest client");
 
         // If backendRef.namespace is absent, default to current route/plugin namespace.
         if cfg.backend_ref.namespace.is_none() {
