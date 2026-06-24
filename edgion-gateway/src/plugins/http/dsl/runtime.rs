@@ -47,36 +47,44 @@ static DSL_HTTP_CLIENT_GUARDED: OnceLock<reqwest::Client> = OnceLock::new();
 pub(crate) fn dsl_http_client(block_private_ips: bool) -> &'static reqwest::Client {
     if block_private_ips {
         DSL_HTTP_CLIENT_GUARDED.get_or_init(|| {
-            reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::custom(|attempt| {
-                    if attempt.previous().len() >= DSL_MAX_REDIRECTS {
-                        return attempt.stop();
-                    }
-                    let raw = attempt.url().host_str().unwrap_or("");
-                    // url crate serializes IPv6 hosts with brackets (e.g. "[::1]") — strip them
-                    let host = raw.trim_matches(|c: char| c == '[' || c == ']');
-                    if super::lang::builtins::is_ssrf_blocked_ip_literal(host) {
-                        return attempt.error("redirect to private/loopback IP blocked");
-                    }
-                    attempt.follow()
-                }))
-                .pool_max_idle_per_host(4)
-                // Disable reqwest's default HTTP_PROXY/HTTPS_PROXY/NO_PROXY env pickup, matching
-                // the project's peer internal clients (all_endpoint_status, health probes). DSL
-                // outbound must not be silently rerouted through a Pod-injected corporate proxy.
-                .no_proxy()
-                .build()
-                .expect("hardcoded builder options (no custom resolver, proxy disabled, no explicit cert store path) always build successfully")
+            let policy = reqwest::redirect::Policy::custom(|attempt| {
+                if attempt.previous().len() >= DSL_MAX_REDIRECTS {
+                    return attempt.stop();
+                }
+                let raw = attempt.url().host_str().unwrap_or("");
+                // url crate serializes IPv6 hosts with brackets (e.g. "[::1]") — strip them
+                let host = raw.trim_matches(|c: char| c == '[' || c == ']');
+                if super::lang::builtins::is_ssrf_blocked_ip_literal(host) {
+                    return attempt.error("redirect to private/loopback IP blocked");
+                }
+                attempt.follow()
+            });
+            crate::link_sys::http_client::build_outbound_client(
+                crate::link_sys::http_client::OutboundClientConfig {
+                    pool_max_idle_per_host: Some(4),
+                    // Disable reqwest's default HTTP_PROXY/HTTPS_PROXY/NO_PROXY env pickup,
+                    // matching the project's peer internal clients (all_endpoint_status,
+                    // health probes). DSL outbound must not be silently rerouted through a
+                    // Pod-injected corporate proxy.
+                    disable_proxy: true,
+                    redirect: crate::link_sys::http_client::OutboundRedirect::Custom(policy),
+                    ..Default::default()
+                },
+            )
+            .expect("hardcoded builder options (no custom resolver, proxy disabled, no explicit cert store path) always build successfully")
         })
     } else {
         DSL_HTTP_CLIENT.get_or_init(|| {
-            reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::limited(DSL_MAX_REDIRECTS))
-                .pool_max_idle_per_host(4)
-                // See guarded-client branch above for rationale.
-                .no_proxy()
-                .build()
-                .expect("hardcoded builder options (no custom resolver, proxy disabled, no explicit cert store path) always build successfully")
+            crate::link_sys::http_client::build_outbound_client(
+                crate::link_sys::http_client::OutboundClientConfig {
+                    pool_max_idle_per_host: Some(4),
+                    // See guarded-client branch above for rationale.
+                    disable_proxy: true,
+                    redirect: crate::link_sys::http_client::OutboundRedirect::Limit(DSL_MAX_REDIRECTS),
+                    ..Default::default()
+                },
+            )
+            .expect("hardcoded builder options (no custom resolver, proxy disabled, no explicit cert store path) always build successfully")
         })
     }
 }

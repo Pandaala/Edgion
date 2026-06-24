@@ -9,7 +9,7 @@ use reqwest::{Client, ClientBuilder};
 use std::time::Duration;
 
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
-use crate::link_sys::tls as tls_helper;
+use crate::link_sys::http_client::{apply_outbound_policy, OutboundClientConfig, OutboundRedirect};
 use edgion_resources::resources::link_sys::elasticsearch::*;
 
 // ============================================================================
@@ -62,53 +62,66 @@ pub fn build_es_client(
     crd: &ElasticsearchClientConfig,
     auth: &CredentialState<ResolvedCredential>,
 ) -> Result<(Client, HeaderMap)> {
-    let mut builder = ClientBuilder::new();
     let mut headers = HeaderMap::new();
     headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-
-    builder = apply_pool(builder, crd);
-    builder = apply_timeouts(builder, crd);
     apply_auth(&mut headers, crd, auth)?;
-    builder = builder.default_headers(headers.clone());
-    builder = apply_tls(builder, crd)?;
+
+    let (idle_per_host, idle_timeout) = es_pool(crd);
+    let (connect_timeout, request_timeout) = es_timeouts(crd);
+    let tls = crd.tls.as_ref().filter(|t| t.enabled).cloned();
+
+    let builder = apply_outbound_policy(
+        ClientBuilder::new(),
+        OutboundClientConfig {
+            pool_max_idle_per_host: Some(idle_per_host),
+            pool_idle_timeout: Some(idle_timeout),
+            connect_timeout: Some(connect_timeout),
+            total_timeout: Some(request_timeout),
+            redirect: OutboundRedirect::Limit(10),
+            tls,
+            tls_context: Some("Elasticsearch"),
+            ..Default::default()
+        },
+    )?
+    .default_headers(headers.clone());
 
     let client = builder.build().context("failed to build reqwest client")?;
     Ok((client, headers))
 }
 
-fn apply_pool(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> ClientBuilder {
+/// Compute the (max-idle-per-host, idle-timeout) pool values from the CRD,
+/// applying the same clamps/defaults as before.
+fn es_pool(crd: &ElasticsearchClientConfig) -> (usize, Duration) {
     let idle_per_host = crd
         .pool
         .as_ref()
         .and_then(|p| p.max_idle_per_host)
         .map(|n| n.min(MAX_IDLE_PER_HOST))
         .unwrap_or(DEFAULT_IDLE_PER_HOST);
-    let idle_timeout = crd
+    let idle_timeout_ms = crd
         .pool
         .as_ref()
         .and_then(|p| p.idle_timeout)
         .unwrap_or(DEFAULT_IDLE_TIMEOUT_MS);
-    builder
-        .pool_max_idle_per_host(idle_per_host)
-        .pool_idle_timeout(Duration::from_millis(idle_timeout))
+    (idle_per_host, Duration::from_millis(idle_timeout_ms))
 }
 
-fn apply_timeouts(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> ClientBuilder {
-    let connect_timeout = crd
+/// Compute the (connect, request) timeout values from the CRD, applying the same
+/// clamps/defaults as before.
+fn es_timeouts(crd: &ElasticsearchClientConfig) -> (Duration, Duration) {
+    let connect = crd
         .timeout
         .as_ref()
         .and_then(|t| t.connect)
         .map(|ms| ms.min(MAX_CONNECT_TIMEOUT_MS))
         .unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS);
-    let request_timeout = crd
+    let request = crd
         .timeout
         .as_ref()
         .and_then(|t| t.request)
         .map(|ms| ms.min(MAX_REQUEST_TIMEOUT_MS))
         .unwrap_or(DEFAULT_REQUEST_TIMEOUT_MS);
-    builder
-        .connect_timeout(Duration::from_millis(connect_timeout))
-        .timeout(Duration::from_millis(request_timeout))
+    (Duration::from_millis(connect), Duration::from_millis(request))
 }
 
 fn apply_auth(
@@ -144,17 +157,6 @@ fn apply_auth(
         HeaderValue::from_str(&auth_header).context("invalid auth header value")?,
     );
     Ok(())
-}
-
-fn apply_tls(builder: ClientBuilder, crd: &ElasticsearchClientConfig) -> Result<ClientBuilder> {
-    let mut builder = builder;
-    if let Some(tls) = &crd.tls {
-        if tls.enabled {
-            builder = tls_helper::apply_insecure_skip_verify(builder, tls, "Elasticsearch")?;
-            builder = tls_helper::apply_to_reqwest_builder(builder, tls, "Elasticsearch")?;
-        }
-    }
-    Ok(builder)
 }
 
 // ============================================================================

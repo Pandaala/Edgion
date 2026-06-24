@@ -114,14 +114,15 @@ fn elapsed_ms() -> u64 {
 /// Isolated connection pool — does NOT share with get_http_client().
 /// This prevents fan-out requests from starving other plugins' connections.
 static STATUS_HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-    reqwest::Client::builder()
-        .pool_max_idle_per_host(5)
-        .pool_idle_timeout(Duration::from_secs(10))
-        .connect_timeout(Duration::from_secs(3))
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("failed to build AllEndpointStatus HTTP client")
+    crate::link_sys::http_client::build_outbound_client(crate::link_sys::http_client::OutboundClientConfig {
+        pool_max_idle_per_host: Some(5),
+        pool_idle_timeout: Some(Duration::from_secs(10)),
+        connect_timeout: Some(Duration::from_secs(3)),
+        disable_proxy: true,
+        redirect: crate::link_sys::http_client::OutboundRedirect::Deny,
+        ..Default::default()
+    })
+    .expect("failed to build AllEndpointStatus HTTP client")
 });
 
 fn get_status_http_client() -> &'static reqwest::Client {

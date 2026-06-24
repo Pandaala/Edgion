@@ -16,6 +16,7 @@
 
 pub mod credential;
 pub mod health;
+pub mod http_client;
 pub mod lifecycle;
 pub mod providers;
 pub mod tls;

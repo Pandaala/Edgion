@@ -2,6 +2,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use tokio::net::TcpStream;
 
+use crate::link_sys::http_client::{apply_outbound_policy, OutboundClientConfig, OutboundRedirect};
+
 #[derive(Debug)]
 pub enum ProbeError {
     Timeout,
@@ -36,11 +38,18 @@ mod grpc_health_proto {
 
 /// Build reusable HTTP probe client with per-probe timeout.
 pub fn build_http_probe_client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
-    reqwest::Client::builder()
-        .connect_timeout(timeout)
-        .timeout(timeout)
-        .no_proxy()
-        .build()
+    apply_outbound_policy(
+        reqwest::Client::builder(),
+        OutboundClientConfig {
+            connect_timeout: Some(timeout),
+            total_timeout: Some(timeout),
+            disable_proxy: true,
+            redirect: OutboundRedirect::Limit(10),
+            ..Default::default()
+        },
+    )
+    .expect("probe client config has no TLS; apply_outbound_policy is infallible here")
+    .build()
 }
 
 /// HTTP active health probe.

@@ -29,6 +29,10 @@ use reqwest::Client;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::link_sys::http_client::{
+    apply_outbound_policy, build_outbound_client, OutboundClientConfig, OutboundRedirect,
+};
+
 /// Global shared HTTP client with connection pooling.
 ///
 /// Uses OnceLock for lazy initialization; reqwest::Client is designed to be shared.
@@ -54,16 +58,17 @@ pub fn get_http_client_arc() -> std::sync::Arc<Client> {
 /// - TLS enabled (rustls)
 pub fn get_http_client() -> &'static Client {
     HTTP_CLIENT.get_or_init(|| {
-        Client::builder()
-            .pool_max_idle_per_host(32)
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .unwrap_or_else(|e| {
-                tracing::error!(component = "http_client", error = %e, "Failed to build HTTP client");
-                std::process::exit(1);
-            })
+        build_outbound_client(OutboundClientConfig {
+            pool_max_idle_per_host: Some(32),
+            connect_timeout: Some(Duration::from_secs(5)),
+            total_timeout: Some(Duration::from_secs(10)),
+            redirect: OutboundRedirect::Deny,
+            ..Default::default()
+        })
+        .unwrap_or_else(|e| {
+            tracing::error!(component = "http_client", error = %e, "Failed to build HTTP client");
+            std::process::exit(1);
+        })
     })
 }
 
@@ -77,17 +82,18 @@ pub fn get_http_client_with_ssl_verify(ssl_verify: bool) -> &'static Client {
     }
 
     INSECURE_HTTP_CLIENT.get_or_init(|| {
-        Client::builder()
-            .pool_max_idle_per_host(32)
-            .timeout(Duration::from_secs(10))
-            .connect_timeout(Duration::from_secs(5))
-            .redirect(reqwest::redirect::Policy::none())
-            .danger_accept_invalid_certs(true)
-            .build()
-            .unwrap_or_else(|e| {
-                tracing::error!(component = "http_client", error = %e, "Failed to build insecure HTTP client");
-                std::process::exit(1);
-            })
+        build_outbound_client(OutboundClientConfig {
+            pool_max_idle_per_host: Some(32),
+            connect_timeout: Some(Duration::from_secs(5)),
+            total_timeout: Some(Duration::from_secs(10)),
+            redirect: OutboundRedirect::Deny,
+            danger_accept_invalid_certs: true,
+            ..Default::default()
+        })
+        .unwrap_or_else(|e| {
+            tracing::error!(component = "http_client", error = %e, "Failed to build insecure HTTP client");
+            std::process::exit(1);
+        })
     })
 }
 
@@ -104,24 +110,15 @@ pub fn build_webhook_client(
     tls_config: &Option<edgion_resources::resources::common::TlsConfig>,
 ) -> Option<anyhow::Result<Client>> {
     let tls = tls_config.as_ref()?;
-
-    let mut builder = Client::builder()
-        .pool_max_idle_per_host(32)
-        .timeout(Duration::from_secs(10))
-        .connect_timeout(Duration::from_secs(5))
-        .redirect(reqwest::redirect::Policy::none());
-
-    builder = match crate::link_sys::tls::apply_insecure_skip_verify(builder, tls, "Webhook") {
-        Ok(b) => b,
-        Err(e) => return Some(Err(e)),
-    };
-
-    builder = match crate::link_sys::tls::apply_to_reqwest_builder(builder, tls, "Webhook") {
-        Ok(b) => b,
-        Err(e) => return Some(Err(e)),
-    };
-
-    Some(builder.build().map_err(anyhow::Error::from))
+    Some(build_outbound_client(OutboundClientConfig {
+        pool_max_idle_per_host: Some(32),
+        connect_timeout: Some(Duration::from_secs(5)),
+        total_timeout: Some(Duration::from_secs(10)),
+        redirect: OutboundRedirect::Deny,
+        tls: Some(tls.clone()),
+        tls_context: Some("Webhook"),
+        ..Default::default()
+    }))
 }
 
 /// Build a pooled outbound reqwest client with an explicit timeout policy.
@@ -142,14 +139,18 @@ pub fn build_pooled_outbound_client(
     connect_timeout: Duration,
     total_timeout: Option<Duration>,
 ) -> reqwest::Result<Client> {
-    let mut builder = Client::builder()
-        .pool_max_idle_per_host(32)
-        .connect_timeout(connect_timeout)
-        .redirect(reqwest::redirect::Policy::none());
-    if let Some(t) = total_timeout {
-        builder = builder.timeout(t);
-    }
-    builder.build()
+    apply_outbound_policy(
+        Client::builder(),
+        OutboundClientConfig {
+            pool_max_idle_per_host: Some(32),
+            connect_timeout: Some(connect_timeout),
+            total_timeout,
+            redirect: OutboundRedirect::Deny,
+            ..Default::default()
+        },
+    )
+    .expect("pooled outbound config has no TLS; apply_outbound_policy is infallible here")
+    .build()
 }
 
 /// Canonical hop-by-hop headers that MUST NOT be forwarded to upstream services.
