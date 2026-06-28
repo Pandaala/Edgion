@@ -155,6 +155,7 @@ pub struct EtcdLogging {
 mod tests {
     use super::super::{LinkSys, LinkSysSpec, SystemConfig, SystemType};
     use super::*;
+    use crate::resources::common::CaSource;
 
     #[test]
     fn test_deserialize_etcd_simple() {
@@ -225,12 +226,11 @@ spec:
       - "https://etcd.example.com:2379"
     tls:
       enabled: true
-      insecureSkipVerify: false
-      certs:
-        caCert: "CA_CERT_CONTENT"
-        clientCert: "CLIENT_CERT_CONTENT"
-        secretRef:
-          name: etcd-client-tls
+      verify: false
+      caSource: Inline
+      caCert: "CA_CERT_CONTENT"
+      clientSecretRef:
+        name: etcd-client-tls
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
@@ -238,19 +238,20 @@ spec:
 
         let tls = etcd_config.tls.as_ref().expect("TLS should be present");
         assert!(tls.enabled);
-        assert_eq!(tls.insecure_skip_verify, Some(false));
-
-        let certs = tls.certs.as_ref().expect("Certs should be present");
-        assert_eq!(certs.ca_cert.as_deref(), Some("CA_CERT_CONTENT"));
-        assert_eq!(certs.client_cert.as_deref(), Some("CLIENT_CERT_CONTENT"));
+        assert_eq!(tls.outbound.verify, Some(false));
+        assert_eq!(tls.outbound.ca_source, Some(CaSource::Inline));
+        assert_eq!(tls.outbound.ca_cert.as_deref(), Some("CA_CERT_CONTENT"));
         assert_eq!(
-            certs.secret_ref.as_ref().map(|s| s.name.as_str()),
+            tls.outbound.client_secret_ref.as_ref().map(|s| s.name.as_str()),
             Some("etcd-client-tls")
         );
     }
 
     #[test]
     fn test_deserialize_etcd_with_tls_rejects_inline_client_key() {
+        // A stray unknown field directly under `tls:` must be rejected by
+        // `TlsConfig`'s `deny_unknown_fields`. Using `clientKey` preserves the
+        // security intent: no inline private key material is accepted.
         let yaml = r#"
 apiVersion: edgion.io/v1
 kind: LinkSys
@@ -264,13 +265,12 @@ spec:
       - "https://etcd.example.com:2379"
     tls:
       enabled: true
-      certs:
-        clientKey: "INLINE_PRIVATE_KEY_SHOULD_FAIL"
+      clientKey: "INLINE_PRIVATE_KEY_SHOULD_FAIL"
 "#;
         let r: Result<LinkSys, _> = serde_yaml::from_str(yaml);
         assert!(
             r.is_err(),
-            "inline clientKey must be rejected by TlsCerts' deny_unknown_fields"
+            "unknown TLS field must be rejected by TlsConfig's deny_unknown_fields"
         );
     }
 
@@ -349,7 +349,6 @@ spec:
         name: etcd-creds
     tls:
       enabled: true
-      insecureSkipVerify: false
     timeout:
       dial: 5000
       request: 10000
@@ -469,10 +468,10 @@ spec:
         namespace: test
     tls:
       enabled: true
-      certs:
-        secretRef:
-          name: etcd-tls
-          namespace: test
+      caSource: SecretRef
+      caSecretRef:
+        name: etcd-tls
+        namespace: test
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
@@ -483,9 +482,13 @@ spec:
         assert_eq!(auth.slot.secret_ref.namespace.as_deref(), Some("test"));
 
         let tls = etcd_config.tls.as_ref().expect("TLS should be present");
-        let tls_certs = tls.certs.as_ref().expect("TLS certs should be present");
-        let tls_secret_ref = tls_certs.secret_ref.as_ref().expect("TLS secret ref should be present");
-        assert_eq!(tls_secret_ref.name, "etcd-tls");
+        assert_eq!(tls.outbound.ca_source, Some(CaSource::SecretRef));
+        let ca_secret_ref = tls
+            .outbound
+            .ca_secret_ref
+            .as_ref()
+            .expect("CA secret ref should be present");
+        assert_eq!(ca_secret_ref.name, "etcd-tls");
     }
 
     #[test]

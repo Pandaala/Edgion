@@ -78,31 +78,28 @@ Secret 键名遵循固定的已知约定，不支持通过 `usernameKey` / `pass
 ```yaml
 tls:
   enabled: true
-  insecureSkipVerify: false
-  certs:
-    # CA 证书和客户端证书属于公开材料，可以内联。
-    caCert: |
-      -----BEGIN CERTIFICATE-----
-      <base64-encoded-cert>
-      -----END CERTIFICATE-----
-    clientCert: |
-      -----BEGIN CERTIFICATE-----
-      <base64-encoded-cert>
-      -----END CERTIFICATE-----
-    # 客户端私钥（tls.key）必须来自 Secret。
-    secretRef:
-      name: my-client-tls
+  verify: true                 # 验证对端证书（默认 true）；false 由运维人员负责，启动时记录 WARN
+  caSource: SecretRef          # System | SecretRef | Inline
+  caSecretRef:
+    name: my-ca-bundle         # 包含 ca.crt 的 Secret（caSource: SecretRef 时使用）
+  # caCert: |                  # 内联 PEM CA 包（caSource: Inline 时使用）
+  #   -----BEGIN CERTIFICATE-----
+  #   <base64-encoded-cert>
+  #   -----END CERTIFICATE-----
+  clientSecretRef:
+    name: my-client-tls        # 包含 tls.crt + tls.key 的 Secret，用于客户端 mTLS
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | Boolean | `false` | 为连接启用 TLS。对于已隐含 TLS 的 URL（`https://`、`rediss://`），此字段仅添加自定义 CA / 客户端证书处理。 |
-| `insecureSkipVerify` | Boolean | `false` | 跳过证书验证。⚠️ **仅限开发和测试。** Redis 和 Etcd 不支持此选项——设置为 `true` 会直接拒绝启动。 |
-| `certs.caCert` | String | none | CA 证书 PEM（公开材料，可内联）。 |
-| `certs.clientCert` | String | none | mTLS 客户端证书 PEM（公开材料，可内联）。 |
-| `certs.secretRef` | Object | none | 提供客户端私钥 `tls.key` 的 Secret 引用。**私钥必须来自 Secret，不可内联。** |
+| `verify` | Boolean | `true` | 验证对端 TLS 证书。`verify: false` 由运维人员负责，启动时记录 WARN。Redis 和 Etcd 始终验证证书（SDK 无跳过验证 API，启动时即失败）。 |
+| `caSource` | Enum | — | 信任锚来源：`System`（内置 webpki 根证书）、`SecretRef`（来自 `caSecretRef` 的私有 CA）或 `Inline`（`caCert` 中的 PEM）。自定义 CA **替换**公共根证书。 |
+| `caSecretRef` | Object | none | 包含私有 CA 包（`ca.crt` 键）的 Kubernetes Secret。`caSource: SecretRef` 时必填。 |
+| `caCert` | String | none | 内联 PEM CA 包。`caSource: Inline` 时使用。 |
+| `clientSecretRef` | Object | none | 包含客户端 mTLS 身份（`tls.crt` / `tls.key` 键）的 Kubernetes Secret。 |
 
-⚠️ **客户端私钥必须始终通过 `certs.secretRef` 提供。** 只有 CA 和客户端证书（公开材料）可以内联为 PEM。
+客户端 mTLS 身份（证书 + 私钥）必须通过 `clientSecretRef` 提供。
 
 ### 可观测性
 
@@ -266,9 +263,8 @@ spec:
         namespace: credentials
     tls:
       enabled: true
-      certs:
-        secretRef:
-          name: etcd-client-tls
+      clientSecretRef:
+        name: etcd-client-tls
     namespace: "/my-app/"
 ```
 
@@ -278,7 +274,7 @@ spec:
 |------|------|--------|------|
 | `endpoints` | Array\<String\> | **必填** | Etcd 端点，至少一个。示例：`"https://etcd-1:2379"`。 |
 | `auth` | Object | none | 认证配置。Secret 通常同时提供 `username` 和 `password`。 |
-| `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。Etcd **不支持** `insecureSkipVerify`——设置为 `true` 会拒绝启动。 |
+| `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。Etcd（与 Redis 一样）在任何环境下均拒绝 `verify: false`。 |
 | `namespace` | String | none | Etcd v3 键前缀。 |
 | `userAgent` | String | none | 发送给 etcd 的 HTTP User-Agent。示例：`"edgion-gateway/v1"`。 |
 | `rejectOldCluster` | Boolean | none | 拒绝连接到过时的集群。 |
@@ -1129,7 +1125,7 @@ spec:
 
 ### 3. 带 mTLS 客户端证书的 TLS 加密 Etcd
 
-CA 和客户端证书内联（公开材料），客户端私钥来自 Secret。
+CA 包内联（`caSource: Inline`）。客户端证书和私钥来自 Secret（`clientSecretRef`）。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -1148,17 +1144,13 @@ spec:
         name: etcd-creds
     tls:
       enabled: true
-      certs:
-        caCert: |
-          -----BEGIN CERTIFICATE-----
-          <base64-encoded-cert>
-          -----END CERTIFICATE-----
-        clientCert: |
-          -----BEGIN CERTIFICATE-----
-          <base64-encoded-cert>
-          -----END CERTIFICATE-----
-        secretRef:
-          name: etcd-client-tls
+      caSource: Inline
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        <base64-encoded-cert>
+        -----END CERTIFICATE-----
+      clientSecretRef:
+        name: etcd-client-tls
 ```
 
 ## 常见问题
@@ -1180,9 +1172,9 @@ spec:
 
 **A**：不能。认证和 TLS 结构体开启了 `deny_unknown_fields`，内联敏感字段（`username`、`password`、`bearerToken`、`apiKeyId`、`hmacKey`、`clientKey` 等）会导致解析失败而非被忽略。请始终使用 `secretRef`。
 
-### Q4：为什么将 `insecureSkipVerify: true` 会导致 Redis 或 Etcd 连接器崩溃？
+### Q4：能否为 Redis 或 Etcd 禁用 TLS 验证（`verify: false`）？
 
-**A**：Redis 和 Etcd 客户端不支持跳过验证——设置为 `true` 会直接拒绝启动。这是故意的设计，避免出现字段看似已设置但验证仍然发生的配置陷阱。如需连接使用私有 CA 的后端，请通过 `tls.certs.caCert` 或 `ca.crt` Secret 键提供 CA 证书。
+**A**：不能。Redis 和 Etcd 客户端不支持禁用证书验证——在任何环境下，`verify: false` 对这两种连接器均会在启动时直接失败。这是故意的设计。如需连接使用私有 CA 的后端，请通过 `tls.caSource: Inline` + `tls.caCert`（内联 PEM）或 `tls.caSource: SecretRef` + `tls.caSecretRef` 提供 CA 证书。
 
 ### Q5：轮换 Secret 后，现有连接会怎样？
 

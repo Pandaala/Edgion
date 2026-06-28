@@ -119,7 +119,7 @@ fn default_forward_auth_request() -> OutboundRequestSpec {
 ///   name: auth-service
 ///   port: 8443
 /// tls:
-///   insecureSkipVerify: false
+///   verify: false
 /// timeoutMs: 5000
 /// request:
 ///   headers:

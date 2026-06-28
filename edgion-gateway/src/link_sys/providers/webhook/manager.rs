@@ -67,12 +67,11 @@ impl WebhookManager {
     /// a `WebhookTarget::Service` whose `namespace` field is absent.
     ///
     /// Returns `Err` when `ManagedOutboundClient::from_parts` rejects the config —
-    /// currently when `tls.insecure_skip_verify=true` is set with `EDGION_ENV=production`,
-    /// when the supplied PEM material is malformed, when the port is missing, or when
-    /// the request template has an invalid syntax. The webhook is **not** registered
-    /// in that case, so the LinkSys's `init()` surfaces the failure to the resource
-    /// processor. This avoids silently downgrading a misconfigured webhook to the
-    /// default secure client.
+    /// currently when the supplied PEM material is malformed, when the port is missing,
+    /// or when the request template has an invalid syntax. The webhook is **not**
+    /// registered in that case, so the LinkSys's `init()` surfaces the failure to the
+    /// resource processor. This avoids silently downgrading a misconfigured webhook to
+    /// the default secure client.
     pub async fn upsert(
         &self,
         webhook_ref: &str,

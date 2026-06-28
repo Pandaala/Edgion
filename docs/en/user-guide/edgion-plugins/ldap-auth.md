@@ -46,7 +46,7 @@ Use cases:
 | `ldapPort` | Integer | `389` | LDAP port |
 | `ldaps` | Boolean | `false` | Whether to enable LDAPS |
 | `startTls` | Boolean | `false` | Whether to enable StartTLS (mutually exclusive with `ldaps`) |
-| `verifyLdapHost` | Boolean | `true` | Whether to verify the certificate hostname |
+| `verify` | Boolean | `true` | Verify the LDAP server's TLS certificate. When `false`, peer certificate validation is skipped (operator responsibility; a WARN is logged at startup). |
 | `baseDn` | String | **Required** | Base DN |
 | `attribute` | String | **Required** | User attribute (e.g., `uid` / `cn`) |
 | `bindDnTemplate` | String | none | Custom Bind DN template, must contain `{username}` |
@@ -139,7 +139,7 @@ When allowing anonymous access, the following headers are injected:
 ## Security Recommendations
 
 - Prefer `ldaps: true` or `startTls: true` in production
-- Keep `verifyLdapHost: true`
+- Keep `verify: true` (the default); `verify: false` is operator responsibility and should only be used for testing
 - Enable `hideCredentials: true` to prevent credentials from being passed to upstream
 - Set a reasonable `cacheTtl` (e.g., 60–300 seconds) to balance performance and credential revocation latency
 - Enable account lockout and brute-force protection policies on the LDAP server

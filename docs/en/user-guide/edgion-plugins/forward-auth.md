@@ -62,7 +62,7 @@ spec:
         target: { name: auth-svc, namespace: edgion-default, port: 30040 }
         timeoutMs: 5000                    # connection-level, default 5000
         successStatusCodes: [200, 204]     # connection-level, default: any 2xx
-        tls: { insecureSkipVerify: false } # connection-level, optional
+        tls: { verify: true }              # connection-level, optional
         request:
           path:   { template: "/verify" }
           method: { template: "GET" }
@@ -90,7 +90,7 @@ spec:
 | `target` | object | required | Kubernetes Service backend: `{name, namespace, port}`. Port is required. Namespace defaults to the plugin namespace. |
 | `timeoutMs` | integer | `5000` | Request timeout in milliseconds. |
 | `successStatusCodes` | array\<integer\> | `null` | Status codes treated as auth success. Default: any 2xx (200–299). |
-| `tls` | object | `null` | TLS settings: `insecureSkipVerify`, custom CA certificate, client certificate for mTLS. |
+| `tls` | object | `null` | TLS settings for the outbound auth request. Fields: `verify` (default `true`; `false` is honored, operator responsibility), `caSource` (`System`/`SecretRef`/`Inline`), `caSecretRef`, `caCert` (inline PEM), `clientSecretRef` (client mTLS identity). |
 | `retry` | object | `null` | Retry configuration: `maxRetries`, `retryDelayMs`, `retryOnTimeout`, `retryOnConnectError`, `retryOnStatus`. |
 | `rateLimit` | object | `null` | Outbound call rate limit: `rate` (calls per window) + `windowSec`. |
 | `healthCheck` | object | `null` | Health check: `active` (probe path + interval) and/or `passive` (failure threshold). |
@@ -219,7 +219,7 @@ spec:
           namespace: production
           port: 8443
         tls:
-          insecureSkipVerify: false
+          verify: true
         timeoutMs: 5000
         successStatusCodes: [200, 204]
         request:

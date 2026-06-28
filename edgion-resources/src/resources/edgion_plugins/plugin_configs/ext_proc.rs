@@ -13,9 +13,11 @@
 //! attempt to enable a body mode other than `NONE`/`SKIP` is rejected by
 //! [`ExtProcConfig::validation_error`] rather than silently ignored.
 
+use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::resources::common::OutboundTlsLocal;
 use crate::resources::edgion_plugins::PluginValidation;
 
 /// ExtProc plugin configuration.
@@ -48,6 +50,24 @@ pub struct ExtProcConfig {
     /// - `true`: fail-open — skip processing and continue as if unconfigured.
     #[serde(default)]
     pub failure_mode_allow: bool,
+
+    /// Resolved CA Secret (from `grpcService.caSecretRef`, filled by Controller).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_ca_secret: Option<Secret>,
+
+    /// Resolved mTLS client-identity Secret (from `grpcService.clientSecretRef`, filled by Controller).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_client_secret: Option<Secret>,
 }
 
 /// gRPC connection settings for the external processing service.
@@ -65,6 +85,11 @@ pub struct GrpcServiceConfig {
     /// Whether to dial the target over TLS. Default: false (plaintext h2c).
     #[serde(default)]
     pub tls: bool,
+
+    /// Per-call outbound TLS verification override (verify, caSource, caCert, mTLS).
+    /// All fields are optional and inherit from the global outboundTls default when absent.
+    #[serde(flatten)]
+    pub outbound: OutboundTlsLocal,
 }
 
 /// Per-phase processing control, mirroring Envoy's `ProcessingMode`.
@@ -165,9 +190,12 @@ impl Default for ExtProcConfig {
                 target: String::new(),
                 timeout_ms: default_timeout_ms(),
                 tls: false,
+                outbound: OutboundTlsLocal::default(),
             },
             processing_mode: ProcessingMode::default(),
             failure_mode_allow: false,
+            resolved_ca_secret: None,
+            resolved_client_secret: None,
         }
     }
 }
@@ -257,6 +285,7 @@ mod tests {
                 target: "ext-proc:9000".to_string(),
                 timeout_ms: 200,
                 tls: false,
+                outbound: OutboundTlsLocal::default(),
             },
             ..Default::default()
         }
@@ -368,6 +397,16 @@ mod tests {
         assert_eq!(config.processing_mode.request_header_mode, HeaderSendMode::Send);
         assert_eq!(config.processing_mode.response_header_mode, HeaderSendMode::Skip);
         assert!(!config.failure_mode_allow);
+    }
+
+    #[test]
+    fn extproc_grpc_accepts_verify_and_casource() {
+        let c: GrpcServiceConfig = serde_json::from_value(serde_json::json!({
+            "target":"ep:9000","tls":true,"verify":false,"caSource":"Inline","caCert":"---PEM---"
+        }))
+        .unwrap();
+        assert!(c.tls);
+        assert_eq!(c.outbound.verify, Some(false));
     }
 
     #[test]

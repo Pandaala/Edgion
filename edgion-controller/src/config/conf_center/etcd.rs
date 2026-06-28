@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use edgion_common::link_sys_core::credential::CredentialState;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-use edgion_resources::resources::common::{SecretObjectReference, SecretSlot, TlsCerts, TlsConfig};
+use edgion_resources::resources::common::{CaSource, OutboundTlsLocal, SecretObjectReference, SecretSlot, TlsConfig};
 use edgion_resources::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout};
 
 // ============================================================================
@@ -173,6 +173,8 @@ impl EtcdConfig {
                 data.insert(TLS_KEY_KEY.to_string(), ByteString(pem.into_bytes()));
             }
 
+            let has_ca = data.contains_key(TLS_CA_KEY);
+            let has_client = data.contains_key(TLS_CERT_KEY) && data.contains_key(TLS_KEY_KEY);
             let secret = if data.is_empty() {
                 None
             } else {
@@ -185,13 +187,12 @@ impl EtcdConfig {
 
             Some(TlsConfig {
                 enabled: true,
-                certs: Some(TlsCerts {
-                    ca_cert: None,
-                    client_cert: None,
-                    secret_ref: None,
-                    secret,
-                }),
-                insecure_skip_verify: None,
+                outbound: OutboundTlsLocal {
+                    ca_source: if has_ca { Some(CaSource::SecretRef) } else { None },
+                    ..Default::default()
+                },
+                resolved_ca_secret: if has_ca { secret.clone() } else { None },
+                resolved_client_secret: if has_client { secret } else { None },
             })
         } else {
             None
@@ -372,5 +373,61 @@ auth:
         let (client_config, auth_state) = config.to_client_config().unwrap();
         assert!(client_config.auth.is_none());
         assert!(matches!(auth_state, CredentialState::NotRequired));
+    }
+
+    /// A CA-only TLS config (only ca_cert_file set, no client cert/key) must:
+    /// - produce a TlsConfig with ca_source = Some(SecretRef) so the resolver
+    ///   reads the CA from resolved_ca_secret (not system roots).
+    /// - have resolved_ca_secret set (the CA material).
+    /// - have resolved_client_secret = None (no mTLS identity).
+    ///
+    /// Regression guard for the bug where the synthetic Secret was assigned to
+    /// BOTH resolved_ca_secret and resolved_client_secret, causing the resolver
+    /// to fail with OutboundTlsClientCertInvalid when no tls.crt/tls.key were present.
+    #[test]
+    fn test_ca_only_tls_config_does_not_set_client_secret() {
+        use std::io::Write;
+        use tempfile::NamedTempFile;
+
+        // Write a dummy CA PEM to a temp file.
+        let mut ca_file = NamedTempFile::new().expect("failed to create temp file");
+        write!(
+            ca_file,
+            "-----BEGIN CERTIFICATE-----\nMIIBxxx\n-----END CERTIFICATE-----\n"
+        )
+        .expect("failed to write temp CA");
+        let ca_path = ca_file.path().to_str().unwrap().to_string();
+
+        let config = EtcdConfig {
+            endpoints: vec!["https://etcd:2379".to_string()],
+            key_prefix: "/edgion".to_string(),
+            auth: None,
+            tls: Some(EtcdTlsConfig {
+                ca_cert_file: Some(ca_path),
+                client_cert_file: None,
+                client_key_file: None,
+            }),
+            connect_timeout_ms: None,
+            request_timeout_ms: None,
+            keep_alive_time_secs: None,
+            keep_alive_timeout_secs: None,
+        };
+
+        let (client_config, _) = config.to_client_config().unwrap();
+        let tls = client_config.tls.expect("TLS config must be present");
+
+        assert_eq!(
+            tls.outbound.ca_source,
+            Some(CaSource::SecretRef),
+            "ca_source must be SecretRef when only ca_cert_file is set"
+        );
+        assert!(
+            tls.resolved_ca_secret.is_some(),
+            "resolved_ca_secret must carry the CA material"
+        );
+        assert!(
+            tls.resolved_client_secret.is_none(),
+            "resolved_client_secret must be None when no client cert/key is configured (CA-only)"
+        );
     }
 }

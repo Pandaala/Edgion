@@ -87,6 +87,41 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
         .max()
         .unwrap_or(DEFAULT_LB_PANIC_THRESHOLD);
     crate::backends::panic_threshold::configure_lb_panic_default(panic_threshold);
+
+    // Aggregate the cluster-wide outbound TLS default. Safest-wins on verify;
+    // CA material is adopted only when exactly one config declares a non-System source.
+    use edgion_resources::resources::common::CaSource;
+    // Configs that do not set outbound_tls at all default to verify=true (the safe
+    // default), so the verify aggregate is true whenever any config omits the block.
+    let outbound_blocks: Vec<_> = store
+        .values()
+        .map(|c| c.spec.outbound_tls.clone().unwrap_or_default())
+        .collect();
+    let mut agg = edgion_common::link_sys_core::outbound_tls::aggregate_verify(&outbound_blocks);
+    let ca_blocks: Vec<_> = outbound_blocks
+        .iter()
+        .filter(|b| matches!(b.ca_source, Some(s) if s != CaSource::System))
+        .collect();
+    match ca_blocks.as_slice() {
+        [one] => {
+            // A single non-System CA source (Inline or SecretRef) is adopted as
+            // the cluster-wide default. For SecretRef the Controller has already
+            // resolved the CA Secret into `resolved_ca_secret` and shipped it via
+            // conf_sync, so the per-call resolver can read it for inheriting calls.
+            agg.ca_source = one.ca_source;
+            agg.ca_secret_ref = one.ca_secret_ref.clone();
+            agg.ca_cert = one.ca_cert.clone();
+            agg.resolved_ca_secret = one.resolved_ca_secret.clone();
+        }
+        [] => {}
+        _ => {
+            tracing::warn!(
+                component = "outbound_tls",
+                "multiple EdgionGatewayConfig declare conflicting outbound CA defaults; falling back to System"
+            );
+        }
+    }
+    edgion_common::link_sys_core::outbound_tls::set_outbound_global_default(agg);
 }
 
 impl ConfHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
@@ -185,6 +220,7 @@ mod tests {
                 link_sys: None,
                 tcp_timeout: None,
                 load_balancing: None,
+                outbound_tls: None,
             },
         )
     }
@@ -493,6 +529,60 @@ mod tests {
     }
 
     #[test]
+    fn outbound_tls_safest_wins_and_resets() {
+        use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
+        use edgion_resources::resources::common::OutboundTlsConfig;
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        // Reset global default to known state
+        set_outbound_global_default(OutboundTlsConfig::default());
+
+        let handler = EdgionGatewayConfigHandler;
+
+        // One config with verify=false, one with no outbound_tls (verify defaults true)
+        let mut cfg_a = make_config("a");
+        cfg_a.spec.outbound_tls = Some(OutboundTlsConfig {
+            verify: false,
+            ..OutboundTlsConfig::default()
+        });
+        let cfg_b = make_config("b"); // outbound_tls: None -> verify=true by default
+
+        let mut data = HashMap::new();
+        data.insert("a".to_string(), Arc::new(cfg_a));
+        data.insert("b".to_string(), Arc::new(cfg_b));
+        handler.full_set(&data);
+        // safest-wins: one block is absent (defaults true) → aggregate is true
+        assert!(
+            outbound_global_default().verify,
+            "one absent block must keep verify=true (safest-wins)"
+        );
+
+        // Both verify=false → aggregate is false
+        let mut cfg_c = make_config("c");
+        cfg_c.spec.outbound_tls = Some(OutboundTlsConfig {
+            verify: false,
+            ..OutboundTlsConfig::default()
+        });
+        let mut cfg_d = make_config("d");
+        cfg_d.spec.outbound_tls = Some(OutboundTlsConfig {
+            verify: false,
+            ..OutboundTlsConfig::default()
+        });
+        let mut data2 = HashMap::new();
+        data2.insert("c".to_string(), Arc::new(cfg_c));
+        data2.insert("d".to_string(), Arc::new(cfg_d));
+        handler.full_set(&data2);
+        assert!(
+            !outbound_global_default().verify,
+            "both verify=false must aggregate to false"
+        );
+
+        // Reset to default for subsequent tests
+        set_outbound_global_default(OutboundTlsConfig::default());
+        clear_store();
+    }
+
+    #[test]
     fn partial_update_propagates_link_sys_config_on_add_and_update() {
         use crate::link_sys::providers::webhook::manager::{configure_webhook_global_max, get_webhook_global_max};
         let _g = TEST_MUTEX.lock();
@@ -517,5 +607,181 @@ mod tests {
 
         // Reset
         configure_webhook_global_max(16384);
+    }
+
+    // ------------------------------------------------------------------
+    // M2: a single global caSource=SecretRef with a resolved CA Secret is
+    // adopted as the cluster-wide default.
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn recompute_global_secretref_is_adopted() {
+        use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
+        use edgion_resources::resources::common::SecretObjectReference;
+        use edgion_resources::resources::common::{outbound_tls::CaSource, OutboundTlsConfig};
+        use k8s_openapi::api::core::v1::Secret;
+        use k8s_openapi::ByteString;
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        set_outbound_global_default(OutboundTlsConfig::default());
+
+        let handler = EdgionGatewayConfigHandler;
+
+        let mut data_map = std::collections::BTreeMap::new();
+        data_map.insert(
+            "ca.crt".to_string(),
+            ByteString(b"-----BEGIN CERTIFICATE-----\nMIIBglobal\n-----END CERTIFICATE-----\n".to_vec()),
+        );
+        let resolved = Secret {
+            data: Some(data_map),
+            type_: Some("kubernetes.io/tls".to_string()),
+            ..Default::default()
+        };
+
+        let mut cfg = make_config("egc-secretref");
+        cfg.spec.outbound_tls = Some(OutboundTlsConfig {
+            ca_source: Some(CaSource::SecretRef),
+            ca_secret_ref: Some(SecretObjectReference {
+                name: "my-ca-secret".to_string(),
+                group: None,
+                kind: None,
+                namespace: None,
+            }),
+            resolved_ca_secret: Some(resolved),
+            ..OutboundTlsConfig::default()
+        });
+
+        let mut data = HashMap::new();
+        data.insert("egc-secretref".to_string(), Arc::new(cfg));
+        handler.full_set(&data);
+
+        // The single SecretRef CA is adopted as the cluster-wide default, with the
+        // resolved CA Secret carried through.
+        let global = outbound_global_default();
+        assert_eq!(
+            global.ca_source,
+            Some(CaSource::SecretRef),
+            "global caSource=SecretRef must be adopted, got: {:?}",
+            global.ca_source
+        );
+        assert!(
+            global.resolved_ca_secret.is_some(),
+            "resolved_ca_secret must be carried into the global default"
+        );
+
+        set_outbound_global_default(OutboundTlsConfig::default());
+    }
+
+    // ------------------------------------------------------------------
+    // M-C3: outbound TLS aggregation — delete-path restore + CA adopt/conflict
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn outbound_tls_delete_path_restores_verify_default() {
+        use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
+        use edgion_resources::resources::common::OutboundTlsConfig;
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        set_outbound_global_default(OutboundTlsConfig::default());
+
+        let handler = EdgionGatewayConfigHandler;
+
+        // full_set: one EGC verify=false, one absent (defaults true) → safest-wins → true
+        let mut cfg_a = make_config("a");
+        cfg_a.spec.outbound_tls = Some(OutboundTlsConfig {
+            verify: false,
+            ..OutboundTlsConfig::default()
+        });
+        let cfg_b = make_config("b"); // outbound_tls: None → verify defaults true
+        let mut data = HashMap::new();
+        data.insert("a".to_string(), Arc::new(cfg_a));
+        data.insert("b".to_string(), Arc::new(cfg_b));
+        handler.full_set(&data);
+        assert!(
+            outbound_global_default().verify,
+            "safest-wins: one absent block must keep verify=true"
+        );
+
+        // partial_update removing all entries → default restored
+        let mut remove = std::collections::HashSet::new();
+        remove.insert("a".to_string());
+        remove.insert("b".to_string());
+        handler.partial_update(HashMap::new(), HashMap::new(), remove);
+        assert!(
+            outbound_global_default().verify,
+            "after removing all configs, verify must reset to default (true)"
+        );
+
+        set_outbound_global_default(OutboundTlsConfig::default());
+    }
+
+    #[test]
+    fn outbound_tls_ca_single_inline_adopted() {
+        use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
+        use edgion_resources::resources::common::{outbound_tls::CaSource, OutboundTlsConfig};
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        set_outbound_global_default(OutboundTlsConfig::default());
+
+        let handler = EdgionGatewayConfigHandler;
+
+        let mut cfg = make_config("single-ca");
+        cfg.spec.outbound_tls = Some(OutboundTlsConfig {
+            ca_source: Some(CaSource::Inline),
+            ca_cert: Some("-----BEGIN CERTIFICATE-----\ndummypem\n-----END CERTIFICATE-----\n".to_string()),
+            ..OutboundTlsConfig::default()
+        });
+
+        let mut data = HashMap::new();
+        data.insert("single-ca".to_string(), Arc::new(cfg));
+        handler.full_set(&data);
+
+        let global = outbound_global_default();
+        assert_eq!(
+            global.ca_source,
+            Some(CaSource::Inline),
+            "single Inline CA must be adopted"
+        );
+        assert!(global.ca_cert.is_some(), "ca_cert must be adopted into global default");
+
+        set_outbound_global_default(OutboundTlsConfig::default());
+    }
+
+    #[test]
+    fn outbound_tls_ca_conflict_falls_back_to_system() {
+        use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
+        use edgion_resources::resources::common::{outbound_tls::CaSource, OutboundTlsConfig};
+        let _g = TEST_MUTEX.lock();
+        clear_store();
+        set_outbound_global_default(OutboundTlsConfig::default());
+
+        let handler = EdgionGatewayConfigHandler;
+
+        let mut cfg_a = make_config("ca-a");
+        cfg_a.spec.outbound_tls = Some(OutboundTlsConfig {
+            ca_source: Some(CaSource::Inline),
+            ca_cert: Some("-----BEGIN CERTIFICATE-----\nCA_A\n-----END CERTIFICATE-----\n".to_string()),
+            ..OutboundTlsConfig::default()
+        });
+        let mut cfg_b = make_config("ca-b");
+        cfg_b.spec.outbound_tls = Some(OutboundTlsConfig {
+            ca_source: Some(CaSource::Inline),
+            ca_cert: Some("-----BEGIN CERTIFICATE-----\nCA_B\n-----END CERTIFICATE-----\n".to_string()),
+            ..OutboundTlsConfig::default()
+        });
+
+        let mut data = HashMap::new();
+        data.insert("ca-a".to_string(), Arc::new(cfg_a));
+        data.insert("ca-b".to_string(), Arc::new(cfg_b));
+        handler.full_set(&data);
+
+        let global = outbound_global_default();
+        assert!(
+            global.ca_source.is_none() || global.ca_source == Some(CaSource::System),
+            "conflicting Inline CAs must fall back to System/None, got: {:?}",
+            global.ca_source
+        );
+
+        set_outbound_global_default(OutboundTlsConfig::default());
     }
 }

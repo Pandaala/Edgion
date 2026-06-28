@@ -309,21 +309,23 @@ fn tls_ready_inner(tls: Option<&TlsConfig>) -> bool {
     let Some(tls) = tls else {
         return true;
     };
-    let Some(certs) = tls.certs.as_ref() else {
-        return true;
-    };
-    match certs.secret_ref {
-        Some(_) => certs.secret.is_some(),
-        None => true,
+    // Not ready if a CA secret ref is declared but the Controller has not yet
+    // injected the resolved secret.
+    if tls.outbound.ca_secret_ref.is_some() && tls.resolved_ca_secret.is_none() {
+        return false;
     }
+    // Not ready if a client-identity secret ref is declared but not yet resolved.
+    if tls.outbound.client_secret_ref.is_some() && tls.resolved_client_secret.is_none() {
+        return false;
+    }
+    true
 }
 
 /// TLS readiness check (structural only).
 ///
-/// Returns `false` when the CRD declares a `certs.secretRef` but the
+/// Returns `false` when the CRD declares a `clientSecretRef` but the
 /// Controller has not yet injected the `Secret`. TLS parse failures are
-/// caught inside the provider by
-/// [`tls::build_material`](crate::link_sys_core::tls::build_material).
+/// caught inside the provider via the outbound TLS resolver.
 pub fn tls_ready(ls: &LinkSys) -> bool {
     let tls = match &ls.spec.config {
         SystemConfig::Redis(r) => r.tls.as_ref(),
@@ -348,7 +350,7 @@ pub fn tls_ready(ls: &LinkSys) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::common::{SecretObjectReference, TlsCerts, TlsConfig as CommonTlsConfig};
+    use edgion_resources::resources::common::{OutboundTlsLocal, SecretObjectReference, TlsConfig as CommonTlsConfig};
     use edgion_resources::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
     use edgion_resources::resources::link_sys::LinkSysSpec;
     use k8s_openapi::ByteString;
@@ -772,18 +774,18 @@ mod tests {
                     topology: None,
                     tls: Some(CommonTlsConfig {
                         enabled: true,
-                        certs: Some(TlsCerts {
-                            ca_cert: None,
-                            client_cert: None,
-                            secret_ref: Some(SecretObjectReference {
+                        // CA secret ref declared but not yet resolved
+                        outbound: OutboundTlsLocal {
+                            ca_secret_ref: Some(SecretObjectReference {
                                 group: None,
                                 kind: None,
                                 name: "tls".into(),
                                 namespace: None,
                             }),
-                            secret: None,
-                        }),
-                        insecure_skip_verify: None,
+                            ..Default::default()
+                        },
+                        resolved_ca_secret: None,
+                        resolved_client_secret: None,
                     }),
                     observability: None,
                 }),

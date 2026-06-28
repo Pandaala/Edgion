@@ -37,7 +37,6 @@ use crate::link_sys::http_client::{
 ///
 /// Uses OnceLock for lazy initialization; reqwest::Client is designed to be shared.
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
-static INSECURE_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
 /// Get an Arc-wrapped HTTP client for sharing (e.g. in spawned tasks).
 /// Uses the default secure client.
@@ -72,40 +71,14 @@ pub fn get_http_client() -> &'static Client {
     })
 }
 
-/// Get HTTP client by TLS verification mode.
+/// Build a per-request HTTP client for outbound webhook / forward-auth calls.
 ///
-/// - `ssl_verify=true`: return default secure client.
-/// - `ssl_verify=false`: return client with certificate verification disabled.
-pub fn get_http_client_with_ssl_verify(ssl_verify: bool) -> &'static Client {
-    if ssl_verify {
-        return get_http_client();
-    }
-
-    INSECURE_HTTP_CLIENT.get_or_init(|| {
-        build_outbound_client(OutboundClientConfig {
-            pool_max_idle_per_host: Some(32),
-            connect_timeout: Some(Duration::from_secs(5)),
-            total_timeout: Some(Duration::from_secs(10)),
-            redirect: OutboundRedirect::Deny,
-            danger_accept_invalid_certs: true,
-            ..Default::default()
-        })
-        .unwrap_or_else(|e| {
-            tracing::error!(component = "http_client", error = %e, "Failed to build insecure HTTP client");
-            std::process::exit(1);
-        })
-    })
-}
-
-/// Build an HTTP client for external HTTP connections based on an optional TLS config.
-///
-/// When `tls` is `Some`, builds a custom client with the configured TLS settings
-/// (insecure_skip_verify, custom CA, client certs). When `None`, returns `None` to
-/// indicate the caller should use `get_http_client()` for connection pooling.
-///
-/// `insecure_skip_verify` is gated through the shared
-/// [`link_sys::tls::apply_insecure_skip_verify`] helper, which refuses to honour the flag
-/// when `EDGION_ENV=production`.
+/// When `tls` is `Some`, builds a dedicated client whose TLS policy is resolved through
+/// the shared outbound resolver: the production verify gate is enforced, a custom CA
+/// (inline or from a secret) replaces the default trust store when provided, and an
+/// mTLS client identity is applied when `clientSecretRef` is set. When `tls` is `None`,
+/// returns `None` — the caller should fall back to the pooled default from
+/// [`get_http_client`].
 pub fn build_webhook_client(
     tls_config: &Option<edgion_resources::resources::common::TlsConfig>,
 ) -> Option<anyhow::Result<Client>> {
@@ -295,17 +268,5 @@ mod tests {
         let client2 = get_http_client();
         // Both should point to the same instance
         assert!(std::ptr::eq(client1, client2));
-    }
-
-    #[test]
-    fn test_get_http_client_with_ssl_verify_returns_expected_instances() {
-        let secure1 = get_http_client_with_ssl_verify(true);
-        let secure2 = get_http_client();
-        assert!(std::ptr::eq(secure1, secure2));
-
-        let insecure1 = get_http_client_with_ssl_verify(false);
-        let insecure2 = get_http_client_with_ssl_verify(false);
-        assert!(std::ptr::eq(insecure1, insecure2));
-        assert!(!std::ptr::eq(secure1, insecure1));
     }
 }

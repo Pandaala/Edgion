@@ -20,7 +20,7 @@ pub mod template;
 // core/runtime boundary: backend-agnostic core logic (credential / TLS / health /
 // lifecycle, or a provider the controller also needs) belongs in the common
 // `link_sys_core`; data-plane runtime providers and stores belong in this module.
-pub use edgion_common::link_sys_core::{credential, health, http_client, lifecycle, tls, LinkSysHealth};
+pub use edgion_common::link_sys_core::{credential, health, http_client, lifecycle, outbound_tls, tls, LinkSysHealth};
 
 pub use providers::webhook::{
     get_webhook_call_handle, WebhookCallError, WebhookCallHandle, WebhookCallRequest, WebhookCallResult,

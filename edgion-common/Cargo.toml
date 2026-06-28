@@ -51,7 +51,7 @@ tonic-reflection.workspace = true
 prost.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
-rustls-native-certs.workspace = true
+webpki-roots.workspace = true
 x509-parser.workspace = true
 
 futures.workspace = true

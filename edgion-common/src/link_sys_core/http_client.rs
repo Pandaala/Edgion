@@ -9,7 +9,7 @@ use std::time::Duration;
 use edgion_resources::resources::common::TlsConfig;
 use reqwest::{Client, ClientBuilder};
 
-use super::tls::{apply_insecure_skip_verify, apply_to_reqwest_builder};
+use super::tls::apply_resolved_outbound_tls;
 
 /// Redirect policy for an outbound client.
 #[derive(Default)]
@@ -45,18 +45,13 @@ pub struct OutboundClientConfig {
     pub redirect: OutboundRedirect,
     /// `true` → `no_proxy()` (ignore HTTP(S)_PROXY / NO_PROXY env).
     pub disable_proxy: bool,
-    /// Optional TLS config (CA / client identity / gated `insecure_skip_verify`),
+    /// Optional TLS config (CA / client identity / gated `verify=false`),
     /// applied through the shared [`super::tls`] helpers. The caller is
     /// responsible for the `tls.enabled` gate — pass `None` when TLS is disabled.
     pub tls: Option<TlsConfig>,
     /// Label used in TLS error messages (e.g. "Webhook", "Elasticsearch").
     /// `None` → "OutboundClient".
     pub tls_context: Option<&'static str>,
-    /// RAW, UNGATED `danger_accept_invalid_certs`. Unlike `tls`'s
-    /// `insecure_skip_verify` (which is refused in production), this is NOT gated.
-    /// Exists ONLY to preserve the legacy OIDC `ssl_verify=false` behavior; do not
-    /// use for new code.
-    pub danger_accept_invalid_certs: bool,
 }
 
 /// Apply `cfg` to `builder`. Consumed by value — see [`OutboundClientConfig`].
@@ -85,13 +80,9 @@ pub fn apply_outbound_policy(mut builder: ClientBuilder, cfg: OutboundClientConf
     if cfg.disable_proxy {
         builder = builder.no_proxy();
     }
-    if cfg.danger_accept_invalid_certs {
-        builder = builder.danger_accept_invalid_certs(true);
-    }
     if let Some(tls) = cfg.tls.as_ref() {
         let ctx = cfg.tls_context.unwrap_or("OutboundClient");
-        builder = apply_insecure_skip_verify(builder, tls, ctx)?;
-        builder = apply_to_reqwest_builder(builder, tls, ctx)?;
+        builder = apply_resolved_outbound_tls(builder, tls, ctx)?;
     }
     Ok(builder)
 }
@@ -125,7 +116,6 @@ mod tests {
             total_timeout: Some(Duration::from_secs(10)),
             redirect: OutboundRedirect::Limit(10),
             disable_proxy: true,
-            danger_accept_invalid_certs: true,
             ..Default::default()
         };
         assert!(build_outbound_client(cfg).is_ok());
@@ -141,29 +131,27 @@ mod tests {
     }
 
     #[test]
-    fn insecure_tls_is_refused_in_production() {
-        let _guard = crate::link_sys_core::tls::ENV_TEST_MUTEX.lock();
-        let prev = std::env::var("EDGION_ENV").ok();
-        std::env::set_var("EDGION_ENV", "production");
+    fn insecure_tls_is_honored_when_verify_false() {
+        use edgion_resources::resources::common::OutboundTlsLocal;
 
         let cfg = OutboundClientConfig {
             tls: Some(TlsConfig {
                 enabled: true,
-                certs: None,
-                insecure_skip_verify: Some(true),
+                outbound: OutboundTlsLocal {
+                    verify: Some(false),
+                    ..Default::default()
+                },
+                resolved_ca_secret: None,
+                resolved_client_secret: None,
             }),
             tls_context: Some("TestProvider"),
             ..Default::default()
         };
         let result = build_outbound_client(cfg);
-
-        match prev {
-            Some(v) => std::env::set_var("EDGION_ENV", v),
-            None => std::env::remove_var("EDGION_ENV"),
-        }
         assert!(
-            result.is_err(),
-            "insecure_skip_verify must be refused when EDGION_ENV=production"
+            result.is_ok(),
+            "verify=false must be honored (operator responsibility), got: {:?}",
+            result.err()
         );
     }
 }

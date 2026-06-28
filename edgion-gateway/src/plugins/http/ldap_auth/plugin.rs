@@ -26,6 +26,8 @@ pub struct LdapAuth {
     config: LdapAuthConfig,
     ldap_url: String,
     auth_cache: Arc<ShardedLruCache<String, String>>,
+    /// Effective TLS verification flag (resolved from config.verify + global default).
+    tls_verify: bool,
 }
 
 #[derive(Debug)]
@@ -65,11 +67,40 @@ impl LdapAuth {
         };
         let auth_cache = Arc::new(ShardedLruCache::new(capacity, shards));
 
+        // Resolve the effective verify flag. CA/mTLS are out of scope for LDAP
+        // (deferred); only the verify tri-state is wired here. provider_can_disable=true
+        // because ldap3 supports set_no_tls_verify. Operator-set verify=false is honored;
+        // the shared resolver already emits a WARN at config-load time.
+        use edgion_resources::resources::common::OutboundTlsLocal;
+        let tls_verify = match edgion_common::link_sys_core::outbound_tls::resolve_outbound_tls(
+            &OutboundTlsLocal {
+                verify: config.verify,
+                ..Default::default()
+            },
+            None,
+            None,
+            true,
+            "LdapAuth",
+        ) {
+            Ok(r) => r.verify,
+            Err(e) => {
+                // Only reachable when provider_can_disable=false, which is not the case
+                // here (ldap3 supports set_no_tls_verify). Fail-closed for safety.
+                tracing::warn!(
+                    component = "ldap_auth",
+                    error = ?e,
+                    "outbound TLS resolve error; forcing certificate verification"
+                );
+                true
+            }
+        };
+
         Self {
             name: "LdapAuth".to_string(),
             config: config.clone(),
             ldap_url,
             auth_cache,
+            tls_verify,
         }
     }
 
@@ -163,7 +194,7 @@ impl LdapAuth {
         let settings = LdapConnSettings::new()
             .set_conn_timeout(timeout)
             .set_starttls(self.config.start_tls)
-            .set_no_tls_verify(!self.config.verify_ldap_host);
+            .set_no_tls_verify(!self.tls_verify);
         let (conn, mut ldap) = tokio::time::timeout(timeout, LdapConnAsync::with_settings(settings, &self.ldap_url))
             .await
             .map_err(|_| LdapAuthError::Timeout)?
@@ -428,5 +459,27 @@ mod tests {
         };
         let auth = LdapAuth::new(&config);
         assert_eq!(auth.auth_cache.len(), 0);
+    }
+
+    /// Guard: verify=false is honored — the operator's explicit choice is respected.
+    #[test]
+    fn ldap_verify_false_is_honored() {
+        let config = LdapAuthConfig {
+            verify: Some(false),
+            ..test_config()
+        };
+        let auth = LdapAuth::new(&config);
+        assert!(!auth.tls_verify, "verify=false must be honoured when operator sets it");
+    }
+
+    /// Guard: verify=true (default) is respected.
+    #[test]
+    fn ldap_verify_true_by_default() {
+        let config = LdapAuthConfig {
+            verify: None,
+            ..test_config()
+        };
+        let auth = LdapAuth::new(&config);
+        assert!(auth.tls_verify, "verify must default to true when not explicitly set");
     }
 }

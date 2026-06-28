@@ -172,6 +172,19 @@ pub enum EdgionStatus {
     /// response/body substitution is not yet supported: the response is terminated
     /// by status only and the body is not replaced. See `tasks/todo/filter-04-response-local-reply.md`.
     PluginResponseReplaceUnsupportedGrpc = 999_04,
+
+    /// Outbound TLS skip-verify was requested, but the target provider does not
+    /// expose a skip-verify knob (e.g. etcd-client). Fail-closed rather than
+    /// silently ignoring the operator's intent.
+    OutboundTlsVerifyUnsupported = 999_05,
+
+    /// The CA Secret referenced by `caSecretRef` has not been resolved by the
+    /// Controller yet, or the resolved Secret is missing the `ca.crt` key.
+    OutboundTlsCaMissing = 999_07,
+
+    /// The client-identity Secret referenced by `clientSecretRef` is missing
+    /// `tls.crt` or `tls.key`.
+    OutboundTlsClientCertInvalid = 999_08,
 }
 
 impl EdgionStatus {
@@ -248,6 +261,9 @@ mod tests {
             EdgionStatus::BackendRequestTimeoutRetry => Some(504),
             EdgionStatus::PluginResponseReplaced => None,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc => None,
+            EdgionStatus::OutboundTlsVerifyUnsupported => None,
+            EdgionStatus::OutboundTlsCaMissing => None,
+            EdgionStatus::OutboundTlsClientCertInvalid => None,
         }
     }
 
@@ -300,6 +316,9 @@ mod tests {
             EdgionStatus::BackendRequestTimeoutRetry,
             EdgionStatus::PluginResponseReplaced,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc,
+            EdgionStatus::OutboundTlsVerifyUnsupported,
+            EdgionStatus::OutboundTlsCaMissing,
+            EdgionStatus::OutboundTlsClientCertInvalid,
         ];
         for &s in all {
             assert_eq!(s.http_status(), expected_http(s), "http_status mismatch for {s:?}");

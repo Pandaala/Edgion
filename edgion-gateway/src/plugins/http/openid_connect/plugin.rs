@@ -24,13 +24,15 @@ use super::jwks_provider::{DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksP
 use super::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
 use crate::cache::ShardedLruCache;
 use crate::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
+use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::plugins::http::common::auth_common::{
     send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
 };
-use crate::plugins::http::common::http_client::get_http_client_with_ssl_verify;
+use crate::plugins::http::common::http_client::get_http_client_arc;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::normalize_config_path;
+use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::edgion_plugins::{
     EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode,
 };
@@ -157,6 +159,10 @@ pub struct OpenidConnect {
     config: OpenidConnectConfig,
     #[allow(dead_code)]
     plugin_namespace: String,
+    /// Per-instance outbound HTTP client. Built at construction with the plugin's
+    /// resolved TLS policy (custom CA, mTLS identity, verify gate). Falls back to
+    /// the secure default client if the resolver/gate rejects the config.
+    pub(super) client: Arc<reqwest::Client>,
     pub(super) jwks_provider: Arc<JwksProvider<DiscoveryDocument>>,
     introspection_cache: Arc<ShardedLruCache<String, IntrospectionCacheEntry>>,
     access_token_cache: Arc<ShardedLruCache<String, AccessTokenCacheEntry>>,
@@ -212,8 +218,40 @@ impl OpenidConnect {
             get_default_lru_cache_shards()
         };
 
+        // Build the per-instance outbound client before the jwks_provider block so the
+        // client Arc can be cloned into both the provider and stored on Self.
+        let outbound_client: Arc<reqwest::Client> = {
+            let tls_for_client = TlsConfig {
+                enabled: true,
+                outbound: config.outbound.clone(),
+                resolved_ca_secret: config.resolved_ca_secret.clone(),
+                resolved_client_secret: config.resolved_client_secret.clone(),
+            };
+            match build_outbound_client(OutboundClientConfig {
+                pool_max_idle_per_host: Some(32),
+                connect_timeout: Some(Duration::from_secs(5)),
+                total_timeout: Some(Duration::from_secs(config.timeout)),
+                redirect: OutboundRedirect::Deny,
+                tls: Some(tls_for_client),
+                tls_context: Some("OpenidConnect"),
+                ..Default::default()
+            }) {
+                Ok(c) => Arc::new(c),
+                Err(e) => {
+                    // Process-lifecycle / config-load event (allowed WARN). Fail closed to a
+                    // verifying client rather than running with the operator's verify=false.
+                    tracing::warn!(
+                        component = "openid_connect",
+                        error = %e,
+                        "outbound TLS resolve/gate failed; using secure default client"
+                    );
+                    get_http_client_arc()
+                }
+            }
+        };
+
         let jwks_provider = {
-            let client = Arc::new(get_http_client_with_ssl_verify(config.ssl_verify).clone());
+            let client = outbound_client.clone();
             let provider_config = JwksProviderConfig {
                 discovery_url: config.discovery.clone(),
                 jwks_cache_ttl: Duration::from_secs(config.jwks_cache_ttl),
@@ -252,6 +290,7 @@ impl OpenidConnect {
             name: "OpenidConnect".to_string(),
             config,
             plugin_namespace,
+            client: outbound_client,
             jwks_provider,
             introspection_cache: Arc::new(ShardedLruCache::new(introspection_capacity, introspection_shards)),
             access_token_cache: Arc::new(ShardedLruCache::new(access_token_capacity, access_token_shards)),

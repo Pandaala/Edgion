@@ -227,6 +227,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_hmac(&mut ep, &resource_ref, ctx);
         cred::resolve_key_auth(&mut ep, &resource_ref, ctx);
         cred::resolve_openid_connect(&mut ep, &resource_ref, ctx);
+        cred::resolve_ext_proc(&mut ep, &resource_ref, ctx);
         cred::resolve_csrf(&mut ep, &resource_ref, ctx);
         cred::resolve_global_access_control(&mut ep, &resource_ref, ctx);
         cred::resolve_forward_auth(&mut ep, &resource_ref, ctx).await;
@@ -747,7 +748,10 @@ mod tests {
             _ => panic!("unexpected plugin type"),
         };
 
-        assert_eq!(config.resolved_client_secret.as_deref(), Some("client-secret-value"));
+        assert_eq!(
+            config.resolved_oidc_client_secret.as_deref(),
+            Some("client-secret-value")
+        );
         assert_eq!(config.resolved_session_secret.as_deref(), Some("session-secret-value"));
         assert_eq!(ctx.secret_ref_manager().get_refs("default/oidc-client").len(), 1);
         assert_eq!(ctx.secret_ref_manager().get_refs("default/oidc-session").len(), 1);
@@ -2259,5 +2263,66 @@ mod tests {
             "condition message must mention the missing secret name; got: {}",
             cond.message
         );
+    }
+
+    /// Verify that `resolve_ext_proc` populates `resolved_ca_secret` from
+    /// `grpcService.outbound.caSecretRef` when the referenced Secret is present
+    /// in the store.
+    #[tokio::test]
+    async fn extproc_resolver_fills_resolved_secrets() {
+        use edgion_resources::resources::common::OutboundTlsLocal;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::GrpcServiceConfig;
+
+        let ca_secret = build_secret("default", "extproc-ca", "ca.crt", "CA-PEM-DATA");
+        let mut secrets = HashMap::new();
+        secrets.insert("default/extproc-ca".to_string(), ca_secret);
+
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
+
+        let mut ep = EdgionPlugins::new("extproc-plugins", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::ExtProc(
+            edgion_resources::resources::edgion_plugins::ExtProcConfig {
+                grpc_service: GrpcServiceConfig {
+                    target: "ext-proc.default.svc.cluster.local:9000".to_string(),
+                    timeout_ms: 200,
+                    tls: true,
+                    outbound: OutboundTlsLocal {
+                        ca_secret_ref: Some(SecretObjectReference {
+                            group: None,
+                            kind: None,
+                            name: "extproc-ca".to_string(),
+                            namespace: None,
+                        }),
+                        ..Default::default()
+                    },
+                },
+                ..Default::default()
+            },
+        ))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let entry = parsed
+            .spec
+            .request_plugins
+            .as_ref()
+            .and_then(|v| v.first())
+            .expect("missing request plugin");
+        let config = match &entry.plugin {
+            EdgionPlugin::ExtProc(c) => c,
+            _ => panic!("unexpected plugin type"),
+        };
+
+        assert!(
+            config.resolved_ca_secret.is_some(),
+            "resolved_ca_secret must be populated from caSecretRef"
+        );
+        assert!(config.resolved_client_secret.is_none(), "no clientSecretRef was set");
+        assert_eq!(ctx.secret_ref_manager().get_refs("default/extproc-ca").len(), 1);
     }
 }

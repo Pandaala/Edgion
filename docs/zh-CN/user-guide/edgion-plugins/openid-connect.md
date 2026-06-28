@@ -72,7 +72,7 @@
 | `tokenSigningAlg` | String | 无 | 指定 Token 签名算法（不可为 `none`） |
 | `allowedSigningAlgs` | Array\<String\> | 无 | 允许的签名算法列表（不可包含 `none`） |
 | `useJwks` | Boolean | `true` | 是否使用 JWKS 进行本地验证 |
-| `sslVerify` | Boolean | `true` | 是否验证 OIDC Provider 的 TLS 证书 |
+| `verify` | Boolean | `true` | 是否验证 OIDC Provider 的 TLS 证书。`false` 时跳过对端证书验证（由运维人员负责，启动时记录 WARN）。可配合 `caSource`/`caSecretRef`/`caCert` 使用私有 CA，或配合 `clientSecretRef` 进行 mTLS。 |
 | `issuers` | Array\<String\> | 无 | 允许的 issuer 列表 |
 | `audiences` | Array\<String\> | 无 | 允许的 audience 列表 |
 | `clockSkewSeconds` | Integer | `120` | 时钟偏差容差（秒） |
@@ -137,7 +137,7 @@ config:
   useNonce: true     # 必开
   sessionCookieSecure: true      # 默认已 true，保持
   sessionCookieSameSite: "Lax"   # 默认已 Lax，根据跨站需求可调
-  sslVerify: true                # 默认已 true，切勿关闭
+  verify: true                   # 默认已 true，切勿关闭
   verificationMode: Auto
 ```
 

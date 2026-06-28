@@ -94,6 +94,7 @@ prost = "0.13"
 # TLS / certificates
 rustls = { version = "0.23", features = ["ring"] }
 rustls-native-certs = "0.8"
+webpki-roots = "1"
 x509-parser = { version = "0.18", features = ["verify"] }
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
 instant-acme = "0.8.4"

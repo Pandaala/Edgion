@@ -42,7 +42,7 @@
 //!     name: auth-service
 //!     port: 8443
 //!   tls:
-//!     insecureSkipVerify: false
+//!     verify: true
 //!   timeoutMs: 5000
 //!   request:
 //!     headers:

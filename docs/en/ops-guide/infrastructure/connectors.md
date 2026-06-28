@@ -78,31 +78,28 @@ Every backend accepts the same `tls` block for securing the connection.
 ```yaml
 tls:
   enabled: true
-  insecureSkipVerify: false
-  certs:
-    # CA and client certificates are public material and may be inlined.
-    caCert: |
-      -----BEGIN CERTIFICATE-----
-      <base64-encoded-cert>
-      -----END CERTIFICATE-----
-    clientCert: |
-      -----BEGIN CERTIFICATE-----
-      <base64-encoded-cert>
-      -----END CERTIFICATE-----
-    # The client private key (tls.key) must come from a Secret.
-    secretRef:
-      name: my-client-tls
+  verify: true                 # verify peer certificate (default true); false is honored (operator responsibility)
+  caSource: SecretRef          # System | SecretRef | Inline
+  caSecretRef:
+    name: my-ca-bundle         # Secret holding ca.crt (used when caSource: SecretRef)
+  # caCert: |                  # Inline PEM CA bundle (used when caSource: Inline)
+  #   -----BEGIN CERTIFICATE-----
+  #   <base64-encoded-cert>
+  #   -----END CERTIFICATE-----
+  clientSecretRef:
+    name: my-client-tls        # Secret holding tls.crt + tls.key for client mTLS
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | Boolean | `false` | Enable TLS for the connection. For URLs that already imply TLS (`https://`, `rediss://`), this only adds custom CA / client-certificate handling. |
-| `insecureSkipVerify` | Boolean | `false` | Skip certificate verification. ⚠️ **Development and testing only.** Redis and Etcd do not support it — setting `true` rejects startup outright. |
-| `certs.caCert` | String | none | CA certificate PEM (public material; inlineable). |
-| `certs.clientCert` | String | none | Client certificate PEM for mTLS (public material; inlineable). |
-| `certs.secretRef` | Object | none | Secret reference supplying the client private key `tls.key`. **The private key must come from a Secret, never inline.** |
+| `verify` | Boolean | `true` | Verify the peer TLS certificate. `verify: false` is honored (operator responsibility); a WARN is logged at startup. Redis and Etcd always verify (`verify: false` is rejected at startup — the SDK has no skip-verify API). |
+| `caSource` | Enum | — | Trust-anchor source: `System` (built-in webpki roots), `SecretRef` (private CA from `caSecretRef`), or `Inline` (PEM in `caCert`). A custom CA **replaces** the public roots. |
+| `caSecretRef` | Object | none | Kubernetes Secret holding a private CA bundle (`ca.crt` key). Required when `caSource: SecretRef`. |
+| `caCert` | String | none | Inline PEM CA bundle. Used when `caSource: Inline`. |
+| `clientSecretRef` | Object | none | Kubernetes Secret holding the client mTLS identity (`tls.crt` / `tls.key` keys). |
 
-⚠️ **The client private key must always be supplied through `certs.secretRef`.** Only the CA and client certificate (public material) may be inlined as PEM.
+The client mTLS identity (certificate + private key) must be provided via `clientSecretRef`.
 
 ### Observability
 
@@ -266,9 +263,8 @@ spec:
         namespace: credentials
     tls:
       enabled: true
-      certs:
-        secretRef:
-          name: etcd-client-tls
+      clientSecretRef:
+        name: etcd-client-tls
     namespace: "/my-app/"
 ```
 
@@ -278,7 +274,7 @@ spec:
 |-----------|------|---------|-------------|
 | `endpoints` | Array\<String\> | **Required** | Etcd endpoints; at least one. Example: `"https://etcd-1:2379"`. |
 | `auth` | Object | none | Authentication. The Secret typically provides both `username` and `password`. |
-| `tls` | Object | none | TLS configuration; see [TLS](#tls). Etcd does **not** support `insecureSkipVerify` — setting `true` rejects startup. |
+| `tls` | Object | none | TLS configuration; see [TLS](#tls). Etcd (like Redis) rejects `verify: false` in any environment. |
 | `namespace` | String | none | Etcd v3 key prefix. |
 | `userAgent` | String | none | HTTP User-Agent sent to etcd. Example: `"edgion-gateway/v1"`. |
 | `rejectOldCluster` | Boolean | none | Reject connecting to an outdated cluster. |
@@ -1130,7 +1126,7 @@ spec:
 
 ### 3. TLS-secured Etcd with mTLS client certificate
 
-The CA and client certificate are inlined (public material); the client private key comes from a Secret.
+The CA bundle is inlined (`caSource: Inline`). The client certificate and private key come from a Secret (`clientSecretRef`).
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -1149,17 +1145,13 @@ spec:
         name: etcd-creds
     tls:
       enabled: true
-      certs:
-        caCert: |
-          -----BEGIN CERTIFICATE-----
-          <base64-encoded-cert>
-          -----END CERTIFICATE-----
-        clientCert: |
-          -----BEGIN CERTIFICATE-----
-          <base64-encoded-cert>
-          -----END CERTIFICATE-----
-        secretRef:
-          name: etcd-client-tls
+      caSource: Inline
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        <base64-encoded-cert>
+        -----END CERTIFICATE-----
+      clientSecretRef:
+        name: etcd-client-tls
 ```
 
 ## FAQ
@@ -1181,9 +1173,9 @@ spec:
 
 **A**: No. The auth and TLS structs enable `deny_unknown_fields`, so inline sensitive fields (`username`, `password`, `bearerToken`, `apiKeyId`, `hmacKey`, `clientKey`, ...) cause parsing to fail rather than being ignored. Always use a `secretRef`.
 
-### Q4: Why does setting `insecureSkipVerify: true` break my Redis or Etcd connector?
+### Q4: Can I disable TLS verification (`verify: false`) for Redis or Etcd?
 
-**A**: Redis and Etcd clients do not support skipping verification — setting `true` rejects startup outright. This is intentional, to avoid a configuration where the field appears set but verification still happens. To connect to a backend with a private CA, provide the CA via `tls.certs.caCert` or a `ca.crt` Secret key instead.
+**A**: No. Redis and Etcd clients do not support disabling certificate verification — `verify: false` is rejected at startup for these connectors in any environment. This is intentional: to connect to a backend with a private CA, use `tls.caSource: Inline` + `tls.caCert` (inline PEM) or `tls.caSource: SecretRef` + `tls.caSecretRef` instead.
 
 ### Q5: What happens to active connections when I rotate a Secret?
 

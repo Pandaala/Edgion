@@ -265,6 +265,37 @@ spec:
                       description: "Global hard cap for webhook response body size in bytes (default 16384)"
                       format: int64
                       default: 16384
+                outboundTls:
+                  type: object
+                  description: "Cluster-wide default for plugin / LinkSys outbound TLS verification"
+                  properties:
+                    verify:
+                      type: boolean
+                      description: "Global default for outbound TLS peer verification; defaults to true"
+                    caSource:
+                      type: string
+                      description: "Where the trust anchors come from (System, SecretRef, or Inline)"
+                      enum: [System, SecretRef, Inline]
+                    caSecretRef:
+                      type: object
+                      description: "Kubernetes Secret holding a private CA bundle. When set on EdgionGatewayConfig (global default), it IS honored cluster-wide: the Controller resolves the referenced Secret and ships the resolved CA to the data plane via conf_sync. Because EdgionGatewayConfig is cluster-scoped, set caSecretRef.namespace explicitly (a bare name resolves in the 'default' namespace; a different namespace requires a ReferenceGrant from 'default')."
+                      properties:
+                        group:
+                          type: string
+                          description: "Group of the referent; defaults to empty string (core)"
+                        kind:
+                          type: string
+                          description: "Kind of the referent; defaults to Secret"
+                        name:
+                          type: string
+                          description: "Name of the referent"
+                        namespace:
+                          type: string
+                          description: "Namespace of the referent"
+                      required: [name]
+                    caCert:
+                      type: string
+                      description: "Inline PEM CA bundle used when caSource is Inline"
 
             status:
               type: object

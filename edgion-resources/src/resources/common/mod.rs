@@ -4,6 +4,7 @@ pub mod external_http;
 pub mod group_name;
 pub mod log_labels;
 pub mod outbound_request;
+pub mod outbound_tls;
 pub mod secret_object_ref;
 pub mod secret_slot;
 pub mod service_kind;
@@ -17,10 +18,11 @@ pub use log_labels::{resolve_log_ctx_keys, resolve_log_labels};
 pub use outbound_request::{
     CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec, PresencePolicy,
 };
+pub use outbound_tls::{CaSource, OutboundTlsConfig, OutboundTlsLocal};
 pub use secret_object_ref::SecretObjectReference;
 pub use secret_slot::SecretSlot;
 pub use service_kind::EdgionService;
-pub use tls::{TlsCerts, TlsConfig};
+pub use tls::TlsConfig;
 
 // ---- Types shared across all route resources ----
 // (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, etc.)

@@ -444,39 +444,29 @@ mod tests {
         assert_eq!(name.len(), "test-logs-2026.02.11".len());
     }
 
-    /// `tls.enabled = false` must NOT inject TLS material or honour `insecure_skip_verify`.
-    /// Without this gate, `bail!` on `insecure_skip_verify: true` in production
-    /// would fire even though the operator has not opted into TLS.
-    ///
-    /// Serialised via `link_sys::tls::ENV_TEST_MUTEX` because this test
-    /// mutates `EDGION_ENV` (a process-global table) and would race against
-    /// the `apply_insecure_skip_verify_prod_bails_nonprod_accepts` test in
-    /// the same test binary otherwise.
+    /// `tls.enabled = false` must NOT inject TLS material even when `verify=false`
+    /// is set. The `enabled` gate prevents the outbound resolver from being called
+    /// entirely, so TLS verification is irrelevant.
     #[test]
-    fn test_tls_disabled_ignores_insecure_skip_verify_even_in_prod() {
+    fn test_tls_disabled_ignores_verify_flag() {
         use edgion_resources::resources::common::TlsConfig;
-
-        let _env_guard = crate::link_sys::tls::ENV_TEST_MUTEX.lock();
 
         let crd = ElasticsearchClientConfig {
             tls: Some(TlsConfig {
                 enabled: false,
-                certs: None,
-                insecure_skip_verify: Some(true),
+                outbound: edgion_resources::resources::common::OutboundTlsLocal {
+                    verify: Some(false),
+                    ..Default::default()
+                },
+                resolved_ca_secret: None,
+                resolved_client_secret: None,
             }),
             ..Default::default()
         };
-        let prior = std::env::var("EDGION_ENV").ok();
-        // Simulate production: would bail if the `enabled` gate were missing.
-        std::env::set_var("EDGION_ENV", "production");
         let result = build_es_client(&crd, &no_auth());
-        match prior {
-            Some(v) => std::env::set_var("EDGION_ENV", v),
-            None => std::env::remove_var("EDGION_ENV"),
-        }
         assert!(
             result.is_ok(),
-            "tls.enabled=false must skip insecure_skip_verify handling, got: {:?}",
+            "tls.enabled=false must skip TLS handling entirely, got: {:?}",
             result.err()
         );
     }

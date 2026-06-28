@@ -31,7 +31,7 @@ pub struct ExtProc {
 
 impl ExtProc {
     fn build(config: &ExtProcConfig) -> Option<Self> {
-        match ExtProcClient::new(&config.grpc_service) {
+        match ExtProcClient::new(config) {
             Ok(client) => Some(ExtProc {
                 name: PLUGIN_NAME.to_string(),
                 client,

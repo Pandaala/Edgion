@@ -45,7 +45,7 @@ LDAP Auth 插件用于将网关认证委托给企业 LDAP/AD 目录服务。插�
 | `ldapPort` | Integer | `389` | LDAP 端口 |
 | `ldaps` | Boolean | `false` | 是否启用 LDAPS |
 | `startTls` | Boolean | `false` | 是否启用 StartTLS（与 `ldaps` 互斥） |
-| `verifyLdapHost` | Boolean | `true` | 是否校验证书主机名 |
+| `verify` | Boolean | `true` | 是否验证 LDAP 服务器的 TLS 证书。`false` 时跳过对端证书验证（由运维人员负责，启动时记录 WARN）。 |
 | `baseDn` | String | 无 | 基础 DN，必填 |
 | `attribute` | String | 无 | 用户属性，必填（如 `uid`/`cn`） |
 | `bindDnTemplate` | String | 无 | 自定义 Bind DN 模板，必须包含 `{username}` |
@@ -141,7 +141,7 @@ spec:
 ## 安全建议
 
 - 生产环境优先使用 `ldaps: true` 或 `startTls: true`
-- 保持 `verifyLdapHost: true`
+- 保持 `verify: true`（默认值）；`verify: false` 由运维人员负责，仅应用于测试环境
 - 开启 `hideCredentials: true`，避免凭证透传到上游
 - 设置合理 `cacheTtl`（如 60~300 秒）平衡性能与凭证撤销生效时间
 - 在 LDAP 服务器侧启用账户锁定与防爆破策略

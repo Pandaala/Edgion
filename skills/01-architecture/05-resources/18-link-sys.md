@@ -125,7 +125,7 @@ Constraints:
 `edgion-common/src/link_sys_core/tls.rs` plugs `TlsConfig` + the resolved `TlsMaterial` into each provider's TLS configuration:
 - `ca_pem`: if `TlsCerts.caCert` inline is present, use the inline value; otherwise use the material's `ca_pem`.
 - `client_cert_pem` / `client_key_pem`: prefer material (via secretRef); the private key is `Zeroizing<Vec<u8>>`.
-- `insecureSkipVerify` is handled per provider capability: etcd ignores and warns; Redis/ES/Webhook honor it.
+- `verify` is enforced per provider: Redis and Etcd always verify (`verify: false` is rejected at startup — the SDK has no skip-verify API); ES, Webhook, and other connectors honor `verify: false` as an operator decision (a WARN is emitted at config-load time). `caSource` controls trust anchors (`System` / `SecretRef` / `Inline`); a custom CA replaces the public roots entirely. Client mTLS identity comes from `clientSecretRef`.
 
 ## Cross-resource relationships
 

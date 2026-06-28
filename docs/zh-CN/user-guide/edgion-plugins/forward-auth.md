@@ -62,7 +62,7 @@ spec:
         target: { name: auth-svc, namespace: edgion-default, port: 30040 }
         timeoutMs: 5000                    # 连接层，默认 5000
         successStatusCodes: [200, 204]     # 连接层，默认 任意 2xx
-        tls: { insecureSkipVerify: false } # 连接层，可选
+        tls: { verify: true }              # 连接层，可选
         request:
           path:   { template: "/verify" }
           method: { template: "GET" }
@@ -90,7 +90,7 @@ spec:
 | `target` | object | 必填 | Kubernetes Service 后端：`{name, namespace, port}`。端口必填；namespace 默认为插件所在命名空间。 |
 | `timeoutMs` | integer | `5000` | 请求超时（毫秒）。 |
 | `successStatusCodes` | array\<integer\> | `null` | 视为鉴权成功的状态码。默认：任意 2xx（200–299）。 |
-| `tls` | object | `null` | TLS 配置：`insecureSkipVerify`、自定义 CA 证书、mTLS 客户端证书。 |
+| `tls` | object | `null` | 出向鉴权请求的 TLS 配置。字段：`verify`（默认 `true`；`false` 由运维人员负责）、`caSource`（`System`/`SecretRef`/`Inline`）、`caSecretRef`、`caCert`（内联 PEM）、`clientSecretRef`（客户端 mTLS 身份）。 |
 | `retry` | object | `null` | 重试配置：`maxRetries`、`retryDelayMs`、`retryOnTimeout`、`retryOnConnectError`、`retryOnStatus`。 |
 | `rateLimit` | object | `null` | 出向调用限速：`rate`（每窗口最大调用次数）+ `windowSec`。 |
 | `healthCheck` | object | `null` | 健康检查：`active`（探针路径 + 间隔）和/或 `passive`（失败阈值）。 |
@@ -219,7 +219,7 @@ spec:
           namespace: production
           port: 8443
         tls:
-          insecureSkipVerify: false
+          verify: true
         timeoutMs: 5000
         successStatusCodes: [200, 204]
         request:

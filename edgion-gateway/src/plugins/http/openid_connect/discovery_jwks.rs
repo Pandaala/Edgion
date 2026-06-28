@@ -1,8 +1,8 @@
 use super::*;
 
 impl OpenidConnect {
-    pub(super) fn http_client(&self) -> &'static reqwest::Client {
-        get_http_client_with_ssl_verify(self.config.ssl_verify)
+    pub(super) fn http_client(&self) -> Arc<reqwest::Client> {
+        self.client.clone()
     }
 
     pub(super) async fn get_or_fetch_discovery(&self) -> OidcResult<DiscoveryDocument> {

@@ -24,9 +24,10 @@ pub struct LdapAuthConfig {
     #[serde(default)]
     pub start_tls: bool,
 
-    /// Verify LDAP server certificate hostname (default: true)
-    #[serde(default = "default_verify_ldap_host")]
-    pub verify_ldap_host: bool,
+    /// Override outbound TLS certificate verification for this LDAP connection.
+    /// None = inherit global outboundTls.verify; Some(true) = verify; Some(false) = skip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify: Option<bool>,
 
     // === LDAP Search / Bind ===
     /// Base DN for LDAP bind DN construction
@@ -97,10 +98,6 @@ fn default_ldap_port() -> u16 {
     389
 }
 
-fn default_verify_ldap_host() -> bool {
-    true
-}
-
 fn default_header_type() -> String {
     "ldap".to_string()
 }
@@ -136,7 +133,7 @@ impl Default for LdapAuthConfig {
             ldap_port: default_ldap_port(),
             ldaps: false,
             start_tls: false,
-            verify_ldap_host: default_verify_ldap_host(),
+            verify: None,
             base_dn: String::new(),
             attribute: String::new(),
             bind_dn_template: None,
@@ -204,7 +201,7 @@ mod tests {
         assert_eq!(cfg.ldap_port, 389);
         assert!(!cfg.ldaps);
         assert!(!cfg.start_tls);
-        assert!(cfg.verify_ldap_host);
+        assert!(cfg.verify.is_none());
         assert_eq!(cfg.header_type, "ldap");
         assert_eq!(cfg.realm, "API Gateway");
         assert_eq!(cfg.cache_ttl, 60);
@@ -266,5 +263,16 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(cfg.get_validation_error(), None);
+    }
+
+    #[test]
+    fn ldap_verify_is_tristate_default_none() {
+        let c: LdapAuthConfig = serde_json::from_value(serde_json::json!({
+            "ldapHost": "ldap.example.com",
+            "baseDn": "dc=example,dc=com",
+            "attribute": "uid"
+        }))
+        .unwrap();
+        assert!(c.verify.is_none());
     }
 }

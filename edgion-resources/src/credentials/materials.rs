@@ -17,7 +17,7 @@
 //! - The controller-side `SecretStore` caches the raw `ByteString` plaintext
 //!   for the lifetime of the resource watcher.
 //! - The resolved `Secret` object is embedded on `*Auth.secret` /
-//!   `TlsCerts.secret` and serialized via `serde_json` / gRPC through
+//!   `TlsConfig.resolved_ca_secret`/`resolved_client_secret` and serialized via `serde_json` / gRPC through
 //!   conf_sync to the Gateway; none of those buffers are wiped.
 //! - The Gateway-side runtime store keeps the embedded `Secret` until the
 //!   resource is removed.
@@ -82,9 +82,9 @@ pub struct WebhookApiKeyMaterial {
 ///   builds a parsed tree in the heap that is dropped normally.
 /// - Transient `String` allocations produced during decoding (e.g.
 ///   `json.to_string()`) live until the allocator reclaims the memory.
-/// - The embedded `Secret` object on `*Auth.secret` / `TlsCerts.secret` is
-///   serialized via `serde_json` and transported over gRPC to the Gateway
-///   — none of those buffers are zero-wiped.
+/// - The embedded `Secret` object on `*Auth.secret` / `TlsConfig.resolved_ca_secret`
+///   / `TlsConfig.resolved_client_secret` is serialized via `serde_json` and
+///   transported over gRPC to the Gateway — none of those buffers are zero-wiped.
 ///
 /// In other words: `Zeroize` here reduces but does NOT eliminate the window
 /// during which the private key is resident in memory. Treat this as
@@ -111,7 +111,8 @@ pub struct AcmeAccountMaterial {
 /// `client_key_pem` (the private key) is held in `Zeroizing<Vec<u8>>` and
 /// zero-wiped on drop. `ca_pem` and `client_cert_pem` are plaintext public
 /// material and deliberately not wrapped. The same caveats about the
-/// `SecretStore` cache, the embedded `Secret` on `TlsCerts.secret`, and the
+/// `SecretStore` cache, the embedded `Secret` on `TlsConfig.resolved_ca_secret`
+/// / `resolved_client_secret`, and the
 /// conf_sync transport buffers apply here — see [`AcmeAccountMaterial`] for
 /// the full list. `Zeroize` is defense-in-depth, not an end-to-end guarantee.
 #[derive(Debug)]

@@ -178,13 +178,21 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
 
     if let Some(tls) = &crd.tls {
         if tls.enabled {
-            if tls.insecure_skip_verify.unwrap_or(false) {
-                anyhow::bail!(
-                    "Redis TLS insecure_skip_verify is configured but not supported by the fred client. \
-                     TLS always verifies certificates. Use a proper CA certificate or connect without TLS. \
-                     For development, consider using a self-signed cert with the system CA store."
-                );
-            }
+            // fred's rustls connector always verifies; reject verify=false up front
+            // (provider_can_disable=false → rejected even outside production).
+            crate::link_sys::outbound_tls::resolve_outbound_tls(
+                &tls.outbound,
+                tls.resolved_ca_secret.as_ref(),
+                tls.resolved_client_secret.as_ref(),
+                false,
+                "Redis",
+            )
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Redis TLS configuration error: {e:?}. fred does not support skip-verify; \
+                     use a proper CA certificate or connect without TLS."
+                )
+            })?;
             // Prefer a custom rustls `ClientConfig` built from CRD / Secret
             // material (private CA, client mTLS). Falls back to fred's default
             // rustls connector (system CA roots, no client auth) when the CRD
@@ -493,5 +501,32 @@ mod tests {
         assert_eq!(effective_timeout_ms(Some(0), 5_000, 30_000), 5_000);
         assert_eq!(effective_timeout_ms(Some(1_000), 5_000, 30_000), 1_000);
         assert_eq!(effective_timeout_ms(Some(99_999), 5_000, 30_000), 30_000);
+    }
+
+    /// Guard: fred's rustls connector always verifies — verify=false must be
+    /// rejected regardless of environment (provider_can_disable=false).
+    #[test]
+    fn redis_rejects_verify_false_always() {
+        use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
+
+        let crd = RedisClientConfig {
+            tls: Some(TlsConfig {
+                enabled: true,
+                outbound: OutboundTlsLocal {
+                    verify: Some(false),
+                    ..Default::default()
+                },
+                resolved_ca_secret: None,
+                resolved_client_secret: None,
+            }),
+            ..minimal_config(vec!["redis://localhost:6379".to_string()])
+        };
+        // provider_can_disable=false causes the resolver to reject verify=false
+        // (Redis SDK has no skip-verify API) regardless of any environment variable.
+        let err = build_fred_pool(&crd, build_fred_config(&crd, &no_auth()).unwrap()).unwrap_err();
+        assert!(
+            err.to_string().contains("Redis TLS configuration error"),
+            "unexpected error: {err}"
+        );
     }
 }

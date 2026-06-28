@@ -1,40 +1,44 @@
-//! Common TLS configuration types for `LinkSys` resources:
+//! Common TLS configuration for `LinkSys` backend connections.
 //!
-//! - [`TlsConfig`] — on/off switch, certs sub-object, `insecureSkipVerify`.
-//! - [`TlsCerts`] — CA + client cert + `secretRef` (+ resolved `Secret`).
+//! - [`TlsConfig`] — on/off switch plus the unified outbound verify / CA
+//!   trust-source block (flattened from [`super::outbound_tls::OutboundTlsLocal`]).
 //!
 //! Design decisions:
 //!
-//! - Inline private key (`clientKey`) is **not allowed** — `deny_unknown_fields`
-//!   rejects it at YAML parse time ("no inline sensitive material" rule).
-//!   Client private key MUST be provided through `secretRef` pointing at a
-//!   `kubernetes.io/tls` or `Opaque` Secret (key: `tls.key`).
-//! - `ca_cert` / `client_cert` inline PEM is still allowed (public material).
-//! - `secret` mirrors the `auth.secret` pattern: filled by the Controller after
-//!   resolving `secret_ref`, serialized to the Gateway over conf_sync, but
-//!   omitted from YAML/CRD schema via `skip_serializing_if = "Option::is_none"`.
+//! - The `verify` / `caSource` / `caSecretRef` / `caCert` / `clientSecretRef`
+//!   fields appear **at the top level** of `TlsConfig` (flattened from
+//!   `OutboundTlsLocal`), not inside a nested `certs` sub-object.
+//! - Inline private keys are not accepted; `deny_unknown_fields` rejects any
+//!   unrecognized field at YAML/JSON parse time ("no inline sensitive material").
+//!   Client private key MUST be provided through `clientSecretRef` pointing at a
+//!   `kubernetes.io/tls` Secret (`tls.key`).
+//! - Inline CA PEM (`caCert`) is still allowed (public material).
+//! - `resolved_ca_secret` and `resolved_client_secret` are filled by the
+//!   Controller after resolving the respective `*SecretRef`, shipped to the
+//!   Gateway via conf_sync, but omitted from YAML/CRD schema via `#[schemars(skip)]`
+//!   and `skip_serializing_if`.
 //!
 //! TLS material is parsed on demand by the Gateway using
 //! `crate::credentials::resolvers::tls::TlsCertsResolver`.
 //!
 //! # Zeroize scope (transport)
 //!
-//! [`TlsCerts::secret`] carries the resolved K8s `Secret` (including the
-//! `tls.key` private key) from controller to Gateway via `serde_json` + gRPC
-//! through conf_sync; those buffers and the Gateway-side runtime store cache
-//! are **not** zero-wiped. Only the `TlsMaterial.client_key_pem` parsed out
-//! of this Secret on the Gateway side uses `Zeroizing`. See
-//! [`crate::credentials::TlsMaterial`] for the full caveat list.
+//! The resolved K8s `Secret` values (including `tls.key` private key) are
+//! carried from controller to Gateway via `serde_json` + gRPC through conf_sync;
+//! those buffers and the Gateway-side runtime store cache are **not** zero-wiped.
+//! Only the `TlsMaterial.client_key_pem` parsed out of these secrets on the
+//! Gateway side uses `Zeroizing`. See [`crate::credentials::TlsMaterial`] for
+//! the full caveat list.
 
 use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::SecretObjectReference;
+use super::outbound_tls::OutboundTlsLocal;
 
 /// TLS configuration shared by all LinkSys backend connections.
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TlsConfig {
     /// Enable TLS for the backend connection.
     ///
@@ -44,52 +48,28 @@ pub struct TlsConfig {
     #[serde(default)]
     pub enabled: bool,
 
-    /// Certificate material (CA + optional client mTLS).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub certs: Option<TlsCerts>,
+    /// Unified outbound verify + CA trust source (flattened: verify, caSource,
+    /// caSecretRef, caCert, clientSecretRef).
+    #[serde(flatten)]
+    pub outbound: OutboundTlsLocal,
 
-    /// Skip server certificate verification.
-    ///
-    /// **Dangerous** — only for development / testing. Not every provider
-    /// supports this (e.g. `etcd-client` ignores it and logs a warning).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub insecure_skip_verify: Option<bool>,
-}
-
-/// TLS certificate material.
-///
-/// CA and client certificate may be provided inline (PEM string, public material)
-/// or via `secret_ref`. The client **private key** is only accepted via
-/// `secret_ref` — `deny_unknown_fields` rejects any `clientKey` inline value.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TlsCerts {
-    /// CA certificate (PEM format). Public material, inline allowed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_cert: Option<String>,
-
-    /// Client certificate (PEM format) for mTLS. Public material, inline allowed.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_cert: Option<String>,
-
-    /// Reference to a Kubernetes Secret carrying TLS material.
-    ///
-    /// Recommended secret type: `kubernetes.io/tls` with keys `tls.crt` /
-    /// `tls.key`; optional `ca.crt`. `Opaque` is also accepted for compatibility.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub secret_ref: Option<SecretObjectReference>,
-
-    /// Resolved Secret object (filled by Controller, never from user YAML).
-    ///
-    /// Serialized to the Gateway via conf_sync. Not persisted back into the K8s
-    /// `spec` (the controller only patches `status`).
+    /// Resolved CA Secret (filled by Controller, shipped via conf_sync).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
-    pub secret: Option<Secret>,
+    pub resolved_ca_secret: Option<Secret>,
+
+    /// Resolved client-identity Secret (filled by Controller).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_client_secret: Option<Secret>,
 }
 
 // ============================================================================
@@ -98,6 +78,7 @@ pub struct TlsCerts {
 
 #[cfg(test)]
 mod tests {
+    use super::super::outbound_tls::CaSource;
     use super::*;
 
     #[test]
@@ -105,73 +86,23 @@ mod tests {
         let yaml = "enabled: true";
         let cfg: TlsConfig = serde_yaml::from_str(yaml).expect("should parse");
         assert!(cfg.enabled);
-        assert!(cfg.certs.is_none());
+        assert!(cfg.outbound.verify.is_none());
     }
 
     #[test]
-    fn tls_certs_with_ca_and_secret_ref_parses() {
-        let yaml = r#"
-caCert: "-----BEGIN CERTIFICATE-----\nMIIB..."
-secretRef:
-  name: my-tls
-  namespace: default
-"#;
-        let certs: TlsCerts = serde_yaml::from_str(yaml).expect("should parse");
-        assert!(certs.ca_cert.is_some());
-        assert_eq!(certs.secret_ref.as_ref().unwrap().name, "my-tls");
+    fn tls_config_rejects_legacy_insecure_skip_verify() {
+        // deny_unknown_fields must reject the deleted key.
+        let r: Result<TlsConfig, _> = serde_json::from_str(r#"{"enabled":true,"insecureSkipVerify":true}"#);
+        assert!(r.is_err(), "legacy insecureSkipVerify must be rejected");
     }
 
     #[test]
-    fn tls_certs_rejects_inline_client_key() {
-        let yaml = r#"
-clientCert: "-----BEGIN CERTIFICATE-----"
-clientKey: "-----BEGIN PRIVATE KEY-----"
-"#;
-        let r: Result<TlsCerts, _> = serde_yaml::from_str(yaml);
-        assert!(r.is_err(), "inline clientKey must be rejected by deny_unknown_fields");
-    }
-
-    #[test]
-    fn tls_certs_secret_field_round_trips_through_json() {
-        use k8s_openapi::ByteString;
-        use std::collections::BTreeMap;
-
-        let mut data = BTreeMap::new();
-        data.insert("tls.crt".to_string(), ByteString(b"CERT-BYTES".to_vec()));
-        data.insert("tls.key".to_string(), ByteString(b"KEY-BYTES".to_vec()));
-
-        let certs = TlsCerts {
-            ca_cert: None,
-            client_cert: None,
-            secret_ref: Some(SecretObjectReference {
-                group: None,
-                kind: None,
-                name: "my-tls".to_string(),
-                namespace: None,
-            }),
-            secret: Some(Secret {
-                data: Some(data),
-                type_: Some("kubernetes.io/tls".to_string()),
-                ..Default::default()
-            }),
-        };
-
-        let json = serde_json::to_string(&certs).expect("serialize");
-        let parsed: TlsCerts = serde_json::from_str(&json).expect("deserialize");
-        let data = parsed.secret.expect("secret").data.expect("data");
-        assert_eq!(data.get("tls.crt").unwrap().0, b"CERT-BYTES");
-        assert_eq!(data.get("tls.key").unwrap().0, b"KEY-BYTES");
-    }
-
-    #[test]
-    fn tls_certs_secret_is_omitted_from_yaml_when_none() {
-        let certs = TlsCerts {
-            ca_cert: Some("CA".to_string()),
-            client_cert: None,
-            secret_ref: None,
-            secret: None,
-        };
-        let yaml = serde_yaml::to_string(&certs).expect("serialize");
-        assert!(!yaml.contains("secret:"), "secret=None must not appear in YAML: {yaml}");
+    fn tls_config_accepts_unified_verify_and_casource() {
+        let c: TlsConfig = serde_json::from_str(
+            r#"{"enabled":true,"verify":false,"caSource":"SecretRef","caSecretRef":{"name":"ca"}}"#,
+        )
+        .unwrap();
+        assert_eq!(c.outbound.verify, Some(false));
+        assert_eq!(c.outbound.ca_source, Some(CaSource::SecretRef));
     }
 }

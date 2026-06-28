@@ -10,7 +10,7 @@ use anyhow::Result;
 use etcd_client::{Certificate, ConnectOptions, Identity, TlsOptions};
 
 use crate::link_sys_core::credential::CredentialState;
-use crate::link_sys_core::tls as tls_helper;
+use crate::link_sys_core::outbound_tls::{self, EffectiveCa};
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
@@ -93,30 +93,36 @@ pub fn build_connect_options(
 
 /// Build TLS options from CRD config.
 ///
-/// Uses Rustls (etcd-client default) for TLS connections. CA + client mTLS
-/// come from [`tls_helper::build_material`], which merges inline PEM from the
-/// CRD with the resolved K8s Secret (`tls.crt` / `tls.key` / `ca.crt`).
+/// Uses the shared [`outbound_tls::resolve_outbound_tls`] resolver with
+/// `provider_can_disable: false` — etcd-client's TLS stack always verifies
+/// certificates and has no skip-verify knob, so the resolver will return
+/// [`EdgionStatus::OutboundTlsVerifyUnsupported`] (mapped to an error here)
+/// if `verify=false` is configured, preventing a silent ignore of the
+/// operator's intent.
 fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
+    let resolved = outbound_tls::resolve_outbound_tls(
+        &tls.outbound,
+        tls.resolved_ca_secret.as_ref(),
+        tls.resolved_client_secret.as_ref(),
+        false, // etcd-client cannot disable TLS verification
+        "Etcd",
+    )
+    .map_err(|e| {
+        anyhow::anyhow!(
+            "Etcd TLS configuration error: {e:?}. \
+             etcd-client does not support skip-verify; \
+             use a proper CA certificate or connect without TLS."
+        )
+    })?;
+
     let mut tls_options = TlsOptions::new();
 
-    if let Some(material) = tls_helper::build_material(tls) {
-        if let Some(ca_pem) = &material.ca_pem {
-            tls_options = tls_options.ca_certificate(Certificate::from_pem(ca_pem));
-        }
-        if let (Some(cert), Some(key)) = (&material.client_cert_pem, &material.client_key_pem) {
-            tls_options = tls_options.identity(Identity::from_pem(cert, key.as_slice()));
-        }
+    if let EffectiveCa::Custom(ca_pem) = &resolved.ca {
+        tls_options = tls_options.ca_certificate(Certificate::from_pem(ca_pem));
     }
 
-    // etcd-client TlsOptions does not expose an insecure_skip_verify knob.
-    // Aligning with Redis: refuse to start rather than silently ignoring the
-    // operator's intent (an operator who set `insecure_skip_verify: true` for
-    // testing would otherwise get strict verification without any signal).
-    if tls.insecure_skip_verify == Some(true) {
-        anyhow::bail!(
-            "Etcd TLS insecure_skip_verify is configured but not supported by etcd-client. \
-             TLS always verifies certificates. Use a proper CA certificate or connect without TLS."
-        );
+    if let Some((cert_pem, key_pem)) = &resolved.client_identity {
+        tls_options = tls_options.identity(Identity::from_pem(cert_pem, key_pem.as_slice()));
     }
 
     Ok(tls_options)
@@ -324,11 +330,13 @@ mod tests {
 
     #[test]
     fn test_with_tls_enabled_no_certs() {
+        use edgion_resources::resources::common::OutboundTlsLocal;
         let crd = EtcdClientConfig {
             tls: Some(TlsConfig {
                 enabled: true,
-                certs: None,
-                insecure_skip_verify: None,
+                outbound: OutboundTlsLocal::default(),
+                resolved_ca_secret: None,
+                resolved_client_secret: None,
             }),
             ..minimal_config(vec!["https://localhost:2379".to_string()])
         };
@@ -336,34 +344,38 @@ mod tests {
         assert!(options.is_some());
     }
 
-    /// `insecure_skip_verify: true` must fail fast rather than silently being
-    /// ignored — etcd-client cannot honour the flag and an operator who set it
+    /// `verify=false` must fail fast for Etcd rather than silently being
+    /// ignored — etcd-client has no skip-verify knob and an operator who set it
     /// (e.g. for self-signed dev certs) would otherwise get strict verification
     /// with no signal.
     #[test]
     fn test_insecure_skip_verify_bails() {
+        use edgion_resources::resources::common::OutboundTlsLocal;
         let crd = EtcdClientConfig {
             tls: Some(TlsConfig {
                 enabled: true,
-                certs: None,
-                insecure_skip_verify: Some(true),
+                outbound: OutboundTlsLocal {
+                    verify: Some(false),
+                    ..Default::default()
+                },
+                resolved_ca_secret: None,
+                resolved_client_secret: None,
             }),
             ..minimal_config(vec!["https://localhost:2379".to_string()])
         };
-        let err = build_connect_options(&crd, &no_auth()).expect_err("should refuse insecure_skip_verify");
-        assert!(
-            err.to_string().contains("insecure_skip_verify"),
-            "unexpected error message: {err}"
-        );
+        let err = build_connect_options(&crd, &no_auth()).expect_err("should refuse verify=false");
+        assert!(err.to_string().contains("Etcd TLS"), "unexpected error message: {err}");
     }
 
     #[test]
     fn test_tls_disabled_returns_none() {
+        use edgion_resources::resources::common::OutboundTlsLocal;
         let crd = EtcdClientConfig {
             tls: Some(TlsConfig {
                 enabled: false,
-                certs: None,
-                insecure_skip_verify: None,
+                outbound: OutboundTlsLocal::default(),
+                resolved_ca_secret: None,
+                resolved_client_secret: None,
             }),
             ..minimal_config(vec!["http://localhost:2379".to_string()])
         };

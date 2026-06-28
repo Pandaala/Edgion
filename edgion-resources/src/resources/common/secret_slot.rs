@@ -1,8 +1,7 @@
 //! Reusable "Secret reference + resolved Secret" slot for CRD fields.
 //!
-//! Embedded into `*Auth` structs / enum variants and `TlsCerts` via
-//! `#[serde(flatten)]` so the YAML form is unchanged: `secretRef` appears at
-//! the parent's top level.
+//! Embedded into `*Auth` structs / enum variants via `#[serde(flatten)]` so
+//! the YAML form is unchanged: `secretRef` appears at the parent's top level.
 //!
 //! The `secret` field is **never** populated from user YAML — it's filled by
 //! the Controller during Secret resolution and serialized to the Gateway via

@@ -83,28 +83,38 @@ spec:
                           type: boolean
                           description: "Enable TLS"
                           default: false
-                        insecureSkipVerify:
+                        verify:
                           type: boolean
-                          description: "Skip certificate verification (insecure)"
-                        certs:
+                          description: "Verify the peer TLS certificate (default true). verify: false is honored (operator responsibility); a WARN is logged at startup. Redis and Etcd always verify — verify: false is rejected at startup for them (the SDK has no skip-verify API)."
+                        caSource:
+                          type: string
+                          description: "Trust-anchor source: System (built-in webpki roots), SecretRef (private CA from caSecretRef), or Inline (PEM in caCert). A custom CA replaces the public roots."
+                          enum: [System, SecretRef, Inline]
+                        caSecretRef:
                           type: object
-                          description: "TLS certificates; private key MUST be provided via secretRef (inline clientKey is rejected)"
+                          description: "Kubernetes Secret holding a private CA bundle (used when caSource: SecretRef)"
+                          required: ["name"]
                           properties:
-                            caCert:
+                            name:
                               type: string
-                              description: "CA certificate (PEM, public material)"
-                            clientCert:
+                              description: "Name of the Secret"
+                            namespace:
                               type: string
-                              description: "Client certificate (PEM, public material)"
-                            secretRef:
-                              type: object
-                              description: "Secret reference (kubernetes.io/tls or Opaque with tls.crt/tls.key/ca.crt keys)"
-                              required: ["name"]
-                              properties:
-                                name:
-                                  type: string
-                                namespace:
-                                  type: string
+                              description: "Namespace of the Secret"
+                        caCert:
+                          type: string
+                          description: "Inline PEM CA bundle (used when caSource: Inline)"
+                        clientSecretRef:
+                          type: object
+                          description: "Kubernetes Secret holding the client mTLS identity (tls.crt / tls.key keys)"
+                          required: ["name"]
+                          properties:
+                            name:
+                              type: string
+                              description: "Name of the Secret"
+                            namespace:
+                              type: string
+                              description: "Namespace of the Secret"
                     timeout:
                       type: object
                       description: "Timeout configuration (milliseconds)"

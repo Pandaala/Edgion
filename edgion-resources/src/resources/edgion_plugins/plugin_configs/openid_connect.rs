@@ -1,8 +1,10 @@
 //! OpenID Connect plugin configuration
 
 use super::lru_cache_config::LruCacheConfig;
+use crate::resources::common::OutboundTlsLocal;
 use crate::resources::gateway::SecretObjectReference;
 use jsonwebtoken::Algorithm;
+use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -137,8 +139,10 @@ pub struct OpenidConnectConfig {
     pub allowed_signing_algs: Option<Vec<String>>,
     #[serde(default = "default_true")]
     pub use_jwks: bool,
-    #[serde(default = "default_true")]
-    pub ssl_verify: bool,
+    /// Outbound TLS verification and CA trust-source for IdP connections (discovery, JWKS,
+    /// introspection). Flattened: verify, caSource, caSecretRef, caCert, clientSecretRef.
+    #[serde(flatten)]
+    pub outbound: OutboundTlsLocal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuers: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -202,18 +206,37 @@ pub struct OpenidConnectConfig {
     pub userinfo_max_response_bytes: usize,
 
     // Runtime fields (controller-populated)
+    /// Resolved OIDC OAuth2 client secret value (from `clientSecretRef`).
     #[serde(
+        default,
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
-    pub resolved_client_secret: Option<String>,
+    pub resolved_oidc_client_secret: Option<String>,
     #[serde(
+        default,
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
     pub resolved_session_secret: Option<String>,
+    /// Resolved CA Secret (from `outbound.caSecretRef`, filled by Controller).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_ca_secret: Option<Secret>,
+    /// Resolved mTLS client-identity Secret (from `outbound.clientSecretRef`, filled by Controller).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_client_secret: Option<Secret>,
 
     // Security extras
     /// Remove Authorization header from the upstream request after successful bearer-token auth.
@@ -329,7 +352,7 @@ impl Default for OpenidConnectConfig {
             token_signing_alg: None,
             allowed_signing_algs: None,
             use_jwks: default_true(),
-            ssl_verify: default_true(),
+            outbound: OutboundTlsLocal::default(),
             issuers: None,
             audiences: None,
             clock_skew_seconds: default_clock_skew_seconds(),
@@ -350,8 +373,10 @@ impl Default for OpenidConnectConfig {
             max_header_value_bytes: default_max_header_value_bytes(),
             max_total_header_bytes: default_max_total_header_bytes(),
             timeout: default_timeout_seconds(),
-            resolved_client_secret: None,
+            resolved_oidc_client_secret: None,
             resolved_session_secret: None,
+            resolved_ca_secret: None,
+            resolved_client_secret: None,
             hide_credentials: false,
             auth_failure_delay_ms: 0,
             discovery_max_response_bytes: default_discovery_max_response_bytes(),
@@ -502,7 +527,7 @@ impl OpenidConnectConfig {
             || self.verification_mode == VerificationMode::IntrospectionOnly
             || (!self.use_jwks && self.verification_mode == VerificationMode::Auto)
             || self.revoke_tokens_on_logout;
-        if needs_client_secret && self.client_secret_ref.is_none() && self.resolved_client_secret.is_none() {
+        if needs_client_secret && self.client_secret_ref.is_none() && self.resolved_oidc_client_secret.is_none() {
             return Some("clientSecretRef is required for non-bearer-only/introspection flows");
         }
         let needs_session_secret = !self.bearer_only && self.unauth_action == UnauthAction::Auth;
@@ -619,7 +644,7 @@ mod tests {
             client_id: "my-web-app".to_string(),
             bearer_only: false,
             unauth_action: UnauthAction::Auth,
-            resolved_client_secret: Some("client-secret".to_string()),
+            resolved_oidc_client_secret: Some("client-secret".to_string()),
             ..Default::default()
         };
         assert_eq!(
@@ -648,7 +673,7 @@ mod tests {
             client_id: "my-web-app".to_string(),
             bearer_only: false,
             unauth_action: UnauthAction::Auth,
-            resolved_client_secret: Some("client-secret".to_string()),
+            resolved_oidc_client_secret: Some("client-secret".to_string()),
             resolved_session_secret: Some("session-secret".to_string()),
             max_session_cookie_bytes: 0,
             ..Default::default()
@@ -666,7 +691,7 @@ mod tests {
             client_id: "my-web-app".to_string(),
             bearer_only: false,
             unauth_action: UnauthAction::Auth,
-            resolved_client_secret: Some("client-secret".to_string()),
+            resolved_oidc_client_secret: Some("client-secret".to_string()),
             resolved_session_secret: Some("session-secret".to_string()),
             session_cookie_same_site: "Invalid".to_string(),
             ..Default::default()
@@ -684,7 +709,7 @@ mod tests {
             client_id: "my-web-app".to_string(),
             bearer_only: false,
             unauth_action: UnauthAction::Auth,
-            resolved_client_secret: Some("client-secret".to_string()),
+            resolved_oidc_client_secret: Some("client-secret".to_string()),
             resolved_session_secret: Some("session-secret".to_string()),
             session_cookie_same_site: "None".to_string(),
             session_cookie_secure: false,
@@ -726,5 +751,15 @@ mod tests {
             cfg.get_validation_error(),
             Some("clientSecretRef is required for non-bearer-only/introspection flows")
         );
+    }
+
+    #[test]
+    fn openid_drops_ssl_verify_accepts_verify() {
+        let c: OpenidConnectConfig = serde_json::from_value(serde_json::json!({
+            "clientId":"x","clientSecret":"y","discovery":"https://i/.well-known/openid-configuration",
+            "verify": false
+        }))
+        .unwrap();
+        assert_eq!(c.outbound.verify, Some(false));
     }
 }

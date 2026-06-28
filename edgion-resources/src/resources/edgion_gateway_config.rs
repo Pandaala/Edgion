@@ -70,6 +70,10 @@ pub struct EdgionGatewayConfigSpec {
     /// Load-balancing-wide settings (panic threshold, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub load_balancing: Option<LoadBalancingConfig>,
+
+    /// Cluster-wide default for plugin / LinkSys outbound TLS verification.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outbound_tls: Option<crate::resources::common::OutboundTlsConfig>,
 }
 
 // ============================================
@@ -358,6 +362,7 @@ impl Default for EdgionGatewayConfigSpec {
             link_sys: None,
             tcp_timeout: None,
             load_balancing: None,
+            outbound_tls: None,
         }
     }
 }
@@ -699,6 +704,15 @@ mod tcp_timeout_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn egc_outbound_tls_roundtrips() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "outboundTls": {"verify": false, "caSource":"System"}
+        }))
+        .unwrap();
+        assert_eq!(s.outbound_tls.unwrap().verify, false);
+    }
 
     #[test]
     fn test_deserialize_gateway_config() {

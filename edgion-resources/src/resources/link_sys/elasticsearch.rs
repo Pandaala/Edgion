@@ -189,7 +189,6 @@ auth:
     name: es-creds
 tls:
   enabled: true
-  insecureSkipVerify: false
 timeout:
   connect: 5000
   request: 30000

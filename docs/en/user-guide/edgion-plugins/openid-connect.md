@@ -72,7 +72,7 @@
 | `tokenSigningAlg` | String | none | Specify token signing algorithm (cannot be `none`) |
 | `allowedSigningAlgs` | Array\<String\> | none | Allowed signing algorithms list (cannot contain `none`) |
 | `useJwks` | Boolean | `true` | Whether to use JWKS for local verification |
-| `sslVerify` | Boolean | `true` | Whether to verify the OIDC Provider's TLS certificate |
+| `verify` | Boolean | `true` | Verify the OIDC Provider's TLS certificate. When `false`, the gateway skips peer certificate validation (operator responsibility; a WARN is logged at startup). Optionally pair with `caSource`/`caSecretRef`/`caCert` for private-CA IdPs and `clientSecretRef` for mTLS. |
 | `issuers` | Array\<String\> | none | Allowed issuer list |
 | `audiences` | Array\<String\> | none | Allowed audience list |
 | `clockSkewSeconds` | Integer | `120` | Clock skew tolerance (seconds) |
@@ -137,7 +137,7 @@ config:
   useNonce: true             # required
   sessionCookieSecure: true      # already default true, keep
   sessionCookieSameSite: "Lax"   # already default Lax, adjust per cross-site needs
-  sslVerify: true                # already default true, never disable
+  verify: true                   # already default true, never disable
   verificationMode: Auto
 ```
 

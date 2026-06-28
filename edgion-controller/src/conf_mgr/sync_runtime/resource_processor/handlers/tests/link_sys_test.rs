@@ -534,7 +534,7 @@ fn test_update_status_sets_accepted_false_on_validation_errors() {
 #[tokio::test]
 async fn test_redis_tls_secret_ref_resolution() {
     use edgion_resources::credentials::resolvers::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-    use edgion_resources::resources::common::{TlsCerts, TlsConfig};
+    use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
 
     let (key, mut secret) = make_secret(
         "default",
@@ -561,18 +561,17 @@ async fn test_redis_tls_secret_ref_resolution() {
         topology: None,
         tls: Some(TlsConfig {
             enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: None,
-                client_cert: None,
-                secret_ref: Some(SecretObjectReference {
+            outbound: OutboundTlsLocal {
+                ca_secret_ref: Some(SecretObjectReference {
                     group: None,
                     kind: None,
                     name: "redis-tls".to_string(),
                     namespace: None,
                 }),
-                secret: None,
-            }),
-            insecure_skip_verify: None,
+                ..Default::default()
+            },
+            resolved_ca_secret: None,
+            resolved_client_secret: None,
         }),
         observability: None,
     });
@@ -582,11 +581,11 @@ async fn test_redis_tls_secret_ref_resolution() {
         ProcessResult::Skip { reason } => panic!("unexpected skip: {reason}"),
     };
 
-    let certs = match &ls.spec.config {
-        SystemConfig::Redis(r) => r.tls.as_ref().unwrap().certs.as_ref().unwrap(),
+    let tls = match &ls.spec.config {
+        SystemConfig::Redis(r) => r.tls.as_ref().unwrap(),
         _ => panic!("expected Redis"),
     };
-    let secret = certs.secret.as_ref().expect("secret injected");
+    let secret = tls.resolved_ca_secret.as_ref().expect("resolved_ca_secret injected");
     let data = secret.data.as_ref().expect("data");
     assert_eq!(data.get(TLS_CA_KEY).unwrap().0, b"CA-PEM");
     assert_eq!(data.get(TLS_CERT_KEY).unwrap().0, b"CERT-PEM");
@@ -602,7 +601,7 @@ async fn test_redis_tls_secret_ref_resolution() {
 /// Setup:
 /// - auth.secretRef points to a non-existent Secret → `SecretNotFound`
 ///   (priority 5 in `pick_resolved_refs_reason`)
-/// - tls.certs.secretRef points to a Secret with a rejected `type`
+/// - tls.outbound.caSecretRef points to a Secret with a rejected `type`
 ///   (`kubernetes.io/ssh-auth`, which `TlsCertsResolver` does not allow)
 ///   → `InvalidSecretType` (priority 2 — higher severity)
 ///
@@ -613,7 +612,7 @@ async fn test_redis_tls_secret_ref_resolution() {
 #[tokio::test]
 async fn test_auth_and_tls_both_fail_collects_both_errors() {
     use edgion_resources::credentials::resolvers::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-    use edgion_resources::resources::common::{TlsCerts, TlsConfig};
+    use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
 
     // tls Secret exists but with a rejected type — surfaces as
     // `InvalidSecretType` from the pipeline's type-check step.
@@ -653,18 +652,17 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
         topology: None,
         tls: Some(TlsConfig {
             enabled: true,
-            certs: Some(TlsCerts {
-                ca_cert: None,
-                client_cert: None,
-                secret_ref: Some(SecretObjectReference {
+            outbound: OutboundTlsLocal {
+                ca_secret_ref: Some(SecretObjectReference {
                     group: None,
                     kind: None,
                     name: "redis-tls-bad-type".to_string(),
                     namespace: None,
                 }),
-                secret: None,
-            }),
-            insecure_skip_verify: None,
+                ..Default::default()
+            },
+            resolved_ca_secret: None,
+            resolved_client_secret: None,
         }),
         observability: None,
     });
@@ -674,8 +672,7 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
         ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
     };
 
-    // Spec must show both sides still at `secret: None`, proving neither
-    // side silently succeeded.
+    // Spec must show both sides still at `None`, proving neither side silently succeeded.
     match &ls.spec.config {
         SystemConfig::Redis(r) => {
             assert!(
@@ -683,8 +680,8 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
                 "auth.secret must remain None when auth resolution failed"
             );
             assert!(
-                r.tls.as_ref().unwrap().certs.as_ref().unwrap().secret.is_none(),
-                "tls.certs.secret must remain None when tls resolution failed"
+                r.tls.as_ref().unwrap().resolved_ca_secret.is_none(),
+                "tls.resolved_ca_secret must remain None when tls resolution failed"
             );
         }
         _ => panic!("expected Redis"),

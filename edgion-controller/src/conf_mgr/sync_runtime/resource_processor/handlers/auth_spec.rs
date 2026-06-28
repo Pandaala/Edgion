@@ -44,7 +44,7 @@ pub trait AuthSpec: Send {
 /// Bind a TLS-bearing CRD type to its resolution path.
 ///
 /// `resolve()` returns `None` when there is no TLS material to resolve
-/// (`tls.certs` absent or `secret_ref` absent — inline-only TLS); otherwise
+/// (`tls.clientSecretRef` absent — inline or System-only TLS); otherwise
 /// returns `Some(err)` on failure / `None` on success.
 #[async_trait]
 pub trait TlsSpec: Send {
@@ -200,8 +200,8 @@ impl AuthSpec for KafkaSaslConfig {
 }
 
 // ============================================================================
-// TlsSpec impl on TlsConfig — operates on TlsCerts.secret_ref + .secret directly
-// (TlsCerts intentionally uses secret_ref + secret directly rather than SecretSlot)
+// TlsSpec impl on TlsConfig — resolves outbound.ca_secret_ref -> resolved_ca_secret
+// and outbound.client_secret_ref -> resolved_client_secret independently.
 // ============================================================================
 
 #[async_trait]
@@ -210,15 +210,19 @@ impl TlsSpec for TlsConfig {
         "TLS"
     }
     async fn resolve(&mut self, ctx: &HandlerContext, owner: &ResourceRef) -> Option<ResolvedRefsError> {
-        let certs = self.certs.as_mut()?;
-        let secret_ref = certs.secret_ref.as_ref()?.clone();
-        match resolve_one(ctx, owner, &secret_ref, &TlsCertsResolver).await {
-            Ok(s) => {
-                certs.secret = s;
-                None
+        if let Some(ca_ref) = self.outbound.ca_secret_ref.as_ref().cloned() {
+            match resolve_one(ctx, owner, &ca_ref, &TlsCertsResolver).await {
+                Ok(s) => self.resolved_ca_secret = s,
+                Err(e) => return Some(e),
             }
-            Err(e) => Some(e),
         }
+        if let Some(client_ref) = self.outbound.client_secret_ref.as_ref().cloned() {
+            match resolve_one(ctx, owner, &client_ref, &TlsCertsResolver).await {
+                Ok(s) => self.resolved_client_secret = s,
+                Err(e) => return Some(e),
+            }
+        }
+        None
     }
 }
 

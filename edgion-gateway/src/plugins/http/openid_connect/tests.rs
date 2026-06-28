@@ -1,5 +1,4 @@
 use super::{DiscoveryDocument, IntrospectionCacheEntry, OidcSessionCookie, OpenidConnect};
-use crate::plugins::http::common::http_client::get_http_client_with_ssl_verify;
 use crate::plugins::runtime::traits::session::MockPluginSession;
 use crate::plugins::runtime::PluginLog;
 use crate::plugins::runtime::RequestFilter;
@@ -53,7 +52,7 @@ async fn test_unauth_action_pass_without_token_allows_request() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Pass;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
@@ -74,7 +73,7 @@ async fn test_unauth_action_auth_without_token_redirects_to_idp() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
@@ -137,7 +136,7 @@ async fn test_unauth_action_auth_with_nonce_redirects_with_nonce_param() {
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
     cfg.use_nonce = true;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
@@ -187,7 +186,7 @@ async fn test_authorization_params_appends_non_reserved_params() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.authorization_params = Some(HashMap::from([
         ("foo".to_string(), "bar".to_string()),
@@ -241,7 +240,7 @@ async fn test_callback_path_with_code_missing_state_returns_400() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
 
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
@@ -267,7 +266,7 @@ async fn test_logout_path_clears_cookies_and_redirects() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.logout_path = "/auth/logout".to_string();
     cfg.post_logout_redirect_uri = Some("/".to_string());
@@ -304,7 +303,7 @@ async fn test_logout_prefers_end_session_endpoint_when_cached() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.logout_path = "/auth/logout".to_string();
     cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
@@ -352,7 +351,7 @@ async fn test_logout_end_session_includes_id_token_hint_when_available() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.logout_path = "/auth/logout".to_string();
     cfg.post_logout_redirect_uri = Some("/after-logout".to_string());
@@ -420,7 +419,7 @@ async fn test_logout_with_revoke_enabled_and_no_session_cookie_still_redirects()
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
     cfg.revoke_tokens_on_logout = true;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     cfg.logout_path = "/auth/logout".to_string();
     cfg.post_logout_redirect_uri = Some("/".to_string());
@@ -451,7 +450,7 @@ fn test_signed_cookie_roundtrip() {
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
@@ -477,7 +476,7 @@ async fn test_maybe_set_session_cookie_header_strips_access_token_and_caches_it(
     let mut cfg = base_config();
     cfg.bearer_only = false;
     cfg.unauth_action = UnauthAction::Auth;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
@@ -549,7 +548,7 @@ async fn test_run_request_uses_cached_session_access_token_when_cookie_token_mis
     cfg.unauth_action = UnauthAction::Deny;
     cfg.verification_mode = VerificationMode::IntrospectionOnly;
     cfg.introspection_cache_ttl = 60;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
@@ -618,7 +617,7 @@ async fn test_run_request_cache_miss_uses_refresh_singleflight_cached_result() {
     cfg.unauth_action = UnauthAction::Deny;
     cfg.verification_mode = VerificationMode::IntrospectionOnly;
     cfg.introspection_cache_ttl = 60;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
@@ -807,7 +806,7 @@ fn test_should_preemptive_refresh() {
     cfg.bearer_only = false;
     cfg.renew_access_token_on_expiry = true;
     cfg.access_token_expires_leeway = 30;
-    cfg.resolved_client_secret = Some("dummy-secret".to_string());
+    cfg.resolved_oidc_client_secret = Some("dummy-secret".to_string());
     cfg.resolved_session_secret = Some("dummy-session-secret-32-bytes-long!!".to_string());
     let plugin = OpenidConnect::new(&cfg, "default".to_string());
 
@@ -1188,27 +1187,11 @@ async fn test_fetch_userinfo_json_returns_none_without_userinfo_endpoint() {
 }
 
 #[test]
-fn test_http_client_selection_respects_ssl_verify() {
-    let mut secure_cfg = base_config();
-    secure_cfg.ssl_verify = true;
-    let secure_plugin = OpenidConnect::new(&secure_cfg, "default".to_string());
-
-    let mut insecure_cfg = base_config();
-    insecure_cfg.ssl_verify = false;
-    let insecure_plugin = OpenidConnect::new(&insecure_cfg, "default".to_string());
-
-    assert!(std::ptr::eq(
-        secure_plugin.http_client(),
-        get_http_client_with_ssl_verify(true)
-    ));
-    assert!(std::ptr::eq(
-        insecure_plugin.http_client(),
-        get_http_client_with_ssl_verify(false)
-    ));
-    assert!(!std::ptr::eq(
-        secure_plugin.http_client(),
-        insecure_plugin.http_client()
-    ));
+fn test_two_openid_instances_get_distinct_clients() {
+    let a = OpenidConnect::new(&base_config(), "default".to_string());
+    let b = OpenidConnect::new(&base_config(), "default".to_string());
+    // Each instance builds its own reqwest::Client.
+    assert!(!std::sync::Arc::ptr_eq(&a.http_client(), &b.http_client()));
 }
 
 #[tokio::test]
