@@ -12,9 +12,9 @@ metadata:
   name: ext-proc-tls
   namespace: edgion-default
 spec:
-  # Request-phase only: the request-phase ExtProc plugin is what the controller
-  # resolves caSecretRef for, and one phase is enough to prove the rustls
-  # connector completes the TLS+h2 handshake and mutates a header over TLS.
+  # Both phases over TLS: the controller resolves caSecretRef for request AND
+  # upstream-response stages, so both connectors complete the TLS+h2 handshake
+  # with the private CA and mutate a header.
   requestPlugins:
     - enable: true
       type: ExtProc
@@ -28,4 +28,18 @@ spec:
             name: backend-ca
         processingMode:
           requestHeaderMode: SEND
+        failureModeAllow: false
+  upstreamResponsePlugins:
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30042"
+          timeoutMs: 2000
+          tls: true
+          caSource: SecretRef
+          caSecretRef:
+            name: backend-ca
+        processingMode:
+          responseHeaderMode: SEND
         failureModeAllow: false

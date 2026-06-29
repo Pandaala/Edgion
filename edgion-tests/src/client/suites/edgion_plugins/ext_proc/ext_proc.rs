@@ -28,10 +28,11 @@ const TLS_NOVERIFY_HOST: &str = "ext-proc-tls-noverify.example.com";
 
 pub struct ExtProcTestSuite;
 
-/// Shared assertion for the over-TLS scenarios (request-phase only): the
-/// processor adds a request header that the backend `/headers` echoes. Reaching
-/// the processor at all means the rustls ext_proc connector completed the TLS+h2
-/// handshake; the echoed header proves the bidi stream produced a verdict.
+/// Shared assertion for the over-TLS scenarios: the processor adds a request
+/// header (echoed by the backend `/headers`) and a response header (visible to
+/// the client). Both phases dial the processor over TLS, so success proves the
+/// rustls ext_proc connector completed the TLS+h2 handshake on request AND
+/// upstream-response stages.
 async fn assert_headers_applied_over_tls(ctx: TestContext, host: &str) -> TestResult {
     let start = Instant::now();
     let url = format!("{}/headers", ctx.http_url());
@@ -45,20 +46,33 @@ async fn assert_headers_applied_over_tls(ctx: TestContext, host: &str) -> TestRe
         return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
     }
 
+    // Response header added by the response phase over TLS.
+    let resp_header_ok = response
+        .headers()
+        .get("x-ext-proc-resp")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v == "seen")
+        .unwrap_or(false);
+
     // Request header added by the request phase over TLS, echoed by /headers.
     let body = response.text().await.unwrap_or_default();
     let body_lower = body.to_lowercase();
     let req_header_ok = body_lower.contains("x-ext-proc-req") && body_lower.contains("seen");
 
-    if req_header_ok {
+    if req_header_ok && resp_header_ok {
         TestResult::passed_with_message(
             start.elapsed(),
-            "request header applied over TLS (handshake + h2 stream succeeded)".to_string(),
+            "request and response headers both applied over TLS".to_string(),
         )
     } else {
         TestResult::failed(
             start.elapsed(),
-            format!("req_header_ok={}; body: {}", req_header_ok, &body[..body.len().min(400)]),
+            format!(
+                "req_header_ok={} resp_header_ok={}; body: {}",
+                req_header_ok,
+                resp_header_ok,
+                &body[..body.len().min(400)]
+            ),
         )
     }
 }

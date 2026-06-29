@@ -240,7 +240,9 @@ async fn main() -> Result<()> {
                 let handle = tokio::spawn(ext_proc_server::start_tls(ext_proc_tls_port, cert, key));
                 handles.push(handle);
             }
-            _ => error!("--ext-proc-tls-port set but --ext-proc-tls-cert/--ext-proc-tls-key missing; skipping TLS ext_proc"),
+            _ => error!(
+                "--ext-proc-tls-port set but --ext-proc-tls-cert/--ext-proc-tls-key missing; skipping TLS ext_proc"
+            ),
         }
     }
 
@@ -1461,7 +1463,10 @@ mod ext_proc_server {
             .map_err(|e| anyhow::anyhow!("ext_proc TLS: failed to read key {}: {}", key_path, e))?;
         let identity = Identity::from_pem(cert, key);
 
-        info!("✓ ext_proc TLS server listening on https://{} (cert: {})", addr, cert_path);
+        info!(
+            "✓ ext_proc TLS server listening on https://{} (cert: {})",
+            addr, cert_path
+        );
         Server::builder()
             .tls_config(ServerTlsConfig::new().identity(identity))?
             .add_service(ExternalProcessorServer::new(FakeProcessor))
