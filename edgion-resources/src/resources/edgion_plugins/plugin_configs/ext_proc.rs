@@ -13,11 +13,10 @@
 //! attempt to enable a body mode other than `NONE`/`SKIP` is rejected by
 //! [`ExtProcConfig::validation_error`] rather than silently ignored.
 
-use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::common::OutboundTlsLocal;
+use crate::resources::common::TlsConfig;
 use crate::resources::edgion_plugins::PluginValidation;
 
 /// ExtProc plugin configuration.
@@ -27,7 +26,6 @@ use crate::resources::edgion_plugins::PluginValidation;
 /// grpcService:
 ///   target: "ext-proc.svc.cluster.local:9000"
 ///   timeoutMs: 200
-///   tls: false
 /// processingMode:
 ///   requestHeaderMode:  SEND
 ///   responseHeaderMode: SEND
@@ -50,24 +48,6 @@ pub struct ExtProcConfig {
     /// - `true`: fail-open — skip processing and continue as if unconfigured.
     #[serde(default)]
     pub failure_mode_allow: bool,
-
-    /// Resolved CA Secret (from `grpcService.caSecretRef`, filled by Controller).
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::redact::redact_opt::serialize"
-    )]
-    #[schemars(skip)]
-    pub resolved_ca_secret: Option<Secret>,
-
-    /// Resolved mTLS client-identity Secret (from `grpcService.clientSecretRef`, filled by Controller).
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        serialize_with = "crate::redact::redact_opt::serialize"
-    )]
-    #[schemars(skip)]
-    pub resolved_client_secret: Option<Secret>,
 }
 
 /// gRPC connection settings for the external processing service.
@@ -82,14 +62,11 @@ pub struct GrpcServiceConfig {
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
 
-    /// Whether to dial the target over TLS. Default: false (plaintext h2c).
+    /// TLS settings for the gRPC connection (enabled, verify, caSource, CA material, mTLS).
+    /// Set tls.enabled=true to dial over TLS; all other fields are optional and inherit from
+    /// the global outboundTls default when absent.
     #[serde(default)]
-    pub tls: bool,
-
-    /// Per-call outbound TLS verification override (verify, caSource, caCert, mTLS).
-    /// All fields are optional and inherit from the global outboundTls default when absent.
-    #[serde(flatten)]
-    pub outbound: OutboundTlsLocal,
+    pub tls: TlsConfig,
 }
 
 /// Per-phase processing control, mirroring Envoy's `ProcessingMode`.
@@ -189,13 +166,10 @@ impl Default for ExtProcConfig {
             grpc_service: GrpcServiceConfig {
                 target: String::new(),
                 timeout_ms: default_timeout_ms(),
-                tls: false,
-                outbound: OutboundTlsLocal::default(),
+                tls: TlsConfig::default(),
             },
             processing_mode: ProcessingMode::default(),
             failure_mode_allow: false,
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
         }
     }
 }
@@ -284,8 +258,7 @@ mod tests {
             grpc_service: GrpcServiceConfig {
                 target: "ext-proc:9000".to_string(),
                 timeout_ms: 200,
-                tls: false,
-                outbound: OutboundTlsLocal::default(),
+                tls: TlsConfig::default(),
             },
             ..Default::default()
         }
@@ -393,7 +366,7 @@ mod tests {
         let json = r#"{"grpcService":{"target":"ext-proc:9000"}}"#;
         let config: ExtProcConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.grpc_service.timeout_ms, 200);
-        assert!(!config.grpc_service.tls);
+        assert!(!config.grpc_service.tls.enabled);
         assert_eq!(config.processing_mode.request_header_mode, HeaderSendMode::Send);
         assert_eq!(config.processing_mode.response_header_mode, HeaderSendMode::Skip);
         assert!(!config.failure_mode_allow);
@@ -402,17 +375,17 @@ mod tests {
     #[test]
     fn extproc_grpc_accepts_verify_and_casource() {
         let c: GrpcServiceConfig = serde_json::from_value(serde_json::json!({
-            "target":"ep:9000","tls":true,"verify":false,"caSource":"Inline","caCert":"---PEM---"
+            "target":"ep:9000","tls":{"enabled":true,"verify":false,"caSource":"Inline","caCert":"---PEM---"}
         }))
         .unwrap();
-        assert!(c.tls);
-        assert_eq!(c.outbound.verify, Some(false));
+        assert!(c.tls.enabled);
+        assert_eq!(c.tls.outbound.verify, Some(false));
     }
 
     #[test]
     fn deserializes_screaming_snake_modes() {
         let json = r#"{
-            "grpcService":{"target":"ext-proc:9000","timeoutMs":150,"tls":true},
+            "grpcService":{"target":"ext-proc:9000","timeoutMs":150,"tls":{"enabled":true}},
             "processingMode":{
                 "requestHeaderMode":"SEND",
                 "responseHeaderMode":"SEND",
@@ -422,7 +395,7 @@ mod tests {
             "failureModeAllow":true
         }"#;
         let config: ExtProcConfig = serde_json::from_str(json).unwrap();
-        assert!(config.grpc_service.tls);
+        assert!(config.grpc_service.tls.enabled);
         assert_eq!(config.grpc_service.timeout_ms, 150);
         assert_eq!(config.processing_mode.response_header_mode, HeaderSendMode::Send);
         assert!(config.failure_mode_allow);

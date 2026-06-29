@@ -31,7 +31,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
                 config.resolved_client_secret = None;
 
                 // TLS CA secret.
-                if let Some(sor) = config.outbound.ca_secret_ref.clone() {
+                if let Some(sor) = config.tls.ca_secret_ref.clone() {
                     let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_ns.as_ref()), &sor.name);
                     match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
                         FetchOutcome::Ok(secret) => {
@@ -66,7 +66,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
                 }
 
                 // TLS client-identity secret (mTLS).
-                if let Some(sor) = config.outbound.client_secret_ref.clone() {
+                if let Some(sor) = config.tls.client_secret_ref.clone() {
                     let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_ns.as_ref()), &sor.name);
                     match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
                         FetchOutcome::Ok(secret) => {

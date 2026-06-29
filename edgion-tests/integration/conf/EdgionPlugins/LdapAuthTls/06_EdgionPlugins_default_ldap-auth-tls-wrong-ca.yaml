@@ -17,7 +17,7 @@ spec:
         realm: "LDAP wrong CA"
         cacheTtl: 0
         timeout: 3000
-        outbound:
+        tls:
           caSource: Inline
           # A self-signed CA that does NOT match the server cert — TLS will fail with certificate verify error.
           caCert: |

@@ -71,13 +71,12 @@ pub use edgion_plugins::{
     GlobalPluginsSnapshotTestSuite, HeaderCertAuthTestSuite, HmacAuthTestSuite,
     IpRestrictionPartialGoodPluginTestSuite, IpRestrictionPluginTestSuite, IpRestrictionRefsPluginTestSuite,
     JweDecryptTestSuite, JwtAuthTestSuite, KeyAuthTestSuite, LdapAuthTestSuite, LdapAuthTlsTestSuite,
-    MatchedRouteMetaTestSuite,
-    OpenidConnectTestSuite, PathNormalizationForwardViewTestSuite, PathNormalizationPreserveParamTestSuite,
-    PathNormalizationTestSuite, PluginConditionTestSuite, PluginLogsTestSuite, PluginValidationStatusTestSuite,
-    ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite, RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite,
-    RateLimitTestSuite, RealIpPluginTestSuite, RegionRouteTestSuite, RequestMirrorTestSuite,
-    RequestRestrictionTestSuite, ResolvedRefsTestSuite, ResponseRewriteTestSuite, TraceContextPluginTestSuite,
-    WebhookKeyGetTestSuite,
+    MatchedRouteMetaTestSuite, OpenidConnectTestSuite, PathNormalizationForwardViewTestSuite,
+    PathNormalizationPreserveParamTestSuite, PathNormalizationTestSuite, PluginConditionTestSuite, PluginLogsTestSuite,
+    PluginValidationStatusTestSuite, ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite,
+    RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
+    RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResolvedRefsTestSuite,
+    ResponseRewriteTestSuite, TraceContextPluginTestSuite, WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests

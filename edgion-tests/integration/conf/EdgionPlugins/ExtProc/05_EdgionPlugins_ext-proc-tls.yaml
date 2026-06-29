@@ -22,10 +22,11 @@ spec:
         grpcService:
           target: "127.0.0.1:30042"
           timeoutMs: 2000
-          tls: true
-          caSource: SecretRef
-          caSecretRef:
-            name: backend-ca
+          tls:
+            enabled: true
+            caSource: SecretRef
+            caSecretRef:
+              name: backend-ca
         processingMode:
           requestHeaderMode: SEND
         failureModeAllow: false
@@ -36,10 +37,11 @@ spec:
         grpcService:
           target: "127.0.0.1:30042"
           timeoutMs: 2000
-          tls: true
-          caSource: SecretRef
-          caSecretRef:
-            name: backend-ca
+          tls:
+            enabled: true
+            caSource: SecretRef
+            caSecretRef:
+              name: backend-ca
         processingMode:
           responseHeaderMode: SEND
         failureModeAllow: false

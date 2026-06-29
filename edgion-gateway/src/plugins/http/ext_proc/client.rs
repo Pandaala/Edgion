@@ -49,7 +49,7 @@ impl ExtProcClient {
         let timeout = Duration::from_millis(grpc.timeout_ms);
 
         // Plain-HTTP path: identical behavior to the pre-TLS-refactor client.
-        if !grpc.tls {
+        if !grpc.tls.enabled {
             let uri = format!("http://{}", grpc.target);
             let channel = Channel::from_shared(uri)
                 .map_err(|e| format!("invalid ext_proc grpcService.target: {e}"))?
@@ -64,9 +64,9 @@ impl ExtProcClient {
 
         // TLS path: resolve once through the shared outbound resolver.
         let resolved = resolve_outbound_tls(
-            &grpc.outbound,
-            cfg.resolved_ca_secret.as_ref(),
-            cfg.resolved_client_secret.as_ref(),
+            &grpc.tls.outbound,
+            grpc.tls.resolved_ca_secret.as_ref(),
+            grpc.tls.resolved_client_secret.as_ref(),
             true,
             "ExtProc",
         )
@@ -288,7 +288,7 @@ mod tests {
     use super::*;
     use edgion_resources::plugin_configs::GrpcServiceConfig;
     use edgion_resources::resources::common::outbound_tls::CaSource;
-    use edgion_resources::resources::common::OutboundTlsLocal;
+    use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
 
     fn install_test_crypto_provider() {
         static INSTALL: std::sync::Once = std::sync::Once::new();
@@ -302,8 +302,10 @@ mod tests {
             grpc_service: GrpcServiceConfig {
                 target: "ep:9000".to_string(),
                 timeout_ms: 200,
-                tls: true,
-                outbound: OutboundTlsLocal::default(),
+                tls: TlsConfig {
+                    enabled: true,
+                    ..Default::default()
+                },
             },
             ..Default::default()
         }
@@ -325,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn extproc_plain_http_channel_builds() {
         let mut cfg = tls_cfg();
-        cfg.grpc_service.tls = false;
+        cfg.grpc_service.tls.enabled = false;
         assert!(ExtProcClient::new(&cfg).is_ok());
     }
 
@@ -336,7 +338,7 @@ mod tests {
         install_test_crypto_provider();
 
         let mut cfg = tls_cfg();
-        cfg.grpc_service.outbound = OutboundTlsLocal {
+        cfg.grpc_service.tls.outbound = OutboundTlsLocal {
             verify: Some(false),
             ..Default::default()
         };
@@ -359,7 +361,7 @@ mod tests {
         let ca_pem = ca.cert.pem();
 
         let mut cfg = tls_cfg();
-        cfg.grpc_service.outbound = OutboundTlsLocal {
+        cfg.grpc_service.tls.outbound = OutboundTlsLocal {
             ca_source: Some(CaSource::Inline),
             ca_cert: Some(ca_pem),
             ..Default::default()

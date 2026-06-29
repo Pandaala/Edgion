@@ -2271,7 +2271,7 @@ mod tests {
     /// in the store.
     #[tokio::test]
     async fn extproc_resolver_fills_resolved_secrets() {
-        use edgion_resources::resources::common::OutboundTlsLocal;
+        use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
         use edgion_resources::resources::edgion_plugins::plugin_configs::GrpcServiceConfig;
 
         let ca_secret = build_secret("default", "extproc-ca", "ca.crt", "CA-PEM-DATA");
@@ -2287,14 +2287,17 @@ mod tests {
                 grpc_service: GrpcServiceConfig {
                     target: "ext-proc.default.svc.cluster.local:9000".to_string(),
                     timeout_ms: 200,
-                    tls: true,
-                    outbound: OutboundTlsLocal {
-                        ca_secret_ref: Some(SecretObjectReference {
-                            group: None,
-                            kind: None,
-                            name: "extproc-ca".to_string(),
-                            namespace: None,
-                        }),
+                    tls: TlsConfig {
+                        enabled: true,
+                        outbound: OutboundTlsLocal {
+                            ca_secret_ref: Some(SecretObjectReference {
+                                group: None,
+                                kind: None,
+                                name: "extproc-ca".to_string(),
+                                namespace: None,
+                            }),
+                            ..Default::default()
+                        },
                         ..Default::default()
                     },
                 },
@@ -2320,10 +2323,13 @@ mod tests {
         };
 
         assert!(
-            config.resolved_ca_secret.is_some(),
+            config.grpc_service.tls.resolved_ca_secret.is_some(),
             "resolved_ca_secret must be populated from caSecretRef"
         );
-        assert!(config.resolved_client_secret.is_none(), "no clientSecretRef was set");
+        assert!(
+            config.grpc_service.tls.resolved_client_secret.is_none(),
+            "no clientSecretRef was set"
+        );
         assert_eq!(ctx.secret_ref_manager().get_refs("default/extproc-ca").len(), 1);
     }
 }

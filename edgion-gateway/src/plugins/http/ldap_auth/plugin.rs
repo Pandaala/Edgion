@@ -190,7 +190,7 @@ impl LdapAuth {
 
         let tls_config = if config.ldaps || config.start_tls {
             let resolved = resolve_outbound_tls(
-                &config.outbound,
+                &config.tls,
                 config.resolved_ca_secret.as_ref(),
                 config.resolved_client_secret.as_ref(),
                 true,
@@ -200,7 +200,7 @@ impl LdapAuth {
 
             // M4: when verify=false the resolver drops client_identity. Warn the
             // operator that their clientSecretRef is not being used.
-            if !resolved.verify && config.outbound.client_secret_ref.is_some() && resolved.client_identity.is_none() {
+            if !resolved.verify && config.tls.client_secret_ref.is_some() && resolved.client_identity.is_none() {
                 tracing::warn!(
                     component = "ldap_auth",
                     "verify=false with clientSecretRef configured: client certificate is not sent (M4)"
@@ -620,7 +620,7 @@ mod tests {
         use edgion_resources::resources::common::OutboundTlsLocal;
         let config = LdapAuthConfig {
             ldaps: true,
-            outbound: OutboundTlsLocal {
+            tls: OutboundTlsLocal {
                 verify: Some(false),
                 ..Default::default()
             },
@@ -637,7 +637,7 @@ mod tests {
         use edgion_resources::resources::common::{CaSource, OutboundTlsLocal, SecretObjectReference};
         let config = LdapAuthConfig {
             ldaps: true,
-            outbound: OutboundTlsLocal {
+            tls: OutboundTlsLocal {
                 ca_source: Some(CaSource::SecretRef),
                 ca_secret_ref: Some(SecretObjectReference {
                     name: "missing-secret".to_string(),
@@ -683,7 +683,7 @@ mod tests {
         // Below we exercise the error path when the PEM is invalid:
         let config = LdapAuthConfig {
             ldaps: true,
-            outbound: OutboundTlsLocal {
+            tls: OutboundTlsLocal {
                 ca_source: Some(CaSource::Inline),
                 ca_cert: Some(dummy_ca_pem.to_string()),
                 ..Default::default()

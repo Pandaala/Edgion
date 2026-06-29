@@ -20,8 +20,9 @@ spec:
         grpcService:
           target: "127.0.0.1:30042"
           timeoutMs: 2000
-          tls: true
-          verify: false
+          tls:
+            enabled: true
+            verify: false
         processingMode:
           requestHeaderMode: SEND
         failureModeAllow: false
@@ -32,8 +33,9 @@ spec:
         grpcService:
           target: "127.0.0.1:30042"
           timeoutMs: 2000
-          tls: true
-          verify: false
+          tls:
+            enabled: true
+            verify: false
         processingMode:
           responseHeaderMode: SEND
         failureModeAllow: false

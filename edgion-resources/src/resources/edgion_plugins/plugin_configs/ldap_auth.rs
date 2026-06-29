@@ -29,9 +29,9 @@ pub struct LdapAuthConfig {
     /// Outbound TLS settings (verify, caSource, CA material, client mTLS).
     /// All fields are optional; absent fields inherit from the global outboundTls default.
     #[serde(default)]
-    pub outbound: OutboundTlsLocal,
+    pub tls: OutboundTlsLocal,
 
-    /// Resolved CA Secret (from outbound.caSecretRef; populated by the Controller).
+    /// Resolved CA Secret (from tls.caSecretRef; populated by the Controller).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -40,7 +40,7 @@ pub struct LdapAuthConfig {
     #[schemars(skip)]
     pub resolved_ca_secret: Option<Secret>,
 
-    /// Resolved mTLS client-identity Secret (from outbound.clientSecretRef; populated by the Controller).
+    /// Resolved mTLS client-identity Secret (from tls.clientSecretRef; populated by the Controller).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -153,7 +153,7 @@ impl Default for LdapAuthConfig {
             ldap_port: default_ldap_port(),
             ldaps: false,
             start_tls: false,
-            outbound: OutboundTlsLocal::default(),
+            tls: OutboundTlsLocal::default(),
             resolved_ca_secret: None,
             resolved_client_secret: None,
             base_dn: String::new(),
@@ -223,10 +223,9 @@ mod tests {
         assert_eq!(cfg.ldap_port, 389);
         assert!(!cfg.ldaps);
         assert!(!cfg.start_tls);
-        // outbound replaces the old verify field
-        assert!(cfg.outbound.verify.is_none());
-        assert!(cfg.outbound.ca_source.is_none());
-        assert!(cfg.outbound.client_secret_ref.is_none());
+        assert!(cfg.tls.verify.is_none());
+        assert!(cfg.tls.ca_source.is_none());
+        assert!(cfg.tls.client_secret_ref.is_none());
         assert!(cfg.resolved_ca_secret.is_none());
         assert!(cfg.resolved_client_secret.is_none());
         assert_eq!(cfg.header_type, "ldap");
@@ -300,11 +299,11 @@ mod tests {
             "attribute": "uid"
         }))
         .unwrap();
-        assert!(c.outbound.verify.is_none());
-        assert!(c.outbound.ca_source.is_none());
-        assert!(c.outbound.ca_secret_ref.is_none());
-        assert!(c.outbound.ca_cert.is_none());
-        assert!(c.outbound.client_secret_ref.is_none());
+        assert!(c.tls.verify.is_none());
+        assert!(c.tls.ca_source.is_none());
+        assert!(c.tls.ca_secret_ref.is_none());
+        assert!(c.tls.ca_cert.is_none());
+        assert!(c.tls.client_secret_ref.is_none());
     }
 
     #[test]
@@ -314,12 +313,12 @@ mod tests {
             "ldapHost": "ldap.example.com",
             "baseDn": "dc=example,dc=com",
             "attribute": "uid",
-            "outbound": { "verify": false, "caSource": "Inline", "caCert": "---PEM---" }
+            "tls": { "verify": false, "caSource": "Inline", "caCert": "---PEM---" }
         }))
         .unwrap();
-        assert_eq!(c.outbound.verify, Some(false));
-        assert_eq!(c.outbound.ca_source, Some(CaSource::Inline));
-        assert_eq!(c.outbound.ca_cert.as_deref(), Some("---PEM---"));
+        assert_eq!(c.tls.verify, Some(false));
+        assert_eq!(c.tls.ca_source, Some(CaSource::Inline));
+        assert_eq!(c.tls.ca_cert.as_deref(), Some("---PEM---"));
     }
 
     #[test]

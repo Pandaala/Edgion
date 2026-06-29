@@ -139,10 +139,11 @@ pub struct OpenidConnectConfig {
     pub allowed_signing_algs: Option<Vec<String>>,
     #[serde(default = "default_true")]
     pub use_jwks: bool,
-    /// Outbound TLS verification and CA trust-source for IdP connections (discovery, JWKS,
-    /// introspection). Flattened: verify, caSource, caSecretRef, caCert, clientSecretRef.
-    #[serde(flatten)]
-    pub outbound: OutboundTlsLocal,
+    /// Outbound TLS settings (verify, caSource, CA material, client mTLS) for IdP connections
+    /// (discovery, JWKS, introspection). All fields are optional; absent fields inherit from
+    /// the global outboundTls default.
+    #[serde(default)]
+    pub tls: OutboundTlsLocal,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub issuers: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -352,7 +353,7 @@ impl Default for OpenidConnectConfig {
             token_signing_alg: None,
             allowed_signing_algs: None,
             use_jwks: default_true(),
-            outbound: OutboundTlsLocal::default(),
+            tls: OutboundTlsLocal::default(),
             issuers: None,
             audiences: None,
             clock_skew_seconds: default_clock_skew_seconds(),
@@ -757,9 +758,9 @@ mod tests {
     fn openid_drops_ssl_verify_accepts_verify() {
         let c: OpenidConnectConfig = serde_json::from_value(serde_json::json!({
             "clientId":"x","clientSecret":"y","discovery":"https://i/.well-known/openid-configuration",
-            "verify": false
+            "tls": { "verify": false }
         }))
         .unwrap();
-        assert_eq!(c.outbound.verify, Some(false));
+        assert_eq!(c.tls.verify, Some(false));
     }
 }

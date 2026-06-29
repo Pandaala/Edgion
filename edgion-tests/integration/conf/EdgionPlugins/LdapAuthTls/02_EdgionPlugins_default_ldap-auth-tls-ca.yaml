@@ -17,7 +17,7 @@ spec:
         realm: "LDAP TLS Test"
         cacheTtl: 0
         timeout: 5000
-        outbound:
+        tls:
           caSource: SecretRef
           caSecretRef:
             name: ldap-ca-bundle

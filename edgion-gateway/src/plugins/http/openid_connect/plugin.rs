@@ -223,7 +223,7 @@ impl OpenidConnect {
         let outbound_client: Arc<reqwest::Client> = {
             let tls_for_client = TlsConfig {
                 enabled: true,
-                outbound: config.outbound.clone(),
+                outbound: config.tls.clone(),
                 resolved_ca_secret: config.resolved_ca_secret.clone(),
                 resolved_client_secret: config.resolved_client_secret.clone(),
             };

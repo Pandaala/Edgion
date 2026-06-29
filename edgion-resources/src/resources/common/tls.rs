@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 use super::outbound_tls::OutboundTlsLocal;
 
 /// TLS configuration shared by all LinkSys backend connections.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TlsConfig {
     /// Enable TLS for the backend connection.

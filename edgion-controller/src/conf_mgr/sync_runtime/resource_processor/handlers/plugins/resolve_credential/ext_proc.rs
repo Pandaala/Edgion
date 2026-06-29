@@ -56,15 +56,15 @@ fn resolve_ext_proc_plugin(
     };
 
     // Reset runtime-resolved fields first to avoid stale values on update.
-    config.resolved_ca_secret = None;
-    config.resolved_client_secret = None;
+    config.grpc_service.tls.resolved_ca_secret = None;
+    config.grpc_service.tls.resolved_client_secret = None;
 
     // TLS CA secret (whole Secret object for gateway TLS verification).
-    if let Some(sor) = config.grpc_service.outbound.ca_secret_ref.clone() {
+    if let Some(sor) = config.grpc_service.tls.outbound.ca_secret_ref.clone() {
         let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_ns), &sor.name);
         match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
             FetchOutcome::Ok(secret) => {
-                config.resolved_ca_secret = Some(secret);
+                config.grpc_service.tls.resolved_ca_secret = Some(secret);
                 tracing::debug!(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,
@@ -95,11 +95,11 @@ fn resolve_ext_proc_plugin(
     }
 
     // TLS client-identity secret (mTLS; whole Secret object).
-    if let Some(sor) = config.grpc_service.outbound.client_secret_ref.clone() {
+    if let Some(sor) = config.grpc_service.tls.outbound.client_secret_ref.clone() {
         let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_ns), &sor.name);
         match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
             FetchOutcome::Ok(secret) => {
-                config.resolved_client_secret = Some(secret);
+                config.grpc_service.tls.resolved_client_secret = Some(secret);
                 tracing::debug!(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,
