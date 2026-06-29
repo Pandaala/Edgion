@@ -18,6 +18,7 @@ mod hmac;
 mod jwe;
 mod jwt;
 mod key_auth;
+mod ldap_auth;
 mod openid_connect;
 
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use basic_auth::resolve as resolve_basic_auth;
@@ -30,6 +31,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use hmac::re
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwe::resolve as resolve_jwe;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwt::resolve as resolve_jwt;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use key_auth::resolve as resolve_key_auth;
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ldap_auth::resolve as resolve_ldap_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use openid_connect::resolve as resolve_openid_connect;
 
 /// Read a UTF-8 value from a Secret's `data` map. Returns the first non-empty

@@ -785,7 +785,7 @@ impl PluginRuntime {
                 CreateResult::Ok(Some(Box::new(HeaderCertAuth::new(config, namespace.to_string()))))
             }
             EdgionPlugin::KeyAuth(config) => CreateResult::Ok(Some(KeyAuth::create(config))),
-            EdgionPlugin::LdapAuth(config) => CreateResult::Ok(Some(LdapAuth::create(config))),
+            EdgionPlugin::LdapAuth(config) => CreateResult::Ok(LdapAuth::create(config)),
             EdgionPlugin::FaultInjection(config) => CreateResult::Ok(Some(Box::new(FaultInjection::new(config)))),
             EdgionPlugin::Mock(config) => CreateResult::Ok(Some(Box::new(Mock::new(config)))),
             EdgionPlugin::ProxyRewrite(config) => CreateResult::Ok(Some(Box::new(ProxyRewrite::new(config)))),

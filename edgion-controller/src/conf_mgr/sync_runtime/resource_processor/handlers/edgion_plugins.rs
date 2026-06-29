@@ -228,6 +228,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_key_auth(&mut ep, &resource_ref, ctx);
         cred::resolve_openid_connect(&mut ep, &resource_ref, ctx);
         cred::resolve_ext_proc(&mut ep, &resource_ref, ctx);
+        cred::resolve_ldap_auth(&mut ep, &resource_ref, ctx);
         cred::resolve_csrf(&mut ep, &resource_ref, ctx);
         cred::resolve_global_access_control(&mut ep, &resource_ref, ctx);
         cred::resolve_forward_auth(&mut ep, &resource_ref, ctx).await;

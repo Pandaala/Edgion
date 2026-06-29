@@ -1,0 +1,40 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: ldap-auth-tls-wrong-ca-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: LdapAuth
+      config:
+        ldapHost: "127.0.0.1"
+        ldapPort: 33636
+        ldaps: true
+        baseDn: "ou=people,dc=example,dc=org"
+        attribute: "uid"
+        headerType: "ldap"
+        realm: "LDAP wrong CA"
+        cacheTtl: 0
+        timeout: 3000
+        outbound:
+          caSource: Inline
+          # A self-signed CA that does NOT match the server cert — TLS will fail with certificate verify error.
+          caCert: |
+            -----BEGIN CERTIFICATE-----
+            MIICujCCAaICCQCgbzo1UpGiWjANBgkqhkiG9w0BAQsFADAfMR0wGwYDVQQDDBRl
+            ZGdpb24tdGVzdC13cm9uZy1jYTAeFw0yNjA2MjkwNDI2MzBaFw0zNjA2MjYwNDI2
+            MzBaMB8xHTAbBgNVBAMMFGVkZ2lvbi10ZXN0LXdyb25nLWNhMIIBIjANBgkqhkiG
+            9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4oVzBb2gDomOE6KgAnFhJlqde25xUKxk2GIN
+            q9YcIPLmK7UkScnPV/hneDvMCxdjUYVxHJyayRKtsTQ+VOX0GzDJs8Y5opt8bXWA
+            +7YZsXitg1VrL59ydJgWKlPqsZ5iq711YBQBHRvub09b5e12uR4jANXKWLGZztC2
+            kux4JiJgfKM9Jywjd/AMOB1yDNaWdckoWJuEWdyJqBGtmJ13D4GF/76cMZRYXpU5
+            CeLM++pn+8Zu0AMJnfDeEMw42d+EA5tvw936NDE9l/AXGnylnECpphVlVIrj5g0G
+            RCEZQgLsOkjX4NxHa/dMfwePqQ++oc3DUyB6ZQHTB7MFrJuMnQIDAQABMA0GCSqG
+            SIb3DQEBCwUAA4IBAQDWDyUaU6GAHQpt7wj+zeWZ357fplJuFihfx5fElVqwCznc
+            OKmgLxApOnnHNNUwc0bSzRTyfbr7Gap13MYQxANoNcznoY2f/2tS9TKUCLeMwqz1
+            Q/oBWTHXRlLn22PLTRq4pywmk2/q3Vr9nRa2W289xgPwHwd3Chi634NkfqiMdDPA
+            OGZiJ/DVRl2CjvCPEIkbpI1EhWvr9JLGZNq46jENeZ8dPxH/l3sDVWWbZ8CuGWkF
+            mRfP5qcPYzcNmv9mEETvwk4pGVytn4GHwuXmEDQapGdRIDJbysQ9Vgi/7jr5sY4I
+            v/EehGgzLroQxtIKU8QEIFkDvUe+1G/PFQNvFzc8
+            -----END CERTIFICATE-----

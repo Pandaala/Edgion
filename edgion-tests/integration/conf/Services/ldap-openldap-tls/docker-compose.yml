@@ -1,0 +1,61 @@
+# docker-compose.yml — TLS OpenLDAP for LDAP CA/mTLS integration tests.
+# Port 33636 = LDAPS, Port 33389 = plain LDAP (for STARTTLS).
+services:
+  openldap-tls:
+    image: osixia/openldap:1.5.0
+    container_name: edgion-test-openldap-tls
+    environment:
+      LDAP_ORGANISATION: "Edgion Test"
+      LDAP_DOMAIN: "example.org"
+      LDAP_ADMIN_PASSWORD: "admin"
+      LDAP_TLS: "true"
+      LDAP_TLS_CRT_FILENAME: "server.crt"
+      LDAP_TLS_KEY_FILENAME: "server.key"
+      LDAP_TLS_CA_CRT_FILENAME: "ca.crt"
+      LDAP_TLS_VERIFY_CLIENT: "try"       # "demand" for mTLS-required scenario
+      LDAP_TLS_ENFORCE: "false"
+      LDAP_LOG_LEVEL: "256"
+      LDAP_REMOVE_CONFIG_AFTER_SETUP: "false"
+    volumes:
+      - ./certs/server.crt:/container/service/slapd/assets/certs/server.crt
+      - ./certs/server.key:/container/service/slapd/assets/certs/server.key
+      - ./certs/ca.crt:/container/service/slapd/assets/certs/ca.crt
+      - ./bootstrap:/container/service/slapd/assets/config/bootstrap/ldif/custom
+    ports:
+      - "33636:636"   # LDAPS
+      - "33389:389"   # plain LDAP (for STARTTLS tests)
+    healthcheck:
+      test: ["CMD-SHELL", "ldapwhoami -x -H ldaps://127.0.0.1:636 -D cn=admin,dc=example,dc=org -w admin -Z || true"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  openldap-tls-mtls:
+    image: osixia/openldap:1.5.0
+    container_name: edgion-test-openldap-mtls
+    environment:
+      LDAP_ORGANISATION: "Edgion Test"
+      LDAP_DOMAIN: "example.org"
+      LDAP_ADMIN_PASSWORD: "admin"
+      LDAP_TLS: "true"
+      LDAP_TLS_CRT_FILENAME: "server.crt"
+      LDAP_TLS_KEY_FILENAME: "server.key"
+      LDAP_TLS_CA_CRT_FILENAME: "ca.crt"
+      LDAP_TLS_VERIFY_CLIENT: "demand"    # require client cert
+      LDAP_TLS_ENFORCE: "true"
+      LDAP_LOG_LEVEL: "256"
+      LDAP_REMOVE_CONFIG_AFTER_SETUP: "false"
+    volumes:
+      - ./certs/server.crt:/container/service/slapd/assets/certs/server.crt
+      - ./certs/server.key:/container/service/slapd/assets/certs/server.key
+      - ./certs/ca.crt:/container/service/slapd/assets/certs/ca.crt
+      - ./bootstrap:/container/service/slapd/assets/config/bootstrap/ldif/custom
+    ports:
+      - "33637:636"   # LDAPS with required mTLS
+    healthcheck:
+      # LDAP_TLS_VERIFY_CLIENT=demand blocks ldapwhoami probes without a client cert;
+      # use a process-level check instead.
+      test: ["CMD-SHELL", "pgrep slapd > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 12

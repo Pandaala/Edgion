@@ -41,6 +41,13 @@ LDAP_COMPOSE_FILE=""
 LDAP_SERVICE_REQUIRED=false
 LDAP_SERVICE_STARTED=false
 
+# LDAP TLS integration dependency (OpenLDAP with TLS via Docker Compose)
+# Used by EdgionPlugins/LdapAuthTls.
+LDAP_TLS_COMPOSE_DIR=""
+LDAP_TLS_COMPOSE_FILE=""
+LDAP_TLS_SERVICE_REQUIRED=false
+LDAP_TLS_SERVICE_STARTED=false
+
 # Redis integration dependency (used by EdgionPlugins/Dsl, EdgionPlugins/RateLimitRedis,
 # and any LinkSys Redis test driven by the main runner). The bundled docker-compose
 # matches edgion-tests/integration/conf/LinkSys/Redis (host 127.0.0.1, port 16379, password
@@ -130,6 +137,7 @@ SLOW_TESTS=(
     "HTTPRoute_Backend_HealthCheckTransition"
     "EdgionPlugins_AllEndpointStatus"
     "EdgionPlugins_LdapAuth"
+    "EdgionPlugins_LdapAuthTls"
 )
 
 is_slow_test() {
@@ -394,6 +402,10 @@ cleanup() {
             log_info "Stopping OpenLDAP test service..."
             docker compose -f "${LDAP_COMPOSE_FILE}" down --timeout 5 >/dev/null 2>&1 || true
         fi
+        if $LDAP_TLS_SERVICE_STARTED; then
+            log_info "Stopping TLS OpenLDAP test service..."
+            docker compose -f "${LDAP_TLS_COMPOSE_FILE}" down --timeout 5 >/dev/null 2>&1 || true
+        fi
         if $REDIS_SERVICE_STARTED; then
             log_info "Stopping Redis test service..."
             docker compose -f "${REDIS_COMPOSE_FILE}" down --timeout 5 >/dev/null 2>&1 || true
@@ -402,6 +414,9 @@ cleanup() {
     else
         if $LDAP_SERVICE_STARTED; then
             log_info "OpenLDAP test service still running (keep-alive mode): ${LDAP_COMPOSE_FILE}"
+        fi
+        if $LDAP_TLS_SERVICE_STARTED; then
+            log_info "TLS OpenLDAP test service still running (keep-alive mode): ${LDAP_TLS_COMPOSE_FILE}"
         fi
         if $REDIS_SERVICE_STARTED; then
             log_info "Redis test service still running (keep-alive mode): ${REDIS_COMPOSE_FILE}"
@@ -527,6 +542,105 @@ start_ldap_service_if_needed() {
     fi
 
     log_success "OpenLDAP test data seeded"
+    return 0
+}
+
+# =============================================================================
+# LDAP TLS integration dependency (OpenLDAP with TLS/mTLS via Docker Compose)
+# =============================================================================
+# Triggered by EdgionPlugins/LdapAuthTls or a full sweep with --full-test.
+is_ldap_tls_service_required() {
+    local explicit_suites="$1"
+
+    # TLS LDAP tests are full-test only.
+    if ! $FULL_TEST; then
+        return 1
+    fi
+
+    # Any full run contains EdgionPlugins/LdapAuthTls.
+    if [ -z "$G_RESOURCE" ]; then
+        return 0
+    fi
+
+    # Resource/item targeting.
+    if [ "$G_RESOURCE" = "EdgionPlugins" ]; then
+        if [ -z "$G_ITEM" ] || [ "$G_ITEM" = "LdapAuthTls" ]; then
+            return 0
+        fi
+    fi
+
+    # Explicit suites override.
+    if [[ ",$explicit_suites," == *",EdgionPlugins/LdapAuthTls,"* ]]; then
+        return 0
+    fi
+
+    return 1
+}
+
+start_ldap_tls_service_if_needed() {
+    if ! $LDAP_TLS_SERVICE_REQUIRED; then
+        return 0
+    fi
+
+    LDAP_TLS_COMPOSE_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf/Services/ldap-openldap-tls"
+    LDAP_TLS_COMPOSE_FILE="${LDAP_TLS_COMPOSE_DIR}/docker-compose.yml"
+
+    if ! command -v docker >/dev/null 2>&1; then
+        log_error "docker not found, but LdapAuthTls test requires TLS OpenLDAP service"
+        return 1
+    fi
+
+    if [ ! -f "${LDAP_TLS_COMPOSE_FILE}" ]; then
+        log_error "LDAP TLS compose file not found: ${LDAP_TLS_COMPOSE_FILE}"
+        return 1
+    fi
+
+    log_section "LDAP TLS dependency: start TLS OpenLDAP"
+    local compose_output=""
+    compose_output=$(docker compose -f "${LDAP_TLS_COMPOSE_FILE}" up -d 2>&1) || {
+        log_error "Failed to start TLS OpenLDAP via docker compose"
+        echo "$compose_output"
+        return 1
+    }
+
+    # Wait for the LDAPS container (openldap-tls) to become ready.
+    local container_id=""
+    container_id=$(docker compose -f "${LDAP_TLS_COMPOSE_FILE}" ps -q openldap-tls 2>/dev/null || true)
+    if [ -z "$container_id" ]; then
+        log_error "TLS OpenLDAP container (openldap-tls) was not created"
+        return 1
+    fi
+
+    local elapsed=0
+    local timeout=60
+    while [ $elapsed -lt $timeout ]; do
+        local health=""
+        local state=""
+        health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{end}}' "$container_id" 2>/dev/null || true)
+        state=$(docker inspect -f '{{.State.Status}}' "$container_id" 2>/dev/null || true)
+
+        if [ "$health" = "healthy" ] || { [ -z "$health" ] && [ "$state" = "running" ]; }; then
+            LDAP_TLS_SERVICE_STARTED=true
+            log_success "TLS OpenLDAP is ready"
+            break
+        fi
+
+        if [ "$state" = "exited" ] || [ "$state" = "dead" ]; then
+            log_error "TLS OpenLDAP container is not running (state=${state})"
+            docker compose -f "${LDAP_TLS_COMPOSE_FILE}" logs --no-color --tail=80 || true
+            return 1
+        fi
+
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    if ! $LDAP_TLS_SERVICE_STARTED; then
+        log_error "TLS OpenLDAP did not become ready within ${timeout}s"
+        docker compose -f "${LDAP_TLS_COMPOSE_FILE}" logs --no-color --tail=80 || true
+        return 1
+    fi
+
     return 0
 }
 
@@ -967,6 +1081,11 @@ run_all_tests() {
                     else
                         log_info "Skipping complex test: EdgionPlugins_LdapAuth (requires --full-test)"
                     fi
+                    if ! should_skip_test "EdgionPlugins_LdapAuthTls"; then
+                        run_test "EdgionPlugins_LdapAuthTls" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i LdapAuthTls" || test_failed=true
+                    else
+                        log_info "Skipping complex test: EdgionPlugins_LdapAuthTls (requires --full-test)"
+                    fi
                     run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
                     run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
                     run_test "EdgionPlugins_RateLimitRedis" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
@@ -1153,6 +1272,11 @@ run_all_tests() {
         else
             log_info "Skipping complex test: EdgionPlugins_LdapAuth (requires --full-test)"
         fi
+        if ! should_skip_test "EdgionPlugins_LdapAuthTls"; then
+            run_test "EdgionPlugins_LdapAuthTls" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i LdapAuthTls" || test_failed=true
+        else
+            log_info "Skipping complex test: EdgionPlugins_LdapAuthTls (requires --full-test)"
+        fi
         run_test "EdgionPlugins_ProxyRewrite" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ProxyRewrite" || test_failed=true
         run_test "EdgionPlugins_RateLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RateLimit" || test_failed=true
         run_test "EdgionPlugins_RateLimitRedis" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RateLimitRedis" || test_failed=true
@@ -1322,12 +1446,14 @@ main() {
             if [ -z "$G_ITEM" ]; then
                 suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/GlobalAccessControl,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/AllEndpointStatus"
                 if $FULL_TEST; then
-                    suites="${suites},EdgionPlugins/LdapAuth"
+                    suites="${suites},EdgionPlugins/LdapAuth,EdgionPlugins/LdapAuthTls"
                 fi
             else
                 suites="${base_suites}"
                 if [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/LdapAuth" ] && ! $FULL_TEST; then
                     log_info "LdapAuth suite requires --full-test, config load will be skipped"
+                elif [ "${G_RESOURCE}/${G_ITEM}" = "EdgionPlugins/LdapAuthTls" ] && ! $FULL_TEST; then
+                    log_info "LdapAuthTls suite requires --full-test, config load will be skipped"
                 else
                     suites="${suites},${G_RESOURCE}/${G_ITEM}"
                 fi
@@ -1374,8 +1500,19 @@ main() {
         exit 0
     fi
 
+    # Fast mode guard: LDAP TLS integration test requires Docker, full-test only.
+    if ! $FULL_TEST && [ "$G_RESOURCE" = "EdgionPlugins" ] && [ "$G_ITEM" = "LdapAuthTls" ]; then
+        log_info "EdgionPlugins/LdapAuthTls is a complex Docker-based test and requires --full-test"
+        DO_CLEANUP=false
+        exit 0
+    fi
+
     if is_ldap_service_required "$suites"; then
         LDAP_SERVICE_REQUIRED=true
+    fi
+
+    if is_ldap_tls_service_required "$suites"; then
+        LDAP_TLS_SERVICE_REQUIRED=true
     fi
 
     if is_redis_service_required "$suites"; then
@@ -1453,6 +1590,11 @@ main() {
     # Step 0: Start external dependencies when needed
     if ! start_ldap_service_if_needed; then
         log_error "Failed to start external LDAP dependency"
+        exit 1
+    fi
+
+    if ! start_ldap_tls_service_if_needed; then
+        log_error "Failed to start external LDAP TLS dependency"
         exit 1
     fi
 

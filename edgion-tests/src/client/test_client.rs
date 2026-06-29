@@ -163,6 +163,7 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "hmac-auth" | "hmacauth" => "EdgionPlugins/HmacAuth".to_string(),
             "header-cert-auth" | "headercertauth" => "EdgionPlugins/HeaderCertAuth".to_string(),
             "ldap-auth" | "ldapauth" => "EdgionPlugins/LdapAuth".to_string(),
+            "ldap-auth-tls" | "ldapauthtls" => "EdgionPlugins/LdapAuthTls".to_string(),
             "forward-auth" | "forwardauth" => "EdgionPlugins/ForwardAuth".to_string(),
             "ext-proc" | "extproc" => "EdgionPlugins/ExtProc".to_string(),
             "openid-connect" | "openidconnect" | "oidc" => "EdgionPlugins/OpenidConnect".to_string(),
@@ -287,6 +288,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/HmacAuth" => "EdgionPlugins",
         "EdgionPlugins/HeaderCertAuth" => "EdgionPlugins",
         "EdgionPlugins/LdapAuth" => "EdgionPlugins",
+        "EdgionPlugins/LdapAuthTls" => "EdgionPlugins",
         "EdgionPlugins/ProxyRewrite" => "EdgionPlugins",
         "EdgionPlugins/RateLimit" => "EdgionPlugins",
         "EdgionPlugins/RateLimitDynamic" => "EdgionPlugins",
@@ -961,6 +963,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::LdapAuthTestSuite));
+        }
+        "EdgionPlugins/LdapAuthTls" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/LdapAuthTls tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::LdapAuthTlsTestSuite));
         }
         "EdgionPlugins/ProxyRewrite" => {
             if !gateway {
