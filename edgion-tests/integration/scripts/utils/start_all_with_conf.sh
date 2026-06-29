@@ -335,6 +335,16 @@ start_test_server() {
         log_warning "Backend TLS certificate，Skip HTTPS after"
     fi
 
+    # ext_proc TLS server (reuses the backend server cert; SAN covers 127.0.0.1).
+    # Drives the ExtProc-over-TLS scenario (the gateway's rustls ext_proc connector).
+    local ext_proc_tls_args=""
+    if [ -f "$BACKEND_CERT" ] && [ -f "$BACKEND_KEY" ]; then
+        ext_proc_tls_args="--ext-proc-tls-port 30042 --ext-proc-tls-cert $BACKEND_CERT --ext-proc-tls-key $BACKEND_KEY"
+        log_info " ext_proc TLS port 30042"
+    else
+        log_warning "Backend TLS certificate missing, skipping ext_proc TLS server"
+    fi
+
     local https_backend_mtls_args=""
     if [ -f "$BACKEND_CERT" ] && [ -f "$BACKEND_KEY" ] && [ -f "$BACKEND_MTLS_CLIENT_CA" ]; then
         https_backend_mtls_args="--https-backend-mtls-port 30052 --client-ca-file $BACKEND_MTLS_CLIENT_CA"
@@ -362,6 +372,7 @@ start_test_server() {
         --ext-proc-port 30041 \
         --h2-trailer-malformed-port 30025 \
         --log-level info \
+        $ext_proc_tls_args \
         $https_backend_args \
         $https_backend_mtls_args \
         $https_backend_multi_sni_args \

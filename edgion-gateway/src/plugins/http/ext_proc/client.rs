@@ -74,7 +74,12 @@ impl ExtProcClient {
 
         let client_config = build_rustls_config(&resolved)?;
 
-        let uri = format!("https://{}", grpc.target);
+        // The custom connector performs the TLS handshake itself. tonic rejects an
+        // `https://` authority unless its OWN built-in TLS is configured ("Connecting
+        // to HTTPS without TLS enabled"), so the channel URI uses the `http://`
+        // scheme: tonic then treats the connector's stream as the transport as-is,
+        // while `build_tls_connector` still upgrades it to rustls (ALPN h2).
+        let uri = format!("http://{}", grpc.target);
         let connector = build_tls_connector(client_config);
 
         let channel = Channel::from_shared(uri)

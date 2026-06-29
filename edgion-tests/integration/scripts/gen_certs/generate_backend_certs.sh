@@ -33,9 +33,14 @@ CERTS_DIR="$PROJECT_ROOT/edgion-tests/certs/backend"
 SECRET_OUTPUT_ROOT="${EDGION_GENERATED_SECRET_DIR:-$PROJECT_ROOT/tmp/integration_testing/generated_secrets_manual}"
 SECRET_OUTPUT_DIR="$SECRET_OUTPUT_ROOT/HTTPRoute/Backend/BackendTLS"
 SECRET_OUTPUT_FILE="$SECRET_OUTPUT_DIR/Secret_backend-ca.yaml"
+# Same CA, but in edgion-default — used by the ExtProc-over-TLS plugin
+# (grpcService.caSecretRef resolves in the EdgionPlugins' own namespace).
+EXTPROC_SECRET_OUTPUT_DIR="$SECRET_OUTPUT_ROOT/EdgionPlugins/ExtProc"
+EXTPROC_SECRET_OUTPUT_FILE="$EXTPROC_SECRET_OUTPUT_DIR/Secret_edgion-default_backend-ca.yaml"
 
 mkdir -p "$CERTS_DIR"
 mkdir -p "$SECRET_OUTPUT_DIR"
+mkdir -p "$EXTPROC_SECRET_OUTPUT_DIR"
 
 create_backend_ca_secret() {
     local ca_b64
@@ -46,6 +51,16 @@ kind: Secret
 metadata:
   name: backend-ca
   namespace: edgion-test
+type: Opaque
+data:
+  ca.crt: $ca_b64
+EOF
+    cat > "$EXTPROC_SECRET_OUTPUT_FILE" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: backend-ca
+  namespace: edgion-default
 type: Opaque
 data:
   ca.crt: $ca_b64

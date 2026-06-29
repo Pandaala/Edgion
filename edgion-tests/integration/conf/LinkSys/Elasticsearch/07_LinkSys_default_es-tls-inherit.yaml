@@ -1,0 +1,24 @@
+# Global outboundTls inheritance (P1#5 / M2).
+#
+# tls.enabled with NO local caSource / caSecretRef. The connector inherits the
+# cluster-wide default that run_es_test.sh sets on EdgionGatewayConfig.outboundTls
+# (caSource: SecretRef -> the backend CA). It connects to the same private-cert
+# endpoint as es-tls-test (https://127.0.0.1:19201); a successful PING proves the
+# global CA default was inherited and trusted (the connector carries no local CA
+# of its own). es-tls-systemca, which sets a LOCAL caSource: System, still fails —
+# proving a local override beats the inherited global default.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: es-tls-inherit
+  namespace: default
+spec:
+  type: elasticsearch
+  config:
+    endpoints:
+      - "https://127.0.0.1:19201"
+    tls:
+      enabled: true
+    timeout:
+      connect: 5000
+      request: 30000

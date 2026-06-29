@@ -89,6 +89,19 @@ struct Cli {
     #[arg(long)]
     ext_proc_port: Option<u16>,
 
+    /// Fake ext_proc gRPC server TLS port (for ExtProc-over-TLS testing).
+    /// Serves the same processor over HTTPS/h2; needs --ext-proc-tls-cert/key.
+    #[arg(long)]
+    ext_proc_tls_port: Option<u16>,
+
+    /// TLS certificate file for the ext_proc TLS server (SAN must cover 127.0.0.1).
+    #[arg(long)]
+    ext_proc_tls_cert: Option<String>,
+
+    /// TLS private key file for the ext_proc TLS server.
+    #[arg(long)]
+    ext_proc_tls_key: Option<String>,
+
     /// HTTPS backend server port (for Backend TLS testing)
     #[arg(long)]
     https_backend_port: Option<u16>,
@@ -218,6 +231,17 @@ async fn main() -> Result<()> {
     if let Some(ext_proc_port) = cli.ext_proc_port {
         let handle = tokio::spawn(ext_proc_server::start(ext_proc_port));
         handles.push(handle);
+    }
+
+    // Start Fake ext_proc TLS server (if configured)
+    if let Some(ext_proc_tls_port) = cli.ext_proc_tls_port {
+        match (cli.ext_proc_tls_cert.clone(), cli.ext_proc_tls_key.clone()) {
+            (Some(cert), Some(key)) => {
+                let handle = tokio::spawn(ext_proc_server::start_tls(ext_proc_tls_port, cert, key));
+                handles.push(handle);
+            }
+            _ => error!("--ext-proc-tls-port set but --ext-proc-tls-cert/--ext-proc-tls-key missing; skipping TLS ext_proc"),
+        }
     }
 
     // Start HTTPS backend server (if configured)
@@ -1415,6 +1439,31 @@ mod ext_proc_server {
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
         info!("✓ ext_proc server listening on http://{}", addr);
         Server::builder()
+            .add_service(ExternalProcessorServer::new(FakeProcessor))
+            .serve(addr)
+            .await?;
+        Ok(())
+    }
+
+    /// TLS variant: serves the same fake processor over HTTPS/h2 so the gateway's
+    /// hand-built rustls ext_proc connector exercises a real outbound TLS
+    /// handshake (ALPN h2 is negotiated by tonic). Used by the ExtProc-over-TLS
+    /// integration scenario.
+    pub async fn start_tls(port: u16, cert_path: String, key_path: String) -> Result<()> {
+        use tonic::transport::{Identity, ServerTlsConfig};
+
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        let cert = tokio::fs::read(&cert_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("ext_proc TLS: failed to read cert {}: {}", cert_path, e))?;
+        let key = tokio::fs::read(&key_path)
+            .await
+            .map_err(|e| anyhow::anyhow!("ext_proc TLS: failed to read key {}: {}", key_path, e))?;
+        let identity = Identity::from_pem(cert, key);
+
+        info!("✓ ext_proc TLS server listening on https://{} (cert: {})", addr, cert_path);
+        Server::builder()
+            .tls_config(ServerTlsConfig::new().identity(identity))?
             .add_service(ExternalProcessorServer::new(FakeProcessor))
             .serve(addr)
             .await?;
