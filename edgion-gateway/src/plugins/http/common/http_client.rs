@@ -76,7 +76,7 @@ pub fn get_http_client() -> &'static Client {
 /// When `tls` is `Some`, builds a dedicated client whose TLS policy is resolved through
 /// the shared outbound resolver: the production verify gate is enforced, a custom CA
 /// (inline or from a secret) replaces the default trust store when provided, and an
-/// mTLS client identity is applied when `clientSecretRef` is set. When `tls` is `None`,
+/// mTLS client identity is applied when `clientCertificateRef` is set. When `tls` is `None`,
 /// returns `None` — the caller should fall back to the pooled default from
 /// [`get_http_client`].
 pub fn build_webhook_client(

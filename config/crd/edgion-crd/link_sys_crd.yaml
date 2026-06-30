@@ -86,35 +86,70 @@ spec:
                         verify:
                           type: boolean
                           description: "Verify the peer TLS certificate (default true). verify: false is honored (operator responsibility); a WARN is logged at startup. Redis and Etcd always verify — verify: false is rejected at startup for them (the SDK has no skip-verify API)."
-                        caSource:
-                          type: string
-                          description: "Trust-anchor source: System (built-in webpki roots), SecretRef (private CA from caSecretRef), or Inline (PEM in caCert). A custom CA replaces the public roots."
-                          enum: [System, SecretRef, Inline]
-                        caSecretRef:
+                        validation:
                           type: object
-                          description: "Kubernetes Secret holding a private CA bundle (used when caSource: SecretRef)"
-                          required: ["name"]
+                          description: "CA trust configuration for outbound TLS connections"
                           properties:
+                            caCertificateRefs:
+                              type: array
+                              description: "References to CA certificate resources (Secret or ConfigMap)"
+                              items:
+                                type: object
+                                properties:
+                                  group:
+                                    type: string
+                                    description: "Group of the referent; defaults to empty string (core)"
+                                  kind:
+                                    type: string
+                                    description: "Kind of the referent; e.g. Secret or ConfigMap"
+                                  name:
+                                    type: string
+                                    description: "Name of the referent"
+                                  namespace:
+                                    type: string
+                                    description: "Namespace of the referent. Cross-namespace refs require a ReferenceGrant"
+                                required: [kind, name]
+                            wellKnownCACertificates:
+                              type: string
+                              description: "Use well-known system CA certificates (e.g. Mozilla roots)"
+                              enum: [System]
+                            hostname:
+                              type: string
+                              description: "Optional SNI override and default SAN check hostname"
+                            subjectAltNames:
+                              type: array
+                              description: "Subject alternative names to verify in the server certificate"
+                              items:
+                                type: object
+                                properties:
+                                  type:
+                                    type: string
+                                    description: "SAN type"
+                                    enum: [Hostname, URI]
+                                  hostname:
+                                    type: string
+                                    description: "Hostname SAN value (used when type is Hostname)"
+                                  uri:
+                                    type: string
+                                    description: "URI SAN value (used when type is URI)"
+                                required: [type]
+                        clientCertificateRef:
+                          type: object
+                          description: "Reference to a kubernetes.io/tls Secret for mTLS client identity"
+                          properties:
+                            group:
+                              type: string
+                              description: "Group of the referent; defaults to empty string (core)"
+                            kind:
+                              type: string
+                              description: "Kind of the referent; defaults to Secret"
                             name:
                               type: string
-                              description: "Name of the Secret"
+                              description: "Name of the referent"
                             namespace:
                               type: string
-                              description: "Namespace of the Secret"
-                        caCert:
-                          type: string
-                          description: "Inline PEM CA bundle (used when caSource: Inline)"
-                        clientSecretRef:
-                          type: object
-                          description: "Kubernetes Secret holding the client mTLS identity (tls.crt / tls.key keys)"
-                          required: ["name"]
-                          properties:
-                            name:
-                              type: string
-                              description: "Name of the Secret"
-                            namespace:
-                              type: string
-                              description: "Namespace of the Secret"
+                              description: "Namespace of the referent. Cross-namespace refs require a ReferenceGrant"
+                          required: [name]
                     timeout:
                       type: object
                       description: "Timeout configuration (milliseconds)"

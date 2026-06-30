@@ -1,0 +1,38 @@
+# OIDC plugin that uses a ConfigMap CA reference for outbound TLS to the IdP.
+# Tests the ConfigMap branch of caCertificateRefs (B1 scenario).
+#
+# The tls.validation.caCertificateRefs entry references the ConfigMap created by
+# 01_ConfigMap_default_oidc-corp-ca.yaml (oidc-corp-ca in edgion-default).
+#
+# NOTE: This fixture validates schema acceptance only. A live integration run
+# requires a real TLS OIDC provider and a valid CA in the ConfigMap.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: openid-connect-configmap-ca-test
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: OpenidConnect
+      config:
+        discovery: "https://127.0.0.1:30043/oidc/.well-known/openid-configuration"
+        clientId: "test-client"
+        clientSecretRef:
+          name: oidc-client-secret
+          namespace: edgion-default
+        bearerOnly: true
+        unauthAction: Deny
+        verificationMode: IntrospectionOnly
+        useJwks: false
+        requiredScopes:
+          - "api:read"
+        setAccessTokenHeader: true
+        claimsToHeaders:
+          sub: "X-User-ID"
+        timeout: 3
+        tls:
+          validation:
+            caCertificateRefs:
+              - kind: ConfigMap
+                name: oidc-corp-ca

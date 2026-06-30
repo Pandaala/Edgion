@@ -123,9 +123,9 @@ Constraints:
 ### TLS assembly
 
 `edgion-common/src/link_sys_core/tls.rs` plugs `TlsConfig` + the resolved `TlsMaterial` into each provider's TLS configuration:
-- `ca_pem`: if `TlsCerts.caCert` inline is present, use the inline value; otherwise use the material's `ca_pem`.
-- `client_cert_pem` / `client_key_pem`: prefer material (via secretRef); the private key is `Zeroizing<Vec<u8>>`.
-- `verify` is enforced per provider: Redis and Etcd always verify (`verify: false` is rejected at startup — the SDK has no skip-verify API); ES, Webhook, and other connectors honor `verify: false` as an operator decision (a WARN is emitted at config-load time). `caSource` controls trust anchors (`System` / `SecretRef` / `Inline`); a custom CA replaces the public roots entirely. Client mTLS identity comes from `clientSecretRef`.
+- `ca_pem`: derived from the resolved `validation.caCertificateRefs` Secret(s) carrying a `ca.crt` key. The old inline `TlsCerts.caCert` field has been removed. A custom CA replaces the public roots entirely.
+- `client_cert_pem` / `client_key_pem`: from the Secret referenced by `clientCertificateRef`; the private key is `Zeroizing<Vec<u8>>`.
+- `verify` is enforced per provider: Redis and Etcd always verify (`verify: false` is rejected at startup — the SDK has no skip-verify API); ES, Webhook, and other connectors honor `verify: false` as an operator decision (a WARN is emitted at config-load time). Trust anchors come from `validation.caCertificateRefs` (for LinkSys, only `kind: Secret` is supported in this release) or `validation.wellKnownCACertificates: System` (built-in webpki roots).
 
 ## Cross-resource relationships
 

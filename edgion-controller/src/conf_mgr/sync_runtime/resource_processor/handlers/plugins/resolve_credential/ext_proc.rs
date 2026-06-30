@@ -1,12 +1,14 @@
 //! ExtProc credential resolution.
 //!
-//! Resolves the outbound TLS secret refs on each `ExtProc` plugin
-//! (`grpcService.caSecretRef` → `resolved_ca_secret` and
-//! `grpcService.clientSecretRef` → `resolved_client_secret`) and registers
-//! the references with `SecretRefManager` so that a future Secret change
-//! triggers a re-process of the owning `EdgionPlugins` resource.
+//! Resolves the outbound TLS refs on each `ExtProc` plugin:
+//! `grpcService.tls.validation.caCertificateRefs` → `resolved_ca_certificates` and
+//! `grpcService.tls.clientCertificateRef` → `resolved_client_certificate`.
+//! References are registered with `SecretRefManager` so that a future Secret
+//! change triggers a re-process of the owning `EdgionPlugins` resource.
 
-use crate::conf_mgr::sync_runtime::resource_processor::credential::{fetch_secret, FetchOutcome, PendingReason};
+use crate::conf_mgr::sync_runtime::resource_processor::credential::{
+    fetch_secret, resolve_ca_certificate_refs, CaFetchStrategy, FetchOutcome, PendingReason,
+};
 use crate::conf_mgr::sync_runtime::resource_processor::{format_secret_key, HandlerContext, ResourceRef};
 use edgion_resources::prelude_resources::EdgionPlugins;
 use edgion_resources::resources::edgion_plugins::EdgionPlugin;
@@ -14,10 +16,10 @@ use edgion_resources::resources::edgion_plugins::EdgionPlugin;
 /// Resolve ExtProc TLS secrets and register references with SecretRefManager.
 ///
 /// ExtProc can be configured in any plugin stage (request and every upstream
-/// response stage). The TLS secret refs must be resolved wherever an ExtProc
+/// response stage). The TLS material refs must be resolved wherever an ExtProc
 /// entry appears — a response-stage ExtProc over TLS needs its
-/// `caSecretRef`/`clientSecretRef` resolved just like the request stage,
-/// otherwise the gateway fails closed with `OutboundTlsCaMissing`.
+/// `validation.caCertificateRefs`/`clientCertificateRef` resolved just like the
+/// request stage, otherwise the gateway fails closed with `OutboundTlsCaMissing`.
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn resolve(
     ep: &mut EdgionPlugins,
     resource_ref: &ResourceRef,
@@ -56,50 +58,36 @@ fn resolve_ext_proc_plugin(
     };
 
     // Reset runtime-resolved fields first to avoid stale values on update.
-    config.grpc_service.tls.resolved_ca_secret = None;
-    config.grpc_service.tls.resolved_client_secret = None;
+    config.grpc_service.tls.resolved_ca_certificates = None;
+    config.grpc_service.tls.resolved_client_certificate = None;
 
-    // TLS CA secret (whole Secret object for gateway TLS verification).
-    if let Some(sor) = config.grpc_service.tls.outbound.ca_secret_ref.clone() {
-        let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_ns), &sor.name);
-        match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
-            FetchOutcome::Ok(secret) => {
-                config.grpc_service.tls.resolved_ca_secret = Some(secret);
-                tracing::debug!(
-                    edgion_plugins = %resource_ref.key(),
-                    secret_key = %secret_key,
-                    "ExtProc: CA secret resolved"
-                );
-            }
-            FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
-                tracing::info!(
-                    edgion_plugins = %resource_ref.key(),
-                    secret_key = %secret_key,
-                    "ExtProc: CA secret not found yet, will be reprocessed when Secret arrives"
-                );
-            }
-            FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
-                ref from_ns,
-                ref to_ns,
-                ref secret_name,
-            }) => {
-                tracing::warn!(
-                    edgion_plugins = %resource_ref.key(),
-                    from_ns = %from_ns,
-                    to_ns = %to_ns,
-                    secret_name = %secret_name,
-                    "ExtProc: cross-namespace CA secret reference denied (ReferenceGrant missing)"
-                );
-            }
-        }
-    }
+    // TLS CA certificate refs (multi-bundle).
+    let ca_refs = config
+        .grpc_service
+        .tls
+        .outbound
+        .validation
+        .as_ref()
+        .and_then(|v| v.ca_certificate_refs.as_deref())
+        .unwrap_or_default();
+    let resolved_cas = resolve_ca_certificate_refs(
+        ctx,
+        resource_ref,
+        ep_ns.map(String::as_str),
+        ca_refs,
+        CaFetchStrategy::GrantGated {
+            group: "edgion.io",
+            kind: "EdgionPlugins",
+        },
+    );
+    config.grpc_service.tls.resolved_ca_certificates = (!resolved_cas.is_empty()).then_some(resolved_cas);
 
     // TLS client-identity secret (mTLS; whole Secret object).
-    if let Some(sor) = config.grpc_service.tls.outbound.client_secret_ref.clone() {
+    if let Some(sor) = config.grpc_service.tls.outbound.client_certificate_ref.clone() {
         let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_ns), &sor.name);
         match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
             FetchOutcome::Ok(secret) => {
-                config.grpc_service.tls.resolved_client_secret = Some(secret);
+                config.grpc_service.tls.resolved_client_certificate = Some(secret);
                 tracing::debug!(
                     edgion_plugins = %resource_ref.key(),
                     secret_key = %secret_key,

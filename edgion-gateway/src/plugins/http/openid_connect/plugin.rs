@@ -224,8 +224,8 @@ impl OpenidConnect {
             let tls_for_client = TlsConfig {
                 enabled: true,
                 outbound: config.tls.clone(),
-                resolved_ca_secret: config.resolved_ca_secret.clone(),
-                resolved_client_secret: config.resolved_client_secret.clone(),
+                resolved_ca_certificates: config.resolved_ca_certificates.clone(),
+                resolved_client_certificate: config.resolved_client_certificate.clone(),
             };
             match build_outbound_client(OutboundClientConfig {
                 pool_max_idle_per_host: Some(32),

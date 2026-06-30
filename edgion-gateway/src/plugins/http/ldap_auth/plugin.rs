@@ -119,14 +119,16 @@ fn build_ldap_rustls_config(
             EffectiveCa::System => {
                 roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             }
-            EffectiveCa::Custom(ca_pem) => {
+            EffectiveCa::Custom(bundles) => {
                 let mut added = 0usize;
-                for cert in CertificateDer::pem_slice_iter(ca_pem) {
-                    let cert = cert.map_err(|e| format!("LdapAuth TLS: invalid CA certificate PEM: {e}"))?;
-                    roots
-                        .add(cert)
-                        .map_err(|e| format!("LdapAuth TLS: failed to add CA certificate: {e}"))?;
-                    added += 1;
+                for bundle in bundles {
+                    for cert in CertificateDer::pem_slice_iter(bundle) {
+                        let cert = cert.map_err(|e| format!("LdapAuth TLS: invalid CA certificate PEM: {e}"))?;
+                        roots
+                            .add(cert)
+                            .map_err(|e| format!("LdapAuth TLS: failed to add CA certificate: {e}"))?;
+                        added += 1;
+                    }
                 }
                 if added == 0 {
                     return Err("LdapAuth TLS: CA PEM did not contain any valid certificates".to_string());
@@ -191,19 +193,19 @@ impl LdapAuth {
         let tls_config = if config.ldaps || config.start_tls {
             let resolved = resolve_outbound_tls(
                 &config.tls,
-                config.resolved_ca_secret.as_ref(),
-                config.resolved_client_secret.as_ref(),
+                config.resolved_ca_certificates.as_deref(),
+                config.resolved_client_certificate.as_ref(),
                 true,
                 "LdapAuth",
             )
             .map_err(|e| format!("LdapAuth TLS configuration error: {e:?}"))?;
 
             // M4: when verify=false the resolver drops client_identity. Warn the
-            // operator that their clientSecretRef is not being used.
-            if !resolved.verify && config.tls.client_secret_ref.is_some() && resolved.client_identity.is_none() {
+            // operator that their clientCertificateRef is not being used.
+            if !resolved.verify && config.tls.client_certificate_ref.is_some() && resolved.client_identity.is_none() {
                 tracing::warn!(
                     component = "ldap_auth",
-                    "verify=false with clientSecretRef configured: client certificate is not sent (M4)"
+                    "verify=false with clientCertificateRef configured: client certificate is not sent (M4)"
                 );
             }
 
@@ -630,24 +632,28 @@ mod tests {
         assert!(auth.tls_config.is_some());
     }
 
-    /// caSource: SecretRef with resolved_ca_secret=None → construction error (fail-closed).
+    /// caCertificateRefs declared but resolved_ca_certificates=None → construction error (fail-closed).
     #[test]
     fn ldaps_secretref_without_resolved_secret_fails() {
         install_test_crypto_provider();
-        use edgion_resources::resources::common::{CaSource, OutboundTlsLocal, SecretObjectReference};
+        use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+        use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+        use edgion_resources::resources::common::OutboundTlsLocal;
         let config = LdapAuthConfig {
             ldaps: true,
             tls: OutboundTlsLocal {
-                ca_source: Some(CaSource::SecretRef),
-                ca_secret_ref: Some(SecretObjectReference {
-                    name: "missing-secret".to_string(),
-                    group: None,
-                    kind: None,
-                    namespace: None,
+                validation: Some(OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                        kind: "Secret".to_string(),
+                        name: "missing-secret".to_string(),
+                        group: String::new(),
+                        namespace: None,
+                    }]),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
-            resolved_ca_secret: None, // not yet resolved
+            resolved_ca_certificates: None, // not yet resolved
             ..test_config()
         };
         let result = LdapAuth::new(&config);
@@ -657,37 +663,47 @@ mod tests {
         );
     }
 
-    /// caSource: Inline with an invalid PEM does not panic; returns Err.
+    /// Custom CA via resolved_ca_certificates with invalid PEM does not panic; returns Err.
     #[test]
     fn ldaps_inline_ca_invalid_pem_does_not_panic() {
         install_test_crypto_provider();
-        use edgion_resources::resources::common::{CaSource, OutboundTlsLocal};
+        use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+        use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+        use edgion_resources::resources::common::OutboundTlsLocal;
 
-        // A minimal self-signed CA cert for testing (RSA 2048, 10-year validity).
-        // Generated with: openssl req -x509 -newkey rsa:2048 -keyout /dev/null
-        //   -out /dev/stdout -days 3650 -nodes -subj "/CN=test-ca"
-        // This is a real DER-encoded cert in PEM form; it will parse but the
-        // subject/issuer are not verified in unit tests.
-        let dummy_ca_pem = "-----BEGIN CERTIFICATE-----\n\
+        // An intentionally invalid CA PEM: exercises the error path when
+        // CertificateDer::pem_slice_iter encounters bad base64 in the Secret data.
+        let dummy_ca_pem = b"-----BEGIN CERTIFICATE-----\n\
             MIICpDCCAYwCCQDU9pQ4pHgSpDANBgkqhkiG9w0BAQsFADAUMRIwEAYDVQQDDAl0\n\
             ZXN0LWNhMB4XDTIzMDEwMTAwMDAwMFoXDTMzMDEwMTAwMDAwMFowFDESMBAGA1UE\n\
             AwwJdGVzdC1jYTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMqkQPaH\n\
             placeholder_only_for_length_not_real_base64_data_AAAAAAAAAAAAAAAAAAA\n\
             -----END CERTIFICATE-----\n";
-        // Note: the above PEM is intentionally invalid base64 — use a real cert
-        // when wiring up: the point is that `LdapAuth::new` calls
-        // `CertificateDer::pem_slice_iter`. Replace with a real self-signed cert
-        // generated from `make-test-certs.sh` (Task 4) when running integration tests.
-        // For unit testing the *path*, use the real PEM from the test fixtures.
-        //
-        // Below we exercise the error path when the PEM is invalid:
+
+        // Build a K8s Secret carrying the invalid PEM so the resolver picks it up.
+        let mut data = std::collections::BTreeMap::new();
+        data.insert("ca.crt".to_string(), k8s_openapi::ByteString(dummy_ca_pem.to_vec()));
+        let ca_secret = k8s_openapi::api::core::v1::Secret {
+            data: Some(data),
+            type_: Some("kubernetes.io/tls".to_string()),
+            ..Default::default()
+        };
+
         let config = LdapAuthConfig {
             ldaps: true,
             tls: OutboundTlsLocal {
-                ca_source: Some(CaSource::Inline),
-                ca_cert: Some(dummy_ca_pem.to_string()),
+                validation: Some(OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                        kind: "Secret".to_string(),
+                        name: "dummy-ca".to_string(),
+                        group: String::new(),
+                        namespace: None,
+                    }]),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
+            resolved_ca_certificates: Some(vec![ca_secret]),
             ..test_config()
         };
         // An invalid PEM will fail; for a real test use a valid cert.

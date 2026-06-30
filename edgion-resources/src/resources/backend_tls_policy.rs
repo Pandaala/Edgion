@@ -166,8 +166,12 @@ pub struct BackendTLSPolicyValidation {
 }
 
 /// BackendTLSPolicyCACertificateRef identifies a ConfigMap or Secret containing a CA certificate bundle.
-/// Note: Per Gateway API spec, caCertificateRef can only reference resources in the same namespace.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+///
+/// For BackendTLSPolicy, per Gateway API spec, refs must be in the same namespace as the policy;
+/// `namespace` is ignored by the `DirectSameNs` fetch strategy. For non-BTP consumers (e.g.
+/// EdgionGatewayConfig outbound TLS), an explicit `namespace` enables cross-namespace trust-anchor
+/// references subject to a `ReferenceGrant` when the `GrantGated` fetch strategy is used.
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BackendTLSPolicyCACertificateRef {
     /// Group is the group of the referent. For example, "".
@@ -180,6 +184,14 @@ pub struct BackendTLSPolicyCACertificateRef {
 
     /// Name is the name of the referent.
     pub name: String,
+
+    /// Namespace of the referent. When absent the controller infers the same namespace
+    /// as the owning resource. For cluster-scoped resources (e.g. EdgionGatewayConfig)
+    /// this field is required; refs without a namespace are skipped.
+    /// Cross-namespace refs require a matching ReferenceGrant when the `GrantGated`
+    /// fetch strategy is in use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
 }
 
 /// SubjectAltName represents a Subject Alternative Name.

@@ -18,7 +18,7 @@ pub use log_labels::{resolve_log_ctx_keys, resolve_log_labels};
 pub use outbound_request::{
     CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec, PresencePolicy,
 };
-pub use outbound_tls::{CaSource, OutboundTlsConfig, OutboundTlsLocal};
+pub use outbound_tls::{OutboundTlsConfig, OutboundTlsLocal, OutboundTlsValidation};
 pub use secret_object_ref::SecretObjectReference;
 pub use secret_slot::SecretSlot;
 pub use service_kind::EdgionService;

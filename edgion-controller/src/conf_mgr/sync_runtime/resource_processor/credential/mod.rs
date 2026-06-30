@@ -8,12 +8,14 @@
 //! computation, `ReferenceGrant` enforcement, `SecretRefManager` wiring and
 //! Secret-lookup against the runtime caches.
 
+pub mod ca_refs;
 pub mod pipeline;
 pub mod request_secrets;
 
+pub use ca_refs::{resolve_ca_certificate_refs, CaFetchStrategy};
 pub use pipeline::{
-    fetch_secret, resolve_credential, resolve_secret, FetchOutcome, InvalidCredentialError, PendingReason,
-    ResolveOutcome,
+    fetch_configmap, fetch_secret, resolve_credential, resolve_secret, FetchOutcome, InvalidCredentialError,
+    PendingReason, ResolveOutcome,
 };
 pub use request_secrets::resolve_request_secrets;
 

@@ -178,11 +178,11 @@ pub enum EdgionStatus {
     /// silently ignoring the operator's intent.
     OutboundTlsVerifyUnsupported = 999_05,
 
-    /// The CA Secret referenced by `caSecretRef` has not been resolved by the
+    /// The CA Secret referenced by `caCertificateRefs` has not been resolved by the
     /// Controller yet, or the resolved Secret is missing the `ca.crt` key.
     OutboundTlsCaMissing = 999_07,
 
-    /// The client-identity Secret referenced by `clientSecretRef` is missing
+    /// The client-identity Secret referenced by `clientCertificateRef` is missing
     /// `tls.crt` or `tls.key`.
     OutboundTlsClientCertInvalid = 999_08,
 }

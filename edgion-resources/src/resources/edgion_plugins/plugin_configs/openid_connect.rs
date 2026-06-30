@@ -139,7 +139,7 @@ pub struct OpenidConnectConfig {
     pub allowed_signing_algs: Option<Vec<String>>,
     #[serde(default = "default_true")]
     pub use_jwks: bool,
-    /// Outbound TLS settings (verify, caSource, CA material, client mTLS) for IdP connections
+    /// Outbound TLS settings (verify, validation, clientCertificateRef) for IdP connections
     /// (discovery, JWKS, introspection). All fields are optional; absent fields inherit from
     /// the global outboundTls default.
     #[serde(default)]
@@ -222,22 +222,22 @@ pub struct OpenidConnectConfig {
     )]
     #[schemars(skip)]
     pub resolved_session_secret: Option<String>,
-    /// Resolved CA Secret (from `outbound.caSecretRef`, filled by Controller).
+    /// Resolved CA Secrets (from `tls.validation.caCertificateRefs`, filled by Controller).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
-    pub resolved_ca_secret: Option<Secret>,
-    /// Resolved mTLS client-identity Secret (from `outbound.clientSecretRef`, filled by Controller).
+    pub resolved_ca_certificates: Option<Vec<Secret>>,
+    /// Resolved mTLS client-identity Secret (from `tls.clientCertificateRef`, filled by Controller).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
-    pub resolved_client_secret: Option<Secret>,
+    pub resolved_client_certificate: Option<Secret>,
 
     // Security extras
     /// Remove Authorization header from the upstream request after successful bearer-token auth.
@@ -376,8 +376,8 @@ impl Default for OpenidConnectConfig {
             timeout: default_timeout_seconds(),
             resolved_oidc_client_secret: None,
             resolved_session_secret: None,
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
             hide_credentials: false,
             auth_failure_delay_ms: 0,
             discovery_max_response_bytes: default_discovery_max_response_bytes(),

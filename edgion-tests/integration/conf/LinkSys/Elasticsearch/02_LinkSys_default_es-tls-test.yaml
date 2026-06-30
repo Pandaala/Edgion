@@ -18,9 +18,10 @@ spec:
       - "https://127.0.0.1:19201"
     tls:
       enabled: true
-      caSource: SecretRef
-      caSecretRef:
-        name: es-backend-ca
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: es-backend-ca
     timeout:
       connect: 5000
       request: 30000

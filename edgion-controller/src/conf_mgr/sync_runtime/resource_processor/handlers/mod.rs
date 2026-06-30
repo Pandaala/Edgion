@@ -24,6 +24,7 @@ mod link_sys;
 mod plugins;
 mod reference_grant;
 pub(crate) mod route_utils;
+pub(crate) mod san_guard;
 mod secret;
 mod service;
 mod tcp_route;

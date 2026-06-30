@@ -26,28 +26,28 @@ pub struct LdapAuthConfig {
     #[serde(default)]
     pub start_tls: bool,
 
-    /// Outbound TLS settings (verify, caSource, CA material, client mTLS).
+    /// Outbound TLS settings (verify, CA trust anchors, client mTLS).
     /// All fields are optional; absent fields inherit from the global outboundTls default.
     #[serde(default)]
     pub tls: OutboundTlsLocal,
 
-    /// Resolved CA Secret (from tls.caSecretRef; populated by the Controller).
+    /// Resolved CA Secrets (from `tls.validation.caCertificateRefs`; populated by the Controller).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
-    pub resolved_ca_secret: Option<Secret>,
+    pub resolved_ca_certificates: Option<Vec<Secret>>,
 
-    /// Resolved mTLS client-identity Secret (from tls.clientSecretRef; populated by the Controller).
+    /// Resolved mTLS client-identity Secret (from `tls.clientCertificateRef`; populated by the Controller).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
-    pub resolved_client_secret: Option<Secret>,
+    pub resolved_client_certificate: Option<Secret>,
 
     // === LDAP Search / Bind ===
     /// Base DN for LDAP bind DN construction
@@ -154,8 +154,8 @@ impl Default for LdapAuthConfig {
             ldaps: false,
             start_tls: false,
             tls: OutboundTlsLocal::default(),
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
             base_dn: String::new(),
             attribute: String::new(),
             bind_dn_template: None,
@@ -224,10 +224,10 @@ mod tests {
         assert!(!cfg.ldaps);
         assert!(!cfg.start_tls);
         assert!(cfg.tls.verify.is_none());
-        assert!(cfg.tls.ca_source.is_none());
-        assert!(cfg.tls.client_secret_ref.is_none());
-        assert!(cfg.resolved_ca_secret.is_none());
-        assert!(cfg.resolved_client_secret.is_none());
+        assert!(cfg.tls.validation.is_none());
+        assert!(cfg.tls.client_certificate_ref.is_none());
+        assert!(cfg.resolved_ca_certificates.is_none());
+        assert!(cfg.resolved_client_certificate.is_none());
         assert_eq!(cfg.header_type, "ldap");
         assert_eq!(cfg.realm, "API Gateway");
         assert_eq!(cfg.cache_ttl, 60);
@@ -300,25 +300,21 @@ mod tests {
         }))
         .unwrap();
         assert!(c.tls.verify.is_none());
-        assert!(c.tls.ca_source.is_none());
-        assert!(c.tls.ca_secret_ref.is_none());
-        assert!(c.tls.ca_cert.is_none());
-        assert!(c.tls.client_secret_ref.is_none());
+        assert!(c.tls.validation.is_none());
+        assert!(c.tls.client_certificate_ref.is_none());
     }
 
     #[test]
-    fn ldap_outbound_accepts_verify_and_casource() {
-        use crate::resources::common::CaSource;
+    fn ldap_outbound_accepts_verify_and_validation() {
         let c: LdapAuthConfig = serde_json::from_value(serde_json::json!({
             "ldapHost": "ldap.example.com",
             "baseDn": "dc=example,dc=com",
             "attribute": "uid",
-            "tls": { "verify": false, "caSource": "Inline", "caCert": "---PEM---" }
+            "tls": { "verify": false }
         }))
         .unwrap();
         assert_eq!(c.tls.verify, Some(false));
-        assert_eq!(c.tls.ca_source, Some(CaSource::Inline));
-        assert_eq!(c.tls.ca_cert.as_deref(), Some("---PEM---"));
+        assert!(c.tls.validation.is_none());
     }
 
     #[test]
@@ -326,12 +322,12 @@ mod tests {
         let schema = serde_json::to_value(schemars::schema_for!(LdapAuthConfig)).unwrap();
         let props = &schema["properties"];
         assert!(
-            props.get("resolvedCaSecret").is_none() && props.get("resolved_ca_secret").is_none(),
-            "resolvedCaSecret must not appear in schema"
+            props.get("resolvedCaCertificates").is_none() && props.get("resolved_ca_certificates").is_none(),
+            "resolvedCaCertificates must not appear in schema"
         );
         assert!(
-            props.get("resolvedClientSecret").is_none() && props.get("resolved_client_secret").is_none(),
-            "resolvedClientSecret must not appear in schema"
+            props.get("resolvedClientCertificate").is_none() && props.get("resolved_client_certificate").is_none(),
+            "resolvedClientCertificate must not appear in schema"
         );
     }
 }

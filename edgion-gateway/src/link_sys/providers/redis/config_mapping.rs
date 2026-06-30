@@ -182,8 +182,8 @@ pub fn build_fred_pool(crd: &RedisClientConfig, config: Config) -> Result<(Build
             // (provider_can_disable=false → rejected even outside production).
             crate::link_sys::outbound_tls::resolve_outbound_tls(
                 &tls.outbound,
-                tls.resolved_ca_secret.as_ref(),
-                tls.resolved_client_secret.as_ref(),
+                tls.resolved_ca_certificates.as_deref(),
+                tls.resolved_client_certificate.as_ref(),
                 false,
                 "Redis",
             )
@@ -516,8 +516,8 @@ mod tests {
                     verify: Some(false),
                     ..Default::default()
                 },
-                resolved_ca_secret: None,
-                resolved_client_secret: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
             }),
             ..minimal_config(vec!["redis://localhost:6379".to_string()])
         };

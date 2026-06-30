@@ -89,8 +89,7 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
     crate::backends::panic_threshold::configure_lb_panic_default(panic_threshold);
 
     // Aggregate the cluster-wide outbound TLS default. Safest-wins on verify;
-    // CA material is adopted only when exactly one config declares a non-System source.
-    use edgion_resources::resources::common::CaSource;
+    // CA material (validation + resolved bundles + clientCertificateRef) is adopted only when exactly one config declares non-empty validation (refs or wellKnown).
     // Configs that do not set outbound_tls at all default to verify=true (the safe
     // default), so the verify aggregate is true whenever any config omits the block.
     let outbound_blocks: Vec<_> = store
@@ -100,18 +99,22 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
     let mut agg = edgion_common::link_sys_core::outbound_tls::aggregate_verify(&outbound_blocks);
     let ca_blocks: Vec<_> = outbound_blocks
         .iter()
-        .filter(|b| matches!(b.ca_source, Some(s) if s != CaSource::System))
+        .filter(|b| {
+            b.validation.as_ref().is_some_and(|v| {
+                v.ca_certificate_refs.as_ref().is_some_and(|r| !r.is_empty()) || v.well_known_ca_certificates.is_some()
+            })
+        })
         .collect();
     match ca_blocks.as_slice() {
         [one] => {
-            // A single non-System CA source (Inline or SecretRef) is adopted as
-            // the cluster-wide default. For SecretRef the Controller has already
-            // resolved the CA Secret into `resolved_ca_secret` and shipped it via
-            // conf_sync, so the per-call resolver can read it for inheriting calls.
-            agg.ca_source = one.ca_source;
-            agg.ca_secret_ref = one.ca_secret_ref.clone();
-            agg.ca_cert = one.ca_cert.clone();
-            agg.resolved_ca_secret = one.resolved_ca_secret.clone();
+            // A single non-empty validation (refs or wellKnown) is adopted as
+            // the cluster-wide default. The Controller has already resolved the CA
+            // Secrets into `resolved_ca_certificates` and shipped them via conf_sync,
+            // so the per-call resolver can read them for inheriting calls.
+            agg.validation = one.validation.clone();
+            agg.resolved_ca_certificates = one.resolved_ca_certificates.clone();
+            agg.client_certificate_ref = one.client_certificate_ref.clone();
+            agg.resolved_client_certificate = one.resolved_client_certificate.clone();
         }
         [] => {}
         _ => {
@@ -610,15 +613,15 @@ mod tests {
     }
 
     // ------------------------------------------------------------------
-    // M2: a single global caSource=SecretRef with a resolved CA Secret is
-    // adopted as the cluster-wide default.
+    // M2: a single config with validation.caCertificateRefs + resolved_ca_certificates
+    // is adopted as the cluster-wide default.
     // ------------------------------------------------------------------
 
     #[test]
-    fn recompute_global_secretref_is_adopted() {
+    fn aggregate_adopts_single_validation_block() {
         use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
-        use edgion_resources::resources::common::SecretObjectReference;
-        use edgion_resources::resources::common::{outbound_tls::CaSource, OutboundTlsConfig};
+        use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+        use edgion_resources::resources::common::{outbound_tls::OutboundTlsValidation, OutboundTlsConfig};
         use k8s_openapi::api::core::v1::Secret;
         use k8s_openapi::ByteString;
         let _g = TEST_MUTEX.lock();
@@ -638,35 +641,40 @@ mod tests {
             ..Default::default()
         };
 
-        let mut cfg = make_config("egc-secretref");
+        let mut cfg = make_config("egc-validation");
         cfg.spec.outbound_tls = Some(OutboundTlsConfig {
-            ca_source: Some(CaSource::SecretRef),
-            ca_secret_ref: Some(SecretObjectReference {
-                name: "my-ca-secret".to_string(),
-                group: None,
-                kind: None,
-                namespace: None,
+            verify: true,
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                    kind: "Secret".to_string(),
+                    name: "my-ca-secret".to_string(),
+                    group: String::new(),
+                    namespace: None,
+                }]),
+                well_known_ca_certificates: None,
+                hostname: None,
+                subject_alt_names: None,
             }),
-            resolved_ca_secret: Some(resolved),
-            ..OutboundTlsConfig::default()
+            resolved_ca_certificates: Some(vec![resolved]),
+            client_certificate_ref: None,
+            resolved_client_certificate: None,
         });
 
         let mut data = HashMap::new();
-        data.insert("egc-secretref".to_string(), Arc::new(cfg));
+        data.insert("egc-validation".to_string(), Arc::new(cfg));
         handler.full_set(&data);
 
-        // The single SecretRef CA is adopted as the cluster-wide default, with the
-        // resolved CA Secret carried through.
+        // The single validation with caCertificateRefs is adopted as the cluster-wide
+        // default, with the resolved CA certificates carried through.
         let global = outbound_global_default();
-        assert_eq!(
-            global.ca_source,
-            Some(CaSource::SecretRef),
-            "global caSource=SecretRef must be adopted, got: {:?}",
-            global.ca_source
+        assert!(global.validation.is_some(), "global validation must be adopted");
+        assert!(
+            global.validation.as_ref().unwrap().ca_certificate_refs.is_some(),
+            "ca_certificate_refs must be in the validation"
         );
         assert!(
-            global.resolved_ca_secret.is_some(),
-            "resolved_ca_secret must be carried into the global default"
+            global.resolved_ca_certificates.is_some(),
+            "resolved_ca_certificates must be carried into the global default"
         );
 
         set_outbound_global_default(OutboundTlsConfig::default());
@@ -716,41 +724,10 @@ mod tests {
     }
 
     #[test]
-    fn outbound_tls_ca_single_inline_adopted() {
+    fn aggregate_conflicts_fallback_to_system() {
         use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
-        use edgion_resources::resources::common::{outbound_tls::CaSource, OutboundTlsConfig};
-        let _g = TEST_MUTEX.lock();
-        clear_store();
-        set_outbound_global_default(OutboundTlsConfig::default());
-
-        let handler = EdgionGatewayConfigHandler;
-
-        let mut cfg = make_config("single-ca");
-        cfg.spec.outbound_tls = Some(OutboundTlsConfig {
-            ca_source: Some(CaSource::Inline),
-            ca_cert: Some("-----BEGIN CERTIFICATE-----\ndummypem\n-----END CERTIFICATE-----\n".to_string()),
-            ..OutboundTlsConfig::default()
-        });
-
-        let mut data = HashMap::new();
-        data.insert("single-ca".to_string(), Arc::new(cfg));
-        handler.full_set(&data);
-
-        let global = outbound_global_default();
-        assert_eq!(
-            global.ca_source,
-            Some(CaSource::Inline),
-            "single Inline CA must be adopted"
-        );
-        assert!(global.ca_cert.is_some(), "ca_cert must be adopted into global default");
-
-        set_outbound_global_default(OutboundTlsConfig::default());
-    }
-
-    #[test]
-    fn outbound_tls_ca_conflict_falls_back_to_system() {
-        use edgion_common::link_sys_core::outbound_tls::{outbound_global_default, set_outbound_global_default};
-        use edgion_resources::resources::common::{outbound_tls::CaSource, OutboundTlsConfig};
+        use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+        use edgion_resources::resources::common::{outbound_tls::OutboundTlsValidation, OutboundTlsConfig};
         let _g = TEST_MUTEX.lock();
         clear_store();
         set_outbound_global_default(OutboundTlsConfig::default());
@@ -759,15 +736,39 @@ mod tests {
 
         let mut cfg_a = make_config("ca-a");
         cfg_a.spec.outbound_tls = Some(OutboundTlsConfig {
-            ca_source: Some(CaSource::Inline),
-            ca_cert: Some("-----BEGIN CERTIFICATE-----\nCA_A\n-----END CERTIFICATE-----\n".to_string()),
-            ..OutboundTlsConfig::default()
+            verify: true,
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                    kind: "Secret".to_string(),
+                    name: "ca-a-secret".to_string(),
+                    group: String::new(),
+                    namespace: None,
+                }]),
+                well_known_ca_certificates: None,
+                hostname: None,
+                subject_alt_names: None,
+            }),
+            resolved_ca_certificates: None,
+            client_certificate_ref: None,
+            resolved_client_certificate: None,
         });
         let mut cfg_b = make_config("ca-b");
         cfg_b.spec.outbound_tls = Some(OutboundTlsConfig {
-            ca_source: Some(CaSource::Inline),
-            ca_cert: Some("-----BEGIN CERTIFICATE-----\nCA_B\n-----END CERTIFICATE-----\n".to_string()),
-            ..OutboundTlsConfig::default()
+            verify: true,
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                    kind: "Secret".to_string(),
+                    name: "ca-b-secret".to_string(),
+                    group: String::new(),
+                    namespace: None,
+                }]),
+                well_known_ca_certificates: None,
+                hostname: None,
+                subject_alt_names: None,
+            }),
+            resolved_ca_certificates: None,
+            client_certificate_ref: None,
+            resolved_client_certificate: None,
         });
 
         let mut data = HashMap::new();
@@ -777,9 +778,9 @@ mod tests {
 
         let global = outbound_global_default();
         assert!(
-            global.ca_source.is_none() || global.ca_source == Some(CaSource::System),
-            "conflicting Inline CAs must fall back to System/None, got: {:?}",
-            global.ca_source
+            global.validation.is_none(),
+            "conflicting validations must fall back to None (System), got: {:?}",
+            global.validation
         );
 
         set_outbound_global_default(OutboundTlsConfig::default());

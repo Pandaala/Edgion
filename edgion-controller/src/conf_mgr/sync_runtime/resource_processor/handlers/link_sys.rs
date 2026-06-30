@@ -24,6 +24,7 @@ use edgion_resources::resources::link_sys::webhook::{ResolvedSecrets, WebhookSer
 use edgion_resources::resources::link_sys::{LinkSysStatus, SystemConfig};
 
 use super::auth_spec::{AuthSpec, TlsSpec};
+use super::san_guard;
 use edgion_resources::ResourceKind;
 use k8s_openapi::api::core::v1::Secret;
 
@@ -113,7 +114,11 @@ fn needs_operator_secret_edit(err: &ResolvedRefsError) -> bool {
 #[async_trait::async_trait]
 impl ProcessorHandler<LinkSys> for LinkSysHandler {
     fn preparse(&self, ls: &mut LinkSys, _ctx: &HandlerContext) -> Vec<String> {
-        ls.validate_config()
+        let mut errors = ls.validate_config();
+        // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on LinkSys
+        // providers where SAN pinning enforcement is not yet implemented.
+        errors.extend(san_guard::check_link_sys_san(ls));
+        errors
     }
 
     async fn parse(&self, mut ls: LinkSys, ctx: &HandlerContext) -> ProcessResult<LinkSys> {

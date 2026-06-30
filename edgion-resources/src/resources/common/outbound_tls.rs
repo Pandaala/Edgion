@@ -1,49 +1,52 @@
-//! Shared outbound (plugin / LinkSys) TLS verification + CA trust-source schema.
+//! Shared outbound (plugin / LinkSys) TLS verification schema.
 //!
 //! `verify` is positive and tri-state at the local layer (None = inherit the
-//! global `outboundTls.verify`). `caSource` is a plain string discriminator so
-//! the structural CRD coverage guard keeps working (no data-carrying enum).
+//! global `outboundTls.verify`).
+//!
+//! CA trust sources are configured via the `validation` block, which supports:
+//! - `caCertificateRefs`: references to Secret/ConfigMap resources holding CA bundles
+//! - `wellKnownCACertificates`: use system well-known (e.g., Mozilla roots)
+//!
+//! mTLS client identity is specified via `clientCertificateRef` (kubernetes.io/tls Secret).
 
 use k8s_openapi::api::core::v1::Secret;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::SecretObjectReference;
-
-/// Where the trust anchors for outbound TLS verification come from.
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
-pub enum CaSource {
-    /// Built-in webpki roots compiled into the binary.
-    System,
-    /// A Kubernetes Secret holding a private CA bundle (REPLACES public roots).
-    SecretRef,
-    /// Inline PEM CA bundle (public material; REPLACES public roots).
-    Inline,
-}
+use crate::resources::backend_tls_policy::{BackendTLSPolicyCACertificateRef, SubjectAltName, WellKnownCACertificates};
 
 /// Returns `true`; used as `#[serde(default = "default_verify_true")]`.
 pub fn default_verify_true() -> bool {
     true
 }
 
-/// Per-call outbound TLS override. All-None = inherit the global default.
-#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+/// Outbound TLS verification config — reuses the BackendTLSPolicy validation
+/// shape (leaf types), but `hostname` is optional (outbound has an endpoint host).
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct OutboundTlsValidation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ca_certificate_refs: Option<Vec<BackendTLSPolicyCACertificateRef>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "wellKnownCACertificates")]
+    pub well_known_ca_certificates: Option<WellKnownCACertificates>,
+    /// Optional SNI override (default: endpoint host) + default SAN to check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hostname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject_alt_names: Option<Vec<SubjectAltName>>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct OutboundTlsLocal {
-    /// None -> inherit global outboundTls.verify; Some -> override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verify: Option<bool>,
-    /// None -> inherit global caSource and its CA material.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_source: Option<CaSource>,
+    pub validation: Option<OutboundTlsValidation>,
+    /// Top-level outbound mTLS identity (kubernetes.io/tls Secret).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_secret_ref: Option<SecretObjectReference>,
-    /// Inline CA PEM (public material) used when caSource == Inline.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_cert: Option<String>,
-    /// Optional client mTLS Secret (kubernetes.io/tls: tls.crt + tls.key).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub client_secret_ref: Option<SecretObjectReference>,
+    pub client_certificate_ref: Option<SecretObjectReference>,
 }
 
 /// Cluster-wide outbound TLS default carried on EdgionGatewayConfig.
@@ -54,13 +57,12 @@ pub struct OutboundTlsConfig {
     #[serde(default = "default_verify_true")]
     pub verify: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_source: Option<CaSource>,
+    pub validation: Option<OutboundTlsValidation>,
+    /// Top-level outbound mTLS identity (kubernetes.io/tls Secret).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_secret_ref: Option<SecretObjectReference>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ca_cert: Option<String>,
-    /// Resolved cluster-wide CA Secret (filled by the Controller from
-    /// `ca_secret_ref`, shipped via conf_sync). Out of the CRD schema; redacted
+    pub client_certificate_ref: Option<SecretObjectReference>,
+    /// Resolved cluster-wide CA Secrets (filled by the Controller from
+    /// `validation.caCertificateRefs`, shipped via conf_sync). Out of the CRD schema; redacted
     /// in admin output.
     #[serde(
         default,
@@ -68,17 +70,27 @@ pub struct OutboundTlsConfig {
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
-    pub resolved_ca_secret: Option<Secret>,
+    pub resolved_ca_certificates: Option<Vec<Secret>>,
+    /// Resolved client-identity Secret (filled by the Controller from
+    /// `clientCertificateRef`, shipped via conf_sync). Out of the CRD schema; redacted
+    /// in admin output.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "crate::redact::redact_opt::serialize"
+    )]
+    #[schemars(skip)]
+    pub resolved_client_certificate: Option<Secret>,
 }
 
 impl Default for OutboundTlsConfig {
     fn default() -> Self {
         Self {
             verify: true,
-            ca_source: None,
-            ca_secret_ref: None,
-            ca_cert: None,
-            resolved_ca_secret: None,
+            validation: None,
+            client_certificate_ref: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
         }
     }
 }
@@ -88,15 +100,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ca_source_serializes_as_plain_string() {
-        let v = serde_json::to_value(CaSource::SecretRef).unwrap();
-        assert_eq!(v, serde_json::json!("SecretRef"));
+    fn validation_shape_parses_and_camelcases() {
+        let json = r#"{"validation":{"caCertificateRefs":[{"kind":"Secret","name":"idp-ca"},{"kind":"ConfigMap","name":"corp-ca"}],"hostname":"idp.example.com","subjectAltNames":[{"type":"Hostname","hostname":"idp.example.com"}]},"clientCertificateRef":{"name":"idp-client"}}"#;
+        let l: OutboundTlsLocal = serde_json::from_str(json).unwrap();
+        let v = l.validation.unwrap();
+        assert_eq!(v.ca_certificate_refs.unwrap().len(), 2);
+        assert_eq!(v.hostname.as_deref(), Some("idp.example.com"));
+        assert_eq!(v.subject_alt_names.unwrap().len(), 1);
+        assert_eq!(l.client_certificate_ref.unwrap().name, "idp-client");
     }
 
     #[test]
-    fn local_defaults_are_all_none() {
-        let l: OutboundTlsLocal = serde_json::from_str("{}").unwrap();
-        assert!(l.verify.is_none() && l.ca_source.is_none() && l.client_secret_ref.is_none());
+    fn well_known_and_refs_both_optional_both_absent_ok() {
+        let l: OutboundTlsLocal = serde_json::from_str(r#"{"verify":true}"#).unwrap();
+        assert!(l.validation.is_none());
+    }
+
+    #[test]
+    fn legacy_ca_source_field_no_longer_a_variant() {
+        // CaSource is deleted; this field must be rejected at parse time by
+        // deny_unknown_fields to prevent silent no-op when operators forget to migrate.
+        // Before deny_unknown_fields, this would be silently ignored; now it fails loudly.
+        let r: Result<OutboundTlsLocal, _> = serde_json::from_str(r#"{"caSource":"SecretRef"}"#);
+        assert!(r.is_err(), "legacy caSource field should be rejected, got: {:?}", r);
     }
 
     #[test]
@@ -105,28 +131,28 @@ mod tests {
         assert!(g.verify);
     }
 
-    /// `resolved_ca_secret` is a controller-resolved field: it must stay out of
+    /// `resolved_ca_certificates` is a controller-resolved field: it must stay out of
     /// the JSON schema (`#[schemars(skip)]`) so the structural CRD coverage guard
-    /// keeps 6/6.
+    /// keeps in sync.
     #[test]
-    fn resolved_ca_secret_is_absent_from_schema() {
+    fn resolved_ca_certificates_absent_from_schema() {
         let schema = serde_json::to_value(schemars::schema_for!(OutboundTlsConfig)).unwrap();
         let props = &schema["properties"];
         assert!(
-            props.get("resolvedCaSecret").is_none() && props.get("resolved_ca_secret").is_none(),
-            "resolved_ca_secret must not appear in the schema, got: {props}"
+            props.get("resolvedCaCertificates").is_none() && props.get("resolved_ca_certificates").is_none(),
+            "resolved_ca_certificates must not appear in the schema, got: {props}"
         );
     }
 
-    /// In an admin-redact scope the resolved Secret serializes as `[redacted]`,
-    /// while conf_sync (no guard) still ships the real value.
+    /// In an admin-redact scope the resolved Secrets serialize as `[redacted]`,
+    /// while conf_sync (no guard) still ships the real values.
     #[test]
-    fn resolved_ca_secret_redacted_in_admin_output() {
+    fn resolved_ca_certificates_redacted_in_admin_output() {
         let cfg = OutboundTlsConfig {
-            resolved_ca_secret: Some(k8s_openapi::api::core::v1::Secret {
+            resolved_ca_certificates: Some(vec![k8s_openapi::api::core::v1::Secret {
                 type_: Some("kubernetes.io/tls".to_string()),
                 ..Default::default()
-            }),
+            }]),
             ..Default::default()
         };
 
@@ -134,13 +160,56 @@ mod tests {
             let _g = crate::redact::AdminRedactGuard::new();
             serde_json::to_value(&cfg).unwrap()
         };
-        assert_eq!(admin["resolvedCaSecret"], "[redacted]");
+        assert_eq!(admin["resolvedCaCertificates"], "[redacted]");
 
         let sync = serde_json::to_value(&cfg).unwrap();
         assert!(
-            sync["resolvedCaSecret"].is_object(),
-            "conf_sync must ship the real Secret object, got: {}",
-            sync["resolvedCaSecret"]
+            sync["resolvedCaCertificates"].is_array(),
+            "conf_sync must ship the real Secret array, got: {}",
+            sync["resolvedCaCertificates"]
         );
+    }
+
+    #[test]
+    fn resolved_ca_certificates_is_vec_and_absent_from_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(OutboundTlsConfig)).unwrap();
+        let props = &schema["properties"];
+        assert!(props.get("resolvedCaCertificates").is_none());
+        assert!(props.get("validation").is_some());
+    }
+
+    /// `resolved_client_certificate` is a controller-resolved field: it must stay out of
+    /// the JSON schema (`#[schemars(skip)]`) so the structural CRD coverage guard
+    /// keeps in sync (symmetric with `resolved_ca_certificates`).
+    #[test]
+    fn resolved_client_certificate_absent_from_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(OutboundTlsConfig)).unwrap();
+        let props = &schema["properties"];
+        assert!(
+            props.get("resolvedClientCertificate").is_none() && props.get("resolved_client_certificate").is_none(),
+            "resolved_client_certificate must not appear in the schema, got: {props}"
+        );
+    }
+
+    #[test]
+    fn outbound_tls_local_rejects_legacy_keys() {
+        // Old schema fields (caSource/caCert/caSecretRef/clientSecretRef) MUST
+        // be rejected at parse time to prevent silent no-op when operators
+        // forget to migrate. They are gone from the schema; serde must error
+        // rather than ignore.
+        for legacy in [
+            r#"{"caSource":"SecretRef"}"#,
+            r#"{"caCert":"---pem---"}"#,
+            r#"{"caSecretRef":{"name":"ca"}}"#,
+            r#"{"clientSecretRef":{"name":"id"}}"#,
+        ] {
+            let r: Result<OutboundTlsLocal, _> = serde_json::from_str(legacy);
+            assert!(
+                r.is_err(),
+                "legacy key in {} should be rejected by deny_unknown_fields, got: {:?}",
+                legacy,
+                r
+            );
+        }
     }
 }

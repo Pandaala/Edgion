@@ -5,16 +5,16 @@
 //!
 //! Design decisions:
 //!
-//! - The `verify` / `caSource` / `caSecretRef` / `caCert` / `clientSecretRef`
-//!   fields appear **at the top level** of `TlsConfig` (flattened from
-//!   `OutboundTlsLocal`), not inside a nested `certs` sub-object.
+//! - The `verify`, `validation`, and `clientCertificateRef` fields appear **at the top level**
+//!   of `TlsConfig` (flattened from `OutboundTlsLocal`), not inside a nested `certs` sub-object.
+//! - CA trust sources are configured via the `validation` block (supports `caCertificateRefs`
+//!   and `wellKnownCACertificates`). mTLS client identity via `clientCertificateRef`.
 //! - Inline private keys are not accepted; `deny_unknown_fields` rejects any
 //!   unrecognized field at YAML/JSON parse time ("no inline sensitive material").
-//!   Client private key MUST be provided through `clientSecretRef` pointing at a
+//!   Client private key MUST be provided through `clientCertificateRef` pointing at a
 //!   `kubernetes.io/tls` Secret (`tls.key`).
-//! - Inline CA PEM (`caCert`) is still allowed (public material).
-//! - `resolved_ca_secret` and `resolved_client_secret` are filled by the
-//!   Controller after resolving the respective `*SecretRef`, shipped to the
+//! - `resolved_ca_certificates` and `resolved_client_certificate` are filled by the
+//!   Controller after resolving the respective resource references, shipped to the
 //!   Gateway via conf_sync, but omitted from YAML/CRD schema via `#[schemars(skip)]`
 //!   and `skip_serializing_if`.
 //!
@@ -48,19 +48,19 @@ pub struct TlsConfig {
     #[serde(default)]
     pub enabled: bool,
 
-    /// Unified outbound verify + CA trust source (flattened: verify, caSource,
-    /// caSecretRef, caCert, clientSecretRef).
+    /// Unified outbound verify + CA trust source (flattened: verify, validation,
+    /// clientCertificateRef).
     #[serde(flatten)]
     pub outbound: OutboundTlsLocal,
 
-    /// Resolved CA Secret (filled by Controller, shipped via conf_sync).
+    /// Resolved CA Secrets (filled by Controller, shipped via conf_sync).
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
-    pub resolved_ca_secret: Option<Secret>,
+    pub resolved_ca_certificates: Option<Vec<Secret>>,
 
     /// Resolved client-identity Secret (filled by Controller).
     #[serde(
@@ -69,7 +69,7 @@ pub struct TlsConfig {
         serialize_with = "crate::redact::redact_opt::serialize"
     )]
     #[schemars(skip)]
-    pub resolved_client_secret: Option<Secret>,
+    pub resolved_client_certificate: Option<Secret>,
 }
 
 // ============================================================================
@@ -78,7 +78,6 @@ pub struct TlsConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::super::outbound_tls::CaSource;
     use super::*;
 
     #[test]
@@ -90,19 +89,28 @@ mod tests {
     }
 
     #[test]
-    fn tls_config_rejects_legacy_insecure_skip_verify() {
-        // deny_unknown_fields must reject the deleted key.
-        let r: Result<TlsConfig, _> = serde_json::from_str(r#"{"enabled":true,"insecureSkipVerify":true}"#);
-        assert!(r.is_err(), "legacy insecureSkipVerify must be rejected");
+    fn tls_config_accepts_validation_and_client_ref() {
+        let c: TlsConfig = serde_json::from_str(
+            r#"{"enabled":true,"verify":false,"validation":{"caCertificateRefs":[{"kind":"Secret","name":"ca"}]},"clientCertificateRef":{"name":"id"}}"#,
+        ).unwrap();
+        assert_eq!(c.outbound.verify, Some(false));
+        assert!(c.outbound.validation.unwrap().ca_certificate_refs.is_some());
+        assert_eq!(c.outbound.client_certificate_ref.unwrap().name, "id");
     }
 
     #[test]
-    fn tls_config_accepts_unified_verify_and_casource() {
-        let c: TlsConfig = serde_json::from_str(
-            r#"{"enabled":true,"verify":false,"caSource":"SecretRef","caSecretRef":{"name":"ca"}}"#,
-        )
-        .unwrap();
-        assert_eq!(c.outbound.verify, Some(false));
-        assert_eq!(c.outbound.ca_source, Some(CaSource::SecretRef));
+    fn tls_config_rejects_legacy_outbound_keys() {
+        // Flatten + deny may interact unpredictably; verify the LinkSys TlsConfig
+        // path also rejects legacy outbound keys (otherwise it's a silent no-op
+        // for redis/etcd/es operators).
+        for legacy in [
+            r#"{"enabled":true,"caSource":"SecretRef"}"#,
+            r#"{"enabled":true,"caCert":"---pem---"}"#,
+            r#"{"enabled":true,"caSecretRef":{"name":"ca"}}"#,
+            r#"{"enabled":true,"clientSecretRef":{"name":"id"}}"#,
+        ] {
+            let r: Result<TlsConfig, _> = serde_json::from_str(legacy);
+            assert!(r.is_err(), "legacy key in {} should be rejected, got: {:?}", legacy, r);
+        }
     }
 }

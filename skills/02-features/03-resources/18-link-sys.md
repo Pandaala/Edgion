@@ -69,20 +69,28 @@ All application-layer key names use **camelCase**; TLS keys follow the K8s `kube
 tls:
   enabled: true
   verify: true                    # Verify peer certificate (default true). Redis/Etcd always verify (SDK has no skip-verify API). Other connectors honor verify: false as operator responsibility (WARN logged at startup).
-  caSource: SecretRef             # System | SecretRef | Inline — where trust anchors come from. A custom CA REPLACES the public roots.
-  caSecretRef:
-    name: my-ca-bundle            # Secret holding ca.crt; required when caSource: SecretRef
-  caCert: |                       # Inline PEM CA bundle; used when caSource: Inline
-    -----BEGIN CERTIFICATE-----
-    ...
-  clientSecretRef:                # Secret holding tls.crt + tls.key for client mTLS
+  validation:                     # Optional; omit to use built-in webpki root CAs (same as wellKnownCACertificates: System).
+    caCertificateRefs:            # List of CA certificate refs. For LinkSys (redis/etcd/es/kafka), only kind: Secret is supported in this release.
+      - kind: Secret              # Secret must be kubernetes.io/tls or Opaque with a ca.crt key.
+        name: my-ca-bundle        # Defaults to the same namespace as LinkSys when namespace is omitted.
+    wellKnownCACertificates: System   # Alternatively, explicitly use the built-in webpki root bundle.
+    # Phase 1: hostname and subjectAltNames are schema-exposed but enforcement is deferred.
+    # Configuring either field causes Accepted=False until Phase 2 lands.
+    # hostname: "backend.example.com"
+    # subjectAltNames: ["backend.example.com"]
+  clientCertificateRef:           # Secret holding tls.crt + tls.key for client mTLS
     name: my-client-tls
-    # Defaults to the same namespace as LinkSys when omitted
+    # Defaults to the same namespace as LinkSys when namespace is omitted.
 ```
 
-- The client identity (certificate + private key) **must** be provided via `clientSecretRef`, pointing to a `kubernetes.io/tls` or `Opaque` Secret with `tls.crt` and `tls.key` keys.
-- CA trust anchors are controlled by `caSource`: `System` uses the built-in webpki roots; `SecretRef` reads from `caSecretRef`; `Inline` reads the PEM from `caCert`. A custom CA **replaces** the public roots.
+- The client identity (certificate + private key) **must** be provided via `clientCertificateRef`, pointing to a `kubernetes.io/tls` or `Opaque` Secret with `tls.crt` and `tls.key` keys.
+- CA trust anchors come from `validation.caCertificateRefs` (Secret refs; for LinkSys only `kind: Secret` is supported) or `validation.wellKnownCACertificates: System` (built-in webpki roots). A custom CA **replaces** the public roots. Inline CA (`caCert`) has been removed in this release; use a `kubernetes.io/tls` or `Opaque` Secret with a `ca.crt` key instead.
 - For providers whose URLs already imply TLS (`https://`, `rediss://`), `enabled: true` only additionally enables custom CA / client certificate handling; `tls` may be omitted when only system CAs are used.
+
+> **Phase 1 outbound TLS limitations:**
+> - `validation.caCertificateRefs` for LinkSys (redis / etcd / elasticsearch / kafka) only supports `kind: Secret` in this release. ConfigMap CA is not supported for LinkSys. If you need ConfigMap CA support, use the plugin (OIDC / LDAP / ForwardAuth / EGC) TLS paths instead.
+> - `validation.hostname` and `validation.subjectAltNames` (SAN pinning) are schema-visible but **not enforced** in Phase 1. Configuring either field causes `Accepted=False`. Enforcement for OIDC/LDAP paths is deferred to Phase 2. See `docs/superpowers/specs/2026-06-29-outbound-tls-align-backendtlspolicy-design.md` §6.
+> - Inline CA (`caCert` field) has been removed. Use a Secret with a `ca.crt` key instead.
 
 ## Configuration by `type`
 
@@ -115,7 +123,7 @@ spec:
       #   maxRedirects: 6
     tls:
       enabled: true
-      clientSecretRef: { name: redis-client-tls }
+      clientCertificateRef: { name: redis-client-tls }
     observability:
       logging: { enabled: true, level: info, slowLogThreshold: 200 }
       metrics: { enabled: true, labels: { env: prod } }
@@ -139,7 +147,7 @@ spec:
         namespace: credentials
     tls:
       enabled: true
-      clientSecretRef: { name: etcd-client-tls }
+      clientCertificateRef: { name: etcd-client-tls }
     timeout:                      # ms
       dial: 5000
       request: 10000
@@ -160,7 +168,7 @@ spec:
 ```
 
 - `auth` likewise uses `BasicAuthResolver` (username + password, both typically required for etcd).
-- Both Redis and Etcd clients always verify (`verify: false` is rejected at startup — the SDK has no skip-verify API). For a private CA, use `caSource: SecretRef` + `caSecretRef` or `caSource: Inline` + `caCert`.
+- Both Redis and Etcd clients always verify (`verify: false` is rejected at startup — the SDK has no skip-verify API). For a private CA, use `validation.caCertificateRefs` pointing to a Secret with a `ca.crt` key.
 
 ### `type: elasticsearch`
 
@@ -258,7 +266,7 @@ spec:
     timeoutMs: 3000
     tls:
       enabled: true
-      clientSecretRef: { name: webhook-client-tls }
+      clientCertificateRef: { name: webhook-client-tls }
     successStatusCodes: [200]
     maxResponseBytes: 2048                         # clamped to EdgionGatewayConfig.linkSys.webhookMaxResponseBytes (default 16 KiB)
     allowDegradation: true                         # silently degrade to None on failure

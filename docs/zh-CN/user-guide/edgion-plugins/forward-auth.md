@@ -90,7 +90,7 @@ spec:
 | `target` | object | 必填 | Kubernetes Service 后端：`{name, namespace, port}`。端口必填；namespace 默认为插件所在命名空间。 |
 | `timeoutMs` | integer | `5000` | 请求超时（毫秒）。 |
 | `successStatusCodes` | array\<integer\> | `null` | 视为鉴权成功的状态码。默认：任意 2xx（200–299）。 |
-| `tls` | object | `null` | 出向鉴权请求的 TLS 配置。字段：`verify`（默认 `true`；`false` 由运维人员负责）、`caSource`（`System`/`SecretRef`/`Inline`）、`caSecretRef`、`caCert`（内联 PEM）、`clientSecretRef`（客户端 mTLS 身份）。 |
+| `tls` | object | `null` | 出向鉴权请求的 TLS 配置。字段：`verify`（默认 `true`；`false` 由运维人员负责）；`validation.caCertificateRefs`（CA 证书引用列表，每项 `{kind, name, namespace}`，Secret 或 ConfigMap，须包含 `ca.crt` 键）；`validation.wellKnownCACertificates: System`（内置 webpki 根证书）；`clientCertificateRef`（含 `tls.crt`/`tls.key` 的 Secret，用于客户端 mTLS）。内联 CA（`caCert`）已移除，请改用含 `ca.crt` 键的 Secret 或 ConfigMap。Phase 1 说明：`validation.hostname` 和 `validation.subjectAltNames`（SAN 固定）已暴露但暂不强制执行，配置后导致 `Accepted=False`。 |
 | `retry` | object | `null` | 重试配置：`maxRetries`、`retryDelayMs`、`retryOnTimeout`、`retryOnConnectError`、`retryOnStatus`。 |
 | `rateLimit` | object | `null` | 出向调用限速：`rate`（每窗口最大调用次数）+ `windowSec`。 |
 | `healthCheck` | object | `null` | 健康检查：`active`（探针路径 + 间隔）和/或 `passive`（失败阈值）。 |

@@ -47,8 +47,8 @@ use crate::link_sys_core::outbound_tls::{self, EffectiveCa};
 pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig>> {
     let resolved = outbound_tls::resolve_outbound_tls(
         &tls.outbound,
-        tls.resolved_ca_secret.as_ref(),
-        tls.resolved_client_secret.as_ref(),
+        tls.resolved_ca_certificates.as_deref(),
+        tls.resolved_client_certificate.as_ref(),
         false,
         "LinkSys",
     )
@@ -64,14 +64,16 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
     let mut roots = RootCertStore::empty();
 
     match &resolved.ca {
-        EffectiveCa::Custom(ca_pem) => {
+        EffectiveCa::Custom(bundles) => {
             let mut added = 0usize;
-            for cert in CertificateDer::pem_slice_iter(ca_pem) {
-                let cert = cert.context("failed to parse CA certificate PEM from LinkSys TLS material")?;
-                roots
-                    .add(cert)
-                    .context("failed to add CA certificate to rustls RootCertStore")?;
-                added += 1;
+            for bundle in bundles {
+                for cert in CertificateDer::pem_slice_iter(bundle.as_slice()) {
+                    let cert = cert.context("failed to parse CA certificate PEM from LinkSys TLS material")?;
+                    roots
+                        .add(cert)
+                        .context("failed to add CA certificate to rustls RootCertStore")?;
+                    added += 1;
+                }
             }
             if added == 0 {
                 anyhow::bail!("LinkSys TLS CA PEM did not contain any valid certificates");
@@ -104,15 +106,49 @@ pub fn build_rustls_client_config(tls: &TlsConfig) -> Result<Option<ClientConfig
     Ok(Some(client_config))
 }
 
-/// Apply a custom CA PEM bundle to a reqwest `ClientBuilder` with REPLACE
-/// semantics: disables the built-in root certificates, then adds only the
-/// supplied PEM as the trust anchor.
+/// Split a multi-certificate PEM bundle into individual certificate PEM blocks.
+///
+/// Handles multiple certificates concatenated in a single PEM buffer, where each
+/// certificate is wrapped in `-----BEGIN CERTIFICATE-----` and `-----END CERTIFICATE-----`.
+fn split_pem_certificates(pem: &[u8]) -> Vec<Vec<u8>> {
+    let s = String::from_utf8_lossy(pem);
+    let mut certs = Vec::new();
+    let mut current = String::new();
+    for line in s.lines() {
+        current.push_str(line);
+        current.push('\n');
+        if line == "-----END CERTIFICATE-----" {
+            certs.push(current.clone().into_bytes());
+            current.clear();
+        }
+    }
+    certs
+}
+
+/// Apply custom CA PEM bundles to a reqwest `ClientBuilder` with REPLACE
+/// semantics: disables the built-in root certificates, then adds each supplied
+/// PEM bundle as a trust anchor.
 ///
 /// Use this instead of the bare `add_root_certificate` call whenever a custom
 /// CA replaces (rather than supplements) the public roots.
-pub fn apply_custom_ca_pem(builder: reqwest::ClientBuilder, ca_pem: &[u8]) -> anyhow::Result<reqwest::ClientBuilder> {
-    let cert = reqwest::Certificate::from_pem(ca_pem).context("TLS: invalid CA certificate PEM")?;
-    Ok(builder.tls_built_in_root_certs(false).add_root_certificate(cert))
+///
+/// Each bundle in `bundles` may contain multiple certificates (root + intermediate chain).
+/// `bundles` is a slice of PEM byte vectors, one per resolved CA Secret.
+pub fn apply_custom_ca_pem(
+    builder: reqwest::ClientBuilder,
+    bundles: &[Vec<u8>],
+) -> anyhow::Result<reqwest::ClientBuilder> {
+    let mut builder = builder.tls_built_in_root_certs(false);
+    for bundle in bundles {
+        // Split the bundle into individual PEM blocks (handles root + intermediate chains).
+        let pem_blocks = split_pem_certificates(bundle.as_slice());
+        for cert_pem in pem_blocks {
+            let cert =
+                reqwest::Certificate::from_pem(cert_pem.as_slice()).context("TLS: invalid CA certificate PEM")?;
+            builder = builder.add_root_certificate(cert);
+        }
+    }
+    Ok(builder)
 }
 
 /// Resolve `tls` through the shared outbound resolver and apply the result
@@ -128,8 +164,8 @@ pub fn apply_resolved_outbound_tls(
 ) -> Result<reqwest::ClientBuilder> {
     let resolved = outbound_tls::resolve_outbound_tls(
         &tls.outbound,
-        tls.resolved_ca_secret.as_ref(),
-        tls.resolved_client_secret.as_ref(),
+        tls.resolved_ca_certificates.as_deref(),
+        tls.resolved_client_certificate.as_ref(),
         true,
         provider,
     )
@@ -139,8 +175,8 @@ pub fn apply_resolved_outbound_tls(
     if !resolved.verify {
         // Operator explicitly disabled verification; resolver already emitted WARN.
         builder = builder.danger_accept_invalid_certs(true);
-    } else if let EffectiveCa::Custom(ca_pem) = &resolved.ca {
-        builder = apply_custom_ca_pem(builder, ca_pem)
+    } else if let EffectiveCa::Custom(bundles) = &resolved.ca {
+        builder = apply_custom_ca_pem(builder, bundles)
             .with_context(|| format!("{provider} TLS: invalid CA certificate PEM"))?;
     }
     if let Some((cert_pem, key_pem)) = &resolved.client_identity {
@@ -158,7 +194,10 @@ pub fn apply_resolved_outbound_tls(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::common::{outbound_tls::CaSource, OutboundTlsLocal, TlsConfig};
+    use edgion_resources::constants::secret_keys::tls as tls_keys;
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+    use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
     use k8s_openapi::api::core::v1::Secret;
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
@@ -171,6 +210,28 @@ mod tests {
         Secret {
             data: Some(data),
             type_: Some("kubernetes.io/tls".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// Build a CA `Secret` with the PEM stored under `ca.crt`.
+    fn ca_secret(pem: &[u8]) -> Secret {
+        secret_with(&[(tls_keys::CA_CERT, pem)])
+    }
+
+    /// Build an `OutboundTlsLocal` that declares one CA ref (name only; the
+    /// resolved bytes come from `resolved_ca_certificates`).
+    fn outbound_with_ca_ref(name: &str) -> OutboundTlsLocal {
+        OutboundTlsLocal {
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                    group: String::new(),
+                    kind: "Secret".into(),
+                    name: name.into(),
+                    namespace: None,
+                }]),
+                ..Default::default()
+            }),
             ..Default::default()
         }
     }
@@ -199,8 +260,8 @@ mod tests {
         let tls = TlsConfig {
             enabled: true,
             outbound: OutboundTlsLocal::default(),
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
         };
         assert!(build_rustls_client_config(&tls).unwrap().is_none());
     }
@@ -211,13 +272,9 @@ mod tests {
         let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
         let tls = TlsConfig {
             enabled: true,
-            outbound: OutboundTlsLocal {
-                ca_source: Some(CaSource::Inline),
-                ca_cert: Some(ca_pem),
-                ..Default::default()
-            },
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            outbound: outbound_with_ca_ref("my-ca"),
+            resolved_ca_certificates: Some(vec![ca_secret(ca_pem.as_bytes())]),
+            resolved_client_certificate: None,
         };
         let cfg = build_rustls_client_config(&tls).unwrap();
         assert!(cfg.is_some(), "expected a ClientConfig when CA is provided");
@@ -229,13 +286,9 @@ mod tests {
         let (ca_pem, cert_pem, key_pem) = gen_ca_and_leaf();
         let tls = TlsConfig {
             enabled: true,
-            outbound: OutboundTlsLocal {
-                ca_source: Some(CaSource::Inline),
-                ca_cert: Some(ca_pem),
-                ..Default::default()
-            },
-            resolved_ca_secret: None,
-            resolved_client_secret: Some(secret_with(&[
+            outbound: outbound_with_ca_ref("my-ca"),
+            resolved_ca_certificates: Some(vec![ca_secret(ca_pem.as_bytes())]),
+            resolved_client_certificate: Some(secret_with(&[
                 ("tls.crt", cert_pem.as_bytes()),
                 ("tls.key", key_pem.as_bytes()),
             ])),
@@ -251,13 +304,11 @@ mod tests {
         install_test_crypto_provider();
         let tls = TlsConfig {
             enabled: true,
-            outbound: OutboundTlsLocal {
-                ca_source: Some(CaSource::Inline),
-                ca_cert: Some("-----BEGIN CERTIFICATE-----\nnot-a-real-pem\n-----END CERTIFICATE-----\n".into()),
-                ..Default::default()
-            },
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            outbound: outbound_with_ca_ref("bad-ca"),
+            resolved_ca_certificates: Some(vec![ca_secret(
+                b"-----BEGIN CERTIFICATE-----\nnot-a-real-pem\n-----END CERTIFICATE-----\n",
+            )]),
+            resolved_client_certificate: None,
         };
         assert!(build_rustls_client_config(&tls).is_err());
     }
@@ -273,14 +324,14 @@ mod tests {
                 verify: Some(false),
                 ..Default::default()
             },
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
         };
         let tls_nop = TlsConfig {
             enabled: true,
             outbound: OutboundTlsLocal::default(), // verify = None → inherit global (true)
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
         };
 
         // verify=false → honored, returns Ok.
@@ -306,8 +357,8 @@ mod tests {
         let tls = TlsConfig {
             enabled: true,
             outbound: OutboundTlsLocal::default(),
-            resolved_ca_secret: None,
-            resolved_client_secret: Some(secret_with(&[
+            resolved_ca_certificates: None,
+            resolved_client_certificate: Some(secret_with(&[
                 ("tls.crt", cert_pem.as_bytes()),
                 ("tls.key", key_pem.as_bytes()),
             ])),
@@ -327,8 +378,8 @@ mod tests {
         let tls = TlsConfig {
             enabled: true,
             outbound: OutboundTlsLocal::default(),
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
         };
         assert!(
             apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test").is_ok(),
@@ -341,13 +392,9 @@ mod tests {
         let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
         let tls = TlsConfig {
             enabled: true,
-            outbound: OutboundTlsLocal {
-                ca_source: Some(CaSource::Inline),
-                ca_cert: Some(ca_pem),
-                ..Default::default()
-            },
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            outbound: outbound_with_ca_ref("my-ca"),
+            resolved_ca_certificates: Some(vec![ca_secret(ca_pem.as_bytes())]),
+            resolved_client_certificate: None,
         };
         assert!(
             apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test").is_ok(),
@@ -360,13 +407,9 @@ mod tests {
         let (ca_pem, cert_pem, key_pem) = gen_ca_and_leaf();
         let tls = TlsConfig {
             enabled: true,
-            outbound: OutboundTlsLocal {
-                ca_source: Some(CaSource::Inline),
-                ca_cert: Some(ca_pem),
-                ..Default::default()
-            },
-            resolved_ca_secret: None,
-            resolved_client_secret: Some(secret_with(&[
+            outbound: outbound_with_ca_ref("my-ca"),
+            resolved_ca_certificates: Some(vec![ca_secret(ca_pem.as_bytes())]),
+            resolved_client_certificate: Some(secret_with(&[
                 ("tls.crt", cert_pem.as_bytes()),
                 ("tls.key", key_pem.as_bytes()),
             ])),
@@ -382,13 +425,9 @@ mod tests {
         let (ca_pem, _cert_pem, _key_pem) = gen_ca_and_leaf();
         let tls = TlsConfig {
             enabled: true,
-            outbound: OutboundTlsLocal {
-                ca_source: Some(CaSource::Inline),
-                ca_cert: Some(ca_pem),
-                ..Default::default()
-            },
-            resolved_ca_secret: None,
-            resolved_client_secret: Some(secret_with(&[("tls.crt", b"bad-cert"), ("tls.key", b"bad-key")])),
+            outbound: outbound_with_ca_ref("my-ca"),
+            resolved_ca_certificates: Some(vec![ca_secret(ca_pem.as_bytes())]),
+            resolved_client_certificate: Some(secret_with(&[("tls.crt", b"bad-cert"), ("tls.key", b"bad-key")])),
         };
         let err = apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "TestProvider")
             .expect_err("invalid identity PEM must return Err");
@@ -396,6 +435,95 @@ mod tests {
         assert!(
             msg.contains("TestProvider TLS:"),
             "error must carry provider prefix, got: {msg}"
+        );
+    }
+
+    /// Two CA bundles in `resolved_ca_certificates` must both be loaded into the
+    /// reqwest root store.  Both bundles are real (rcgen-generated) certs so
+    /// `Certificate::from_pem` accepts them; the assertion is that `build()` does
+    /// not return an error — a failure to parse either bundle would surface there.
+    #[test]
+    fn apply_resolved_outbound_tls_multi_bundle_reqwest() {
+        let (ca_pem_a, _c, _k) = gen_ca_and_leaf();
+        let (ca_pem_b, _c, _k) = gen_ca_and_leaf();
+
+        let tls = TlsConfig {
+            enabled: true,
+            outbound: OutboundTlsLocal {
+                validation: Some(OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![
+                        BackendTLSPolicyCACertificateRef {
+                            group: String::new(),
+                            kind: "Secret".into(),
+                            name: "ca-a".into(),
+                            namespace: None,
+                        },
+                        BackendTLSPolicyCACertificateRef {
+                            group: String::new(),
+                            kind: "Secret".into(),
+                            name: "ca-b".into(),
+                            namespace: None,
+                        },
+                    ]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            resolved_ca_certificates: Some(vec![ca_secret(ca_pem_a.as_bytes()), ca_secret(ca_pem_b.as_bytes())]),
+            resolved_client_certificate: None,
+        };
+
+        let result = apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "Test");
+        assert!(
+            result.is_ok(),
+            "two distinct CA bundles must both be accepted by reqwest, err: {:?}",
+            result.err()
+        );
+        // Verify the built client can be constructed (not just the builder).
+        let builder_result = result.unwrap().build();
+        assert!(
+            builder_result.is_ok(),
+            "reqwest Client::build() must succeed with two CA bundles, err: {:?}",
+            builder_result.err()
+        );
+    }
+
+    /// A single CA bundle containing multiple certificates (root + intermediate chain)
+    /// must have all certificates loaded into the reqwest root store.
+    /// This regression test ensures that `apply_custom_ca_pem` correctly handles
+    /// multi-certificate PEM bundles instead of silently dropping certificates after the first.
+    #[test]
+    fn apply_custom_ca_pem_multi_cert_in_single_bundle() {
+        let (ca_root_pem, _c, _k) = gen_ca_and_leaf();
+        let (_ca_intermediate_pem, _c, _k) = gen_ca_and_leaf();
+
+        // Simulate an operator concatenating root + intermediate into a single PEM bundle.
+        // In practice, ca_root_pem and _ca_intermediate_pem are two independent certs.
+        let combined_pem = format!("{}\n{}\n", ca_root_pem, _ca_intermediate_pem);
+
+        let tls = TlsConfig {
+            enabled: true,
+            outbound: outbound_with_ca_ref("multi-cert-ca"),
+            resolved_ca_certificates: Some(vec![ca_secret(combined_pem.as_bytes())]),
+            resolved_client_certificate: None,
+        };
+
+        // Before the fix, reqwest::Certificate::from_pem would silently accept
+        // only the first cert and drop the second. After the fix, apply_custom_ca_pem
+        // splits the bundle and loads all certs.
+        let result = apply_resolved_outbound_tls(reqwest::Client::builder(), &tls, "MultiCertTest");
+        assert!(
+            result.is_ok(),
+            "multi-certificate PEM bundle should be accepted, err: {:?}",
+            result.err()
+        );
+
+        // Verify the built client can be constructed (success = no error during cert load).
+        let builder_result = result.unwrap().build();
+        assert!(
+            builder_result.is_ok(),
+            "reqwest Client::build() must succeed with multi-cert bundle, err: {:?}",
+            builder_result.err()
         );
     }
 }

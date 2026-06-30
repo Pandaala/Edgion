@@ -90,7 +90,7 @@ spec:
 | `target` | object | required | Kubernetes Service backend: `{name, namespace, port}`. Port is required. Namespace defaults to the plugin namespace. |
 | `timeoutMs` | integer | `5000` | Request timeout in milliseconds. |
 | `successStatusCodes` | array\<integer\> | `null` | Status codes treated as auth success. Default: any 2xx (200–299). |
-| `tls` | object | `null` | TLS settings for the outbound auth request. Fields: `verify` (default `true`; `false` is honored, operator responsibility), `caSource` (`System`/`SecretRef`/`Inline`), `caSecretRef`, `caCert` (inline PEM), `clientSecretRef` (client mTLS identity). |
+| `tls` | object | `null` | TLS settings for the outbound auth request. Fields: `verify` (default `true`; `false` is honored, operator responsibility); `validation.caCertificateRefs` (list of `{kind, name, namespace}` refs — Secret or ConfigMap — each holding a `ca.crt` key); `validation.wellKnownCACertificates: System` (built-in webpki roots); `clientCertificateRef` (Secret with `tls.crt`/`tls.key` for client mTLS). Inline CA is no longer supported; use a Secret or ConfigMap with a `ca.crt` key. Phase 1 note: `validation.hostname` and `validation.subjectAltNames` (SAN pinning) are schema-exposed but not enforced; configuring them causes `Accepted=False`. |
 | `retry` | object | `null` | Retry configuration: `maxRetries`, `retryDelayMs`, `retryOnTimeout`, `retryOnConnectError`, `retryOnStatus`. |
 | `rateLimit` | object | `null` | Outbound call rate limit: `rate` (calls per window) + `windowSec`. |
 | `healthCheck` | object | `null` | Health check: `active` (probe path + interval) and/or `passive` (failure threshold). |

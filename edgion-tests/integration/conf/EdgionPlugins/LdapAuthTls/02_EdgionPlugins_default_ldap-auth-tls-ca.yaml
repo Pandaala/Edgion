@@ -18,6 +18,7 @@ spec:
         cacheTtl: 0
         timeout: 5000
         tls:
-          caSource: SecretRef
-          caSecretRef:
-            name: ldap-ca-bundle
+          validation:
+            caCertificateRefs:
+              - kind: Secret
+                name: ldap-ca-bundle

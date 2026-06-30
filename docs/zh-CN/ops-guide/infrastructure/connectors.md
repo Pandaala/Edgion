@@ -79,27 +79,28 @@ Secret 键名遵循固定的已知约定，不支持通过 `usernameKey` / `pass
 tls:
   enabled: true
   verify: true                 # 验证对端证书（默认 true）；false 由运维人员负责，启动时记录 WARN
-  caSource: SecretRef          # System | SecretRef | Inline
-  caSecretRef:
-    name: my-ca-bundle         # 包含 ca.crt 的 Secret（caSource: SecretRef 时使用）
-  # caCert: |                  # 内联 PEM CA 包（caSource: Inline 时使用）
-  #   -----BEGIN CERTIFICATE-----
-  #   <base64-encoded-cert>
-  #   -----END CERTIFICATE-----
-  clientSecretRef:
+  validation:                  # 可选；省略则使用内置 webpki 根证书
+    caCertificateRefs:         # CA 证书引用列表；LinkSys 仅支持 kind: Secret
+      - kind: Secret
+        name: my-ca-bundle     # Secret 须包含 ca.crt 键（类型 kubernetes.io/tls 或 Opaque）
+    wellKnownCACertificates: System  # 或显式使用内置 webpki 根证书
+    # Phase 1：hostname 和 subjectAltNames 字段已暴露，但暂不强制执行，配置后 Accepted=False。
+  clientCertificateRef:
     name: my-client-tls        # 包含 tls.crt + tls.key 的 Secret，用于客户端 mTLS
 ```
+
+> **Phase 1 CA 引用限制**：LinkSys（redis / etcd / elasticsearch / kafka）的 `validation.caCertificateRefs` 在本版本中仅支持 `kind: Secret`，不支持 ConfigMap CA。如需 ConfigMap CA，请使用插件（OIDC / LDAP / ForwardAuth / EGC）的 TLS 配置路径。内联 CA（`caCert` 字段）已从本版本中移除，请改用包含 `ca.crt` 键的 Secret。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `enabled` | Boolean | `false` | 为连接启用 TLS。对于已隐含 TLS 的 URL（`https://`、`rediss://`），此字段仅添加自定义 CA / 客户端证书处理。 |
 | `verify` | Boolean | `true` | 验证对端 TLS 证书。`verify: false` 由运维人员负责，启动时记录 WARN。Redis 和 Etcd 始终验证证书（SDK 无跳过验证 API，启动时即失败）。 |
-| `caSource` | Enum | — | 信任锚来源：`System`（内置 webpki 根证书）、`SecretRef`（来自 `caSecretRef` 的私有 CA）或 `Inline`（`caCert` 中的 PEM）。自定义 CA **替换**公共根证书。 |
-| `caSecretRef` | Object | none | 包含私有 CA 包（`ca.crt` 键）的 Kubernetes Secret。`caSource: SecretRef` 时必填。 |
-| `caCert` | String | none | 内联 PEM CA 包。`caSource: Inline` 时使用。 |
-| `clientSecretRef` | Object | none | 包含客户端 mTLS 身份（`tls.crt` / `tls.key` 键）的 Kubernetes Secret。 |
+| `validation` | Object | none | 可选信任锚配置。省略则使用内置 webpki 根证书。 |
+| `validation.caCertificateRefs` | Array | none | CA 证书 Secret 引用列表（每项：`{ kind: Secret, name, namespace }`）。Secret 须包含 `ca.crt` 键。LinkSys 仅支持 `kind: Secret`。自定义 CA **替换**内置根证书。 |
+| `validation.wellKnownCACertificates` | String | none | 显式使用内置 webpki 根证书。允许值：`System`。 |
+| `clientCertificateRef` | Object | none | 包含客户端 mTLS 身份（`tls.crt` / `tls.key` 键）的 Kubernetes Secret。 |
 
-客户端 mTLS 身份（证书 + 私钥）必须通过 `clientSecretRef` 提供。
+客户端 mTLS 身份（证书 + 私钥）必须通过 `clientCertificateRef` 提供。
 
 ### 可观测性
 
@@ -263,7 +264,7 @@ spec:
         namespace: credentials
     tls:
       enabled: true
-      clientSecretRef:
+      clientCertificateRef:
         name: etcd-client-tls
     namespace: "/my-app/"
 ```
@@ -1125,7 +1126,7 @@ spec:
 
 ### 3. 带 mTLS 客户端证书的 TLS 加密 Etcd
 
-CA 包内联（`caSource: Inline`）。客户端证书和私钥来自 Secret（`clientSecretRef`）。
+CA 包通过 Secret 引用提供（`validation.caCertificateRefs`），客户端证书和私钥来自另一个 Secret（`clientCertificateRef`）。注意：本版本已移除内联 CA（`caCert` 字段），请改用包含 `ca.crt` 键的 Secret。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -1144,12 +1145,11 @@ spec:
         name: etcd-creds
     tls:
       enabled: true
-      caSource: Inline
-      caCert: |
-        -----BEGIN CERTIFICATE-----
-        <base64-encoded-cert>
-        -----END CERTIFICATE-----
-      clientSecretRef:
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: etcd-ca-bundle   # 包含 ca.crt 键的 Secret，例如 kubectl create secret generic etcd-ca-bundle --from-file=ca.crt=ca.pem
+      clientCertificateRef:
         name: etcd-client-tls
 ```
 
@@ -1174,7 +1174,7 @@ spec:
 
 ### Q4：能否为 Redis 或 Etcd 禁用 TLS 验证（`verify: false`）？
 
-**A**：不能。Redis 和 Etcd 客户端不支持禁用证书验证——在任何环境下，`verify: false` 对这两种连接器均会在启动时直接失败。这是故意的设计。如需连接使用私有 CA 的后端，请通过 `tls.caSource: Inline` + `tls.caCert`（内联 PEM）或 `tls.caSource: SecretRef` + `tls.caSecretRef` 提供 CA 证书。
+**A**：不能。Redis 和 Etcd 客户端不支持禁用证书验证——在任何环境下，`verify: false` 对这两种连接器均会在启动时直接失败。这是故意的设计。如需连接使用私有 CA 的后端，请通过 `tls.validation.caCertificateRefs` 引用包含 `ca.crt` 键的 Secret 来提供 CA 证书。
 
 ### Q5：轮换 Secret 后，现有连接会怎样？
 

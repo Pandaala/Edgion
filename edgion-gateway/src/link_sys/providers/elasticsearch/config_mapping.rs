@@ -458,8 +458,8 @@ mod tests {
                     verify: Some(false),
                     ..Default::default()
                 },
-                resolved_ca_secret: None,
-                resolved_client_secret: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
             }),
             ..Default::default()
         };

@@ -267,18 +267,61 @@ spec:
                       default: 16384
                 outboundTls:
                   type: object
-                  description: "Cluster-wide default for plugin / LinkSys outbound TLS verification"
+                  description: "Cluster-wide default for plugin / LinkSys outbound TLS"
                   properties:
                     verify:
                       type: boolean
                       description: "Global default for outbound TLS peer verification; defaults to true"
-                    caSource:
-                      type: string
-                      description: "Where the trust anchors come from (System, SecretRef, or Inline)"
-                      enum: [System, SecretRef, Inline]
-                    caSecretRef:
+                    validation:
                       type: object
-                      description: "Kubernetes Secret holding a private CA bundle. When set on EdgionGatewayConfig (global default), it IS honored cluster-wide: the Controller resolves the referenced Secret and ships the resolved CA to the data plane via conf_sync. Because EdgionGatewayConfig is cluster-scoped, set caSecretRef.namespace explicitly (a bare name resolves in the 'default' namespace; a different namespace requires a ReferenceGrant from 'default')."
+                      description: "CA trust configuration for outbound TLS connections"
+                      properties:
+                        caCertificateRefs:
+                          type: array
+                          description: "References to CA certificate resources (Secret or ConfigMap)"
+                          items:
+                            type: object
+                            properties:
+                              group:
+                                type: string
+                                description: "Group of the referent; defaults to empty string (core)"
+                              kind:
+                                type: string
+                                description: "Kind of the referent; e.g. Secret or ConfigMap"
+                              name:
+                                type: string
+                                description: "Name of the referent"
+                              namespace:
+                                type: string
+                                description: "Namespace of the referent. Required for cluster-scoped EGC; refs without namespace are skipped"
+                            required: [kind, name]
+                        wellKnownCACertificates:
+                          type: string
+                          description: "Use well-known system CA certificates (e.g. Mozilla roots)"
+                          enum: [System]
+                        hostname:
+                          type: string
+                          description: "Optional SNI override and default SAN check hostname"
+                        subjectAltNames:
+                          type: array
+                          description: "Subject alternative names to verify in the server certificate"
+                          items:
+                            type: object
+                            properties:
+                              type:
+                                type: string
+                                description: "SAN type"
+                                enum: [Hostname, URI]
+                              hostname:
+                                type: string
+                                description: "Hostname SAN value (used when type is Hostname)"
+                              uri:
+                                type: string
+                                description: "URI SAN value (used when type is URI)"
+                            required: [type]
+                    clientCertificateRef:
+                      type: object
+                      description: "Reference to a kubernetes.io/tls Secret for mTLS client identity"
                       properties:
                         group:
                           type: string
@@ -293,9 +336,6 @@ spec:
                           type: string
                           description: "Namespace of the referent"
                       required: [name]
-                    caCert:
-                      type: string
-                      description: "Inline PEM CA bundle used when caSource is Inline"
 
             status:
               type: object

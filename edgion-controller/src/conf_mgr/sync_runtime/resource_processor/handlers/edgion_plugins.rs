@@ -23,6 +23,7 @@ use edgion_resources::ResourceKind;
 
 use super::config_data_ref_mark::{mark_one_ref, ExpectedEntry};
 use super::plugins::resolve_credential as cred;
+use super::san_guard;
 
 pub struct EdgionPluginsHandler;
 
@@ -208,7 +209,11 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // VM init), which require the gateway-only DSL VM; the data plane still
         // fails closed for those at runtime. See
         // `edgion_resources::resources::edgion_plugins::validate`.
-        ep.validate_plugins()
+        let mut errors = ep.validate_plugins();
+        // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on plugins
+        // where SAN pinning enforcement is not yet implemented.
+        errors.extend(san_guard::check_plugins_san(ep));
+        errors
     }
 
     async fn parse(&self, mut ep: EdgionPlugins, ctx: &HandlerContext) -> ProcessResult<EdgionPlugins> {
@@ -2267,7 +2272,7 @@ mod tests {
     }
 
     /// Verify that `resolve_ext_proc` populates `resolved_ca_secret` from
-    /// `grpcService.outbound.caSecretRef` when the referenced Secret is present
+    /// `grpcService.outbound.validation.caCertificateRefs` when the referenced Secret is present
     /// in the store.
     #[tokio::test]
     async fn extproc_resolver_fills_resolved_secrets() {
@@ -2290,11 +2295,15 @@ mod tests {
                     tls: TlsConfig {
                         enabled: true,
                         outbound: OutboundTlsLocal {
-                            ca_secret_ref: Some(SecretObjectReference {
-                                group: None,
-                                kind: None,
-                                name: "extproc-ca".to_string(),
-                                namespace: None,
+                            validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
+                                ca_certificate_refs: Some(vec![
+                                    edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef {
+                                        kind: "Secret".to_string(),
+                                        name: "extproc-ca".to_string(),
+                                        ..Default::default()
+                                    },
+                                ]),
+                                ..Default::default()
                             }),
                             ..Default::default()
                         },
@@ -2323,13 +2332,206 @@ mod tests {
         };
 
         assert!(
-            config.grpc_service.tls.resolved_ca_secret.is_some(),
-            "resolved_ca_secret must be populated from caSecretRef"
+            config
+                .grpc_service
+                .tls
+                .resolved_ca_certificates
+                .as_ref()
+                .is_some_and(|v| !v.is_empty()),
+            "resolved_ca_certificates must be populated from caCertificateRefs"
         );
         assert!(
-            config.grpc_service.tls.resolved_client_secret.is_none(),
-            "no clientSecretRef was set"
+            config.grpc_service.tls.resolved_client_certificate.is_none(),
+            "no clientCertificateRef was set"
         );
         assert_eq!(ctx.secret_ref_manager().get_refs("default/extproc-ca").len(), 1);
+    }
+
+    // ── Phase 1 SAN guard tests ───────────────────────────────────────────────
+
+    /// OpenidConnect plugin with `tls.validation.subjectAltNames` must produce
+    /// an Accepted=False preparse error in Phase 1.
+    #[tokio::test]
+    async fn oidc_with_san_rejected_phase1() {
+        use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+        use edgion_resources::resources::common::OutboundTlsValidation;
+
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        let mut ep = EdgionPlugins::new("oidc-san-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::OpenidConnect(Box::new(
+            OpenidConnectConfig {
+                discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+                client_id: "my-client".to_string(),
+                tls: edgion_resources::resources::common::OutboundTlsLocal {
+                    validation: Some(OutboundTlsValidation {
+                        subject_alt_names: Some(vec![SubjectAltName {
+                            san_type: SubjectAltNameType::Hostname,
+                            hostname: Some("idp.example.com".to_string()),
+                            uri: None,
+                        }]),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let errors = handler.preparse(&mut ep, &ctx);
+
+        assert!(
+            !errors.is_empty(),
+            "expected preparse error for OIDC subjectAltNames in Phase 1"
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("SAN pinning") || e.contains("subjectAltNames")),
+            "error must mention SAN pinning; got: {:?}",
+            errors
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("OpenidConnect")),
+            "error must identify the provider; got: {:?}",
+            errors
+        );
+    }
+
+    /// LdapAuth plugin with `tls.validation.hostname` must produce an
+    /// Accepted=False preparse error in Phase 1 (spot-check for LDAP path).
+    #[tokio::test]
+    async fn ldap_with_hostname_rejected_phase1() {
+        use edgion_resources::resources::common::OutboundTlsValidation;
+        use edgion_resources::resources::edgion_plugins::LdapAuthConfig;
+
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        let mut ep = EdgionPlugins::new("ldap-san-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::LdapAuth(LdapAuthConfig {
+            ldap_host: "ldap.example.com".to_string(),
+            base_dn: "dc=example,dc=com".to_string(),
+            attribute: "uid".to_string(),
+            tls: edgion_resources::resources::common::OutboundTlsLocal {
+                validation: Some(OutboundTlsValidation {
+                    hostname: Some("ldap.example.com".to_string()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let errors = handler.preparse(&mut ep, &ctx);
+
+        assert!(
+            !errors.is_empty(),
+            "expected preparse error for LdapAuth hostname in Phase 1"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("LdapAuth")),
+            "error must identify the provider; got: {:?}",
+            errors
+        );
+    }
+
+    /// ExtProc plugin with `grpcService.tls.validation.subjectAltNames` must
+    /// produce an Accepted=False preparse error in Phase 1.
+    #[tokio::test]
+    async fn extproc_with_san_rejected_phase1() {
+        use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+        use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
+        use edgion_resources::resources::edgion_plugins::{plugin_configs::GrpcServiceConfig, ExtProcConfig};
+
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        let mut ep = EdgionPlugins::new("extproc-san-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::ExtProc(ExtProcConfig {
+            grpc_service: GrpcServiceConfig {
+                target: "ext-proc.default.svc.cluster.local:9000".to_string(),
+                timeout_ms: 200,
+                tls: TlsConfig {
+                    enabled: true,
+                    outbound: OutboundTlsLocal {
+                        validation: Some(OutboundTlsValidation {
+                            subject_alt_names: Some(vec![SubjectAltName {
+                                san_type: SubjectAltNameType::Hostname,
+                                hostname: Some("ext-proc.example.com".to_string()),
+                                uri: None,
+                            }]),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            },
+            ..Default::default()
+        }))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let errors = handler.preparse(&mut ep, &ctx);
+
+        assert!(
+            !errors.is_empty(),
+            "expected preparse error for ExtProc subjectAltNames in Phase 1"
+        );
+        assert!(
+            errors.iter().any(|e| e.contains("ExtProc")),
+            "error must identify the provider; got: {:?}",
+            errors
+        );
+    }
+
+    /// A plugin without SAN pinning (only CA refs) must NOT be rejected.
+    #[tokio::test]
+    async fn oidc_ca_only_no_san_accepted() {
+        use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+        use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation};
+
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        let mut ep = EdgionPlugins::new("oidc-caonly-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::OpenidConnect(Box::new(
+            OpenidConnectConfig {
+                discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+                client_id: "my-client".to_string(),
+                tls: OutboundTlsLocal {
+                    validation: Some(OutboundTlsValidation {
+                        ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                            kind: "Secret".to_string(),
+                            name: "idp-ca".to_string(),
+                            namespace: None,
+                            ..Default::default()
+                        }]),
+                        subject_alt_names: None,
+                        hostname: None,
+                        well_known_ca_certificates: None,
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let errors = handler.preparse(&mut ep, &ctx);
+
+        // CA-only validation must not trigger the SAN guard.
+        let san_errors: Vec<_> = errors
+            .iter()
+            .filter(|e| e.contains("SAN pinning") || e.contains("subjectAltNames"))
+            .collect();
+        assert!(
+            san_errors.is_empty(),
+            "CA-only validation must not be rejected by the SAN guard; got: {:?}",
+            errors
+        );
     }
 }

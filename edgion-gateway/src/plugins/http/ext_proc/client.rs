@@ -65,8 +65,8 @@ impl ExtProcClient {
         // TLS path: resolve once through the shared outbound resolver.
         let resolved = resolve_outbound_tls(
             &grpc.tls.outbound,
-            grpc.tls.resolved_ca_secret.as_ref(),
-            grpc.tls.resolved_client_secret.as_ref(),
+            grpc.tls.resolved_ca_certificates.as_deref(),
+            grpc.tls.resolved_client_certificate.as_ref(),
             true,
             "ExtProc",
         )
@@ -151,14 +151,16 @@ fn build_rustls_config(
             EffectiveCa::System => {
                 roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
             }
-            EffectiveCa::Custom(ca_pem) => {
+            EffectiveCa::Custom(bundles) => {
                 let mut added = 0usize;
-                for cert in CertificateDer::pem_slice_iter(ca_pem) {
-                    let cert = cert.map_err(|e| format!("ext_proc TLS: invalid CA certificate PEM: {e}"))?;
-                    roots
-                        .add(cert)
-                        .map_err(|e| format!("ext_proc TLS: failed to add CA certificate: {e}"))?;
-                    added += 1;
+                for bundle in bundles {
+                    for cert in CertificateDer::pem_slice_iter(bundle) {
+                        let cert = cert.map_err(|e| format!("ext_proc TLS: invalid CA certificate PEM: {e}"))?;
+                        roots
+                            .add(cert)
+                            .map_err(|e| format!("ext_proc TLS: failed to add CA certificate: {e}"))?;
+                        added += 1;
+                    }
                 }
                 if added == 0 {
                     return Err("ext_proc TLS CA PEM did not contain any valid certificates".to_string());
@@ -287,7 +289,8 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAllVerifier {
 mod tests {
     use super::*;
     use edgion_resources::plugin_configs::GrpcServiceConfig;
-    use edgion_resources::resources::common::outbound_tls::CaSource;
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
     use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
 
     fn install_test_crypto_provider() {
@@ -351,25 +354,43 @@ mod tests {
         );
     }
 
-    /// Custom-CA Inline: supply a valid self-signed CA PEM; the resolver must
-    /// build the REPLACE-root ClientConfig without error.
+    /// Custom CA via resolved_ca_certificates: supply a valid self-signed CA PEM in a K8s Secret;
+    /// the resolver must build the REPLACE-root ClientConfig without error.
     #[tokio::test]
     async fn extproc_custom_inline_ca_builds() {
         install_test_crypto_provider();
 
         let ca = rcgen::generate_simple_self_signed(vec!["test-ca".into()]).unwrap();
-        let ca_pem = ca.cert.pem();
+        let ca_pem = ca.cert.pem().into_bytes();
 
-        let mut cfg = tls_cfg();
-        cfg.grpc_service.tls.outbound = OutboundTlsLocal {
-            ca_source: Some(CaSource::Inline),
-            ca_cert: Some(ca_pem),
+        // Build a K8s Secret carrying the CA PEM under the expected key.
+        let mut data = std::collections::BTreeMap::new();
+        data.insert("ca.crt".to_string(), k8s_openapi::ByteString(ca_pem));
+        let ca_secret = k8s_openapi::api::core::v1::Secret {
+            data: Some(data),
+            type_: Some("kubernetes.io/tls".to_string()),
             ..Default::default()
         };
 
+        let mut cfg = tls_cfg();
+        // Declare a caCertificateRef so the resolver picks up the custom CA.
+        cfg.grpc_service.tls.outbound = OutboundTlsLocal {
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                    kind: "Secret".to_string(),
+                    name: "test-ca-secret".to_string(),
+                    group: String::new(),
+                    namespace: None,
+                }]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        cfg.grpc_service.tls.resolved_ca_certificates = Some(vec![ca_secret]);
+
         assert!(
             ExtProcClient::new(&cfg).is_ok(),
-            "Custom-CA Inline must build the REPLACE-root channel without error"
+            "Custom CA via resolved_ca_certificates must build the REPLACE-root channel without error"
         );
     }
 }

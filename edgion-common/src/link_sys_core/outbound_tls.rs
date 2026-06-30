@@ -4,13 +4,14 @@
 //! Provides a single entry point [`resolve_outbound_tls`] that:
 //! - inherits the cluster-wide default from [`outbound_global_default`]
 //! - applies per-call overrides from [`OutboundTlsLocal`]
-//! - resolves CA material from inline PEM or a resolved Kubernetes Secret
+//! - resolves CA material from resolved Kubernetes Secrets (one per ref)
 
 use std::sync::{LazyLock, RwLock};
 
 use edgion_resources::constants::secret_keys::tls as tls_keys;
 use edgion_resources::edgion_status::EdgionStatus;
-use edgion_resources::resources::common::{CaSource, OutboundTlsConfig, OutboundTlsLocal};
+use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+use edgion_resources::resources::common::{OutboundTlsConfig, OutboundTlsLocal};
 use k8s_openapi::api::core::v1::Secret;
 use zeroize::Zeroizing;
 
@@ -23,8 +24,10 @@ use zeroize::Zeroizing;
 pub enum EffectiveCa {
     /// Built-in webpki roots compiled into the binary.
     System,
-    /// PEM bundle that REPLACES the public roots (private CA mode).
-    Custom(Vec<u8>),
+    /// PEM bundles that REPLACE the public roots (private CA mode).
+    /// Each inner `Vec<u8>` is one complete PEM bundle (may contain multiple
+    /// certificates).
+    Custom(Vec<Vec<u8>>),
 }
 
 /// Resolved outbound TLS configuration, ready for consumption by a provider.
@@ -33,6 +36,9 @@ pub struct ResolvedOutboundTls {
     pub ca: EffectiveCa,
     /// `(cert_pem, key_pem)` when a client-identity Secret was provided.
     pub client_identity: Option<(Vec<u8>, Zeroizing<Vec<u8>>)>,
+    /// Carries the resolved `OutboundTlsValidation` for Phase 2 SNI/SAN
+    /// enforcement. Unused by the data plane in Phase 1.
+    pub san: Option<OutboundTlsValidation>,
 }
 
 // ============================================================================
@@ -94,29 +100,30 @@ pub fn aggregate_verify(blocks: &[OutboundTlsConfig]) -> OutboundTlsConfig {
 /// # Arguments
 ///
 /// - `local` — per-call override; all-`None` fields inherit the global default.
-/// - `resolved_ca` — the resolved K8s Secret when `caSource == SecretRef`.
+/// - `resolved_ca` — the resolved K8s Secrets for `validation.caCertificateRefs`
+///   (one Secret per ref, in the same order). Pass `None` or `Some(&[])` when
+///   no per-call CA is available; the resolver falls back to the global resolved
+///   CA certificates from the cluster-wide default.
 /// - `resolved_client` — the resolved K8s Secret for client mTLS identity.
 /// - `provider_can_disable` — whether this provider exposes a skip-verify knob.
 ///   Pass `false` for providers like Etcd whose TLS stack always verifies.
 /// - `context` — short provider name embedded in log messages.
 ///
-/// # CA source inference
+/// # CA source determination
 ///
-/// When neither `local.caSource` nor the global default `caSource` is set, the
-/// resolver infers the source from material presence (fail-secure):
-/// - `caSecretRef` present (local or global) or `resolved_ca` is `Some` → `SecretRef`
-/// - `caCert` (inline PEM) present (local or global) → `Inline`
-/// - otherwise → `System` (built-in webpki roots)
+/// When `verify == true`, the CA source is determined from the `validation` block
+/// (local takes precedence over global):
+/// - `caCertificateRefs` present and non-empty → `EffectiveCa::Custom` (multi-bundle)
+///   using the resolved Secrets; fails with `OutboundTlsCaMissing` if no resolved
+///   Secret carries a valid `tls.ca.crt` PEM.
+/// - `wellKnownCACertificates: System` or both absent → `EffectiveCa::System`
+///   (built-in webpki roots).
 ///
-/// An explicit `caSource` always wins; this inference only applies when the
-/// discriminator is omitted.
+/// # Global CA fallback
 ///
-/// # Global SecretRef
-///
-/// A GLOBAL `outboundTls.caSource: SecretRef` default IS supported: the
-/// Controller resolves `outboundTls.caSecretRef` and ships the resolved CA
-/// Secret via conf_sync (`OutboundTlsConfig::resolved_ca_secret`). An inheriting
-/// call with no per-call `resolved_ca` falls back to that global resolved Secret.
+/// An inheriting call (no per-call `resolved_ca`) falls back to the global
+/// resolved CA certificates when `validation.caCertificateRefs` is declared at
+/// the global level and the Controller has shipped the resolved bundles.
 ///
 /// # Known limitations
 ///
@@ -136,13 +143,13 @@ pub fn aggregate_verify(blocks: &[OutboundTlsConfig]) -> OutboundTlsConfig {
 ///
 /// - [`EdgionStatus::OutboundTlsVerifyUnsupported`] — `verify=false` requested
 ///   but `provider_can_disable == false`.
-/// - [`EdgionStatus::OutboundTlsCaMissing`] — `caSource` is `Inline` or
-///   `SecretRef` but the CA PEM is absent.
+/// - [`EdgionStatus::OutboundTlsCaMissing`] — `caCertificateRefs` declared but
+///   no resolved Secret carries a valid CA PEM bundle.
 /// - [`EdgionStatus::OutboundTlsClientCertInvalid`] — `resolved_client` is
 ///   `Some` but the Secret is missing `tls.crt` or `tls.key`.
 pub fn resolve_outbound_tls(
     local: &OutboundTlsLocal,
-    resolved_ca: Option<&Secret>,
+    resolved_ca: Option<&[Secret]>,
     resolved_client: Option<&Secret>,
     provider_can_disable: bool,
     context: &str,
@@ -167,44 +174,33 @@ pub fn resolve_outbound_tls(
             verify: false,
             ca: EffectiveCa::System,
             client_identity: None,
+            san: None,
         });
     }
 
-    // verify == true: resolve CA source.
-    // When neither local nor global sets a discriminator, infer from material
-    // presence (fail-secure: a present CA ref/cert means "trust that CA").
-    let ca_source = local.ca_source.or(global.ca_source).unwrap_or_else(|| {
-        if resolved_ca.is_some() || local.ca_secret_ref.is_some() || global.ca_secret_ref.is_some() {
-            CaSource::SecretRef
-        } else if local.ca_cert.is_some() || global.ca_cert.is_some() {
-            CaSource::Inline
-        } else {
-            CaSource::System
-        }
-    });
-
-    let ca = match ca_source {
-        CaSource::System => EffectiveCa::System,
-        CaSource::Inline => {
-            let pem = local
-                .ca_cert
-                .as_deref()
-                .or(global.ca_cert.as_deref())
+    // verify == true: resolve CA source from the validation block.
+    // Local validation takes precedence over global.
+    let validation = local.validation.as_ref().or(global.validation.as_ref());
+    let ca = match validation {
+        Some(v) if v.ca_certificate_refs.as_ref().is_some_and(|r| !r.is_empty()) => {
+            // Prefer per-call resolved bundles; fall back to the global resolved
+            // bundles so an inheriting call (no local CA) uses the cluster-wide
+            // default that the Controller resolved and shipped.
+            let secrets: &[Secret] = resolved_ca
+                .filter(|s| !s.is_empty())
+                .or(global.resolved_ca_certificates.as_deref())
                 .ok_or(EdgionStatus::OutboundTlsCaMissing)?;
-            EffectiveCa::Custom(pem.as_bytes().to_vec())
+            let bundles: Vec<Vec<u8>> = secrets
+                .iter()
+                .filter_map(|s| s.data.as_ref()?.get(tls_keys::CA_CERT).map(|v| v.0.clone()))
+                .collect();
+            if bundles.is_empty() {
+                return Err(EdgionStatus::OutboundTlsCaMissing);
+            }
+            EffectiveCa::Custom(bundles)
         }
-        CaSource::SecretRef => {
-            // Prefer the per-call resolved Secret; fall back to the cluster-wide
-            // resolved CA Secret so an inheriting call (no local CA) uses the
-            // global default that the Controller resolved and shipped.
-            let pem = resolved_ca
-                .or(global.resolved_ca_secret.as_ref())
-                .and_then(|s| s.data.as_ref())
-                .and_then(|d| d.get(tls_keys::CA_CERT))
-                .map(|v| v.0.clone())
-                .ok_or(EdgionStatus::OutboundTlsCaMissing)?;
-            EffectiveCa::Custom(pem)
-        }
+        // wellKnownCACertificates: System, or both absent → public roots.
+        _ => EffectiveCa::System,
     };
 
     // Resolve optional client mTLS identity
@@ -231,6 +227,7 @@ pub fn resolve_outbound_tls(
         verify,
         ca,
         client_identity,
+        san: validation.cloned(),
     })
 }
 
@@ -241,6 +238,28 @@ pub fn resolve_outbound_tls(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::backend_tls_policy::{BackendTLSPolicyCACertificateRef, WellKnownCACertificates};
+    use k8s_openapi::ByteString;
+    use std::collections::BTreeMap;
+
+    fn cert_ref(kind: &str, name: &str) -> BackendTLSPolicyCACertificateRef {
+        BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: kind.into(),
+            name: name.into(),
+            namespace: None,
+        }
+    }
+
+    fn ca_secret(pem: &[u8]) -> Secret {
+        let mut data = BTreeMap::new();
+        data.insert(tls_keys::CA_CERT.to_string(), ByteString(pem.to_vec()));
+        Secret {
+            data: Some(data),
+            type_: Some("kubernetes.io/tls".to_string()),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn aggregate_verify_safest_wins() {
@@ -286,97 +305,43 @@ mod tests {
         assert!(r.verify);
     }
 
-    /// When `caSecretRef` is set but `caSource` is absent, the resolver must
-    /// infer `CaSource::SecretRef` and read the CA from `resolved_ca`.
-    /// This guards the case where an operator provides a K8s Secret reference
-    /// without an explicit discriminator.
     #[test]
-    fn ca_secret_ref_without_ca_source_infers_secret_ref() {
-        use edgion_resources::resources::common::SecretObjectReference;
-        use k8s_openapi::ByteString;
-        use std::collections::BTreeMap;
-
+    fn ca_refs_present_yields_multi_bundle_custom() {
         set_outbound_global_default(OutboundTlsConfig::default());
-
-        let ca_pem = b"-----BEGIN CERTIFICATE-----\nMIIBdummy\n-----END CERTIFICATE-----\n";
-        let mut data = BTreeMap::new();
-        data.insert(tls_keys::CA_CERT.to_string(), ByteString(ca_pem.to_vec()));
-        let resolved_ca = k8s_openapi::api::core::v1::Secret {
-            data: Some(data),
-            type_: Some("kubernetes.io/tls".to_string()),
-            ..Default::default()
-        };
-
+        let s1 = ca_secret(b"-----BEGIN CERTIFICATE-----\nA\n-----END CERTIFICATE-----\n");
+        let s2 = ca_secret(b"-----BEGIN CERTIFICATE-----\nB\n-----END CERTIFICATE-----\n");
         let local = OutboundTlsLocal {
-            ca_secret_ref: Some(SecretObjectReference {
-                name: "my-ca-secret".to_string(),
-                group: None,
-                kind: None,
-                namespace: None,
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![cert_ref("Secret", "a"), cert_ref("Secret", "b")]),
+                ..Default::default()
             }),
-            ca_source: None,
             ..Default::default()
         };
-
-        let result =
-            resolve_outbound_tls(&local, Some(&resolved_ca), None, true, "Test").expect("should resolve successfully");
-        assert!(
-            matches!(result.ca, EffectiveCa::Custom(_)),
-            "expected EffectiveCa::Custom when caSecretRef is set and ca_source is None"
-        );
+        let r = resolve_outbound_tls(&local, Some(&[s1, s2]), None, true, "Test").unwrap();
+        match r.ca {
+            EffectiveCa::Custom(b) => assert_eq!(b.len(), 2),
+            _ => panic!("expected multi-bundle Custom"),
+        }
     }
 
-    /// A global `caSource: SecretRef` with a resolved CA Secret must let an
-    /// inheriting call (no local CA) resolve `EffectiveCa::Custom` from the global
-    /// resolved Secret.
     #[test]
-    fn global_secretref_resolves_ca_from_global_secret() {
-        use k8s_openapi::ByteString;
-        use std::collections::BTreeMap;
-
-        let ca_pem = b"-----BEGIN CERTIFICATE-----\nMIIBglobal\n-----END CERTIFICATE-----\n";
-        let mut data = BTreeMap::new();
-        data.insert(tls_keys::CA_CERT.to_string(), ByteString(ca_pem.to_vec()));
-        let global_ca = Secret {
-            data: Some(data),
-            type_: Some("kubernetes.io/tls".to_string()),
-            ..Default::default()
-        };
-
-        set_outbound_global_default(OutboundTlsConfig {
-            ca_source: Some(CaSource::SecretRef),
-            resolved_ca_secret: Some(global_ca),
-            ..Default::default()
-        });
-
-        let result = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test")
-            .expect("global SecretRef should resolve");
-        assert!(
-            matches!(result.ca, EffectiveCa::Custom(_)),
-            "expected EffectiveCa::Custom from the global resolved CA Secret"
-        );
-
-        // Reset the global default so other tests are unaffected.
+    fn well_known_system_yields_system() {
         set_outbound_global_default(OutboundTlsConfig::default());
-    }
-
-    /// When `ca_cert` (inline PEM) is set but `caSource` is absent, the resolver
-    /// must infer `CaSource::Inline` and return `EffectiveCa::Custom`.
-    #[test]
-    fn ca_cert_without_ca_source_infers_inline() {
-        set_outbound_global_default(OutboundTlsConfig::default());
-
-        let ca_pem = "-----BEGIN CERTIFICATE-----\nMIIBinline\n-----END CERTIFICATE-----\n";
         let local = OutboundTlsLocal {
-            ca_cert: Some(ca_pem.to_string()),
-            ca_source: None,
+            validation: Some(OutboundTlsValidation {
+                well_known_ca_certificates: Some(WellKnownCACertificates::System),
+                ..Default::default()
+            }),
             ..Default::default()
         };
+        let r = resolve_outbound_tls(&local, None, None, true, "Test").unwrap();
+        assert!(matches!(r.ca, EffectiveCa::System));
+    }
 
-        let result = resolve_outbound_tls(&local, None, None, true, "Test").expect("should resolve successfully");
-        assert!(
-            matches!(result.ca, EffectiveCa::Custom(_)),
-            "expected EffectiveCa::Custom when ca_cert is set and ca_source is None"
-        );
+    #[test]
+    fn both_absent_defaults_to_system_public_roots() {
+        set_outbound_global_default(OutboundTlsConfig::default());
+        let r = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test").unwrap();
+        assert!(matches!(r.ca, EffectiveCa::System));
     }
 }

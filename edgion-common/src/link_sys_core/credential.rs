@@ -309,13 +309,18 @@ fn tls_ready_inner(tls: Option<&TlsConfig>) -> bool {
     let Some(tls) = tls else {
         return true;
     };
-    // Not ready if a CA secret ref is declared but the Controller has not yet
-    // injected the resolved secret.
-    if tls.outbound.ca_secret_ref.is_some() && tls.resolved_ca_secret.is_none() {
+    // Not ready if CA certificate refs are declared but the Controller has not yet
+    // injected the resolved secrets.
+    let has_ca_refs = tls
+        .outbound
+        .validation
+        .as_ref()
+        .is_some_and(|v| v.ca_certificate_refs.as_ref().is_some_and(|r| !r.is_empty()));
+    if has_ca_refs && tls.resolved_ca_certificates.is_none() {
         return false;
     }
     // Not ready if a client-identity secret ref is declared but not yet resolved.
-    if tls.outbound.client_secret_ref.is_some() && tls.resolved_client_secret.is_none() {
+    if tls.outbound.client_certificate_ref.is_some() && tls.resolved_client_certificate.is_none() {
         return false;
     }
     true
@@ -323,7 +328,7 @@ fn tls_ready_inner(tls: Option<&TlsConfig>) -> bool {
 
 /// TLS readiness check (structural only).
 ///
-/// Returns `false` when the CRD declares a `clientSecretRef` but the
+/// Returns `false` when the CRD declares a `clientCertificateRef` but the
 /// Controller has not yet injected the `Secret`. TLS parse failures are
 /// caught inside the provider via the outbound TLS resolver.
 pub fn tls_ready(ls: &LinkSys) -> bool {
@@ -350,6 +355,8 @@ pub fn tls_ready(ls: &LinkSys) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
     use edgion_resources::resources::common::{OutboundTlsLocal, SecretObjectReference, TlsConfig as CommonTlsConfig};
     use edgion_resources::resources::link_sys::redis::{RedisAuth, RedisClientConfig};
     use edgion_resources::resources::link_sys::LinkSysSpec;
@@ -774,18 +781,21 @@ mod tests {
                     topology: None,
                     tls: Some(CommonTlsConfig {
                         enabled: true,
-                        // CA secret ref declared but not yet resolved
+                        // CA certificate refs declared but not yet resolved
                         outbound: OutboundTlsLocal {
-                            ca_secret_ref: Some(SecretObjectReference {
-                                group: None,
-                                kind: None,
-                                name: "tls".into(),
-                                namespace: None,
+                            validation: Some(OutboundTlsValidation {
+                                ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                                    group: String::new(),
+                                    kind: "Secret".into(),
+                                    name: "tls".into(),
+                                    namespace: None,
+                                }]),
+                                ..Default::default()
                             }),
                             ..Default::default()
                         },
-                        resolved_ca_secret: None,
-                        resolved_client_secret: None,
+                        resolved_ca_certificates: None,
+                        resolved_client_certificate: None,
                     }),
                     observability: None,
                 }),

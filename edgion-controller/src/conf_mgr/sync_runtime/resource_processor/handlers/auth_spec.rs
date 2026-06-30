@@ -18,7 +18,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRef
 use edgion_resources::credentials::resolvers::{
     BasicAuthResolver, BearerResolver, EsApiKeyResolver, HmacResolver, TlsCertsResolver, WebhookApiKeyResolver,
 };
-use edgion_resources::resources::common::{SecretSlot, TlsConfig};
+use edgion_resources::resources::common::{SecretObjectReference, SecretSlot, TlsConfig};
 use edgion_resources::resources::link_sys::elasticsearch::ElasticsearchAuth;
 use edgion_resources::resources::link_sys::etcd::EtcdAuth;
 use edgion_resources::resources::link_sys::kafka::KafkaSaslConfig;
@@ -44,7 +44,7 @@ pub trait AuthSpec: Send {
 /// Bind a TLS-bearing CRD type to its resolution path.
 ///
 /// `resolve()` returns `None` when there is no TLS material to resolve
-/// (`tls.clientSecretRef` absent — inline or System-only TLS); otherwise
+/// (`tls.clientCertificateRef` absent — inline or System-only TLS); otherwise
 /// returns `Some(err)` on failure / `None` on success.
 #[async_trait]
 pub trait TlsSpec: Send {
@@ -200,8 +200,8 @@ impl AuthSpec for KafkaSaslConfig {
 }
 
 // ============================================================================
-// TlsSpec impl on TlsConfig — resolves outbound.ca_secret_ref -> resolved_ca_secret
-// and outbound.client_secret_ref -> resolved_client_secret independently.
+// TlsSpec impl on TlsConfig — resolves outbound CA cert refs and client cert
+// ref into resolved_ca_certificates / resolved_client_certificate.
 // ============================================================================
 
 #[async_trait]
@@ -210,15 +210,49 @@ impl TlsSpec for TlsConfig {
         "TLS"
     }
     async fn resolve(&mut self, ctx: &HandlerContext, owner: &ResourceRef) -> Option<ResolvedRefsError> {
-        if let Some(ca_ref) = self.outbound.ca_secret_ref.as_ref().cloned() {
-            match resolve_one(ctx, owner, &ca_ref, &TlsCertsResolver).await {
-                Ok(s) => self.resolved_ca_secret = s,
-                Err(e) => return Some(e),
+        // Reset runtime-resolved fields first to avoid stale values on update.
+        self.resolved_ca_certificates = None;
+        self.resolved_client_certificate = None;
+
+        // Resolve CA certificate refs (type-validated via TlsCertsResolver).
+        // Note: ca_refs::resolve_ca_certificate_refs is intentionally NOT used here
+        // because TlsSpec.resolve() must return InvalidSecretType on a bad CA Secret
+        // type (e.g. kubernetes.io/ssh-auth). The ca_refs helper skips type
+        // validation; resolve_one + TlsCertsResolver enforces the whitelist.
+        let refs = self
+            .outbound
+            .validation
+            .as_ref()
+            .and_then(|v| v.ca_certificate_refs.as_deref())
+            .unwrap_or_default();
+        if !refs.is_empty() {
+            let mut cas = Vec::new();
+            for ca_ref in refs {
+                // Only Secret-kind refs are supported; other kinds (e.g. ConfigMap) are skipped.
+                if ca_ref.kind != "Secret" {
+                    continue;
+                }
+                let sor = SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: ca_ref.name.clone(),
+                    namespace: ca_ref.namespace.clone(),
+                };
+                match resolve_one(ctx, owner, &sor, &TlsCertsResolver).await {
+                    Ok(Some(s)) => cas.push(s),
+                    Ok(None) => {}
+                    Err(e) => return Some(e),
+                }
+            }
+            if !cas.is_empty() {
+                self.resolved_ca_certificates = Some(cas);
             }
         }
-        if let Some(client_ref) = self.outbound.client_secret_ref.as_ref().cloned() {
+
+        // Resolve client certificate ref (mTLS identity).
+        if let Some(client_ref) = self.outbound.client_certificate_ref.as_ref().cloned() {
             match resolve_one(ctx, owner, &client_ref, &TlsCertsResolver).await {
-                Ok(s) => self.resolved_client_secret = s,
+                Ok(s) => self.resolved_client_certificate = s,
                 Err(e) => return Some(e),
             }
         }

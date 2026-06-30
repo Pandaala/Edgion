@@ -562,16 +562,20 @@ async fn test_redis_tls_secret_ref_resolution() {
         tls: Some(TlsConfig {
             enabled: true,
             outbound: OutboundTlsLocal {
-                ca_secret_ref: Some(SecretObjectReference {
-                    group: None,
-                    kind: None,
-                    name: "redis-tls".to_string(),
-                    namespace: None,
+                validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![
+                        edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef {
+                            kind: "Secret".to_string(),
+                            name: "redis-tls".to_string(),
+                            ..Default::default()
+                        },
+                    ]),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
         }),
         observability: None,
     });
@@ -585,7 +589,11 @@ async fn test_redis_tls_secret_ref_resolution() {
         SystemConfig::Redis(r) => r.tls.as_ref().unwrap(),
         _ => panic!("expected Redis"),
     };
-    let secret = tls.resolved_ca_secret.as_ref().expect("resolved_ca_secret injected");
+    let secrets = tls
+        .resolved_ca_certificates
+        .as_ref()
+        .expect("resolved_ca_certificates injected");
+    let secret = secrets.first().expect("at least one resolved CA secret");
     let data = secret.data.as_ref().expect("data");
     assert_eq!(data.get(TLS_CA_KEY).unwrap().0, b"CA-PEM");
     assert_eq!(data.get(TLS_CERT_KEY).unwrap().0, b"CERT-PEM");
@@ -653,16 +661,20 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
         tls: Some(TlsConfig {
             enabled: true,
             outbound: OutboundTlsLocal {
-                ca_secret_ref: Some(SecretObjectReference {
-                    group: None,
-                    kind: None,
-                    name: "redis-tls-bad-type".to_string(),
-                    namespace: None,
+                validation: Some(edgion_resources::resources::common::OutboundTlsValidation {
+                    ca_certificate_refs: Some(vec![
+                        edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef {
+                            kind: "Secret".to_string(),
+                            name: "redis-tls-bad-type".to_string(),
+                            ..Default::default()
+                        },
+                    ]),
+                    ..Default::default()
                 }),
                 ..Default::default()
             },
-            resolved_ca_secret: None,
-            resolved_client_secret: None,
+            resolved_ca_certificates: None,
+            resolved_client_certificate: None,
         }),
         observability: None,
     });
@@ -680,8 +692,8 @@ async fn test_auth_and_tls_both_fail_collects_both_errors() {
                 "auth.secret must remain None when auth resolution failed"
             );
             assert!(
-                r.tls.as_ref().unwrap().resolved_ca_secret.is_none(),
-                "tls.resolved_ca_secret must remain None when tls resolution failed"
+                r.tls.as_ref().unwrap().resolved_ca_certificates.is_none(),
+                "tls.resolved_ca_certificates must remain None when tls resolution failed"
             );
         }
         _ => panic!("expected Redis"),
@@ -1042,4 +1054,196 @@ async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
         }
         ProcessResult::Skip { reason } => panic!("expected Continue, got Skip: {reason}"),
     }
+}
+
+// ── Phase 1 SAN guard tests ───────────────────────────────────────────────────
+
+/// Redis LinkSys with `tls.validation.subjectAltNames` must produce an
+/// Accepted=False preparse error in Phase 1.
+#[tokio::test]
+async fn redis_with_san_rejected_phase1() {
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+    use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
+    use edgion_resources::resources::link_sys::redis::RedisClientConfig;
+
+    let (ctx, _runtime) = make_ctx(HashMap::new());
+
+    let mut ls = LinkSys {
+        metadata: ObjectMeta {
+            name: Some("redis-san".to_string()),
+            namespace: Some("default".to_string()),
+            generation: Some(1),
+            ..Default::default()
+        },
+        spec: LinkSysSpec {
+            config: SystemConfig::Redis(RedisClientConfig {
+                endpoints: vec!["redis://localhost:6379".to_string()],
+                tls: Some(TlsConfig {
+                    enabled: true,
+                    outbound: OutboundTlsLocal {
+                        validation: Some(OutboundTlsValidation {
+                            subject_alt_names: Some(vec![SubjectAltName {
+                                san_type: SubjectAltNameType::Hostname,
+                                hostname: Some("redis.example.com".to_string()),
+                                uri: None,
+                            }]),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                auth: None,
+                db: None,
+                timeout: None,
+                pool: None,
+                retry: None,
+                topology: None,
+                observability: None,
+            }),
+        },
+        status: None,
+    };
+
+    let handler = LinkSysHandler::new();
+    let errors = handler.preparse(&mut ls, &ctx);
+
+    assert!(
+        !errors.is_empty(),
+        "expected preparse error for Redis subjectAltNames in Phase 1"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("Redis")),
+        "error must identify the provider as Redis; got: {:?}",
+        errors
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("SAN pinning") || e.contains("subjectAltNames")),
+        "error must mention SAN pinning; got: {:?}",
+        errors
+    );
+}
+
+/// Etcd LinkSys with `tls.validation.hostname` must produce an
+/// Accepted=False preparse error in Phase 1 (spot-check for Etcd path).
+#[tokio::test]
+async fn etcd_with_hostname_rejected_phase1() {
+    use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
+    use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
+
+    let (ctx, _runtime) = make_ctx(HashMap::new());
+
+    let mut ls = LinkSys {
+        metadata: ObjectMeta {
+            name: Some("etcd-san".to_string()),
+            namespace: Some("default".to_string()),
+            generation: Some(1),
+            ..Default::default()
+        },
+        spec: LinkSysSpec {
+            config: SystemConfig::Etcd(EtcdClientConfig {
+                endpoints: vec!["https://etcd:2379".to_string()],
+                tls: Some(TlsConfig {
+                    enabled: true,
+                    outbound: OutboundTlsLocal {
+                        validation: Some(OutboundTlsValidation {
+                            hostname: Some("etcd.example.com".to_string()),
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                auth: None,
+                timeout: None,
+                keep_alive: None,
+                namespace: None,
+                auto_sync_interval: None,
+                max_call_send_size: None,
+                max_call_recv_size: None,
+                user_agent: None,
+                reject_old_cluster: None,
+                observability: None,
+            }),
+        },
+        status: None,
+    };
+
+    let handler = LinkSysHandler::new();
+    let errors = handler.preparse(&mut ls, &ctx);
+
+    assert!(
+        !errors.is_empty(),
+        "expected preparse error for Etcd hostname in Phase 1"
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("Etcd")),
+        "error must identify the provider as Etcd; got: {:?}",
+        errors
+    );
+}
+
+/// Redis with only CA refs (no SAN fields) must NOT be rejected by the SAN guard.
+#[tokio::test]
+async fn redis_ca_only_no_san_accepted() {
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+    use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
+    use edgion_resources::resources::link_sys::redis::RedisClientConfig;
+
+    let (ctx, _runtime) = make_ctx(HashMap::new());
+
+    let mut ls = LinkSys {
+        metadata: ObjectMeta {
+            name: Some("redis-ca".to_string()),
+            namespace: Some("default".to_string()),
+            generation: Some(1),
+            ..Default::default()
+        },
+        spec: LinkSysSpec {
+            config: SystemConfig::Redis(RedisClientConfig {
+                endpoints: vec!["redis://localhost:6379".to_string()],
+                tls: Some(TlsConfig {
+                    enabled: true,
+                    outbound: OutboundTlsLocal {
+                        validation: Some(OutboundTlsValidation {
+                            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                                kind: "Secret".to_string(),
+                                name: "redis-ca".to_string(),
+                                namespace: None,
+                                ..Default::default()
+                            }]),
+                            subject_alt_names: None,
+                            hostname: None,
+                            well_known_ca_certificates: None,
+                        }),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                auth: None,
+                db: None,
+                timeout: None,
+                pool: None,
+                retry: None,
+                topology: None,
+                observability: None,
+            }),
+        },
+        status: None,
+    };
+
+    let handler = LinkSysHandler::new();
+    let errors = handler.preparse(&mut ls, &ctx);
+
+    let san_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| e.contains("SAN pinning") || e.contains("subjectAltNames"))
+        .collect();
+    assert!(
+        san_errors.is_empty(),
+        "CA-only TLS config must not trigger the SAN guard; got: {:?}",
+        errors
+    );
 }

@@ -16,7 +16,7 @@
 //! - [`resolve_secret`] — full pipeline; returns the validated `Secret`.
 //! - [`resolve_credential`] — full pipeline; returns the parsed `Material`.
 
-use k8s_openapi::api::core::v1::Secret;
+use k8s_openapi::api::core::v1::{ConfigMap, Secret};
 
 use edgion_resources::credentials::{ResolveError, SecretMaterialResolver};
 use edgion_resources::resources::common::SecretObjectReference;
@@ -152,6 +152,80 @@ pub fn fetch_secret(
         None => FetchOutcome::Pending(PendingReason::SecretNotFound {
             namespace: secret_ns,
             name: secret_ref.name.clone(),
+        }),
+    }
+}
+
+/// Fetch the ConfigMap object: register dependency, optionally check cross-namespace
+/// ReferenceGrant, then look up in the store.
+///
+/// Mirrors [`fetch_secret`] for ConfigMaps. The `namespace` parameter is the
+/// explicit namespace of the target ConfigMap (`None` means "same as owner"). The
+/// `owner_ns` parameter is the owner resource's own namespace (`None` for
+/// cluster-scoped resources). When `namespace` is `Some` and differs from
+/// `owner_ns` the function checks for a cross-namespace `ReferenceGrant` authorised
+/// by `owner_group`/`owner_kind` before accessing the store.
+///
+/// `owner_group` and `owner_kind` identify the requesting resource type on the
+/// "from" side of the `ReferenceGrant` (`from.group`, `from.kind`).
+pub fn fetch_configmap(
+    ctx: &HandlerContext,
+    resource_ref: &ResourceRef,
+    owner_group: &str,
+    owner_kind: &str,
+    name: &str,
+    namespace: Option<&str>,
+    owner_ns: Option<&str>,
+) -> FetchOutcome<ConfigMap> {
+    // ── Step 1: compute effective namespace ──────────────────────────────
+    let effective_ns = match namespace.or(owner_ns) {
+        Some(ns) => ns,
+        None => {
+            // Cluster-scoped owner with no explicit namespace: cannot resolve.
+            return FetchOutcome::Pending(PendingReason::SecretNotFound {
+                namespace: String::new(),
+                name: name.to_string(),
+            });
+        }
+    };
+
+    // ── Step 2: register SecretRefManager dependency ─────────────────────
+    let key_ns = effective_ns.to_string();
+    let cm_key = format_secret_key(Some(&key_ns), name);
+    ctx.secret_ref_manager().add_ref(cm_key, resource_ref.clone());
+
+    // ── Step 3: cross-namespace ReferenceGrant check ─────────────────────
+    let cross_ns = match (namespace, owner_ns) {
+        (Some(ns), Some(own)) => ns != own,
+        (Some(_), None) => true, // cluster-scoped owner referencing an explicit namespace
+        (None, _) => false,      // same-namespace reference
+    };
+    if cross_ns {
+        let from_ns = owner_ns.unwrap_or("");
+        let allowed = ctx.runtime().ref_grant_store.check_reference_allowed(
+            from_ns,
+            owner_group,
+            owner_kind,
+            effective_ns,
+            "",
+            "ConfigMap",
+            Some(name),
+        );
+        if !allowed {
+            return FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+                from_ns: from_ns.to_string(),
+                to_ns: effective_ns.to_string(),
+                secret_name: name.to_string(),
+            });
+        }
+    }
+
+    // ── Step 4: look up the ConfigMap ────────────────────────────────────
+    match ctx.runtime().configmap_store.get(Some(effective_ns), name) {
+        Some(cm) => FetchOutcome::Ok(cm),
+        None => FetchOutcome::Pending(PendingReason::SecretNotFound {
+            namespace: effective_ns.to_string(),
+            name: name.to_string(),
         }),
     }
 }

@@ -155,7 +155,6 @@ pub struct EtcdLogging {
 mod tests {
     use super::super::{LinkSys, LinkSysSpec, SystemConfig, SystemType};
     use super::*;
-    use crate::resources::common::CaSource;
 
     #[test]
     fn test_deserialize_etcd_simple() {
@@ -227,9 +226,7 @@ spec:
     tls:
       enabled: true
       verify: false
-      caSource: Inline
-      caCert: "CA_CERT_CONTENT"
-      clientSecretRef:
+      clientCertificateRef:
         name: etcd-client-tls
 "#;
 
@@ -239,10 +236,9 @@ spec:
         let tls = etcd_config.tls.as_ref().expect("TLS should be present");
         assert!(tls.enabled);
         assert_eq!(tls.outbound.verify, Some(false));
-        assert_eq!(tls.outbound.ca_source, Some(CaSource::Inline));
-        assert_eq!(tls.outbound.ca_cert.as_deref(), Some("CA_CERT_CONTENT"));
+        assert!(tls.outbound.validation.is_none());
         assert_eq!(
-            tls.outbound.client_secret_ref.as_ref().map(|s| s.name.as_str()),
+            tls.outbound.client_certificate_ref.as_ref().map(|s| s.name.as_str()),
             Some("etcd-client-tls")
         );
     }
@@ -468,10 +464,6 @@ spec:
         namespace: test
     tls:
       enabled: true
-      caSource: SecretRef
-      caSecretRef:
-        name: etcd-tls
-        namespace: test
 "#;
 
         let link_sys: LinkSys = serde_yaml::from_str(yaml).expect("Failed to deserialize");
@@ -482,13 +474,8 @@ spec:
         assert_eq!(auth.slot.secret_ref.namespace.as_deref(), Some("test"));
 
         let tls = etcd_config.tls.as_ref().expect("TLS should be present");
-        assert_eq!(tls.outbound.ca_source, Some(CaSource::SecretRef));
-        let ca_secret_ref = tls
-            .outbound
-            .ca_secret_ref
-            .as_ref()
-            .expect("CA secret ref should be present");
-        assert_eq!(ca_secret_ref.name, "etcd-tls");
+        // The old caSource/caSecretRef fields are unknown to the new schema and are silently ignored
+        assert!(tls.outbound.validation.is_none());
     }
 
     #[test]

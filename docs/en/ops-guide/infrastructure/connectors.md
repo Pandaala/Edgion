@@ -79,27 +79,29 @@ Every backend accepts the same `tls` block for securing the connection.
 tls:
   enabled: true
   verify: true                 # verify peer certificate (default true); false is honored (operator responsibility)
-  caSource: SecretRef          # System | SecretRef | Inline
-  caSecretRef:
-    name: my-ca-bundle         # Secret holding ca.crt (used when caSource: SecretRef)
-  # caCert: |                  # Inline PEM CA bundle (used when caSource: Inline)
-  #   -----BEGIN CERTIFICATE-----
-  #   <base64-encoded-cert>
-  #   -----END CERTIFICATE-----
-  clientSecretRef:
+  validation:                  # optional; omit to use built-in webpki root CAs
+    caCertificateRefs:         # list of CA cert refs; for LinkSys, only kind: Secret is supported
+      - kind: Secret
+        name: my-ca-bundle     # Secret must have a ca.crt key (type kubernetes.io/tls or Opaque)
+    wellKnownCACertificates: System  # alternatively, explicitly use built-in webpki roots
+    # Phase 1: hostname and subjectAltNames are schema-exposed but not enforced.
+    # Configuring them causes Accepted=False until Phase 2.
+  clientCertificateRef:
     name: my-client-tls        # Secret holding tls.crt + tls.key for client mTLS
 ```
+
+> **Phase 1 CA ref limitation**: `validation.caCertificateRefs` for LinkSys (redis / etcd / elasticsearch / kafka) only supports `kind: Secret` in this release. ConfigMap CA is not supported for LinkSys. If you need ConfigMap CA support, use the plugin (OIDC / LDAP / ForwardAuth / EGC) TLS paths. Inline CA (`caCert`) has been removed; use a Secret with a `ca.crt` key instead.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | Boolean | `false` | Enable TLS for the connection. For URLs that already imply TLS (`https://`, `rediss://`), this only adds custom CA / client-certificate handling. |
 | `verify` | Boolean | `true` | Verify the peer TLS certificate. `verify: false` is honored (operator responsibility); a WARN is logged at startup. Redis and Etcd always verify (`verify: false` is rejected at startup — the SDK has no skip-verify API). |
-| `caSource` | Enum | — | Trust-anchor source: `System` (built-in webpki roots), `SecretRef` (private CA from `caSecretRef`), or `Inline` (PEM in `caCert`). A custom CA **replaces** the public roots. |
-| `caSecretRef` | Object | none | Kubernetes Secret holding a private CA bundle (`ca.crt` key). Required when `caSource: SecretRef`. |
-| `caCert` | String | none | Inline PEM CA bundle. Used when `caSource: Inline`. |
-| `clientSecretRef` | Object | none | Kubernetes Secret holding the client mTLS identity (`tls.crt` / `tls.key` keys). |
+| `validation` | Object | none | Optional trust anchor configuration. Omit to use built-in webpki root CAs. |
+| `validation.caCertificateRefs` | Array | none | List of CA certificate Secret refs (each: `{ kind: Secret, name, namespace }`). The Secret must have a `ca.crt` key. For LinkSys, only `kind: Secret` is supported in this release. A custom CA **replaces** the built-in roots. |
+| `validation.wellKnownCACertificates` | String | none | Explicitly use built-in webpki root CAs. Allowed value: `System`. |
+| `clientCertificateRef` | Object | none | Kubernetes Secret holding the client mTLS identity (`tls.crt` / `tls.key` keys). |
 
-The client mTLS identity (certificate + private key) must be provided via `clientSecretRef`.
+The client mTLS identity (certificate + private key) must be provided via `clientCertificateRef`.
 
 ### Observability
 
@@ -263,7 +265,7 @@ spec:
         namespace: credentials
     tls:
       enabled: true
-      clientSecretRef:
+      clientCertificateRef:
         name: etcd-client-tls
     namespace: "/my-app/"
 ```
@@ -1126,7 +1128,7 @@ spec:
 
 ### 3. TLS-secured Etcd with mTLS client certificate
 
-The CA bundle is inlined (`caSource: Inline`). The client certificate and private key come from a Secret (`clientSecretRef`).
+The CA bundle is provided via a Secret ref (`validation.caCertificateRefs`). The client certificate and private key come from a separate Secret (`clientCertificateRef`). Note: inline CA (`caCert`) is no longer supported in this release; use a Secret with a `ca.crt` key instead.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -1145,12 +1147,11 @@ spec:
         name: etcd-creds
     tls:
       enabled: true
-      caSource: Inline
-      caCert: |
-        -----BEGIN CERTIFICATE-----
-        <base64-encoded-cert>
-        -----END CERTIFICATE-----
-      clientSecretRef:
+      validation:
+        caCertificateRefs:
+          - kind: Secret
+            name: etcd-ca-bundle   # Secret with ca.crt key; e.g. kubectl create secret generic etcd-ca-bundle --from-file=ca.crt=ca.pem
+      clientCertificateRef:
         name: etcd-client-tls
 ```
 
@@ -1175,7 +1176,7 @@ spec:
 
 ### Q4: Can I disable TLS verification (`verify: false`) for Redis or Etcd?
 
-**A**: No. Redis and Etcd clients do not support disabling certificate verification — `verify: false` is rejected at startup for these connectors in any environment. This is intentional: to connect to a backend with a private CA, use `tls.caSource: Inline` + `tls.caCert` (inline PEM) or `tls.caSource: SecretRef` + `tls.caSecretRef` instead.
+**A**: No. Redis and Etcd clients do not support disabling certificate verification — `verify: false` is rejected at startup for these connectors in any environment. This is intentional: to connect to a backend with a private CA, use `tls.validation.caCertificateRefs` pointing to a Secret with a `ca.crt` key instead.
 
 ### Q5: What happens to active connections when I rotate a Secret?
 

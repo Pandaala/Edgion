@@ -13,7 +13,9 @@ use std::collections::BTreeMap;
 use edgion_common::link_sys_core::credential::CredentialState;
 use edgion_resources::credentials::materials::BasicAuthMaterial;
 use edgion_resources::credentials::resolvers::tls::{TLS_CA_KEY, TLS_CERT_KEY, TLS_KEY_KEY};
-use edgion_resources::resources::common::{CaSource, OutboundTlsLocal, SecretObjectReference, SecretSlot, TlsConfig};
+use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
+use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+use edgion_resources::resources::common::{OutboundTlsLocal, SecretObjectReference, SecretSlot, TlsConfig};
 use edgion_resources::resources::link_sys::etcd::{EtcdAuth, EtcdClientConfig, EtcdKeepAlive, EtcdTimeout};
 
 // ============================================================================
@@ -188,11 +190,26 @@ impl EtcdConfig {
             Some(TlsConfig {
                 enabled: true,
                 outbound: OutboundTlsLocal {
-                    ca_source: if has_ca { Some(CaSource::SecretRef) } else { None },
+                    // When a CA file is present, declare a synthetic CA ref so that
+                    // resolve_outbound_tls knows to use resolved_ca_certificates
+                    // (Custom CA) rather than system roots.
+                    validation: if has_ca {
+                        Some(OutboundTlsValidation {
+                            ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
+                                group: String::new(),
+                                kind: "Secret".to_string(),
+                                name: "conf-center-ca".to_string(),
+                                namespace: None,
+                            }]),
+                            ..Default::default()
+                        })
+                    } else {
+                        None
+                    },
                     ..Default::default()
                 },
-                resolved_ca_secret: if has_ca { secret.clone() } else { None },
-                resolved_client_secret: if has_client { secret } else { None },
+                resolved_ca_certificates: if has_ca { secret.clone().map(|s| vec![s]) } else { None },
+                resolved_client_certificate: if has_client { secret } else { None },
             })
         } else {
             None
@@ -376,14 +393,15 @@ auth:
     }
 
     /// A CA-only TLS config (only ca_cert_file set, no client cert/key) must:
-    /// - produce a TlsConfig with ca_source = Some(SecretRef) so the resolver
-    ///   reads the CA from resolved_ca_secret (not system roots).
-    /// - have resolved_ca_secret set (the CA material).
-    /// - have resolved_client_secret = None (no mTLS identity).
+    /// - produce a TlsConfig with validation.caCertificateRefs set so the resolver
+    ///   reads the CA from resolved_ca_certificates (not system roots).
+    /// - have resolved_ca_certificates set (the CA material).
+    /// - have resolved_client_certificate = None (no mTLS identity).
     ///
     /// Regression guard for the bug where the synthetic Secret was assigned to
-    /// BOTH resolved_ca_secret and resolved_client_secret, causing the resolver
-    /// to fail with OutboundTlsClientCertInvalid when no tls.crt/tls.key were present.
+    /// BOTH resolved_ca_certificates and resolved_client_certificate, causing the
+    /// resolver to fail with OutboundTlsClientCertInvalid when no tls.crt/tls.key
+    /// were present.
     #[test]
     fn test_ca_only_tls_config_does_not_set_client_secret() {
         use std::io::Write;
@@ -416,18 +434,23 @@ auth:
         let (client_config, _) = config.to_client_config().unwrap();
         let tls = client_config.tls.expect("TLS config must be present");
 
-        assert_eq!(
-            tls.outbound.ca_source,
-            Some(CaSource::SecretRef),
-            "ca_source must be SecretRef when only ca_cert_file is set"
+        // When a CA file is configured, the outbound validation block must contain a
+        // non-empty ca_certificate_refs so that resolve_outbound_tls picks Custom CA.
+        assert!(
+            tls.outbound
+                .validation
+                .as_ref()
+                .and_then(|v| v.ca_certificate_refs.as_ref())
+                .is_some_and(|r| !r.is_empty()),
+            "outbound.validation.ca_certificate_refs must be set when ca_cert_file is provided"
         );
         assert!(
-            tls.resolved_ca_secret.is_some(),
-            "resolved_ca_secret must carry the CA material"
+            tls.resolved_ca_certificates.is_some(),
+            "resolved_ca_certificates must carry the CA material"
         );
         assert!(
-            tls.resolved_client_secret.is_none(),
-            "resolved_client_secret must be None when no client cert/key is configured (CA-only)"
+            tls.resolved_client_certificate.is_none(),
+            "resolved_client_certificate must be None when no client cert/key is configured (CA-only)"
         );
     }
 }

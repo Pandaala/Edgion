@@ -708,7 +708,7 @@ mod tests {
     #[test]
     fn egc_outbound_tls_roundtrips() {
         let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
-            "outboundTls": {"verify": false, "caSource":"System"}
+            "outboundTls": {"verify": false}
         }))
         .unwrap();
         assert_eq!(s.outbound_tls.unwrap().verify, false);

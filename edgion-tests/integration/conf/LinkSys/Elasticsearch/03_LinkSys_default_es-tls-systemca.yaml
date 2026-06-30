@@ -18,7 +18,8 @@ spec:
       - "https://127.0.0.1:19201"
     tls:
       enabled: true
-      caSource: System
+      validation:
+        wellKnownCACertificates: System
     timeout:
       connect: 5000
       request: 30000

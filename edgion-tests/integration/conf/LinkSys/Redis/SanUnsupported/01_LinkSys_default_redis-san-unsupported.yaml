@@ -1,0 +1,33 @@
+# LinkSys Redis resource with subjectAltNames pinning (B3 scenario).
+#
+# SAN pinning enforcement is deferred to Phase 2. In Phase 1 the schema fields
+# (validation.subjectAltNames + validation.hostname) are exposed on every provider
+# but the san_guard preparse check sets Accepted=False with a reason containing
+# "SAN pinning not supported" when either field is present, to surface the
+# unimplemented enforcement instead of silently ignoring the config.
+#
+# The endpoint and auth Secret are intentionally omitted; the fixture is for
+# admission/status verification only, not runtime connectivity.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: redis-san-unsupported
+  namespace: default
+spec:
+  type: redis
+  config:
+    endpoints:
+      - "rediss://127.0.0.1:16379"
+    db: 0
+    tls:
+      enabled: true
+      validation:
+        subjectAltNames:
+          - type: Hostname
+            hostname: redis.example.com
+    pool:
+      size: 2
+    timeout:
+      connect: 3000
+      read: 2000
+      write: 2000

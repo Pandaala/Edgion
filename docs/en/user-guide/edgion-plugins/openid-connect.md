@@ -72,7 +72,7 @@
 | `tokenSigningAlg` | String | none | Specify token signing algorithm (cannot be `none`) |
 | `allowedSigningAlgs` | Array\<String\> | none | Allowed signing algorithms list (cannot contain `none`) |
 | `useJwks` | Boolean | `true` | Whether to use JWKS for local verification |
-| `verify` | Boolean | `true` | Verify the OIDC Provider's TLS certificate. When `false`, the gateway skips peer certificate validation (operator responsibility; a WARN is logged at startup). Optionally pair with `caSource`/`caSecretRef`/`caCert` for private-CA IdPs and `clientSecretRef` for mTLS. |
+| `verify` | Boolean | `true` | Verify the OIDC Provider's TLS certificate. When `false`, the gateway skips peer certificate validation (operator responsibility; a WARN is logged at startup). For private-CA IdPs, pair with `validation.caCertificateRefs` (list of Secret/ConfigMap refs each with a `ca.crt` key) or `validation.wellKnownCACertificates: System`. For mutual TLS to the IdP, pair with `clientCertificateRef` (Secret with `tls.crt`/`tls.key` keys). Inline CA (`caCert`) is no longer supported. Phase 1 note: `validation.hostname` and `validation.subjectAltNames` (SAN pinning) are schema-exposed but not enforced; configuring them causes `Accepted=False`. Note: `clientSecretRef` in the Basic Parameters table above is the OAuth2 client secret, separate from TLS configuration. |
 | `issuers` | Array\<String\> | none | Allowed issuer list |
 | `audiences` | Array\<String\> | none | Allowed audience list |
 | `clockSkewSeconds` | Integer | `120` | Clock skew tolerance (seconds) |

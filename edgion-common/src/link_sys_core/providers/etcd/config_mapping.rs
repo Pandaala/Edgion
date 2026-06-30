@@ -102,8 +102,8 @@ pub fn build_connect_options(
 fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
     let resolved = outbound_tls::resolve_outbound_tls(
         &tls.outbound,
-        tls.resolved_ca_secret.as_ref(),
-        tls.resolved_client_secret.as_ref(),
+        tls.resolved_ca_certificates.as_deref(),
+        tls.resolved_client_certificate.as_ref(),
         false, // etcd-client cannot disable TLS verification
         "Etcd",
     )
@@ -117,8 +117,12 @@ fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
 
     let mut tls_options = TlsOptions::new();
 
-    if let EffectiveCa::Custom(ca_pem) = &resolved.ca {
-        tls_options = tls_options.ca_certificate(Certificate::from_pem(ca_pem));
+    if let EffectiveCa::Custom(bundles) = &resolved.ca {
+        // etcd-client accepts one Certificate per `ca_certificate()` call;
+        // iterate over all resolved PEM bundles and add each in turn.
+        for bundle in bundles {
+            tls_options = tls_options.ca_certificate(Certificate::from_pem(bundle.as_slice()));
+        }
     }
 
     if let Some((cert_pem, key_pem)) = &resolved.client_identity {
@@ -335,8 +339,8 @@ mod tests {
             tls: Some(TlsConfig {
                 enabled: true,
                 outbound: OutboundTlsLocal::default(),
-                resolved_ca_secret: None,
-                resolved_client_secret: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
             }),
             ..minimal_config(vec!["https://localhost:2379".to_string()])
         };
@@ -358,8 +362,8 @@ mod tests {
                     verify: Some(false),
                     ..Default::default()
                 },
-                resolved_ca_secret: None,
-                resolved_client_secret: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
             }),
             ..minimal_config(vec!["https://localhost:2379".to_string()])
         };
@@ -374,8 +378,8 @@ mod tests {
             tls: Some(TlsConfig {
                 enabled: false,
                 outbound: OutboundTlsLocal::default(),
-                resolved_ca_secret: None,
-                resolved_client_secret: None,
+                resolved_ca_certificates: None,
+                resolved_client_certificate: None,
             }),
             ..minimal_config(vec!["http://localhost:2379".to_string()])
         };

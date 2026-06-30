@@ -62,7 +62,7 @@ pub struct GrpcServiceConfig {
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
 
-    /// TLS settings for the gRPC connection (enabled, verify, caSource, CA material, mTLS).
+    /// TLS settings for the gRPC connection (enabled, verify, validation, clientCertificateRef).
     /// Set tls.enabled=true to dial over TLS; all other fields are optional and inherit from
     /// the global outboundTls default when absent.
     #[serde(default)]
@@ -373,9 +373,9 @@ mod tests {
     }
 
     #[test]
-    fn extproc_grpc_accepts_verify_and_casource() {
+    fn extproc_grpc_accepts_verify_and_validation() {
         let c: GrpcServiceConfig = serde_json::from_value(serde_json::json!({
-            "target":"ep:9000","tls":{"enabled":true,"verify":false,"caSource":"Inline","caCert":"---PEM---"}
+            "target":"ep:9000","tls":{"enabled":true,"verify":false,"validation":{"caCertificateRefs":[{"kind":"Secret","name":"ca"}]}}
         }))
         .unwrap();
         assert!(c.tls.enabled);
