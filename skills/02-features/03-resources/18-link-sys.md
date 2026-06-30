@@ -74,8 +74,9 @@ tls:
       - kind: Secret              # Secret must be kubernetes.io/tls or Opaque with a ca.crt key.
         name: my-ca-bundle        # Defaults to the same namespace as LinkSys when namespace is omitted.
     wellKnownCACertificates: System   # Alternatively, explicitly use the built-in webpki root bundle.
-    # Phase 1: hostname and subjectAltNames are schema-exposed but enforcement is deferred.
-    # Configuring either field causes Accepted=False until Phase 2 lands.
+    # Phase 2: OIDC and LDAP now enforce hostname and subjectAltNames.
+    # For LinkSys (redis/etcd/elasticsearch/kafka) and ext_proc, enforcement is deferred.
+    # Configuring these fields for unsupported backends causes Accepted=False.
     # hostname: "backend.example.com"
     # subjectAltNames: ["backend.example.com"]
   clientCertificateRef:           # Secret holding tls.crt + tls.key for client mTLS
@@ -87,9 +88,9 @@ tls:
 - CA trust anchors come from `validation.caCertificateRefs` (Secret refs; for LinkSys only `kind: Secret` is supported) or `validation.wellKnownCACertificates: System` (built-in webpki roots). A custom CA **replaces** the public roots. Inline CA (`caCert`) has been removed in this release; use a `kubernetes.io/tls` or `Opaque` Secret with a `ca.crt` key instead.
 - For providers whose URLs already imply TLS (`https://`, `rediss://`), `enabled: true` only additionally enables custom CA / client certificate handling; `tls` may be omitted when only system CAs are used.
 
-> **Phase 1 outbound TLS limitations:**
+> **Phase 2 outbound TLS status:**
 > - `validation.caCertificateRefs` for LinkSys (redis / etcd / elasticsearch / kafka) only supports `kind: Secret` in this release. ConfigMap CA is not supported for LinkSys. If you need ConfigMap CA support, use the plugin (OIDC / LDAP / ForwardAuth / EGC) TLS paths instead.
-> - `validation.hostname` and `validation.subjectAltNames` (SAN pinning) are schema-visible but **not enforced** in Phase 1. Configuring either field causes `Accepted=False`. Enforcement for OIDC/LDAP paths is deferred to Phase 2. See `docs/superpowers/specs/2026-06-29-outbound-tls-align-backendtlspolicy-design.md` §6.
+> - `validation.hostname` and `validation.subjectAltNames` (SAN pinning) are now **enforced for OIDC and LDAP plugins**. TLS handshakes use rustls `OutboundSanVerifier` to validate peer certificate SANs at runtime; mismatch results in handshake failure with `EdgionStatus::OutboundTlsSanMismatch (999_09)`. **For LinkSys (redis / etcd / elasticsearch / kafka), ext_proc, and global EdgionGatewayConfig defaults, SAN enforcement is deferred to Phase 3.** Configuring SAN fields for unsupported backends causes `Accepted=False`. See `docs/superpowers/specs/2026-06-29-outbound-tls-align-backendtlspolicy-design.md` §6 and `tasks/todo/outbound-tls-sdk-san-audit.md` for the enforcement timeline.
 > - Inline CA (`caCert` field) has been removed. Use a Secret with a `ca.crt` key instead.
 
 ## Configuration by `type`

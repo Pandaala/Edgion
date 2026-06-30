@@ -185,6 +185,9 @@ pub enum EdgionStatus {
     /// The client-identity Secret referenced by `clientCertificateRef` is missing
     /// `tls.crt` or `tls.key`.
     OutboundTlsClientCertInvalid = 999_08,
+
+    /// Outbound peer certificate SANs did not match configured subjectAltNames.
+    OutboundTlsSanMismatch = 999_09,
 }
 
 impl EdgionStatus {
@@ -264,7 +267,19 @@ mod tests {
             EdgionStatus::OutboundTlsVerifyUnsupported => None,
             EdgionStatus::OutboundTlsCaMissing => None,
             EdgionStatus::OutboundTlsClientCertInvalid => None,
+            EdgionStatus::OutboundTlsSanMismatch => None,
         }
+    }
+
+    #[test]
+    fn outbound_tls_san_mismatch_renders_stable_code() {
+        let status = EdgionStatus::OutboundTlsSanMismatch;
+        assert_eq!(status as u32, 999_09);
+        assert_eq!(
+            status.http_status(),
+            None,
+            "OutboundTlsSanMismatch should have no HTTP status"
+        );
     }
 
     #[test]
@@ -319,6 +334,7 @@ mod tests {
             EdgionStatus::OutboundTlsVerifyUnsupported,
             EdgionStatus::OutboundTlsCaMissing,
             EdgionStatus::OutboundTlsClientCertInvalid,
+            EdgionStatus::OutboundTlsSanMismatch,
         ];
         for &s in all {
             assert_eq!(s.http_status(), expected_http(s), "http_status mismatch for {s:?}");

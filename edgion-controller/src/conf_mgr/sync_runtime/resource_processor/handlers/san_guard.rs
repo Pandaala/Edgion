@@ -1,27 +1,27 @@
-//! Phase 1 SAN-pinning guard: reject outbound TLS `subjectAltNames`/`hostname`
-//! on every provider where enforcement is not yet implemented.
+//! SAN-pinning guard: reject outbound TLS `subjectAltNames`/`hostname`
+//! on providers where enforcement is not yet implemented.
 //!
 //! # Design
 //!
 //! SAN pinning (verifying the peer certificate against an operator-supplied
-//! list of Subject Alternative Names) is a Phase 2 feature. Phase 1 exposes
+//! list of Subject Alternative Names) is a Phase 2+ feature. Phase 1 exposes
 //! the `validation.subjectAltNames` / `validation.hostname` schema fields on
 //! all outbound-TLS-capable providers so operators can write the config ahead
 //! of time, but the data-plane verifier is not wired yet.
 //!
-//! If an operator configures SAN pinning now the config would be silently
-//! ignored, which is worse than a clear rejection. This module surfaces that
-//! case as an `Accepted=False` validation error (via the standard `preparse`
-//! error-string mechanism) so the operator learns immediately.
+//! If an operator configures SAN pinning on an unsupported provider, the config
+//! would be silently ignored, which is worse than a clear rejection. This module
+//! surfaces that case as an `Accepted=False` validation error (via the standard
+//! `preparse` error-string mechanism) so the operator learns immediately.
 //!
-//! # Phase 2 migration
+//! # Phase 2+ enablement
 //!
-//! Flip the relevant `SAN_ENFORCED_*` constant to `true` and redeploy. The
-//! guard `san_pinning_requested(v) && !SAN_ENFORCED_X` short-circuits, so the
-//! error disappears without any other code change.
+//! As each provider's verifier lands, flip the corresponding `SAN_ENFORCED_*`
+//! constant to `true` and redeploy. The guard `san_pinning_requested(v) && !SAN_ENFORCED_X`
+//! short-circuits, so the error disappears without any other code change.
 //!
-//! Each constant is intentionally per-provider so Phase 2 can enable oidc/ldap
-//! first while keeping ext_proc/link_sys/egc guarded until their verifiers land.
+//! Each constant is intentionally per-provider so different providers can be
+//! rolled out independently (e.g., oidc/ldap in Phase 2, ext_proc/link_sys/egc later).
 
 use edgion_resources::prelude_resources::{EdgionGatewayConfig, EdgionPlugins, LinkSys};
 use edgion_resources::resources::common::OutboundTlsValidation;
@@ -32,13 +32,13 @@ use edgion_resources::resources::link_sys::SystemConfig;
 // Per-provider enforcement gates (Phase 1: all false)
 // ============================================================================
 
-/// Phase 1: SAN pinning is NOT enforced for the OpenidConnect plugin.
-/// Phase 2 will flip this to `true` once the OIDC TLS verifier is wired.
-pub const SAN_ENFORCED_OIDC: bool = false;
+/// Phase 2: SAN pinning is enforced for the OpenidConnect plugin.
+/// OIDC reqwest path uses use_preconfigured_tls + OutboundSanVerifier.
+pub const SAN_ENFORCED_OIDC: bool = true;
 
-/// Phase 1: SAN pinning is NOT enforced for the LdapAuth plugin.
-/// Phase 2 will flip this to `true` once the LDAP TLS verifier is wired.
-pub const SAN_ENFORCED_LDAP: bool = false;
+/// Phase 2: SAN pinning is enforced for the LdapAuth plugin.
+/// LDAP rustls path uses OutboundSanVerifier wrap.
+pub const SAN_ENFORCED_LDAP: bool = true;
 
 /// Phase 1: SAN pinning is NOT enforced for the ExtProc plugin.
 /// Phase 2 will flip this to `true` once the gRPC TLS verifier is wired.

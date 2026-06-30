@@ -2349,14 +2349,20 @@ mod tests {
 
     // ── Phase 1 SAN guard tests ───────────────────────────────────────────────
 
-    /// OpenidConnect plugin with `tls.validation.subjectAltNames` must produce
-    /// an Accepted=False preparse error in Phase 1.
+    /// OpenidConnect plugin with `tls.validation.subjectAltNames` is accepted in Phase 2.
+    /// SAN pinning is now enforced by the OIDC TLS verifier (use_preconfigured_tls + OutboundSanVerifier).
     #[tokio::test]
-    async fn oidc_with_san_rejected_phase1() {
+    async fn oidc_with_san_accepted_phase2() {
         use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
         use edgion_resources::resources::common::OutboundTlsValidation;
 
-        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+        let client_secret = build_secret("default", "oidc-client", "clientSecret", "client-secret-value");
+        let session_secret = build_secret("default", "oidc-session", "sessionSecret", "session-secret-value");
+        let mut secrets = HashMap::new();
+        secrets.insert("default/oidc-client".to_string(), client_secret);
+        secrets.insert("default/oidc-session".to_string(), session_secret);
+
+        let (ctx, _runtime) = make_ctx_with_secrets(secrets);
 
         let mut ep = EdgionPlugins::new("oidc-san-ep", EdgionPluginsSpec::default());
         ep.metadata.namespace = Some("default".to_string());
@@ -2364,6 +2370,18 @@ mod tests {
             OpenidConnectConfig {
                 discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
                 client_id: "my-client".to_string(),
+                client_secret_ref: Some(SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "oidc-client".to_string(),
+                    namespace: None,
+                }),
+                session_secret_ref: Some(SecretObjectReference {
+                    group: None,
+                    kind: None,
+                    name: "oidc-session".to_string(),
+                    namespace: None,
+                }),
                 tls: edgion_resources::resources::common::OutboundTlsLocal {
                     validation: Some(OutboundTlsValidation {
                         subject_alt_names: Some(vec![SubjectAltName {
@@ -2383,27 +2401,16 @@ mod tests {
         let errors = handler.preparse(&mut ep, &ctx);
 
         assert!(
-            !errors.is_empty(),
-            "expected preparse error for OIDC subjectAltNames in Phase 1"
-        );
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("SAN pinning") || e.contains("subjectAltNames")),
-            "error must mention SAN pinning; got: {:?}",
-            errors
-        );
-        assert!(
-            errors.iter().any(|e| e.contains("OpenidConnect")),
-            "error must identify the provider; got: {:?}",
+            errors.is_empty(),
+            "OIDC with subjectAltNames should be accepted in Phase 2; got errors: {:?}",
             errors
         );
     }
 
-    /// LdapAuth plugin with `tls.validation.hostname` must produce an
-    /// Accepted=False preparse error in Phase 1 (spot-check for LDAP path).
+    /// LdapAuth plugin with `tls.validation.hostname` is accepted in Phase 2.
+    /// SAN pinning is now enforced by the LDAP TLS verifier (OutboundSanVerifier wrap).
     #[tokio::test]
-    async fn ldap_with_hostname_rejected_phase1() {
+    async fn ldap_with_hostname_accepted_phase2() {
         use edgion_resources::resources::common::OutboundTlsValidation;
         use edgion_resources::resources::edgion_plugins::LdapAuthConfig;
 
@@ -2429,12 +2436,8 @@ mod tests {
         let errors = handler.preparse(&mut ep, &ctx);
 
         assert!(
-            !errors.is_empty(),
-            "expected preparse error for LdapAuth hostname in Phase 1"
-        );
-        assert!(
-            errors.iter().any(|e| e.contains("LdapAuth")),
-            "error must identify the provider; got: {:?}",
+            errors.is_empty(),
+            "LdapAuth with hostname should be accepted in Phase 2; got errors: {:?}",
             errors
         );
     }

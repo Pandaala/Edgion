@@ -1279,3 +1279,45 @@ fn callback_path_normalized_for_absolute_url_redirect_uri() {
     // The URL parser extracts the path; normalize_config_path then collapses it.
     assert_eq!(plugin.callback_path(), "/auth/callback");
 }
+
+#[test]
+fn oidc_san_pinning_config_builds_with_system_ca() {
+    use super::build_oidc_rustls_config_with_san;
+    use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+
+    let resolved = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::System,
+        client_identity: None,
+        san: None,
+    };
+    let san = vec![SubjectAltName {
+        san_type: SubjectAltNameType::Hostname,
+        hostname: Some("idp.example.com".to_string()),
+        uri: None,
+    }];
+    let cfg = build_oidc_rustls_config_with_san(&resolved, san).expect("build ok");
+    assert_eq!(cfg.alpn_protocols, vec![b"h2".to_vec(), b"http/1.1".to_vec()]);
+}
+
+#[test]
+fn oidc_san_pinning_config_fails_with_empty_custom_ca() {
+    use super::build_oidc_rustls_config_with_san;
+    use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+
+    let resolved = ResolvedOutboundTls {
+        verify: true,
+        ca: EffectiveCa::Custom(vec![b"not-a-pem".to_vec()]),
+        client_identity: None,
+        san: None,
+    };
+    let san = vec![SubjectAltName {
+        san_type: SubjectAltNameType::Hostname,
+        hostname: Some("idp.example.com".to_string()),
+        uri: None,
+    }];
+    let r = build_oidc_rustls_config_with_san(&resolved, san);
+    assert!(r.is_err(), "invalid CA PEM should error");
+}

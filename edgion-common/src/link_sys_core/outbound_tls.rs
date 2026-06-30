@@ -170,11 +170,15 @@ pub fn resolve_outbound_tls(
             provider = context,
             "outbound TLS verification disabled (verify=false) — operator-configured, insecure"
         );
+        // Preserve any SAN policy even when verify=false so that downstream
+        // TLS builders can enforce SAN pinning regardless of the skip-verify
+        // flag (fail-secure: a non-empty SAN policy overrides verify=false).
+        let san = local.validation.as_ref().or(global.validation.as_ref()).cloned();
         return Ok(ResolvedOutboundTls {
             verify: false,
             ca: EffectiveCa::System,
             client_identity: None,
-            san: None,
+            san,
         });
     }
 

@@ -97,7 +97,9 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAllVerifier {
 
 /// Build a rustls `ClientConfig` for ldap3 from the already-resolved outbound TLS settings.
 ///
-/// - `verify=false` → `AcceptAllVerifier` (operator's responsibility).
+/// - `verify=false` with no SAN policy → `AcceptAllVerifier` (operator's responsibility).
+/// - `verify=false` with non-empty SAN policy → full webpki + `OutboundSanVerifier` (fail-secure:
+///   SAN policy overrides skip-verify).
 /// - `System` → webpki built-in roots (binary-embedded, not OS cert store).
 /// - `Custom(pem)` → private CA bundle, REPLACES public roots entirely.
 /// - Client identity (`client_identity`) → `with_client_auth_cert`; absent → `with_no_client_auth`.
@@ -109,11 +111,22 @@ fn build_ldap_rustls_config(
         .with_safe_default_protocol_versions()
         .map_err(|e| format!("LdapAuth TLS: rustls provider error: {e}"))?;
 
-    let builder = if !resolved.verify {
+    // A non-empty SAN policy overrides verify=false and forces full certificate
+    // verification (fail-secure). Skip verification only when verify=false AND
+    // no SAN policy is configured.
+    let san_policy = resolved
+        .san
+        .as_ref()
+        .and_then(|v| v.subject_alt_names.clone())
+        .unwrap_or_default();
+
+    let builder = if san_policy.is_empty() && !resolved.verify {
+        // No SAN policy: operator explicitly disabled verification.
         builder
             .dangerous()
             .with_custom_certificate_verifier(std::sync::Arc::new(AcceptAllVerifier::new()))
     } else {
+        // Either verify=true, or a SAN policy is set (which overrides verify=false).
         let mut roots = RootCertStore::empty();
         match &resolved.ca {
             EffectiveCa::System => {
@@ -135,7 +148,22 @@ fn build_ldap_rustls_config(
                 }
             }
         }
-        builder.with_root_certificates(roots)
+        // If the operator supplied a SAN pinning policy, wrap the webpki
+        // verifier in OutboundSanVerifier so that the handshake is also
+        // checked against the configured subjectAltNames.
+        if !san_policy.is_empty() {
+            let webpki = rustls::client::WebPkiServerVerifier::builder_with_provider(
+                std::sync::Arc::new(roots),
+                std::sync::Arc::new(rustls::crypto::ring::default_provider()),
+            )
+            .build()
+            .map_err(|e| format!("LdapAuth TLS: webpki verifier build error: {e}"))?;
+            let san_verifier =
+                std::sync::Arc::new(crate::tls::validation::OutboundSanVerifier::new(webpki, san_policy));
+            builder.dangerous().with_custom_certificate_verifier(san_verifier)
+        } else {
+            builder.with_root_certificates(roots)
+        }
     };
 
     let config = match &resolved.client_identity {
@@ -615,7 +643,7 @@ mod tests {
         assert!(auth.tls_config.is_some(), "LDAPS must produce a TLS config");
     }
 
-    /// verify=false + ldaps=true → tls_config is Some (AcceptAllVerifier path).
+    /// verify=false + ldaps=true (no SAN policy) → tls_config is Some (AcceptAllVerifier path).
     #[test]
     fn ldaps_verify_false_builds_tls_config() {
         install_test_crypto_provider();
@@ -709,5 +737,106 @@ mod tests {
         // An invalid PEM will fail; for a real test use a valid cert.
         // We just verify the function is called and returns Err (not panics).
         let _ = LdapAuth::new(&config); // Ok or Err — just must not panic
+    }
+
+    // -----------------------------------------------------------------------
+    // Helpers for build_ldap_rustls_config SAN tests
+    // -----------------------------------------------------------------------
+
+    fn make_resolved_verify_true(
+        san_names: Vec<edgion_resources::resources::backend_tls_policy::SubjectAltName>,
+    ) -> edgion_common::link_sys_core::outbound_tls::ResolvedOutboundTls {
+        use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
+        use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+        let san = if san_names.is_empty() {
+            None
+        } else {
+            Some(OutboundTlsValidation {
+                subject_alt_names: Some(san_names),
+                ..Default::default()
+            })
+        };
+        ResolvedOutboundTls {
+            verify: true,
+            ca: EffectiveCa::System,
+            client_identity: None,
+            san,
+        }
+    }
+
+    fn make_resolved_verify_false_with_san(
+        san_names: Vec<edgion_resources::resources::backend_tls_policy::SubjectAltName>,
+    ) -> edgion_common::link_sys_core::outbound_tls::ResolvedOutboundTls {
+        use edgion_common::link_sys_core::outbound_tls::{EffectiveCa, ResolvedOutboundTls};
+        use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
+        let san = if san_names.is_empty() {
+            None
+        } else {
+            Some(OutboundTlsValidation {
+                subject_alt_names: Some(san_names),
+                ..Default::default()
+            })
+        };
+        ResolvedOutboundTls {
+            verify: false,
+            ca: EffectiveCa::System,
+            client_identity: None,
+            san,
+        }
+    }
+
+    /// Non-empty SAN policy (verify=true) → OutboundSanVerifier wraps webpki → returns Ok.
+    #[test]
+    fn ldap_rustls_config_with_san_policy_wraps_verifier() {
+        install_test_crypto_provider();
+        use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+        let san_policy = vec![SubjectAltName {
+            san_type: SubjectAltNameType::Hostname,
+            hostname: Some("ldap.example.com".to_string()),
+            uri: None,
+        }];
+        let resolved = make_resolved_verify_true(san_policy);
+        let result = build_ldap_rustls_config(&resolved);
+        assert!(
+            result.is_ok(),
+            "SAN-wrapped verifier path must build Ok, got: {:?}",
+            result.err()
+        );
+    }
+
+    /// Empty SAN policy (verify=true) → standard webpki path → returns Ok.
+    #[test]
+    fn ldap_rustls_config_without_san_uses_default_webpki() {
+        install_test_crypto_provider();
+        let resolved = make_resolved_verify_true(vec![]);
+        let result = build_ldap_rustls_config(&resolved);
+        assert!(
+            result.is_ok(),
+            "default webpki (no SAN policy) must build Ok, got: {:?}",
+            result.err()
+        );
+    }
+
+    /// verify=false + non-empty SAN policy → SAN verifier overrides skip-verify (fail-secure).
+    /// The function must build Ok via the webpki + OutboundSanVerifier path,
+    /// not via AcceptAllVerifier.
+    #[test]
+    fn ldap_rustls_config_verify_false_with_san_forces_secure_path() {
+        install_test_crypto_provider();
+        use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
+        let san_policy = vec![SubjectAltName {
+            san_type: SubjectAltNameType::Hostname,
+            hostname: Some("ldap.example.com".to_string()),
+            uri: None,
+        }];
+        let resolved = make_resolved_verify_false_with_san(san_policy);
+        // verify=false is overridden by the SAN policy: the function must build
+        // a config using webpki + OutboundSanVerifier rather than AcceptAllVerifier.
+        let result = build_ldap_rustls_config(&resolved);
+        assert!(
+            result.is_ok(),
+            "verify=false with SAN policy must build Ok via SAN verifier path, got: {:?}",
+            result.err()
+        );
     }
 }

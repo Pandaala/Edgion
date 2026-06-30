@@ -11,6 +11,9 @@ use jsonwebtoken::{decode, decode_header, DecodingKey, Validation};
 use pingora_http::ResponseHeader;
 use rand::RngCore;
 use reqwest::Url;
+use rustls::client::WebPkiServerVerifier;
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use rustls::{ClientConfig, RootCertStore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -30,8 +33,11 @@ use crate::plugins::http::common::auth_common::{
 };
 use crate::plugins::http::common::http_client::get_http_client_arc;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::tls::validation::OutboundSanVerifier;
+use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa, ResolvedOutboundTls};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::path_normalization::normalize_config_path;
+use edgion_resources::resources::backend_tls_policy::SubjectAltName;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::edgion_plugins::{
     EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode,
@@ -66,6 +72,78 @@ impl DiscoveryDoc for DiscoveryDocument {
     fn jwks_uri(&self) -> &str {
         &self.jwks_uri
     }
+}
+
+/// Build a rustls `ClientConfig` for OIDC outbound HTTPS with SAN pinning enforced.
+///
+/// Used only when the operator configured `tls.validation.subjectAltNames`.
+/// Bypasses reqwest's high-level `add_root_certificate` / `identity` helpers
+/// because they don't allow attaching a custom `ServerCertVerifier`.
+///
+/// Mirrors `build_ldap_rustls_config` in `ldap_auth/plugin.rs`, with two OIDC
+/// additions: ALPN protocols (`h2`, `http/1.1`) for HTTPS+HTTP/2 negotiation,
+/// and a return type tailored for `reqwest::ClientBuilder::use_preconfigured_tls`.
+fn build_oidc_rustls_config_with_san(
+    resolved: &ResolvedOutboundTls,
+    san_policy: Vec<SubjectAltName>,
+) -> Result<ClientConfig, String> {
+    let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+    let builder = ClientConfig::builder_with_provider(provider.clone())
+        .with_safe_default_protocol_versions()
+        .map_err(|e| format!("OpenidConnect TLS: rustls provider error: {e}"))?;
+
+    // Root store
+    let mut roots = RootCertStore::empty();
+    match &resolved.ca {
+        EffectiveCa::System => {
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        }
+        EffectiveCa::Custom(bundles) => {
+            let mut added = 0usize;
+            for bundle in bundles {
+                for cert in CertificateDer::pem_slice_iter(bundle) {
+                    let cert = cert.map_err(|e| format!("OpenidConnect TLS: invalid CA PEM: {e}"))?;
+                    roots
+                        .add(cert)
+                        .map_err(|e| format!("OpenidConnect TLS: add CA failed: {e}"))?;
+                    added += 1;
+                }
+            }
+            if added == 0 {
+                return Err("OpenidConnect TLS: CA PEM contained no valid certificates".to_string());
+            }
+        }
+    }
+
+    // Wrap webpki verifier with OutboundSanVerifier
+    let webpki = WebPkiServerVerifier::builder_with_provider(std::sync::Arc::new(roots), provider)
+        .build()
+        .map_err(|e| format!("OpenidConnect TLS: webpki verifier build error: {e}"))?;
+    let san_verifier = std::sync::Arc::new(OutboundSanVerifier::new(webpki, san_policy));
+    let builder = builder.dangerous().with_custom_certificate_verifier(san_verifier);
+
+    // Client identity (mTLS) — same pattern as ldap_auth/plugin.rs
+    let mut config = match &resolved.client_identity {
+        Some((cert_pem, key_pem)) => {
+            let certs: Vec<CertificateDer<'static>> = CertificateDer::pem_slice_iter(cert_pem)
+                .collect::<Result<_, _>>()
+                .map_err(|e| format!("OpenidConnect TLS: invalid client cert PEM: {e}"))?;
+            if certs.is_empty() {
+                return Err("OpenidConnect TLS: client cert PEM contained no certificates".to_string());
+            }
+            let key = PrivateKeyDer::from_pem_slice(key_pem.as_slice())
+                .map_err(|e| format!("OpenidConnect TLS: invalid client key PEM: {e}"))?;
+            builder
+                .with_client_auth_cert(certs, key)
+                .map_err(|e| format!("OpenidConnect TLS: client auth cert error: {e}"))?
+        }
+        None => builder.with_no_client_auth(),
+    };
+
+    // ALPN — OIDC over HTTPS may negotiate h2 (reqwest does so by default)
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+
+    Ok(config)
 }
 
 /// Build a config-aware discovery validator that fails fetch when a required
@@ -227,25 +305,85 @@ impl OpenidConnect {
                 resolved_ca_certificates: config.resolved_ca_certificates.clone(),
                 resolved_client_certificate: config.resolved_client_certificate.clone(),
             };
-            match build_outbound_client(OutboundClientConfig {
-                pool_max_idle_per_host: Some(32),
-                connect_timeout: Some(Duration::from_secs(5)),
-                total_timeout: Some(Duration::from_secs(config.timeout)),
-                redirect: OutboundRedirect::Deny,
-                tls: Some(tls_for_client),
-                tls_context: Some("OpenidConnect"),
-                ..Default::default()
-            }) {
-                Ok(c) => Arc::new(c),
-                Err(e) => {
-                    // Process-lifecycle / config-load event (allowed WARN). Fail closed to a
-                    // verifying client rather than running with the operator's verify=false.
-                    tracing::warn!(
-                        component = "openid_connect",
-                        error = %e,
-                        "outbound TLS resolve/gate failed; using secure default client"
-                    );
-                    get_http_client_arc()
+
+            // Phase 2: if SAN pinning is configured (validation.subjectAltNames),
+            // build reqwest with use_preconfigured_tls(rustls::ClientConfig) instead
+            // of the high-level helpers (which can't attach a ServerCertVerifier).
+            let san_policy: Vec<SubjectAltName> = tls_for_client
+                .outbound
+                .validation
+                .as_ref()
+                .and_then(|v| v.subject_alt_names.clone())
+                .unwrap_or_default();
+
+            if !san_policy.is_empty() {
+                match resolve_outbound_tls(
+                    &tls_for_client.outbound,
+                    tls_for_client.resolved_ca_certificates.as_deref(),
+                    tls_for_client.resolved_client_certificate.as_ref(),
+                    true,
+                    "OpenidConnect",
+                ) {
+                    Ok(resolved) => match build_oidc_rustls_config_with_san(&resolved, san_policy) {
+                        Ok(rustls_cfg) => {
+                            let builder = reqwest::ClientBuilder::new()
+                                .pool_max_idle_per_host(32)
+                                .connect_timeout(Duration::from_secs(5))
+                                .timeout(Duration::from_secs(config.timeout))
+                                .redirect(reqwest::redirect::Policy::none())
+                                .use_preconfigured_tls(rustls_cfg);
+                            match builder.build() {
+                                Ok(c) => Arc::new(c),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        component = "openid_connect",
+                                        error = %e,
+                                        "SAN-pinning reqwest client build failed; using secure default client"
+                                    );
+                                    get_http_client_arc()
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                component = "openid_connect",
+                                error = %e,
+                                "SAN-pinning rustls config build failed; using secure default client"
+                            );
+                            get_http_client_arc()
+                        }
+                    },
+                    Err(e) => {
+                        tracing::warn!(
+                            component = "openid_connect",
+                            error = ?e,
+                            "outbound TLS resolve failed (SAN path); using secure default client"
+                        );
+                        get_http_client_arc()
+                    }
+                }
+            } else {
+                // Original path (no SAN policy) — unchanged.
+                match build_outbound_client(OutboundClientConfig {
+                    pool_max_idle_per_host: Some(32),
+                    connect_timeout: Some(Duration::from_secs(5)),
+                    total_timeout: Some(Duration::from_secs(config.timeout)),
+                    redirect: OutboundRedirect::Deny,
+                    tls: Some(tls_for_client),
+                    tls_context: Some("OpenidConnect"),
+                    ..Default::default()
+                }) {
+                    Ok(c) => Arc::new(c),
+                    Err(e) => {
+                        // Process-lifecycle / config-load event (allowed WARN). Fail closed to a
+                        // verifying client rather than running with the operator's verify=false.
+                        tracing::warn!(
+                            component = "openid_connect",
+                            error = %e,
+                            "outbound TLS resolve/gate failed; using secure default client"
+                        );
+                        get_http_client_arc()
+                    }
                 }
             }
         };
