@@ -62,6 +62,13 @@ spec:
 | `minTlsVersion` | `TlsVersion?` | No | Minimum TLS version |
 | `ciphers` | `Vec<String>?` | No | OpenSSL-format cipher suites (BoringSSL default when omitted) |
 
+> **FIPS build note**: on a `fips`-feature gateway image, when `ciphers` is omitted the gateway
+> defaults to the FIPS-approved TLS 1.2 cipher set (`ECDHE-ECDSA-AES128-GCM-SHA256`,
+> `ECDHE-RSA-AES128-GCM-SHA256`, `ECDHE-ECDSA-AES256-GCM-SHA384`, `ECDHE-RSA-AES256-GCM-SHA384`)
+> and ECDH curves (`P-256`, `P-384`, `P-521`) instead of the plain BoringSSL default. Setting
+> `ciphers` explicitly always overrides this — the operator's list wins. See
+> `docs/superpowers/specs/2026-07-02-boringssl-fips-design.md` for details.
+
 ### TlsVersion Enum
 
 | Value | Description |

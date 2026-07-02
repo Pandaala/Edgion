@@ -1,3 +1,4 @@
+pub mod fips_profile;
 pub mod runtime;
 pub mod store;
 pub mod validation;

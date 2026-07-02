@@ -355,6 +355,42 @@ impl EdgionGatewayCli {
             );
         }
 
+        // 4c. FIPS: publish the module state and enforce the startup requirement.
+        // Placed after the Prometheus recorder is installed (4b) so the gauge is
+        // captured by the real exporter, and before any downstream subsystem is
+        // initialized so a required-but-missing FIPS module aborts startup early.
+        let fips_available = crate::tls::fips_profile::fips_module_available();
+        ::metrics::gauge!(crate::observe::metrics::registry::names::FIPS_MODULE_ENABLED).set(if fips_available {
+            1.0
+        } else {
+            0.0
+        });
+
+        let require_fips = config.gateway.require_fips
+            || config::require_fips_env_enabled(std::env::var(config::REQUIRE_FIPS_ENV).ok().as_deref());
+
+        if let Err(msg) = config::check_fips_requirement(require_fips, fips_available) {
+            tracing::error!(target: "startup", "{msg}");
+            std::process::exit(1);
+        }
+
+        // Force-enable the FIPS-approved TLS policy when configured, even on a
+        // non-FIPS build. A real FIPS build enforces it regardless; this lets the
+        // policy be exercised on a normal boringssl build (integration tests) or
+        // opted into as defense-in-depth. Resolved once here and read on the
+        // handshake path via fips_policy_active().
+        let fips_policy = config.gateway.fips_policy
+            || config::fips_policy_env_enabled(std::env::var(config::FIPS_POLICY_ENV).ok().as_deref());
+        crate::tls::fips_profile::set_fips_policy_forced(fips_policy);
+
+        tracing::info!(
+            target: "startup",
+            fips_module_enabled = fips_available,
+            require_fips,
+            fips_policy,
+            "FIPS status resolved"
+        );
+
         // 5. Initialize RateLimit / LRU cache / access-log sensitive global configurations
         edgion_resources::rate_limit_config::init_rate_limit_global_config(&config.rate_limit);
         config::init_lru_cache_global_config(&config.lru_cache);

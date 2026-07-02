@@ -104,6 +104,9 @@ access_log_sensitive:
   # replace_with: "***"            # Replacement string when mode=replace
   # wrap_prefix: "<E>"             # Prefix when mode=wrap
   # wrap_suffix: "</E>"            # Suffix when mode=wrap
+
+# require_fips: false              # Startup guard: require the FIPS-validated module (see below)
+# fips_policy: false               # Force FIPS-approved cipher/curve policy even on a non-FIPS build (see below)
 ```
 
 ## Field Details
@@ -234,6 +237,50 @@ Controls the redaction behavior of fields marked as sensitive in access log, ssl
 - Wrap mode uses a thread-local buffer with no heap allocation.
 - For custom wrap prefixes/suffixes, the total length should not exceed 36 bytes; otherwise it reduces the per-entry writable length of the plugin log.
 
+### require_fips
+
+Gateway-local (not cluster-synced) startup guard for BoringSSL FIPS builds. Also settable via
+env `EDGION_REQUIRE_FIPS` (truthy: `1`/`true`/`yes`/`on`); the env takes effect the same as the
+config field.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `require_fips` | `bool` | `false` | Require the FIPS-validated crypto module to be present at startup |
+
+- `require_fips: false` (default): starts normally regardless of whether the binary is a FIPS
+  build.
+- `require_fips: true` on a FIPS build (image compiled with the `fips` cargo feature): the guard
+  passes; the FIPS-approved default cipher/curve set applies automatically to downstream TLS.
+- `require_fips: true` on a non-FIPS build (validated module absent): the gateway logs a clear
+  error and exits non-zero at startup (fail-close) — no silent downgrade.
+
+This is a gateway-local field, not a cluster-synced one: a bad value can't be hot-pushed to
+crashloop a fleet, and it surfaces on first run. The `fips` cargo feature itself is an image/build
+concern, not something toggled at runtime. See
+`docs/superpowers/specs/2026-07-02-boringssl-fips-design.md` for the full design, including the
+approved cipher/curve set and known limitations (TLS 1.3 ChaCha20 not restrictable in BoringSSL;
+upstream/backend TLS ciphers are not FIPS-restricted).
+
+### fips_policy
+
+Gateway-local switch that force-enables the FIPS-approved TLS policy (approved cipher list +
+curves) on downstream listeners **even on a non-FIPS build**. Also settable via env
+`EDGION_FIPS_POLICY` (truthy: `1`/`true`/`yes`/`on`).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `fips_policy` | `bool` | `false` | Force the FIPS-approved cipher/curve enforcement regardless of the validated module |
+
+- `fips_policy: false` (default): enforcement follows the build — a real FIPS build enforces the
+  approved set automatically; a non-FIPS build does not.
+- `fips_policy: true`: the approved cipher/curve set is enforced on a normal boringssl build too.
+  Two uses: (1) exercise the FIPS policy in integration tests without a FIPS toolchain/module
+  (the approved-suite behavior is pure SSL config, so it works on any boringssl build); (2) opt
+  into the approved-suite restriction as defense-in-depth. Enforcement gate is
+  `fips_module_available() OR fips_policy`. Operator `EdgionTls.ciphers` still overrides the cipher
+  list (approved curves still apply). This flag does **not** provide the validated crypto module —
+  for real FIPS compliance the binary must still be a FIPS build.
+
 ## `integration_testing_mode`
 
 This is a CLI flag, not a YAML config section. It is **production-unsafe** and is
@@ -265,3 +312,4 @@ production enablement even when the startup WARN goes unread.
 - Toggle business logs: change `access_log` / `ssl_log` / `tcp_log` / `udp_log`
 - Tune Pingora workers and keepalive: change `server`
 - Tune the default RateLimit precision: change `rate_limit`
+- Require the FIPS-validated crypto module at startup (FIPS builds only): change `require_fips` or set `EDGION_REQUIRE_FIPS`

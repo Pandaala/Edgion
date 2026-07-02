@@ -21,6 +21,21 @@ Each binary crate sets its own `#[global_allocator]`; libraries set none. Becaus
 - TLS backend: `boringssl` (default) | `rustls`
 - Memory allocator: `allocator-jemalloc` (default) | `allocator-mimalloc` | `allocator-system`
 
+**BoringSSL FIPS (image-only)**: `fips` is a gateway cargo feature enabled only in release/CI
+Docker builds (requires `boringssl`; not a default, not toggled at runtime). On a FIPS build,
+downstream server TLS defaults to the FIPS-approved TLS 1.2 cipher set
+(`ECDHE-{ECDSA,RSA}-AES{128,256}-GCM-SHA{256,384}`) and ECDH curves (`P-256`/`P-384`/`P-521`)
+unless `EdgionTls.spec.ciphers` is set explicitly (operator override always wins). The gateway-local
+`require_fips` config field (also settable via `EDGION_REQUIRE_FIPS`) fails startup non-zero if
+`require_fips: true` but the binary is not a FIPS build. The gateway-local `fips_policy` field (env
+`EDGION_FIPS_POLICY`) force-enables the approved cipher/curve policy even on a non-FIPS build
+(gate is `fips_module_available() OR fips_policy`) — mainly to exercise the FIPS policy in
+integration tests on a normal boringssl build; it does not provide the validated module. Known
+limitations: TLS 1.3 cipher suites
+cannot be restricted in BoringSSL (`TLS_CHACHA20_POLY1305_SHA256` still negotiable under FIPS), and
+upstream (gateway→backend) TLS cipher suites are not FIPS-restricted (pingora connector
+limitation). See `docs/superpowers/specs/2026-07-02-boringssl-fips-design.md` for the full design.
+
 ## Knowledge System
 
 When a task needs project context, start from `skills/SKILL.md` and **load progressively on demand** — do not read everything at once. The detailed AI Agent collaboration guide lives in this file (`AGENTS.md`); `CLAUDE.md` is a symlink to it.

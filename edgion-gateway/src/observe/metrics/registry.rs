@@ -73,6 +73,9 @@ pub mod names {
     // and lines that failed to backfill (kept for retry). Cold/failure-path.
     pub const ACCESS_LOG_BACKFILL_INGESTED_TOTAL: &str = "edgion_access_log_backfill_ingested_total";
     pub const ACCESS_LOG_BACKFILL_FAILED_TOTAL: &str = "edgion_access_log_backfill_failed_total";
+    // FIPS: 1 = the BoringSSL FIPS-validated crypto module is linked and enabled
+    // in this binary, 0 = not present (non-FIPS build). Set once at startup.
+    pub const FIPS_MODULE_ENABLED: &str = "edgion_gateway_fips_module_enabled";
 }
 
 /// Global metrics singleton
@@ -725,6 +728,11 @@ mod tests {
         // route_namespace / backend_namespace must NOT appear under default cfg
         assert!(!labels.iter().any(|(k, _)| *k == "route_namespace"));
         assert!(!labels.iter().any(|(k, _)| *k == "backend_namespace"));
+    }
+
+    #[test]
+    fn fips_metric_name_is_stable() {
+        assert_eq!(names::FIPS_MODULE_ENABLED, "edgion_gateway_fips_module_enabled");
     }
 }
 

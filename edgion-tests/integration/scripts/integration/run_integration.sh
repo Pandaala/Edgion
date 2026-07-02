@@ -1647,6 +1647,21 @@ main() {
         log_success "Gateway admin auth passed"
     fi
 
+    # Step 1.8: FIPS-approved TLS policy (standalone, boots its own minimal
+    # Controller + Gateway with EDGION_FIPS_POLICY=1 on isolated ports). Only runs
+    # in the default full sweep (no -r / -i targeting). Isolated on purpose: the
+    # FIPS policy toggle is process-global, so it must not run on the main sweep's
+    # single shared gateway. Verifies a ChaCha20-only TLS 1.2 client is rejected
+    # and an approved AES-GCM client is accepted.
+    if [ -z "$G_RESOURCE" ]; then
+        log_section "FIPS TLS policy"
+        if ! "${SCRIPT_DIR}/test_fips_policy.sh"; then
+            log_error "FAIL: FIPS TLS policy"
+            exit 1
+        fi
+        log_success "FIPS TLS policy passed"
+    fi
+
     # Admin token for the main suite (token-only model).
     #
     # The Controller authenticates the Admin API with a single pre-shared bearer

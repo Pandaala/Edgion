@@ -566,11 +566,43 @@ impl TlsCallback {
         // converts the `err_log + return` pattern into an actual handshake
         // abort, since "no cert bound" is the only fail-close lever we have
         // from inside cert_cb (see the function-level doc above).
-        if let Some(ref ciphers) = edgion_tls.spec.ciphers {
-            if let Err(e) = self.configure_ciphers(ssl, ciphers) {
-                ssl_ctx.meta.err_log = Some(format!("cipher config: {e}"));
+        // Cipher selection: operator `spec.ciphers` wins (the free per-workload
+        // override); otherwise a FIPS build applies the approved default set;
+        // otherwise BoringSSL's default is left in place. All three keep the
+        // fail-close ordering: any Err returns before cert/key are bound, so the
+        // handshake aborts rather than silently negotiating a wider policy.
+        use crate::tls::fips_profile::{
+            configure_fips_ciphers, configure_fips_curves, decide_cipher_action, fips_policy_active, CipherAction,
+        };
+        // FIPS enforcement is active on a real FIPS build OR when force-enabled
+        // via config/env (fips_policy_active). When active, the approved-curve
+        // restriction always applies, even if the operator overrides the cipher
+        // list — curves are orthogonal to the cipher list, so a `spec.ciphers`
+        // override must not silently re-enable a non-approved curve (e.g.
+        // X25519).
+        let enforce_fips = fips_policy_active();
+        if enforce_fips {
+            if let Err(e) = configure_fips_curves(ssl) {
+                ssl_ctx.meta.err_log = Some(format!("fips curves config: {e}"));
                 return;
             }
+        }
+        match decide_cipher_action(edgion_tls.spec.ciphers.is_some(), enforce_fips) {
+            CipherAction::Operator => {
+                if let Some(ref ciphers) = edgion_tls.spec.ciphers {
+                    if let Err(e) = self.configure_ciphers(ssl, ciphers) {
+                        ssl_ctx.meta.err_log = Some(format!("cipher config: {e}"));
+                        return;
+                    }
+                }
+            }
+            CipherAction::FipsDefault => {
+                if let Err(e) = configure_fips_ciphers(ssl) {
+                    ssl_ctx.meta.err_log = Some(format!("fips cipher config: {e}"));
+                    return;
+                }
+            }
+            CipherAction::BoringDefault => {}
         }
 
         // mTLS client-cert verification is a security-boundary control
@@ -724,6 +756,24 @@ impl TlsCallback {
                     return;
                 }
                 Ok(verify_installed) => ssl_ctx.meta.is_mtls = verify_installed,
+            }
+        }
+
+        // FIPS: a FIPS build defaults this listener to the approved cipher/curve
+        // set, matching the EdgionTls path. The Gateway API listener path has no
+        // operator cipher field, so both the approved curves and the approved
+        // cipher list always apply on a FIPS build (BoringSSL default
+        // otherwise). Runs BEFORE apply_secret_to_ssl binds cert/key, so a
+        // rejected cipher/curve aborts the handshake (fail-closed) rather than
+        // negotiating a wider policy.
+        if crate::tls::fips_profile::fips_policy_active() {
+            if let Err(e) = crate::tls::fips_profile::configure_fips_curves(ssl) {
+                ssl_ctx.meta.err_log = Some(format!("fips curves config: {e}"));
+                return;
+            }
+            if let Err(e) = crate::tls::fips_profile::configure_fips_ciphers(ssl) {
+                ssl_ctx.meta.err_log = Some(format!("fips cipher config: {e}"));
+                return;
             }
         }
 

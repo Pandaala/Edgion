@@ -180,6 +180,24 @@ pub struct GatewayConfig {
     #[arg(skip)]
     #[serde(default, skip_serializing)]
     pub admin_token: Option<String>,
+
+    /// Require the FIPS-validated crypto module at startup. Default false.
+    /// When true and the module is absent (a non-FIPS build), the gateway logs
+    /// a clear error and exits non-zero. Also settable via `EDGION_REQUIRE_FIPS`
+    /// (truthy: 1/true/yes/on). See the FIPS design spec.
+    #[arg(long = "require-fips")]
+    #[serde(default)]
+    pub require_fips: bool,
+
+    /// Force the FIPS-approved TLS policy (approved cipher list + curves) on
+    /// downstream listeners even on a non-FIPS build. Default false. A real FIPS
+    /// build enforces the policy automatically regardless of this flag; this
+    /// flag lets the policy be exercised on a normal boringssl build (e.g.
+    /// integration tests) or opted into as defense-in-depth. Also settable via
+    /// `EDGION_FIPS_POLICY` (truthy: 1/true/yes/on). See the FIPS design spec.
+    #[arg(long = "fips-policy")]
+    #[serde(default)]
+    pub fips_policy: bool,
 }
 
 impl std::fmt::Debug for GatewayConfig {
@@ -189,6 +207,8 @@ impl std::fmt::Debug for GatewayConfig {
             .field("admin_listen", &self.admin_listen)
             .field("probe_listen", &self.probe_listen)
             .field("admin_token", &self.admin_token.as_ref().map(|_| "[redacted]"))
+            .field("require_fips", &self.require_fips)
+            .field("fips_policy", &self.fips_policy)
             .finish()
     }
 }
@@ -208,6 +228,42 @@ pub fn integration_testing_mode_env_enabled(env_value: Option<&str>) -> bool {
         Some(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
         None => false,
     }
+}
+
+/// Env var that forces the FIPS-module startup assertion. Truthy: 1/true/yes/on.
+pub const REQUIRE_FIPS_ENV: &str = "EDGION_REQUIRE_FIPS";
+
+/// Whether `EDGION_REQUIRE_FIPS` is set to a truthy value (trimmed, lowercased).
+/// Unset/empty/other => false.
+pub fn require_fips_env_enabled(env_value: Option<&str>) -> bool {
+    match env_value.map(|v| v.trim().to_ascii_lowercase()) {
+        Some(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
+        None => false,
+    }
+}
+
+/// Env var that force-enables the FIPS-approved TLS policy. Truthy: 1/true/yes/on.
+pub const FIPS_POLICY_ENV: &str = "EDGION_FIPS_POLICY";
+
+/// Whether `EDGION_FIPS_POLICY` is set to a truthy value (trimmed, lowercased).
+/// Unset/empty/other => false.
+pub fn fips_policy_env_enabled(env_value: Option<&str>) -> bool {
+    match env_value.map(|v| v.trim().to_ascii_lowercase()) {
+        Some(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
+        None => false,
+    }
+}
+
+/// Startup gate: when FIPS is required but the validated module is absent,
+/// return an error string for the caller to log before exiting non-zero.
+pub fn check_fips_requirement(require_fips: bool, module_available: bool) -> Result<(), String> {
+    if require_fips && !module_available {
+        return Err("FIPS required (require_fips / EDGION_REQUIRE_FIPS) but this binary \
+             does not link the FIPS-validated crypto module; deploy a FIPS build \
+             or unset the requirement"
+            .to_string());
+    }
+    Ok(())
 }
 
 /// Resolve the gateway admin token from its sources, highest precedence first:
@@ -966,6 +1022,38 @@ access_log_sensitive:
         let dbg = format!("{:?}", cfg);
         assert!(!dbg.contains("must-not-leak"), "admin_token must be redacted in Debug");
         assert!(dbg.contains("[redacted]"));
+    }
+
+    #[test]
+    fn require_fips_env_truthy_values() {
+        assert!(require_fips_env_enabled(Some("1")));
+        assert!(require_fips_env_enabled(Some(" TRUE ")));
+        assert!(require_fips_env_enabled(Some("yes")));
+        assert!(!require_fips_env_enabled(Some("0")));
+        assert!(!require_fips_env_enabled(Some("")));
+        assert!(!require_fips_env_enabled(None));
+        // fips_policy env parsing mirrors require_fips.
+        assert!(fips_policy_env_enabled(Some("1")));
+        assert!(fips_policy_env_enabled(Some(" On ")));
+        assert!(!fips_policy_env_enabled(Some("off")));
+        assert!(!fips_policy_env_enabled(None));
+    }
+
+    #[test]
+    fn check_fips_requirement_ok_when_not_required() {
+        assert!(check_fips_requirement(false, false).is_ok());
+        assert!(check_fips_requirement(false, true).is_ok());
+    }
+
+    #[test]
+    fn check_fips_requirement_ok_when_required_and_present() {
+        assert!(check_fips_requirement(true, true).is_ok());
+    }
+
+    #[test]
+    fn check_fips_requirement_err_when_required_but_missing() {
+        let err = check_fips_requirement(true, false).unwrap_err();
+        assert!(err.contains("FIPS"));
     }
 
     #[test]
