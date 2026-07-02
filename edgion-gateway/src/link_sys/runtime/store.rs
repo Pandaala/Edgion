@@ -715,6 +715,8 @@ async fn dispatch_full_set(data: &HashMap<String, LinkSys>) {
                     &mut new_kafka_map,
                 );
             }
+            // DNS resolver, not a runtime link client — nothing to register in the link store.
+            edgion_resources::resources::link_sys::SystemConfig::HttpDns(_) => {}
         }
     }
 
@@ -804,6 +806,8 @@ async fn dispatch_partial_update(add_or_update: &HashMap<String, LinkSys>, remov
                     &KAFKA_RUNTIME,
                 );
             }
+            // DNS resolver, not a runtime link client — nothing to register in the link store.
+            edgion_resources::resources::link_sys::SystemConfig::HttpDns(_) => {}
         }
     }
 

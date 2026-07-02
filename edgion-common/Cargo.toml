@@ -98,6 +98,9 @@ reqwest.workspace = true
 rcgen.workspace = true
 time.workspace = true
 
+# Standard-DNS resolver backend (targets an explicit server list; see src/dns/).
+hickory-resolver.workspace = true
+
 [build-dependencies]
 tonic-build.workspace = true
 

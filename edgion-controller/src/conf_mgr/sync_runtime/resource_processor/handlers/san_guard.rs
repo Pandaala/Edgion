@@ -186,6 +186,13 @@ pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
         SystemConfig::Elasticsearch(c) => c.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
         SystemConfig::Kafka(c) => c.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
         SystemConfig::Webhook(c) => c.conn.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
+        // httpdns `connection` reuses the same ExternalHttpConnection shape as Webhook's `conn`,
+        // so its outbound TLS validation block is guarded identically (not silently skipped).
+        SystemConfig::HttpDns(c) => c
+            .connection
+            .as_ref()
+            .and_then(|conn| conn.tls.as_ref())
+            .and_then(|t| t.outbound.validation.as_ref()),
     };
     let provider = match &ls.spec.config {
         SystemConfig::Redis(_) => "Redis",
@@ -193,6 +200,7 @@ pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
         SystemConfig::Elasticsearch(_) => "Elasticsearch",
         SystemConfig::Kafka(_) => "Kafka",
         SystemConfig::Webhook(_) => "Webhook",
+        SystemConfig::HttpDns(_) => "HttpDns",
     };
     check_validation_block(validation_opt, provider, SAN_ENFORCED_LINK_SYS)
 }

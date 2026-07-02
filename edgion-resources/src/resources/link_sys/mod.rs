@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub mod common;
 pub mod elasticsearch;
 pub mod etcd;
+pub mod httpdns;
 pub mod kafka;
 pub mod redis;
 pub mod webhook;
@@ -19,6 +20,7 @@ pub mod webhook;
 pub use common::SecretObjectReference;
 pub use elasticsearch::ElasticsearchClientConfig;
 pub use etcd::EtcdClientConfig;
+pub use httpdns::HttpDnsResolverConfig;
 pub use kafka::KafkaClientConfig;
 pub use redis::RedisClientConfig;
 pub use webhook::WebhookServiceConfig;
@@ -60,6 +62,8 @@ pub enum SystemConfig {
     Kafka(KafkaClientConfig),
     /// HTTP webhook service configuration
     Webhook(WebhookServiceConfig),
+    /// HTTP DNS resolver configuration
+    HttpDns(HttpDnsResolverConfig),
 }
 
 impl SystemConfig {
@@ -71,6 +75,7 @@ impl SystemConfig {
             SystemConfig::Elasticsearch(_) => SystemType::Elasticsearch,
             SystemConfig::Kafka(_) => SystemType::Kafka,
             SystemConfig::Webhook(_) => SystemType::Webhook,
+            SystemConfig::HttpDns(_) => SystemType::HttpDns,
         }
     }
 
@@ -113,6 +118,14 @@ impl SystemConfig {
             _ => None,
         }
     }
+
+    /// Get HTTP DNS configuration if this is an HttpDns system
+    pub fn as_http_dns(&self) -> Option<&HttpDnsResolverConfig> {
+        match self {
+            SystemConfig::HttpDns(config) => Some(config),
+            _ => None,
+        }
+    }
 }
 
 /// System type enumeration (for helper methods and logging)
@@ -124,6 +137,7 @@ pub enum SystemType {
     Elasticsearch,
     Kafka,
     Webhook,
+    HttpDns,
 }
 
 impl LinkSys {
@@ -177,6 +191,11 @@ impl LinkSys {
                     errors.push("Kafka configuration has no brokers".to_string());
                 }
             }
+            SystemConfig::HttpDns(http_dns) => {
+                for err in http_dns.validate() {
+                    errors.push(format!("HTTP DNS configuration error: {}", err));
+                }
+            }
         }
         errors
     }
@@ -203,4 +222,52 @@ pub struct LinkSysStatus {
     /// Standard conditions: Accepted, ResolvedRefs (Gateway API).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<Condition>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_link_sys(name: &str, spec: LinkSysSpec) -> LinkSys {
+        LinkSys {
+            metadata: kube::api::ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some("default".to_string()),
+                ..Default::default()
+            },
+            spec,
+            status: None,
+        }
+    }
+
+    #[test]
+    fn http_dns_variant_roundtrips_and_validates() {
+        let yaml = r#"
+type: httpdns
+config:
+  urlTemplate: "https://203.0.113.10/d?host={domain}"
+  response:
+    kind: json
+    ipPath: ips
+  fallback:
+    type: system
+"#;
+        let spec: LinkSysSpec = serde_yaml::from_str(yaml).expect("parse httpdns LinkSys");
+        assert_eq!(spec.config.system_type(), SystemType::HttpDns);
+        assert!(spec.config.as_http_dns().is_some());
+
+        let ls = make_link_sys("h", spec);
+        assert!(
+            ls.validate_config().is_empty(),
+            "valid httpdns must pass validate_config"
+        );
+    }
+
+    #[test]
+    fn http_dns_missing_url_template_is_invalid() {
+        let yaml = "type: httpdns\nconfig:\n  fallback:\n    type: none\n";
+        let spec: LinkSysSpec = serde_yaml::from_str(yaml).unwrap();
+        let ls = make_link_sys("h", spec);
+        assert!(!ls.validate_config().is_empty());
+    }
 }

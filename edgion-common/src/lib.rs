@@ -1,4 +1,5 @@
 pub mod conf_sync;
+pub mod dns;
 pub mod ext_proc;
 pub mod grpc_tls;
 pub mod link_sys_core;

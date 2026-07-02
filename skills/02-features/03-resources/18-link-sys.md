@@ -18,7 +18,7 @@ metadata:
   name: my-redis
   namespace: default
 spec:
-  type: redis                 # redis | etcd | elasticsearch | webhook | kafka
+  type: redis                 # redis | etcd | elasticsearch | webhook | kafka | httpdns
   config:                     # Backend-type-specific configuration (expanded by type below)
     ...
 ```
@@ -325,6 +325,10 @@ spec:
 ```
 
 - Kafka is currently a placeholder (the schema is valid, but the Gateway side has not yet integrated a provider). `Accepted=True`; runtime availability depends on later releases.
+
+### `type: httpdns`
+
+An HTTP DNS resolver: resolves external domains via an HTTP(S) endpoint instead of standard DNS. The `HttpDnsResolverConfig` schema (endpoint template, response format, presets, fallback) and the shared resolver core live in `edgion-common/src/dns/`; controller/gateway wiring lands in a later phase. See [`docs/superpowers/specs/2026-07-02-external-dns-resolution-design.md`](../../../docs/superpowers/specs/2026-07-02-external-dns-resolution-design.md) for the full design.
 
 ## Status Schema
 
