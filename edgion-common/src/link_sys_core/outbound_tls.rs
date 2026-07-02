@@ -6,13 +6,14 @@
 //! - applies per-call overrides from [`OutboundTlsLocal`]
 //! - resolves CA material from resolved Kubernetes Secrets (one per ref)
 
-use std::sync::{LazyLock, RwLock};
+use std::sync::LazyLock;
 
 use edgion_resources::constants::secret_keys::tls as tls_keys;
 use edgion_resources::edgion_status::EdgionStatus;
 use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
 use edgion_resources::resources::common::{OutboundTlsConfig, OutboundTlsLocal};
 use k8s_openapi::api::core::v1::Secret;
+use parking_lot::RwLock;
 use zeroize::Zeroizing;
 
 // ============================================================================
@@ -54,10 +55,7 @@ static OUTBOUND_GLOBAL_DEFAULT: LazyLock<RwLock<OutboundTlsConfig>> =
 /// override). Updated by [`set_outbound_global_default`] when an
 /// `EdgionGatewayConfig` is applied.
 pub fn outbound_global_default() -> OutboundTlsConfig {
-    OUTBOUND_GLOBAL_DEFAULT
-        .read()
-        .expect("global outbound TLS default lock poisoned")
-        .clone()
+    OUTBOUND_GLOBAL_DEFAULT.read().clone()
 }
 
 /// Replace the cluster-wide outbound TLS default.
@@ -65,9 +63,7 @@ pub fn outbound_global_default() -> OutboundTlsConfig {
 /// Called by the Gateway when an `EdgionGatewayConfig` carrying an
 /// `outboundTls` block is applied.
 pub fn set_outbound_global_default(cfg: OutboundTlsConfig) {
-    *OUTBOUND_GLOBAL_DEFAULT
-        .write()
-        .expect("global outbound TLS default lock poisoned") = cfg;
+    *OUTBOUND_GLOBAL_DEFAULT.write() = cfg;
 }
 
 // ============================================================================
@@ -100,10 +96,12 @@ pub fn aggregate_verify(blocks: &[OutboundTlsConfig]) -> OutboundTlsConfig {
 /// # Arguments
 ///
 /// - `local` — per-call override; all-`None` fields inherit the global default.
-/// - `resolved_ca` — the resolved K8s Secrets for `validation.caCertificateRefs`
-///   (one Secret per ref, in the same order). Pass `None` or `Some(&[])` when
-///   no per-call CA is available; the resolver falls back to the global resolved
-///   CA certificates from the cluster-wide default.
+/// - `resolved_ca` — the resolved K8s Secrets for the **local**
+///   `validation.caCertificateRefs` (one Secret per ref, in the same order).
+///   Required when `local.validation` declares CA refs; there is no fallback to
+///   the global bundles for a local block (see the precedence section below).
+///   Ignored when the local block declares no `validation` (the global block
+///   then supplies both refs and resolved bytes).
 /// - `resolved_client` — the resolved K8s Secret for client mTLS identity.
 /// - `provider_can_disable` — whether this provider exposes a skip-verify knob.
 ///   Pass `false` for providers like Etcd whose TLS stack always verifies.
@@ -119,25 +117,41 @@ pub fn aggregate_verify(blocks: &[OutboundTlsConfig]) -> OutboundTlsConfig {
 /// - `wellKnownCACertificates: System` or both absent → `EffectiveCa::System`
 ///   (built-in webpki roots).
 ///
-/// # Global CA fallback
+/// # Validation-block precedence and global CA fallback
 ///
-/// An inheriting call (no per-call `resolved_ca`) falls back to the global
-/// resolved CA certificates when `validation.caCertificateRefs` is declared at
-/// the global level and the Controller has shipped the resolved bundles.
+/// The `validation` block has **whole-block** precedence: a present
+/// `local.validation` shadows the global block entirely (fields are not merged).
+/// CA bytes are sourced from whichever block wins:
+/// - local block wins → CA bytes come **only** from the per-call `resolved_ca`.
+///   If the local block declares `caCertificateRefs` but `resolved_ca` is
+///   `None`/empty, this fails with [`EdgionStatus::OutboundTlsCaMissing`] rather
+///   than silently falling back to the global bundles (which belong to the
+///   global refs, not the local ones).
+/// - global block wins (no local `validation`) → CA bytes come from the
+///   Controller-shipped `global.resolved_ca_certificates`.
+///
+/// # Fail-secure: SAN pinning overrides verify=false
+///
+/// A non-empty `validation.subjectAltNames` policy forces full certificate
+/// verification even when the operator set `verify=false` — SAN pinning is
+/// meaningless without chain verification. In that case the returned `verify`
+/// is `true`, CA material is resolved, and the client mTLS identity is retained.
 ///
 /// # Known limitations
 ///
-/// - M4: When `verify=false`, client mTLS identity is intentionally dropped
-///   (the skip-verify path sends no client certificate).
+/// - M4: When the effective `verify` is `false` (skip-verify actually in force,
+///   i.e. no SAN policy raised it), client mTLS identity is intentionally
+///   dropped — the skip-verify path sends no client certificate.
 ///
 /// # Operator responsibility for verify=false
 ///
-/// When an operator explicitly sets `verify=false`, it is honored without an
-/// environment check — the operator owns this decision. A WARN is emitted at
-/// configuration-load time as an audit trail. `verify=false` is rejected ONLY
-/// when `provider_can_disable == false` (a technical SDK-capability fact: e.g.
-/// etcd-client and the rustls Redis connector have no skip-verify API, so
-/// honoring the request would silently still verify).
+/// When an operator explicitly sets `verify=false` (and no SAN policy overrides
+/// it), it is honored without an environment check — the operator owns this
+/// decision. A WARN is emitted at configuration-load time as an audit trail.
+/// `verify=false` is rejected ONLY when `provider_can_disable == false` (a
+/// technical SDK-capability fact: e.g. etcd-client and the rustls Redis
+/// connector have no skip-verify API, so honoring the request would silently
+/// still verify).
 ///
 /// # Errors
 ///
@@ -155,7 +169,28 @@ pub fn resolve_outbound_tls(
     context: &str,
 ) -> Result<ResolvedOutboundTls, EdgionStatus> {
     let global = outbound_global_default();
-    let verify = local.verify.unwrap_or(global.verify);
+
+    // Whole-block precedence: a present local `validation` shadows the global
+    // block entirely (fields are not merged). CA bytes are sourced from whichever
+    // block wins — the per-call `resolved_ca` for a local block, or the
+    // Controller-shipped global bundles when inheriting the global block. This
+    // deliberately does NOT fall back from local to global CA: the global
+    // resolved bundles correspond to the global refs, not the local ones.
+    let (validation, resolved_ca_effective): (Option<&OutboundTlsValidation>, Option<&[Secret]>) =
+        if local.validation.is_some() {
+            (local.validation.as_ref(), resolved_ca)
+        } else {
+            (global.validation.as_ref(), global.resolved_ca_certificates.as_deref())
+        };
+
+    // Fail-secure: a non-empty subjectAltNames policy forces full verification
+    // even if the operator set verify=false — SAN pinning is meaningless without
+    // chain verification, so it overrides the skip-verify request.
+    let san_pinned = validation
+        .and_then(|v| v.subject_alt_names.as_ref())
+        .is_some_and(|s| !s.is_empty());
+    let requested_verify = local.verify.unwrap_or(global.verify);
+    let verify = requested_verify || san_pinned;
 
     if !verify {
         if !provider_can_disable {
@@ -170,29 +205,28 @@ pub fn resolve_outbound_tls(
             provider = context,
             "outbound TLS verification disabled (verify=false) — operator-configured, insecure"
         );
-        // Preserve any SAN policy even when verify=false so that downstream
-        // TLS builders can enforce SAN pinning regardless of the skip-verify
-        // flag (fail-secure: a non-empty SAN policy overrides verify=false).
-        let san = local.validation.as_ref().or(global.validation.as_ref()).cloned();
         return Ok(ResolvedOutboundTls {
             verify: false,
             ca: EffectiveCa::System,
             client_identity: None,
-            san,
+            san: validation.cloned(),
         });
     }
 
-    // verify == true: resolve CA source from the validation block.
-    // Local validation takes precedence over global.
-    let validation = local.validation.as_ref().or(global.validation.as_ref());
+    if san_pinned && !requested_verify {
+        tracing::warn!(
+            provider = context,
+            "outbound TLS verify=false overridden by subjectAltNames policy — full certificate verification enforced (fail-secure)"
+        );
+    }
+
+    // verify == true: resolve CA source from the winning validation block.
     let ca = match validation {
         Some(v) if v.ca_certificate_refs.as_ref().is_some_and(|r| !r.is_empty()) => {
-            // Prefer per-call resolved bundles; fall back to the global resolved
-            // bundles so an inheriting call (no local CA) uses the cluster-wide
-            // default that the Controller resolved and shipped.
-            let secrets: &[Secret] = resolved_ca
+            // CA bytes must come from the block that won precedence above; no
+            // cross-block fallback (see the tuple selection comment).
+            let secrets: &[Secret] = resolved_ca_effective
                 .filter(|s| !s.is_empty())
-                .or(global.resolved_ca_certificates.as_deref())
                 .ok_or(EdgionStatus::OutboundTlsCaMissing)?;
             let bundles: Vec<Vec<u8>> = secrets
                 .iter()
@@ -242,7 +276,9 @@ pub fn resolve_outbound_tls(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::backend_tls_policy::{BackendTLSPolicyCACertificateRef, WellKnownCACertificates};
+    use edgion_resources::resources::backend_tls_policy::{
+        BackendTLSPolicyCACertificateRef, SubjectAltName, SubjectAltNameType, WellKnownCACertificates,
+    };
     use k8s_openapi::ByteString;
     use std::collections::BTreeMap;
 
@@ -262,6 +298,25 @@ mod tests {
             data: Some(data),
             type_: Some("kubernetes.io/tls".to_string()),
             ..Default::default()
+        }
+    }
+
+    fn client_secret() -> Secret {
+        let mut data = BTreeMap::new();
+        data.insert(tls_keys::CERT.to_string(), ByteString(b"cert-pem".to_vec()));
+        data.insert(tls_keys::KEY.to_string(), ByteString(b"key-pem".to_vec()));
+        Secret {
+            data: Some(data),
+            type_: Some("kubernetes.io/tls".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn hostname_san(h: &str) -> SubjectAltName {
+        SubjectAltName {
+            san_type: SubjectAltNameType::Hostname,
+            hostname: Some(h.to_string()),
+            uri: None,
         }
     }
 
@@ -347,5 +402,96 @@ mod tests {
         set_outbound_global_default(OutboundTlsConfig::default());
         let r = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test").unwrap();
         assert!(matches!(r.ca, EffectiveCa::System));
+    }
+
+    /// Fail-secure: a non-empty subjectAltNames policy overrides verify=false, so
+    /// the effective `verify` becomes true and the client mTLS identity is retained
+    /// (rather than dropped by the skip-verify path).
+    #[test]
+    fn san_policy_overrides_verify_false_and_keeps_client_identity() {
+        set_outbound_global_default(OutboundTlsConfig::default());
+        let local = OutboundTlsLocal {
+            verify: Some(false),
+            validation: Some(OutboundTlsValidation {
+                subject_alt_names: Some(vec![hostname_san("idp.example.com")]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let r = resolve_outbound_tls(&local, None, Some(&client_secret()), true, "Test").unwrap();
+        assert!(r.verify, "SAN policy must force verify=true (fail-secure)");
+        assert!(
+            r.client_identity.is_some(),
+            "client identity must be retained when SAN raises verify"
+        );
+    }
+
+    /// verify=false with no SAN policy is a genuine skip-verify path: client
+    /// identity is dropped (M4).
+    #[test]
+    fn verify_false_without_san_drops_client_identity() {
+        set_outbound_global_default(OutboundTlsConfig::default());
+        let local = OutboundTlsLocal {
+            verify: Some(false),
+            ..Default::default()
+        };
+        let r = resolve_outbound_tls(&local, None, Some(&client_secret()), true, "Test").unwrap();
+        assert!(!r.verify);
+        assert!(
+            r.client_identity.is_none(),
+            "skip-verify path must drop client identity"
+        );
+    }
+
+    /// A local validation block declaring caCertificateRefs but with no per-call
+    /// resolved bytes must fail with OutboundTlsCaMissing — it must NOT silently
+    /// fall back to the global resolved CA (which belongs to the global refs).
+    #[test]
+    fn local_ca_refs_without_resolved_bytes_errors_no_global_fallback() {
+        // Global has its own resolved CA that must NOT be borrowed by the local block.
+        set_outbound_global_default(OutboundTlsConfig {
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![cert_ref("Secret", "global-ca")]),
+                ..Default::default()
+            }),
+            resolved_ca_certificates: Some(vec![ca_secret(
+                b"-----BEGIN CERTIFICATE-----\nGLOBAL\n-----END CERTIFICATE-----\n",
+            )]),
+            ..Default::default()
+        });
+        let local = OutboundTlsLocal {
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![cert_ref("Secret", "local-ca")]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let r = resolve_outbound_tls(&local, None, None, true, "Test");
+        assert!(
+            matches!(r, Err(EdgionStatus::OutboundTlsCaMissing)),
+            "local CA refs with no resolved bytes must error, got: {:?}",
+            r.map(|_| "Ok(resolved)")
+        );
+    }
+
+    /// When the local block declares no validation, the global validation block
+    /// wins and its Controller-shipped resolved CA bundles are used.
+    #[test]
+    fn inherits_global_ca_when_local_validation_absent() {
+        set_outbound_global_default(OutboundTlsConfig {
+            validation: Some(OutboundTlsValidation {
+                ca_certificate_refs: Some(vec![cert_ref("Secret", "global-ca")]),
+                ..Default::default()
+            }),
+            resolved_ca_certificates: Some(vec![ca_secret(
+                b"-----BEGIN CERTIFICATE-----\nGLOBAL\n-----END CERTIFICATE-----\n",
+            )]),
+            ..Default::default()
+        });
+        let r = resolve_outbound_tls(&OutboundTlsLocal::default(), None, None, true, "Test").unwrap();
+        match r.ca {
+            EffectiveCa::Custom(b) => assert_eq!(b.len(), 1),
+            _ => panic!("expected global resolved CA to be inherited as Custom"),
+        }
     }
 }

@@ -68,17 +68,18 @@ All application-layer key names use **camelCase**; TLS keys follow the K8s `kube
 ```yaml
 tls:
   enabled: true
-  verify: true                    # Verify peer certificate (default true). Redis/Etcd always verify (SDK has no skip-verify API). Other connectors honor verify: false as operator responsibility (WARN logged at startup).
+  verify: true                    # Verify peer certificate (default true). Redis/Etcd/Kafka always verify (rustls connector; verify: false is rejected at config load). Other connectors (Elasticsearch/Webhook) honor verify: false as operator responsibility (WARN logged at startup).
   validation:                     # Optional; omit to use built-in webpki root CAs (same as wellKnownCACertificates: System).
     caCertificateRefs:            # List of CA certificate refs. For LinkSys (redis/etcd/es/kafka), only kind: Secret is supported in this release.
       - kind: Secret              # Secret must be kubernetes.io/tls or Opaque with a ca.crt key.
         name: my-ca-bundle        # Defaults to the same namespace as LinkSys when namespace is omitted.
     wellKnownCACertificates: System   # Alternatively, explicitly use the built-in webpki root bundle.
-    # Phase 2: OIDC and LDAP now enforce hostname and subjectAltNames.
-    # For LinkSys (redis/etcd/elasticsearch/kafka) and ext_proc, enforcement is deferred.
-    # Configuring these fields for unsupported backends causes Accepted=False.
-    # hostname: "backend.example.com"
+    # subjectAltNames (SAN pinning) is enforced for OIDC and LDAP; deferred for
+    # LinkSys (redis/etcd/elasticsearch/kafka), ext_proc, and EGC defaults.
+    # hostname (SNI override) is not implemented on any outbound provider yet.
+    # Configuring an unenforced field causes Accepted=False (no silent no-op).
     # subjectAltNames: ["backend.example.com"]
+    # hostname: "backend.example.com"   # currently rejected everywhere
   clientCertificateRef:           # Secret holding tls.crt + tls.key for client mTLS
     name: my-client-tls
     # Defaults to the same namespace as LinkSys when namespace is omitted.
@@ -90,7 +91,8 @@ tls:
 
 > **Phase 2 outbound TLS status:**
 > - `validation.caCertificateRefs` for LinkSys (redis / etcd / elasticsearch / kafka) only supports `kind: Secret` in this release. ConfigMap CA is not supported for LinkSys. If you need ConfigMap CA support, use the plugin (OIDC / LDAP / ForwardAuth / EGC) TLS paths instead.
-> - `validation.hostname` and `validation.subjectAltNames` (SAN pinning) are now **enforced for OIDC and LDAP plugins**. TLS handshakes use rustls `OutboundSanVerifier` to validate peer certificate SANs at runtime; mismatch results in handshake failure with `EdgionStatus::OutboundTlsSanMismatch (999_09)`. **For LinkSys (redis / etcd / elasticsearch / kafka), ext_proc, and global EdgionGatewayConfig defaults, SAN enforcement is deferred to Phase 3.** Configuring SAN fields for unsupported backends causes `Accepted=False`. See `docs/superpowers/specs/2026-06-29-outbound-tls-align-backendtlspolicy-design.md` §6 and `tasks/todo/outbound-tls-sdk-san-audit.md` for the enforcement timeline.
+> - `validation.subjectAltNames` (SAN pinning) is **enforced for OIDC and LDAP plugins**. TLS handshakes use rustls `OutboundSanVerifier` to validate peer certificate SANs at runtime; mismatch results in handshake failure with `EdgionStatus::OutboundTlsSanMismatch (999_09)`. A non-empty `subjectAltNames` policy also **overrides `verify: false`** (fail-secure: full chain verification is forced, and the client mTLS identity is retained). **For LinkSys (redis / etcd / elasticsearch / kafka), ext_proc, and global EdgionGatewayConfig defaults, SAN enforcement is deferred to Phase 3.** Configuring `subjectAltNames` on an unsupported backend causes `Accepted=False`.
+> - `validation.hostname` (SNI override) is **not implemented on any outbound provider yet** — setting it causes `Accepted=False` on every provider (including OIDC/LDAP) rather than being silently ignored. Use `subjectAltNames` for SAN pinning. See `docs/superpowers/specs/2026-06-29-outbound-tls-align-backendtlspolicy-design.md` §6 and `tasks/todo/outbound-tls-sdk-san-audit.md` for the enforcement timeline.
 > - Inline CA (`caCert` field) has been removed. Use a Secret with a `ca.crt` key instead.
 
 ## Configuration by `type`

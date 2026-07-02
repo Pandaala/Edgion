@@ -2407,10 +2407,11 @@ mod tests {
         );
     }
 
-    /// LdapAuth plugin with `tls.validation.hostname` is accepted in Phase 2.
+    /// LdapAuth plugin with `tls.validation.subjectAltNames` is accepted in Phase 2.
     /// SAN pinning is now enforced by the LDAP TLS verifier (OutboundSanVerifier wrap).
     #[tokio::test]
-    async fn ldap_with_hostname_accepted_phase2() {
+    async fn ldap_with_san_accepted_phase2() {
+        use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
         use edgion_resources::resources::common::OutboundTlsValidation;
         use edgion_resources::resources::edgion_plugins::LdapAuthConfig;
 
@@ -2424,7 +2425,11 @@ mod tests {
             attribute: "uid".to_string(),
             tls: edgion_resources::resources::common::OutboundTlsLocal {
                 validation: Some(OutboundTlsValidation {
-                    hostname: Some("ldap.example.com".to_string()),
+                    subject_alt_names: Some(vec![SubjectAltName {
+                        san_type: SubjectAltNameType::Hostname,
+                        hostname: Some("ldap.example.com".to_string()),
+                        uri: None,
+                    }]),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -2437,7 +2442,43 @@ mod tests {
 
         assert!(
             errors.is_empty(),
-            "LdapAuth with hostname should be accepted in Phase 2; got errors: {:?}",
+            "LdapAuth with subjectAltNames should be accepted in Phase 2; got errors: {:?}",
+            errors
+        );
+    }
+
+    /// `tls.validation.hostname` (SNI override) is implemented on no outbound
+    /// provider, so it must be rejected even on OIDC/LDAP where subjectAltNames
+    /// IS enforced — otherwise it would be a silent no-op.
+    #[tokio::test]
+    async fn oidc_with_hostname_rejected() {
+        use edgion_resources::resources::common::OutboundTlsValidation;
+
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        let mut ep = EdgionPlugins::new("oidc-hostname-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::OpenidConnect(Box::new(
+            OpenidConnectConfig {
+                discovery: "https://idp.example.com/.well-known/openid-configuration".to_string(),
+                client_id: "my-client".to_string(),
+                tls: edgion_resources::resources::common::OutboundTlsLocal {
+                    validation: Some(OutboundTlsValidation {
+                        hostname: Some("idp.example.com".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let errors = handler.preparse(&mut ep, &ctx);
+
+        assert!(
+            errors.iter().any(|e| e.contains("hostname")),
+            "OIDC validation.hostname must be rejected as unimplemented; got: {:?}",
             errors
         );
     }

@@ -1,27 +1,31 @@
-//! SAN-pinning guard: reject outbound TLS `subjectAltNames`/`hostname`
-//! on providers where enforcement is not yet implemented.
+//! SAN-pinning guard: reject outbound TLS `validation.subjectAltNames` /
+//! `validation.hostname` on providers where enforcement is not yet implemented.
 //!
 //! # Design
 //!
-//! SAN pinning (verifying the peer certificate against an operator-supplied
-//! list of Subject Alternative Names) is a Phase 2+ feature. Phase 1 exposes
-//! the `validation.subjectAltNames` / `validation.hostname` schema fields on
-//! all outbound-TLS-capable providers so operators can write the config ahead
-//! of time, but the data-plane verifier is not wired yet.
+//! The `validation` schema fields are exposed on all outbound-TLS-capable
+//! providers so operators can write the config against the shared shape, but the
+//! data-plane enforcement lands provider-by-provider. If an operator configures
+//! a field a provider does not enforce, the config would be silently ignored —
+//! worse than a clear rejection. This module surfaces that case as an
+//! `Accepted=False` validation error (via the standard `preparse` error-string
+//! mechanism) so the operator learns immediately.
 //!
-//! If an operator configures SAN pinning on an unsupported provider, the config
-//! would be silently ignored, which is worse than a clear rejection. This module
-//! surfaces that case as an `Accepted=False` validation error (via the standard
-//! `preparse` error-string mechanism) so the operator learns immediately.
+//! Two independent gates, because the two fields have different rollout state:
 //!
-//! # Phase 2+ enablement
+//! - **`subjectAltNames`** (SAN pinning) — enforced per-provider via
+//!   `SAN_ENFORCED_*`. oidc/ldap enforce it today; ext_proc/link_sys/egc do not.
+//! - **`hostname`** (SNI override) — implemented on *no* outbound provider yet,
+//!   so it is rejected uniformly via [`HOSTNAME_SNI_ENFORCED`], independent of
+//!   `SAN_ENFORCED_*`. This closes the trap where a provider that enforces
+//!   `subjectAltNames` (oidc/ldap) would otherwise accept-and-ignore `hostname`.
+//!
+//! # Enablement
 //!
 //! As each provider's verifier lands, flip the corresponding `SAN_ENFORCED_*`
-//! constant to `true` and redeploy. The guard `san_pinning_requested(v) && !SAN_ENFORCED_X`
-//! short-circuits, so the error disappears without any other code change.
-//!
-//! Each constant is intentionally per-provider so different providers can be
-//! rolled out independently (e.g., oidc/ldap in Phase 2, ext_proc/link_sys/egc later).
+//! constant to `true` (or `HOSTNAME_SNI_ENFORCED` once SNI override is wired) and
+//! redeploy. [`check_validation_block`] short-circuits on the flipped gate, so
+//! the error disappears without any other code change.
 
 use edgion_resources::prelude_resources::{EdgionGatewayConfig, EdgionPlugins, LinkSys};
 use edgion_resources::resources::common::OutboundTlsValidation;
@@ -52,31 +56,68 @@ pub const SAN_ENFORCED_LINK_SYS: bool = false;
 /// Phase 2 will flip this to `true` once the EGC global TLS verifier is wired.
 pub const SAN_ENFORCED_EGC: bool = false;
 
+/// `validation.hostname` (SNI override + implicit peer-name check) is not
+/// implemented on ANY outbound provider yet — unlike `subjectAltNames`, which
+/// oidc/ldap already enforce. So it is rejected uniformly across every provider
+/// (independent of the per-provider `SAN_ENFORCED_*` gates) until a provider
+/// actually wires SNI override. Flip to `true` (or split per-provider) once it
+/// lands. Keeping this separate from `SAN_ENFORCED_*` avoids the trap where a
+/// provider that enforces `subjectAltNames` silently accepts-and-ignores
+/// `hostname`.
+pub const HOSTNAME_SNI_ENFORCED: bool = false;
+
 // ============================================================================
-// Sentinel predicate
+// Sentinel predicates
 // ============================================================================
 
-/// Returns `true` iff `validation` expresses SAN pinning intent:
-/// a non-empty `subjectAltNames` list **or** a non-None `hostname`.
-///
-/// Used by the Phase 1 guard: callers check
-/// `san_pinning_requested(v) && !SAN_ENFORCED_X` to decide whether to emit
-/// an `Accepted=False` validation error. Phase 2 flips the const to `true` to
-/// lift the guard without any structural change here.
-pub fn san_pinning_requested(validation: Option<&OutboundTlsValidation>) -> bool {
-    validation.is_some_and(|v| v.subject_alt_names.as_ref().is_some_and(|s| !s.is_empty()) || v.hostname.is_some())
+/// Returns `true` iff `validation` declares a non-empty `subjectAltNames` list.
+pub fn subject_alt_names_requested(validation: Option<&OutboundTlsValidation>) -> bool {
+    validation.is_some_and(|v| v.subject_alt_names.as_ref().is_some_and(|s| !s.is_empty()))
+}
+
+/// Returns `true` iff `validation` sets a `hostname` (SNI override).
+pub fn hostname_requested(validation: Option<&OutboundTlsValidation>) -> bool {
+    validation.is_some_and(|v| v.hostname.is_some())
 }
 
 // ============================================================================
-// Canonical error message
+// Canonical error messages + per-block check
 // ============================================================================
 
 fn san_not_supported_msg(provider: &str) -> String {
     format!(
-        "outbound TLS subjectAltNames/hostname is not supported for {} in Phase 1 \
+        "outbound TLS subjectAltNames is not supported for {} in Phase 1 \
          (SAN pinning enforcement deferred to Phase 2)",
         provider
     )
+}
+
+fn hostname_not_supported_msg(provider: &str) -> String {
+    format!(
+        "outbound TLS validation.hostname (SNI override) is not implemented for {} \
+         (would be silently ignored); remove it or use subjectAltNames for SAN pinning",
+        provider
+    )
+}
+
+/// Check one provider's outbound `validation` block against both gates:
+/// - `subjectAltNames` → gated by the per-provider `san_enforced`.
+/// - `hostname` → gated by the uniform [`HOSTNAME_SNI_ENFORCED`].
+///
+/// Returns one error string per unsupported-but-configured field.
+fn check_validation_block(
+    validation: Option<&OutboundTlsValidation>,
+    provider: &str,
+    san_enforced: bool,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    if !san_enforced && subject_alt_names_requested(validation) {
+        errors.push(san_not_supported_msg(provider));
+    }
+    if !HOSTNAME_SNI_ENFORCED && hostname_requested(validation) {
+        errors.push(hostname_not_supported_msg(provider));
+    }
+    errors
 }
 
 // ============================================================================
@@ -98,21 +139,26 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
                         continue;
                     }
                     match &entry.plugin {
-                        EdgionPlugin::OpenidConnect(config)
-                            if !SAN_ENFORCED_OIDC && san_pinning_requested(config.tls.validation.as_ref()) =>
-                        {
-                            errors.push(san_not_supported_msg("OpenidConnect"));
+                        EdgionPlugin::OpenidConnect(config) => {
+                            errors.extend(check_validation_block(
+                                config.tls.validation.as_ref(),
+                                "OpenidConnect",
+                                SAN_ENFORCED_OIDC,
+                            ));
                         }
-                        EdgionPlugin::LdapAuth(config)
-                            if !SAN_ENFORCED_LDAP && san_pinning_requested(config.tls.validation.as_ref()) =>
-                        {
-                            errors.push(san_not_supported_msg("LdapAuth"));
+                        EdgionPlugin::LdapAuth(config) => {
+                            errors.extend(check_validation_block(
+                                config.tls.validation.as_ref(),
+                                "LdapAuth",
+                                SAN_ENFORCED_LDAP,
+                            ));
                         }
-                        EdgionPlugin::ExtProc(config)
-                            if !SAN_ENFORCED_EXT_PROC
-                                && san_pinning_requested(config.grpc_service.tls.outbound.validation.as_ref()) =>
-                        {
-                            errors.push(san_not_supported_msg("ExtProc"));
+                        EdgionPlugin::ExtProc(config) => {
+                            errors.extend(check_validation_block(
+                                config.grpc_service.tls.outbound.validation.as_ref(),
+                                "ExtProc",
+                                SAN_ENFORCED_EXT_PROC,
+                            ));
                         }
                         _ => {}
                     }
@@ -133,10 +179,6 @@ pub fn check_plugins_san(ep: &EdgionPlugins) -> Vec<String> {
 ///
 /// Returns at most one error string (per-resource, not per-endpoint).
 pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
-    if SAN_ENFORCED_LINK_SYS {
-        return vec![];
-    }
-
     // Extract the outbound validation block from whichever provider is configured.
     let validation_opt: Option<&OutboundTlsValidation> = match &ls.spec.config {
         SystemConfig::Redis(c) => c.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
@@ -145,19 +187,14 @@ pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
         SystemConfig::Kafka(c) => c.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
         SystemConfig::Webhook(c) => c.conn.tls.as_ref().and_then(|t| t.outbound.validation.as_ref()),
     };
-
-    if san_pinning_requested(validation_opt) {
-        let provider = match &ls.spec.config {
-            SystemConfig::Redis(_) => "Redis",
-            SystemConfig::Etcd(_) => "Etcd",
-            SystemConfig::Elasticsearch(_) => "Elasticsearch",
-            SystemConfig::Kafka(_) => "Kafka",
-            SystemConfig::Webhook(_) => "Webhook",
-        };
-        vec![san_not_supported_msg(provider)]
-    } else {
-        vec![]
-    }
+    let provider = match &ls.spec.config {
+        SystemConfig::Redis(_) => "Redis",
+        SystemConfig::Etcd(_) => "Etcd",
+        SystemConfig::Elasticsearch(_) => "Elasticsearch",
+        SystemConfig::Kafka(_) => "Kafka",
+        SystemConfig::Webhook(_) => "Webhook",
+    };
+    check_validation_block(validation_opt, provider, SAN_ENFORCED_LINK_SYS)
 }
 
 /// Check the EdgionGatewayConfig global outbound TLS validation block for SAN
@@ -165,17 +202,8 @@ pub fn check_link_sys_san(ls: &LinkSys) -> Vec<String> {
 ///
 /// Returns at most one error string.
 pub fn check_egc_san(egc: &EdgionGatewayConfig) -> Vec<String> {
-    if SAN_ENFORCED_EGC {
-        return vec![];
-    }
-
     let validation_opt = egc.spec.outbound_tls.as_ref().and_then(|ob| ob.validation.as_ref());
-
-    if san_pinning_requested(validation_opt) {
-        vec![san_not_supported_msg("EdgionGatewayConfig")]
-    } else {
-        vec![]
-    }
+    check_validation_block(validation_opt, "EdgionGatewayConfig", SAN_ENFORCED_EGC)
 }
 
 // ============================================================================
@@ -185,29 +213,40 @@ pub fn check_egc_san(egc: &EdgionGatewayConfig) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use edgion_resources::resources::backend_tls_policy::SubjectAltName;
+    use edgion_resources::resources::backend_tls_policy::{SubjectAltName, SubjectAltNameType};
     use edgion_resources::resources::common::OutboundTlsValidation;
 
-    // ── san_pinning_requested ─────────────────────────────────────────────────
+    fn san_only() -> OutboundTlsValidation {
+        OutboundTlsValidation {
+            subject_alt_names: Some(vec![SubjectAltName {
+                san_type: SubjectAltNameType::Hostname,
+                hostname: Some("idp.example.com".to_string()),
+                uri: None,
+            }]),
+            ..Default::default()
+        }
+    }
+
+    fn hostname_only() -> OutboundTlsValidation {
+        OutboundTlsValidation {
+            hostname: Some("idp.example.com".to_string()),
+            ..Default::default()
+        }
+    }
+
+    // ── predicates ────────────────────────────────────────────────────────────
 
     #[test]
-    fn no_validation_block_is_not_pinning() {
-        assert!(!san_pinning_requested(None));
+    fn predicates_on_empty_and_none() {
+        assert!(!subject_alt_names_requested(None));
+        assert!(!hostname_requested(None));
+        let empty = OutboundTlsValidation::default();
+        assert!(!subject_alt_names_requested(Some(&empty)));
+        assert!(!hostname_requested(Some(&empty)));
     }
 
     #[test]
-    fn empty_validation_block_is_not_pinning() {
-        let v = OutboundTlsValidation {
-            ca_certificate_refs: None,
-            well_known_ca_certificates: None,
-            hostname: None,
-            subject_alt_names: None,
-        };
-        assert!(!san_pinning_requested(Some(&v)));
-    }
-
-    #[test]
-    fn only_ca_refs_is_not_pinning() {
+    fn only_ca_refs_is_neither_san_nor_hostname() {
         use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
         let v = OutboundTlsValidation {
             ca_certificate_refs: Some(vec![BackendTLSPolicyCACertificateRef {
@@ -216,48 +255,66 @@ mod tests {
                 namespace: None,
                 ..Default::default()
             }]),
-            well_known_ca_certificates: None,
-            hostname: None,
-            subject_alt_names: None,
+            ..Default::default()
         };
-        assert!(!san_pinning_requested(Some(&v)));
+        assert!(!subject_alt_names_requested(Some(&v)));
+        assert!(!hostname_requested(Some(&v)));
     }
 
     #[test]
-    fn hostname_triggers_pinning() {
-        let v = OutboundTlsValidation {
-            ca_certificate_refs: None,
-            well_known_ca_certificates: None,
-            hostname: Some("idp.example.com".to_string()),
-            subject_alt_names: None,
-        };
-        assert!(san_pinning_requested(Some(&v)));
+    fn subject_alt_names_and_hostname_predicates_are_independent() {
+        assert!(subject_alt_names_requested(Some(&san_only())));
+        assert!(!hostname_requested(Some(&san_only())));
+        assert!(hostname_requested(Some(&hostname_only())));
+        assert!(!subject_alt_names_requested(Some(&hostname_only())));
     }
 
     #[test]
-    fn subject_alt_names_triggers_pinning() {
-        use edgion_resources::resources::backend_tls_policy::SubjectAltNameType;
+    fn empty_subject_alt_names_vec_is_not_requested() {
         let v = OutboundTlsValidation {
-            ca_certificate_refs: None,
-            well_known_ca_certificates: None,
-            hostname: None,
-            subject_alt_names: Some(vec![SubjectAltName {
-                san_type: SubjectAltNameType::Hostname,
-                hostname: Some("idp.example.com".to_string()),
-                uri: None,
-            }]),
-        };
-        assert!(san_pinning_requested(Some(&v)));
-    }
-
-    #[test]
-    fn empty_subject_alt_names_vec_is_not_pinning() {
-        let v = OutboundTlsValidation {
-            ca_certificate_refs: None,
-            well_known_ca_certificates: None,
-            hostname: None,
             subject_alt_names: Some(vec![]),
+            ..Default::default()
         };
-        assert!(!san_pinning_requested(Some(&v)));
+        assert!(!subject_alt_names_requested(Some(&v)));
+    }
+
+    // ── check_validation_block: the SAN gate is per-provider, hostname is not ──
+
+    #[test]
+    fn san_rejected_when_provider_gate_off() {
+        let errs = check_validation_block(Some(&san_only()), "ExtProc", false);
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].contains("subjectAltNames"));
+    }
+
+    #[test]
+    fn san_allowed_when_provider_gate_on() {
+        // oidc/ldap-style: subjectAltNames is enforced, so it passes the guard.
+        assert!(check_validation_block(Some(&san_only()), "OpenidConnect", true).is_empty());
+    }
+
+    #[test]
+    fn hostname_rejected_even_when_san_gate_on() {
+        // The key fix: a provider that enforces subjectAltNames (gate on) must
+        // still reject hostname, because SNI override is implemented nowhere.
+        assert!(!HOSTNAME_SNI_ENFORCED, "test assumes SNI override not yet enforced");
+        let errs = check_validation_block(Some(&hostname_only()), "OpenidConnect", true);
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].contains("hostname"));
+    }
+
+    #[test]
+    fn both_fields_yield_two_errors_when_both_unsupported() {
+        let v = OutboundTlsValidation {
+            hostname: Some("idp.example.com".to_string()),
+            subject_alt_names: san_only().subject_alt_names,
+            ..Default::default()
+        };
+        let errs = check_validation_block(Some(&v), "ExtProc", false);
+        assert_eq!(
+            errs.len(),
+            2,
+            "expected both subjectAltNames and hostname errors, got: {errs:?}"
+        );
     }
 }
