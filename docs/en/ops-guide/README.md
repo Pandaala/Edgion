@@ -22,6 +22,7 @@ This section is intended for operators, covering Gateway deployment, configurati
 - [TLS Termination](./gateway/tls/tls-termination.md): Standard TLS termination configuration.
 - [EdgionTls Extension 🔌](./gateway/tls/edgion-tls.md): Extended certificate and TLS capabilities.
 - [ACME Auto-Certificate 🔌](./gateway/tls/acme.md): Automatic issuance and renewal.
+- [FIPS Mode 🔒](./gateway/tls/fips.md): FIPS-validated BoringSSL and approved-by-default cipher/curve set.
 - [TLS Routing (Passthrough)](../user-guide/tls-route/overview.md): SNI-based routing without decrypting traffic.
 
 ### Infrastructure

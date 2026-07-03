@@ -22,6 +22,7 @@
 - [TLS 终结](./gateway/tls/tls-termination.md)：标准 TLS 终结配置。
 - [EdgionTls 扩展 🔌](./gateway/tls/edgion-tls.md)：扩展证书与 TLS 能力。
 - [ACME 自动证书 🔌](./gateway/tls/acme.md)：自动签发与续期。
+- [FIPS 模式 🔒](./gateway/tls/fips.md)：FIPS 验证的 BoringSSL 与默认批准的密码套件 / 曲线集合。
 
 ### 基础设施
 
