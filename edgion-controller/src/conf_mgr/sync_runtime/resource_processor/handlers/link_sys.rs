@@ -341,11 +341,10 @@ async fn resolve_for_spec(
             drive_standard(ctx, owner, kafka_config.sasl.as_mut(), kafka_config.tls.as_mut()).await
         }
         SystemConfig::HttpDns(h) => {
-            // `connection` reuses the same `ExternalHttpConnection` shape as
-            // Webhook's `conn`, so its TLS refs get the identical treatment.
-            // Non-TLS secretRef resolution for httpdns (if any is added later)
-            // stays deferred to Part B; TLS is resolved here at Part A like
-            // every other LinkSys provider.
+            // `connection` is the lean `HttpDnsConnection { tls, timeout_ms }`;
+            // its outbound TLS refs get the same treatment as every other
+            // provider. Non-TLS secretRef resolution for httpdns (if any is
+            // added later) stays deferred; TLS is resolved here like the rest.
             let mut errs = Vec::new();
             if let Some(conn) = h.connection.as_mut() {
                 if let Some(tls) = conn.tls.as_mut() {

@@ -4,6 +4,7 @@
 //! and the no-config path falls back to the system resolver.
 
 pub mod httpdns;
+pub mod resolver_select;
 pub mod standard;
 pub mod system;
 

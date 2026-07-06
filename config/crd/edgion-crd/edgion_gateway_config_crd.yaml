@@ -336,6 +336,31 @@ spec:
                           type: string
                           description: "Namespace of the referent"
                       required: [name]
+                dnsResolver:
+                  type: object
+                  description: "Data-plane default DNS resolver for ServiceExternalName backends"
+                  properties:
+                    linkSysRef:
+                      type: object
+                      description: "Reference to an httpdns LinkSys resource (namespace required; cluster-scoped EGC)"
+                      properties:
+                        namespace:
+                          type: string
+                          description: "Namespace of the httpdns LinkSys resource"
+                        name:
+                          type: string
+                          description: "Name of the httpdns LinkSys resource"
+                      required: [namespace, name]
+                    servers:
+                      type: array
+                      description: "Inline standard-DNS server list (ip[:port]); mutually exclusive with linkSysRef"
+                      items:
+                        type: string
+                    cacheTtl:
+                      type: string
+                      description: "Data-plane resolution cache TTL (default 5s)"
+                      default: "5s"
+                      pattern: "^([0-9]+(\\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\\.[0-9]+)?$"
 
             status:
               type: object

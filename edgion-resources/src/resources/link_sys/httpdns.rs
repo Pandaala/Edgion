@@ -8,7 +8,29 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::resources::common::external_http::ExternalHttpConnection;
+use crate::resources::common::TlsConfig;
+
+/// Connection-level settings for an HTTP DNS resolver request.
+///
+/// Deliberately lean: an HTTP DNS resolver targets a `urlTemplate` (not a
+/// Kubernetes Service), so — unlike the webhook `ExternalHttpConnection` — it
+/// has NO required `target`/`WebhookTarget`. Only the two fields the resolver
+/// core actually consumes are modeled: outbound TLS and a request timeout.
+//
+// NOTE: no `PartialEq`/`Eq` — `TlsConfig` derives neither, so structural
+// equality is unavailable here (and unnecessary). Do not add them.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HttpDnsConnection {
+    /// Outbound TLS configuration (custom CA, mTLS, SAN checks) for the HTTPS
+    /// request to the HTTP DNS endpoint. Absent = system CA bundle, no client
+    /// certificate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tls: Option<TlsConfig>,
+    /// Request timeout in milliseconds. Absent = the fetcher's built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
 
 /// Built-in vendor presets. Each preset implies a known URL template and
 /// response format so operators do not have to spell them out.
@@ -61,9 +83,8 @@ pub enum HttpDnsFallback {
 
 /// HTTP DNS resolver configuration.
 //
-// NOTE: no `PartialEq`/`Eq` — `ExternalHttpConnection` derives neither, and it
-// transitively contains an `f64` (PassiveBackoff.multiplier) so `Eq` is
-// structurally impossible. Do not add them.
+// NOTE: no `PartialEq`/`Eq` — `HttpDnsConnection` embeds `TlsConfig`, which
+// derives neither, so structural equality is unavailable. Do not add them.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpDnsResolverConfig {
@@ -79,9 +100,9 @@ pub struct HttpDnsResolverConfig {
     /// Failure fallback behavior.
     #[serde(default)]
     pub fallback: HttpDnsFallback,
-    /// Connection settings (TLS, timeout) — reuses the shared external-HTTP type.
+    /// Connection settings (outbound TLS, request timeout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub connection: Option<ExternalHttpConnection>,
+    pub connection: Option<HttpDnsConnection>,
 }
 
 impl HttpDnsResolverConfig {
@@ -182,6 +203,40 @@ mod tests {
             errs.iter().any(|e| e.contains("not-an-ip")),
             "expected an error naming the invalid server, got {errs:?}"
         );
+    }
+
+    #[test]
+    fn http_dns_connection_roundtrips_without_target() {
+        // The lean HttpDnsConnection must parse with only tls/timeout and NO
+        // `target` field (unlike the webhook ExternalHttpConnection it replaced).
+        let yaml = "timeoutMs: 1500\n";
+        let conn: HttpDnsConnection = serde_yaml::from_str(yaml).expect("parse lean connection");
+        assert_eq!(conn.timeout_ms, Some(1500));
+        assert!(conn.tls.is_none());
+
+        // Round-trip: serialized form must not contain a `target` key.
+        let out = serde_yaml::to_string(&conn).unwrap();
+        assert!(
+            !out.contains("target"),
+            "lean connection must not carry a target, got: {out}"
+        );
+    }
+
+    #[test]
+    fn http_dns_config_with_lean_connection_roundtrips() {
+        let cfg = HttpDnsResolverConfig {
+            preset: Some(HttpDnsPreset::Aliyun),
+            url_template: None,
+            response: HttpDnsResponseFormat::default(),
+            fallback: HttpDnsFallback::System,
+            connection: Some(HttpDnsConnection {
+                tls: None,
+                timeout_ms: Some(2000),
+            }),
+        };
+        let out = serde_yaml::to_string(&cfg).unwrap();
+        let back: HttpDnsResolverConfig = serde_yaml::from_str(&out).unwrap();
+        assert_eq!(back.connection.and_then(|c| c.timeout_ms), Some(2000));
     }
 
     #[test]

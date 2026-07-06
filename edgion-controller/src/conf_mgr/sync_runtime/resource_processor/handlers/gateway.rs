@@ -275,6 +275,24 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         let cross_ns_manager = &ctx.runtime().cross_ns_ref_mgr;
         cross_ns_manager.clear_resource_refs(&cross_ns_ref);
 
+        // Track a cross-namespace `edgion.io/dns-resolver-ref` (Gateway → httpdns
+        // LinkSys) so a ReferenceGrant add/remove requeues this Gateway. The grant
+        // check + annotation strip happen in `update_status` (which reports the
+        // denial via ResolvedRefs before stripping).
+        if let Some(v) = g
+            .metadata
+            .annotations
+            .as_ref()
+            .and_then(|a| a.get(annotations::edgion::DNS_RESOLVER_REF))
+        {
+            if let Some(key) = edgion_common::dns::resolver_select::LinkSysKey::parse(v) {
+                let gateway_ns = g.metadata.namespace.as_deref().unwrap_or("default");
+                if key.namespace != gateway_ns {
+                    cross_ns_manager.add_ref(key.namespace, cross_ns_ref.clone());
+                }
+            }
+        }
+
         // Register listeners to ListenerPortManager (empty list clears stale registrations)
         let listener_ports: Vec<(String, ConflictKey, Option<String>)> = g
             .spec
@@ -603,6 +621,8 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         // Pre-compute stream plugin ref validation before taking a mutable borrow of gateway.
         let stream_plugin_ref_error = validate_gateway_stream_plugin_ref(gateway, _ctx.runtime());
         let plugin_ref_error = validate_gateway_plugin_ref(gateway, _ctx.runtime());
+        // Cross-namespace dns-resolver-ref grant denial (Gateway → httpdns LinkSys).
+        let dns_resolver_ref_error = validate_gateway_dns_resolver_ref(gateway, _ctx.runtime());
 
         // Initialize status if not present
         let status = gateway.status.get_or_insert_with(GatewayStatus::default);
@@ -640,14 +660,33 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
             update_gateway_condition(conditions, cond);
         }
 
-        // Gateway-level ResolvedRefs: merge stream-plugin and HTTP-plugin ref errors
-        // into a single shared condition — never emit two conditions of the same type.
+        // Gateway-level ResolvedRefs: merge stream-plugin, HTTP-plugin, and
+        // dns-resolver ref errors into a single shared condition — never emit two
+        // conditions of the same type. Reason precedence keeps the existing
+        // plugin-ref reasons; a dns-resolver-ref denial alone uses the standard
+        // RefNotPermitted reason.
         {
-            let merged = match (stream_plugin_ref_error.as_ref(), plugin_ref_error.as_ref()) {
-                (None, None) => None,
-                (Some(s), None) => Some((condition_reasons::INVALID_STREAM_PLUGINS_REF, s.clone())),
-                (None, Some(p)) => Some((condition_reasons::INVALID_PLUGINS_REF, p.clone())),
-                (Some(s), Some(p)) => Some((condition_reasons::INVALID_PLUGINS_REF, format!("{}; {}", s, p))),
+            let mut parts: Vec<String> = Vec::new();
+            if let Some(s) = stream_plugin_ref_error.as_ref() {
+                parts.push(s.clone());
+            }
+            if let Some(p) = plugin_ref_error.as_ref() {
+                parts.push(p.clone());
+            }
+            if let Some(d) = dns_resolver_ref_error.as_ref() {
+                parts.push(d.clone());
+            }
+            let merged = if parts.is_empty() {
+                None
+            } else {
+                let reason = if plugin_ref_error.is_some() {
+                    condition_reasons::INVALID_PLUGINS_REF
+                } else if stream_plugin_ref_error.is_some() {
+                    condition_reasons::INVALID_STREAM_PLUGINS_REF
+                } else {
+                    condition_reasons::REF_NOT_PERMITTED
+                };
+                Some((reason, parts.join("; ")))
             };
             match merged {
                 None => {
@@ -660,7 +699,7 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
                     update_gateway_condition(conditions, cond);
                 }
                 Some((reason, message)) => {
-                    tracing::warn!(error = %message, "Gateway-level plugin ref unresolved");
+                    tracing::warn!(error = %message, "Gateway-level ref unresolved");
                     let cond = condition_false(condition_types::RESOLVED_REFS, reason, message, generation);
                     update_gateway_condition(conditions, cond);
                 }
@@ -816,6 +855,15 @@ impl ProcessorHandler<Gateway> for GatewayHandler {
         } else {
             // All listeners removed from spec: clear status listeners
             status.listeners = Some(Vec::new());
+        }
+
+        // Strip a denied cross-namespace `dns-resolver-ref` after conditions are
+        // reported, so the data plane never honors an unpermitted reference. Only
+        // the shipped/cached copy is mutated (status write-back touches the status
+        // subresource only), so the apiserver object keeps the annotation and a
+        // later ReferenceGrant re-enables it on the next reconcile.
+        if dns_resolver_ref_error.is_some() {
+            super::dns_resolver_guard::strip_dns_resolver_ref(&mut gateway.metadata.annotations);
         }
     }
 }
@@ -1633,11 +1681,32 @@ fn validate_gateway_plugin_ref(gateway: &Gateway, runtime: &ControllerRuntime) -
     }
 }
 
+/// Returns `Some(error_message)` when the Gateway's `edgion.io/dns-resolver-ref`
+/// annotation points at an httpdns LinkSys in another namespace with no matching
+/// ReferenceGrant. `None` when the annotation is absent, same-namespace, or
+/// permitted. Same-namespace refs and trusted config are never gated.
+fn validate_gateway_dns_resolver_ref(gateway: &Gateway, runtime: &ControllerRuntime) -> Option<String> {
+    use super::dns_resolver_guard::check_dns_resolver_ref_grant;
+    let gateway_ns = gateway.metadata.namespace.as_deref().unwrap_or("default");
+    let denial = check_dns_resolver_ref_grant(
+        gateway_ns,
+        "gateway.networking.k8s.io",
+        "Gateway",
+        gateway.metadata.annotations.as_ref(),
+        runtime,
+    )?;
+    Some(format!(
+        "dns-resolver-ref LinkSys '{}/{}' cross-namespace reference not permitted (no ReferenceGrant)",
+        denial.ref_namespace, denial.name
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         gateway_service_lookup_candidates, has_all_ca_refs_invalid, parse_stream_plugin_ref,
-        validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref, GatewayHandler, GatewayResolvedRefsError,
+        validate_gateway_dns_resolver_ref, validate_gateway_plugin_ref, validate_gateway_stream_plugin_ref,
+        GatewayHandler, GatewayResolvedRefsError,
     };
     use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessorHandler};
     use crate::conf_mgr::ControllerRuntime;
@@ -1707,6 +1776,47 @@ mod tests {
         let result = validate_gateway_stream_plugin_ref(&gw, &runtime);
         assert!(result.is_some());
         assert!(result.unwrap().contains("my-ns/my-stream"));
+    }
+
+    fn make_gateway_with_dns_resolver_ref(ns: &str, reference: &str) -> Gateway {
+        let mut gw = make_test_gateway(ns);
+        let mut annotations = BTreeMap::new();
+        annotations.insert("edgion.io/dns-resolver-ref".to_string(), reference.to_string());
+        gw.metadata.annotations = Some(annotations);
+        gw
+    }
+
+    #[test]
+    fn validate_dns_resolver_ref_no_annotation_returns_none() {
+        let runtime = ControllerRuntime::default();
+        let gw = make_test_gateway("default");
+        assert!(validate_gateway_dns_resolver_ref(&gw, &runtime).is_none());
+    }
+
+    #[test]
+    fn validate_dns_resolver_ref_same_namespace_is_allowed() {
+        // A same-namespace ref is never grant-gated.
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_dns_resolver_ref("app", "app/aliyun");
+        assert!(validate_gateway_dns_resolver_ref(&gw, &runtime).is_none());
+    }
+
+    #[test]
+    fn validate_dns_resolver_ref_cross_namespace_without_grant_is_denied() {
+        // Empty ref_grant_store + default (enabled) validation → cross-ns denied.
+        let runtime = ControllerRuntime::default();
+        let gw = make_gateway_with_dns_resolver_ref("app", "dns/aliyun");
+        let result = validate_gateway_dns_resolver_ref(&gw, &runtime);
+        assert!(
+            result.is_some(),
+            "cross-namespace ref without a ReferenceGrant must be denied"
+        );
+        let msg = result.unwrap();
+        assert!(msg.contains("dns/aliyun"), "message must name the ref, got: {msg}");
+        assert!(
+            msg.contains("not permitted"),
+            "message must state the denial, got: {msg}"
+        );
     }
 
     #[test]

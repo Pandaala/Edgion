@@ -224,6 +224,7 @@ mod tests {
                 tcp_timeout: None,
                 load_balancing: None,
                 outbound_tls: None,
+                dns_resolver: None,
             },
         )
     }

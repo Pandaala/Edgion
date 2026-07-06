@@ -4,6 +4,7 @@
 //! as parametersRef in GatewayClass to provide gateway-wide configuration.
 
 use super::common::Condition;
+use super::edgion_plugins::plugin_configs::LinkSysRef;
 use super::edgion_plugins::RealIpConfig;
 use kube::CustomResource;
 use schemars::JsonSchema;
@@ -74,6 +75,42 @@ pub struct EdgionGatewayConfigSpec {
     /// Cluster-wide default for plugin / LinkSys outbound TLS verification.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outbound_tls: Option<crate::resources::common::OutboundTlsConfig>,
+
+    /// Data-plane default DNS resolver for `ServiceExternalName` backends.
+    /// Overridden per-Gateway (annotation) and per-Service (annotation); this is
+    /// the gateway-wide fallback below those. Control-plane resolution does NOT
+    /// use this (it uses Service annotation → Controller YAML default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dns_resolver: Option<DnsResolverConfig>,
+}
+
+/// Data-plane default DNS resolver configuration (EdgionGatewayConfig).
+///
+/// `linkSysRef` (an httpdns LinkSys) and `servers` (inline standard DNS) are
+/// mutually exclusive; the structural CRD cannot express `oneOf`, so both stay
+/// optional and the exclusion is enforced at ingest.
+//
+// NOTE: no `PartialEq`/`Eq` — kept simple and consistent with the other EGC
+// sub-structs; not required by any consumer.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DnsResolverConfig {
+    /// httpdns LinkSys reference (`namespace` + `name`). Namespace is required
+    /// because EdgionGatewayConfig is cluster-scoped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_sys_ref: Option<LinkSysRef>,
+
+    /// Inline standard-DNS server list (`ip[:port]`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub servers: Option<Vec<String>>,
+
+    /// Data-plane resolution cache TTL (duration string, default "5s").
+    #[serde(default = "default_dns_cache_ttl")]
+    pub cache_ttl: String,
+}
+
+fn default_dns_cache_ttl() -> String {
+    "5s".to_string()
 }
 
 // ============================================
@@ -363,6 +400,7 @@ impl Default for EdgionGatewayConfigSpec {
             tcp_timeout: None,
             load_balancing: None,
             outbound_tls: None,
+            dns_resolver: None,
         }
     }
 }
@@ -537,6 +575,24 @@ fn default_webhook_max_response_bytes() -> usize {
 }
 
 impl EdgionGatewayConfigSpec {
+    /// Validate `spec.dnsResolver` at ingest. Returns error strings suitable for
+    /// an `Accepted=False/reason=Invalid` condition (empty = OK).
+    ///
+    /// The structural CRD cannot express `oneOf`, so `linkSysRef` and `servers`
+    /// both stay optional in YAML and their mutual exclusion is enforced here.
+    pub fn validate_dns_resolver(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+        if let Some(dr) = &self.dns_resolver {
+            let has_ref = dr.link_sys_ref.is_some();
+            let has_servers = dr.servers.as_ref().is_some_and(|s| !s.is_empty());
+            if has_ref && has_servers {
+                errors
+                    .push("dnsResolver: `linkSysRef` and `servers` are mutually exclusive (set only one)".to_string());
+            }
+        }
+        errors
+    }
+
     /// Check for deprecated fields and log warnings.
     pub fn check_deprecated_fields(&self) {
         if let Some(ref http_timeout) = self.http_timeout {
@@ -712,6 +768,56 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(s.outbound_tls.unwrap().verify, false);
+    }
+
+    #[test]
+    fn egc_dns_resolver_absent_is_none() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_str("{}").unwrap();
+        assert!(s.dns_resolver.is_none());
+        assert!(s.validate_dns_resolver().is_empty());
+    }
+
+    #[test]
+    fn egc_dns_resolver_link_sys_ref_roundtrips() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "dnsResolver": {"linkSysRef": {"namespace": "dns", "name": "aliyun"}}
+        }))
+        .unwrap();
+        let dr = s.dns_resolver.as_ref().unwrap();
+        let r = dr.link_sys_ref.as_ref().unwrap();
+        assert_eq!(r.namespace, "dns");
+        assert_eq!(r.name, "aliyun");
+        // cacheTtl defaults to 5s when omitted.
+        assert_eq!(dr.cache_ttl, "5s");
+        assert!(s.validate_dns_resolver().is_empty());
+    }
+
+    #[test]
+    fn egc_dns_resolver_servers_roundtrip_and_cache_ttl() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "dnsResolver": {"servers": ["1.1.1.1", "8.8.8.8:5353"], "cacheTtl": "10s"}
+        }))
+        .unwrap();
+        let dr = s.dns_resolver.as_ref().unwrap();
+        assert_eq!(dr.servers.as_ref().unwrap().len(), 2);
+        assert_eq!(dr.cache_ttl, "10s");
+        assert!(s.validate_dns_resolver().is_empty());
+    }
+
+    #[test]
+    fn egc_dns_resolver_ref_and_servers_are_mutually_exclusive() {
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "dnsResolver": {
+                "linkSysRef": {"namespace": "dns", "name": "aliyun"},
+                "servers": ["1.1.1.1"]
+            }
+        }))
+        .unwrap();
+        let errs = s.validate_dns_resolver();
+        assert!(
+            errs.iter().any(|e| e.contains("mutually exclusive")),
+            "both linkSysRef and servers set must be rejected, got: {errs:?}"
+        );
     }
 
     #[test]

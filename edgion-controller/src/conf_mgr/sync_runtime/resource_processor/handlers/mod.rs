@@ -8,6 +8,7 @@ pub mod auth_spec;
 mod backend_tls_policy;
 pub(crate) mod config_data_ref_mark;
 mod configmap;
+pub(crate) mod dns_resolver_guard;
 mod edgion_acme;
 mod edgion_config_data;
 mod edgion_gateway_config;

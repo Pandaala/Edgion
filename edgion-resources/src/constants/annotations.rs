@@ -133,6 +133,28 @@ pub mod edgion {
     /// list (bare names use the Gateway's namespace).
     pub const EDGION_PLUGINS: &str = "edgion.io/edgion-plugins";
 
+    /// Per-Service DNS resolution mode for a `ServiceExternalName` backend.
+    /// Value: `controller` (default) | `gateway` | `per-request`.
+    /// - `controller`: use the controller-resolved EndpointSlice when it has a
+    ///   ready backend, else the gateway bridges via self-resolution + cache.
+    /// - `gateway`: the gateway resolves via the effective resolver + 5s cache
+    ///   (authoritative; never consults a slice).
+    /// - `per-request`: the gateway resolves on every request, no cache.
+    ///
+    /// Set on a Service. Invalid values fall back to `controller`.
+    pub const DNS_RESOLUTION_MODE: &str = "edgion.io/dns-resolution-mode";
+
+    /// Inline standard-DNS resolver override. Value: a comma/space-separated
+    /// server list (`ip[:port]`). Set on a Service (spans both planes) or a
+    /// Gateway (data-plane only). Mutually exclusive with `DNS_RESOLVER_REF`.
+    pub const DNS_RESOLVER: &str = "edgion.io/dns-resolver";
+
+    /// httpdns LinkSys resolver override. Value: `namespace/name` (explicit
+    /// namespace required; bare names are rejected). Set on a Service (spans both
+    /// planes) or a Gateway (data-plane only). Mutually exclusive with
+    /// `DNS_RESOLVER`.
+    pub const DNS_RESOLVER_REF: &str = "edgion.io/dns-resolver-ref";
+
     /// Parse the `edgion.io/edgion-plugins` (or stream) annotation value into an ordered,
     /// de-duplicated list of "namespace/name" store keys. Bare names (no `/`) are expanded
     /// with `default_ns`. Blank entries are skipped.

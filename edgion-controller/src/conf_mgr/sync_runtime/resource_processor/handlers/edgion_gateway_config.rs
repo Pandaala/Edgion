@@ -47,7 +47,11 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
     fn preparse(&self, egc: &mut EdgionGatewayConfig, _ctx: &HandlerContext) -> Vec<String> {
         // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on
         // EdgionGatewayConfig where SAN pinning enforcement is not yet implemented.
-        san_guard::check_egc_san(egc)
+        let mut errors = san_guard::check_egc_san(egc);
+        // dnsResolver `linkSysRef` and `servers` are mutually exclusive (the
+        // structural CRD cannot express `oneOf`, so it is enforced here).
+        errors.extend(egc.spec.validate_dns_resolver());
+        errors
     }
 
     async fn parse(&self, mut egc: EdgionGatewayConfig, ctx: &HandlerContext) -> ProcessResult<EdgionGatewayConfig> {

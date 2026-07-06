@@ -154,6 +154,61 @@ pub struct EdgionControllerConfig {
     #[arg(skip)]
     #[serde(default)]
     pub admin_token: Option<String>,
+
+    /// Control-plane DNS resolution for ExternalName backends (background loop).
+    #[arg(skip)]
+    #[serde(default)]
+    pub dns_resolver: DnsResolverConfig,
+}
+
+/// Control-plane DNS resolver configuration.
+///
+/// Governs the background resolution loop (data-plane resolution is configured
+/// separately via `EdgionGatewayConfig.spec.dnsResolver` + annotations). The
+/// default resolver is either an httpdns LinkSys reference (`link_sys_ref`) OR
+/// an inline standard-DNS server list (`servers`) — the two are mutually
+/// exclusive (validated at load).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DnsResolverConfig {
+    /// Control-plane resolution on/off.
+    pub enabled: bool,
+    /// Background refresh interval (duration string, e.g. "15s").
+    pub refresh_interval: String,
+    /// Default resolver: httpdns LinkSys reference `"namespace/name"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub link_sys_ref: Option<String>,
+    /// Default resolver: inline standard-DNS server list (`ip[:port]`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<String>,
+}
+
+impl Default for DnsResolverConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            refresh_interval: "15s".to_string(),
+            link_sys_ref: None,
+            servers: Vec::new(),
+        }
+    }
+}
+
+impl DnsResolverConfig {
+    /// Validate the default-resolver configuration. `link_sys_ref` and `servers`
+    /// are mutually exclusive (a single default resolver, not both).
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .link_sys_ref
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|s| !s.is_empty())
+            && !self.servers.is_empty()
+        {
+            return Err("dns_resolver: `link_sys_ref` and `servers` are mutually exclusive (set only one)".to_string());
+        }
+        Ok(())
+    }
 }
 
 /// Server configuration
@@ -370,6 +425,7 @@ impl EdgionControllerConfig {
 
         file_config.validate_metrics()?;
         crate::api::ip_allowlist::validate_admin_ips(&file_config.server.allow_admin_ips)?;
+        file_config.dns_resolver.validate().map_err(anyhow::Error::msg)?;
 
         Ok(file_config)
     }
@@ -682,6 +738,57 @@ impl CenterClientConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dns_resolver_defaults_enabled_15s() {
+        let cfg = DnsResolverConfig::default();
+        assert!(cfg.enabled, "control-plane resolution defaults to on");
+        assert_eq!(cfg.refresh_interval, "15s");
+        assert!(cfg.link_sys_ref.is_none());
+        assert!(cfg.servers.is_empty());
+    }
+
+    #[test]
+    fn dns_resolver_parses_from_yaml() {
+        let yaml = "enabled: false\nrefresh_interval: 30s\nservers:\n  - 1.1.1.1\n  - 8.8.8.8:5353\n";
+        let cfg: DnsResolverConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(!cfg.enabled);
+        assert_eq!(cfg.refresh_interval, "30s");
+        assert_eq!(cfg.servers, vec!["1.1.1.1".to_string(), "8.8.8.8:5353".to_string()]);
+    }
+
+    #[test]
+    fn dns_resolver_omitted_fields_take_defaults() {
+        // `#[serde(default)]` on the struct → an empty map yields the full default.
+        let cfg: DnsResolverConfig = serde_yaml::from_str("{}").unwrap();
+        assert!(cfg.enabled);
+        assert_eq!(cfg.refresh_interval, "15s");
+    }
+
+    #[test]
+    fn dns_resolver_link_sys_ref_and_servers_are_mutually_exclusive() {
+        let cfg = DnsResolverConfig {
+            link_sys_ref: Some("dns/aliyun".to_string()),
+            servers: vec!["1.1.1.1".to_string()],
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err(), "both set must be rejected");
+    }
+
+    #[test]
+    fn dns_resolver_single_source_validates_clean() {
+        let only_ref = DnsResolverConfig {
+            link_sys_ref: Some("dns/aliyun".to_string()),
+            ..Default::default()
+        };
+        assert!(only_ref.validate().is_ok());
+        let only_servers = DnsResolverConfig {
+            servers: vec!["1.1.1.1".to_string()],
+            ..Default::default()
+        };
+        assert!(only_servers.validate().is_ok());
+        assert!(DnsResolverConfig::default().validate().is_ok());
+    }
 
     #[test]
     fn test_to_log_config_respects_console_flag() {

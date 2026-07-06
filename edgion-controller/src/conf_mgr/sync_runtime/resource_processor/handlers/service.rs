@@ -6,6 +6,7 @@
 
 use k8s_openapi::api::core::v1::Service;
 
+use crate::conf_mgr::sync_runtime::resource_processor::handlers::dns_resolver_guard;
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
 
 /// Service handler
@@ -51,7 +52,30 @@ impl Default for ServiceHandler {
 
 #[async_trait::async_trait]
 impl ProcessorHandler<Service> for ServiceHandler {
-    async fn parse(&self, svc: Service, _ctx: &HandlerContext) -> ProcessResult<Service> {
+    async fn parse(&self, mut svc: Service, ctx: &HandlerContext) -> ProcessResult<Service> {
+        // Gate a cross-namespace `edgion.io/dns-resolver-ref` to an httpdns
+        // LinkSys. A native Service has no Edgion status surface, so a denial is
+        // logged (not a status condition) and the annotation is stripped so the
+        // data plane never honors an unpermitted reference (falls back to the
+        // next resolver layer / system).
+        let svc_ns = svc.metadata.namespace.as_deref().unwrap_or("default").to_string();
+        if let Some(denial) = dns_resolver_guard::check_dns_resolver_ref_grant(
+            &svc_ns,
+            "",
+            "Service",
+            svc.metadata.annotations.as_ref(),
+            ctx.runtime(),
+        ) {
+            tracing::warn!(
+                service_ns = %svc_ns,
+                service = svc.metadata.name.as_deref().unwrap_or(""),
+                ref_ns = %denial.ref_namespace,
+                ref_name = %denial.name,
+                "edgion.io/dns-resolver-ref: cross-namespace reference to httpdns LinkSys has no ReferenceGrant; \
+                 stripping annotation (data-plane DNS resolution falls back to the next layer)"
+            );
+            dns_resolver_guard::strip_dns_resolver_ref(&mut svc.metadata.annotations);
+        }
         ProcessResult::Continue(svc)
     }
 
