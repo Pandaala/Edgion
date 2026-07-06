@@ -3,6 +3,7 @@
 //! backend uses hickory-resolver, HTTP DNS reuses link_sys_core's HTTP client,
 //! and the no-config path falls back to the system resolver.
 
+pub mod http_fetcher;
 pub mod httpdns;
 pub mod resolver_select;
 pub mod standard;
@@ -33,6 +34,37 @@ pub enum ResolverSpec {
     /// Boxed: `HttpDnsResolverConfig` is much larger than the other variants, so
     /// carrying it inline triggers `clippy::large_enum_variant`.
     HttpDns(Box<HttpDnsResolverConfig>),
+}
+
+impl ResolverSpec {
+    /// A stable fingerprint of this resolver choice, used as a data-plane cache
+    /// key component so a resolver change (different servers, a swapped httpdns
+    /// config) invalidates cached addresses instead of serving stale ones.
+    ///
+    /// `System` and `StandardDns` fingerprint from their fields directly; the
+    /// `HttpDns` variant serializes its config (order-stable serde) because it
+    /// has no cheaper structural identity.
+    pub fn fingerprint(&self) -> String {
+        match self {
+            ResolverSpec::System => "system".to_string(),
+            ResolverSpec::StandardDns { servers } => format!("std:{}", servers.join(",")),
+            // serde_json is order-stable for struct fields; a serialize failure
+            // (not expected for this plain config) degrades to a constant tag,
+            // which only means "do not distinguish two httpdns configs" — never
+            // a correctness hazard because the resolved addresses are re-validated.
+            //
+            // Serialize under an admin-redact guard so any resolved secret
+            // material in `connection.tls` (client key / CA PEMs) collapses to
+            // "[redacted]" and never enters the process-global cache key. A
+            // secret-only change (e.g. a rotated client cert) does not alter the
+            // resolved IPs, so redacting it from the key is also semantically
+            // correct — it must not force a cache invalidation.
+            ResolverSpec::HttpDns(cfg) => {
+                let _redact = edgion_resources::redact::AdminRedactGuard::new();
+                format!("httpdns:{}", serde_json::to_string(cfg).unwrap_or_default())
+            }
+        }
+    }
 }
 
 /// Resolver failure classes (stable, low-cardinality).
@@ -70,11 +102,17 @@ pub async fn resolve(spec: &ResolverSpec, domain: &str) -> Result<Vec<IpAddr>, D
             }
         }
         ResolverSpec::StandardDns { servers } => standard::resolve_standard(servers, domain).await,
-        // Deferred to Part B: this dispatch needs the real HTTP fetcher (built on
-        // link_sys_core's HTTP client). The render/parse/fallback core already
-        // exists in `httpdns::resolve_http_dns_with` and is unit-tested; only the
-        // network fetch + connection/auth wiring remains.
-        ResolverSpec::HttpDns(_) => Err(DnsError::Http("http dns not yet implemented".into())),
+        ResolverSpec::HttpDns(cfg) => {
+            // Build the real network fetcher from the resolver's connection
+            // settings (outbound TLS + timeout) and run the transport-free
+            // render/parse/fallback core against it. If the client cannot even be
+            // built (e.g. invalid resolved TLS material), fall through to the
+            // configured fallback rather than dropping it.
+            match http_fetcher::ReqwestHttpDnsFetcher::new(cfg.connection.as_ref()) {
+                Ok(fetcher) => httpdns::resolve_http_dns_with(&fetcher, cfg, domain).await,
+                Err(_build_err) => httpdns::resolve_via_fallback(cfg, domain).await,
+            }
+        }
     }
 }
 
@@ -86,6 +124,72 @@ mod tests {
     async fn system_spec_resolves_localhost() {
         let addrs = resolve(&ResolverSpec::System, "localhost").await.expect("resolves");
         assert!(addrs.iter().any(|ip| ip.is_loopback()));
+    }
+
+    #[test]
+    fn fingerprint_distinguishes_resolvers() {
+        let system = ResolverSpec::System.fingerprint();
+        let dns_a = ResolverSpec::StandardDns {
+            servers: vec!["1.1.1.1".to_string()],
+        }
+        .fingerprint();
+        let dns_b = ResolverSpec::StandardDns {
+            servers: vec!["8.8.8.8".to_string()],
+        }
+        .fingerprint();
+        assert_ne!(system, dns_a);
+        assert_ne!(dns_a, dns_b, "different server lists must fingerprint differently");
+        // Same servers → same fingerprint (cache hit across requests).
+        assert_eq!(
+            dns_a,
+            ResolverSpec::StandardDns {
+                servers: vec!["1.1.1.1".to_string()]
+            }
+            .fingerprint()
+        );
+    }
+
+    #[test]
+    fn httpdns_fingerprint_redacts_resolved_secret_material() {
+        use edgion_resources::resources::common::{OutboundTlsLocal, TlsConfig};
+        use edgion_resources::resources::link_sys::httpdns::{
+            HttpDnsConnection, HttpDnsFallback, HttpDnsPreset, HttpDnsResolverConfig, HttpDnsResponseFormat,
+        };
+        use k8s_openapi::api::core::v1::Secret;
+        use std::collections::BTreeMap;
+
+        const SENTINEL: &str = "SUPER_SECRET_KEY_MATERIAL";
+        let mut string_data = BTreeMap::new();
+        string_data.insert("tls.key".to_string(), SENTINEL.to_string());
+        let secret = Secret {
+            string_data: Some(string_data),
+            ..Default::default()
+        };
+        let tls = TlsConfig {
+            enabled: true,
+            outbound: OutboundTlsLocal::default(),
+            resolved_ca_certificates: None,
+            resolved_client_certificate: Some(secret),
+        };
+        let cfg = HttpDnsResolverConfig {
+            preset: Some(HttpDnsPreset::Aliyun),
+            url_template: None,
+            response: HttpDnsResponseFormat::default(),
+            fallback: HttpDnsFallback::System,
+            connection: Some(HttpDnsConnection {
+                tls: Some(tls),
+                timeout_ms: None,
+            }),
+        };
+        let fp = ResolverSpec::HttpDns(Box::new(cfg)).fingerprint();
+        assert!(
+            !fp.contains(SENTINEL),
+            "resolved secret material must not appear in the cache fingerprint: {fp}"
+        );
+        assert!(
+            fp.contains("[redacted]"),
+            "expected redaction marker in fingerprint: {fp}"
+        );
     }
 
     #[test]

@@ -41,6 +41,50 @@ pub enum HttpDnsPreset {
     Tencent,
 }
 
+impl HttpDnsPreset {
+    /// The vendor's built-in best-effort HTTP DNS URL template. `{domain}` is
+    /// substituted at request time.
+    ///
+    /// This is only a fallback used when no explicit `urlTemplate` is given. The
+    /// vendors' public resolving endpoints are plain HTTP (their public IPs do
+    /// not serve a trusted certificate for a bare-IP TLS handshake), and Aliyun
+    /// additionally requires a per-account path segment a preset cannot know.
+    /// The recommended production pattern is therefore `preset: <vendor>` (to
+    /// reuse the response FORMAT) *plus* an explicit `urlTemplate` carrying the
+    /// correct scheme / account / signing — the urlTemplate wins over this
+    /// default (see `edgion_common::dns::httpdns::render_url`).
+    pub fn url_template(&self) -> &'static str {
+        match self {
+            // Aliyun public HTTPDNS (account-less form; real accounts use /<id>/d).
+            HttpDnsPreset::Aliyun => "http://203.107.1.1/d?host={domain}",
+            // Tencent DNSPod (HTTPDNS) public plaintext resolving host. A custom
+            // urlTemplate for this preset must NOT add `&ttl=1`: that makes the
+            // response `ip;ip,<ttl>` and the ';'-delimited parser drops the last
+            // (ttl-suffixed) address.
+            HttpDnsPreset::Tencent => "http://119.29.29.29/d?dn={domain}",
+        }
+    }
+
+    /// The response body format this vendor returns. Used by the resolver core
+    /// in place of the user-supplied `response` when a preset is set.
+    pub fn response_format(&self) -> HttpDnsResponseFormat {
+        match self {
+            HttpDnsPreset::Aliyun => HttpDnsResponseFormat {
+                kind: HttpDnsBodyKind::Json,
+                ip_path: Some("ips".to_string()),
+                delimiter: None,
+                ttl_path: Some("ttl".to_string()),
+            },
+            HttpDnsPreset::Tencent => HttpDnsResponseFormat {
+                kind: HttpDnsBodyKind::Delimited,
+                ip_path: None,
+                delimiter: Some(";".to_string()),
+                ttl_path: None,
+            },
+        }
+    }
+}
+
 /// Shape of the HTTP DNS response body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
 #[serde(rename_all = "lowercase")]
@@ -88,13 +132,18 @@ pub enum HttpDnsFallback {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HttpDnsResolverConfig {
-    /// Optional vendor preset (syntactic sugar over urlTemplate + response).
+    /// Optional vendor preset. Selects the response FORMAT (and a best-effort
+    /// default URL); may be combined with an explicit `url_template`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preset: Option<HttpDnsPreset>,
-    /// Request URL template; `{domain}` is substituted. Required when no preset.
+    /// Request URL template; `{domain}` is substituted. Wins over a preset's
+    /// built-in URL, so `preset` + `url_template` = the preset's response format
+    /// with a custom (account-scoped / correct-scheme) endpoint. Required only
+    /// when no preset is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url_template: Option<String>,
-    /// Response parsing rules (ignored when a preset is set).
+    /// Response parsing rules. Ignored when a preset is set (the preset's format
+    /// wins); used only for a preset-less generic `url_template` config.
     #[serde(default)]
     pub response: HttpDnsResponseFormat,
     /// Failure fallback behavior.
@@ -109,12 +158,17 @@ impl HttpDnsResolverConfig {
     /// Validate the configuration; empty result means OK.
     pub fn validate(&self) -> Vec<String> {
         let mut errors = Vec::new();
-        if self.preset.is_none() {
-            if self.url_template.as_deref().unwrap_or("").is_empty() {
-                errors.push("HTTP DNS requires urlTemplate when no preset is set".to_string());
-            } else if !self.url_template.as_deref().unwrap_or("").contains("{domain}") {
+        // A urlTemplate, whenever present, must carry the `{domain}` placeholder —
+        // including alongside a preset (a preset + explicit urlTemplate reuses the
+        // preset's response format with a custom URL). With no urlTemplate, a
+        // preset supplies the built-in default; without either there is no URL.
+        let tmpl = self.url_template.as_deref().unwrap_or("");
+        if !tmpl.is_empty() {
+            if !tmpl.contains("{domain}") {
                 errors.push("HTTP DNS urlTemplate must contain the {domain} placeholder".to_string());
             }
+        } else if self.preset.is_none() {
+            errors.push("HTTP DNS requires urlTemplate when no preset is set".to_string());
         }
         if let HttpDnsFallback::Dns { servers } = &self.fallback {
             if servers.is_empty() {
@@ -237,6 +291,23 @@ mod tests {
         let out = serde_yaml::to_string(&cfg).unwrap();
         let back: HttpDnsResolverConfig = serde_yaml::from_str(&out).unwrap();
         assert_eq!(back.connection.and_then(|c| c.timeout_ms), Some(2000));
+    }
+
+    #[test]
+    fn preset_url_templates_contain_domain_placeholder() {
+        assert!(HttpDnsPreset::Aliyun.url_template().contains("{domain}"));
+        assert!(HttpDnsPreset::Tencent.url_template().contains("{domain}"));
+    }
+
+    #[test]
+    fn preset_response_formats_match_vendor_shapes() {
+        let aliyun = HttpDnsPreset::Aliyun.response_format();
+        assert_eq!(aliyun.kind, HttpDnsBodyKind::Json);
+        assert_eq!(aliyun.ip_path.as_deref(), Some("ips"));
+
+        let tencent = HttpDnsPreset::Tencent.response_format();
+        assert_eq!(tencent.kind, HttpDnsBodyKind::Delimited);
+        assert_eq!(tencent.delimiter.as_deref(), Some(";"));
     }
 
     #[test]

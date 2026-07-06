@@ -29,6 +29,21 @@ pub fn list_edgion_gateway_configs() -> Vec<EdgionGatewayConfig> {
     items
 }
 
+/// The data-plane default DNS resolver (`spec.dnsResolver`) from the effectively
+/// singular EGC store, if any EGC declares one.
+///
+/// Cheap hot-path accessor: it clones only the winning `DnsResolverConfig`, not
+/// the whole store, and picks deterministically by name (lowest key wins) so the
+/// choice is stable across restarts when more than one EGC sets a default.
+pub fn get_egc_dns_resolver_default() -> Option<edgion_resources::resources::edgion_gateway_config::DnsResolverConfig> {
+    EDGION_GATEWAY_CONFIG_STORE
+        .read()
+        .iter()
+        .filter(|(_, egc)| egc.spec.dns_resolver.is_some())
+        .min_by(|a, b| a.0.cmp(b.0))
+        .and_then(|(_, egc)| egc.spec.dns_resolver.clone())
+}
+
 /// ConfHandler implementation for EdgionGatewayConfig
 pub struct EdgionGatewayConfigHandler;
 

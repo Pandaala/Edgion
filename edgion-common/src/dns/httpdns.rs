@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::net::IpAddr;
 
 use edgion_resources::resources::link_sys::httpdns::{
-    HttpDnsBodyKind, HttpDnsFallback, HttpDnsPreset, HttpDnsResolverConfig, HttpDnsResponseFormat,
+    HttpDnsBodyKind, HttpDnsFallback, HttpDnsResolverConfig, HttpDnsResponseFormat,
 };
 
 use super::{standard, strip_brackets, system, DnsError};
@@ -42,23 +42,34 @@ fn validate_domain(domain: &str) -> Result<(), DnsError> {
     Ok(())
 }
 
-/// Build the request URL: preset templates take priority, else substitute `{domain}`.
+/// Build the request URL.
+///
+/// An explicit `urlTemplate` always wins — it lets an operator supply an
+/// account-scoped / signed / correct-scheme endpoint while still reusing a
+/// preset's response format (see [`effective_response_format`], which keeps the
+/// preset's format). A preset's built-in URL is only the fallback when no
+/// `urlTemplate` is given.
 pub fn render_url(cfg: &HttpDnsResolverConfig, domain: &str) -> Result<String, DnsError> {
     validate_domain(domain)?;
-    if let Some(preset) = &cfg.preset {
-        let tmpl = match preset {
-            // Placeholder preset templates — replace host/account params at wire-up
-            // time with the real vendor endpoints; the {domain} contract is what matters.
-            HttpDnsPreset::Aliyun => "https://203.0.113.1/resolve?host={domain}",
-            HttpDnsPreset::Tencent => "https://203.0.113.2/d?dn={domain}",
-        };
+    if let Some(tmpl) = cfg.url_template.as_deref().filter(|s| !s.is_empty()) {
+        if !tmpl.contains("{domain}") {
+            return Err(DnsError::Parse("urlTemplate missing {domain}".into()));
+        }
         return Ok(tmpl.replace("{domain}", domain));
     }
-    let tmpl = cfg.url_template.as_deref().unwrap_or("");
-    if !tmpl.contains("{domain}") {
-        return Err(DnsError::Parse("urlTemplate missing {domain}".into()));
+    if let Some(preset) = &cfg.preset {
+        return Ok(preset.url_template().replace("{domain}", domain));
     }
-    Ok(tmpl.replace("{domain}", domain))
+    Err(DnsError::Parse("no urlTemplate and no preset configured".into()))
+}
+
+/// The response format to parse with: a preset's format wins over the
+/// user-supplied `response` (the preset knows the vendor's wire shape).
+fn effective_response_format(cfg: &HttpDnsResolverConfig) -> HttpDnsResponseFormat {
+    match &cfg.preset {
+        Some(preset) => preset.response_format(),
+        None => cfg.response.clone(),
+    }
 }
 
 fn json_pointer_path(path: &str) -> String {
@@ -155,6 +166,16 @@ async fn apply_fallback(fallback: &HttpDnsFallback, domain: &str) -> Result<Vec<
     }
 }
 
+/// Run only the configured fallback for `cfg`.
+///
+/// Used when the primary HTTP path cannot even be attempted — e.g. the outbound
+/// client failed to build from bad resolved TLS material. Without this the caller
+/// would surface the build error and silently skip the operator's configured
+/// `fallback: system|dns`, which would be a fail-open surprise.
+pub async fn resolve_via_fallback(cfg: &HttpDnsResolverConfig, domain: &str) -> Result<Vec<IpAddr>, DnsError> {
+    apply_fallback(&cfg.fallback, domain).await
+}
+
 /// Core logic with an injectable fetcher (used by tests and the real entry point).
 pub async fn resolve_http_dns_with<F: HttpDnsFetcher + ?Sized>(
     fetcher: &F,
@@ -164,7 +185,7 @@ pub async fn resolve_http_dns_with<F: HttpDnsFetcher + ?Sized>(
     let attempt = async {
         let url = render_url(cfg, domain)?;
         let body = fetcher.get(&url).await?;
-        parse_body(&cfg.response, &body)
+        parse_body(&effective_response_format(cfg), &body)
     }
     .await;
 
@@ -204,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn render_url_preset_ignores_missing_template() {
+    fn render_url_falls_back_to_preset_when_no_template() {
         let mut cfg = generic("", HttpDnsResponseFormat::default());
         cfg.preset = Some(HttpDnsPreset::Aliyun);
         cfg.url_template = None;
@@ -446,5 +467,83 @@ mod tests {
     async fn fetch_failure_none_fallback_errors() {
         let cfg = generic("https://h/d?host={domain}", HttpDnsResponseFormat::default());
         assert!(resolve_http_dns_with(&FailingFetcher, &cfg, "localhost").await.is_err());
+    }
+
+    // ---- preset drives BOTH url template AND response format ----
+
+    /// A fetcher that returns a fixed body regardless of URL.
+    struct FixedBodyFetcher(&'static str);
+    #[async_trait::async_trait]
+    impl HttpDnsFetcher for FixedBodyFetcher {
+        async fn get(&self, _url: &str) -> Result<String, DnsError> {
+            Ok(self.0.to_string())
+        }
+    }
+
+    fn preset_cfg(preset: HttpDnsPreset) -> HttpDnsResolverConfig {
+        HttpDnsResolverConfig {
+            preset: Some(preset),
+            // A bogus/absent user response must NOT be consulted when a preset is set.
+            url_template: None,
+            response: HttpDnsResponseFormat {
+                kind: HttpDnsBodyKind::Delimited,
+                ip_path: None,
+                delimiter: Some("|".to_string()),
+                ttl_path: None,
+            },
+            fallback: HttpDnsFallback::None,
+            connection: None,
+        }
+    }
+
+    #[test]
+    fn render_url_uses_aliyun_preset_host() {
+        let cfg = preset_cfg(HttpDnsPreset::Aliyun);
+        let url = render_url(&cfg, "api.example.com").unwrap();
+        assert!(url.contains("203.107.1.1"), "aliyun preset host, got {url}");
+        assert!(url.ends_with("host=api.example.com"));
+    }
+
+    #[tokio::test]
+    async fn preset_plus_url_template_uses_custom_url_and_preset_format() {
+        // preset = Aliyun (JSON `ips` format), but an explicit account-scoped
+        // urlTemplate is supplied — the URL must come from the template while the
+        // response is still parsed with the Aliyun JSON format.
+        let mut cfg = preset_cfg(HttpDnsPreset::Aliyun);
+        cfg.url_template = Some("http://203.107.1.1/my-account/d?host={domain}".to_string());
+
+        let url = render_url(&cfg, "api.example.com").unwrap();
+        assert_eq!(url, "http://203.107.1.1/my-account/d?host=api.example.com");
+
+        // Body is Aliyun-shaped JSON; the preset format (not the delimited user
+        // `response`) must parse it.
+        let fetcher = FixedBodyFetcher(r#"{"host":"api.example.com","ips":["93.184.216.34"],"ttl":30}"#);
+        let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com").await.unwrap();
+        assert_eq!(ips, vec!["93.184.216.34".parse::<IpAddr>().unwrap()]);
+    }
+
+    #[tokio::test]
+    async fn aliyun_preset_parses_json_ips_ignoring_user_response() {
+        let cfg = preset_cfg(HttpDnsPreset::Aliyun);
+        // Aliyun shape: JSON with an `ips` array. The user `response` (delimited `|`)
+        // must be ignored in favor of the preset's JSON format.
+        let fetcher = FixedBodyFetcher(r#"{"host":"api.example.com","ips":["93.184.216.34"],"ttl":30}"#);
+        let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com").await.unwrap();
+        assert_eq!(ips, vec!["93.184.216.34".parse::<IpAddr>().unwrap()]);
+    }
+
+    #[tokio::test]
+    async fn tencent_preset_parses_semicolon_delimited_ignoring_user_response() {
+        let cfg = preset_cfg(HttpDnsPreset::Tencent);
+        // Tencent DNSPod shape: semicolon-delimited plaintext.
+        let fetcher = FixedBodyFetcher("1.2.3.4;5.6.7.8");
+        let ips = resolve_http_dns_with(&fetcher, &cfg, "api.example.com").await.unwrap();
+        assert_eq!(
+            ips,
+            vec![
+                "1.2.3.4".parse::<IpAddr>().unwrap(),
+                "5.6.7.8".parse::<IpAddr>().unwrap()
+            ]
+        );
     }
 }

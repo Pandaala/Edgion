@@ -251,6 +251,19 @@ impl ListenerGatewayInfoStore {
                 .map(|v| annotations::parse_plugin_ref_list(v, gateway_namespace.as_deref().unwrap_or("default")))
                 .unwrap_or_default();
 
+            // Precompute the gateway-layer DNS resolver candidate from the two
+            // `edgion.io/dns-resolver{,-ref}` annotations, so the hot ExternalName
+            // self-resolution path reads it off GatewayInfo without re-parsing.
+            let dns_resolver_candidate = {
+                let mut dns_ann: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+                for key in [annotations::DNS_RESOLVER, annotations::DNS_RESOLVER_REF] {
+                    if let Some(v) = gateway_annotations_map.get(key) {
+                        dns_ann.insert(key.to_string(), v.clone());
+                    }
+                }
+                edgion_common::dns::resolver_select::candidate_from_annotations(&dns_ann)
+            };
+
             for listener in listeners {
                 if is_listener_conflicted(gateway, &listener.name) {
                     continue;
@@ -269,6 +282,7 @@ impl ListenerGatewayInfoStore {
                     metrics_test_type.clone(),
                     require_sni_host_match,
                     plugin_store_keys.clone(),
+                    dns_resolver_candidate.clone(),
                 );
 
                 let gateway_key = gi.gateway_key();

@@ -256,6 +256,31 @@ pub(crate) fn validate_backend_addr(addr: &SocketAddr, allow_loopback_upstream: 
     }
 }
 
+/// Pick the first resolved IP that passes [`validate_backend_addr`] (SSRF), as a
+/// `SocketAddr::Inet` bound to `port`.
+///
+/// Self-resolution (an `ExternalName` DNS/httpdns lookup) can return several
+/// addresses; routing to any that fails the SSRF gate is forbidden, so this
+/// skips the unsafe ones and returns the first safe address. If none are safe,
+/// it returns the rejection status of the last candidate (a stable
+/// loopback/link-local status) so the caller can record it; an empty input
+/// yields [`EdgionStatus::BackendDnsResolutionFailed`].
+pub(crate) fn first_safe_inet_addr(
+    ips: &[std::net::IpAddr],
+    port: u16,
+    allow_loopback_upstream: bool,
+) -> Result<SocketAddr, EdgionStatus> {
+    let mut last_err = EdgionStatus::BackendDnsResolutionFailed;
+    for ip in ips {
+        let addr = SocketAddr::Inet(std::net::SocketAddr::new(*ip, port));
+        match validate_backend_addr(&addr, allow_loopback_upstream) {
+            Ok(()) => return Ok(addr),
+            Err(status) => last_err = status,
+        }
+    }
+    Err(last_err)
+}
+
 /// Validate endpoint-derived backend addresses for metadata/link-local safety.
 ///
 /// Loopback is allowed only in explicit integration testing mode because local
@@ -275,5 +300,50 @@ pub(crate) fn validate_endpoint_backend_addr(
         Some(BlockedBackendReason::Localhost) => Err(EdgionStatus::BackendLocalhostNotAllowed),
         Some(BlockedBackendReason::LinkLocal) => Err(EdgionStatus::BackendAddrLinkLocalNotAllowed),
         None => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::IpAddr;
+
+    fn ip(s: &str) -> IpAddr {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn first_safe_inet_addr_skips_unsafe_and_picks_public() {
+        // Loopback + link-local are unsafe; the public IP is selected.
+        let ips = [ip("127.0.0.1"), ip("169.254.169.254"), ip("93.184.216.34")];
+        let addr = first_safe_inet_addr(&ips, 443, false).unwrap();
+        match addr {
+            SocketAddr::Inet(a) => {
+                assert_eq!(a.ip(), ip("93.184.216.34"));
+                assert_eq!(a.port(), 443);
+            }
+            _ => panic!("expected inet addr"),
+        }
+    }
+
+    #[test]
+    fn first_safe_inet_addr_all_unsafe_errors() {
+        let ips = [ip("127.0.0.1"), ip("169.254.169.254")];
+        let err = first_safe_inet_addr(&ips, 80, false).unwrap_err();
+        // The last candidate's rejection status surfaces (link-local here).
+        assert_eq!(err, EdgionStatus::BackendAddrLinkLocalNotAllowed);
+    }
+
+    #[test]
+    fn first_safe_inet_addr_loopback_allowed_when_flag_set() {
+        let ips = [ip("127.0.0.1")];
+        let addr = first_safe_inet_addr(&ips, 8080, true).unwrap();
+        assert!(matches!(addr, SocketAddr::Inet(_)));
+    }
+
+    #[test]
+    fn first_safe_inet_addr_empty_is_dns_failure() {
+        let err = first_safe_inet_addr(&[], 80, false).unwrap_err();
+        assert_eq!(err, EdgionStatus::BackendDnsResolutionFailed);
     }
 }

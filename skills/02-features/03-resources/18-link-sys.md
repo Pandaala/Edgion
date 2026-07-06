@@ -328,7 +328,14 @@ spec:
 
 ### `type: httpdns`
 
-An HTTP DNS resolver: resolves external domains via an HTTP(S) endpoint instead of standard DNS. The `HttpDnsResolverConfig` schema (endpoint template, response format, presets, fallback) and the shared resolver core live in `edgion-common/src/dns/`; controller/gateway wiring lands in a later phase. See [`docs/superpowers/specs/2026-07-02-external-dns-resolution-design.md`](../../../docs/superpowers/specs/2026-07-02-external-dns-resolution-design.md) for the full design.
+An HTTP DNS resolver: resolves external domains via an HTTP(S) endpoint instead of standard DNS. The `HttpDnsResolverConfig` schema and the shared resolver core live in `edgion-common/src/dns/`. The gateway data-plane wiring is live: a `ServiceExternalName` backend whose effective resolver (Service → Gateway → EGC precedence) points at an httpdns LinkSys is resolved through this config, cached briefly, and SSRF-validated. See [`docs/superpowers/specs/2026-07-02-external-dns-resolution-design.md`](../../../docs/superpowers/specs/2026-07-02-external-dns-resolution-design.md) for the full design.
+
+Key fields:
+- `preset` (`aliyun` | `tencent`) — selects the response **format** (Aliyun JSON `ips`; Tencent DNSPod `;`-delimited) plus a best-effort built-in URL. The built-in URLs are plain HTTP against the vendors' public resolving IPs and are account-less, so for real vendor accounts combine `preset` with an explicit `urlTemplate`.
+- `urlTemplate` — request URL with a `{domain}` placeholder. **Wins over a preset's built-in URL**, so `preset` + `urlTemplate` = the preset's response format with a custom (account-scoped / correct-scheme) endpoint. Required only when no `preset` is set.
+- `response` — parsing rules (`json` with `ipPath`, or `delimited` with `delimiter`); ignored when a `preset` is set.
+- `connection` — lean `{ tls, timeoutMs }` (no `target`); outbound TLS + request timeout for the fetch.
+- `fallback` — `system` | `dns` (server list) | `none`, applied on fetch/parse failure.
 
 ## Status Schema
 

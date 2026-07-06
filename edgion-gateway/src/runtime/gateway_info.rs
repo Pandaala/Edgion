@@ -5,6 +5,7 @@
 //! port-based GatewayInfo store.
 
 use crate::observe::metrics::TestType;
+use edgion_common::dns::resolver_select::ResolverCandidate;
 
 /// Gateway information for route matching context
 ///
@@ -41,10 +42,18 @@ pub struct GatewayInfo {
     /// the `edgion.io/edgion-plugins` annotation. Run for every request on this Gateway,
     /// after GatewayClass-wide global plugins and before route-level plugins.
     pub plugin_store_keys: Vec<String>,
+
+    /// Gateway-layer DNS resolver candidate, precomputed from the Gateway's
+    /// `edgion.io/dns-resolver` / `edgion.io/dns-resolver-ref` annotations. Used
+    /// as the middle layer of the data-plane resolver precedence
+    /// (Service → Gateway → EGC → system) when self-resolving an `ExternalName`
+    /// backend. `None` when the Gateway sets neither annotation.
+    pub dns_resolver_candidate: Option<ResolverCandidate>,
 }
 
 impl GatewayInfo {
     /// Create a new GatewayInfo
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         namespace: Option<String>,
         name: String,
@@ -53,6 +62,7 @@ impl GatewayInfo {
         metrics_test_type: Option<TestType>,
         require_sni_host_match: Option<bool>,
         plugin_store_keys: Vec<String>,
+        dns_resolver_candidate: Option<ResolverCandidate>,
     ) -> Self {
         Self {
             namespace,
@@ -62,6 +72,7 @@ impl GatewayInfo {
             metrics_test_type,
             require_sni_host_match,
             plugin_store_keys,
+            dns_resolver_candidate,
         }
     }
 

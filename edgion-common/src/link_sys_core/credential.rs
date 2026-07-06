@@ -332,12 +332,18 @@ fn tls_ready_inner(tls: Option<&TlsConfig>) -> bool {
 /// Controller has not yet injected the `Secret`. TLS parse failures are
 /// caught inside the provider via the outbound TLS resolver.
 pub fn tls_ready(ls: &LinkSys) -> bool {
+    // Exhaustive on purpose: a `_ => None` fallback would make any webhook-shaped
+    // provider (Webhook / HttpDns) that declares CA/client-cert refs report
+    // `tls_ready == true` before the Controller injected the secrets — a
+    // fail-open readiness bug (DR-4). List every variant so a future one forces
+    // an explicit decision here.
     let tls = match &ls.spec.config {
         SystemConfig::Redis(r) => r.tls.as_ref(),
         SystemConfig::Etcd(e) => e.tls.as_ref(),
         SystemConfig::Elasticsearch(es) => es.tls.as_ref(),
         SystemConfig::Kafka(k) => k.tls.as_ref(),
-        _ => None,
+        SystemConfig::Webhook(w) => w.conn.tls.as_ref(),
+        SystemConfig::HttpDns(h) => h.connection.as_ref().and_then(|c| c.tls.as_ref()),
     };
     tls_ready_inner(tls)
 }
@@ -642,6 +648,67 @@ mod tests {
     fn resolved_state_webhook_no_auth_is_not_required() {
         let ls = mk_webhook_linksys(None);
         assert!(matches!(resolved_state(&ls), CredentialState::NotRequired));
+    }
+
+    // ------------------------------------------------------------
+    // DR-4: tls_ready must NOT fail open for the webhook-shaped
+    // providers (Webhook / HttpDns) whose `connection.tls` declares
+    // an unresolved client-certificate ref. Before the explicit arms
+    // these fell through `_ => None` and reported ready == true.
+    // ------------------------------------------------------------
+
+    fn tls_with_unresolved_client_cert() -> edgion_resources::resources::common::TlsConfig {
+        serde_json::from_str(r#"{"enabled":true,"clientCertificateRef":{"name":"id"}}"#).unwrap()
+    }
+
+    fn mk_httpdns_linksys(
+        connection: Option<edgion_resources::resources::link_sys::httpdns::HttpDnsConnection>,
+    ) -> LinkSys {
+        use edgion_resources::resources::link_sys::httpdns::{
+            HttpDnsFallback, HttpDnsPreset, HttpDnsResolverConfig, HttpDnsResponseFormat,
+        };
+        LinkSys {
+            metadata: ObjectMeta {
+                name: Some("dns".into()),
+                namespace: Some("default".into()),
+                ..Default::default()
+            },
+            spec: LinkSysSpec {
+                config: SystemConfig::HttpDns(HttpDnsResolverConfig {
+                    preset: Some(HttpDnsPreset::Aliyun),
+                    url_template: None,
+                    response: HttpDnsResponseFormat::default(),
+                    fallback: HttpDnsFallback::System,
+                    connection,
+                }),
+            },
+            status: None,
+        }
+    }
+
+    #[test]
+    fn tls_ready_httpdns_false_when_client_cert_unresolved() {
+        use edgion_resources::resources::link_sys::httpdns::HttpDnsConnection;
+        let ls = mk_httpdns_linksys(Some(HttpDnsConnection {
+            tls: Some(tls_with_unresolved_client_cert()),
+            timeout_ms: None,
+        }));
+        assert!(!tls_ready(&ls), "httpdns connection.tls readiness must not fail open");
+    }
+
+    #[test]
+    fn tls_ready_httpdns_true_when_no_tls() {
+        let ls = mk_httpdns_linksys(None);
+        assert!(tls_ready(&ls), "no connection.tls means nothing to wait for");
+    }
+
+    #[test]
+    fn tls_ready_webhook_false_when_client_cert_unresolved() {
+        let mut ls = mk_webhook_linksys(None);
+        if let SystemConfig::Webhook(w) = &mut ls.spec.config {
+            w.conn.tls = Some(tls_with_unresolved_client_cert());
+        }
+        assert!(!tls_ready(&ls), "webhook conn.tls readiness must not fail open");
     }
 
     #[test]
