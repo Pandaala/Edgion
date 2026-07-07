@@ -3,7 +3,9 @@
 
 mod backend_tls_sni_host_override;
 mod circuit_breaker;
+mod dns_resolution;
 mod dns_resolution_failure;
+mod dns_resolution_flap;
 mod grpc_health_check;
 mod h2_mtls_persistence;
 mod health_check;
@@ -25,7 +27,9 @@ mod weighted_backend;
 
 pub use backend_tls_sni_host_override::BackendTlsSniHostOverrideTestSuite;
 pub use circuit_breaker::CircuitBreakerTestSuite;
+pub use dns_resolution::DnsResolutionTestSuite;
 pub use dns_resolution_failure::DnsResolutionFailureTestSuite;
+pub use dns_resolution_flap::{DnsFlapFailingTestSuite, DnsFlapWorkingTestSuite};
 pub use grpc_health_check::GrpcHealthCheckTestSuite;
 pub use h2_mtls_persistence::H2MtlsPersistenceTestSuite;
 pub use health_check::HealthCheckTestSuite;

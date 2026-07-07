@@ -224,6 +224,12 @@
     "HTTPRoute/Backend/DnsResolutionFailure": {
       "http": 31339
     },
+    "HTTPRoute/Backend/DnsResolution": {
+      "http": 31360
+    },
+    "HTTPRoute/Backend/DnsResolutionFlap": {
+      "http": 31361
+    },
     "Status/RefGrant/TCPRouteCrossNsSvc": {
       "tcp": 31341
     },

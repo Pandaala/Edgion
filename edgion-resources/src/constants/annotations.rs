@@ -155,6 +155,11 @@ pub mod edgion {
     /// `DNS_RESOLVER`.
     pub const DNS_RESOLVER_REF: &str = "edgion.io/dns-resolver-ref";
 
+    /// Controller-written freshness stamp on a synthetic EndpointSlice produced by
+    /// the control-plane DNS resolver loop. Value: an RFC3339 timestamp of the
+    /// last resolution that changed the endpoint set. NOT operator-set.
+    pub const DNS_RESOLVED_AT: &str = "edgion.io/dns-resolved-at";
+
     /// Parse the `edgion.io/edgion-plugins` (or stream) annotation value into an ordered,
     /// de-duplicated list of "namespace/name" store keys. Bare names (no `/`) are expanded
     /// with `default_ns`. Blank entries are skipped.

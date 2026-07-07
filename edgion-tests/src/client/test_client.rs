@@ -224,6 +224,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/GrpcHealthCheck" => "HTTPRoute/Backend/GrpcHealthCheck",
         "HTTPRoute/Backend/HealthCheckTransition" => "HTTPRoute/Backend/HealthCheckTransition",
         "HTTPRoute/Backend/DnsResolutionFailure" => "HTTPRoute/Backend/DnsResolutionFailure",
+        "HTTPRoute/Backend/DnsResolution" => "HTTPRoute/Backend/DnsResolution",
         "HTTPRoute/Backend/PartiallyInvalid" => "HTTPRoute/Backend/PartiallyInvalid",
         "HTTPRoute/Backend/SessionPersistence" => "HTTPRoute/Backend/SessionPersistence",
         "HTTPRoute/Backend/SessionPersistenceBackendChange" => "HTTPRoute/Backend/SessionPersistenceBackendChange",
@@ -495,6 +496,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::DnsResolutionFailureTestSuite));
+        }
+        "HTTPRoute/Backend/DnsResolution" => {
+            if !gateway {
+                eprintln!("Error: DnsResolution tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::DnsResolutionTestSuite));
         }
         "HTTPRoute/Backend/PartiallyInvalid" => {
             if !gateway {

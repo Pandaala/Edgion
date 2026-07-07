@@ -1,0 +1,18 @@
+# httpdns via a DOWN endpoint with fallback: system. The httpdns fetch fails and
+# resolution falls back to the OS resolver; externalName=localhost → 127.0.0.1 →
+# the local test backend still serves.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-httpdns-fallback
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: per-request
+    edgion.io/dns-resolver-ref: edgion-default/dns-httpdns-dead
+spec:
+  type: ExternalName
+  externalName: localhost
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

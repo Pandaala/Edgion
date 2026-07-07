@@ -18,12 +18,13 @@ pub use multi_port::MultiPortTestSuite;
 
 // Export sub-module tests
 pub use backend::{
-    BackendTlsSniHostOverrideTestSuite, CircuitBreakerTestSuite, DnsResolutionFailureTestSuite,
-    GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite, HealthCheckTestSuite, HealthCheckTransitionTestSuite,
-    LBConsistentHashTestSuite, LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite,
-    LBLeastConnTestSuite, LBRoundRobinTestSuite, PanicThresholdTestSuite, PartiallyInvalidTestSuite,
-    PerTryTimeoutTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite, SpChangeFinalTestSuite,
-    SpChangeInitialTestSuite, TimeoutTestSuite, WeightedBackendTestSuite,
+    BackendTlsSniHostOverrideTestSuite, CircuitBreakerTestSuite, DnsFlapFailingTestSuite, DnsFlapWorkingTestSuite,
+    DnsResolutionFailureTestSuite, DnsResolutionTestSuite, GrpcHealthCheckTestSuite, H2MtlsPersistenceTestSuite,
+    HealthCheckTestSuite, HealthCheckTransitionTestSuite, LBConsistentHashTestSuite, LBEwmaRetryOnStatusTestSuite,
+    LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite, LBRoundRobinTestSuite,
+    PanicThresholdTestSuite, PartiallyInvalidTestSuite, PerTryTimeoutTestSuite, RetryOnStatusTestSuite,
+    SessionPersistenceTestSuite, SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite,
+    WeightedBackendTestSuite,
 };
 pub use filters::{
     FilterConflictTestSuite, HeaderModifierTestSuite, HttpRedirectTestSuite, HttpSecurityTestSuite,

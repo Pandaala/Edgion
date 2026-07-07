@@ -42,6 +42,16 @@ pub fn get_no_sync_kinds() -> Vec<String> {
         })
 }
 
+/// Get the control-plane DNS resolver configuration (background loop).
+/// Returns the default (enabled, 15s, no default resolver) when config is
+/// uninitialized.
+pub fn dns_resolver_config() -> DnsResolverConfig {
+    CONTROLLER_CONFIG
+        .get()
+        .map(|c| c.dns_resolver.clone())
+        .unwrap_or_default()
+}
+
 /// Get the cache capacity for a specific resource kind.
 /// This reads from the global controller configuration.
 /// Falls back to per-resource macro default, then global default (1000).
@@ -196,7 +206,8 @@ impl Default for DnsResolverConfig {
 
 impl DnsResolverConfig {
     /// Validate the default-resolver configuration. `link_sys_ref` and `servers`
-    /// are mutually exclusive (a single default resolver, not both).
+    /// are mutually exclusive (a single default resolver, not both), and
+    /// `refresh_interval` must be a parseable duration.
     pub fn validate(&self) -> Result<(), String> {
         if self
             .link_sys_ref
@@ -206,6 +217,15 @@ impl DnsResolverConfig {
             && !self.servers.is_empty()
         {
             return Err("dns_resolver: `link_sys_ref` and `servers` are mutually exclusive (set only one)".to_string());
+        }
+        // Reject an unparseable interval at load rather than silently defaulting
+        // it at runtime. (A sub-second value is accepted here but clamped up to a
+        // safe minimum by the loop — see `MIN_REFRESH`.)
+        if crate::services::dns_resolver::service::parse_duration_str(&self.refresh_interval).is_none() {
+            return Err(format!(
+                "dns_resolver: refresh_interval '{}' is not a valid duration (e.g. \"15s\", \"500ms\", \"2m\")",
+                self.refresh_interval
+            ));
         }
         Ok(())
     }
@@ -788,6 +808,21 @@ mod tests {
         };
         assert!(only_servers.validate().is_ok());
         assert!(DnsResolverConfig::default().validate().is_ok());
+    }
+
+    #[test]
+    fn dns_resolver_rejects_unparseable_refresh_interval() {
+        let cfg = DnsResolverConfig {
+            refresh_interval: "soon".to_string(),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_err(), "unparseable interval must be rejected at load");
+        // A parseable sub-second value passes validation (the loop clamps it up).
+        let cfg = DnsResolverConfig {
+            refresh_interval: "500ms".to_string(),
+            ..Default::default()
+        };
+        assert!(cfg.validate().is_ok());
     }
 
     #[test]

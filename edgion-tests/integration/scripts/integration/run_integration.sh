@@ -1222,6 +1222,7 @@ run_all_tests() {
         run_test "HTTPRoute_Backend_PartiallyInvalid" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/PartiallyInvalid" || test_failed=true
         run_test "HTTPRoute_Backend_GrpcHealthCheck" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/GrpcHealthCheck" || test_failed=true
         run_test "HTTPRoute_Backend_DnsResolutionFailure" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/DnsResolutionFailure" || test_failed=true
+        run_test "HTTPRoute_Backend_DnsResolution" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend/DnsResolution" || test_failed=true
         run_test "HTTPRoute_Filters_Redirect" "${PROJECT_ROOT}/target/debug/test_client -g http-redirect" || test_failed=true
         run_test "HTTPRoute_Filters_Security" "${PROJECT_ROOT}/target/debug/test_client -g http-security" || test_failed=true
         run_test "HTTPRoute_Filters_HeaderModifier" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Filters/HeaderModifier" || test_failed=true

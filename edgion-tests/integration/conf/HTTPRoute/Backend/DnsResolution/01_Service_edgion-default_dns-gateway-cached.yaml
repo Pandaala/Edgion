@@ -1,0 +1,19 @@
+# gateway mode: the gateway self-resolves via the effective resolver and caches
+# the result (5s TTL); it never consults a controller EndpointSlice. Resolves via
+# the httpdns endpoint so the test can count resolver hits and assert that a
+# second request within the TTL is served from cache (no re-resolve).
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-gateway-cached
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: gateway
+    edgion.io/dns-resolver-ref: edgion-default/dns-httpdns-local
+spec:
+  type: ExternalName
+  externalName: gwcached.dns.test
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

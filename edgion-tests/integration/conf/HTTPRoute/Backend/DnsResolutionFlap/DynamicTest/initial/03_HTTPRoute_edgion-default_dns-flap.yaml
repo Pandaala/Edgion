@@ -1,0 +1,21 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: dns-flap-route
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: dns-flap-gateway
+      namespace: edgion-test
+  hostnames:
+    - "flap.dns.test"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: dns-flap
+          namespace: edgion-default
+          kind: ServiceExternalName
+          port: 30001

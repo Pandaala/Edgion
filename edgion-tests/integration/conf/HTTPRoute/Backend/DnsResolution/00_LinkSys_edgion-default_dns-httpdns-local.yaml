@@ -1,0 +1,18 @@
+# httpdns resolver that points at the test_server's fake HTTP DNS endpoint.
+# `{domain}` is substituted with the ExternalName being resolved; the `&ip=`
+# query pins the answer to the local test backend (127.0.0.1) so the scenario is
+# hermetic (no real DNS). The endpoint returns the generic {"ips":[...]} body.
+apiVersion: edgion.io/v1
+kind: LinkSys
+metadata:
+  name: dns-httpdns-local
+  namespace: edgion-default
+spec:
+  type: httpdns
+  config:
+    urlTemplate: "http://127.0.0.1:30001/dns/resolve?host={domain}&ip=127.0.0.1"
+    response:
+      kind: json
+      ipPath: ips
+    fallback:
+      type: system

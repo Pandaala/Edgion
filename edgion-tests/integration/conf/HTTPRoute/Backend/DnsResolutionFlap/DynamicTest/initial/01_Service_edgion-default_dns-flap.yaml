@@ -1,0 +1,18 @@
+# ExternalName Service whose resolver-ref starts pointing at the DOWN httpdns
+# (dns-flap-dead). per-request mode so every request re-resolves and there is no
+# cache to mask the runtime annotation change.
+apiVersion: v1
+kind: Service
+metadata:
+  name: dns-flap
+  namespace: edgion-default
+  annotations:
+    edgion.io/dns-resolution-mode: per-request
+    edgion.io/dns-resolver-ref: edgion-default/dns-flap-dead
+spec:
+  type: ExternalName
+  externalName: flapbackend.test
+  ports:
+    - port: 30001
+      targetPort: 30001
+      protocol: TCP

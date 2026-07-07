@@ -38,8 +38,11 @@ rules:
   resources: ["configmaps"]
   verbs: ["get", "list", "watch"]
 - apiGroups: ["discovery.k8s.io"]
+  # create/update/patch/delete are required by the control-plane DNS resolver,
+  # which writes/GCs synthetic EndpointSlices for controller-mode ExternalName
+  # Services (edgion.io/dns-resolution-mode: controller).
   resources: ["endpointslices"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ["edgion.io"]
   resources: ["edgiontls", "edgiongatewayclassconfigs", "edgionstreamplugins", "edgionplugins", "edgionconfigdata", "linksys", "edgionacmes"]
   verbs: ["get", "list", "watch"]

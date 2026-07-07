@@ -53,6 +53,12 @@ static RETRY_SEQUENCE_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashM
 static CB_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashMap<String, u32>>> =
     std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
 
+/// HTTP DNS resolve counter: tracks how many times the fake HTTP DNS endpoint
+/// resolved each host. Lets tests assert caching behaviour (a `gateway`-mode
+/// resolution should NOT re-hit the endpoint within its TTL).
+static DNS_RESOLVE_COUNTER: std::sync::LazyLock<Mutex<std::collections::HashMap<String, u32>>> =
+    std::sync::LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+
 #[derive(Parser, Debug)]
 #[command(name = "test-server")]
 #[command(about = "Edgion Unified Test Server - Supports all protocols")]
@@ -325,6 +331,29 @@ async fn main() -> Result<()> {
 // ============================================================================
 
 async fn start_http_server(port: u16) -> Result<()> {
+    // Best-effort IPv6 loopback listener on the same port. A backend that
+    // resolves `localhost` to `::1` (dual-stack hosts, e.g. the DnsResolution
+    // system-resolver scenarios) must still reach the test server. Bound
+    // separately from 0.0.0.0 (distinct address family) so there is no conflict;
+    // non-fatal if IPv6 is unavailable.
+    tokio::spawn(async move {
+        let v6_addr = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port));
+        match TcpListener::bind(v6_addr).await {
+            Ok(listener) => {
+                info!("✓ HTTP server also listening on http://{}", v6_addr);
+                let app =
+                    create_echo_router(format!("[::1]:{}", port)).into_make_service_with_connect_info::<SocketAddr>();
+                if let Err(e) = axum::serve(listener, app).await {
+                    error!("IPv6 HTTP server error on port {}: {}", port, e);
+                }
+            }
+            // Warn (not info): the system-resolver DNS scenarios resolve
+            // `localhost` to ::1 on dual-stack hosts and depend on this listener,
+            // so an unexpected bind failure must be visible.
+            Err(e) => tracing::warn!("IPv6 loopback bind skipped on port {}: {}", port, e),
+        }
+    });
+
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let server_addr_str = format!("0.0.0.0:{}", port);
     let app = create_echo_router(server_addr_str.clone());
@@ -408,6 +437,14 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/cb-fail/{test_id}/{fail_count}", get(cb_fail_handler))
         .route("/cb-fail/{test_id}/{fail_count}/{status}", get(cb_fail_status_handler))
         .route("/cb-reset", get(cb_reset_handler))
+        // --- Fake HTTP DNS endpoint (for httpdns resolver integration tests) ---
+        // GET /dns/resolve?host=<domain>[&ip=<ip>[,<ip>...]]: returns the generic
+        // httpdns JSON body {"ips":[...]} and counts one resolution for <host>.
+        .route("/dns/resolve", get(dns_resolve_handler))
+        // GET /dns/hits/{host}: how many times <host> has been resolved (caching assertions).
+        .route("/dns/hits/{host}", get(dns_hits_handler))
+        // GET /dns/reset: clear all HTTP DNS resolve counters (between test cases).
+        .route("/dns/reset", get(dns_reset_handler))
         .route("/{*path}", get(catch_all_handler))
         .layer(Extension(server_addr_str))
 }
@@ -910,6 +947,83 @@ async fn cb_reset_handler() -> impl IntoResponse {
     let mut store = CB_COUNTER.lock();
     store.clear();
     (StatusCode::OK, "cb-reset-ok")
+}
+
+// ============================================================================
+// Fake HTTP DNS endpoint (for httpdns resolver integration tests)
+// ============================================================================
+
+/// Parse the `/dns/resolve` query string into `(host, ips)`.
+///
+/// - `host` is the domain being resolved (empty when absent).
+/// - `ips` come from an optional `ip=<a>[,<b>...]` param; when absent the
+///   endpoint defaults to `127.0.0.1` (the local test backend), so a scenario
+///   can point an ExternalName at the loopback backend without a real DNS.
+///
+/// Values are used verbatim (no percent-decoding) — tests pass plain IP literals.
+fn parse_dns_query(query: &str) -> (String, Vec<String>) {
+    let mut host = String::new();
+    let mut ips: Vec<String> = Vec::new();
+    for pair in query.split('&').filter(|s| !s.is_empty()) {
+        let mut it = pair.splitn(2, '=');
+        let key = it.next().unwrap_or("");
+        let val = it.next().unwrap_or("");
+        match key {
+            "host" => host = val.to_string(),
+            "ip" => {
+                for ip in val.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+                    ips.push(ip.to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    if ips.is_empty() {
+        ips.push("127.0.0.1".to_string());
+    }
+    (host, ips)
+}
+
+/// `/dns/resolve?host=<domain>[&ip=<ip>...]` — the fake HTTP DNS endpoint.
+///
+/// Returns the generic httpdns response body `{"ips":[...]}` (matching the
+/// default `HttpDnsResponseFormat` `ipPath: ips`) and records one resolution for
+/// `host` so caching tests can assert the endpoint was (or was not) re-hit.
+async fn dns_resolve_handler(axum::extract::RawQuery(query): axum::extract::RawQuery) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let raw = query.unwrap_or_default();
+    let (host, ips) = parse_dns_query(&raw);
+
+    {
+        let mut store = DNS_RESOLVE_COUNTER.lock();
+        *store.entry(host.clone()).or_insert(0) += 1;
+        info!("dns/resolve: host={} ips={:?}", host, ips);
+    }
+
+    (StatusCode::OK, Json(json!({ "ips": ips })))
+}
+
+/// `/dns/hits/{host}` — resolution count for `host` (0 when never resolved).
+async fn dns_hits_handler(Path(host): Path<String>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+    use axum::response::Json;
+    use serde_json::json;
+
+    let hits = DNS_RESOLVE_COUNTER.lock().get(&host).copied().unwrap_or(0);
+    (StatusCode::OK, Json(json!({ "host": host, "hits": hits })))
+}
+
+/// `/dns/reset` — clear all HTTP DNS resolve counters.
+async fn dns_reset_handler() -> impl IntoResponse {
+    use axum::http::StatusCode;
+    let mut store = DNS_RESOLVE_COUNTER.lock();
+    let count = store.len();
+    store.clear();
+    info!("dns/reset: cleared {} host entries", count);
+    (StatusCode::OK, format!("dns-reset-ok: cleared {}", count))
 }
 
 /// Webhook resolve handler — returns resolved key value AND echoes the inbound
@@ -2243,4 +2357,33 @@ async fn start_https_backend_multi_sni_server(
         .await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dns_query_defaults_to_loopback_when_no_ip() {
+        let (host, ips) = parse_dns_query("host=backend.test");
+        assert_eq!(host, "backend.test");
+        assert_eq!(ips, vec!["127.0.0.1".to_string()]);
+    }
+
+    #[test]
+    fn dns_query_parses_explicit_single_and_multi_ip() {
+        let (host, ips) = parse_dns_query("host=a.test&ip=10.0.0.1");
+        assert_eq!(host, "a.test");
+        assert_eq!(ips, vec!["10.0.0.1".to_string()]);
+
+        let (_, ips) = parse_dns_query("host=b.test&ip=10.0.0.1,10.0.0.2");
+        assert_eq!(ips, vec!["10.0.0.1".to_string(), "10.0.0.2".to_string()]);
+    }
+
+    #[test]
+    fn dns_query_tolerates_missing_host_and_empty_query() {
+        let (host, ips) = parse_dns_query("");
+        assert_eq!(host, "");
+        assert_eq!(ips, vec!["127.0.0.1".to_string()]);
+    }
 }
