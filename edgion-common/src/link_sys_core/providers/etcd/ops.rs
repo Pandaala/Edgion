@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use etcd_client::{
-    Compare, CompareOp, DeleteOptions, EventType, GetOptions, LockOptions as EtcdLockOptions, PutOptions, Txn, TxnOp,
+    Compare, CompareOp, DeleteOptions, GetOptions, LockOptions as EtcdLockOptions, PutOptions, Txn, TxnOp,
     WatchOptions, WatchStream,
 };
 
@@ -246,24 +246,6 @@ impl EtcdLinkClient {
         Ok(())
     }
 
-    /// Start keep-alive for a lease.
-    /// Returns (LeaseKeeper, LeaseKeepAliveStream) — caller should spawn a task to drive it.
-    pub async fn lease_keep_alive(
-        &self,
-        lease_id: i64,
-    ) -> Result<(etcd_client::LeaseKeeper, etcd_client::LeaseKeepAliveStream)> {
-        let mut client = self
-            .get_client()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-
-        let (keeper, stream) = client
-            .lease_keep_alive(lease_id)
-            .await
-            .map_err(|e| anyhow::anyhow!("Etcd LEASE KEEP_ALIVE {}: {:?}", lease_id, e))?;
-        Ok((keeper, stream))
-    }
-
     /// Get lease TTL remaining.
     pub async fn lease_time_to_live(&self, lease_id: i64) -> Result<i64> {
         let mut client = self
@@ -283,56 +265,7 @@ impl EtcdLinkClient {
 // Watch Operations
 // ============================================================================
 
-/// Watch event with parsed fields.
-#[derive(Debug)]
-pub struct WatchEvent {
-    pub key: String,
-    pub value: Option<Vec<u8>>,
-    pub event_type: WatchEventType,
-    pub mod_revision: i64,
-}
-
-/// Watch event type.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum WatchEventType {
-    Put,
-    Delete,
-}
-
 impl EtcdLinkClient {
-    /// Watch a key for changes.
-    /// Returns a WatchStream — caller should spawn a task to process events.
-    pub async fn watch(&self, key: &str) -> Result<WatchStream> {
-        let mut client = self
-            .get_client()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_key = self.full_key(key);
-
-        let stream = client
-            .watch(full_key, None)
-            .await
-            .map_err(|e| anyhow::anyhow!("Etcd WATCH {}: {:?}", key, e))?;
-        Ok(stream)
-    }
-
-    /// Watch all keys with a given prefix.
-    /// Returns a WatchStream — caller should spawn a task to process events.
-    pub async fn watch_prefix(&self, prefix: &str) -> Result<WatchStream> {
-        let mut client = self
-            .get_client()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
-        let full_prefix = self.full_key(prefix);
-
-        let options = WatchOptions::new().with_prefix();
-        let stream = client
-            .watch(full_prefix, Some(options))
-            .await
-            .map_err(|e| anyhow::anyhow!("Etcd WATCH prefix {}: {:?}", prefix, e))?;
-        Ok(stream)
-    }
-
     /// Watch all keys with a given prefix, starting from a specific revision.
     ///
     /// Used by ConfCenter to resume watching after init-phase or reconnection.
@@ -350,32 +283,6 @@ impl EtcdLinkClient {
             .await
             .map_err(|e| anyhow::anyhow!("Etcd WATCH prefix (rev={}) {}: {:?}", start_revision, prefix, e))?;
         Ok(stream)
-    }
-
-    /// Parse watch events from a WatchResponse, stripping namespace prefix.
-    pub fn parse_watch_events(&self, resp: &etcd_client::WatchResponse) -> Vec<WatchEvent> {
-        let ns_len = self.namespace().map(|n| n.len()).unwrap_or(0);
-        resp.events()
-            .iter()
-            .filter_map(|event| {
-                let kv = event.kv()?;
-                let key = kv.key_str().unwrap_or("").to_string();
-                let stripped = if ns_len > 0 && key.len() > ns_len {
-                    key[ns_len..].to_string()
-                } else {
-                    key
-                };
-                Some(WatchEvent {
-                    key: stripped,
-                    value: Some(kv.value().to_vec()),
-                    event_type: match event.event_type() {
-                        EventType::Put => WatchEventType::Put,
-                        EventType::Delete => WatchEventType::Delete,
-                    },
-                    mod_revision: kv.mod_revision(),
-                })
-            })
-            .collect()
     }
 }
 
@@ -403,11 +310,6 @@ impl EtcdLockGuard {
             .await
             .map_err(|e| anyhow::anyhow!("Etcd LEASE REVOKE (unlock): {:?}", e))?;
         Ok(())
-    }
-
-    /// Get the lock key (for debugging).
-    pub fn lock_key(&self) -> &[u8] {
-        &self.lock_key
     }
 }
 

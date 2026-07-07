@@ -87,27 +87,6 @@ impl<M> CredentialState<M> {
         matches!(self, Self::NotRequired | Self::Resolved(_))
     }
 
-    /// Borrow the material if the state is [`Resolved`](Self::Resolved).
-    #[inline]
-    pub fn resolved(&self) -> Option<&M> {
-        match self {
-            Self::Resolved(m) => Some(m),
-            _ => None,
-        }
-    }
-
-    /// Extract the material by value if the state is [`Resolved`](Self::Resolved).
-    ///
-    /// Useful for call sites that want to hold the owned material (e.g. Etcd's
-    /// reconnect path keeps `Option<BasicAuthMaterial>` internally).
-    #[inline]
-    pub fn into_resolved(self) -> Option<M> {
-        match self {
-            Self::Resolved(m) => Some(m),
-            _ => None,
-        }
-    }
-
     /// Stable short identifier for logs / metrics — never includes material.
     pub fn kind(&self) -> &'static str {
         match self {

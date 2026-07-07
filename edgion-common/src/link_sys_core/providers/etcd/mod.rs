@@ -14,4 +14,4 @@ pub mod config_mapping;
 pub mod ops;
 
 pub use client::EtcdLinkClient;
-pub use ops::{EtcdLockGuard, WatchEvent, WatchEventType};
+pub use ops::EtcdLockGuard;
