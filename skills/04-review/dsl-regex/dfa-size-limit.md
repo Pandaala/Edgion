@@ -9,8 +9,8 @@ description: Use when reviewing DSL `Constant::Regex` compilation paths for DFA 
 
 Fixed (P3-g5-015, 2026-05-16). All three DSL pipeline sites that compile `Constant::Regex` patterns now use `regex::RegexBuilder` with `size_limit(1 << 20)` and `dfa_size_limit(1 << 20)` instead of the bare `regex::Regex::new`:
 
-- `edgion-gateway/src/plugins/http/dsl/lang/compiler/emit.rs::Compiler::add_regex_const` — compile-time syntax validation
-- `edgion-gateway/src/plugins/http/dsl/lang/validator.rs::Validator::validate` — bytecode validation pass
+- `edgion-dsl/src/compiler/emit.rs::Compiler::add_regex_const` — compile-time syntax validation
+- `edgion-dsl/src/validator.rs::Validator::validate` — bytecode validation pass
 - `edgion-gateway/src/plugins/http/dsl/lang/vm.rs::Vm::new` — pre-compiled regex cache for execution
 
 ## Why

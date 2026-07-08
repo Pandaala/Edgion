@@ -33,8 +33,8 @@ in the plugin's `linkSysRefs` list. This allows scripts to access multiple Redis
 | File | Role |
 |------|------|
 | `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `call_builtin_redis`, `redis_ok`, `redis_err`, error helpers |
-| `edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs` | `BuiltinId` Redis variants |
-| `edgion-gateway/src/plugins/http/dsl/lang/compiler/builtins.rs` | `resolve_namespace_method` + `builtin_expected_argc` entries |
+| `edgion-dsl/src/bytecode.rs` | `BuiltinId` Redis variants |
+| `edgion-dsl/src/compiler/builtins.rs` | `resolve_namespace_method` + `builtin_expected_argc` entries |
 | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `is_redis_builtin`, `CallBuiltin` dispatch |
 | `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `DslRuntime.redis_links: HashMap<String, String>` |
 | `edgion-gateway/src/plugins/http/dsl/config.rs` | `DslConfig.linksys_refs: Vec<LinkSysRef>` |

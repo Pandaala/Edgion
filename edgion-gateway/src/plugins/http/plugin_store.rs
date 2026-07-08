@@ -267,6 +267,7 @@ mod kind_stats_tests {
 #[cfg(test)]
 mod compile_plugins_tests {
     use super::*;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::DslConfig;
     use edgion_resources::resources::edgion_plugins::{
         EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
     };
@@ -379,9 +380,9 @@ mod compile_plugins_tests {
     /// covered by the unit tests in
     /// `edgion_resources::resources::edgion_plugins::validate`; this guard's job
     /// is the stronger safety property that neither path has an error the other
-    /// lacks. DSL entries are intentionally excluded from the corpus — the
-    /// documented divergence is that `validate_plugins` cannot run the
-    /// gateway-only Rhai compile / VM-init deep checks.
+    /// lacks. DSL entries are included: since the edgion-dsl extraction, both
+    /// paths call the same `DslConfig::validation_error()` pipeline, so they
+    /// must match exactly.
     #[test]
     fn validate_plugins_matches_compile_plugins_error_set() {
         fn sorted(mut v: Vec<String>) -> Vec<String> {
@@ -403,6 +404,13 @@ mod compile_plugins_tests {
         }
         fn respm() -> EdgionPlugin {
             EdgionPlugin::ResponseHeaderModifier(hf())
+        }
+        fn dsl(source: &str) -> EdgionPlugin {
+            EdgionPlugin::Dsl(DslConfig {
+                name: "d".to_string(),
+                source: Some(source.to_string()),
+                ..Default::default()
+            })
         }
         fn aliased(mut e: RequestFilterEntry, alias: &str) -> RequestFilterEntry {
             e.alias = Some(alias.to_string());
@@ -457,6 +465,26 @@ mod compile_plugins_tests {
                         UpstreamResponseFilterEntry::new(respm()),
                         UpstreamResponseFilterEntry::new(rhm()),
                     ]),
+                ),
+            ),
+            (
+                "dsl_valid",
+                mk(Some(vec![RequestFilterEntry::new(dsl("let a = 1"))]), None),
+            ),
+            (
+                "dsl_bad_syntax",
+                mk(
+                    Some(vec![RequestFilterEntry::new(dsl("this is not valid dsl @@@"))]),
+                    None,
+                ),
+            ),
+            (
+                "dsl_unknown_redis_link",
+                mk(
+                    Some(vec![RequestFilterEntry::new(dsl(
+                        "let r = redis.get(\"mylink\", \"k\")",
+                    ))]),
+                    None,
                 ),
             ),
         ];

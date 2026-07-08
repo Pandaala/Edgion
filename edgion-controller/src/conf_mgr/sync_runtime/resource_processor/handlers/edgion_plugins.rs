@@ -232,10 +232,11 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // schema carries no runtime. The controller only needs the validation
         // errors for the K8s status condition, so it runs the schema-layer
         // `validate_plugins` instead of compiling a runtime it would throw away.
-        // This keeps the controller free of any `edgion-gateway` dependency. The
-        // one gap versus `compile_plugins` is the DSL deep checks (Rhai compile /
-        // VM init), which require the gateway-only DSL VM; the data plane still
-        // fails closed for those at runtime. See
+        // This keeps the controller free of any `edgion-gateway` dependency.
+        // DSL scripts are fully statically validated here too (compile /
+        // bytecode / linkSysRefs, via the shared `edgion-dsl` crate); the only
+        // residual gateway-only DSL failure is VM init, for which the data
+        // plane still fails closed at runtime. See
         // `edgion_resources::resources::edgion_plugins::validate`.
         let mut errors = ep.validate_plugins();
         // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on plugins

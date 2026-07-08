@@ -9,14 +9,14 @@
 //! condition, which forced a `controller -> gateway` crate dependency.
 //!
 //! [`EdgionPlugins::validate_plugins`] reproduces that error set at the schema
-//! layer so the controller no longer needs the gateway, with ONE documented
-//! exception: the DSL plugin's deep checks (Rhai script compilation and VM
-//! initialization) live in the gateway-only DSL VM and cannot run here.
-//! Concretely, for `Dsl` entries this function still runs
-//! `DslConfig::validation_error()` (structural config validation) but NOT the
-//! script-compile / VM-init checks. The data plane still fails closed at runtime
-//! for an uncompilable DSL script, so the only behavior change is that such
-//! errors are not surfaced onto the K8s status at ingest time.
+//! layer so the controller no longer needs the gateway. Since the DSL
+//! compile/validate path was extracted into the `edgion-dsl` crate,
+//! `DslConfig::validation_error()` runs the full static pipeline (compile
+//! `source` / deserialize+validate `bytecode` / linkSysRefs / redis link-name
+//! scan) — the same code path the gateway `DslPlugin` constructor uses. The
+//! only remaining gateway-only DSL failure is VM init (`Vm::new`), which
+//! cannot be predicted statically; the data plane still fails closed for it
+//! at runtime.
 //!
 //! Every other error — condition regex compilation/validation, per-plugin
 //! `validation_error()`, alias validation, and wrong-stage placement — is
@@ -120,8 +120,8 @@ impl EdgionPlugins {
     /// the gateway plugin runtime.
     ///
     /// Mirrors the `preparse_errors` that `edgion-gateway`'s `compile_plugins`
-    /// surfaces into the EdgionPlugins K8s status condition, minus the DSL deep
-    /// checks (Rhai compile / VM init) that require the gateway-only DSL VM. See
+    /// surfaces into the EdgionPlugins K8s status condition, minus DSL VM init
+    /// (`Vm::new`), the one failure that cannot be predicted statically. See
     /// the module docs for the full contract.
     pub fn validate_plugins(&self) -> Vec<String> {
         let mut errors = Vec::new();
@@ -224,6 +224,7 @@ impl EdgionPlugins {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::resources::edgion_plugins::plugin_configs::DslConfig;
     use crate::resources::edgion_plugins::{EdgionPluginsSpec, RequestFilterEntry};
     use crate::resources::http_route::HTTPHeaderFilter;
 
@@ -244,6 +245,46 @@ mod tests {
             },
             status: None,
         }
+    }
+
+    fn dsl_entry(source: &str) -> RequestFilterEntry {
+        RequestFilterEntry::new(EdgionPlugin::Dsl(DslConfig {
+            name: "d".to_string(),
+            source: Some(source.to_string()),
+            ..Default::default()
+        }))
+    }
+
+    #[test]
+    fn dsl_bad_syntax_surfaces_at_schema_layer() {
+        let ep = with_request_plugins(vec![dsl_entry("this is not valid dsl @@@")]);
+        let errs = ep.validate_plugins();
+        assert!(
+            errs.iter().any(|e| e.contains("DSL compile errors")),
+            "expected a DSL compile error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn dsl_wrong_builtin_arity_surfaces_at_schema_layer() {
+        // req.header takes exactly 1 argument; arity is validated at compile time.
+        let ep = with_request_plugins(vec![dsl_entry("let h = req.header()")]);
+        let errs = ep.validate_plugins();
+        assert!(
+            errs.iter()
+                .any(|e| e.contains("DSL compile errors") && e.contains("expects 1 argument(s), got 0")),
+            "expected an arity compile error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn dsl_unknown_redis_link_surfaces_at_schema_layer() {
+        let ep = with_request_plugins(vec![dsl_entry("let r = redis.get(\"mylink\", \"mykey\")")]);
+        let errs = ep.validate_plugins();
+        assert!(
+            errs.iter().any(|e| e.contains("linkSysRefs")),
+            "expected a redis link-name error, got: {errs:?}"
+        );
     }
 
     #[test]

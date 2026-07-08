@@ -11,18 +11,20 @@ description: DSL sandbox security model — maintainer view of where each sandbo
 
 The VM never trusts a single layer. Each layer is independent — a hole in one does not compromise the others.
 
+The compile-time layers (parser, validator, compiler, bytecode loader) now live in the standalone `edgion-dsl` crate, shared by the controller and the gateway; the VM and builtins (runtime layers) remain gateway-only, since only the gateway constructs and executes a `Vm`.
+
 | Layer | Where it runs | What it caps | Code |
 |---|---|---|---|
-| Parser | source → AST | source bytes, AST node count, parse-step budget | `lang/parser/mod.rs:17,32-46,80-86,96-100` |
-| Validator (post-decode) | bytecode → AST-shaped program | instruction count, local-var count, constant pool count & bytes, single-string-constant length, observed loop nest depth, `MakeMap(n)` operand, regex pattern length + DFA-bounded rebuild | `lang/validator.rs:11-46,61-128,210-290` |
-| Compiler | AST → bytecode | regex pattern length, "pattern must be a string literal" enforcement (applies to `.matches()`, `regex_find`, `regex_replace`) | `lang/compiler/mod.rs:25`, `lang/compiler/emit.rs:79-86`, `lang/compiler/expr.rs:218-251` |
-| Bytecode load | decoded base64 → struct | total decoded bytes ≤ 256 KB | `lang/bytecode.rs:13,285-301` |
+| Parser | source → AST | source bytes, AST node count, parse-step budget | `edgion-dsl/src/parser/mod.rs:17,32-46,80-86,96-100` |
+| Validator (post-decode) | bytecode → AST-shaped program | instruction count, local-var count, constant pool count & bytes, single-string-constant length, observed loop nest depth, `MakeMap(n)` operand, regex pattern length + DFA-bounded rebuild | `edgion-dsl/src/validator.rs:11-46,61-128,210-290` |
+| Compiler | AST → bytecode | regex pattern length, "pattern must be a string literal" enforcement (applies to `.matches()`, `regex_find`, `regex_replace`) | `edgion-dsl/src/compiler/mod.rs:25`, `edgion-dsl/src/compiler/emit.rs:79-86`, `edgion-dsl/src/compiler/expr.rs:218-251` |
+| Bytecode load | decoded base64 → struct | total decoded bytes ≤ 256 KB | `edgion-dsl/src/bytecode.rs:13,285-301` |
 | VM (per-instruction) | runtime | steps, calls, stack depth, loops, string len, list len, map size | `lang/vm.rs:34-95,132-176` |
 | VM init (regex precompile) | script load | per-pattern DFA memory ≤ 1 MiB | `lang/vm.rs:199-235` |
 | Builtins (per-call) | runtime | per-builtin caps (split list size, range list size, header map size, http.call response size, etc.); shared `checked_value_str` / `checked_value_opt_str` helpers at `lang/builtins.rs:46-56` | `lang/builtins.rs:500-549,943-1208` |
 | Panic isolation | the whole `execute` | catches everything else | `lang/vm.rs` → `execute_safe` (`AssertUnwindSafe + catch_unwind`); see `dsl-engine.md` §5 |
 
-**Pre-compiled bytecode shipped from the controller is re-validated by `Validator::validate` on the gateway side.** The controller's compile output is never trusted blindly — see `DslPlugin::resolve_script` for the order `deserialize → Validator::validate → use`. Hand-crafted bytecode payloads that declare `max_loop_depth: 0` while shipping deeper loops, or `MakeMap(65535)` operands, are rejected here (`validator.rs:220-290`).
+**Pre-compiled bytecode shipped from the controller is re-validated by `Validator::validate` on the gateway side.** The controller's compile output is never trusted blindly — see `DslConfig::compile_and_validate` → `edgion_dsl::resolve_script` for the order `deserialize → Validator::validate → use`. Hand-crafted bytecode payloads that declare `max_loop_depth: 0` while shipping deeper loops, or `MakeMap(65535)` operands, are rejected here (`edgion-dsl/src/validator.rs:220-290`).
 
 ## 2. Runtime limit enforcement — source map
 
@@ -36,11 +38,11 @@ These are the `VmLimits` fields and where every breach is raised. **When adding 
 | `max_stack_depth` | 128 | `vm.rs` push paths (`StackOverflow`) |
 | `max_string_len` | 8_192 | `vm.rs:327,341,355` (concat branches), `vm.rs:593` (`regex_find` result), `vm.rs:626` (`regex_replace` result), plus every checked builtin return via `checked_value_str` / `checked_value_opt_str` (defined at `builtins.rs:46-56`, used throughout) |
 | `max_list_len` | 1_024 | List construction lives entirely in builtins — `builtins.rs:510-549` (`split` pre-allocation estimate, `range` with `hard_cap = max_list_len.min(1000)`); also bounds `req.header_names` / `resp.header_names` via their own hard 256 cap (predates Point 02) |
-| `max_map_size` | 512 | `vm.rs:732` `MakeMap`, `builtins.rs:943,1204` (`http.call` response headers truncate at this cap; `redis.hgetall` rejects above it), `validator.rs:279-290` compile-time `MakeMap(n)` operand check |
+| `max_map_size` | 512 | `vm.rs:732` `MakeMap`, `builtins.rs:943,1204` (`http.call` response headers truncate at this cap; `redis.hgetall` rejects above it), `edgion-dsl/src/validator.rs:279-290` compile-time `MakeMap(n)` operand check |
 
 Adding a new runtime limit requires:
 1. Field + default in `VmLimits` (`vm.rs:34-95`).
-2. Mirror the compile-time portion in `validator.rs` `Limits` if the bytecode can declare the value statically (`MakeMap(n)` is the model).
+2. Mirror the compile-time portion in `edgion-dsl/src/validator.rs` `Limits` if the bytecode can declare the value statically (`MakeMap(n)` is the model).
 3. Raise the matching `RuntimeError` variant from every code path that can blow the cap.
 4. Extend the user docs in `docs/en/.../dsl/sandbox-security.md` (and the zh-CN mirror).
 5. Add a negative test in `tests/sandbox.rs` or a dedicated `tests/<limit>.rs`.
@@ -49,18 +51,18 @@ Adding a new runtime limit requires:
 
 | Constant / field | Default | Where |
 |---|---|---|
-| `MAX_SOURCE_LEN` | 64 KB | `lang/parser/mod.rs:17` |
-| Parse-step budget | 50_000 | `lang/parser/mod.rs:26,41` (`parse_budget`) |
-| `max_ast_nodes` | 2_000 | `lang/parser/mod.rs:34,45` |
-| `max_nesting_depth` (parser) | 64 | `lang/parser/mod.rs:30,43` — parser stack-overflow guard, separate from the compiler's `max_loop_depth` |
-| `max_instructions` | 1_000 | `lang/validator.rs:17,35` |
-| `max_locals` | 64 | `lang/validator.rs:19,36` |
-| `max_constants` | 256 | `lang/validator.rs:21,37` |
-| `max_string_const_len` | 4_096 B | `lang/validator.rs:23,38` |
-| `max_const_pool_bytes` | 32_768 B | `lang/validator.rs:25,39` |
-| `max_loop_depth` (observed) | 8 | `lang/validator.rs:27,40,220-260` — recomputed from the bytecode, not trusted from the declared field |
-| `MAX_REGEX_PATTERN_LEN` | 1_024 B | `lang/compiler/mod.rs:25`, `lang/compiler/emit.rs:79-86`, `lang/validator.rs:11,106-113` (also re-checked when validating decoded bytecode, alongside a DFA-bounded rebuild at `:114-125`) |
-| `MAX_DECODED_BYTECODE_LEN` | 256 KB | `lang/bytecode.rs:13,297-301` |
+| `MAX_SOURCE_LEN` | 64 KB | `edgion-dsl/src/parser/mod.rs:17` |
+| Parse-step budget | 50_000 | `edgion-dsl/src/parser/mod.rs:26,41` (`parse_budget`) |
+| `max_ast_nodes` | 2_000 | `edgion-dsl/src/parser/mod.rs:34,45` |
+| `max_nesting_depth` (parser) | 64 | `edgion-dsl/src/parser/mod.rs:30,43` — parser stack-overflow guard, separate from the compiler's `max_loop_depth` |
+| `max_instructions` | 1_000 | `edgion-dsl/src/validator.rs:17,35` |
+| `max_locals` | 64 | `edgion-dsl/src/validator.rs:19,36` |
+| `max_constants` | 256 | `edgion-dsl/src/validator.rs:21,37` |
+| `max_string_const_len` | 4_096 B | `edgion-dsl/src/validator.rs:23,38` |
+| `max_const_pool_bytes` | 32_768 B | `edgion-dsl/src/validator.rs:25,39` |
+| `max_loop_depth` (observed) | 8 | `edgion-dsl/src/validator.rs:27,40,220-260` — recomputed from the bytecode, not trusted from the declared field |
+| `MAX_REGEX_PATTERN_LEN` | 1_024 B | `edgion-dsl/src/compiler/mod.rs:25`, `edgion-dsl/src/compiler/emit.rs:79-86`, `edgion-dsl/src/validator.rs:11,106-113` (also re-checked when validating decoded bytecode, alongside a DFA-bounded rebuild at `:114-125`) |
+| `MAX_DECODED_BYTECODE_LEN` | 256 KB | `edgion-dsl/src/bytecode.rs:13,297-301` |
 
 These constants are deliberately **not** runtime-configurable. They protect the loader/parser themselves; exposing them to operator config would invite the bytecode-format attack surface to grow with deployment time.
 
@@ -72,7 +74,7 @@ Before 2026-05-18, `max_list_len` and `max_map_size` existed only on paper for s
 |---|---|---|
 | `Split(s, delim)` | `max_list_len` (estimated, before allocation) | `builtins.rs:500-518` |
 | `Range(start, end)` | `min(max_list_len, 1000)` hard ceiling | `builtins.rs:519-549` |
-| `MakeMap` opcode | `max_map_size` runtime + compile-time | `vm.rs:732`, `validator.rs:279-290` |
+| `MakeMap` opcode | `max_map_size` runtime + compile-time | `vm.rs:732`, `edgion-dsl/src/validator.rs:279-290` |
 | `http.call` response headers | silently truncate at `max_map_size` | `builtins.rs:938-947` |
 | `redis.hgetall` | reject above `max_map_size` | `builtins.rs:1204-1209` |
 | `req.header_names` / `resp.header_names` | hard 256 (separate from `max_map_size`, predates Point 02) | see `docs/.../sandbox-security.md` "Per-Function Limit Summary" |
@@ -81,7 +83,7 @@ Before 2026-05-18, `max_list_len` and `max_map_size` existed only on paper for s
 
 **Why `http.call` truncates while `redis.hgetall` rejects?** HTTP response headers are inbound third-party data we cannot retransmit — silently dropping the tail is the only way to keep the script running. Redis HGETALL operates on values the script asked for; failing loud is the safer default there.
 
-The compile-time `MakeMap(n)` operand check in `validator.rs:279-290` exists specifically to reject hand-crafted bytecode that ships `MakeMap(65535)` without ever having to allocate. Skipping the validator check would still be caught by the runtime check at `vm.rs:732`, but at the cost of one wasted allocation per request — undesirable on a hot path.
+The compile-time `MakeMap(n)` operand check in `edgion-dsl/src/validator.rs:279-290` exists specifically to reject hand-crafted bytecode that ships `MakeMap(65535)` without ever having to allocate. Skipping the validator check would still be caught by the runtime check at `vm.rs:732`, but at the cost of one wasted allocation per request — undesirable on a hot path.
 
 ## 5. String length cap — what it does and doesn't cover
 
@@ -91,7 +93,7 @@ It deliberately does **not** cap string literals in the constant pool. Those are
 
 ## 6. Regex / ReDoS posture
 
-All three regex opcodes (`.matches(pattern)`, `regex_find(s, pattern)`, `regex_replace(s, pattern, replacement)`) require a **string-literal pattern**, enforced at the compiler in `lang/compiler/expr.rs:195-208` (`.matches()`) and `:218-251` (`regex_find` / `regex_replace`) — dynamic patterns are rejected before bytecode is emitted. The literal is stored as a `Constant::Regex(String)` (`bytecode.rs:247`) and never appears in a variable slot.
+All three regex opcodes (`.matches(pattern)`, `regex_find(s, pattern)`, `regex_replace(s, pattern, replacement)`) require a **string-literal pattern**, enforced at the compiler in `edgion-dsl/src/compiler/expr.rs:195-208` (`.matches()`) and `:218-251` (`regex_find` / `regex_replace`) — dynamic patterns are rejected before bytecode is emitted. The literal is stored as a `Constant::Regex(String)` (`edgion-dsl/src/bytecode.rs:247`) and never appears in a variable slot.
 
 Patterns are **pre-compiled once per script**, not once per call:
 
@@ -102,13 +104,13 @@ Defense in depth around regex evaluation:
 
 | Layer | Where | What it stops |
 |---|---|---|
-| String-literal requirement | `lang/compiler/expr.rs:218-251` | Dynamic / attacker-controlled patterns |
-| `MAX_REGEX_PATTERN_LEN = 1024 B` | `lang/compiler/emit.rs:79-86`, `lang/validator.rs:106-113` (re-checked after deserialization) | Pathologically long patterns |
-| DFA + size limit during compile | `lang/compiler/emit.rs:89-94`, `lang/validator.rs:114-125`, `lang/vm.rs:209-215` | Patterns that compile to multi-MB DFA tables |
+| String-literal requirement | `edgion-dsl/src/compiler/expr.rs:218-251` | Dynamic / attacker-controlled patterns |
+| `MAX_REGEX_PATTERN_LEN = 1024 B` | `edgion-dsl/src/compiler/emit.rs:79-86`, `edgion-dsl/src/validator.rs:106-113` (re-checked after deserialization) | Pathologically long patterns |
+| DFA + size limit during compile | `edgion-dsl/src/compiler/emit.rs:89-94`, `edgion-dsl/src/validator.rs:114-125`, `lang/vm.rs:209-215` | Patterns that compile to multi-MB DFA tables |
 | `max_steps` | `lang/vm.rs:168` | Pathological matching time on adversarial input |
 | `max_string_len` | `lang/vm.rs:593,626` | Oversized `regex_find` / `regex_replace` output |
 
-The validator-side rebuild at `validator.rs:114-125` is the key safeguard against **hand-crafted bytecode that ships a regex pattern the compiler would have rejected**: even if the controller's compiler is bypassed, the validator runs the same `RegexBuilder` with the same memory caps before the VM is constructed.
+The validator-side rebuild at `edgion-dsl/src/validator.rs:114-125` is the key safeguard against **hand-crafted bytecode that ships a regex pattern the compiler would have rejected**: even if the controller's compiler is bypassed, the validator runs the same `RegexBuilder` with the same memory caps before the VM is constructed.
 
 ## 7. SSRF guard — `is_ssrf_blocked_ip_literal`
 

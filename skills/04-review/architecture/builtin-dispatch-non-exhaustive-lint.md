@@ -15,7 +15,7 @@ Fix suggestions of the form "add `#![warn(non_exhaustive_omitted_patterns)]` to 
 
 **1. The `non_exhaustive_omitted_patterns` lint is scoped to external `#[non_exhaustive]` types**
 
-Per the Rust reference, the lint detects a wildcard pattern that is reachable in a match on a `#[non_exhaustive]` enum or struct **from a different crate**. Within the defining crate `#[non_exhaustive]` is treated as exhaustive, and the lint is suppressed. `BuiltinId` lives in `edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs` alongside its match sites in the same `edgion` crate, so even if the enum were re-marked `#[non_exhaustive]` the lint would still not fire on these dispatch files.
+Per the Rust reference, the lint detects a wildcard pattern that is reachable in a match on a `#[non_exhaustive]` enum or struct **from a different crate**. Within the defining crate `#[non_exhaustive]` is treated as exhaustive, and the lint is suppressed. `BuiltinId` lives in `edgion-dsl/src/bytecode.rs` alongside its match sites in the same `edgion` crate, so even if the enum were re-marked `#[non_exhaustive]` the lint would still not fire on these dispatch files.
 
 **2. Native exhaustiveness checking is the real lever**
 

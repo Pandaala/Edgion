@@ -57,6 +57,10 @@ edgion-resources.workspace = true
 # Shared common crate (config loader, observe, secret store, link core, etc.)
 edgion-common.workspace = true
 
+# EdgionDSL language core (parser/compiler/bytecode/validator); the gateway
+# keeps the VM and builtin dispatch and re-exports the core paths.
+edgion-dsl.workspace = true
+
 # Core async runtime and error handling
 tokio.workspace = true
 tokio-util.workspace = true
@@ -104,7 +108,6 @@ regex.workspace = true
 rand.workspace = true
 smallvec.workspace = true
 indexmap.workspace = true
-nom.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 crc32fast.workspace = true

@@ -1,10 +1,10 @@
 [workspace]
-members = ["edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller", "edgion-tests"]
+members = ["edgion-dsl", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller", "edgion-tests"]
 # `edgion-tests` is the ~56k-line end-to-end harness. It is a member (so
 # `cargo build -p edgion-tests` works and CI can target it), but is kept out of
 # `default-members` so a bare `cargo build` / `cargo check --all-targets` for
 # production does NOT compile it. Build it explicitly with `-p edgion-tests`.
-default-members = ["edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller"]
+default-members = ["edgion-dsl", "edgion-resources", "edgion-common", "edgion-cli", "edgion-gateway", "edgion-controller"]
 # Virtual manifest: after the crate split there is no root `edgion` package — the
 # three binaries (`edgion-gateway`, `edgion-controller`, `edgion-cli`) are peers
 # and no single package owns the workspace. A virtual manifest has no
@@ -54,6 +54,7 @@ manual_let_else       = "warn"
 [workspace.dependencies]
 # Internal crates (path is relative to the workspace root). Not published, so
 # path-only — no version pin.
+edgion-dsl        = { path = "edgion-dsl" }
 edgion-resources  = { path = "edgion-resources" }
 edgion-common     = { path = "edgion-common" }
 # default-features = false so that a crate depending on this workspace dep

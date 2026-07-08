@@ -43,25 +43,28 @@ session ─► DslPlugin::run_request / run_upstream_response_filter
                                        wrapped by execute_safe → catch_unwind
 ```
 
-Each stage rejects oversized or malformed input independently. Pre-compiled bytecode coming from the controller is re-validated by `Validator` after deserialization, so the data plane never trusts the controller's compile output blindly — see `DslPlugin::resolve_script` for the order: deserialize → `Validator::validate` → use.
+Each stage rejects oversized or malformed input independently. Pre-compiled bytecode coming from the controller is re-validated by `Validator` after deserialization, so the data plane never trusts the controller's compile output blindly — see `edgion_dsl::resolve_script` (wrapped by `DslConfig::compile_and_validate` in `edgion-resources`) for the order: deserialize → `Validator::validate` → use.
 
 ## 2. Source layout
 
+The language core (parser, AST, compiler, bytecode, errors, value, validator) lives in the standalone `edgion-dsl` crate, shared with the controller for admission-time validation via `DslConfig::compile_and_validate`. The runtime — VM execution, builtin dispatch, and plugin wiring — stays in the gateway. The static validation entry points are `edgion_dsl::resolve_script` and `edgion_dsl::check_redis_link_names`.
+
 | Stage / role | File |
 |---|---|
-| Parser (nom combinators, parse budget 50_000, source ≤64 KB) | `edgion-gateway/src/plugins/http/dsl/lang/parser/` |
-| AST node types | `lang/ast.rs` |
-| Compiler (type check, regex pre-compile, constant pool, max regex pattern length 1024 B) | `lang/compiler/` |
-| Compile-time entry that ties parser + compiler together | `lang/validator.rs` — `compile_dsl_source()` |
-| Bytecode format + `BYTECODE_VERSION` + (de)serialization (gated by `MAX_DECODED_BYTECODE_LEN = 256 KB`) | `lang/bytecode.rs` |
-| Standalone validator (also re-runs on deserialized bytecode) | `lang/validator.rs` — `Validator` |
-| VM (`async fn execute`, panic-isolated `execute_safe`, `VmLimits`) | `lang/vm.rs` |
+| Parser (nom combinators, parse budget 50_000, source ≤64 KB) | `edgion-dsl/src/parser/` |
+| AST node types | `edgion-dsl/src/ast.rs` |
+| Compiler (type check, regex pre-compile, constant pool, max regex pattern length 1024 B) | `edgion-dsl/src/compiler/` |
+| Compile-time entry that ties parser + compiler together | `edgion-dsl/src/validator.rs` — `compile_dsl_source()` |
+| Bytecode format + `BYTECODE_VERSION` + (de)serialization (gated by `MAX_DECODED_BYTECODE_LEN = 256 KB`) | `edgion-dsl/src/bytecode.rs` |
+| Standalone validator (also re-runs on deserialized bytecode) | `edgion-dsl/src/validator.rs` — `Validator` |
+| Config-independent compile/validate entry points | `edgion-dsl/src/script.rs` — `resolve_script()`, `check_redis_link_names()` |
+| VM (`async fn execute`, panic-isolated `execute_safe`, `VmLimits`) | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` |
 | Builtin implementations (`call_builtin`, `call_builtin_http`, `call_builtin_redis`) | `lang/builtins.rs` |
-| Value enum (`Value::Str(Arc<str>)`, `List`, `Map(Box<IndexMap<String, Value>>)`) | `lang/value.rs` |
-| Runtime errors | `lang/error.rs` |
+| Value enum (`Value::Str(Arc<str>)`, `List`, `Map(Box<IndexMap<String, Value>>)`) | `edgion-dsl/src/value.rs` |
+| Runtime errors | `edgion-dsl/src/error.rs` |
 | Plugin entry (RequestFilter + UpstreamResponseFilter impls, config-to-plugin factory) | `plugin.rs` |
 | Per-plugin external-call context (limits + redis link table) | `runtime.rs` — `DslRuntime` |
-| Static config schema | `config.rs` — `DslConfig` |
+| Static config schema + `compile_and_validate()` wrapper | `config.rs` — `DslConfig` (`edgion-resources` crate) |
 | Unit & integration tests | `tests/` |
 
 ## 3. Plugin entry points
@@ -70,10 +73,11 @@ Each stage rejects oversized or malformed input independently. Pre-compiled byte
 
 Both factories call `resolve_parts()`, which:
 
-1. Calls `resolve_script()` — prefers pre-compiled `bytecode` over inline `source`. Source is compiled via `compile_dsl_source()`. Bytecode is re-validated through `Validator` after `CompiledScript::deserialize_base64`.
-2. Calls `DslConfig::validate()` for static config sanity (limits, errorPolicy enum, etc.).
-3. Calls `check_redis_link_names()` — a best-effort bytecode scan that rejects `redis.*` calls whose first-arg link name is not in `linkSysRefs`. False-positive / false-negative limitations are documented inline in `plugin.rs`; runtime `ok=false` is the fallback.
-4. Builds `VmLimits` and `DslRuntime` from the config and constructs the `Vm`.
+1. Calls `config.compile_and_validate()` (`edgion-resources`, backed by the `edgion-dsl` crate) — the single source of truth for the static validation pipeline, in order:
+   - `edgion_dsl::resolve_script()` — prefers pre-compiled `bytecode` over inline `source`. Source is compiled via `compile_dsl_source()`. Bytecode is re-validated through `Validator` after `CompiledScript::deserialize_base64`.
+   - `DslConfig::validate()` for static config sanity (limits, errorPolicy enum, etc.).
+   - `edgion_dsl::check_redis_link_names()` — a best-effort bytecode scan that rejects `redis.*` calls whose first-arg link name is not in `linkSysRefs`. False-positive / false-negative limitations are documented inline in `edgion-dsl/src/script.rs`; runtime `ok=false` is the fallback.
+2. Builds `VmLimits` and `DslRuntime` from the config and constructs the `Vm`.
 
 The same `DslPlugin` instance is shared across requests through `PluginRuntime` — only `&self` accessors run on the hot path. Per-request mutable state lives in `Vm::execute`'s local `VmState`, not in `DslPlugin`.
 

@@ -139,17 +139,39 @@ impl DslConfig {
         }
         Ok(())
     }
+
+    /// Full static validation — the exact set of failures the gateway's
+    /// `DslPlugin` constructor would hit, minus VM init (`Vm::new`), which is
+    /// the one failure that cannot be predicted statically and is covered by
+    /// the data-plane seal backstop.
+    ///
+    /// Check order mirrors the original gateway `validate_config`: resolve the
+    /// script (compile `source` / deserialize+validate `bytecode`) first, then
+    /// the linkSysRefs format check, then the redis link-name scan — so a
+    /// dual-fault config reports the compile error. Returns the validated
+    /// `CompiledScript` so data-plane callers can reuse it without paying for
+    /// a second compile/deserialize cycle.
+    pub fn compile_and_validate(&self) -> Result<edgion_dsl::bytecode::CompiledScript, String> {
+        let val_limits = edgion_dsl::validator::ValidationLimits {
+            max_map_size: self.max_map_size.unwrap_or(512),
+            ..Default::default()
+        };
+        let script = edgion_dsl::resolve_script(self.source.as_deref(), self.bytecode.as_deref(), &val_limits)?;
+        self.validate()?;
+        let valid_names: std::collections::HashSet<&str> = self.linksys_refs.iter().map(|r| r.name.as_str()).collect();
+        edgion_dsl::check_redis_link_names(&script, &valid_names)?;
+        Ok(script)
+    }
 }
 
 impl PluginValidation for DslConfig {
-    /// Schema-level (light) validation. Field-range and linkSysRefs checks only.
-    ///
-    /// The heavy data-plane validation (compiling `source` / deserializing
-    /// `bytecode` / resolving linksys_refs against redis links) requires the
-    /// gateway DSL VM and therefore runs gateway-side during plugin-runtime
-    /// construction (`PluginRuntime::add_from_*` invokes `DslPlugin::validate_config`,
-    /// which fails closed via `seal_fail_closed`). Keeping the VM out of this
-    /// schema layer is what lets `types` stay a leaf with no engine dependency.
+    /// Full preparse validation: light field/range checks first, then the deep
+    /// static checks (compile `source` / deserialize+validate `bytecode`,
+    /// linkSysRefs format, redis link-name scan) via
+    /// [`DslConfig::compile_and_validate`] and the shared `edgion-dsl` crate.
+    /// Control plane and data plane therefore report identical DSL errors. VM
+    /// init (`Vm::new`) is the one remaining gateway-only failure — it cannot
+    /// be predicted statically and is covered by the data-plane seal backstop.
     fn validation_error(&self) -> Option<String> {
         if self.name.is_empty() {
             return Some("dsl plugin name is required".to_string());
@@ -187,13 +209,11 @@ impl PluginValidation for DslConfig {
                 return Some("errorPolicy denyWith status must be between 100 and 599".to_string());
             }
         }
-        // NOTE: linkSysRefs validation (`self.validate()`) is intentionally NOT
-        // run here. The gateway heavy check (`DslPlugin::validate_config`, called
-        // from `PluginRuntime::add_from_*`) compiles `source`/`bytecode` first and
-        // then runs `config.validate()` — preserving the original error-priority
-        // ordering (compile error wins over a linkSysRefs error on a dual-fault
-        // config). Running it here would flip that priority.
-        None
+        // Deep static checks last. `compile_and_validate` preserves the
+        // gateway error priority (compile error wins over a linkSysRefs error
+        // on a dual-fault config), so running it after the light checks keeps
+        // the combined ordering identical to the gateway's.
+        self.compile_and_validate().err()
     }
 }
 
@@ -202,14 +222,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validation_error_passes_light_checks_for_valid_config() {
+    fn validation_error_passes_for_valid_config() {
         let config = DslConfig {
             name: "ok".to_string(),
             source: Some("let x = 1".to_string()),
             bytecode: None,
             ..Default::default()
         };
-        // Light checks only — name set + source present + valid ranges.
+        // Full pipeline — the trivial script compiles, so no error.
         assert_eq!(config.validation_error(), None);
     }
 
@@ -243,5 +263,63 @@ mod tests {
             ..Default::default()
         };
         assert!(config.validation_error().is_some());
+    }
+
+    #[test]
+    fn validation_error_rejects_uncompilable_source() {
+        let config = DslConfig {
+            name: "bad".to_string(),
+            source: Some("this is not valid dsl @@@".to_string()),
+            ..Default::default()
+        };
+        let err = config.validation_error().expect("uncompilable source must fail");
+        assert!(err.contains("DSL compile errors"), "got: {err}");
+    }
+
+    #[test]
+    fn validation_error_rejects_unknown_redis_link() {
+        let config = DslConfig {
+            name: "unknown-link".to_string(),
+            source: Some("let r = redis.get(\"mylink\", \"mykey\")".to_string()),
+            ..Default::default()
+        };
+        let err = config
+            .validation_error()
+            .expect("redis call referencing an undeclared link must fail");
+        assert!(err.contains("linkSysRefs"), "got: {err}");
+    }
+
+    #[test]
+    fn compile_and_validate_compile_error_wins_on_dual_fault() {
+        use crate::resources::edgion_plugins::plugin_configs::LinkSysRef;
+        // Both faults present: uncompilable source AND an invalid linkSysRefs
+        // name. The compile error must win (original gateway error priority).
+        let config = DslConfig {
+            name: "dual".to_string(),
+            source: Some("this is not valid dsl @@@".to_string()),
+            linksys_refs: vec![LinkSysRef {
+                namespace: "default".to_string(),
+                name: "BAD NAME".to_string(),
+            }],
+            ..Default::default()
+        };
+        let err = config.compile_and_validate().expect_err("dual fault must fail");
+        assert!(err.contains("DSL compile errors"), "compile error must win, got: {err}");
+    }
+
+    #[test]
+    fn compile_and_validate_reports_link_format_error_when_script_compiles() {
+        use crate::resources::edgion_plugins::plugin_configs::LinkSysRef;
+        let config = DslConfig {
+            name: "bad-link-name".to_string(),
+            source: Some("let a = 1".to_string()),
+            linksys_refs: vec![LinkSysRef {
+                namespace: "default".to_string(),
+                name: "BAD NAME".to_string(),
+            }],
+            ..Default::default()
+        };
+        let err = config.compile_and_validate().expect_err("invalid link name must fail");
+        assert!(err.contains("invalid name"), "got: {err}");
     }
 }

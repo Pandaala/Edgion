@@ -1406,6 +1406,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "edgion-dsl"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "indexmap 2.13.1",
+ "nom",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "edgion-gateway"
 version = "0.1.0"
 dependencies = [
@@ -1427,6 +1439,7 @@ dependencies = [
  "crc32fast",
  "dashmap",
  "edgion-common",
+ "edgion-dsl",
  "edgion-resources",
  "etcd-client",
  "expect-test",
@@ -1449,7 +1462,6 @@ dependencies = [
  "metrics-util",
  "mimalloc",
  "mockall",
- "nom",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1508,6 +1520,7 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "edgion-dsl",
  "http",
  "jsonwebtoken",
  "k8s-openapi",

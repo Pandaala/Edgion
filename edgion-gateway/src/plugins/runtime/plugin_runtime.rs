@@ -696,21 +696,16 @@ impl PluginRuntime {
 
     /// Gateway-side plugin validation gate.
     ///
-    /// Runs the schema-layer light checks (`EdgionPlugin::validation_error`)
-    /// plus the heavy DSL checks (compiling `source` / decoding `bytecode` /
-    /// resolving `linkSysRefs` against redis links) that require the DSL VM.
-    /// The VM lives in this crate, so it cannot sit on the `types` schema
-    /// layer's `DslConfig::validation_error()`; running it here preserves the
-    /// specific compile-error message that `seal_fail_closed` surfaces into the
-    /// resource's K8s status condition (and the data-plane fail-closed 500).
+    /// Runs the schema-layer checks (`EdgionPlugin::validation_error`) — which
+    /// since the `edgion-dsl` extraction include the deep DSL static pipeline
+    /// (compile / bytecode validation / linkSysRefs / redis link-name scan),
+    /// so control plane and data plane literally share one code path — plus
+    /// gateway-only checks that need resolved runtime state (e.g. the CSRF
+    /// resolved-key guard below). DSL VM init remains covered by
+    /// `seal_fail_closed` at construction time.
     fn plugin_validation_error(plugin: &EdgionPlugin) -> Option<String> {
         if let Some(e) = plugin.validation_error() {
             return Some(e);
-        }
-        if let EdgionPlugin::Dsl(cfg) = plugin {
-            if let Err(e) = DslPlugin::validate_config(cfg) {
-                return Some(e);
-            }
         }
         if let EdgionPlugin::Csrf(cfg) = plugin {
             // A CSRF plugin cannot sign/verify without a key. If the secretRef

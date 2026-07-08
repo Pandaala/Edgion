@@ -13,7 +13,8 @@ The code is a Cargo workspace (resolver 2); each plane is its own crate (the old
 single-crate `src/core/` layout is gone):
 
 ```
-edgion-resources/    # Shared resource/config schema (leaf)
+edgion-dsl/          # EdgionDSL language core (leaf, no workspace-internal deps)
+edgion-resources/    # Shared resource/config schema (depends on edgion-dsl)
 edgion-common/       # Code shared across bins (depends on edgion-resources)
 edgion-gateway/      # Data plane + `edgion-gateway` binary
 edgion-controller/   # Control plane + `edgion-controller` binary
@@ -183,8 +184,9 @@ violation is a compile error, not just a convention):
   `edgion-gateway`. Plugin validation on resource ingest runs the schema-layer
   `EdgionPlugins::validate_plugins` (in `edgion-resources`), not the gateway's
   `plugins::http::compile_plugins`. The two share the same underlying checks; the
-  schema layer omits only the DSL deep checks (Rhai compile / VM init), which the
-  data plane still enforces fail-closed at runtime.
+  schema layer now runs the full DSL static pipeline (parse, compile, validate)
+  via the shared `edgion-dsl` crate and omits only VM init, which the data plane
+  still enforces fail-closed at runtime.
 - The config-center schema (`ConfCenterConfig`, `FileSystemConfig`,
   `KubernetesConfig`, `MetadataFilterConfig`, `EtcdConfig`) lives in
   `edgion-controller/src/config/conf_center/` (controller-only — the gateway never

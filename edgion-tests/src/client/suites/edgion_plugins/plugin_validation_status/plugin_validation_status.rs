@@ -208,9 +208,10 @@ impl PluginValidationStatusTestSuite {
     // Scenario 6: Dsl with an uncompilable inline source → Accepted=False/Invalid
     //
     // DslConfig::validation_error() runs the full data-plane validation path
-    // (DslPlugin::validate_config → resolve_script → compile_dsl_source). An
-    // uncompilable `source` is reported as "DSL compile errors: ..." which the
-    // controller joins verbatim into the Accepted condition message.
+    // (DslConfig::compile_and_validate → edgion_dsl::resolve_script →
+    // compile_dsl_source). An uncompilable `source` is reported as
+    // "DSL compile errors: ..." which the controller joins verbatim into the
+    // Accepted condition message.
     // =========================================================================
 
     fn dsl_invalid() -> TestCase {

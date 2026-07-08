@@ -341,7 +341,11 @@ impl CompiledScript {
 
     /// Look up the source line that produced the instruction at `pc`.
     /// Returns `None` when no `source_map` is attached (legacy payloads) or `pc` is past the end.
-    #[cfg(test)]
+    ///
+    /// Not `#[cfg(test)]`-gated: `edgion-gateway`'s property tests call this
+    /// on `edgion_dsl::bytecode::CompiledScript` compiled as a normal
+    /// (non-test) dependency, so it must be reachable outside `edgion-dsl`'s
+    /// own test build.
     pub fn line_of(&self, pc: usize) -> Option<u32> {
         let runs = self.source_map.as_ref()?;
         let mut covered: usize = 0;

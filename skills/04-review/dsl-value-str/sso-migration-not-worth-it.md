@@ -122,8 +122,8 @@ Open a new task and revisit the analysis if **any** of the following is observed
 
 ## Source references for fact-checking the above
 
-- `edgion-gateway/src/plugins/http/dsl/lang/value.rs:13-26` — current `Value` enum with `Str(Arc<str>)` and `List(Vec<Arc<str>>)`.
-- `edgion-gateway/src/plugins/http/dsl/lang/value.rs:74-89` — current `into_string` (always allocates `s.to_string()`).
+- `edgion-dsl/src/value.rs:13-26` — current `Value` enum with `Str(Arc<str>)` and `List(Vec<Arc<str>>)`.
+- `edgion-dsl/src/value.rs:74-89` — current `into_string` (always allocates `s.to_string()`).
 - `edgion-gateway/src/plugins/http/dsl/lang/vm.rs:179` — `const_str_cache: Vec<Option<Arc<str>>>` pre-conversion cache.
 - `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` — Vec<Arc<str>> construction sites: `:100`, `:218`, `:529`, `:558`; `Value::Str(Arc::from(...))` at `:358`, `:361`, `:523`, `:932`, `:947`.
 - `tasks/todo/dsl-value-str-arc-smartstring.md` — the original migration proposal (left in place; its conclusions are superseded by this memo).

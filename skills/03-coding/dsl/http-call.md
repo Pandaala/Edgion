@@ -11,9 +11,9 @@
 | `edgion-gateway/src/plugins/http/dsl/lang/builtins.rs` | `call_builtin_http` + SSRF helpers |
 | `edgion-gateway/src/plugins/http/dsl/runtime.rs` | `DslRuntime` struct + global `DSL_HTTP_CLIENT` |
 | `edgion-gateway/src/plugins/http/dsl/config.rs` | Config fields: `http_max_timeout_ms`, `http_max_response_body_bytes`, `http_block_private_ips` |
-| `edgion-gateway/src/plugins/http/dsl/lang/bytecode.rs` | `OpCode::MakeMap(u16)`, `OpCode::IndexGet` |
+| `edgion-dsl/src/bytecode.rs` | `OpCode::MakeMap(u16)`, `OpCode::IndexGet` |
 | `edgion-gateway/src/plugins/http/dsl/lang/vm.rs` | `MakeMap` handler, `IndexGet` handler (Map + List), async `execute` / `execute_safe` |
-| `edgion-gateway/src/plugins/http/dsl/lang/compiler/expr.rs` | `ExprKind::Index` → `OpCode::IndexGet` |
+| `edgion-dsl/src/compiler/expr.rs` | `ExprKind::Index` → `OpCode::IndexGet` |
 | `edgion-gateway/src/plugins/http/dsl/tests/http_call_tests.rs` | Unit + integration tests |
 
 ## Return value shape

@@ -5,7 +5,13 @@
 //! via a stack-based VM on the gateway.
 //!
 //! Architecture:
-//!   Source → Parser(nom) → AST → Compiler → Bytecode → VM(sandbox)
+//!   Source → Parser(nom) → AST → Compiler → Bytecode   (edgion-dsl crate)
+//!   Bytecode → VM(sandbox)                              (this module)
+//!
+//! The language core (parser/compiler/bytecode/validator) lives in the
+//! standalone `edgion-dsl` crate so the controller runs the same
+//! compile/validate path at resource ingest; `lang/` re-exports it and keeps
+//! the VM + builtin dispatch here.
 //!
 //! Security model:
 //!   Layer 0: Input limits (source size, parse budget, nesting depth)
