@@ -3,6 +3,7 @@
 pub mod all_endpoint_status;
 pub mod bandwidth_limit;
 pub mod basic_auth;
+pub mod canary;
 pub mod common;
 mod conf_handler_impl;
 pub mod cors;
@@ -39,6 +40,7 @@ pub mod trace_context;
 pub use all_endpoint_status::AllEndpointStatus;
 pub use bandwidth_limit::BandwidthLimit;
 pub use basic_auth::BasicAuth;
+pub use canary::Canary;
 pub use conf_handler_impl::create_plugin_handler;
 pub use cors::Cors;
 pub use csrf::Csrf;

@@ -86,7 +86,8 @@ fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
         | FaultInjection(_)
         | RegionRoute(_)
         | TraceContext(_)
-        | GlobalAccessControl(_) => (true, false, false, false),
+        | GlobalAccessControl(_)
+        | Canary(_) => (true, false, false, false),
     };
     StageSet {
         request,

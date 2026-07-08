@@ -8,6 +8,7 @@ Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
 |------|------|
 | [bandwidth-limit.md](bandwidth-limit.md) | 带宽限制 |
 | [basic-auth.md](basic-auth.md) | HTTP Basic 认证 |
+| [canary.md](canary.md) | 全量切换、可远程切换的金丝雀流量插件 |
 | [cors.md](cors.md) | 跨域资源共享（CORS） |
 | [csrf.md](csrf.md) | CSRF 防护 |
 | [ctx-setter.md](ctx-setter.md) | 上下文变量提取 |

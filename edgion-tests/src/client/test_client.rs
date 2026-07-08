@@ -312,6 +312,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/RegionRoute" => "EdgionPlugins",
         "EdgionPlugins/EdgionConfigDataManaged" => "EdgionPlugins",
         "EdgionPlugins/GlobalAccessControl" => "EdgionPlugins",
+        "EdgionPlugins/Canary" => "EdgionPlugins",
         "EdgionPlugins/GlobalConnectionIpRestriction" => "EdgionPlugins",
         "EdgionPlugins/GlobalPluginsSnapshot" => "EdgionPlugins",
         "EdgionPlugins/EdgionConfigDataStatus" => "EdgionPlugins",
@@ -1059,6 +1060,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GlobalAccessControlTestSuite));
+        }
+        "EdgionPlugins/Canary" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/Canary tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::CanaryTestSuite));
         }
         "EdgionPlugins/IpRestriction" => {
             if !gateway {

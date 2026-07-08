@@ -33,6 +33,7 @@ use super::traits::{
 use crate::plugins::http::all_endpoint_status::AllEndpointStatus;
 use crate::plugins::http::bandwidth_limit::BandwidthLimit;
 use crate::plugins::http::basic_auth::BasicAuth;
+use crate::plugins::http::canary::Canary;
 use crate::plugins::http::cors::Cors;
 use crate::plugins::http::csrf::Csrf;
 use crate::plugins::http::ctx_set::CtxSet;
@@ -774,6 +775,7 @@ impl PluginRuntime {
             EdgionPlugin::GlobalAccessControl(config) => {
                 CreateResult::Ok(Some(GlobalAccessControl::create(config, namespace)))
             }
+            EdgionPlugin::Canary(config) => CreateResult::Ok(Some(Canary::create(config, namespace))),
             EdgionPlugin::JwtAuth(config) => {
                 CreateResult::Ok(Some(Box::new(JwtAuth::new(config, namespace.to_string()))))
             }
@@ -868,7 +870,8 @@ impl PluginRuntime {
             | EdgionPlugin::FaultInjection(_)
             | EdgionPlugin::ExtProc(_)
             | EdgionPlugin::RegionRoute(_)
-            | EdgionPlugin::GlobalAccessControl(_) => CreateResult::WrongStage,
+            | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::Canary(_) => CreateResult::WrongStage,
         }
     }
 
@@ -927,6 +930,7 @@ impl PluginRuntime {
             | EdgionPlugin::ExtProc(_)
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::GlobalAccessControl(_)
+            | EdgionPlugin::Canary(_)
             | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
         }
     }
@@ -942,6 +946,7 @@ impl PluginRuntime {
             EdgionPlugin::Csrf(_) => "Csrf",
             EdgionPlugin::IpRestriction(_) => "IpRestriction",
             EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
+            EdgionPlugin::Canary(_) => "Canary",
             EdgionPlugin::JwtAuth(_) => "JwtAuth",
             EdgionPlugin::JweDecrypt(_) => "JweDecrypt",
             EdgionPlugin::HmacAuth(_) => "HmacAuth",
@@ -1465,6 +1470,51 @@ mod tests {
         );
         let first = runtime.request_plugins_iter().next().expect("reject filter");
         assert_eq!(first.name(), "RejectInvalidConfig");
+    }
+
+    #[test]
+    fn canary_plugin_construction() {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::CanaryConfig;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::DynUpstreamTarget;
+        use std::collections::HashMap;
+
+        // Create a minimal valid CanaryConfig (must have at least one profile).
+        let mut profiles = HashMap::new();
+        profiles.insert(
+            "base".to_string(),
+            DynUpstreamTarget {
+                name: "backend1".to_string(),
+                namespace: None,
+            },
+        );
+
+        let config = CanaryConfig {
+            enable: true,
+            active_profile: "base".to_string(),
+            profiles,
+            active_profile_ref: None,
+            on_invalid: Default::default(),
+            debug_header: false,
+        };
+
+        let plugin = EdgionPlugin::Canary(config);
+
+        // Verify request stage returns Ok(Some(...)).
+        let result = PluginRuntime::create_request_filter_from_edgion(&plugin, "default");
+        assert!(
+            matches!(result, CreateResult::Ok(Some(_))),
+            "Canary should construct in request stage"
+        );
+
+        // Verify upstream response stage returns WrongStage.
+        let result_response = PluginRuntime::create_upstream_response_filter_from_edgion(&plugin, "default");
+        assert!(
+            matches!(result_response, CreateResult::WrongStage),
+            "Canary should not apply to upstream response stage"
+        );
+
+        // Verify get_plugin_name works.
+        assert_eq!(PluginRuntime::get_plugin_name(&plugin), "Canary");
     }
 }
 

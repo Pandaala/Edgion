@@ -1,0 +1,10 @@
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: canary-selector
+  namespace: default
+spec:
+  data:
+    type: Selector
+    config:
+      active: stable

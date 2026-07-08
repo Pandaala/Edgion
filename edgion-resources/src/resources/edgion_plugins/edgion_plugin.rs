@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::plugin_configs::{
-    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CorsConfig, CsrfConfig, CtxSetConfig,
+    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
     DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig, ForwardAuthConfig, GlobalAccessControlConfig,
     HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
@@ -102,6 +102,8 @@ pub enum EdgionPlugin {
     ExtProc(ExtProcConfig),
     /// GlobalAccessControl filter (L7 allow-list: IP/CIDR and header/cookie/... composite, OR groups)
     GlobalAccessControl(GlobalAccessControlConfig),
+    /// Canary filter (100% traffic to one named backend, switchable via a Selector EdgionConfigData)
+    Canary(CanaryConfig),
     // TODO: Add more custom Edgion plugins here (no `Edgion` prefix on the variant name)
     // CircuitBreaker(CircuitBreakerConfig),
     // Waf(WafConfig),
@@ -151,6 +153,7 @@ impl EdgionPlugin {
             EdgionPlugin::TraceContext(_) => "TraceContext",
             EdgionPlugin::ExtProc(_) => "ExtProc",
             EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
+            EdgionPlugin::Canary(_) => "Canary",
         }
     }
 
@@ -193,6 +196,7 @@ impl EdgionPlugin {
             EdgionPlugin::TraceContext(c) => c.validation_error(),
             EdgionPlugin::ExtProc(c) => c.validation_error(),
             EdgionPlugin::GlobalAccessControl(c) => c.validation_error(),
+            EdgionPlugin::Canary(c) => c.validation_error(),
             // Gateway API filter variants (foreign types): no PluginValidation impl.
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::ResponseHeaderModifier(_)
@@ -244,6 +248,50 @@ mod global_access_control_variant_tests {
             ip_source: crate::resources::edgion_plugins::plugin_configs::IpSource::RemoteAddr,
         };
         let p = EdgionPlugin::GlobalAccessControl(cfg);
+        assert!(p.validation_error().unwrap().contains("activeProfile"));
+    }
+}
+
+#[cfg(test)]
+mod canary_variant_tests {
+    use super::*;
+    use crate::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+    use std::collections::HashMap;
+
+    fn target(name: &str) -> DynUpstreamTarget {
+        DynUpstreamTarget {
+            name: name.to_string(),
+            namespace: None,
+        }
+    }
+
+    #[test]
+    fn type_name_and_tag_roundtrip() {
+        let json = serde_json::json!({
+            "type": "Canary",
+            "config": {
+                "enable": true,
+                "activeProfile": "stable",
+                "profiles": { "stable": { "name": "app-v1" } }
+            }
+        });
+        let p: EdgionPlugin = serde_json::from_value(json).unwrap();
+        assert_eq!(p.type_name(), "Canary");
+        assert!(matches!(p, EdgionPlugin::Canary(_)));
+        assert!(p.validation_error().is_none());
+    }
+
+    #[test]
+    fn validation_error_surfaces_bad_active_profile() {
+        let cfg = CanaryConfig {
+            enable: true,
+            active_profile: "ghost".to_string(),
+            profiles: HashMap::from([("stable".to_string(), target("app-v1"))]),
+            active_profile_ref: None,
+            on_invalid: Default::default(),
+            debug_header: false,
+        };
+        let p = EdgionPlugin::Canary(cfg);
         assert!(p.validation_error().unwrap().contains("activeProfile"));
     }
 }

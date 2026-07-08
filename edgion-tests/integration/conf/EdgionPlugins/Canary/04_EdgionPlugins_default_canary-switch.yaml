@@ -1,0 +1,22 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-switch
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      config:
+        enable: true
+        activeProfile: stable
+        profiles:
+          stable:
+            name: canary-app-v1
+          canary:
+            name: canary-app-v2
+        activeProfileRef:
+          name: canary-selector
+          namespace: default
+        onInvalid: reject
+        debugHeader: true

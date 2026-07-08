@@ -139,6 +139,7 @@ curl https://api.example.com/api                          # weighted selection
 > **Choosing a canary strategy**
 > - **Deterministic, sticky** (same user always sees the same version): use this plugin with a `cookie` / `header` source — the example above.
 > - **Percentage-based gradual rollout** (e.g. shift 5% → 25% → 100%): use `backendRefs` `weight` on the route, or a plugin `conditions.run` `probability` matcher. See [Backend Weight](../../backends/weight.md).
+> - **Full cutover, remotely switchable** (100% of traffic to one backend, flip it without redeploying): use the [Canary plugin](./canary.md) with an `activeProfileRef` Selector.
 
 ---
 

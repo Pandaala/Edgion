@@ -169,6 +169,7 @@ spec:
                           - TraceContext
                           - ExtProc
                           - GlobalAccessControl
+                          - Canary
                       config:
                         type: object
                         description: "Plugin-specific configuration"

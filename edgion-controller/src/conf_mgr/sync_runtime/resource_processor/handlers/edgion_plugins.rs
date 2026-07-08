@@ -122,6 +122,29 @@ impl EdgionPluginsHandler {
             .collect()
     }
 
+    /// Collect "namespace/name" keys for every `Canary` plugin's
+    /// `active_profile_ref` in `request_plugins`. Namespace defaults to the
+    /// EP namespace. Mirrors `get_active_profile_ref_keys` for the Canary ref site.
+    fn get_canary_active_profile_ref_keys(ep: &EdgionPlugins) -> Vec<String> {
+        let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+        let Some(plugins) = &ep.spec.request_plugins else {
+            return vec![];
+        };
+        plugins
+            .iter()
+            .filter_map(|e| {
+                if let EdgionPlugin::Canary(ref config) = e.plugin {
+                    config.active_profile_ref.as_ref().map(|r| {
+                        let ref_ns = r.namespace.as_deref().unwrap_or(ns);
+                        format!("{}/{}", ref_ns, r.name)
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     /// Set or clear `ref_denied` on every EdgionConfigDataRef in this EdgionPlugins.
     ///
     /// Called in `parse()` after ref registration, before `ProcessResult::Continue`.
@@ -152,6 +175,11 @@ impl EdgionPluginsHandler {
                     }
                 }
                 EdgionPlugin::GlobalAccessControl(config) => {
+                    if let Some(r) = config.active_profile_ref.as_mut() {
+                        mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::Selector, ctx);
+                    }
+                }
+                EdgionPlugin::Canary(config) => {
                     if let Some(r) = config.active_profile_ref.as_mut() {
                         mark_one_ref(r, &from_ns, "EdgionPlugins", ExpectedEntry::Selector, ctx);
                     }
@@ -267,6 +295,13 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             ctx.runtime().edgion_config_data_refs.add_ref(gac_key, ep_key.clone());
         }
 
+        // Register requeue watcher: EP → EdgionConfigData(Canary activeProfileRef).
+        for canary_key in Self::get_canary_active_profile_ref_keys(&ep) {
+            ctx.runtime()
+                .edgion_config_data_refs
+                .add_ref(canary_key, ep_key.clone());
+        }
+
         // Grant-change revalidation: register cross-ns EdgionConfigData ref target namespaces
         // into the namespace-keyed cross_ns_ref_mgr (mirrors http_route::record_cross_ns_refs).
         // When a ReferenceGrant in a target namespace changes, the CrossNsRevalidationListener
@@ -277,6 +312,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             .into_iter()
             .chain(Self::get_ip_list_ref_keys(&ep))
             .chain(Self::get_active_profile_ref_keys(&ep))
+            .chain(Self::get_canary_active_profile_ref_keys(&ep))
         {
             if let Some((target_ns, _)) = key.split_once('/') {
                 if target_ns != ns {
@@ -335,6 +371,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         resolved_errors.extend(resolve_override_refs(ep, ctx));
         resolved_errors.extend(resolve_ip_list_refs(ep, ctx));
         resolved_errors.extend(resolve_active_profile_refs(ep, ctx));
+        resolved_errors.extend(resolve_canary_active_profile_refs(ep, ctx));
         let resolved_refs = if resolved_errors.is_empty() {
             condition_true(
                 condition_types::RESOLVED_REFS,
@@ -513,6 +550,46 @@ pub fn resolve_active_profile_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> 
     let mut errors = Vec::new();
     for entry in plugins {
         if let EdgionPlugin::GlobalAccessControl(ref config) = entry.plugin {
+            if let Some(ref r) = config.active_profile_ref {
+                let rns = r.namespace.as_deref().unwrap_or(ns);
+                if r.ref_denied.is_some() {
+                    errors.push(ResolvedRefsError::RefNotPermitted {
+                        from_namespace: ns.to_string(),
+                        from_kind: "EdgionPlugins",
+                        target_namespace: rns.to_string(),
+                        target_name: r.name.clone(),
+                    });
+                } else {
+                    let target = ctx.runtime().edgion_config_data_store.get(Some(rns), &r.name);
+                    let resolved = target
+                        .as_ref()
+                        .is_some_and(|t| t.spec.enable && matches!(&t.spec.data, ConfigEntry::Selector(_)));
+                    if !resolved {
+                        errors.push(ResolvedRefsError::EdgionConfigDataNotFound {
+                            namespace: rns.to_string(),
+                            name: r.name.clone(),
+                            expected_type: "Selector".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    errors
+}
+
+/// Check each `Canary` plugin's `active_profile_ref` against the EdgionConfigData
+/// store. Returns one `RefNotPermitted` error when `ref_denied` is set (cross-namespace
+/// denial), or one `EdgionConfigDataNotFound { expected_type: "Selector" }` per missing
+/// or wrong-type reference. Mirrors `resolve_active_profile_refs` (GlobalAccessControl).
+pub fn resolve_canary_active_profile_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let ns = ep.metadata.namespace.as_deref().unwrap_or("default");
+    let Some(plugins) = &ep.spec.request_plugins else {
+        return vec![];
+    };
+    let mut errors = Vec::new();
+    for entry in plugins {
+        if let EdgionPlugin::Canary(ref config) = entry.plugin {
             if let Some(ref r) = config.active_profile_ref {
                 let rns = r.namespace.as_deref().unwrap_or(ns);
                 if r.ref_denied.is_some() {
@@ -1164,6 +1241,267 @@ mod tests {
         }
     }
 
+    // ── Canary + activeProfileRef resolution tests ──────────────────────────
+
+    #[tokio::test]
+    async fn test_resolve_canary_active_profile_refs_ok() {
+        // Selector EdgionConfigData exists → resolve_canary_active_profile_refs returns no error.
+        use edgion_resources::resources::edgion_config_data::Selector;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+
+        let selector_ed = build_edgion_config_data(
+            "default",
+            "canary-selector",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                data: ConfigEntry::Selector(Selector {
+                    active: Some("canary".to_string()),
+                    description: None,
+                }),
+            },
+        );
+
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ed_map = HashMap::new();
+        ed_map.insert("default/canary-selector".to_string(), selector_ed);
+        runtime.edgion_config_data_store.replace_all(ed_map);
+
+        let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::Canary(CanaryConfig {
+            enable: true,
+            active_profile: "stable".to_string(),
+            profiles: HashMap::from([
+                (
+                    "stable".to_string(),
+                    DynUpstreamTarget {
+                        name: "app-v1".to_string(),
+                        namespace: None,
+                    },
+                ),
+                (
+                    "canary".to_string(),
+                    DynUpstreamTarget {
+                        name: "app-v2".to_string(),
+                        namespace: None,
+                    },
+                ),
+            ]),
+            active_profile_ref: Some(EdgionConfigDataRef {
+                name: "canary-selector".to_string(),
+                namespace: None,
+                ..Default::default()
+            }),
+            on_invalid: Default::default(),
+            debug_header: false,
+        }))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let ref_errors = super::resolve_canary_active_profile_refs(&parsed, &ctx);
+        assert!(ref_errors.is_empty(), "expected no ref errors, got: {:?}", ref_errors);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_canary_active_profile_refs_missing() {
+        // Empty EdgionConfigData store → resolve_canary_active_profile_refs reports the missing reference.
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::Canary(CanaryConfig {
+            enable: true,
+            active_profile: "stable".to_string(),
+            profiles: HashMap::from([(
+                "stable".to_string(),
+                DynUpstreamTarget {
+                    name: "app-v1".to_string(),
+                    namespace: None,
+                },
+            )]),
+            active_profile_ref: Some(EdgionConfigDataRef {
+                name: "canary-selector-absent".to_string(),
+                namespace: None,
+                ..Default::default()
+            }),
+            on_invalid: Default::default(),
+            debug_header: false,
+        }))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let ref_errors = super::resolve_canary_active_profile_refs(&parsed, &ctx);
+        assert_eq!(ref_errors.len(), 1, "expected one EdgionConfigDataNotFound error");
+        match &ref_errors[0] {
+            crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::
+                EdgionConfigDataNotFound { namespace, name, expected_type } => {
+                assert_eq!(namespace, "default");
+                assert_eq!(name, "canary-selector-absent");
+                assert_eq!(expected_type, "Selector");
+            }
+            other => panic!("expected EdgionConfigDataNotFound, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_canary_active_profile_refs_type_mismatch() {
+        // EdgionConfigData exists but has wrong type → resolve_canary_active_profile_refs reports error.
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+
+        let wrong_type_ed = build_edgion_config_data(
+            "default",
+            "canary-selector-wrong-type",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                data: ConfigEntry::KeyList(edgion_resources::resources::edgion_config_data::KeyListData {
+                    match_mode: edgion_resources::resources::edgion_config_data::KeyMatchMode::default(),
+                    items: vec![],
+                }),
+            },
+        );
+
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ed_map = HashMap::new();
+        ed_map.insert("default/canary-selector-wrong-type".to_string(), wrong_type_ed);
+        runtime.edgion_config_data_store.replace_all(ed_map);
+
+        let mut ep = EdgionPlugins::new("test-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::Canary(CanaryConfig {
+            enable: true,
+            active_profile: "stable".to_string(),
+            profiles: HashMap::from([(
+                "stable".to_string(),
+                DynUpstreamTarget {
+                    name: "app-v1".to_string(),
+                    namespace: None,
+                },
+            )]),
+            active_profile_ref: Some(EdgionConfigDataRef {
+                name: "canary-selector-wrong-type".to_string(),
+                namespace: None,
+                ..Default::default()
+            }),
+            on_invalid: Default::default(),
+            debug_header: false,
+        }))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let parsed = match handler.parse(ep, &ctx).await {
+            ProcessResult::Continue(v) => v,
+            ProcessResult::Skip { reason } => panic!("unexpected skip: {}", reason),
+        };
+
+        let ref_errors = super::resolve_canary_active_profile_refs(&parsed, &ctx);
+        assert_eq!(
+            ref_errors.len(),
+            1,
+            "expected one EdgionConfigDataNotFound for type mismatch"
+        );
+        match &ref_errors[0] {
+            crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError::
+                EdgionConfigDataNotFound { expected_type, .. } => {
+                assert_eq!(expected_type, "Selector");
+            }
+            other => panic!("expected EdgionConfigDataNotFound, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn cross_ns_canary_ref_registered_for_grant_revalidation() {
+        // Verify the Canary active_profile_ref cross-ns gap is closed the same way as GAC's
+        // (Task 6, Step 3): both the same-resource requeue loop and the cross_mgr loop in
+        // parse() must register the ref, otherwise a ReferenceGrant change in the target
+        // namespace would silently fail to requeue this EdgionPlugins.
+        use edgion_resources::resources::edgion_config_data::Selector;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+        use edgion_resources::ResourceKind;
+
+        let selector_ed = build_edgion_config_data(
+            "shared-ns",
+            "canary-selector",
+            EdgionConfigDataSpec {
+                enable: true,
+                active: None,
+                visibility: Default::default(),
+                data: ConfigEntry::Selector(Selector {
+                    active: Some("canary".to_string()),
+                    description: None,
+                }),
+            },
+        );
+        let (ctx, runtime) = make_ctx_with_secrets(HashMap::new());
+        let mut ed_map = HashMap::new();
+        ed_map.insert("shared-ns/canary-selector".to_string(), selector_ed);
+        runtime.edgion_config_data_store.replace_all(ed_map);
+
+        let cfg = CanaryConfig {
+            enable: true,
+            active_profile: "stable".to_string(),
+            profiles: HashMap::from([
+                (
+                    "stable".to_string(),
+                    DynUpstreamTarget {
+                        name: "app-v1".to_string(),
+                        namespace: None,
+                    },
+                ),
+                (
+                    "canary".to_string(),
+                    DynUpstreamTarget {
+                        name: "app-v2".to_string(),
+                        namespace: None,
+                    },
+                ),
+            ]),
+            active_profile_ref: Some(EdgionConfigDataRef {
+                name: "canary-selector".to_string(),
+                namespace: Some("shared-ns".to_string()),
+                ..Default::default()
+            }),
+            on_invalid: Default::default(),
+            debug_header: false,
+        };
+
+        let mut ep = EdgionPlugins::new("canary-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("team-a".to_string());
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::Canary(cfg))]);
+
+        let handler = EdgionPluginsHandler::new();
+        let _ = handler.parse(ep, &ctx).await;
+
+        // cross_ns_ref_mgr must contain this EP under "shared-ns" (the cross_mgr chain hookup).
+        let refs = runtime.cross_ns_ref_mgr.get_refs("shared-ns");
+        assert!(
+            refs.iter().any(|rr| rr.kind == ResourceKind::EdgionPlugins),
+            "Canary active_profile_ref cross-ns must register EP in cross_ns_ref_mgr; got: {:?}",
+            refs
+        );
+
+        // edgion_config_data_refs must also track Canary (the same-resource requeue loop hookup).
+        let ep_key = "EdgionPlugins:team-a/canary-ep";
+        let cd_refs = runtime.edgion_config_data_refs.get_refs("shared-ns/canary-selector");
+        assert!(
+            cd_refs.contains(&ep_key.to_string()),
+            "Canary active_profile_ref must be registered in edgion_config_data_refs; got: {:?}",
+            cd_refs
+        );
+    }
+
     // ── IpRestriction + allowRefs/denyRefs resolution tests ─────────────────
 
     #[tokio::test]
@@ -1671,13 +2009,14 @@ mod tests {
     #[test]
     fn ep_ref_bearing_variants_are_classified() {
         // Exhaustive match: a new ref-bearing variant forces an update here.
-        // Only RegionRoute, IpRestriction, and GlobalAccessControl carry
+        // Only RegionRoute, IpRestriction, GlobalAccessControl, and Canary carry
         // EdgionConfigData refs; everything else must map to false.
         fn carries_config_data_ref(p: &EdgionPlugin) -> bool {
             match p {
                 EdgionPlugin::RegionRoute(_)
                 | EdgionPlugin::IpRestriction(_)
-                | EdgionPlugin::GlobalAccessControl(_) => true,
+                | EdgionPlugin::GlobalAccessControl(_)
+                | EdgionPlugin::Canary(_) => true,
                 EdgionPlugin::RequestHeaderModifier(_)
                 | EdgionPlugin::ResponseHeaderModifier(_)
                 | EdgionPlugin::RequestRedirect(_)

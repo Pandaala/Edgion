@@ -2,6 +2,7 @@
 
 pub mod basic_auth_dynamic;
 pub mod btlsp_ref_flap;
+pub mod canary_hot_swap;
 pub mod dns_resolution_flap;
 pub mod dsl_dynamic;
 pub mod edgion_config_data_ref_flap;

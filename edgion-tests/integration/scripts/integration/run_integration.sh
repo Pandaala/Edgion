@@ -1094,6 +1094,7 @@ run_all_tests() {
                     run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
                     run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
                     run_test "EdgionPlugins_GlobalAccessControl" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i GlobalAccessControl" || test_failed=true
+                    run_test "EdgionPlugins_Canary" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Canary" || test_failed=true
                     run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
                     run_test "EdgionPlugins_IpRestrictionPartialGood" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestrictionPartialGood" || test_failed=true
                     run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true
@@ -1286,6 +1287,7 @@ run_all_tests() {
         run_test "EdgionPlugins_ResponseRewrite" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i ResponseRewrite" || test_failed=true
         run_test "EdgionPlugins_RequestRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i RequestRestriction" || test_failed=true
         run_test "EdgionPlugins_GlobalAccessControl" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i GlobalAccessControl" || test_failed=true
+        run_test "EdgionPlugins_Canary" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i Canary" || test_failed=true
         run_test "EdgionPlugins_IpRestriction" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestriction" || test_failed=true
         run_test "EdgionPlugins_IpRestrictionPartialGood" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i IpRestrictionPartialGood" || test_failed=true
         run_test "EdgionPlugins_PathNormalization" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionPlugins -i PathNormalization" || test_failed=true

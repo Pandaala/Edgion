@@ -139,6 +139,7 @@ curl https://api.example.com/api                          # 加权选择
 > **如何选择金丝雀策略**
 > - **确定性、粘性**（同一用户始终看到同一版本）：用本插件配 `cookie` / `header` 来源，即上面的示例。
 > - **按百分比逐步放量**（如 5% → 25% → 100%）：用路由的 `backendRefs` `weight`，或插件 `conditions.run` 的 `probability` 匹配器。参见 [后端权重](../../backends/weight.md)。
+> - **全量切换、可远程切换**（100% 流量发往同一个后端，无需重新部署即可翻转）：使用带 `activeProfileRef` Selector 的 [Canary 插件](./canary.md)。
 
 ---
 

@@ -98,6 +98,8 @@ backendRefs:
     weight: 100
 ```
 
+> **想要无需重新部署即可远程切换？** 上面的权重修改仍需修改并重新应用路由。如果希望在运行时（例如通过 `kubectl apply` 一个小的配置对象，而不是路由本身）翻转全量切换，可改用带 `activeProfileRef` Selector 的 [Canary 插件](../filters/edgion-plugins/canary.md)。
+
 ### 示例 3：A/B 测试
 
 ```yaml

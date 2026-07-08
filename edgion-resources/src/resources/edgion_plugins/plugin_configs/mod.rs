@@ -1,6 +1,7 @@
 pub mod all_endpoint_status;
 mod bandwidth_limit;
 mod basic_auth;
+mod canary;
 mod cors;
 mod csrf;
 mod ctx_set;
@@ -37,6 +38,7 @@ mod trace_context;
 pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use bandwidth_limit::BandwidthLimitConfig;
 pub use basic_auth::{BasicAuthConfig, BasicAuthSecretGroup, ResolvedBasicAuthUser};
+pub use canary::CanaryConfig;
 pub use cors::CorsConfig;
 pub use csrf::CsrfConfig;
 pub use ctx_set::{

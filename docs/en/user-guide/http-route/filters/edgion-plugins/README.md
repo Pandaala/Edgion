@@ -8,6 +8,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 |----------|-------------|
 | [bandwidth-limit.md](bandwidth-limit.md) | Bandwidth throttling |
 | [basic-auth.md](basic-auth.md) | HTTP Basic authentication |
+| [canary.md](canary.md) | Full-cutover, remotely switchable traffic canary |
 | [cors.md](cors.md) | Cross-origin resource sharing (CORS) |
 | [csrf.md](csrf.md) | CSRF protection |
 | [ctx-setter.md](ctx-setter.md) | Context variable extraction |

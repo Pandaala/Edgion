@@ -6,6 +6,7 @@
 mod all_endpoint_status;
 mod bandwidth_limit;
 mod basic_auth;
+mod canary;
 mod cors;
 mod csrf;
 mod ctx_set;
@@ -55,6 +56,7 @@ pub use basic_auth::{
     BasicAuthDynamicGroupedInitialTestSuite, BasicAuthDynamicGroupedUpdateTestSuite, BasicAuthDynamicInitialTestSuite,
     BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite,
 };
+pub use canary::{CanaryHotSwapFinalTestSuite, CanaryHotSwapInitialTestSuite, CanaryTestSuite};
 pub use cors::CorsPluginTestSuite;
 pub use csrf::CsrfTestSuite;
 pub use ctx_set::CtxSetTestSuite;
