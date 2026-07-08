@@ -5,4 +5,4 @@
 //! so the schema layer carries no engine dependency.
 //! The compiled DSL VM (`DslPlugin`) remains in this gateway module.
 
-pub use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::{DslConfig, DslErrorPolicy};
+pub use edgion_resources::resources::edgion_plugins::plugin_configs::dsl::DslConfig;

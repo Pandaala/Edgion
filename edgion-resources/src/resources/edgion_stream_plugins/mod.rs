@@ -31,12 +31,6 @@ pub use tls_route_plugins::TlsRouteStreamPlugin;
 // Re-export plugin configs
 pub use crate::resources::edgion_plugins::DefaultAction;
 
-/// API group for EdgionStreamPlugins
-pub const EDGION_STREAM_PLUGINS_GROUP: &str = "edgion.io";
-
-/// Kind for EdgionStreamPlugins
-pub const EDGION_STREAM_PLUGINS_KIND: &str = "EdgionStreamPlugins";
-
 /// EdgionStreamPlugins defines reusable plugin configurations for stream protocols
 #[derive(CustomResource, Serialize, Deserialize, Debug, Clone, JsonSchema)]
 #[kube(
@@ -140,19 +134,5 @@ impl EdgionStreamPlugins {
     /// Get the total number of plugins
     pub fn plugin_count(&self) -> usize {
         self.spec.plugins.as_ref().map_or(0, |p| p.len())
-    }
-
-    /// Get plugin entries as a slice
-    pub fn plugin_entries(&self) -> &[StreamPluginEntry] {
-        self.spec.plugins.as_deref().unwrap_or(&[])
-    }
-
-    /// Get only enabled plugins
-    pub fn enabled_plugins(&self) -> Vec<&EdgionStreamPlugin> {
-        self.spec
-            .plugins
-            .as_ref()
-            .map(|entries| entries.iter().filter(|e| e.is_enabled()).map(|e| &e.plugin).collect())
-            .unwrap_or_default()
     }
 }

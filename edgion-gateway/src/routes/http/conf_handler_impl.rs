@@ -798,8 +798,8 @@ mod tests {
             "policy must be visible in store after full_set returns"
         );
 
-        policy_store.delete_lb_policies_by_resource_key(route_key);
-        policy_store.delete_lb_policies_by_resource_key(stale_key);
+        policy_store.remove_by_route(route_key);
+        policy_store.remove_by_route(stale_key);
     }
 
     #[test]
@@ -850,7 +850,7 @@ mod tests {
             "union semantics: prior policy retained"
         );
 
-        policy_store.delete_lb_policies_by_resource_key(route_key);
+        policy_store.remove_by_route(route_key);
     }
 
     #[test]
@@ -897,7 +897,7 @@ mod tests {
             "policies untouched when route content changes but policy doesn't"
         );
 
-        policy_store.delete_lb_policies_by_resource_key(route_key);
+        policy_store.remove_by_route(route_key);
     }
 
     #[test]
@@ -977,8 +977,8 @@ mod tests {
         );
         assert!(policy_store.get(svc_c).contains(&LbPolicy::LeastConnection));
 
-        policy_store.delete_lb_policies_by_resource_key(route_a);
-        policy_store.delete_lb_policies_by_resource_key(route_c);
+        policy_store.remove_by_route(route_a);
+        policy_store.remove_by_route(route_c);
     }
 
     #[test]
@@ -1003,7 +1003,7 @@ mod tests {
             "route_cache must store the same Arc (zero-copy), not a deep clone"
         );
 
-        crate::lb::lb_policy::get_global_policy_store().delete_lb_policies_by_resource_key(route_key);
+        crate::lb::lb_policy::get_global_policy_store().remove_by_route(route_key);
     }
 
     #[test]
@@ -1038,6 +1038,6 @@ mod tests {
             "unit.route must share the cache Arc (zero-copy)"
         );
 
-        crate::lb::lb_policy::get_global_policy_store().delete_lb_policies_by_resource_key(route_key);
+        crate::lb::lb_policy::get_global_policy_store().remove_by_route(route_key);
     }
 }

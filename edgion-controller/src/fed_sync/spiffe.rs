@@ -94,39 +94,6 @@ pub fn parse_controller_spiffe(uri: &str) -> Option<ControllerSpiffe> {
     })
 }
 
-/// Center-side exact match: host == trust_domain (case-insensitive),
-/// cluster == request cluster (case-sensitive), and
-/// `controller_id == "{cluster}/{name}"` (case-sensitive).
-pub fn check_match(
-    parsed: &ControllerSpiffe,
-    trust_domain: &str,
-    req_cluster: &str,
-    req_controller_id: &str,
-) -> Result<(), PeerIdentityError> {
-    if !parsed.host.eq_ignore_ascii_case(trust_domain) {
-        return Err(PeerIdentityError::Mismatch);
-    }
-    if parsed.cluster != req_cluster {
-        return Err(PeerIdentityError::Mismatch);
-    }
-    if format!("{}/{}", parsed.cluster, parsed.name) != req_controller_id {
-        return Err(PeerIdentityError::Mismatch);
-    }
-    Ok(())
-}
-
-/// Full Center verify: extract -> parse -> match. Single entry point for `sync()`.
-pub fn verify(
-    leaf_der: &[u8],
-    trust_domain: &str,
-    req_cluster: &str,
-    req_controller_id: &str,
-) -> Result<(), PeerIdentityError> {
-    let uri = extract_single_spiffe_uri(leaf_der)?;
-    let parsed = parse_controller_spiffe(&uri).ok_or(PeerIdentityError::Mismatch)?;
-    check_match(&parsed, trust_domain, req_cluster, req_controller_id)
-}
-
 /// Controller-side path-only check (trust_domain verified by Center).
 pub fn path_matches(parsed: &ControllerSpiffe, cluster: &str, name: &str) -> bool {
     parsed.cluster == cluster && parsed.name == name
@@ -199,21 +166,6 @@ mod tests {
     }
 
     #[test]
-    fn real_cert_verify_full_match_ok() {
-        let der = cert_der_with_sans(&["spiffe://edgion.io/controllers/prod/ctrl-1"], &[]);
-        assert_eq!(verify(&der, "edgion.io", "prod", "prod/ctrl-1"), Ok(()));
-    }
-
-    #[test]
-    fn real_cert_verify_wrong_controller_id_rejected() {
-        let der = cert_der_with_sans(&["spiffe://edgion.io/controllers/attacker/x"], &[]);
-        assert_eq!(
-            verify(&der, "edgion.io", "prod", "prod/ctrl-1"),
-            Err(PeerIdentityError::Mismatch)
-        );
-    }
-
-    #[test]
     fn real_cert_garbage_der_parse_error() {
         let garbage = vec![0x30, 0x03, 0x01, 0x02, 0x03];
         assert_eq!(extract_single_spiffe_uri(&garbage), Err(PeerIdentityError::ParseError));
@@ -255,65 +207,6 @@ mod tests {
     fn parse_does_not_decode_percent() {
         let p = parse_controller_spiffe("spiffe://edgion.io/controllers/prod/ctrl%2F1").unwrap();
         assert_eq!(p.name, "ctrl%2F1");
-    }
-
-    #[test]
-    fn match_fields_ok() {
-        let p = ControllerSpiffe {
-            host: "edgion.io".into(),
-            cluster: "prod".into(),
-            name: "ctrl-1".into(),
-        };
-        assert_eq!(check_match(&p, "edgion.io", "prod", "prod/ctrl-1"), Ok(()));
-    }
-
-    #[test]
-    fn match_rejects_trust_domain_trailing_dot() {
-        let p = ControllerSpiffe {
-            host: "edgion.io.".into(),
-            cluster: "prod".into(),
-            name: "ctrl-1".into(),
-        };
-        assert_eq!(
-            check_match(&p, "edgion.io", "prod", "prod/ctrl-1"),
-            Err(PeerIdentityError::Mismatch)
-        );
-    }
-
-    #[test]
-    fn match_trust_domain_case_insensitive() {
-        let p = ControllerSpiffe {
-            host: "Edgion.IO".into(),
-            cluster: "prod".into(),
-            name: "ctrl-1".into(),
-        };
-        assert_eq!(check_match(&p, "edgion.io", "prod", "prod/ctrl-1"), Ok(()));
-    }
-
-    #[test]
-    fn match_rejects_cluster_mismatch() {
-        let p = ControllerSpiffe {
-            host: "edgion.io".into(),
-            cluster: "staging".into(),
-            name: "ctrl-1".into(),
-        };
-        assert_eq!(
-            check_match(&p, "edgion.io", "staging", "prod/ctrl-1"),
-            Err(PeerIdentityError::Mismatch)
-        );
-    }
-
-    #[test]
-    fn match_rejects_empty_cluster_request() {
-        let p = ControllerSpiffe {
-            host: "edgion.io".into(),
-            cluster: "prod".into(),
-            name: "ctrl-1".into(),
-        };
-        assert_eq!(
-            check_match(&p, "edgion.io", "", "/ctrl-1"),
-            Err(PeerIdentityError::Mismatch)
-        );
     }
 
     #[test]

@@ -107,22 +107,7 @@ impl<T> RadixHost<T> {
         host.split('.').rev().collect::<Vec<_>>().join(".")
     }
 
-    /// Check if a pre-normalized (lowercased) hostname matches this pattern.
-    ///
-    /// The caller MUST pass a hostname that is already lowercased.
-    /// Normalization happens once in `build_request_metadata()`.
-    ///
-    /// # Arguments
-    /// * `request_host` - Pre-normalized lowercase hostname
-    ///
-    /// # Returns
-    /// `true` if the hostname matches this pattern
-    pub fn matches(&self, request_host: &str) -> bool {
-        let reversed_request = Self::reverse_hostname(request_host);
-        self.matches_reversed(&reversed_request)
-    }
-
-    /// Like `matches()`, but accepts a hostname already reversed by `reverse_hostname()`.
+    /// Check if a hostname, already reversed by `reverse_hostname()`, matches this pattern.
     /// Use this when the caller has already reversed the hostname to avoid a second allocation.
     pub fn matches_reversed(&self, reversed_request: &str) -> bool {
         if self.is_wildcard {

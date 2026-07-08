@@ -19,11 +19,6 @@ pub struct EventStore<T> {
 }
 
 impl<T> EventStore<T> {
-    /// Set current sync version
-    pub fn set_current_sync_version(&mut self, version: u64) {
-        self.sync_version = version;
-    }
-
     // init add do not apply any events
     pub fn init_add(&mut self, sync_version: u64, resource: T)
     where
@@ -34,10 +29,6 @@ impl<T> EventStore<T> {
         if sync_version > self.sync_version {
             self.sync_version = sync_version;
         }
-    }
-
-    pub fn get_last_sync_version(&self) -> u64 {
-        self.sync_version
     }
 
     /// Clear all data and reset to initial state

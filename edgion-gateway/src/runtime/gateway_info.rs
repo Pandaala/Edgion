@@ -76,12 +76,6 @@ impl GatewayInfo {
         }
     }
 
-    /// Get namespace as &str, returns empty string if None
-    #[inline]
-    pub fn namespace_str(&self) -> &str {
-        self.namespace.as_deref().unwrap_or("")
-    }
-
     /// Build Gateway Key: "{namespace}/{name}" or just "{name}" if no namespace
     pub fn gateway_key(&self) -> String {
         match &self.namespace {

@@ -243,34 +243,6 @@ impl PolicyStore {
         }
     }
 
-    /// Delete all policy references for a specific resource key (HTTPRoute)
-    ///
-    /// This is an alias for `remove_by_route` with a more explicit name.
-    /// Cleans up entries where this was the last route reference.
-    ///
-    /// # Arguments
-    /// * `resource_key` - The HTTPRoute resource key to delete (format: "namespace/route-name")
-    ///
-    /// # Example
-    /// ```
-    /// use edgion::core::gateway::lb::lb_policy::get_global_policy_store;
-    ///
-    /// let store = get_global_policy_store();
-    /// store.delete_lb_policies_by_resource_key("default/my-route");
-    /// ```
-    pub fn delete_lb_policies_by_resource_key(&self, resource_key: &str) {
-        self.remove_by_route(resource_key);
-        tracing::info!(
-            resource_key = %resource_key,
-            "Deleted LB policies by resource key"
-        );
-    }
-
-    /// Get all configured services
-    pub fn all_services(&self) -> Vec<String> {
-        self.policies.iter().map(|entry| entry.key().clone()).collect()
-    }
-
     /// Get statistics about the policy store
     pub fn stats(&self) -> PolicyStoreStats {
         let total_services = self.policies.len();
@@ -284,12 +256,6 @@ impl PolicyStore {
             total_services,
             total_route_refs,
         }
-    }
-
-    /// Clear all policies
-    pub fn clear(&self) {
-        self.policies.clear();
-        tracing::info!("Cleared all LB policies");
     }
 }
 

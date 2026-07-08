@@ -15,14 +15,18 @@ pub fn count_edgion_gateway_configs() -> usize {
     EDGION_GATEWAY_CONFIG_STORE.read().len()
 }
 
-/// Query EdgionGatewayConfig by name (cluster-scoped: key == name)
-#[allow(dead_code)]
+/// Query EdgionGatewayConfig by name (cluster-scoped: key == name).
+/// Test-only: production reads go through `ConfigClient::get_edgion_gateway_config`
+/// against the conf_sync ClientCache, not this store.
+#[cfg(test)]
 pub fn get_edgion_gateway_config_by_name(name: &str) -> Option<EdgionGatewayConfig> {
     EDGION_GATEWAY_CONFIG_STORE.read().get(name).cloned()
 }
 
-/// List all EdgionGatewayConfig resources
-#[allow(dead_code)]
+/// List all EdgionGatewayConfig resources.
+/// Test-only: production reads go through `ConfigClient::list_edgion_gateway_configs`
+/// against the conf_sync ClientCache, not this store.
+#[cfg(test)]
 pub fn list_edgion_gateway_configs() -> Vec<EdgionGatewayConfig> {
     let mut items: Vec<EdgionGatewayConfig> = EDGION_GATEWAY_CONFIG_STORE.read().values().cloned().collect();
     items.sort_by(|a, b| a.name_any().cmp(&b.name_any()));

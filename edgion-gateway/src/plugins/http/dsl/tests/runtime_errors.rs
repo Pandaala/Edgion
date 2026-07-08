@@ -84,18 +84,6 @@ fn test_stack_overflow() {
     assert!(matches!(err, RuntimeError::StackOverflow { limit: 1 }));
 }
 
-// ── UndefinedLocal ───────────────────────────────────────────────────────────
-
-#[test]
-fn test_undefined_local_variant() {
-    // The current VM emits Nil (not UndefinedLocal) for any GetLocal on an
-    // uninitialized slot — UndefinedLocal is not reachable via compiled bytecode.
-    // This test verifies the variant is correctly defined and can be matched,
-    // acting as a compile-time regression guard for the enum shape.
-    let err = RuntimeError::UndefinedLocal { slot: 42 };
-    assert!(matches!(err, RuntimeError::UndefinedLocal { slot } if slot == 42));
-}
-
 // ── ApiError ─────────────────────────────────────────────────────────────────
 
 #[test]

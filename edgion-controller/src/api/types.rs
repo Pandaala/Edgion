@@ -398,16 +398,6 @@ impl<T> ListResponse<T> {
             error: None,
         }
     }
-
-    pub fn error(message: String) -> Self {
-        Self {
-            success: false,
-            data: None,
-            count: 0,
-            continue_token: None,
-            error: Some(message),
-        }
-    }
 }
 
 #[cfg(test)]

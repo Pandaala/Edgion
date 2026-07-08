@@ -66,10 +66,6 @@ pub async fn init_tcp_logger(config: &edgion_resources::LogConfig) -> Result<()>
     Ok(())
 }
 
-pub fn get_tcp_logger() -> Option<&'static Arc<AccessLogger>> {
-    TCP_LOGGER.get()
-}
-
 pub async fn log_tcp(entry: &TcpLogEntry) {
     if let Some(logger) = TCP_LOGGER.get() {
         let _ = logger.send(entry.to_json()).await;

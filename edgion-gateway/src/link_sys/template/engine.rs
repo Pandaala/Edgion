@@ -33,7 +33,7 @@ pub fn evaluate_template(compiled: &CompiledTemplate, session: &dyn PluginSessio
 ///
 /// Returns the resolved value, or an empty string when the named source is
 /// absent from the session.
-pub fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: &dyn PluginSession) -> String {
+pub(crate) fn resolve_var(var_type: &TemplateVarType, var_name: Option<&str>, session: &dyn PluginSession) -> String {
     match var_type {
         TemplateVarType::Header => var_name.and_then(|n| session.header_value(n)).unwrap_or_default(),
         TemplateVarType::Query => var_name.and_then(|n| session.get_query_param(n)).unwrap_or_default(),

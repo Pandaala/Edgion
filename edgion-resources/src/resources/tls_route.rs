@@ -10,12 +10,6 @@ use super::common::{ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
 
-/// API group for TLSRoute
-pub const TLS_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for TLSRoute
-pub const TLS_ROUTE_KIND: &str = "TLSRoute";
-
 /// TLSRoute defines TLS rules for mapping requests to backends
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(

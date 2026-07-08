@@ -227,11 +227,6 @@ impl KeyGet {
             _ => None,
         }
     }
-
-    /// Whether this key source requires async resolution (network I/O)
-    pub fn is_remote(&self) -> bool {
-        matches!(self, KeyGet::Webhook { .. })
-    }
 }
 
 // ============================================================================
@@ -297,16 +292,6 @@ impl KeySet {
             KeySet::ResponseHeader { name } => format!("res_hdr:{}", name),
             KeySet::Cookie { name } => format!("cookie:{}", name),
             KeySet::Ctx { name } => format!("ctx:{}", name),
-        }
-    }
-
-    /// Get the target type as a static string
-    pub fn target_type(&self) -> &'static str {
-        match self {
-            KeySet::Header { .. } => "header",
-            KeySet::ResponseHeader { .. } => "responseHeader",
-            KeySet::Cookie { .. } => "cookie",
-            KeySet::Ctx { .. } => "ctx",
         }
     }
 
@@ -424,24 +409,6 @@ mod tests {
             }
             .as_log_str(),
             "ctx:user_id"
-        );
-    }
-
-    #[test]
-    fn test_key_set_target_type() {
-        assert_eq!(
-            KeySet::Header {
-                name: "X-Test".to_string()
-            }
-            .target_type(),
-            "header"
-        );
-        assert_eq!(
-            KeySet::ResponseHeader {
-                name: "X-Test".to_string()
-            }
-            .target_type(),
-            "responseHeader"
         );
     }
 
@@ -651,21 +618,6 @@ extract:
         let json = serde_json::to_string(&key).unwrap();
         let deserialized: KeyGet = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized, key);
-    }
-
-    #[test]
-    fn test_key_get_webhook_is_remote() {
-        assert!(KeyGet::Webhook {
-            webhook_ref: "ns/name".to_string(),
-            path_override: None,
-            extract: WebhookExtract::BodyText,
-        }
-        .is_remote());
-        assert!(!KeyGet::ClientIp.is_remote());
-        assert!(!KeyGet::Header {
-            name: "X-Test".to_string()
-        }
-        .is_remote());
     }
 
     #[test]

@@ -154,12 +154,6 @@ impl PluginStore {
         map.contains_key(key)
     }
 
-    /// Get the compiled plugins by key (namespace/name)
-    pub fn get(&self, key: &str) -> Option<Arc<CompiledPlugins>> {
-        let map = self.plugins.load();
-        map.get(key).cloned()
-    }
-
     /// Execute a function with the compiled plugins reference
     pub fn with_plugin<F, R>(&self, key: &str, f: F) -> Option<R>
     where

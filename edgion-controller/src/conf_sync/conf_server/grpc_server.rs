@@ -122,17 +122,6 @@ impl ConfigSyncGrpcServer {
         Ok(builder)
     }
 
-    pub async fn serve(
-        self,
-        addr: std::net::SocketAddr,
-        security: &ConfSyncSecurityConfig,
-        auto_identity: Option<&crate::services::conf_sync_ca::ServerIdentityPem>,
-    ) -> anyhow::Result<()> {
-        let mut builder = Self::build_server(security, auto_identity).await?;
-        builder.add_service(self.into_service()).serve(addr).await?;
-        Ok(())
-    }
-
     /// Start the gRPC server with graceful shutdown support
     pub async fn serve_with_shutdown(
         self,

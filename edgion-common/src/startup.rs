@@ -1,5 +1,4 @@
 use std::sync::atomic::{AtomicBool, Ordering};
-use tracing_subscriber::EnvFilter;
 
 /// Whether a `tracing` subscriber has been installed. Flipped to `true` by
 /// `mark_tracing_ready()` (called from `init_logging` once the subscriber is
@@ -90,10 +89,4 @@ pub fn install_panic_hook() {
             eprintln!("[panic] thread '{thread}' panicked at {location}: {message}\n{backtrace}");
         }
     }));
-}
-
-pub fn init_default_tracing() {
-    tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("info".parse().unwrap()))
-        .init();
 }

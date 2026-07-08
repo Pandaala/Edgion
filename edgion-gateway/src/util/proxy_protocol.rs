@@ -20,10 +20,6 @@ pub const PP2_AF_INET6_STREAM: u8 = 0x21;
 pub const PP2_TYPE_ALPN: u8 = 0x01;
 /// SNI hostname (HAProxy standard: "server_name" extension / authority)
 pub const PP2_TYPE_AUTHORITY: u8 = 0x02;
-pub const PP2_TYPE_CRC32C: u8 = 0x03;
-pub const PP2_TYPE_NOOP: u8 = 0x04;
-pub const PP2_TYPE_UNIQUE_ID: u8 = 0x05;
-pub const PP2_TYPE_SSL: u8 = 0x20;
 
 /// A single Type-Length-Value entry
 pub struct Tlv {

@@ -214,11 +214,6 @@ impl DynamicInternalUpstreamConfig {
         None
     }
 
-    /// Check if this config uses direct mode (no rules)
-    pub fn is_direct_mode(&self) -> bool {
-        self.rules.is_none()
-    }
-
     /// Resolve routing key to target backend_ref name and optional namespace.
     ///
     /// In direct mode: routing_key is used directly as backend_ref name.

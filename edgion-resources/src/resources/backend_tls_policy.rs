@@ -10,11 +10,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// API group for BackendTLSPolicy
-pub const BACKEND_TLS_POLICY_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for BackendTLSPolicy
-pub const BACKEND_TLS_POLICY_KIND: &str = "BackendTLSPolicy";
 /// Implementation-specific option key for upstream mTLS client certificate Secret reference.
 ///
 /// Value format:
@@ -336,27 +331,6 @@ impl BackendTLSPolicy {
     /// Get the name of this resource
     pub fn name(&self) -> &str {
         self.metadata.name.as_deref().unwrap_or("")
-    }
-
-    /// Check if this policy applies to a given target
-    /// Per Gateway API spec, targetRef can only reference resources in the same namespace as the policy.
-    pub fn applies_to(&self, group: &str, kind: &str, name: &str, namespace: Option<&str>) -> bool {
-        let policy_ns = self.namespace();
-
-        self.spec.target_refs.iter().any(|target| {
-            let matches = target.group == group && target.kind == kind && target.name == name;
-
-            if !matches {
-                return false;
-            }
-
-            // Check namespace match - target must be in the same namespace as the policy
-            match (namespace, policy_ns) {
-                (Some(resource_ns), Some(policy_ns)) => policy_ns == resource_ns,
-                (None, None) => true,
-                _ => false,
-            }
-        })
     }
 }
 

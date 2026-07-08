@@ -103,11 +103,6 @@ pub async fn init_udp_logger(config: &edgion_resources::LogConfig) -> Result<()>
     Ok(())
 }
 
-/// Get global UDP logger instance
-pub fn get_udp_logger() -> Option<&'static Arc<AccessLogger>> {
-    UDP_LOGGER.get()
-}
-
 /// Log a UDP session entry (async)
 pub async fn log_udp(entry: &UdpLogEntry) {
     if let Some(logger) = UDP_LOGGER.get() {

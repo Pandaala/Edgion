@@ -49,7 +49,7 @@ use super::context::HandlerContext;
 use super::handler::{ProcessResult, ProcessorHandler};
 use super::make_resource_key;
 use super::raw_store::RawStore;
-use crate::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue, WorkqueueConfig};
+use crate::conf_mgr::sync_runtime::workqueue::{TriggerChain, Workqueue};
 
 /// Result of status extraction
 #[derive(Debug, PartialEq)]
@@ -261,30 +261,6 @@ where
             capacity = capacity,
             "Creating ResourceProcessor"
         );
-
-        Self {
-            kind,
-            cache,
-            workqueue,
-            handler,
-            metadata_filter: RwLock::new(None),
-            namespace_filter: RwLock::new(None),
-            raw_store: RwLock::new(None),
-            runtime,
-            stats_dirty: Arc::new(AtomicBool::new(true)),
-        }
-    }
-
-    /// Create with custom workqueue config
-    pub fn with_workqueue_config(
-        kind: &'static str,
-        capacity: usize,
-        handler: Arc<dyn ProcessorHandler<K>>,
-        workqueue_config: WorkqueueConfig,
-        runtime: Arc<ControllerRuntime>,
-    ) -> Self {
-        let cache = Arc::new(ServerCache::new(capacity as u32));
-        let workqueue = Arc::new(Workqueue::new(kind, workqueue_config));
 
         Self {
             kind,

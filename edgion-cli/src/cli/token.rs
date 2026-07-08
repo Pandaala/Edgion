@@ -59,17 +59,6 @@ pub fn save_token(token: &str) -> Result<()> {
     Ok(())
 }
 
-/// Delete the saved token file. Silently ignores NotFound; prints a warning for other errors.
-pub fn delete_token() {
-    if let Some(path) = token_file_path() {
-        if let Err(e) = fs::remove_file(&path) {
-            if e.kind() != std::io::ErrorKind::NotFound {
-                eprintln!("warning: failed to delete token file: {e}");
-            }
-        }
-    }
-}
-
 /// Generate a new CLI token and print it with its SHA-256 digest.
 ///
 /// The token is 32 CSPRNG bytes encoded as URL-safe base64 (no padding) with an
@@ -106,6 +95,7 @@ pub fn gen_token() -> Result<()> {
 ///
 /// Mirrors `controller::authz::sha256_hex` — used in tests to verify that the
 /// full `edg_`-prefixed token is what gets hashed.
+#[cfg(test)]
 pub fn sha256_hex_of(token: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();

@@ -44,31 +44,6 @@ pub fn create_metrics_router() -> Router {
     common_create_metrics_router()
 }
 
-/// Serve the metrics API on the configured address.
-pub async fn serve(cfg: &MetricsConfig) -> anyhow::Result<()> {
-    if !recorder_installed() {
-        init_metrics_exporter(cfg).map_err(|e| anyhow::anyhow!("Failed to initialize metrics exporter: {}", e))?;
-    }
-
-    let app = create_metrics_router();
-    let addr: std::net::SocketAddr = cfg
-        .listen
-        .parse()
-        .map_err(|e| anyhow::anyhow!("Invalid metrics listen address '{}': {}", cfg.listen, e))?;
-
-    tracing::info!(
-        component = "metrics_api",
-        event = "server_starting",
-        addr = %addr,
-        "Metrics API server listening"
-    );
-
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
-
-    Ok(())
-}
-
 /// Serve the metrics API with graceful shutdown support.
 pub async fn serve_with_shutdown(
     cfg: &MetricsConfig,

@@ -5,14 +5,13 @@ use anyhow::Result;
 use edgion_common::conf_sync::types::ListData;
 use edgion_resources::prelude_resources::*;
 use edgion_resources::resource_defs::get_resource_info;
-use edgion_resources::{all_resource_type_names, GatewayBaseConf, ResourceKind};
+use edgion_resources::{all_resource_type_names, ResourceKind};
 use k8s_openapi::api::core::v1::Service;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 
 pub struct ConfigClient {
-    pub base_conf: RwLock<Option<GatewayBaseConf>>,
     /// Current server_id from Controller (updated on each list/watch response)
     current_server_id: RwLock<String>,
     gateway_classes: ClientCache<GatewayClass>,
@@ -106,7 +105,6 @@ impl ConfigClient {
         edgion_acme_cache.set_conf_processor(acme_handler);
 
         Self {
-            base_conf: RwLock::new(None),
             current_server_id: RwLock::new(String::new()),
             gateway_classes: gateway_classes_cache,
             gateways: gateways_cache,
@@ -211,6 +209,7 @@ impl ConfigClient {
     }
 
     /// Typed accessor for the `EdgionTls` cache, retained for typed test access.
+    #[cfg(test)]
     pub fn edgion_tls(&self) -> &ClientCache<EdgionTls> {
         &self.edgion_tls
     }
@@ -307,36 +306,6 @@ impl ConfigClient {
         self.tls_routes.list_owned()
     }
 
-    /// List LinkSys
-    pub fn list_link_sys(&self) -> ListData<LinkSys> {
-        self.link_sys.list_owned()
-    }
-
-    /// List services
-    pub fn list_services(&self) -> ListData<Service> {
-        self.services.list_owned()
-    }
-
-    /// List endpoint slices
-    pub fn list_endpoint_slices(&self) -> ListData<EndpointSlice> {
-        self.endpoint_slices.list_owned()
-    }
-
-    /// List Edgion TLS
-    pub fn list_edgion_tls(&self) -> ListData<EdgionTls> {
-        self.edgion_tls.list_owned()
-    }
-
-    /// List Edgion Plugins
-    pub fn list_edgion_plugins(&self) -> ListData<EdgionPlugins> {
-        self.edgion_plugins.list_owned()
-    }
-
-    /// List EdgionConfigData entries
-    pub fn list_edgion_config_data(&self) -> ListData<EdgionConfigData> {
-        self.edgion_config_data.list_owned()
-    }
-
     /// List GatewayClasses
     pub fn list_gateway_classes(&self) -> ListData<GatewayClass> {
         self.gateway_classes.list_owned()
@@ -350,12 +319,6 @@ impl ConfigClient {
     /// List EdgionGatewayConfigs
     pub fn list_edgion_gateway_configs(&self) -> ListData<EdgionGatewayConfig> {
         self.edgion_gateway_configs.list_owned()
-    }
-
-    /// Get a Gateway by namespace and name
-    pub fn get_gateway(&self, namespace: &str, name: &str) -> Option<Gateway> {
-        let key = format!("{}/{}", namespace, name);
-        self.gateways.get(&key)
     }
 
     /// Get a GatewayClass by name
@@ -395,13 +358,15 @@ impl ConfigClient {
         out
     }
 
-    /// Per-kind sample keys (capped at `max`). Used by leak detection diagnostic report.
+    /// Per-kind sample keys (capped at `max`).
     ///
     /// Looks up the cache via `get_dyn_cache()` (exhaustive `ResourceKind` match) and
     /// matches `kind` against `kind_name_dyn()` — so it stays in lockstep with
     /// `client_cache_stats`. Returns an empty Vec for any unknown kind or for kinds
     /// not cached on Gateway (Secret, ConfigMap, ReferenceGrant).
-    #[allow(dead_code)] // Consumed by the validator binary.
+    /// Test-only: exercised by the stats/keys lockstep cross-check below; no
+    /// production caller today.
+    #[cfg(test)]
     pub fn client_cache_keys(&self, kind: &str, max: usize) -> Vec<String> {
         use edgion_resources::resource_defs::ALL_RESOURCE_INFOS;
 

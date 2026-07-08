@@ -37,29 +37,6 @@ impl Default for ServerHeaderOpts {
 }
 
 impl ServerHeaderOpts {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn add_header<S: Into<String>>(mut self, key: S, value: S) -> Self {
-        self.upsert(&key.into(), &value.into());
-        self
-    }
-
-    pub fn set_strict_transport_security(&mut self, value: impl Into<String>) {
-        self.upsert(HSTS_KEY, &value.into());
-    }
-
-    pub fn has_headers(&self, h: &str) -> bool {
-        HeaderName::try_from(h)
-            .map(|name| self.headers.iter().any(|e| e.name == name))
-            .unwrap_or(false)
-    }
-
-    pub fn enable(&mut self, enable: bool) {
-        self.enable = enable;
-    }
-
     pub fn remove_hsts(&mut self) {
         self.remove(HSTS_KEY);
     }

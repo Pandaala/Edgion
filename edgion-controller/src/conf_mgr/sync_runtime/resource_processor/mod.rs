@@ -43,9 +43,8 @@ pub use raw_store::{KubeRawStore, LocalRawStore, RawStore};
 // `k8s_openapi::Condition` (not our local `types::common::Condition`) and has
 // its own `k8s_condition_unknown` helper.
 pub use status_utils::{
-    accepted_condition, condition_false, condition_reasons, condition_true, condition_types, now_rfc3339,
-    resolved_refs_condition, set_parent_conditions, set_parent_conditions_full, update_condition, AcceptedError,
-    ResolvedRefsError,
+    accepted_condition, condition_false, condition_reasons, condition_true, condition_types, resolved_refs_condition,
+    set_parent_conditions_full, update_condition, AcceptedError, ResolvedRefsError,
 };
 
 pub use handlers::{
@@ -72,7 +71,7 @@ pub use ref_grant::{
 
 pub use listener_port_manager::{make_conflict_key, ConflictKey, ListenerPortManager, ListenerRef, PortKey};
 
-pub use attached_route_tracker::{AttachedRouteTracker, Attachment, RouteRef};
+pub use attached_route_tracker::AttachedRouteTracker;
 
 pub use gateway_route_index::GatewayRouteIndex;
 

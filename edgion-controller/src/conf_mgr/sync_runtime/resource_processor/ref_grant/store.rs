@@ -52,6 +52,7 @@ impl ReferenceGrantStore {
     }
 
     /// Get a reference grant by namespace and name
+    #[cfg(test)]
     pub fn get_by_ns_name(&self, namespace: &str, name: &str) -> Option<Arc<ReferenceGrant>> {
         let key = format!("{}/{}", namespace, name);
         self.get(&key)
@@ -155,32 +156,6 @@ impl ReferenceGrantStore {
         state.by_to_namespace = new_index;
     }
 
-    /// Update grants incrementally and rebuild affected indexes only
-    pub fn update_incremental(
-        &self,
-        add_or_update: HashMap<String, Arc<ReferenceGrant>>,
-        remove: &std::collections::HashSet<String>,
-    ) {
-        let mut state = self.state.write();
-
-        // Identify affected namespaces against the pre-update raw map so that
-        // removed grants still contribute their old namespace.
-        let affected_namespaces = Self::build_affected_namespaces(&add_or_update, remove, &state.raw);
-
-        // Apply mutations to raw storage.
-        for (key, grant) in add_or_update {
-            state.raw.insert(key, grant);
-        }
-        for key in remove {
-            state.raw.remove(key);
-        }
-
-        // Rebuild affected indexes within the same write critical section.
-        for ns in &affected_namespaces {
-            Self::rebuild_namespace_index_locked(&mut state, ns);
-        }
-    }
-
     /// Build index from raw grants
     fn build_index(grants: &RawGrantMap) -> IndexedGrantMap {
         let mut index: IndexedGrantMap = HashMap::new();
@@ -192,68 +167,6 @@ impl ReferenceGrantStore {
         }
 
         index
-    }
-
-    /// Identify all namespaces affected by this update
-    fn build_affected_namespaces(
-        add_or_update: &HashMap<String, Arc<ReferenceGrant>>,
-        remove: &std::collections::HashSet<String>,
-        current_grants: &RawGrantMap,
-    ) -> std::collections::HashSet<String> {
-        let mut affected = std::collections::HashSet::new();
-
-        // Extract to_namespace from new/updated grants
-        for grant in add_or_update.values() {
-            if let Some(ns) = grant.namespace() {
-                affected.insert(ns.to_string());
-            }
-        }
-
-        // Extract to_namespace from removed grants
-        for key in remove {
-            if let Some(grant) = current_grants.get(key) {
-                if let Some(ns) = grant.namespace() {
-                    affected.insert(ns.to_string());
-                }
-            }
-        }
-
-        affected
-    }
-
-    /// Identify all namespaces affected by this update (public for handler use)
-    pub fn identify_affected_namespaces(
-        &self,
-        add: &HashMap<String, ReferenceGrant>,
-        update: &HashMap<String, ReferenceGrant>,
-        remove: &std::collections::HashSet<String>,
-    ) -> std::collections::HashSet<String> {
-        let state = self.state.read();
-        let mut affected = std::collections::HashSet::new();
-
-        // Extract from new/updated grants
-        for grant in add.values().chain(update.values()) {
-            if let Some(ns) = grant.namespace() {
-                affected.insert(ns.to_string());
-            }
-            for from in &grant.spec.from {
-                affected.insert(from.namespace.clone());
-            }
-        }
-
-        // Extract from removed grants
-        for key in remove {
-            if let Some(grant) = state.raw.get(key) {
-                if let Some(ns) = grant.namespace() {
-                    affected.insert(ns.to_string());
-                }
-                for from in &grant.spec.from {
-                    affected.insert(from.namespace.clone());
-                }
-            }
-        }
-
-        affected
     }
 
     /// Get all grants (for testing/debugging)

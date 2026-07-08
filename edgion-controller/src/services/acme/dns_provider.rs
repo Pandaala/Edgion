@@ -92,9 +92,6 @@ async fn read_text_limited(resp: reqwest::Response, ctx: &str) -> String {
 /// Implementations create and remove TXT records for ACME DNS-01 validation.
 #[async_trait]
 pub trait DnsProvider: Send + Sync {
-    /// Provider name (for logging/diagnostics)
-    fn name(&self) -> &str;
-
     /// Create a DNS TXT record for the ACME challenge.
     ///
     /// # Arguments
@@ -237,10 +234,6 @@ impl CloudflareDnsProvider {
 
 #[async_trait]
 impl DnsProvider for CloudflareDnsProvider {
-    fn name(&self) -> &str {
-        "cloudflare"
-    }
-
     async fn create_txt_record(&self, domain: &str, value: &str) -> Result<()> {
         let zone_id = self.get_zone_id(domain).await?;
         let record_name = format!("_acme-challenge.{}", domain);
@@ -391,10 +384,6 @@ fn percent_encode(s: &str) -> String {
 
 #[async_trait]
 impl DnsProvider for AlidnsDnsProvider {
-    fn name(&self) -> &str {
-        "alidns"
-    }
-
     async fn create_txt_record(&self, domain: &str, value: &str) -> Result<()> {
         let root_domain = extract_root_domain(domain);
         // For wildcard domains like "*.example.com", the RR is "_acme-challenge"
@@ -566,10 +555,6 @@ impl PebbleChalltestDnsProvider {
 
 #[async_trait]
 impl DnsProvider for PebbleChalltestDnsProvider {
-    fn name(&self) -> &str {
-        "pebble-challtestsrv"
-    }
-
     async fn create_txt_record(&self, domain: &str, value: &str) -> Result<()> {
         // challtestsrv expects FQDN with trailing dot
         let fqdn = format!("_acme-challenge.{}.", domain.trim_end_matches('.'));

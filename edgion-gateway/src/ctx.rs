@@ -114,6 +114,7 @@ impl Rsc {
     }
 
     /// Attach resolved operator log labels, consuming and returning `self`.
+    #[cfg(test)]
     pub fn with_labels(mut self, labels: Option<LogLabels>) -> Self {
         self.labels = labels;
         self
@@ -1295,11 +1296,6 @@ impl EdgionHttpContext {
     /// Remove a context variable
     pub fn remove_ctx_var(&mut self, key: &str) -> Option<String> {
         self.ctx_map.remove(key)
-    }
-
-    /// Check if a context variable exists
-    pub fn has_ctx_var(&self, key: &str) -> bool {
-        self.ctx_map.contains_key(key)
     }
 
     // ===== URI/path canonical accessors =====

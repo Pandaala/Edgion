@@ -63,11 +63,6 @@ impl FileSystemStatusHandler {
         self
     }
 
-    /// Get the configuration directory
-    pub fn conf_dir(&self) -> &Path {
-        &self.conf_dir
-    }
-
     /// Get status file path for a config file
     ///
     /// `aaa.yaml` -> `aaa.yaml.status`

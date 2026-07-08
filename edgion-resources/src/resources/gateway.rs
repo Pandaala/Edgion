@@ -7,12 +7,6 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// API group for Gateway
-pub const GATEWAY_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for Gateway
-pub const GATEWAY_KIND: &str = "Gateway";
-
 use super::common::Condition;
 
 /// Gateway defines a network gateway

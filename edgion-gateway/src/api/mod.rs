@@ -1547,17 +1547,6 @@ async fn es_bulk_send(
     })))
 }
 
-/// Serve the admin API on the specified port.
-///
-/// Thin wrapper over [`serve_with_shutdown`] with a never-resolving shutdown future,
-/// kept as a public entry point for callers that don't need graceful shutdown plumbing.
-pub async fn serve(config_client: Arc<ConfigClient>, port: u16) -> anyhow::Result<()> {
-    let addr_str = format!("0.0.0.0:{}", port);
-    // No token plumbing on this convenience entry point: fail-close (503) until a
-    // caller that resolves a token uses `serve_with_shutdown` directly.
-    serve_with_shutdown(config_client, &addr_str, None, std::future::pending::<()>()).await
-}
-
 /// Serve the admin API on the specified listen address with graceful shutdown support.
 ///
 /// `admin_token` is the resolved shared bearer token (env > config), or `None`

@@ -739,7 +739,8 @@ impl EdgionGatewayConfig {
         self.gateway.server_addr.clone()
     }
 
-    /// Get admin_listen
+    /// Get admin_listen. Test-only: production always calls `admin_listen_or_default`.
+    #[cfg(test)]
     pub fn admin_listen(&self) -> Option<String> {
         self.gateway.admin_listen.clone()
     }
@@ -752,7 +753,8 @@ impl EdgionGatewayConfig {
             .unwrap_or_else(|| DEFAULT_GATEWAY_ADMIN_LISTEN.to_string())
     }
 
-    /// Get probe_listen
+    /// Get probe_listen. Test-only: production always calls `probe_listen_or_default`.
+    #[cfg(test)]
     pub fn probe_listen(&self) -> Option<String> {
         self.gateway.probe_listen.clone()
     }

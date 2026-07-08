@@ -13,12 +13,6 @@ pub struct Span {
     pub col: u32,
 }
 
-impl Span {
-    pub fn new(offset: usize, line: u32, col: u32) -> Self {
-        Self { offset, line, col }
-    }
-}
-
 impl fmt::Display for Span {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "line {}, col {}", self.line, self.col)
@@ -39,12 +33,6 @@ impl ParseError {
         Self {
             message: message.into(),
             span: None,
-        }
-    }
-    pub fn with_span(message: impl Into<String>, span: Span) -> Self {
-        Self {
-            message: message.into(),
-            span: Some(span),
         }
     }
 }
@@ -74,12 +62,6 @@ impl CompileError {
         Self {
             message: message.into(),
             span: None,
-        }
-    }
-    pub fn with_span(message: impl Into<String>, span: Span) -> Self {
-        Self {
-            message: message.into(),
-            span: Some(span),
         }
     }
 }
@@ -161,8 +143,6 @@ pub enum RuntimeError {
     ListTooLong { len: usize, limit: usize },
     /// Map exceeded entry-count limit
     MapTooLarge { size: usize, limit: usize },
-    /// Access to uninitialized local variable slot
-    UndefinedLocal { slot: u16 },
     /// PluginSession API returned error
     ApiError { function: String, message: String },
     /// Regex execution error
@@ -196,7 +176,6 @@ impl fmt::Display for RuntimeError {
             Self::MapTooLarge { size, limit } => {
                 write!(f, "map too large ({} > {})", size, limit)
             }
-            Self::UndefinedLocal { slot } => write!(f, "undefined local (slot {})", slot),
             Self::ApiError { function, message } => {
                 write!(f, "API error in {}: {}", function, message)
             }
@@ -207,47 +186,3 @@ impl fmt::Display for RuntimeError {
 }
 
 impl std::error::Error for RuntimeError {}
-
-// ========== Unified DSL Error ==========
-
-#[derive(Debug)]
-pub enum DslError {
-    Parse(ParseError),
-    Compile(CompileError),
-    Validation(ValidationError),
-    Runtime(RuntimeError),
-}
-
-impl fmt::Display for DslError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Parse(e) => write!(f, "{}", e),
-            Self::Compile(e) => write!(f, "{}", e),
-            Self::Validation(e) => write!(f, "{}", e),
-            Self::Runtime(e) => write!(f, "{}", e),
-        }
-    }
-}
-
-impl std::error::Error for DslError {}
-
-impl From<ParseError> for DslError {
-    fn from(e: ParseError) -> Self {
-        Self::Parse(e)
-    }
-}
-impl From<CompileError> for DslError {
-    fn from(e: CompileError) -> Self {
-        Self::Compile(e)
-    }
-}
-impl From<ValidationError> for DslError {
-    fn from(e: ValidationError) -> Self {
-        Self::Validation(e)
-    }
-}
-impl From<RuntimeError> for DslError {
-    fn from(e: RuntimeError) -> Self {
-        Self::Runtime(e)
-    }
-}

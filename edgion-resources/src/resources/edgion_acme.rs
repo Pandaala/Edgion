@@ -9,12 +9,6 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// API group for EdgionAcme
-pub const EDGION_ACME_GROUP: &str = "edgion.io";
-
-/// Kind for EdgionAcme
-pub const EDGION_ACME_KIND: &str = "EdgionAcme";
-
 // ============================================================================
 // ACME Challenge types
 // ============================================================================

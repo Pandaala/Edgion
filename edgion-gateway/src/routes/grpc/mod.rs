@@ -17,7 +17,7 @@ pub use match_engine::GrpcMatchEngine;
 pub use match_unit::{CompiledGrpcBackend, GrpcMatchInfo, GrpcRouteInfo, GrpcRouteRuleUnit, GrpcRuleRuntime};
 pub use routes_mgr::{
     get_global_grpc_route_manager, get_global_grpc_route_managers, DomainGrpcRouteRules, GlobalGrpcRouteManagers,
-    GrpcPortRouteManager, GrpcRouteManager, GrpcRouteManagerStats, GrpcRouteRules,
+    GrpcPortRouteManager, GrpcRouteManagerStats, GrpcRouteRules,
 };
 
 // Export integration interface for the HTTP pipeline to call.

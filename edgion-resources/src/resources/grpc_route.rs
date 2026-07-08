@@ -16,12 +16,6 @@ use super::http_route::{
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
 
-/// API group for GRPCRoute
-pub const GRPC_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for GRPCRoute
-pub const GRPC_ROUTE_KIND: &str = "GRPCRoute";
-
 /// GRPCRoute defines gRPC rules for mapping requests to backends
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(

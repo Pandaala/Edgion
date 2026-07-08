@@ -72,16 +72,6 @@ impl FileSystemCenter {
         })
     }
 
-    /// Get the configuration
-    pub fn config(&self) -> &FileSystemConfig {
-        &self.config
-    }
-
-    /// Get the shared path registry
-    pub fn registry(&self) -> &Arc<PathRegistry> {
-        &self.registry
-    }
-
     #[cfg(test)]
     pub(super) fn conf_dir_abs(&self) -> &std::path::Path {
         &self.conf_dir_abs

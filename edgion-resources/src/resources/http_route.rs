@@ -12,12 +12,6 @@ use super::common::{Condition, ParentReference, RefDenied};
 use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
 
-/// API group for HTTPRoute
-pub const HTTP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for HTTPRoute
-pub const HTTP_ROUTE_KIND: &str = "HTTPRoute";
-
 /// HTTPRoute defines HTTP rules for mapping requests to backends
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
@@ -871,11 +865,6 @@ impl RouteTimeout {
             RouteTimeout::Duration(d) => Some(*d),
             _ => None,
         }
-    }
-
-    /// Returns true if explicitly disabled via "0s".
-    pub fn is_disabled(&self) -> bool {
-        matches!(self, RouteTimeout::Disabled)
     }
 
     pub fn parse(s: &str, field_name: &str) -> Self {

@@ -406,9 +406,7 @@ pub fn get_global_grpc_route_managers() -> &'static GlobalGrpcRouteManagers {
     GLOBAL_GRPC_ROUTE_MANAGERS.get_or_init(GlobalGrpcRouteManagers::new)
 }
 
-// Legacy aliases for backward compatibility
-pub type GrpcRouteManager = GlobalGrpcRouteManagers;
-
+// Legacy alias for backward compatibility
 pub fn get_global_grpc_route_manager() -> &'static GlobalGrpcRouteManagers {
     get_global_grpc_route_managers()
 }

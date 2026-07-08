@@ -15,10 +15,6 @@ pub mod names {
     pub const TCP_LOG_DROPPED: &str = "edgion_tcp_log_dropped_total";
     pub const TLS_LOG_DROPPED: &str = "edgion_tls_log_dropped_total";
     pub const UDP_LOG_DROPPED: &str = "edgion_udp_log_dropped_total";
-    // K8s Status update metrics
-    pub const STATUS_UPDATE_TOTAL: &str = "edgion_status_update_total";
-    pub const STATUS_UPDATE_FAILED: &str = "edgion_status_update_failed_total";
-    pub const STATUS_UPDATE_SKIPPED: &str = "edgion_status_update_skipped_total";
     // Config sync metrics (client side)
     pub const CONFIG_RELOAD_SIGNALS: &str = "edgion_config_reload_signals_total";
     pub const CONFIG_RELIST_TOTAL: &str = "edgion_config_relist_total";
@@ -34,10 +30,6 @@ pub mod names {
     pub const MIRROR_REQUESTS_TOTAL: &str = "edgion_mirror_requests_total";
     // End-to-end request duration histogram
     pub const GATEWAY_REQUEST_DURATION_MS: &str = "edgion_gateway_request_duration_ms";
-    // Controller: number of gateway instances connected via gRPC long-poll
-    pub const CONTROLLER_CONNECTED_GATEWAYS: &str = "edgion_controller_connected_gateways";
-    // Controller: schema validation failures from Admin API (non-K8s mode)
-    pub const SCHEMA_VALIDATION_ERRORS: &str = "edgion_controller_schema_validation_errors_total";
     // Circuit breaker metrics
     pub const CB_EJECTIONS_TOTAL: &str = "edgion_circuit_breaker_ejections_total";
     pub const CB_EJECTED_ENDPOINTS: &str = "edgion_circuit_breaker_ejected_endpoints";
@@ -117,23 +109,13 @@ pub struct GatewayMetrics {
     udp_log_dropped: OnceLock<Counter>,
     access_log_backfill_ingested: OnceLock<Counter>,
     access_log_backfill_failed: OnceLock<Counter>,
-    status_update_total: OnceLock<Counter>,
-    status_update_failed: OnceLock<Counter>,
-    status_update_skipped: OnceLock<Counter>,
     config_reload_signals: OnceLock<Counter>,
     config_relist_total: OnceLock<Counter>,
-    controller_connected_gateways: OnceLock<Gauge>,
-    schema_validation_errors: OnceLock<Counter>,
 }
 
 #[inline]
 fn get_or_register_counter<'a>(slot: &'a OnceLock<Counter>, name: &'static str) -> &'a Counter {
     slot.get_or_init(|| counter!(name))
-}
-
-#[inline]
-fn get_or_register_gauge<'a>(slot: &'a OnceLock<Gauge>, name: &'static str) -> &'a Gauge {
-    slot.get_or_init(|| gauge!(name))
 }
 
 impl GatewayMetrics {
@@ -156,13 +138,8 @@ impl GatewayMetrics {
             udp_log_dropped: OnceLock::new(),
             access_log_backfill_ingested: OnceLock::new(),
             access_log_backfill_failed: OnceLock::new(),
-            status_update_total: OnceLock::new(),
-            status_update_failed: OnceLock::new(),
-            status_update_skipped: OnceLock::new(),
             config_reload_signals: OnceLock::new(),
             config_relist_total: OnceLock::new(),
-            controller_connected_gateways: OnceLock::new(),
-            schema_validation_errors: OnceLock::new(),
         }
     }
 
@@ -171,12 +148,6 @@ impl GatewayMetrics {
     pub fn ctx_created(&self) {
         self.ctx_created.increment(1);
         self.ctx_active.increment(1.0);
-    }
-
-    /// Record a context destruction
-    #[inline]
-    pub fn ctx_destroyed(&self) {
-        self.ctx_active.decrement(1.0);
     }
 
     /// Record a dropped access log entry
@@ -227,25 +198,6 @@ impl GatewayMetrics {
         get_or_register_counter(&self.udp_log_dropped, names::UDP_LOG_DROPPED).increment(1);
     }
 
-    /// Record a successful K8s status update
-    #[inline]
-    pub fn status_update_success(&self) {
-        get_or_register_counter(&self.status_update_total, names::STATUS_UPDATE_TOTAL).increment(1);
-    }
-
-    /// Record a failed K8s status update
-    #[inline]
-    pub fn status_update_failed(&self) {
-        get_or_register_counter(&self.status_update_total, names::STATUS_UPDATE_TOTAL).increment(1);
-        get_or_register_counter(&self.status_update_failed, names::STATUS_UPDATE_FAILED).increment(1);
-    }
-
-    /// Record a skipped K8s status update (no change needed)
-    #[inline]
-    pub fn status_update_skipped(&self) {
-        get_or_register_counter(&self.status_update_skipped, names::STATUS_UPDATE_SKIPPED).increment(1);
-    }
-
     /// Record a reload signal received from controller
     #[inline]
     pub fn config_reload_signal(&self) {
@@ -268,32 +220,6 @@ impl GatewayMetrics {
     #[inline]
     pub fn add_response_bytes(&self, bytes: u64) {
         self.gateway_response_bytes.increment(bytes);
-    }
-
-    /// Record a gateway instance connected to controller via gRPC
-    #[inline]
-    pub fn gateway_connected(&self) {
-        get_or_register_gauge(
-            &self.controller_connected_gateways,
-            names::CONTROLLER_CONNECTED_GATEWAYS,
-        )
-        .increment(1.0);
-    }
-
-    /// Record a gateway instance disconnected from controller
-    #[inline]
-    pub fn gateway_disconnected(&self) {
-        get_or_register_gauge(
-            &self.controller_connected_gateways,
-            names::CONTROLLER_CONNECTED_GATEWAYS,
-        )
-        .decrement(1.0);
-    }
-
-    /// Record a schema validation error from Admin API (non-K8s mode)
-    #[inline]
-    pub fn schema_validation_error(&self) {
-        get_or_register_counter(&self.schema_validation_errors, names::SCHEMA_VALIDATION_ERRORS).increment(1);
     }
 }
 

@@ -29,54 +29,36 @@ edgion-resources.workspace = true
 
 # Core async runtime and error handling
 tokio.workspace = true
-tokio-util.workspace = true
-tokio-stream.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
-thiserror.workspace = true
 
 # Serialization/Deserialization
 serde.workspace = true
 serde_json.workspace = true
-serde_yaml.workspace = true
 
 # Kubernetes client and types
 kube.workspace = true
 k8s-openapi.workspace = true
-schemars.workspace = true
 
 # gRPC (config sync + fed sync)
 tonic.workspace = true
-tonic-reflection.workspace = true
 prost.workspace = true
 rustls.workspace = true
-tokio-rustls.workspace = true
 webpki-roots.workspace = true
 x509-parser.workspace = true
-
-futures.workspace = true
 
 # HTTP server
 axum.workspace = true
 
 # Utilities
-bytes.workspace = true
 base64.workspace = true
 chrono.workspace = true
 parking_lot.workspace = true
-uuid.workspace = true
-arc-swap.workspace = true
-dashmap.workspace = true
 regex.workspace = true
 rand.workspace = true
-smallvec.workspace = true
-indexmap.workspace = true
-sha2.workspace = true
-hex.workspace = true
 
 # Pingora (TLS backend feature flows from the workspace via unification)
 pingora-core.workspace = true
-pingora-http.workspace = true
 etcd-client.workspace = true
 
 # Metrics
@@ -91,7 +73,6 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 http.workspace = true
-percent-encoding.workspace = true
 
 reqwest.workspace = true
 
@@ -103,11 +84,3 @@ hickory-resolver.workspace = true
 
 [build-dependencies]
 tonic-build.workspace = true
-
-[dev-dependencies]
-tempfile.workspace = true
-wiremock.workspace = true
-mockall.workspace = true
-proptest.workspace = true
-expect-test.workspace = true
-tower.workspace = true

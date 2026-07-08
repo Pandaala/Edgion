@@ -28,38 +28,6 @@ pub enum Value {
 }
 
 impl Value {
-    // ========== Type checking ==========
-
-    #[inline]
-    pub fn is_nil(&self) -> bool {
-        matches!(self, Value::Nil)
-    }
-
-    #[inline]
-    pub fn is_str(&self) -> bool {
-        matches!(self, Value::Str(_))
-    }
-
-    #[inline]
-    pub fn is_int(&self) -> bool {
-        matches!(self, Value::Int(_))
-    }
-
-    #[inline]
-    pub fn is_bool(&self) -> bool {
-        matches!(self, Value::Bool(_))
-    }
-
-    #[inline]
-    pub fn is_list(&self) -> bool {
-        matches!(self, Value::List(_))
-    }
-
-    #[inline]
-    pub fn is_map(&self) -> bool {
-        matches!(self, Value::Map(_))
-    }
-
     // ========== Type coercion ==========
 
     /// Get string ref; returns empty string for non-Str types.
@@ -87,30 +55,6 @@ impl Value {
             Value::Nil => "nil".to_string(),
             Value::List(_) => "[list]".to_string(),
             Value::Map(m) => format!("[map:{}]", m.len()),
-        }
-    }
-
-    /// Get integer value, or None
-    pub fn as_int(&self) -> Option<i64> {
-        match self {
-            Value::Int(n) => Some(*n),
-            _ => None,
-        }
-    }
-
-    /// Get boolean value, or None
-    pub fn as_bool(&self) -> Option<bool> {
-        match self {
-            Value::Bool(b) => Some(*b),
-            _ => None,
-        }
-    }
-
-    /// Get list ref, or None
-    pub fn as_list(&self) -> Option<&Vec<Arc<str>>> {
-        match self {
-            Value::List(l) => Some(l),
-            _ => None,
         }
     }
 
@@ -170,41 +114,6 @@ impl PartialEq for Value {
 
 impl Eq for Value {}
 
-impl From<String> for Value {
-    fn from(s: String) -> Self {
-        Value::Str(Arc::from(s))
-    }
-}
-
-impl From<&str> for Value {
-    fn from(s: &str) -> Self {
-        Value::Str(Arc::from(s))
-    }
-}
-
-impl From<i64> for Value {
-    fn from(n: i64) -> Self {
-        Value::Int(n)
-    }
-}
-
-impl From<bool> for Value {
-    fn from(b: bool) -> Self {
-        Value::Bool(b)
-    }
-}
-
-/// Convert Option<String> → Value::Str or Value::Nil
-/// This is the primary bridge from PluginSession return values
-impl From<Option<String>> for Value {
-    fn from(opt: Option<String>) -> Self {
-        match opt {
-            Some(s) => Value::Str(Arc::from(s)),
-            None => Value::Nil,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,21 +138,12 @@ mod tests {
     }
 
     #[test]
-    fn test_from_option() {
-        let v: Value = Some("hello".to_string()).into();
-        assert_eq!(v, Value::Str(Arc::from("hello")));
-        let v: Value = None::<String>.into();
-        assert_eq!(v, Value::Nil);
-    }
-
-    #[test]
     fn test_map_basic() {
         let mut m = IndexMap::new();
         m.insert("status".to_string(), Value::Int(200));
         m.insert("body".to_string(), Value::Str(Arc::from("ok")));
         let v = Value::Map(Box::new(m));
         assert!(v.is_truthy());
-        assert!(v.is_map());
         assert_eq!(v.type_name(), "Map");
         assert_eq!(format!("{}", v), "[map:2]");
     }

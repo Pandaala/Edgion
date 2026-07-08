@@ -25,12 +25,6 @@ pub use kafka::KafkaClientConfig;
 pub use redis::RedisClientConfig;
 pub use webhook::WebhookServiceConfig;
 
-/// API group for LinkSys
-pub const LINK_SYS_GROUP: &str = "edgion.io";
-
-/// Kind for LinkSys
-pub const LINK_SYS_KIND: &str = "LinkSys";
-
 /// LinkSys defines connections to external systems
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(
@@ -79,42 +73,10 @@ impl SystemConfig {
         }
     }
 
-    /// Get Webhook configuration if this is a Webhook system
-    pub fn as_webhook(&self) -> Option<&WebhookServiceConfig> {
-        match self {
-            SystemConfig::Webhook(config) => Some(config),
-            _ => None,
-        }
-    }
-
-    /// Get Redis configuration if this is a Redis system
-    pub fn as_redis(&self) -> Option<&RedisClientConfig> {
-        match self {
-            SystemConfig::Redis(config) => Some(config),
-            _ => None,
-        }
-    }
-
     /// Get Etcd configuration if this is an Etcd system
     pub fn as_etcd(&self) -> Option<&EtcdClientConfig> {
         match self {
             SystemConfig::Etcd(config) => Some(config),
-            _ => None,
-        }
-    }
-
-    /// Get Elasticsearch configuration if this is an Elasticsearch system
-    pub fn as_elasticsearch(&self) -> Option<&ElasticsearchClientConfig> {
-        match self {
-            SystemConfig::Elasticsearch(config) => Some(config),
-            _ => None,
-        }
-    }
-
-    /// Get Kafka configuration if this is a Kafka system
-    pub fn as_kafka(&self) -> Option<&KafkaClientConfig> {
-        match self {
-            SystemConfig::Kafka(config) => Some(config),
             _ => None,
         }
     }

@@ -260,6 +260,8 @@ impl GatewayRouteIndex {
     /// Get all routes that reference a given Gateway.
     ///
     /// Returns (ResourceKind, route_key) pairs for requeue.
+    /// Test-only: no production caller today.
+    #[cfg(test)]
     pub fn get_routes_for_gateway(&self, gateway_key: &str) -> Vec<(ResourceKind, String)> {
         self.inner.read().collect_routes_for_gateway(gateway_key)
     }

@@ -322,16 +322,6 @@ impl RadixRouter {
         }
     }
 
-    /// Returns the number of routes inserted.
-    pub fn len(&self) -> usize {
-        self.route_count
-    }
-
-    /// Returns whether the router is empty.
-    pub fn is_empty(&self) -> bool {
-        self.route_count == 0
-    }
-
     /// Converts this builder into a cache-friendly frozen tree.
     ///
     /// After freezing, the tree can no longer be modified, but lookups

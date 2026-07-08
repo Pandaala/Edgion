@@ -865,7 +865,6 @@ pub async fn execute_safe(
                 RuntimeError::StringTooLong { .. } => "string too long",
                 RuntimeError::ListTooLong { .. } => "list too long",
                 RuntimeError::MapTooLarge { .. } => "map too large",
-                RuntimeError::UndefinedLocal { .. } => "undefined local",
                 RuntimeError::ApiError { .. } => "api error",
                 RuntimeError::RegexError { .. } => "regex error",
                 RuntimeError::Internal { .. } => "internal error",

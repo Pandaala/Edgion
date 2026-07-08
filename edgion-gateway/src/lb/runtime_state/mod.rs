@@ -32,12 +32,6 @@ pub fn invalidate_selector_cache(service_key: &str) {
     SP_AFFINITY.remove(service_key);
 }
 
-/// Look up a session token in the affinity map for a service.
-/// Returns the endpoint SocketAddr if the token is known.
-pub fn sp_affinity_lookup(service_key: &str, token: &str) -> Option<std::net::SocketAddr> {
-    SP_AFFINITY.get(service_key).and_then(|map| map.get(token).copied())
-}
-
 fn build_sp_affinity_map(
     backends: &[Arc<EdgionBackend>],
 ) -> Arc<std::collections::HashMap<String, std::net::SocketAddr>> {
@@ -59,11 +53,6 @@ fn build_sp_affinity_map(
         }
     }
     Arc::new(map)
-}
-
-/// Build or refresh the session affinity map for a service from its current backends.
-pub fn sp_affinity_build(service_key: &str, backends: &[Arc<EdgionBackend>]) {
-    SP_AFFINITY.insert(service_key.to_string(), build_sp_affinity_map(backends));
 }
 
 /// Get or lazily build the session affinity map. The `backends_fn` closure is
@@ -169,23 +158,25 @@ mod tests {
         let v4: StdSocketAddr = "10.0.0.1:8080".parse().unwrap();
         let v6: StdSocketAddr = "[::1]:30001".parse().unwrap();
         let svc = "ns/sp-round-trip";
-        sp_affinity_build(svc, &[backend(v4), backend(v6)]);
+        let backends = Arc::new(vec![backend(v4), backend(v6)]);
+        let map = sp_affinity_get_or_build_key(svc, || backends.clone());
+        let lookup = |token: &str| map.get(token).copied();
 
         // Token format: backend cell address formatted with `SocketAddr::to_string()`.
         let v4_token = generate_session_token(&v4.to_string());
         let v6_token = generate_session_token(&v6.to_string());
-        assert_eq!(sp_affinity_lookup(svc, &v4_token), Some(v4));
-        assert_eq!(sp_affinity_lookup(svc, &v6_token), Some(v6));
+        assert_eq!(lookup(&v4_token), Some(v4));
+        assert_eq!(lookup(&v6_token), Some(v6));
 
         // Unbracketed IPv6 form (`::1:30001`, from `format!("{}:{}", ip, port)`)
         // must NOT resolve — it is not a valid `SocketAddr::to_string()` output.
         let v6_unbracketed = generate_session_token(&format!("{}:{}", v6.ip(), v6.port()));
-        assert_eq!(sp_affinity_lookup(svc, &v6_unbracketed), None);
+        assert_eq!(lookup(&v6_unbracketed), None);
 
         // Token built from a rewritten peer port must NOT resolve: session tokens
         // key off the cell address, not the post-rewritten peer address.
         let v6_rewritten_port = generate_session_token("[::1]:8080");
-        assert_eq!(sp_affinity_lookup(svc, &v6_rewritten_port), None);
+        assert_eq!(lookup(&v6_rewritten_port), None);
 
         remove_service(svc);
     }

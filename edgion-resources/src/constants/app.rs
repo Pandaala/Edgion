@@ -9,6 +9,5 @@ pub const GATEWAY_NAME: &str = "edgion-gateway";
 /// Application version (from Cargo.toml)
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-// Backward compatibility aliases
+// Backward compatibility alias
 pub use CONTROLLER_NAME as COMPONENT_EDGION_CONTROLLER;
-pub use GATEWAY_NAME as COMPONENT_EDGION_GATEWAY;

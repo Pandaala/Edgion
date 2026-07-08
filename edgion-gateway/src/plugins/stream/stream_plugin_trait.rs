@@ -62,15 +62,6 @@ impl StreamContext {
             remote_addr: None,
         }
     }
-
-    /// Create a stream context with remote address
-    pub fn with_remote_addr(client_ip: IpAddr, listener_port: u16, remote_addr: String) -> Self {
-        Self {
-            client_ip,
-            listener_port,
-            remote_addr: Some(remote_addr),
-        }
-    }
 }
 
 /// Stream plugin trait for TCP/UDP connection filtering

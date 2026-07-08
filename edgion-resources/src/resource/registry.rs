@@ -1,77 +1,13 @@
 //! Global Resource Type Registry
 //!
-//! Provides `ResourceTypeMetadata` / `RESOURCE_TYPES` wrappers around the
-//! unified definitions in `resource_defs` (kept for backward compatibility).
+//! Provides the resource type name list used by `ConfigClient`, built on top of
+//! the unified definitions in `resource_defs`.
 
-use std::sync::LazyLock;
-
-use super::{registry_resource_names, ALL_RESOURCE_INFOS};
-
-/// Metadata for a resource type.
-///
-/// Prefer `ResourceKindInfo` from the `resource_defs` module for new code.
-#[derive(Debug, Clone)]
-pub struct ResourceTypeMetadata {
-    /// The name of the resource type (used for display and logging)
-    pub name: &'static str,
-    /// Description of the resource type (optional)
-    pub description: Option<&'static str>,
-    /// Whether this resource is a base configuration resource
-    pub is_base_conf: bool,
-}
-
-impl ResourceTypeMetadata {
-    pub const fn new(name: &'static str) -> Self {
-        Self {
-            name,
-            description: None,
-            is_base_conf: false,
-        }
-    }
-
-    pub const fn with_description(mut self, description: &'static str) -> Self {
-        self.description = Some(description);
-        self
-    }
-
-    pub const fn base_conf(mut self) -> Self {
-        self.is_base_conf = true;
-        self
-    }
-}
-
-/// Global registry of all resource types.
-///
-/// Only resources with `in_registry: true` are included (excludes `Secret` and `ConfigMap`).
-pub static RESOURCE_TYPES: LazyLock<Vec<ResourceTypeMetadata>> = LazyLock::new(|| {
-    ALL_RESOURCE_INFOS
-        .iter()
-        .filter(|info| info.in_registry)
-        .map(|info| {
-            let mut metadata = ResourceTypeMetadata::new(info.cache_field_name);
-            if info.is_base_conf {
-                metadata = metadata.base_conf();
-            }
-            // Description is derived from kind_name for simplicity
-            metadata = metadata.with_description(info.kind_name);
-            metadata
-        })
-        .collect()
-});
+use super::registry_resource_names;
 
 /// Get the list of all resource type names
 pub fn all_resource_type_names() -> Vec<&'static str> {
     registry_resource_names()
-}
-
-/// Returns base configuration resource names.
-pub fn base_conf_resource_names() -> Vec<&'static str> {
-    super::base_conf_kind_names()
-}
-
-/// Get metadata for a specific resource type by name
-pub fn get_resource_metadata(name: &str) -> Option<&ResourceTypeMetadata> {
-    RESOURCE_TYPES.iter().find(|r| r.name == name)
 }
 
 #[cfg(test)]
@@ -80,29 +16,8 @@ mod tests {
 
     #[test]
     fn test_resource_registry() {
-        // Ensure we have resources registered
-        assert!(!RESOURCE_TYPES.is_empty());
-
-        // Check base conf resources
-        let base_conf = base_conf_resource_names();
-        assert!(base_conf.contains(&"gateway_classes"));
-        assert!(base_conf.contains(&"gateways"));
-        assert!(base_conf.contains(&"edgion_gateway_configs"));
-
-        // Check non-base conf resources
         let all_names = all_resource_type_names();
         assert!(all_names.contains(&"routes"));
         assert!(all_names.contains(&"services"));
-    }
-
-    #[test]
-    fn test_metadata_lookup() {
-        let metadata = get_resource_metadata("gateway_classes");
-        assert!(metadata.is_some());
-        assert!(metadata.unwrap().is_base_conf);
-
-        let metadata = get_resource_metadata("routes");
-        assert!(metadata.is_some());
-        assert!(!metadata.unwrap().is_base_conf);
     }
 }

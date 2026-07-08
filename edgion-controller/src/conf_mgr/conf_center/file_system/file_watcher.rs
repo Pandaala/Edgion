@@ -68,11 +68,6 @@ impl FileSystemWatcher {
         }
     }
 
-    /// Get the shared path registry
-    pub fn registry(&self) -> &Arc<PathRegistry> {
-        &self.registry
-    }
-
     /// Register a kind and get its event receiver
     ///
     /// Must be called before `run()` for each resource kind that needs events.
@@ -886,24 +881,4 @@ mod tests {
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].losers.len(), 1);
     }
-}
-
-/// Build file path from kind and key
-///
-/// Key format:
-/// - Namespaced: "namespace/name"
-/// - Cluster-scoped: "name"
-pub fn build_path_from_key(conf_dir: &Path, kind: &str, key: &str) -> PathBuf {
-    let (namespace, name) = if let Some(pos) = key.find('/') {
-        (Some(&key[..pos]), &key[pos + 1..])
-    } else {
-        (None, key)
-    };
-
-    let filename = match namespace {
-        Some(ns) => format!("{}_{}_{}.yaml", kind, ns, name),
-        None => format!("{}__{}.yaml", kind, name),
-    };
-
-    conf_dir.join(filename)
 }

@@ -7,6 +7,6 @@
 mod conf_handler;
 
 pub use conf_handler::{
-    count_edgion_config_data, create_edgion_config_data_handler, edgion_config_data_keys,
-    get_global_edgion_config_data_store, resolve_ip_list_matchers, resolve_ip_list_ref_keys, EdgionConfigDataStore,
+    count_edgion_config_data, create_edgion_config_data_handler, get_global_edgion_config_data_store,
+    resolve_ip_list_matchers, resolve_ip_list_ref_keys, EdgionConfigDataStore,
 };

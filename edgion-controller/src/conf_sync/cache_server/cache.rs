@@ -35,49 +35,17 @@ impl<T: ResourceMeta + Resource + Send + Sync> ServerCache<T> {
     }
 
     /// Get a clone of the shared notify for watchers
-    pub fn get_notify(&self) -> Arc<Notify> {
+    fn get_notify(&self) -> Arc<Notify> {
         self.notify.clone()
     }
 
     /// Get a clone of the store for watchers
-    pub fn get_store(&self) -> Arc<RwLock<EventStore<T>>> {
+    fn get_store(&self) -> Arc<RwLock<EventStore<T>>> {
         self.store.clone()
     }
 
     pub fn is_ready(&self) -> bool {
         *self.ready.read()
-    }
-
-    /// Set cache to not ready state
-    /// Used during relink to prevent serving stale data
-    pub fn set_not_ready(&self) {
-        *self.ready.write() = false;
-    }
-
-    /// Clear all data from the cache
-    /// Used during relink to remove stale data
-    ///
-    /// Notifies all waiting watcher tasks so they can detect the version
-    /// discontinuity (EventsLost) and exit cleanly. This is essential for
-    /// Federation watchers (Center) which don't have server_id polling —
-    /// without notification they'd wait forever on a dead cache.
-    pub fn clear(&self)
-    where
-        T: Clone,
-    {
-        let mut store_guard = self.store.write();
-        store_guard.clear();
-        drop(store_guard);
-        // Wake all watchers so they detect the version discontinuity and exit.
-        self.notify.notify_waiters();
-    }
-
-    /// List all resources in the cache with their sync version.
-    pub fn list(&self) -> ListData<T>
-    where
-        T: Clone,
-    {
-        self.list_owned()
     }
 
     /// List all resources as owned (cloned) values with their sync version.

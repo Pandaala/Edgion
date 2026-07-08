@@ -1282,8 +1282,6 @@ dependencies = [
  "rand 0.9.2",
  "rcgen",
  "reqwest",
- "rpassword",
- "serde",
  "serde_json",
  "serde_yaml",
  "sha2",
@@ -1292,7 +1290,6 @@ dependencies = [
  "tikv-jemallocator",
  "time",
  "tokio",
- "tracing",
  "wiremock",
  "zeroize",
 ]
@@ -1302,62 +1299,38 @@ name = "edgion-common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "arc-swap",
  "async-trait",
  "axum 0.8.8",
  "base64",
- "bytes",
  "chrono",
  "clap",
- "dashmap",
  "edgion-resources",
  "etcd-client",
- "expect-test",
- "futures",
- "hex",
  "hickory-resolver",
  "http",
- "indexmap 2.13.1",
  "k8s-openapi",
  "kube",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-util",
- "mockall",
  "parking_lot",
- "percent-encoding",
  "pingora-core",
- "pingora-http",
- "proptest",
  "prost 0.13.5",
  "rand 0.9.2",
  "rcgen",
  "regex",
  "reqwest",
  "rustls",
- "schemars",
  "serde",
  "serde_json",
- "serde_yaml",
- "sha2",
- "smallvec",
- "tempfile",
- "thiserror 2.0.18",
  "time",
  "tokio",
- "tokio-rustls",
- "tokio-stream",
- "tokio-util",
  "tonic 0.12.3",
  "tonic-build 0.12.3",
- "tonic-reflection",
- "tower 0.5.3",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
- "uuid",
  "webpki-roots 1.0.6",
- "wiremock",
  "x509-parser 0.18.1",
  "zeroize",
 ]
@@ -1366,24 +1339,19 @@ dependencies = [
 name = "edgion-controller"
 version = "0.1.0"
 dependencies = [
- "aes-gcm",
  "anyhow",
  "arc-swap",
  "async-trait",
  "axum 0.8.8",
- "axum-server",
  "base64",
  "bytes",
  "chrono",
  "clap",
- "cookie",
- "crc32fast",
  "dashmap",
  "edgion-common",
  "edgion-resources",
  "etcd-client",
  "expect-test",
- "fred",
  "futures",
  "hex",
  "hmac",
@@ -1391,25 +1359,16 @@ dependencies = [
  "indexmap 2.13.1",
  "instant-acme",
  "jsonschema",
- "jsonwebtoken",
  "k8s-openapi",
  "kube",
- "ldap3",
- "md-5",
  "metrics",
  "metrics-exporter-prometheus",
- "metrics-util",
  "mimalloc",
  "mockall",
- "nom",
  "notify",
  "parking_lot",
  "percent-encoding",
  "pingora-core",
- "pingora-http",
- "pingora-ketama",
- "pingora-limits",
- "pingora-load-balancing",
  "pingora-proxy",
  "proptest",
  "prost 0.13.5",
@@ -1417,10 +1376,7 @@ dependencies = [
  "rcgen",
  "regex",
  "reqwest",
- "rpassword",
- "rusqlite",
  "rustls",
- "rustls-native-certs 0.8.3",
  "schemars",
  "serde",
  "serde_json",
@@ -1428,8 +1384,6 @@ dependencies = [
  "sha1",
  "sha2",
  "smallvec",
- "subtle",
- "tabled",
  "tempfile",
  "thiserror 2.0.18",
  "tikv-jemallocator",
@@ -1440,7 +1394,6 @@ dependencies = [
  "tokio-util",
  "tonic 0.12.3",
  "tonic-build 0.12.3",
- "tonic-reflection",
  "tower 0.5.3",
  "tracing",
  "tracing-appender",
@@ -1486,7 +1439,6 @@ dependencies = [
  "hyper-util",
  "indexmap 2.13.1",
  "instant-acme",
- "jsonschema",
  "jsonwebtoken",
  "k8s-openapi",
  "kube",
@@ -1498,7 +1450,6 @@ dependencies = [
  "mimalloc",
  "mockall",
  "nom",
- "notify",
  "opentelemetry",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
@@ -1517,7 +1468,6 @@ dependencies = [
  "rcgen",
  "regex",
  "reqwest",
- "rpassword",
  "rskafka",
  "rusqlite",
  "rustix",
@@ -1530,7 +1480,6 @@ dependencies = [
  "sha2",
  "smallvec",
  "subtle",
- "tabled",
  "tempfile",
  "thiserror 2.0.18",
  "tikv-jemallocator",
@@ -1541,17 +1490,14 @@ dependencies = [
  "tokio-tungstenite",
  "tokio-util",
  "tonic 0.12.3",
- "tonic-reflection",
  "tower 0.5.3",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
- "walkdir",
  "webpki-roots 1.0.6",
  "wiremock",
  "x509-parser 0.18.1",
- "zeroize",
 ]
 
 [[package]]
@@ -4857,17 +4803,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rpassword"
-version = "7.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66d4c8b64f049c6721ec8ccec37ddfc3d641c4a7fca57e8f2a89de509c73df39"
-dependencies = [
- "libc",
- "rtoolbox",
- "windows-sys 0.59.0",
-]
-
-[[package]]
 name = "rsasl"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4904,16 +4839,6 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tracing",
-]
-
-[[package]]
-name = "rtoolbox"
-version = "0.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "50a0e551c1e27e1731aba276dbeaeac73f53c7cd34d1bda485d02bd1e0f36844"
-dependencies = [
- "libc",
- "windows-sys 0.59.0",
 ]
 
 [[package]]

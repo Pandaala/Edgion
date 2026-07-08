@@ -341,6 +341,7 @@ impl CompiledScript {
 
     /// Look up the source line that produced the instruction at `pc`.
     /// Returns `None` when no `source_map` is attached (legacy payloads) or `pc` is past the end.
+    #[cfg(test)]
     pub fn line_of(&self, pc: usize) -> Option<u32> {
         let runs = self.source_map.as_ref()?;
         let mut covered: usize = 0;

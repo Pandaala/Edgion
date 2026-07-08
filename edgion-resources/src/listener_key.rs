@@ -24,25 +24,12 @@ impl ListenerKey {
         ListenerKey(format!("{}/{}", addr, protocol.to_uppercase()))
     }
 
-    /// Returns the socket-address portion of the key (everything before the last `/`).
-    pub fn socket_addr_str(&self) -> &str {
-        match self.0.rfind('/') {
-            Some(pos) => &self.0[..pos],
-            None => &self.0,
-        }
-    }
-
     /// Returns the protocol portion of the key (everything after the last `/`).
     pub fn protocol(&self) -> &str {
         match self.0.rfind('/') {
             Some(pos) => &self.0[pos + 1..],
             None => "",
         }
-    }
-
-    /// Returns the raw key string.
-    pub fn as_str(&self) -> &str {
-        &self.0
     }
 }
 
@@ -86,8 +73,6 @@ mod tests {
     fn test_new_and_accessors() {
         let addr = make_addr("0.0.0.0", 80);
         let key = ListenerKey::new(addr, "HTTP");
-        assert_eq!(key.as_str(), "0.0.0.0:80/HTTP");
-        assert_eq!(key.socket_addr_str(), "0.0.0.0:80");
         assert_eq!(key.protocol(), "HTTP");
     }
 

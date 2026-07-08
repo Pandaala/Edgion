@@ -85,11 +85,6 @@ impl StreamPluginRuntime {
         StreamPluginResult::Allow
     }
 
-    /// Get the number of plugins in this runtime
-    pub fn plugin_count(&self) -> usize {
-        self.plugins.len()
-    }
-
     /// Check if runtime has any plugins
     pub fn is_empty(&self) -> bool {
         self.plugins.is_empty()

@@ -49,12 +49,6 @@ impl ConditionalRequestFilter {
             alias,
         }
     }
-
-    /// Create a wrapper without conditions (always runs)
-    #[allow(dead_code)]
-    pub fn without_conditions(inner: Box<dyn RequestFilter>) -> Self {
-        Self::new(inner, None)
-    }
 }
 
 #[async_trait]
@@ -111,12 +105,6 @@ impl ConditionalUpstreamResponseFilter {
             conditions,
             alias,
         }
-    }
-
-    /// Create a wrapper without conditions (always runs)
-    #[allow(dead_code)]
-    pub fn without_conditions(inner: Box<dyn UpstreamResponseFilter>) -> Self {
-        Self::new(inner, None)
     }
 }
 
@@ -183,12 +171,6 @@ impl ConditionalUpstreamResponseBodyFilter {
             alias,
         }
     }
-
-    /// Create a wrapper without conditions (always runs)
-    #[allow(dead_code)]
-    pub fn without_conditions(inner: Box<dyn UpstreamResponseBodyFilter>) -> Self {
-        Self::new(inner, None)
-    }
 }
 
 impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
@@ -248,12 +230,6 @@ impl ConditionalUpstreamResponse {
             conditions,
             alias,
         }
-    }
-
-    /// Create a wrapper without conditions (always runs)
-    #[allow(dead_code)]
-    pub fn without_conditions(inner: Box<dyn UpstreamResponse>) -> Self {
-        Self::new(inner, None)
     }
 }
 

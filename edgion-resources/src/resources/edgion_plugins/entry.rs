@@ -109,16 +109,6 @@ impl PluginEntry {
         }
     }
 
-    /// Create a new plugin entry with conditions
-    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
-        Self {
-            enable: true,
-            conditions: Some(conditions),
-            alias: None,
-            plugin,
-        }
-    }
-
     /// Validate the optional alias against the entry-level rule.
     /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
     pub fn validate_alias(&self) -> Option<String> {
@@ -135,11 +125,6 @@ impl PluginEntry {
     /// Get the conditions for runtime evaluation
     pub fn conditions(&self) -> Option<&PluginConditions> {
         self.conditions.as_ref()
-    }
-
-    /// Check if this entry has conditions defined
-    pub fn has_conditions(&self) -> bool {
-        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -193,16 +178,6 @@ impl RequestFilterEntry {
         }
     }
 
-    /// Create a new plugin entry with conditions
-    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
-        Self {
-            enable: true,
-            conditions: Some(conditions),
-            alias: None,
-            plugin,
-        }
-    }
-
     /// Validate the optional alias against the entry-level rule.
     /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
     pub fn validate_alias(&self) -> Option<String> {
@@ -217,11 +192,6 @@ impl RequestFilterEntry {
     /// Get the conditions for runtime evaluation
     pub fn conditions(&self) -> Option<&PluginConditions> {
         self.conditions.as_ref()
-    }
-
-    /// Check if this entry has conditions defined
-    pub fn has_conditions(&self) -> bool {
-        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -275,16 +245,6 @@ impl UpstreamResponseFilterEntry {
         }
     }
 
-    /// Create a new plugin entry with conditions
-    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
-        Self {
-            enable: true,
-            conditions: Some(conditions),
-            alias: None,
-            plugin,
-        }
-    }
-
     /// Validate the optional alias against the entry-level rule.
     /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
     pub fn validate_alias(&self) -> Option<String> {
@@ -299,11 +259,6 @@ impl UpstreamResponseFilterEntry {
     /// Get the conditions for runtime evaluation
     pub fn conditions(&self) -> Option<&PluginConditions> {
         self.conditions.as_ref()
-    }
-
-    /// Check if this entry has conditions defined
-    pub fn has_conditions(&self) -> bool {
-        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -357,16 +312,6 @@ impl UpstreamResponseBodyFilterEntry {
         }
     }
 
-    /// Create a new plugin entry with conditions
-    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
-        Self {
-            enable: true,
-            conditions: Some(conditions),
-            alias: None,
-            plugin,
-        }
-    }
-
     /// Validate the optional alias against the entry-level rule.
     /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
     pub fn validate_alias(&self) -> Option<String> {
@@ -381,11 +326,6 @@ impl UpstreamResponseBodyFilterEntry {
     /// Get the conditions for runtime evaluation
     pub fn conditions(&self) -> Option<&PluginConditions> {
         self.conditions.as_ref()
-    }
-
-    /// Check if this entry has conditions defined
-    pub fn has_conditions(&self) -> bool {
-        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name
@@ -439,16 +379,6 @@ impl UpstreamResponseEntry {
         }
     }
 
-    /// Create a new plugin entry with conditions
-    pub fn with_conditions(plugin: EdgionPlugin, conditions: PluginConditions) -> Self {
-        Self {
-            enable: true,
-            conditions: Some(conditions),
-            alias: None,
-            plugin,
-        }
-    }
-
     /// Validate the optional alias against the entry-level rule.
     /// Returns `Some(error)` if alias is set and invalid; `None` otherwise.
     pub fn validate_alias(&self) -> Option<String> {
@@ -463,11 +393,6 @@ impl UpstreamResponseEntry {
     /// Get the conditions for runtime evaluation
     pub fn conditions(&self) -> Option<&PluginConditions> {
         self.conditions.as_ref()
-    }
-
-    /// Check if this entry has conditions defined
-    pub fn has_conditions(&self) -> bool {
-        self.conditions.as_ref().is_some_and(|c| !c.is_empty())
     }
 
     /// Get the plugin type name

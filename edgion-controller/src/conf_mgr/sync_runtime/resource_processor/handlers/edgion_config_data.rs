@@ -13,7 +13,6 @@
 
 use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, partially_invalid_condition, update_condition,
-    ResolvedRefsError,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     EdgionConfigDataStore, HandlerContext, ProcessResult, ProcessorHandler,
@@ -159,12 +158,4 @@ impl ProcessorHandler<EdgionConfigData> for EdgionConfigDataHandler {
             update_condition(&mut status.conditions, partially_invalid);
         }
     }
-}
-
-/// Resolve cross-EdgionConfigData references for update_status.
-///
-/// EdgionConfigData resources carry no external refs; always returns empty.
-#[allow(dead_code)]
-fn resolve_refs(_ed: &EdgionConfigData, _ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
-    vec![]
 }

@@ -94,11 +94,6 @@ pub async fn init_logging(config: LogConfig) -> Result<WorkerGuard> {
     Ok(guard)
 }
 
-/// Initialize logging with default configuration
-pub async fn init_default() -> Result<WorkerGuard> {
-    init_logging(LogConfig::default()).await
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

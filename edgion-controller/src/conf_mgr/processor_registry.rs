@@ -263,20 +263,6 @@ impl ProcessorRegistry {
         }
     }
 
-    /// Set all processors to not ready state
-    pub fn set_all_not_ready(&self) {
-        for processor in self.processors.read().values() {
-            processor.set_not_ready();
-        }
-    }
-
-    /// Clear all processors' caches
-    pub fn clear_all(&self) {
-        for processor in self.processors.read().values() {
-            processor.clear();
-        }
-    }
-
     /// Requeue all resources across all kinds.
     /// Used on leader transition to trigger full status reconciliation.
     pub async fn requeue_all(&self) {

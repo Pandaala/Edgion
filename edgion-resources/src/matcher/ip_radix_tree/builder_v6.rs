@@ -116,11 +116,6 @@ impl IpV6RadixBuilder {
         Self::insert_helper(child, ip, prefix_len, label_id, current_bit + 1, cidr_str)
     }
 
-    /// Returns the number of rules inserted
-    pub fn len(&self) -> usize {
-        self.rule_count
-    }
-
     /// Returns whether the builder is empty
     pub fn is_empty(&self) -> bool {
         self.rule_count == 0
@@ -154,7 +149,7 @@ mod tests {
     #[test]
     fn test_new_builder() {
         let builder = IpV6RadixBuilder::new();
-        assert_eq!(builder.len(), 0);
+        assert_eq!(builder.rule_count, 0);
         assert!(builder.is_empty());
     }
 
@@ -162,7 +157,7 @@ mod tests {
     fn test_insert_single_rule() {
         let mut builder = IpV6RadixBuilder::new();
         assert!(builder.insert("2001:db8::/32", 1).is_ok());
-        assert_eq!(builder.len(), 1);
+        assert_eq!(builder.rule_count, 1);
         assert!(!builder.is_empty());
     }
 
@@ -172,7 +167,7 @@ mod tests {
         assert!(builder.insert("2001:db8::/32", 1).is_ok());
         assert!(builder.insert("fe80::/10", 2).is_ok());
         assert!(builder.insert("::1/128", 1).is_ok());
-        assert_eq!(builder.len(), 3);
+        assert_eq!(builder.rule_count, 3);
     }
 
     #[test]

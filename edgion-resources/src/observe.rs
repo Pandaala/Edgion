@@ -47,11 +47,6 @@ impl LogConfig {
     pub fn enabled_default(path: impl Into<String>) -> Self {
         Self::with_path(path, true)
     }
-
-    /// Create disabled config with default settings
-    pub fn disabled_default(path: impl Into<String>) -> Self {
-        Self::with_path(path, false)
-    }
 }
 
 /// Access log output options that are not part of the generic [`LogConfig`].

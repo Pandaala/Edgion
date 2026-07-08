@@ -65,12 +65,6 @@ pub fn count_edgion_config_data() -> usize {
     GLOBAL_EDGION_CONFIG_DATA_STORE.count()
 }
 
-/// List all keys ("namespace/name") in the global EdgionConfigData store.
-#[allow(dead_code)] // Consumed by validator/sample-diagnostics; allow until then.
-pub fn edgion_config_data_keys() -> Vec<String> {
-    GLOBAL_EDGION_CONFIG_DATA_STORE.keys()
-}
-
 /// Raw EdgionConfigData map. Key: "namespace/name" (e.g. "edgion-default/region-override").
 type RawMap = HashMap<String, Arc<EdgionConfigData>>;
 

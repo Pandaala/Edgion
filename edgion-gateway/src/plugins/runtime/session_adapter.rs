@@ -423,18 +423,6 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         result
     }
 
-    fn write_response_header_boxed<'b>(
-        &'b mut self,
-        resp: Box<ResponseHeader>,
-        end_of_stream: bool,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginSessionResult<()>> + Send + 'b>> {
-        // Delegate to `write_response_header` so the gRPC non-200 intercept logic lives
-        // in a single place. Keeping this method on the trait lets callers that need an
-        // explicit `Pin<Box<dyn Future>>` (e.g. when working through `dyn PluginSession`)
-        // obtain one without duplicating the body.
-        Box::pin(async move { self.write_response_header(resp, end_of_stream).await })
-    }
-
     fn set_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()> {
         if let Some(resp) = &mut self.response_header {
             resp.insert_header(name.to_string(), value.to_string())

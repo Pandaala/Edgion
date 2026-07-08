@@ -9,12 +9,6 @@ use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// API group for EdgionTls
-pub const EDGION_TLS_GROUP: &str = "edgion.io";
-
-/// Kind for EdgionTls
-pub const EDGION_TLS_KIND: &str = "EdgionTls";
-
 /// TLS protocol version (similar to Cloudflare's Minimum TLS Version).
 ///
 /// **Security note**: `Tls10` and `Tls11` are **formally deprecated by IETF

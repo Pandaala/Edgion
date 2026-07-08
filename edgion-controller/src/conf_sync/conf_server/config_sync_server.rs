@@ -89,22 +89,11 @@ impl ConfigSyncServer {
         self.server_id.read().clone()
     }
 
-    /// Regenerate server ID (for relink)
-    pub fn regenerate_server_id(&self) {
-        let old_id = self.server_id();
-        let new_id = Self::generate_server_id();
-        tracing::info!(
-            component = "config_sync_server",
-            old_server_id = %old_id,
-            new_server_id = %new_id,
-            "Regenerating server_id for relink"
-        );
-        *self.server_id.write() = new_id;
-    }
-
     // ==================== WatchObj Registration ====================
 
-    /// Register a WatchObj (called by Processor initialization)
+    /// Register a WatchObj (called by Processor initialization).
+    /// Test-only: production registration uses the batch `register_all`.
+    #[cfg(test)]
     pub fn register_watch_obj(&self, kind: &str, obj: Arc<dyn WatchObj>) {
         let mut map = self.watch_objects.write();
         tracing::info!(
@@ -126,11 +115,6 @@ impl ConfigSyncServer {
             );
             map.insert(kind, obj);
         }
-    }
-
-    /// Get a watch object by kind
-    pub fn get_watch_obj(&self, kind: &str) -> Option<Arc<dyn WatchObj>> {
-        self.watch_objects.read().get(kind).cloned()
     }
 
     pub fn all_kinds(&self) -> Vec<String> {
@@ -244,11 +228,6 @@ impl ConfigSyncServer {
 
     // ==================== State Management ====================
 
-    pub fn is_all_ready(&self) -> bool {
-        let map = self.watch_objects.read();
-        map.values().all(|obj| obj.is_ready())
-    }
-
     pub fn not_ready_kinds(&self) -> Vec<String> {
         let map = self.watch_objects.read();
         map.iter()
@@ -257,46 +236,11 @@ impl ConfigSyncServer {
             .collect()
     }
 
-    /// Set a specific watch object to ready state by kind
-    pub fn set_cache_ready_by_kind(&self, kind: &str) {
-        let map = self.watch_objects.read();
-        if let Some(obj) = map.get(kind) {
-            obj.set_ready();
-            tracing::info!(component = "config_sync_server", kind = kind, "Cache marked as ready");
-        } else {
-            tracing::warn!(
-                component = "config_sync_server",
-                kind = kind,
-                "Unknown kind for set_cache_ready_by_kind"
-            );
-        }
-    }
-
-    pub fn set_all_not_ready(&self) {
-        let map = self.watch_objects.read();
-        for obj in map.values() {
-            obj.set_not_ready();
-        }
-    }
-
     pub fn clear_all(&self) {
         let map = self.watch_objects.read();
         for obj in map.values() {
             obj.clear();
         }
-    }
-
-    /// Reset for relink
-    pub fn reset_for_relink(&self) {
-        tracing::info!(component = "config_sync_server", "Resetting for relink");
-        self.set_all_not_ready();
-        self.clear_all();
-        self.regenerate_server_id();
-        tracing::info!(
-            component = "config_sync_server",
-            server_id = %self.server_id(),
-            "Reset complete"
-        );
     }
 }
 

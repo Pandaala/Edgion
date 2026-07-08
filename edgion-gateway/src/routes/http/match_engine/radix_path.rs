@@ -85,16 +85,6 @@ impl RadixPath {
     pub fn tree_key(&self) -> &str {
         &self.normalized
     }
-
-    /// Return a string describing the match type for debugging.
-    pub fn match_type_str(&self) -> &str {
-        match (self.is_prefix_match, self.has_params) {
-            (true, true) => "ParamPrefix",
-            (true, false) => "Prefix",
-            (false, true) => "Param",
-            (false, false) => "Exact",
-        }
-    }
 }
 
 /// Normalize a path by merging consecutive slashes.
@@ -184,7 +174,6 @@ mod tests {
         assert!(!path.is_prefix_match);
         assert_eq!(path.segment_count, 1);
         assert!(!path.has_params);
-        assert_eq!(path.match_type_str(), "Exact");
     }
 
     #[test]
@@ -194,7 +183,6 @@ mod tests {
         assert!(path.is_prefix_match);
         assert_eq!(path.segment_count, 1);
         assert!(!path.has_params);
-        assert_eq!(path.match_type_str(), "Prefix");
     }
 
     #[test]
@@ -204,7 +192,6 @@ mod tests {
         assert!(!path.is_prefix_match);
         assert_eq!(path.segment_count, 2);
         assert!(path.has_params);
-        assert_eq!(path.match_type_str(), "Param");
     }
 
     #[test]
@@ -214,7 +201,6 @@ mod tests {
         assert!(path.is_prefix_match);
         assert_eq!(path.segment_count, 2);
         assert!(path.has_params);
-        assert_eq!(path.match_type_str(), "ParamPrefix");
     }
 
     #[test]
@@ -253,14 +239,6 @@ mod tests {
         let short = RadixPath::new("/api", 0, false);
         let long = RadixPath::new("/api/users/profile", 0, false);
         assert!(long.priority_weight > short.priority_weight);
-    }
-
-    #[test]
-    fn test_match_type_str_variants() {
-        assert_eq!(RadixPath::new("/api", 0, false).match_type_str(), "Exact");
-        assert_eq!(RadixPath::new("/api", 0, true).match_type_str(), "Prefix");
-        assert_eq!(RadixPath::new("/users/:id", 0, false).match_type_str(), "Param");
-        assert_eq!(RadixPath::new("/users/:id", 0, true).match_type_str(), "ParamPrefix");
     }
 
     #[test]

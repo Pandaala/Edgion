@@ -161,16 +161,13 @@ impl BinOp {
 // ==================== AST Construction Helpers ====================
 
 impl Stmt {
-    pub fn new(kind: StmtKind) -> Self {
-        Self { kind, span: None }
-    }
     pub fn with_span(kind: StmtKind, span: Span) -> Self {
         Self { kind, span: Some(span) }
     }
 }
 
 impl Expr {
-    pub fn new(kind: ExprKind) -> Self {
+    fn new(kind: ExprKind) -> Self {
         Self { kind, span: None }
     }
     pub fn with_span(kind: ExprKind, span: Span) -> Self {
@@ -181,14 +178,5 @@ impl Expr {
     }
     pub fn int(n: i64) -> Self {
         Self::new(ExprKind::IntLit(n))
-    }
-    pub fn ident(name: impl Into<String>) -> Self {
-        Self::new(ExprKind::Ident(name.into()))
-    }
-    pub fn nil() -> Self {
-        Self::new(ExprKind::NilLit)
-    }
-    pub fn bool_val(b: bool) -> Self {
-        Self::new(ExprKind::BoolLit(b))
     }
 }

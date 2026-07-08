@@ -19,7 +19,6 @@ use tokio::sync::mpsc;
 
 use crate::link_sys::credential::{CredentialState, ResolvedCredential};
 use crate::link_sys::lifecycle::LinkSysLifecycle;
-use crate::link_sys::LinkSysHealth;
 use edgion_resources::resources::common::TlsConfig;
 use edgion_resources::resources::link_sys::kafka::KafkaClientConfig;
 
@@ -193,21 +192,6 @@ impl KafkaLinkClient {
 
     pub fn healthy(&self) -> bool {
         self.healthy.load(Ordering::Relaxed)
-    }
-
-    pub fn health_status(&self) -> LinkSysHealth {
-        let connected = self.healthy();
-        LinkSysHealth {
-            name: self.name.clone(),
-            system_type: "kafka".to_string(),
-            connected,
-            latency_ms: None,
-            error: if connected {
-                None
-            } else {
-                Some("not connected".to_string())
-            },
-        }
     }
 
     /// Non-blocking send to Kafka topic. Returns Err if not initialized or channel full.

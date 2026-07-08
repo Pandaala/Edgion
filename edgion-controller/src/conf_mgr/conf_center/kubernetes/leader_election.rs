@@ -84,12 +84,6 @@ impl LeaderElectionConfig {
         })
     }
 
-    /// Set the identity for this instance
-    pub fn with_identity(mut self, identity: impl Into<String>) -> Self {
-        self.identity = identity.into();
-        self
-    }
-
     /// Set the lease duration
     pub fn with_lease_duration_secs(mut self, secs: i32) -> Self {
         self.lease_duration_secs = secs;
@@ -592,15 +586,6 @@ impl LeaderHandle {
     /// Check if this instance is the leader
     pub fn is_leader(&self) -> bool {
         self.is_leader.load(Ordering::Acquire)
-    }
-
-    /// Wait until this instance becomes leader
-    ///
-    /// This will block indefinitely until leadership is acquired.
-    pub async fn wait_until_leader(&self) {
-        while !self.is_leader() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
     }
 
     /// Wait until this instance becomes leader, with cancellation support

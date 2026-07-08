@@ -33,16 +33,6 @@ impl KubernetesStorage {
         Ok(Self { client })
     }
 
-    /// Create a new KubernetesStorage with existing client
-    pub fn with_client(client: Client) -> Self {
-        Self { client }
-    }
-
-    /// Get the Kubernetes client
-    pub fn client(&self) -> &Client {
-        &self.client
-    }
-
     /// Resolve ApiResource and Scope for a resource kind.
     async fn resolve_api_resource(&self, kind: &str) -> Result<(ApiResource, Scope), ConfWriterError> {
         fn api_resource(group: &str, version: &str, kind: &str, plural: &str) -> ApiResource {

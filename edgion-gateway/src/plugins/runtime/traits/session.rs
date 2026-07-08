@@ -90,12 +90,6 @@ pub trait PluginSession: Send + Sync {
         end_of_stream: bool,
     ) -> PluginSessionResult<()>;
 
-    fn write_response_header_boxed<'a>(
-        &'a mut self,
-        resp: Box<ResponseHeader>,
-        end_of_stream: bool,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = PluginSessionResult<()>> + Send + 'a>>;
-
     /// Set a response header (will be added when write_response_header is called)
     fn set_response_header(&mut self, name: &str, value: &str) -> PluginSessionResult<()>;
 

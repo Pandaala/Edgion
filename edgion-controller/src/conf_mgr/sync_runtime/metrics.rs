@@ -179,26 +179,6 @@ impl ReloadMetrics {
     }
 }
 
-/// RAII guard for measuring reload duration
-pub struct ReloadTimer {
-    start: Instant,
-}
-
-impl ReloadTimer {
-    /// Start a new reload timer
-    pub fn start() -> Self {
-        reload_metrics().reload_started();
-        Self { start: Instant::now() }
-    }
-
-    /// Complete and record duration
-    pub fn complete(self) -> f64 {
-        let duration = Instant::now().saturating_duration_since(self.start).as_secs_f64();
-        reload_metrics().reload_completed(duration);
-        duration
-    }
-}
-
 // ==================== Status Write Metrics ====================
 
 /// Record a successful status write (K8s API or FileSystem).

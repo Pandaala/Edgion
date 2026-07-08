@@ -328,21 +328,6 @@ pub fn get_kafka_client(name: &str) -> Option<Arc<KafkaLinkClient>> {
     KAFKA_RUNTIME.get(name)
 }
 
-/// List all registered Kafka client names.
-pub fn list_kafka_clients() -> Vec<String> {
-    KAFKA_RUNTIME.list()
-}
-
-/// Number of Kafka link clients currently in the runtime.
-pub fn kafka_client_count() -> usize {
-    KAFKA_RUNTIME.count()
-}
-
-/// Health check all registered Kafka clients.
-pub fn health_check_all_kafka() -> Vec<LinkSysHealth> {
-    KAFKA_RUNTIME.values().into_iter().map(|c| c.health_status()).collect()
-}
-
 // ============================================================
 // Webhook runtime store
 // ============================================================

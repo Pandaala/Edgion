@@ -216,18 +216,6 @@ impl PluginRuntime {
         runtime
     }
 
-    /// Deprecated: prefer `from_httproute_filters_for_rule` or `_for_backend`
-    /// to make the scope explicit. Defaults to rule-scope behavior.
-    #[deprecated(note = "use from_httproute_filters_for_rule or from_httproute_filters_for_backend")]
-    pub fn from_httproute_filters(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
-        Self::from_httproute_filters_for_rule(filters, namespace)
-    }
-
-    #[deprecated(note = "use from_httproute_filters_for_rule or _for_backend wrappers")]
-    pub fn add_from_httproute_filters(&mut self, filters: &[HTTPRouteFilter], namespace: &str) {
-        self.add_from_httproute_filters_inner(filters, namespace, true);
-    }
-
     fn add_from_httproute_filters_inner(&mut self, filters: &[HTTPRouteFilter], namespace: &str, assign_indices: bool) {
         for filter in filters {
             match filter.filter_type {
@@ -321,18 +309,6 @@ impl PluginRuntime {
         let mut runtime = Self::new();
         runtime.add_from_grpcroute_filters_inner(filters, namespace, false);
         runtime
-    }
-
-    /// Deprecated: prefer `from_grpcroute_filters_for_rule` or `_for_backend`
-    /// to make the scope explicit. Defaults to rule-scope behavior.
-    #[deprecated(note = "use from_grpcroute_filters_for_rule or from_grpcroute_filters_for_backend")]
-    pub fn from_grpcroute_filters(filters: &[GRPCRouteFilter], namespace: &str) -> Self {
-        Self::from_grpcroute_filters_for_rule(filters, namespace)
-    }
-
-    #[deprecated(note = "use from_grpcroute_filters_for_rule or _for_backend wrappers")]
-    pub fn add_from_grpcroute_filters(&mut self, filters: &[GRPCRouteFilter], namespace: &str) {
-        self.add_from_grpcroute_filters_inner(filters, namespace, true);
     }
 
     fn add_from_grpcroute_filters_inner(&mut self, filters: &[GRPCRouteFilter], namespace: &str, assign_indices: bool) {
@@ -993,14 +969,6 @@ impl PluginRuntime {
 
     fn add_upstream_response(&mut self, filter: Box<dyn UpstreamResponse>) {
         self.upstream_response_async_plugins.push(filter);
-    }
-
-    /// Get total plugin count across all stages
-    pub fn total_plugin_count(&self) -> usize {
-        self.request_plugins.len()
-            + self.upstream_response_plugins.len()
-            + self.upstream_response_body_plugins.len()
-            + self.upstream_response_async_plugins.len()
     }
 
     /// Get request stage plugin count

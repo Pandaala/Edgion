@@ -63,10 +63,7 @@ schemars.workspace = true
 tonic.workspace = true
 rustls.workspace = true
 tokio-rustls.workspace = true
-# System CA roots for building custom rustls ClientConfig (Redis LinkSys TLS)
-rustls-native-certs.workspace = true
 x509-parser.workspace = true
-tonic-reflection.workspace = true
 prost.workspace = true
 
 # File system monitoring
@@ -76,7 +73,6 @@ futures.workspace = true
 
 # HTTP server
 axum.workspace = true
-axum-server.workspace = true
 
 # Utilities
 bytes.workspace = true
@@ -90,32 +86,21 @@ regex.workspace = true
 rand.workspace = true
 smallvec.workspace = true
 indexmap.workspace = true
-nom.workspace = true
 sha2.workspace = true
-subtle.workspace = true
-crc32fast.workspace = true
 hmac.workspace = true
-aes-gcm.workspace = true
 hex.workspace = true
-jsonwebtoken.workspace = true
 
 # Pingora
 pingora-core.workspace = true
-pingora-http.workspace = true
-pingora-limits.workspace = true
-pingora-load-balancing.workspace = true
 pingora-proxy.workspace = true
 etcd-client.workspace = true
-fred.workspace = true
 
 # Metrics
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
-metrics-util.workspace = true
 
 # CLI
 clap.workspace = true
-rpassword.workspace = true
 zeroize.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -126,18 +111,10 @@ percent-encoding.workspace = true
 # Test client dependencies
 reqwest.workspace = true
 
-# CLI table formatting
-tabled.workspace = true
-
-rusqlite.workspace = true
-md-5.workspace = true
-cookie.workspace = true
 instant-acme.workspace = true
 rcgen.workspace = true
 time.workspace = true
 sha1.workspace = true
-ldap3.workspace = true
-pingora-ketama.workspace = true
 tower.workspace = true
 
 

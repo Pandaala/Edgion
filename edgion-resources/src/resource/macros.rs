@@ -140,15 +140,6 @@ macro_rules! define_resources {
             }
         }
 
-        /// Get base configuration resource names
-        pub fn base_conf_kind_names() -> Vec<&'static str> {
-            ALL_RESOURCE_INFOS
-                .iter()
-                .filter(|info| info.is_base_conf)
-                .map(|info| info.cache_field_name)
-                .collect()
-        }
-
         /// Check if a ResourceKind is cluster-scoped
         pub fn is_kind_cluster_scoped(kind: $crate::ResourceKind) -> bool {
             get_resource_info(kind).map(|info| info.cluster_scoped).unwrap_or(false)

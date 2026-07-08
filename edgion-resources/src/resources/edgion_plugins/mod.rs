@@ -49,12 +49,6 @@ pub use plugin_configs::{
 };
 pub use plugin_validation::PluginValidation;
 
-/// API group for EdgionPlugins
-pub const EDGION_PLUGINS_GROUP: &str = "edgion.io";
-
-/// Kind for EdgionPlugins
-pub const EDGION_PLUGINS_KIND: &str = "EdgionPlugins";
-
 /// EdgionPlugins defines reusable plugin configurations
 #[derive(CustomResource, Serialize, Deserialize, Debug, Default, Clone, JsonSchema)]
 #[kube(

@@ -29,16 +29,6 @@ impl RedisLinkClient {
         Ok(val)
     }
 
-    /// GET key → Option<Vec<u8>> (binary safe)
-    pub async fn get_bytes(&self, key: &str) -> Result<Option<Vec<u8>>> {
-        let val: Option<Vec<u8>> = self
-            .pool()
-            .get(key)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis GET bytes {}: {:?}", key, e))?;
-        Ok(val)
-    }
-
     /// SET key value [EX seconds]
     pub async fn set(&self, key: &str, value: &str, ttl: Option<Duration>) -> Result<()> {
         use fred::types::Expiration;
@@ -212,15 +202,6 @@ impl RedisLinkClient {
             .await
             .map_err(|e| anyhow::anyhow!("Redis LLEN {}: {:?}", key, e))?;
         Ok(len)
-    }
-
-    /// LTRIM key start stop — trim list to [start, stop] range
-    pub async fn ltrim(&self, key: &str, start: i64, stop: i64) -> Result<()> {
-        self.pool()
-            .ltrim::<(), _>(key, start, stop)
-            .await
-            .map_err(|e| anyhow::anyhow!("Redis LTRIM {}: {:?}", key, e))?;
-        Ok(())
     }
 }
 

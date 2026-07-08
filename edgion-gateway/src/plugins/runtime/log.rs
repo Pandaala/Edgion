@@ -373,13 +373,6 @@ impl PluginLog {
         self.refer_to = Some(name);
     }
 
-    /// Legacy method for backward compatibility (deprecated, use push() instead)
-    #[inline]
-    #[deprecated(note = "Use push() instead")]
-    pub fn add_plugin_log(&mut self, log: &str) {
-        self.push(log);
-    }
-
     /// Render this log as a single `String` suitable for `expect-test`
     /// snapshot assertions.
     ///

@@ -25,13 +25,10 @@ pub mod registry;
 // Re-export core types
 pub use kind::ResourceKind;
 pub use meta::ResourceMeta;
-pub use registry::{
-    all_resource_type_names, base_conf_resource_names, get_resource_metadata, ResourceTypeMetadata, RESOURCE_TYPES,
-};
+pub use registry::all_resource_type_names;
 
 // Re-export from defs for backward compatibility
 pub use defs::{
-    all_resource_kind_names, base_conf_kind_names, default_capacity_for_kind, get_resource_info,
-    is_kind_cluster_scoped, registry_resource_names, resource_kind_from_name, ResourceKindInfo, ALL_RESOURCE_INFOS,
-    DEFAULT_NO_SYNC_KINDS,
+    all_resource_kind_names, default_capacity_for_kind, get_resource_info, is_kind_cluster_scoped,
+    registry_resource_names, resource_kind_from_name, ResourceKindInfo, ALL_RESOURCE_INFOS, DEFAULT_NO_SYNC_KINDS,
 };

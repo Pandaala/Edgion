@@ -112,33 +112,31 @@ impl KubernetesConfig {
         }
     }
 
-    /// Set watch namespaces
+    /// Set watch namespaces. Test-only builder seam.
+    #[cfg(test)]
     pub fn with_watch_namespaces(mut self, namespaces: Vec<String>) -> Self {
         self.watch_namespaces = namespaces;
         self
     }
 
-    /// Set label selector
+    /// Set label selector. Test-only builder seam.
+    #[cfg(test)]
     pub fn with_label_selector(mut self, selector: impl Into<String>) -> Self {
         self.label_selector = Some(selector.into());
         self
     }
 
-    /// Set controller name used in Gateway API status reporting
+    /// Set controller name used in Gateway API status reporting. Test-only builder seam.
+    #[cfg(test)]
     pub fn with_controller_name(mut self, controller_name: impl Into<String>) -> Self {
         self.controller_name = controller_name.into();
         self
     }
 
-    /// Set metadata filter
+    /// Set metadata filter. Test-only builder seam.
+    #[cfg(test)]
     pub fn with_metadata_filter(mut self, filter: MetadataFilterConfig) -> Self {
         self.metadata_filter = filter;
-        self
-    }
-
-    /// Set leader election config
-    pub fn with_leader_election(mut self, config: LeaderElectionConfig) -> Self {
-        self.leader_election = config;
         self
     }
 
@@ -147,7 +145,8 @@ impl KubernetesConfig {
         &self.watch_namespaces
     }
 
-    /// Get label selector
+    /// Get label selector. Test-only: production reads the field directly.
+    #[cfg(test)]
     pub fn label_selector(&self) -> Option<&str> {
         self.label_selector.as_deref()
     }
@@ -160,11 +159,6 @@ impl KubernetesConfig {
     /// Get controller name
     pub fn controller_name(&self) -> &str {
         &self.controller_name
-    }
-
-    /// Get static gateway address (for status.addresses fallback)
-    pub fn gateway_address(&self) -> Option<&str> {
-        self.gateway_address.as_deref()
     }
 
     /// Get metadata filter
@@ -180,11 +174,6 @@ impl KubernetesConfig {
     /// Get HA mode
     pub fn ha_mode(&self) -> HaMode {
         self.ha_mode
-    }
-
-    /// Get no_watch_kinds
-    pub fn no_watch_kinds(&self) -> &[String] {
-        &self.no_watch_kinds
     }
 }
 

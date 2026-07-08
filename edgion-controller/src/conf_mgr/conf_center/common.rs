@@ -62,11 +62,6 @@ impl ErrorStatus {
             }],
         }
     }
-
-    /// Create a status for YAML parse error
-    pub fn parse_error(error: &str) -> Self {
-        Self::error("ParseError", error)
-    }
 }
 
 // ============================================================================

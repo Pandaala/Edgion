@@ -52,8 +52,6 @@ pub type RelinkSignalSender = mpsc::Sender<RelinkReason>;
 /// Reason for relink request
 #[derive(Debug, Clone)]
 pub enum RelinkReason {
-    /// Watcher received 410 Gone error
-    GoneError,
     /// Watcher reconnected (detected by Event::Init after init_done)
     WatcherReconnected,
     /// Manual reload requested via Admin API

@@ -16,23 +16,8 @@ pub enum EdError {
     #[error("Route not found")]
     RouteNotFound(),
 
-    #[error("Invalid config: {0}")]
-    InvalidConfig(String),
-
     #[error("Internal error: {0}")]
     InternalError(String),
-
-    #[error("Service unavailable: {0}")]
-    ServiceUnavailable(String),
-
-    #[error("Upstream error {0}")]
-    UpstreamError(String),
-
-    #[error("Sni not match_engine: {0}")]
-    SniNotMatch(String),
-
-    #[error("Route match error: {0}")]
-    RouteMatchError(String),
 
     #[error("No backend available")]
     BackendNotFound(),
@@ -45,9 +30,6 @@ pub enum EdError {
 
     #[error("Plugin terminated the request")]
     PluginTerminated(),
-
-    #[error("HTTP/2 required for gRPC")]
-    Http2Required,
 
     #[error("Cross-namespace reference denied: {target_namespace}/{target_name} ({reason})")]
     RefDenied {

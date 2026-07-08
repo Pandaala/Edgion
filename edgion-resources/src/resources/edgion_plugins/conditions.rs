@@ -350,11 +350,6 @@ impl KeyMatchCondition {
         }
         Ok(())
     }
-
-    #[deprecated(note = "Use compile() instead")]
-    pub fn compile_regex(&mut self) -> Result<(), regex::Error> {
-        self.compile()
-    }
 }
 
 impl IncludeCondition {

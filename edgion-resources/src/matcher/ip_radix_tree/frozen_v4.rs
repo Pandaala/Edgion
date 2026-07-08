@@ -132,11 +132,6 @@ impl FrozenIpV4RadixTree {
     pub fn match_ipv4(&self, ip: Ipv4Addr) -> Option<u16> {
         self.match_ip(u32::from(ip))
     }
-
-    /// Returns the number of nodes in the tree
-    pub fn node_count(&self) -> usize {
-        self.nodes.len()
-    }
 }
 
 /// Recursively count nodes in the build tree

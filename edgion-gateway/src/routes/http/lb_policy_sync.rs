@@ -158,7 +158,7 @@ mod tests {
         assert!(!policies.is_empty());
         assert!(policies.contains(&LbPolicy::Consistent));
 
-        policy_store.delete_lb_policies_by_resource_key("test-sync/route1");
+        policy_store.remove_by_route("test-sync/route1");
     }
 
     #[test]
@@ -215,7 +215,7 @@ mod tests {
         assert!(policies1.contains(&LbPolicy::Consistent));
         assert!(policies2.contains(&LbPolicy::LeastConnection));
 
-        policy_store.delete_lb_policies_by_resource_key("test-multi/route1");
-        policy_store.delete_lb_policies_by_resource_key("test-multi/route2");
+        policy_store.remove_by_route("test-multi/route1");
+        policy_store.remove_by_route("test-multi/route2");
     }
 }

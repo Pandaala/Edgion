@@ -35,8 +35,6 @@ pub struct EdgionClient {
     client: Client,
     base_url: String,
     target: TargetType,
-    #[allow(dead_code)]
-    socket_path: Option<PathBuf>,
     token: Option<Zeroizing<String>>,
 }
 
@@ -47,7 +45,7 @@ impl EdgionClient {
     /// `EDGION_TOKEN`, or `~/.edgion/token`), this token-less client is created so
     /// `ensure_auth` can print a friendly "no token configured" message. With a
     /// resolved token the caller uses `with_static_bearer` instead.
-    pub fn new(target: TargetType, server: Option<String>, socket: Option<PathBuf>) -> Result<Self> {
+    pub fn new(target: TargetType, server: Option<String>, _socket: Option<PathBuf>) -> Result<Self> {
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .connect_timeout(Duration::from_secs(5))
@@ -68,7 +66,6 @@ impl EdgionClient {
             client,
             base_url,
             target,
-            socket_path: socket,
             token: None,
         })
     }
@@ -80,7 +77,7 @@ impl EdgionClient {
     pub fn with_static_bearer(
         target: TargetType,
         server: Option<String>,
-        socket: Option<PathBuf>,
+        _socket: Option<PathBuf>,
         bearer: &str,
     ) -> Result<Self> {
         let client = Client::builder()
@@ -103,7 +100,6 @@ impl EdgionClient {
             client,
             base_url,
             target,
-            socket_path: socket,
             // Wrap in Zeroizing so the credential is wiped on drop.
             token: Some(Zeroizing::new(bearer.to_string())),
         })
@@ -462,7 +458,6 @@ mod ensure_auth_tests {
             client,
             base_url,
             target: crate::cli::TargetType::Center,
-            socket_path: None,
             token: None,
         }
     }

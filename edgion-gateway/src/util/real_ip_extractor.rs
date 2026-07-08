@@ -254,17 +254,6 @@ fn extract_ip_from_socket_addr(addr: &str) -> IpAddr {
         .unwrap_or_else(|_| IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)))
 }
 
-/// Extracts IP address from socket address string and returns as string (without port)
-///
-/// # Arguments
-/// * `addr` - Socket address string (e.g., "192.168.1.1:45678")
-///
-/// # Returns
-/// * IP address as string (e.g., "192.168.1.1")
-pub fn extract_ip_string(addr: &str) -> String {
-    extract_ip_from_socket_addr(addr).to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,13 +420,6 @@ mod tests {
         // All IPs trusted, recursive: return leftmost IP (Nginx behavior)
         let result = extractor.extract_real_ip("192.168.1.254:45678", &headers);
         assert_eq!(result, "203.0.113.1");
-    }
-
-    #[test]
-    fn test_extract_ip_string() {
-        assert_eq!(extract_ip_string("192.168.1.1:45678"), "192.168.1.1");
-        assert_eq!(extract_ip_string("192.168.1.1"), "192.168.1.1");
-        assert_eq!(extract_ip_string("[::1]:8080"), "::1");
     }
 
     #[test]

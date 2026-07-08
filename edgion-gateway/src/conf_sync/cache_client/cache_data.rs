@@ -90,6 +90,7 @@ impl<T: ResourceMeta> CacheData<T> {
         self.sync_version
     }
 
+    #[cfg(test)]
     pub(crate) fn set_sync_version(&mut self, version: u64) {
         self.sync_version = version;
     }

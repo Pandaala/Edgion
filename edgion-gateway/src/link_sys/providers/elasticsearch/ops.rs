@@ -42,23 +42,6 @@ impl EsLinkClient {
         let endpoint = self.next_endpoint().to_string();
         self.cluster_health_at(&endpoint).await
     }
-
-    /// GET /_cat/health?format=json — verbose health info.
-    pub async fn cluster_health_verbose(&self) -> Result<Value> {
-        let endpoint = self.next_endpoint();
-        let url = format!("{}/_cat/health?format=json", endpoint);
-
-        let resp = self
-            .inner()
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("ES cat health failed: {:?}", e))?;
-
-        resp.json()
-            .await
-            .map_err(|e| anyhow::anyhow!("ES cat health parse error: {:?}", e))
-    }
 }
 
 // ============================================================================
@@ -174,27 +157,6 @@ impl EsLinkClient {
             .as_str()
             .map(|s| s.to_string())
             .ok_or_else(|| anyhow::anyhow!("ES index doc: missing _id in response"))
-    }
-
-    /// PUT /{index}/_doc/{id} — index a document with explicit ID.
-    pub async fn index_doc_with_id(&self, index: &str, id: &str, doc: &Value) -> Result<()> {
-        let endpoint = self.next_endpoint();
-        let url = format!("{}/{}/_doc/{}", endpoint, index, id);
-
-        let resp = self
-            .inner()
-            .put(&url)
-            .json(doc)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("ES index doc {}/{}: {:?}", index, id, e))?;
-
-        if !resp.status().is_success() {
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("ES index doc {}/{}: {}", index, id, body);
-        }
-
-        Ok(())
     }
 
     /// GET /{index}/_doc/{id} — get document by ID. Returns `_source` or None.

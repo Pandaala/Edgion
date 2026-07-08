@@ -333,27 +333,6 @@ pub struct KubernetesController {
 }
 
 impl KubernetesController {
-    /// Create a new KubernetesController
-    pub async fn new(
-        gateway_class_name: String,
-        controller_name: String,
-        gateway_address: Option<String>,
-        watch_namespaces: Vec<String>,
-        label_selector: Option<String>,
-    ) -> Result<Self> {
-        let client = Client::try_default().await?;
-        Self::with_metadata_filter(
-            client,
-            gateway_class_name,
-            controller_name,
-            gateway_address,
-            watch_namespaces,
-            label_selector,
-            MetadataFilterConfig::default(),
-            HashSet::new(),
-        )
-    }
-
     /// Create a new KubernetesController with metadata filter
     ///
     /// Accepts an external Client to enable Client reuse across components.

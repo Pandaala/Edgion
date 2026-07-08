@@ -9,12 +9,6 @@ use serde::{Deserialize, Serialize};
 use super::common::{ParentReference, RefDenied};
 use crate::ListenerKey;
 
-/// API group for TCPRoute
-pub const TCP_ROUTE_GROUP: &str = "gateway.networking.k8s.io";
-
-/// Kind for TCPRoute
-pub const TCP_ROUTE_KIND: &str = "TCPRoute";
-
 /// TCPRoute defines TCP rules for mapping requests to backends
 #[derive(CustomResource, Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[kube(

@@ -12,12 +12,6 @@ use std::path::Path;
 pub enum ValidationError {
     #[error("Schema validation failed: {0}")]
     SchemaViolation(String),
-
-    #[error("No schema found for resource kind: {0:?}")]
-    NoSchema(ResourceKind),
-
-    #[error("Failed to convert resource to JSON: {0}")]
-    JsonConversion(#[from] serde_json::Error),
 }
 
 /// Schema validator for Kubernetes resources based on CRD definitions
@@ -222,11 +216,6 @@ impl SchemaValidator {
                 Ok(())
             }
         }
-    }
-
-    /// Check if a schema is available for a resource kind
-    pub fn has_schema(&self, kind: ResourceKind) -> bool {
-        self.validators.contains_key(&kind)
     }
 
     /// Get the number of loaded schemas

@@ -504,33 +504,6 @@ pub fn create_admin_router(
     router
 }
 
-/// Serve the admin API on the specified address.
-///
-/// Thin wrapper over [`serve_with_shutdown`] with a never-resolving shutdown
-/// future. Kept as a separate public entry point for callers that don't need
-/// graceful shutdown plumbing.
-pub async fn serve(
-    conf_mgr: Arc<ConfMgr>,
-    schema_validator: Arc<SchemaValidator>,
-    addr: std::net::SocketAddr,
-    config_file: Option<String>,
-    authorizer: Arc<crate::authz::Authorizer>,
-    center_reload_tx: tokio::sync::watch::Sender<crate::config::CenterClientConfig>,
-    allow_admin_ips: Vec<String>,
-) -> anyhow::Result<()> {
-    serve_with_shutdown(
-        conf_mgr,
-        schema_validator,
-        addr,
-        config_file,
-        authorizer,
-        center_reload_tx,
-        allow_admin_ips,
-        std::future::pending::<()>(),
-    )
-    .await
-}
-
 /// Serve the admin API with graceful shutdown support.
 ///
 /// Credentials come only from configuration (resolved into `local_auth_config` /

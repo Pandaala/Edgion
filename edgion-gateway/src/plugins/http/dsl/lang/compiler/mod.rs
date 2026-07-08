@@ -30,7 +30,6 @@ pub(super) struct Local {
     pub(super) name: String,
     pub(super) slot: u16,
     pub(super) mutable: bool,
-    #[allow(dead_code)]
     pub(super) depth: u16,
 }
 
@@ -88,6 +87,7 @@ impl Compiler {
     /// Compile a program to bytecode (without embedding source).
     ///
     /// Used by unit tests that hand-build AST without raw source text.
+    #[cfg(test)]
     pub fn compile(self, program: &Program) -> Result<CompiledScript, CompileError> {
         self.compile_inner(program, None)
     }

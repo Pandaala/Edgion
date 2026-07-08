@@ -49,9 +49,6 @@ fn default_enable() -> bool {
     true
 }
 
-/// Kind for EdgionConfigData
-pub const EDGION_CONFIG_DATA_KIND: &str = "EdgionConfigData";
-
 /// Reference to an EdgionConfigData resource by name (and optional namespace).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

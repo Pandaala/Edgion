@@ -22,9 +22,7 @@ pub mod template;
 // `link_sys_core`; data-plane runtime providers and stores belong in this module.
 pub use edgion_common::link_sys_core::{credential, health, http_client, lifecycle, outbound_tls, tls, LinkSysHealth};
 
-pub use providers::webhook::{
-    get_webhook_call_handle, WebhookCallError, WebhookCallHandle, WebhookCallRequest, WebhookCallResult,
-};
+pub use providers::webhook::{get_webhook_call_handle, WebhookCallHandle};
 pub use providers::{LocalFileWriter, LogType};
 pub use runtime::{
     create_link_sys_handler, get_es_client, get_etcd_client, get_global_link_sys_store, get_kafka_client,

@@ -626,11 +626,6 @@ impl EdgionControllerConfig {
         self.conf_center.is_k8s_mode()
     }
 
-    /// Get the ConfCenterConfig
-    pub fn conf_center_config(&self) -> &ConfCenterConfig {
-        &self.conf_center
-    }
-
     /// Convert to SysLogConfig (for system logging)
     pub fn to_log_config(&self) -> edgion_common::observe::SysLogConfig {
         use edgion_common::observe::SysLogConfig;

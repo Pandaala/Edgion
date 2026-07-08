@@ -247,10 +247,6 @@ impl HttpRouteRuleUnit {
         (header_regexes, query_regexes)
     }
 
-    pub fn is_regex_route(&self) -> bool {
-        self.path_regex.is_some()
-    }
-
     /// Try to match the request path against the regex pattern (if this is a regex route)
     pub fn matches_path(&self, path: &str) -> bool {
         if let Some(ref regex) = self.path_regex {
@@ -285,10 +281,6 @@ impl HttpRouteRuleUnit {
             &self.compiled_query_regexes,
             self.has_query_matchers,
         )
-    }
-
-    pub fn identifier(&self) -> String {
-        format!("{}/{}", self.matched_info.rsc.ns, self.matched_info.rsc.name)
     }
 
     /// Match HTTP header.
