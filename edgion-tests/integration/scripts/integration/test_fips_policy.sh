@@ -10,7 +10,7 @@
 # toolchain or validated module required.
 #
 # It runs an ISOLATED stack (its own minimal Controller + Gateway on dedicated
-# ports, EDGION_FIPS_POLICY=1) so it does not disturb the main sweep's single
+# ports, EDGION_FIPS_POLICY=on) so it does not disturb the main sweep's single
 # shared gateway: the process-global toggle would otherwise force FIPS on every
 # listener in the shared run.
 #
@@ -247,7 +247,7 @@ EOF
 }
 
 # =============================================================================
-# Gateway launch (EDGION_FIPS_POLICY=1)
+# Gateway launch (EDGION_FIPS_POLICY=on)
 # =============================================================================
 GW_TMPDIR=""
 GW_PID=""
@@ -272,10 +272,10 @@ EOF
     precheck_port "$GW_METRICS_PORT" "gateway metrics" || return 1
     precheck_port "$GW_HTTPS_PORT"   "gateway https"   || return 1
 
-    echo "=== Starting gateway with EDGION_FIPS_POLICY=1 ==="
+    echo "=== Starting gateway with EDGION_FIPS_POLICY=on ==="
     RUST_LOG="info,pingora_proxy=error,pingora_core=error" \
     EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
-    EDGION_FIPS_POLICY=1 \
+    EDGION_FIPS_POLICY=on \
     "$GATEWAY_BIN" \
         -c "$GW_TMPDIR/gateway.yaml" \
         --work-dir "$GW_TMPDIR" \

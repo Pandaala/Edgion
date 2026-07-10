@@ -28,4 +28,6 @@ spec:
             overrideHost: eu-central.internal
         onMissing: skip
         onNoMatch: skip
-        debugHeader: true
+        dyeHeaders:
+          request:
+            - name: X-Dynamic-External-Upstream

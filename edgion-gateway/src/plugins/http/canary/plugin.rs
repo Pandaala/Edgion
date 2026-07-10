@@ -10,6 +10,7 @@
 
 use async_trait::async_trait;
 
+use crate::plugins::runtime::dye_headers::{apply_dye_headers, strip_request_dye_headers};
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
@@ -114,6 +115,12 @@ impl RequestFilter for Canary {
             return PluginRunningResult::GoodNext;
         }
 
+        // Anti-spoofing: a client-sent header with a configured dye name must
+        // never pass through on any path (fallback/reject included).
+        if let Some(dye) = &self.config.dye_headers {
+            strip_request_dye_headers(session, dye);
+        }
+
         let profile_name = self.resolve_active_profile_name(log);
         let Some(target) = self.config.profiles.get(&profile_name) else {
             // Unreachable post-validation: resolve_active_profile_name only
@@ -179,8 +186,8 @@ impl RequestFilter for Canary {
             }
         }
 
-        if self.config.debug_header {
-            let _ = session.set_request_header("X-Canary-Active", &profile_name);
+        if let Some(dye) = &self.config.dye_headers {
+            apply_dye_headers(session, dye, &profile_name, log);
         }
 
         PluginRunningResult::GoodNext
@@ -214,7 +221,7 @@ mod tests {
             ]),
             active_profile_ref: None,
             on_invalid: DynUpstreamOnInvalid::default(),
-            debug_header: false,
+            dye_headers: None,
         }
     }
 

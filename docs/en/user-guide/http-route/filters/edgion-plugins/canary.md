@@ -36,7 +36,9 @@ spec:
           canary:
             name: canary-app-v2
         onInvalid: reject
-        debugHeader: true
+        dyeHeaders:
+          request:
+            - name: X-Canary-Active
 ```
 
 ```yaml
@@ -79,7 +81,7 @@ With no `activeProfileRef` configured, every request is pinned to the `stable` p
 | `profiles[].namespace` | String | none | Optional namespace of the target `backendRef`. If unset, matches by name only; if set, both name and namespace must match. |
 | `activeProfileRef` | EdgionConfigDataRef | none | Optional reference to a `Selector` `EdgionConfigData` supplying the active profile name at runtime. |
 | `onInvalid` | Enum | `Reject` | Behavior when the resolved profile's `backendRef` is not present in the route's `backendRefs` (stale/misconfigured profile). Allowed values: `Reject` (403) / `Fallback` (falls through to the route's own weighted `backendRefs` selection). |
-| `debugHeader` | Boolean | `false` | When `true`, sets the `X-Canary-Active` request header (sent to the upstream) to the resolved profile name. |
+| `dyeHeaders` | Object | none | Traffic-tagging headers applied after a successful profile selection. `request`/`response` entry lists of `{name, value}`; an omitted `value` carries the resolved profile name. See [Dye Headers](#dye-headers) below. |
 
 ### EdgionConfigDataRef (for `activeProfileRef`)
 
@@ -150,7 +152,9 @@ spec:
           name: canary-selector
           namespace: default
         onInvalid: reject
-        debugHeader: true
+        dyeHeaders:
+          request:
+            - name: X-Canary-Active
 ```
 
 Updating `canary-selector.spec.data.config.active` from `stable` to `canary` hot-swaps every gateway referencing it — no `EdgionPlugins` edit, no route edit, no restart.
@@ -176,15 +180,38 @@ requestPlugins:
 - `reject` (default): return `403 Forbidden` with body `"Target backend not allowed"`. Fails closed — appropriate when a stale profile pointing at the wrong backend is a security concern (e.g. it could otherwise send traffic to a decommissioned or unintended Service).
 - `fallback`: fall through to the route's own weighted `backendRefs` selection, as if Canary were disabled for this request. Fails open — appropriate when you would rather serve traffic via normal load balancing than reject the request outright.
 
-### Debug Header
+### Dye Headers
 
-Set `debugHeader: true` to have the gateway attach `X-Canary-Active: <profile-name>` to the request forwarded to the upstream, so the resolved profile is visible for tracing/debugging:
+`dyeHeaders` is default-off: when omitted, Canary sets no headers and strips nothing. When configured, it tags a successfully-resolved request with operator-chosen HTTP headers so the backend (or an observer) can see which profile served the request:
+
+```yaml
+requestPlugins:
+  - type: Canary
+    config:
+      enable: true
+      activeProfile: stable
+      profiles:
+        stable:
+          name: app-v1
+        canary:
+          name: app-v2
+      dyeHeaders:
+        request:
+          - name: X-Canary-Active      # value omitted => resolved profile name
+        response:
+          - name: X-Served-By
+            value: edge-cluster-1      # explicit static value
+```
 
 ```bash
 curl -H "Host: canary-test.example.com" http://<gateway>/  # upstream sees X-Canary-Active: stable
 ```
 
-This header carries the **profile name only** (e.g. `stable`, `canary`) — it does not (yet) support attaching arbitrary business-defined values per profile. See the FAQ below.
+- `request` entries are set on the request forwarded to the upstream; `response` entries are set on the response returned to the client.
+- A `value` omitted in config carries the **resolved profile name** (e.g. `stable`, `canary`); a static `value` is sent as-is.
+- Dyeing happens only after a successful profile resolution and `backendRef` membership check — the `enable: false`, no-route, and `onInvalid: reject` paths never dye.
+- **Anti-spoofing**: any client-supplied request header matching a configured **request**-direction dye name (e.g. a client sending its own `X-Canary-Active`) is stripped before this plugin runs, on every path — selected, fallback, or reject — so a client can never forge the tag the backend trusts.
+- Header names go through validation at admission: framing-sensitive names (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `TE`, `Upgrade`, `Trailer`) are rejected.
 
 ## Behavior Details
 
@@ -205,7 +232,7 @@ This header carries the **profile name only** (e.g. `stable`, `canary`) — it d
   > Per project convention, these signals live in the access log rather than as Prometheus counters — aggregate them at query time in Elasticsearch / ClickHouse / Loki when you want a "canary switch failure rate by reason" dashboard.
 - **backendRef membership check**: once a profile name is resolved (base or selector), the plugin verifies the profile's target `backendRef` (`name` + optional `namespace`) actually appears in the route's `backendRefs`. This check runs on every request against the *current* route state, so removing a backend from the route invalidates any profile pointing at it — governed by `onInvalid`.
 - **`onInvalid` behavior**: see the Usage Scenarios section above.
-- **`debugHeader`**: sets `X-Canary-Active` to the resolved profile name; only applied on a successful upstream jump (not when the plugin is disabled, has no route, or rejects).
+- **`dyeHeaders`**: default-off; when configured, applies the configured request/response headers only on a successful upstream jump (not when the plugin is disabled, has no route, or rejects). See [Dye Headers](#dye-headers) above.
 - **No route / no backendRefs**: if the request has no route unit or the route rule has no `backendRefs`, the plugin passes through (`GoodNext`) without acting — this should not occur in practice, since `Canary` is only meaningful attached to a route with backends.
 
 ## FAQ
@@ -222,9 +249,9 @@ This header carries the **profile name only** (e.g. `stable`, `canary`) — it d
 
 **A**: The plugin always uses the base `activeProfile`. This is the same end state as the selector resolving to "use base" — there is no behavioral difference between "no `activeProfileRef` configured" and "`activeProfileRef` configured but currently failing/absent/denied."
 
-### Q4: Can I attach per-profile business headers (e.g. `X-Release-Track: canary` on the response, or a custom value per profile) instead of just the fixed `X-Canary-Active` debug header?
+### Q4: Can I attach per-profile business headers (e.g. a different header value for each profile, not just the resolved profile name)?
 
-**A**: Not yet. `debugHeader` only supports a fixed header name (`X-Canary-Active`) whose value is the resolved profile name — it is for debugging/tracing, not for signaling business logic to the backend or client. Per-profile, business-defined "dye" headers (arbitrary name/value pairs configured per profile) are tracked as a cross-plugin design item in [`tasks/todo/plugin-dye-header-unification.md`](../../../../../../tasks/todo/plugin-dye-header-unification.md) — it is not implemented for Canary or any other plugin today.
+**A**: `dyeHeaders` supports any operator-chosen header name and direction, with either a static value or the resolved profile name (omitted `value`) — this covers the common case (`X-Release-Track: <active profile>`) with a fixed name. Per-profile override lists (a different `{name, value}` pair configured per profile) remain a deliberate non-goal: the common business case is already covered by the resolved-value default, and per-profile overrides can be added later if a concrete consumer needs them. See [`docs/superpowers/specs/2026-07-10-dye-headers-unification-design.md`](../../../../../../docs/superpowers/specs/2026-07-10-dye-headers-unification-design.md) for the full design.
 
 ## Related Docs
 

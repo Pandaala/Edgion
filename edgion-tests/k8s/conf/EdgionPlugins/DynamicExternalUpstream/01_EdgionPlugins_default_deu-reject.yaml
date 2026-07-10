@@ -24,4 +24,6 @@ spec:
             tls: false
         onMissing: reject
         onNoMatch: reject
-        debugHeader: true
+        dyeHeaders:
+          request:
+            - name: X-Dynamic-External-Upstream

@@ -42,7 +42,7 @@ spec:
 | `onMissing` | String | ❌ | `Fallback` | 值缺失时行为：`Fallback`（回退正常LB）/ `Reject`（拒绝请求）|
 | `onInvalid` | String | ❌ | `Reject` | 值无效时行为：`Reject` / `Fallback` |
 | `inheritTls` | Boolean | ❌ | `true` | 是否继承路由的 TLS 配置 |
-| `debugHeader` | Boolean | ❌ | `false` | 是否在响应中添加调试 header |
+| `dyeHeaders` | Object | ❌ | 无 | 成功解析出 endpoint 后应用的流量染色请求头/响应头。`request`/`response` 为 `{name, value}` 条目列表；不设置 `value` 时携带已解析的 endpoint `ip:port`。详见下方[场景 2：染色请求头](#场景-2染色请求头) |
 
 ---
 
@@ -66,7 +66,7 @@ requestPlugins:
 curl -H "X-Target-IP: 10.0.1.5" https://api.example.com/debug
 ```
 
-### 场景 2：调试模式
+### 场景 2：染色请求头
 
 ```yaml
 requestPlugins:
@@ -75,9 +75,19 @@ requestPlugins:
       from:
         type: header
         name: X-Target-IP
-      debugHeader: true
+      dyeHeaders:
+        response:
+          - name: X-Direct-Endpoint
       onMissing: fallback
 ```
+
+`dyeHeaders` 默认关闭：不配置时插件不设置任何请求头，也不做任何剥离。配置后，会在成功解析出 endpoint 的请求上附加运维自定义的 HTTP 头——`request` 条目设置在转发给上游的请求上，`response` 条目设置在返回给客户端的**响应**上（与上面 `X-Direct-Endpoint` 这个惯用头的语义一致，它历来就是下游响应头，而不是请求头）。不设置 `value` 时携带已解析的 endpoint `ip:port`；设置了静态 `value` 则原样发送：
+
+```bash
+curl -H "X-Target-IP: 10.0.1.5" https://api.example.com/debug  # 客户端在响应上看到 X-Direct-Endpoint: 10.0.1.5:8080
+```
+
+只有 endpoint 成功匹配到路由后端之后才会染色——`onMissing`（值缺失）和 `onInvalid`（endpoint 不属于任何 backendRef）对应的路径，无论是拒绝还是回退，都不会染色。客户端携带的、与配置的**请求方向**染色头同名的请求头，会在插件运行前被剥离，因此客户端永远无法伪造后端所信任的请求方向标记。请求头名称在准入阶段就会被校验：与消息帧或路由机制冲突的名称（`Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`TE`、`Upgrade`、`Trailer`）会被拒绝；请求方向染色头名与插件自身 `from` 所读的请求头同名时同样会被拒绝（防伪造剥离会在提取之前把 endpoint 值删掉）。
 
 ### 场景 3：正则提取 endpoint
 
@@ -100,7 +110,7 @@ requestPlugins:
 
 - 指定的 endpoint IP 必须属于当前路由 `backendRefs` 中某个 Service 的 Endpoints 列表
 - 如果 endpoint 不属于任何 backend，视为 `onInvalid` 处理
-- `debugHeader: true` 时，响应中会包含 `X-Direct-Endpoint` header 指示实际路由的 endpoint
+- `dyeHeaders` 默认关闭；配置后只有在成功解析出 endpoint 后才会应用配置的请求/响应头——见上方[场景 2：染色请求头](#场景-2染色请求头)
 - `Fallback` 模式下回退到正常的负载均衡选择
 
 ---

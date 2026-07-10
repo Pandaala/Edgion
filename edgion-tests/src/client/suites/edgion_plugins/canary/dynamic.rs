@@ -10,6 +10,7 @@
 //   initial/EdgionPlugins_default_canary-hotswap-switch.yaml
 //   initial/HTTPRoute_default_canary-hotswap-test.yaml
 //   updates/flip_to_v2/EdgionConfigData_default_canary-hotswap-selector.yaml
+//   updates/flip_to_v2/EdgionPlugins_default_canary-hotswap-switch.yaml
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -93,6 +94,45 @@ impl CanaryHotSwapFinalTestSuite {
             |ctx: TestContext| Box::pin(check_routes_to(ctx, 30002)),
         )
     }
+
+    /// After the hot swap, the updated dyeHeaders (new X-Release-Track entry)
+    /// must be live and carry the flipped profile name.
+    ///
+    /// Uses /echo rather than /canary/api for the same reason as the static
+    /// Canary suite's dye tests: the test-server route for /canary/api falls
+    /// through to catch_all_handler, which title-cases header names, defeating
+    /// a lowercase substring check. The HotSwap route has no explicit path
+    /// match (defaults to "/" prefix), so /echo reaches the same backend.
+    fn hotswap_final_dye_header() -> TestCase {
+        TestCase::new(
+            "hotswap_final_dye_header",
+            "Final: hot-reloaded dyeHeaders adds X-Release-Track carrying 'canary'",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/echo", ctx.target_host);
+                    match ctx.http_client.get(&url).header("host", CANARY_HOST).send().await {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            let body = response.text().await.unwrap_or_default();
+                            if body.contains("x-release-track: canary") {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("x-release-track: canary not found in echo body: {}", body),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for CanaryHotSwapFinalTestSuite {
@@ -100,6 +140,6 @@ impl TestSuite for CanaryHotSwapFinalTestSuite {
         "Canary HotSwap (final)"
     }
     fn test_cases(&self) -> Vec<TestCase> {
-        vec![Self::hotswap_final_canary()]
+        vec![Self::hotswap_final_canary(), Self::hotswap_final_dye_header()]
     }
 }

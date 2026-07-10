@@ -66,8 +66,9 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `serviceRegionRouteRef` | String | 无 | 与 `EdgionPlugins` 资源同命名空间的 `ServiceRegionRoute` EdgionConfigData 名称。所有路由规则均从此引用解析 |
+| `dyeHeaders` | Object | 无 | 成功选中区域后应用的流量染色请求头/响应头。`request`/`response` 为 `{name, value}` 条目列表；不设置 `value` 时携带最终区域名（`failoverTo` 重定向之后的区域）。详见下方[染色请求头](#染色请求头)。 |
 
-插件不进行本地字段校验——被引用的 EdgionConfigData 是否存在由 Controller 的 `preparse()`（通过 status conditions 暴露）和 Gateway 在插件构建时检查。
+插件除共享的 `dyeHeaders` 校验外不进行其他本地字段校验——被引用的 EdgionConfigData 是否存在由 Controller 的 `preparse()`（通过 status conditions 暴露）和 Gateway 在插件构建时检查。
 
 ### 路由模型（EdgionConfigData）
 
@@ -125,6 +126,34 @@ EdgionConfigData 定义 `RouteByHashRange`，为各集群配置 `hashRange` 切�
 ### 3. 区域故障转移
 
 在 `ClusterRegionRoute` EdgionConfigData 中为集群设置 `failoverTo`（通常由 Center 驱动）。目标为降级集群的流量将被透明地重定向到指定的健康集群——`EdgionPlugins` 和 HTTPRoute 无需改变。
+
+---
+
+## 染色请求头
+
+`dyeHeaders` 默认关闭：不配置时插件不设置任何请求头，也不做任何剥离。配置后，会在请求被路由到某个区域时附加运维自定义的 HTTP 头：
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: my-region-route-plugin
+  namespace: production
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        serviceRegionRouteRef: my-svc-region-route
+        dyeHeaders:
+          request:
+            - name: X-Served-Region     # 不设置 value => 携带最终区域名
+```
+
+- `request` 条目设置在转发给上游的请求上（对于本地区域直通场景，则设置在继续经过网关自身处理链的请求上）；`response` 条目设置在返回给客户端的响应上。
+- 不设置 `value` 时携带**最终区域名**——即经过 `failoverTo` 重定向之后的区域，而不是最初匹配到的区域。设置了静态 `value` 则原样发送。
+- 只要有规则（`RouteByDirectRegion`、`RouteByKeyConfMatch`，或终止性的 `RouteByHashRange`）实际选中了区域，就会染色，包括**本地区域直通**场景——当解析出的区域正是本网关自身所在区域时，不会发生跨区域跳转，但请求仍然被路由到了一个区域，因此仍会以该区域名染色。当其他插件已经锁定了上游跳转（`Rejected` 结果）时，或没有任何规则匹配时，不会染色。
+- **防伪造**：客户端携带的、与配置的**请求方向**染色头同名的请求头，会在插件求值规则之前被剥离——无论最终是路由成功、本地直通、未匹配，还是跳转被拒(其他插件已锁定上游)——因此客户端永远无法伪造后端所信任的区域标记。
+- 请求头名称在准入阶段就会被校验：与消息帧或路由机制冲突的名称（`Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`TE`、`Upgrade`、`Trailer`）会被拒绝；请求方向染色头名与插件任一 header 型 key 来源（`keyGet`、`hashKeyGet` 或 `RouteByDirectRegion.keyFrom`）同名时同样会被拒绝——防伪造剥离会在提取之前把路由键删掉。
 
 ---
 

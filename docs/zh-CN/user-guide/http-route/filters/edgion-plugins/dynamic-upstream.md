@@ -45,7 +45,7 @@ spec:
 | `onMissing` | Enum | `Fallback` | 路由 key 缺失时的行为。允许值：`Fallback` / `Reject`（400） |
 | `onNoMatch` | Enum | `Fallback` | 无规则匹配时的行为（仅 rules 模式）。允许值：`Fallback` / `Reject`（400） |
 | `onInvalid` | Enum | `Reject` | 解析出的 backendRef 不在路由中时的行为。允许值：`Reject`（403）/ `Fallback` |
-| `debugHeader` | Boolean | `false` | 为 `true` 时，在请求头中设置 `X-Dynamic-Internal-Upstream`（发往上游），指示实际路由的后端 |
+| `dyeHeaders` | Object | 无 | 成功跳转到解析出的后端后应用的流量染色请求头/响应头。`request`/`response` 为 `{name, value}` 条目列表；不设置 `value` 时携带解析出的目标 `[ns/]name`。详见下方[染色请求头](#染色请求头)。 |
 
 ### 使用场景
 
@@ -61,7 +61,9 @@ requestPlugins:
         type: header
         name: X-Backend-Target
       onMissing: fallback
-      debugHeader: true
+      dyeHeaders:
+        request:
+          - name: X-Dynamic-Internal-Upstream
 ```
 
 ```bash
@@ -179,7 +181,7 @@ spec:
 | `domainMap` | Object | **必填** | 域名映射白名单（不能为空） |
 | `onMissing` | Enum | `Skip` | 路由 key 缺失时的行为。允许值：`Skip` / `Reject`（400） |
 | `onNoMatch` | Enum | `Skip` | key 无法匹配任何 `domainMap` 条目时的行为。允许值：`Skip` / `Reject`（400） |
-| `debugHeader` | Boolean | `false` | 为 `true` 时，在请求头中设置 `X-Dynamic-External-Upstream`（发往上游），指示实际路由的域名 |
+| `dyeHeaders` | Object | 无 | 成功跳转到解析出的域名后应用的流量染色请求头/响应头。`request`/`response` 为 `{name, value}` 条目列表；不设置 `value` 时携带解析出的目标 `domain:port`。详见下方[染色请求头](#染色请求头)。 |
 
 ### DomainTarget 子字段
 
@@ -221,7 +223,9 @@ requestPlugins:
           port: 443
           tls: true
       onMissing: skip
-      debugHeader: true
+      dyeHeaders:
+        request:
+          - name: X-Dynamic-External-Upstream
 ```
 
 #### 第三方 API 代理（覆盖 Host + SNI）
@@ -255,12 +259,38 @@ requestPlugins:
 
 ---
 
+## 染色请求头
+
+`dyeHeaders` 默认关闭：不配置时，两个子插件都不会设置任何请求头，也不会剥离任何请求头。配置后，会在成功解析的请求上附加运维自定义的 HTTP 头：
+
+```yaml
+requestPlugins:
+  - type: DynamicInternalUpstream
+    config:
+      from:
+        type: header
+        name: X-Backend-Target
+      dyeHeaders:
+        request:
+          - name: X-Release-Track      # 不设置 value => 携带解析出的目标 "[ns/]name"
+        response:
+          - name: X-Served-By
+            value: edge-cluster-1      # 显式静态值
+```
+
+- `request` 条目设置在转发给上游的请求上；`response` 条目设置在返回给客户端的响应上。
+- 不设置 `value` 时携带已解析的选择结果：**`DynamicInternalUpstream`** 使用目标 backendRef 的 `[ns/]name`；**`DynamicExternalUpstream`** 使用目标的 `domain:port`。设置了静态 `value` 则原样发送。
+- 只有在成功跳转到解析出的目标后才会染色——`onMissing`/`onNoMatch: skip|fallback` 以及 `onInvalid: reject` 等路径都不会染色。
+- **防伪造**：客户端携带的、与配置的**请求方向**染色头同名的请求头，会在插件运行前被剥离——无论最终是跳转、skip/fallback 还是拒绝——因此客户端永远无法伪造后端所信任的标记。
+- 请求头名称在准入阶段就会被校验：与消息帧或路由机制冲突的名称（`Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`TE`、`Upgrade`、`Trailer`）会被拒绝；请求方向染色头名与插件自身 `from` 所读的请求头同名时同样会被拒绝（防伪造剥离会在提取之前把路由键删掉）。
+- 协议限定沿用两个插件已有的 gRPC 跳过逻辑：两者都不会给 gRPC 流量染色，因为它们在到达染色调用点之前，就已经在 gRPC 匹配的路由上提前返回。
+
 ## 行为细节
 
 - **DynamicInternalUpstream**：选择的目标必须存在于当前路由的 `backendRefs` 中，否则视为无效。
 - **DynamicExternalUpstream**：只能路由到 `domainMap` 白名单中的域名，防止 SSRF。
 - 在 `Skip` / `Fallback` 模式下，未匹配的请求使用正常路由逻辑。
-- `debugHeader: true` 时会添加一个请求头（`X-Dynamic-Internal-Upstream` 或 `X-Dynamic-External-Upstream`）并转发给上游，指示实际路由的目标。
+- `dyeHeaders` 的行为两个子插件共用，详见上方[染色请求头](#染色请求头)。
 
 ---
 
@@ -272,7 +302,7 @@ requestPlugins:
 
 ### Q2：为什么 DynamicExternalUpstream 的请求走到了正常后端而不是外部域名？
 
-**A**：默认的 `onMissing` 和 `onNoMatch` 均为 `Skip`，即静默走正常后端选择而非拒绝。若路由 key 缺失或无法匹配 `domainMap` 条目，请求会静默使用路由的 `backendRefs`。若需 fail-close，请将两者均设为 `Reject`，或启用 `debugHeader: true` 确认是否发生了跳转。
+**A**：默认的 `onMissing` 和 `onNoMatch` 均为 `Skip`，即静默走正常后端选择而非拒绝。若路由 key 缺失或无法匹配 `domainMap` 条目，请求会静默使用路由的 `backendRefs`。若需 fail-close，请将两者均设为 `Reject`，或配置 `dyeHeaders` 确认是否发生了跳转。
 
 ### Q3：DynamicExternalUpstream 能访问任意域名吗？
 

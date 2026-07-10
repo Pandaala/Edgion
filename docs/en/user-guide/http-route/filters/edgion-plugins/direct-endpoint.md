@@ -42,7 +42,7 @@ spec:
 | `onMissing` | Enum | `Fallback` | Behavior when the value is missing. Allowed values: `Fallback` (normal LB) / `Reject` (400) |
 | `onInvalid` | Enum | `Reject` | Behavior when the endpoint is not in any backendRef. Allowed values: `Reject` (403) / `Fallback` |
 | `inheritTls` | Boolean | `true` | Inherit TLS from the matched backendRef's BackendTLSPolicy |
-| `debugHeader` | Boolean | `false` | When `true`, sets the `X-Direct-Endpoint` request header (sent to the upstream) indicating the targeted endpoint |
+| `dyeHeaders` | Object | none | Traffic-tagging headers applied after a successful endpoint resolution. `request`/`response` entry lists of `{name, value}`; an omitted `value` carries the resolved endpoint `ip:port`. See [Scenario 2: Dye Headers](#scenario-2-dye-headers) below. |
 
 ---
 
@@ -66,7 +66,7 @@ requestPlugins:
 curl -H "X-Target-IP: 10.0.1.5" https://api.example.com/debug
 ```
 
-### Scenario 2: Debug Mode
+### Scenario 2: Dye Headers
 
 ```yaml
 requestPlugins:
@@ -75,9 +75,19 @@ requestPlugins:
       from:
         type: header
         name: X-Target-IP
-      debugHeader: true
+      dyeHeaders:
+        response:
+          - name: X-Direct-Endpoint
       onMissing: fallback
 ```
+
+`dyeHeaders` is default-off: when omitted, the plugin sets no headers and strips nothing. When configured, it tags a successfully-resolved request with operator-chosen HTTP headers — `request` entries are set on the request forwarded to the upstream, `response` entries are set on the **response** returned to the client (matching the plugin's traditional `X-Direct-Endpoint` header above, which was always a downstream response header, not a request header). An omitted `value` carries the resolved endpoint `ip:port`; a static `value` is sent as-is:
+
+```bash
+curl -H "X-Target-IP: 10.0.1.5" https://api.example.com/debug  # client sees X-Direct-Endpoint: 10.0.1.5:8080 on the response
+```
+
+Dyeing happens only after the endpoint successfully resolves against the route's backends — the `onMissing` (value absent) and `onInvalid` (endpoint not in any backendRef) paths never dye, regardless of whether they reject or fall back. Any client-supplied request header matching a configured **request**-direction dye name is stripped before the plugin runs, on every path, so a client can never forge a request-direction tag the backend trusts. Header names go through validation at admission: framing-sensitive names (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `TE`, `Upgrade`, `Trailer`) are rejected, and so is a request-direction dye name equal to the plugin's own `from` header (the anti-spoof strip would remove the endpoint value before extraction).
 
 ### Scenario 3: Regex Extraction
 
@@ -101,7 +111,7 @@ requestPlugins:
 - The specified endpoint IP must belong to the Endpoints list of a Service in the current route's `backendRefs`
 - If the endpoint doesn't belong to any backend, it is handled as `onInvalid` (default `Reject` with 403)
 - The port is resolved in priority order: (1) port embedded in the value (`ip:port`), (2) the `port` field, (3) the matched backendRef's port. If none are available, the plugin returns an error
-- With `debugHeader: true`, the `X-Direct-Endpoint` request header is added and forwarded to the upstream, indicating the actual routed endpoint
+- `dyeHeaders` is default-off; when configured, it applies the configured request/response headers only after a successful endpoint resolution — see [Scenario 2: Dye Headers](#scenario-2-dye-headers) above
 - `Fallback` mode falls back to normal load balancing selection
 
 ---

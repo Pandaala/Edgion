@@ -18,7 +18,7 @@
 // 1. Plugin request_filter logic via access log (plugin_log entries)
 // 2. Skip/Reject behavior for missing/unmatched keys
 // 3. Regex extraction
-// 4. Debug header presence
+// 4. dyeHeaders presence
 // 5. Loopback rejection (security)
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
@@ -450,7 +450,7 @@ impl DynamicExternalUpstreamTestSuite {
     fn regex_host_override() -> TestCase {
         TestCase::new(
             "regex_host_override",
-            "Regex mode: overrideHost is set (verified via access log debug header)",
+            "Regex mode: overrideHost is set (verified via access log dyeHeaders)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -494,14 +494,14 @@ impl DynamicExternalUpstreamTestSuite {
     }
 
     // ======================================================================
-    // Debug header test
+    // dyeHeaders test
     // ======================================================================
 
-    /// Verify debug header in access log when matched
-    fn debug_header_in_access_log() -> TestCase {
+    /// Verify dyeHeaders entry in access log when matched
+    fn dye_header_in_access_log() -> TestCase {
         TestCase::new(
-            "debug_header_in_access_log",
-            "Debug header X-Dynamic-External-Upstream recorded in access log",
+            "dye_header_in_access_log",
+            "dyeHeaders X-Dynamic-External-Upstream recorded in access log",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -566,8 +566,8 @@ impl TestSuite for DynamicExternalUpstreamTestSuite {
             Self::regex_match_extracted(),
             Self::regex_no_match_fallback(),
             Self::regex_host_override(),
-            // Debug header
-            Self::debug_header_in_access_log(),
+            // dyeHeaders
+            Self::dye_header_in_access_log(),
         ]
     }
 }

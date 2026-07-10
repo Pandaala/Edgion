@@ -293,7 +293,7 @@ mod canary_variant_tests {
             profiles: HashMap::from([("stable".to_string(), target("app-v1"))]),
             active_profile_ref: None,
             on_invalid: Default::default(),
-            debug_header: false,
+            dye_headers: None,
         };
         let p = EdgionPlugin::Canary(cfg);
         assert!(p.validation_error().unwrap().contains("activeProfile"));

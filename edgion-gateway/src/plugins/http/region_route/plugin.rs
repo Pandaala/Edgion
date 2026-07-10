@@ -22,6 +22,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::observe::metrics::record_region_route_overlay_event;
+use crate::plugins::runtime::dye_headers::{apply_dye_headers, strip_request_dye_headers};
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
@@ -239,8 +240,12 @@ impl RegionRoute {
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         // Pass through when the target region is this gateway's own region.
+        // The request WAS routed to a region, so it is dyed like a jump.
         if !self.base.my_region.is_empty() && self.base.my_region == region.name {
             log.push("local_region, pass");
+            if let Some(dye) = &self.base.dye_headers {
+                apply_dye_headers(session, dye, &region.name, log);
+            }
             return PluginRunningResult::GoodNext;
         }
 
@@ -268,7 +273,11 @@ impl RegionRoute {
             // Cross-region hop: the peer gateway handles its own path normalization.
             preserve_raw_path: true,
         })) {
-            SetJumpOutcome::Set => {}
+            SetJumpOutcome::Set => {
+                if let Some(dye) = &self.base.dye_headers {
+                    apply_dye_headers(session, dye, &region.name, log);
+                }
+            }
             SetJumpOutcome::Rejected => {
                 log.push_err("jump_rejected");
             }
@@ -375,6 +384,12 @@ impl RequestFilter for RegionRoute {
         if self.base.route_rules.is_empty() && self.base.regions.is_empty() {
             log.push("no_region_route_config, pass");
             return PluginRunningResult::GoodNext;
+        }
+
+        // Anti-spoofing: a client-sent header with a configured dye name must
+        // never pass through on any path (miss/failover/reject included).
+        if let Some(dye) = &self.base.dye_headers {
+            strip_request_dye_headers(session, dye);
         }
 
         // Resolve the effective region table: base + optional overlay (fail-to-base on error).

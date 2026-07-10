@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use crate::plugins::runtime::dye_headers::{apply_dye_headers, strip_request_dye_headers};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
@@ -34,6 +35,10 @@ impl RequestFilter for DynamicExternalUpstream {
         if session.ctx().is_grpc_route_matched {
             log.push("skip grpc");
             return PluginRunningResult::GoodNext;
+        }
+
+        if let Some(dye) = &self.config.dye_headers {
+            strip_request_dye_headers(session, dye);
         }
 
         // 1. Extract raw routing key via KeyGet
@@ -131,10 +136,10 @@ impl RequestFilter for DynamicExternalUpstream {
             }
         }
 
-        // 6. Optionally set debug request header (sent to upstream for tracing)
-        if self.config.debug_header {
-            let header_value = format!("{}:{}", target.domain, target.effective_port());
-            let _ = session.set_request_header("X-Dynamic-External-Upstream", &header_value);
+        // 6. Traffic-tagging headers, only after a successful selection.
+        if let Some(dye) = &self.config.dye_headers {
+            let resolved = format!("{}:{}", target.domain, target.effective_port());
+            apply_dye_headers(session, dye, &resolved, log);
         }
 
         PluginRunningResult::GoodNext

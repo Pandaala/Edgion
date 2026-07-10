@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::dye_headers::DyeHeaders;
 use crate::common::KeyGet;
 
 /// DirectEndpoint plugin configuration
@@ -62,12 +63,11 @@ pub struct DirectEndpointConfig {
     #[serde(default = "default_true")]
     pub inherit_tls: bool,
 
-    /// Whether to set `X-Direct-Endpoint` request header (sent to upstream)
-    /// indicating which endpoint was targeted. Useful for end-to-end debugging.
-    ///
-    /// Default: false
-    #[serde(default)]
-    pub debug_header: bool,
+    /// Optional traffic-tagging headers applied after a successful endpoint
+    /// resolution; entries with `value` omitted carry the resolved endpoint
+    /// address (`ip:port`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dye_headers: Option<DyeHeaders>,
 
     // === Compiled regex cache ===
     #[serde(skip)]
@@ -128,7 +128,7 @@ impl Default for DirectEndpointConfig {
             on_missing: DirectEndpointOnMissing::default(),
             on_invalid: DirectEndpointOnInvalid::default(),
             inherit_tls: true,
-            debug_header: false,
+            dye_headers: None,
             compiled_regex: None,
         }
     }
@@ -156,6 +156,63 @@ impl PluginValidation for DirectEndpointConfig {
                 return Some(format!("Invalid extract regex: {}", e));
             }
         }
+        if let Some(dye) = &self.dye_headers {
+            if let Some(err) = dye.validation_error() {
+                return Some(err);
+            }
+            let mut key_headers: Vec<&str> = Vec::new();
+            if let KeyGet::Header { name } = &self.from {
+                key_headers.push(name);
+            }
+            if let Some(err) = dye.key_collision_error(&key_headers) {
+                return Some(err);
+            }
+        }
         None
+    }
+}
+
+#[cfg(test)]
+mod validation_trait_tests {
+    use super::*;
+    use crate::resources::edgion_plugins::plugin_configs::{DyeHeader, DyeHeaders};
+
+    #[test]
+    fn invalid_dye_headers_are_rejected() {
+        let config = DirectEndpointConfig {
+            dye_headers: Some(DyeHeaders {
+                request: vec![],
+                response: vec![DyeHeader {
+                    name: "Content-Length".to_string(),
+                    value: Some("0".to_string()),
+                }],
+            }),
+            ..Default::default()
+        };
+        let err = PluginValidation::validation_error(&config).unwrap();
+        assert!(err.contains("not allowed"), "got: {}", err);
+    }
+
+    #[test]
+    fn dye_name_colliding_with_from_header_is_rejected() {
+        // Default `from` is `Header { name: "X-Target-Endpoint" }`; the strip
+        // would remove the endpoint value before extraction.
+        let config = DirectEndpointConfig {
+            dye_headers: Some(DyeHeaders {
+                request: vec![DyeHeader {
+                    name: "x-target-endpoint".to_string(),
+                    value: None,
+                }],
+                response: vec![],
+            }),
+            ..Default::default()
+        };
+        let err = PluginValidation::validation_error(&config).unwrap();
+        assert!(err.contains("collides"), "got: {}", err);
+    }
+
+    #[test]
+    fn default_config_is_valid() {
+        assert!(PluginValidation::validation_error(&DirectEndpointConfig::default()).is_none());
     }
 }

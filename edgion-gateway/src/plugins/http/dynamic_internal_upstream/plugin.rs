@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 
+use crate::plugins::runtime::dye_headers::{apply_dye_headers, strip_request_dye_headers};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
@@ -34,6 +35,10 @@ impl RequestFilter for DynamicInternalUpstream {
         if session.ctx().is_grpc_route_matched {
             log.push("skip grpc");
             return PluginRunningResult::GoodNext;
+        }
+
+        if let Some(dye) = &self.config.dye_headers {
+            strip_request_dye_headers(session, dye);
         }
 
         // 1. Extract raw routing key via KeyGet
@@ -148,9 +153,14 @@ impl RequestFilter for DynamicInternalUpstream {
         }
 
         // 5. Build InternalJumpPreset and set in context
+        // Resolved selection value for dye headers: "[namespace/]name".
+        let resolved = match &target_namespace {
+            Some(ns) => format!("{}/{}", ns, target_name),
+            None => target_name.clone(),
+        };
         let info = InternalJumpPreset {
-            backend_ref_name: target_name.clone(),
-            backend_ref_namespace: target_namespace.clone(),
+            backend_ref_name: target_name,
+            backend_ref_namespace: target_namespace,
         };
         match session.set_upstream_jump(UpstreamJumpTarget::Internal(info)) {
             SetJumpOutcome::Set => {
@@ -162,13 +172,9 @@ impl RequestFilter for DynamicInternalUpstream {
             }
         }
 
-        // 6. Optionally set debug request header (sent to upstream for tracing)
-        if self.config.debug_header {
-            let header_value = match &target_namespace {
-                Some(ns) => format!("{}/{}", ns, target_name),
-                None => target_name,
-            };
-            let _ = session.set_request_header("X-Dynamic-Internal-Upstream", &header_value);
+        // 6. Traffic-tagging headers, only after a successful selection.
+        if let Some(dye) = &self.config.dye_headers {
+            apply_dye_headers(session, dye, &resolved, log);
         }
 
         PluginRunningResult::GoodNext

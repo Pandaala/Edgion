@@ -36,7 +36,9 @@ spec:
           canary:
             name: canary-app-v2
         onInvalid: reject
-        debugHeader: true
+        dyeHeaders:
+          request:
+            - name: X-Canary-Active
 ```
 
 ```yaml
@@ -79,7 +81,7 @@ spec:
 | `profiles[].namespace` | String | 无 | 目标 `backendRef` 的可选命名空间。不设置时仅按名称匹配；设置时名称和命名空间都需匹配。 |
 | `activeProfileRef` | EdgionConfigDataRef | 无 | 可选引用，指向一个 `Selector` 类型的 `EdgionConfigData`，在运行时提供当前生效的 profile 名。 |
 | `onInvalid` | Enum | `Reject` | 解析出的 profile 对应的 `backendRef` 不在路由的 `backendRefs` 中时（profile 过期/配置错误）的行为。允许值：`Reject`（403）/ `Fallback`（回落到路由自身基于权重的 `backendRefs` 选择）。 |
-| `debugHeader` | Boolean | `false` | 为 `true` 时，将请求头 `X-Canary-Active`（发往上游）设置为已解析的 profile 名。 |
+| `dyeHeaders` | Object | 无 | 成功解析出 profile 后应用的流量染色（traffic-tagging）请求头/响应头。`request`/`response` 为 `{name, value}` 条目列表；不设置 `value` 时携带已解析的 profile 名。详见下方[染色请求头](#染色请求头)。 |
 
 ### EdgionConfigDataRef（用于 `activeProfileRef`）
 
@@ -150,7 +152,9 @@ spec:
           name: canary-selector
           namespace: default
         onInvalid: reject
-        debugHeader: true
+        dyeHeaders:
+          request:
+            - name: X-Canary-Active
 ```
 
 把 `canary-selector.spec.data.config.active` 从 `stable` 改为 `canary`，会热切换所有引用它的网关——不需要修改 `EdgionPlugins`，不需要修改路由，也不需要重启。
@@ -176,15 +180,38 @@ requestPlugins:
 - `reject`（默认）：返回 `403 Forbidden`，body 为 `"Target backend not allowed"`。失败关闭（fail closed）——适用于过期 profile 指向错误后端属于安全隐患的场景（例如可能因此把流量发到已下线或非预期的 Service）。
 - `fallback`：回落到路由自身基于权重的 `backendRefs` 选择，效果等同于该请求上 Canary 未启用。失败开放（fail open）——适用于宁可走正常负载均衡也不希望直接拒绝请求的场景。
 
-### 调试请求头
+### 染色请求头
 
-设置 `debugHeader: true`，网关会在转发给上游的请求上附加 `X-Canary-Active: <profile 名>`，便于追踪/调试当前解析出的 profile：
+`dyeHeaders` 默认关闭：不配置时，Canary 不设置任何请求头，也不做任何剥离。配置后，会在成功解析出 profile 的请求上附加运维自定义的 HTTP 头，方便后端（或观测系统）识别本次请求由哪个 profile 处理：
+
+```yaml
+requestPlugins:
+  - type: Canary
+    config:
+      enable: true
+      activeProfile: stable
+      profiles:
+        stable:
+          name: app-v1
+        canary:
+          name: app-v2
+      dyeHeaders:
+        request:
+          - name: X-Canary-Active      # 不设置 value => 使用已解析的 profile 名
+        response:
+          - name: X-Served-By
+            value: edge-cluster-1      # 显式静态值
+```
 
 ```bash
 curl -H "Host: canary-test.example.com" http://<gateway>/  # 上游会看到 X-Canary-Active: stable
 ```
 
-该请求头只携带 **profile 名本身**（如 `stable`、`canary`）——目前（尚）不支持按 profile 附带任意业务自定义值。详见下方 FAQ。
+- `request` 条目设置在转发给上游的请求上；`response` 条目设置在返回给客户端的响应上。
+- 配置中不设置 `value` 时携带**已解析的 profile 名**（如 `stable`、`canary`）；设置了静态 `value` 则原样发送。
+- 只有在成功解析出 profile 并通过 `backendRef` 归属校验后才会染色——`enable: false`、无路由、`onInvalid: reject` 等路径都不会染色。
+- **防伪造**：客户端携带的、与配置的**请求方向**染色头同名的请求头，会在插件运行前被剥离——无论最终走的是选中、fallback 还是拒绝路径——因此客户端永远无法伪造后端所信任的标记。
+- 请求头名称在准入阶段就会被校验：与消息帧或路由机制冲突的名称（`Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`TE`、`Upgrade`、`Trailer`）会被拒绝。
 
 ## 行为细节
 
@@ -205,7 +232,7 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # 上游会看到 X-C
   > 按项目约定,这些信号只走 access log 而不做 Prometheus 计数器——需要"按原因分类的金丝雀切换失败率"仪表盘时,在查询期由 Elasticsearch / ClickHouse / Loki 聚合出来即可。
 - **backendRef 归属校验**：解析出 profile 名（无论来自基础配置还是 selector）之后，插件会校验该 profile 的目标 `backendRef`（`name` + 可选 `namespace`）确实出现在路由当前的 `backendRefs` 中。这个校验在**每个请求**上都针对路由的当前状态执行，因此从路由中移除某个后端会使指向它的任何 profile 失效——由 `onInvalid` 决定后续行为。
 - **`onInvalid` 行为**：见上方"使用场景"一节。
-- **`debugHeader`**：将 `X-Canary-Active` 设置为已解析的 profile 名；只在成功完成上游跳转时才会设置（插件被禁用、无路由、或被拒绝时不会设置）。
+- **`dyeHeaders`**：默认关闭；配置后只在成功完成上游跳转时才会应用配置的请求/响应头（插件被禁用、无路由、或被拒绝时不会应用）。详见上方[染色请求头](#染色请求头)。
 - **无路由 / 无 backendRefs**：如果请求没有路由单元，或路由规则没有 `backendRefs`，插件直接放行（`GoodNext`），不做任何动作——实践中不应出现此情况，因为 `Canary` 只有挂在带后端的路由上才有意义。
 
 ## 常见问题
@@ -222,9 +249,9 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # 上游会看到 X-C
 
 **A**：插件始终使用基础 `activeProfile`。这与 selector 解析结果为"使用基础配置"的最终状态完全相同——"未配置 `activeProfileRef`"与"配置了但当前解析失败/缺失/被拒绝"之间没有行为差异。
 
-### Q4：可以给每个 profile 附加业务自定义请求头（例如响应上的 `X-Release-Track: canary`，或每个 profile 不同的自定义值），而不只是固定的 `X-Canary-Active` 调试头吗？
+### Q4：可以给每个 profile 附加不同的业务自定义请求头（而不只是携带已解析 profile 名的固定头）吗？
 
-**A**：目前还不支持。`debugHeader` 只支持一个固定的请求头名（`X-Canary-Active`），值是已解析的 profile 名——它是用于调试/追踪的，不用于向后端或客户端传达业务语义。按 profile 定义的业务"染色（dye）"请求头（每个 profile 可配置任意 name/value）作为跨插件的设计事项记录在 [`tasks/todo/plugin-dye-header-unification.md`](../../../../../../tasks/todo/plugin-dye-header-unification.md) 中——目前 Canary 及其他任何插件都尚未实现。
+**A**：`dyeHeaders` 支持任意运维自定义的请求头名和方向，值可以是静态字符串，也可以不设置（携带已解析的 profile 名）——这已经覆盖了常见业务场景（`X-Release-Track: <当前生效 profile>`）。按 profile 配置不同的 `{name, value}` 覆盖列表目前是刻意的非目标（non-goal）：常见业务场景已被"不设置 value 即用已解析值"覆盖，若未来出现具体需求可以再补充。完整设计参见 [`docs/superpowers/specs/2026-07-10-dye-headers-unification-design.md`](../../../../../../docs/superpowers/specs/2026-07-10-dye-headers-unification-design.md)。
 
 ## 相关文档
 

@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::dye_headers::DyeHeaders;
 use crate::common::{KeyGet, KeySet};
 use crate::resources::edgion_config_data::EdgionConfigDataRef;
 
@@ -56,6 +57,12 @@ pub struct RegionRouteConfig {
     /// request time and applies a `RegionRouteOverride` on top of the base `regions`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub override_ref: Option<EdgionConfigDataRef>,
+
+    /// Optional traffic-tagging headers applied when a region is selected
+    /// (including the local-region pass-through); entries with `value`
+    /// omitted carry the final region name (post-failoverTo redirect).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dye_headers: Option<DyeHeaders>,
 }
 
 /// RouteByKeyConfMatch configuration with bypass support.
@@ -204,10 +211,42 @@ impl RegionRouteConfig {
         // No local validation needed.
     }
 
-    /// Stateless field-level validation. Returns None — all checks are deferred to
-    /// plugin-build time or request-time overlay resolution.
+    /// Stateless field-level validation. Routing-table checks are deferred to
+    /// plugin-build time or request-time overlay resolution; only the shared
+    /// dye-header shape (and its collision with this plugin's own header key
+    /// sources) is checked here.
     fn check_fields(&self) -> Option<String> {
-        None
+        let Some(dye) = &self.dye_headers else {
+            return None;
+        };
+        if let Some(err) = dye.validation_error() {
+            return Some(err);
+        }
+        // Every header-typed key source this plugin reads: the shared keyGet,
+        // the hash passthrough sources, and each RouteByDirectRegion keyFrom.
+        let mut key_headers: Vec<&str> = Vec::new();
+        for kg in &self.key_get {
+            if let KeyGet::Header { name } = kg {
+                key_headers.push(name);
+            }
+        }
+        if let Some(kgs) = &self.hash_key_get {
+            for kg in kgs {
+                if let KeyGet::Header { name } = kg {
+                    key_headers.push(name);
+                }
+            }
+        }
+        for rule in &self.route_rules {
+            if let RouteRule::RouteByDirectRegion { key_from } = rule {
+                for kg in key_from {
+                    if let KeyGet::Header { name } = kg {
+                        key_headers.push(name);
+                    }
+                }
+            }
+        }
+        dye.key_collision_error(&key_headers)
     }
 }
 
@@ -230,5 +269,59 @@ mod validation_trait_tests {
         // the trait method must return None and must not panic.
         let config = RegionRouteConfig::default();
         assert_eq!(config.validation_error(), None);
+    }
+
+    #[test]
+    fn invalid_dye_headers_are_rejected() {
+        use super::super::dye_headers::{DyeHeader, DyeHeaders};
+        let config = RegionRouteConfig {
+            dye_headers: Some(DyeHeaders {
+                request: vec![DyeHeader {
+                    name: "Connection".to_string(),
+                    value: None,
+                }],
+                response: vec![],
+            }),
+            ..Default::default()
+        };
+        assert!(config.validation_error().is_some());
+    }
+
+    #[test]
+    fn dye_name_colliding_with_any_header_key_source_is_rejected() {
+        use super::super::dye_headers::{DyeHeader, DyeHeaders};
+        use crate::common::KeyGet;
+
+        let dye = Some(DyeHeaders {
+            request: vec![DyeHeader {
+                name: "x-account-id".to_string(),
+                value: None,
+            }],
+            response: vec![],
+        });
+
+        // Collision via the shared keyGet list.
+        let config = RegionRouteConfig {
+            key_get: vec![KeyGet::Header {
+                name: "X-Account-Id".to_string(),
+            }],
+            dye_headers: dye.clone(),
+            ..Default::default()
+        };
+        let err = config.validation_error().unwrap();
+        assert!(err.contains("collides"), "got: {}", err);
+
+        // Collision via a RouteByDirectRegion keyFrom source.
+        let config = RegionRouteConfig {
+            route_rules: vec![RouteRule::RouteByDirectRegion {
+                key_from: vec![KeyGet::Header {
+                    name: "X-Account-Id".to_string(),
+                }],
+            }],
+            dye_headers: dye,
+            ..Default::default()
+        };
+        let err = config.validation_error().unwrap();
+        assert!(err.contains("collides"), "got: {}", err);
     }
 }

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use std::net::IpAddr;
 
 use crate::backends::{validate_endpoint_backend_addr, validate_endpoint_in_route};
+use crate::plugins::runtime::dye_headers::{apply_dye_headers, strip_request_dye_headers};
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{DirectEndpointPreset, SetJumpOutcome, UpstreamJumpTarget};
@@ -107,6 +108,10 @@ impl RequestFilter for DirectEndpoint {
             return PluginRunningResult::GoodNext;
         }
 
+        if let Some(dye) = &self.config.dye_headers {
+            strip_request_dye_headers(session, dye);
+        }
+
         // 1. Extract raw endpoint value via KeyGet
         let raw_value = match session.key_get(&self.config.from).await {
             Some(v) if !v.is_empty() => v,
@@ -163,8 +168,8 @@ impl RequestFilter for DirectEndpoint {
                     }
                 }
 
-                if self.config.debug_header {
-                    let _ = session.set_response_header("X-Direct-Endpoint", &addr_str);
+                if let Some(dye) = &self.config.dye_headers {
+                    apply_dye_headers(session, dye, &addr_str, log);
                 }
                 PluginRunningResult::GoodNext
             }

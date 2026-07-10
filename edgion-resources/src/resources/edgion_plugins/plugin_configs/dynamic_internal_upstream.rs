@@ -1,6 +1,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::dye_headers::DyeHeaders;
 use crate::common::KeyGet;
 use crate::resources::edgion_plugins::PluginValidation;
 
@@ -67,12 +68,11 @@ pub struct DynamicInternalUpstreamConfig {
     #[serde(default)]
     pub on_invalid: DynUpstreamOnInvalid,
 
-    /// Whether to set `X-Dynamic-Internal-Upstream` request header (sent to upstream)
-    /// indicating which backend was targeted. Useful for end-to-end debugging.
-    ///
-    /// Default: false
-    #[serde(default)]
-    pub debug_header: bool,
+    /// Optional traffic-tagging headers applied after a successful upstream
+    /// jump; entries with `value` omitted carry the resolved target as
+    /// `[namespace/]name`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dye_headers: Option<DyeHeaders>,
 
     // === Compiled regex cache ===
     #[serde(skip)]
@@ -166,7 +166,7 @@ impl Default for DynamicInternalUpstreamConfig {
             on_missing: DynUpstreamOnMissing::default(),
             on_no_match: DynUpstreamOnNoMatch::default(),
             on_invalid: DynUpstreamOnInvalid::default(),
-            debug_header: false,
+            dye_headers: None,
             compiled_regex: None,
         }
     }
@@ -208,6 +208,19 @@ impl DynamicInternalUpstreamConfig {
                 if rule.backend_ref.name.is_empty() {
                     return Some(format!("Rule[{}]: backendRef.name cannot be empty", i));
                 }
+            }
+        }
+
+        if let Some(dye) = &self.dye_headers {
+            if let Some(err) = dye.validation_error() {
+                return Some(err);
+            }
+            let mut key_headers: Vec<&str> = Vec::new();
+            if let KeyGet::Header { name } = &self.from {
+                key_headers.push(name);
+            }
+            if let Some(err) = dye.key_collision_error(&key_headers) {
+                return Some(err);
             }
         }
 
@@ -338,5 +351,40 @@ mod validation_trait_tests {
         };
         config.validate();
         assert!(config.compiled_regex.is_some());
+    }
+
+    #[test]
+    fn invalid_dye_headers_are_rejected() {
+        use super::super::dye_headers::{DyeHeader, DyeHeaders};
+        let config = DynamicInternalUpstreamConfig {
+            dye_headers: Some(DyeHeaders {
+                request: vec![DyeHeader {
+                    name: "bad name".to_string(),
+                    value: None,
+                }],
+                response: vec![],
+            }),
+            ..Default::default()
+        };
+        assert!(PluginValidation::validation_error(&config).is_some());
+    }
+
+    #[test]
+    fn dye_name_colliding_with_from_header_is_rejected() {
+        use super::super::dye_headers::{DyeHeader, DyeHeaders};
+        // Default `from` is `Header { name: "X-Backend-Target" }`; the strip
+        // would remove the routing key before extraction.
+        let config = DynamicInternalUpstreamConfig {
+            dye_headers: Some(DyeHeaders {
+                request: vec![DyeHeader {
+                    name: "x-backend-target".to_string(),
+                    value: None,
+                }],
+                response: vec![],
+            }),
+            ..Default::default()
+        };
+        let err = PluginValidation::validation_error(&config).unwrap();
+        assert!(err.contains("collides"), "got: {}", err);
     }
 }

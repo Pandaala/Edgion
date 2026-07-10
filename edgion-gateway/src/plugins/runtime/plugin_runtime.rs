@@ -1462,7 +1462,7 @@ mod tests {
             profiles,
             active_profile_ref: None,
             on_invalid: Default::default(),
-            debug_header: false,
+            dye_headers: None,
         };
 
         let plugin = EdgionPlugin::Canary(config);

@@ -66,8 +66,9 @@ spec:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `serviceRegionRouteRef` | String | none | Name of a `ServiceRegionRoute` EdgionConfigData in the same namespace as the `EdgionPlugins` resource. All routing rules are resolved from this reference |
+| `dyeHeaders` | Object | none | Traffic-tagging headers applied after a region is selected. `request`/`response` entry lists of `{name, value}`; an omitted `value` carries the final region name (post-`failoverTo`). See [Dye Headers](#dye-headers) below. |
 
-The plugin performs no local field validation — existence of the referenced EdgionConfigData is checked by the Controller's `preparse()` (surfaced via status conditions) and by the Gateway at plugin-build time.
+The plugin performs no local field validation beyond the shared `dyeHeaders` shape — existence of the referenced EdgionConfigData is checked by the Controller's `preparse()` (surfaced via status conditions) and by the Gateway at plugin-build time.
 
 ### Routing model (EdgionConfigData)
 
@@ -125,6 +126,34 @@ The EdgionConfigData defines `RouteByHashRange` with per-cluster `hashRange` sli
 ### 3. Region Failover
 
 Set `failoverTo` on a cluster in the `ClusterRegionRoute` EdgionConfigData (typically driven by Center). Traffic destined for a degraded cluster is transparently redirected to the named healthy cluster — the `EdgionPlugins` and HTTPRoute do not change.
+
+---
+
+## Dye Headers
+
+`dyeHeaders` is default-off: when omitted, the plugin sets no headers and strips nothing. When configured, it tags a request routed to a region with operator-chosen HTTP headers:
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: my-region-route-plugin
+  namespace: production
+spec:
+  requestPlugins:
+    - type: RegionRoute
+      config:
+        serviceRegionRouteRef: my-svc-region-route
+        dyeHeaders:
+          request:
+            - name: X-Served-Region     # value omitted => final region name
+```
+
+- `request` entries are set on the request forwarded to the upstream (or, for a local-region pass, on the request continuing through the gateway's own chain); `response` entries are set on the response returned to the client.
+- An omitted `value` carries the **final region name** — that is the region *after* any `failoverTo` redirect is applied, not the originally-matched region. A static `value` is sent as-is.
+- Dyeing applies whenever a rule (`RouteByDirectRegion`, `RouteByKeyConfMatch`, or the terminal `RouteByHashRange`) actually selects a region, including the **local-region pass** case — when the resolved region is this gateway's own region, no cross-region jump happens, but the request was still routed to a region, so it is dyed with that region's name. Dyeing does NOT happen when another plugin has already locked the upstream jump (`Rejected` outcome) or when no rule matches at all.
+- **Anti-spoofing**: any client-supplied request header matching a configured **request**-direction dye name is stripped before the plugin evaluates its rules, on every path — routed, local-pass, unmatched, or a rejected jump (another plugin already locked the upstream) — so a client can never forge the region tag the backend trusts.
+- Header names go through validation at admission: framing-sensitive names (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `TE`, `Upgrade`, `Trailer`) are rejected, and so is a request-direction dye name equal to any of the plugin's own header key sources (`keyGet`, `hashKeyGet`, or a `RouteByDirectRegion.keyFrom` entry) — the anti-spoof strip would remove the routing key before extraction.
 
 ---
 

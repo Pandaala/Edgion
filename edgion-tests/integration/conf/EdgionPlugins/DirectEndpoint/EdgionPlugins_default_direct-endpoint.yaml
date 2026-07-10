@@ -13,4 +13,6 @@ spec:
         onMissing: fallback # Allow requests to pass normally if header is missing
         onInvalid: reject   # Reject if IP is not valid or not in backend endpoints
         inheritTls: false
-        debugHeader: true   # Set X-Direct-Endpoint response header for verification
+        dyeHeaders:
+          response:
+            - name: X-Direct-Endpoint   # response header, used by the suite for verification

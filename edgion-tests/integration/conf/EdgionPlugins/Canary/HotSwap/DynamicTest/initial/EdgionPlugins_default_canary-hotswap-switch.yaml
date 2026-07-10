@@ -19,4 +19,6 @@ spec:
           name: canary-hotswap-selector
           namespace: default
         onInvalid: reject
-        debugHeader: true
+        dyeHeaders:
+          request:
+            - name: X-Canary-Active

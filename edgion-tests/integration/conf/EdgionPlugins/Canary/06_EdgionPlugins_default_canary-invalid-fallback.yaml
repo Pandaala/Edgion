@@ -20,3 +20,6 @@ spec:
           canary:
             name: canary-app-v2
         onInvalid: fallback
+        dyeHeaders:
+          request:
+            - name: X-Canary-Active

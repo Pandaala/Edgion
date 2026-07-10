@@ -1,0 +1,34 @@
+# Behavior pin for the pending-op queue semantic: Canary selects successfully
+# and queues a RESPONSE dye header; the FaultInjection plugin listed after it
+# then aborts the request with a local 403 reply via the standard ErrResponse
+# termination path -- the path that drains queued response-header ops. The
+# queued dye header must still appear on that local reply (spec: response-dye
+# lifetime). Note: auth-style deny helpers (e.g. IpRestriction's direct-write
+# 403 via send_gateway_plain_error_response) do NOT carry queued ops, which is
+# why FaultInjection is used here instead.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-dye-local-reply
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      config:
+        enable: true
+        activeProfile: stable
+        profiles:
+          stable:
+            name: canary-app-v1
+        onInvalid: reject
+        dyeHeaders:
+          response:
+            - name: X-Served-By
+              value: edge-1
+    - enable: true
+      type: FaultInjection
+      config:
+        abort:
+          statusCode: 403
+          body: "fault abort"

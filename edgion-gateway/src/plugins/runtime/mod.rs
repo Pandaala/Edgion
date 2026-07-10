@@ -2,6 +2,7 @@
 
 pub mod conditional_filter;
 pub mod conditions;
+pub mod dye_headers;
 pub mod edgion_config_data;
 pub mod gateway_api_filters;
 pub mod log;

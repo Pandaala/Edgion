@@ -43,3 +43,6 @@ spec:
             backendEndpoint: "127.0.0.1:30003"
             tls: false
             failoverTo: ohio
+        dyeHeaders:
+          request:
+            - name: X-Region

@@ -14,4 +14,6 @@ spec:
           name: X-Backend-Target
         onMissing: reject
         onInvalid: reject
-        debugHeader: true
+        dyeHeaders:
+          request:
+            - name: X-Dynamic-Internal-Upstream
