@@ -63,6 +63,7 @@ use crate::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::plugins::http::request_restriction::RequestRestriction;
 use crate::plugins::http::response_rewrite::ResponseRewrite;
 use crate::plugins::http::trace_context::TraceContext;
+use crate::plugins::http::wasm::WasmPlugin;
 use crate::plugins::runtime::gateway_api_filters::{
     DebugAccessLogToHeaderFilter, ExtensionRefFilter, GapiCorsFilter, RequestHeaderModifierFilter,
     RequestRedirectFilter, ResponseHeaderModifierFilter, URLRewriteFilter,
@@ -786,6 +787,7 @@ impl PluginRuntime {
             }
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config(config)),
             EdgionPlugin::RegionRoute(config) => CreateResult::Ok(Some(RegionRoute::create(config, namespace))),
+            EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_request(config)),
             // Response-stage only — not applicable to request filters
             EdgionPlugin::ResponseHeaderModifier(_)
             | EdgionPlugin::DebugAccessLogToHeader(_)
@@ -808,6 +810,7 @@ impl PluginRuntime {
             }
             EdgionPlugin::ResponseRewrite(config) => CreateResult::Ok(Some(Box::new(ResponseRewrite::new(config)))),
             EdgionPlugin::Dsl(config) => CreateResult::Ok(DslPlugin::from_config_response(config)),
+            EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_response_filter(config)),
             // Request-stage or other-stage plugins — not applicable to upstream response filters
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::RequestRedirect(_)
@@ -902,7 +905,8 @@ impl PluginRuntime {
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_)
-            | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
+            | EdgionPlugin::Dsl(_)
+            | EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
         }
     }
 
@@ -947,6 +951,7 @@ impl PluginRuntime {
             EdgionPlugin::Dsl(_) => "Dsl",
             EdgionPlugin::RegionRoute(_) => "RegionRoute",
             EdgionPlugin::ExtProc(_) => "ExtProc",
+            EdgionPlugin::Wasm(_) => "Wasm",
         }
     }
 

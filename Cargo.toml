@@ -195,6 +195,13 @@ nom = "7"
 notify = "8.2"
 walkdir = "2"
 
+# WebAssembly runtime for the Wasm HTTP plugin (proxy-wasm host)
+wasmtime = "46"
+# WAT text-format -> binary compiler; used by vm_manager tests to write raw
+# .wasm bytes to disk for the file-source loader (wasmtime's own `wat`
+# feature only covers `Module::new` taking text input, not raw bytes).
+wat = "1"
+
 # Async DNS resolver able to target a specific server (tokio::net::lookup_host
 # cannot). default-features = false to avoid pulling a second TLS backend into
 # the workspace TLS-backend unification; enable only the tokio runtime and

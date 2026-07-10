@@ -48,6 +48,7 @@ mod request_restriction;
 mod resolved_refs;
 mod response_rewrite;
 mod trace_context;
+mod wasm;
 mod webhook_key_get;
 
 pub use all_endpoint_status::AllEndpointStatusTestSuite;
@@ -103,4 +104,5 @@ pub use request_restriction::RequestRestrictionTestSuite;
 pub use resolved_refs::ResolvedRefsTestSuite;
 pub use response_rewrite::ResponseRewriteTestSuite;
 pub use trace_context::TraceContextPluginTestSuite;
+pub use wasm::WasmPluginTestSuite;
 pub use webhook_key_get::WebhookKeyGetTestSuite;

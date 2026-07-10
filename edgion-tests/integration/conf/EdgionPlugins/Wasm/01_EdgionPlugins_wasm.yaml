@@ -1,0 +1,33 @@
+# Wasm plugin (proxy-wasm host) - reference guest artifact header_demo.wasm.
+# Request phase: header x-wasm-panic:1 -> guest traps (host fail-closes -> 500);
+# x-wasm-deny:1 -> local 403 body "wasm denied"; otherwise adds request header
+# x-wasm-added: yes. Response phase: adds response header x-wasm-resp: yes.
+#
+# source.file is resolved against the gateway work directory. The integration
+# harness runs the gateway with work-dir
+# ${PROJECT_ROOT}/tmp/integration_testing/testing_<TS> (three levels below the
+# repo root), so "../../../edgion-tests/wasm/artifacts/header_demo.wasm"
+# resolves back to the committed artifact regardless of checkout location.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wasm-demo
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: Wasm
+      enable: true
+      config:
+        source:
+          file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
+        pluginConfig: '{}'
+        failOpen: false
+        timeoutMs: 500
+  upstreamResponseFilterPlugins:
+    - type: Wasm
+      enable: true
+      config:
+        source:
+          file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
+        failOpen: false
+        timeoutMs: 500

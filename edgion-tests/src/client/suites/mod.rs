@@ -76,7 +76,7 @@ pub use edgion_plugins::{
     PluginValidationStatusTestSuite, ProxyRewriteTestSuite, RateLimitDynamicInitialTestSuite,
     RateLimitDynamicUpdateTestSuite, RateLimitRedisTestSuite, RateLimitTestSuite, RealIpPluginTestSuite,
     RegionRouteTestSuite, RequestMirrorTestSuite, RequestRestrictionTestSuite, ResolvedRefsTestSuite,
-    ResponseRewriteTestSuite, TraceContextPluginTestSuite, WebhookKeyGetTestSuite,
+    ResponseRewriteTestSuite, TraceContextPluginTestSuite, WasmPluginTestSuite, WebhookKeyGetTestSuite,
 };
 
 // LinkSys tests

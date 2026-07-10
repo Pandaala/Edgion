@@ -297,6 +297,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/BandwidthLimit" => "EdgionPlugins",
         "EdgionPlugins/RealIp" => "EdgionPlugins",
         "EdgionPlugins/TraceContext" => "EdgionPlugins",
+        "EdgionPlugins/Wasm" => "EdgionPlugins",
         "EdgionPlugins/RequestMirror" => "EdgionPlugins",
         "EdgionPlugins/RequestRestriction" => "EdgionPlugins",
         "EdgionPlugins/IpRestriction" => "EdgionPlugins",
@@ -1039,6 +1040,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::TraceContextPluginTestSuite));
+        }
+        "EdgionPlugins/Wasm" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/Wasm tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::WasmPluginTestSuite));
         }
         "EdgionPlugins/RequestMirror" => {
             if !gateway {

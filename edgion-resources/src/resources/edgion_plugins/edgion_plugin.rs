@@ -9,7 +9,7 @@ use super::plugin_configs::{
     DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig, ForwardAuthConfig, GlobalAccessControlConfig,
     HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
     LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
-    RealIpConfig, RegionRouteConfig, RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig,
+    RealIpConfig, RegionRouteConfig, RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig, WasmConfig,
 };
 use crate::resources::http_route::{
     HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter,
@@ -104,6 +104,8 @@ pub enum EdgionPlugin {
     GlobalAccessControl(GlobalAccessControlConfig),
     /// Canary filter (100% traffic to one named backend, switchable via a Selector EdgionConfigData)
     Canary(CanaryConfig),
+    /// Wasm filter (proxy-wasm ABI guest module executed via wasmtime)
+    Wasm(WasmConfig),
     // TODO: Add more custom Edgion plugins here (no `Edgion` prefix on the variant name)
     // CircuitBreaker(CircuitBreakerConfig),
     // Waf(WafConfig),
@@ -154,6 +156,7 @@ impl EdgionPlugin {
             EdgionPlugin::ExtProc(_) => "ExtProc",
             EdgionPlugin::GlobalAccessControl(_) => "GlobalAccessControl",
             EdgionPlugin::Canary(_) => "Canary",
+            EdgionPlugin::Wasm(_) => "Wasm",
         }
     }
 
@@ -197,6 +200,7 @@ impl EdgionPlugin {
             EdgionPlugin::ExtProc(c) => c.validation_error(),
             EdgionPlugin::GlobalAccessControl(c) => c.validation_error(),
             EdgionPlugin::Canary(c) => c.validation_error(),
+            EdgionPlugin::Wasm(c) => c.validation_error(),
             // Gateway API filter variants (foreign types): no PluginValidation impl.
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::ResponseHeaderModifier(_)

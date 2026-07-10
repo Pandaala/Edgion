@@ -36,6 +36,7 @@ pub mod request_mirror;
 pub mod request_restriction;
 pub mod response_rewrite;
 pub mod trace_context;
+pub mod wasm;
 
 pub use all_endpoint_status::AllEndpointStatus;
 pub use bandwidth_limit::BandwidthLimit;
@@ -66,6 +67,7 @@ pub use region_route::RegionRoute;
 pub use request_mirror::RequestMirrorPlugin;
 pub use request_restriction::RequestRestriction;
 pub use response_rewrite::ResponseRewrite;
+pub use wasm::WasmPlugin;
 
 // Re-export plugin configs from types
 pub use edgion_resources::resources::edgion_plugins::{

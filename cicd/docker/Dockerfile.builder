@@ -15,7 +15,7 @@
 #     edgion-builder \
 #     cargo build --release --target aarch64-unknown-linux-gnu
 
-ARG RUST_VERSION=1.92
+ARG RUST_VERSION=1.94
 
 FROM rust:${RUST_VERSION}-bookworm
 

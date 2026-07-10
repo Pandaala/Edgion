@@ -161,6 +161,7 @@ Good references in the current repo:
 - Plugins that depend on ctx variables: `real_ip`, `ctx_set`.
 - Plugins that depend on Secrets and complex validation: `jwt_auth`, `openid_connect`, `key_auth`.
 - Body filter: `bandwidth_limit`.
+- External-runtime plugin (embeds a separate execution engine — global engine/cache/pool + host ABI bridge, guest failure isolated from the gateway process): `wasm` (`edgion-gateway/src/plugins/http/wasm/`).
 
 ### 5. Register the construction logic in `PluginRuntime`
 

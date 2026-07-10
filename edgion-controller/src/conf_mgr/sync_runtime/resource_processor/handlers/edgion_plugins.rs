@@ -219,7 +219,8 @@ impl EdgionPluginsHandler {
                 | EdgionPlugin::DynamicExternalUpstream(_)
                 | EdgionPlugin::Dsl(_)
                 | EdgionPlugin::TraceContext(_)
-                | EdgionPlugin::ExtProc(_) => {}
+                | EdgionPlugin::ExtProc(_)
+                | EdgionPlugin::Wasm(_) => {}
             }
         }
     }
@@ -2051,7 +2052,8 @@ mod tests {
                 | EdgionPlugin::DynamicExternalUpstream(_)
                 | EdgionPlugin::Dsl(_)
                 | EdgionPlugin::TraceContext(_)
-                | EdgionPlugin::ExtProc(_) => false,
+                | EdgionPlugin::ExtProc(_)
+                | EdgionPlugin::Wasm(_) => false,
             }
         }
         let _ = carries_config_data_ref; // referenced for exhaustiveness guard

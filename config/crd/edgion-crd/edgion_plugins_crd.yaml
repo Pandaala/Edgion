@@ -170,6 +170,7 @@ spec:
                           - ExtProc
                           - GlobalAccessControl
                           - Canary
+                          - Wasm
                       config:
                         type: object
                         description: "Plugin-specific configuration"
@@ -369,6 +370,7 @@ spec:
                           - ResponseRewrite
                           - DebugAccessLogToHeader
                           - Dsl
+                          - Wasm
                       config:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true

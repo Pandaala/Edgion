@@ -34,6 +34,7 @@ mod request_match;
 mod request_restriction;
 mod response_rewrite;
 mod trace_context;
+mod wasm;
 
 pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use bandwidth_limit::BandwidthLimitConfig;
@@ -84,3 +85,4 @@ pub use request_match::{OnMissing, RestrictionRule, RestrictionSource, SanType};
 pub use request_restriction::{RequestRestrictionConfig, RestrictionMode, RuleGroup};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
 pub use trace_context::TraceContextConfig;
+pub use wasm::{WasmConfig, WasmSourceSpec};

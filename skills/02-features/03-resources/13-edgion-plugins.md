@@ -1,6 +1,6 @@
 ---
 name: http-plugin-catalog
-description: Full EdgionPlugins CRD schema and catalog of 33 HTTP plugins.
+description: Full EdgionPlugins CRD schema and catalog of 35 HTTP plugins.
 ---
 
 # EdgionPlugins — HTTP Plugins
@@ -76,6 +76,7 @@ spec:
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
 | `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation + immediate-response short-circuit. MVP is header-only (no body); peer of `ForwardAuth`. Runs in the `RequestFilter` and async `UpstreamResponse` stages. |
+| `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: request/response header mutation + local-response short-circuit. v1 is header-only (no body hooks, no HTTP/gRPC callouts, no cross-phase guest state). Runs in the `RequestFilter` and sync `UpstreamResponseFilter` stages. See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
 
 ### Routing/Backend
 
@@ -104,7 +105,7 @@ HTTP plugins execute across Pingora's 4 stages:
 | Stage | Trigger Time | Typical Plugins |
 |-------|--------------|-----------------|
 | `RequestFilter` | After the request is received and before backend selection | Auth, RateLimit, CORS, IP restriction |
-| `UpstreamResponseFilter` | After upstream response headers are received | ResponseHeaderModifier |
+| `UpstreamResponseFilter` | After upstream response headers are received | ResponseHeaderModifier, `Wasm` (`proxy_on_response_headers`) |
 | `UpstreamResponseBodyFilter` | After upstream response body is received | ResponseRewrite (body modification) |
 | `UpstreamResponse` | After the upstream response headers arrive (async) | `ExtProc` (response-header processing); logic needing async access to the response |
 
