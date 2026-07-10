@@ -16,7 +16,17 @@ use crate::routes::udp::UdpPortRouteManager;
 use edgion_resources::resources::edgion_gateway_config::EdgionGatewayConfig;
 use edgion_resources::ListenerKey;
 
-/// UDP session timeout (60 seconds of inactivity)
+/// UDP session idle timeout: a session is reclaimed after 60 seconds without
+/// traffic in either direction.
+///
+/// This is intentionally a fixed constant, NOT operator-configurable — unlike
+/// the TCP/TLS L4 relay, whose idle timeout is resolved from
+/// `tcpTimeout.idleTimeout` (`resolve_tcp_idle_timeout`). UDP is connectionless
+/// soft state with no close handshake, so 60s follows the conventional NAT-style
+/// UDP mapping lifetime and bounds resource use per [`MAX_UDP_SESSIONS`]. A
+/// `udpTimeout.idleTimeout` knob is deliberately deferred until a concrete need
+/// appears; see the timeout-coverage audit (item 4) for the rationale. The value
+/// is pinned by a unit test in this module so any change is deliberate.
 const SESSION_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Maximum UDP packet size (64KB)
