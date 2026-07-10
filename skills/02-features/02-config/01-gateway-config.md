@@ -257,29 +257,58 @@ config field.
 This is a gateway-local field, not a cluster-synced one: a bad value can't be hot-pushed to
 crashloop a fleet, and it surfaces on first run. The `fips` cargo feature itself is an image/build
 concern, not something toggled at runtime. See
-`docs/superpowers/specs/2026-07-02-boringssl-fips-design.md` for the full design, including the
+`docs/superpowers/specs/2026-07-10-fips-host-detection-design.md` for the full design, including the
 approved cipher/curve set and known limitations (TLS 1.3 ChaCha20 not restrictable in BoringSSL;
 upstream/backend TLS ciphers are not FIPS-restricted).
 
+Also note that `--require-fips` on the CLI **now takes effect**: `GatewayConfig::merge()` was
+previously missing this field, so a CLI flag was parsed by clap and then silently discarded by the
+config merge, leaving only YAML/env able to set it. `require_fips` keeps its OR semantics in the
+merge — the CLI flag can only turn it on, never override a file's `true` back to `false`.
+
 ### fips_policy
 
-Gateway-local switch that force-enables the FIPS-approved TLS policy (approved cipher list +
-curves) on downstream listeners **even on a non-FIPS build**. Also settable via env
-`EDGION_FIPS_POLICY` (truthy: `1`/`true`/`yes`/`on`).
+Gateway-local tri-state that selects the FIPS-approved TLS policy (approved cipher list + curves)
+on downstream listeners, independent of whether the binary is a FIPS build.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `fips_policy` | `bool` | `false` | Force the FIPS-approved cipher/curve enforcement regardless of the validated module |
+| `fips_policy` | `"auto" \| "on" \| "off"` | `auto` | Select the FIPS-approved cipher/curve enforcement regardless of the validated module |
 
-- `fips_policy: false` (default): enforcement follows the build — a real FIPS build enforces the
-  approved set automatically; a non-FIPS build does not.
-- `fips_policy: true`: the approved cipher/curve set is enforced on a normal boringssl build too.
-  Two uses: (1) exercise the FIPS policy in integration tests without a FIPS toolchain/module
-  (the approved-suite behavior is pure SSL config, so it works on any boringssl build); (2) opt
-  into the approved-suite restriction as defense-in-depth. Enforcement gate is
-  `fips_module_available() OR fips_policy`. Operator `EdgionTls.ciphers` still overrides the cipher
-  list (approved curves still apply). This flag does **not** provide the validated crypto module —
-  for real FIPS compliance the binary must still be a FIPS build.
+- `auto` (default): follow the host kernel. Enforces the approved set when the host kernel reports
+  FIPS mode via `/proc/sys/crypto/fips_enabled`; otherwise does not. This is cipher-suite policy
+  alignment only — it is **not** a validated-module compliance claim.
+- `on`: always enforces the approved cipher/curve set, even on a normal (non-FIPS) boringssl build.
+  Two uses: (1) exercise the FIPS policy in integration tests without a FIPS toolchain/module (the
+  approved-suite behavior is pure SSL config, so it works on any boringssl build); (2) opt into the
+  approved-suite restriction as defense-in-depth.
+- `off`: never force-enables the policy. On a genuine FIPS build the approved profile still applies
+  unconditionally — `off` can only disable the module-less (forced) half of the gate, never real
+  FIPS-build enforcement. Effective gate is `fips_module_available() OR fips_policy_forced` where
+  `fips_policy_forced` is derived from this setting (and, for `auto`, from the host state).
+  Operator `EdgionTls.ciphers` still overrides the cipher list (approved curves still apply). This
+  field does **not** provide the validated crypto module — for real FIPS compliance the binary must
+  still be a FIPS build.
+
+**Accepted values.** Only the three strings above — no legacy booleans, no legacy truthy/falsey
+tokens. A YAML boolean (`fips_policy: true`) is a hard deserialize error. YAML 1.1 reads a bare
+`on` / `off` scalar as a boolean, so those two values must be quoted: `fips_policy: "on"` /
+`fips_policy: "off"`; `auto` needs no quoting.
+
+**Resolution order, highest first: env → CLI → config file → `auto`.**
+
+- **Env** (`EDGION_FIPS_POLICY`): accepts only `auto`/`on`/`off` (case-insensitive, trimmed).
+  Unset or whitespace-only falls through to CLI/file. Any other token — including the old
+  `1`/`true`/`0`/`false` — is unrecognized: the gateway **WARNs and ignores it**, falling through
+  to CLI/file rather than treating it as `off`, so a typo can never silently disable enforcement.
+- **CLI** (`--fips-policy`): `value_enum` with `num_args = 0..=1` and `default_missing_value = "on"`,
+  so a bare `--fips-policy` means `on`, `--fips-policy=off` / `--fips-policy=auto` also work, and
+  omitting the flag leaves the field `None` (not `Some(Auto)`) so it does not clobber a config
+  file's value during merge. `--fips-policy` **now takes effect**: `GatewayConfig::merge()` was
+  previously missing this field entirely, so the CLI value was parsed and then silently discarded;
+  only YAML/env reached the runtime.
+- **Config file**: the YAML value, if the field is present.
+- **`auto`**: the default if none of the above set a value.
 
 ## `integration_testing_mode`
 

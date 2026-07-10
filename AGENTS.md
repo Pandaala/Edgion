@@ -28,14 +28,20 @@ downstream server TLS defaults to the FIPS-approved TLS 1.2 cipher set
 (`ECDHE-{ECDSA,RSA}-AES{128,256}-GCM-SHA{256,384}`) and ECDH curves (`P-256`/`P-384`/`P-521`)
 unless `EdgionTls.spec.ciphers` is set explicitly (operator override always wins). The gateway-local
 `require_fips` config field (also settable via `EDGION_REQUIRE_FIPS`) fails startup non-zero if
-`require_fips: true` but the binary is not a FIPS build. The gateway-local `fips_policy` field (env
-`EDGION_FIPS_POLICY`) force-enables the approved cipher/curve policy even on a non-FIPS build
-(gate is `fips_module_available() OR fips_policy`) — mainly to exercise the FIPS policy in
-integration tests on a normal boringssl build; it does not provide the validated module. Known
+`require_fips: true` but the binary is not a FIPS build. The gateway-local `fips_policy` field is a
+tri-state (`auto` | `on` | `off`, default `auto`) resolved with precedence env
+(`EDGION_FIPS_POLICY`) → CLI (`--fips-policy`) → config file → `auto`; there are no legacy booleans
+and no legacy truthy/falsey tokens — a YAML boolean or an unrecognized env token is rejected
+(the env case WARNs and falls through to the config instead of being treated as `off`, so a typo
+can never silently disable enforcement). `auto` enables the approved cipher/curve policy when the
+host kernel reports FIPS mode (`/proc/sys/crypto/fips_enabled`), which lets a FIPS node tighten the
+profile without per-cluster configuration — this is cipher-suite policy alignment only and is NOT a
+validated-module compliance claim. A non-FIPS binary on a FIPS node also emits a startup WARN;
+alert on `edgion_gateway_fips_host_enabled == 1 and edgion_gateway_fips_module_enabled == 0`. Known
 limitations: TLS 1.3 cipher suites
 cannot be restricted in BoringSSL (`TLS_CHACHA20_POLY1305_SHA256` still negotiable under FIPS), and
 upstream (gateway→backend) TLS cipher suites are not FIPS-restricted (pingora connector
-limitation). See `docs/superpowers/specs/2026-07-02-boringssl-fips-design.md` for the full design.
+limitation). See `docs/superpowers/specs/2026-07-10-fips-host-detection-design.md` for the full design.
 
 ## Knowledge System
 
@@ -139,6 +145,7 @@ Steps 2/3/4 may run in parallel. If any step fails, report the error immediately
 - Log ID and observability conventions are in `skills/03-coding/`.
 - Do not introduce security vulnerabilities (injection, XSS, and other OWASP Top 10).
 - Keep changes minimal — do not refactor or add features that were not requested.
+- **Pre-release: no backward-compatibility burden.** Edgion has not shipped to production yet, so a refactor requested by the user does not need to preserve historical behavior. Do not keep deprecated fields, legacy aliases, migration shims, or `#[deprecated]` re-exports "for compatibility", and do not add a compatibility layer nobody asked for. Rename/move/delete freely, update every call site and the docs, and let the compiler and tests be the safety net. This does not license *unrequested* refactors — the "keep changes minimal" rule above still holds.
 - **Written content language**: everything written to disk must be English (code, comments, doc comments, TODO/FIXME, log/error literals, commit messages, `skills/` and `docs/en/` documentation). The only exception is Chinese user-facing documentation under `docs/zh-CN/`.
 - **No smuggling past the English-only lint**: judge by runtime meaning, not source bytes. If a value's decoded form lands on a blocked codepoint, it's smuggling — whether spelled as `\u{...}`, YAML/JSON `\uXXXX`, percent-encoded UTF-8 (`%E4%B8%AD`, `%D1%80`, ...), runtime byte/hex/base64 construction, or `include_bytes!` / external file. Use an English equivalent that exercises the same code path: percent-decoding can be tested with a space (`hello world` ↔ `hello%20world`) or reserved char (`foo&bar` ↔ `foo%26bar`); multi-byte UTF-8 coverage with lint-permitted chars (`é`, `ñ`, `€`, `©`, `π`).
 

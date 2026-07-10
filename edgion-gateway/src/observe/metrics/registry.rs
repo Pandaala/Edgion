@@ -67,7 +67,20 @@ pub mod names {
     pub const ACCESS_LOG_BACKFILL_FAILED_TOTAL: &str = "edgion_access_log_backfill_failed_total";
     // FIPS: 1 = the BoringSSL FIPS-validated crypto module is linked and enabled
     // in this binary, 0 = not present (non-FIPS build). Set once at startup.
+    // This is the ONLY validated-module compliance signal.
     pub const FIPS_MODULE_ENABLED: &str = "edgion_gateway_fips_module_enabled";
+    // 1 = the host kernel reports FIPS mode (/proc/sys/crypto/fips_enabled).
+    // Left operand of the compliance alert:
+    //   fips_host_enabled == 1 and fips_module_enabled == 0
+    pub const FIPS_HOST_ENABLED: &str = "edgion_gateway_fips_host_enabled";
+    // 1 = the host FIPS flag exists but could not be read (masked /proc). Both
+    // the guardrail and the fips_policy=auto default are inert in this state.
+    pub const FIPS_HOST_DETECT_ERROR: &str = "edgion_gateway_fips_host_detect_error";
+    // 1 = the approved cipher/curve profile is in effect on downstream
+    // listeners. Labeled `validated="true|false"` by whether the validated
+    // module backs it. NOT a compliance signal on its own: validated="false"
+    // means approved suites over an unvalidated module.
+    pub const FIPS_POLICY_ACTIVE: &str = "edgion_gateway_fips_policy_active";
 }
 
 /// Global metrics singleton
@@ -657,8 +670,14 @@ mod tests {
     }
 
     #[test]
-    fn fips_metric_name_is_stable() {
+    fn fips_metric_names_are_stable() {
+        // These names are load-bearing: the compliance alert
+        //   fips_host_enabled == 1 and fips_module_enabled == 0
+        // breaks silently if either is renamed.
         assert_eq!(names::FIPS_MODULE_ENABLED, "edgion_gateway_fips_module_enabled");
+        assert_eq!(names::FIPS_HOST_ENABLED, "edgion_gateway_fips_host_enabled");
+        assert_eq!(names::FIPS_HOST_DETECT_ERROR, "edgion_gateway_fips_host_detect_error");
+        assert_eq!(names::FIPS_POLICY_ACTIVE, "edgion_gateway_fips_policy_active");
     }
 }
 

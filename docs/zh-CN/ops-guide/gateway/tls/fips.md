@@ -40,6 +40,49 @@ FIPS 在**镜像构建期**启用，而非运行时。发布 / CI 的 Docker 构
 没有任何配置字段或环境变量能把 FIPS “打开”——你需要部署一个 FIPS 镜像。下面的配置开关控制的是**断言与
 策略**，而不是验证模块是否存在。
 
+## 主机 FIPS 检测与 `auto` 默认值
+
+Gateway 还会在启动时通过读取一次 `/proc/sys/crypto/fips_enabled` 来检测**宿主机内核**是否处于 FIPS
+模式。BoringSSL 静态链接进二进制文件，因此宿主机的 FIPS 模式对进程内实际执行的加密代码没有任何影响——
+这项检测不能把一个非 FIPS 二进制变成经过验证的 FIPS 二进制。它驱动两件互相独立的事情：
+
+1. **合规护栏**——如果宿主机内核报告处于 FIPS 模式，但本二进制并未链接验证模块，Gateway 会在启动时发出
+   一条 WARN，指出被限制的套件与逃生舱口，然后正常启动（fail-fast 仍然是通过 `require_fips` 的可选行
+   为）。
+2. **`auto` 策略默认值**——`fips_policy`（见下文）默认为 `auto`，只要宿主机是 FIPS 节点，即使二进制不
+   是 FIPS 构建，也会强制启用批准的密码套件 / 曲线策略。
+
+**对运维的影响**：在一个 FIPS 节点上，**完全没有任何 FIPS 相关配置**的 Gateway，现在会自动把 TLS 1.2
+限制为四个批准的 AES-GCM 密码套件与 P-256/P-384/P-521 曲线。只能协商 ChaCha20 或 CBC 套件的 TLS 1.2
+客户端将握手失败。这是一个纯粹由节点内核标志驱动的真实行为变化——Gateway 侧配置并未改变。逃生舱口：
+
+- `fips_policy: off`——为该部署禁用强制策略（真正的 FIPS 构建仍会无条件强制批准的密码套件配置；`off`
+  只能禁用 module-less/auto 这一路径）。
+- `EdgionTls.spec.ciphers`——为该工作负载 / listener 显式设置密码套件列表；运维覆盖始终优先于任何 FIPS
+  默认值。
+
+### `Unknown` 主机状态
+
+读取该标志文件最终会落在三种状态之一，而不只是 enabled/disabled：
+
+| 状态 | 何时出现 | 影响 |
+|------|----------|------|
+| `Enabled` | 文件可读，内容为 `1` | `auto` 生效强制；如果本二进制非 FIPS，mismatch 护栏可能触发 |
+| `Disabled` | 文件可读但内容非 `1`，或文件不存在（ENOENT / 非 Linux） | `auto` 不强制 |
+| `Unknown` | 文件存在但无法读取（例如被加固 / 屏蔽的 `/proc`） | 记录一条 **WARN**，将 `edgion_gateway_fips_host_detect_error` 指标置为 `1`，**不**触发合规护栏，也**不**在 `auto` 下收紧密码套件 |
+
+`Unknown` 在流量上选择失败开放（无法确定的主机状态不能作为违规证据），但会在日志与指标中刻意保持醒目，
+因为屏蔽 `/proc` 的加固节点恰恰是本特性面向的高保障环境。
+
+### 已知限制：沙箱化容器运行时
+
+在基于 VM 或沙箱隔离的容器运行时下——Kata Containers、Firecracker microVM、gVisor——
+`/proc/sys/crypto/fips_enabled` 反映的是**客户机 / 沙箱内核**，而非物理节点。读取会*成功*，但返回一个
+有效却错误的值，因此没有任何检测状态或日志能捕捉到这种情况。在默认的命名空间共享运行时（runc/containerd）
+下，该文件能正确反映宿主机内核。
+
+**在沙箱化运行时上，运维必须显式设置 `fips_policy`**（`on` 或 `off`），而不要依赖 `auto`。
+
 ## 配置
 
 有两个 gateway-local（进程级、非集群同步）的启动开关控制 FIPS 行为。两者都位于 Gateway YAML 配置中，
@@ -72,27 +115,54 @@ require_fips: true
 EDGION_REQUIRE_FIPS=1 ./edgion-gateway --config-file config/edgion-gateway.yaml
 ```
 
-### `fips_policy`——在非 FIPS 构建上强制启用批准策略
+### `fips_policy`——无论验证模块是否存在都选择批准策略
 
-即使二进制不是 FIPS 构建，也在下行 listener 上强制启用 FIPS 批准的密码套件 / 曲线**策略**。这只是策略
-开关——它**不**提供验证模块。
+一个三态开关，用于在下行 listener 上选择 FIPS 批准的密码套件 / 曲线**策略**，与二进制是否为 FIPS 构建
+无关。这只是策略开关——它**不**提供验证模块。
 
 | 字段 | 类型 | 默认 | 环境变量 | 说明 |
 |------|------|------|----------|------|
-| `fips_policy` | `bool` | `false` | `EDGION_FIPS_POLICY` | 无论验证模块是否存在都强制批准的密码套件 / 曲线 |
+| `fips_policy` | `"auto" \| "on" \| "off"` | `auto` | `EDGION_FIPS_POLICY` | 无论验证模块是否存在都选择批准的密码套件 / 曲线强制策略 |
 
-- `fips_policy: false`（默认）——强制策略跟随构建：真正的 FIPS 构建自动强制批准集合；非 FIPS 构建不
-  强制。
-- `fips_policy: true`——在普通 BoringSSL 构建上也强制批准的密码套件 / 曲线集合。
+- `auto`（默认）——跟随宿主机：当[主机 FIPS 检测](#主机-fips-检测与-auto-默认值)报告宿主机内核处于
+  FIPS 模式时强制启用批准集合，否则不强制。这只是密码套件层面的策略对齐，不是合规声明。
+- `on`——即使在普通 BoringSSL 构建上，也无条件强制启用批准的密码套件 / 曲线集合。
+- `off`——永不强制启用该策略。真正的 FIPS 构建仍会无条件强制批准配置；`off` 只能禁用 module-less
+  （强制）路径。
 
-强制门实际上是 `fips_module_available() OR fips_policy`。两个用途：
+强制门实际上是 `fips_module_available() OR fips_policy_forced`，其中 `fips_policy_forced` 由该设置
+（以及 `auto` 时的主机状态）解析得出。`on` 的两个用途：
 
 1. 在没有 FIPS 工具链或模块的情况下于集成测试中验证 FIPS 密码套件 / 曲线行为（批准套件限制是纯 SSL 配
    置，在任何 BoringSSL 构建上都有效）。
 2. 作为纵深防御主动开启批准套件限制。
 
-> ⚠️ `fips_policy: true` **不会**让非 FIPS 二进制变得 FIPS 合规。真正的 FIPS 合规要求二进制是 FIPS
-> 构建（验证模块）。此开关仅镜像**密码套件 / 曲线策略**。
+> ⚠️ `fips_policy: on`（或 `auto` 默认值在 FIPS 主机上收紧）**不会**让非 FIPS 二进制变得 FIPS 合规。
+> 真正的 FIPS 合规要求二进制是 FIPS 构建（验证模块）。此字段仅镜像**密码套件 / 曲线策略**。
+
+**取值与优先级。** 只接受上面这三个字符串——没有历史遗留的布尔值，也没有历史遗留的 truthy/falsey 令
+牌。YAML 布尔值（`fips_policy: true`）会触发反序列化硬错误；而 YAML 1.1 会把裸写的 `on` / `off` 标量
+解析为布尔值，因此配置文件中这两个取值必须加引号：
+
+```yaml
+# edgion-gateway.yaml
+fips_policy: "off"   # 或 "on"；auto 无需加引号
+```
+
+解析优先级，从高到低：**环境变量 → CLI → 配置文件 → `auto`**。
+
+```bash
+# 环境变量只接受 auto/on/off；其他任何取值（包括旧的 1/true/0/false）都是无法识别的
+# 令牌，会被 WARN 并忽略，回退到 CLI/配置文件，而不是被当成 off
+EDGION_FIPS_POLICY=off ./edgion-gateway --config-file config/edgion-gateway.yaml
+
+# CLI：裸标志表示 on；--fips-policy=auto / --fips-policy=off 同样有效
+./edgion-gateway --fips-policy --config-file config/edgion-gateway.yaml
+```
+
+`--fips-policy` 与 `--require-fips` 现在**真正生效**：此前两者都会被 clap 解析，随后又被配置合并逻辑
+静默丢弃，只有 YAML 和环境变量能真正到达运行中的 Gateway。这个合并缺陷已修复——传入该 CLI 标志时其值
+会被采纳，省略该标志则保留配置文件中的原值。
 
 ## 按 listener 覆盖密码套件
 
@@ -120,12 +190,13 @@ spec:
     - ECDHE-RSA-AES256-GCM-SHA384
 ```
 
-FIPS 构建上的决策顺序：
+决策顺序：
 
 ```text
-运维设置了 spec.ciphers        -> 使用它们（覆盖优先）
-否则 FIPS 构建 / fips_policy    -> 应用批准的默认密码套件 + 曲线
-否则                            -> 保留 BoringSSL 默认（非 FIPS 行为）
+运维设置了 spec.ciphers            -> 使用它们（覆盖优先）
+否则 fips_policy_active() 为真      -> 应用批准的默认密码套件 + 曲线
+  （FIPS 构建上恒真，或 fips_policy=on，或 fips_policy=auto 且宿主机为 FIPS 节点）
+否则                                -> 保留 BoringSSL 默认（非 FIPS 行为）
 ```
 
 即使 `ciphers` 被覆盖，批准的 ECDH 曲线仍然生效。密码套件字段的完整语义见 [EdgionTls](./edgion-tls.md)。
@@ -134,9 +205,36 @@ FIPS 构建上的决策顺序：
 
 Gateway 通过可观测性而非业务 API 暴露 FIPS 状态：
 
-- **启动日志**——一条 INFO 记录报告模块状态、构建期注入的模块标识符，以及批准默认值是否生效。
-- **指标**——`edgion_gateway_fips_module_enabled`（gauge，`0`/`1`）反映 Layer-1 事实：链接了验证模块
-  时为 `1`。通过 Gateway 指标端点抓取（见 [监控指标](../../observability/metrics.md)）。
+- **启动日志**——一条 INFO 记录（`"FIPS status resolved"`）报告模块状态、检测到的主机 FIPS 状态、解析
+  后的 `fips_policy` 模式，以及批准配置是否生效。
+- **指标**——四个 gauge，全部在启动时无条件设置（从不采用惰性注册，因此一个缺失的序列永远不会掩盖
+  `== 0` 这一条件）：
+
+  | 指标 | 含义 |
+  |------|------|
+  | `edgion_gateway_fips_module_enabled` | 本二进制链接了 FIPS 验证加密模块时为 `1`（Layer-1 事实：真正的 FIPS 构建）。**这是唯一的验证模块信号。** |
+  | `edgion_gateway_fips_host_enabled` | 宿主机内核报告处于 FIPS 模式（`/proc/sys/crypto/fips_enabled`）时为 `1` |
+  | `edgion_gateway_fips_host_detect_error` | 主机检测无法读取标志文件（`HostFipsState::Unknown`）时为 `1`——此时护栏与 `auto` 默认值均处于失效状态 |
+  | `edgion_gateway_fips_policy_active{validated="true\|false"}` | 该进程上批准的密码套件 / 曲线配置实际生效时为 `1`；`validated` 标签携带 `fips_module_enabled` 的值，使两个信号始终同行 |
+
+  通过 Gateway 指标端点抓取（见 [监控指标](../../observability/metrics.md)）。
+
+> ⚠️ **`fips_policy_active{validated="false"}` 不是合规通过的标志。** 它意味着批准的密码套件正运行在
+> *未经验证*的加密实现之上——这正是 `auto`/`on` 在非 FIPS 二进制上产生的结果。只检查协商套件的仪表盘
+> 面板或外部密码套件扫描器，会看到与真正 FIPS 构建相同的批准套件，从而可能误读为"合规"。事实并非如
+> 此：`edgion_gateway_fips_module_enabled` 是**唯一**的验证模块信号，任何对 `fips_policy_active` 的解
+> 读都必须与它联合判断。
+
+### 合规告警
+
+对合规而言真正重要的主机-二进制不匹配情况——FIPS 节点运行了不含验证模块的二进制——可以用一条 PromQL
+表达式表达：
+
+```promql
+edgion_gateway_fips_host_enabled == 1 and edgion_gateway_fips_module_enabled == 0
+```
+
+这正是启动期护栏 WARN 所检查的同一条件；该指标让你可以在整个集群范围内对其告警，而不必翻查 Pod 日志。
 
 从客户端确认协商到的套件：
 
@@ -154,7 +252,7 @@ openssl s_client -connect secure.example.com:443 -tls1_2 \
 ## 已知限制
 
 FIPS 模式覆盖了常见的下行姿态，但存在若干有记录的缺口（完整设计见
-`docs/superpowers/specs/2026-07-02-boringssl-fips-design.md`）：
+`docs/superpowers/specs/2026-07-10-fips-host-detection-design.md`）：
 
 - **BoringSSL 无法限制 TLS 1.3 密码套件。** `TLS_CHACHA20_POLY1305_SHA256` 在 TLS 1.3 上仍可协商。
   批准套件强制仅在 **TLS 1.2** 生效。若要彻底排除 TLS 1.3 ChaCha20，必须禁用 TLS 1.3（默认不禁用）。
@@ -171,13 +269,17 @@ FIPS 模式覆盖了常见的下行姿态，但存在若干有记录的缺口（
 |------|----------|------|
 | Gateway 启动时报 FIPS 错误并非零退出 | 非 FIPS 镜像上设了 `require_fips: true` | 部署 FIPS 构建镜像；若该节点不要求 FIPS，则去掉 `require_fips` |
 | `edgion_gateway_fips_module_enabled` 为 `0` | 二进制不是 FIPS 构建 | 运行的镜像未以 `fips` feature 编译——改用 FIPS 镜像 |
+| Gateway 配置未变，但 ChaCha20 或纯 CBC 的 TLS 1.2 客户端突然失败 | 节点变成了 FIPS 主机，且 `fips_policy` 处于 `auto` 默认值 | 为该部署设置 `fips_policy: off`，或为该工作负载设置 `EdgionTls.spec.ciphers` |
 | ChaCha20 客户端在 TLS 1.2 上失败，但你以为能用 | FIPS 批准默认套件排除了 ChaCha20 | 在该 listener 显式设置 `EdgionTls.spec.ciphers`，或将这些客户端路由到非 FIPS listener |
 | ChaCha20 在 TLS 1.3 上仍能协商 | BoringSSL 无法限制 TLS 1.3 套件（有记录的限制） | 固定 `minTlsVersion: TLS1_2` 并在该 listener 禁用 TLS 1.3（若必须排除） |
-| 本地（非 FIPS）构建上未应用批准策略 | 未设置 `fips_policy` | 设置 `fips_policy: true` 或 `EDGION_FIPS_POLICY=1` 以在无 FIPS 模块时验证策略 |
+| 本地（非 FIPS）构建 / 非 FIPS 主机上未应用批准策略 | `fips_policy` 解析为 `off`（或 `auto` 且主机非 FIPS） | 设置 `fips_policy: on`（或 `EDGION_FIPS_POLICY=on`）以在无 FIPS 模块时验证策略 |
+| YAML 中 `fips_policy: true` 加载失败 | 历史遗留布尔写法；`fips_policy` 是字符串三态，不是布尔值 | 改用 `fips_policy: "on"` / `"off"` / `auto` |
+| `edgion_gateway_fips_host_detect_error` 为 `1` | 主机检测无法读取 `/proc/sys/crypto/fips_enabled`（例如被加固 / 屏蔽的 `/proc`） | 显式设置 `fips_policy`（`on`/`off`）；检测处于 `Unknown` 时 `auto` 不生效 |
+| 沙箱化运行时内 `edgion_gateway_fips_host_enabled` 的读数与预期相反 | Kata/Firecracker/gVisor：`/proc/sys/crypto/fips_enabled` 反映的是客户机内核，而非物理节点 | 在该运行时上显式设置 `fips_policy`；不要依赖 `auto` |
 
 ## 相关文档
 
 - [EdgionTls](./edgion-tls.md)——密码套件 / 最低 TLS 版本控制与 `ciphers` 覆盖
 - [TLS 终结](./tls-termination.md)
 - [Gateway 配置](../../configuration/gateway-config.md)——`require_fips` / `fips_policy` 参考
-- [监控指标](../../observability/metrics.md)——抓取 `edgion_gateway_fips_module_enabled`
+- [监控指标](../../observability/metrics.md)——抓取 `edgion_gateway_fips_module_enabled`、`edgion_gateway_fips_host_enabled`、`edgion_gateway_fips_host_detect_error`、`edgion_gateway_fips_policy_active`

@@ -2,7 +2,7 @@
 //!
 //! When the gateway is a FIPS build, downstream listeners default to the
 //! FIPS-approved cipher/curve set unless the operator overrides via
-//! `EdgionTls.ciphers`. See docs/superpowers/specs/2026-07-02-boringssl-fips-design.md.
+//! `EdgionTls.ciphers`. See docs/superpowers/specs/2026-07-10-fips-host-detection-design.md.
 //!
 //! Backend-agnostic surface: `fips_module_available` and `decide_cipher_action`
 //! are callable on both the boringssl and rustls builds (the startup path uses
@@ -138,6 +138,83 @@ pub(crate) fn configure_fips_curves(ssl: &mut SslRef) -> Result<(), Box<PingoraE
         }
     }
     Ok(())
+}
+
+/// How the approved cipher/curve policy is selected when the validated crypto
+/// module is absent. `Auto` follows the host kernel's FIPS mode.
+///
+/// This governs only the `fips_policy_forced` half of `fips_policy_active()`.
+/// A genuine FIPS build enforces the profile unconditionally, so `Off` can
+/// never disable enforcement there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum FipsPolicyMode {
+    /// Follow the host: enforce iff the host kernel reports FIPS mode.
+    #[default]
+    Auto,
+    /// Always enforce the approved profile.
+    On,
+    /// Never enforce it (on a non-FIPS build).
+    Off,
+}
+
+impl FipsPolicyMode {
+    /// The canonical spelling, used by `Serialize` and by log fields.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            FipsPolicyMode::Auto => "auto",
+            FipsPolicyMode::On => "on",
+            FipsPolicyMode::Off => "off",
+        }
+    }
+
+    /// Parse one operator-supplied token. Accepts only the tri-state names.
+    /// Case-insensitive, trimmed.
+    pub fn parse_token(token: &str) -> Option<FipsPolicyMode> {
+        match token.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(FipsPolicyMode::Auto),
+            "on" => Some(FipsPolicyMode::On),
+            "off" => Some(FipsPolicyMode::Off),
+            _ => None,
+        }
+    }
+}
+
+impl serde::Serialize for FipsPolicyMode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FipsPolicyMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ModeVisitor;
+
+        impl serde::de::Visitor<'_> for ModeVisitor {
+            type Value = FipsPolicyMode;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str(r#"one of "auto", "on", "off""#)
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<Self::Value, E> {
+                FipsPolicyMode::parse_token(v).ok_or_else(|| E::custom(format!("invalid fips_policy value: {v:?}")))
+            }
+        }
+
+        deserializer.deserialize_str(ModeVisitor)
+    }
+}
+
+/// Whether the approved profile should be force-enabled given the operator's
+/// mode and the detected host state. The validated module is NOT considered
+/// here — `fips_policy_active()` OR-s it in — so that `Off` cannot disable
+/// enforcement on a genuine FIPS build.
+pub fn resolve_policy(mode: FipsPolicyMode, host: crate::tls::fips_host::HostFipsState) -> bool {
+    match mode {
+        FipsPolicyMode::On => true,
+        FipsPolicyMode::Off => false,
+        FipsPolicyMode::Auto => matches!(host, crate::tls::fips_host::HostFipsState::Enabled),
+    }
 }
 
 #[cfg(test)]
@@ -285,5 +362,99 @@ mod tests {
             run(FIPS_TLS12_CIPHERS),
             "FIPS-policy server must accept an approved-suite TLS 1.2 client"
         );
+    }
+
+    use crate::tls::fips_host::HostFipsState;
+
+    #[test]
+    fn resolve_policy_on_and_off_ignore_the_host() {
+        for host in [HostFipsState::Enabled, HostFipsState::Disabled, HostFipsState::Unknown] {
+            assert!(resolve_policy(FipsPolicyMode::On, host));
+            assert!(!resolve_policy(FipsPolicyMode::Off, host));
+        }
+    }
+
+    #[test]
+    fn resolve_policy_auto_follows_the_host_and_unknown_does_not_tighten() {
+        assert!(resolve_policy(FipsPolicyMode::Auto, HostFipsState::Enabled));
+        assert!(!resolve_policy(FipsPolicyMode::Auto, HostFipsState::Disabled));
+        // An undetermined host must not silently restrict cipher suites.
+        assert!(!resolve_policy(FipsPolicyMode::Auto, HostFipsState::Unknown));
+    }
+
+    #[test]
+    fn policy_mode_deserializes_tristate_strings() {
+        // Bare unquoted `on`/`off` resolve to YAML 1.1 booleans, so they must be
+        // quoted here to reach the string parser at all.
+        let auto: FipsPolicyMode = serde_yaml::from_str("auto").unwrap();
+        assert_eq!(auto, FipsPolicyMode::Auto);
+        let on_str: FipsPolicyMode = serde_yaml::from_str("\"on\"").unwrap();
+        assert_eq!(on_str, FipsPolicyMode::On);
+        let off_str: FipsPolicyMode = serde_yaml::from_str("\"OFF\"").unwrap();
+        assert_eq!(off_str, FipsPolicyMode::Off);
+
+        // A YAML boolean is no longer accepted (no compatibility layer).
+        assert!(serde_yaml::from_str::<FipsPolicyMode>("true").is_err());
+        // An unrecognized token is still rejected.
+        assert!(serde_yaml::from_str::<FipsPolicyMode>("nonsense").is_err());
+    }
+
+    #[test]
+    fn policy_mode_serialize_round_trips() {
+        // The struct-level `#[derive(Serialize)]` on GatewayConfig forces a
+        // Serialize impl. Assert on the round-trip, not the exact bytes: YAML
+        // 1.1 treats `on`/`off` as booleans, so serde_yaml's emitter may quote
+        // them (`'on'`). Either spelling must deserialize back to the same mode.
+        for mode in [FipsPolicyMode::Auto, FipsPolicyMode::On, FipsPolicyMode::Off] {
+            let yaml = serde_yaml::to_string(&mode).unwrap();
+            let back: FipsPolicyMode = serde_yaml::from_str(&yaml).unwrap();
+            assert_eq!(back, mode, "round-trip failed for {yaml:?}");
+        }
+    }
+
+    #[test]
+    fn policy_mode_default_is_auto() {
+        assert_eq!(FipsPolicyMode::default(), FipsPolicyMode::Auto);
+    }
+
+    /// The full decision chain from a simulated host flag to the enforcement
+    /// bool, including the production gate on the path override. Mutates the
+    /// process env, so it must not run concurrently with another env test in
+    /// this module; none exists today.
+    #[test]
+    fn simulated_fips_host_drives_auto_policy_and_gate_refuses_override() {
+        use crate::tls::fips_host::{detect_host_fips, HostFipsState, FIPS_HOST_PATH_ENV};
+
+        let dir = tempfile::tempdir().unwrap();
+        let flag = dir.path().join("fips_enabled");
+        std::fs::write(&flag, "1\n").unwrap();
+
+        // The workspace is edition 2021, where `set_var` is still a safe fn — do
+        // not wrap it in `unsafe`, that trips the `unused_unsafe` lint.
+        std::env::set_var(FIPS_HOST_PATH_ENV, &flag);
+
+        // Integration-testing mode on: the override is honored.
+        let host = detect_host_fips(true);
+        assert_eq!(host, HostFipsState::Enabled);
+        assert!(
+            resolve_policy(FipsPolicyMode::Auto, host),
+            "auto must follow a FIPS host"
+        );
+        assert!(
+            !resolve_policy(FipsPolicyMode::Off, host),
+            "off must still win over the host"
+        );
+
+        // Integration-testing mode off: the override is refused and the real
+        // kernel path is read instead. On any CI host that is not itself in FIPS
+        // mode, that yields Disabled (the file is absent) — never Enabled from
+        // our temp file.
+        assert_ne!(
+            detect_host_fips(false),
+            HostFipsState::Enabled,
+            "the path override must be refused outside integration-testing mode"
+        );
+
+        std::env::remove_var(FIPS_HOST_PATH_ENV);
     }
 }

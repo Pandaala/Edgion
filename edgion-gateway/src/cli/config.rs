@@ -189,15 +189,24 @@ pub struct GatewayConfig {
     #[serde(default)]
     pub require_fips: bool,
 
-    /// Force the FIPS-approved TLS policy (approved cipher list + curves) on
-    /// downstream listeners even on a non-FIPS build. Default false. A real FIPS
-    /// build enforces the policy automatically regardless of this flag; this
-    /// flag lets the policy be exercised on a normal boringssl build (e.g.
-    /// integration tests) or opted into as defense-in-depth. Also settable via
-    /// `EDGION_FIPS_POLICY` (truthy: 1/true/yes/on). See the FIPS design spec.
-    #[arg(long = "fips-policy")]
+    /// How to select the FIPS-approved TLS policy (approved cipher list +
+    /// curves) on downstream listeners. `auto` (the default) follows the host
+    /// kernel's FIPS mode; `on` always enforces; `off` never does. A real FIPS
+    /// build enforces the policy unconditionally regardless of this setting.
+    ///
+    /// Accepts only `auto`/`on`/`off`. Also settable via `EDGION_FIPS_POLICY`
+    /// (same three values), which takes precedence over this field. `None`
+    /// means "not specified".
+    /// See docs/superpowers/specs/2026-07-10-fips-host-detection-design.md.
+    #[arg(
+        long = "fips-policy",
+        value_name = "MODE",
+        value_enum,
+        num_args = 0..=1,
+        default_missing_value = "on"
+    )]
     #[serde(default)]
-    pub fips_policy: bool,
+    pub fips_policy: Option<crate::tls::fips_profile::FipsPolicyMode>,
 }
 
 impl std::fmt::Debug for GatewayConfig {
@@ -242,15 +251,33 @@ pub fn require_fips_env_enabled(env_value: Option<&str>) -> bool {
     }
 }
 
-/// Env var that force-enables the FIPS-approved TLS policy. Truthy: 1/true/yes/on.
+/// Env var that selects the FIPS-approved TLS policy. Accepts `auto`/`on`/`off`.
 pub const FIPS_POLICY_ENV: &str = "EDGION_FIPS_POLICY";
 
-/// Whether `EDGION_FIPS_POLICY` is set to a truthy value (trimmed, lowercased).
-/// Unset/empty/other => false.
-pub fn fips_policy_env_enabled(env_value: Option<&str>) -> bool {
-    match env_value.map(|v| v.trim().to_ascii_lowercase()) {
-        Some(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
-        None => false,
+/// The three outcomes of reading `EDGION_FIPS_POLICY`. `Invalid` is kept
+/// distinct from `Unset` so the caller can WARN on a typo rather than silently
+/// falling through — a misspelled value must never change policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvPolicy {
+    /// Not set, or set to whitespace.
+    Unset,
+    /// Set to an unrecognized token, carried for the WARN message.
+    Invalid(String),
+    /// Set to a recognized mode.
+    Set(crate::tls::fips_profile::FipsPolicyMode),
+}
+
+/// Parse `EDGION_FIPS_POLICY`. Unset or empty falls through to the config file.
+pub fn fips_policy_env_mode(env_value: Option<&str>) -> EnvPolicy {
+    let Some(raw) = env_value else {
+        return EnvPolicy::Unset;
+    };
+    if raw.trim().is_empty() {
+        return EnvPolicy::Unset;
+    }
+    match crate::tls::fips_profile::FipsPolicyMode::parse_token(raw) {
+        Some(mode) => EnvPolicy::Set(mode),
+        None => EnvPolicy::Invalid(raw.trim().to_string()),
     }
 }
 
@@ -705,7 +732,7 @@ impl EdgionGatewayConfig {
     }
 
     /// Merge CLI config into file config (CLI takes precedence)
-    fn merge(base: &mut Self, cli: &Self) {
+    pub(crate) fn merge(base: &mut Self, cli: &Self) {
         // Work directory: CLI value takes precedence if provided
         if cli.work_dir.is_some() {
             base.work_dir = cli.work_dir.clone();
@@ -720,6 +747,16 @@ impl EdgionGatewayConfig {
         }
         if cli.gateway.probe_listen.is_some() {
             base.gateway.probe_listen = cli.gateway.probe_listen.clone();
+        }
+        // FIPS: `fips_policy` is Option, so `Some` means the operator actually
+        // passed --fips-policy; None must leave the file's value alone.
+        if cli.gateway.fips_policy.is_some() {
+            base.gateway.fips_policy = cli.gateway.fips_policy;
+        }
+        // `require_fips` keeps its OR semantics: the CLI flag can only add the
+        // requirement, never remove one set in the file.
+        if cli.gateway.require_fips {
+            base.gateway.require_fips = true;
         }
 
         // Logging config
@@ -1034,11 +1071,6 @@ access_log_sensitive:
         assert!(!require_fips_env_enabled(Some("0")));
         assert!(!require_fips_env_enabled(Some("")));
         assert!(!require_fips_env_enabled(None));
-        // fips_policy env parsing mirrors require_fips.
-        assert!(fips_policy_env_enabled(Some("1")));
-        assert!(fips_policy_env_enabled(Some(" On ")));
-        assert!(!fips_policy_env_enabled(Some("off")));
-        assert!(!fips_policy_env_enabled(None));
     }
 
     #[test]
@@ -1110,5 +1142,118 @@ access_log:
             }
             other => panic!("expected StringOutput::Otlp, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn fips_policy_env_mode_parses_tristate() {
+        use crate::tls::fips_profile::FipsPolicyMode;
+
+        assert!(matches!(
+            fips_policy_env_mode(Some("auto")),
+            EnvPolicy::Set(FipsPolicyMode::Auto)
+        ));
+        assert!(matches!(
+            fips_policy_env_mode(Some(" On ")),
+            EnvPolicy::Set(FipsPolicyMode::On)
+        ));
+        assert!(matches!(
+            fips_policy_env_mode(Some("off")),
+            EnvPolicy::Set(FipsPolicyMode::Off)
+        ));
+        // No compatibility layer: the legacy truthy/falsey vocabulary of the old
+        // boolean flag is no longer recognized.
+        assert!(matches!(fips_policy_env_mode(Some("1")), EnvPolicy::Invalid(_)));
+        assert!(matches!(fips_policy_env_mode(Some("false")), EnvPolicy::Invalid(_)));
+    }
+
+    #[test]
+    fn fips_policy_env_mode_unset_and_empty_fall_through() {
+        assert!(matches!(fips_policy_env_mode(None), EnvPolicy::Unset));
+        assert!(matches!(fips_policy_env_mode(Some("")), EnvPolicy::Unset));
+        assert!(matches!(fips_policy_env_mode(Some("   ")), EnvPolicy::Unset));
+    }
+
+    #[test]
+    fn fips_policy_env_mode_reports_garbage_instead_of_guessing() {
+        // A typo must not silently change policy in either direction; the caller
+        // WARNs and falls through to the config file.
+        match fips_policy_env_mode(Some("enabled")) {
+            EnvPolicy::Invalid(raw) => assert_eq!(raw, "enabled"),
+            other => panic!("expected Invalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_propagates_fips_policy_from_cli_and_preserves_file_when_omitted() {
+        use crate::tls::fips_profile::FipsPolicyMode;
+
+        // Regression test for the pre-existing bug: --fips-policy was parsed and
+        // then discarded by merge(), so the flag did nothing.
+        let mut file = EdgionGatewayConfig::default();
+        file.gateway.fips_policy = Some(FipsPolicyMode::On);
+
+        let mut cli = EdgionGatewayConfig::default();
+        cli.gateway.fips_policy = Some(FipsPolicyMode::Off);
+        EdgionGatewayConfig::merge(&mut file, &cli);
+        assert_eq!(
+            file.gateway.fips_policy,
+            Some(FipsPolicyMode::Off),
+            "CLI must override the file"
+        );
+
+        // Omitted on the CLI (None) must NOT clobber the file's value. This is
+        // why the field is Option: a bare enum with a clap default_value would
+        // make "omitted" indistinguishable from "--fips-policy=auto".
+        let mut file = EdgionGatewayConfig::default();
+        file.gateway.fips_policy = Some(FipsPolicyMode::On);
+        let cli = EdgionGatewayConfig::default();
+        EdgionGatewayConfig::merge(&mut file, &cli);
+        assert_eq!(
+            file.gateway.fips_policy,
+            Some(FipsPolicyMode::On),
+            "omitted CLI must preserve the file"
+        );
+    }
+
+    #[test]
+    fn merge_propagates_require_fips_with_or_semantics() {
+        let mut file = EdgionGatewayConfig::default();
+        let mut cli = EdgionGatewayConfig::default();
+        cli.gateway.require_fips = true;
+        EdgionGatewayConfig::merge(&mut file, &cli);
+        assert!(
+            file.gateway.require_fips,
+            "CLI --require-fips must reach the merged config"
+        );
+
+        // OR semantics: a file `true` survives an absent CLI flag.
+        let mut file = EdgionGatewayConfig::default();
+        file.gateway.require_fips = true;
+        let cli = EdgionGatewayConfig::default();
+        EdgionGatewayConfig::merge(&mut file, &cli);
+        assert!(file.gateway.require_fips);
+    }
+
+    #[test]
+    fn gateway_config_deserializes_fips_policy() {
+        use crate::tls::fips_profile::FipsPolicyMode;
+
+        let yaml = "fips_policy: auto\n";
+        let parsed: GatewayConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.fips_policy, Some(FipsPolicyMode::Auto));
+
+        // Bare `on` resolves to a YAML boolean, so it must be quoted to reach
+        // the string parser.
+        let yaml = "fips_policy: \"on\"\n";
+        let parsed: GatewayConfig = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.fips_policy, Some(FipsPolicyMode::On));
+
+        // Omitted => None => the startup path applies Auto.
+        let parsed: GatewayConfig = serde_yaml::from_str("{}").unwrap();
+        assert_eq!(parsed.fips_policy, None);
+
+        // No compatibility layer: a YAML boolean is rejected outright.
+        let yaml = "fips_policy: true\n";
+        assert!(serde_yaml::from_str::<GatewayConfig>(yaml).is_err());
     }
 }

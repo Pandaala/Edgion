@@ -355,16 +355,34 @@ impl EdgionGatewayCli {
             );
         }
 
-        // 4c. FIPS: publish the module state and enforce the startup requirement.
-        // Placed after the Prometheus recorder is installed (4b) so the gauge is
-        // captured by the real exporter, and before any downstream subsystem is
-        // initialized so a required-but-missing FIPS module aborts startup early.
-        let fips_available = crate::tls::fips_profile::fips_module_available();
+        // 4c. FIPS: detect the host state, publish the gauges, enforce the
+        // startup requirement, and resolve the approved-profile policy.
+        // Placed after the Prometheus recorder is installed (4b) so the gauges
+        // are captured by the real exporter, and before any downstream subsystem
+        // is initialized so a required-but-missing FIPS module aborts early.
+        //
+        // The host FIPS state is informational: BoringSSL is linked statically,
+        // so the node's mode has no effect on our crypto. It drives the
+        // compliance guardrail and the `fips_policy: auto` default only.
+        use crate::tls::fips_host::{self, HostFipsState};
+        use crate::tls::fips_profile;
+
+        let fips_available = fips_profile::fips_module_available();
+        // The detection-path override is production-unsafe (it is the sole input
+        // to detection, so it can suppress the compliance signal entirely), and
+        // is honored only under the same integration-testing gate as the other
+        // production-unsafe modes.
+        let host_state = fips_host::detect_host_fips(integration_testing);
+
         ::metrics::gauge!(crate::observe::metrics::registry::names::FIPS_MODULE_ENABLED).set(if fips_available {
             1.0
         } else {
             0.0
         });
+        ::metrics::gauge!(crate::observe::metrics::registry::names::FIPS_HOST_ENABLED)
+            .set(if host_state == HostFipsState::Enabled { 1.0 } else { 0.0 });
+        ::metrics::gauge!(crate::observe::metrics::registry::names::FIPS_HOST_DETECT_ERROR)
+            .set(if host_state == HostFipsState::Unknown { 1.0 } else { 0.0 });
 
         let require_fips = config.gateway.require_fips
             || config::require_fips_env_enabled(std::env::var(config::REQUIRE_FIPS_ENV).ok().as_deref());
@@ -374,20 +392,54 @@ impl EdgionGatewayCli {
             std::process::exit(1);
         }
 
-        // Force-enable the FIPS-approved TLS policy when configured, even on a
-        // non-FIPS build. A real FIPS build enforces it regardless; this lets the
-        // policy be exercised on a normal boringssl build (integration tests) or
-        // opted into as defense-in-depth. Resolved once here and read on the
-        // handshake path via fips_policy_active().
-        let fips_policy = config.gateway.fips_policy
-            || config::fips_policy_env_enabled(std::env::var(config::FIPS_POLICY_ENV).ok().as_deref());
-        crate::tls::fips_profile::set_fips_policy_forced(fips_policy);
+        // Compliance guardrail: a FIPS node running a binary without the
+        // validated module. WARN rather than exit, because `fips_enabled=1` is a
+        // node property the gateway's operator may not control; fail-fast is
+        // opt-in via `require_fips`.
+        if fips_host::host_fips_mismatch(host_state, fips_available) {
+            tracing::warn!(
+                target: "startup",
+                "host kernel reports FIPS mode but this binary does not link the \
+                 FIPS-validated crypto module. Traffic is served by unvalidated \
+                 crypto. Deploy a FIPS build, or set require_fips to fail closed. \
+                 Alert on: fips_host_enabled == 1 and fips_module_enabled == 0"
+            );
+        }
+
+        // Resolve the policy mode: env > CLI/file > Auto. (`merge()` has already
+        // collapsed CLI over file into `config.gateway.fips_policy`.)
+        let configured = config.gateway.fips_policy;
+        let env_mode = match config::fips_policy_env_mode(std::env::var(config::FIPS_POLICY_ENV).ok().as_deref()) {
+            config::EnvPolicy::Set(mode) => Some(mode),
+            config::EnvPolicy::Unset => None,
+            config::EnvPolicy::Invalid(raw) => {
+                tracing::warn!(
+                    target: "startup",
+                    env = config::FIPS_POLICY_ENV,
+                    value = %raw,
+                    "ignoring an unrecognized FIPS policy value; expected auto, on, or off"
+                );
+                None
+            }
+        };
+
+        let mode = env_mode.or(configured).unwrap_or_default();
+        fips_profile::set_fips_policy_forced(fips_profile::resolve_policy(mode, host_state));
+
+        let policy_active = fips_profile::fips_policy_active();
+        ::metrics::gauge!(
+            crate::observe::metrics::registry::names::FIPS_POLICY_ACTIVE,
+            "validated" => if fips_available { "true" } else { "false" },
+        )
+        .set(if policy_active { 1.0 } else { 0.0 });
 
         tracing::info!(
             target: "startup",
             fips_module_enabled = fips_available,
+            fips_host_state = ?host_state,
             require_fips,
-            fips_policy,
+            fips_policy_mode = mode.as_str(),
+            fips_policy_active = policy_active,
             "FIPS status resolved"
         );
 

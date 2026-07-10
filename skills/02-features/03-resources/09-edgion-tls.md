@@ -66,8 +66,12 @@ spec:
 > defaults to the FIPS-approved TLS 1.2 cipher set (`ECDHE-ECDSA-AES128-GCM-SHA256`,
 > `ECDHE-RSA-AES128-GCM-SHA256`, `ECDHE-ECDSA-AES256-GCM-SHA384`, `ECDHE-RSA-AES256-GCM-SHA384`)
 > and ECDH curves (`P-256`, `P-384`, `P-521`) instead of the plain BoringSSL default. Setting
-> `ciphers` explicitly always overrides this — the operator's list wins. See
-> `docs/superpowers/specs/2026-07-02-boringssl-fips-design.md` for details.
+> `ciphers` explicitly always overrides this — the operator's list wins. On a **non-FIPS**
+> build, the same approved default is also applied when `fips_policy` resolves to enforce
+> (default `auto`: enabled when the host kernel reports FIPS mode via
+> `/proc/sys/crypto/fips_enabled`, or explicit `on`) — this is cipher-suite policy alignment
+> only, not a validated-module compliance claim. See
+> `docs/superpowers/specs/2026-07-10-fips-host-detection-design.md` for details.
 
 ### TlsVersion Enum
 
