@@ -1,6 +1,6 @@
 use arc_swap::ArcSwap;
 use edgion_resources::resources::health_check::ActiveHealthCheckConfig;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 static HC_CONFIG_STORE: LazyLock<Arc<HealthCheckConfigStore>> =
@@ -10,26 +10,14 @@ pub fn get_hc_config_store() -> Arc<HealthCheckConfigStore> {
     HC_CONFIG_STORE.clone()
 }
 
-/// Resolved health check config for a service, including selected source.
-#[derive(Debug, Clone)]
-pub struct ResolvedHealthCheckConfig {
-    pub config: ActiveHealthCheckConfig,
-    pub source: HealthCheckConfigSource,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HealthCheckConfigSource {
-    Service,
-    EndpointSlice,
-    Endpoint,
-}
-
-/// Resolve and store service health check configs with priority:
-/// EndpointSlice > Endpoint > Service.
+/// Per-service active health check configuration store.
+///
+/// A single map keyed by Service key (`namespace/service`). The
+/// `EdgionBackendTrafficPolicy` conf-handler is the sole writer: it computes the
+/// winning policy per Service key and pushes the effective config via
+/// `set_service_config`. There are no source tiers anymore.
 pub struct HealthCheckConfigStore {
-    service_configs: ArcSwap<HashMap<String, ActiveHealthCheckConfig>>,
-    endpoint_slice_configs: ArcSwap<HashMap<String, ActiveHealthCheckConfig>>,
-    endpoint_configs: ArcSwap<HashMap<String, ActiveHealthCheckConfig>>,
+    configs: ArcSwap<HashMap<String, ActiveHealthCheckConfig>>,
 }
 
 impl Default for HealthCheckConfigStore {
@@ -41,50 +29,18 @@ impl Default for HealthCheckConfigStore {
 impl HealthCheckConfigStore {
     pub fn new() -> Self {
         Self {
-            service_configs: ArcSwap::from_pointee(HashMap::new()),
-            endpoint_slice_configs: ArcSwap::from_pointee(HashMap::new()),
-            endpoint_configs: ArcSwap::from_pointee(HashMap::new()),
+            configs: ArcSwap::from_pointee(HashMap::new()),
         }
     }
 
-    pub fn resolve(&self, service_key: &str) -> Option<ResolvedHealthCheckConfig> {
-        if let Some(config) = self.endpoint_slice_configs.load().get(service_key) {
-            return Some(ResolvedHealthCheckConfig {
-                config: config.clone(),
-                source: HealthCheckConfigSource::EndpointSlice,
-            });
-        }
-
-        if let Some(config) = self.endpoint_configs.load().get(service_key) {
-            return Some(ResolvedHealthCheckConfig {
-                config: config.clone(),
-                source: HealthCheckConfigSource::Endpoint,
-            });
-        }
-
-        self.service_configs
-            .load()
-            .get(service_key)
-            .map(|config| ResolvedHealthCheckConfig {
-                config: config.clone(),
-                source: HealthCheckConfigSource::Service,
-            })
+    /// Resolve the active health check config for a Service key, if any.
+    pub fn resolve(&self, service_key: &str) -> Option<ActiveHealthCheckConfig> {
+        self.configs.load().get(service_key).cloned()
     }
 
-    pub fn all_configured_services(&self) -> Vec<String> {
-        let mut keys = HashSet::new();
-        keys.extend(self.service_configs.load().keys().cloned());
-        keys.extend(self.endpoint_slice_configs.load().keys().cloned());
-        keys.extend(self.endpoint_configs.load().keys().cloned());
-        keys.into_iter().collect()
-    }
-
-    pub fn service_keys(&self) -> Vec<String> {
-        self.service_configs.load().keys().cloned().collect()
-    }
-
+    /// Set or clear the config for a Service key. `None` removes any entry.
     pub fn set_service_config(&self, service_key: &str, config: Option<ActiveHealthCheckConfig>) {
-        let mut new_map = (**self.service_configs.load()).clone();
+        let mut new_map = (**self.configs.load()).clone();
         match config {
             Some(cfg) => {
                 new_map.insert(service_key.to_string(), cfg);
@@ -93,53 +49,22 @@ impl HealthCheckConfigStore {
                 new_map.remove(service_key);
             }
         }
-        self.service_configs.store(Arc::new(new_map));
+        self.configs.store(Arc::new(new_map));
     }
 
-    pub fn set_endpoint_slice_config(&self, service_key: &str, config: Option<ActiveHealthCheckConfig>) {
-        let mut new_map = (**self.endpoint_slice_configs.load()).clone();
-        match config {
-            Some(cfg) => {
-                new_map.insert(service_key.to_string(), cfg);
-            }
-            None => {
-                new_map.remove(service_key);
-            }
-        }
-        self.endpoint_slice_configs.store(Arc::new(new_map));
-    }
-
-    pub fn set_endpoint_config(&self, service_key: &str, config: Option<ActiveHealthCheckConfig>) {
-        let mut new_map = (**self.endpoint_configs.load()).clone();
-        match config {
-            Some(cfg) => {
-                new_map.insert(service_key.to_string(), cfg);
-            }
-            None => {
-                new_map.remove(service_key);
-            }
-        }
-        self.endpoint_configs.store(Arc::new(new_map));
-    }
-
-    /// Number of unique service keys configured (across all three source maps).
-    /// Not atomically consistent across the three layers; safe for leak-detection
-    /// use after a quiesced wipe.
+    /// Number of Service keys currently configured.
     pub fn count(&self) -> usize {
-        self.keys().len()
+        self.configs.load().len()
     }
 
-    /// Unique service keys currently configured across all source maps (snapshot).
-    /// Not atomically consistent across the three layers; safe for leak-detection
-    /// use after a quiesced wipe.
+    /// Service keys currently configured (snapshot).
     pub fn keys(&self) -> Vec<String> {
-        self.all_configured_services()
+        self.configs.load().keys().cloned().collect()
     }
 
+    /// Remove the config for a Service key (equivalent to `set_service_config(key, None)`).
     pub fn remove_service(&self, service_key: &str) {
         self.set_service_config(service_key, None);
-        self.set_endpoint_slice_config(service_key, None);
-        self.set_endpoint_config(service_key, None);
     }
 }
 
@@ -174,57 +99,50 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_service_only() {
+    fn test_set_then_resolve_returns_config() {
         let store = HealthCheckConfigStore::new();
         store.set_service_config("default/svc", Some(test_config(HealthCheckType::Http)));
 
         let resolved = store.resolve("default/svc").expect("resolved config");
-        assert_eq!(resolved.source, HealthCheckConfigSource::Service);
-        assert_eq!(resolved.config.r#type, HealthCheckType::Http);
+        assert_eq!(resolved.r#type, HealthCheckType::Http);
     }
 
     #[test]
-    fn test_resolve_endpoint_only() {
+    fn test_set_none_removes() {
         let store = HealthCheckConfigStore::new();
-        store.set_endpoint_config("default/svc", Some(test_config(HealthCheckType::Tcp)));
-
-        let resolved = store.resolve("default/svc").expect("resolved config");
-        assert_eq!(resolved.source, HealthCheckConfigSource::Endpoint);
-        assert_eq!(resolved.config.r#type, HealthCheckType::Tcp);
-    }
-
-    #[test]
-    fn test_resolve_endpoint_slice_priority() {
-        let store = HealthCheckConfigStore::new();
-        store.set_service_config("default/svc", Some(test_config(HealthCheckType::Http)));
-        store.set_endpoint_config("default/svc", Some(test_config(HealthCheckType::Tcp)));
-        store.set_endpoint_slice_config("default/svc", Some(test_config(HealthCheckType::Http)));
-
-        let resolved = store.resolve("default/svc").expect("resolved config");
-        assert_eq!(resolved.source, HealthCheckConfigSource::EndpointSlice);
-    }
-
-    #[test]
-    fn test_remove_endpoint_fallback_to_service() {
-        let store = HealthCheckConfigStore::new();
-        store.set_service_config("default/svc", Some(test_config(HealthCheckType::Http)));
-        store.set_endpoint_config("default/svc", Some(test_config(HealthCheckType::Tcp)));
-
-        store.set_endpoint_config("default/svc", None);
-        let resolved = store.resolve("default/svc").expect("resolved config");
-        assert_eq!(resolved.source, HealthCheckConfigSource::Service);
-        assert_eq!(resolved.config.r#type, HealthCheckType::Http);
-    }
-
-    #[test]
-    fn test_remove_service_with_endpoint_keeps_endpoint() {
-        let store = HealthCheckConfigStore::new();
-        store.set_service_config("default/svc", Some(test_config(HealthCheckType::Http)));
-        store.set_endpoint_config("default/svc", Some(test_config(HealthCheckType::Tcp)));
+        store.set_service_config("default/svc", Some(test_config(HealthCheckType::Tcp)));
+        assert!(store.resolve("default/svc").is_some());
 
         store.set_service_config("default/svc", None);
+        assert!(store.resolve("default/svc").is_none());
+    }
+
+    #[test]
+    fn test_remove_service_is_set_none() {
+        let store = HealthCheckConfigStore::new();
+        store.set_service_config("default/svc", Some(test_config(HealthCheckType::Http)));
+        store.remove_service("default/svc");
+        assert!(store.resolve("default/svc").is_none());
+    }
+
+    #[test]
+    fn test_overwrite_replaces_config() {
+        let store = HealthCheckConfigStore::new();
+        store.set_service_config("default/svc", Some(test_config(HealthCheckType::Http)));
+        store.set_service_config("default/svc", Some(test_config(HealthCheckType::Tcp)));
+
         let resolved = store.resolve("default/svc").expect("resolved config");
-        assert_eq!(resolved.source, HealthCheckConfigSource::Endpoint);
-        assert_eq!(resolved.config.r#type, HealthCheckType::Tcp);
+        assert_eq!(resolved.r#type, HealthCheckType::Tcp);
+    }
+
+    #[test]
+    fn test_keys_and_count_track_entries() {
+        let store = HealthCheckConfigStore::new();
+        store.set_service_config("default/a", Some(test_config(HealthCheckType::Http)));
+        store.set_service_config("default/b", Some(test_config(HealthCheckType::Tcp)));
+        assert_eq!(store.count(), 2);
+        let mut keys = store.keys();
+        keys.sort();
+        assert_eq!(keys, vec!["default/a".to_string(), "default/b".to_string()]);
     }
 }

@@ -58,11 +58,10 @@ impl HealthCheckManager {
     /// Reconcile a service after annotation/config changes.
     pub fn reconcile_service(&self, service_key: &str) {
         match self.config_store.resolve(service_key) {
-            Some(resolved) => {
-                self.upsert_task(service_key.to_string(), resolved.config);
+            Some(config) => {
+                self.upsert_task(service_key.to_string(), config);
                 tracing::info!(
                     service = %service_key,
-                    source = ?resolved.source,
                     "Health check reconciled"
                 );
             }

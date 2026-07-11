@@ -7,7 +7,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::common::{ParentReference, RefDenied};
-use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
 
 /// TLSRoute defines TLS rules for mapping requests to backends
@@ -83,11 +82,6 @@ pub struct TLSBackendRef {
     /// Kind is the kind of the referent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-
-    /// Parsed extension info (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub extension_info: BackendExtensionInfo,
 
     /// Cross-namespace reference denial info
     /// Set by Controller when this backend's cross-namespace reference
@@ -198,7 +192,6 @@ mod tests {
                         weight: Some(1),
                         group: None,
                         kind: None,
-                        extension_info: Default::default(),
                         ref_denied: None,
                     }]),
                 }]),

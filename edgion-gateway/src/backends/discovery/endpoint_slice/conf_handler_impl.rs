@@ -1,12 +1,8 @@
 use super::get_roundrobin_store;
 use crate::backends::discovery::conf_handler_common::{update_affected_lbs, update_all_existing_lbs};
-use crate::backends::health::check::{
-    annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
-};
 use crate::lb::compiled_selector;
 use crate::lb::runtime_state;
 use edgion_common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
-use edgion_resources::resources::health_check::ActiveHealthCheckConfig;
 use k8s_openapi::api::discovery::v1::EndpointSlice;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -21,46 +17,6 @@ pub struct EpSliceHandler;
 impl EpSliceHandler {
     pub fn new() -> Self {
         Self
-    }
-
-    fn resolve_endpoint_slice_config_for_service(&self, service_key: &str) -> Option<ActiveHealthCheckConfig> {
-        let roundrobin_store = get_roundrobin_store();
-        let slices = roundrobin_store.get_slices_for_service(service_key)?;
-
-        let mut selected: Option<(ActiveHealthCheckConfig, String)> = None;
-        for slice in slices {
-            let Some(cfg) = parse_health_check_annotation(&slice.metadata) else {
-                continue;
-            };
-            let slice_name = slice.metadata.name.clone().unwrap_or_default();
-
-            if let Some((existing_cfg, selected_slice)) = &selected {
-                if existing_cfg != &cfg {
-                    tracing::warn!(
-                        service = %service_key,
-                        selected_slice = %selected_slice,
-                        conflict_slice = %slice_name,
-                        "Conflicting EndpointSlice health-check annotations detected; disable endpoint-level config and fallback to Service"
-                    );
-                    return None;
-                }
-            } else {
-                selected = Some((cfg, slice_name));
-            }
-        }
-
-        selected.map(|(cfg, _)| cfg)
-    }
-
-    fn sync_health_check_configs_for_services(&self, service_keys: &HashSet<String>) {
-        let config_store = get_hc_config_store();
-        let hc_manager = get_health_check_manager();
-
-        for service_key in service_keys {
-            let active_config = self.resolve_endpoint_slice_config_for_service(service_key);
-            config_store.set_endpoint_slice_config(service_key, active_config);
-            hc_manager.reconcile_service(service_key);
-        }
     }
 }
 
@@ -83,9 +39,8 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
             "full set - updating data layer"
         );
 
-        let config_store = get_hc_config_store();
-        // Use cell keys (not HC config store keys) so services without HC annotations
-        // are also tracked and their cells dropped when the service is deleted.
+        // Use cell keys so services are tracked and their cells dropped when the
+        // service is deleted.
         let old_keys: HashSet<String> = compiled_selector::all_cell_keys().into_iter().collect();
 
         // 1. Only update RoundRobin store's data layer (shared data layer)
@@ -96,25 +51,18 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         // 2. Push fresh backends into cells for all known services
         update_all_existing_lbs(&*roundrobin_store, &all_services);
 
-        // 3. Sync EndpointSlice-level health check config
-        self.sync_health_check_configs_for_services(&all_services);
-
-        // 4. Invalidate SP-affinity caches for all services (data may have changed)
+        // 3. Invalidate SP-affinity caches for all services (data may have changed)
         for service_key in &all_services {
             runtime_state::invalidate_selector_cache(service_key);
         }
 
-        // 5. Clear stale services (removed by full_set)
+        // 4. Clear stale services (removed by full_set). Per-service policy config
+        // is owned by the EdgionBackendTrafficPolicy conf-handler, so only the
+        // per-backend runtime state and selector cell are dropped here.
         let stale_services: HashSet<String> = old_keys.difference(&all_services).cloned().collect();
-        if !stale_services.is_empty() {
-            let cb_store = crate::backends::get_circuit_breaker_store();
-            for service_key in &stale_services {
-                config_store.set_endpoint_slice_config(service_key, None);
-                get_health_check_manager().reconcile_service(service_key);
-                runtime_state::remove_service(service_key);
-                cb_store.remove_service(service_key);
-                compiled_selector::drop_cell(service_key);
-            }
+        for service_key in &stale_services {
+            runtime_state::remove_service(service_key);
+            compiled_selector::drop_cell(service_key);
         }
 
         tracing::info!(
@@ -144,19 +92,14 @@ impl ConfHandler<EndpointSlice> for EpSliceHandler {
         // 2. Update affected LBs in ALL stores
         update_affected_lbs(&*roundrobin_store, &affected_services);
 
-        // 3. Sync EndpointSlice-level health check config
-        self.sync_health_check_configs_for_services(&affected_services);
-
-        // 4. Clean up stale services whose last EndpointSlice was removed
+        // 3. Clean up stale services whose last EndpointSlice was removed.
+        // Per-service policy config is owned by the EdgionBackendTrafficPolicy
+        // conf-handler, so only per-backend runtime state and selector cells are
+        // dropped here.
         if remove_count > 0 {
-            let config_store = get_hc_config_store();
-            let cb_store = crate::backends::get_circuit_breaker_store();
             for service_key in &affected_services {
                 if roundrobin_store.get_slices_for_service(service_key).is_none() {
-                    config_store.set_endpoint_slice_config(service_key, None);
-                    get_health_check_manager().reconcile_service(service_key);
                     runtime_state::remove_service(service_key);
-                    cb_store.remove_service(service_key);
                     compiled_selector::drop_cell(service_key);
                 }
             }

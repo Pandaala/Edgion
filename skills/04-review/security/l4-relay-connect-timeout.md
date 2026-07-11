@@ -74,7 +74,8 @@ assignment. The TLS doc string of `tcpTimeout` covers all three relay types.
   connect-timeout logic. Do not re-file the connect-timeout finding for this reason.
 - **Outlier detection**: bounding the connect means a slow-to-accept backend now books a
   `FailureClass::Gateway` failure at the timeout instead of eventually connecting. This
-  only matters when `edgion.io/outlier-detection` is explicitly enabled (otherwise
+  only matters when outlier detection is explicitly enabled for the Service (via an
+  `EdgionBackendTrafficPolicy`'s `spec.outlierDetection` section; otherwise
   `record_failure_by_addr` is a no-op); attribution and per-attempt recording are
   pre-existing and consistent with the HTTP connect-failure path.
 

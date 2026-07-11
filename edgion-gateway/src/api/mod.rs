@@ -386,7 +386,7 @@ struct StoreStatsResponse {
     tls_store: TlsStoreStats,
     tls_cert_matcher: TlsCertMatcherStats,
     link_sys_store: LinkSysStoreStats,
-    policy_store: crate::lb::lb_policy::PolicyStoreStats,
+    lb_policies: std::collections::BTreeMap<String, String>,
     backend_tls_policy: crate::backends::policy::BackendTLSPolicyStoreStats,
     gateway_class_store: SimpleCountStats,
     edgion_gateway_config_store: SimpleCountStats,
@@ -487,7 +487,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         resources: crate::link_sys::runtime::store::get_global_link_sys_store().count(),
     };
 
-    let policy_store = crate::lb::lb_policy::get_global_policy_store().stats();
+    let lb_policies = crate::backends::policy::get_backend_traffic_policy_store().lb_policy_snapshot();
 
     let backend_tls_policy = crate::backends::policy::get_global_backend_tls_policy_store().stats();
 
@@ -561,7 +561,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         tls_store,
         tls_cert_matcher,
         link_sys_store,
-        policy_store,
+        lb_policies,
         backend_tls_policy,
         gateway_class_store,
         edgion_gateway_config_store,
@@ -1740,10 +1740,7 @@ mod store_stats_tests {
             },
             tls_cert_matcher: TlsCertMatcherStats { listener_count: 0 },
             link_sys_store: LinkSysStoreStats { resources: 0 },
-            policy_store: crate::lb::lb_policy::PolicyStoreStats {
-                total_services: 0,
-                total_route_refs: 0,
-            },
+            lb_policies: std::collections::BTreeMap::new(),
             backend_tls_policy: crate::backends::policy::BackendTLSPolicyStoreStats {
                 policies: 0,
                 reverse_index_targets: 0,

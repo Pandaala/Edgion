@@ -206,6 +206,9 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
 /// Return the port-config key for the given suite name.
 fn suite_to_port_key(suite: &str) -> &str {
     match suite {
+        // Control-plane suite: no data-plane listener of its own; borrow a valid
+        // HTTP port key so the per-suite context still resolves a port.
+        "EdgionBackendTrafficPolicy" => "HTTPRoute/Backend/CircuitBreaker",
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => "HTTPRoute/Basic",
         "HTTPRoute/Match" => "HTTPRoute/Match",
@@ -355,6 +358,11 @@ fn suite_to_port_key(suite: &str) -> &str {
 /// Register test suites matching the given suite name into the runner.
 fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, phase: Option<&str>) {
     match suite {
+        // EdgionBackendTrafficPolicy (control-plane: policy sync, LB store
+        // mapping, oldest-wins conflict, hot reload, resync survival).
+        "EdgionBackendTrafficPolicy" => {
+            runner.add_suite(Box::new(suites::EdgionBackendTrafficPolicyTestSuite));
+        }
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));

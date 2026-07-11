@@ -1,4 +1,3 @@
-pub mod annotation;
 pub mod config_store;
 pub mod manager;
 pub mod probes;

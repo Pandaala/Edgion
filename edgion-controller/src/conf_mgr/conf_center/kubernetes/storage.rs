@@ -198,6 +198,17 @@ impl KubernetesStorage {
                 ApiResource::from_gvk(&GroupVersionKind::gvk("edgion.io", "v1", "EdgionAcme")),
                 Scope::Namespaced,
             ),
+            // Non-conventional plural: naive pluralization would yield
+            // "edgionbackendtrafficpolicys", so an explicit plural is required.
+            "EdgionBackendTrafficPolicy" => (
+                api_resource(
+                    "edgion.io",
+                    "v1",
+                    "EdgionBackendTrafficPolicy",
+                    "edgionbackendtrafficpolicies",
+                ),
+                Scope::Namespaced,
+            ),
             _ => {
                 return Err(ConfWriterError::InternalError(format!(
                     "Unknown resource kind: {}",

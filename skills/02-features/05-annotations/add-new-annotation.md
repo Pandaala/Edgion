@@ -71,8 +71,16 @@ Gateway runtime consumer locations by resource:
 |----------|-----------------------|
 | Gateway listeners | `edgion-gateway/src/runtime/server/listener_builder.rs`, `edgion-gateway/src/runtime/store/listener_gateway_info.rs` |
 | TCPRoute / TLSRoute | `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`, `edgion-gateway/src/routes/tls/conf_handler_impl.rs` |
-| Service / health | `edgion-gateway/src/backends/health/check/annotation.rs` |
 | EdgionTls | `edgion-resources/src/resources/edgion_tls.rs` |
+
+> Service-level backend behavior (health checks, outlier detection, panic
+> threshold, LB algorithm) is no longer an annotation at all — it moved to the
+> `EdgionBackendTrafficPolicy` CRD, a normal `ProcessorHandler`/`ConfHandler`
+> resource pair (see
+> [03-resources/20-edgion-backend-traffic-policy.md](../03-resources/20-edgion-backend-traffic-policy.md)
+> and the resource-registration guide) rather than an annotation-parsing path.
+> Do not use this checklist for that kind of config; use
+> [01-controller/09-add-new-resource/00-guide.md](../../01-architecture/01-controller/09-add-new-resource/00-guide.md) instead.
 
 ### 3c. `spec.options` path (listener options / policy options)
 

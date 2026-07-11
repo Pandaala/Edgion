@@ -80,7 +80,7 @@ pub struct RouteMatchResult {
 /// on `select()` is cheap.
 #[derive(Clone)]
 pub struct CompiledBackend {
-    /// The pure backend-ref schema (name, port, weight, extension_info, …). Owned
+    /// The pure backend-ref schema (name, port, weight, …). Owned
     /// (not `Arc`) because the selected backend's per-request `backend_tls_policy`
     /// is mutated after selection; clone-on-`select()` matches today's cost (the
     /// old selector also cloned `HTTPBackendRef`).
@@ -92,7 +92,7 @@ pub struct CompiledBackend {
 impl std::ops::Deref for CompiledBackend {
     type Target = HTTPBackendRef;
     /// Deref to the backend schema so existing `selected_backend.name` / `.port` /
-    /// `.extension_info` / `.backend_tls_policy` accesses keep working unchanged.
+    /// `.backend_tls_policy` accesses keep working unchanged.
     /// `plugin_runtime` is `CompiledBackend`'s own field, so it shadows correctly.
     fn deref(&self) -> &HTTPBackendRef {
         &self.schema

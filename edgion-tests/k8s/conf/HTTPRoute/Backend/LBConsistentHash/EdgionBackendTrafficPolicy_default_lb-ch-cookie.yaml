@@ -1,0 +1,15 @@
+# Cookie ConsistentHash keyed on cookie "session-id".
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: lb-ch-cookie-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: lb-ch-cookie-service
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      hashOn: cookie
+      key: session-id

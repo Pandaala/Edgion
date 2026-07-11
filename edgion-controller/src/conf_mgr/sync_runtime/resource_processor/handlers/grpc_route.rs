@@ -15,7 +15,6 @@ use edgion_resources::prelude_resources::GRPCRoute;
 use edgion_resources::resources::common::RefDenied;
 use edgion_resources::resources::grpc_route::{GRPCRouteFilter, GRPCRouteFilterType, GRPCRouteStatus};
 use edgion_resources::resources::http_route::RouteParentStatus;
-use edgion_resources::resources::http_route_preparse::is_lb_policy_kind;
 use edgion_resources::ResourceKind;
 
 /// GRPCRoute handler
@@ -516,11 +515,10 @@ mod tests {
     }
 
     #[test]
-    fn extension_ref_lb_policy_on_backend_ref_not_flagged() {
-        // An LBPolicy ExtensionRef on a backendRef is a recognized second use of
-        // the ExtensionRef filter type (load-balancing policy, consumed by
-        // BackendExtensionInfo). It must NOT be flagged by the unsupported-kind
-        // gate.
+    fn extension_ref_lb_policy_on_backend_ref_now_flagged_as_unsupported() {
+        // Regression: the route-level extensionRef-based load-balancing-policy
+        // mechanism was removed, so a formerly-exempt kind now fails the same
+        // "only EdgionPlugins is supported" gate as any other unknown kind.
         let route: GRPCRoute = serde_json::from_value(json!({
             "apiVersion": "gateway.networking.k8s.io/v1",
             "kind": "GRPCRoute",
@@ -538,9 +536,10 @@ mod tests {
             }
         }))
         .expect("route should deserialize");
-        assert!(
-            super::find_invalid_rule_indices(&route, "default").is_empty(),
-            "LBPolicy backendRef ExtensionRef must not be flagged invalid"
+        assert_eq!(
+            super::find_invalid_rule_indices(&route, "default"),
+            vec![0],
+            "LBPolicy backendRef ExtensionRef must now be flagged invalid"
         );
     }
 
@@ -636,13 +635,11 @@ fn has_duplicate_filter_conflict(filters: Option<&Vec<GRPCRouteFilter>>) -> bool
 /// True if any `ExtensionRef` filter in the list points at a kind that is not
 /// recognized.
 ///
-/// `ExtensionRef` has two recognized uses:
-/// - `EdgionPlugins` (group empty or `edgion.io`) — a plugin reference.
-/// - The LBPolicy kinds (`LBPolicyConsistentHash` / `LBPolicyLeastConn` /
-///   `LBPolicyEwma`) — a load-balancing-policy reference on `backendRefs[].filters`,
-///   consumed by `BackendExtensionInfo` / `parse_lb_policy`. These are exempt
-///   from this gate (an LBPolicy ExtensionRef placed at rule-level is a silent
-///   no-op).
+/// `ExtensionRef` has exactly one recognized use: `EdgionPlugins` (group empty
+/// or `edgion.io`) — a plugin reference. The former route-level
+/// extensionRef-based load-balancing-policy mechanism has been removed; those
+/// kinds are now flagged like any other unsupported kind. Load-balancing
+/// policy is configured via `EdgionBackendTrafficPolicy`.
 ///
 /// Anything else is a static config error; the gRPC side has no reason-string
 /// plumbing, so this only contributes the rule index to `invalid_rule_indices`.
@@ -654,7 +651,7 @@ fn has_unsupported_extension_ref(filters: Option<&Vec<GRPCRouteFilter>>) -> bool
         }
         if let Some(ext) = f.extension_ref.as_ref() {
             let group_ok = ext.group.is_empty() || ext.group == "edgion.io";
-            let recognized = (group_ok && ext.kind == "EdgionPlugins") || is_lb_policy_kind(&ext.kind);
+            let recognized = group_ok && ext.kind == "EdgionPlugins";
             if !recognized {
                 return true;
             }

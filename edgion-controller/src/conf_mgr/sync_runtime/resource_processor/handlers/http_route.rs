@@ -14,7 +14,6 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 use edgion_resources::prelude_resources::HTTPRoute;
 use edgion_resources::resources::common::RefDenied;
 use edgion_resources::resources::http_route::{HTTPRouteFilterType, HTTPRouteStatus, RouteParentStatus};
-use edgion_resources::resources::http_route_preparse::is_lb_policy_kind;
 use edgion_resources::ResourceKind;
 
 /// HTTPRoute handler
@@ -471,13 +470,11 @@ fn invalid_cors_reason(rule: &edgion_resources::resources::http_route::HTTPRoute
 /// Returns a reason string if a rule has an `ExtensionRef` filter whose `kind`
 /// is not a recognized Edgion extension kind.
 ///
-/// `ExtensionRef` has two recognized uses:
-/// - `EdgionPlugins` (group empty or `edgion.io`) — a plugin reference.
-/// - The LBPolicy kinds (`LBPolicyConsistentHash` / `LBPolicyLeastConn` /
-///   `LBPolicyEwma`) — a load-balancing-policy reference on `backendRefs[].filters`,
-///   consumed by `BackendExtensionInfo` / `parse_lb_policy`. These are exempt
-///   from this gate (an LBPolicy ExtensionRef placed at rule-level is a silent
-///   no-op, matching pre-gate behavior).
+/// `ExtensionRef` has exactly one recognized use: `EdgionPlugins` (group empty
+/// or `edgion.io`) — a plugin reference. The former route-level
+/// extensionRef-based load-balancing-policy mechanism has been removed; those
+/// kinds are now flagged like any other unsupported kind. Load-balancing
+/// policy is configured via `EdgionBackendTrafficPolicy`.
 ///
 /// Anything else is a static config error knowable without the runtime store;
 /// flagging it here excludes the rule from the data-plane route table instead
@@ -490,11 +487,6 @@ fn invalid_extension_ref_reason(rule: &edgion_resources::resources::http_route::
         let ext = f.extension_ref.as_ref()?;
         let group_ok = ext.group.is_empty() || ext.group == "edgion.io";
         if group_ok && ext.kind == "EdgionPlugins" {
-            return None;
-        }
-        // LBPolicy ExtensionRefs are a recognized second use of this filter type
-        // (load-balancing policy on backendRefs); they must not be flagged.
-        if is_lb_policy_kind(&ext.kind) {
             return None;
         }
         Some(format!(
@@ -963,12 +955,13 @@ spec:
     }
 
     #[test]
-    fn extension_ref_lb_policy_on_backend_ref_not_flagged() {
-        // An LBPolicy ExtensionRef on a backendRef is a recognized second use of
-        // the ExtensionRef filter type (load-balancing policy, consumed by
-        // BackendExtensionInfo). It must NOT be flagged by the unsupported-kind
-        // gate — otherwise the rule is excluded from the route table and LB
-        // routes 404.
+    fn extension_ref_lb_policy_on_backend_ref_now_flagged_as_unsupported() {
+        // The route-level extensionRef LB mechanism was removed: `LBPolicy*`
+        // kinds are no longer a recognized second use of the ExtensionRef
+        // filter type. A `LBPolicyConsistentHash` backendRef ExtensionRef now
+        // fails the same "only EdgionPlugins is supported" gate as any other
+        // unknown kind. Load-balancing policy is configured via
+        // `EdgionBackendTrafficPolicy` instead.
         let yaml = r#"
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -988,18 +981,23 @@ spec:
                 name: header.x-user-id
 "#;
         let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(
+            indices_only(details.clone()),
+            vec![0],
+            "LBPolicy backendRef ExtensionRef must now be flagged invalid: {details:?}"
+        );
         assert!(
-            find_invalid_rule_details(&route, "default").is_empty(),
-            "LBPolicy backendRef ExtensionRef must not be flagged invalid"
+            details[0].1.contains("LBPolicyConsistentHash"),
+            "reason must name the unsupported kind: {}",
+            details[0].1
         );
     }
 
     #[test]
-    fn extension_ref_lb_policy_at_rule_level_not_flagged() {
-        // A rule-level (filters[]) LBPolicy ExtensionRef — as opposed to a
-        // backendRef-level one — is not a meaningful placement (LBPolicy is
-        // consumed per-backendRef), but it is a tolerated silent no-op rather
-        // than an unsupported kind. It must NOT flag the rule invalid.
+    fn extension_ref_lb_policy_at_rule_level_now_flagged_as_unsupported() {
+        // Same removal as above, exercised at rule level (filters[]) instead of
+        // backendRef level.
         let yaml = r#"
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -1019,9 +1017,16 @@ spec:
           port: 80
 "#;
         let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(
+            indices_only(details.clone()),
+            vec![0],
+            "rule-level LBPolicy ExtensionRef must now be flagged invalid: {details:?}"
+        );
         assert!(
-            find_invalid_rule_details(&route, "default").is_empty(),
-            "rule-level LBPolicy ExtensionRef must not be flagged invalid"
+            details[0].1.contains("LBPolicyConsistentHash"),
+            "reason must name the unsupported kind: {}",
+            details[0].1
         );
     }
 

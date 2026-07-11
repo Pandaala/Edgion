@@ -97,6 +97,11 @@ macro_rules! for_each_phase2_resource {
         $cb!(LinkSys, LinkSysHandler::new());
         // ACME
         $cb!(EdgionAcme, EdgionAcmeHandler::new());
+        // Backend traffic policy
+        $cb!(
+            EdgionBackendTrafficPolicy,
+            EdgionBackendTrafficPolicyHandler::new()
+        );
         // Cluster-scoped dependent
         $cb!(EdgionGatewayConfig, EdgionGatewayConfigHandler::new());
     };

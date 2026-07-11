@@ -12,7 +12,6 @@ Use this file when the task is about real Kubernetes object annotations under `m
 - `edgion-resources/src/resources/http_route_preparse.rs`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/http_route.rs`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/grpc_route.rs`
-- `edgion-gateway/src/backends/health/check/annotation.rs`
 - `edgion-resources/src/resources/edgion_tls.rs`
 
 ## Gateway `metadata.annotations`
@@ -130,21 +129,22 @@ GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
-| `edgion.io/health-check` | YAML string | none | Configures active backend health checks (type: http/tcp/grpc). For gRPC, supports `grpcServiceName` field. Parsed from object metadata and validated before use. |
-| `edgion.io/outlier-detection` | YAML string | none | Per-endpoint passive health check (Envoy-style outlier detection). Fields: `consecutiveErrors` (consecutive **application** 5xx — any >=500 except 502/503/504; default `5`), `consecutiveGatewayErrors` (consecutive **upstream-origin gateway** failures — backend returned 502/503/504; defaults to the parsed `consecutiveErrors`), `consecutiveLocalOriginFailures` (consecutive **local-origin** failures — connect failure/timeout, TLS-handshake timeout, transport reset, mid-proxy error; the data plane never got a usable HTTP response; defaults to the resolved `consecutiveGatewayErrors`), `ejectionSeconds` (base ejection time; default `30`), `maxEjectionSeconds` (cap on the backoff-scaled ejection time = `ejectionSeconds × num_ejections`; default `max(300, ejectionSeconds)`), `maxEjectionPercent` (default `50`). The three failure counters are independent; any one reaching its threshold ejects the endpoint. Aligns with Envoy `splitExternalLocalOriginErrors`: connect/transport failures (local-origin) are split from backend-returned 5xx (gateway/application) so a backend doing graceful 503 overload-shedding is not ejected on the same threshold as a dead port. Limitation: app-origin 502/503/504 are counted as gateway failures (the gateway sees only the status code) — raise `consecutiveGatewayErrors` if your app emits them. No-op for UDPRoute. Metrics: `edgion_circuit_breaker_ejected_endpoints` gauge + `edgion_circuit_breaker_ejections_total` counter (labelled `class` = `gateway`/`application`/`local_origin`) + `cb_recovery`/`cb_rejection`. Verify in code: `edgion-gateway/src/backends/circuit_breaker/config.rs`. |
-| `edgion.io/circuit-breaker` | YAML string | none | **Deprecated alias** for `edgion.io/outlier-detection` (logs a one-time deprecation warning per service; still fully functional). Despite the name this is passive health check / outlier detection, **not** an upstream circuit breaker. Prefer the canonical key. |
-| `edgion.io/panic-threshold` | integer string `0`–`100` | `0` (disabled) | Panic threshold percent. When the fraction of healthy backends (after health-check and circuit-breaker filtering) drops below this value, the gateway ignores health filtering and routes across **all** backends instead of returning 503. `0` disables panic mode. Values outside `0`–`100` are rejected. Overrides `EdgionGatewayConfig.spec.loadBalancing.panicThreshold` for this Service. |
 | `edgion.io/dns-resolution-mode` | `controller` / `gateway` / `per-request` | `controller` | Per-`ServiceExternalName` DNS resolution mode. `controller`: use the controller-resolved EndpointSlice when it has a ready backend, else the gateway bridges via self-resolution + 5s cache. `gateway`: gateway resolves via the effective resolver + 5s cache (authoritative). `per-request`: resolve on every request, no cache. Invalid values fall back to `controller`. |
 | `edgion.io/dns-resolver` | `ip[:port]` list (comma/space-separated) | inherits Gateway / EGC / system | Per-Service inline standard-DNS resolver (most specific; applies to **both** planes). Mutually exclusive with `dns-resolver-ref`. |
 | `edgion.io/dns-resolver-ref` | `namespace/name` | inherits Gateway / EGC / system | Per-Service httpdns LinkSys resolver reference (most specific; applies to **both** planes). Explicit namespace required (bare names rejected). A cross-namespace ref is ReferenceGrant-gated (from-kind `Service`, to-kind `edgion.io/LinkSys`); a denied ref is logged and stripped before it reaches the data plane. Mutually exclusive with `dns-resolver`. |
 
+Active health checks, outlier detection (passive ejection / circuit breaking), and
+the per-Service panic-threshold override are **not** Service annotations anymore —
+they moved to the `EdgionBackendTrafficPolicy` CRD (`spec.healthCheck` /
+`spec.outlierDetection` / `spec.loadBalancer.panicThreshold`, attached via
+`targetRefs`). See
+[03-resources/20-edgion-backend-traffic-policy.md](../../03-resources/20-edgion-backend-traffic-policy.md)
+for the schema and `edgion-resources/src/resources/edgion_backend_traffic_policy.rs`
+for the implementation.
+
 Notes:
 
-- The parser accepts YAML text, not flat key-value options.
-- Supported probe types: `http` (default), `tcp`, `grpc` (gRPC Health Check Protocol).
-- The user-facing health-check guide remains the best place for schema examples:
-  - `docs/zh-CN/user-guide/http-route/backends/health-check.md`
-  - `docs/en/user-guide/http-route/backends/health-check.md`
+- Supported active-probe types: `http` (default), `tcp`, `grpc` (gRPC Health Check Protocol).
 
 ## Legacy Key Warning
 

@@ -177,6 +177,18 @@ fn tls_spec_has_no_uncovered_fields() {
     );
 }
 
+#[test]
+fn backend_traffic_policy_spec_has_no_uncovered_fields() {
+    let expected = serde_json::to_value(schema_for!(edgion_resources::EdgionBackendTrafficPolicySpec)).unwrap();
+    let actual = crd_section("edgion_backend_traffic_policy_crd.yaml", "spec");
+    let (d1, d2) = compare_spec(&expected, &actual, &[]);
+    assert!(
+        d1.is_empty() && d2.is_empty(),
+        "EdgionBackendTrafficPolicy CRD drift:\n  missing from CRD (Direction-1): {d1:?}\n  stale in CRD (Direction-2): {d2:?}\n\
+         Fix: add the missing field(s) to edgion_backend_traffic_policy_crd.yaml, or add an intentional omission to the allowlist with a reason."
+    );
+}
+
 /// Narrow regression pins for the two one-time fixes on tagged-enum CRDs that
 /// the general guard intentionally does not cover (acme status, stream spec).
 fn has_property(section: &Value, dotted: &str) -> bool {

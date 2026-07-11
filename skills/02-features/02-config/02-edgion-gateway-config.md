@@ -152,9 +152,9 @@ spec:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `panicThreshold` | `u8` | `0` | Global panic threshold percent (0–100). When the fraction of healthy backends for a service (after health-check + circuit-breaker filtering) drops below this value, the gateway routes across all backends instead of returning 503. `0` disables panic mode. The per-Service `edgion.io/panic-threshold` annotation overrides this global default. Prometheus gauge `edgion_lb_panic_mode{service}` = 1 while panic mode is engaged. |
+| `panicThreshold` | `u8` | `0` | Global panic threshold percent (0–100). When the fraction of healthy backends for a service (after health-check + outlier-detection filtering) drops below this value, the gateway routes across all backends instead of returning 503. `0` disables panic mode. A per-Service `EdgionBackendTrafficPolicy`'s `spec.loadBalancer.panicThreshold` overrides this global default for its target Service(s). Prometheus gauge `edgion_lb_panic_mode{service}` = 1 while panic mode is engaged. |
 
-> Default `0` matches Istio's Kubernetes default. Enable (e.g. `50`) only for services with larger backend pools (≈ ≥ 5 endpoints); see the annotation reference for the full rationale.
+> Default `0` matches Istio's Kubernetes default. Enable (e.g. `50`) only for services with larger backend pools (≈ ≥ 5 endpoints); see [03-resources/20-edgion-backend-traffic-policy.md](../03-resources/20-edgion-backend-traffic-policy.md) for the full rationale and the per-Service override.
 
 ### spec.realIp
 

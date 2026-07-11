@@ -13,7 +13,6 @@ use super::http_route::{
     HTTPHeader, LocalObjectReference, ParsedRouteRetry, ParsedRouteTimeouts as HttpParsedRouteTimeouts,
     RouteTimeout as HttpRouteTimeout, SessionPersistence,
 };
-use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
 
 /// GRPCRoute defines gRPC rules for mapping requests to backends
@@ -232,12 +231,6 @@ pub struct GRPCBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<GRPCRouteFilter>>,
 
-    /// Parsed extension info (runtime only, not serialized).
-    /// Populated from `filters[].extensionRef` by `preparse()`.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub extension_info: BackendExtensionInfo,
-
     /// BackendTLSPolicy for this backend (runtime only, not serialized)
     /// Queried and populated during select_backend
     #[serde(skip)]
@@ -352,10 +345,7 @@ pub struct GRPCRouteRetry {
 
 /// Pre-parse methods for GRPCRoute.
 impl GRPCRoute {
-    /// Populate `extension_info` on each backend ref from its `ExtensionRef` filter.
-    ///
-    /// This is pure schema normalization (controller-side). It does **not** build
-    /// plugin runtimes — that is gateway-side work done by `compile_grpc_rule()`.
+    /// Parse per-rule annotations (`retry-non-idempotent`).
     ///
     /// # Incomplete by itself
     ///
@@ -403,26 +393,6 @@ impl GRPCRoute {
 
         for rule in rules.iter_mut() {
             rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
-
-            let Some(backend_refs) = rule.backend_refs.as_mut() else {
-                continue;
-            };
-
-            for backend_ref in backend_refs.iter_mut() {
-                // Populate extension_info from the ExtensionRef filter (schema normalization).
-                // Plugin runtime construction has moved to gateway compile_grpc_rule().
-                backend_ref.extension_info = backend_ref
-                    .filters
-                    .as_ref()
-                    .and_then(|filters| {
-                        filters
-                            .iter()
-                            .find(|f| f.filter_type == GRPCRouteFilterType::ExtensionRef)
-                            .and_then(|f| f.extension_ref.as_ref())
-                            .map(BackendExtensionInfo::from_extension_ref)
-                    })
-                    .unwrap_or_default();
-            }
         }
     }
 

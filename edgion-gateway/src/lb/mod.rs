@@ -7,7 +7,6 @@ pub mod backend_selector;
 pub mod compiled_selector;
 pub mod edgion_backend;
 pub mod ewma;
-pub mod lb_policy;
 pub mod leastconn;
 pub mod runtime_state;
 pub mod selection;

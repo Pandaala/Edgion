@@ -10,23 +10,6 @@ pub mod edgion {
     pub const HTTPS_REDIRECT_PORT: &str = "edgion.io/https-redirect-port";
     /// Expose mTLS client certificate info to plugin layer via TLS digest extension
     pub const EXPOSE_CLIENT_CERT: &str = "edgion.io/expose-client-cert";
-    /// Active health check configuration for backend endpoints.
-    /// Value format: YAML string.
-    pub const HEALTH_CHECK: &str = "edgion.io/health-check";
-    /// Circuit breaker configuration for backend endpoints.
-    /// Value format: YAML string.
-    pub const CIRCUIT_BREAKER: &str = "edgion.io/circuit-breaker";
-    /// Outlier detection (passive health check) configuration for backend
-    /// endpoints. Canonical key; supersedes the deprecated `CIRCUIT_BREAKER`
-    /// alias, which is still parsed for backward compatibility.
-    /// Value format: YAML string.
-    pub const OUTLIER_DETECTION: &str = "edgion.io/outlier-detection";
-
-    /// Per-service load-balancing panic threshold (percent, 0-100).
-    /// When the fraction of healthy backends drops below this percent, the
-    /// gateway ignores health filtering and load-balances across all backends.
-    /// Value: integer string. 0 (default) disables panic mode.
-    pub const PANIC_THRESHOLD: &str = "edgion.io/panic-threshold";
 
     /// Proxy Protocol version to send to upstream.
     /// Value: "v2" to enable PP2.

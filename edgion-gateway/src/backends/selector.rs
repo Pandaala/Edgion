@@ -4,8 +4,8 @@ use crate::backends::health;
 use crate::backends::health::get_health_status_store;
 use crate::lb::{compiled_selector, EdgionBackend, PolicyKind};
 use edgion_resources::edgion_status::EdgionStatus;
+use edgion_resources::resources::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
 use edgion_resources::uri_utils;
-use edgion_resources::{ConsistentHashOn, ParsedLBPolicy};
 use pingora_proxy::Session;
 use std::sync::Arc;
 

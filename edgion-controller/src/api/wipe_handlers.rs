@@ -3,7 +3,8 @@
 //! through the normal watch path.
 //!
 //! Tier 1 (consumers): HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute,
-//!                     EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy
+//!                     EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy,
+//!                     EdgionBackendTrafficPolicy
 //! Tier 2 (config):    Gateway, GatewayClass, EdgionGatewayConfig, EdgionTls, EdgionAcme,
 //!                     EdgionConfigData, LinkSys, ReferenceGrant
 //! Tier 3 (low-level): Service, EndpointSlice, Secret, ConfigMap
@@ -41,6 +42,7 @@ const TIER_1: &[ResourceKind] = &[
     ResourceKind::EdgionPlugins,
     ResourceKind::EdgionStreamPlugins,
     ResourceKind::BackendTLSPolicy,
+    ResourceKind::EdgionBackendTrafficPolicy,
 ];
 
 const TIER_2: &[ResourceKind] = &[
@@ -299,7 +301,7 @@ mod tests {
         all.extend(TIER_1);
         all.extend(TIER_2);
         all.extend(TIER_3);
-        assert_eq!(all.len(), 20, "tiers must cover all 20 ResourceKind variants");
+        assert_eq!(all.len(), 21, "tiers must cover all 21 ResourceKind variants");
         // Verify no duplicates
         let mut seen = std::collections::HashSet::new();
         for k in &all {

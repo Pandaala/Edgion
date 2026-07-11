@@ -6,7 +6,6 @@
 //! - Session persistence ([`session_persistence`])
 
 pub(crate) mod conf_handler_impl;
-pub mod lb_policy_sync;
 pub mod match_engine;
 pub mod match_unit;
 pub mod redirect_http;

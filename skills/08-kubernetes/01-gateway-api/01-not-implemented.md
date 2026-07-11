@@ -166,10 +166,20 @@ The direction of BackendTrafficPolicy is to unify management of backend
 traffic behaviors (such as retry budget; later possibly extending to
 connection pool, circuit breaker, health check, retry policy).
 
-Edgion has implemented these features in a distributed manner via annotations (`edgion.io/circuit-breaker`, `health_check.rs`, `edgion_gateway_config.rs`); features are complete, but they are not exposed via the standard BTP CRD.
+Edgion has unified these features behind its own namespaced CRD,
+`EdgionBackendTrafficPolicy` (`edgion.io/v1`, short name `ebtp`,
+Gateway-API-policy-attachment style via `targetRefs` — same `DirectSameNs`
+attachment model the standard BackendTLSPolicy uses), covering load balancing
+(incl. consistent hash and panic threshold), active health check, and outlier
+detection (passive ejection / circuit breaking). See
+[03-resources/20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md).
+This is functionally equivalent in spirit to the standard BTP direction but is
+not the standard `XBackendTrafficPolicy` CRD itself, and connection-pool /
+retry-budget fields are not yet covered (v1 scope; see the design doc's
+Non-Goals).
 
-- Will reconsider unifying behind the standard CRD only after BTP graduates from Experimental to Standard/GA
-- The current annotation-based approach is usable by users and does not affect actual functionality
+- Will reconsider migrating onto the standard CRD only after BTP graduates from Experimental to Standard/GA
+- The current Edgion-native CRD is usable by users today and does not affect actual functionality
 - A related tracking item has not yet been filed under `tasks/` (file a new task to drive this).
 
 ## GatewayFrontendClientCertificateValidation (frontendValidation)

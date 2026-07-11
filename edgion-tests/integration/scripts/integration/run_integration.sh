@@ -1040,6 +1040,11 @@ run_all_tests() {
                     run_test "UDPRoute_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r UDPRoute -i ${G_ITEM}" || test_failed=true
                 fi
                 ;;
+            EdgionBackendTrafficPolicy)
+                # Control-plane group: the suite applies/edits/deletes policies at
+                # runtime and asserts the Gateway store/config state. No item split.
+                run_test "EdgionBackendTrafficPolicy" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionBackendTrafficPolicy" || test_failed=true
+                ;;
             Gateway)
                 if [ -z "$G_ITEM" ]; then
                     run_test "Gateway_Security" "${PROJECT_ROOT}/target/debug/test_client -g -r Gateway -i Security" || test_failed=true
@@ -1467,6 +1472,10 @@ main() {
             else
                 suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy,Status/GatewayFrontendValidation,Status/TLSListenerMode,Status/TLSRoute"
             fi
+        elif [ "$G_RESOURCE" = "EdgionBackendTrafficPolicy" ]; then
+            # Control-plane suite applies its own policies at runtime; only the
+            # base namespaces/services need to be preloaded.
+            suites="${base_suites}"
         elif [ "$G_RESOURCE" = "LinkSys" ]; then
             # LinkSys/Redis assertions hit /api/v1/testing/link-sys/redis/* on the
             # Gateway admin port (covered by base) AND drive real proxy traffic

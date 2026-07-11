@@ -1,0 +1,15 @@
+# Outlier detection for cb-test.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: cb-test-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: cb-test
+  outlierDetection:
+    consecutiveErrors: 3
+    consecutiveGatewayErrors: 3
+    ejectionSeconds: 3
+    maxEjectionPercent: 0

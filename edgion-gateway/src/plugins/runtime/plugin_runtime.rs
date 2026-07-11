@@ -12,7 +12,6 @@ use crate::EdgionHttpContext;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
 use edgion_resources::resources::edgion_plugins::CorsConfig;
-use edgion_resources::resources::http_route_preparse::is_lb_policy_kind;
 use edgion_resources::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
 };
@@ -272,14 +271,6 @@ impl PluginRuntime {
                 }
                 HTTPRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        // LBPolicy ExtensionRefs are not plugins; they are consumed by
-                        // `BackendExtensionInfo` / `parse_lb_policy`. Do not build an
-                        // ExtensionRefFilter for them — skipping here means
-                        // `ExtensionRefFilter::prepare_execution`'s `Err(())` only ever
-                        // sees genuinely-unsupported kinds.
-                        if is_lb_policy_kind(&ext_ref.kind) {
-                            continue;
-                        }
                         let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
                         if assign_indices {
                             let idx = self.ext_ref_keys.len();
@@ -329,14 +320,6 @@ impl PluginRuntime {
                 }
                 GRPCRouteFilterType::ExtensionRef => {
                     if let Some(ext_ref) = &filter.extension_ref {
-                        // LBPolicy ExtensionRefs are not plugins; they are consumed by
-                        // `BackendExtensionInfo` / `parse_lb_policy`. Do not build an
-                        // ExtensionRefFilter for them — skipping here means
-                        // `ExtensionRefFilter::prepare_execution`'s `Err(())` only ever
-                        // sees genuinely-unsupported kinds.
-                        if is_lb_policy_kind(&ext_ref.kind) {
-                            continue;
-                        }
                         let mut ext_filter = ExtensionRefFilter::new(namespace.to_string(), ext_ref.clone());
                         if assign_indices {
                             let idx = self.ext_ref_keys.len();
@@ -1531,11 +1514,16 @@ mod ext_ref_index_tests {
     }
 
     #[test]
-    fn lb_policy_extension_ref_does_not_build_a_filter() {
-        // An LBPolicy ExtensionRef is not a plugin reference — it is consumed by
-        // BackendExtensionInfo / parse_lb_policy. The plugin runtime must NOT
-        // build an ExtensionRefFilter for it; otherwise every request through
-        // the backend hits prepare_execution's `Err(())` and 500s.
+    fn lb_policy_kind_extension_ref_now_builds_a_filter_like_any_other_kind() {
+        // The route-level extensionRef LB mechanism was removed: `LBPolicy*`
+        // kinds are no longer special-cased by the plugin runtime. A
+        // `LBPolicyConsistentHash` ExtensionRef is now treated exactly like any
+        // other ExtensionRef filter, so it builds an ExtensionRefFilter.
+        // (Routes using this kind are excluded from the data-plane route table
+        // upstream at the controller's extensionRef-kind validation gate, so
+        // this filter would never actually execute in production — but the
+        // gateway-side runtime construction no longer knows or cares about the
+        // kind.)
         let filters = vec![make_ext_ref_filter_with_kind(
             "LBPolicyConsistentHash",
             "header.x-user-id",
@@ -1543,8 +1531,8 @@ mod ext_ref_index_tests {
         let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1");
         assert_eq!(
             rt.request_plugins_count(),
-            0,
-            "LBPolicy ExtensionRef must not build an ExtensionRefFilter"
+            1,
+            "LBPolicy* kinds are no longer special-cased; an ExtensionRefFilter is built like any other kind"
         );
     }
 }

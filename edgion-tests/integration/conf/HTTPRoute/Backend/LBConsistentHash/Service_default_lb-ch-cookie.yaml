@@ -1,0 +1,12 @@
+# Cookie ConsistentHash backend Service. Split from lb-ch-service because the
+# per-Service EdgionBackendTrafficPolicy carries a single hashOn dimension, so
+# each hash variant (header/cookie/queryParam) needs its own target Service.
+apiVersion: v1
+kind: Service
+metadata:
+  name: lb-ch-cookie-service
+  namespace: edgion-default
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP

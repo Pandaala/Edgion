@@ -15,7 +15,7 @@ impl TestSuite for CircuitBreakerTestSuite {
             Self::test_consecutive_failures_eject(),
             Self::test_recovery_after_cooldown(),
             Self::test_gateway_and_app_counters_independent(),
-            Self::test_deprecated_alias_still_ejects(),
+            Self::test_second_policy_still_ejects(),
         ]
     }
 }
@@ -320,16 +320,16 @@ impl CircuitBreakerTestSuite {
         )
     }
 
-    fn test_deprecated_alias_still_ejects() -> TestCase {
+    fn test_second_policy_still_ejects() -> TestCase {
         TestCase::new(
-            "deprecated_alias_still_ejects",
-            "edgion.io/circuit-breaker alias still drives ejection",
+            "second_policy_still_ejects",
+            "cb-alias outlierDetection policy drives gateway-class ejection",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = std::time::Instant::now();
                     let host = "cb-alias.example.com";
                     let test_id = format!(
-                        "alias-{}",
+                        "second-{}",
                         std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()
@@ -342,7 +342,7 @@ impl CircuitBreakerTestSuite {
                         .await
                         .ok();
 
-                    // gateway threshold 3 via the alias config; 502 ejects after 3.
+                    // gateway threshold 3 via the cb-alias policy; 502 ejects after 3.
                     let mut ejected = false;
                     for i in 0..4 {
                         let url = format!("{}/cb-fail/{}/100/502", ctx.http_url(), test_id);
@@ -358,10 +358,10 @@ impl CircuitBreakerTestSuite {
                     if ejected {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "Alias annotation ejected the backend".to_string(),
+                            "cb-alias policy ejected the backend".to_string(),
                         )
                     } else {
-                        TestResult::failed(start.elapsed(), "Alias annotation did not eject".to_string())
+                        TestResult::failed(start.elapsed(), "cb-alias policy did not eject".to_string())
                     }
                 })
             },

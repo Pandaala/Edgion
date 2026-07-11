@@ -197,6 +197,16 @@ define_resources! {
         in_registry: false,  // ConfigMap follows related resources, not tracked independently
     },
 
+    // ==================== Backend Traffic Policy ====================
+    EdgionBackendTrafficPolicy {
+        enum_value: 22,
+        kind_name: "edgionbackendtrafficpolicy",
+        kind_aliases: [],
+        cache_field: edgion_backend_traffic_policy,
+        capacity_field: edgion_backend_traffic_policy_capacity,
+        default_capacity: small,
+    },
+
     // ==================== Infrastructure Resources ====================
     LinkSys {
         enum_value: 15,
@@ -215,8 +225,8 @@ mod tests {
 
     #[test]
     fn test_all_resource_infos_count() {
-        // We have 20 resource types (excluding Unspecified)
-        assert_eq!(ALL_RESOURCE_INFOS.len(), 20);
+        // We have 21 resource types (excluding Unspecified)
+        assert_eq!(ALL_RESOURCE_INFOS.len(), 21);
     }
 
     #[test]

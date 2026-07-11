@@ -60,7 +60,8 @@ impl_resource_meta!(TLSRouteAlpha3, TLSRoute, "TLSRoute");
 // =============================================================================
 
 use crate::resources::{
-    EdgionAcme, EdgionConfigData, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins, EdgionTls, LinkSys,
+    EdgionAcme, EdgionBackendTrafficPolicy, EdgionConfigData, EdgionGatewayConfig, EdgionPlugins, EdgionStreamPlugins,
+    EdgionTls, LinkSys,
 };
 
 // Cluster-scoped
@@ -112,3 +113,10 @@ impl_resource_meta!(EdgionConfigData, EdgionConfigData, "EdgionConfigData", |sel
 
 // ACME
 impl_resource_meta!(EdgionAcme, EdgionAcme, "EdgionAcme");
+
+// Backend Traffic Policy
+impl_resource_meta!(
+    EdgionBackendTrafficPolicy,
+    EdgionBackendTrafficPolicy,
+    "EdgionBackendTrafficPolicy"
+);

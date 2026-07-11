@@ -7,7 +7,6 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::common::{ParentReference, RefDenied};
-use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
 
 /// UDPRoute defines UDP rules for mapping requests to backends
@@ -72,11 +71,6 @@ pub struct UDPBackendRef {
     /// Kind is the kind of the referent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
-
-    /// Parsed extension info (runtime only, not serialized)
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub extension_info: BackendExtensionInfo,
 
     /// Cross-namespace reference denial info
     /// Set by Controller when this backend's cross-namespace reference

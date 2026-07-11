@@ -2,7 +2,8 @@
 // LB LeastConn Test Suite
 // ============================================================================
 //
-// Validates LBPolicyLeastConn distributes load across endpoints by sending
+// Validates that a LeastConn EdgionBackendTrafficPolicy distributes load across
+// endpoints by sending
 // concurrent slow requests and asserting the load lands on more than one
 // backend. Without per-request LB metadata, runtime_state::increment is never
 // called, all backends report count=0 forever, the LeastConn picker's

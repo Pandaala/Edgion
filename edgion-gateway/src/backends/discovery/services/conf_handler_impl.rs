@@ -1,9 +1,4 @@
 use super::{get_global_service_store, ServiceStore};
-use crate::backends::circuit_breaker::{config::parse_outlier_detection_annotation, get_circuit_breaker_store};
-use crate::backends::health::check::{
-    annotation::parse_health_check_annotation, get_hc_config_store, get_health_check_manager,
-};
-use crate::backends::panic_threshold::{get_panic_threshold_store, parse_panic_threshold_annotation};
 use crate::lb::compiled_selector;
 use crate::lb::runtime_state;
 use edgion_common::conf_sync::traits::{arc_map_into_owned, arc_map_to_owned, ConfHandler};
@@ -19,35 +14,21 @@ pub fn create_service_handler() -> Box<dyn ConfHandler<Service> + Send + Sync> {
 impl ConfHandler<Service> for ServiceStore {
     fn full_set(&self, data: &HashMap<String, Arc<Service>>) {
         tracing::info!(component = "service_store", cnt = data.len(), "full set");
+
+        // Snapshot the previous key set before the swap so we can drop per-backend
+        // runtime state and selector cells for Services removed by this full set.
+        // Per-service policy config (health check / circuit breaker / panic
+        // threshold / LB policy) is owned exclusively by the EdgionBackendTrafficPolicy
+        // conf-handler, so a Service resync must never touch those stores.
+        let old_keys = self.keys();
         self.replace_all(arc_map_to_owned(data));
 
-        let config_store = get_hc_config_store();
-        let hc_manager = get_health_check_manager();
-        let cb_store = get_circuit_breaker_store();
-        let panic_store = get_panic_threshold_store();
-        let incoming_keys: HashSet<String> = data.keys().cloned().collect();
-
-        for old_key in config_store.service_keys() {
-            if !incoming_keys.contains(&old_key) {
-                config_store.set_service_config(&old_key, None);
-                hc_manager.reconcile_service(&old_key);
-                runtime_state::remove_service(&old_key);
-                cb_store.remove_service(&old_key);
-                panic_store.remove_service(&old_key);
-                compiled_selector::drop_cell(&old_key);
+        let incoming_keys: HashSet<&String> = data.keys().collect();
+        for old_key in &old_keys {
+            if !incoming_keys.contains(old_key) {
+                runtime_state::remove_service(old_key);
+                compiled_selector::drop_cell(old_key);
             }
-        }
-
-        for (key, service) in data {
-            let active_config = parse_health_check_annotation(&service.metadata);
-            config_store.set_service_config(key, active_config);
-            hc_manager.reconcile_service(key);
-            let parsed = parse_outlier_detection_annotation(&service.metadata);
-            if parsed.as_ref().is_some_and(|p| p.used_alias) {
-                cb_store.warn_alias_once(key);
-            }
-            cb_store.set_service_config(key, parsed.map(|p| p.config));
-            panic_store.set_service_threshold(key, parse_panic_threshold_annotation(&service.metadata));
         }
     }
 
@@ -65,29 +46,11 @@ impl ConfHandler<Service> for ServiceStore {
             "partial update"
         );
 
-        let config_store = get_hc_config_store();
-        let hc_manager = get_health_check_manager();
-        let cb_store = get_circuit_breaker_store();
-        let panic_store = get_panic_threshold_store();
-
-        for (key, service) in add.iter().chain(update.iter()) {
-            let active_config = parse_health_check_annotation(&service.metadata);
-            config_store.set_service_config(key, active_config);
-            hc_manager.reconcile_service(key);
-            let parsed = parse_outlier_detection_annotation(&service.metadata);
-            if parsed.as_ref().is_some_and(|p| p.used_alias) {
-                cb_store.warn_alias_once(key);
-            }
-            cb_store.set_service_config(key, parsed.map(|p| p.config));
-            panic_store.set_service_threshold(key, parse_panic_threshold_annotation(&service.metadata));
-        }
-
+        // Per-service policy config is owned by the EdgionBackendTrafficPolicy
+        // conf-handler; only per-backend runtime state and selector cells are
+        // cleaned up here for removed Services.
         for key in &remove {
-            config_store.set_service_config(key, None);
-            hc_manager.reconcile_service(key);
             runtime_state::remove_service(key);
-            cb_store.remove_service(key);
-            panic_store.remove_service(key);
             compiled_selector::drop_cell(key);
         }
 
@@ -202,34 +165,5 @@ mod tests {
         store.partial_update(HashMap::new(), HashMap::new(), remove);
 
         assert!(!store.contains("default/svc1"));
-    }
-
-    #[test]
-    fn test_panic_threshold_annotation_plumbed_and_removed() {
-        use crate::backends::panic_threshold::{
-            configure_lb_panic_default, get_panic_threshold_store, resolve_panic_threshold,
-        };
-        configure_lb_panic_default(0);
-        let store = ServiceStore::new();
-
-        let mut svc = create_test_service("default", "pt-svc");
-        svc.metadata.annotations = Some(std::collections::BTreeMap::from([(
-            "edgion.io/panic-threshold".to_string(),
-            "40".to_string(),
-        )]));
-
-        let mut data = HashMap::new();
-        data.insert("default/pt-svc".to_string(), Arc::new(svc));
-        store.full_set(&data);
-        assert_eq!(resolve_panic_threshold("default/pt-svc"), 40);
-
-        // Removal clears the override (falls back to global default 0).
-        store.partial_update(
-            HashMap::new(),
-            HashMap::new(),
-            HashSet::from(["default/pt-svc".to_string()]),
-        );
-        assert_eq!(resolve_panic_threshold("default/pt-svc"), 0);
-        get_panic_threshold_store().remove_service("default/pt-svc");
     }
 }

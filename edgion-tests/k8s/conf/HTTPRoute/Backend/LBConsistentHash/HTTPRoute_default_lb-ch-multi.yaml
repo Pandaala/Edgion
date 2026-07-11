@@ -1,5 +1,3 @@
-# ConsistentHash (Header) +  EndpointSlice 
-#  X-User-Id header ， slice 
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
@@ -7,26 +5,20 @@ metadata:
   namespace: edgion-default
 spec:
   parentRefs:
-    - name: lb-ch-gateway
-      namespace: edgion-test
+  - name: lb-ch-gateway
+    namespace: edgion-test
   hostnames:
-    - "lb-ch-multi.example.com"
+  - lb-ch-multi.example.com
   rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /test
-      retry:
-        attempts: 0
-      timeouts:
-        request: 2s
-        backendRequest: 1s
-      backendRefs:
-        - name: lb-ch-multi-service
-          port: 8080
-          filters:
-            - type: ExtensionRef
-              extensionRef:
-                group: edgion.io
-                kind: LBPolicyConsistentHash
-                name: header.x-user-id
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /test
+    retry:
+      attempts: 0
+    timeouts:
+      request: 2s
+      backendRequest: 1s
+    backendRefs:
+    - name: lb-ch-multi-service
+      port: 8080

@@ -1,0 +1,22 @@
+# Initial healthy active HTTP health check. The HealthCheckTransition suite
+# mutates this policy at runtime (probe path /health -> /status/503) to drive
+# the backend unhealthy, replacing the former Service-annotation edit.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: hc-transition-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: hc-transition
+  healthCheck:
+    active:
+      type: http
+      path: /health
+      interval: 1s
+      timeout: 1s
+      healthyThreshold: 1
+      unhealthyThreshold: 1
+      expectedStatuses:
+        - 200

@@ -2,112 +2,21 @@
 //! The enclosing route fields that hold these values carry `#[serde(skip)]`,
 //! so they never appear in the conf_sync payload.
 
-use super::{HTTPRoute, HTTPRouteFilterType, LocalObjectReference};
+use super::HTTPRoute;
 use crate::path_normalization::normalize_config_path;
-use serde::{Deserialize, Serialize};
-
-/// Hash source type for consistent hash LB policy
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ConsistentHashOn {
-    /// Hash based on request header
-    Header(String),
-    /// Hash based on cookie
-    Cookie(String),
-    /// Hash based on query argument
-    Arg(String),
-}
-
-/// Parsed LB policy from extensionRef
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ParsedLBPolicy {
-    /// Consistent hash with specified source
-    ConsistentHash(ConsistentHashOn),
-    /// Least connection
-    LeastConn,
-    /// EWMA (Exponentially Weighted Moving Average) based on response time
-    Ewma,
-}
-
-/// Parsed extension info attached to HTTPBackendRef
-/// This is computed at runtime, not from YAML
-#[derive(Debug, Clone, Default)]
-pub struct BackendExtensionInfo {
-    /// Parsed LB policy if extensionRef specifies one
-    pub lb_policy: Option<ParsedLBPolicy>,
-}
-
-impl BackendExtensionInfo {
-    /// Parse from LocalObjectReference
-    pub fn from_extension_ref(ext_ref: &LocalObjectReference) -> Self {
-        let lb_policy = Self::parse_lb_policy(ext_ref);
-        Self { lb_policy }
-    }
-
-    /// Parse LB policy from extensionRef
-    ///
-    /// Supported formats:
-    /// - group: edgion.io, kind: LBPolicyConsistentHash, name: header.x-user-id
-    /// - group: edgion.io, kind: LBPolicyConsistentHash, name: cookie.session-id
-    /// - group: edgion.io, kind: LBPolicyConsistentHash, name: arg.user-id
-    /// - group: edgion.io, kind: LBPolicyLeastConn, name: default
-    /// - group: edgion.io, kind: LBPolicyEwma, name: default
-    fn parse_lb_policy(ext_ref: &LocalObjectReference) -> Option<ParsedLBPolicy> {
-        // Check group (empty string means core API group, otherwise should be edgion.io)
-        if !ext_ref.group.is_empty() && ext_ref.group != "edgion.io" {
-            return None;
-        }
-
-        // `is_lb_policy_kind` is the single source of truth for which kinds are
-        // LBPolicy kinds. Bail out early for any non-LBPolicy kind so the kind
-        // list never needs to be duplicated here.
-        if !is_lb_policy_kind(&ext_ref.kind) {
-            return None;
-        }
-
-        match ext_ref.kind.as_str() {
-            "LBPolicyConsistentHash" => {
-                Self::parse_consistent_hash_name(&ext_ref.name).map(ParsedLBPolicy::ConsistentHash)
-            }
-            "LBPolicyLeastConn" => Some(ParsedLBPolicy::LeastConn),
-            "LBPolicyEwma" => Some(ParsedLBPolicy::Ewma),
-            _ => None,
-        }
-    }
-
-    /// Parse consistent hash source from name
-    /// Format: "header.xxx" / "cookie.xxx" / "arg.xxx"
-    fn parse_consistent_hash_name(name: &str) -> Option<ConsistentHashOn> {
-        let parts: Vec<&str> = name.splitn(2, '.').collect();
-        match parts.as_slice() {
-            ["header", key] => Some(ConsistentHashOn::Header(key.to_string())),
-            ["cookie", key] => Some(ConsistentHashOn::Cookie(key.to_string())),
-            ["arg", key] => Some(ConsistentHashOn::Arg(key.to_string())),
-            _ => None,
-        }
-    }
-}
-
-/// True if `kind` names a load-balancing-policy ExtensionRef (as opposed to a
-/// plugin reference). LBPolicy ExtensionRefs live on `backendRefs[].filters` and
-/// are consumed by `BackendExtensionInfo` / `parse_lb_policy`, not the plugin
-/// runtime — callers that gate "is this a supported ExtensionRef kind" must
-/// treat these as recognized, not unsupported.
-pub fn is_lb_policy_kind(kind: &str) -> bool {
-    matches!(kind, "LBPolicyConsistentHash" | "LBPolicyLeastConn" | "LBPolicyEwma")
-}
 
 /// Pre-parse methods for HTTPRoute.
 impl HTTPRoute {
-    /// Parse all extension_ref in backend_refs and populate extension_info fields.
+    /// Normalize path matcher values and parse per-rule annotations
+    /// (`forward-raw-path`, `retry-non-idempotent`).
     ///
-    /// This method should be called after deserializing HTTPRoute from YAML/JSON
-    /// to populate the runtime-only extension_info fields.
+    /// This method should be called after deserializing HTTPRoute from YAML/JSON.
     ///
     /// # Incomplete by itself
     ///
-    /// `preparse()` only covers plugin runtimes, path-matcher normalization, and
-    /// the `forward-raw-path` annotation. It does **not** parse timeouts or retry
-    /// configurations. A fully pre-processed `HTTPRoute` requires all three calls:
+    /// `preparse()` only covers path-matcher normalization and the annotations
+    /// above. It does **not** parse timeouts or retry configurations. A fully
+    /// pre-processed `HTTPRoute` requires all three calls:
     ///
     /// ```ignore
     /// route.preparse();
@@ -177,27 +86,6 @@ impl HTTPRoute {
         for rule in rules.iter_mut() {
             rule.parsed_forward_raw_path = parsed_forward_raw_path;
             rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
-
-            let Some(backend_refs) = rule.backend_refs.as_mut() else {
-                continue;
-            };
-
-            for backend_ref in backend_refs.iter_mut() {
-                // Find ExtensionRef filter in backend_ref.filters
-                let extension_info = backend_ref
-                    .filters
-                    .as_ref()
-                    .and_then(|filters| {
-                        filters
-                            .iter()
-                            .find(|f| f.filter_type == HTTPRouteFilterType::ExtensionRef)
-                            .and_then(|f| f.extension_ref.as_ref())
-                            .map(BackendExtensionInfo::from_extension_ref)
-                    })
-                    .unwrap_or_default();
-
-                backend_ref.extension_info = extension_info;
-            }
         }
     }
 
@@ -330,111 +218,6 @@ impl HTTPRoute {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_parse_consistent_hash_header() {
-        let ext_ref = LocalObjectReference {
-            group: "edgion.io".to_string(),
-            kind: "LBPolicyConsistentHash".to_string(),
-            name: "header.x-user-id".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(
-            info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
-                "x-user-id".to_string()
-            )))
-        );
-    }
-
-    #[test]
-    fn test_parse_consistent_hash_cookie() {
-        let ext_ref = LocalObjectReference {
-            group: "edgion.io".to_string(),
-            kind: "LBPolicyConsistentHash".to_string(),
-            name: "cookie.session-id".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(
-            info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Cookie(
-                "session-id".to_string()
-            )))
-        );
-    }
-
-    #[test]
-    fn test_parse_consistent_hash_arg() {
-        let ext_ref = LocalObjectReference {
-            group: "edgion.io".to_string(),
-            kind: "LBPolicyConsistentHash".to_string(),
-            name: "arg.user-id".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(
-            info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Arg(
-                "user-id".to_string()
-            )))
-        );
-    }
-
-    #[test]
-    fn test_parse_least_conn() {
-        let ext_ref = LocalObjectReference {
-            group: "edgion.io".to_string(),
-            kind: "LBPolicyLeastConn".to_string(),
-            name: "default".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(info.lb_policy, Some(ParsedLBPolicy::LeastConn));
-    }
-
-    #[test]
-    fn test_parse_unknown_kind() {
-        let ext_ref = LocalObjectReference {
-            group: "edgion.io".to_string(),
-            kind: "UnknownPolicy".to_string(),
-            name: "default".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(info.lb_policy, None);
-    }
-
-    #[test]
-    fn test_parse_wrong_group() {
-        let ext_ref = LocalObjectReference {
-            group: "other.io".to_string(),
-            kind: "LBPolicyConsistentHash".to_string(),
-            name: "header.x-user-id".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(info.lb_policy, None);
-    }
-
-    #[test]
-    fn test_parse_empty_group() {
-        // Empty group (core API group), should still work
-        let ext_ref = LocalObjectReference {
-            group: String::new(),
-            kind: "LBPolicyConsistentHash".to_string(),
-            name: "header.x-user-id".to_string(),
-        };
-
-        let info = BackendExtensionInfo::from_extension_ref(&ext_ref);
-        assert_eq!(
-            info.lb_policy,
-            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Header(
-                "x-user-id".to_string()
-            )))
-        );
-    }
 
     // =========================================================================
     // Group J: HTTPRoute path matcher normalization tests

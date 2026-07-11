@@ -9,7 +9,6 @@ use std::fmt;
 use std::sync::Arc;
 
 use super::common::{Condition, ParentReference, RefDenied};
-use super::http_route_preparse::BackendExtensionInfo;
 use crate::ListenerKey;
 
 /// HTTPRoute defines HTTP rules for mapping requests to backends
@@ -271,12 +270,6 @@ pub struct HTTPBackendRef {
     /// Filters defined at this level should be executed if and only if the request is being forwarded to this backend
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filters: Option<Vec<HTTPRouteFilter>>,
-
-    /// Parsed extension info (runtime only, not serialized).
-    /// Populated from `filters[].extensionRef` by `preparse()`.
-    #[serde(skip)]
-    #[schemars(skip)]
-    pub extension_info: BackendExtensionInfo,
 
     /// BackendTLSPolicy for this backend (runtime only, not serialized)
     /// Queried and populated during select_backend

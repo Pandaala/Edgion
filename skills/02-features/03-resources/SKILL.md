@@ -29,9 +29,11 @@ description: Feature and configuration schema reference for all Kubernetes resou
 | 16 | Service/Endpoints | `05-resources/16-service-endpoints.md` | [16-service-backends.md](16-service-backends.md) |
 | 17 | EdgionAcme | `05-resources/17-edgion-acme.md` | [17-acme.md](17-acme.md) |
 | 18 | LinkSys | `05-resources/18-link-sys.md` | [18-link-sys.md](18-link-sys.md) |
+| 20 | EdgionBackendTrafficPolicy | → [../../01-architecture/02-gateway/07-backends.md](../../01-architecture/02-gateway/07-backends.md) + [06-load-balancing.md](../../01-architecture/02-gateway/06-load-balancing.md) | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) |
 
 > The feature documentation for #03 (EdgionGatewayConfig) lives under `02-config/` because it is essentially a configuration-layer resource.
 > #10 (Secret), #11 (ReferenceGrant), and #15 (EdgionConfigData) currently have no standalone feature documentation; see the architecture documentation.
+> #20 (EdgionBackendTrafficPolicy) has no numbered `05-resources/` counterpart file: its internal processing flow is covered by the existing gateway backend/LB architecture docs (#07/#06 under `01-architecture/02-gateway/`) rather than a new per-resource file, since it slots into the pre-existing `backends/policy/backend_traffic/` module rather than a standalone Controller/Gateway pipeline.
 
 ## Browse by Category
 
@@ -72,7 +74,8 @@ description: Feature and configuration schema reference for all Kubernetes resou
 
 | Resource | Description |
 |----------|-------------|
-| [16-service-backends.md](16-service-backends.md) | Service discovery, health checks, load balancing policies |
+| [16-service-backends.md](16-service-backends.md) | Service discovery |
+| [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) | Per-destination load balancing, active health checks, outlier detection (attached to a Service via targetRefs) |
 | [18-link-sys.md](18-link-sys.md) | Redis/Etcd/ES/Webhook/Kafka connectors |
 
 ## Quick Lookup
@@ -86,6 +89,7 @@ description: Feature and configuration schema reference for all Kubernetes resou
 | Configure automatic certificates | [17-acme.md](17-acme.md) |
 | Look up HTTP plugins | [13-edgion-plugins.md](13-edgion-plugins.md) |
 | Configure TCP-layer plugins | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) |
-| Configure health checks/load balancing | [16-service-backends.md](16-service-backends.md) |
+| Configure Service discovery | [16-service-backends.md](16-service-backends.md) |
+| Configure health checks/circuit breaking/load balancing | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) |
 | Integrate with external systems | [18-link-sys.md](18-link-sys.md) |
 | Configure upstream TLS | [12-backend-tls-policy.md](12-backend-tls-policy.md) |

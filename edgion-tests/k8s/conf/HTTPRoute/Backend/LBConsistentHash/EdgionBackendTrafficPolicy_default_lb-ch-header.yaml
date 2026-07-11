@@ -1,0 +1,15 @@
+# Header ConsistentHash for lb-ch-service keyed on header "x-user-id".
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: lb-ch-header-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: lb-ch-service
+  loadBalancer:
+    type: ConsistentHash
+    consistentHash:
+      hashOn: header
+      key: x-user-id

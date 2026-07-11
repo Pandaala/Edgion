@@ -1,0 +1,12 @@
+# EWMA load balancing for lb-ewma-rs-service.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: lb-ewma-rs-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: lb-ewma-rs-service
+  loadBalancer:
+    type: Ewma

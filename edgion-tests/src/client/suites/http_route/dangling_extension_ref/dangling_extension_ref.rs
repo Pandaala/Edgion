@@ -70,8 +70,8 @@ impl DanglingExtensionRefTestSuite {
         )
     }
 
-    // An ExtensionRef filter whose `kind` is neither `EdgionPlugins` nor a
-    // recognized LBPolicy kind is flagged at the controller's preparse step:
+    // An ExtensionRef filter whose `kind` is not `EdgionPlugins` (the only
+    // supported ExtensionRef kind) is flagged at the controller's preparse step:
     // the rule index goes into `invalid_rule_indices` and the HTTPRoute gets a
     // `PartiallyInvalid=True` condition. This polls the configserver admin API
     // for that condition.

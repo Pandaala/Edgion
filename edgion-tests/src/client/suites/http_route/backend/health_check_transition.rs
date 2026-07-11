@@ -1,44 +1,21 @@
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::time::Instant;
 
 pub struct HealthCheckTransitionTestSuite;
 
 const TEST_HOST: &str = "hc-transition.example.com";
 const TEST_NAMESPACE: &str = "edgion-default";
-const TEST_SERVICE: &str = "hc-transition";
-const HC_ANNOTATION_KEY: &str = "edgion.io/health-check";
+// The active health check lives on an EdgionBackendTrafficPolicy targeting the
+// hc-transition Service. The transition is driven by editing the policy's probe
+// path (/health -> /status/503), not the Service.
+const POLICY_KIND: &str = "EdgionBackendTrafficPolicy";
+const POLICY_NAME: &str = "hc-transition-policy";
+const HEALTHY_PATH: &str = "/health";
+const UNHEALTHY_PATH: &str = "/status/503";
 
 impl HealthCheckTransitionTestSuite {
-    fn healthy_hc_annotation() -> String {
-        r#"active:
-  type: http
-  path: /health
-  interval: 1s
-  timeout: 1s
-  healthyThreshold: 1
-  unhealthyThreshold: 1
-  expectedStatuses:
-    - 200
-"#
-        .to_string()
-    }
-
-    fn unhealthy_hc_annotation() -> String {
-        r#"active:
-  type: http
-  path: /status/503
-  interval: 1s
-  timeout: 1s
-  healthyThreshold: 1
-  unhealthyThreshold: 1
-  expectedStatuses:
-    - 200
-"#
-        .to_string()
-    }
-
     async fn send_status(ctx: &TestContext) -> Result<u16, String> {
         let url = format!("{}/health", ctx.http_url());
         let resp = ctx
@@ -69,12 +46,17 @@ impl HealthCheckTransitionTestSuite {
         Ok(observed)
     }
 
-    async fn update_service_health_check(ctx: &TestContext, annotation_value: &str) -> Result<(), String> {
+    /// Fetch the EdgionBackendTrafficPolicy, rewrite its active-health-check
+    /// probe path, and PUT it back. Switching the path between a healthy
+    /// (200) and an always-503 endpoint drives the backend up/down without
+    /// touching the Service.
+    async fn update_policy_health_check(ctx: &TestContext, probe_path: &str) -> Result<(), String> {
         let admin_url = format!(
-            "{}/api/v1/namespaced/Service/{}/{}",
+            "{}/api/v1/namespaced/{}/{}/{}",
             ctx.admin_api_url(),
+            POLICY_KIND,
             TEST_NAMESPACE,
-            TEST_SERVICE
+            POLICY_NAME
         );
 
         let mut get_req = ctx.http_client.get(&admin_url);
@@ -84,38 +66,35 @@ impl HealthCheckTransitionTestSuite {
         let current: Value = get_req
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch Service: {}", e))?
+            .map_err(|e| format!("Failed to fetch policy: {}", e))?
             .error_for_status()
-            .map_err(|e| format!("Service fetch status error: {}", e))?
+            .map_err(|e| format!("Policy fetch status error: {}", e))?
             .json()
             .await
-            .map_err(|e| format!("Failed to decode Service JSON: {}", e))?;
+            .map_err(|e| format!("Failed to decode policy JSON: {}", e))?;
 
         let mut updated = current;
-        if updated.get("metadata").is_none() {
-            updated["metadata"] = json!({});
-        }
-        if updated["metadata"].get("annotations").is_none() {
-            updated["metadata"]["annotations"] = json!({});
-        }
-        updated["metadata"]["annotations"][HC_ANNOTATION_KEY] = Value::String(annotation_value.to_string());
+        let active = updated
+            .get_mut("spec")
+            .and_then(|s| s.get_mut("healthCheck"))
+            .and_then(|h| h.get_mut("active"))
+            .ok_or_else(|| "policy is missing spec.healthCheck.active".to_string())?;
+        active["path"] = Value::String(probe_path.to_string());
 
         let mut put_req = ctx
             .http_client
             .put(&admin_url)
             .header("Content-Type", "application/json")
-            .body(
-                serde_json::to_string(&updated).map_err(|e| format!("Failed to encode updated Service JSON: {}", e))?,
-            );
+            .body(serde_json::to_string(&updated).map_err(|e| format!("Failed to encode updated policy JSON: {}", e))?);
         if let Some(ref token) = ctx.admin_token {
             put_req = put_req.header("Authorization", format!("Bearer {}", token));
         }
         put_req
             .send()
             .await
-            .map_err(|e| format!("Failed to update Service: {}", e))?
+            .map_err(|e| format!("Failed to update policy: {}", e))?
             .error_for_status()
-            .map_err(|e| format!("Service update status error: {}", e))?;
+            .map_err(|e| format!("Policy update status error: {}", e))?;
 
         Ok(())
     }
@@ -123,15 +102,15 @@ impl HealthCheckTransitionTestSuite {
     fn test_health_check_transitions_to_unhealthy() -> TestCase {
         TestCase::new(
             "health_check_transitions_to_unhealthy",
-            "Backend starts healthy, then Service annotation update makes HC fail and route returns 503",
+            "Backend starts healthy, then a policy healthCheck edit makes HC fail and route returns 503",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
 
-                    // Previous runs may have intentionally switched this Service
+                    // Previous runs may have intentionally switched this policy
                     // to an unhealthy HC path. Reset first so skip-prepare reruns
                     // start from the same state as a fresh prepare.
-                    if let Err(e) = Self::update_service_health_check(&ctx, &Self::healthy_hc_annotation()).await {
+                    if let Err(e) = Self::update_policy_health_check(&ctx, HEALTHY_PATH).await {
                         return TestResult::failed(start.elapsed(), e);
                     }
 
@@ -141,15 +120,15 @@ impl HealthCheckTransitionTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), e),
                     };
                     if !initial.contains(&200) {
-                        let _ = Self::update_service_health_check(&ctx, &Self::healthy_hc_annotation()).await;
+                        let _ = Self::update_policy_health_check(&ctx, HEALTHY_PATH).await;
                         return TestResult::failed(
                             start.elapsed(),
                             format!("Expected initial 200 before transition, observed={:?}", initial),
                         );
                     }
 
-                    // Step 2: update Service annotation to failing HC path
-                    if let Err(e) = Self::update_service_health_check(&ctx, &Self::unhealthy_hc_annotation()).await {
+                    // Step 2: update the policy's health-check probe to a failing path
+                    if let Err(e) = Self::update_policy_health_check(&ctx, UNHEALTHY_PATH).await {
                         return TestResult::failed(start.elapsed(), e);
                     }
 
@@ -157,12 +136,12 @@ impl HealthCheckTransitionTestSuite {
                     let transitioned = match Self::wait_for_status(&ctx, 503, 24, 500).await {
                         Ok(statuses) => statuses,
                         Err(e) => {
-                            let _ = Self::update_service_health_check(&ctx, &Self::healthy_hc_annotation()).await;
+                            let _ = Self::update_policy_health_check(&ctx, HEALTHY_PATH).await;
                             return TestResult::failed(start.elapsed(), e);
                         }
                     };
                     if transitioned.last() == Some(&503) || transitioned.contains(&503) {
-                        let _ = Self::update_service_health_check(&ctx, &Self::healthy_hc_annotation()).await;
+                        let _ = Self::update_policy_health_check(&ctx, HEALTHY_PATH).await;
                         return TestResult::passed_with_message(
                             start.elapsed(),
                             format!(
@@ -172,7 +151,7 @@ impl HealthCheckTransitionTestSuite {
                         );
                     }
 
-                    let _ = Self::update_service_health_check(&ctx, &Self::healthy_hc_annotation()).await;
+                    let _ = Self::update_policy_health_check(&ctx, HEALTHY_PATH).await;
                     TestResult::failed(
                         start.elapsed(),
                         format!("Expected transition to 503, observed after update={:?}", transitioned),

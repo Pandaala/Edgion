@@ -1,0 +1,12 @@
+# EWMA load balancing for lb-ewma-service.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: lb-ewma-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: lb-ewma-service
+  loadBalancer:
+    type: Ewma

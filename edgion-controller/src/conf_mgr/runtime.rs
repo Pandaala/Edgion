@@ -48,6 +48,13 @@ pub struct ControllerRuntime {
     pub(crate) listener_port_manager: ListenerPortManager,
     pub(crate) configmap_store: ConfigMapStore,
     pub(crate) backend_tls_policy: BackendTLSPolicyState,
+    /// Target-conflict + creation-timestamp index for `EdgionBackendTrafficPolicy`.
+    /// Reuses `BackendTLSPolicyState` (a generic target-conflict/precedence store)
+    /// to implement the same oldest-wins conflict detection and sibling
+    /// re-evaluation the `BackendTLSPolicy` handler uses. Kept separate from
+    /// `backend_tls_policy` so the two resource kinds never collide on a shared
+    /// Service key.
+    pub(crate) edgion_backend_traffic_policy: BackendTLSPolicyState,
     pub(crate) edgion_config_data_store: EdgionConfigDataStore,
     /// Tracks which EdgionPlugins/EdgionStreamPlugins reference each EdgionConfigData.
     /// Used by the EdgionConfigDataHandler to requeue referencing resources on change.
@@ -83,6 +90,7 @@ impl ControllerRuntime {
             listener_port_manager: ListenerPortManager::new(),
             configmap_store: ConfigMapStore::new(),
             backend_tls_policy: BackendTLSPolicyState::new(),
+            edgion_backend_traffic_policy: BackendTLSPolicyState::new(),
             edgion_config_data_store: EdgionConfigDataStore::new(),
             edgion_config_data_refs: EdgionConfigDataRefManager::new(),
             stream_plugin_ref_mgr: BidirectionalRefManager::with_component("stream_plugin_ref_mgr"),
@@ -147,6 +155,7 @@ impl ControllerRuntime {
         tracing::info!(component = "controller_runtime", "Cleared ConfigMapStore");
 
         self.backend_tls_policy.reset();
+        self.edgion_backend_traffic_policy.reset();
 
         self.edgion_config_data_store.replace_all(HashMap::new());
         tracing::info!(component = "controller_runtime", "Cleared EdgionConfigData store");

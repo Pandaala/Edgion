@@ -49,7 +49,16 @@ If the placement is wrong, the code path and the documentation usually drift wit
 | `edgion.io/tcp-keepalive-interval` | `TCPRoute` / `TLSRoute` | Seconds between keepalive probes (1–75). Only applied when `tcp-keepalive-time` is set; absent or invalid = 75 (OS default) |
 | `edgion.io/tcp-keepalive-probes` | `TCPRoute` / `TLSRoute` | Number of failed probes before the connection is declared dead (1–20). Only applied when `tcp-keepalive-time` is set; absent or invalid = 9 (OS default) |
 | `edgion.io/expose-client-cert` | `EdgionTls` | Exposes mTLS client certificate info to the plugin/session layer |
-| `edgion.io/health-check` | `Service` / `EndpointSlice` / `Endpoints` | Active health-check YAML config (type: http/tcp/grpc) |
+
+Service-level backend behavior (active health checks, outlier detection,
+panic threshold, load-balancing algorithm) is **not** an annotation — it is
+configured via the `EdgionBackendTrafficPolicy` CRD, attached to a Service via
+`spec.targetRefs`. See
+[`skills/02-features/03-resources/20-edgion-backend-traffic-policy.md`](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md)
+for the full schema, or the user guides:
+[Active Health Check](../user-guide/http-route/backends/health-check.md),
+[Circuit Breaker](../user-guide/http-route/backends/circuit-breaker.md),
+[Load Balancing Algorithms](../user-guide/http-route/lb-algorithms.md).
 
 ## Common Keys That Are Not Annotations
 

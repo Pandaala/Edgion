@@ -1,0 +1,205 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: edgionbackendtrafficpolicies.edgion.io
+spec:
+  group: edgion.io
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              description: "Per-destination traffic policy (load-balancing algorithm, active health check, outlier detection, panic threshold) attached to Services via targetRefs"
+              required:
+                - targetRefs
+              properties:
+                targetRefs:
+                  type: array
+                  description: "Services this policy attaches to (same namespace as the policy)"
+                  items:
+                    type: object
+                    required:
+                      - kind
+                      - name
+                    properties:
+                      group:
+                        type: string
+                        description: "Group of the referent. Empty string (default) = core API group"
+                      kind:
+                        type: string
+                        description: "Kind of the referent. v1 supports only \"Service\""
+                      name:
+                        type: string
+                        description: "Name of the referent Service (same namespace as the policy)"
+                loadBalancer:
+                  type: object
+                  description: "Load-balancing algorithm and panic threshold"
+                  required:
+                    - type
+                  properties:
+                    type:
+                      type: string
+                      description: "Algorithm. RoundRobin is the engine default"
+                      enum: ["RoundRobin", "LeastConn", "Ewma", "ConsistentHash"]
+                    consistentHash:
+                      type: object
+                      description: "Required iff type == ConsistentHash"
+                      required:
+                        - hashOn
+                        - key
+                      properties:
+                        hashOn:
+                          type: string
+                          enum: ["header", "cookie", "queryParam"]
+                        key:
+                          type: string
+                          description: "Header name / cookie name / query parameter name to hash on"
+                    panicThreshold:
+                      type: integer
+                      description: "Percent 0-100. Overrides the global EdgionGatewayConfig.spec.loadBalancing.panicThreshold for the target"
+                      minimum: 0
+                      maximum: 100
+                healthCheck:
+                  type: object
+                  description: "Active health check (probe) configuration"
+                  properties:
+                    active:
+                      type: object
+                      description: "Active health check configuration (periodic probing)"
+                      properties:
+                        type:
+                          type: string
+                          description: "Probe type: \"http\" (default), \"tcp\", or \"grpc\""
+                          enum: ["http", "tcp", "grpc"]
+                          default: "http"
+                        path:
+                          type: string
+                          description: "HTTP request path for health check. Default: \"/\""
+                          default: "/"
+                        port:
+                          type: integer
+                          description: "Optional health check port override"
+                          minimum: 0
+                          maximum: 65535
+                        interval:
+                          type: string
+                          description: "Interval between probes (e.g. \"10s\", \"1m\")"
+                          default: "10s"
+                        timeout:
+                          type: string
+                          description: "Probe timeout (e.g. \"3s\", \"500ms\")"
+                          default: "3s"
+                        healthyThreshold:
+                          type: integer
+                          description: "Consecutive successes before marking healthy"
+                          minimum: 0
+                          default: 2
+                        unhealthyThreshold:
+                          type: integer
+                          description: "Consecutive failures before marking unhealthy"
+                          minimum: 0
+                          default: 3
+                        expectedStatuses:
+                          type: array
+                          description: "Expected healthy HTTP status codes"
+                          items:
+                            type: integer
+                            minimum: 0
+                            maximum: 65535
+                          default: [200]
+                        host:
+                          type: string
+                          description: "Optional Host header override for HTTP checks"
+                        grpcServiceName:
+                          type: string
+                          description: |
+                            gRPC Health Check service name. Empty string (default) checks the
+                            overall server health. Only used when type is "grpc".
+                outlierDetection:
+                  type: object
+                  description: "Outlier detection (passive ejection) configuration"
+                  properties:
+                    consecutiveErrors:
+                      type: integer
+                      description: "Consecutive application-5xx (any >=500 that is NOT 502/503/504) before ejection"
+                      minimum: 0
+                      default: 5
+                    consecutiveGatewayErrors:
+                      type: integer
+                      description: |
+                        Consecutive upstream-origin gateway failures (backend returned
+                        502/503/504) before ejection. Defaults to consecutiveErrors when unset
+                        (sibling-dependent default resolved by the gateway, not declared here).
+                      minimum: 0
+                    consecutiveLocalOriginFailures:
+                      type: integer
+                      description: |
+                        Consecutive local-origin failures (connect/TLS-handshake/transport-reset/
+                        proxy errors) before ejection. Defaults to consecutiveGatewayErrors when
+                        unset (sibling-dependent default resolved by the gateway, not declared here).
+                      minimum: 0
+                    ejectionSeconds:
+                      type: integer
+                      description: "Base ejection duration in seconds (multiplied by the endpoint's ejection count)"
+                      minimum: 0
+                      default: 30
+                    maxEjectionSeconds:
+                      type: integer
+                      description: |
+                        Upper bound on the backoff-scaled ejection duration in seconds.
+                        Defaults to max(300, ejectionSeconds) when unset (sibling-dependent
+                        default resolved by the gateway, not declared here).
+                      minimum: 0
+                    maxEjectionPercent:
+                      type: integer
+                      description: "Max percent of a service's endpoints that may be ejected at once (0 disables the cap)"
+                      minimum: 0
+                      default: 50
+            status:
+              type: object
+              properties:
+                conditions:
+                  type: array
+                  description: "Gateway-API-style conditions"
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      observedGeneration:
+                        type: integer
+                        format: int64
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: TargetRef
+          type: string
+          jsonPath: .spec.targetRefs[0].name
+          description: First target Service name
+        - name: LBType
+          type: string
+          jsonPath: .spec.loadBalancer.type
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: edgionbackendtrafficpolicies
+    singular: edgionbackendtrafficpolicy
+    kind: EdgionBackendTrafficPolicy
+    shortNames:
+      - ebtp

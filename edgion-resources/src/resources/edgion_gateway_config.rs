@@ -296,7 +296,8 @@ pub struct LoadBalancingConfig {
     /// Panic threshold percent (0-100). When the fraction of healthy backends
     /// for a service drops below this percent, the gateway ignores health
     /// filtering and load-balances across all backends. 0 (default) disables
-    /// panic mode. Per-service `edgion.io/panic-threshold` overrides this.
+    /// panic mode. An EdgionBackendTrafficPolicy's `loadBalancer.panicThreshold`
+    /// overrides this for its target Services.
     #[serde(default)]
     pub panic_threshold: u8,
 }

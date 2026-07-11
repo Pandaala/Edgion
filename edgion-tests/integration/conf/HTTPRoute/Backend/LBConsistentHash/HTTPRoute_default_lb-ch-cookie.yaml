@@ -22,11 +22,5 @@ spec:
         request: 2s
         backendRequest: 1s
       backendRefs:
-        - name: lb-ch-service
+        - name: lb-ch-cookie-service
           port: 8080
-          filters:
-            - type: ExtensionRef
-              extensionRef:
-                group: edgion.io
-                kind: LBPolicyConsistentHash
-                name: cookie.session-id

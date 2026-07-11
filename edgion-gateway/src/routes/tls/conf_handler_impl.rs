@@ -148,7 +148,6 @@ mod tests {
                         weight: Some(1),
                         group: None,
                         kind: None,
-                        extension_info: Default::default(),
                         ref_denied: None,
                     }]),
                 }]),

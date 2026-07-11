@@ -291,6 +291,15 @@ pub async fn create_namespaced(
                 .await
                 .map_err(map_writer_error)?;
         }
+        edgion_resources::ResourceKind::EdgionBackendTrafficPolicy => {
+            let policy: EdgionBackendTrafficPolicy = parse_resource_and_update_version(&content, !is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &policy, is_k8s)?;
+            let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            writer
+                .create_one(kind.as_str(), Some(&ns), &name, json_content)
+                .await
+                .map_err(map_writer_error)?;
+        }
         // 400, not 501: unknown kind is a client error; 501 is reserved for unknown HTTP methods.
         _ => return Err(StatusCode::BAD_REQUEST),
     }
@@ -513,6 +522,15 @@ pub async fn update_namespaced(
             let acme: EdgionAcme = parse_resource_and_update_version(&content, !is_k8s)?;
             validate_resource(state.schema_validator.as_ref(), kind, &acme, is_k8s)?;
             let json_content = serde_json::to_string(&acme).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+            writer
+                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .await
+                .map_err(map_writer_error)?;
+        }
+        edgion_resources::ResourceKind::EdgionBackendTrafficPolicy => {
+            let policy: EdgionBackendTrafficPolicy = parse_resource_and_update_version(&content, !is_k8s)?;
+            validate_resource(state.schema_validator.as_ref(), kind, &policy, is_k8s)?;
+            let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
                 .update_one(kind.as_str(), Some(&ns), &name, json_content)
                 .await

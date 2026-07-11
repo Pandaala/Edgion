@@ -9,7 +9,7 @@ use crate::routes::HttpRouteRuleUnit;
 use crate::runtime::GatewayInfo;
 use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::http_route_preparse::ParsedLBPolicy;
+use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::uri_utils;
 use edgion_resources::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
@@ -1618,7 +1618,6 @@ mod jump_tests {
     }
 
     fn sample_direct() -> (DirectEndpointPreset, Box<HTTPBackendRef>) {
-        use edgion_resources::resources::http_route_preparse::BackendExtensionInfo;
         let preset = DirectEndpointPreset {
             addr: "10.0.0.1:8080".parse().unwrap(),
             use_tls: false,
@@ -1633,7 +1632,6 @@ mod jump_tests {
             group: None,
             kind: None,
             filters: None,
-            extension_info: BackendExtensionInfo::default(),
             backend_tls_policy: None,
             ref_denied: None,
         };

@@ -68,6 +68,7 @@ const fn is_default_readable(kind: ResourceKind) -> bool {
         ResourceKind::BackendTLSPolicy => true,
         ResourceKind::EdgionAcme => true,
         ResourceKind::ConfigMap => true,
+        ResourceKind::EdgionBackendTrafficPolicy => true,
     }
 }
 
@@ -104,6 +105,7 @@ const DEFAULT_READ_KINDS: &[&str] = &[
     ResourceKind::BackendTLSPolicy.as_str(),
     ResourceKind::EdgionAcme.as_str(),
     ResourceKind::ConfigMap.as_str(),
+    ResourceKind::EdgionBackendTrafficPolicy.as_str(),
 ];
 
 /// Build the built-in default Center policy.
@@ -314,13 +316,13 @@ mod tests {
 
     #[test]
     fn default_policy_read_kinds_count() {
-        // ResourceKind has 21 named variants (including Unspecified and Secret).
+        // ResourceKind has 22 named variants (including Unspecified and Secret).
         // The read set must exclude exactly Unspecified and Secret, so
-        // expected = 21 - 2 = 19.
+        // expected = 22 - 2 = 20.
         //
         // If a new ResourceKind variant is added and DEFAULT_READ_KINDS is not
         // updated, this test will fail with a count mismatch.
-        let total_variants: usize = 21; // update when adding a new ResourceKind variant
+        let total_variants: usize = 22; // update when adding a new ResourceKind variant
         let expected = total_variants - 2; // minus Unspecified and Secret
         assert_eq!(
             DEFAULT_READ_KINDS.len(),
@@ -368,6 +370,7 @@ mod tests {
             ResourceKind::BackendTLSPolicy,
             ResourceKind::EdgionAcme,
             ResourceKind::ConfigMap,
+            ResourceKind::EdgionBackendTrafficPolicy,
         ];
 
         for variant in &all_variants {

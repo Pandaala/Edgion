@@ -1,0 +1,12 @@
+# LeastConn load balancing for lb-lc-service.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: lb-lc-policy
+  namespace: edgion-default
+spec:
+  targetRefs:
+    - kind: Service
+      name: lb-lc-service
+  loadBalancer:
+    type: LeastConn

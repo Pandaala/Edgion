@@ -1,6 +1,6 @@
 ---
 name: gateway-http-route-engine
-description: HTTP route matching engine — RadixPath, RegexSet, ConfHandler, proxy implementation, LB policy sync.
+description: HTTP route matching engine — RadixPath, RegexSet, ConfHandler, proxy implementation, session persistence.
 ---
 
 # HTTP route engine
@@ -24,7 +24,6 @@ edgion-gateway/src/routes/http/
 │   ├── pg_response_filter.rs   # response filter
 │   └── ...                     # other Pingora callbacks
 ├── redirect_http.rs            # EdgionHttpRedirectProxy: HTTP→HTTPS 301 redirect
-├── lb_policy_sync.rs           # sync LB policies into the global PolicyStore
 ├── session_persistence.rs      # Gateway API SessionPersistence: cookie/header session affinity
 └── tests.rs
 ```
@@ -89,13 +88,17 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 - Returns status code 301 with a `Location` header pointing to the HTTPS URL.
 - Port handling: when the HTTPS port is 443, the port number is omitted.
 
-## LB policy sync
+## LB policy
 
-`lb_policy_sync.rs` extracts LB policies and syncs them to the global `PolicyStore` when routes update:
-
-- `sync_lb_policies_for_routes`: iterate all HTTPRoute rules' `backend_refs`, extract `extension_info.lb_policy`, and update `PolicyStore`.
-- `cleanup_lb_policies_for_routes`: remove LB policies associated with deleted routes.
-- Supported policy types: `LBPolicyConsistentHash` (header.xxx / cookie.xxx / arg.xxx), `LBPolicyLeastConn`.
+The route no longer carries an LB policy. The route-level `LBPolicy*`
+`ExtensionRef` filter mechanism and its per-route sync module
+(`lb_policy_sync.rs`, the route-fed `PolicyStore`) were removed; a route
+`backendRef` filter referencing an `LBPolicy*` kind now fails validation like
+any other unrecognized `extensionRef`. The LB algorithm is resolved purely
+from the target Service key at selection time, via the
+`EdgionBackendTrafficPolicy` policy store — see
+[06-load-balancing.md](../06-load-balancing.md) and
+[07-backends.md](../07-backends.md#backend-traffic-policy-edgionbackendtrafficpolicy).
 
 ## Session persistence
 
@@ -147,4 +150,4 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 | `edgion-gateway/src/routes/http/match_unit.rs` | HttpRouteRuleUnit, deep_match |
 | `edgion-gateway/src/routes/http/proxy_http/mod.rs` | EdgionHttpProxy |
 | `edgion-gateway/src/routes/http/redirect_http.rs` | EdgionHttpRedirectProxy |
-| `edgion-gateway/src/routes/http/lb_policy_sync.rs` | LB policy sync |
+| `edgion-gateway/src/routes/http/session_persistence.rs` | Gateway API SessionPersistence |

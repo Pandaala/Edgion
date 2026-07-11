@@ -31,6 +31,7 @@ pub struct ConfigClient {
     backend_tls_policies: ClientCache<BackendTLSPolicy>,
     edgion_config_data: ClientCache<EdgionConfigData>,
     edgion_acme: ClientCache<EdgionAcme>,
+    edgion_backend_traffic_policy: ClientCache<EdgionBackendTrafficPolicy>,
     // secrets: ClientCache<Secret>,  // Secret now follows related resources
     /// Optional cache-field whitelist used for readiness checks.
     /// When set, `is_ready()` only waits for these caches.
@@ -104,6 +105,10 @@ impl ConfigClient {
         let acme_handler = crate::services::acme::create_acme_handler();
         edgion_acme_cache.set_conf_processor(acme_handler);
 
+        let edgion_backend_traffic_policy_cache = ClientCache::new(client_id.clone(), client_name.clone());
+        let backend_traffic_policy_handler = crate::backends::policy::create_backend_traffic_policy_handler();
+        edgion_backend_traffic_policy_cache.set_conf_processor(backend_traffic_policy_handler);
+
         Self {
             current_server_id: RwLock::new(String::new()),
             gateway_classes: gateway_classes_cache,
@@ -133,6 +138,7 @@ impl ConfigClient {
                 ed_cache
             },
             edgion_acme: edgion_acme_cache,
+            edgion_backend_traffic_policy: edgion_backend_traffic_policy_cache,
             required_cache_names: RwLock::new(None),
         }
     }
@@ -220,8 +226,8 @@ impl ConfigClient {
     /// When a new ResourceKind variant is added, the compiler will force you to
     /// handle it here — eliminating the "UnknownKind" dead-wait bug.
     ///
-    /// Returns None only for kinds that are intentionally not cached on Gateway
-    /// (Secret, ReferenceGrant, Unspecified).
+    /// Returns None for kinds that are intentionally not cached on Gateway
+    /// (Secret, ConfigMap, ReferenceGrant, Unspecified).
     pub fn get_dyn_cache(&self, kind: ResourceKind) -> Option<&dyn DynClientCache> {
         match kind {
             ResourceKind::GatewayClass => Some(&self.gateway_classes),
@@ -246,6 +252,7 @@ impl ConfigClient {
             ResourceKind::ConfigMap => None,
             ResourceKind::ReferenceGrant => None,
             ResourceKind::Unspecified => None,
+            ResourceKind::EdgionBackendTrafficPolicy => Some(&self.edgion_backend_traffic_policy),
         }
     }
 
@@ -333,11 +340,6 @@ impl ConfigClient {
         self.edgion_gateway_configs.get(name)
     }
 
-    /// Trigger update event for an endpoint slice by key
-    pub fn trigger_endpoint_slice_update_event(&self, key: &str) {
-        self.endpoint_slices.trigger_update_event_by_key(key);
-    }
-
     /// Per-kind entry counts for every ClientCache held on the Gateway side.
     /// Used by store-stats leak detection.
     ///
@@ -423,8 +425,8 @@ mod tests {
         let _enter = rt.enter();
         let client = ConfigClient::new("cid".to_string(), "cname".to_string());
         let stats = client.client_cache_stats();
-        // 17: Secret, ConfigMap, and ReferenceGrant have no ClientCache on the gateway side.
-        assert_eq!(stats.len(), 17, "expected 17 gateway-side ClientCache kinds");
+        // 18: Secret, ConfigMap, ReferenceGrant, and Unspecified have no ClientCache on the gateway side.
+        assert_eq!(stats.len(), 18, "expected 18 gateway-side ClientCache kinds");
         for (kind, count) in &stats {
             assert_eq!(*count, 0, "kind {kind} should start empty");
         }

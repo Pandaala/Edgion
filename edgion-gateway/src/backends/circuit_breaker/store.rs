@@ -1,5 +1,5 @@
 use super::config::CircuitBreakerConfig;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
@@ -91,16 +91,12 @@ impl ServiceCbState {
 
 pub struct CircuitBreakerStore {
     services: DashMap<String, Arc<ServiceCbState>>,
-    /// Service keys already warned for using the deprecated `circuit-breaker`
-    /// alias, so the WARN fires at most once per service across resyncs.
-    warned_alias_services: DashSet<String>,
 }
 
 impl CircuitBreakerStore {
     pub fn new() -> Self {
         Self {
             services: DashMap::new(),
-            warned_alias_services: DashSet::new(),
         }
     }
 
@@ -310,18 +306,6 @@ impl CircuitBreakerStore {
     pub fn remove_service(&self, service_key: &str) {
         if let Some((_, svc)) = self.services.remove(service_key) {
             Self::drain_ejected_gauge(service_key, &svc);
-        }
-        self.warned_alias_services.remove(service_key);
-    }
-
-    /// Emit the deprecated-alias WARN at most once per service. Called from the
-    /// services conf-handler when a service uses `edgion.io/circuit-breaker`.
-    pub fn warn_alias_once(&self, service_key: &str) {
-        if self.warned_alias_services.insert(service_key.to_string()) {
-            tracing::warn!( // tracing-allow: cold config path, deduped, not data-plane.
-                service = %service_key,
-                "annotation 'edgion.io/circuit-breaker' is deprecated; use 'edgion.io/outlier-detection'"
-            );
         }
     }
 
@@ -792,22 +776,6 @@ mod tests {
         assert!(!store.is_ejected("default/svc", 1));
         store.record_failure("default/svc", 1, 1, FailureClass::Gateway);
         assert!(store.is_ejected("default/svc", 1));
-    }
-
-    #[test]
-    fn alias_warn_dedups_per_service() {
-        let store = CircuitBreakerStore::new();
-        store.warn_alias_once("default/svc");
-        store.warn_alias_once("default/svc"); // duplicate -> no new dedup entry
-        assert_eq!(store.warned_alias_services.len(), 1);
-
-        store.warn_alias_once("default/other");
-        assert_eq!(store.warned_alias_services.len(), 2);
-
-        // remove_service clears the dedup entry so a re-added service warns again.
-        store.remove_service("default/svc");
-        assert_eq!(store.warned_alias_services.len(), 1);
-        assert!(!store.warned_alias_services.contains("default/svc"));
     }
 
     #[test]

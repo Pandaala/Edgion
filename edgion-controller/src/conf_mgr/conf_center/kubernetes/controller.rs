@@ -62,10 +62,10 @@ use edgion_resources::ResourceMeta;
 // Import handlers from conf_mgr
 use crate::conf_mgr::sync_runtime::resource_processor::{
     BackendTlsPolicyAlpha3Handler, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
-    EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler, EdgionStreamPluginsHandler,
-    EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler, GrpcRouteHandler, HttpRouteHandler,
-    LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler, SecretHandler, ServiceHandler, TcpRouteHandler,
-    TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
+    EdgionBackendTrafficPolicyHandler, EdgionConfigDataHandler, EdgionGatewayConfigHandler, EdgionPluginsHandler,
+    EdgionStreamPluginsHandler, EdgionTlsHandler, EndpointSliceHandler, GatewayClassHandler, GatewayHandler,
+    GrpcRouteHandler, HttpRouteHandler, LinkSysHandler, ReferenceGrantBetaHandler, ReferenceGrantHandler,
+    SecretHandler, ServiceHandler, TcpRouteHandler, TlsRouteAlpha3Handler, TlsRouteHandler, UdpRouteHandler,
 };
 
 /// Context for spawn functions
@@ -454,6 +454,7 @@ impl KubernetesController {
                 "EdgionConfigData",
                 "LinkSys",
                 "EdgionAcme",
+                "EdgionBackendTrafficPolicy",
                 "EdgionGatewayConfig",
             ]
             .into_iter()
@@ -746,6 +747,16 @@ impl KubernetesController {
                 self,
                 "EdgionAcme",
                 EdgionAcmeHandler::new(),
+                &ctx,
+            ));
+        }
+
+        // Backend traffic policy
+        if self.should_watch("EdgionBackendTrafficPolicy") {
+            h.push(spawn::<EdgionBackendTrafficPolicy, _>(
+                self,
+                "EdgionBackendTrafficPolicy",
+                EdgionBackendTrafficPolicyHandler::new(),
                 &ctx,
             ));
         }

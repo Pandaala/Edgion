@@ -11,7 +11,7 @@ pub mod selector;
 pub mod service_kind;
 pub mod validation;
 
-pub use circuit_breaker::{get_circuit_breaker_store, parse_outlier_detection_annotation, FailureClass};
+pub use circuit_breaker::{get_circuit_breaker_store, FailureClass};
 pub use discovery::{
     create_ep_slice_handler, create_service_handler, decide_external_name_path, get_global_dns_cache,
     get_global_service_store, get_roundrobin_store, DnsResolutionMode, EndpointSliceExt, EpSliceStore,
@@ -19,8 +19,7 @@ pub use discovery::{
 };
 use edgion_resources::resources::BackendTLSPolicy;
 pub use panic_threshold::{
-    configure_lb_panic_default, get_lb_panic_default, get_panic_threshold_store, panic_floor,
-    parse_panic_threshold_annotation, resolve_panic_threshold,
+    configure_lb_panic_default, get_lb_panic_default, get_panic_threshold_store, panic_floor, resolve_panic_threshold,
 };
 
 pub use gateway_backend_tls_store::{get_global_gateway_backend_tls_store, GatewayBackendTlsStore};
@@ -48,8 +47,8 @@ use edgion_common::dns::{resolve, ResolverSpec};
 use edgion_resources::constants::annotations::edgion as edgion_annotations;
 use edgion_resources::duration::parse_duration;
 use edgion_resources::edgion_status::EdgionStatus;
+use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::resources::link_sys::HttpDnsResolverConfig;
-use edgion_resources::ParsedLBPolicy;
 use peer_builder::first_safe_inet_addr;
 use peer_builder::{
     apply_backend_app_protocol, create_tls_peer, detect_backend_app_protocol_key, extract_tls_config,
@@ -75,28 +74,20 @@ pub(crate) async fn try_get_peer(
     let gateway_key_ref = Some(gateway_key.as_str());
 
     // Extract needed fields from backend_ref to avoid clone and borrow checker issues
-    let (br_port, lb_policy, backend_tls_policy) = if is_grpc {
+    let (br_port, backend_tls_policy) = if is_grpc {
         // gRPC backend
         let grpc_br = ctx
             .selected_grpc_backend
             .as_ref()
             .ok_or(EdgionStatus::GrpcUpstreamNotBackendRefs)?;
-        (
-            grpc_br.port,
-            &grpc_br.extension_info.lb_policy,
-            &grpc_br.backend_tls_policy,
-        )
+        (grpc_br.port, &grpc_br.backend_tls_policy)
     } else {
         // HTTP backend
         let http_br = ctx
             .selected_backend
             .as_ref()
             .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
-        (
-            http_br.port,
-            &http_br.extension_info.lb_policy,
-            &http_br.backend_tls_policy,
-        )
+        (http_br.port, &http_br.backend_tls_policy)
     };
 
     // Read service_key and service_kind from BackendContext (set by init_backend_context_if_needed).
@@ -111,10 +102,13 @@ pub(crate) async fn try_get_peer(
         })
         .ok_or(EdgionStatus::UpstreamNotBackendRefs)?;
 
-    // Clone only the fields we hand to build_peer_from_lb_selection as owned values
-    // (the helper takes &mut ctx, which would invalidate the ctx-borrowed references).
-    let lb_policy = lb_policy.clone();
+    // Clone only the field we hand to build_peer_from_lb_selection as an owned value
+    // (the helper takes &mut ctx, which would invalidate the ctx-borrowed reference).
     let backend_tls_policy = backend_tls_policy.clone();
+
+    // Source the LB policy from the per-service EdgionBackendTrafficPolicy store
+    // (single DashMap read). No policy => None => the RoundRobin default in selection.
+    let lb_policy = crate::backends::policy::backend_traffic::resolve_lb_policy(&service_key);
 
     let backend_app_protocol = detect_backend_app_protocol_key(&service_key, br_port);
 

@@ -1,5 +1,6 @@
 // Test suite module
 
+pub mod edgion_backend_traffic_policy;
 pub mod edgion_plugins;
 pub mod edgion_tls;
 pub mod gateway;
@@ -24,6 +25,8 @@ pub use http_route::{
     PerTryTimeoutTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
     SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
+
+pub use edgion_backend_traffic_policy::EdgionBackendTrafficPolicyTestSuite;
 
 pub use grpc_route::{
     GrpcMatchTestSuite, GrpcRateLimitTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite,

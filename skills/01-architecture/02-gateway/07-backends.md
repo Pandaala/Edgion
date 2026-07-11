@@ -43,10 +43,9 @@ Each discovery source implements:
 health/
 ├── check/
 │   ├── manager.rs        # HealthCheckManager — manages a check task per service
-│   ├── probes.rs         # Probe implementations (HTTP/TCP)
+│   ├── probes.rs         # Probe implementations (HTTP/TCP/gRPC)
 │   ├── config_store.rs   # HealthCheckConfigStore — health-check configuration store
-│   ├── status_store.rs   # HealthStatusStore — health status store
-│   └── annotation.rs     # Service annotation parsing
+│   └── status_store.rs   # HealthStatusStore — health status store
 └── mod.rs
 ```
 
@@ -55,7 +54,15 @@ health/
 - Global singleton (`HEALTH_CHECK_MANAGER`, LazyLock).
 - Maintains one background tokio task (`JoinHandle<()>`) per service.
 - `reconcile_service(service_key)` — creates/updates/deletes the check task based on configuration.
-- Configuration source priority: parsed result in HealthCheckConfigStore (annotation or CRD).
+- **Configuration source**: `HealthCheckConfigStore` is a single map keyed by
+  Service key (`namespace/service`) — there are no source tiers anymore. The
+  `EdgionBackendTrafficPolicy` policy store
+  (`backends/policy/backend_traffic/store.rs`) is the **sole writer**: on every
+  policy full_set/partial_update it resolves the oldest-wins winner per
+  targeted Service key and calls `set_service_config` +
+  `hc_manager.reconcile_service(key)`. There is no annotation-parsing path —
+  `health/check/annotation.rs` and the EndpointSlice-tier override were
+  removed; see [Backend Traffic Policy](#backend-traffic-policy-edgionbackendtrafficpolicy) below.
 - Without configuration, deletes the task and unregisters health status.
 
 ### Probe types
@@ -85,7 +92,9 @@ Passive ejection mechanism to prevent cascading failures. References a slimmed-d
 
 ```
 circuit_breaker/
-├── config.rs     # CircuitBreakerConfig — config struct + annotation parsing
+├── config.rs     # re-exports CircuitBreakerConfig / OutlierDetectionConfig
+│                 # (the struct + normalize()/validate() now live in
+│                 # edgion-resources::resources::outlier_detection)
 ├── store.rs      # CircuitBreakerStore — DashMap-based ejection state store
 └── mod.rs
 ```
@@ -119,9 +128,19 @@ circuit_breaker/
 
 ### Lifecycle
 
-- During Service sync, parse the `edgion.io/circuit-breaker` annotation → `set_service_config`.
-- During EP/EPS `cleanup_removed_backends` → `remove_backend` cleans ejection state.
-- On Service deletion → `remove_service` clears the entire CB configuration.
+- `CircuitBreakerStore.set_service_config` is written **only** by the
+  `EdgionBackendTrafficPolicy` policy store (oldest-wins winner's
+  `spec.outlierDetection`, normalized) — see
+  [Backend Traffic Policy](#backend-traffic-policy-edgionbackendtrafficpolicy)
+  below. There is no annotation parsing anymore.
+- During EP/EPS `cleanup_removed_backends` → `remove_backend` cleans
+  per-backend ejection state (this stays owned by the Service/EndpointSlice
+  handlers — only the per-service *policy config* moved).
+- A Service/EndpointSlice `full_set` resync (e.g. every gateway reconnect)
+  must **not** delete the per-service CB/HC/panic/LB policy config — that
+  would wipe policy-written entries with nothing to re-apply them. Only the
+  policy `ConfHandler` creates/updates/deletes those entries, independent of
+  whether the Service currently exists.
 
 ### Prometheus metrics
 
@@ -130,6 +149,45 @@ circuit_breaker/
 | `edgion_circuit_breaker_ejections_total` | Counter | `service` | An ejection succeeds |
 | `edgion_circuit_breaker_ejected_endpoints` | Gauge | `service` | +1 on ejection, -1 on recovery / cleanup |
 | `edgion_circuit_breaker_rejections_total` | Counter | `service` | LB selection hits an ejected backend |
+
+## Backend Traffic Policy (EdgionBackendTrafficPolicy)
+
+Full external schema: [02-features/03-resources/20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md).
+
+```
+policy/
+├── backend_traffic/
+│   ├── store.rs             # BackendTrafficPolicyStore — synced cache + arbitration
+│   ├── conf_handler_impl.rs # ConfHandler<EdgionBackendTrafficPolicy>
+│   └── mod.rs                # resolve_lb_policy() — request-path LB lookup
+└── mod.rs
+```
+
+`BackendTrafficPolicyStore` (`get_backend_traffic_policy_store()`, global
+singleton) is the single owner of per-service *policy config* — it is the
+**sole writer** of `HealthCheckConfigStore`, `CircuitBreakerStore`, the
+`PanicThresholdStore` per-service override, and its own `lb_policies: DashMap<service_key, ParsedLBPolicy>`
+(read on the request path via `resolve_lb_policy(service_key)` /
+`backends::policy::resolve_lb_policy`). This replaced the former route-fed,
+ref-counted `lb/lb_policy/PolicyStore` (deleted).
+
+- **Arbitration** (`reapply_service(service_key)`): among all cached policies
+  whose `targetRefs` include this Service key, skip specs that fail
+  `get_validation_errors()`, then pick the minimum `precedence_key` (oldest
+  `creationTimestamp`, then name) — same rule as `BackendTLSPolicy`. The
+  winner's `loadBalancer` / `healthCheck` / `outlierDetection` sections are
+  pushed atomically (whole-section, no per-field merge across policies) into
+  the four stores; no winner clears all four.
+- **`full_set_policies` / `partial_update_policies`**: `partial_update` is a
+  real incremental diff (ConfHandler iron rule) — it recomputes only the
+  Service keys touched by the changed policies' old ∪ new `targetRefs`.
+- **EPS rebuild on LB change**: when `reapply_service` flips the applied LB
+  policy for a key, it calls
+  `config_client.trigger_endpoint_slice_update_event(service_key)` so
+  `ServiceSelectorCell`s rebuild against the new algorithm.
+- Admin `/store/stats` exposes the resolved LB map as `lb_policies` (a
+  `service_key → algorithm` map) — this is the field that replaced the old
+  `policy_store` stat.
 
 ## BackendTLSPolicy
 
@@ -179,8 +237,10 @@ edgion-gateway/src/backends/
 ├── health/                   # health checks
 │   └── check/                # check system
 ├── circuit_breaker/          # circuit breaker (passive ejection)
+├── panic_threshold.rs        # panic-threshold store + resolution
 ├── policy/                   # backend policies
-│   └── backend_tls/          # BackendTLSPolicy (upstream mTLS)
+│   ├── backend_tls/          # BackendTLSPolicy (upstream mTLS)
+│   └── backend_traffic/      # EdgionBackendTrafficPolicy (HC/CB/panic/LB arbitration)
 ├── preload.rs                # LB preload
 └── validation.rs             # endpoint validation (SSRF prevention)
 ```

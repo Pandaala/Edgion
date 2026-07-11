@@ -46,6 +46,7 @@ Edgion extension CRDs are installed via Edgion's own deployment manifest.
 | **EdgionConfigData** | edgion.io/v1alpha1 | Plugin metadata: describes plugin capabilities, parameter schema, and version information |
 | **LinkSys** | edgion.io/v1alpha1 | External system integration: connection configuration for ES, Redis, Etcd, Webhook, File, and other data sources |
 | **EdgionAcme** | edgion.io/v1alpha1 | ACME automatic certificate issuance configuration: Let's Encrypt integration, executed only on the Leader Controller |
+| **EdgionBackendTrafficPolicy** | edgion.io/v1 | Per-destination traffic policy (load balancing, active health check, outlier detection) attached to a Service via `targetRefs`, Gateway-API-policy-attachment style like BackendTLSPolicy |
 
 ## Conformance Testing
 
@@ -90,8 +91,8 @@ Edgion extends standard Gateway API through the following mechanisms:
 
 Use annotations with the `edgion.io/*` prefix to add Edgion-specific behavior to standard resources.
 Most `edgion.io/*` annotations tune runtime behavior (e.g. `edgion.io/enable-http2`,
-`edgion.io/http-to-https-redirect`, `edgion.io/health-check`, `edgion.io/circuit-breaker`,
-`edgion.io/proxy-protocol`). The one annotation that references another resource is:
+`edgion.io/http-to-https-redirect`, `edgion.io/proxy-protocol`,
+`edgion.io/tcp-keepalive-time`). The one annotation that references another resource is:
 
 | Annotation | Applicable Resources | Description |
 |------|---------|------|

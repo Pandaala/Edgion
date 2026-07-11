@@ -271,6 +271,7 @@ pub fn validate_no_watch_kinds(no_watch_kinds: &[String]) {
         "EdgionConfigData",
         "LinkSys",
         "EdgionAcme",
+        "EdgionBackendTrafficPolicy",
         "EdgionGatewayConfig",
     ]
     .into_iter()
