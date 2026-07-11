@@ -5,9 +5,9 @@ impl OpenidConnect {
         let discovery = self
             .get_or_fetch_discovery()
             .await
-            .map_err(|e| OidcVerifyError::Other {
+            .map_err(|_| OidcVerifyError::Other {
                 status: 502,
-                message: format!("Failed to fetch OIDC discovery document: {}", e),
+                message: "Bad Gateway".to_string(),
             })?;
         let endpoint = self
             .config
@@ -48,9 +48,12 @@ impl OpenidConnect {
             ]),
         };
 
-        let resp = request.send().await.map_err(|e| OidcVerifyError::Other {
-            status: 502,
-            message: format!("Introspection request failed: {}", e),
+        let resp = request.send().await.map_err(|e| {
+            super::token_exchange::note_oidc_san_mismatch(&e, "introspection");
+            OidcVerifyError::Other {
+                status: 502,
+                message: "Bad Gateway".to_string(),
+            }
         })?;
         if !resp.status().is_success() {
             return Err(OidcVerifyError::Other {
@@ -127,9 +130,9 @@ impl OpenidConnect {
         let discovery = self
             .get_or_fetch_discovery()
             .await
-            .map_err(|e| OidcVerifyError::Other {
+            .map_err(|_| OidcVerifyError::Other {
                 status: 502,
-                message: format!("Failed to fetch OIDC discovery document: {}", e),
+                message: "Bad Gateway".to_string(),
             })?;
 
         let mut validation = Validation::new(token_alg);

@@ -21,8 +21,8 @@ Phase 2 在 Phase 1 schema 对齐的基础上，通过**启用 OIDC 和 LDAP 插
 **现在（Phase 2）：**
 - `validation.hostname` 和 `validation.subjectAltNames` 被**接受并在运行时强制执行**。
 - 在 TLS 握手到 OIDC 提供商（如 Keycloak、Okta、Azure AD）或 LDAP 服务器时，网关的 rustls 验证器检查对端证书的 Subject Alternative Names (SANs) 是否与配置的值匹配。
-- 如果验证失败（证书 SAN 不包含预期的主机名或值），握手立即中止。连接记录 `EdgionStatus::OutboundTlsSanMismatch (999_09)`，显示在访问日志和 ssl.log 中。
-- 握手失败会传播到请求：客户端收到错误响应，网关在 ssl.log 中记录详细信息。
+- 如果验证失败（证书 SAN 不包含预期的主机名或值），握手立即中止。连接会在网关访问日志中记录 `EdgionStatus::OutboundTlsSanMismatch`。
+- 握手失败会传播到请求：客户端收到错误响应，网关记录拒绝原因（详见下方"诊断"章节）。
 
 ### LinkSys、ext_proc 和全局默认（仍处于延期阶段）
 
@@ -35,6 +35,11 @@ Phase 2 在 Phase 1 schema 对齐的基础上，通过**启用 OIDC 和 LDAP 插
 | 代码 | 名称 | HTTP 含义 | 条件 |
 |------|------|----------|------|
 | 999_09 | `OutboundTlsSanMismatch` | 502 Bad Gateway（默认） | 出站对端证书的 Subject Alternative Names 与配置的 `validation.subjectAltNames` 或 `validation.hostname` 不匹配 |
+
+> **范围说明。** `OutboundTlsSanMismatch` 会出现在 LDAP bind 和 OIDC discovery 请求的访问日志中。OIDC
+> 的 token-exchange、refresh、revoke 和 userinfo 调用只会记录 `edgion_gateway_outbound_tls_san_mismatch_total`
+> 计数器和一条网关 warn 日志，不会写入单次请求的状态。SAN 不匹配属于配置错误，会使每个请求以相同方式失败，
+> 因此该计数器是所有路径上的预期告警信号。
 
 ## 操作员操作必需
 
@@ -72,14 +77,18 @@ echo | openssl s_client -connect ldap.example.com:636 2>/dev/null | \
 
 ### 步骤 3：监控握手失败
 
-部署 Phase 2 后，在网关访问日志中监控 `EdgionStatus: 999_09`：
+部署 Phase 2 后，对 `edgion_gateway_outbound_tls_san_mismatch_total` 计数器设置告警——这是预期的监控信号，
+因为 `EdgionStatus` 序列化为其变体名称，而不是数字代码：
 
 ```bash
-# 在访问日志中检查 SAN 不匹配错误
-kubectl logs -n edgion-system -l app=edgion-gateway -c edgion-gateway | grep "999_09"
+# 对出站 TLS SAN 固定拒绝设置告警
+sum(rate(edgion_gateway_outbound_tls_san_mismatch_total[5m])) by (plugin) > 0
+```
 
-# 在 ssl.log 中检查详细的 TLS 验证错误
-kubectl logs -n edgion-system -l app=edgion-gateway -c edgion-gateway --tail=200 | grep "SAN mismatch"
+用于临时日志排查：
+
+```bash
+kubectl logs -n edgion-system -l app=edgion-gateway -c edgion-gateway | grep "OutboundTlsSanMismatch"
 ```
 
 如果看到失败，调整配置以匹配证书的实际 SANs，或临时删除 SAN 固定以解除生产阻塞（并提交问题）。
@@ -124,30 +133,25 @@ spec:
 
 ### 访问日志条目
 
-当握手因 SAN 不匹配而失败时，访问日志包含：
+当握手因 SAN 不匹配而失败时，访问日志的 `errors` 数组会包含 `EdgionStatus` 的变体名称
+（unit variant 序列化为其名称，而不是数字代码）：
 
 ```json
 {
-  "edgionStatus": "999_09",
-  "edgionStatusReason": "OutboundTlsSanMismatch",
-  "message": "Outbound peer cert SANs did not match configured subjectAltNames"
+  "errors": ["OutboundTlsSanMismatch"]
 }
 ```
 
 ### SSL 日志（网关数据平面）
 
-网关的 ssl.log（如果在 `observability.ssl` 中启用）记录底层 rustls 验证错误：
-
-```
-[2026-06-30 12:34:56.789] ERROR: TLS verification failed for idp.example.com:443
-  Subject Alternative Names mismatch: expected [idp.example.com], got [idp-old.example.com]
-```
+`ssl.log` 只记录*入站* TLS 握手诊断信息（client → gateway），不涉及出站 SAN 固定。对于出站 TLS SAN
+不匹配，请使用上文描述的网关日志行、计数器以及访问日志 `errors` 数组。
 
 ### 调试命令
 
 ```bash
 # 追踪访问日志中的最近失败
-kubectl logs -n edgion-system -l app=edgion-gateway --tail=100 -f | grep "999_09"
+kubectl logs -n edgion-system -l app=edgion-gateway --tail=100 -f | grep "OutboundTlsSanMismatch"
 
 # 描述插件以查看其配置
 kubectl describe edgionplugin corporate-oidc -n edgion-system
@@ -161,10 +165,10 @@ kubectl get edgionplugin corporate-oidc -n edgion-system -o jsonpath='{.status.c
 - [ ] 运行审计命令找到带有 SAN 配置的 OIDC/LDAP 插件
 - [ ] 从所有配置的 OIDC 提供商和 LDAP 服务器获取证书
 - [ ] 验证证书中的 SANs 与配置的 `validation.subjectAltNames` 和 `validation.hostname` 匹配
-- [ ] 在 canary 环境中部署 Phase 2 并监控访问日志中的 `999_09` 错误
+- [ ] 在 canary 环境中部署 Phase 2 并对 `edgion_gateway_outbound_tls_san_mismatch_total` 设置告警
 - [ ] 根据需要调整配置或证书以解决 SAN 不匹配问题
 - [ ] 自信地部署到生产环境
 
 ## 相关文档
 
-有关 OIDC 和 LDAP 插件配置的详细信息，请参见 Edgion 用户指南中的插件文档。关于 TLS 故障排除，请查阅网关访问日志和 ssl.log，如上面诊断部分所述。
+有关 OIDC 和 LDAP 插件配置的详细信息，请参见 Edgion 用户指南中的插件文档。关于出站 TLS SAN 固定故障排除，请查阅网关访问日志和 `edgion_gateway_outbound_tls_san_mismatch_total` 计数器，如上面诊断部分所述（ssl.log 只覆盖入站 TLS 握手）。

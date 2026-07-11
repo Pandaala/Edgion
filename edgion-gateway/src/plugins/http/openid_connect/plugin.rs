@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
 
 use super::error::{map_jwt_decode_error_typed, OidcVerifyError};
-use super::jwks_provider::{DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig};
+use super::jwks_provider::{DiscoveryDoc, DiscoveryValidator, JwksProvider, JwksProviderConfig, JwksProviderError};
 use super::jwt_common::{resolve_algorithm_policy, select_jwk, validate_token_alg, JwkSelectError};
 use crate::cache::ShardedLruCache;
 use crate::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
@@ -32,6 +32,7 @@ use crate::plugins::http::common::auth_common::{
     send_gateway_auth_error_response, set_claims_headers as set_common_claims_headers, Claims,
 };
 use crate::plugins::http::common::http_client::get_http_client_arc;
+use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::tls::validation::OutboundSanVerifier;
 use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa, ResolvedOutboundTls};
@@ -485,7 +486,9 @@ fn spawn_discovery_prewarm(
             component = "openid_connect",
             plugin_namespace = %plugin_namespace,
             discovery_url = %discovery_url,
-            "OIDC discovery prewarm exhausted retries; cache remains cold until first request triggers lazy fetch"
+            "OIDC discovery prewarm exhausted retries; cache remains cold until first request \
+             triggers lazy fetch. If outbound TLS SAN pinning is configured, check \
+             edgion_gateway_outbound_tls_san_mismatch_total and the SAN pinning warn logs above"
         );
     });
 }

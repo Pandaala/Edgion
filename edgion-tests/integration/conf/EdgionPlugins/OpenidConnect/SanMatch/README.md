@@ -35,7 +35,7 @@ Verify that OpenID Connect outbound connections succeed when the server certific
    - Discovery document retrieved
    - Token introspection succeeds
    - Authorization proceeds normally
-   - Note: `EdgionStatus: 999_09` (OutboundTlsSanMismatch) is not wired into access log yet; tracked in `tasks/todo/outbound-tls-san-status-wiring.md`
+   - Note: the access log `errors` array must NOT contain `"OutboundTlsSanMismatch"` on this path
 
 ## Current Limitation
 

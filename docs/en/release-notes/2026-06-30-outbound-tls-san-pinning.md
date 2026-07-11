@@ -21,8 +21,8 @@ Other backends—LinkSys providers (Redis, etcd, Elasticsearch, Kafka), ext_proc
 **Now (Phase 2):**
 - `validation.hostname` and `validation.subjectAltNames` are **accepted and enforced at runtime**.
 - During TLS handshake to the OIDC provider (e.g., Keycloak, Okta, Azure AD) or LDAP server, the gateway's rustls verifier checks that the peer certificate's Subject Alternative Names (SANs) match the configured values.
-- If verification fails (certificate SAN does not contain the expected hostname or value), the handshake is aborted immediately. The connection records `EdgionStatus::OutboundTlsSanMismatch (999_09)` in access logs and ssl.log.
-- Handshake failures propagate to the request: the client receives an error response, and the gateway logs details in ssl.log.
+- If verification fails (certificate SAN does not contain the expected hostname or value), the handshake is aborted immediately. The connection records `EdgionStatus::OutboundTlsSanMismatch` in the gateway access log.
+- Handshake failures propagate to the request: the client receives an error response, and the gateway logs the rejection reason (see Diagnostics below).
 
 ### LinkSys, ext_proc, and Global Defaults (Still Deferred)
 
@@ -35,6 +35,12 @@ Other backends—LinkSys providers (Redis, etcd, Elasticsearch, Kafka), ext_proc
 | Code | Name | HTTP Meaning | Condition |
 |------|------|--------------|-----------|
 | 999_09 | `OutboundTlsSanMismatch` | 502 Bad Gateway (default) | Outbound peer certificate Subject Alternative Names did not match the configured `validation.subjectAltNames` or `validation.hostname` |
+
+> **Scope note.** `OutboundTlsSanMismatch` appears in the access log for the LDAP bind and the OIDC
+> discovery fetch. The OIDC token-exchange, refresh, revoke, and userinfo calls record the
+> `edgion_gateway_outbound_tls_san_mismatch_total` counter and a gateway warn log, but do not stamp
+> the per-request status. A SAN mismatch is a configuration error that fails every request
+> identically, so the counter is the intended alerting signal on all paths.
 
 ## Operator Action Required
 
@@ -72,14 +78,18 @@ Ensure that the SANs in the certificate match the values you have configured in 
 
 ### Step 3: Monitor for Handshake Failures
 
-After deploying Phase 2, monitor your gateway access logs for `EdgionStatus: 999_09`:
+After deploying Phase 2, alert on the `edgion_gateway_outbound_tls_san_mismatch_total` counter — this
+is the intended signal, since `EdgionStatus` serializes to its variant name, not the numeric code:
 
 ```bash
-# Check for SAN mismatch errors in access logs
-kubectl logs -n edgion-system -l app=edgion-gateway -c edgion-gateway | grep "999_09"
+# Alert on outbound TLS SAN pinning rejections
+sum(rate(edgion_gateway_outbound_tls_san_mismatch_total[5m])) by (plugin) > 0
+```
 
-# Check ssl.log for detailed TLS verification errors
-kubectl logs -n edgion-system -l app=edgion-gateway -c edgion-gateway --tail=200 | grep "SAN mismatch"
+For ad-hoc log inspection:
+
+```bash
+kubectl logs -n edgion-system -l app=edgion-gateway -c edgion-gateway | grep "OutboundTlsSanMismatch"
 ```
 
 If you see failures, adjust your configuration to match the certificate's actual SANs or temporarily remove the SAN pinning to unblock production (and file an issue).
@@ -124,30 +134,26 @@ For detailed rationale and the full three-phase enforcement timeline (OIDC/LDAP 
 
 ### Access Log Entry
 
-When a handshake fails due to SAN mismatch, the access log contains:
+When a handshake fails due to SAN mismatch, the access log's `errors` array contains the
+`EdgionStatus` variant name (unit variants serialize to their name, not the numeric code):
 
 ```json
 {
-  "edgionStatus": "999_09",
-  "edgionStatusReason": "OutboundTlsSanMismatch",
-  "message": "Outbound peer cert SANs did not match configured subjectAltNames"
+  "errors": ["OutboundTlsSanMismatch"]
 }
 ```
 
 ### SSL Log (Gateway Data Plane)
 
-The gateway's ssl.log (if enabled in `observability.ssl`) records the underlying rustls verification error:
-
-```
-[2026-06-30 12:34:56.789] ERROR: TLS verification failed for idp.example.com:443
-  Subject Alternative Names mismatch: expected [idp.example.com], got [idp-old.example.com]
-```
+`ssl.log` records *inbound* TLS handshake diagnostics only (client → gateway) and is not touched by
+outbound SAN pinning. For outbound TLS SAN mismatches, use the gateway log line, the counter, and
+the access log `errors` array described above.
 
 ### Debugging Commands
 
 ```bash
 # Tail the access log for recent failures
-kubectl logs -n edgion-system -l app=edgion-gateway --tail=100 -f | grep "999_09"
+kubectl logs -n edgion-system -l app=edgion-gateway --tail=100 -f | grep "OutboundTlsSanMismatch"
 
 # Describe the plugin to see its configuration
 kubectl describe edgionplugin corporate-oidc -n edgion-system
@@ -161,10 +167,10 @@ kubectl get edgionplugin corporate-oidc -n edgion-system -o jsonpath='{.status.c
 - [ ] Run audit command to find OIDC/LDAP plugins with SAN configuration
 - [ ] Obtain certificates from all configured OIDC providers and LDAP servers
 - [ ] Verify SANs in certificates match configured `validation.subjectAltNames` and `validation.hostname`
-- [ ] Deploy Phase 2 in a canary environment and monitor access logs for `999_09` errors
+- [ ] Deploy Phase 2 in a canary environment and alert on `edgion_gateway_outbound_tls_san_mismatch_total`
 - [ ] Adjust configurations or certificates as needed to resolve any SAN mismatches
 - [ ] Deploy to production with confidence
 
 ## Related Documentation
 
-For detailed information on OIDC and LDAP plugin configuration, see the plugin documentation in your Edgion user guide. For TLS troubleshooting, consult the gateway access logs and ssl.log as described in the Diagnostics section above.
+For detailed information on OIDC and LDAP plugin configuration, see the plugin documentation in your Edgion user guide. For outbound TLS SAN pinning troubleshooting, consult the gateway access logs and the `edgion_gateway_outbound_tls_san_mismatch_total` counter as described in the Diagnostics section above (ssl.log covers inbound TLS handshakes only).

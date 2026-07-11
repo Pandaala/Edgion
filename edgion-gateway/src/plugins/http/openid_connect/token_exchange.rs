@@ -1,5 +1,23 @@
 use super::*;
 
+/// Record and log an outbound TLS SAN-pinning rejection on an OIDC outbound call.
+///
+/// These call sites do not emit `EdgionStatus::OutboundTlsSanMismatch`: threading a
+/// typed error to a session-owning frame would cost a signature cascade for a
+/// failure that is already visible in the counter and this log line, and that
+/// fires on every request once the configuration is wrong.
+pub(super) fn note_oidc_san_mismatch(err: &reqwest::Error, call: &'static str) {
+    if let Some(reason) = crate::tls::validation::outbound_san_mismatch_reason(err) {
+        crate::observe::metrics::registry::record_outbound_tls_san_mismatch("openid_connect");
+        tracing::warn!(
+            component = "openid_connect",
+            call = call,
+            reason = %reason,
+            "OIDC outbound call rejected by TLS SAN pinning"
+        );
+    }
+}
+
 impl OpenidConnect {
     pub(super) fn refresh_lock_key(raw_cookie_value: &str) -> String {
         let digest = Sha256::digest(raw_cookie_value.as_bytes());
@@ -156,9 +174,12 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request.send().await.map_err(|e| OidcVerifyError::Other {
-            status: 502,
-            message: format!("Token exchange request failed: {}", e),
+        let resp = request.send().await.map_err(|e| {
+            note_oidc_san_mismatch(&e, "token_exchange");
+            OidcVerifyError::Other {
+                status: 502,
+                message: "Bad Gateway".to_string(),
+            }
         })?;
         if !resp.status().is_success() {
             return Err(OidcVerifyError::Other {
@@ -210,7 +231,10 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request.send().await?;
+        let resp = request
+            .send()
+            .await
+            .inspect_err(|e| note_oidc_san_mismatch(e, "revoke_token"))?;
         if !resp.status().is_success() {
             return Err(format!("Revocation request failed with status {}", resp.status()).into());
         }
@@ -309,9 +333,12 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request.send().await.map_err(|e| OidcVerifyError::Other {
-            status: 502,
-            message: format!("Token refresh request failed: {}", e),
+        let resp = request.send().await.map_err(|e| {
+            note_oidc_san_mismatch(&e, "token_refresh");
+            OidcVerifyError::Other {
+                status: 502,
+                message: "Bad Gateway".to_string(),
+            }
         })?;
         if !resp.status().is_success() {
             return Err(OidcVerifyError::Other {
@@ -345,9 +372,9 @@ impl OpenidConnect {
         let discovery = self
             .get_or_fetch_discovery()
             .await
-            .map_err(|e| OidcVerifyError::Other {
+            .map_err(|_| OidcVerifyError::Other {
                 status: 502,
-                message: format!("Failed to fetch OIDC discovery document: {}", e),
+                message: "Bad Gateway".to_string(),
             })?;
         let token_response = self.refresh_access_token(&discovery, refresh_token).await?;
 

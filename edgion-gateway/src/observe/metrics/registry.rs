@@ -57,8 +57,11 @@ pub mod names {
     pub const LINK_SYS_HEALTH: &str = "edgion_link_sys_health";
     // Link-sys health flip counter (monotonic): exposes sub-scrape flapping the gauge cannot.
     pub const LINK_SYS_HEALTH_FLIPS_TOTAL: &str = "edgion_link_sys_health_flips_total";
-    // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail)
+    // LDAP auth plugin: error counter by kind (unreachable / timeout / bind_fail / tls_san_mismatch)
     pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
+    // Outbound TLS SAN pinning rejection, by plugin. The alerting signal for a
+    // misconfigured `validation.subjectAltNames` or a rotated peer certificate.
+    pub const OUTBOUND_TLS_SAN_MISMATCH_TOTAL: &str = "edgion_gateway_outbound_tls_san_mismatch_total";
     // Webhook key resolver: per-resolve failure counter by reason
     pub const WEBHOOK_RESOLVE_ERRORS_TOTAL: &str = "edgion_webhook_resolve_errors_total";
     // Egress resolver: outbound address rejected by the SSRF egress policy, by reason
@@ -554,10 +557,18 @@ pub fn record_rr_selector_truncated() {
 
 /// Record a LDAP auth plugin error event.
 ///
-/// `kind` must be one of: `"unreachable"`, `"timeout"`, `"bind_fail"`.
-/// Fixed cardinality — safe as a label.
+/// `kind` must be one of: `"unreachable"`, `"timeout"`, `"bind_fail"`,
+/// `"tls_san_mismatch"`. Fixed cardinality — safe as a label.
 pub fn record_ldap_auth_error(kind: &'static str) {
     counter!(names::LDAP_AUTH_ERRORS_TOTAL, "kind" => kind).increment(1);
+}
+
+/// Record an outbound TLS SAN-pinning rejection.
+///
+/// `plugin` must be one of: `"ldap_auth"`, `"openid_connect"`.
+/// Fixed cardinality — safe as a label.
+pub fn record_outbound_tls_san_mismatch(plugin: &'static str) {
+    counter!(names::OUTBOUND_TLS_SAN_MISMATCH_TOTAL, "plugin" => plugin).increment(1);
 }
 
 /// Record a webhook key-resolver failure.

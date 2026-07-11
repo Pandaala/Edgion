@@ -13,12 +13,13 @@ use sha2::{Digest, Sha256};
 
 use crate::cache::ShardedLruCache;
 use crate::cli::config::{get_default_lru_cache_capacity, get_default_lru_cache_shards};
-use crate::observe::metrics::registry::record_ldap_auth_error;
+use crate::observe::metrics::registry::{record_ldap_auth_error, record_outbound_tls_san_mismatch};
 use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, send_gateway_plain_error_response,
 };
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::tls::validation::outbound_san_mismatch_reason;
 use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::LdapAuthConfig;
@@ -40,6 +41,19 @@ enum LdapAuthError {
     ConnectionFailed,
     Timeout,
     BindFailed,
+    /// Outbound TLS handshake rejected by SAN pinning. Carries the verifier's reason.
+    TlsSanMismatch(String),
+}
+
+/// Classify an `LdapError` raised while opening the connection. ldap3 completes
+/// both the implicit-TLS (`ldaps://`) and the STARTTLS handshake inside
+/// `LdapConnAsync::with_settings`, so this is the only site where a TLS error
+/// can appear; `simple_bind` cannot raise one.
+fn map_ldap_connect_error(err: &ldap3::LdapError) -> LdapAuthError {
+    match outbound_san_mismatch_reason(err) {
+        Some(reason) => LdapAuthError::TlsSanMismatch(reason),
+        None => LdapAuthError::ConnectionFailed,
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -349,7 +363,7 @@ impl LdapAuth {
         let (conn, mut ldap) = tokio::time::timeout(timeout, LdapConnAsync::with_settings(settings, &self.ldap_url))
             .await
             .map_err(|_| LdapAuthError::Timeout)?
-            .map_err(|_| LdapAuthError::ConnectionFailed)?;
+            .map_err(|e| map_ldap_connect_error(&e))?;
 
         ldap3::drive!(conn);
 
@@ -477,6 +491,14 @@ impl RequestFilter for LdapAuth {
             Err(LdapAuthError::ConnectionFailed) => {
                 plugin_log.push_err("ldap unreachable");
                 record_ldap_auth_error("unreachable");
+                self.service_unavailable(session).await
+            }
+            Err(LdapAuthError::TlsSanMismatch(reason)) => {
+                session.add_error(edgion_resources::EdgionStatus::OutboundTlsSanMismatch);
+                plugin_log.push_err("outbound tls san mismatch");
+                plugin_log.push_fmt("san {}", la![reason.as_str()]);
+                record_ldap_auth_error("tls_san_mismatch");
+                record_outbound_tls_san_mismatch("ldap_auth");
                 self.service_unavailable(session).await
             }
             Err(LdapAuthError::Timeout) => {
@@ -838,5 +860,41 @@ mod tests {
             "verify=false with SAN policy must build Ok via SAN verifier path, got: {:?}",
             result.err()
         );
+    }
+
+    /// A SAN mismatch surfacing from `LdapConnAsync::with_settings` must map to
+    /// `TlsSanMismatch`, not the generic `ConnectionFailed`. The mapping closure
+    /// is exercised directly because opening a real TLS connection is out of
+    /// scope for a unit test.
+    #[test]
+    fn ldap_error_with_san_mismatch_maps_to_tls_san_mismatch() {
+        let rustls_err = rustls::Error::InvalidCertificate(rustls::CertificateError::Other(rustls::OtherError(
+            std::sync::Arc::new(crate::tls::validation::SanMismatchError {
+                reason: "declared [ldap.example.com], actual [127.0.0.1]".to_string(),
+            }),
+        )));
+        let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, rustls_err);
+        let ldap_err = ldap3::LdapError::Io { source: io_err };
+
+        let mapped = map_ldap_connect_error(&ldap_err);
+
+        match mapped {
+            LdapAuthError::TlsSanMismatch(reason) => {
+                assert_eq!(reason, "declared [ldap.example.com], actual [127.0.0.1]");
+            }
+            other => panic!("expected TlsSanMismatch, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ldap_error_without_san_mismatch_maps_to_connection_failed() {
+        let ldap_err = ldap3::LdapError::Io {
+            source: std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused"),
+        };
+
+        assert!(matches!(
+            map_ldap_connect_error(&ldap_err),
+            LdapAuthError::ConnectionFailed
+        ));
     }
 }

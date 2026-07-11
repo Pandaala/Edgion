@@ -27,7 +27,7 @@ Verify that LDAP TLS outbound connections succeed when the server certificate's 
 2. **LDAP Authentication**: SUCCESS
    - Login request succeeds; no SAN mismatch rejection
    - Access log shows clean LDAP exchange
-   - Note: `EdgionStatus: 999_09` (OutboundTlsSanMismatch) is not wired into access log yet; tracked in `tasks/todo/outbound-tls-san-status-wiring.md`
+   - Note: the access log `errors` array must NOT contain `"OutboundTlsSanMismatch"` on this path
 
 ## Dependencies
 

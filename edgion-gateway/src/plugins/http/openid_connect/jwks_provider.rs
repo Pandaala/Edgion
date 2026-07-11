@@ -18,7 +18,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, RwLock};
 
+use crate::observe::metrics::registry::record_outbound_tls_san_mismatch;
 use crate::plugins::http::common::http_util::fetch_json_limited;
+use crate::tls::validation::outbound_san_mismatch_reason;
 
 /// Trait every discovery-doc shape must implement so the provider can read
 /// the two universally-required fields. Extended fields (e.g. `token_endpoint`)
@@ -36,6 +38,36 @@ pub type DiscoveryValidator<D> = Arc<dyn Fn(&D) -> Result<(), String> + Send + S
 #[cfg(test)]
 pub fn no_op_validator<D: DiscoveryDoc>() -> DiscoveryValidator<D> {
     Arc::new(|_| Ok(()))
+}
+
+/// Error type for the discovery / JWKS fetch paths.
+///
+/// `TlsSanMismatch` is produced **only** by the discovery fetch. The JWKS fetch
+/// returns `Other` because `get_jwks` serves a stale cache on error, so the
+/// variant would be discarded on exactly the paths that could act on it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JwksProviderError {
+    TlsSanMismatch { reason: String },
+    Other(String),
+}
+
+impl std::fmt::Display for JwksProviderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            JwksProviderError::TlsSanMismatch { reason } => {
+                write!(f, "outbound TLS SAN mismatch: {}", reason)
+            }
+            JwksProviderError::Other(msg) => f.write_str(msg),
+        }
+    }
+}
+
+impl std::error::Error for JwksProviderError {}
+
+impl From<String> for JwksProviderError {
+    fn from(msg: String) -> Self {
+        JwksProviderError::Other(msg)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -109,7 +141,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 
     /// Get cached discovery, fetch if absent. Validator runs **before** caching;
     /// a failed validator does NOT poison the cache (next call retries).
-    pub async fn get_or_fetch_discovery(&self) -> Result<D, String> {
+    pub async fn get_or_fetch_discovery(&self) -> Result<D, JwksProviderError> {
         if let Some(doc) = self.discovery_doc.read().await.as_ref() {
             return Ok(doc.clone());
         }
@@ -124,20 +156,40 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             .timeout(self.config.request_timeout)
             .send()
             .await
-            .map_err(|e| format!("Failed to fetch discovery document: {}", e))?;
+            .map_err(|e| match outbound_san_mismatch_reason(&e) {
+                Some(reason) => {
+                    record_outbound_tls_san_mismatch("openid_connect");
+                    tracing::warn!(
+                        component = self.config.component_label,
+                        reason = %reason,
+                        "OIDC discovery fetch rejected by outbound TLS SAN pinning"
+                    );
+                    JwksProviderError::TlsSanMismatch { reason }
+                }
+                None => JwksProviderError::Other(format!("Failed to fetch discovery document: {}", e)),
+            })?;
         if !resp.status().is_success() {
-            return Err(format!("Discovery endpoint returned status {}", resp.status()));
+            return Err(JwksProviderError::Other(format!(
+                "Discovery endpoint returned status {}",
+                resp.status()
+            )));
         }
-        let doc: D = fetch_json_limited(resp, self.config.discovery_max_response_bytes, "OIDC discovery").await?;
+        let doc: D = fetch_json_limited(resp, self.config.discovery_max_response_bytes, "OIDC discovery")
+            .await
+            .map_err(JwksProviderError::Other)?;
 
         if doc.issuer().is_empty() {
-            return Err("Discovery document missing issuer".to_string());
+            return Err(JwksProviderError::Other(
+                "Discovery document missing issuer".to_string(),
+            ));
         }
         if doc.jwks_uri().is_empty() {
-            return Err("Discovery document missing jwks_uri".to_string());
+            return Err(JwksProviderError::Other(
+                "Discovery document missing jwks_uri".to_string(),
+            ));
         }
         // Caller-supplied config-aware validation runs before caching.
-        (self.validator)(&doc)?;
+        (self.validator)(&doc).map_err(JwksProviderError::Other)?;
 
         tracing::info!(
             component = self.config.component_label,
@@ -156,7 +208,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
     ///
     /// `force_refresh=true` skips the TTL fast-path (used on JWT `kid` miss);
     /// `jwks_min_refresh_interval` still gates back-to-back refreshes.
-    pub async fn get_jwks(&self, force_refresh: bool) -> Result<JwkSet, String> {
+    pub async fn get_jwks(&self, force_refresh: bool) -> Result<JwkSet, JwksProviderError> {
         let now = Instant::now();
         let min_refresh = self.config.jwks_min_refresh_interval;
         let ttl = self.config.jwks_cache_ttl;
@@ -189,7 +241,9 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
                 }
             } else if !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
                 // No cached set AND blocked by min_refresh: caller should retry later.
-                return Err("JWKS refresh blocked by minimum refresh interval".to_string());
+                return Err(JwksProviderError::Other(
+                    "JWKS refresh blocked by minimum refresh interval".to_string(),
+                ));
             }
         }
 
@@ -201,7 +255,17 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
                 .timeout(self.config.request_timeout)
                 .send()
                 .await
-                .map_err(|e| format!("JWKS request failed: {}", e))?;
+                .map_err(|e| {
+                    if let Some(reason) = outbound_san_mismatch_reason(&e) {
+                        record_outbound_tls_san_mismatch("openid_connect");
+                        tracing::warn!(
+                            component = self.config.component_label,
+                            reason = %reason,
+                            "JWKS fetch rejected by outbound TLS SAN pinning"
+                        );
+                    }
+                    format!("JWKS request failed: {}", e)
+                })?;
             if !resp.status().is_success() {
                 return Err(format!("JWKS request failed with status {}", resp.status()));
             }
@@ -241,7 +305,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
                     );
                     Ok(cached)
                 }
-                None => Err(err),
+                None => Err(JwksProviderError::Other(err)),
             },
         }
     }
@@ -264,6 +328,18 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_error_display_renders_inner_message() {
+        assert_eq!(JwksProviderError::Other("boom".to_string()).to_string(), "boom");
+        assert_eq!(
+            JwksProviderError::TlsSanMismatch {
+                reason: "no match".to_string()
+            }
+            .to_string(),
+            "outbound TLS SAN mismatch: no match"
+        );
+    }
 
     #[test]
     fn test_lean_discovery_document_deserialize() {
@@ -403,7 +479,11 @@ mod tests {
         let idp = spawn_mock_idp().await;
         idp.jwks_should_fail.store(true, Ordering::SeqCst);
         let p = test_provider(test_config(&idp.addr, 60_000, 0));
-        let err = p.get_jwks(false).await.expect_err("must error with empty cache");
+        let err = p
+            .get_jwks(false)
+            .await
+            .expect_err("must error with empty cache")
+            .to_string();
         assert!(err.contains("503") || err.contains("status"), "got: {}", err);
     }
 
@@ -469,7 +549,11 @@ mod tests {
         let validator: DiscoveryValidator<LeanDiscoveryDocument> =
             Arc::new(|_| Err("synthetic validation failure".into()));
         let p = JwksProvider::new(cfg, client, validator);
-        let err = p.get_or_fetch_discovery().await.expect_err("validator should reject");
+        let err = p
+            .get_or_fetch_discovery()
+            .await
+            .expect_err("validator should reject")
+            .to_string();
         assert!(err.contains("synthetic"), "got: {}", err);
         assert!(
             p.cached_discovery().await.is_none(),
@@ -536,7 +620,8 @@ mod tests {
         let err = p
             .get_jwks(false)
             .await
-            .expect_err("timeout must error with empty cache");
+            .expect_err("timeout must error with empty cache")
+            .to_string();
         let lc = err.to_lowercase();
         assert!(
             lc.contains("timeout") || lc.contains("timed out") || lc.contains("jwks request failed"),
@@ -555,7 +640,11 @@ mod tests {
             .mount(&server)
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
-        let err = p.get_jwks(false).await.expect_err("5xx without cache must error");
+        let err = p
+            .get_jwks(false)
+            .await
+            .expect_err("5xx without cache must error")
+            .to_string();
         assert!(
             err.contains("500") || err.contains("status"),
             "expected status error, got: {err}"
@@ -601,7 +690,11 @@ mod tests {
             .mount(&server)
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
-        let err = p.get_jwks(false).await.expect_err("malformed JSON must error");
+        let err = p
+            .get_jwks(false)
+            .await
+            .expect_err("malformed JSON must error")
+            .to_string();
         let lc = err.to_lowercase();
         assert!(
             lc.contains("parse") || lc.contains("jwks"),
@@ -620,7 +713,7 @@ mod tests {
             .mount(&server)
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
-        let err = p.get_jwks(false).await.expect_err("empty keys must error");
+        let err = p.get_jwks(false).await.expect_err("empty keys must error").to_string();
         assert!(err.contains("empty keys"), "expected 'empty keys' message, got: {err}");
     }
 
@@ -633,7 +726,11 @@ mod tests {
             .mount(&server)
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
-        let err = p.get_or_fetch_discovery().await.expect_err("discovery 5xx must error");
+        let err = p
+            .get_or_fetch_discovery()
+            .await
+            .expect_err("discovery 5xx must error")
+            .to_string();
         assert!(
             err.contains("503") || err.contains("status"),
             "expected discovery status error, got: {err}"
@@ -656,7 +753,8 @@ mod tests {
         let err = p
             .get_or_fetch_discovery()
             .await
-            .expect_err("discovery malformed JSON must error");
+            .expect_err("discovery malformed JSON must error")
+            .to_string();
         let lc = err.to_lowercase();
         assert!(
             lc.contains("parse") || lc.contains("oidc discovery"),
@@ -681,7 +779,8 @@ mod tests {
         let err = p
             .get_or_fetch_discovery()
             .await
-            .expect_err("missing jwks_uri must error");
+            .expect_err("missing jwks_uri must error")
+            .to_string();
         assert!(
             err.contains("jwks_uri"),
             "expected 'jwks_uri' in error message, got: {err}"
@@ -701,7 +800,11 @@ mod tests {
             .mount(&server)
             .await;
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
-        let err = p.get_or_fetch_discovery().await.expect_err("missing issuer must error");
+        let err = p
+            .get_or_fetch_discovery()
+            .await
+            .expect_err("missing issuer must error")
+            .to_string();
         assert!(err.contains("issuer"), "expected 'issuer' in error message, got: {err}");
     }
 
@@ -721,7 +824,8 @@ mod tests {
         let err = p
             .get_or_fetch_discovery()
             .await
-            .expect_err("unreachable discovery must error");
+            .expect_err("unreachable discovery must error")
+            .to_string();
         assert!(
             err.contains("Failed to fetch discovery document"),
             "expected fetch failure, got: {err}"

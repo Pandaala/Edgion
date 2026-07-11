@@ -77,6 +77,134 @@ fn extract_sans_from_rustls_cert(der: &CertificateDer<'_>) -> Result<Vec<String>
 }
 
 // ---------------------------------------------------------------------------
+// SanMismatchError + detector
+// ---------------------------------------------------------------------------
+
+/// Marker prefix carried by both `Display` and `Debug`. Callers outside this
+/// module match on the typed error; the prefix exists so the last-resort
+/// substring fallback in `outbound_san_mismatch_reason` can still recover the
+/// reason when the typed identity is lost crossing a foreign error boundary.
+const SAN_MISMATCH_PREFIX: &str = "SAN mismatch: ";
+
+/// Bound on the `source()` walk. Real chains are 3-5 links deep.
+const MAX_CHAIN_DEPTH: usize = 16;
+
+/// Typed marker embedded in `rustls::Error::InvalidCertificate(CertificateError::Other(..))`
+/// when outbound SAN pinning rejects a peer certificate.
+///
+/// `Debug` is hand-written, not derived, and renders identically to `Display`.
+/// rustls's `CertificateError` `Display` falls through to `write!(f, "{other:?}")`,
+/// so a derived `Debug` would emit `SanMismatchError { reason: "..." }` and the
+/// `SAN_MISMATCH_PREFIX` marker would never appear in the rendered chain.
+pub struct SanMismatchError {
+    pub reason: String,
+}
+
+impl std::fmt::Display for SanMismatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}", SAN_MISMATCH_PREFIX, self.reason)
+    }
+}
+
+impl std::fmt::Debug for SanMismatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}", SAN_MISMATCH_PREFIX, self.reason)
+    }
+}
+
+impl std::error::Error for SanMismatchError {}
+
+/// Recover the SAN-mismatch reason from an outbound error chain, if present.
+///
+/// Two full, depth-bounded passes over the chain, not one interleaved pass:
+/// typed matches first (`probe_typed`), the `Display`-substring fallback
+/// (`probe_fallback`) only if the entire chain fails every typed check.
+///
+/// This ordering matters. Some error types (e.g. `thiserror`'s
+/// `#[error("... {source}")]`) render their whole nested chain into one
+/// `Display` string, and `rustls::CertificateError::Other` has no dedicated
+/// `Display` arm and falls back to `{other:?}` (`Other(OtherError(SAN
+/// mismatch: ...))`, `Debug`, with wrapper parens). A single interleaved
+/// pass would try the substring fallback on an *outer* node first, match the
+/// marker inside that recursively-rendered text, and return a reason
+/// contaminated with the inner nodes' wrapper syntax -- before the walk ever
+/// reaches the deeper node where the clean typed downcast would have hit.
+/// Trying every node's typed check before any node's fallback check
+/// guarantees a clean match always wins over a contaminated one.
+///
+/// Returns an owned `String` because the fallback arm recovers the reason from a
+/// `Display` rendering, which is a temporary nothing can borrow from. This is a
+/// cold error path.
+pub fn outbound_san_mismatch_reason(err: &(dyn std::error::Error + 'static)) -> Option<String> {
+    walk_chain(err, probe_typed).or_else(|| walk_chain(err, probe_fallback))
+}
+
+/// Depth-bounded `source()` walk, applying `probe` at each node until it matches.
+fn walk_chain(
+    err: &(dyn std::error::Error + 'static),
+    probe: fn(&(dyn std::error::Error + 'static)) -> Option<String>,
+) -> Option<String> {
+    let mut node: Option<&(dyn std::error::Error + 'static)> = Some(err);
+    let mut depth = 0usize;
+
+    while let Some(current) = node {
+        if depth >= MAX_CHAIN_DEPTH {
+            return None;
+        }
+        depth += 1;
+
+        if let Some(reason) = probe(current) {
+            return Some(reason);
+        }
+        node = current.source();
+    }
+
+    None
+}
+
+/// Typed-only checks. Never falls back to a `Display` rendering -- see
+/// `outbound_san_mismatch_reason` for why that must stay a separate, later pass.
+fn probe_typed(node: &(dyn std::error::Error + 'static)) -> Option<String> {
+    // 1. The typed error itself.
+    if let Some(san) = node.downcast_ref::<SanMismatchError>() {
+        return Some(san.reason.clone());
+    }
+
+    // 2. Still inside the rustls error that the verifier returned.
+    if let Some(RustlsError::InvalidCertificate(CertificateError::Other(other))) = node.downcast_ref::<RustlsError>() {
+        if let Some(san) = other.0.downcast_ref::<SanMismatchError>() {
+            return Some(san.reason.clone());
+        }
+    }
+
+    // 3. `std::io::Error::source()` is `Custom(c) => c.error.source()` -- it returns
+    //    the *inner* error's source and skips the inner error itself. tokio-rustls
+    //    wraps `rustls::Error` exactly this way, so without an explicit `get_ref()`
+    //    hop the walk steps straight over it. Do not remove.
+    if let Some(io_err) = node.downcast_ref::<std::io::Error>() {
+        if let Some(inner) = io_err.get_ref() {
+            if let Some(reason) = walk_chain(inner, probe_typed) {
+                return Some(reason);
+            }
+        }
+    }
+
+    None
+}
+
+/// Last resort: the typed identity was lost crossing a foreign boundary,
+/// but the marker survives in the rendered text. Intentionally traverses only
+/// `source()` and NOT `io::Error::get_ref()` children (unlike `probe_typed`), as
+/// this fallback is unreachable for real SAN rejections (typed pass always matches).
+/// Keeping `source()`-only avoids reintroducing reason-string contamination.
+fn probe_fallback(node: &(dyn std::error::Error + 'static)) -> Option<String> {
+    let rendered = node.to_string();
+    rendered
+        .find(SAN_MISMATCH_PREFIX)
+        .map(|idx| rendered[idx + SAN_MISMATCH_PREFIX.len()..].to_string())
+}
+
+// ---------------------------------------------------------------------------
 // OutboundSanVerifier
 // ---------------------------------------------------------------------------
 
@@ -131,10 +259,7 @@ impl ServerCertVerifier for OutboundSanVerifier {
         let result = validate_backend_sans(&cert_sans, &self.policy_sans);
         if !result.passed {
             return Err(RustlsError::InvalidCertificate(CertificateError::Other(OtherError(
-                Arc::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("SAN mismatch: {}", result.reason),
-                )),
+                Arc::new(SanMismatchError { reason: result.reason }),
             ))));
         }
 
@@ -299,5 +424,119 @@ mod tests {
         let result = verifier.verify_server_cert(&cert_der, &[], &make_server_name(), &[], make_now());
 
         assert!(result.is_ok(), "empty policy_sans should pass, got: {:?}", result);
+    }
+
+    // -----------------------------------------------------------------------
+    // Detector tests
+    // -----------------------------------------------------------------------
+
+    fn san_rustls_error(reason: &str) -> RustlsError {
+        RustlsError::InvalidCertificate(CertificateError::Other(OtherError(Arc::new(SanMismatchError {
+            reason: reason.to_string(),
+        }))))
+    }
+
+    /// A foreign error type that only exposes the marker through `Display`.
+    /// Exercises the step-4 substring fallback.
+    #[derive(Debug)]
+    struct OpaqueError(String);
+
+    impl std::fmt::Display for OpaqueError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    impl std::error::Error for OpaqueError {}
+
+    #[test]
+    fn detector_matches_bare_typed_error() {
+        let err = SanMismatchError {
+            reason: "declared [idp.example.com], actual [other.example.com]".to_string(),
+        };
+        assert_eq!(
+            outbound_san_mismatch_reason(&err).as_deref(),
+            Some("declared [idp.example.com], actual [other.example.com]")
+        );
+    }
+
+    #[test]
+    fn detector_matches_through_rustls_error() {
+        let err = san_rustls_error("no match");
+        assert_eq!(outbound_san_mismatch_reason(&err).as_deref(), Some("no match"));
+    }
+
+    /// Regression guard for the `io::Error::get_ref()` hop.
+    ///
+    /// `std::io::Error`'s `Error::source()` returns the *inner* error's source and
+    /// skips the inner error itself, so a plain `source()` walk never sees the
+    /// wrapped `rustls::Error`. tokio-rustls wraps handshake failures exactly this
+    /// way. Deleting the `get_ref()` hop turns only this test red.
+    #[test]
+    fn detector_matches_through_io_error_wrapper() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::InvalidData, san_rustls_error("wrapped"));
+        assert_eq!(outbound_san_mismatch_reason(&io_err).as_deref(), Some("wrapped"));
+    }
+
+    #[test]
+    fn detector_falls_back_to_display_substring() {
+        let err = OpaqueError("connect error: SAN mismatch: fallback reason".to_string());
+        assert_eq!(outbound_san_mismatch_reason(&err).as_deref(), Some("fallback reason"));
+    }
+
+    #[test]
+    fn detector_rejects_unrelated_certificate_error() {
+        let err = RustlsError::InvalidCertificate(CertificateError::Expired);
+        assert_eq!(outbound_san_mismatch_reason(&err), None);
+    }
+
+    #[test]
+    fn detector_rejects_unrelated_error() {
+        let err = OpaqueError("connection refused".to_string());
+        assert_eq!(outbound_san_mismatch_reason(&err), None);
+    }
+
+    /// The chain walk is depth-bounded. The marker is planted deeper than
+    /// `MAX_CHAIN_DEPTH`, so a correct implementation gives up before reaching it.
+    /// A test with the marker absent would pass even with no bound at all.
+    #[test]
+    fn detector_stops_at_max_chain_depth() {
+        #[derive(Debug)]
+        struct Link {
+            msg: String,
+            next: Option<Box<Link>>,
+        }
+
+        impl std::fmt::Display for Link {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.msg)
+            }
+        }
+
+        impl std::error::Error for Link {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.next
+                    .as_ref()
+                    .map(|b| b.as_ref() as &(dyn std::error::Error + 'static))
+            }
+        }
+
+        // Deepest link carries the marker; 32 plain links sit above it.
+        let mut head = Link {
+            msg: "SAN mismatch: too deep to reach".to_string(),
+            next: None,
+        };
+        for _ in 0..32 {
+            head = Link {
+                msg: "link".to_string(),
+                next: Some(Box::new(head)),
+            };
+        }
+
+        assert_eq!(
+            outbound_san_mismatch_reason(&head),
+            None,
+            "the walk must abandon the chain at MAX_CHAIN_DEPTH"
+        );
     }
 }

@@ -209,13 +209,14 @@ impl RequestFilter for OpenidConnect {
                     let discovery = match self.get_or_fetch_discovery().await {
                         Ok(d) => d,
                         Err(e) => {
-                            let _ = self
-                                .send_plain_error(
-                                    session,
-                                    502,
-                                    &format!("Failed to fetch OIDC discovery document: {}", e),
-                                )
-                                .await;
+                            if let JwksProviderError::TlsSanMismatch { ref reason } = e {
+                                session.add_error(edgion_resources::EdgionStatus::OutboundTlsSanMismatch);
+                                plugin_log.push_err("outbound tls san mismatch");
+                                plugin_log.push_fmt("san {}", la![reason.as_str()]);
+                            } else {
+                                plugin_log.push_fmt("discovery fetch fail {}", la![e.to_string().as_str()]);
+                            }
+                            let _ = self.send_plain_error(session, 502, "Bad Gateway").await;
                             return PluginRunningResult::ErrTerminateRequest;
                         }
                     };
