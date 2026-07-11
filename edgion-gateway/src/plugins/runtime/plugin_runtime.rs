@@ -851,6 +851,7 @@ impl PluginRuntime {
     ) -> CreateResult<Box<dyn UpstreamResponseBodyFilter>> {
         match plugin {
             EdgionPlugin::BandwidthLimit(config) => CreateResult::Ok(Some(BandwidthLimit::create(config))),
+            EdgionPlugin::Wasm(config) => CreateResult::Ok(WasmPlugin::create_body_filter(config)),
             // Not body-filter plugins
             EdgionPlugin::RequestHeaderModifier(_)
             | EdgionPlugin::ResponseHeaderModifier(_)
@@ -888,8 +889,7 @@ impl PluginRuntime {
             | EdgionPlugin::RegionRoute(_)
             | EdgionPlugin::GlobalAccessControl(_)
             | EdgionPlugin::Canary(_)
-            | EdgionPlugin::Dsl(_)
-            | EdgionPlugin::Wasm(_) => CreateResult::WrongStage,
+            | EdgionPlugin::Dsl(_) => CreateResult::WrongStage,
         }
     }
 

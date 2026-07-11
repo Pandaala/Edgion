@@ -394,6 +394,7 @@ spec:
                         type: string
                         enum:
                           - BandwidthLimit
+                          - Wasm
                       config:
                         type: object
                         description: "Plugin-specific configuration"

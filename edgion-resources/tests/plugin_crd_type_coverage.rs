@@ -69,6 +69,7 @@ const STAGE_EXCEPTIONS: &[(&str, &[&str])] = &[
     ("ResponseRewrite", &[RESPONSE_FILTER]),
     ("BandwidthLimit", &[RESPONSE_BODY_FILTER]),
     ("Dsl", &[REQUEST, RESPONSE_FILTER]),
+    ("Wasm", &[REQUEST, RESPONSE_FILTER, RESPONSE_BODY_FILTER]),
     ("ExtProc", &[REQUEST, RESPONSE_ASYNC]),
 ];
 

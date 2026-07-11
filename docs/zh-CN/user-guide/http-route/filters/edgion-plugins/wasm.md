@@ -8,9 +8,9 @@
 
 proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可运行在任意兼容 host（Envoy、本网关或其他实现）上，无需重新编译 host 本身。你不需要针对 Edgion 内部 API 编写原生 Rust 插件，而是用你偏好语言的 [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) 编译出一个体积较小的 WebAssembly 模块，把编译产物 `.wasm` 字节码交给本插件。网关只编译一次、缓存编译结果，并对初始化好的实例做池化，因此单次请求的执行成本很低。
 
-这是一个 **v1、仅 header** 的实现：只覆盖 proxy-wasm ABI 中经过刻意裁剪的一个子集（见下文），不是完整规范。
+实现的 ABI 是一个刻意收敛的子集（见下文）：header 读写、本地响应、**HTTP callout + Pause/恢复**（请求阶段）、**响应 body 只读观测**、**shared data** 与**定时器**（`on_tick`）。body *改写*与请求 body 钩子未实现。
 
-## 支持的 ABI 子集（v1）
+## 支持的 ABI 子集
 
 ### 钩子（Hooks）
 
@@ -18,27 +18,42 @@ proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可�
 |---|---|---|
 | `proxy_on_context_create` / `proxy_on_vm_start` / `proxy_on_configure` | —（实例初始化） | 每个池化实例在服务任何请求之前执行一次 |
 | `proxy_on_request_headers` | `requestPlugins`（`RequestFilter`） | 请求 header 到达、访问后端之前 |
+| `proxy_on_http_call_response` | —（callout 回调） | 请求挂起期间，每个完成的 callout 回调一次 |
 | `proxy_on_response_headers` | `upstreamResponseFilterPlugins`（`UpstreamResponseFilter`） | 上游响应 header 到达 |
-| `proxy_on_done` / `proxy_on_delete` | —（每次钩子调用后的清理） | 每次 header 钩子返回之后 |
+| `proxy_on_http_response_body` | `upstreamResponseBodyFilterPlugins`（`UpstreamResponseBodyFilter`） | 每个上游 body chunk 一次，**只读**（见 [body 观测](#响应-body-观测只读)） |
+| `proxy_on_tick` | —（后台） | guest 设定 tick 周期后周期性触发（见[定时器](#shared-data-与定时器)） |
+| `proxy_on_done` / `proxy_on_delete` | —（上下文清理） | 每个请求级上下文结束之后 |
 
-Wasm **不支持** `upstreamResponseBodyFilterPlugins` 或（异步的）`upstreamResponsePlugins` 阶段——见[限制](#v1-限制)。
+Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
 
 ### Host 调用
 
 | Host 函数 | 支持 | 说明 |
 |---|:---:|---|
-| `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | 请求与响应 header map |
-| `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | 设置 / 追加 / 删除 / 批量替换；钩子返回后应用到真实的请求/响应上 |
-| `proxy_send_local_response` | ✅ | 以指定状态码、body、header 短路请求 |
-| `proxy_get_property` / `proxy_set_property` | ✅（基础子集） | 可读 key：`request.path`、`request.method`、`request.host`、`source.address`、`plugin_name`、`response.code`（仅响应阶段）。`proxy_set_property` 只写入当前阶段的内存态属性表（不持久化，不对外暴露） |
-| `proxy_get_buffer_bytes` | ✅（仅 VM/插件配置） | 只支持 `VmConfiguration` 与 `PluginConfiguration` 两种 buffer 类型；其他类型返回 not-found |
-| `proxy_log` | ✅ | 转发到网关自身的 `tracing::debug!` 输出（target 为 `wasm_guest`）——**绝不**写入 access log。access log 只记录一个汇总计数（见 [PluginLog 格式](#pluginlog-格式)） |
-| `proxy_get_current_time_nanoseconds` | ✅ | 墙钟时间 |
-| `proxy_get_configuration`（旧版 0.1） | ✅ | 返回与 `PluginConfiguration` buffer 相同的字节，兼容仍调用旧接口的 SDK |
-| `proxy_set_effective_context` / `proxy_set_tick_period_milliseconds` / `proxy_done` / `proxy_continue_stream` / `proxy_continue_request` / `proxy_continue_response` | 接受但空操作 | 返回 `STATUS_OK` 但不做任何事（tick period 会被接受，但永远不会触发——v1 没有定时器子系统） |
-| 其余全部（body 钩子、HTTP/gRPC callout、共享数据、共享队列、外部函数调用、指标等） | ❌ | 未注册到 linker。若 guest 模块导入了其中之一且**真的调用**它，该调用会 trap（后续按[失败语义](#失败语义)处理）；只导入但从不调用是无害的 |
+| `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | 请求头、响应头，以及（callout 回调内）`HttpCallResponseHeaders`——callout 响应头外加合成的 `:status` |
+| `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | 设置/追加/删除/整体替换；钩子返回后应用到真实请求/响应。对 callout 响应 map 的写入被拒绝 |
+| `proxy_send_local_response` | ✅ | 以指定状态码/响应体/头短路请求。也可在 `proxy_on_http_call_response` 内调用（鉴权 callout 后拒绝） |
+| `proxy_dispatch_http_call` | ✅（请求阶段） | 见 [HTTP callout](#http-calloutpause恢复)。响应/body/tick 阶段返回 `UNIMPLEMENTED`（12） |
+| `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | 恢复因 callout 挂起的请求。`proxy_continue_response` 仍是接受型 no-op |
+| `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | 模块级 KV + CAS——见 [shared data](#shared-data-与定时器) |
+| `proxy_set_tick_period_milliseconds` | ✅ | 启动模块级 tick 任务；`0` 停止。周期下限 100ms |
+| `proxy_get_property` / `proxy_set_property` | ✅（基础子集） | 可读键：`request.path`、`request.method`、`request.host`、`source.address`、`plugin_name`、`response.code`（仅响应阶段）。`proxy_set_property` 仅写入当前阶段的内存属性表 |
+| `proxy_get_buffer_bytes` | ✅ | `VmConfiguration`、`PluginConfiguration`、`HttpCallResponseBody`（callout 回调内）、`HttpResponseBody`（body 钩子内的**当前 chunk 窗口**） |
+| `proxy_log` | ✅ | 转发到网关自身的 `tracing::debug!` 输出（target `wasm_guest`），**绝不**写入访问日志 |
+| `proxy_get_current_time_nanoseconds` | ✅ | 系统时钟 |
+| `proxy_get_configuration`（0.1 遗留） | ✅ | 返回与 `PluginConfiguration` buffer 相同的字节 |
+| `proxy_set_effective_context` / `proxy_done` | 接受型 no-op | 返回 `STATUS_OK`，不做任何事 |
+| 其余全部（请求 body 钩子、gRPC callout、shared queue、foreign function、metrics 等） | ❌ | 未注册进 linker。guest 导入且真正调用会 **trap**（随后按[失败语义](#失败语义)处理）；只导入不调用无害 |
 
-## 配置参数
+### ABI 版本检查
+
+加载时 host 会检查 guest 导出的 `proxy_abi_version_*` 标记：
+
+- `proxy_abi_version_0_2_0` / `proxy_abi_version_0_2_1`——接受。
+- 其他 `proxy_abi_version_*`——**加载错误**，报错信息明确为 "unsupported proxy-wasm ABI version"（而不是令人困惑的运行时 trap）。
+- 完全没有标记——WARN 后放行（兼容手写测试模块与非标 guest）。
+
+## 配置参考
 
 ```yaml
 type: Wasm
@@ -50,174 +65,200 @@ config:
   timeoutMs: 100
 ```
 
-| 参数 | 类型 | 默认 | 说明 |
+| 参数 | 类型 | 默认值 | 说明 |
 |-----------|------|---------|-------------|
-| `source.file` | String | — | 本地 `.wasm` 文件路径。相对路径相对于网关工作目录解析。`source.file` / `source.inline` / `source.url` 三者必须恰好设置一个。 |
-| `source.inline` | String（base64） | — | 内联在资源中的 Wasm 字节码，base64 编码。 |
-| `source.url` | String | — | 网关拉取字节码的 `http://` 或 `https://` URL（固定 10 秒拉取超时，只接受 `2xx` 响应）。**要求同时设置 `sha256`。** |
-| `sha256` | String（64 位十六进制） | — | 原始字节码的 SHA-256，编译前校验。`file` / `inline` 可选；`url` **必填**。校验不通过即为加载失败——模块永远不会被编译。 |
-| `pluginConfig` | String | — | 传给 guest `proxy_on_configure` 钩子的不透明配置字符串，通过 `PluginConfiguration` buffer（`proxy_get_buffer_bytes` / 旧版 `proxy_get_configuration`）读取。 |
-| `vmConfig` | String | — | 传给 guest `proxy_on_vm_start` 钩子的不透明配置字符串，通过 `VmConfiguration` buffer 读取。 |
-| `failOpen` | Boolean | `false` | 决定加载失败 / trap / 超时 / 实例获取失败时的行为——见[失败语义](#失败语义)。 |
-| `timeoutMs` | Integer | `100` | 单次钩子调用的墙钟预算（毫秒），由 wasmtime epoch interruption 强制。范围 `1..=10000`。 |
-| `instancePoolSize` | Integer | `8` | 每个编译模块、每个网关进程保留的最大池化实例数。范围 `1..=64`。 |
+| `source.file` | String | — | 本地 `.wasm` 文件路径，相对路径基于网关工作目录解析。`file` / `inline` / `url` 三者必须恰好设置一个。 |
+| `source.inline` | String (base64) | — | base64 编码、内嵌在资源里的字节码。**仅作为开发/测试便利**——解码后硬上限 1MiB（超出为校验错误），超过 512KiB 网关在加载时 WARN。见[来源形态选型](#来源形态选型)。 |
+| `source.url` | String | — | 网关拉取字节码的 `http://` / `https://` URL。**必须配 `sha256`。** 连接行为可通过 `source.fetch` 调整。 |
+| `source.fetch` | Object | — | `url` 来源的可选拉取强化（与 `file`/`inline` 同用为校验错误）：TLS、认证、超时、重试。 |
+| `source.fetch.tls` | Object | — | 共享 `TlsConfig` 结构：自定义 CA（`validation.caCertificateRefs`）和/或 mTLS 客户端身份（`clientCertificateRef`）。Secret 引用由 controller 解析（跨 namespace 需要 `ReferenceGrant`）。 |
+| `source.fetch.authHeaderSecretRef` | Object | — | `{name, namespace?, key}`：Secret 的 `key`（默认 `authorization`）保存拉取时发送的完整 `Authorization` 头值（如 `Bearer <token>`）。设置了引用但 Secret 尚未解析时，加载**失败**而不是静默匿名拉取。 |
+| `source.fetch.timeoutMs` | Integer | `10000` | 单次尝试超时。范围 `1..=60000`。 |
+| `source.fetch.retry` | Object | — | `{attempts, backoffMs}`——含首次的总尝试数（`1..=10`，默认 3）与逐次翻倍的基础退避（默认 500，上限 30000）。策略固定：传输错误与 `5xx` 重试；**`4xx` 永不重试**。 |
+| `sha256` | String (64 hex) | — | 原始字节码的 SHA-256，编译前校验。`file` / `inline` 可选；`url` **必填**。 |
+| `pluginConfig` | String | — | 传给 `proxy_on_configure` 的不透明配置，经 `PluginConfiguration` buffer 可读。 |
+| `vmConfig` | String | — | 传给 `proxy_on_vm_start` 的不透明配置，经 `VmConfiguration` buffer 可读。 |
+| `failOpen` | Boolean | `false` | 加载失败 / trap / 超时 / callout 不恢复时的行为——见[失败语义](#失败语义)。 |
+| `timeoutMs` | Integer | `100` | 每次钩子调用的墙钟预算（epoch 中断）。范围 `1..=10000`。body chunk 钩子按 `timeoutMs / 10` 执行。 |
+| `instancePoolSize` | Integer | `8` | 每个编译模块、每个网关进程保留的池化实例上限。范围 `1..=64`。 |
+| `calloutAllowlist` | String 列表 | `[]` | guest 可通过 `proxy_dispatch_http_call` 访问的 origin（`scheme://host[:port]`）。**空 = 禁用 callout**（dispatch 返回 guest 可观测的宿主错误）。规范化后精确匹配。 |
+| `calloutTimeoutMs` | Integer | `5000` | 每个 callout 的 guest 超时上限（guest 传 0 时的生效值）。范围 `1..=10000`。 |
 
-## 三种 source 形式
+## 来源形态选型
 
-### `file` —— 本地文件系统
+| 形态 | 定位 | 大小上限 | 分发路径 |
+|---|---|---|---|
+| `inline` | **开发/测试便利**，不是生产分发机制 | 解码后 1MiB（硬上限）；另受 K8s 对象/etcd 限制 | 随 CR 进 etcd；每次 conf_sync 全量携带 |
+| `file` | 打进网关镜像或 initContainer 挂载的模块 | 无 | 镜像构建 / volume 挂载 |
+| `url` | **生产推荐**——内部制品库（Nexus、Artifactory、S3 presigned） | 无 | 网关直拉，配合 `source.fetch` 的 TLS/认证/重试与强制 `sha256` |
+| `oci://` | Roadmap（对齐 Istio 的 OCI 镜像分发）——尚未实现 | — | — |
 
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: wasm-file
-  namespace: edgion-default
-spec:
-  requestPlugins:
-    - type: Wasm
-      config:
-        source:
-          file: ./plugins/header_demo.wasm
-        failOpen: false
-        timeoutMs: 100
-  upstreamResponseFilterPlugins:
-    - type: Wasm
-      config:
-        source:
-          file: ./plugins/header_demo.wasm
-        failOpen: false
-        timeoutMs: 100
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: wasm-route
-  namespace: edgion-default
-spec:
-  parentRefs:
-    - name: edgion-plugins-gateway
-      namespace: edgion-test
-  hostnames:
-    - "wasm.example.com"
-  rules:
-    - matches:
-        - path: { type: PathPrefix, value: "/" }
-      filters:
-        - type: ExtensionRef
-          extensionRef: { group: edgion.io, kind: EdgionPlugins, name: wasm-file }
-      backendRefs:
-        - name: test-http
-          namespace: edgion-test
-          port: 30001
-```
+这与 Istio 的取向一致：Istio 的 `WasmPlugin` **根本没有 inline 字段**，以 `oci://` 为主通道、`http(s)` 次之。Edgion 保留 inline 用于快速迭代，但加上限并告警；ConfigMap 形态经评估后否决（与 inline 同受 etcd 对象上限，还引入 ref 追踪复杂度，无增量价值）。
 
-> 请求阶段和响应阶段是**两个独立条目**（`requestPlugins` 与 `upstreamResponseFilterPlugins`），和其他拆分阶段的插件一样。只需要哪个阶段就配哪个——缺省某个条目不会有额外开销。
-
-### `inline` —— 字节码内联在资源里
-
-适合体积较小、希望随资源一起分发、不依赖外部文件或网络的 guest：
+### url + 拉取强化（生产示例）
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: wasm-inline
-  namespace: edgion-default
-spec:
-  requestPlugins:
-    - type: Wasm
-      config:
-        source:
-          inline: AGFzbQEAAAA...   # base64 编码的 .wasm 字节码
-        failOpen: true
-        timeoutMs: 50
+requestPlugins:
+  - type: Wasm
+    config:
+      source:
+        url: "https://artifacts.internal/wasm/header-demo-1.2.0.wasm"
+        fetch:
+          tls:
+            enabled: true
+            validation:
+              caCertificateRefs:
+                - { kind: Secret, name: artifact-repo-ca }
+          authHeaderSecretRef:
+            name: artifact-repo-token
+            key: authorization        # Secret 值形如 "Bearer eyJ..."
+          timeoutMs: 10000
+          retry: { attempts: 3, backoffMs: 500 }
+      sha256: "3b1c...e4"
 ```
 
-两个内容不同的 inline source 不会在模块缓存中冲突——缓存 key 对完整 base64 内容做 SHA-256 哈希，而不是仅按长度区分。
+说明：
 
-### `url` —— 通过 HTTP(S) 拉取
+- 重试仅针对传输错误与 `5xx`；`401`/`403`/`404` 立即失败（认证错误重试无意义，且会刷爆制品库日志）。
+- 全部尝试失败按一次加载失败计，与其他加载错误一样进入 30s 负缓存。
+- 解析出的 `Authorization` 值在 admin `/configclient` 输出中显示为 `[redacted]`。
+- 不同 URL 的并发拉取全进程上限 4（防启动风暴）；同 URL 的并发调用本就共享一次在途加载。
 
-这里 `sha256` 是**必填项**，以便网关在编译执行前校验拉取到的字节：
+## HTTP callout（Pause/恢复）
 
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: wasm-url
-  namespace: edgion-default
-spec:
-  requestPlugins:
-    - type: Wasm
-      config:
-        source:
-          url: "https://artifacts.example.com/plugins/header_demo.wasm"
-        sha256: "3b1c...e4"   # 64 位十六进制，url source 必填
-        failOpen: false
-        timeoutMs: 200
-        instancePoolSize: 16
-```
+`proxy_dispatch_http_call` 允许 guest 在请求中途调用外部 HTTP 服务——proxy-wasm 生态最主流的插件形态（外部鉴权、风控评分、审计）。流程：
+
+1. guest 在 `on_http_request_headers` 里 dispatch 一或多个 callout，返回 `Action::Pause`。
+2. 网关在请求挂起期间（异步、不占 guest CPU 预算）执行这些 callout。
+3. 每个结果经 `proxy_on_http_call_response` 投递；guest 读取 `HttpCallResponseHeaders` / `HttpCallResponseBody`，然后要么恢复请求（`resume_http_request` / `proxy_continue_request`），要么直接应答（`send_http_response` / `proxy_send_local_response`）。
+
+语义与护栏：
+
+- **寻址**：`upstream` 参数是目标 **origin URL**（`https://auth.internal:8443`），不是 Envoy 的 cluster 名。dispatch 的 header map 里的 `:path`、`:method`、`:authority` 伪头驱动外呼请求（`:authority` 作为 `Host` 发送）。
+- **允许列表**：origin 必须（规范化后）精确匹配 `calloutAllowlist` 的某一项。没有允许列表 = 没有 callout。被拒绝的 dispatch 同步返回 `INTERNAL_FAILURE`。
+- **仅请求阶段**：响应头/body 阶段是同步的、无法 await，dispatch 返回 `UNIMPLEMENTED`；tick 里（暂时）也不能 dispatch。
+- **必须 Pause**：`dispatch` + `Action::Continue` 不受支持——排队的 callout 被丢弃并记日志（`callouts-dropped=N`）。dispatch 之后必须 Pause。
+- **预算**：每请求最多 8 次 dispatch、4 轮回调（回调里可以追发 callout）、全进程 64 个并发 callout、单 callout 响应体上限 256KiB。每个 callout 的超时为 `min(guest 超时, calloutTimeoutMs)`。
+- **callout 失败**（连接错误、超时、响应体超限）：回调以 **0 个 header** 触发（proxy-wasm 惯例），guest 自行决定失败行为。宿主绝不因 callout 失败而 trap guest。
+- **guest 不恢复**：所有 callout 完成后 guest 既没 continue 也没本地应答 → 宿主按 `failOpen` 处理（reason `no-resume`）。
+- **epoch 预算**：`timeoutMs` 只约束每次 *guest* 钩子调用；callout 的网络等待发生在 guest 调用之间，不消耗 guest CPU 预算。
+
+### callout 与 ExtProc 的分工
+
+两者都是接入外部决策服务，方向不同：
+
+- **ExtProc**（推模式）：网关把每个请求各阶段推给常驻外部处理器（gRPC）。外部服务拥有逻辑、需要看到全部流量时选它。
+- **Wasm callout**（拉模式）：guest 逻辑内嵌网关，按需外呼。插件自己决定*是否/何时*咨询外部服务时（如先查缓存、未命中再校验 token）选它。
+
+## 响应 body 观测（只读）
+
+把 Wasm 条目列在 `upstreamResponseBodyFilterPlugins` 下，`proxy_on_http_response_body` 会对每个上游 chunk 触发一次：
+
+- `proxy_get_buffer_bytes(HttpResponseBody, start, max)` 返回的是**当前 chunk 窗口**——网关从不缓冲 body。跨 chunk 聚合是 guest 自己的事（自身内存或 [shared data](#shared-data-与定时器)）。
+- **严格只读**：不能改写 body，也不能在 body 阶段短路响应（响应头已发出）。检测结论只能记日志（`proxy_log`）或写入 shared data。
+- body 钩子返回 `Action::Pause` 在只读形态下无意义，被忽略。
+- 每个 chunk 在缩减的 CPU 预算（`timeoutMs / 10`，下限 10ms）下执行，慢 guest 拖不垮长流；body 钩子 trap **绝不断流**（实例被丢弃，流继续，与 `failOpen` 无关）。
+- 未导出 `proxy_on_http_response_body` 的 guest 在此阶段是零成本 no-op。
+
+请求 body 观测**未实现**（依赖网关尚不具备的请求 body 缓冲基建）。
+
+## Shared data 与定时器
+
+### Shared data
+
+`proxy_get_shared_data` / `proxy_set_shared_data` 提供带 proxy-wasm CAS 语义的模块级 KV（每 key 单调递增的 CAS 令牌；`set` 携带非零期望 CAS 且不匹配时返回 `CasMismatch`；CAS 0 无条件写；空值删除 key）。
+
+- **作用域：单个网关进程内的一个模块（缓存条目）。** 该模块的所有池化实例共享——跨请求、跨阶段、含 tick 任务。它**不是**集群级状态：集群级协调（如全局限流）仍然用 `rate_limit_redis`，不要用 shared data。
+- 上限：单值 64KiB，每模块总量 4MiB。超限写入返回 `BAD_ARGUMENT`。
+- 生命周期：模块缓存条目被淘汰时释放（见[模块缓存生命周期](#模块缓存生命周期)）；换内容的 reload 从空 store 开始。
+
+### 定时器（`on_tick`）
+
+guest 调用 `proxy_set_tick_period_milliseconds(N)`（通常在 `on_configure` 里）后，后台任务（每模块一个）每 `N` ms（下限 100ms）调用一次 `proxy_on_tick`。tick 实例从与请求相同的池租借，受正常 `timeoutMs` epoch 预算约束。guest 可在 `on_tick` 内调整周期或停止（`0`）。模块缓存条目被淘汰时 tick 任务自动停止。tick 里暂不支持 callout（dispatch 返回 `UNIMPLEMENTED`）。
+
+典型模式：`on_tick` 把规则集刷进 shared data，请求钩子读取。
 
 ## 失败语义
 
-四种不同的失败原因都走同一个 `failOpen` 决策：
+所有失败模式共用同一个 `failOpen` 决策：
 
-| 原因 | 触发条件 | PluginLog |
+| Reason | 触发条件 | PluginLog |
 |---|---|---|
-| `load` | 模块编译、下载、解码失败，或 `sha256` 校验不通过。加载错误会缓存 30 秒，避免对一个坏掉的 source 每次请求都重试；超过该窗口后会重新尝试。 | `wasm load:fail-open` / `wasm load:fail-close` |
-| `acquire` | 实例池无法产出可用 VM（例如实例化过程中 `proxy_on_vm_start` / `proxy_on_configure` 返回 false）。 | `wasm acquire:fail-open` / `wasm acquire:fail-close` |
-| `trap` | guest 在运行钩子期间 panic、命中 `unreachable`，或以其他方式出错。 | `wasm trap:fail-open` / `wasm trap:fail-close` |
-| `not loaded` | 仅响应阶段：`UpstreamResponseFilter` 是同步钩子（无 `await`），因此使用非阻塞的缓存查找。若模块尚未完成其（异步的）首次加载，会立即触发该原因，并在后台为下次调用启动一次加载。 | `wasm not loaded:fail-open` / `wasm not loaded:fail-close` |
+| `load` | 模块下载/解码/编译失败、`sha256` 不匹配、ABI 版本不支持、或实例初始化失败（`on_vm_start`/`on_configure` 返回 false）。加载错误缓存 30s。 | `wasm load:fail-open` / `fail-close` |
+| `acquire` | 请求时实例池无法产出可用 VM（如 pooling allocator 槽位耗尽）。 | `wasm acquire:…` |
+| `trap` | guest panic、`unreachable`、CPU 预算超限，或在钩子（含 callout 回调与上下文关闭）中出错。 | `wasm trap:…` |
+| `callout` | callout 解析结构性失败（如 guest 回调在投递中 trap）。 | `wasm callout:…` |
+| `no-resume` | guest 因 callout 挂起，但全部完成后既未恢复也未应答。 | `wasm no-resume:…` |
+| `not loaded` | 仅响应阶段：同步钩子用非阻塞缓存查询；模块（异步的）首次加载未完成时触发，同时踢一次后台加载。 | `wasm not loaded:…` |
 
-- **`failOpen: false`**（默认）——以 `500` 短路请求，body 为 `wasm plugin error`。
-- **`failOpen: true`**——记录该次失败，插件链按未配置 Wasm 一样继续执行。
+- **`failOpen: false`**（默认）——请求以 `500` + `wasm plugin error` 短路。
+- **`failOpen: true`**——记录失败，插件链继续。
 
-### Trap 中毒（poisoning）与恢复
+### trap 污染与恢复
 
-一个 trap（或以其他方式出错）的 VM 实例会被**标记中毒**：它不会被归还实例池，而是直接丢弃，释放其占用的 slot。下一个需要该模块的请求会从缓存的编译模块重新实例化一个全新实例（不会重新编译——只有 `Module::new` 开销较大，`InstancePre::instantiate` 很廉价）。guest panic 永远不会导致网关进程崩溃、挂起或受损——只会导致那一次请求失败（受 `failOpen` 约束）。
+trap（或其他故障）的 VM 实例会被**污染**：直接丢弃而不回池，释放其槽位。下一个请求从缓存的编译模块重新实例化（便宜——只有 `Module::new` 昂贵）。guest panic 绝不会 crash、挂起或损害网关进程。
 
 ### 超时
 
-每次钩子调用都通过 wasmtime 的 **epoch interruption** 受 `timeoutMs` 约束：后台 ticker 每 10ms 递增一次引擎 epoch，钩子调用的截止时间在**每次**钩子调用开始时重新设置（而不是在实例被租出时只设置一次）——一次租用通常会横跨请求 header 钩子和响应 header 钩子，中间还有一次上游往返，如果只在租用时设置截止时间，等响应钩子运行时往往早已过期。超出预算的 guest 会 trap，处理方式与其他 trap 完全相同（中毒 + `failOpen` 决策）。
+每次钩子调用由 `timeoutMs` 经 wasmtime **epoch 中断**约束：后台 ticker 每 10ms 递增引擎 epoch，deadline 在*每次* guest 调用（header 钩子、callout 回调、body chunk、tick）开始时重新武装。有效粒度约 10-20ms。callout 的网络等待发生在 guest 调用之间，不占 guest 预算。
 
 ## 模块缓存生命周期
 
-编译模块缓存（按 `source.cache_key()` 分 key）与网关进程同生命周期，请留意它「做」和「不做」的事：
+编译模块缓存的 key 是来源本身，**外加 `file` 来源的文件 size+mtime**：
 
-- **配置变更不会淘汰缓存。** 一个编译后的模块会一直留在内存里，直到进程退出。修改 `EdgionPlugins` 资源、让 `source.inline` 或 `source.url` 携带不同的字节码内容，会生成一个**新的**缓存条目（内容哈希不同），而不会替换或淘汰旧的那一份——旧条目占用的内存只有在网关重启后才会被回收。
-- **`file` source 按路径缓存，不是按内容。** 在磁盘上原地覆盖同一路径的 `.wasm` 文件**不会**被网关感知——一旦网关为某个路径编译过一次，就不会再重新读取该 `file` source。要发布新版本，请把 `source.file` 指向一个新路径（例如给文件名加版本号），或者重启网关。同理，如果 `source.url` 不变、只改了 `sha256`，也不会生效：缓存 key 由 source 本身派生，不含 `sha256`，因此一个不变的 `url` 会复用旧的编译产物，并不会用新的哈希重新校验。
-- **多租户容量规划。** 所有 `EdgionPlugins` 资源里的 Wasm 模块共享同一个引擎级别的 pooling allocator。当其实例 slot 耗尽时，`instantiate` 会失败（按普通的 `acquire` 失败处理，受 `failOpen` 约束）。规划 `instancePoolSize` 时要考虑所有已配置 Wasm 插件加总后的实例数，而不是只看单个插件。
-- **超时精度下限。** 超时的强制执行基于 epoch，ticker 每 10ms 触发一次，因此无论 `timeoutMs` 配成多少，实际生效粒度大约是 10-20ms。把 `timeoutMs` 设到 10 以下，guest 仍然能拿到大约一个 tick 的 CPU 时间才会 trap——它不是一个严格的亚 10ms 上限。
+- **引用计数淘汰。** 每个存活的 Wasm 插件实例都会 pin 住其缓存条目。reload/配置变更使某条目失去最后一个引用（如 inline 内容变化 → 新 key）后，孤儿条目在 **60s 宽限期**后被淘汰（宽限吸收 reload 抖动）。在途请求通过自身强引用保持条目存活；最后一个结束后内存释放。淘汰计入 `edgion_wasm_module_evicted_total` 指标。
+- **`file` 来源内容感知。** 运行时缓存 key 含文件 size 与 mtime，在插件（重）构建时采集。同路径覆写 `.wasm` **并触发插件 reload**（对所属 `EdgionPlugins` 资源的任何更新，或全量配置重同步）即可生效新内容；旧条目被引用计数淘汰。不 reload 的话运行中插件仍持旧 key——单纯覆写文件仍不会热替换。
+- **实例预热。** 加载时即实例化一个实例：guest 初始化失败成为清晰的加载错误（进负缓存），而不是每请求的 acquire 失败；`on_configure` 里设置的 tick 周期在首个请求到来前就开始生效。
+- **多租户容量。** 所有 Wasm 模块共享一个引擎级 pooling allocator。`instancePoolSize` 要按全部已配置 Wasm 插件的实例总量核算。
 
-## PluginLog 格式
+## 指标
 
-access log 会记录以下之一：
+所有指标带 `module` label——人类可读的来源描述（`file:<path>`、`url:<url>`、`inline:<sha8>`），基数受配置模块数约束。
 
-- `wasm ok ops=N logs=M` —— 成功；`N` 为应用到请求/响应上的 header 操作数，`M` 为通过 `proxy_log` 产生的日志行数（内容进 debug log，不进这里）。
-- `wasm ok ops=N pause-ignored` —— guest 返回了 `Action::Pause` 但没有调用 `proxy_send_local_response`；v1 无法支持单纯的 pause（见[限制](#v1-限制)），请求/响应按正常流程继续。
-- `wasm local <status>` —— guest 调用了 `proxy_send_local_response`；网关应用了该状态码/header/body 并终止处理。
-- `wasm <reason>:fail-open` / `wasm <reason>:fail-close` —— 上述四种失败原因之一。
+| 指标 | 类型 | Labels | 含义 |
+|---|---|---|---|
+| `edgion_wasm_module_load_total` | counter | `result=ok\|error` | 加载尝试（负缓存命中不计） |
+| `edgion_wasm_module_compile_duration_ms` | histogram | | `Module::new` 耗时 |
+| `edgion_wasm_module_evicted_total` | counter | | 引用计数淘汰次数 |
+| `edgion_wasm_instance_instantiate_total` | counter | | 新实例化（池 miss） |
+| `edgion_wasm_instance_discard_total` | counter | `reason=poisoned\|over_capacity` | 未回池而被丢弃的实例 |
+| `edgion_wasm_pool_size` | gauge | | 当前池内实例数 |
+| `edgion_wasm_hook_duration_ms` | histogram | `phase` | guest 钩子耗时（`request_headers`、`response_headers`、`response_body`、`http_call_response`、`tick`） |
+| `edgion_wasm_trap_total` | counter | `phase` | trap / 协议违规 |
+| `edgion_wasm_fail_mode_total` | counter | `reason`、`mode=open\|close` | fail-mode 决策 |
+| `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit` | callout 结果 |
 
-## v1 限制
+trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_total{reason="poisoned"}` 同步上涨。
 
-- **仅 header，无 body 钩子。** 没有 `proxy_on_request_body` / `proxy_on_response_body` 等价物；只实现了 body 钩子的 guest 永远不会被调用。
-- **不支持 HTTP 或 gRPC callout。** `proxy_dispatch_http_call` 等函数未注册——调用会 trap。
-- **不支持定时器。** `proxy_set_tick_period_milliseconds` 会被接受（空操作）但永远不会触发；没有 `proxy_on_tick`。
-- **不支持共享数据或共享队列。** proxy-wasm 的 shared-KV 与 shared-queue ABI 未实现；调用会 trap。
-- **不支持 `Action::Pause`。** 一个钩子返回 `Pause` 但没有同时调用 `proxy_send_local_response`，会直接继续（日志记为 `pause-ignored`）——v1 没有中途挂起请求、稍后恢复的机制。
-- **无跨阶段 guest 状态。** 同一个逻辑请求的请求-header 钩子和响应-header 钩子可能运行在**不同的池化 VM 实例**上（每个阶段各自从池中获取一次租用），且每次钩子调用都会拿到一个全新的 proxy-wasm context id。guest 在 `on_http_request_headers` 期间写入自身结构体字段的内容，不保证在 `on_http_response_headers` 期间可见。静态配置请使用 `pluginConfig` / `vmConfig`；若需要在两阶段之间关联信息，可以借助网关自身的 header 透传（例如把值暂存进一个请求 header）。
+## `PluginLog` 格式
 
-以上都不是永久性的架构限制——它们描述的是 v1 覆盖了什么，而不是 proxy-wasm 允许什么。
+- `wasm ok ops=N logs=M`——成功；应用了 `N` 个 header 操作，guest 输出 `M` 行日志（内容进 debug 日志）。
+- `wasm ok ops=N pause-ignored`——guest 返回 `Pause` 但既没 dispatch callout 也没发本地响应；请求继续。
+- `wasm callouts=N leftover=M`——请求阶段解析了 `N` 个 callout（`M` 个被轮次上限丢弃）。
+- `wasm callouts-dropped=N`——guest dispatch 了 callout 却返回 `Continue`，被丢弃（不支持的用法）。
+- `wasm local <status>`——guest 发送了本地响应。
+- `wasm <reason>:fail-open` / `wasm <reason>:fail-close`——上文失败原因之一。
 
-## 编写一个 guest
+## 剩余限制
 
-任何拥有 proxy-wasm SDK 的语言都可以使用，只要编译产物是线性内存的 Wasm target（不需要 WASI 导入——对 Rust SDK 而言 `wasm32-unknown-unknown` 已经足够）。本仓库自身测试所用的参考 guest 是一个很好的起点：
+- **无请求 body 钩子**（`proxy_on_request_body`）：依赖网关尚无的请求 body 缓冲；只实现请求 body 钩子的 guest 永远不会被调用。
+- **响应 body 仅可观测**：不能改写 body，不能在 body 阶段短路。
+- **无 gRPC callout**（`proxy_dispatch_grpc_call`）：调用即 trap。
+- **callout 仅限请求阶段**，且 dispatch 后不 Pause 会被丢弃。
+- **无 shared queue、foreign function、guest 自定义 metrics**：调用即 trap。
+- **请求级上下文按钩子调用创建**：同一请求的请求头钩子与响应头钩子可能运行在不同池化实例上、拿到全新 context id。跨阶段关联请用 shared data 或塞请求头，不要依赖 guest 结构体字段。
+- **暂无 OCI（`oci://`）来源**——roadmap。
+
+## 编写 guest
+
+任何有 proxy-wasm SDK 的语言都可以，只要编译产物面向线性内存 Wasm 目标（无需 WASI 导入——Rust SDK 用 `wasm32-unknown-unknown` 即可）。本仓库测试用的参考 guest 是很好的起点：
 
 - 源码：`edgion-tests/wasm/header-demo/src/lib.rs`
 - 使用官方 [`proxy-wasm` Rust SDK](https://crates.io/crates/proxy-wasm) v0.2 构建。
-- `Cargo.toml`：`crate-type = ["cdylib"]`、`proxy-wasm = "0.2"`，并带有自己的 `[workspace]` 表（因此不参与主 Edgion Cargo workspace——它只为 `wasm32-unknown-unknown` 构建）。
-- 构建：先 `rustup target add wasm32-unknown-unknown`，再执行 `./edgion-tests/wasm/build.sh`——以 release 模式编译，并把产物拷贝到 `edgion-tests/wasm/artifacts/header_demo.wasm`。
+- `Cargo.toml`：`crate-type = ["cdylib"]`、`proxy-wasm = "0.2"`、自带 `[workspace]` 表（不进主 Edgion workspace，因为它只面向 `wasm32-unknown-unknown` 构建）。
+- 构建：`rustup target add wasm32-unknown-unknown`，然后 `./edgion-tests/wasm/build.sh`——release 编译并把产物拷到 `edgion-tests/wasm/artifacts/header_demo.wasm`。
 
-一个 guest 的最小形态（取自参考模块）：
+guest 的最小形态（摘自参考模块）：
 
 ```rust
 use proxy_wasm::traits::{Context, HttpContext};
@@ -245,27 +286,60 @@ impl HttpContext for MyPlugin {
 }
 ```
 
-完整契约（包括 panic 与 local-response 两条测试路径）参见 `edgion-tests/wasm/README.md`；修改 guest 源码后如何重新生成已提交的产物也写在那里。
+外部鉴权 callout guest 形如：
 
-## 常见问题
+```rust
+impl HttpContext for AuthPlugin {
+    fn on_http_request_headers(&mut self, _n: usize, _eos: bool) -> Action {
+        self.dispatch_http_call(
+            "https://auth.internal:8443",       // origin — must be in calloutAllowlist
+            vec![(":method", "GET"), (":path", "/verify"), (":authority", "auth.internal")],
+            None, vec![], Duration::from_millis(500),
+        ).unwrap();
+        Action::Pause
+    }
+}
 
-### Q：我的 guest 模块在响应阶段没有生效？
+impl Context for AuthPlugin {
+    fn on_http_call_response(&mut self, _token: u32, num_headers: usize, _body: usize, _trailers: usize) {
+        if num_headers > 0 && self.get_http_call_response_header(":status").as_deref() == Some("200") {
+            self.resume_http_request();
+        } else {
+            self.send_http_response(403, vec![], Some(b"denied"));
+        }
+    }
+}
+```
 
-确认条目配置在 `upstreamResponseFilterPlugins` 下，而不是 `upstreamResponsePlugins`（后者属于另一个异步阶段，被 ExtProc 等插件使用）——Wasm 在响应侧只支持同步的 `UpstreamResponseFilter` 阶段。
+参考 guest 实现的完整契约（含 panic、本地响应测试路径）与产物重建方法见 `edgion-tests/wasm/README.md`。
 
-### Q：Controller 拒绝了我的 EdgionPlugins 资源？
+## FAQ
 
-常见原因：`source` 里 `file`/`inline`/`url` 一个都没设置，或设置了不止一个；设置了 `source.url` 却没设 `sha256`；`sha256` 不是恰好 64 位十六进制字符；`source.inline` 不是合法 base64；`timeoutMs` 为 `0` 或超过 `10000`；`instancePoolSize` 为 `0` 或超过 `64`。
+### Q：支持哪些 proxy-wasm ABI 版本？
 
-### Q：模块在本地能跑，到网关里却因为 "load" fail-close？
+`0.2.0` 与 `0.2.1`（Rust/C++ SDK 导出的 `proxy_abi_version_0_2_x`）。导出其他 `proxy_abi_version_*` 标记的模块在加载时以明确信息失败；不导出任何标记的模块 WARN 后放行。
 
-检查 source 形式：`file` 路径相对网关工作目录解析（相对路径不会相对你本地 shell 的 cwd 解析）；`url` source 要求 URL 在 10 秒内以 `2xx` 状态返回、且字节内容与 `sha256` 匹配。
+### Q：我的 callout 从未被执行？
 
-### Q：guest 能读到前一个请求阶段钩子设置的 header 吗？
+依次检查：（1）目标 origin 是否列在 `calloutAllowlist`——空列表完全禁用 callout；（2）guest dispatch 后是否返回了 `Action::Pause`——dispatch 后 `Continue` 会被丢弃（访问日志出现 `callouts-dropped=N`）；（3）dispatch 是否发生在请求阶段——响应/body/tick 阶段返回 `UNIMPLEMENTED`。
 
-在同一次钩子调用内可以——guest 自己的写入对同一次调用内后续的 `proxy_get_header_map_*` 调用可见。但跨请求-header 钩子和响应-header 钩子（同一个请求的两个阶段）则不行——见[无跨阶段 guest 状态](#v1-限制)。
+### Q：guest 模块在响应阶段不生效？
+
+确认条目列在 `upstreamResponseFilterPlugins`（响应头）或 `upstreamResponseBodyFilterPlugins`（只读 body）下，而不是 `upstreamResponsePlugins`（那个异步阶段属于 ExtProc 等其他插件）。
+
+### Q：controller 拒绝了我的 EdgionPlugins 资源？
+
+常见原因：`source` 的 `file`/`inline`/`url` 设置了零个或多个；`source.url` 未配 `sha256`；`sha256` 不是 64 位十六进制；`source.inline` 不是合法 base64 或解码超过 1MiB；`source.fetch` 未配 `source.url`；`calloutAllowlist` 条目不是干净的 `scheme://host[:port]` origin；`timeoutMs`/`calloutTimeoutMs` 超出 `1..=10000`；`instancePoolSize` 超出 `1..=64`。
+
+### Q：我覆写了磁盘上的 `.wasm` 文件，但网关还在跑旧构建？
+
+内容感知的缓存 key 在插件构建时采集。覆写文件后更新一次所属 `EdgionPlugins` 资源（任意变更）——reload 会重新 stat 文件、落到新缓存条目，旧条目在宽限期后被淘汰。
+
+### Q：两个请求之间能共享状态吗？
+
+能——用 `proxy_{get,set}_shared_data`，同一模块的所有实例在**单个网关进程内**共享。它不跨网关副本复制；集群级协调仍属于 `rate_limit_redis`。
 
 ## 相关链接
 
-- [ExtProc 插件](./ext-proc.md) —— 基于 gRPC 的替代方案，相对进程内 Wasm 执行
-- [过滤器总览](../README.md)
+- [ExtProc 插件](./ext-proc.md)——gRPC 推模式方案（见 [callout 与 ExtProc 的分工](#callout-与-extproc-的分工)）
+- [Filters 总览](../README.md)

@@ -87,4 +87,7 @@ pub use request_match::{OnMissing, RestrictionRule, RestrictionSource, SanType};
 pub use request_restriction::{RequestRestrictionConfig, RestrictionMode, RuleGroup};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
 pub use trace_context::TraceContextConfig;
-pub use wasm::{WasmConfig, WasmSourceSpec};
+pub use wasm::{
+    normalize_callout_origin, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry, WasmFetchSpec, WasmSourceSpec,
+    INLINE_WARN_DECODED_BYTES, MAX_INLINE_DECODED_BYTES,
+};

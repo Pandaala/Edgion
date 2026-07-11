@@ -8,13 +8,17 @@
 //! the guest's own `proxy_on_memory_allocate` export.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use wasmtime::{Caller, Extern, Linker};
 
 pub const MAP_HTTP_REQUEST_HEADERS: i32 = 0;
 pub const MAP_HTTP_RESPONSE_HEADERS: i32 = 2;
+pub const MAP_HTTP_CALL_RESPONSE_HEADERS: i32 = 6;
 
+pub const BUF_HTTP_RESPONSE_BODY: i32 = 1;
+pub const BUF_HTTP_CALL_RESPONSE_BODY: i32 = 4;
 pub const BUF_VM_CONFIGURATION: i32 = 6;
 pub const BUF_PLUGIN_CONFIGURATION: i32 = 7;
 
@@ -22,13 +26,22 @@ pub const STATUS_OK: i32 = 0;
 pub const STATUS_NOT_FOUND: i32 = 1;
 pub const STATUS_BAD_ARGUMENT: i32 = 2;
 pub const STATUS_INVALID_MEMORY_ACCESS: i32 = 6;
+pub const STATUS_CAS_MISMATCH: i32 = 8;
 pub const STATUS_INTERNAL_FAILURE: i32 = 10;
+pub const STATUS_UNIMPLEMENTED: i32 = 12;
+
+/// Max callouts one request context may dispatch (across all rounds).
+/// Bounds guest-driven outbound amplification.
+pub const MAX_CALLOUTS_PER_REQUEST: u32 = 8;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WasmPhase {
     #[default]
     RequestHeaders,
     ResponseHeaders,
+    ResponseBody,
+    /// Background `proxy_on_tick` invocation (no request in scope).
+    Tick,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +59,38 @@ pub struct LocalResponse {
     pub headers: Vec<(String, String)>,
 }
 
+/// One guest-dispatched HTTP callout, queued by `proxy_dispatch_http_call`
+/// and executed by the plugin's async request path while the guest is
+/// paused.
+#[derive(Debug, Clone)]
+pub struct PendingCallout {
+    pub token: u32,
+    /// Normalized `scheme://host:port` origin (already allowlist-checked).
+    pub origin: String,
+    /// `:path` pseudo header (leading `/` guaranteed).
+    pub path: String,
+    /// `:method` pseudo header.
+    pub method: String,
+    /// `:authority` pseudo header, sent as the `Host` header when present.
+    pub authority: Option<String>,
+    /// Non-pseudo request headers.
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+    /// Guest-supplied timeout (0 = use the config cap).
+    pub timeout_ms: u32,
+}
+
+/// The callout response currently being delivered to the guest via
+/// `proxy_on_http_call_response`. Empty `headers` signals a failed callout
+/// (proxy-wasm convention: the callback fires with 0 headers).
+#[derive(Debug, Clone, Default)]
+pub struct CalloutResponse {
+    pub token: u32,
+    /// Includes `:status` as the first pair on success; empty on failure.
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
 /// Per-Store host state. Config fields persist across leases; request-scoped
 /// fields are reset by `begin_phase`.
 #[derive(Default)]
@@ -60,13 +105,54 @@ pub struct HostState {
     pub plugin_config: Vec<u8>,
     /// (level, message) lines emitted via proxy_log during the current phase.
     pub log_lines: Vec<(i32, String)>,
+    /// Metrics label of the owning module (set once per Store).
+    pub metrics_label: String,
+
+    // ---- Callout state (request phase only; see `arm_dispatch`) ----
+    /// Whether `proxy_dispatch_http_call` is accepted in the current phase.
+    pub dispatch_enabled: bool,
+    /// Normalized origins the guest may call out to (empty = deny all).
+    pub callout_allowlist: Arc<[String]>,
+    /// Cap (and 0-fallback) for guest-supplied callout timeouts, ms.
+    pub callout_timeout_cap_ms: u64,
+    /// Callouts queued by the guest, drained by the plugin's async path.
+    pub pending_callouts: Vec<PendingCallout>,
+    /// The response being delivered in the current
+    /// `proxy_on_http_call_response` invocation.
+    pub callout_response: Option<CalloutResponse>,
+    /// Set by `proxy_continue_request` / `proxy_continue_stream(request)`.
+    pub continue_requested: bool,
+    /// Total callouts dispatched in this phase (cap enforcement).
+    callouts_dispatched: u32,
+    next_callout_token: u32,
+
+    // ---- Body observation state (read-only chunk window) ----
+    /// Current response-body chunk exposed via
+    /// `get_buffer_bytes(HttpResponseBody)`. Never buffers across chunks.
+    pub body_chunk: Vec<u8>,
+
+    /// Guest-requested tick period in ms (0 = no tick). Module-lifetime
+    /// state (typically set during `on_configure`), NOT reset per phase;
+    /// the module tick task reads it after instance init.
+    pub tick_period_ms: u64,
+
+    /// Module-wide shared KV (proxy-wasm shared data). Shared by every
+    /// pooled VM of the same `ModuleEntry`; process-local by design.
+    pub shared_data: Arc<super::shared_data::SharedData>,
 }
 
 impl HostState {
-    pub fn new(vm_config: Vec<u8>, plugin_config: Vec<u8>) -> Self {
+    pub fn new(
+        vm_config: Vec<u8>,
+        plugin_config: Vec<u8>,
+        metrics_label: String,
+        shared_data: Arc<super::shared_data::SharedData>,
+    ) -> Self {
         HostState {
             vm_config,
             plugin_config,
+            metrics_label,
+            shared_data,
             ..Default::default()
         }
     }
@@ -86,6 +172,25 @@ impl HostState {
         self.pending_ops.clear();
         self.local_response = None;
         self.log_lines.clear();
+        self.dispatch_enabled = false;
+        self.callout_allowlist = Arc::from(Vec::new());
+        self.callout_timeout_cap_ms = 0;
+        self.pending_callouts.clear();
+        self.callout_response = None;
+        self.continue_requested = false;
+        self.callouts_dispatched = 0;
+        // Tokens start at 1: some proxy-wasm SDKs treat a 0 call-token as an
+        // invalid/sentinel value (Envoy issues nonzero tokens).
+        self.next_callout_token = 1;
+        self.body_chunk.clear();
+    }
+
+    /// Enable `proxy_dispatch_http_call` for the current phase (request
+    /// phase only — the sync response stages cannot await a callout).
+    pub fn arm_dispatch(&mut self, allowlist: Arc<[String]>, timeout_cap_ms: u64) {
+        self.dispatch_enabled = true;
+        self.callout_allowlist = allowlist;
+        self.callout_timeout_cap_ms = timeout_cap_ms;
     }
 
     fn map_mut(&mut self, map: i32) -> Option<&mut Vec<(String, String)>> {
@@ -96,10 +201,20 @@ impl HostState {
         }
     }
 
-    fn map_ref(&self, map: i32) -> Option<&Vec<(String, String)>> {
+    fn map_ref(&self, map: i32) -> Option<&[(String, String)]> {
         match map {
             MAP_HTTP_REQUEST_HEADERS => Some(&self.request_headers),
             MAP_HTTP_RESPONSE_HEADERS => Some(&self.response_headers),
+            // The callout-response map is only populated during a
+            // `proxy_on_http_call_response` delivery; elsewhere it reads empty
+            // (not an error). Returned as a borrow so a per-header lookup does
+            // not clone the whole map.
+            MAP_HTTP_CALL_RESPONSE_HEADERS => Some(
+                self.callout_response
+                    .as_ref()
+                    .map(|r| r.headers.as_slice())
+                    .unwrap_or(&[]),
+            ),
             _ => None,
         }
     }
@@ -187,8 +302,19 @@ fn read_guest(caller: &mut Caller<'_, HostState>, ptr: i32, len: i32) -> Result<
         return Err(STATUS_BAD_ARGUMENT);
     }
     let mem = guest_memory(caller).ok_or(STATUS_INVALID_MEMORY_ACCESS)?;
-    let mut buf = vec![0u8; len as usize];
-    mem.read(&mut *caller, ptr as usize, &mut buf)
+    let (ptr, len) = (ptr as usize, len as usize);
+    // Bounds-check against the guest's ACTUAL memory size BEFORE allocating.
+    // `len` is guest-controlled (up to ~2GiB); a blind `vec![0u8; len]` would
+    // let a guest drive the host toward OOM before the subsequent `mem.read`
+    // bounds check ever fires. Same hazard `decode_map` guards against, applied
+    // one level lower so every guest-input ABI (dispatch, set_shared_data,
+    // set_header_map_pairs, send_local_response, …) is covered.
+    let mem_size = mem.data_size(&*caller);
+    if ptr.checked_add(len).map_or(true, |end| end > mem_size) {
+        return Err(STATUS_INVALID_MEMORY_ACCESS);
+    }
+    let mut buf = vec![0u8; len];
+    mem.read(&mut *caller, ptr, &mut buf)
         .map_err(|_| STATUS_INVALID_MEMORY_ACCESS)?;
     Ok(buf)
 }
@@ -272,11 +398,15 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         "env",
         "proxy_get_header_map_pairs",
         |mut caller: Caller<'_, HostState>, map: i32, ret_ptr: i32, ret_size: i32| -> i32 {
-            let pairs = match caller.data().map_ref(map) {
-                Some(p) => p.clone(),
-                None => return STATUS_BAD_ARGUMENT,
+            // Encode into an owned buffer inside a scope so the immutable
+            // borrow of the header map is released before write_to_guest takes
+            // caller mutably.
+            let encoded = {
+                let Some(pairs) = caller.data().map_ref(map) else {
+                    return STATUS_BAD_ARGUMENT;
+                };
+                encode_map(pairs)
             };
-            let encoded = encode_map(&pairs);
             write_to_guest(&mut caller, &encoded, ret_ptr, ret_size)
         },
     )?;
@@ -289,12 +419,15 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Ok(k) => k,
                 Err(s) => return s,
             };
-            let value = match caller.data().map_ref(map) {
-                Some(pairs) => pairs
+            let value = {
+                let Some(pairs) = caller.data().map_ref(map) else {
+                    return STATUS_BAD_ARGUMENT;
+                };
+                // Clone only the single matched value (not the whole map).
+                pairs
                     .iter()
                     .find(|(n, _)| n.eq_ignore_ascii_case(&key))
-                    .map(|(_, v)| v.clone()),
-                None => return STATUS_BAD_ARGUMENT,
+                    .map(|(_, v)| v.clone())
             };
             match value {
                 Some(v) => write_to_guest(&mut caller, v.as_bytes(), ret_ptr, ret_size),
@@ -400,6 +533,15 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             let data = match buf_type {
                 BUF_VM_CONFIGURATION => caller.data().vm_config.clone(),
                 BUF_PLUGIN_CONFIGURATION => caller.data().plugin_config.clone(),
+                BUF_HTTP_CALL_RESPONSE_BODY => caller
+                    .data()
+                    .callout_response
+                    .as_ref()
+                    .map(|r| r.body.clone())
+                    .unwrap_or_default(),
+                // Read-only chunk window (body observation): the CURRENT
+                // chunk only, never an accumulated body.
+                BUF_HTTP_RESPONSE_BODY => caller.data().body_chunk.clone(),
                 _ => return STATUS_NOT_FOUND,
             };
             let start = start.max(0) as usize;
@@ -506,6 +648,188 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         },
     )?;
 
+    // HTTP callout dispatch. Queues the call in HostState; the plugin's
+    // async request path executes it while the guest is paused and delivers
+    // the result via `proxy_on_http_call_response`. Sync stages (response
+    // headers/body) never arm dispatch, so the guest sees UNIMPLEMENTED
+    // there instead of a silent no-op.
+    #[allow(clippy::too_many_arguments)]
+    linker.func_wrap(
+        "env",
+        "proxy_dispatch_http_call",
+        |mut caller: Caller<'_, HostState>,
+         upstream_ptr: i32,
+         upstream_size: i32,
+         headers_ptr: i32,
+         headers_size: i32,
+         body_ptr: i32,
+         body_size: i32,
+         _trailers_ptr: i32,
+         _trailers_size: i32,
+         timeout_ms: i32,
+         return_token_ptr: i32|
+         -> i32 {
+            if !caller.data().dispatch_enabled {
+                return STATUS_UNIMPLEMENTED;
+            }
+            let upstream = match read_guest_string(&mut caller, upstream_ptr, upstream_size) {
+                Ok(s) => s,
+                Err(s) => return s,
+            };
+            let header_bytes = match read_guest(&mut caller, headers_ptr, headers_size) {
+                Ok(b) => b,
+                Err(s) => return s,
+            };
+            let Some(all_headers) = decode_map(&header_bytes) else {
+                return STATUS_BAD_ARGUMENT;
+            };
+            let body = if body_size > 0 {
+                match read_guest(&mut caller, body_ptr, body_size) {
+                    Ok(b) => b,
+                    Err(s) => return s,
+                }
+            } else {
+                Vec::new()
+            };
+
+            // The upstream parameter addresses the target directly as an
+            // origin URL (Edgion has no Envoy-style cluster registry for
+            // guests to name).
+            let origin = match edgion_resources::plugin_configs::normalize_callout_origin(&upstream) {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::debug!(error = %e, "wasm callout: malformed upstream origin");
+                    return STATUS_BAD_ARGUMENT;
+                }
+            };
+
+            let state = caller.data_mut();
+            if !state.callout_allowlist.iter().any(|a| a == &origin) {
+                crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "denied");
+                tracing::warn!(%origin, "wasm callout denied: origin not in calloutAllowlist");
+                return STATUS_INTERNAL_FAILURE;
+            }
+            if state.callouts_dispatched >= MAX_CALLOUTS_PER_REQUEST {
+                crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "over_limit");
+                tracing::warn!("wasm callout rejected: per-request dispatch cap reached");
+                return STATUS_INTERNAL_FAILURE;
+            }
+
+            let mut method = "GET".to_string();
+            let mut path = "/".to_string();
+            let mut authority = None;
+            let mut headers = Vec::with_capacity(all_headers.len());
+            for (name, value) in all_headers {
+                match name.as_str() {
+                    ":method" => method = value,
+                    ":path" => path = value,
+                    ":authority" => authority = Some(value),
+                    n if n.starts_with(':') => {}
+                    _ => headers.push((name, value)),
+                }
+            }
+            if !path.starts_with('/') {
+                path.insert(0, '/');
+            }
+
+            let token = state.next_callout_token;
+            let pending = PendingCallout {
+                token,
+                origin,
+                path,
+                method,
+                authority,
+                headers,
+                body,
+                timeout_ms: timeout_ms.max(0) as u32,
+            };
+
+            // Deliver the token to the guest FIRST; only commit the dispatch
+            // (increment counter + queue) if the write succeeds. A bad
+            // return_token_ptr must not leave a phantom callout queued (and a
+            // consumed cap slot) that the guest never received a handle for.
+            let Some(mem) = guest_memory(&mut caller) else {
+                return STATUS_INVALID_MEMORY_ACCESS;
+            };
+            if mem
+                .write(&mut caller, return_token_ptr as usize, &token.to_le_bytes())
+                .is_err()
+            {
+                return STATUS_INVALID_MEMORY_ACCESS;
+            }
+            let state = caller.data_mut();
+            state.callouts_dispatched += 1;
+            state.next_callout_token = token.wrapping_add(1);
+            state.pending_callouts.push(pending);
+            STATUS_OK
+        },
+    )?;
+
+    // Shared data (per-module KV with CAS). Process-local: shared across
+    // all pooled VMs of one ModuleEntry, freed with the cache entry.
+    linker.func_wrap(
+        "env",
+        "proxy_get_shared_data",
+        |mut caller: Caller<'_, HostState>,
+         key_ptr: i32,
+         key_size: i32,
+         ret_value_ptr: i32,
+         ret_value_size: i32,
+         ret_cas_ptr: i32|
+         -> i32 {
+            let key = match read_guest_string(&mut caller, key_ptr, key_size) {
+                Ok(k) => k,
+                Err(s) => return s,
+            };
+            let Some((value, cas)) = caller.data().shared_data.get(&key) else {
+                return STATUS_NOT_FOUND;
+            };
+            let status = write_to_guest(&mut caller, &value, ret_value_ptr, ret_value_size);
+            if status != STATUS_OK {
+                return status;
+            }
+            let Some(mem) = guest_memory(&mut caller) else {
+                return STATUS_INVALID_MEMORY_ACCESS;
+            };
+            match mem.write(&mut caller, ret_cas_ptr as usize, &cas.to_le_bytes()) {
+                Ok(_) => STATUS_OK,
+                Err(_) => STATUS_INVALID_MEMORY_ACCESS,
+            }
+        },
+    )?;
+
+    linker.func_wrap(
+        "env",
+        "proxy_set_shared_data",
+        |mut caller: Caller<'_, HostState>,
+         key_ptr: i32,
+         key_size: i32,
+         value_ptr: i32,
+         value_size: i32,
+         cas: i32|
+         -> i32 {
+            let key = match read_guest_string(&mut caller, key_ptr, key_size) {
+                Ok(k) => k,
+                Err(s) => return s,
+            };
+            // Null value = delete (proxy-wasm convention).
+            let value = if value_ptr == 0 && value_size == 0 {
+                None
+            } else {
+                match read_guest(&mut caller, value_ptr, value_size) {
+                    Ok(v) => Some(v),
+                    Err(s) => return s,
+                }
+            };
+            use super::shared_data::SharedDataError;
+            match caller.data().shared_data.set(&key, value, cas as u32) {
+                Ok(()) => STATUS_OK,
+                Err(SharedDataError::CasMismatch) => STATUS_CAS_MISMATCH,
+                Err(SharedDataError::TooLarge) => STATUS_BAD_ARGUMENT,
+            }
+        },
+    )?;
+
     // Accepted no-ops for the v1 subset.
     linker.func_wrap(
         "env",
@@ -515,17 +839,33 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
     linker.func_wrap(
         "env",
         "proxy_set_tick_period_milliseconds",
-        |_: Caller<'_, HostState>, _ms: i32| -> i32 { STATUS_OK },
+        |mut caller: Caller<'_, HostState>, ms: i32| -> i32 {
+            caller.data_mut().tick_period_ms = ms.max(0) as u64;
+            STATUS_OK
+        },
     )?;
     linker.func_wrap("env", "proxy_done", |_: Caller<'_, HostState>| -> i32 { STATUS_OK })?;
+    // Pause/resume: the guest resumes a paused request either through the
+    // 0.1-style proxy_continue_request or the 0.2-style
+    // proxy_continue_stream(stream_type=0 /* Request */).
     linker.func_wrap(
         "env",
         "proxy_continue_stream",
-        |_: Caller<'_, HostState>, _stream: i32| -> i32 { STATUS_OK },
+        |mut caller: Caller<'_, HostState>, stream: i32| -> i32 {
+            if stream == 0 {
+                caller.data_mut().continue_requested = true;
+            }
+            STATUS_OK
+        },
     )?;
-    linker.func_wrap("env", "proxy_continue_request", |_: Caller<'_, HostState>| -> i32 {
-        STATUS_OK
-    })?;
+    linker.func_wrap(
+        "env",
+        "proxy_continue_request",
+        |mut caller: Caller<'_, HostState>| -> i32 {
+            caller.data_mut().continue_requested = true;
+            STATUS_OK
+        },
+    )?;
     linker.func_wrap("env", "proxy_continue_response", |_: Caller<'_, HostState>| -> i32 {
         STATUS_OK
     })?;

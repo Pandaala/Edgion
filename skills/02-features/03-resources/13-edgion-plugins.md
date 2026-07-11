@@ -76,7 +76,7 @@ spec:
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
 | `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation + immediate-response short-circuit. MVP is header-only (no body); peer of `ForwardAuth`. Runs in the `RequestFilter` and async `UpstreamResponse` stages. |
-| `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: request/response header mutation + local-response short-circuit. v1 is header-only (no body hooks, no HTTP/gRPC callouts, no cross-phase guest state). Runs in the `RequestFilter` and sync `UpstreamResponseFilter` stages. See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
+| `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts with Pause/resume (request phase, `calloutAllowlist`-gated), read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No request-body hooks, no body rewrite, no gRPC callouts. Runs in the `RequestFilter`, sync `UpstreamResponseFilter`, and `UpstreamResponseBodyFilter` stages. See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
 
 ### Routing/Backend
 
@@ -106,7 +106,7 @@ HTTP plugins execute across Pingora's 4 stages:
 |-------|--------------|-----------------|
 | `RequestFilter` | After the request is received and before backend selection | Auth, RateLimit, CORS, IP restriction |
 | `UpstreamResponseFilter` | After upstream response headers are received | ResponseHeaderModifier, `Wasm` (`proxy_on_response_headers`) |
-| `UpstreamResponseBodyFilter` | After upstream response body is received | ResponseRewrite (body modification) |
+| `UpstreamResponseBodyFilter` | After upstream response body is received | ResponseRewrite (body modification), `Wasm` (`proxy_on_http_response_body`, read-only) |
 | `UpstreamResponse` | After the upstream response headers arrive (async) | `ExtProc` (response-header processing); logic needing async access to the response |
 
 ## Secret Dependencies
@@ -122,5 +122,6 @@ The following plugin types read Secret data from `GLOBAL_SECRET_STORE` during th
 | `KeyAuth` | API keys |
 | `OpenidConnect` | client_secret, session_secret |
 | `HeaderCertAuth` | CA certificates |
+| `Wasm` | `source.fetch`: artifact-repo Authorization header value, fetch TLS CA / client certs |
 
 Secret changes automatically trigger reprocessing of EdgionPlugins via SecretRefManager.

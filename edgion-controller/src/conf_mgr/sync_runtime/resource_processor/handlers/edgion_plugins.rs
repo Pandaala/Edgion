@@ -267,6 +267,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         cred::resolve_csrf(&mut ep, &resource_ref, ctx);
         cred::resolve_global_access_control(&mut ep, &resource_ref, ctx);
         cred::resolve_forward_auth(&mut ep, &resource_ref, ctx).await;
+        cred::resolve_wasm(&mut ep, &resource_ref, ctx);
 
         // Clear existing EdgionConfigData override refs for this EP, then re-register from scratch.
         Self::clear_config_data_refs(&ep, ctx);

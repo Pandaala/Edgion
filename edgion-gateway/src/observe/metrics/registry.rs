@@ -86,6 +86,19 @@ pub mod names {
     // module backs it. NOT a compliance signal on its own: validated="false"
     // means approved suites over an unvalidated module.
     pub const FIPS_POLICY_ACTIVE: &str = "edgion_gateway_fips_policy_active";
+    // Wasm plugin host metrics. The `module` label is the human-readable
+    // source descriptor (file path / url / "inline:<sha8>"), NOT the raw
+    // cache key: bounded by the number of configured modules and readable.
+    pub const WASM_MODULE_LOAD_TOTAL: &str = "edgion_wasm_module_load_total";
+    pub const WASM_MODULE_COMPILE_DURATION_MS: &str = "edgion_wasm_module_compile_duration_ms";
+    pub const WASM_MODULE_EVICTED_TOTAL: &str = "edgion_wasm_module_evicted_total";
+    pub const WASM_INSTANCE_INSTANTIATE_TOTAL: &str = "edgion_wasm_instance_instantiate_total";
+    pub const WASM_INSTANCE_DISCARD_TOTAL: &str = "edgion_wasm_instance_discard_total";
+    pub const WASM_POOL_SIZE: &str = "edgion_wasm_pool_size";
+    pub const WASM_HOOK_DURATION_MS: &str = "edgion_wasm_hook_duration_ms";
+    pub const WASM_TRAP_TOTAL: &str = "edgion_wasm_trap_total";
+    pub const WASM_FAIL_MODE_TOTAL: &str = "edgion_wasm_fail_mode_total";
+    pub const WASM_CALLOUT_TOTAL: &str = "edgion_wasm_callout_total";
 }
 
 /// Global metrics singleton
@@ -584,6 +597,78 @@ pub fn record_webhook_resolve_error(reason: &'static str) {
 /// `reason` is one of `"loopback"`, `"link_local"`, `"private"`, `"unspecified"`.
 pub fn record_egress_blocked(reason: &'static str) {
     counter!(names::EGRESS_BLOCKED_TOTAL, "reason" => reason).increment(1);
+}
+
+// ============================================================
+// Wasm plugin host metrics
+// ============================================================
+//
+// All Wasm metrics carry a `module` label: the human-readable source
+// descriptor produced by `WasmSourceSpec::metrics_label()` (file path, url,
+// or `inline:<sha8>`). Cardinality is bounded by the number of distinct
+// configured modules.
+
+/// Record a Wasm module load attempt outcome. `result` is `"ok"` or `"error"`.
+pub fn record_wasm_module_load(module: &str, result: &'static str) {
+    counter!(names::WASM_MODULE_LOAD_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
+}
+
+/// Record the wall-clock duration of one `Module::new` compilation.
+pub fn record_wasm_compile_duration(module: &str, ms: f64) {
+    histogram!(names::WASM_MODULE_COMPILE_DURATION_MS, "module" => module.to_string()).record(ms);
+}
+
+/// Record a module-cache entry eviction (refcount reached zero and the grace
+/// period elapsed without re-registration).
+pub fn record_wasm_module_evicted(module: &str) {
+    counter!(names::WASM_MODULE_EVICTED_TOTAL, "module" => module.to_string()).increment(1);
+}
+
+/// Record a fresh VM instantiation (pool miss).
+pub fn record_wasm_instance_instantiate(module: &str) {
+    counter!(names::WASM_INSTANCE_INSTANTIATE_TOTAL, "module" => module.to_string()).increment(1);
+}
+
+/// Record a VM discarded instead of returned to the pool.
+/// `reason` is `"poisoned"` or `"over_capacity"`.
+pub fn record_wasm_instance_discard(module: &str, reason: &'static str) {
+    counter!(names::WASM_INSTANCE_DISCARD_TOTAL, "module" => module.to_string(), "reason" => reason).increment(1);
+}
+
+/// Set the current pooled-instance count for a module.
+pub fn set_wasm_pool_size(module: &str, size: usize) {
+    gauge!(names::WASM_POOL_SIZE, "module" => module.to_string()).set(size as f64);
+}
+
+/// Record the duration of one guest hook invocation.
+/// `phase` is one of `"request_headers"`, `"response_headers"`,
+/// `"response_body"`, `"http_call_response"`, `"tick"`.
+pub fn record_wasm_hook_duration(module: &str, phase: &'static str, ms: f64) {
+    histogram!(names::WASM_HOOK_DURATION_MS, "module" => module.to_string(), "phase" => phase).record(ms);
+}
+
+/// Record a guest trap (or protocol violation that poisons the lease).
+pub fn record_wasm_trap(module: &str, phase: &'static str) {
+    counter!(names::WASM_TRAP_TOTAL, "module" => module.to_string(), "phase" => phase).increment(1);
+}
+
+/// Record a fail-mode decision taken by the Wasm plugin.
+/// `reason` is one of `"load"`, `"acquire"`, `"trap"`, `"not loaded"`,
+/// `"callout"`, `"no-resume"`; `mode` is `"open"` or `"close"`.
+pub fn record_wasm_fail_mode(module: &str, reason: &str, mode: &'static str) {
+    counter!(
+        names::WASM_FAIL_MODE_TOTAL,
+        "module" => module.to_string(),
+        "reason" => reason.to_string(),
+        "mode" => mode
+    )
+    .increment(1);
+}
+
+/// Record a guest-dispatched HTTP callout outcome.
+/// `result` is one of `"ok"`, `"error"`, `"denied"`, `"over_limit"`.
+pub fn record_wasm_callout(module: &str, result: &'static str) {
+    counter!(names::WASM_CALLOUT_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
 }
 
 #[cfg(test)]

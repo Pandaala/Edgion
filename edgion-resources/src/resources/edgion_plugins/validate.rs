@@ -52,9 +52,11 @@ fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
         // Upstream-response-body-filter-stage-only plugins.
         BandwidthLimit(_) => (false, false, true, false),
         // DSL runs in both the request and the upstream-response-filter stages.
-        // Wasm (proxy-wasm guest) also runs in both stages, matching its two CRD
-        // stage enum entries (requestPlugins, upstreamResponseFilterPlugins).
-        Dsl(_) | Wasm(_) => (true, true, false, false),
+        Dsl(_) => (true, true, false, false),
+        // Wasm (proxy-wasm guest) runs in the request, upstream-response-filter,
+        // and upstream-response-body-filter (read-only observation) stages,
+        // matching its three CRD stage enum entries.
+        Wasm(_) => (true, true, true, false),
         // ExtProc runs in the request stage and the async upstream-response stage.
         ExtProc(_) => (true, false, false, true),
         // Everything else is request-stage-only.

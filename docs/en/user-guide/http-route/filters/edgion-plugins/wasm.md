@@ -8,9 +8,9 @@
 
 proxy-wasm is a portable ABI for writing proxy extensions once and running them on any compliant host (Envoy, this gateway, or others) without recompiling the host itself. Instead of writing a native Rust plugin against Edgion's internal APIs, you compile a small WebAssembly module against the [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) for your language of choice and hand the compiled `.wasm` bytecode to this plugin. The gateway compiles it once, caches the compiled module, and pools initialized instances so per-request execution is cheap.
 
-This is a **v1, header-only** implementation: it exercises a deliberately small subset of the proxy-wasm ABI (see below), not the full spec.
+The implemented ABI is a deliberate subset (see below): header read/write, local responses, **HTTP callouts with Pause/resume** (request phase), **read-only response-body observation**, **shared data**, and **timers** (`on_tick`). Body *modification* and request-body hooks are not implemented.
 
-## Supported ABI subset (v1)
+## Supported ABI subset
 
 ### Hooks
 
@@ -18,25 +18,40 @@ This is a **v1, header-only** implementation: it exercises a deliberately small 
 |---|---|---|
 | `proxy_on_context_create` / `proxy_on_vm_start` / `proxy_on_configure` | — (instance init) | Once per pooled instance, before any request is served |
 | `proxy_on_request_headers` | `requestPlugins` (`RequestFilter`) | Request headers received, before the backend is contacted |
+| `proxy_on_http_call_response` | — (callout callback) | While the request is paused, once per completed callout dispatched from `proxy_on_request_headers` |
 | `proxy_on_response_headers` | `upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | Upstream response headers received |
-| `proxy_on_done` / `proxy_on_delete` | — (per-hook-call cleanup) | After each headers hook returns |
+| `proxy_on_http_response_body` | `upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | Once per upstream body chunk, **read-only** (see [Body observation](#response-body-observation-read-only)) |
+| `proxy_on_tick` | — (background) | Periodically, once the guest set a tick period (see [Timers](#shared-data-and-timers)) |
+| `proxy_on_done` / `proxy_on_delete` | — (per-context cleanup) | After each per-request context finishes |
 
-Wasm is **not** available at `upstreamResponseBodyFilterPlugins` or `upstreamResponsePlugins` (async) — see [Limitations](#v1-limitations).
+Wasm is **not** available at `upstreamResponsePlugins` (async response stage).
 
 ### Host calls
 
 | Host function | Supported | Notes |
 |---|:---:|---|
-| `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | Request and response header maps |
-| `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | Set / add / remove / bulk-replace; applied to the real request/response after the hook returns |
-| `proxy_send_local_response` | ✅ | Short-circuits the request with a status, body, and headers |
-| `proxy_get_property` / `proxy_set_property` | ✅ (basic subset) | Readable keys: `request.path`, `request.method`, `request.host`, `source.address`, `plugin_name`, `response.code` (response phase only). `proxy_set_property` writes into the current phase's in-memory property map only (not persisted, not exposed elsewhere) |
-| `proxy_get_buffer_bytes` | ✅ (VM/plugin configuration only) | Only `VmConfiguration` and `PluginConfiguration` buffer types are backed; other buffer types return not-found |
-| `proxy_log` | ✅ | Forwarded to the gateway's own `tracing::debug!` output (target `wasm_guest`) — **never** written to the access log. The access log only records an aggregate count (see [PluginLog format](#pluginlog-format)) |
+| `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | Request headers, response headers, and (inside the callout callback) `HttpCallResponseHeaders` — the callout's response headers plus a synthetic `:status` pair |
+| `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | Set / add / remove / bulk-replace; applied to the real request/response after the hook returns. Header-map writes to the callout response map are rejected |
+| `proxy_send_local_response` | ✅ | Short-circuits the request with a status, body, and headers. Also valid from inside `proxy_on_http_call_response` (deny after an auth callout) |
+| `proxy_dispatch_http_call` | ✅ (request phase) | See [HTTP callouts](#http-callouts-pauseresume). In the response/body/tick phases it returns `UNIMPLEMENTED` (12) |
+| `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | Resumes a request paused on a callout. `proxy_continue_response` remains an accepted no-op |
+| `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | Per-module KV with CAS — see [Shared data](#shared-data-and-timers) |
+| `proxy_set_tick_period_milliseconds` | ✅ | Arms the per-module tick task; `0` stops it. Period floor 100ms |
+| `proxy_get_property` / `proxy_set_property` | ✅ (basic subset) | Readable keys: `request.path`, `request.method`, `request.host`, `source.address`, `plugin_name`, `response.code` (response phase only). `proxy_set_property` writes into the current phase's in-memory property map only |
+| `proxy_get_buffer_bytes` | ✅ | `VmConfiguration`, `PluginConfiguration`, `HttpCallResponseBody` (inside the callout callback), and `HttpResponseBody` (the **current chunk window** in the body hook) |
+| `proxy_log` | ✅ | Forwarded to the gateway's own `tracing::debug!` output (target `wasm_guest`) — **never** written to the access log |
 | `proxy_get_current_time_nanoseconds` | ✅ | Wall-clock time |
-| `proxy_get_configuration` (legacy 0.1) | ✅ | Returns the same bytes as the `PluginConfiguration` buffer, for SDKs that still call the old accessor |
-| `proxy_set_effective_context` / `proxy_set_tick_period_milliseconds` / `proxy_done` / `proxy_continue_stream` / `proxy_continue_request` / `proxy_continue_response` | Accepted no-ops | Return `STATUS_OK` without doing anything (tick period is accepted but never fires — there is no timer subsystem in v1) |
-| Everything else (body hooks, HTTP/gRPC callouts, shared data, shared queues, foreign function calls, metrics, …) | ❌ | Not registered with the linker. If a guest module imports one of these and actually calls it, the call **traps** (the request then follows [failure semantics](#failure-semantics)); importing but never calling is harmless |
+| `proxy_get_configuration` (legacy 0.1) | ✅ | Returns the same bytes as the `PluginConfiguration` buffer |
+| `proxy_set_effective_context` / `proxy_done` | Accepted no-ops | Return `STATUS_OK` without doing anything |
+| Everything else (request-body hooks, gRPC callouts, shared queues, foreign function calls, metrics, …) | ❌ | Not registered with the linker. If a guest module imports one of these and actually calls it, the call **traps** (the request then follows [failure semantics](#failure-semantics)); importing but never calling is harmless |
+
+### ABI version check
+
+At load time the host inspects the guest's `proxy_abi_version_*` marker export:
+
+- `proxy_abi_version_0_2_0` / `proxy_abi_version_0_2_1` — accepted.
+- Any other `proxy_abi_version_*` — **load error** with a clear "unsupported proxy-wasm ABI version" message (instead of a confusing runtime trap).
+- No marker at all — accepted with a WARN (hand-written test modules and non-standard guests).
 
 ## Configuration reference
 
@@ -53,160 +68,186 @@ config:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `source.file` | String | — | Local filesystem path to a `.wasm` file. Relative paths resolve against the gateway work directory. Exactly one of `source.file` / `source.inline` / `source.url` must be set. |
-| `source.inline` | String (base64) | — | Wasm bytecode carried inline in the resource, base64-encoded. |
-| `source.url` | String | — | An `http://` or `https://` URL the gateway fetches the bytecode from (fixed 10s fetch timeout, only a `2xx` response is accepted). **Requires `sha256`.** |
-| `sha256` | String (64 hex chars) | — | SHA-256 of the raw bytecode, verified before compilation. Optional for `file` / `inline`; **required** for `url`. A mismatch is a load error — the module is never compiled. |
-| `pluginConfig` | String | — | Opaque configuration string passed to the guest's `proxy_on_configure` hook, readable via the `PluginConfiguration` buffer (`proxy_get_buffer_bytes` / legacy `proxy_get_configuration`). |
-| `vmConfig` | String | — | Opaque configuration string passed to the guest's `proxy_on_vm_start` hook, readable via the `VmConfiguration` buffer. |
-| `failOpen` | Boolean | `false` | Governs behavior on load failure / trap / timeout / instance-acquire failure — see [Failure semantics](#failure-semantics). |
-| `timeoutMs` | Integer | `100` | Per-hook wall-clock budget in milliseconds, enforced by wasmtime epoch interruption. Range `1..=10000`. |
+| `source.inline` | String (base64) | — | Wasm bytecode carried inline in the resource, base64-encoded. **Dev/test convenience only** — decoded size is capped at 1MiB (hard validation error above), and above 512KiB the gateway logs a WARN at load time. See [Choosing a source form](#choosing-a-source-form). |
+| `source.url` | String | — | An `http://` or `https://` URL the gateway fetches the bytecode from. **Requires `sha256`.** Connection behavior is tunable via `source.fetch`. |
+| `source.fetch` | Object | — | Optional fetch hardening for `url` sources (invalid with `file`/`inline`): TLS, auth, timeout, retry. See below. |
+| `source.fetch.tls` | Object | — | The shared `TlsConfig` block: custom CA bundle (`validation.caCertificateRefs`) and/or client identity (`clientCertificateRef`) for mTLS to the artifact repository. Secret refs are resolved by the controller (cross-namespace refs need a `ReferenceGrant`). |
+| `source.fetch.authHeaderSecretRef` | Object | — | `{name, namespace?, key}` of a Secret whose `key` (default `authorization`) holds the full `Authorization` header value sent with the fetch (e.g. `Bearer <token>`). If the ref is set but the Secret is not yet resolved, the load **fails** rather than silently fetching unauthenticated. |
+| `source.fetch.timeoutMs` | Integer | `10000` | Per-attempt fetch timeout. Range `1..=60000`. |
+| `source.fetch.retry` | Object | — | `{attempts, backoffMs}` — total attempts including the first (`1..=10`, default 3) and base backoff doubled per retry (default 500, max 30000). Fixed policy: transport errors and `5xx` retry; **`4xx` never retries**. |
+| `sha256` | String (64 hex chars) | — | SHA-256 of the raw bytecode, verified before compilation. Optional for `file` / `inline`; **required** for `url`. |
+| `pluginConfig` | String | — | Opaque configuration passed to `proxy_on_configure`, readable via the `PluginConfiguration` buffer. |
+| `vmConfig` | String | — | Opaque configuration passed to `proxy_on_vm_start`, readable via the `VmConfiguration` buffer. |
+| `failOpen` | Boolean | `false` | Governs behavior on load failure / trap / timeout / callout no-resume — see [Failure semantics](#failure-semantics). |
+| `timeoutMs` | Integer | `100` | Per-hook wall-clock budget in milliseconds (epoch interruption). Range `1..=10000`. Body-chunk hooks run at `timeoutMs / 10`. |
 | `instancePoolSize` | Integer | `8` | Max pooled instances kept per compiled module, per gateway process. Range `1..=64`. |
+| `calloutAllowlist` | String list | `[]` | Origins (`scheme://host[:port]`) the guest may target with `proxy_dispatch_http_call`. **Empty = callouts disabled** (dispatch fails with a host error the guest can observe). Exact-origin match after normalization. |
+| `calloutTimeoutMs` | Integer | `5000` | Upper bound on each callout's guest-supplied timeout (also the effective timeout when the guest passes 0). Range `1..=10000`. |
 
-## The three source forms
+## Choosing a source form
 
-### `file` — local filesystem
+| Form | Position | Size bound | Distribution path |
+|---|---|---|---|
+| `inline` | **Dev/test convenience.** Not a production distribution mechanism. | 1MiB decoded (hard cap); K8s object + etcd limits apply on top | Rides the CR through etcd; every conf_sync carries it in full |
+| `file` | Modules baked into the gateway image or mounted via initContainer | none | Image build / volume mount |
+| `url` | **Recommended for production** — internal artifact repository (Nexus, Artifactory, S3 presigned) | none | Gateway fetches directly, with `source.fetch` TLS/auth/retry and mandatory `sha256` |
+| `oci://` | Roadmap (Istio-style OCI image distribution) — not yet implemented | — | — |
 
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: wasm-file
-  namespace: edgion-default
-spec:
-  requestPlugins:
-    - type: Wasm
-      config:
-        source:
-          file: ./plugins/header_demo.wasm
-        failOpen: false
-        timeoutMs: 100
-  upstreamResponseFilterPlugins:
-    - type: Wasm
-      config:
-        source:
-          file: ./plugins/header_demo.wasm
-        failOpen: false
-        timeoutMs: 100
----
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: wasm-route
-  namespace: edgion-default
-spec:
-  parentRefs:
-    - name: edgion-plugins-gateway
-      namespace: edgion-test
-  hostnames:
-    - "wasm.example.com"
-  rules:
-    - matches:
-        - path: { type: PathPrefix, value: "/" }
-      filters:
-        - type: ExtensionRef
-          extensionRef: { group: edgion.io, kind: EdgionPlugins, name: wasm-file }
-      backendRefs:
-        - name: test-http
-          namespace: edgion-test
-          port: 30001
-```
+This mirrors Istio's posture: Istio's `WasmPlugin` has **no inline field** at all and treats `oci://` as the primary channel with `http(s)` as the second. Edgion keeps `inline` for fast iteration but caps and warns on it; a ConfigMap-based form was evaluated and rejected (same etcd object cap as inline, plus ref-tracking complexity, no added value).
 
-> The request phase and the response phase are **separate entries** (`requestPlugins` vs `upstreamResponseFilterPlugins`), same as other split-stage plugins. List only the phase(s) your guest module actually needs — omitting an entry costs nothing.
-
-### `inline` — bytecode embedded in the resource
-
-Useful for small guests you want to ship as part of the resource itself, with no external file or network dependency:
+### `url` with fetch hardening (production example)
 
 ```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: wasm-inline
-  namespace: edgion-default
-spec:
-  requestPlugins:
-    - type: Wasm
-      config:
-        source:
-          inline: AGFzbQEAAAA...   # base64-encoded .wasm bytecode
-        failOpen: true
-        timeoutMs: 50
+requestPlugins:
+  - type: Wasm
+    config:
+      source:
+        url: "https://artifacts.internal/wasm/header-demo-1.2.0.wasm"
+        fetch:
+          tls:
+            enabled: true
+            validation:
+              caCertificateRefs:
+                - { kind: Secret, name: artifact-repo-ca }
+          authHeaderSecretRef:
+            name: artifact-repo-token
+            key: authorization        # Secret value e.g. "Bearer eyJ..."
+          timeoutMs: 10000
+          retry: { attempts: 3, backoffMs: 500 }
+      sha256: "3b1c...e4"
 ```
 
-Two inline sources with different content never collide in the module cache — the cache key hashes the full base64 payload (SHA-256), not just its length.
+Notes:
 
-### `url` — fetched over HTTP(S)
+- Retries apply to transport errors and `5xx` only; a `401`/`403`/`404` fails immediately (an auth error will not heal by retrying, and retrying it floods the repository's logs).
+- All retry attempts exhausting counts as ONE load failure, which is negative-cached for 30s like any other load error.
+- The resolved `Authorization` value is redacted in the admin `/configclient` output.
+- Distinct-URL fetches are capped at 4 in flight process-wide (startup-storm protection); same-URL callers already share one in-flight load.
 
-`sha256` is **mandatory** here so the gateway can verify the fetched bytes before compiling and running them:
+## HTTP callouts (Pause/resume)
 
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: wasm-url
-  namespace: edgion-default
-spec:
-  requestPlugins:
-    - type: Wasm
-      config:
-        source:
-          url: "https://artifacts.example.com/plugins/header_demo.wasm"
-        sha256: "3b1c...e4"   # 64 hex chars, required for url sources
-        failOpen: false
-        timeoutMs: 200
-        instancePoolSize: 16
-```
+`proxy_dispatch_http_call` lets the guest call an external HTTP service mid-request — the proxy-wasm ecosystem's most common plugin shape (external auth, risk scoring, audit). Flow:
+
+1. In `on_http_request_headers`, the guest dispatches one or more callouts and returns `Action::Pause`.
+2. The gateway executes the callouts (asynchronously, off the guest's CPU budget) while the request is suspended.
+3. Each result is delivered via `proxy_on_http_call_response`; the guest reads `HttpCallResponseHeaders` / `HttpCallResponseBody` and either resumes the request (`resume_http_request` / `proxy_continue_request`) or answers directly (`send_http_response` / `proxy_send_local_response`).
+
+Semantics and guardrails:
+
+- **Addressing**: the `upstream` parameter is the target **origin URL** (`https://auth.internal:8443`), not an Envoy cluster name. The `:path`, `:method`, and `:authority` pseudo headers from the dispatched header map drive the outbound request (`:authority` is sent as `Host`).
+- **Allowlist**: the origin must exactly match an entry in `calloutAllowlist` (after normalization). No allowlist = no callouts. A denied dispatch returns `INTERNAL_FAILURE` from `proxy_dispatch_http_call` synchronously.
+- **Request phase only**: the response-headers/body stages are synchronous and cannot await; dispatch there returns `UNIMPLEMENTED`. Ticks cannot dispatch either (yet).
+- **Pause required**: `dispatch` + `Action::Continue` is not supported — the queued callouts are dropped and logged (`callouts-dropped=N`). Dispatch must be followed by `Pause`.
+- **Budgets**: at most 8 dispatches per request, 4 callback rounds (a callback may dispatch follow-ups), 64 concurrent callouts process-wide, 256KiB response-body cap per callout. Each callout's timeout is `min(guest_timeout, calloutTimeoutMs)`.
+- **Callout failure** (connect error, timeout, oversized body): the callback fires with **0 headers** — the proxy-wasm convention — and the guest decides its own fail behavior. The host never traps the guest for a failed callout.
+- **Guest never resumes**: if after all callouts the guest neither continued nor answered, the host applies `failOpen` (reason `no-resume`).
+- **Epoch budget**: `timeoutMs` bounds each *guest* hook invocation; the callout's network wait does not consume guest CPU budget.
+
+### Callout vs ExtProc
+
+Both integrate external decision services; they differ in direction:
+
+- **ExtProc** (push): the gateway pushes every request through a resident external processor over gRPC. Choose it when the external service owns the logic and sees all traffic.
+- **Wasm callout** (pull): guest logic lives in the gateway and calls out on demand. Choose it when the plugin decides *if/when* to consult an external service (e.g. cache-then-verify token checks).
+
+## Response-body observation (read-only)
+
+Listing a Wasm entry under `upstreamResponseBodyFilterPlugins` invokes `proxy_on_http_response_body` once per upstream chunk:
+
+- `proxy_get_buffer_bytes(HttpResponseBody, start, max)` returns the **current chunk window only** — the gateway never buffers the body. Cross-chunk aggregation is the guest's job (its own memory or [shared data](#shared-data-and-timers)).
+- **Strictly read-only**: the body cannot be modified, and the response cannot be short-circuited from the body phase (headers are already sent). A detection verdict can only be logged (`proxy_log`) or aggregated via shared data.
+- `Action::Pause` from the body hook is meaningless in the read-only form and is ignored.
+- Each chunk runs under a reduced CPU budget (`timeoutMs / 10`, floor 10ms) so a slow guest cannot stall a long stream; a trap in the body hook **never interrupts the stream** (the instance is discarded and streaming continues, regardless of `failOpen`).
+- A guest that does not export `proxy_on_http_response_body` is a free no-op at this stage.
+
+Request-body observation is **not implemented** (it requires the request-body buffering infrastructure, which the gateway does not have yet).
+
+## Shared data and timers
+
+### Shared data
+
+`proxy_get_shared_data` / `proxy_set_shared_data` back a per-module KV store with proxy-wasm CAS semantics (per-key monotonically increasing CAS token; `set` with a nonzero expected CAS fails with `CasMismatch` on mismatch; CAS 0 writes unconditionally; a null value deletes the key).
+
+- **Scope: one module (cache entry) within one gateway process.** All pooled instances of the module share it — across requests, phases, and the tick task. It is **not** cluster-level state: for cluster-wide coordination (e.g. global rate limiting) use `rate_limit_redis`, not shared data.
+- Limits: 64KiB per value, 4MiB total per module. An oversized write returns `BAD_ARGUMENT`.
+- Lifecycle: freed when the module's cache entry is evicted (see [Module cache lifecycle](#module-cache-lifecycle)); a reload that changes the module content starts with an empty store.
+
+### Timers (`on_tick`)
+
+A guest that calls `proxy_set_tick_period_milliseconds(N)` (typically from `on_configure`) gets `proxy_on_tick` invoked every `N` ms (floor 100ms) on a background task, one per module. The tick instance is leased from the same pool as request instances and runs under the normal `timeoutMs` epoch budget. The guest can change the period or stop ticking (`0`) from inside `on_tick`. The tick task stops automatically when the module's cache entry is evicted. Callouts from `on_tick` are not yet supported (dispatch returns `UNIMPLEMENTED`).
+
+Typical pattern: `on_tick` refreshes a ruleset into shared data; request hooks read it.
 
 ## Failure semantics
 
-Four distinct failure modes all route through the same `failOpen` decision:
+All failure modes route through the same `failOpen` decision:
 
 | Reason | Trigger | PluginLog |
 |---|---|---|
-| `load` | The module fails to compile, download, decode, or its `sha256` doesn't match. Load errors are cached for 30s so a broken source isn't retried on every request; after that window a fresh attempt is made. | `wasm load:fail-open` / `wasm load:fail-close` |
-| `acquire` | The instance pool cannot produce a usable VM (e.g. `proxy_on_vm_start` / `proxy_on_configure` returned false during instantiation). | `wasm acquire:fail-open` / `wasm acquire:fail-close` |
-| `trap` | The guest panics, hits `unreachable`, or otherwise faults while running a hook. | `wasm trap:fail-open` / `wasm trap:fail-close` |
-| `not loaded` | Response-phase only: `UpstreamResponseFilter` is a synchronous hook (no `await`), so it uses a non-blocking cache lookup. If the module hasn't finished its (async) first load yet, this reason fires immediately and a background load is kicked off for next time. | `wasm not loaded:fail-open` / `wasm not loaded:fail-close` |
+| `load` | The module fails to download / decode / compile, its `sha256` doesn't match, its ABI version is unsupported, or instance init fails (`on_vm_start`/`on_configure` returned false). Load errors are cached for 30s. | `wasm load:fail-open` / `fail-close` |
+| `acquire` | The instance pool cannot produce a usable VM at request time (e.g. pooling-allocator slots exhausted). | `wasm acquire:…` |
+| `trap` | The guest panics, hits `unreachable`, blows its CPU budget, or otherwise faults while running a hook (including the callout callback and context close). | `wasm trap:…` |
+| `callout` | Callout resolution failed structurally (e.g. the guest's callback trapped mid-delivery). | `wasm callout:…` |
+| `no-resume` | The guest paused on callouts but neither resumed nor answered after all of them completed. | `wasm no-resume:…` |
+| `not loaded` | Response-phase only: the sync hook uses a non-blocking cache lookup; if the module hasn't finished its (async) first load, this fires and a background load is kicked off. | `wasm not loaded:…` |
 
 - **`failOpen: false`** (default) — the request is short-circuited with `500` and body `wasm plugin error`.
-- **`failOpen: true`** — the failure is logged and the plugin chain continues as if Wasm were not configured.
+- **`failOpen: true`** — the failure is logged and the plugin chain continues.
 
 ### Trap poisoning and recovery
 
-A trapped (or otherwise faulted) VM instance is **poisoned**: it is discarded rather than returned to the instance pool, freeing its slot. The next request that needs the module gets a fresh instance re-instantiated from the cached compiled module (no recompilation — only `Module::new` is expensive, `InstancePre::instantiate` is cheap). A guest panic never crashes, hangs, or otherwise impairs the gateway process — it only fails that one request (subject to `failOpen`).
+A trapped (or otherwise faulted) VM instance is **poisoned**: it is discarded rather than returned to the instance pool, freeing its slot. The next request gets a fresh instance re-instantiated from the cached compiled module (cheap — only `Module::new` is expensive). A guest panic never crashes, hangs, or otherwise impairs the gateway process.
 
 ### Timeout
 
-Each hook call is bounded by `timeoutMs` via wasmtime **epoch interruption**: a background ticker increments the engine epoch every 10ms, and the deadline for a hook call is armed fresh at the start of *every* hook call (not once when the instance is leased) — a lease is typically held across the request-headers hook and the response-headers hook, with an upstream round trip in between, so a deadline set only at lease time would often already be stale by the time the response hook runs. A guest that blows its budget traps, which is handled identically to any other trap (poison + `failOpen` decision).
+Each hook call is bounded by `timeoutMs` via wasmtime **epoch interruption**: a background ticker increments the engine epoch every 10ms, and the deadline is re-armed at the start of *every* guest call (headers hooks, callout callbacks, body chunks, ticks). Effective granularity is ~10-20ms. Callout network waits happen *between* guest calls and never consume guest budget.
 
 ## Module cache lifecycle
 
-The compiled-module cache (keyed by `source.cache_key()`) lives for the entire gateway process; be aware of what it does and does not do:
+The compiled-module cache is keyed by the source **plus, for `file` sources, the file's size+mtime**:
 
-- **Never evicted on config change.** A compiled module stays cached and in memory for the life of the process. Editing the `EdgionPlugins` resource so `source.inline` or `source.url` carries different bytecode content creates a *new* cache entry (a different content hash) — it does not replace or evict the old one. The stale entry's memory is only reclaimed on gateway restart.
-- **`file` sources are cached by path, not by content.** Overwriting the `.wasm` file on disk at the same path does **not** pick up the new build — the gateway never re-reads a `file` source once it has compiled it for that path. To roll out a new build, point `source.file` at a new path (e.g. version the filename) or restart the gateway. The same applies if you change only `sha256` while `source.url` is unchanged: the cache key is derived from the source, not from `sha256`, so an unchanged `url` with a new `sha256` reuses the old compiled module and never re-verifies against the new hash.
-- **Multi-tenant sizing.** All Wasm modules across every `EdgionPlugins` resource share one engine-wide pooling allocator. When its instance slots are exhausted, `instantiate` fails (handled like any other `acquire` failure, subject to `failOpen`). Size `instancePoolSize` with the total instance count across all configured Wasm plugins in mind, not just one plugin in isolation.
-- **Timeout floor.** Enforcement is epoch-based with a 10ms ticker, so effective granularity is roughly 10-20ms regardless of the configured `timeoutMs`. A `timeoutMs` set below 10 still allows the guest up to about one tick's worth of CPU time before it traps — it is not a hard sub-10ms bound.
+- **Refcount eviction.** Every live Wasm plugin instance pins its cache entry. When a reload/config change drops the last reference to an entry (e.g. inline content changed → new key), the orphaned entry is evicted after a **60s grace period** (which absorbs reload thrash). In-flight requests keep the entry alive via their own strong references; memory is freed when the last one finishes. Evictions show up in the `edgion_wasm_module_evicted_total` metric.
+- **`file` sources are content-aware.** The runtime cache key includes the file's size and mtime, captured when the plugin is (re)built. Overwriting the `.wasm` at the same path **and triggering a plugin reload** (any change to the owning `EdgionPlugins` resource, or a full config resync) picks up the new content; the old entry is refcount-evicted. Without a reload the running plugin keeps its original key — a bare file overwrite alone still doesn't hot-swap.
+- **Eager instance warm-up.** One instance is instantiated at load time, so guest init failures surface as clear load errors (negative-cached) instead of per-request acquire failures, and a tick period requested during `on_configure` starts ticking before the first request.
+- **Multi-tenant sizing.** All Wasm modules share one engine-wide pooling allocator. Size `instancePoolSize` with the total across all configured Wasm plugins in mind.
+
+## Metrics
+
+All metrics carry a `module` label — the human-readable source descriptor (`file:<path>`, `url:<url>`, `inline:<sha8>`), bounded by the number of configured modules.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `edgion_wasm_module_load_total` | counter | `result=ok\|error` | Load attempts (negative-cache hits not counted) |
+| `edgion_wasm_module_compile_duration_ms` | histogram | | `Module::new` wall time |
+| `edgion_wasm_module_evicted_total` | counter | | Refcount evictions |
+| `edgion_wasm_instance_instantiate_total` | counter | | Fresh instantiations (pool misses) |
+| `edgion_wasm_instance_discard_total` | counter | `reason=poisoned\|over_capacity` | Instances dropped instead of pooled |
+| `edgion_wasm_pool_size` | gauge | | Current pooled instances |
+| `edgion_wasm_hook_duration_ms` | histogram | `phase` | Guest hook wall time (`request_headers`, `response_headers`, `response_body`, `http_call_response`, `tick`) |
+| `edgion_wasm_trap_total` | counter | `phase` | Traps / protocol violations |
+| `edgion_wasm_fail_mode_total` | counter | `reason`, `mode=open\|close` | Fail-mode decisions |
+| `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit` | Callout outcomes |
+
+A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_discard_total{reason="poisoned"}` rising together.
 
 ## `PluginLog` format
 
-The access log records one of:
+- `wasm ok ops=N logs=M` — success; `N` header operations applied, `M` guest log lines (content goes to the debug log).
+- `wasm ok ops=N pause-ignored` — the guest returned `Pause` without dispatching a callout or sending a local response; the request continues.
+- `wasm callouts=N leftover=M` — request phase resolved `N` callouts (`M` dropped by the round cap).
+- `wasm callouts-dropped=N` — the guest dispatched callouts but returned `Continue`; they were dropped (unsupported pattern).
+- `wasm local <status>` — the guest sent a local response.
+- `wasm <reason>:fail-open` / `wasm <reason>:fail-close` — one of the failure reasons above.
 
-- `wasm ok ops=N logs=M` — success; `N` header operations were applied to the request/response, `M` lines were emitted via `proxy_log` (their content goes to the debug log, not here).
-- `wasm ok ops=N pause-ignored` — the guest returned `Action::Pause` without calling `proxy_send_local_response`; v1 cannot honor a bare pause (see [Limitations](#v1-limitations)), so the request/response continues normally.
-- `wasm local <status>` — the guest called `proxy_send_local_response`; the gateway applied that status/headers/body and stopped.
-- `wasm <reason>:fail-open` / `wasm <reason>:fail-close` — one of the four failure reasons above.
+## Remaining limitations
 
-## v1 limitations
-
-- **Headers only, no body hooks.** There is no `proxy_on_request_body` / `proxy_on_response_body` equivalent; a guest that only implements body hooks never gets invoked.
-- **No HTTP or gRPC callouts.** `proxy_dispatch_http_call` and friends are not registered — calling them traps.
-- **No timers.** `proxy_set_tick_period_milliseconds` is accepted (no-op) but no tick ever fires; there is no `proxy_on_tick`.
-- **No shared data or shared queues.** The proxy-wasm shared-KV and shared-queue ABI is not implemented; calling it traps.
-- **`Action::Pause` is not honored.** A hook that returns `Pause` without also calling `proxy_send_local_response` simply continues (logged as `pause-ignored`) — v1 has no mechanism to suspend a request mid-flight and resume it later.
-- **No cross-phase guest state.** The request-headers hook and the response-headers hook of the *same* logical request may run on **different pooled VM instances** (each phase acquires its own lease from the pool), and each hook call gets a fresh proxy-wasm context id. Anything a guest stores in its own struct fields during `on_http_request_headers` is not guaranteed to be visible during `on_http_response_headers`. Use `pluginConfig` / `vmConfig` for static configuration, and rely on the gateway's own header pass-through (e.g. stash a value in a request header) if you need to correlate the two phases.
-
-None of these are permanent architectural limits — they define what v1 exercises, not what proxy-wasm allows.
+- **No request-body hooks** (`proxy_on_request_body`): needs request-body buffering the gateway doesn't have; a guest that only implements request-body hooks never gets invoked.
+- **Response body is observe-only**: no body rewrite, no short-circuit from the body phase.
+- **No gRPC callouts** (`proxy_dispatch_grpc_call`): calling it traps.
+- **Callouts are request-phase only**, and dispatch without `Pause` is dropped.
+- **No shared queues, foreign functions, or guest-defined metrics**: calling them traps.
+- **Per-request contexts are per-hook-call**: the request-headers and response-headers hooks of the same request may run on different pooled instances with fresh context ids. Correlate the phases through shared data or a stashed request header, not guest struct fields.
+- **No OCI (`oci://`) source** yet — roadmap.
 
 ## Building a guest
 
@@ -245,27 +286,60 @@ impl HttpContext for MyPlugin {
 }
 ```
 
-See `edgion-tests/wasm/README.md` for the full contract the reference guest implements (including the panic and local-response test paths) and for how to rebuild the committed artifact after editing the guest source.
+An external-auth callout guest looks like:
+
+```rust
+impl HttpContext for AuthPlugin {
+    fn on_http_request_headers(&mut self, _n: usize, _eos: bool) -> Action {
+        self.dispatch_http_call(
+            "https://auth.internal:8443",       // origin — must be in calloutAllowlist
+            vec![(":method", "GET"), (":path", "/verify"), (":authority", "auth.internal")],
+            None, vec![], Duration::from_millis(500),
+        ).unwrap();
+        Action::Pause
+    }
+}
+
+impl Context for AuthPlugin {
+    fn on_http_call_response(&mut self, _token: u32, num_headers: usize, _body: usize, _trailers: usize) {
+        if num_headers > 0 && self.get_http_call_response_header(":status").as_deref() == Some("200") {
+            self.resume_http_request();
+        } else {
+            self.send_http_response(403, vec![], Some(b"denied"));
+        }
+    }
+}
+```
+
+See `edgion-tests/wasm/README.md` for the full contract the reference guest implements and for how to rebuild the committed artifact after editing the guest source.
 
 ## FAQ
 
+### Q: Which proxy-wasm ABI versions are supported?
+
+`0.2.0` and `0.2.1` (the versions the Rust/C++ SDKs export as `proxy_abi_version_0_2_x`). A module exporting a different `proxy_abi_version_*` marker fails at load with an explicit message; a module exporting none loads with a WARN.
+
+### Q: My callout is never executed?
+
+Check, in order: (1) the target origin is listed in `calloutAllowlist` — empty list disables callouts entirely; (2) the guest returns `Action::Pause` after dispatching — dispatch followed by `Continue` is dropped (`callouts-dropped=N` in the access log); (3) the dispatch happens in the request phase — response/body/tick phases return `UNIMPLEMENTED`.
+
 ### Q: My guest module isn't taking effect on the response phase?
 
-Confirm you listed the entry under `upstreamResponseFilterPlugins`, not `upstreamResponsePlugins` (that field belongs to a different, async stage used by other plugins such as ExtProc) — Wasm only supports the sync `UpstreamResponseFilter` stage on the response side.
+Confirm you listed the entry under `upstreamResponseFilterPlugins` (headers) or `upstreamResponseBodyFilterPlugins` (read-only body), not `upstreamResponsePlugins` (that async stage belongs to other plugins such as ExtProc).
 
 ### Q: The controller rejected my EdgionPlugins resource?
 
-Common causes: `source` has zero or more than one of `file`/`inline`/`url` set; `source.url` is set without `sha256`; `sha256` isn't exactly 64 hex characters; `source.inline` isn't valid base64; `timeoutMs` is `0` or above `10000`; `instancePoolSize` is `0` or above `64`.
+Common causes: `source` has zero or more than one of `file`/`inline`/`url` set; `source.url` without `sha256`; `sha256` isn't 64 hex chars; `source.inline` isn't valid base64 or decodes to more than 1MiB; `source.fetch` without `source.url`; `calloutAllowlist` entries that aren't clean `scheme://host[:port]` origins; `timeoutMs`/`calloutTimeoutMs` out of `1..=10000`; `instancePoolSize` out of `1..=64`.
 
-### Q: My module loads fine locally but fails in the gateway with a "load" fail-close?
+### Q: I replaced the `.wasm` file on disk but the gateway still runs the old build?
 
-Check the source form: `file` paths are resolved against the gateway's work directory (relative paths are not resolved against your local shell's cwd); `url` sources require the URL to respond within 10 seconds with a `2xx` status and bytes matching `sha256`.
+The content-aware cache key is captured when the plugin is built. Touch the owning `EdgionPlugins` resource (any update) after overwriting the file — the reload re-stats the file, lands on a new cache entry, and the old one is evicted after the grace period.
 
-### Q: Can the guest read a header the previous request-phase hook set?
+### Q: Can two requests share state?
 
-Within the same hook call, yes — the guest's own writes are visible to subsequent `proxy_get_header_map_*` calls in that same call. Across the request-headers hook and the response-headers hook of the same request, no — see [No cross-phase guest state](#v1-limitations).
+Yes — via `proxy_{get,set}_shared_data`, which is shared across all instances of the same module **within one gateway process**. It is not replicated across gateway replicas; cluster-level coordination still belongs to `rate_limit_redis`.
 
 ## Related links
 
-- [ExtProc Plugin](./ext-proc.md) — the gRPC-based alternative to in-process Wasm execution
+- [ExtProc Plugin](./ext-proc.md) — the gRPC push-model alternative (see [Callout vs ExtProc](#callout-vs-extproc))
 - [Filters overview](../README.md)

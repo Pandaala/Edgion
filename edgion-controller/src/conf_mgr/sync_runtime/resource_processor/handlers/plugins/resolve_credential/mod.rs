@@ -20,6 +20,7 @@ mod jwt;
 mod key_auth;
 mod ldap_auth;
 mod openid_connect;
+mod wasm;
 
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use basic_auth::resolve as resolve_basic_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use csrf::resolve as resolve_csrf;
@@ -33,6 +34,7 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use jwt::res
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use key_auth::resolve as resolve_key_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use ldap_auth::resolve as resolve_ldap_auth;
 pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use openid_connect::resolve as resolve_openid_connect;
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use wasm::resolve as resolve_wasm;
 
 /// Read a UTF-8 value from a Secret's `data` map. Returns the first non-empty
 /// match across the provided keys.
