@@ -22,7 +22,8 @@ This is the classic external auth pattern, comparable to:
 - **Secret injection** — inject Kubernetes Secret values as custom request headers via `${secretRef:ns/name:key}` templates
 - **Graceful degradation** — when the auth service is unreachable, allow requests through (fail-open) or return a custom error status (fail-close)
 - **Custom success status codes** — not limited to 2xx; configure exactly which status codes count as auth success
-- **SSRF protection** — target is a Kubernetes Service `backendRef`; resolved pod IPs are validated by `validate_endpoint_backend_addr` before dialing
+- **Service or URL target** — `target` is a Kubernetes Service `backendRef` by default, or an external URL (`target.url`); see [Target](#target) below
+- **SSRF protection** — a Service target's resolved pod IPs are validated by `validate_endpoint_backend_addr` before dialing; a URL target has its own egress guard (see [Target](#target))
 - **Brute-force mitigation** — optional `authFailureDelayMs` delay on auth failure responses
 - **Hot reload** — configuration changes take effect immediately without a gateway restart
 
@@ -87,7 +88,7 @@ spec:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `target` | object | required | Kubernetes Service backend: `{name, namespace, port}`. Port is required. Namespace defaults to the plugin namespace. |
+| `target` | object | required | Either a Kubernetes Service backend `{name, namespace, port}` (port required; namespace defaults to the plugin namespace), or an external URL target `{url, blockPrivate}`. The two forms are mutually exclusive. See [Target](#target). |
 | `timeoutMs` | integer | `5000` | Request timeout in milliseconds. |
 | `successStatusCodes` | array\<integer\> | `null` | Status codes treated as auth success. Default: any 2xx (200–299). |
 | `tls` | object | `null` | TLS settings for the outbound auth request. Fields: `verify` (default `true`; `false` is honored, operator responsibility); `validation.caCertificateRefs` (list of `{kind, name, namespace}` refs — Secret or ConfigMap — each holding a `ca.crt` key); `validation.wellKnownCACertificates: System` (built-in webpki roots); `clientCertificateRef` (Secret with `tls.crt`/`tls.key` for client mTLS). Inline CA is no longer supported; use a Secret or ConfigMap with a `ca.crt` key. Phase 1 note: `validation.hostname` and `validation.subjectAltNames` (SAN pinning) are schema-exposed but not enforced; configuring them causes `Accepted=False`. |
@@ -167,11 +168,34 @@ When the auth service is unreachable (connection refused, timeout, rate-limited,
 
 For security-critical APIs, keep `allowDegradation: false`. Use `allowDegradation: true` only when authentication is not on the critical security path (for example, analytics or low-sensitivity APIs where availability takes priority).
 
-### SSRF Protection
+### Target
 
-`target` is a Kubernetes Service `backendRef` (name, namespace, port) — not a free-form URI. At runtime the gateway resolves the Service to pod endpoints via EndpointSlice and runs `validate_endpoint_backend_addr` on each resolved IP before dialing. This guard rejects loopback (`127.x.x.x`) and link-local (`169.254.x.x`) addresses. The same protection is used by `request_mirror` backends.
+`target` addresses the auth service in one of two mutually exclusive forms:
 
-Cluster-local DNS names (e.g. `auth-svc.edgion-default.svc.cluster.local`) cannot be classified as loopback or link-local at config time, so they bypass the IP-layer guard — the appropriate defense for those paths is Kubernetes NetworkPolicy.
+- **Kubernetes Service** (`{name, namespace, port}`, the default form shown above) — at runtime the
+  gateway resolves the Service to pod endpoints via EndpointSlice and runs
+  `validate_endpoint_backend_addr` on each resolved IP before dialing. This guard rejects loopback
+  (`127.x.x.x`) and link-local (`169.254.x.x`) addresses. The same protection is used by
+  `request_mirror` backends. Cluster-local DNS names (e.g. `auth-svc.edgion-default.svc.cluster.local`)
+  cannot be classified as loopback or link-local at dial time, so they bypass this IP-layer guard —
+  the appropriate defense for those names is Kubernetes NetworkPolicy.
+- **External URL** (`{url, blockPrivate}`) — lets ForwardAuth call an auth service outside the
+  cluster. `target` is shared with the LinkSys Webhook connector's target field
+  (`ExternalHttpConnection.target`), so the origin-only rule, the mutual exclusion with the Service
+  fields, the `http://` + `tls.enabled` rejection, the dedicated connection pool, and the
+  `blockPrivate` / gateway-wide egress-policy guard are all documented once, in
+  [Connectors (LinkSys) → Webhook connector → URL target](../../ops-guide/infrastructure/connectors.md#url-target-external-services)
+  and [→ Egress policy (SSRF protection)](../../ops-guide/infrastructure/connectors.md#egress-policy-ssrf-protection).
+  Everything there applies to ForwardAuth unchanged.
+
+```yaml
+config:
+  target:
+    url: https://auth.example.com
+    blockPrivate: true
+  request:
+    path: { template: "/verify" }
+```
 
 ## Usage Examples
 
@@ -358,7 +382,7 @@ spec:
 | Custom error status | `decision.statusOnError` | no | `status_on_error` | no |
 | Hide credentials | `decision.hideCredentials` | no | no | no |
 | Brute-force delay | `decision.authFailureDelayMs` | no | no | no |
-| SSRF protection | backendRef + IP guard | no | no | no |
+| SSRF protection | Service backendRef IP guard, or URL target egress guard (`blockPrivate`) | no | no | no |
 | Cookie forwarding | via `forwardAll` or `origin` | yes | yes | yes |
 | TLS support | yes (`tls` block) | yes | yes | yes |
 | Forward body | no | `forwardBody` | no | no |
@@ -407,8 +431,8 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 
 ## Notes
 
-1. **backendRef target**: the `target` field is a Kubernetes Service reference (`name`/`namespace`/`port`), not a URI. The gateway resolves pod endpoints at call time via EndpointSlice.
-2. **SSRF guard**: each resolved pod IP is validated by `validate_endpoint_backend_addr` before dialing. Loopback and link-local IPs are rejected.
+1. **Two target forms**: `target` is either a Kubernetes Service reference (`name`/`namespace`/`port`) or an external URL (`url`/`blockPrivate`); see [Target](#target). The gateway resolves pod endpoints at call time via EndpointSlice for a Service target.
+2. **SSRF guard**: a Service target's resolved pod IPs are validated by `validate_endpoint_backend_addr` before dialing (loopback and link-local rejected). A URL target has its own guard, documented in [Connectors (LinkSys) → Egress policy](../../ops-guide/infrastructure/connectors.md#egress-policy-ssrf-protection).
 3. **No redirect following**: the HTTP client does not follow redirects. A 301/302 from the auth service is treated as an auth failure.
 4. **Body not forwarded**: the original request body is not forwarded to the auth service. Most auth scenarios do not need it.
 5. **Hot reload**: updating the `EdgionPlugins` resource triggers an automatic hot reload; no gateway restart is required.

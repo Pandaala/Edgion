@@ -53,7 +53,7 @@ The module path `crate::types::link_sys` **no longer exists**. If you still see 
 - Calls `LinkSys::validate_config()`:
   - Redis/Etcd/Elasticsearch with empty `endpoints` → error
   - Redis with `topology.mode=sentinel` but no `sentinel` sub-object / `mode=cluster` but no `cluster` sub-object → error
-  - Webhook (redesigned): `target.backendRef` missing `port` or unsupported `kind`; `request` template parse error; a field name in both `origin` and `custom`, duplicate names within a block, or a `headers.origin: [{name: Cookie}]` / non-empty `cookies` conflict; `statusOnError` out of range; `maxResponseBytes` over the cap → error. See [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
+  - Webhook (redesigned): a Service target (`target.name`/`target.port`) missing `name`/`port` or with an unsupported `kind`, OR a `url` target that is not origin-only, is set together with any Service field (mutually exclusive), or combines `http://` with `tls.enabled: true`; `request` template parse error; a field name in both `origin` and `custom`, duplicate names within a block, or a `headers.origin: [{name: Cookie}]` / non-empty `cookies` conflict; `statusOnError` out of range; `maxResponseBytes` over the cap → error. See [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
 - Unimplemented providers (e.g., `Kafka`) **do not** produce errors and stay `Accepted=True` (the schema is valid; the backend is simply not yet wired up — this avoids flipping existing resources to Invalid on upgrade).
 
 ### parse — credential resolution

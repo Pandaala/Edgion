@@ -183,7 +183,7 @@ impl ForwardAuthConfig {
     /// Validate the configuration and return the first error found.
     pub fn validation_error(&self) -> Option<String> {
         // Validate the target (port required, kind must be supported)
-        if let Some(e) = crate::resources::common::validate_webhook_target(&self.conn.target) {
+        if let Some(e) = crate::resources::common::validate_connection_target(&self.conn) {
             return Some(format!("target invalid: {e}"));
         }
         // Validate status_on_error range
@@ -219,7 +219,7 @@ mod tests {
     fn forward_auth_new_schema_parses() {
         let y = "target:\n  name: auth\n  port: 8080\ndecision:\n  statusOnError: 503\n";
         let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
-        assert_eq!(cfg.conn.target.backend_ref.port, Some(8080));
+        assert_eq!(cfg.conn.target.service.port, Some(8080));
         assert!(cfg.request.headers.forward_all); // forward_auth Default sets true
         assert!(cfg.validation_error().is_none());
     }

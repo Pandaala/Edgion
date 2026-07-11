@@ -155,7 +155,7 @@ pub struct EdgionGatewayConfig {
 }
 
 /// Gateway configuration
-#[derive(Clone, Serialize, Deserialize, Args, Default)]
+#[derive(Clone, Serialize, Deserialize, Args)]
 pub struct GatewayConfig {
     /// Operator gRPC address (e.g., http://127.0.0.1:12151)
     #[arg(long = "server-addr", value_name = "ADDR")]
@@ -207,6 +207,45 @@ pub struct GatewayConfig {
     )]
     #[serde(default)]
     pub fips_policy: Option<crate::tls::fips_profile::FipsPolicyMode>,
+
+    /// Reject RFC1918 / unique-local addresses for outbound URL targets by default.
+    /// A `target.blockPrivate` on the resource overrides this. Loopback and
+    /// link-local are always rejected regardless. Default false, matching
+    /// `classify_backend_addr`'s stance for Service targets.
+    /// Set in the gateway config file, or via `EDGION_OUTBOUND_BLOCK_PRIVATE`
+    /// (truthy: 1/true/yes/on).
+    #[arg(skip)]
+    #[serde(default)]
+    pub outbound_egress_block_private: bool,
+
+    /// TTL in milliseconds for `EgressResolver`'s per-client address memo.
+    /// Deliberately distinct from `EdgionGatewayConfig.dnsResolver.cacheTtl`, which
+    /// governs ExternalName self-resolution. Default 5s, matching
+    /// `backends::discovery::dns_cache::DEFAULT_DNS_CACHE_TTL`.
+    /// Set in the gateway config file, or via `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`.
+    #[arg(skip)]
+    #[serde(default = "default_outbound_egress_dns_cache_ttl_ms")]
+    pub outbound_egress_dns_cache_ttl_ms: u64,
+}
+
+/// 5s — matches `backends::discovery::dns_cache::DEFAULT_DNS_CACHE_TTL`.
+fn default_outbound_egress_dns_cache_ttl_ms() -> u64 {
+    5_000
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            server_addr: None,
+            admin_listen: None,
+            probe_listen: None,
+            admin_token: None,
+            require_fips: false,
+            fips_policy: None,
+            outbound_egress_block_private: false,
+            outbound_egress_dns_cache_ttl_ms: default_outbound_egress_dns_cache_ttl_ms(),
+        }
+    }
 }
 
 impl std::fmt::Debug for GatewayConfig {
@@ -218,6 +257,11 @@ impl std::fmt::Debug for GatewayConfig {
             .field("admin_token", &self.admin_token.as_ref().map(|_| "[redacted]"))
             .field("require_fips", &self.require_fips)
             .field("fips_policy", &self.fips_policy)
+            .field("outbound_egress_block_private", &self.outbound_egress_block_private)
+            .field(
+                "outbound_egress_dns_cache_ttl_ms",
+                &self.outbound_egress_dns_cache_ttl_ms,
+            )
             .finish()
     }
 }
@@ -278,6 +322,43 @@ pub fn fips_policy_env_mode(env_value: Option<&str>) -> EnvPolicy {
     match crate::tls::fips_profile::FipsPolicyMode::parse_token(raw) {
         Some(mode) => EnvPolicy::Set(mode),
         None => EnvPolicy::Invalid(raw.trim().to_string()),
+    }
+}
+
+/// Env var that force-enables `block_private` for outbound URL targets.
+/// Truthy: 1/true/yes/on.
+pub const OUTBOUND_BLOCK_PRIVATE_ENV: &str = "EDGION_OUTBOUND_BLOCK_PRIVATE";
+
+/// Whether `EDGION_OUTBOUND_BLOCK_PRIVATE` is set to a truthy value (trimmed,
+/// lowercased). Unset/empty/other => false.
+pub fn outbound_block_private_env_enabled(env_value: Option<&str>) -> bool {
+    match env_value.map(|v| v.trim().to_ascii_lowercase()) {
+        Some(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
+        None => false,
+    }
+}
+
+/// Env var overriding the outbound egress DNS cache TTL, in milliseconds.
+pub const OUTBOUND_DNS_CACHE_TTL_MS_ENV: &str = "EDGION_OUTBOUND_DNS_CACHE_TTL_MS";
+
+/// Resolve the outbound egress DNS cache TTL (ms): the env override takes
+/// precedence over `config_value` when present and parses as `u64`. An
+/// unparseable env value is not worth failing startup over — this logs a WARN
+/// and falls back to `config_value` instead of propagating the parse error.
+pub fn resolve_outbound_egress_dns_cache_ttl_ms(config_value: u64, env_value: Option<&str>) -> u64 {
+    match env_value {
+        Some(raw) => match raw.trim().parse::<u64>() {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                tracing::warn!(
+                    target: "startup",
+                    raw_value = raw,
+                    "EDGION_OUTBOUND_DNS_CACHE_TTL_MS is not a valid u64; keeping configured value"
+                );
+                config_value
+            }
+        },
+        None => config_value,
     }
 }
 
@@ -1071,6 +1152,84 @@ access_log_sensitive:
         assert!(!require_fips_env_enabled(Some("0")));
         assert!(!require_fips_env_enabled(Some("")));
         assert!(!require_fips_env_enabled(None));
+    }
+
+    #[test]
+    fn outbound_egress_defaults_are_permissive_and_short_lived() {
+        let cfg = GatewayConfig::default();
+        assert!(
+            !cfg.outbound_egress_block_private,
+            "private ranges must be allowed by default, matching classify_backend_addr"
+        );
+        assert_eq!(cfg.outbound_egress_dns_cache_ttl_ms, 5_000);
+    }
+
+    #[test]
+    fn outbound_egress_parses_from_yaml() {
+        let cfg: GatewayConfig =
+            serde_yaml::from_str("outbound_egress_block_private: true\noutbound_egress_dns_cache_ttl_ms: 30000\n")
+                .unwrap();
+        assert!(cfg.outbound_egress_block_private);
+        assert_eq!(cfg.outbound_egress_dns_cache_ttl_ms, 30_000);
+    }
+
+    #[test]
+    fn outbound_egress_fields_come_from_config_file_not_cli() {
+        // Both fields are `#[arg(skip)]`: clap never populates them, and
+        // `merge()` does not copy them from the CLI-parsed struct into the
+        // file-loaded base config. Their only source is the config file (or
+        // the corresponding env var, applied separately in cli/mod.rs). This
+        // guards against a regression that re-adds a clap flag for these
+        // fields without also wiring `merge()` to honor it.
+        let yaml = "gateway:\n  outbound_egress_block_private: true\n  outbound_egress_dns_cache_ttl_ms: 30000\n";
+        let mut base: EdgionGatewayConfig = serde_yaml::from_str(yaml).unwrap();
+        assert!(base.gateway.outbound_egress_block_private);
+        assert_eq!(base.gateway.outbound_egress_dns_cache_ttl_ms, 30_000);
+
+        // Simulate a CLI-parsed struct carrying different values (as would
+        // happen if a clap flag were mistakenly reintroduced and passed).
+        let mut cli = EdgionGatewayConfig::default();
+        cli.gateway.outbound_egress_block_private = false;
+        cli.gateway.outbound_egress_dns_cache_ttl_ms = 5_000;
+
+        EdgionGatewayConfig::merge(&mut base, &cli);
+
+        // merge() must leave these fields alone: the config-file values survive.
+        assert!(base.gateway.outbound_egress_block_private);
+        assert_eq!(base.gateway.outbound_egress_dns_cache_ttl_ms, 30_000);
+
+        // And GatewayConfig::default() still gives the documented defaults.
+        assert!(!GatewayConfig::default().outbound_egress_block_private);
+        assert_eq!(GatewayConfig::default().outbound_egress_dns_cache_ttl_ms, 5_000);
+    }
+
+    #[test]
+    fn outbound_block_private_env_truthy_values() {
+        assert!(outbound_block_private_env_enabled(Some("1")));
+        assert!(outbound_block_private_env_enabled(Some(" TRUE ")));
+        assert!(outbound_block_private_env_enabled(Some("yes")));
+        assert!(outbound_block_private_env_enabled(Some("On")));
+        assert!(!outbound_block_private_env_enabled(Some("0")));
+        assert!(!outbound_block_private_env_enabled(Some("")));
+        assert!(!outbound_block_private_env_enabled(None));
+    }
+
+    #[test]
+    fn outbound_egress_dns_cache_ttl_ms_env_overrides_when_valid() {
+        assert_eq!(resolve_outbound_egress_dns_cache_ttl_ms(5_000, Some("30000")), 30_000);
+        assert_eq!(resolve_outbound_egress_dns_cache_ttl_ms(5_000, Some(" 12 ")), 12);
+    }
+
+    #[test]
+    fn outbound_egress_dns_cache_ttl_ms_falls_back_on_unparseable_env() {
+        // An unparseable TTL must not panic or fail startup; the configured
+        // value is kept and a WARN is logged.
+        assert_eq!(
+            resolve_outbound_egress_dns_cache_ttl_ms(5_000, Some("not-a-number")),
+            5_000
+        );
+        assert_eq!(resolve_outbound_egress_dns_cache_ttl_ms(7_500, Some("")), 7_500);
+        assert_eq!(resolve_outbound_egress_dns_cache_ttl_ms(9_000, None), 9_000);
     }
 
     #[test]

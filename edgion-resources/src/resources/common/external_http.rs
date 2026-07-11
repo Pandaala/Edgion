@@ -17,7 +17,6 @@ use std::collections::BTreeMap;
 
 use crate::resources::common::EdgionService;
 use crate::resources::common::TlsConfig;
-use crate::resources::http_route::BackendObjectReference;
 
 // ============================================================
 // ResolvedSecrets
@@ -43,77 +42,214 @@ impl std::fmt::Debug for ResolvedSecrets {
 // WebhookTarget
 // ============================================================
 
-/// Webhook target backend.
+/// Service-backed webhook target fields.
 ///
-/// Targets a Kubernetes Service backend for webhook requests. The gateway resolves
-/// pod endpoints at call time based on the `kind` semantics.
-///
-/// `kind` semantics match `EdgionService::from_kind()`:
-///   `None` / `""` / `"Service"` / `"ServiceEndpointSlice"` → WRR over pod endpoints resolved by the gateway at call time
-///   `"ServiceClusterIp"`                                    → ClusterIP DNS, kube-proxy LB
-/// Other kinds (ExternalName, ServiceImport, unsupported) are rejected.
-///
-/// Port is required (webhook connections need an explicit destination port).
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct WebhookTarget {
-    /// Backend service reference (name, namespace, port, kind).
-    /// Matches the Gateway API BackendObjectReference pattern.
-    /// Fields are flattened for serialization (no nesting in YAML).
-    #[serde(flatten)]
-    pub backend_ref: BackendObjectReference,
+/// Webhook-local on purpose: this is NOT the shared
+/// [`crate::resources::http_route::BackendObjectReference`], whose `name` is
+/// required and whose relaxation would silently degrade HTTPRoute's `backendRef`
+/// validation. Every field here is optional so that a `url`-only target parses.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookServiceRef {
+    /// Group of the referent. Empty = core.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub group: String,
+    /// Kind of the referent. `None` / `""` defaults to `Service`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Name of the referent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Namespace of the backend. `None` = the LinkSys resource's namespace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    /// Destination port. Required for a service target.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<i32>,
 }
 
-impl Default for WebhookTarget {
-    fn default() -> Self {
-        Self {
-            backend_ref: BackendObjectReference {
-                group: String::new(),
-                kind: None,
-                name: String::new(),
-                namespace: None,
-                port: None,
-            },
+/// Webhook target backend: either an external URL or a Kubernetes Service.
+///
+/// The two forms are mutually exclusive and enforced by [`WebhookTarget::kind`],
+/// not by the type system: the serialized shape must stay flat so that existing
+/// CRs and conf_sync payloads round-trip unchanged. An untagged enum would have
+/// silently matched `{url, name}` as a Service target.
+///
+/// ## YAML
+///
+/// ```yaml
+/// # External URL (origin only)
+/// target:
+///   url: https://api.example.com
+///   blockPrivate: true      # optional
+///
+/// # Kubernetes Service
+/// target:
+///   name: auth-svc
+///   namespace: prod
+///   port: 8080
+/// ```
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WebhookTarget {
+    /// External URL target. Origin only: `scheme://host[:port]`, no path, query,
+    /// fragment, or credentials. Mutually exclusive with the service fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+
+    /// URL targets only. When `true`, resolved RFC1918 / unique-local addresses are
+    /// rejected in addition to the always-blocked loopback and link-local ranges.
+    /// `None` = inherit the gateway-local `outbound_egress.block_private` default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub block_private: Option<bool>,
+
+    /// Kubernetes Service target fields (flattened: no nesting in YAML).
+    #[serde(flatten)]
+    pub service: WebhookServiceRef,
+}
+
+/// Validated view of a [`WebhookTarget`]. Derived by [`WebhookTarget::kind`],
+/// never stored.
+#[derive(Debug)]
+pub enum TargetKind<'a> {
+    /// External URL target.
+    Url {
+        /// Validated origin-only URL.
+        url: &'a str,
+        /// `None` = inherit the gateway-local default.
+        block_private: Option<bool>,
+    },
+    /// Kubernetes Service target.
+    Service(&'a WebhookServiceRef),
+}
+
+impl WebhookTarget {
+    /// Resolve this target to a validated [`TargetKind`], or return the first
+    /// error found. This is the single source of truth: `validate_webhook_target`
+    /// delegates here, so the schema layer and the gateway cannot disagree.
+    pub fn kind(&self) -> Result<TargetKind<'_>, String> {
+        let svc = &self.service;
+        let has_service = !svc.group.is_empty()
+            || svc.kind.is_some()
+            || svc.name.is_some()
+            || svc.namespace.is_some()
+            || svc.port.is_some();
+
+        match (&self.url, has_service) {
+            (Some(_), true) => Err(
+                "target: url and service fields (name/namespace/port/kind/group) are mutually exclusive; \
+                 set exactly one form"
+                    .to_string(),
+            ),
+            (None, false) => Err("target: one of url or name is required".to_string()),
+            (Some(url), false) => {
+                validate_origin_url(url)?;
+                Ok(TargetKind::Url {
+                    url,
+                    block_private: self.block_private,
+                })
+            }
+            (None, true) => {
+                if self.block_private.is_some() {
+                    return Err("target: blockPrivate applies to url targets only".to_string());
+                }
+                validate_service_ref(svc)?;
+                Ok(TargetKind::Service(svc))
+            }
         }
+    }
+}
+
+/// Validate an origin-only URL: `scheme://host[:port]` with `http`/`https`,
+/// no path, query, fragment, or credentials.
+///
+/// Path and method come from the `request` block, so admitting a path here would
+/// leave `request.path`, `path_override`, and `healthCheck.active.path`
+/// composition undefined.
+fn validate_origin_url(raw: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(raw).map_err(|e| format!("target: url is not a valid URL: {e}"))?;
+
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("target: url scheme must be http or https, got '{other}'")),
+    }
+    if parsed.host_str().is_none() {
+        return Err("target: url must have a host".to_string());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("target: url must not contain credentials".to_string());
+    }
+    // `Url::parse("https://host")` normalizes the path to "/".
+    let path = parsed.path();
+    if !path.is_empty() && path != "/" {
+        return Err(format!(
+            "target: url must be origin-only (scheme://host[:port]); path '{path}' is not allowed \
+             — put the path in request.path.template"
+        ));
+    }
+    if parsed.query().is_some() {
+        return Err("target: url must be origin-only; a query string is not allowed".to_string());
+    }
+    if parsed.fragment().is_some() {
+        return Err("target: url must be origin-only; a fragment is not allowed".to_string());
+    }
+    Ok(())
+}
+
+/// Validate a Service-backed target.
+///
+/// Checks:
+/// - `name` is present and non-empty
+/// - `port` is present and > 0
+/// - `kind` is in the allowed set: {Service, ServiceClusterIp, ServiceEndpointSlice, None, ""}
+/// - Rejects: ExternalName, ServiceImport, unsupported kinds
+fn validate_service_ref(svc: &WebhookServiceRef) -> Result<(), String> {
+    if svc.name.as_deref().unwrap_or("").is_empty() {
+        return Err("target: one of url or name is required".to_string());
+    }
+    match svc.port {
+        None => return Err("backendRef port is required".to_string()),
+        Some(port) if port <= 0 => return Err("backendRef port must be > 0".to_string()),
+        Some(_) => {}
+    }
+    match EdgionService::from_kind(svc.kind.as_ref()) {
+        EdgionService::Unsupported(k) => Err(format!("unsupported service kind: {k}")),
+        EdgionService::ServiceImport => Err("ServiceImport is not yet supported for webhook".to_string()),
+        EdgionService::ServiceExternalName => Err("ServiceExternalName is not supported for webhook".to_string()),
+        // Service, ServiceClusterIp, ServiceEndpointSlice
+        _ => Ok(()),
     }
 }
 
 /// Validate a WebhookTarget and return an error message if invalid.
-///
-/// Checks:
-/// - `backend_ref.port` is Some (required)
-/// - `backend_ref.kind` is in allowed set: {Service, ServiceClusterIp, ServiceEndpointSlice, None, ""}
-/// - Rejects: ExternalName, ServiceImport, unsupported kinds
 pub fn validate_webhook_target(target: &WebhookTarget) -> Option<String> {
-    let backend_ref = &target.backend_ref;
+    target.kind().err()
+}
 
-    // Require port
-    if backend_ref.port.is_none() {
-        return Some("backendRef port is required".to_string());
-    }
-
-    // Validate port value if present
-    if let Some(port) = backend_ref.port {
-        if port <= 0 {
-            return Some("backendRef port must be > 0".to_string());
+/// Validate a target together with the connection's TLS block.
+///
+/// Beyond [`validate_webhook_target`], this rejects `url: http://...` combined
+/// with `tls.enabled: true`. A webhook target is a security boundary; silently
+/// preferring the URL's plaintext scheme over an explicit `tls.enabled` would be
+/// a downgrade the operator never asked for.
+pub fn validate_connection_target(conn: &ExternalHttpConnection) -> Option<String> {
+    let kind = match conn.target.kind() {
+        Ok(k) => k,
+        Err(e) => return Some(e),
+    };
+    if let TargetKind::Url { url, .. } = kind {
+        let tls_enabled = conn.tls.as_ref().map(|t| t.enabled).unwrap_or(false);
+        // Parse the URL to get the normalized scheme (lowercase), not the raw string prefix.
+        // validate_origin_url has already run in target.kind(), so parse cannot fail.
+        if let Ok(parsed) = url::Url::parse(url) {
+            if parsed.scheme() == "http" && tls_enabled {
+                return Some(
+                    "target: url scheme is http but tls.enabled is true; use https:// or set tls.enabled: false"
+                        .to_string(),
+                );
+            }
         }
     }
-
-    // Validate kind
-    match EdgionService::from_kind(backend_ref.kind.as_ref()) {
-        EdgionService::Unsupported(k) => {
-            return Some(format!("unsupported service kind: {k}"));
-        }
-        EdgionService::ServiceImport => {
-            return Some("ServiceImport is not yet supported for webhook".to_string());
-        }
-        EdgionService::ServiceExternalName => {
-            return Some("ServiceExternalName is not supported for webhook".to_string());
-        }
-        // All other kinds are allowed: Service, ServiceClusterIp, ServiceEndpointSlice
-        _ => {}
-    }
-
     None
 }
 

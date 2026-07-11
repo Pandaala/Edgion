@@ -29,6 +29,7 @@ k8s-openapi.workspace = true
 regex.workspace = true
 smallvec.workspace = true
 parking_lot.workspace = true
+url.workspace = true
 
 # Errors
 thiserror.workspace = true

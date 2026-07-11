@@ -61,6 +61,8 @@ pub mod names {
     pub const LDAP_AUTH_ERRORS_TOTAL: &str = "edgion_ldap_auth_errors_total";
     // Webhook key resolver: per-resolve failure counter by reason
     pub const WEBHOOK_RESOLVE_ERRORS_TOTAL: &str = "edgion_webhook_resolve_errors_total";
+    // Egress resolver: outbound address rejected by the SSRF egress policy, by reason
+    pub const EGRESS_BLOCKED_TOTAL: &str = "edgion_outbound_egress_blocked_total";
     // Access-log backfill: docs re-ingested into ES from the fallback file,
     // and lines that failed to backfill (kept for retry). Cold/failure-path.
     pub const ACCESS_LOG_BACKFILL_INGESTED_TOTAL: &str = "edgion_access_log_backfill_ingested_total";
@@ -564,6 +566,13 @@ pub fn record_ldap_auth_error(kind: &'static str) {
 /// `"status_error"`, `"call_failed"`. Fixed cardinality — safe as a label.
 pub fn record_webhook_resolve_error(reason: &'static str) {
     counter!(names::WEBHOOK_RESOLVE_ERRORS_TOTAL, "reason" => reason).increment(1);
+}
+
+/// Record an outbound address rejected by the egress policy.
+///
+/// `reason` is one of `"loopback"`, `"link_local"`, `"private"`, `"unspecified"`.
+pub fn record_egress_blocked(reason: &'static str) {
+    counter!(names::EGRESS_BLOCKED_TOTAL, "reason" => reason).increment(1);
 }
 
 #[cfg(test)]

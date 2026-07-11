@@ -83,12 +83,12 @@ impl WebhookManager {
         // Auth validation and injection will be re-implemented in Wave B with the new request field.
         // Skip auth validation for shim fields.
 
-        // Apply linksys_ns fallback: when backend_ref.namespace is absent, use the
-        // namespace of the LinkSys resource as a fallback (matching the behaviour of
-        // the previous WebhookManager implementation).
-        if config.conn.target.backend_ref.namespace.is_none() {
+        // Apply linksys_ns fallback: when the target is a Service whose namespace is
+        // absent, use the namespace of the LinkSys resource. A URL target has no
+        // namespace to backfill.
+        if config.conn.target.url.is_none() && config.conn.target.service.namespace.is_none() {
             if let Some(ns) = linksys_ns {
-                config.conn.target.backend_ref.namespace = Some(ns.to_string());
+                config.conn.target.service.namespace = Some(ns.to_string());
             }
         }
 
@@ -205,19 +205,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_upsert_and_get() {
-        use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{
+            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+        };
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
+                    service: WebhookServiceRef {
                         kind: None,
-                        name: "resolve-svc".to_string(),
+                        name: Some("resolve-svc".to_string()),
                         namespace: Some("default".to_string()),
                         port: Some(8080),
+                        ..Default::default()
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -235,19 +237,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_remove() {
-        use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{
+            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+        };
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
+                    service: WebhookServiceRef {
                         kind: None,
-                        name: "resolve-svc".to_string(),
+                        name: Some("resolve-svc".to_string()),
                         namespace: Some("default".to_string()),
                         port: Some(8080),
+                        ..Default::default()
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -266,20 +270,22 @@ mod tests {
     #[tokio::test]
     async fn test_manager_service_cluster_ip_builds_dns_url() {
         use crate::plugins::http::common::outbound::target::ResolvedTarget;
-        use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{
+            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+        };
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
+                    service: WebhookServiceRef {
                         kind: Some("ServiceClusterIp".to_string()),
-                        name: "auth-svc".to_string(),
+                        name: Some("auth-svc".to_string()),
                         namespace: Some("prod".to_string()),
                         port: Some(8080),
+                        ..Default::default()
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -302,20 +308,22 @@ mod tests {
     #[tokio::test]
     async fn test_manager_service_cluster_ip_uses_linksys_ns_fallback() {
         use crate::plugins::http::common::outbound::target::ResolvedTarget;
-        use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{
+            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+        };
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
+                    service: WebhookServiceRef {
                         kind: Some("ServiceClusterIp".to_string()),
-                        name: "svc".to_string(),
+                        name: Some("svc".to_string()),
                         namespace: None, // absent — should use linksys_ns
                         port: Some(9090),
+                        ..Default::default()
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -335,22 +343,47 @@ mod tests {
         }
     }
 
+    /// A URL target must not be given a namespace by the linksys_ns backfill —
+    /// doing so would make `kind()` see a service field and reject the target.
+    #[tokio::test]
+    async fn upsert_url_target_does_not_backfill_namespace() {
+        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+
+        let config = WebhookServiceConfig {
+            conn: ExternalHttpConnection {
+                target: WebhookTarget {
+                    url: Some("https://api.example.com".to_string()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mgr = WebhookManager::new();
+        mgr.upsert("prod/url-hook", config, Some("prod"))
+            .await
+            .expect("url target must register");
+        assert!(mgr.get("prod/url-hook").await.is_some());
+    }
+
     #[tokio::test]
     async fn test_manager_unsupported_service_kind_returns_error() {
-        use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{
+            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+        };
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
+                    service: WebhookServiceRef {
                         kind: Some("ServiceImport".to_string()),
-                        name: "svc".to_string(),
+                        name: Some("svc".to_string()),
                         namespace: None,
                         port: Some(80),
+                        ..Default::default()
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -363,20 +396,22 @@ mod tests {
     #[tokio::test]
     async fn service_kind_none_builds_service_target() {
         use crate::plugins::http::common::outbound::target::ResolvedTarget;
-        use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{
+            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+        };
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
+                    service: WebhookServiceRef {
                         kind: None, // None → EdgionService::Service → ResolvedTarget::Service
-                        name: "backend".to_string(),
+                        name: Some("backend".to_string()),
                         namespace: Some("ns1".to_string()),
                         port: Some(8080),
+                        ..Default::default()
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -406,20 +441,22 @@ mod tests {
     #[tokio::test]
     async fn service_target_uses_linksys_ns_fallback() {
         use crate::plugins::http::common::outbound::target::ResolvedTarget;
-        use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{
+            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+        };
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
+                    service: WebhookServiceRef {
                         kind: None,
-                        name: "backend".to_string(),
+                        name: Some("backend".to_string()),
                         namespace: None, // absent — should fall back to linksys_ns
                         port: Some(8080),
+                        ..Default::default()
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -448,20 +485,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_manager_webhook_with_shim_auth_succeeds() {
-        use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{
+            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+        };
 
         let manager = WebhookManager::new();
         let config = WebhookServiceConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
+                    service: WebhookServiceRef {
                         kind: None,
-                        name: "resolve-svc".to_string(),
+                        name: Some("resolve-svc".to_string()),
                         namespace: Some("default".to_string()),
                         port: Some(8080),
+                        ..Default::default()
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -479,18 +518,20 @@ mod tests {
 
     /// Helper: build a minimal valid WebhookServiceConfig with a default request spec.
     fn make_config_with_target(name: &str) -> WebhookServiceConfig {
-        use edgion_resources::resources::http_route::BackendObjectReference;
-        use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+        use edgion_resources::resources::link_sys::webhook::{
+            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+        };
         WebhookServiceConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
+                    service: WebhookServiceRef {
                         kind: None,
-                        name: name.to_string(),
+                        name: Some(name.to_string()),
                         namespace: Some("default".to_string()),
                         port: Some(8080),
+                        ..Default::default()
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },

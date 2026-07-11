@@ -222,7 +222,8 @@ spec:
 
 ### `type: webhook`
 
-> Redesigned: `backendRef`-only target + a `request` block that is the single source of
+> Redesigned: `target` is either a flat Kubernetes Service reference or an origin-only
+> external `url` (mutually exclusive), plus a `request` block that is the single source of
 > truth for the outbound request. The architecture, controller→conf_sync→gateway flow,
 > consumer `path_override` API, template engine, presence and health semantics live in
 > [01-architecture/03-controller-gateway-link/webhook.md](../../01-architecture/03-controller-gateway-link/webhook.md).
@@ -233,13 +234,16 @@ spec:
 spec:
   type: webhook
   config:
-    target:                                        # backendRef-only (no uri, no type: service wrapper)
-      backendRef:
-        group: ""                                  # default core
-        kind: Service                              # Service | ServiceClusterIp | ServiceEndpointSlice | empty
-        name: webhook-svc
-        namespace: prod                            # optional; defaults to LinkSys namespace
-        port: 8080                                 # required — missing port is rejected (Accepted=False)
+    target:                                        # Kubernetes Service form (fields are flat — no backendRef/uri wrapper)
+      group: ""                                  # default core
+      kind: Service                              # Service | ServiceClusterIp | ServiceEndpointSlice | empty
+      name: webhook-svc
+      namespace: prod                            # optional; defaults to LinkSys namespace
+      port: 8080                                 # required — missing port is rejected (Accepted=False)
+
+    # target:                                      # External URL form (mutually exclusive with the Service fields)
+    #   url: https://api.example.com                # origin-only: scheme://host[:port], no path/query/fragment/credentials
+    #   blockPrivate: true                           # optional, url targets only; default false (inherits gateway-local default)
 
     request:                                       # required — declares the outbound request shape
       path:                                        # omit entirely → reuse frozen incoming path
@@ -298,7 +302,9 @@ spec:
 
 **Schema reference:**
 
-- **`target.backendRef`** (`BackendObjectReference`): required `name` + `port`; `kind` ∈ `{Service, ServiceClusterIp, ServiceEndpointSlice, "", unset→Service}`. `ExternalName` / `ServiceImport` are rejected at admission (use a proxy Service for external endpoints). `Service`/`ServiceEndpointSlice` resolve ready endpoints from `EpSliceStore` at call time; `ServiceClusterIp` uses ClusterIP DNS.
+- **`target`** (`WebhookTarget`): a flat struct with two mutually-exclusive forms, enforced by `WebhookTarget::kind()` — setting `url` together with any Service field (`name`/`namespace`/`port`/`kind`/`group`) is an admission error, and setting neither also errors.
+  - **Service form** (`name`/`namespace`/`port`/`kind`/`group` directly under `target`, no nesting): required `name` + `port`; `kind` ∈ `{Service, ServiceClusterIp, ServiceEndpointSlice, "", unset→Service}`. `ExternalName` / `ServiceImport` are rejected at admission. `Service`/`ServiceEndpointSlice` resolve ready endpoints from `EpSliceStore` at call time; `ServiceClusterIp` uses ClusterIP DNS.
+  - **URL form** (`url` + optional `blockPrivate`): `url` must be origin-only (`scheme://host[:port]`, `http`/`https` only, no path/query/fragment/credentials) — a path/query/fragment/credentials or a non-http(s) scheme is rejected (`Accepted=False`, message contains `origin-only`); the request path comes from `request.path.template`. `http://` combined with `tls.enabled: true` is also rejected (no silent plaintext downgrade). The target is SSRF-guarded: loopback/link-local/unspecified addresses are always blocked; `blockPrivate: true` additionally blocks RFC1918 + unique-local ranges (default `false`, inherits the gateway-local `outbound_egress_block_private` default). A URL target always gets its own dedicated connection pool + DNS resolver.
 - **`request.path`** (`PathSpec`): `{ template: String, allowOverride: bool = false }`. Omit the whole block → reuse the frozen incoming path.
 - **`request.method`** (`MethodSpec`): `{ template: String }`. Omit → reuse the frozen incoming method.
 - **`request.{args,headers,cookies}`** (`ListFields`): `{ origin: [OriginField], custom: [CustomField] }`, both default empty. An allow-list — only named fields appear on the wire. Cookies are emitted as a combined `Cookie` header.

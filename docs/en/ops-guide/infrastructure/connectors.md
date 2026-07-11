@@ -415,7 +415,7 @@ spec:
 
 ## Webhook connector
 
-A webhook connector lets plugins (ctx-set, key-auth, hmac-auth, and so on) call an external HTTP service for user resolution, permission checks, context enrichment, audit logging, and similar lookups. The connector is the **single source of truth** for the outbound request: it declares the backend (`target.backendRef`), and a `request` block that defines exactly which path, method, query args, headers, and cookies are sent. Consuming plugins can no longer silently reshape the request — they can only feed values into the named slots the webhook author declared, optionally override the path (when allowed), and parse the response. Outbound fields follow an **allow-list** model: nothing is forwarded unless the webhook explicitly names it, so a misbehaving upstream plugin cannot leak headers the operator never intended to expose.
+A webhook connector lets plugins (ctx-set, key-auth, hmac-auth, and so on) call an external HTTP service for user resolution, permission checks, context enrichment, audit logging, and similar lookups. The connector is the **single source of truth** for the outbound request: it declares the backend (the `name`/`namespace`/`port`/`kind`/`group` fields set directly under `target`), and a `request` block that defines exactly which path, method, query args, headers, and cookies are sent. Consuming plugins can no longer silently reshape the request — they can only feed values into the named slots the webhook author declared, optionally override the path (when allowed), and parse the response. Outbound fields follow an **allow-list** model: nothing is forwarded unless the webhook explicitly names it, so a misbehaving upstream plugin cannot leak headers the operator never intended to expose.
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -427,11 +427,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -454,25 +453,24 @@ spec:
 
 ### Target
 
-Every webhook references its backend through a single `backendRef`, the same `BackendObjectReference` shape that routes already use. There is no longer a `type: uri` / `type: service` choice — `backendRef` is the only target form.
+Every webhook references its backend by setting Service fields directly under `target` — the same field set (`group`/`kind`/`name`/`namespace`/`port`) as Gateway API's `BackendObjectReference`, flattened with no nested wrapper key. There is no longer a `type: uri` / `type: service` choice, and there is no `backendRef` key — the flat Service fields (or the `url` form below) are the only target shapes.
 
 ```yaml
 target:
-  backendRef:
-    group: ""              # optional; defaults to the core API group
-    kind: Service          # Service | ServiceClusterIp | ServiceEndpointSlice (empty defaults to Service)
-    name: webhook-backend
-    namespace: production  # optional; defaults to the LinkSys namespace
-    port: 8080             # required
+  group: ""              # optional; defaults to the core API group
+  kind: Service          # Service | ServiceClusterIp | ServiceEndpointSlice (empty defaults to Service)
+  name: webhook-backend
+  namespace: production  # optional; defaults to the LinkSys namespace
+  port: 8080             # required
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `target.backendRef.group` | String | core (`""`) | API group of the referenced object. |
-| `target.backendRef.kind` | String | `Service` | Target kind. Allowed: `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, or empty (defaults to `Service`). |
-| `target.backendRef.name` | String | **Required** | Kubernetes Service name. |
-| `target.backendRef.namespace` | String | LinkSys namespace | Service namespace. |
-| `target.backendRef.port` | Integer | **Required** | Service port; must be greater than 0. A missing port is rejected at admission with `Accepted=False`. |
+| `target.group` | String | core (`""`) | API group of the referenced object. |
+| `target.kind` | String | `Service` | Target kind. Allowed: `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, or empty (defaults to `Service`). |
+| `target.name` | String | **Required** | Kubernetes Service name. |
+| `target.namespace` | String | LinkSys namespace | Service namespace. |
+| `target.port` | Integer | **Required** | Service port; must be greater than 0. A missing port is rejected at admission with `Accepted=False`. |
 
 Resolution by kind:
 
@@ -480,7 +478,97 @@ Resolution by kind:
 - `ServiceEndpointSlice`: explicit form of the same EndpointSlice resolution.
 - `ServiceClusterIp`: resolved via the Service ClusterIP DNS name (kube-proxy).
 
-`kind: ExternalName` and `ServiceImport` are **not** supported as webhook targets and are rejected at admission with a descriptive `Accepted=False` message. To reach an external endpoint, create a proxy Service (for example a `LoadBalancer` Service, or a `ClusterIP` Service fronted by an ingress controller) that routes to the external host, then reference that Service by name. See [Migration from the old schema](#migration-from-the-old-schema).
+`kind: ExternalName` and `ServiceImport` are **not** supported as webhook targets and are rejected at admission with a descriptive `Accepted=False` message. To reach an external endpoint, create a proxy Service (for example a `LoadBalancer` Service, or a `ClusterIP` Service fronted by an ingress controller) that routes to the external host, then reference that Service by name — or use the URL target below instead.
+
+### URL target (external services)
+
+Instead of the Service fields, a webhook can address an arbitrary external URL directly:
+
+```yaml
+target:
+  url: https://api.example.com
+  blockPrivate: true       # optional; URL targets only, see "Egress policy" below
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `target.url` | String | none | External URL target. **Origin only**: `scheme://host[:port]` — no path, query, fragment, or credentials. Mutually exclusive with `target.name` / `target.namespace` / `target.port` / `target.kind` / `target.group`. |
+| `target.blockPrivate` | Boolean | `false` (inherits the gateway-local default) | URL targets only. See [Egress policy](#egress-policy-ssrf-protection). |
+
+**Origin-only, and why.** `target.url` must not carry a path, query string, fragment, or embedded
+credentials — setting any of those is rejected at admission with `Accepted=False`. The outbound path
+is decided exclusively by `request.path.template` (see [Outbound request](#outbound-request) below),
+which already composes correctly with `healthCheck.active.path` and a consumer's `pathOverride`. If
+`target.url` also carried a path, every one of those composition rules would need a second, competing
+definition of "the base path" — origin-only removes the ambiguity instead of documenting around it.
+`https://api.example.com` with `request.path.template: /v1/check` is the canonical shape.
+
+**Mutually exclusive with the Service fields.** Setting both `target.url` and any of
+`target.name` / `target.namespace` / `target.port` / `target.kind` / `target.group` is rejected at
+admission — a webhook addresses either an external URL or a Kubernetes Service, never both.
+
+**`http://` + `tls.enabled: true` is rejected.** If `target.url` starts with `http://` (case-insensitive
+scheme check) and the connection's `tls.enabled` is `true`, admission fails with `Accepted=False`.
+This is deliberate: a URL target's scheme already decides plaintext vs. TLS, so an explicit
+`tls.enabled: true` alongside `http://` would either be silently ignored or silently downgrade the
+operator's TLS intent — neither is acceptable, so it is rejected instead of guessed.
+
+**Dedicated connection pool.** A URL target always builds its own `reqwest::Client` — including when
+no `tls` block is set at all — and never falls back to the shared process-global HTTP client that
+other consumers use. This is what lets each URL target own its own DNS resolution and address cache
+(see [Egress policy](#egress-policy-ssrf-protection)); it also means URL targets do not share
+connection-pool exhaustion or health state with unrelated webhooks.
+
+### Egress policy (SSRF protection)
+
+A URL target is addressed by hostname, so — unlike a Service target, which is resolved via
+Kubernetes EndpointSlice — the gateway performs its own DNS resolution and must classify the
+result before connecting. Two enforcement points implement one policy, so the behavior is the same
+whether `target.url` names a hostname or an IP literal:
+
+- **Always blocked**: loopback (`127.0.0.0/8`, `::1`) and link-local addresses, which includes the
+  cloud-metadata address `169.254.169.254` and its whole `169.254.0.0/16` segment.
+- **Blocked when `target.blockPrivate: true`**: RFC1918 private ranges (`10/8`, `172.16/12`,
+  `192.168/16`) and unique-local (`fd00::/8`) addresses, in addition to the always-blocked classes.
+- **Default (`blockPrivate` unset or `false`)**: private ranges are allowed, matching the long-standing
+  behavior for Service targets — most webhooks legitimately point at an internal artifact repository
+  or SaaS reachable only over a private network.
+
+A rejected address surfaces as a connect failure for that call (and, per the usual webhook
+semantics, `allowDegradation` / `statusOnError` then apply). Rejections increment the
+`edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` counter, but only
+on the **hostname** path (`EgressResolver`, which records all three reasons). On the **IP-literal**
+path, only `reason="private"` is ever recorded: the `dial_url` `blockPrivate` check records that
+metric, but the loopback/link-local rejection there goes through the shared backend guard
+(`validate_endpoint_backend_addr`) that predates this metric and does not touch it. So a dashboard
+or alert built on this counter sees full coverage for a hostname target but is blind to
+loopback/link-local rejections when `target.url` is an IP literal.
+
+**Gateway-local default.** When a webhook does not set `target.blockPrivate` explicitly, the effective
+value comes from the gateway's own configuration:
+
+| Setting | Type | Default | Description |
+|---------|------|---------|-------------|
+| `outbound_egress_block_private` (gateway config file) / `EDGION_OUTBOUND_BLOCK_PRIVATE` (env) | Boolean | `false` | Gateway-wide default for `target.blockPrivate` when a webhook omits it. Truthy values: `1`, `true`, `yes`, `on` (case-insensitive). |
+| `outbound_egress_dns_cache_ttl_ms` (gateway config file) / `EDGION_OUTBOUND_DNS_CACHE_TTL_MS` (env) | Integer (ms) | `5000` | How long a URL target's resolved-and-classified addresses are cached before being re-resolved. An unparseable env value is ignored (a WARN is logged) and the configured value is kept. |
+
+**Precedence: the resource field wins.** An explicit `target.blockPrivate` on a webhook always
+overrides the gateway-local default — a cluster administrator who wants the stricter posture
+everywhere flips `outbound_egress_block_private`; an individual webhook that needs to reach an internal
+`10.x` artifact repository can still opt out with `target.blockPrivate: false`, and vice versa.
+
+**No command-line flag, on purpose.** Both settings are config-file / environment-variable only —
+there is no `--outbound-egress-block-private` CLI flag. The gateway's config-merge logic only carries
+a small, fixed set of fields from the CLI into a file-loaded configuration, and `--config-file`
+defaults to a real path in the common deployment, so a flag here would silently have no effect in
+that path. Set these via the gateway config file or the `EDGION_*` environment variables instead.
+
+**This is defense-in-depth, not the primary control.** `target.blockPrivate` and
+`outbound_egress_block_private` narrow what an already-privileged LinkSys/EdgionPlugins write can reach;
+they are not a substitute for network-level isolation. The primary egress control remains a
+Kubernetes `NetworkPolicy` on the Gateway Pod restricting which external IPs/ports it may reach at
+all — the code-layer guard exists because a URL target lets an operator name an arbitrary external
+host by hostname, something a NetworkPolicy alone cannot evaluate at request-authoring time.
 
 ### Outbound request
 
@@ -689,11 +777,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service              # resolves ready endpoints from EndpointSlice
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service              # resolves ready endpoints from EndpointSlice
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -708,10 +795,9 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: ServiceClusterIp     # resolves via the ClusterIP DNS name (kube-proxy)
-        name: key-service
-        port: 8080
+      kind: ServiceClusterIp     # resolves via the ClusterIP DNS name (kube-proxy)
+      name: key-service
+      port: 8080
     request:
       method:
         template: POST
@@ -725,8 +811,7 @@ Forward selected values from the frozen incoming request, unchanged. With `path`
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: authz, port: 8080 }
+    target: { kind: Service, name: authz, port: 8080 }
     request:
       headers:
         origin:
@@ -748,8 +833,7 @@ Inject static values the operator controls.
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: audit-sink, port: 8080 }
+    target: { kind: Service, name: audit-sink, port: 8080 }
     request:
       method:
         template: POST
@@ -769,8 +853,7 @@ Inject a credential from a Secret. The `prefix` builds the full header value (`B
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: key-service, port: 8080 }
+    target: { kind: Service, name: key-service, port: 8080 }
     request:
       method:
         template: POST
@@ -797,8 +880,7 @@ Compute outbound values from incoming request data and gateway context at call t
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: enrich, port: 8080 }
+    target: { kind: Service, name: enrich, port: 8080 }
     request:
       path:
         template: "/resolve/${ctx:action}"
@@ -820,8 +902,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: authz, port: 8080 }
+    target: { kind: Service, name: authz, port: 8080 }
     allowDegradation: false        # required-field failure surfaces statusOnError
     statusOnError: 503
     request:
@@ -840,8 +921,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: user-resolver, port: 8080 }
+    target: { kind: Service, name: user-resolver, port: 8080 }
     request:
       path:
         template: "/v1/users/lookup"
@@ -866,8 +946,7 @@ metadata:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: user-service, port: 8080 }
+    target: { kind: Service, name: user-service, port: 8080 }
     request:
       path:
         template: "/resolve/${ctx:action}"
@@ -903,11 +982,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -946,8 +1024,8 @@ The webhook schema changed in this release. Old fields are accepted during a rol
 
 | Old | New |
 |-----|-----|
-| `target.type: uri` + `target.uri` | `target.backendRef` to a (proxy) Service — raw URLs are no longer supported |
-| `target.type: service` + `target.name/port` | `target.backendRef.{kind,name,namespace,port}` (drop the `type` tag) |
+| `target.type: uri` + `target.uri` | flat Service fields (`target.name`/`target.port`/...) to a (proxy) Service — raw URLs are no longer supported |
+| `target.type: service` + `target.name/port` | `target.{kind,name,namespace,port}` set directly under `target` (drop the `type` tag) |
 | `auth.bearer` / `auth.basic` / `auth.hmac` / `auth.apiKey` | `request.headers.custom` with `secret:` (use `prefix:` for `Bearer `/`Basic `) |
 | `defaultHeaders` (static map) | `request.headers.custom` with `value:` per entry |
 | `requestMethod: POST` | `request.method.template: POST` (old default was `GET`) |
@@ -979,11 +1057,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service        # for an external endpoint, point this at a proxy Service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service        # for an external endpoint, point this at a proxy Service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -1025,7 +1102,7 @@ Consumer-side, `pathSuffix` and `forwardHeaders` are removed:
 ### Webhook troubleshooting
 
 **Webhook not resolving / "webhook not found".**
-Verify the `target.backendRef`: the named Service must exist in the resolved namespace and the `port` must be set and valid. A LinkSys with `Accepted=False` is not loaded into the gateway runtime, so any consumer calling it hits the same "webhook unavailable" path. Run `kubectl get linksys <name> -o yaml` and read the `Accepted` condition message.
+Verify the Service fields under `target` (`name`/`namespace`/`port`/`kind`): the named Service must exist in the resolved namespace and the `port` must be set and valid. A LinkSys with `Accepted=False` is not loaded into the gateway runtime, so any consumer calling it hits the same "webhook unavailable" path. Run `kubectl get linksys <name> -o yaml` and read the `Accepted` condition message.
 
 **`Accepted=False` on a `kind` value.**
 Only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, and empty are valid. `ExternalName` and `ServiceImport` are rejected — use a proxy Service instead.
@@ -1159,7 +1236,7 @@ spec:
 
 ### Q1: Why does my LinkSys report `Accepted=False/Invalid`?
 
-**A**: The structure or per-backend validation failed. Common causes: an empty `endpoints` list, `topology.mode=sentinel` without a `sentinel` block (or `mode=cluster` without `cluster`), a webhook `target.backendRef` with a missing/zero `port` or an unsupported `kind` (only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty are allowed), or a webhook `request` with conflicting fields (the same name in both `origin` and `custom`, a duplicate name within a list, or both `headers.origin[name: Cookie]` and a `cookies.*` list). The status `message` concatenates the specific errors.
+**A**: The structure or per-backend validation failed. Common causes: an empty `endpoints` list, `topology.mode=sentinel` without a `sentinel` block (or `mode=cluster` without `cluster`), a webhook `target` Service reference with a missing/zero `port` or an unsupported `kind` (only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty are allowed), or a webhook `request` with conflicting fields (the same name in both `origin` and `custom`, a duplicate name within a list, or both `headers.origin[name: Cookie]` and a `cookies.*` list). The status `message` concatenates the specific errors.
 
 ### Q2: My credentials look correct, but `ResolvedRefs` is `False`. Why?
 

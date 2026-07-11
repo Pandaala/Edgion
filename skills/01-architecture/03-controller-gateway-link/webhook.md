@@ -1,6 +1,6 @@
 ---
 name: webhook-request-templating
-description: Webhook LinkSys provider after the target-unification + request-templating redesign — backendRef-only target, allow-list request block, controller-side template compilation + secret resolution, conf_sync to gateway, consumer path_override API.
+description: Webhook LinkSys provider after the target-unification + request-templating redesign — Service-or-URL target, allow-list request block, controller-side template compilation + secret resolution, conf_sync to gateway, consumer path_override API.
 ---
 
 # Webhook provider — target unification + request templating
@@ -18,7 +18,7 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 - The outbound request was constructed across **two layers**: the webhook resource defined a base `uri` + `requestMethod` + `defaultHeaders` + a tagged-enum `auth` block, and the *consuming* plugin supplied the rest (`pathSuffix` appended to the URI, `forwardHeaders` selecting which inbound headers to pass through). What actually went on the wire could not be audited from the webhook resource alone, and any consumer could forward any header by default.
 
 **New model (current):**
-- **`target` is `backendRef`-only** — a single `BackendObjectReference` (`{group, kind, name, namespace, port}`), the same shape HTTPRoute/TCPRoute use. No `Uri` variant, no `type: service` wrapper tag. `port` is required. Supported `kind`: `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty/unset (→ Service). `ExternalName`/`ServiceImport` are rejected at admission.
+- **`target` is a flat struct with two mutually-exclusive forms** (no tagged-enum wrapper): a Kubernetes Service reference — `{group, kind, name, namespace, port}` directly under `target`, no `backendRef:` nesting, the same fields HTTPRoute/TCPRoute use — **or** an origin-only external `url` (+ optional `blockPrivate`). `WebhookTarget::kind()` is the single source of truth for which form is set and enforces the exclusion (setting `url` together with any Service field is an admission error; setting neither is also an error). For the Service form, `port` is required; supported `kind`: `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, empty/unset (→ Service); `ExternalName`/`ServiceImport` are rejected at admission. The `url` form was reintroduced by the url-webhook-target feature: it must be origin-only (`scheme://host[:port]`, no path/query/fragment/credentials — the path comes from `request.path.template`), rejects `http://` combined with `tls.enabled: true`, and is SSRF-guarded (loopback/link-local/unspecified always blocked; `blockPrivate: true` also blocks RFC1918 + unique-local) with its own dedicated connection pool + DNS resolver.
 - The webhook resource carries a required **`request` block** that is the *single source of truth* for the outbound request shape: `path`, `method`, and **allow-listed** `args` / `headers` / `cookies`. Nothing is forwarded unless the resource names it.
 - Each `args`/`headers`/`cookies` block splits into **`origin`** (copy the same-named value from the frozen incoming request, with a `presence` policy) and **`custom`** (operator-constructed: a literal `value`, or a `template`; secrets are expressed as `${secretRef:ns/name:key}` inside a template string, controller-resolved and carried inline).
 - Templates reuse the existing **ctx-set template engine** (`${header:X}`, `${ctx:Y}`, ...), pre-compiled at resource ingest.
@@ -33,7 +33,8 @@ description: Webhook LinkSys provider after the target-unification + request-tem
 │ 1. Read WebhookServiceConfig      │            │ 5. ConfHandler<LinkSys> upserts   │
 │    from K8s (CR ingest)           │            │    WebhookManager runtime         │
 │ 2. validate_config():             │            │ 6. CompiledOutboundRequest::      │
-│    - target.backendRef (port/kind)│  conf_sync │    from_spec(request)             │
+│    - target (Service port/kind    │  conf_sync │    from_spec(request)             │
+│      OR origin-only url)          │            │                                    │
 │    - request template syntax,     │  (full     │    parses templates (already      │
 │      origin/custom name conflicts │  struct,   │    parsed controller-side here too)│
 │ 3. Scan ${secretRef:...} vars;    │  serde)    │ 7. webhook_call(session,          │
@@ -149,8 +150,8 @@ The redesign carries a one-release **shim**: removed fields `auth` / `defaultHea
 
 | Old | New |
 |-----|-----|
-| `target: { type: uri, uri: "https://ext..." }` | create a proxy `Service` for the external endpoint, then `target: { backendRef: { kind: Service, name: ..., port: ... } }` |
-| `target: { type: service, backendRef, kind }` | `target: { backendRef: { kind, name, port, ... } }` |
+| `target: { type: uri, uri: "https://ext..." }` | `target: { url: "https://ext...", blockPrivate: true }` — the URL form was reintroduced (origin-only, SSRF-guarded); no proxy `Service` needed |
+| `target: { type: service, backendRef, kind }` | `target: { kind, name, port, ... }` (flat — no `backendRef:` nesting) |
 | `requestMethod: POST` | `request.method.template: "POST"` |
 | `defaultHeaders: { X-Source: edgion }` | `request.headers.custom: [{ name: X-Source, value: edgion }]` |
 | `auth.bearer: { secretRef: { name: N, namespace: NS }, key: token }` | `request.headers.custom: [{ name: Authorization, template: "Bearer ${secretRef:NS/N:token}" }]` |

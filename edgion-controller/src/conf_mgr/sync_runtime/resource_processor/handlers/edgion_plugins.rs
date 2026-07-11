@@ -2540,10 +2540,9 @@ mod tests {
     #[tokio::test]
     async fn forward_auth_resolved_refs_missing() {
         use edgion_resources::resources::common::{
-            CustomField, CustomSource, ExternalHttpConnection, OutboundRequestSpec, WebhookTarget,
+            CustomField, CustomSource, ExternalHttpConnection, OutboundRequestSpec, WebhookServiceRef, WebhookTarget,
         };
         use edgion_resources::resources::edgion_plugins::{ForwardAuthConfig, ForwardAuthDecision};
-        use edgion_resources::resources::http_route::BackendObjectReference;
 
         let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
 
@@ -2561,13 +2560,14 @@ mod tests {
         let cfg = ForwardAuthConfig {
             conn: ExternalHttpConnection {
                 target: WebhookTarget {
-                    backend_ref: BackendObjectReference {
-                        group: String::new(),
+                    service: WebhookServiceRef {
                         kind: None,
-                        name: "auth-svc".to_string(),
+                        name: Some("auth-svc".to_string()),
                         namespace: None,
                         port: Some(8080),
+                        ..Default::default()
                     },
+                    ..Default::default()
                 },
                 ..Default::default()
             },

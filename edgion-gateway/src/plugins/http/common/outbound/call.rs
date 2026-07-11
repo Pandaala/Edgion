@@ -391,9 +391,9 @@ mod tests {
     /// `localhost`-based URL (`http://localhost:PORT`).
     ///
     /// `dial_url()` runs an SSRF guard on IP addresses. `127.0.0.1` is a loopback
-    /// IP and is blocked. `localhost` is a DNS hostname — `extract_socket_addr`
-    /// cannot parse it as a `SocketAddr`, so the SSRF check is skipped and
-    /// `dial_url` returns `Ok`. `reqwest` then resolves `localhost` → `127.0.0.1`
+    /// IP and is blocked. `localhost` is a DNS hostname — `extract_ip_literal`
+    /// cannot parse it as a `SocketAddr`, so the literal-level SSRF check is skipped
+    /// and `dial_url` returns `Ok`. `reqwest` then resolves `localhost` → `127.0.0.1`
     /// and connects to the mock server normally.
     fn localhost_uri(server_uri: &str) -> String {
         server_uri.replace("127.0.0.1", "localhost")
@@ -414,6 +414,7 @@ mod tests {
             max_response_bytes: 64 * 1024,
             timeout: Duration::from_secs(5),
             retry: None,
+            egress_policy: None,
             passive_health_check: None,
             health_task: None,
             resolved_secrets: None,
@@ -454,8 +455,8 @@ mod tests {
 
         // wiremock binds to 127.0.0.1 which is blocked by dial_url's SSRF guard.
         // Use localhost_uri() to replace the IP with the hostname "localhost";
-        // extract_socket_addr cannot parse a DNS name so the SSRF check is skipped,
-        // and reqwest resolves "localhost" → 127.0.0.1 to reach the mock server.
+        // extract_ip_literal cannot parse a DNS name so the literal-level SSRF check
+        // is skipped, and reqwest resolves "localhost" → 127.0.0.1 to reach the mock server.
         let client = make_client(&localhost_uri(&server.uri()));
 
         let session = make_session("GET", "/check");
@@ -648,6 +649,7 @@ mod tests {
             max_response_bytes: 64 * 1024,
             timeout: Duration::from_secs(5),
             retry: None,
+            egress_policy: None,
             passive_health_check: None,
             health_task: None,
             resolved_secrets: None,
@@ -714,6 +716,7 @@ mod tests {
             max_response_bytes: 64 * 1024,
             timeout: Duration::from_secs(5),
             retry: None,
+            egress_policy: None,
             passive_health_check: None,
             health_task: None,
             resolved_secrets: Some(ResolvedSecrets(secrets_map)),

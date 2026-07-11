@@ -413,7 +413,7 @@ spec:
 
 ## Webhook 连接器
 
-Webhook 连接器让插件（ctx-set、key-auth、hmac-auth 等）调用外部 HTTP 服务，用于用户解析、权限校验、上下文增强、审计日志等查询。该连接器是出站请求的**唯一事实来源**：它声明后端（`target.backendRef`），并通过 `request` 块精确定义发送的路径、方法、查询参数、请求头和 Cookie。消费方插件不能再静默地改变请求形状——它们只能向 webhook 作者声明的命名槽位填值，可选地覆盖路径（在被允许时），以及解析响应。出站字段遵循**白名单**模型：除非 webhook 明确声明，否则不转发任何内容，因此上游某个行为异常的插件无法泄露运营者从未打算暴露的请求头。
+Webhook 连接器让插件（ctx-set、key-auth、hmac-auth 等）调用外部 HTTP 服务，用于用户解析、权限校验、上下文增强、审计日志等查询。该连接器是出站请求的**唯一事实来源**：它声明后端（直接写在 `target` 下的 `name`/`namespace`/`port`/`kind`/`group` 字段），并通过 `request` 块精确定义发送的路径、方法、查询参数、请求头和 Cookie。消费方插件不能再静默地改变请求形状——它们只能向 webhook 作者声明的命名槽位填值，可选地覆盖路径（在被允许时），以及解析响应。出站字段遵循**白名单**模型：除非 webhook 明确声明，否则不转发任何内容，因此上游某个行为异常的插件无法泄露运营者从未打算暴露的请求头。
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -425,11 +425,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -452,25 +451,24 @@ spec:
 
 ### 目标
 
-每个 webhook 通过单一的 `backendRef` 引用其后端，与路由已采用的 `BackendObjectReference` 形状相同。不再有 `type: uri` / `type: service` 的选择——`backendRef` 是唯一的目标形式。
+每个 webhook 通过直接写在 `target` 下的 Service 字段引用其后端——字段集合（`group`/`kind`/`name`/`namespace`/`port`）与 Gateway API 自身的 `BackendObjectReference` 相同，但被展平、没有嵌套的包装键。不再有 `type: uri` / `type: service` 的选择，也没有 `backendRef` 这个键——展平后的 Service 字段（或下文的 `url` 形式）是唯一的目标形态。
 
 ```yaml
 target:
-  backendRef:
-    group: ""              # 可选；默认为 core API 组
-    kind: Service          # Service | ServiceClusterIp | ServiceEndpointSlice（留空默认为 Service）
-    name: webhook-backend
-    namespace: production  # 可选；默认为 LinkSys 所在命名空间
-    port: 8080             # 必填
+  group: ""              # 可选；默认为 core API 组
+  kind: Service          # Service | ServiceClusterIp | ServiceEndpointSlice（留空默认为 Service）
+  name: webhook-backend
+  namespace: production  # 可选；默认为 LinkSys 所在命名空间
+  port: 8080             # 必填
 ```
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `target.backendRef.group` | String | core（`""`） | 被引用对象的 API 组。 |
-| `target.backendRef.kind` | String | `Service` | 目标类型。可选：`Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 或留空（默认 `Service`）。 |
-| `target.backendRef.name` | String | **必填** | Kubernetes Service 名称。 |
-| `target.backendRef.namespace` | String | LinkSys 所在命名空间 | Service 所在命名空间。 |
-| `target.backendRef.port` | Integer | **必填** | Service 端口，必须大于 0。缺少端口会在准入时以 `Accepted=False` 拒绝。 |
+| `target.group` | String | core（`""`） | 被引用对象的 API 组。 |
+| `target.kind` | String | `Service` | 目标类型。可选：`Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 或留空（默认 `Service`）。 |
+| `target.name` | String | **必填** | Kubernetes Service 名称。 |
+| `target.namespace` | String | LinkSys 所在命名空间 | Service 所在命名空间。 |
+| `target.port` | Integer | **必填** | Service 端口，必须大于 0。缺少端口会在准入时以 `Accepted=False` 拒绝。 |
 
 按 kind 的解析方式：
 
@@ -478,7 +476,53 @@ target:
 - `ServiceEndpointSlice`：同样的 EndpointSlice 解析的显式形式。
 - `ServiceClusterIp`：通过 Service ClusterIP 的 DNS 名称解析（kube-proxy）。
 
-`kind: ExternalName` 和 `ServiceImport` **不**支持作为 webhook 目标，会在准入时以带说明的 `Accepted=False` 消息拒绝。要访问外部端点，请创建一个代理 Service（例如 `LoadBalancer` 类型的 Service，或由 ingress controller 前置的 `ClusterIP` Service）指向外部主机，然后按名称引用该 Service。详见[从旧 schema 迁移](#从旧-schema-迁移)。
+`kind: ExternalName` 和 `ServiceImport` **不**支持作为 webhook 目标，会在准入时以带说明的 `Accepted=False` 消息拒绝。要访问外部端点，请创建一个代理 Service（例如 `LoadBalancer` 类型的 Service，或由 ingress controller 前置的 `ClusterIP` Service）指向外部主机，然后按名称引用该 Service——或者改用下文的 URL 目标。
+
+### URL 目标（外部服务）
+
+除了 Service 字段，webhook 也可以直接指向任意外部 URL：
+
+```yaml
+target:
+  url: https://api.example.com
+  blockPrivate: true       # 可选；仅 URL 目标可用，见下文"出站流量策略"
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `target.url` | String | none | 外部 URL 目标。**仅限 origin**：`scheme://host[:port]`——不允许路径、查询字符串、片段或内嵌凭据。与 `target.name` / `target.namespace` / `target.port` / `target.kind` / `target.group` 互斥。 |
+| `target.blockPrivate` | Boolean | `false`（继承网关本地默认值） | 仅 URL 目标可用。详见[出站流量策略（SSRF 防护）](#出站流量策略ssrf-防护)。 |
+
+**为什么仅限 origin。** `target.url` 不得携带路径、查询字符串、片段或内嵌凭据——设置任一项都会在准入时以 `Accepted=False` 拒绝。出站路径完全由 `request.path.template`（见下文[出站请求](#出站请求)）决定，该字段已经能与 `healthCheck.active.path` 及消费方的 `pathOverride` 正确组合。如果 `target.url` 同时也能携带路径，上述每一条组合规则都需要再定义一次"基础路径"，且相互冲突——仅限 origin 消除的是这种歧义本身，而不是靠文档去解释它。`https://api.example.com` 搭配 `request.path.template: /v1/check` 是典型写法。
+
+**与 Service 字段互斥。** 同时设置 `target.url` 与 `target.name` / `target.namespace` / `target.port` / `target.kind` / `target.group` 中的任意一个都会在准入时被拒绝——webhook 要么指向外部 URL，要么指向 Kubernetes Service，不能两者兼有。
+
+**`http://` 搭配 `tls.enabled: true` 会被拒绝。** 如果 `target.url` 以 `http://` 开头（scheme 比较大小写不敏感）且连接的 `tls.enabled` 为 `true`，准入会失败并报 `Accepted=False`。这是有意为之：URL 目标的 scheme 本身已经决定了明文还是 TLS，若再叠加显式的 `tls.enabled: true`，要么被静默忽略，要么静默地降级运营者的 TLS 意图——两者都不可接受，因此选择直接拒绝而非猜测意图。
+
+**独享连接池。** URL 目标总是构建自己的 `reqwest::Client`——即便完全没有设置 `tls` 块——绝不回退到其他消费方共用的进程级共享 HTTP 客户端。这使得每个 URL 目标能拥有自己的 DNS 解析与地址缓存（见[出站流量策略（SSRF 防护）](#出站流量策略ssrf-防护)）；也意味着 URL 目标不会与其他无关 webhook 共享连接池耗尽或健康状态。
+
+### 出站流量策略（SSRF 防护）
+
+URL 目标按主机名寻址，因此——与通过 Kubernetes EndpointSlice 解析的 Service 目标不同——网关需要自行完成 DNS 解析，并在建立连接前对结果进行分类。两个执行点实现同一套策略，因此无论 `target.url` 指向的是主机名还是 IP 字面量，行为都一致：
+
+- **始终拒绝**：回环地址（`127.0.0.0/8`、`::1`）和链路本地地址，其中包括云元数据地址 `169.254.169.254` 及其所在的整个 `169.254.0.0/16` 网段。
+- **`target.blockPrivate: true` 时额外拒绝**：RFC1918 私有网段（`10/8`、`172.16/12`、`192.168/16`）及唯一本地地址（`fd00::/8`），在始终拒绝的类别之外追加。
+- **默认（`blockPrivate` 未设置或为 `false`）**：私有网段被放行，与 Service 目标一贯的行为保持一致——多数 webhook 合法地指向内部制品库，或只能通过私有网络访问的 SaaS。
+
+被拒绝的地址会导致该次调用连接失败（并按 webhook 通常的语义，`allowDegradation` / `statusOnError` 随后照常生效）。拒绝会使 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` 计数器递增，但这仅在**主机名**路径上成立（`EgressResolver`，会记录全部三种 reason）。在 **IP 字面量**路径上，只有 `reason="private"` 会被记录：`dial_url` 的 `blockPrivate` 检查会记录该指标，但那条路径上的回环/链路本地拒绝要经过早于该指标就已存在的共享后端守卫（`validate_endpoint_backend_addr`），并不会写入该指标。因此，基于该计数器搭建的看板或告警，对主机名目标能获得完整覆盖，但当 `target.url` 是 IP 字面量时，对回环/链路本地拒绝是"看不见"的。
+
+**网关本地默认值。** 当 webhook 未显式设置 `target.blockPrivate` 时，生效值来自网关自身的配置：
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `outbound_egress_block_private`（网关配置文件）/ `EDGION_OUTBOUND_BLOCK_PRIVATE`（环境变量） | Boolean | `false` | webhook 未设置 `target.blockPrivate` 时的网关级默认值。真值：`1`、`true`、`yes`、`on`（大小写不敏感）。 |
+| `outbound_egress_dns_cache_ttl_ms`（网关配置文件）/ `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`（环境变量） | Integer（毫秒） | `5000` | URL 目标已解析并分类的地址在重新解析前的缓存时长。环境变量值无法解析时会被忽略（记录 WARN）并保留已配置的值。 |
+
+**优先级：资源字段优先于网关默认值。** webhook 上显式设置的 `target.blockPrivate` 总是覆盖网关本地默认值——希望全局采用更严格策略的集群管理员可以打开 `outbound_egress_block_private`；需要访问内部 `10.x` 制品库的个别 webhook 仍可用 `target.blockPrivate: false` 单独放行，反之亦然。
+
+**没有命令行开关，是有意的。** 这两个配置项只能通过配置文件或环境变量设置——没有 `--outbound-egress-block-private` 命令行开关。网关的配置合并逻辑只会把一小组固定字段从命令行带入基于文件加载的配置中，而 `--config-file` 在常见部署路径下默认指向一个真实文件，因此该路径下的命令行开关会被静默忽略。请改用网关配置文件或 `EDGION_*` 环境变量设置。
+
+**这是纵深防御，而非主要控制手段。** `target.blockPrivate` 与 `outbound_egress_block_private` 收窄的是一次已经具备特权（LinkSys/EdgionPlugins 写权限）的写操作所能触达的范围，而不能替代网络层隔离。主要的出站流量控制手段仍然是作用于 Gateway Pod 的 Kubernetes `NetworkPolicy`，限制其可触达的外部 IP/端口范围——之所以还需要代码层防护，是因为 URL 目标允许运营者按主机名指定任意外部主机，而这是 `NetworkPolicy` 在配置编写时无法评估的。
 
 ### 出站请求
 
@@ -687,11 +731,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service              # 从 EndpointSlice 解析就绪端点
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service              # 从 EndpointSlice 解析就绪端点
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -706,10 +749,9 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: ServiceClusterIp     # 通过 ClusterIP 的 DNS 名称解析（kube-proxy）
-        name: key-service
-        port: 8080
+      kind: ServiceClusterIp     # 通过 ClusterIP 的 DNS 名称解析（kube-proxy）
+      name: key-service
+      port: 8080
     request:
       method:
         template: POST
@@ -723,8 +765,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: authz, port: 8080 }
+    target: { kind: Service, name: authz, port: 8080 }
     request:
       headers:
         origin:
@@ -746,8 +787,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: audit-sink, port: 8080 }
+    target: { kind: Service, name: audit-sink, port: 8080 }
     request:
       method:
         template: POST
@@ -767,8 +807,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: key-service, port: 8080 }
+    target: { kind: Service, name: key-service, port: 8080 }
     request:
       method:
         template: POST
@@ -795,8 +834,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: enrich, port: 8080 }
+    target: { kind: Service, name: enrich, port: 8080 }
     request:
       path:
         template: "/resolve/${ctx:action}"
@@ -818,8 +856,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: authz, port: 8080 }
+    target: { kind: Service, name: authz, port: 8080 }
     allowDegradation: false        # required 字段失败时暴露 statusOnError
     statusOnError: 503
     request:
@@ -838,8 +875,7 @@ spec:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: user-resolver, port: 8080 }
+    target: { kind: Service, name: user-resolver, port: 8080 }
     request:
       path:
         template: "/v1/users/lookup"
@@ -864,8 +900,7 @@ metadata:
 spec:
   type: webhook
   config:
-    target:
-      backendRef: { kind: Service, name: user-service, port: 8080 }
+    target: { kind: Service, name: user-service, port: 8080 }
     request:
       path:
         template: "/resolve/${ctx:action}"
@@ -901,11 +936,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -944,8 +978,8 @@ Webhook schema 在本版本中发生变化。旧字段在滚动升级期间被�
 
 | 旧 | 新 |
 |----|----|
-| `target.type: uri` + `target.uri` | 指向（代理）Service 的 `target.backendRef`——不再支持原始 URL |
-| `target.type: service` + `target.name/port` | `target.backendRef.{kind,name,namespace,port}`（去掉 `type` 标签） |
+| `target.type: uri` + `target.uri` | 指向（代理）Service 的展平 Service 字段（`target.name`/`target.port`/……）——不再支持原始 URL |
+| `target.type: service` + `target.name/port` | 直接写在 `target` 下的 `target.{kind,name,namespace,port}`（去掉 `type` 标签） |
 | `auth.bearer` / `auth.basic` / `auth.hmac` / `auth.apiKey` | 带 `secret:` 的 `request.headers.custom`（用 `prefix:` 拼 `Bearer `/`Basic `） |
 | `defaultHeaders`（静态 map） | 每条用 `value:` 的 `request.headers.custom` |
 | `requestMethod: POST` | `request.method.template: POST`（旧默认是 `GET`） |
@@ -977,11 +1011,10 @@ spec:
   type: webhook
   config:
     target:
-      backendRef:
-        kind: Service
-        name: key-service        # 对于外部端点，将此指向一个代理 Service
-        namespace: production
-        port: 8080
+      kind: Service
+      name: key-service        # 对于外部端点，将此指向一个代理 Service
+      namespace: production
+      port: 8080
     request:
       method:
         template: POST
@@ -1023,7 +1056,7 @@ spec:
 ### Webhook 故障排查
 
 **Webhook 无法解析 / "webhook not found"。**
-检查 `target.backendRef`：命名的 Service 必须存在于解析出的命名空间中，且 `port` 必须已设置且有效。`Accepted=False` 的 LinkSys 不会加载进网关运行时，因此任何调用它的消费方都会命中相同的"webhook 不可用"路径。运行 `kubectl get linksys <name> -o yaml` 并阅读 `Accepted` 条件消息。
+检查 `target` 下的 Service 字段（`name`/`namespace`/`port`/`kind`）：命名的 Service 必须存在于解析出的命名空间中，且 `port` 必须已设置且有效。`Accepted=False` 的 LinkSys 不会加载进网关运行时，因此任何调用它的消费方都会命中相同的"webhook 不可用"路径。运行 `kubectl get linksys <name> -o yaml` 并阅读 `Accepted` 条件消息。
 
 **关于 `kind` 值的 `Accepted=False`。**
 只有 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 和留空有效。`ExternalName` 和 `ServiceImport` 被拒绝——请改用代理 Service。
@@ -1157,7 +1190,7 @@ spec:
 
 ### Q1：为什么我的 LinkSys 报告 `Accepted=False/Invalid`？
 
-**A**：结构或后端特定校验失败。常见原因：`endpoints` 列表为空、`topology.mode=sentinel` 但缺少 `sentinel` 块（或 `mode=cluster` 但缺少 `cluster` 块）、webhook 的 `target.backendRef` 缺少/为零的 `port` 或不支持的 `kind`（仅允许 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice`、留空）、webhook 的 `request` 存在冲突字段（同一名称同时出现在 `origin` 和 `custom`、列表内重复名称、或同时声明 `headers.origin[name: Cookie]` 和 `cookies.*` 列表）。状态 `message` 字段列出了具体错误。
+**A**：结构或后端特定校验失败。常见原因：`endpoints` 列表为空、`topology.mode=sentinel` 但缺少 `sentinel` 块（或 `mode=cluster` 但缺少 `cluster` 块）、webhook 的 `target` Service 引用缺少/为零的 `port` 或不支持的 `kind`（仅允许 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice`、留空）、webhook 的 `request` 存在冲突字段（同一名称同时出现在 `origin` 和 `custom`、列表内重复名称、或同时声明 `headers.origin[name: Cookie]` 和 `cookies.*` 列表）。状态 `message` 字段列出了具体错误。
 
 ### Q2：凭据看起来正确，但 `ResolvedRefs` 为 `False`。为什么？
 

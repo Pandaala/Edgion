@@ -4,12 +4,14 @@
 // (backendRef target, request-templating allow-list, presence policy, consumer
 // path_override API, secret resolution flow). Schema: skills/02-features/03-resources/18-link-sys.md.
 //
-// Exercises the 11 redesigned webhook scenarios end to end. Each scenario has a
+// Exercises the 11 redesigned webhook scenarios end to end, plus 6 further
+// scenarios (12-17) covering the URL-target feature (external `target.url`,
+// origin-only validation, SSRF egress guard). Each scenario has a
 // self-contained fixture in conf/EdgionPlugins/WebhookKeyGet/NN-*.yaml that wires
-// up: a backend Service (+ EndpointSlice), a LinkSys webhook resource declaring
-// the outbound `request` (target backendRef + allow-listed origin/custom fields),
-// a CtxSet EdgionPlugins that invokes the webhook via a KeyGet::Webhook var, and an
-// HTTPRoute on host `whN.example.com` path `/test/whN`.
+// up: a backend Service (+ EndpointSlice) OR an external `target.url`, a LinkSys
+// webhook resource declaring the outbound `request` (target + allow-listed
+// origin/custom fields), a CtxSet EdgionPlugins that invokes the webhook via a
+// KeyGet::Webhook var, and an HTTPRoute on host `whN.example.com` path `/test/whN`.
 //
 // Verification model
 // ------------------
@@ -40,7 +42,35 @@
 //     match the route backend path) was evaluated and declined as low-value / niche;
 //     see docs/superpowers/specs/2026-06-21-webhook-serviceclusterip-resolution-design.md.
 //
-// Net: 10/10 scenarios pass.
+// Net: 10/10 original scenarios pass, plus 6/6 URL-target scenarios (12-17; see
+// below), for 16/16 total.
+//
+// URL-target scenarios (12-17)
+// -----------------------------
+// 12. Happy path: `target.url: http://localhost:<port>` — a hostname, so it goes
+//     through `EgressResolver` (real DNS resolution + classification), not the
+//     IP-literal `dial_url` guard. This is the only scenario in this suite that
+//     exercises the hostname path through `EgressResolver`.
+// 13. Custom CA over https: reuses the shared HTTPS backend
+//     (`test_server --https-backend-port 30051`) already started for the
+//     BackendTLSPolicy suite, and its `backend-ca` Secret (also published in
+//     `edgion-default` for the ExtProc-over-TLS suite) — no new TLS scaffolding
+//     needed.
+// 14. Secret-sourced Authorization header on a URL target: verifies both that
+//     test_server observes the real token AND that the controller's own
+//     `/configserver/LinkSys` admin output redacts it.
+// 15. Retry on 5xx: `retry.retryOnStatus: [503]` against test_server's
+//     `/retry-sequence/{test_id}/{status_list}` endpoint; the final response's
+//     `x-attempt-history` header proves the exact 3-call sequence.
+// 16. `blockPrivate: true` against an unroutable RFC1918 IP literal — rejected
+//     pre-connect by `dial_url`'s IP-literal guard, incrementing
+//     `edgion_outbound_egress_blocked_total{reason="private"}`. Paired with a
+//     negative control (same address, `blockPrivate` absent) that fails by
+//     connection timeout instead, proving the metric only fires for the actual
+//     guard rejection.
+// 17. Origin-only rejection: `target.url` with a path is rejected by schema
+//     validation; asserted purely against the controller's Accepted=False
+//     status condition (no gateway traffic).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -131,6 +161,121 @@ where
         Ok(msg) => TestResult::passed_with_message(start.elapsed(), msg),
         Err(msg) => TestResult::failed(start.elapsed(), format!("{} | access-log: {}", msg, log)),
     }
+}
+
+// ============================================================
+// Helpers for the URL-target scenarios (12-17)
+// ============================================================
+
+/// Fetch a LinkSys resource's `status.conditions` from the controller's
+/// `/configserver/LinkSys` admin cache endpoint (the endpoint whose response
+/// format mirrors Gateway's `/configclient/` API). Retries because the
+/// controller reconciles asynchronously after the resource is applied.
+async fn fetch_linksys_conditions(ctx: &TestContext, name: &str) -> Result<Vec<serde_json::Value>, String> {
+    let url = format!(
+        "{}/configserver/LinkSys?namespace=edgion-default&name={}",
+        ctx.admin_api_url(),
+        name
+    );
+
+    let mut last_err = format!("LinkSys '{}' not found", name);
+    for _ in 0..20 {
+        let mut req = ctx.http_client.get(&url);
+        if let Some(ref token) = ctx.admin_token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
+                Ok(body) if body["success"].as_bool().unwrap_or(false) => {
+                    if let Some(conditions) = body["data"]["status"]["conditions"].as_array() {
+                        if !conditions.is_empty() {
+                            return Ok(conditions.clone());
+                        }
+                        last_err = format!("LinkSys '{}' found but status.conditions is empty", name);
+                    } else {
+                        last_err = format!("LinkSys '{}' found but status.conditions not present", name);
+                    }
+                }
+                Ok(body) => {
+                    last_err = format!("API error: {}", body["error"].as_str().unwrap_or("unknown"));
+                }
+                Err(e) => {
+                    last_err = format!("JSON parse error: {}", e);
+                }
+            },
+            Ok(resp) => {
+                last_err = format!("HTTP {}", resp.status());
+            }
+            Err(e) => {
+                last_err = format!("Request error: {}", e);
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
+    Err(last_err)
+}
+
+/// Fetch the full LinkSys resource JSON (not just `status`) from the same
+/// admin cache endpoint, so callers can inspect `spec.config.resolvedSecrets`
+/// (the redacted-in-admin-output secret map) rather than only the status.
+async fn fetch_linksys_resource(ctx: &TestContext, name: &str) -> Result<serde_json::Value, String> {
+    let url = format!(
+        "{}/configserver/LinkSys?namespace=edgion-default&name={}",
+        ctx.admin_api_url(),
+        name
+    );
+    let mut req = ctx.http_client.get(&url);
+    if let Some(ref token) = ctx.admin_token {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+    let resp = req.send().await.map_err(|e| format!("request error: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+    let body: serde_json::Value = resp.json().await.map_err(|e| format!("JSON parse error: {}", e))?;
+    if !body["success"].as_bool().unwrap_or(false) {
+        return Err(format!("API error: {}", body["error"].as_str().unwrap_or("unknown")));
+    }
+    Ok(body["data"].clone())
+}
+
+fn find_condition<'a>(conditions: &'a [serde_json::Value], type_: &str) -> Option<&'a serde_json::Value> {
+    conditions.iter().find(|c| c["type"].as_str() == Some(type_))
+}
+
+/// Gateway metrics port shared by every integration suite (see
+/// `metrics_helper::MetricsClient` usage in the LB suites and bandwidth_limit).
+const GW_METRICS_PORT: u16 = 12090;
+
+/// Parse the current value of a single-label Prometheus counter line, e.g.
+/// `edgion_outbound_egress_blocked_total{reason="private"} 3`. Returns 0 if the
+/// series has never been recorded (Prometheus counters do not exist until the
+/// first increment).
+fn parse_counter_value(raw: &str, metric_name: &str, label_match: &str) -> u64 {
+    for line in raw.lines() {
+        if line.starts_with(metric_name) && line.contains(label_match) {
+            if let Some(idx) = line.rfind(' ') {
+                if let Ok(v) = line[idx + 1..].trim().parse::<u64>() {
+                    return v;
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Fetch the current `edgion_outbound_egress_blocked_total{reason="private"}` value.
+async fn fetch_egress_blocked_private_count(ctx: &TestContext) -> Result<u64, String> {
+    let client = crate::metrics_helper::MetricsClient::from_host_port(&ctx.target_host, GW_METRICS_PORT);
+    let raw = client
+        .fetch_raw_metrics()
+        .await
+        .map_err(|e| format!("fetch_raw_metrics failed: {}", e))?;
+    Ok(parse_counter_value(
+        &raw,
+        "edgion_outbound_egress_blocked_total",
+        "reason=\"private\"",
+    ))
 }
 
 impl WebhookKeyGetTestSuite {
@@ -521,6 +666,301 @@ impl WebhookKeyGetTestSuite {
             },
         )
     }
+
+    // ==================== 12. URL target, happy path ====================
+    fn test_url_target_happy_path() -> TestCase {
+        TestCase::new(
+            "url_target_happy_path",
+            "Webhook target.url (hostname) resolves through EgressResolver and reaches the upstream request",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    run_case(&ctx, "wh12.example.com", "/test/wh12", &[], "wh12", start, true, |log| {
+                        // No origin field is declared, so the backend sees no
+                        // X-Tenant-Id and defaults to uid-unknown. A correct value
+                        // proves the URL target (http://localhost:30001, a
+                        // hostname resolved through EgressResolver) was dialed
+                        // successfully end to end.
+                        if log_has(log, "wh12_user_id", "uid-unknown") {
+                            Ok("URL target (hostname) resolved via EgressResolver; value reached the upstream request"
+                                .into())
+                        } else {
+                            Err("expected wh12_user_id=uid-unknown (URL target resolved)".into())
+                        }
+                    })
+                    .await
+                })
+            },
+        )
+    }
+
+    // ==================== 13. URL target over https with custom CA ====================
+    fn test_url_tls_custom_ca() -> TestCase {
+        TestCase::new(
+            "url_tls_custom_ca",
+            "Webhook target.url (https) validated against a custom CA (tls.validation.caCertificateRefs)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    run_case(
+                        &ctx,
+                        "wh13.example.com",
+                        "/test/wh13",
+                        &[],
+                        "wh13",
+                        start,
+                        true,
+                        |log| {
+                            if log_has(log, "wh13_user_id", "uid-unknown") {
+                                Ok("https:// URL target validated against custom CA and resolved successfully".into())
+                            } else {
+                                Err("expected wh13_user_id=uid-unknown (TLS URL target resolved)".into())
+                            }
+                        },
+                    )
+                    .await
+                })
+            },
+        )
+    }
+
+    // ==================== 14. Secret-sourced auth header on a URL target ====================
+    fn test_url_secret_auth_header_redacted() -> TestCase {
+        TestCase::new(
+            "url_secret_auth_header_redacted",
+            "Secret-sourced Authorization header reaches the URL target; controller admin output redacts it",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    // (a) test_server observed the real token.
+                    let trace_id = format!("wh14-{}", uuid::Uuid::new_v4());
+                    if let Err(e) = send_gw(&ctx, "wh14.example.com", "/test/wh14", &[], &trace_id).await {
+                        return TestResult::failed(start.elapsed(), e);
+                    }
+                    let log = match fetch_log(&ctx, &trace_id).await {
+                        Ok(l) => l,
+                        Err(e) => return TestResult::failed(start.elapsed(), e),
+                    };
+                    if !log_has(&log, "wh14_result", "Bearer integration-test-secret-77") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "expected wh14_result='Bearer integration-test-secret-77' \
+                                 (real token reached the URL target) | access-log: {}",
+                                log
+                            ),
+                        );
+                    }
+
+                    // (b) the controller's own admin output never shows the real value.
+                    let resource = match fetch_linksys_resource(&ctx, "wh14-resolver").await {
+                        Ok(r) => r,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("admin fetch failed: {}", e)),
+                    };
+                    let resource_str = resource.to_string();
+                    if resource_str.contains("integration-test-secret-77") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("controller admin output leaked the real secret value: {}", resource_str),
+                        );
+                    }
+                    let resolved_secrets = &resource["spec"]["config"]["resolvedSecrets"];
+                    if resolved_secrets.as_str() != Some("[redacted]") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "expected spec.config.resolvedSecrets == \"[redacted]\", got: {} | full: {}",
+                                resolved_secrets, resource_str
+                            ),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        "real token reached the URL target; controller admin output renders \"[redacted]\"".to_string(),
+                    )
+                })
+            },
+        )
+    }
+
+    // ==================== 15. Retry on 5xx (URL target) ====================
+    fn test_url_retry_on_5xx() -> TestCase {
+        TestCase::new(
+            "url_retry_on_5xx",
+            "retry.retryOnStatus retries a URL target through exactly 2 retries (3 total attempts)",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    // The fixture's LinkSys target path is a static template
+                    // ("/retry-sequence/wh15-retry-seq/503,503,200") with no
+                    // per-request variables, so `test_id` is a fixed literal
+                    // ("wh15-retry-seq") rather than a fresh UUID. test_server's
+                    // `/retry-sequence/{test_id}/{status_list}` handler keeps a
+                    // cumulative, process-wide counter per `test_id` that never
+                    // wraps once its status_list is exhausted — so without a
+                    // reset, a rerun in the same test_server process would reuse
+                    // the counter from the previous run and never retry. Reset it
+                    // before driving traffic (safe: only this case uses
+                    // `wh15-retry-seq` within this suite, and cases run
+                    // sequentially).
+                    let reset_url = format!("http://{}:30001/retry-sequence-reset", ctx.target_host);
+                    if let Err(e) = ctx.http_client.get(&reset_url).send().await {
+                        return TestResult::failed(start.elapsed(), format!("retry-sequence-reset failed: {}", e));
+                    }
+
+                    run_case(
+                        &ctx,
+                        "wh15.example.com",
+                        "/test/wh15",
+                        &[],
+                        "wh15",
+                        start,
+                        true,
+                        |log| {
+                            // x-attempt-history on the final (successful) response lists
+                            // every status returned so far for this test_id: "503,503,200"
+                            // is only reachable after exactly 3 inbound requests.
+                            if log_has(log, "wh15_result", "503,503,200") {
+                                Ok("retryOnStatus:[503] retried exactly twice; 3rd attempt (200) succeeded".into())
+                            } else {
+                                Err("expected wh15_result=503,503,200 (exactly 3 inbound requests)".into())
+                            }
+                        },
+                    )
+                    .await
+                })
+            },
+        )
+    }
+
+    // ==================== 16. blockPrivate rejects an IP-literal URL target ====================
+    fn test_url_block_private_rejected() -> TestCase {
+        TestCase::new(
+            "url_block_private_rejected",
+            "blockPrivate:true rejects an RFC1918 IP-literal target pre-connect; metric increments; \
+             negative control (blockPrivate absent) fails differently and does not increment the metric",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+
+                    let baseline = match fetch_egress_blocked_private_count(&ctx).await {
+                        Ok(v) => v,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("metrics baseline: {}", e)),
+                    };
+
+                    // Negative control first: same unroutable RFC1918 address, but
+                    // blockPrivate absent. Must NOT increment the "private" metric —
+                    // it fails by connection timeout, not the SSRF guard.
+                    let trace_ctrl = format!("wh16ctrl-{}", uuid::Uuid::new_v4());
+                    if let Err(e) = send_gw(&ctx, "wh16ctrl.example.com", "/test/wh16ctrl", &[], &trace_ctrl).await {
+                        return TestResult::failed(start.elapsed(), e);
+                    }
+                    if let Err(e) = fetch_log(&ctx, &trace_ctrl).await {
+                        return TestResult::failed(start.elapsed(), format!("negative control access-log: {}", e));
+                    }
+
+                    let after_ctrl = match fetch_egress_blocked_private_count(&ctx).await {
+                        Ok(v) => v,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("metrics after ctrl: {}", e)),
+                    };
+                    if after_ctrl != baseline {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "negative control (blockPrivate absent) must NOT increment reason=\"private\": \
+                                 baseline={} after_ctrl={}",
+                                baseline, after_ctrl
+                            ),
+                        );
+                    }
+
+                    // blockPrivate:true — rejected pre-connect; the metric must increment.
+                    let trace_block = format!("wh16-{}", uuid::Uuid::new_v4());
+                    if let Err(e) = send_gw(&ctx, "wh16.example.com", "/test/wh16", &[], &trace_block).await {
+                        return TestResult::failed(start.elapsed(), e);
+                    }
+                    let log_block = match fetch_log(&ctx, &trace_block).await {
+                        Ok(l) => l,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("blocked access-log: {}", e)),
+                    };
+                    if !log_has(&log_block, "wh16_result", "blocked-fallback") {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "expected wh16_result=blocked-fallback (webhook call rejected, degraded to \
+                                 default) | access-log: {}",
+                                log_block
+                            ),
+                        );
+                    }
+
+                    let after_block = match fetch_egress_blocked_private_count(&ctx).await {
+                        Ok(v) => v,
+                        Err(e) => return TestResult::failed(start.elapsed(), format!("metrics after block: {}", e)),
+                    };
+                    if after_block != after_ctrl + 1 {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "expected reason=\"private\" to increment by exactly 1: after_ctrl={} \
+                                 after_block={}",
+                                after_ctrl, after_block
+                            ),
+                        );
+                    }
+
+                    TestResult::passed_with_message(
+                        start.elapsed(),
+                        format!(
+                            "blockPrivate:true rejected pre-connect (metric {} -> {}); negative control \
+                             (blockPrivate absent) failed differently without incrementing the metric",
+                            after_ctrl, after_block
+                        ),
+                    )
+                })
+            },
+        )
+    }
+
+    // ==================== 17. Origin-only rejection reported by the controller ====================
+    fn test_url_origin_only_rejected() -> TestCase {
+        TestCase::new(
+            "url_origin_only_rejected",
+            "target.url with a path is rejected: Accepted=False with an 'origin-only' message",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    match fetch_linksys_conditions(&ctx, "wh17-origin-only").await {
+                        Err(e) => TestResult::failed(start.elapsed(), e),
+                        Ok(conditions) => match find_condition(&conditions, "Accepted") {
+                            Some(c) if c["status"].as_str() == Some("False") => {
+                                let msg = c["message"].as_str().unwrap_or("");
+                                if msg.contains("origin-only") {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        format!("Accepted=False with 'origin-only' in message: {}", msg),
+                                    )
+                                } else {
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        format!("Accepted=False but message lacks 'origin-only': '{}'", msg),
+                                    )
+                                }
+                            }
+                            Some(c) => TestResult::failed(start.elapsed(), format!("Accepted not False: {:?}", c)),
+                            None => TestResult::failed(
+                                start.elapsed(),
+                                format!("Accepted condition not found: {:?}", conditions),
+                            ),
+                        },
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for WebhookKeyGetTestSuite {
@@ -540,6 +980,12 @@ impl TestSuite for WebhookKeyGetTestSuite {
             Self::test_ctx_set_integration(),
             Self::test_custom_template(),
             Self::test_custom_secret(),
+            Self::test_url_target_happy_path(),
+            Self::test_url_tls_custom_ca(),
+            Self::test_url_secret_auth_header_redacted(),
+            Self::test_url_retry_on_5xx(),
+            Self::test_url_block_private_rejected(),
+            Self::test_url_origin_only_rejected(),
         ]
     }
 }

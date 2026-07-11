@@ -11,8 +11,9 @@ pub mod service_kind;
 pub mod tls;
 
 pub use external_http::{
-    validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff, PassiveHealthCheck,
-    ResolvedSecrets, WebhookHealthCheck, WebhookRateLimit, WebhookRetry, WebhookTarget,
+    validate_connection_target, validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff,
+    PassiveHealthCheck, ResolvedSecrets, TargetKind, WebhookHealthCheck, WebhookRateLimit, WebhookRetry,
+    WebhookServiceRef, WebhookTarget,
 };
 pub use log_labels::{resolve_log_ctx_keys, resolve_log_labels};
 pub use outbound_request::{

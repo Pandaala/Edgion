@@ -11,8 +11,9 @@ use crate::resources::common::SecretSlot;
 // Re-export types moved to common::external_http so that existing callers using
 // `link_sys::webhook::{WebhookTarget, WebhookRetry, ExternalHttpConnection, …}` continue to compile.
 pub use crate::resources::common::external_http::{
-    validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff, PassiveHealthCheck,
-    WebhookHealthCheck, WebhookRateLimit, WebhookRetry, WebhookTarget,
+    validate_connection_target, validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff,
+    PassiveHealthCheck, TargetKind, WebhookHealthCheck, WebhookRateLimit, WebhookRetry, WebhookServiceRef,
+    WebhookTarget,
 };
 
 // Re-export the shared outbound-request types so that existing callers using
@@ -245,7 +246,7 @@ impl WebhookServiceConfig {
     /// are not validated; they are accepted for backward compatibility but not used at runtime.
     pub fn get_validation_error(&self) -> Option<String> {
         // Validate the target
-        if let Some(err) = validate_webhook_target(&self.conn.target) {
+        if let Some(err) = crate::resources::common::validate_connection_target(&self.conn) {
             return Some(err);
         }
 
@@ -594,8 +595,8 @@ unknownField: value
     /// thing that can fail.
     fn valid_base_config() -> WebhookServiceConfig {
         let mut config = WebhookServiceConfig::default();
-        config.conn.target.backend_ref.name = "webhook-svc".to_string();
-        config.conn.target.backend_ref.port = Some(8080);
+        config.conn.target.service.name = Some("webhook-svc".to_string());
+        config.conn.target.service.port = Some(8080);
         config
     }
 

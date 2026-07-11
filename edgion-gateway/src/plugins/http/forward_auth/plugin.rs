@@ -282,9 +282,9 @@ mod tests {
     /// `http://localhost:PORT` so that `dial_url`'s SSRF guard does not block it.
     ///
     /// `127.0.0.1` is a loopback IP and `validate_endpoint_backend_addr` rejects
-    /// it. `localhost` is a DNS name — `extract_socket_addr` cannot parse it as a
-    /// `SocketAddr`, so the SSRF check is bypassed, and reqwest resolves it to the
-    /// mock server normally.
+    /// it. `localhost` is a DNS name — `extract_ip_literal` cannot parse it as a
+    /// `SocketAddr`, so the literal-level SSRF check is bypassed, and reqwest
+    /// resolves it to the mock server normally.
     fn localhost_uri(server_uri: &str) -> String {
         server_uri.replace("127.0.0.1", "localhost")
     }

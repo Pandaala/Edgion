@@ -826,9 +826,8 @@ mod tests {
     use super::*;
 
     fn create_test_webhook_linksys(namespace: &str, name: &str) -> LinkSys {
-        use edgion_resources::resources::http_route::BackendObjectReference;
         use edgion_resources::resources::link_sys::webhook::{
-            ExternalHttpConnection, WebhookServiceConfig, WebhookTarget,
+            ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
         };
         use edgion_resources::resources::link_sys::{LinkSysSpec, SystemConfig};
 
@@ -842,13 +841,14 @@ mod tests {
                 config: SystemConfig::Webhook(WebhookServiceConfig {
                     conn: ExternalHttpConnection {
                         target: WebhookTarget {
-                            backend_ref: BackendObjectReference {
-                                group: String::new(),
+                            service: WebhookServiceRef {
                                 kind: None,
-                                name: "resolve-svc".to_string(),
+                                name: Some("resolve-svc".to_string()),
                                 namespace: Some(namespace.to_string()),
                                 port: Some(8080),
+                                ..Default::default()
                             },
+                            ..Default::default()
                         },
                         ..Default::default()
                     },
@@ -1160,8 +1160,8 @@ mod tests {
             CustomField, CustomSource, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
         };
         let mut config = WebhookServiceConfig::default();
-        config.conn.target.backend_ref.name = "svc".to_string();
-        config.conn.target.backend_ref.port = Some(8080);
+        config.conn.target.service.name = Some("svc".to_string());
+        config.conn.target.service.port = Some(8080);
         config.request = WebhookOutboundRequest {
             headers: ListFields {
                 origin: vec![],
@@ -1196,8 +1196,9 @@ mod tests {
         let key = "t13-ns/wh-arc-swap".to_string();
 
         let make_ls = || {
-            use edgion_resources::resources::http_route::BackendObjectReference;
-            use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookTarget};
+            use edgion_resources::resources::link_sys::webhook::{
+                ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+            };
             LinkSys {
                 metadata: kube::core::ObjectMeta {
                     namespace: Some("t13-ns".into()),
@@ -1208,13 +1209,14 @@ mod tests {
                     config: SystemConfig::Webhook(WebhookServiceConfig {
                         conn: ExternalHttpConnection {
                             target: WebhookTarget {
-                                backend_ref: BackendObjectReference {
-                                    group: String::new(),
+                                service: WebhookServiceRef {
                                     kind: None,
-                                    name: "webhook-svc".to_string(),
+                                    name: Some("webhook-svc".to_string()),
                                     namespace: Some("t13-ns".to_string()),
                                     port: Some(8080),
+                                    ..Default::default()
                                 },
+                                ..Default::default()
                             },
                             ..Default::default()
                         },

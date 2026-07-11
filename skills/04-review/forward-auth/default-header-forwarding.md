@@ -17,7 +17,7 @@ description: Use when reviewing forward_auth header-forwarding findings; documen
    - Edgion follows these two mainstream implementations' defaults
    - APISIX `forward-auth` is the minority view (forwards only listed headers by default); diverging from it would cost more than it benefits
 
-2. **Target is a Kubernetes Service backendRef, not user-controlled**: ForwardAuth's `target` field comes from Controller-managed CRD config (`target: { name, namespace, port }`), resolved via EndpointSlice at runtime. There is no scenario where a regular user can induce forwarding to an arbitrary address. The SSRF guard (`validate_endpoint_backend_addr`) provides an additional runtime check.
+2. **Target is Controller/CRD-managed, not user-controlled**: ForwardAuth's `target` field comes from Controller-managed CRD config, and may be either a Kubernetes Service reference (`target: { name, namespace, port }`, resolved via EndpointSlice at runtime) or an origin-only external URL (`target: { url, blockPrivate }`). Either way it is set by a cluster admin via the CRD (RBAC-gated), not by a regular request-time user — there is no scenario where a regular user can induce forwarding to an arbitrary address. The Service form gets an additional runtime SSRF guard (`validate_endpoint_backend_addr`); the URL form carries its own dedicated SSRF egress guard (loopback/link-local/unspecified always blocked, `blockPrivate: true` also blocks RFC1918/unique-local).
 
 3. **Documentation explains the choice clearly**:
    - `docs/{zh-CN,en}/user-guide/edgion-plugins/forward-auth.md` has a dedicated `request.headers.forwardAll Default Semantics` section explaining the three forwarding modes (`forwardAll: true`, `forwardAll: false` + `origin`, or mixed)

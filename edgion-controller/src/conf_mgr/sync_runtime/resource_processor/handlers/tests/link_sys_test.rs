@@ -758,21 +758,23 @@ async fn test_spec_serde_round_trip_preserves_secret() {
 /// no longer embeds them or registers wakeup dependencies.
 #[tokio::test]
 async fn webhook_service_target_registers_no_service_ref() {
-    use edgion_resources::resources::http_route::BackendObjectReference;
-    use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::{
+        ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
+    };
 
     let (ctx, _runtime) = make_ctx(HashMap::new());
     let owner = ResourceRef::new(ResourceKind::LinkSys, Some("ns".to_string()), "websvc".to_string());
     let mut cfg = SystemConfig::Webhook(WebhookServiceConfig {
         conn: ExternalHttpConnection {
             target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
+                service: WebhookServiceRef {
                     kind: None,
-                    name: "websvc".into(),
+                    name: Some("websvc".into()),
                     namespace: Some("ns".into()),
                     port: Some(8080),
+                    ..Default::default()
                 },
+                ..Default::default()
             },
             ..Default::default()
         },
@@ -798,18 +800,20 @@ async fn webhook_service_target_registers_no_service_ref() {
 
 /// Build a minimal valid webhook config with no shim fields set.
 fn make_webhook_config() -> edgion_resources::resources::link_sys::webhook::WebhookServiceConfig {
-    use edgion_resources::resources::http_route::BackendObjectReference;
-    use edgion_resources::resources::link_sys::webhook::{ExternalHttpConnection, WebhookServiceConfig, WebhookTarget};
+    use edgion_resources::resources::link_sys::webhook::{
+        ExternalHttpConnection, WebhookServiceConfig, WebhookServiceRef, WebhookTarget,
+    };
     WebhookServiceConfig {
         conn: ExternalHttpConnection {
             target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
+                service: WebhookServiceRef {
                     kind: None,
-                    name: "websvc".into(),
+                    name: Some("websvc".into()),
                     namespace: Some("ns".into()),
                     port: Some(8080),
+                    ..Default::default()
                 },
+                ..Default::default()
             },
             ..Default::default()
         },
@@ -899,10 +903,9 @@ fn test_deprecation_warns_on_all_shim_fields_together() {
 /// populates `resolved_secrets` with the decoded value.
 #[tokio::test]
 async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
-    use edgion_resources::resources::http_route::BackendObjectReference;
     use edgion_resources::resources::link_sys::webhook::{
         CustomField, CustomSource, ExternalHttpConnection, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
-        WebhookTarget,
+        WebhookServiceRef, WebhookTarget,
     };
 
     // Secret: namespace="edgion-default", name="wh-tok", key="token" -> "my-secret-token"
@@ -921,13 +924,14 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
             config: SystemConfig::Webhook(WebhookServiceConfig {
                 conn: ExternalHttpConnection {
                     target: WebhookTarget {
-                        backend_ref: BackendObjectReference {
-                            group: String::new(),
+                        service: WebhookServiceRef {
                             kind: None,
-                            name: "wh-svc".into(),
+                            name: Some("wh-svc".into()),
                             namespace: Some("edgion-default".into()),
                             port: Some(8080),
+                            ..Default::default()
                         },
+                        ..Default::default()
                     },
                     ..Default::default()
                 },
@@ -981,10 +985,9 @@ async fn test_webhook_secret_ref_resolved_into_resolved_secrets() {
 /// resolved_secrets as None (fail-closed).
 #[tokio::test]
 async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
-    use edgion_resources::resources::http_route::BackendObjectReference;
     use edgion_resources::resources::link_sys::webhook::{
         CustomField, CustomSource, ExternalHttpConnection, ListFields, WebhookOutboundRequest, WebhookServiceConfig,
-        WebhookTarget,
+        WebhookServiceRef, WebhookTarget,
     };
 
     // No secrets in the store — the referenced secret does not exist.
@@ -1002,13 +1005,14 @@ async fn test_webhook_secret_ref_missing_secret_sets_resolved_refs_false() {
             config: SystemConfig::Webhook(WebhookServiceConfig {
                 conn: ExternalHttpConnection {
                     target: WebhookTarget {
-                        backend_ref: BackendObjectReference {
-                            group: String::new(),
+                        service: WebhookServiceRef {
                             kind: None,
-                            name: "wh-svc".into(),
+                            name: Some("wh-svc".into()),
                             namespace: Some("edgion-default".into()),
                             port: Some(8080),
+                            ..Default::default()
                         },
+                        ..Default::default()
                     },
                     ..Default::default()
                 },

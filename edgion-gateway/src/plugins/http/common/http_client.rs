@@ -71,25 +71,26 @@ pub fn get_http_client() -> &'static Client {
     })
 }
 
-/// Build a per-request HTTP client for outbound webhook / forward-auth calls.
+/// Build a dedicated outbound client for a webhook / forward_auth connection.
 ///
-/// When `tls` is `Some`, builds a dedicated client whose TLS policy is resolved through
-/// the shared outbound resolver: the production verify gate is enforced, a custom CA
-/// (inline or from a secret) replaces the default trust store when provided, and an
-/// mTLS client identity is applied when `clientCertificateRef` is set. When `tls` is `None`,
-/// returns `None` — the caller should fall back to the pooled default from
-/// [`get_http_client`].
+/// Returns `None` only when neither a TLS block nor a DNS resolver is supplied —
+/// i.e. when the shared global client is safe to use. A URL target always supplies
+/// a resolver, so it always gets a dedicated client (design spec 2.6).
 pub fn build_webhook_client(
     tls_config: &Option<edgion_resources::resources::common::TlsConfig>,
+    dns_resolver: Option<std::sync::Arc<dyn reqwest::dns::Resolve>>,
 ) -> Option<anyhow::Result<Client>> {
-    let tls = tls_config.as_ref()?;
+    if tls_config.is_none() && dns_resolver.is_none() {
+        return None;
+    }
     Some(build_outbound_client(OutboundClientConfig {
         pool_max_idle_per_host: Some(32),
         connect_timeout: Some(Duration::from_secs(5)),
         total_timeout: Some(Duration::from_secs(10)),
         redirect: OutboundRedirect::Deny,
-        tls: Some(tls.clone()),
+        tls: tls_config.clone(),
         tls_context: Some("Webhook"),
+        dns_resolver,
         ..Default::default()
     }))
 }

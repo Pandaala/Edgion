@@ -14,16 +14,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use edgion_resources::resources::common::external_http::{
-    ActiveHealthCheck, ExternalHttpConnection, PassiveHealthCheck, WebhookRetry, WebhookTarget,
+    ActiveHealthCheck, ExternalHttpConnection, PassiveHealthCheck, TargetKind, WebhookRetry, WebhookTarget,
 };
 use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
 use edgion_resources::resources::common::ResolvedSecrets;
 
+use edgion_common::dns::ResolverSpec;
+
 use crate::backends::service_kind::EdgionService;
 use crate::backends::validate_endpoint_backend_addr;
+use crate::observe::metrics::record_egress_blocked;
 use crate::plugins::http::common::http_client::{build_webhook_client, get_http_client_arc};
-use edgion_resources::resources::common::external_http::validate_webhook_target;
+use crate::util::net::IpClass;
+use edgion_resources::resources::common::external_http::validate_connection_target;
 
+use super::egress::{default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver};
 use super::request::CompiledRequest;
 use super::target::ResolvedTarget;
 
@@ -70,7 +75,8 @@ impl HealthState {
 pub enum ManagedOutboundDialError {
     /// The resolved target currently has no ready backend endpoint.
     NoEndpoint,
-    /// The resolved URL was blocked by the SSRF guard (loopback / link-local address).
+    /// The resolved URL was blocked by the SSRF guard (loopback / link-local address,
+    /// or — for a URL target with `blockPrivate: true` — a private/unique-local address).
     SsrfRejected(String),
 }
 
@@ -111,6 +117,9 @@ pub struct ManagedOutboundClient {
     pub timeout: Duration,
     /// Retry configuration. `None` = no retry.
     pub retry: Option<WebhookRetry>,
+    /// Egress policy for URL targets. `None` for Service targets, whose addresses
+    /// are guarded by `validate_endpoint_backend_addr`'s backend policy instead.
+    pub egress_policy: Option<EgressPolicy>,
     /// Passive health-check configuration. `None` = no passive monitoring.
     pub passive_health_check: Option<PassiveHealthCheck>,
     /// Handle for the active-health background task. Aborted on Drop.
@@ -148,7 +157,7 @@ impl ManagedOutboundClient {
     /// Build a [`ManagedOutboundClient`] from an [`ExternalHttpConnection`] and an
     /// [`OutboundRequestSpec`].
     ///
-    /// * Validates the target via [`validate_webhook_target`].
+    /// * Validates the target via [`validate_connection_target`].
     /// * Builds a `reqwest::Client` from `conn.tls` (falls back to the shared
     ///   global client when TLS is absent).
     /// * Resolves the backend reference into a [`ResolvedTarget`].
@@ -164,12 +173,37 @@ impl ManagedOutboundClient {
         ref_label: &str,
     ) -> Result<Self, String> {
         // ── 1. Validate target ─────────────────────────────────────────────
-        if let Some(e) = validate_webhook_target(&conn.target) {
+        if let Some(e) = validate_connection_target(conn) {
             return Err(format!("invalid target for '{}': {}", ref_label, e));
         }
 
-        // ── 2. Build HTTP client ───────────────────────────────────────────
-        let http_client = match build_webhook_client(&conn.tls) {
+        // ── 2. Build the DNS resolver / egress policy for URL targets ──────
+        // A URL target is addressed by hostname, so the literal-level guard in
+        // `dial_url` cannot see its addresses. `EgressResolver` classifies them at
+        // connect time. Service targets keep reqwest's default resolver: their
+        // addresses arrive as IP literals from the EndpointSlice store and are
+        // already guarded by `dial_url`.
+        let egress_policy: Option<EgressPolicy> = match conn.target.kind() {
+            Ok(TargetKind::Url { block_private, .. }) => Some(EgressPolicy {
+                block_private: block_private.unwrap_or_else(default_block_private),
+            }),
+            Ok(TargetKind::Service(_)) => None,
+            // `validate_connection_target` above already returned on this error.
+            Err(e) => return Err(format!("invalid target for '{ref_label}': {e}")),
+        };
+        let dns_resolver: Option<Arc<dyn reqwest::dns::Resolve>> = egress_policy.map(|policy| {
+            Arc::new(EgressResolver::new(
+                ResolverSpec::System,
+                policy,
+                egress_dns_cache_ttl(),
+            )) as Arc<dyn reqwest::dns::Resolve>
+        });
+
+        // ── 3. Build HTTP client ───────────────────────────────────────────
+        // `build_webhook_client` returns None only when neither TLS nor a resolver
+        // is needed; a URL target always supplies a resolver, so it never falls back
+        // to the shared global client.
+        let http_client = match build_webhook_client(&conn.tls, dns_resolver) {
             None => get_http_client_arc(),
             Some(Ok(client)) => Arc::new(client),
             Some(Err(e)) => {
@@ -177,23 +211,23 @@ impl ManagedOutboundClient {
             }
         };
 
-        // ── 3. Resolve target ──────────────────────────────────────────────
+        // ── 4. Resolve target ──────────────────────────────────────────────
         let resolved_target = build_resolved_target(&conn.target, conn.tls.is_some())?;
 
-        // ── 4. Compile request spec ────────────────────────────────────────
+        // ── 5. Compile request spec ────────────────────────────────────────
         let compiled_request = CompiledRequest::from_spec(request)
             .map_err(|e| format!("failed to compile request spec for '{}': {}", ref_label, e))?;
 
-        // ── 5. Health state ────────────────────────────────────────────────
+        // ── 6. Health state ────────────────────────────────────────────────
         let health = HealthState::new();
 
-        // ── 6. Rate counter ────────────────────────────────────────────────
+        // ── 7. Rate counter ────────────────────────────────────────────────
         let rate = conn
             .rate_limit
             .as_ref()
             .map(|rl| SlidingWindowCounter::new(rl.rate, Duration::from_secs(rl.window_sec.max(1))));
 
-        // ── 7. Spawn active-health task ────────────────────────────────────
+        // ── 8. Spawn active-health task ────────────────────────────────────
         let health_task = if let Some(active) = conn.health_check.as_ref().and_then(|hc| hc.active.as_ref()) {
             let active_clone = active.clone();
             let health_clone = Arc::clone(&health);
@@ -226,6 +260,7 @@ impl ManagedOutboundClient {
             max_response_bytes: conn.max_response_bytes,
             timeout: Duration::from_millis(conn.timeout_ms),
             retry,
+            egress_policy,
             passive_health_check,
             health_task,
             resolved_secrets: secrets.cloned(),
@@ -236,30 +271,60 @@ impl ManagedOutboundClient {
     // dial_url — SSRF-guarded URL resolution
     // ============================================================
 
-    /// Resolve the next base URL for an outbound call, applying the SSRF guard.
+    /// Resolve the next base URL for an outbound call, applying the IP-literal SSRF guard.
     ///
     /// Returns:
     /// - `Ok(url)` — a `"scheme://host:port"` string safe to dial.
     /// - `Err(NoEndpoint)` — the target currently has no ready backend.
-    /// - `Err(SsrfRejected)` — the resolved address is loopback or link-local.
+    /// - `Err(SsrfRejected)` — the resolved IP literal is loopback or link-local.
     ///
-    /// The SSRF guard calls [`validate_endpoint_backend_addr`] with
-    /// `allow_loopback = false` (safe default; forward_auth and other consumers
-    /// that want to allow loopback must set up a separate path).
+    /// A DNS hostname skips this guard by design (see [`extract_ip_literal`]); it is
+    /// guarded at connect time by [`super::egress::EgressResolver`].
     pub fn dial_url(&self) -> Result<String, ManagedOutboundDialError> {
         let url = self
             .resolved_target
             .pick_url()
             .ok_or(ManagedOutboundDialError::NoEndpoint)?;
 
-        // Parse the host:port from the URL for SSRF validation.
-        let addr = extract_socket_addr(&url).map_err(|e| {
+        let literal = extract_ip_literal(&url).map_err(|e| {
             ManagedOutboundDialError::SsrfRejected(format!("cannot parse address from URL {url:?}: {e}"))
         })?;
 
-        validate_endpoint_backend_addr(&addr, false).map_err(|status| {
-            ManagedOutboundDialError::SsrfRejected(format!("address {} is blocked by SSRF guard: {:?}", addr, status))
-        })?;
+        if let Some(addr) = literal {
+            let pingora_addr = pingora_core::protocols::l4::socket::SocketAddr::Inet(addr);
+            validate_endpoint_backend_addr(&pingora_addr, false).map_err(|status| {
+                ManagedOutboundDialError::SsrfRejected(format!("address {addr} is blocked by SSRF guard: {status:?}"))
+            })?;
+
+            // Unspecified (0.0.0.0 / ::) is blocked unconditionally for URL targets,
+            // not gated on `blockPrivate`: `validate_endpoint_backend_addr` allows it
+            // (cluster-internal Service targets legitimately never see 0.0.0.0), but on
+            // Linux a connect to 0.0.0.0 is routed to 127.0.0.1 — a loopback-equivalent
+            // bypass of the guard's "loopback always blocked" promise, and a hostile DNS
+            // answer of 0.0.0.0 is a rebinding-class bypass. This block only runs when
+            // `egress_policy` is set, i.e. for URL targets; Service targets are untouched.
+            if self.egress_policy.is_some() && crate::util::net::classify_ip(addr.ip()) == IpClass::Unspecified {
+                record_egress_blocked("unspecified");
+                return Err(ManagedOutboundDialError::SsrfRejected(format!(
+                    "address {addr} is an unspecified address"
+                )));
+            }
+
+            // A URL target's `blockPrivate` must also apply to IP-literal hosts, which
+            // never reach `EgressResolver`. `validate_endpoint_backend_addr` allows
+            // RFC1918 by design, so the private check lives here.
+            if let Some(policy) = self.egress_policy {
+                if policy.block_private {
+                    let class = crate::util::net::classify_ip(addr.ip());
+                    if matches!(class, IpClass::Private | IpClass::UniqueLocal) {
+                        record_egress_blocked("private");
+                        return Err(ManagedOutboundDialError::SsrfRejected(format!(
+                            "address {addr} is blocked by blockPrivate"
+                        )));
+                    }
+                }
+            }
+        }
 
         Ok(url)
     }
@@ -286,6 +351,7 @@ impl ManagedOutboundClient {
             max_response_bytes: 1024,
             timeout: Duration::from_secs(5),
             retry: None,
+            egress_policy: None,
             passive_health_check: None,
             health_task: None,
             resolved_secrets: None,
@@ -297,43 +363,58 @@ impl ManagedOutboundClient {
 // Internal helpers
 // ============================================================
 
-/// Build a [`ResolvedTarget`] from a [`WebhookTarget`] backend reference.
+/// Build a [`ResolvedTarget`] from a [`WebhookTarget`].
 ///
-/// Mirrors the logic in `WebhookManager::upsert` but is now also used by
-/// [`ManagedOutboundClient::from_parts`] so that both share the same scheme
-/// / service-key resolution rules.
+/// For a `Url` target the scheme comes from the URL itself, not from `tls_enabled`:
+/// the URL encodes the transport, and the `tls` block only supplies custom CA /
+/// client-certificate material. `tls_enabled` still drives the scheme for Service
+/// targets, which carry no scheme of their own.
 fn build_resolved_target(target: &WebhookTarget, tls_enabled: bool) -> Result<ResolvedTarget, String> {
-    let backend_ref = &target.backend_ref;
-    let scheme: &'static str = if tls_enabled { "https" } else { "http" };
-    let ns = backend_ref.namespace.as_deref().unwrap_or("default");
+    match target.kind()? {
+        TargetKind::Url { url, .. } => Ok(ResolvedTarget::Static(url.to_string())),
+        TargetKind::Service(svc) => {
+            let scheme: &'static str = if tls_enabled { "https" } else { "http" };
+            let ns = svc.namespace.as_deref().unwrap_or("default");
+            // `kind()` has already validated a Service target's name/port/kind, so
+            // this unwrap_or_default cannot fire in practice.
+            let name = svc.name.as_deref().unwrap_or_default();
 
-    match EdgionService::from_kind(backend_ref.kind.as_ref()) {
-        EdgionService::ServiceClusterIp => {
-            let port_suffix = backend_ref.port.map(|p| format!(":{p}")).unwrap_or_default();
-            Ok(ResolvedTarget::Static(format!(
-                "{scheme}://{}.{}.svc.cluster.local{}",
-                backend_ref.name, ns, port_suffix
-            )))
+            match EdgionService::from_kind(svc.kind.as_ref()) {
+                EdgionService::ServiceClusterIp => {
+                    let port_suffix = svc.port.map(|p| format!(":{p}")).unwrap_or_default();
+                    Ok(ResolvedTarget::Static(format!(
+                        "{scheme}://{name}.{ns}.svc.cluster.local{port_suffix}"
+                    )))
+                }
+                EdgionService::Service | EdgionService::ServiceEndpointSlice => Ok(ResolvedTarget::Service {
+                    service_key: format!("{ns}/{name}"),
+                    port: svc.port,
+                    scheme,
+                    cursor: AtomicUsize::new(0),
+                }),
+                EdgionService::Unsupported(k) => Err(format!("unsupported service kind: {k}")),
+                EdgionService::ServiceImport => Err("ServiceImport is not supported".to_string()),
+                EdgionService::ServiceExternalName => Err("ServiceExternalName is not supported".to_string()),
+            }
         }
-        EdgionService::Service | EdgionService::ServiceEndpointSlice => Ok(ResolvedTarget::Service {
-            service_key: format!("{}/{}", ns, backend_ref.name),
-            port: backend_ref.port,
-            scheme,
-            cursor: AtomicUsize::new(0),
-        }),
-        EdgionService::Unsupported(k) => Err(format!("unsupported service kind: {k}")),
-        EdgionService::ServiceImport => Err("ServiceImport is not supported".to_string()),
-        EdgionService::ServiceExternalName => Err("ServiceExternalName is not supported".to_string()),
     }
 }
 
-/// Extract a Pingora [`pingora_core::protocols::l4::socket::SocketAddr`] from a URL
-/// string like `"http://10.0.0.1:8080"`.
+/// Extract an IP-literal socket address from a URL string like `"http://10.0.0.1:8080"`.
 ///
-/// Used by [`ManagedOutboundClient::dial_url`] to feed `validate_endpoint_backend_addr`.
-/// Returns `Err` for non-IP hostnames (cluster-local DNS names cannot be SSRF-blocked
-/// by IP classification, so the caller skips the guard for those).
-fn extract_socket_addr(url: &str) -> Result<pingora_core::protocols::l4::socket::SocketAddr, String> {
+/// Returns:
+/// - `Ok(Some(addr))` — the host is an IP literal; the caller applies the SSRF guard.
+/// - `Ok(None)` — the host is a DNS name. IP classification cannot apply, so the
+///   caller skips the literal-level guard. Hostname targets are guarded instead by
+///   [`super::egress::EgressResolver`], which classifies the addresses actually
+///   handed to reqwest.
+/// - `Err(msg)` — the URL is malformed.
+///
+/// Deliberately uses `std::net::SocketAddr` rather than pingora's: pingora's
+/// `FromStr` falls back to parsing a Unix-domain-socket pathname when IP parsing
+/// fails, which turns every hostname into a `SocketAddr::Unix` that
+/// `classify_backend_addr` silently allows.
+fn extract_ip_literal(url: &str) -> Result<Option<std::net::SocketAddr>, String> {
     let parsed = reqwest::Url::parse(url).map_err(|e| format!("invalid URL {url:?}: {e}"))?;
 
     let host = parsed.host_str().ok_or_else(|| format!("URL has no host: {url:?}"))?;
@@ -342,13 +423,15 @@ fn extract_socket_addr(url: &str) -> Result<pingora_core::protocols::l4::socket:
         .port_or_known_default()
         .ok_or_else(|| format!("URL has no port and no default for scheme: {url:?}"))?;
 
-    // Pingora's SocketAddr parses "host:port" strings directly (see util/net.rs).
-    // This will fail for DNS hostnames (non-IP), which is intentional: DNS names
-    // cannot be SSRF-blocked by IP classification.
-    let addr_str = format!("{host}:{port}");
-    addr_str
-        .parse::<pingora_core::protocols::l4::socket::SocketAddr>()
-        .map_err(|_| format!("not an IP address (DNS hostname): {addr_str}"))
+    // `Url::host_str` keeps IPv6 literals in their bracketed form (e.g. "[2001:db8::1]"),
+    // so strip the brackets before parsing as an IP address. IPv4 literals and DNS
+    // names have no brackets, so this is a no-op for them.
+    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => Ok(Some(std::net::SocketAddr::new(ip, port))),
+        Err(_) => Ok(None),
+    }
 }
 
 // ============================================================
@@ -415,6 +498,59 @@ async fn run_active_health_check(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_resources::resources::common::external_http::WebhookServiceRef;
+
+    fn url_target(url: &str) -> WebhookTarget {
+        WebhookTarget {
+            url: Some(url.to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// A URL target resolves to a Static base URL whose scheme comes from the URL,
+    /// not from `tls.is_some()`.
+    #[test]
+    fn build_resolved_target_url_uses_url_scheme() {
+        // https URL with no tls block must still be https.
+        let t = build_resolved_target(&url_target("https://api.example.com"), false).unwrap();
+        match t {
+            ResolvedTarget::Static(url) => assert_eq!(url, "https://api.example.com"),
+            other => panic!("expected Static, got {other:?}"),
+        }
+
+        // http URL must stay http even when a tls block is present (custom CA only).
+        let t = build_resolved_target(&url_target("http://api.example.com:8080"), true).unwrap();
+        match t {
+            ResolvedTarget::Static(url) => assert_eq!(url, "http://api.example.com:8080"),
+            other => panic!("expected Static, got {other:?}"),
+        }
+    }
+
+    /// An invalid URL target surfaces the schema-layer error verbatim.
+    #[test]
+    fn build_resolved_target_rejects_non_origin_url() {
+        let err = build_resolved_target(&url_target("https://api.example.com/v1"), false).unwrap_err();
+        assert!(err.contains("origin-only"), "got: {err}");
+    }
+
+    /// Service targets are unchanged.
+    #[test]
+    fn build_resolved_target_service_cluster_ip_unchanged() {
+        let target = WebhookTarget {
+            service: WebhookServiceRef {
+                kind: Some("ServiceClusterIp".to_string()),
+                name: Some("auth-svc".to_string()),
+                namespace: Some("prod".to_string()),
+                port: Some(8080),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        match build_resolved_target(&target, false).unwrap() {
+            ResolvedTarget::Static(url) => assert_eq!(url, "http://auth-svc.prod.svc.cluster.local:8080"),
+            other => panic!("expected Static, got {other:?}"),
+        }
+    }
 
     /// TDD test (written before implementation): Drop aborts the spawned health task.
     ///
@@ -454,21 +590,41 @@ mod tests {
         );
     }
 
-    /// A Static target with a cluster-local DNS hostname (not an IP) is not blocked
-    /// by the SSRF guard — classify_backend_addr only acts on IP addresses.
+    /// A Static target with a DNS hostname is not blocked by the literal-level guard.
+    /// The skip is intentional: `classify_backend_addr` only acts on IP addresses, and
+    /// hostname targets are protected by `EgressResolver` at connect time instead.
     #[test]
-    fn dial_url_allows_dns_hostname() {
+    fn dial_url_skips_literal_guard_for_dns_hostname() {
         let client = ManagedOutboundClient::test_with_static_target("http://my-svc.default.svc.cluster.local:8080");
-        // extract_socket_addr will fail to parse the hostname as SocketAddr, which we
-        // treat as "not an IP → skip SSRF guard → Ok".
-        // Verify that dial_url does not return SsrfRejected for a DNS name.
         let result = client.dial_url();
-        // Could be Ok (if parse succeeds for some reason) or a specific error,
-        // but must NOT be SsrfRejected.
         assert!(
-            !matches!(result, Err(ManagedOutboundDialError::SsrfRejected(_))),
-            "DNS hostnames must not be SsrfRejected; got {result:?}"
+            matches!(result, Ok(ref u) if u == "http://my-svc.default.svc.cluster.local:8080"),
+            "DNS hostnames must pass the literal guard unchanged; got {result:?}"
         );
+    }
+
+    /// A hostname is not an IP literal: the guard is skipped explicitly, and no
+    /// Unix socket address is ever manufactured.
+    #[test]
+    fn extract_ip_literal_returns_none_for_hostname() {
+        let got = extract_ip_literal("http://my-svc.default.svc.cluster.local:8080").unwrap();
+        assert!(got.is_none(), "a DNS hostname must yield None, got {got:?}");
+    }
+
+    #[test]
+    fn extract_ip_literal_parses_ipv4_and_ipv6() {
+        let v4 = extract_ip_literal("http://10.0.0.1:8080").unwrap().unwrap();
+        assert_eq!(v4.to_string(), "10.0.0.1:8080");
+
+        let v6 = extract_ip_literal("https://[2001:db8::1]:8443").unwrap().unwrap();
+        assert_eq!(v6.port(), 8443);
+    }
+
+    /// A scheme's default port is used when the URL omits one.
+    #[test]
+    fn extract_ip_literal_uses_default_port() {
+        let addr = extract_ip_literal("https://10.0.0.1").unwrap().unwrap();
+        assert_eq!(addr.port(), 443);
     }
 
     /// dial_url returns NoEndpoint when the Service target has no ready backends.
@@ -493,6 +649,7 @@ mod tests {
             max_response_bytes: 1024,
             timeout: Duration::from_secs(5),
             retry: None,
+            egress_policy: None,
             passive_health_check: None,
             health_task: None,
             resolved_secrets: None,
@@ -507,19 +664,21 @@ mod tests {
     /// from_parts rejects an invalid target (missing port).
     #[test]
     fn from_parts_rejects_missing_port() {
-        use edgion_resources::resources::common::external_http::{ExternalHttpConnection, WebhookTarget};
+        use edgion_resources::resources::common::external_http::{
+            ExternalHttpConnection, WebhookServiceRef, WebhookTarget,
+        };
         use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
-        use edgion_resources::resources::http_route::BackendObjectReference;
 
         let conn = ExternalHttpConnection {
             target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
+                service: WebhookServiceRef {
                     kind: None,
-                    name: "svc".to_string(),
+                    name: Some("svc".to_string()),
                     namespace: Some("default".to_string()),
                     port: None, // missing port — must be rejected
+                    ..Default::default()
                 },
+                ..Default::default()
             },
             ..Default::default()
         };
@@ -529,24 +688,114 @@ mod tests {
         assert!(msg.contains("port"), "error should mention port, got: {msg}");
     }
 
+    /// blockPrivate must reject an IP-literal URL target, which never reaches
+    /// EgressResolver because hyper-util skips DNS for IP literals.
+    #[test]
+    fn dial_url_blocks_private_ip_literal_when_policy_set() {
+        let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
+        client.egress_policy = Some(EgressPolicy { block_private: true });
+        match client.dial_url() {
+            Err(ManagedOutboundDialError::SsrfRejected(msg)) => {
+                assert!(msg.contains("blockPrivate"), "got: {msg}");
+            }
+            other => panic!("expected SsrfRejected, got {other:?}"),
+        }
+    }
+
+    /// The same literal passes when blockPrivate is off — matching the resolver path,
+    /// which allows private ranges by default.
+    #[test]
+    fn dial_url_allows_private_ip_literal_by_default() {
+        let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
+        client.egress_policy = Some(EgressPolicy { block_private: false });
+        assert!(client.dial_url().is_ok());
+    }
+
+    /// Link-local is rejected regardless of blockPrivate, on both paths.
+    #[test]
+    fn dial_url_blocks_metadata_ip_literal_regardless_of_policy() {
+        let mut client = ManagedOutboundClient::test_with_static_target("http://169.254.169.254:80");
+        client.egress_policy = Some(EgressPolicy { block_private: false });
+        assert!(matches!(
+            client.dial_url(),
+            Err(ManagedOutboundDialError::SsrfRejected(_))
+        ));
+    }
+
+    /// 0.0.0.0 must be rejected regardless of blockPrivate: `validate_endpoint_backend_addr`
+    /// does not block Unspecified (Service targets legitimately allow it), so the URL-target
+    /// path needs its own unconditional check independent of the `block_private` gate.
+    #[test]
+    fn dial_url_blocks_unspecified_ip_literal_regardless_of_policy() {
+        let mut client = ManagedOutboundClient::test_with_static_target("http://0.0.0.0:8080");
+        client.egress_policy = Some(EgressPolicy { block_private: false });
+        assert!(matches!(
+            client.dial_url(),
+            Err(ManagedOutboundDialError::SsrfRejected(_))
+        ));
+    }
+
+    /// A URL target with no TLS block must still get a dedicated client — otherwise
+    /// it would fall back to the shared global client, which carries no EgressResolver.
+    #[test]
+    fn url_target_without_tls_gets_a_dedicated_client() {
+        let conn = ExternalHttpConnection {
+            target: WebhookTarget {
+                url: Some("https://api.example.com".to_string()),
+                ..Default::default()
+            },
+            tls: None,
+            ..Default::default()
+        };
+        let client = ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/url-hook")
+            .expect("url target must build");
+
+        // The shared global client is a distinct Arc allocation; a dedicated client
+        // must not alias it.
+        assert!(
+            !Arc::ptr_eq(&client.http_client, &get_http_client_arc()),
+            "a URL target must not reuse the shared global client"
+        );
+    }
+
+    /// A Service target with no TLS block still reuses the shared global client.
+    #[test]
+    fn service_target_without_tls_reuses_global_client() {
+        let conn = ExternalHttpConnection {
+            target: WebhookTarget {
+                service: WebhookServiceRef {
+                    name: Some("auth-svc".to_string()),
+                    port: Some(8080),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            tls: None,
+            ..Default::default()
+        };
+        let client = ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/svc-hook")
+            .expect("service target must build");
+        assert!(Arc::ptr_eq(&client.http_client, &get_http_client_arc()));
+    }
+
     /// Helper: build a ManagedOutboundClient with an active health check config so
     /// that from_parts spawns a long-running health task.
     async fn test_client_with_active_health() -> ManagedOutboundClient {
         use edgion_resources::resources::common::external_http::{
-            ActiveHealthCheck, ExternalHttpConnection, WebhookHealthCheck, WebhookTarget,
+            ActiveHealthCheck, ExternalHttpConnection, WebhookHealthCheck, WebhookServiceRef, WebhookTarget,
         };
         use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
-        use edgion_resources::resources::http_route::BackendObjectReference;
 
         let conn = ExternalHttpConnection {
             target: WebhookTarget {
-                backend_ref: BackendObjectReference {
-                    group: String::new(),
+                service: WebhookServiceRef {
                     kind: Some("Service".to_string()),
-                    name: "test-svc".to_string(),
+                    name: Some("test-svc".to_string()),
                     namespace: Some("default".to_string()),
                     port: Some(8080),
+                    ..Default::default()
                 },
+                ..Default::default()
             },
             health_check: Some(WebhookHealthCheck {
                 active: Some(ActiveHealthCheck {

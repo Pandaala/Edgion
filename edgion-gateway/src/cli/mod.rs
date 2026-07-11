@@ -443,6 +443,23 @@ impl EdgionGatewayCli {
             "FIPS status resolved"
         );
 
+        // 4d. Outbound egress: install the gateway-local defaults (block_private,
+        // DNS cache TTL) that `EgressResolver` falls back to when a resource does
+        // not set `target.blockPrivate` / an explicit TTL. Must run before any
+        // `ManagedOutboundClient` can be built.
+        let outbound_egress_block_private = config.gateway.outbound_egress_block_private
+            || config::outbound_block_private_env_enabled(
+                std::env::var(config::OUTBOUND_BLOCK_PRIVATE_ENV).ok().as_deref(),
+            );
+        let outbound_egress_dns_cache_ttl_ms = config::resolve_outbound_egress_dns_cache_ttl_ms(
+            config.gateway.outbound_egress_dns_cache_ttl_ms,
+            std::env::var(config::OUTBOUND_DNS_CACHE_TTL_MS_ENV).ok().as_deref(),
+        );
+        crate::plugins::http::common::outbound::egress::configure_egress_defaults(
+            outbound_egress_block_private,
+            Duration::from_millis(outbound_egress_dns_cache_ttl_ms),
+        );
+
         // 5. Initialize RateLimit / LRU cache / access-log sensitive global configurations
         edgion_resources::rate_limit_config::init_rate_limit_global_config(&config.rate_limit);
         config::init_lru_cache_global_config(&config.lru_cache);

@@ -52,6 +52,11 @@ pub struct OutboundClientConfig {
     /// Label used in TLS error messages (e.g. "Webhook", "Elasticsearch").
     /// `None` → "OutboundClient".
     pub tls_context: Option<&'static str>,
+    /// Custom DNS resolver. `None` leaves reqwest's default (GAI).
+    ///
+    /// The gateway passes an `EgressResolver` here so that SSRF classification runs
+    /// on the exact addresses reqwest connects to.
+    pub dns_resolver: Option<std::sync::Arc<dyn reqwest::dns::Resolve>>,
 }
 
 /// Apply `cfg` to `builder`. Consumed by value — see [`OutboundClientConfig`].
@@ -79,6 +84,11 @@ pub fn apply_outbound_policy(mut builder: ClientBuilder, cfg: OutboundClientConf
     };
     if cfg.disable_proxy {
         builder = builder.no_proxy();
+    }
+    if let Some(resolver) = cfg.dns_resolver {
+        // `dns_resolver2` (not `dns_resolver`) — the latter's `R: Sized` bound
+        // rejects `Arc<dyn Resolve>`.
+        builder = builder.dns_resolver2(resolver);
     }
     if let Some(tls) = cfg.tls.as_ref() {
         let ctx = cfg.tls_context.unwrap_or("OutboundClient");
