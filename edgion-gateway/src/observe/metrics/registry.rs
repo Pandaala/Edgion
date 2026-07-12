@@ -99,6 +99,14 @@ pub mod names {
     pub const WASM_TRAP_TOTAL: &str = "edgion_wasm_trap_total";
     pub const WASM_FAIL_MODE_TOTAL: &str = "edgion_wasm_fail_mode_total";
     pub const WASM_CALLOUT_TOTAL: &str = "edgion_wasm_callout_total";
+    // Capacity/sizing gauges (multi-tenant sizing observability).
+    pub const WASM_MODULES_LOADED: &str = "edgion_wasm_modules_loaded";
+    pub const WASM_SHARED_DATA_BYTES: &str = "edgion_wasm_shared_data_bytes";
+    // A guest returned Action::Pause from the response-body hook, i.e. it expects
+    // the standard proxy-wasm cumulative-buffer semantics this host does not
+    // implement. Alert on this: such a guest silently observes only the current
+    // chunk, not the whole body.
+    pub const WASM_BODY_PAUSE_UNSUPPORTED_TOTAL: &str = "edgion_wasm_body_pause_unsupported_total";
 }
 
 /// Global metrics singleton
@@ -669,6 +677,27 @@ pub fn record_wasm_fail_mode(module: &str, reason: &str, mode: &'static str) {
 /// `result` is one of `"ok"`, `"error"`, `"denied"`, `"over_limit"`.
 pub fn record_wasm_callout(module: &str, result: &'static str) {
     counter!(names::WASM_CALLOUT_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
+}
+
+/// Set the number of compiled modules currently held in the global cache.
+/// Multiplied by `instancePoolSize` this bounds pooling-allocator sizing.
+pub fn set_wasm_modules_loaded(count: usize) {
+    gauge!(names::WASM_MODULES_LOADED).set(count as f64);
+}
+
+/// Set the current shared-data byte total for a module.
+pub fn set_wasm_shared_data_bytes(module: &str, bytes: usize) {
+    gauge!(names::WASM_SHARED_DATA_BYTES, "module" => module.to_string()).set(bytes as f64);
+}
+
+/// Record a guest returning `Action::Pause` from the response-body hook.
+///
+/// This host implements the body hook as a per-chunk read-only *window*, not the
+/// spec's cumulative buffer, so Pause cannot be honored. A guest that pauses is
+/// written against the standard buffering idiom and will silently observe only
+/// the current chunk instead of the whole body — alert on this counter.
+pub fn record_wasm_body_pause_unsupported(module: &str) {
+    counter!(names::WASM_BODY_PAUSE_UNSUPPORTED_TOTAL, "module" => module.to_string()).increment(1);
 }
 
 #[cfg(test)]

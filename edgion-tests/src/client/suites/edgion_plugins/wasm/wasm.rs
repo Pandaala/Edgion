@@ -26,6 +26,14 @@ use serde_json::Value;
 use std::time::Instant;
 
 const HOST: &str = "wasm.example.com";
+/// Advanced-scenario route (callout / body observation / tick+shared-data),
+/// backed by the `wasm-advanced` EdgionPlugins resource.
+const ADV_HOST: &str = "wasm-adv.example.com";
+/// The fake auth server the harness runs (start_all.sh --auth-port 30040);
+/// `/verify` returns 200 for `Bearer valid-token`, 401 otherwise. The guest
+/// reads this origin from the `x-wasm-callout-url` request header and dispatches
+/// a callout to `<origin>/verify`. It is in the plugin's `calloutAllowlist`.
+const CALLOUT_ORIGIN: &str = "http://127.0.0.1:30040";
 
 pub struct WasmPluginTestSuite;
 
@@ -331,6 +339,190 @@ impl WasmPluginTestSuite {
             },
         )
     }
+
+    // ==================== 6. Callout: authorized token resumes ====================
+    fn test_callout_authorized() -> TestCase {
+        TestCase::new(
+            "plugin_wasm_callout_authorized",
+            "Wasm plugin: a callout to the auth server returns 200 for a valid token, guest resumes",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    let resp = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", ADV_HOST)
+                        .header("x-wasm-callout-url", CALLOUT_ORIGIN)
+                        .header("authorization", "Bearer valid-token")
+                        .send()
+                        .await;
+                    match resp {
+                        Ok(r) if r.status() == 200 => {
+                            // The resumed request carries x-wasm-added (set by the callback).
+                            match r.json::<Value>().await {
+                                Ok(body) if body["headers"]["x-wasm-added"].as_str() == Some("yes") => {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        "Authorized callout (200) resumed the request".to_string(),
+                                    )
+                                }
+                                Ok(_) => TestResult::failed(
+                                    start.elapsed(),
+                                    "Resumed request missing x-wasm-added header".to_string(),
+                                ),
+                                Err(e) => TestResult::failed(start.elapsed(), format!("JSON parse: {}", e)),
+                            }
+                        }
+                        Ok(r) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 200 after authorized callout, got {}", r.status()),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 7. Callout: bad token denied ====================
+    fn test_callout_denied() -> TestCase {
+        TestCase::new(
+            "plugin_wasm_callout_denied",
+            "Wasm plugin: a callout returning 401 for a bad token makes the guest deny with 403",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    let resp = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", ADV_HOST)
+                        .header("x-wasm-callout-url", CALLOUT_ORIGIN)
+                        .header("authorization", "Bearer wrong-token")
+                        .send()
+                        .await;
+                    match resp {
+                        Ok(r) if r.status() == 403 => {
+                            let body = r.text().await.unwrap_or_default();
+                            if body.contains("callout denied") {
+                                TestResult::passed_with_message(
+                                    start.elapsed(),
+                                    "Unauthorized callout (401) denied with 403 'callout denied'".to_string(),
+                                )
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected body 'callout denied', got '{}'", body),
+                                )
+                            }
+                        }
+                        Ok(r) => TestResult::failed(
+                            start.elapsed(),
+                            format!("Expected 403 after unauthorized callout, got {}", r.status()),
+                        ),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 8. Tick + shared data ====================
+    fn test_tick_shared_data() -> TestCase {
+        TestCase::new(
+            "plugin_wasm_tick_shared_data",
+            "Wasm plugin: on_tick increments a shared counter readable by request hooks",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    // The guest tick period is 1s; give it a couple of ticks.
+                    tokio::time::sleep(std::time::Duration::from_millis(2300)).await;
+                    let resp = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", ADV_HOST)
+                        .header("x-wasm-read-ticks", "1")
+                        .send()
+                        .await;
+                    match resp {
+                        Ok(r) if r.status() == 200 => match r.json::<Value>().await {
+                            Ok(body) => {
+                                let ticks = body["headers"]["x-wasm-ticks"]
+                                    .as_str()
+                                    .and_then(|s| s.parse::<u64>().ok())
+                                    .unwrap_or(0);
+                                if ticks >= 1 {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        format!("on_tick fired; shared counter x-wasm-ticks={}", ticks),
+                                    )
+                                } else {
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        "x-wasm-ticks is 0 or missing (tick task not running?)".to_string(),
+                                    )
+                                }
+                            }
+                            Err(e) => TestResult::failed(start.elapsed(), format!("JSON parse: {}", e)),
+                        },
+                        Ok(r) => TestResult::failed(start.elapsed(), format!("Expected 200, got {}", r.status())),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 9. Response-body read-only observation ====================
+    fn test_body_observation() -> TestCase {
+        TestCase::new(
+            "plugin_wasm_body_observation",
+            "Wasm plugin: the read-only response-body hook accumulates byte counts into shared data",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    // First request: its response body flows through the body hook,
+                    // accumulating bytes into the shared `bodybytes` counter.
+                    let _ = ctx.http_client.get(&url).header("host", ADV_HOST).send().await;
+                    // Second request reads the accumulated count.
+                    let resp = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", ADV_HOST)
+                        .header("x-wasm-read-body", "1")
+                        .send()
+                        .await;
+                    match resp {
+                        Ok(r) if r.status() == 200 => match r.json::<Value>().await {
+                            Ok(body) => {
+                                let n = body["headers"]["x-wasm-bodybytes"]
+                                    .as_str()
+                                    .and_then(|s| s.parse::<u64>().ok())
+                                    .unwrap_or(0);
+                                if n > 0 {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        format!("Body hook observed {} response-body bytes via shared data", n),
+                                    )
+                                } else {
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        "x-wasm-bodybytes is 0 (response-body hook did not fire?)".to_string(),
+                                    )
+                                }
+                            }
+                            Err(e) => TestResult::failed(start.elapsed(), format!("JSON parse: {}", e)),
+                        },
+                        Ok(r) => TestResult::failed(start.elapsed(), format!("Expected 200, got {}", r.status())),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for WasmPluginTestSuite {
@@ -345,6 +537,10 @@ impl TestSuite for WasmPluginTestSuite {
             Self::test_response_header(),
             Self::test_panic_recovery(),
             Self::test_perf_smoke(),
+            Self::test_callout_authorized(),
+            Self::test_callout_denied(),
+            Self::test_tick_shared_data(),
+            Self::test_body_observation(),
         ]
     }
 }

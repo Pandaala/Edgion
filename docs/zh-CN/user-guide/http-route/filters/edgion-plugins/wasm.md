@@ -20,7 +20,7 @@ proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可�
 | `proxy_on_request_headers` | `requestPlugins`（`RequestFilter`） | 请求 header 到达、访问后端之前 |
 | `proxy_on_http_call_response` | —（callout 回调） | 请求挂起期间，每个完成的 callout 回调一次 |
 | `proxy_on_response_headers` | `upstreamResponseFilterPlugins`（`UpstreamResponseFilter`） | 上游响应 header 到达 |
-| `proxy_on_http_response_body` | `upstreamResponseBodyFilterPlugins`（`UpstreamResponseBodyFilter`） | 每个上游 body chunk 一次，**只读**（见 [body 观测](#响应-body-观测只读)） |
+| `proxy_on_response_body` | `upstreamResponseBodyFilterPlugins`（`UpstreamResponseBodyFilter`） | 每个上游 body chunk 一次，**只读**（见 [body 观测](#响应-body-观测只读)） |
 | `proxy_on_tick` | —（后台） | guest 设定 tick 周期后周期性触发（见[定时器](#shared-data-与定时器)） |
 | `proxy_on_done` / `proxy_on_delete` | —（上下文清理） | 每个请求级上下文结束之后 |
 
@@ -33,7 +33,7 @@ Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | 请求头、响应头，以及（callout 回调内）`HttpCallResponseHeaders`——callout 响应头外加合成的 `:status` |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | 设置/追加/删除/整体替换；钩子返回后应用到真实请求/响应。对 callout 响应 map 的写入被拒绝 |
 | `proxy_send_local_response` | ✅ | 以指定状态码/响应体/头短路请求。也可在 `proxy_on_http_call_response` 内调用（鉴权 callout 后拒绝） |
-| `proxy_dispatch_http_call` | ✅（请求阶段） | 见 [HTTP callout](#http-calloutpause恢复)。响应/body/tick 阶段返回 `UNIMPLEMENTED`（12） |
+| `proxy_http_call` | ✅（请求阶段） | 见 [HTTP callout](#http-calloutpause恢复)。响应/body/tick 阶段返回 `UNIMPLEMENTED`（12） |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | 恢复因 callout 挂起的请求。`proxy_continue_response` 仍是接受型 no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | 模块级 KV + CAS——见 [shared data](#shared-data-与定时器) |
 | `proxy_set_tick_period_milliseconds` | ✅ | 启动模块级 tick 任务；`0` 停止。周期下限 100ms |
@@ -81,7 +81,7 @@ config:
 | `failOpen` | Boolean | `false` | 加载失败 / trap / 超时 / callout 不恢复时的行为——见[失败语义](#失败语义)。 |
 | `timeoutMs` | Integer | `100` | 每次钩子调用的墙钟预算（epoch 中断）。范围 `1..=10000`。body chunk 钩子按 `timeoutMs / 10` 执行。 |
 | `instancePoolSize` | Integer | `8` | 每个编译模块、每个网关进程保留的池化实例上限。范围 `1..=64`。 |
-| `calloutAllowlist` | String 列表 | `[]` | guest 可通过 `proxy_dispatch_http_call` 访问的 origin（`scheme://host[:port]`）。**空 = 禁用 callout**（dispatch 返回 guest 可观测的宿主错误）。规范化后精确匹配。 |
+| `calloutAllowlist` | String 列表 | `[]` | guest 可通过 `proxy_http_call` 访问的 origin（`scheme://host[:port]`）。**空 = 禁用 callout**（dispatch 返回 guest 可观测的宿主错误）。规范化后精确匹配。 |
 | `calloutTimeoutMs` | Integer | `5000` | 每个 callout 的 guest 超时上限（guest 传 0 时的生效值）。范围 `1..=10000`。 |
 
 ## 来源形态选型
@@ -126,7 +126,7 @@ requestPlugins:
 
 ## HTTP callout（Pause/恢复）
 
-`proxy_dispatch_http_call` 允许 guest 在请求中途调用外部 HTTP 服务——proxy-wasm 生态最主流的插件形态（外部鉴权、风控评分、审计）。流程：
+`proxy_http_call`（官方 proxy-wasm SDK 实际导入的名字；host 同时兼容旧的 `proxy_dispatch_http_call` 拼写）允许 guest 在请求中途调用外部 HTTP 服务——proxy-wasm 生态最主流的插件形态（外部鉴权、风控评分、审计）。流程：
 
 1. guest 在 `on_http_request_headers` 里 dispatch 一或多个 callout，返回 `Action::Pause`。
 2. 网关在请求挂起期间（异步、不占 guest CPU 预算）执行这些 callout。
@@ -152,15 +152,31 @@ requestPlugins:
 
 ## 响应 body 观测（只读）
 
-把 Wasm 条目列在 `upstreamResponseBodyFilterPlugins` 下，`proxy_on_http_response_body` 会对每个上游 chunk 触发一次：
+把 Wasm 条目列在 `upstreamResponseBodyFilterPlugins` 下，`proxy_on_response_body` 会对每个上游 chunk 触发一次。
 
-- `proxy_get_buffer_bytes(HttpResponseBody, start, max)` 返回的是**当前 chunk 窗口**——网关从不缓冲 body。跨 chunk 聚合是 guest 自己的事（自身内存或 [shared data](#shared-data-与定时器)）。
+> ### ⚠️ 这里偏离 proxy-wasm spec——移植 guest 前必读
+>
+> spec 的 body 契约是**累积式**的：`body_size` 是**宿主到目前为止已缓冲的总字节数**，`Action::Pause` 让宿主**继续缓冲**，`proxy_get_buffer_bytes` 读的是**累积缓冲区**。Envoy 的实现方式是把 Pause 映射成 `StopIterationAndBuffer`，由它的 filter manager 持有缓冲区。
+>
+> **本网关实现的是每 chunk 的只读*窗口***：`body_size` 是**当前 chunk** 的长度，`proxy_get_buffer_bytes(HttpResponseBody, …)` **只返回该 chunk**，body 从不被缓冲。
+>
+> **后果**：一个按标准范式写的 guest——
+> ```rust
+> if !end_of_stream { return Action::Pause; }             // 期望宿主缓冲
+> let body = self.get_http_response_body(0, body_size)?;  // 以为拿到完整 body
+> ```
+> ——**只会看到最后一个 chunk**。对 WAF 或敏感数据扫描器来说这是**静默漏检**。因此宿主**不会**静默忽略 Pause：它会递增 `edgion_wasm_body_pause_unsupported_total{module}` 并按模块告警一次。**请对该指标配告警**——它意味着线上某个 guest 正在看不完整的数据。
+>
+> 完整 spec 语义需要请求/响应 body 缓冲基建，是一个独立的工程（见 roadmap 任务 `tasks/wasm-followups/body-buffering-spec-semantics.md`）。
+
+在每 chunk 模型下正确的用法：
+
+- 跨 chunk 聚合是 **guest 自己的事**（用它自己的内存，或 [shared data](#shared-data-与定时器)——参考 guest 就是把每个 chunk 的字节数累加进一个 shared 计数器）。
 - **严格只读**：不能改写 body，也不能在 body 阶段短路响应（响应头已发出）。检测结论只能记日志（`proxy_log`）或写入 shared data。
-- body 钩子返回 `Action::Pause` 在只读形态下无意义，被忽略。
 - 每个 chunk 在缩减的 CPU 预算（`timeoutMs / 10`，下限 10ms）下执行，慢 guest 拖不垮长流；body 钩子 trap **绝不断流**（实例被丢弃，流继续，与 `failOpen` 无关）。
-- 未导出 `proxy_on_http_response_body` 的 guest 在此阶段是零成本 no-op。
+- 未导出 `proxy_on_response_body` 的 guest 在此阶段是零成本 no-op。
 
-请求 body 观测**未实现**（依赖网关尚不具备的请求 body 缓冲基建）。
+请求 body 观测**完全未实现**（没有 `proxy_on_request_body`）——它依赖同一套 body 缓冲基建。
 
 ## Shared data 与定时器
 
@@ -209,7 +225,7 @@ trap（或其他故障）的 VM 实例会被**污染**：直接丢弃而不回�
 - **引用计数淘汰。** 每个存活的 Wasm 插件实例都会 pin 住其缓存条目。reload/配置变更使某条目失去最后一个引用（如 inline 内容变化 → 新 key）后，孤儿条目在 **60s 宽限期**后被淘汰（宽限吸收 reload 抖动）。在途请求通过自身强引用保持条目存活；最后一个结束后内存释放。淘汰计入 `edgion_wasm_module_evicted_total` 指标。
 - **`file` 来源内容感知。** 运行时缓存 key 含文件 size 与 mtime，在插件（重）构建时采集。同路径覆写 `.wasm` **并触发插件 reload**（对所属 `EdgionPlugins` 资源的任何更新，或全量配置重同步）即可生效新内容；旧条目被引用计数淘汰。不 reload 的话运行中插件仍持旧 key——单纯覆写文件仍不会热替换。
 - **实例预热。** 加载时即实例化一个实例：guest 初始化失败成为清晰的加载错误（进负缓存），而不是每请求的 acquire 失败；`on_configure` 里设置的 tick 周期在首个请求到来前就开始生效。
-- **多租户容量。** 所有 Wasm 模块共享一个引擎级 pooling allocator。`instancePoolSize` 要按全部已配置 Wasm 插件的实例总量核算。
+- **多租户容量。** 所有 Wasm 模块共享一个引擎级 pooling allocator。`instancePoolSize` 要按全部已配置 Wasm 插件的实例总量核算——峰值实例数约为 `edgion_wasm_modules_loaded × instancePoolSize`。
 
 ## 指标
 
@@ -227,6 +243,9 @@ trap（或其他故障）的 VM 实例会被**污染**：直接丢弃而不回�
 | `edgion_wasm_trap_total` | counter | `phase` | trap / 协议违规 |
 | `edgion_wasm_fail_mode_total` | counter | `reason`、`mode=open\|close` | fail-mode 决策 |
 | `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit` | callout 结果 |
+| `edgion_wasm_modules_loaded` | gauge | | 全局缓存中当前的编译模块数 |
+| `edgion_wasm_shared_data_bytes` | gauge | `module` | 每个模块当前 shared-data 字节总量（上限 4MiB） |
+| `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **建议配告警。** guest 在 body 钩子返回了 `Action::Pause`，即它期望 spec 的累积缓冲语义（本 host 未实现）——它正在静默地只看到当前 chunk，而非完整 body |
 
 trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_total{reason="poisoned"}` 同步上涨。
 
@@ -242,7 +261,7 @@ trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_
 ## 剩余限制
 
 - **无请求 body 钩子**（`proxy_on_request_body`）：依赖网关尚无的请求 body 缓冲；只实现请求 body 钩子的 guest 永远不会被调用。
-- **响应 body 仅可观测**：不能改写 body，不能在 body 阶段短路。
+- **响应 body 仅可观测，且是每 chunk 语义（非 spec 的累积语义）**：不能改写 body，不能在 body 阶段短路，`Action::Pause` 无法兑现——按标准缓冲范式写的 guest 只会看到当前 chunk。见[响应 body 观测](#响应-body-观测只读)一节的警告。
 - **无 gRPC callout**（`proxy_dispatch_grpc_call`）：调用即 trap。
 - **callout 仅限请求阶段**，且 dispatch 后不 Pause 会被丢弃。
 - **无 shared queue、foreign function、guest 自定义 metrics**：调用即 trap。

@@ -55,7 +55,7 @@ use super::shared_data::SharedData;
 use crate::observe::metrics::registry::{
     record_wasm_compile_duration, record_wasm_hook_duration, record_wasm_instance_discard,
     record_wasm_instance_instantiate, record_wasm_module_evicted, record_wasm_module_load, record_wasm_trap,
-    set_wasm_pool_size,
+    set_wasm_modules_loaded, set_wasm_pool_size,
 };
 use edgion_resources::plugin_configs::{WasmConfig, WasmSourceSpec};
 
@@ -273,6 +273,7 @@ impl WasmVmManager {
             // keeps the entry. `remove_if` is atomic per entry.
             if cache.refs.remove_if(&key, |_, count| *count == 0).is_some() && cache.modules.remove(&key).is_some() {
                 record_wasm_module_evicted(&label);
+                set_wasm_modules_loaded(cache.modules.len());
                 tracing::info!(module = %label, "wasm module cache entry evicted (refcount zero)");
             }
         };
@@ -337,6 +338,7 @@ impl WasmVmManager {
             Ok(entry) => {
                 record_wasm_module_load(&label, "ok");
                 *guard = LoadState::Loaded(entry.clone());
+                set_wasm_modules_loaded(self.cache.modules.len());
                 Ok(entry)
             }
             Err(e) => {
@@ -373,7 +375,7 @@ impl WasmVmManager {
         // skip leasing an instance for header-only guests (see
         // `has_body_hook`); export lookup on every chunk would otherwise
         // contend the pool mutex for no benefit on large streamed responses.
-        let has_body_hook = module.exports().any(|e| e.name() == "proxy_on_http_response_body");
+        let has_body_hook = module.exports().any(|e| e.name() == "proxy_on_response_body");
         let mut linker: Linker<HostState> = Linker::new(&engine);
         host_abi::add_to_linker(&mut linker).map_err(|e| format!("linker setup: {e}"))?;
         // Must run AFTER add_to_linker: only imports outside the supported
@@ -391,11 +393,12 @@ impl WasmVmManager {
             pool_cap: config.instance_pool_size,
             vm_config: config.vm_config.clone().unwrap_or_default().into_bytes(),
             plugin_config: config.plugin_config.clone().unwrap_or_default().into_bytes(),
+            shared_data: Arc::new(SharedData::new(label.clone())),
             metrics_label: label,
-            shared_data: Arc::new(SharedData::default()),
             hook_timeout_ms: config.timeout_ms,
             tick_task: Mutex::new(None),
             has_body_hook,
+            body_pause_warned: std::sync::atomic::AtomicBool::new(false),
         });
         // Eagerly warm one instance: validates guest init at load time (an
         // init failure becomes a clear, negative-cached load error instead
@@ -590,10 +593,15 @@ pub struct ModuleEntry {
     /// Background `proxy_on_tick` driver, started once when a guest sets a
     /// nonzero tick period. Holds a `Weak` back-reference; aborted on Drop.
     tick_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
-    /// Whether the guest exports `proxy_on_http_response_body`. Computed once
+    /// Whether the guest exports `proxy_on_response_body`. Computed once
     /// at load; lets the body-filter stage skip the per-chunk lease entirely
     /// for header-only guests.
     has_body_hook: bool,
+    /// Latched once the guest is first seen returning `Action::Pause` from the
+    /// body hook. The incompatibility is a property of the module (a guest
+    /// either uses the standard buffering idiom or it does not), so the WARN is
+    /// emitted once per module rather than once per chunk, which would flood.
+    body_pause_warned: std::sync::atomic::AtomicBool,
 }
 
 impl Drop for ModuleEntry {
@@ -715,11 +723,22 @@ impl ModuleEntry {
         *guard = Some(handle);
     }
 
-    /// Whether the guest exports `proxy_on_http_response_body`. The body
+    /// Whether the guest exports `proxy_on_response_body`. The body
     /// filter stage checks this after the cheap `try_get` lookup and returns
     /// early for header-only guests, avoiding a per-chunk pool lease.
     pub fn has_body_hook(&self) -> bool {
         self.has_body_hook
+    }
+
+    /// Human-readable module descriptor (metrics label).
+    pub fn metrics_label(&self) -> &str {
+        &self.metrics_label
+    }
+
+    /// Latch the body-Pause warning: returns `true` exactly once per module,
+    /// so the caller emits a single WARN instead of one per body chunk.
+    pub fn latch_body_pause_warning(&self) -> bool {
+        !self.body_pause_warned.swap(true, std::sync::atomic::Ordering::Relaxed)
     }
 
     #[cfg(test)]
@@ -841,14 +860,14 @@ impl VmLease {
             let vm = self.vm.as_mut().expect("lease taken");
             if vm
                 .instance
-                .get_typed_func::<(i32, i32, i32), i32>(&mut vm.store, "proxy_on_http_response_body")
+                .get_typed_func::<(i32, i32, i32), i32>(&mut vm.store, "proxy_on_response_body")
                 .is_err()
             {
                 return Ok(0);
             }
         }
         let (ctx_id, action) = self.open_and_call_with(
-            "proxy_on_http_response_body",
+            "proxy_on_response_body",
             "response_body",
             body_size,
             end_of_stream as i32,

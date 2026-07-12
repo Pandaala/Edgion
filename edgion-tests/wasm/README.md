@@ -9,14 +9,29 @@ not just a hand-assembled WAT fixture.
 
 ## Contract
 
-| Phase    | Condition                    | Behavior                                                    |
-|----------|-------------------------------|---------------------------------------------------------------|
-| request  | header `x-wasm-panic: 1`      | guest panics (host must recover; the gateway keeps serving)   |
-| request  | header `x-wasm-deny: 1`       | local response `403` with body `wasm denied`                  |
-| request  | otherwise                     | request header `x-wasm-added: yes` is added                   |
-| response | always                        | response header `x-wasm-resp: yes` is added                   |
+One guest covers every capability the host implements; behavior is selected by
+request headers so unrelated scenarios never interfere.
 
-The guest source is `header-demo/src/lib.rs`.
+| Phase / hook            | Condition                          | Behavior                                                                 |
+|-------------------------|------------------------------------|--------------------------------------------------------------------------|
+| request headers         | header `x-wasm-panic: 1`           | guest panics (host must recover; the gateway keeps serving)              |
+| request headers         | header `x-wasm-deny: 1`            | local response `403` with body `wasm denied`                            |
+| request headers         | header `x-wasm-callout-url: <o>`   | dispatch a GET `<o>/verify` callout forwarding `Authorization`, then Pause; callout `200` → resume (adds `x-wasm-added: yes`), else / failed → local `403` `callout denied`. `<o>` must be in `calloutAllowlist`. |
+| request headers         | header `x-wasm-read-ticks: 1`      | read shared `ticks` counter into request header `x-wasm-ticks`          |
+| request headers         | header `x-wasm-read-body: 1`       | read shared `bodybytes` counter into request header `x-wasm-bodybytes`  |
+| request headers         | otherwise                          | request header `x-wasm-added: yes` is added                             |
+| response headers        | always                             | response header `x-wasm-resp: yes` is added                             |
+| response body           | wired at body-filter stage         | read-only: add each chunk's byte count to shared `bodybytes`            |
+| background (`on_tick`)  | `on_configure` sets a 1s tick      | increment shared `ticks` each tick                                       |
+
+The guest source is `header-demo/src/lib.rs`. It uses `set_root_context` (for the
+tick) with an HTTP context created via `create_http_context`.
+
+> **ABI export/import names.** The host and guest agree on the canonical
+> proxy-wasm names the official SDK emits: the response-body hook is
+> `proxy_on_response_body` (no `http` infix, same as the header hooks), and the
+> callout host import is `proxy_http_call`. Getting these wrong is exactly the
+> class of host↔SDK drift this reference guest exists to catch.
 
 ## Rebuilding the artifact
 

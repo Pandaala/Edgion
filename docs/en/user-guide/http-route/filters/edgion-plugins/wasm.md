@@ -20,7 +20,7 @@ The implemented ABI is a deliberate subset (see below): header read/write, local
 | `proxy_on_request_headers` | `requestPlugins` (`RequestFilter`) | Request headers received, before the backend is contacted |
 | `proxy_on_http_call_response` | — (callout callback) | While the request is paused, once per completed callout dispatched from `proxy_on_request_headers` |
 | `proxy_on_response_headers` | `upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | Upstream response headers received |
-| `proxy_on_http_response_body` | `upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | Once per upstream body chunk, **read-only** (see [Body observation](#response-body-observation-read-only)) |
+| `proxy_on_response_body` | `upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | Once per upstream body chunk, **read-only** (see [Body observation](#response-body-observation-read-only)) |
 | `proxy_on_tick` | — (background) | Periodically, once the guest set a tick period (see [Timers](#shared-data-and-timers)) |
 | `proxy_on_done` / `proxy_on_delete` | — (per-context cleanup) | After each per-request context finishes |
 
@@ -33,7 +33,7 @@ Wasm is **not** available at `upstreamResponsePlugins` (async response stage).
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | Request headers, response headers, and (inside the callout callback) `HttpCallResponseHeaders` — the callout's response headers plus a synthetic `:status` pair |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | Set / add / remove / bulk-replace; applied to the real request/response after the hook returns. Header-map writes to the callout response map are rejected |
 | `proxy_send_local_response` | ✅ | Short-circuits the request with a status, body, and headers. Also valid from inside `proxy_on_http_call_response` (deny after an auth callout) |
-| `proxy_dispatch_http_call` | ✅ (request phase) | See [HTTP callouts](#http-callouts-pauseresume). In the response/body/tick phases it returns `UNIMPLEMENTED` (12) |
+| `proxy_http_call` | ✅ (request phase) | See [HTTP callouts](#http-callouts-pauseresume). In the response/body/tick phases it returns `UNIMPLEMENTED` (12) |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | Resumes a request paused on a callout. `proxy_continue_response` remains an accepted no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | Per-module KV with CAS — see [Shared data](#shared-data-and-timers) |
 | `proxy_set_tick_period_milliseconds` | ✅ | Arms the per-module tick task; `0` stops it. Period floor 100ms |
@@ -81,7 +81,7 @@ config:
 | `failOpen` | Boolean | `false` | Governs behavior on load failure / trap / timeout / callout no-resume — see [Failure semantics](#failure-semantics). |
 | `timeoutMs` | Integer | `100` | Per-hook wall-clock budget in milliseconds (epoch interruption). Range `1..=10000`. Body-chunk hooks run at `timeoutMs / 10`. |
 | `instancePoolSize` | Integer | `8` | Max pooled instances kept per compiled module, per gateway process. Range `1..=64`. |
-| `calloutAllowlist` | String list | `[]` | Origins (`scheme://host[:port]`) the guest may target with `proxy_dispatch_http_call`. **Empty = callouts disabled** (dispatch fails with a host error the guest can observe). Exact-origin match after normalization. |
+| `calloutAllowlist` | String list | `[]` | Origins (`scheme://host[:port]`) the guest may target with `proxy_http_call`. **Empty = callouts disabled** (dispatch fails with a host error the guest can observe). Exact-origin match after normalization. |
 | `calloutTimeoutMs` | Integer | `5000` | Upper bound on each callout's guest-supplied timeout (also the effective timeout when the guest passes 0). Range `1..=10000`. |
 
 ## Choosing a source form
@@ -126,7 +126,7 @@ Notes:
 
 ## HTTP callouts (Pause/resume)
 
-`proxy_dispatch_http_call` lets the guest call an external HTTP service mid-request — the proxy-wasm ecosystem's most common plugin shape (external auth, risk scoring, audit). Flow:
+`proxy_http_call` (what the official proxy-wasm SDKs emit; the host also accepts the older `proxy_dispatch_http_call` spelling) lets the guest call an external HTTP service mid-request — the proxy-wasm ecosystem's most common plugin shape (external auth, risk scoring, audit). Flow:
 
 1. In `on_http_request_headers`, the guest dispatches one or more callouts and returns `Action::Pause`.
 2. The gateway executes the callouts (asynchronously, off the guest's CPU budget) while the request is suspended.
@@ -135,7 +135,7 @@ Notes:
 Semantics and guardrails:
 
 - **Addressing**: the `upstream` parameter is the target **origin URL** (`https://auth.internal:8443`), not an Envoy cluster name. The `:path`, `:method`, and `:authority` pseudo headers from the dispatched header map drive the outbound request (`:authority` is sent as `Host`).
-- **Allowlist**: the origin must exactly match an entry in `calloutAllowlist` (after normalization). No allowlist = no callouts. A denied dispatch returns `INTERNAL_FAILURE` from `proxy_dispatch_http_call` synchronously.
+- **Allowlist**: the origin must exactly match an entry in `calloutAllowlist` (after normalization). No allowlist = no callouts. A denied dispatch returns `INTERNAL_FAILURE` from `proxy_http_call` synchronously.
 - **Request phase only**: the response-headers/body stages are synchronous and cannot await; dispatch there returns `UNIMPLEMENTED`. Ticks cannot dispatch either (yet).
 - **Pause required**: `dispatch` + `Action::Continue` is not supported — the queued callouts are dropped and logged (`callouts-dropped=N`). Dispatch must be followed by `Pause`.
 - **Budgets**: at most 8 dispatches per request, 4 callback rounds (a callback may dispatch follow-ups), 64 concurrent callouts process-wide, 256KiB response-body cap per callout. Each callout's timeout is `min(guest_timeout, calloutTimeoutMs)`.
@@ -152,15 +152,31 @@ Both integrate external decision services; they differ in direction:
 
 ## Response-body observation (read-only)
 
-Listing a Wasm entry under `upstreamResponseBodyFilterPlugins` invokes `proxy_on_http_response_body` once per upstream chunk:
+Listing a Wasm entry under `upstreamResponseBodyFilterPlugins` invokes `proxy_on_response_body` once per upstream chunk.
 
-- `proxy_get_buffer_bytes(HttpResponseBody, start, max)` returns the **current chunk window only** — the gateway never buffers the body. Cross-chunk aggregation is the guest's job (its own memory or [shared data](#shared-data-and-timers)).
+> ### ⚠️ This diverges from the proxy-wasm spec — read before porting a guest
+>
+> The spec's body contract is **cumulative**: `body_size` is the total bytes the host has buffered so far, `Action::Pause` tells the host to **keep buffering**, and `proxy_get_buffer_bytes` reads the **accumulated buffer**. Envoy implements this by mapping Pause onto `StopIterationAndBuffer` and letting its filter manager own the buffer.
+>
+> **This gateway implements a per-chunk read-only *window* instead**: `body_size` is the **current chunk's** length, `proxy_get_buffer_bytes(HttpResponseBody, …)` returns **only that chunk**, and the body is never buffered.
+>
+> **Consequence:** a guest written to the standard idiom —
+> ```rust
+> if !end_of_stream { return Action::Pause; }       // expects the host to buffer
+> let body = self.get_http_response_body(0, body_size)?;  // expects the WHOLE body
+> ```
+> — would observe **only the last chunk**. For a WAF or secret scanner that is a silent false negative. The host therefore does **not** silently ignore a Pause: it increments `edgion_wasm_body_pause_unsupported_total{module}` and logs a WARN once per module. **Alert on that counter** — it means a deployed guest is seeing partial data.
+>
+> Full spec semantics require request/response body buffering, which is a separate piece of infrastructure (see the roadmap task `tasks/wasm-followups/body-buffering-spec-semantics.md`).
+
+Working within the per-chunk model:
+
+- Cross-chunk aggregation is the **guest's** job (its own memory, or [shared data](#shared-data-and-timers) — see the reference guest, which sums each chunk's byte count into a shared counter).
 - **Strictly read-only**: the body cannot be modified, and the response cannot be short-circuited from the body phase (headers are already sent). A detection verdict can only be logged (`proxy_log`) or aggregated via shared data.
-- `Action::Pause` from the body hook is meaningless in the read-only form and is ignored.
 - Each chunk runs under a reduced CPU budget (`timeoutMs / 10`, floor 10ms) so a slow guest cannot stall a long stream; a trap in the body hook **never interrupts the stream** (the instance is discarded and streaming continues, regardless of `failOpen`).
-- A guest that does not export `proxy_on_http_response_body` is a free no-op at this stage.
+- A guest that does not export `proxy_on_response_body` is a free no-op at this stage.
 
-Request-body observation is **not implemented** (it requires the request-body buffering infrastructure, which the gateway does not have yet).
+Request-body observation is **not implemented at all** (no `proxy_on_request_body`) — it requires the same body-buffering infrastructure.
 
 ## Shared data and timers
 
@@ -209,7 +225,7 @@ The compiled-module cache is keyed by the source **plus, for `file` sources, the
 - **Refcount eviction.** Every live Wasm plugin instance pins its cache entry. When a reload/config change drops the last reference to an entry (e.g. inline content changed → new key), the orphaned entry is evicted after a **60s grace period** (which absorbs reload thrash). In-flight requests keep the entry alive via their own strong references; memory is freed when the last one finishes. Evictions show up in the `edgion_wasm_module_evicted_total` metric.
 - **`file` sources are content-aware.** The runtime cache key includes the file's size and mtime, captured when the plugin is (re)built. Overwriting the `.wasm` at the same path **and triggering a plugin reload** (any change to the owning `EdgionPlugins` resource, or a full config resync) picks up the new content; the old entry is refcount-evicted. Without a reload the running plugin keeps its original key — a bare file overwrite alone still doesn't hot-swap.
 - **Eager instance warm-up.** One instance is instantiated at load time, so guest init failures surface as clear load errors (negative-cached) instead of per-request acquire failures, and a tick period requested during `on_configure` starts ticking before the first request.
-- **Multi-tenant sizing.** All Wasm modules share one engine-wide pooling allocator. Size `instancePoolSize` with the total across all configured Wasm plugins in mind.
+- **Multi-tenant sizing.** All Wasm modules share one engine-wide pooling allocator. Size `instancePoolSize` with the total across all configured Wasm plugins in mind — estimate the peak instance count as roughly `edgion_wasm_modules_loaded × instancePoolSize`.
 
 ## Metrics
 
@@ -227,6 +243,9 @@ All metrics carry a `module` label — the human-readable source descriptor (`fi
 | `edgion_wasm_trap_total` | counter | `phase` | Traps / protocol violations |
 | `edgion_wasm_fail_mode_total` | counter | `reason`, `mode=open\|close` | Fail-mode decisions |
 | `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit` | Callout outcomes |
+| `edgion_wasm_modules_loaded` | gauge | | Compiled modules currently in the global cache |
+| `edgion_wasm_shared_data_bytes` | gauge | `module` | Current shared-data byte total per module (cap 4MiB) |
+| `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **Alert on this.** A guest returned `Action::Pause` from the body hook, i.e. it expects the spec's cumulative-buffer semantics this host does not implement — it is silently observing only the current chunk, not the whole body |
 
 A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_discard_total{reason="poisoned"}` rising together.
 
@@ -242,7 +261,7 @@ A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_disc
 ## Remaining limitations
 
 - **No request-body hooks** (`proxy_on_request_body`): needs request-body buffering the gateway doesn't have; a guest that only implements request-body hooks never gets invoked.
-- **Response body is observe-only**: no body rewrite, no short-circuit from the body phase.
+- **Response body is observe-only, and uses per-chunk (not spec cumulative) semantics**: no body rewrite, no short-circuit from the body phase, and `Action::Pause` cannot be honored — a guest written to the standard buffering idiom sees only the current chunk. See the warning in [Response-body observation](#response-body-observation-read-only).
 - **No gRPC callouts** (`proxy_dispatch_grpc_call`): calling it traps.
 - **Callouts are request-phase only**, and dispatch without `Pause` is dropped.
 - **No shared queues, foreign functions, or guest-defined metrics**: calling them traps.

@@ -35,9 +35,20 @@ pub struct SharedData {
     map: DashMap<String, (Vec<u8>, u32)>,
     /// Approximate total of key + value bytes currently stored.
     total_bytes: AtomicUsize,
+    /// Bounded-cardinality module descriptor for the byte-total gauge.
+    metrics_label: String,
 }
 
 impl SharedData {
+    /// Construct with the owning module's metrics label (for the
+    /// `edgion_wasm_shared_data_bytes{module}` gauge).
+    pub fn new(metrics_label: String) -> Self {
+        SharedData {
+            metrics_label,
+            ..Default::default()
+        }
+    }
+
     /// Read a value and its CAS token.
     pub fn get(&self, key: &str) -> Option<(Vec<u8>, u32)> {
         self.map.get(key).map(|e| e.clone())
@@ -96,6 +107,7 @@ impl SharedData {
                         occ.remove();
                     }
                 }
+                self.emit_bytes_gauge();
                 Ok(())
             }
             dashmap::mapref::entry::Entry::Vacant(vac) => {
@@ -114,8 +126,20 @@ impl SharedData {
                 }
                 vac.insert((v, 1));
                 self.total_bytes.fetch_add(add, Ordering::Relaxed);
+                self.emit_bytes_gauge();
                 Ok(())
             }
+        }
+    }
+
+    /// Publish the current byte total to the per-module gauge. Skipped when
+    /// no label is set (test-constructed via `default()`).
+    fn emit_bytes_gauge(&self) {
+        if !self.metrics_label.is_empty() {
+            crate::observe::metrics::registry::set_wasm_shared_data_bytes(
+                &self.metrics_label,
+                self.total_bytes.load(Ordering::Relaxed),
+            );
         }
     }
 

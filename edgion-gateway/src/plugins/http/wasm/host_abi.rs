@@ -357,6 +357,123 @@ fn write_to_guest(caller: &mut Caller<'_, HostState>, data: &[u8], ret_ptr: i32,
     STATUS_OK
 }
 
+/// Host handler for the guest callout dispatch (`proxy_http_call` /
+/// `proxy_dispatch_http_call`). Queues the call in `HostState`; the plugin's
+/// async request path executes it while the guest is paused and delivers the
+/// result via `proxy_on_http_call_response`. Sync stages (response
+/// headers/body, tick) never arm dispatch, so the guest sees UNIMPLEMENTED
+/// there instead of a silent no-op.
+///
+/// A free `fn` (not a closure) so the same handler can be registered under
+/// both import names.
+#[allow(clippy::too_many_arguments)]
+fn host_http_call(
+    mut caller: Caller<'_, HostState>,
+    upstream_ptr: i32,
+    upstream_size: i32,
+    headers_ptr: i32,
+    headers_size: i32,
+    body_ptr: i32,
+    body_size: i32,
+    _trailers_ptr: i32,
+    _trailers_size: i32,
+    timeout_ms: i32,
+    return_token_ptr: i32,
+) -> i32 {
+    if !caller.data().dispatch_enabled {
+        return STATUS_UNIMPLEMENTED;
+    }
+    let upstream = match read_guest_string(&mut caller, upstream_ptr, upstream_size) {
+        Ok(s) => s,
+        Err(s) => return s,
+    };
+    let header_bytes = match read_guest(&mut caller, headers_ptr, headers_size) {
+        Ok(b) => b,
+        Err(s) => return s,
+    };
+    let Some(all_headers) = decode_map(&header_bytes) else {
+        return STATUS_BAD_ARGUMENT;
+    };
+    let body = if body_size > 0 {
+        match read_guest(&mut caller, body_ptr, body_size) {
+            Ok(b) => b,
+            Err(s) => return s,
+        }
+    } else {
+        Vec::new()
+    };
+
+    // The upstream parameter addresses the target directly as an origin URL
+    // (Edgion has no Envoy-style cluster registry for guests to name).
+    let origin = match edgion_resources::plugin_configs::normalize_callout_origin(&upstream) {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::debug!(error = %e, "wasm callout: malformed upstream origin");
+            return STATUS_BAD_ARGUMENT;
+        }
+    };
+
+    let state = caller.data_mut();
+    if !state.callout_allowlist.iter().any(|a| a == &origin) {
+        crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "denied");
+        tracing::warn!(%origin, "wasm callout denied: origin not in calloutAllowlist");
+        return STATUS_INTERNAL_FAILURE;
+    }
+    if state.callouts_dispatched >= MAX_CALLOUTS_PER_REQUEST {
+        crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "over_limit");
+        tracing::warn!("wasm callout rejected: per-request dispatch cap reached");
+        return STATUS_INTERNAL_FAILURE;
+    }
+
+    let mut method = "GET".to_string();
+    let mut path = "/".to_string();
+    let mut authority = None;
+    let mut headers = Vec::with_capacity(all_headers.len());
+    for (name, value) in all_headers {
+        match name.as_str() {
+            ":method" => method = value,
+            ":path" => path = value,
+            ":authority" => authority = Some(value),
+            n if n.starts_with(':') => {}
+            _ => headers.push((name, value)),
+        }
+    }
+    if !path.starts_with('/') {
+        path.insert(0, '/');
+    }
+
+    let token = state.next_callout_token;
+    let pending = PendingCallout {
+        token,
+        origin,
+        path,
+        method,
+        authority,
+        headers,
+        body,
+        timeout_ms: timeout_ms.max(0) as u32,
+    };
+
+    // Deliver the token to the guest FIRST; only commit the dispatch (increment
+    // counter + queue) if the write succeeds. A bad return_token_ptr must not
+    // leave a phantom callout queued (and a consumed cap slot) that the guest
+    // never received a handle for.
+    let Some(mem) = guest_memory(&mut caller) else {
+        return STATUS_INVALID_MEMORY_ACCESS;
+    };
+    if mem
+        .write(&mut caller, return_token_ptr as usize, &token.to_le_bytes())
+        .is_err()
+    {
+        return STATUS_INVALID_MEMORY_ACCESS;
+    }
+    let state = caller.data_mut();
+    state.callouts_dispatched += 1;
+    state.next_callout_token = token.wrapping_add(1);
+    state.pending_callouts.push(pending);
+    STATUS_OK
+}
+
 /// Register the implemented proxy-wasm host functions. Call
 /// `linker.define_unknown_imports_as_traps(&module)` AFTER this so any
 /// import outside the v1 subset traps only if the guest actually calls it.
@@ -648,122 +765,13 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         },
     )?;
 
-    // HTTP callout dispatch. Queues the call in HostState; the plugin's
-    // async request path executes it while the guest is paused and delivers
-    // the result via `proxy_on_http_call_response`. Sync stages (response
-    // headers/body) never arm dispatch, so the guest sees UNIMPLEMENTED
-    // there instead of a silent no-op.
-    #[allow(clippy::too_many_arguments)]
-    linker.func_wrap(
-        "env",
-        "proxy_dispatch_http_call",
-        |mut caller: Caller<'_, HostState>,
-         upstream_ptr: i32,
-         upstream_size: i32,
-         headers_ptr: i32,
-         headers_size: i32,
-         body_ptr: i32,
-         body_size: i32,
-         _trailers_ptr: i32,
-         _trailers_size: i32,
-         timeout_ms: i32,
-         return_token_ptr: i32|
-         -> i32 {
-            if !caller.data().dispatch_enabled {
-                return STATUS_UNIMPLEMENTED;
-            }
-            let upstream = match read_guest_string(&mut caller, upstream_ptr, upstream_size) {
-                Ok(s) => s,
-                Err(s) => return s,
-            };
-            let header_bytes = match read_guest(&mut caller, headers_ptr, headers_size) {
-                Ok(b) => b,
-                Err(s) => return s,
-            };
-            let Some(all_headers) = decode_map(&header_bytes) else {
-                return STATUS_BAD_ARGUMENT;
-            };
-            let body = if body_size > 0 {
-                match read_guest(&mut caller, body_ptr, body_size) {
-                    Ok(b) => b,
-                    Err(s) => return s,
-                }
-            } else {
-                Vec::new()
-            };
-
-            // The upstream parameter addresses the target directly as an
-            // origin URL (Edgion has no Envoy-style cluster registry for
-            // guests to name).
-            let origin = match edgion_resources::plugin_configs::normalize_callout_origin(&upstream) {
-                Ok(o) => o,
-                Err(e) => {
-                    tracing::debug!(error = %e, "wasm callout: malformed upstream origin");
-                    return STATUS_BAD_ARGUMENT;
-                }
-            };
-
-            let state = caller.data_mut();
-            if !state.callout_allowlist.iter().any(|a| a == &origin) {
-                crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "denied");
-                tracing::warn!(%origin, "wasm callout denied: origin not in calloutAllowlist");
-                return STATUS_INTERNAL_FAILURE;
-            }
-            if state.callouts_dispatched >= MAX_CALLOUTS_PER_REQUEST {
-                crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "over_limit");
-                tracing::warn!("wasm callout rejected: per-request dispatch cap reached");
-                return STATUS_INTERNAL_FAILURE;
-            }
-
-            let mut method = "GET".to_string();
-            let mut path = "/".to_string();
-            let mut authority = None;
-            let mut headers = Vec::with_capacity(all_headers.len());
-            for (name, value) in all_headers {
-                match name.as_str() {
-                    ":method" => method = value,
-                    ":path" => path = value,
-                    ":authority" => authority = Some(value),
-                    n if n.starts_with(':') => {}
-                    _ => headers.push((name, value)),
-                }
-            }
-            if !path.starts_with('/') {
-                path.insert(0, '/');
-            }
-
-            let token = state.next_callout_token;
-            let pending = PendingCallout {
-                token,
-                origin,
-                path,
-                method,
-                authority,
-                headers,
-                body,
-                timeout_ms: timeout_ms.max(0) as u32,
-            };
-
-            // Deliver the token to the guest FIRST; only commit the dispatch
-            // (increment counter + queue) if the write succeeds. A bad
-            // return_token_ptr must not leave a phantom callout queued (and a
-            // consumed cap slot) that the guest never received a handle for.
-            let Some(mem) = guest_memory(&mut caller) else {
-                return STATUS_INVALID_MEMORY_ACCESS;
-            };
-            if mem
-                .write(&mut caller, return_token_ptr as usize, &token.to_le_bytes())
-                .is_err()
-            {
-                return STATUS_INVALID_MEMORY_ACCESS;
-            }
-            let state = caller.data_mut();
-            state.callouts_dispatched += 1;
-            state.next_callout_token = token.wrapping_add(1);
-            state.pending_callouts.push(pending);
-            STATUS_OK
-        },
-    )?;
+    // HTTP callout dispatch — see `host_http_call`. The proxy-wasm ABI names
+    // this import `proxy_http_call` (what the official
+    // Rust/C++ SDKs actually call). Older/hand-written guests sometimes spell it
+    // `proxy_dispatch_http_call`; register the same handler under both so an SDK
+    // guest is not silently trapped by `define_unknown_imports_as_traps`.
+    linker.func_wrap("env", "proxy_http_call", host_http_call)?;
+    linker.func_wrap("env", "proxy_dispatch_http_call", host_http_call)?;
 
     // Shared data (per-module KV with CAS). Process-local: shared across
     // all pooled VMs of one ModuleEntry, freed with the cache entry.

@@ -1,0 +1,49 @@
+# Advanced Wasm scenarios (same reference guest header_demo.wasm) exercising the
+# v2 capabilities end-to-end: HTTP callout + Pause/resume, response-body
+# read-only observation, and on_tick + shared data.
+#
+# Guest behavior selected by request headers (see edgion-tests/wasm/README.md):
+#   x-wasm-callout-url: <origin>  -> dispatch GET <origin>/verify forwarding
+#                                    Authorization, Pause; callout 200 -> resume,
+#                                    else -> local 403 "callout denied".
+#   x-wasm-read-ticks: 1          -> request header x-wasm-ticks = shared "ticks".
+#   x-wasm-read-body: 1           -> request header x-wasm-bodybytes = shared count.
+# Response body hook (body-filter stage): adds each chunk's bytes to shared
+# "bodybytes". on_tick increments shared "ticks" every 1s.
+#
+# calloutAllowlist authorizes the fake auth server the integration harness runs
+# at 127.0.0.1:30040 (start_all.sh --auth-port 30040); its /verify returns 200
+# for "Bearer valid-token" and 401 otherwise.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wasm-advanced
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: Wasm
+      enable: true
+      config:
+        source:
+          file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
+        failOpen: false
+        timeoutMs: 1000
+        calloutAllowlist:
+          - "http://127.0.0.1:30040"
+        calloutTimeoutMs: 3000
+  upstreamResponseFilterPlugins:
+    - type: Wasm
+      enable: true
+      config:
+        source:
+          file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
+        failOpen: false
+        timeoutMs: 1000
+  upstreamResponseBodyFilterPlugins:
+    - type: Wasm
+      enable: true
+      config:
+        source:
+          file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
+        failOpen: false
+        timeoutMs: 1000

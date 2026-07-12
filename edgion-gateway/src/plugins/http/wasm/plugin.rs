@@ -10,7 +10,7 @@ use std::sync::Arc;
 use super::callout::execute_callout;
 use super::host_abi::{HeaderOp, LocalResponse, WasmPhase, MAP_HTTP_REQUEST_HEADERS, MAP_HTTP_RESPONSE_HEADERS};
 use super::vm_manager::{global_vm_manager, runtime_cache_key, VmLease};
-use crate::observe::metrics::registry::record_wasm_fail_mode;
+use crate::observe::metrics::registry::{record_wasm_body_pause_unsupported, record_wasm_fail_mode};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{
     PluginLog, PluginSession, RequestFilter, UpstreamResponseBodyFilter, UpstreamResponseFilter,
@@ -288,16 +288,37 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     }
 
     /// Read-only per-chunk observation of the response body via
-    /// `proxy_on_http_response_body` + `get_buffer_bytes(HttpResponseBody)`.
+    /// `proxy_on_response_body` + `get_buffer_bytes(HttpResponseBody)`.
     ///
-    /// Constraints (by design of this stage, not implementation shortcuts):
-    /// - the guest sees the CURRENT chunk only (no cross-chunk buffering);
-    /// - the body cannot be modified and the response cannot be
-    ///   short-circuited (headers are already sent) — a guest verdict can
-    ///   only be logged (proxy_log) or aggregated via shared state;
-    /// - Pause is meaningless in the read-only form and is ignored;
-    /// - a trap never interrupts the stream (failOpen-like, regardless of
-    ///   `failOpen`): the lease is discarded and streaming continues.
+    /// ## DIVERGENCE FROM THE proxy-wasm SPEC — read before changing
+    ///
+    /// The spec's body-hook contract is *cumulative*: `body_size` is the total
+    /// buffered bytes available so far, `Action::Pause` tells the host to keep
+    /// buffering, and `get_buffer_bytes` reads the accumulated buffer. Envoy
+    /// implements this by mapping Pause onto `StopIterationAndBuffer`, letting
+    /// its filter manager own the buffer.
+    ///
+    /// This host implements a *per-chunk window* instead: `body_size` is the
+    /// CURRENT chunk's length and `get_buffer_bytes(HttpResponseBody)` returns
+    /// only that chunk. It cannot buffer — the `UpstreamResponseBodyFilter`
+    /// trait hands us `&Option<Bytes>` (immutable) and returns `Option<Duration>`,
+    /// so there is no way to withhold a chunk or accumulate one.
+    ///
+    /// Consequence: a guest written to the standard idiom
+    /// (`if !end_of_stream { return Action::Pause }` then read the "whole body")
+    /// would silently observe only the LAST chunk — a false negative for a WAF
+    /// or secret scanner. So a Pause is NOT silently dropped: it is counted
+    /// (`edgion_wasm_body_pause_unsupported_total`) and WARNed once per module,
+    /// because it is a reliable signal that the guest is incompatible with this
+    /// host. Honoring it properly needs the request/response body buffering
+    /// infrastructure (see `tasks/wasm-followups/body-buffering-spec-semantics.md`).
+    ///
+    /// Other constraints of this stage:
+    /// - the body cannot be modified and the response cannot be short-circuited
+    ///   (headers are already sent) — a guest verdict can only be logged
+    ///   (`proxy_log`) or aggregated via shared data;
+    /// - a trap never interrupts the stream (regardless of `failOpen`): the
+    ///   lease is discarded and streaming continues.
     ///
     /// Each chunk runs under a reduced CPU budget (`timeoutMs / 10`) so a
     /// slow guest cannot stall a long stream chunk by chunk.
@@ -330,8 +351,27 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
         state.begin_phase(WasmPhase::ResponseBody, Vec::new(), Vec::new(), HashMap::new());
         state.body_chunk = body.as_ref().map(|b| b.to_vec()).unwrap_or_default();
         let size = state.body_chunk.len() as i32;
-        if let Err(e) = lease.call_on_response_body(size, end_of_stream) {
-            tracing::debug!(error = %e, "wasm response-body hook failed (stream continues)");
+        match lease.call_on_response_body(size, end_of_stream) {
+            Ok(action) if action != 0 => {
+                // Pause: the guest expects the spec's cumulative-buffer
+                // semantics, which this host does not implement. Never swallow
+                // this — it means the guest is silently seeing partial data.
+                record_wasm_body_pause_unsupported(entry.metrics_label());
+                if entry.latch_body_pause_warning() {
+                    tracing::warn!(
+                        module = %entry.metrics_label(),
+                        "wasm guest returned Action::Pause from the response-body hook, but this host \
+                         provides a per-chunk read-only window, not the spec's cumulative buffer. The \
+                         guest will observe only the current chunk, NOT the whole body (a WAF/scanner \
+                         guest would false-negative). Rewrite the guest for per-chunk observation, or \
+                         wait for body-buffering support."
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!(error = %e, "wasm response-body hook failed (stream continues)");
+            }
         }
         None
     }
@@ -831,7 +871,7 @@ mod tests {
         }
     }
 
-    /// Body-observation guest: `proxy_on_http_response_body` reads the
+    /// Body-observation guest: `proxy_on_response_body` reads the
     /// current chunk window via `get_buffer_bytes(HttpResponseBody)` and
     /// returns the number of bytes it saw (a test-only contract that lets
     /// the host assert the window was visible).
@@ -854,7 +894,7 @@ mod tests {
       (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
       (func (export "proxy_on_configure") (param i32 i32) (result i32) (i32.const 1))
       (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) (i32.const 0))
-      (func (export "proxy_on_http_response_body") (param i32 i32 i32) (result i32)
+      (func (export "proxy_on_response_body") (param i32 i32 i32) (result i32)
         (drop (call $get_buf (i32.const 1) (i32.const 0) (i32.const 65536)
                              (i32.const 256) (i32.const 260)))
         (i32.load (i32.const 260)))
@@ -894,6 +934,61 @@ mod tests {
         assert_eq!(seen, 1, "window must be the current chunk only");
     }
 
+    /// Guest whose body hook returns Action::Pause (1) — i.e. it is written to
+    /// the standard proxy-wasm cumulative-buffer idiom this host does not
+    /// implement.
+    const GUEST_BODY_PAUSE: &str = r#"
+    (module
+      (memory (export "memory") 1)
+      (func (export "proxy_on_memory_allocate") (param i32) (result i32) (i32.const 1024))
+      (func (export "proxy_on_context_create") (param i32 i32))
+      (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_configure") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) (i32.const 0))
+      (func (export "proxy_on_response_body") (param i32 i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_done") (param i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_delete") (param i32))
+    )
+    "#;
+
+    /// A guest that Pauses on the body hook expects cumulative buffering, which
+    /// this host cannot provide. The stream must keep flowing (never throttle,
+    /// never break), and the incompatibility must be surfaced exactly once per
+    /// module (latched) rather than silently dropped or logged per chunk.
+    #[tokio::test]
+    async fn body_pause_is_surfaced_once_and_never_breaks_the_stream() {
+        use crate::plugins::http::wasm::vm_manager::WasmVmManager;
+        let f = write_temp_wasm(GUEST_BODY_PAUSE);
+        let c = config_for(f.path(), false);
+
+        // Latch semantics are per ModuleEntry: assert exactly-once directly.
+        let mgr = WasmVmManager::new_for_test();
+        let entry = mgr.get_or_load(&c, &runtime_cache_key(&c)).await.expect("loads");
+        assert!(entry.has_body_hook(), "guest exports proxy_on_response_body");
+        assert!(entry.latch_body_pause_warning(), "first warning must fire");
+        assert!(
+            !entry.latch_body_pause_warning(),
+            "subsequent warnings must be latched off"
+        );
+
+        // Plugin path: a Pausing guest must not throttle or break the stream.
+        global_vm_manager()
+            .get_or_load(&c, &runtime_cache_key(&c))
+            .await
+            .expect("module loads");
+        let plugin = WasmPlugin::create_body_filter(&c).unwrap();
+        let mut session = MockPluginSession::new();
+        let chunk = Some(bytes::Bytes::from_static(b"abc"));
+        for eos in [false, true] {
+            assert!(
+                plugin
+                    .run_upstream_response_body_filter(&chunk, eos, &mut session)
+                    .is_none(),
+                "a Pausing body guest must never throttle or interrupt the stream"
+            );
+        }
+    }
+
     /// Guest whose body hook traps — the stream must keep flowing.
     const GUEST_BODY_TRAP: &str = r#"
     (module
@@ -903,7 +998,7 @@ mod tests {
       (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
       (func (export "proxy_on_configure") (param i32 i32) (result i32) (i32.const 1))
       (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) (i32.const 0))
-      (func (export "proxy_on_http_response_body") (param i32 i32 i32) (result i32) unreachable)
+      (func (export "proxy_on_response_body") (param i32 i32 i32) (result i32) unreachable)
       (func (export "proxy_on_done") (param i32) (result i32) (i32.const 1))
       (func (export "proxy_on_delete") (param i32))
     )
@@ -1005,5 +1100,205 @@ mod tests {
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_upstream_response_filter(&mut session, &mut log);
         assert_eq!(res, PluginRunningResult::GoodNext);
+    }
+
+    // ── Reference SDK guest: new-capability coverage ─────────────────────────
+    //
+    // These drive the REAL rebuilt `header_demo.wasm` (proxy-wasm Rust SDK)
+    // through the host for callout / tick+shared-data / body observation — the
+    // same guest the integration suite uses, so they catch SDK-vs-host ABI
+    // drift the WAT fixtures cannot. Each test copies the artifact to its own
+    // temp file so its cache entry (and thus its SharedData + tick task) is
+    // disjoint from the others'.
+
+    const REF_ARTIFACT: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../edgion-tests/wasm/artifacts/header_demo.wasm"
+    );
+
+    /// Copy the committed reference artifact to a fresh temp file (disjoint
+    /// cache key). Returns None when the artifact has not been built.
+    fn ref_artifact_temp() -> Option<tempfile::NamedTempFile> {
+        if !std::path::Path::new(REF_ARTIFACT).exists() {
+            eprintln!("skipping: reference artifact not built");
+            return None;
+        }
+        let bytes = std::fs::read(REF_ARTIFACT).expect("read reference artifact");
+        let f = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(f.path(), &bytes).unwrap();
+        Some(f)
+    }
+
+    fn ref_mock(headers: Vec<(&str, &str)>) -> MockPluginSession {
+        let mut s = MockPluginSession::new();
+        let owned: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        s.expect_request_headers().returning(move || owned.clone());
+        let hmap: std::collections::HashMap<String, String> =
+            headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        s.expect_header_value().returning(move |name| hmap.get(name).cloned());
+        s.expect_get_path().return_const("/x".to_string());
+        s.expect_get_method().return_const("GET".to_string());
+        s.expect_remote_addr().return_const("1.2.3.4".to_string());
+        // A guest deny path (send_http_response) applies local-response headers.
+        s.expect_set_response_header().returning(|_, _| Ok(()));
+        s
+    }
+
+    /// Real SDK guest: callout to an auth endpoint that returns 200 for a valid
+    /// bearer token → guest resumes and applies `x-wasm-added`. Also asserts the
+    /// forwarded Authorization header reached the callout target.
+    #[tokio::test]
+    async fn reference_guest_callout_authorized_resumes() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let Some(f) = ref_artifact_temp() else { return };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/verify"))
+            .and(header("authorization", "Bearer valid-token"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let mut c = WasmConfig::default();
+        c.source.file = Some(f.path().to_string_lossy().into_owned());
+        c.callout_allowlist = vec![server.uri()];
+
+        let plugin = WasmPlugin::create_request(&c).unwrap();
+        let mut session = ref_mock(vec![
+            ("host", "t.example.com"),
+            ("x-wasm-callout-url", &server.uri()),
+            ("authorization", "Bearer valid-token"),
+        ]);
+        session
+            .expect_set_request_header()
+            .withf(|k, v| k == "x-wasm-added" && v == "yes")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let mut log = PluginLog::new("Wasm");
+        let res = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(res, PluginRunningResult::GoodNext, "authorized callout must resume");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
+    /// Real SDK guest: callout returns 401 for a bad token → guest denies with
+    /// a 403 local response.
+    #[tokio::test]
+    async fn reference_guest_callout_unauthorized_denies() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let Some(f) = ref_artifact_temp() else { return };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/verify"))
+            .respond_with(ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+
+        let mut c = WasmConfig::default();
+        c.source.file = Some(f.path().to_string_lossy().into_owned());
+        c.callout_allowlist = vec![server.uri()];
+
+        let plugin = WasmPlugin::create_request(&c).unwrap();
+        let mut session = ref_mock(vec![
+            ("host", "t.example.com"),
+            ("x-wasm-callout-url", &server.uri()),
+            ("authorization", "Bearer nope"),
+        ]);
+        let mut log = PluginLog::new("Wasm");
+        let res = plugin.run_request(&mut session, &mut log).await;
+        assert!(
+            matches!(res, PluginRunningResult::ErrResponse { status: 403, .. }),
+            "unauthorized callout must deny, got {res:?}"
+        );
+    }
+
+    /// Real SDK guest: `on_tick` increments a shared counter; a later request
+    /// reads it into `x-wasm-ticks`. Proves the background tick task runs and
+    /// shared data is visible to request hooks. (Guest tick period is 1s.)
+    #[tokio::test]
+    async fn reference_guest_tick_increments_shared_counter() {
+        let Some(f) = ref_artifact_temp() else { return };
+        let mut c = WasmConfig::default();
+        c.source.file = Some(f.path().to_string_lossy().into_owned());
+
+        // Load warms one instance, which runs on_configure (sets the 1s tick)
+        // and arms the module tick task.
+        global_vm_manager()
+            .get_or_load(&c, &runtime_cache_key(&c))
+            .await
+            .expect("module loads");
+        // Wait for at least two ticks.
+        tokio::time::sleep(std::time::Duration::from_millis(2300)).await;
+
+        let plugin = WasmPlugin::create_request(&c).unwrap();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let seen2 = seen.clone();
+        let mut session = ref_mock(vec![("host", "t.example.com"), ("x-wasm-read-ticks", "1")]);
+        session
+            .expect_set_request_header()
+            .withf(move |k, v| {
+                if k == "x-wasm-ticks" {
+                    seen2.store(v.parse().unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+                }
+                true
+            })
+            .returning(|_, _| Ok(()));
+        let mut log = PluginLog::new("Wasm");
+        let res = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(res, PluginRunningResult::GoodNext);
+        assert!(
+            seen.load(std::sync::atomic::Ordering::Relaxed) >= 1,
+            "on_tick must have fired at least once and be readable via shared data"
+        );
+    }
+
+    /// Real SDK guest: the read-only body hook adds each chunk's byte count to
+    /// a shared counter; a later request reads it into `x-wasm-bodybytes`.
+    /// Ties body observation → shared data → cross-request read.
+    #[tokio::test]
+    async fn reference_guest_body_observation_accumulates_bytes() {
+        let Some(f) = ref_artifact_temp() else { return };
+        let mut c = WasmConfig::default();
+        c.source.file = Some(f.path().to_string_lossy().into_owned());
+        global_vm_manager()
+            .get_or_load(&c, &runtime_cache_key(&c))
+            .await
+            .expect("module loads");
+
+        // Drive two response-body chunks through the body filter.
+        let body_plugin = WasmPlugin::create_body_filter(&c).unwrap();
+        let mut bsession = MockPluginSession::new();
+        let chunk = Some(bytes::Bytes::from_static(&[b'x'; 100]));
+        assert!(body_plugin
+            .run_upstream_response_body_filter(&chunk, false, &mut bsession)
+            .is_none());
+        assert!(body_plugin
+            .run_upstream_response_body_filter(&chunk, true, &mut bsession)
+            .is_none());
+
+        // A request reads the accumulated byte count.
+        let req_plugin = WasmPlugin::create_request(&c).unwrap();
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let seen2 = seen.clone();
+        let mut session = ref_mock(vec![("host", "t.example.com"), ("x-wasm-read-body", "1")]);
+        session
+            .expect_set_request_header()
+            .withf(move |k, v| {
+                if k == "x-wasm-bodybytes" {
+                    seen2.store(v.parse().unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+                }
+                true
+            })
+            .returning(|_, _| Ok(()));
+        let mut log = PluginLog::new("Wasm");
+        let res = req_plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(res, PluginRunningResult::GoodNext);
+        assert!(
+            seen.load(std::sync::atomic::Ordering::Relaxed) >= 200,
+            "body hook must have counted both 100-byte chunks into shared data"
+        );
     }
 }
