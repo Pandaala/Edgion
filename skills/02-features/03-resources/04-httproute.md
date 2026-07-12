@@ -314,6 +314,46 @@ backendRefs:
     weight: 10    # 10% of traffic (canary)
 ```
 
+## Route Delegation (Multi-Tenancy)
+
+A rule delegates its path prefix to child HTTPRoutes (possibly in other
+namespaces) by pointing its **single** `backendRef` at
+`group: gateway.networking.k8s.io, kind: HTTPRoute` (`name: "*"` = every route
+in the target namespace). The controller flattens the tree at parse time into
+the controller-resolved `resolved_rules` field; the data plane never sees the
+nesting.
+
+```yaml
+rules:
+  - matches:
+      - path: { type: PathPrefix, value: /api/v1/billing }   # PathPrefix only
+    filters:              # mandatory, inherited by all child rules
+      - type: RequestHeaderModifier
+        requestHeaderModifier: { set: [{ name: x-tenant, value: billing }] }
+    backendRefs:
+      - group: gateway.networking.k8s.io
+        kind: HTTPRoute
+        name: "*"
+        namespace: billing
+```
+
+Key semantics (canonical user doc: [`docs/en/user-guide/http-route/delegation.md`](../../../docs/en/user-guide/http-route/delegation.md); design: `docs/superpowers/specs/2026-07-11-route-delegation-design.md`):
+
+- Child paths are absolute and must fall inside the delegated prefix (segment
+  boundary); out-of-prefix child rules are dropped + reported (`PartiallyInvalid`).
+- Children must not set `hostnames`; children may delegate further (cycle
+  detection, depth cap 8); children may reverse-lock parents via
+  `parentRefs {kind: HTTPRoute}`.
+- Parent standard filters are mandatory (same-type child filter ⇒ rule
+  dropped); ExtensionRef chains concatenate (parent first). `timeouts` /
+  `retry` / `sessionPersistence`: child-first-else-inherit.
+- Child backendRef namespace defaults to the child's namespace; cross-ns
+  Service refs are ReferenceGrant-checked with the child as referrer.
+- Additive: `backendRef {kind: HTTPRoute}` was previously invalid config;
+  `allowedRoutes` semantics are untouched.
+
+Internal processing: [`01-architecture/05-resources/04-http-route.md`](../../01-architecture/05-resources/04-http-route.md).
+
 ## Edgion Extension Annotations
 
 The following annotations are placed in `HTTPRoute.metadata.annotations` (same for GRPCRoute). For the full specification and parsing details, see the "HTTPRoute / GRPCRoute" section of [`skills/02-features/05-annotations/references/annotations-metadata.md`](../05-annotations/references/annotations-metadata.md).

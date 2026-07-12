@@ -1,0 +1,16 @@
+# Update phase: the application team moves the rule from /pay to /pay2.
+# Only this child changes; the parent and Gateway are untouched.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: billing-child
+  namespace: edgion-deleg-dyn
+spec:
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /api/v1/billing/pay2
+      backendRefs:
+        - name: child-dyn-svc
+          port: 30001

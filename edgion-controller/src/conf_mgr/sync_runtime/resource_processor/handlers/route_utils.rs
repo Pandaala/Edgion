@@ -513,6 +513,14 @@ fn resolve_listeners_inner(
     let mut listener_hostnames: Vec<Option<String>> = Vec::new();
 
     for parent_ref in parent_refs {
+        // Only Gateway parentRefs bind to listeners. Delegation parentRefs
+        // (`kind: HTTPRoute` reverse locks) and other kinds are skipped.
+        let parent_group = parent_ref.group.as_deref().unwrap_or("gateway.networking.k8s.io");
+        let parent_kind = parent_ref.kind.as_deref().unwrap_or("Gateway");
+        if parent_group != "gateway.networking.k8s.io" || parent_kind != "Gateway" {
+            continue;
+        }
+
         let gw_ns = parent_ref
             .namespace
             .as_deref()
@@ -685,6 +693,24 @@ mod tests {
         let runtime = crate::conf_mgr::ControllerRuntime::default();
         assert!(listener_allows_route_namespace(&None, "ns1", "ns1", &runtime));
         assert!(!listener_allows_route_namespace(&None, "ns1", "ns2", &runtime));
+    }
+
+    #[test]
+    fn test_resolve_listener_keys_skips_delegation_parent_refs() {
+        // A `kind: HTTPRoute` parentRef (delegation reverse lock) must not be
+        // looked up as a Gateway — it yields no listener keys and no side
+        // effects (previously it would log a bogus "Gateway not found").
+        let runtime = crate::conf_mgr::ControllerRuntime::default();
+        let delegation_ref = ParentReference {
+            group: Some("gateway.networking.k8s.io".to_string()),
+            kind: Some("HTTPRoute".to_string()),
+            namespace: Some("infra".to_string()),
+            name: "parent-route".to_string(),
+            section_name: None,
+            port: None,
+        };
+        let keys = resolve_listener_keys(&[delegation_ref], "billing", Some("billing"), &runtime);
+        assert!(keys.is_empty());
     }
 
     #[test]

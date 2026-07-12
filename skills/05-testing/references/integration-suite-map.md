@@ -11,6 +11,7 @@ This file only answers three things:
 | Family | YAML directory | Rust entry | `--gateway` | Notes |
 |------|-----------|-----------|-------------|------|
 | `HTTPRoute/Basic` | `edgion-tests/integration/conf/HTTPRoute/Basic/` | `edgion-tests/src/client/suites/http_route/` | No | Direct HTTP basic capability |
+| `HTTPRoute/Delegation` | `edgion-tests/integration/conf/HTTPRoute/Delegation/` | `DelegationTestSuite` | Yes | Parent→child delegation flatten: inherited filter, out-of-prefix drop, plain sibling |
 | `HTTPRoute/Match` | `edgion-tests/integration/conf/HTTPRoute/Match/` | `HttpMatchTestSuite` | Yes | Relies on gateway route matching |
 | `HTTPRoute/Backend/*` | `edgion-tests/integration/conf/HTTPRoute/Backend/` | `LBRoundRobinTestSuite`, `LBConsistentHashTestSuite`, `WeightedBackendTestSuite`, `TimeoutTestSuite`, `HealthCheckTestSuite`, `GrpcHealthCheckTestSuite`, `HealthCheckTransitionTestSuite`, `PartiallyInvalidTestSuite`, `RetryOnStatusTestSuite`, `CircuitBreakerTestSuite`, `SessionPersistenceTestSuite` | Yes | Load balancing, timeout, health check, partially invalid rules, retry, circuit breaking, session persistence |
 | `HTTPRoute/Filters/*` | `edgion-tests/integration/conf/HTTPRoute/Filters/` | `HttpRedirectTestSuite`, `HttpSecurityTestSuite`, `HeaderModifierTestSuite`, `FilterConflictTestSuite` | Yes | Redirect, security, header modifier, filter conflict |

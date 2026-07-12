@@ -3,6 +3,7 @@
 
 // basic tests
 mod basic;
+mod delegation;
 mod multi_port;
 
 // Sub-modules - by function
@@ -14,6 +15,7 @@ mod protocol;
 
 pub use basic::HttpTestSuite;
 pub use dangling_extension_ref::DanglingExtensionRefTestSuite;
+pub use delegation::{DelegationDynamicInitialTestSuite, DelegationDynamicUpdateTestSuite, DelegationTestSuite};
 pub use multi_port::MultiPortTestSuite;
 
 // Export sub-module tests

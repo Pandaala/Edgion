@@ -1,0 +1,17 @@
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: child-dyn-svc
+  namespace: edgion-deleg-dyn
+  labels:
+    kubernetes.io/service-name: child-dyn-svc
+addressType: IPv4
+ports:
+  - name: http-30001
+    port: 30001
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

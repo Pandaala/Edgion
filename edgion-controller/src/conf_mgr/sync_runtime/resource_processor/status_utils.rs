@@ -245,6 +245,10 @@ pub enum ResolvedRefsError {
     /// loop (see the tls-06 design). The condition reason is the coarse
     /// `INVALID_CERTIFICATE`; `detail` carries the specific human-readable cause.
     CertContentInvalid { detail: String },
+    /// Edgion extension · HTTPRoute delegation: a named child HTTPRoute
+    /// referenced by a delegating rule (`backendRef {kind: HTTPRoute}`) does
+    /// not exist.
+    DelegationChildNotFound { namespace: String, name: String },
 }
 
 impl ResolvedRefsError {
@@ -259,6 +263,7 @@ impl ResolvedRefsError {
             Self::DecodeError { .. } => condition_reasons::DECODE_ERROR,
             Self::InvalidSecretType { .. } => condition_reasons::INVALID_SECRET_TYPE,
             Self::CertContentInvalid { .. } => condition_reasons::INVALID_CERTIFICATE,
+            Self::DelegationChildNotFound { .. } => condition_reasons::BACKEND_NOT_FOUND,
         }
     }
 
@@ -307,6 +312,9 @@ impl ResolvedRefsError {
                 )
             }
             Self::CertContentInvalid { detail } => detail.clone(),
+            Self::DelegationChildNotFound { namespace, name } => {
+                format!("Delegation child HTTPRoute '{}/{}' not found", namespace, name)
+            }
         }
     }
 }
@@ -481,6 +489,9 @@ pub(crate) fn pick_resolved_refs_reason(errors: &[ResolvedRefsError]) -> &'stati
             ResolvedRefsError::InvalidSecretType { .. } => 3,
             ResolvedRefsError::EdgionConfigDataNotFound { .. } => 4,
             ResolvedRefsError::BackendNotFound { .. } => 5,
+            // Delegation child missing is the same severity class as a missing
+            // Service backend (both surface as BACKEND_NOT_FOUND).
+            ResolvedRefsError::DelegationChildNotFound { .. } => 5,
             ResolvedRefsError::SecretNotFound { .. } => 6,
             ResolvedRefsError::DecodeError { .. } => 7,
             ResolvedRefsError::MissingKeys { .. } => 8,

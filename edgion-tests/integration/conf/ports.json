@@ -1,5 +1,5 @@
 {
-  "current_max": 31931,
+  "current_max": 31933,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -276,6 +276,12 @@
     },
     "LinkSys/Kafka": {
       "http": 31931
+    },
+    "HTTPRoute/Delegation": {
+      "http": 31932
+    },
+    "HTTPRoute/Delegation/DynamicTest": {
+      "http": 31933
     }
   }
 }

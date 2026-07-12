@@ -450,6 +450,14 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
             .map(|r| HttpRouteRuleUnit::compile_http_rule(r, &validated.namespace))
             .collect();
 
+        // invalid_rule_indices refers to spec.rules; when resolved_rules is
+        // compiled (delegation), flattening already dropped invalid rules and
+        // the indices do not apply.
+        let invalid_rule_indices = if route.spec.resolved_rules.is_some() {
+            None
+        } else {
+            route.spec.invalid_rule_indices.as_ref()
+        };
         for hostname in &get_effective_hostnames(route) {
             append_route_to_hostname(
                 &mut domain_rules,
@@ -457,7 +465,7 @@ fn parse_http_routes_to_domain_rules(data: &HashMap<String, Arc<HTTPRoute>>) -> 
                 &validated,
                 &resource_key,
                 &accepted_refs,
-                route.spec.invalid_rule_indices.as_ref(),
+                invalid_rule_indices,
                 creation_ts_ms,
                 route_sv,
                 &rule_runtimes,
@@ -488,7 +496,9 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
         }
     };
 
-    let rules = match &route.spec.rules {
+    // Delegation: when the controller flattened a delegation tree into
+    // resolved_rules, compile those INSTEAD of the operator-authored rules.
+    let rules = match route.effective_rules() {
         Some(rules) if !rules.is_empty() => rules,
         _ => {
             tracing::warn!(route=%route.key_name(),"no rules");
@@ -746,6 +756,96 @@ mod tests {
         let mut route: HTTPRoute = serde_json::from_value(json).expect("Failed to build HTTPRoute");
         route.pre_parse();
         route
+    }
+
+    fn build_route_with_two_rules(namespace: &str, name: &str) -> HTTPRoute {
+        let json = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": { "namespace": namespace, "name": name },
+            "spec": {
+                "parentRefs": [{ "name": "test-gateway", "kind": "Gateway" }],
+                "hostnames": ["test.example.com"],
+                "rules": [
+                    { "matches": [{ "path": { "type": "PathPrefix", "value": "/spec-a" } }],
+                      "backendRefs": [{ "name": "svc", "port": 8080 }] },
+                    { "matches": [{ "path": { "type": "PathPrefix", "value": "/spec-b" } }],
+                      "backendRefs": [{ "name": "svc", "port": 8080 }] }
+                ]
+            }
+        });
+        let mut route: HTTPRoute = serde_json::from_value(json).expect("Failed to build HTTPRoute");
+        route.pre_parse();
+        route
+    }
+
+    fn domain_unit_paths(domain_rules: &DomainRouteRulesMap, hostname: &str) -> Vec<String> {
+        domain_rules
+            .get(hostname)
+            .map(|(normal, regex)| {
+                normal
+                    .iter()
+                    .chain(regex.iter())
+                    .filter_map(|u| u.matched_info.m.path.as_ref().and_then(|p| p.value.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn test_resolved_rules_compiled_instead_of_spec_rules() {
+        // Delegation contract: when resolved_rules is present the gateway
+        // compiles it INSTEAD of spec.rules.
+        let mut route = build_route_with_two_rules("test-deleg", "flat");
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([
+                { "matches": [{ "path": { "type": "PathPrefix", "value": "/resolved" } }],
+                  "backendRefs": [{ "name": "child-svc", "namespace": "test-deleg", "port": 8080 }] }
+            ]))
+            .unwrap(),
+        );
+        route.pre_parse();
+
+        let mut data = HashMap::new();
+        data.insert("test-deleg/flat".to_string(), Arc::new(route));
+        let domain_rules = parse_http_routes_to_domain_rules(&data);
+
+        let paths = domain_unit_paths(&domain_rules, "test.example.com");
+        assert_eq!(paths, vec!["/resolved"], "resolved_rules must replace spec.rules");
+    }
+
+    #[test]
+    fn test_invalid_rule_indices_ignored_when_resolved_rules_present() {
+        // invalid_rule_indices refers to spec.rules; a flattened route must
+        // not have its (pre-filtered) resolved_rules dropped by stale indices.
+        let mut route = build_route_with_two_rules("test-deleg-inv", "flat");
+        route.spec.invalid_rule_indices = Some(vec![0]);
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([
+                { "matches": [{ "path": { "type": "PathPrefix", "value": "/r-a" } }],
+                  "backendRefs": [{ "name": "svc", "port": 8080 }] },
+                { "matches": [{ "path": { "type": "PathPrefix", "value": "/r-b" } }],
+                  "backendRefs": [{ "name": "svc", "port": 8080 }] }
+            ]))
+            .unwrap(),
+        );
+        route.pre_parse();
+
+        let mut data = HashMap::new();
+        data.insert("test-deleg-inv/flat".to_string(), Arc::new(route));
+        let domain_rules = parse_http_routes_to_domain_rules(&data);
+        let mut paths = domain_unit_paths(&domain_rules, "test.example.com");
+        paths.sort();
+        assert_eq!(paths, vec!["/r-a", "/r-b"], "indices must not apply to resolved_rules");
+
+        // Control: without resolved_rules the same indices DO drop rule 0.
+        let mut plain = build_route_with_two_rules("test-deleg-inv", "plain");
+        plain.spec.invalid_rule_indices = Some(vec![0]);
+        let mut data = HashMap::new();
+        data.insert("test-deleg-inv/plain".to_string(), Arc::new(plain));
+        let domain_rules = parse_http_routes_to_domain_rules(&data);
+        let paths = domain_unit_paths(&domain_rules, "test.example.com");
+        assert_eq!(paths, vec!["/spec-b"], "indices must still apply to spec.rules");
     }
 
     #[test]

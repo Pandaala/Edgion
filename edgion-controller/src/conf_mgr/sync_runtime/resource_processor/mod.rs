@@ -28,6 +28,7 @@ pub mod raw_store;
 pub mod ref_grant;
 pub mod ref_manager;
 pub mod region_route_table;
+pub mod route_delegation_index;
 pub mod secret_utils;
 pub mod service_ref;
 pub mod status_diff;
@@ -74,6 +75,8 @@ pub use listener_port_manager::{make_conflict_key, ConflictKey, ListenerPortMana
 pub use attached_route_tracker::AttachedRouteTracker;
 
 pub use gateway_route_index::GatewayRouteIndex;
+
+pub use route_delegation_index::RouteDelegationIndex;
 
 pub use service_ref::{new_service_ref_manager, ServiceRefManager};
 

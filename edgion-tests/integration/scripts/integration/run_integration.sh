@@ -978,6 +978,7 @@ run_all_tests() {
                 if [ -z "$G_ITEM" ]; then
                     # Run all HTTPRoute tests
                     run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Basic" || test_failed=true
+                    run_test "HTTPRoute_Delegation" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Delegation" || test_failed=true
                     run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Match" || test_failed=true
                     run_test "HTTPRoute_Backend" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Backend" || test_failed=true
                     if ! should_skip_test "HTTPRoute_Backend_HealthCheckTransition"; then
@@ -1198,6 +1199,7 @@ run_all_tests() {
         
         # HTTPRoute Tests
         run_test "HTTPRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g http" || test_failed=true
+        run_test "HTTPRoute_Delegation" "${PROJECT_ROOT}/target/debug/test_client -g -r HTTPRoute -i Delegation" || test_failed=true
         run_test "HTTPRoute_Match" "${PROJECT_ROOT}/target/debug/test_client -g http-match" || test_failed=true
         run_test "HTTPRoute_Backend_LBRoundRobin" "${PROJECT_ROOT}/target/debug/test_client -g lb-rr" || test_failed=true
         run_test "HTTPRoute_Backend_LBConsistentHash" "${PROJECT_ROOT}/target/debug/test_client -g lb-ch" || test_failed=true

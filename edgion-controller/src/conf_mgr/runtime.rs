@@ -25,6 +25,7 @@ use super::sync_runtime::resource_processor::{
         events::ReferenceGrantEventDispatcher,
         ReferenceGrantStore,
     },
+    route_delegation_index::RouteDelegationIndex,
     secret_utils::{new_secret_ref_manager, SecretRefManager, SecretStore},
     service_ref::{new_service_ref_manager, ServiceRefManager},
     BidirectionalRefManager, ResourceRef,
@@ -44,6 +45,9 @@ pub struct ControllerRuntime {
     pub(crate) secret_ref_manager: SecretRefManager,
     pub(crate) secret_store: SecretStore,
     pub(crate) gateway_route_index: GatewayRouteIndex,
+    /// child HTTPRoute → delegating parent HTTPRoutes reverse index; a child
+    /// change requeues its parents for delegation re-flattening.
+    pub(crate) route_delegation_index: RouteDelegationIndex,
     pub(crate) attached_route_tracker: AttachedRouteTracker,
     pub(crate) listener_port_manager: ListenerPortManager,
     pub(crate) configmap_store: ConfigMapStore,
@@ -86,6 +90,7 @@ impl ControllerRuntime {
             secret_ref_manager: new_secret_ref_manager(),
             secret_store: SecretStore::new(),
             gateway_route_index: GatewayRouteIndex::new(),
+            route_delegation_index: RouteDelegationIndex::new(),
             attached_route_tracker: AttachedRouteTracker::new(),
             listener_port_manager: ListenerPortManager::new(),
             configmap_store: ConfigMapStore::new(),
@@ -144,6 +149,9 @@ impl ControllerRuntime {
 
         self.gateway_route_index.clear();
         tracing::info!(component = "controller_runtime", "Cleared GatewayRouteIndex");
+
+        self.route_delegation_index.clear();
+        tracing::info!(component = "controller_runtime", "Cleared RouteDelegationIndex");
 
         self.attached_route_tracker.clear();
         tracing::info!(component = "controller_runtime", "Cleared AttachedRouteTracker");

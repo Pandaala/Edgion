@@ -211,6 +211,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionBackendTrafficPolicy" => "HTTPRoute/Backend/CircuitBreaker",
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => "HTTPRoute/Basic",
+        "HTTPRoute/Delegation" => "HTTPRoute/Delegation",
         "HTTPRoute/Match" => "HTTPRoute/Match",
         "HTTPRoute/Backend" | "HTTPRoute/Backend/LBRoundRobin" => "HTTPRoute/Backend/LBRoundRobin",
         "HTTPRoute/Backend/LBConsistentHash" => "HTTPRoute/Backend/LBConsistentHash",
@@ -366,6 +367,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => {
             runner.add_suite(Box::new(suites::HttpTestSuite));
+        }
+        "HTTPRoute/Delegation" => {
+            if !gateway {
+                eprintln!("Error: HTTPRoute/Delegation tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::DelegationTestSuite));
         }
         "HTTPRoute/Match" => {
             if !gateway {

@@ -25,6 +25,7 @@ const enSidebar = [
         collapsed: false,
         items: [
           { text: 'Overview', link: '/en/user-guide/http-route/overview' },
+          { text: 'Route Delegation', link: '/en/user-guide/http-route/delegation' },
           {
             text: 'Backends',
             collapsed: true,
@@ -269,6 +270,7 @@ const zhSidebar = [
         collapsed: false,
         items: [
           { text: '概览', link: '/zh-CN/user-guide/http-route/overview' },
+          { text: '路由委派', link: '/zh-CN/user-guide/http-route/delegation' },
           {
             text: '后端',
             collapsed: true,

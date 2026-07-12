@@ -45,6 +45,7 @@ pub struct HTTPRouteSpec {
 
     /// Controller-identified invalid rule indices.
     /// Gateway skips these rules during route compilation.
+    /// Indices refer to `rules`; not applicable to `resolved_rules`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub invalid_rule_indices: Option<Vec<usize>>,
@@ -52,7 +53,38 @@ pub struct HTTPRouteSpec {
     /// Rules defines the HTTP routing rules
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<Vec<HTTPRouteRule>>,
+
+    /// Controller-resolved flattened rules produced by HTTPRoute delegation
+    /// (a rule whose backendRef points at `kind: HTTPRoute` delegates its path
+    /// prefix to child routes; the controller expands the delegation tree).
+    /// Present only on routes containing at least one delegating rule. When
+    /// present, the gateway compiles these INSTEAD of `rules`, and
+    /// `invalid_rule_indices` does not apply (flattening already dropped
+    /// invalid rules). See docs/superpowers/specs/2026-07-11-route-delegation-design.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub resolved_rules: Option<Vec<HTTPRouteRule>>,
+
+    /// Controller-internal delegation diagnostics, produced by the flatten
+    /// step in `parse` and consumed by `update_status`. Never serialized.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub delegation_issues: Vec<DelegationIssue>,
 }
+
+/// Diagnostics from delegation flattening (controller-internal).
+#[derive(Clone, Debug, PartialEq)]
+pub enum DelegationIssue {
+    /// A named child HTTPRoute referenced by a delegating rule does not exist
+    /// (surfaces as `ResolvedRefs=False` / `BackendNotFound`).
+    MissingChild { namespace: String, name: String },
+    /// A delegating rule or a child rule was dropped from `resolved_rules`
+    /// (surfaces via the `PartiallyInvalid` condition).
+    RuleDropped { message: String },
+}
+
+/// API group of the Gateway API resources (used for delegation ref detection).
+pub const GATEWAY_API_GROUP: &str = "gateway.networking.k8s.io";
 
 #[derive(Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -285,6 +317,23 @@ pub struct HTTPBackendRef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(skip)]
     pub ref_denied: Option<RefDenied>,
+}
+
+impl HTTPBackendRef {
+    /// True if this backendRef delegates to a child HTTPRoute
+    /// (`group: gateway.networking.k8s.io, kind: HTTPRoute`) instead of
+    /// referencing a Service backend.
+    pub fn is_route_delegation_ref(&self) -> bool {
+        self.group.as_deref() == Some(GATEWAY_API_GROUP) && self.kind.as_deref() == Some("HTTPRoute")
+    }
+}
+
+impl HTTPRoute {
+    /// Rules the gateway should compile: the controller-flattened delegation
+    /// result when present, otherwise the operator-authored `rules`.
+    pub fn effective_rules(&self) -> Option<&Vec<HTTPRouteRule>> {
+        self.spec.resolved_rules.as_ref().or(self.spec.rules.as_ref())
+    }
 }
 
 /// HTTPRouteFilter defines processing steps that must be completed during the request/response lifecycle
@@ -950,6 +999,95 @@ pub struct RouteParentStatus {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    fn backend_ref(group: Option<&str>, kind: Option<&str>) -> HTTPBackendRef {
+        HTTPBackendRef {
+            name: "target".to_string(),
+            namespace: None,
+            port: None,
+            weight: None,
+            group: group.map(str::to_string),
+            kind: kind.map(str::to_string),
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        }
+    }
+
+    #[test]
+    fn test_is_route_delegation_ref_matrix() {
+        // Positive: exact group + kind
+        assert!(backend_ref(Some(GATEWAY_API_GROUP), Some("HTTPRoute")).is_route_delegation_ref());
+        // Negative: kind absent (defaults to Service semantics)
+        assert!(!backend_ref(Some(GATEWAY_API_GROUP), None).is_route_delegation_ref());
+        // Negative: Service kind
+        assert!(!backend_ref(None, Some("Service")).is_route_delegation_ref());
+        // Negative: right kind, wrong/absent group (core group Service named HTTPRoute)
+        assert!(!backend_ref(None, Some("HTTPRoute")).is_route_delegation_ref());
+        assert!(!backend_ref(Some("example.io"), Some("HTTPRoute")).is_route_delegation_ref());
+        // Negative: GRPCRoute is not (yet) a delegation target
+        assert!(!backend_ref(Some(GATEWAY_API_GROUP), Some("GRPCRoute")).is_route_delegation_ref());
+    }
+
+    fn route_json(spec: serde_json::Value) -> HTTPRoute {
+        serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {"name": "r", "namespace": "default"},
+            "spec": spec
+        }))
+        .expect("route should deserialize")
+    }
+
+    #[test]
+    fn test_effective_rules_prefers_resolved() {
+        let mut route = route_json(serde_json::json!({
+            "rules": [{"matches": [{"path": {"type": "PathPrefix", "value": "/spec"}}]}]
+        }));
+        // No resolved_rules → falls back to spec.rules
+        let rules = route.effective_rules().expect("spec rules present");
+        assert_eq!(
+            rules[0].matches.as_ref().unwrap()[0]
+                .path
+                .as_ref()
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("/spec")
+        );
+
+        // With resolved_rules → resolved wins
+        let resolved: Vec<HTTPRouteRule> = serde_json::from_value(serde_json::json!(
+            [{"matches": [{"path": {"type": "PathPrefix", "value": "/resolved"}}]}]
+        ))
+        .unwrap();
+        route.spec.resolved_rules = Some(resolved);
+        let rules = route.effective_rules().expect("resolved rules present");
+        assert_eq!(
+            rules[0].matches.as_ref().unwrap()[0]
+                .path
+                .as_ref()
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("/resolved")
+        );
+    }
+
+    #[test]
+    fn test_resolved_rules_serialized_delegation_issues_not() {
+        let mut route = route_json(serde_json::json!({"rules": []}));
+        route.spec.resolved_rules = Some(Vec::new());
+        route.spec.delegation_issues = vec![DelegationIssue::RuleDropped {
+            message: "internal".to_string(),
+        }];
+        let json = serde_json::to_value(&route).unwrap();
+        // resolved_rules must survive conf_sync serialization
+        assert!(json["spec"].get("resolvedRules").is_some());
+        // delegation_issues is controller-internal and must never serialize
+        assert!(json["spec"].get("delegationIssues").is_none());
+        assert!(json["spec"].get("delegation_issues").is_none());
+    }
 
     #[test]
     fn test_backend_request_clamped_to_request() {

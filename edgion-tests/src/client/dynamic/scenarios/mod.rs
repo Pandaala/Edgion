@@ -11,5 +11,6 @@ pub mod gateway_class_params_flap;
 pub mod gateway_dynamic;
 pub mod observed_gen_high_freq;
 pub mod rate_limit_dynamic;
+pub mod route_delegation_dynamic;
 pub mod sp_backend_change;
 pub mod tcp_esp_reload;

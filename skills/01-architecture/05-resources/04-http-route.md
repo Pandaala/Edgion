@@ -33,6 +33,7 @@ HTTPRoute's `preparse()` method builds runtime structures at the type level:
 
 ### parse
 
+0. **ReferenceGrant marking, then delegation flatten**: ref_denied marking on spec.rules runs FIRST (flatten clones non-delegating sibling rules verbatim into resolved_rules, which the gateway compiles instead of spec.rules — marking later would leave the compiled copies un-denied). Then, if any rule delegates (`backendRef {group: gateway.networking.k8s.io, kind: HTTPRoute}`), `route_delegation::flatten_route()` DFS-expands the delegation tree into `spec.resolved_rules` (schemars-skip, serialized for conf_sync) and stores diagnostics in the in-process `spec.delegation_issues`. The flattened Service/cross-ns refs are folded into the registrations below **under the parent's ResourceRef**, and `RouteDelegationIndex` (child → parents) is updated; edge deltas requeue affected children so their child-side status stays fresh. Semantics contract: `docs/superpowers/specs/2026-07-11-route-delegation-design.md`; module: `handlers/route_delegation.rs`
 1. **Record cross-namespace references**: register cross-namespace references in backendRef into CrossNsRefManager so that ReferenceGrant changes automatically requeue the route
 2. **Register Service references**: register all Service-typed backendRefs into ServiceRefManager so that Service changes automatically requeue the route
 3. **Clear and recompute resolved_listeners**: from parentRef, resolve the target Listener's address and protocol, producing `Vec<ListenerKey>` (formatted `"{addr}/{protocol}"`) for per-listener route isolation on the Gateway side. Resolution logic is shared via `resolve_listener_keys()` (used by 6 handlers in `handlers/route_utils.rs`):
@@ -40,29 +41,36 @@ HTTPRoute's `preparse()` method builds runtime structures at the type level:
    - When sectionName + port are both present, validate consistency between them
    - If neither is specified → use all of the Gateway's Listeners (subject to the allowedRoutes namespace check)
 4. **Resolve resolved_hostnames**: compute the intersection of the route's hostnames with the Gateway Listener's hostnames
-5. **Mark rejected cross-namespace references**: for each cross-namespace backendRef, check ReferenceGrant; for unauthorized ones, set the `ref_denied` field so the Gateway side rejects requests accordingly
+5. (ReferenceGrant `ref_denied` marking happens in step 0, before the flatten — see above)
 
 ### on_change
 
 1. Register into `GatewayRouteIndex` (Gateway changes will requeue this route)
 2. Update `AttachedRouteTracker`; if the attachment relationship has changed, requeue the parent Gateway (to refresh the attachedRoutes count)
+3. Requeue delegating parents via `RouteDelegationIndex.parents_of()` (this route may be someone's delegation child; parents must re-flatten)
+
+> **Post-init one-shot (not an on_change step):** `trigger_delegation_parent_revalidation` (`ref_grant/revalidation_listener.rs`, invoked from `run_post_cache_ready_revalidations`) requeues all registered delegating parents once caches are ready, closing the init window where a parent flattened before its children were loaded.
 
 ### on_delete
 
 - Clear registrations in CrossNsRefManager, ServiceRefManager, GatewayRouteIndex, and AttachedRouteTracker
+- Delegation cleanup: clear this route's own parent-side edges via `update_parent(key, ∅, ∅)` and requeue its former children from the returned delta (their child-side Accepted must refresh), then requeue any parents still delegating to it
 - If AttachedRouteTracker has changes, requeue the parent Gateway
 
 ### update_status
 
 Generate an independent RouteParentStatus for each parentRef:
-- `Accepted`: validates whether the Gateway/Listener corresponding to parentRef exists and admits this route (non-empty hostname intersection, namespace policy permits)
-- `ResolvedRefs`: validates whether all backendRef-targeted Services exist and whether cross-namespace references are rejected
+- `Accepted`: validates whether the Gateway/Listener corresponding to parentRef exists and admits this route (non-empty hostname intersection, namespace policy permits). Only `kind: Gateway` parentRefs enter this path
+- `ResolvedRefs`: validates whether all backendRef-targeted Services exist and whether cross-namespace references are rejected (delegation refs are excluded from Service validation; a missing named delegation child surfaces as `BackendNotFound` via `DelegationIssue::MissingChild`)
+- `PartiallyInvalid`: own invalid rules plus every delegation-dropped rule message (`DelegationIssue::RuleDropped` — out-of-prefix child rules, filter conflicts, cycles, depth, malformed delegating rules)
+- Child-side delegation status: each `kind: HTTPRoute` parentRef (reverse lock) gets an `Accepted` condition — True iff that parent currently delegates to this route (`DelegationAccepted` / `NoMatchingParent`, computed from `RouteDelegationIndex`)
 - Cleans up old status entries that correspond to parentRefs no longer present
 
 ## Gateway-side processing
 
 HTTPRoute's ConfHandler implements route compilation and registration:
 
+0. **Effective rules**: compiles `route.effective_rules()` — `spec.resolved_rules` (controller-flattened delegation result) when present, else `spec.rules`. `invalid_rule_indices` applies only to `spec.rules` (flattening already dropped invalid rules). Delegation children have no Gateway parentRefs / `resolved_listeners`, so they register nothing and are inert on the data plane
 1. **parentRef filtering**: only compile parentRefs with `Accepted=True` (when status is not yet present, optimistically compile all)
 2. **Per-listener route management**: based on resolved_listeners, register route rules into the `HttpRouteManager` of the corresponding `ListenerKey`
 3. **Domain route table**: each port maintains a `domain → route_rules` mapping; routes without a hostname are registered under `*` (wildcard)
@@ -78,6 +86,7 @@ HTTPRoute's ConfHandler implements route compilation and registration:
 | Direction | Target resource | Mechanism | Notes |
 |---------|---------|---------|------|
 | HTTPRoute → Gateway | Gateway | parentRef | Route attaches to the Gateway's Listener |
+| HTTPRoute → HTTPRoute | HTTPRoute | delegation backendRef (`kind: HTTPRoute`) + `RouteDelegationIndex` | Parent flattens child rules into `resolved_rules`; child changes requeue parents (named + wildcard-namespace edges, transitively registered at the root) |
 | HTTPRoute → Service | Service | backendRef | Route's backend target service |
 | HTTPRoute → EdgionPlugins | EdgionPlugins | ExtensionRef filter | Plugin configuration referenced via ExtensionRef |
 | HTTPRoute → Secret | Secret | indirect, via plugins | Plugins such as JWT/BasicAuth reference Secrets |

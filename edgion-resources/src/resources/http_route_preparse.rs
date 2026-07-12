@@ -33,10 +33,6 @@ impl HTTPRoute {
         // logic always sees the canonical path representation.
         self.normalize_path_matchers();
 
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
-
         // Parse `edgion.io/forward-raw-path` annotation. Three-state:
         // "true" / "false" / absent. Invalid values logged INFO and treated as None.
         let parsed_forward_raw_path: Option<bool> = self
@@ -83,9 +79,17 @@ impl HTTPRoute {
                 }
             });
 
-        for rule in rules.iter_mut() {
-            rule.parsed_forward_raw_path = parsed_forward_raw_path;
-            rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
+        // Both the operator-authored rules and the controller-flattened
+        // delegation rules (resolved_rules) need the annotation copies; the
+        // gateway compiles whichever is effective (see `effective_rules()`).
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            for rule in rules.iter_mut() {
+                rule.parsed_forward_raw_path = parsed_forward_raw_path;
+                rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
+            }
         }
     }
 
@@ -94,17 +98,18 @@ impl HTTPRoute {
     /// This method is called during route loading (in pre_parse) to avoid runtime parsing overhead.
     /// It parses timeout strings into Duration objects and stores them in rule.parsed_timeouts.
     pub fn parse_timeouts(&mut self) {
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            for rule in rules.iter_mut() {
+                // Parse timeouts for each rule
+                if let Some(timeouts) = &rule.timeouts {
+                    rule.parsed_timeouts = crate::resources::http_route::ParsedRouteTimeouts::from_config(timeouts);
 
-        for rule in rules.iter_mut() {
-            // Parse timeouts for each rule
-            if let Some(timeouts) = &rule.timeouts {
-                rule.parsed_timeouts = crate::resources::http_route::ParsedRouteTimeouts::from_config(timeouts);
-
-                if rule.parsed_timeouts.is_some() {
-                    tracing::debug!("Parsed route-level timeouts for HTTPRoute rule");
+                    if rule.parsed_timeouts.is_some() {
+                        tracing::debug!("Parsed route-level timeouts for HTTPRoute rule");
+                    }
                 }
             }
         }
@@ -119,36 +124,40 @@ impl HTTPRoute {
     /// `RegularExpression` patterns are left unchanged — regex patterns cannot be
     /// machine-normalized; correctness is the operator's responsibility.
     pub fn normalize_path_matchers(&mut self) {
-        let route_ns = self.metadata.namespace.as_deref().unwrap_or("default");
-        let route_name = self.metadata.name.as_deref().unwrap_or("");
-
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
+        let route_key = format!(
+            "{}/{}",
+            self.metadata.namespace.as_deref().unwrap_or("default"),
+            self.metadata.name.as_deref().unwrap_or("")
+        );
 
         let path_cfg = crate::path_normalization::get_path_normalization_config();
-        for rule in rules.iter_mut() {
-            let Some(matches) = rule.matches.as_mut() else {
-                continue;
-            };
-            for m in matches.iter_mut() {
-                let Some(path) = m.path.as_mut() else {
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            for rule in rules.iter_mut() {
+                let Some(matches) = rule.matches.as_mut() else {
                     continue;
                 };
-                // Only normalize Exact and PathPrefix; skip RegularExpression and unknown types.
-                let match_type = path.match_type.as_deref().unwrap_or("PathPrefix");
-                if match_type == "Exact" || match_type == "PathPrefix" {
-                    if let Some(value) = path.value.as_mut() {
-                        let normalized = normalize_config_path(value, path_cfg);
-                        if normalized != *value {
-                            tracing::info!(
-                                route = %format!("{}/{}", route_ns, route_name),
-                                match_type = %match_type,
-                                original = %value,
-                                normalized = %normalized,
-                                "HTTPRoute path matcher value normalized at load time"
-                            );
-                            *value = normalized;
+                for m in matches.iter_mut() {
+                    let Some(path) = m.path.as_mut() else {
+                        continue;
+                    };
+                    // Only normalize Exact and PathPrefix; skip RegularExpression and unknown types.
+                    let match_type = path.match_type.as_deref().unwrap_or("PathPrefix");
+                    if match_type == "Exact" || match_type == "PathPrefix" {
+                        if let Some(value) = path.value.as_mut() {
+                            let normalized = normalize_config_path(value, path_cfg);
+                            if normalized != *value {
+                                tracing::info!(
+                                    route = %route_key,
+                                    match_type = %match_type,
+                                    original = %value,
+                                    normalized = %normalized,
+                                    "HTTPRoute path matcher value normalized at load time"
+                                );
+                                *value = normalized;
+                            }
                         }
                     }
                 }
@@ -158,58 +167,63 @@ impl HTTPRoute {
 
     /// Parse and pre-process retry configurations for all rules
     pub fn parse_retry(&mut self) {
-        let Some(rules) = self.spec.rules.as_mut() else {
-            return;
-        };
+        let route_key = format!(
+            "{}/{}",
+            self.metadata.namespace.as_deref().unwrap_or("default"),
+            self.metadata.name.as_deref().unwrap_or("")
+        );
 
-        for rule in rules.iter_mut() {
-            let Some(retry) = &rule.retry else {
-                continue;
-            };
+        for rules in [self.spec.rules.as_mut(), self.spec.resolved_rules.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            for rule in rules.iter_mut() {
+                let Some(retry) = &rule.retry else {
+                    continue;
+                };
 
-            let attempts = retry.attempts.map(|a| a.max(0) as u32);
+                let attempts = retry.attempts.map(|a| a.max(0) as u32);
 
-            let backoff = retry.backoff.as_deref().and_then(|s| {
-                crate::duration::parse_duration(s)
-                    .map_err(|e| {
-                        tracing::warn!(
-                            route = %format!("{}/{}",
-                                self.metadata.namespace.as_deref().unwrap_or("default"),
-                                self.metadata.name.as_deref().unwrap_or("")),
-                            value = %s,
-                            error = %e,
-                            "Invalid retry backoff duration, backoff disabled"
-                        );
-                    })
-                    .ok()
-            });
-
-            let codes = retry.codes.as_ref().map(|codes| {
-                codes
-                    .iter()
-                    .filter_map(|&c| {
-                        // Retry status codes are restricted to 400..=599 to match
-                        // the upstream Gateway API HTTPRouteRetry CRD validation.
-                        // Informational (1xx) and success/redirect (2xx/3xx) codes
-                        // are never a meaningful retry trigger and a 1xx code here
-                        // would otherwise let retry-on-status misfire on an h1
-                        // informational header.
-                        if (400..=599).contains(&c) {
-                            Some(c as u16)
-                        } else {
-                            tracing::warn!(code = c, "Invalid HTTP status code in retry.codes, ignoring");
-                            None
-                        }
-                    })
-                    .collect::<Vec<u16>>()
-            });
-
-            if attempts.is_some() || backoff.is_some() || codes.is_some() {
-                rule.parsed_retry = Some(crate::resources::http_route::ParsedRouteRetry {
-                    attempts,
-                    backoff,
-                    codes,
+                let backoff = retry.backoff.as_deref().and_then(|s| {
+                    crate::duration::parse_duration(s)
+                        .map_err(|e| {
+                            tracing::warn!(
+                                route = %route_key,
+                                value = %s,
+                                error = %e,
+                                "Invalid retry backoff duration, backoff disabled"
+                            );
+                        })
+                        .ok()
                 });
+
+                let codes = retry.codes.as_ref().map(|codes| {
+                    codes
+                        .iter()
+                        .filter_map(|&c| {
+                            // Retry status codes are restricted to 400..=599 to match
+                            // the upstream Gateway API HTTPRouteRetry CRD validation.
+                            // Informational (1xx) and success/redirect (2xx/3xx) codes
+                            // are never a meaningful retry trigger and a 1xx code here
+                            // would otherwise let retry-on-status misfire on an h1
+                            // informational header.
+                            if (400..=599).contains(&c) {
+                                Some(c as u16)
+                            } else {
+                                tracing::warn!(code = c, "Invalid HTTP status code in retry.codes, ignoring");
+                                None
+                            }
+                        })
+                        .collect::<Vec<u16>>()
+                });
+
+                if attempts.is_some() || backoff.is_some() || codes.is_some() {
+                    rule.parsed_retry = Some(crate::resources::http_route::ParsedRouteRetry {
+                        attempts,
+                        backoff,
+                        codes,
+                    });
+                }
             }
         }
     }
@@ -305,6 +319,64 @@ mod tests {
         let mut route = make_route_with_path("PathPrefix", "/api/v1/./foo");
         route.normalize_path_matchers();
         assert_eq!(get_path_value(&route), "/api/v1/foo");
+    }
+
+    // =========================================================================
+    // resolved_rules preparse coverage (delegation)
+    // =========================================================================
+
+    #[test]
+    fn resolved_rules_covered_by_preparse_pipeline() {
+        // A route whose delegation flatten produced resolved_rules must get the
+        // same load-time processing as spec.rules: path normalization,
+        // timeouts, retry, and annotation copies.
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {
+                "name": "parent", "namespace": "infra",
+                "annotations": {"edgion.io/forward-raw-path": "true"}
+            },
+            "spec": {
+                "rules": [{"matches": [{"path": {"type": "PathPrefix", "value": "/api"}}]}]
+            }
+        }))
+        .unwrap();
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([{
+                "matches": [{"path": {"type": "PathPrefix", "value": "/api//billing/./pay"}}],
+                "timeouts": {"request": "10s"},
+                "retry": {"attempts": 2}
+            }]))
+            .unwrap(),
+        );
+
+        route.preparse();
+        route.parse_timeouts();
+        route.parse_retry();
+
+        let rule = &route.spec.resolved_rules.as_ref().unwrap()[0];
+        assert_eq!(
+            rule.matches.as_ref().unwrap()[0]
+                .path
+                .as_ref()
+                .unwrap()
+                .value
+                .as_deref(),
+            Some("/api/billing/pay"),
+            "resolved_rules paths must be normalized"
+        );
+        assert!(rule.parsed_timeouts.is_some(), "resolved_rules timeouts must be parsed");
+        assert_eq!(
+            rule.parsed_retry.as_ref().and_then(|r| r.attempts),
+            Some(2),
+            "resolved_rules retry must be parsed"
+        );
+        assert_eq!(
+            rule.parsed_forward_raw_path,
+            Some(true),
+            "annotation copies must reach resolved_rules"
+        );
     }
 
     // =========================================================================
