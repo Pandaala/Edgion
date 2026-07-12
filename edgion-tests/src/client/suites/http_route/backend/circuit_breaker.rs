@@ -9,6 +9,10 @@ impl TestSuite for CircuitBreakerTestSuite {
         "CircuitBreaker"
     }
 
+    fn port_key(&self) -> Option<&str> {
+        Some("HTTPRoute/Backend/CircuitBreaker")
+    }
+
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
             Self::test_normal_request_no_ejection(),
