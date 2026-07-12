@@ -20,8 +20,14 @@ use dashmap::DashMap;
 /// Max size of one value. Guest-controlled input — the cap bounds a single
 /// write the same way `host_abi` bounds guest allocations.
 pub const MAX_SHARED_VALUE_BYTES: usize = 64 * 1024;
-/// Max total bytes (keys + values) one module may hold.
+/// Max total bytes (keys + values + per-entry overhead) one module may hold.
 pub const MAX_SHARED_TOTAL_BYTES: usize = 4 * 1024 * 1024;
+/// Fixed per-entry accounting surcharge approximating real memory cost beyond
+/// the key+value bytes: the map slot holds a String header (24B), a Vec header
+/// (24B), and the CAS u32 + padding, plus hashbrown load-factor amortization
+/// and allocator rounding of the two heap blocks. Without it, pathological
+/// many-tiny-key loads inflate the cap's real RSS by orders of magnitude.
+pub const ENTRY_OVERHEAD_BYTES: usize = 128;
 
 /// Outcome of a failed [`SharedData::set`].
 #[derive(Debug, PartialEq, Eq)]
@@ -33,7 +39,8 @@ pub enum SharedDataError {
 #[derive(Default)]
 pub struct SharedData {
     map: DashMap<String, (Vec<u8>, u32)>,
-    /// Approximate total of key + value bytes currently stored.
+    /// Approximate real memory currently stored: key + value bytes plus
+    /// [`ENTRY_OVERHEAD_BYTES`] per entry.
     total_bytes: AtomicUsize,
     /// Bounded-cardinality module descriptor for the byte-total gauge.
     metrics_label: String,
@@ -103,7 +110,8 @@ impl SharedData {
                         }
                     }
                     None => {
-                        self.total_bytes.fetch_sub(old_len + key.len(), Ordering::Relaxed);
+                        self.total_bytes
+                            .fetch_sub(ENTRY_OVERHEAD_BYTES + key.len() + old_len, Ordering::Relaxed);
                         occ.remove();
                     }
                 }
@@ -119,7 +127,7 @@ impl SharedData {
                 let Some(v) = value else {
                     return Ok(());
                 };
-                let add = key.len() + v.len();
+                let add = ENTRY_OVERHEAD_BYTES + key.len() + v.len();
                 let projected = self.total_bytes.load(Ordering::Relaxed).saturating_add(add);
                 if projected > MAX_SHARED_TOTAL_BYTES {
                     return Err(SharedDataError::TooLarge);
@@ -197,14 +205,39 @@ mod tests {
         let sd = SharedData::default();
         sd.set("k", Some(vec![0u8; 1000]), 0).unwrap();
         let after_big = sd.total_bytes();
-        assert_eq!(after_big, 1000 + "k".len());
+        assert_eq!(after_big, ENTRY_OVERHEAD_BYTES + 1000 + "k".len());
         // Shrink the value: the counter MUST drop, not stay at the old size
         // (the old `if new_total >= old_len` guard dropped this decrement).
         sd.set("k", Some(vec![0u8; 10]), sd.get("k").unwrap().1).unwrap();
-        assert_eq!(sd.total_bytes(), 10 + "k".len());
+        assert_eq!(sd.total_bytes(), ENTRY_OVERHEAD_BYTES + 10 + "k".len());
         // Delete brings it to zero exactly — no phantom residue, no wrap.
         sd.set("k", None, 0).unwrap();
         assert_eq!(sd.total_bytes(), 0);
+    }
+
+    #[test]
+    fn entry_overhead_bounds_tiny_key_count() {
+        // Pathological load: many tiny keys with empty values. Without the
+        // per-entry surcharge the logical accounting admits ~4M such entries
+        // (hundreds of MB of real memory); with it the entry count is bounded
+        // to cap/(overhead+key) and the cap stays honest about RSS.
+        let sd = SharedData::default();
+        let per_entry = ENTRY_OVERHEAD_BYTES + 8;
+        let expected_max = MAX_SHARED_TOTAL_BYTES / per_entry;
+        let mut inserted = 0usize;
+        loop {
+            match sd.set(&format!("{inserted:08}"), Some(Vec::new()), 0) {
+                Ok(()) => inserted += 1,
+                Err(SharedDataError::TooLarge) => break,
+                Err(e) => panic!("unexpected error: {e:?}"),
+            }
+            assert!(
+                inserted <= expected_max,
+                "cap admitted more entries than the surcharge allows"
+            );
+        }
+        assert_eq!(inserted, expected_max);
+        assert_eq!(sd.total_bytes(), expected_max * per_entry);
     }
 
     #[test]

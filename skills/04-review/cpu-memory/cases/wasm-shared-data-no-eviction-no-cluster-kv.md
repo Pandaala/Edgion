@@ -1,0 +1,77 @@
+---
+name: wasm-shared-data-no-eviction-no-cluster-kv
+description: Use when reviewing wasm shared data storage-policy findings; covers why no LRU/TTL eviction, no Redis/cluster backend, no cross-reload retention, and no restart persistence are accepted design decisions.
+status: accepted-tradeoff
+finding_id: wasm-shared-data-storage-analysis
+closed: 2026-07-12
+---
+
+# Wasm shared data: no eviction, no cluster KV backend, process-local lifetime — DESIGN-TRADEOFF
+
+## Conclusion
+
+The wasm shared data store (`edgion-gateway/src/plugins/http/wasm/shared_data.rs`) deliberately
+has **no LRU/TTL eviction**, **no Redis/cluster-level backend**, **no cross-reload retention
+beyond content-identical cache-entry reuse**, and **no restart persistence**. Fill-up is handled
+fail-loud: writes beyond the 4MiB per-module cap return `TooLarge` and the guest decides.
+
+Fix suggestions of the form "add LRU/TTL eviction to bound memory", "back shared data with
+Redis for multi-replica consistency", or "persist shared data across reloads/restarts" are
+**not accepted**.
+
+## Core Rationale
+
+- **Spec and reference hosts define no eviction.** The proxy-wasm spec leaves shared data
+  scope, lifetime, limits, and eviction entirely unspecified (only CAS is normative). Envoy's
+  implementation (proxy-wasm-cpp-host `src/shared_data.cc`) has NO size limits, NO eviction,
+  NO TTL — data lives until the vm_id's last VM handle is destroyed. Our three caps
+  (64KiB/value, 4MiB/module, host-side allocation bounds) are already strictly tighter than
+  the reference implementation.
+- **Eviction under CAS is a correctness trap.** No host has ever evicted shared-data keys, so
+  no guest code defends against keys vanishing; the spec gives guests no eviction notification
+  and no defined CAS semantics for a reborn key. The dominant workload (tick-fetched ruleset
+  published for request hooks) would turn LRU into "denylist silently half-disappears" — a
+  worse failure than a loud `TooLarge`.
+- **Cluster KV has no standard-ABI answer.** Envoy/Istio provide none. The only industry
+  precedent, Higress, added `DispatchRedisCall`-style host functions in a forked SDK —
+  a non-portable ABI extension. Edgion's division stands: process-local = shared data;
+  cluster-level = `rate_limit_redis` native plugin or guest callouts (tick-callout is
+  implemented and covers the poll-and-publish pattern). A Higress-style host extension is
+  deferred until a real user scenario demands direct guest KV access, not rejected forever.
+- **Store lifetime bound to the module cache entry is the safe model.** Envoy's one public
+  shared-data incident (envoy#13835 / cpp-host#86, fixed by #114) was caused by store lifetime
+  outliving the VM; the fix converged on cleanup-at-destruction — structurally what Edgion
+  already does. Content-addressed scoping (cache_key) is tighter than Envoy's declared vm_id.
+  Reload with changed bytecode intentionally starts empty (old data may not fit new rule
+  formats); guests self-heal via first tick fetch.
+
+## Explicitly rejected alternatives
+
+- LRU or TTL eviction: no spec, no precedent, correctness risk exceeds memory benefit.
+- Transparent Redis backend for shared data: network latency and availability coupling on the
+  request hot path, CAS→WATCH/Lua mapping, semantic break with every existing guest.
+- Cross-restart persistence / cross-reload identity: no host precedent; stale-data and
+  format-migration hazards exceed the cold-start gap that tick fetch already fills.
+
+## Related fixed finding (do not re-report)
+
+Accounting originally counted only logical key+value bytes, excluding ~100–150B/entry
+structural overhead, so pathological many-tiny-key loads could inflate the 4MiB cap's real
+RSS by orders of magnitude. **Fixed 2026-07-12**: `ENTRY_OVERHEAD_BYTES = 128` is charged per
+entry on insert/delete (`shared_data.rs`), bounding entry count to ~30k and making the cap
+track real memory. Do not escalate the (now closed) overhead gap into an eviction requirement.
+
+## Re-evaluation triggers
+
+- A real user scenario where guests need direct cluster KV and callout polling is insufficient
+  (revisit Higress-style host extension, using their function signatures as the benchmark).
+- The proxy-wasm spec gains normative eviction/TTL semantics.
+- Evidence of a production workload where fail-loud `TooLarge` at 4MiB is operationally worse
+  than eviction (would need guest-visible eviction semantics first).
+
+## Reference cases
+
+- Analysis and sources: `tasks/wasm-followups/shared-data-storage-analysis.md` (2026-07-12).
+- Envoy leak precedent: envoyproxy/envoy#13835, proxy-wasm/proxy-wasm-cpp-host#86 (fixed #114).
+- Sibling multi-tenant trust note: `docs/en/.../wasm.md` shared data section (tick-fetched
+  data readable by all plugins sharing the module).

@@ -186,7 +186,7 @@ requestPlugins:
 
 - **作用域：单个网关进程内的一个模块（缓存条目）。** 该模块的所有池化实例共享——跨请求、跨阶段、含 tick 任务。它**不是**集群级状态：集群级协调（如全局限流）仍然用 `rate_limit_redis`，不要用 shared data。
 - **信任含义**：所有解析到同一份字节码的 `EdgionPlugins` 条目共享这个 store——包括 tick 阶段按某一个插件的 allowlist 外呼拉回的数据，流经*其他*插件的请求也读得到。数据必须隔离的信任域之间不要共享同一模块；按租户分发不同的字节码（或不同来源）。
-- 上限：单值 64KiB，每模块总量 4MiB。超限写入返回 `BAD_ARGUMENT`。
+- 上限：单值 64KiB，每模块总量 4MiB。超限写入返回 `BAD_ARGUMENT`。总量按 key + value 字节**外加每条目约 128B 固定开销**记账（近似真实内存占用），因此海量小 key 场景可用的逻辑空间相应减少——该上限约束的是实际内存，而不只是负载字节。
 - 生命周期：模块缓存条目被淘汰时释放（见[模块缓存生命周期](#模块缓存生命周期)）；换内容的 reload 从空 store 开始。
 
 ### 定时器（`on_tick`）
@@ -256,7 +256,7 @@ trap（或其他故障）的 VM 实例会被**污染**：直接丢弃而不回�
 | `edgion_wasm_fail_mode_total` | counter | `reason`、`mode=open\|close` | fail-mode 决策 |
 | `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit\|tick_config_conflict` | callout 结果；`tick_config_conflict` 统计因共享模块的插件配置了不同 `calloutAllowlist` 而保持禁用 dispatch 的 tick 次数 |
 | `edgion_wasm_modules_loaded` | gauge | | 全局缓存中当前的编译模块数 |
-| `edgion_wasm_shared_data_bytes` | gauge | `module` | 每个模块当前 shared-data 字节总量（上限 4MiB） |
+| `edgion_wasm_shared_data_bytes` | gauge | `module` | 每个模块当前 shared-data 总量，key + value + 每条目约 128B 开销（上限 4MiB） |
 | `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **建议配告警。** guest 在 body 钩子返回了 `Action::Pause`，即它期望 spec 的累积缓冲语义（本 host 未实现）——它正在静默地只看到当前 chunk，而非完整 body |
 
 trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_total{reason="poisoned"}` 同步上涨。

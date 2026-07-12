@@ -186,7 +186,7 @@ Request-body observation is **not implemented at all** (no `proxy_on_request_bod
 
 - **Scope: one module (cache entry) within one gateway process.** All pooled instances of the module share it — across requests, phases, and the tick task. It is **not** cluster-level state: for cluster-wide coordination (e.g. global rate limiting) use `rate_limit_redis`, not shared data.
 - **Trust implication:** every `EdgionPlugins` entry whose source resolves to the same bytecode shares this store — including data a tick-phase callout fetched under one plugin's allowlist, which requests flowing through the *other* plugins can then read. Don't share one module across trust domains whose data must stay separated; ship distinct bytecode (or distinct sources) per tenant instead.
-- Limits: 64KiB per value, 4MiB total per module. An oversized write returns `BAD_ARGUMENT`.
+- Limits: 64KiB per value, 4MiB total per module. An oversized write returns `BAD_ARGUMENT`. The total is accounted as key + value bytes **plus a fixed ~128B per-entry overhead** (approximating real memory cost), so workloads with many tiny keys get proportionally less logical space — the cap bounds actual memory, not just payload bytes.
 - Lifecycle: freed when the module's cache entry is evicted (see [Module cache lifecycle](#module-cache-lifecycle)); a reload that changes the module content starts with an empty store.
 
 ### Timers (`on_tick`)
@@ -256,7 +256,7 @@ All metrics carry a `module` label — the human-readable source descriptor (`fi
 | `edgion_wasm_fail_mode_total` | counter | `reason`, `mode=open\|close` | Fail-mode decisions |
 | `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit\|tick_config_conflict` | Callout outcomes; `tick_config_conflict` counts ticks where dispatch stayed disabled because plugins sharing the module configure different `calloutAllowlist`s |
 | `edgion_wasm_modules_loaded` | gauge | | Compiled modules currently in the global cache |
-| `edgion_wasm_shared_data_bytes` | gauge | `module` | Current shared-data byte total per module (cap 4MiB) |
+| `edgion_wasm_shared_data_bytes` | gauge | `module` | Current shared-data total per module, keys + values + ~128B/entry overhead (cap 4MiB) |
 | `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **Alert on this.** A guest returned `Action::Pause` from the body hook, i.e. it expects the spec's cumulative-buffer semantics this host does not implement — it is silently observing only the current chunk, not the whole body |
 
 A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_discard_total{reason="poisoned"}` rising together.
