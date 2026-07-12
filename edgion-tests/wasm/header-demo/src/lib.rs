@@ -19,6 +19,9 @@
 //!   header `x-wasm-ticks` (proves on_tick liveness + shared-data read).
 //! - `x-wasm-read-body: 1`  -> read the shared `bodybytes` counter into request
 //!   header `x-wasm-bodybytes` (proves the response-body hook fired).
+//! - `x-wasm-read-callout: 1` -> read the shared `calloutticks` counter into
+//!   request header `x-wasm-calloutticks` (proves the tick-phase callout loop:
+//!   on_tick dispatch -> root-context callback -> shared-data write).
 //! - otherwise -> add request header `x-wasm-added: yes`.
 //!
 //! Response phase (`on_http_response_headers`): add `x-wasm-resp: yes`.
@@ -28,7 +31,13 @@
 //! the shared `bodybytes` counter.
 //!
 //! Background: `on_configure` sets a 1s tick; `on_tick` increments the shared
-//! `ticks` counter.
+//! `ticks` counter. When `pluginConfig` is a callout origin (e.g.
+//! `http://127.0.0.1:30040`), every tick also dispatches a GET `<origin>/verify`
+//! callout with `authorization: Bearer valid-token`; a 200 response bumps the
+//! shared `calloutticks` counter (classic "poll a control endpoint from on_tick,
+//! publish via shared data" pattern). The origin must be in `calloutAllowlist`;
+//! a rejected dispatch is ignored so the same artifact still serves scenarios
+//! without callout config.
 
 use std::time::Duration;
 
@@ -37,7 +46,7 @@ use proxy_wasm::types::{Action, ContextType, LogLevel, Status};
 
 proxy_wasm::main! {{
     proxy_wasm::set_log_level(LogLevel::Info);
-    proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> { Box::new(DemoRoot) });
+    proxy_wasm::set_root_context(|_| -> Box<dyn RootContext> { Box::new(DemoRoot::default()) });
 }}
 
 // ---- Shared-data u64 counter helpers (CAS retry loop) ----
@@ -70,12 +79,30 @@ fn read_shared_counter<C: Context + ?Sized>(ctx: &C, key: &str) -> u64 {
 
 // ---- Root context: tick + http-context factory ----
 
-struct DemoRoot;
+#[derive(Default)]
+struct DemoRoot {
+    /// Callout origin polled from `on_tick`, taken from `pluginConfig`.
+    /// None (no/blank config) disables the tick-callout branch.
+    callout_origin: Option<String>,
+}
 
-impl Context for DemoRoot {}
+impl Context for DemoRoot {
+    /// Tick-callout callback (root context): a 200 from `<origin>/verify`
+    /// bumps the shared `calloutticks` counter; failures are ignored.
+    fn on_http_call_response(&mut self, _token: u32, num_headers: usize, _body_size: usize, _num_trailers: usize) {
+        if num_headers > 0 && self.get_http_call_response_header(":status").as_deref() == Some("200") {
+            bump_shared_counter(self, "calloutticks", 1);
+        }
+    }
+}
 
 impl RootContext for DemoRoot {
     fn on_configure(&mut self, _plugin_configuration_size: usize) -> bool {
+        // pluginConfig, when present, is the origin to poll from on_tick.
+        self.callout_origin = self
+            .get_plugin_configuration()
+            .map(|b| String::from_utf8_lossy(&b).trim().to_string())
+            .filter(|s| !s.is_empty());
         // Drive a 1s background tick that bumps the shared `ticks` counter.
         self.set_tick_period(Duration::from_millis(1000));
         true
@@ -83,6 +110,23 @@ impl RootContext for DemoRoot {
 
     fn on_tick(&mut self) {
         bump_shared_counter(self, "ticks", 1);
+        // Tick-phase callout: poll the configured origin. A rejected
+        // dispatch (unarmed or non-allowlisted) is ignored so the same
+        // artifact serves scenarios without callout config.
+        if let Some(origin) = self.callout_origin.clone() {
+            let _ = self.dispatch_http_call(
+                &origin,
+                vec![
+                    (":method", "GET"),
+                    (":path", "/verify"),
+                    (":authority", "auth-callout"),
+                    ("authorization", "Bearer valid-token"),
+                ],
+                None,
+                vec![],
+                Duration::from_secs(2),
+            );
+        }
     }
 
     fn create_http_context(&self, _context_id: u32) -> Option<Box<dyn HttpContext>> {
@@ -139,6 +183,10 @@ impl HttpContext for HeaderDemo {
         if self.get_http_request_header("x-wasm-read-body").as_deref() == Some("1") {
             let n = read_shared_counter(self, "bodybytes");
             self.set_http_request_header("x-wasm-bodybytes", Some(&n.to_string()));
+        }
+        if self.get_http_request_header("x-wasm-read-callout").as_deref() == Some("1") {
+            let n = read_shared_counter(self, "calloutticks");
+            self.set_http_request_header("x-wasm-calloutticks", Some(&n.to_string()));
         }
         if let Some(origin) = self.get_http_request_header("x-wasm-callout-url") {
             let auth = self.get_http_request_header("authorization").unwrap_or_default();

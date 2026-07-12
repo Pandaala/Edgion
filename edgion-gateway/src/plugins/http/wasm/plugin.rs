@@ -7,9 +7,9 @@ use async_trait::async_trait;
 
 use std::sync::Arc;
 
-use super::callout::execute_callout;
+use super::callout::resolve_callouts_on;
 use super::host_abi::{HeaderOp, LocalResponse, WasmPhase, MAP_HTTP_REQUEST_HEADERS, MAP_HTTP_RESPONSE_HEADERS};
-use super::vm_manager::{global_vm_manager, runtime_cache_key, VmLease};
+use super::vm_manager::{global_vm_manager, runtime_cache_key, CalloutGrant, VmLease};
 use crate::observe::metrics::registry::{record_wasm_body_pause_unsupported, record_wasm_fail_mode};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{
@@ -41,7 +41,7 @@ impl WasmPlugin {
         // Admission validation already rejects malformed entries; a residual
         // bad entry here (e.g. a file-mode gateway without the controller
         // validation) is dropped with a WARN rather than failing the plugin.
-        let callout_allowlist: Vec<String> = config
+        let mut callout_allowlist: Vec<String> = config
             .callout_allowlist
             .iter()
             .filter_map(
@@ -54,6 +54,10 @@ impl WasmPlugin {
                 },
             )
             .collect();
+        // Canonical order so grants from plugins listing the same origins in
+        // a different order compare equal in the tick-callout registry.
+        callout_allowlist.sort();
+        callout_allowlist.dedup();
         let plugin = WasmPlugin {
             name: PLUGIN_NAME.to_string(),
             config: config.clone(),
@@ -63,12 +67,22 @@ impl WasmPlugin {
         };
         // Pin the cache entry for this plugin's lifetime (released in Drop;
         // the manager evicts the entry after a grace period once no plugin
-        // references it anymore).
-        global_vm_manager().register_plugin(&plugin.cache_key);
+        // references it anymore). The grant feeds the module-level
+        // tick-callout decision (see `TickCalloutState`).
+        global_vm_manager().register_plugin(&plugin.cache_key, plugin.callout_grant());
         // Warm the module cache so the first request does not pay compile
         // latency (best-effort; lazy load covers the miss).
         global_vm_manager().spawn_preload(config, cache_key);
         plugin
+    }
+
+    /// This plugin's callout configuration as registered with (and removed
+    /// from) the manager's tick-callout registry.
+    fn callout_grant(&self) -> CalloutGrant {
+        CalloutGrant {
+            allowlist: self.callout_allowlist.clone(),
+            timeout_ms: self.config.callout_timeout_ms,
+        }
     }
 
     pub fn create_request(config: &WasmConfig) -> Option<Box<dyn RequestFilter>> {
@@ -204,44 +218,19 @@ impl WasmPlugin {
         self.finish_phase(lease, session, log, action, had_callouts)
     }
 
-    /// Execute queued callouts and deliver each result to the paused guest.
-    /// Bounded: per-request dispatch cap (enforced at dispatch time) plus a
-    /// round cap here (a callback may dispatch follow-up callouts). Stops
-    /// early once the guest resumes or answers locally.
+    /// Execute queued callouts and deliver each result to the paused guest
+    /// (see [`resolve_callouts_on`] for the bounded delivery loop), recording
+    /// the delivered/leftover counts in the plugin log. Leftovers after the
+    /// round cap are dropped (guest is dispatching in a loop); the no-resume
+    /// fallback in the caller decides the request's fate.
     async fn resolve_callouts(&self, lease: &mut VmLease, ctx_id: i32, log: &mut PluginLog) -> Result<(), String> {
-        const MAX_ROUNDS: usize = 4;
-        let mut delivered = 0usize;
-        for _round in 0..MAX_ROUNDS {
-            let pending = std::mem::take(&mut lease.state_mut().pending_callouts);
-            if pending.is_empty() {
-                break;
-            }
-            for callout in pending {
-                if lease.state().continue_requested || lease.state().local_response.is_some() {
-                    // The guest already decided; remaining callouts are moot.
-                    break;
-                }
-                let response = execute_callout(&callout, self.config.callout_timeout_ms, &self.metrics_label).await;
-                let num_headers = response.headers.len() as i32;
-                let body_size = response.body.len() as i32;
-                let token = response.token;
-                lease.state_mut().callout_response = Some(response);
-                lease.call_on_http_call_response(ctx_id, token, num_headers, body_size)?;
-                lease.state_mut().callout_response = None;
-                delivered += 1;
-            }
-            if lease.state().continue_requested || lease.state().local_response.is_some() {
-                break;
-            }
-        }
-        // Anything still pending after the round cap is dropped (guest is
-        // dispatching in a loop); the no-resume fallback in the caller
-        // decides the request's fate.
-        let leftover = lease.state_mut().pending_callouts.len();
-        lease.state_mut().pending_callouts.clear();
+        let outcome = resolve_callouts_on(lease, ctx_id, self.config.callout_timeout_ms, &self.metrics_label).await?;
         log.push_fmt(
             "wasm callouts={} leftover={}",
-            la![delivered.to_string().as_str(), leftover.to_string().as_str()],
+            la![
+                outcome.delivered.to_string().as_str(),
+                outcome.leftover.to_string().as_str()
+            ],
         );
         Ok(())
     }
@@ -383,7 +372,7 @@ impl Drop for WasmPlugin {
         // replaces plugin instances wholesale on reload, so a config change
         // drops the old instance here and the manager evicts the now-orphaned
         // entry after its grace period.
-        global_vm_manager().unregister_plugin(&self.cache_key, &self.metrics_label);
+        global_vm_manager().unregister_plugin(&self.cache_key, &self.metrics_label, &self.callout_grant());
     }
 }
 
@@ -1252,6 +1241,61 @@ mod tests {
         assert!(
             seen.load(std::sync::atomic::Ordering::Relaxed) >= 1,
             "on_tick must have fired at least once and be readable via shared data"
+        );
+    }
+
+    /// Real SDK guest: with `pluginConfig` set to a callout origin, `on_tick`
+    /// dispatches a GET /verify callout; the 200 callback (delivered on the
+    /// root context by the tick task) bumps the shared `calloutticks`
+    /// counter, which a later request reads into `x-wasm-calloutticks`.
+    /// End-to-end proof of the tick-callout loop with the reference guest.
+    #[tokio::test]
+    async fn reference_guest_tick_callout_polls_and_publishes() {
+        use wiremock::matchers::{header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let Some(f) = ref_artifact_temp() else { return };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/verify"))
+            .and(header("authorization", "Bearer valid-token"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let mut c = WasmConfig::default();
+        c.source.file = Some(f.path().to_string_lossy().into_owned());
+        c.plugin_config = Some(server.uri());
+        c.callout_allowlist = vec![server.uri()];
+
+        // Building the plugin registers its callout grant and preloads the
+        // module; the eager warm instance runs on_configure (1s tick).
+        let plugin = WasmPlugin::create_request(&c).unwrap();
+        // Wait for at least two ticks (and their callout round-trips).
+        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let seen2 = seen.clone();
+        let mut session = ref_mock(vec![("host", "t.example.com"), ("x-wasm-read-callout", "1")]);
+        session
+            .expect_set_request_header()
+            .withf(move |k, v| {
+                if k == "x-wasm-calloutticks" {
+                    seen2.store(v.parse().unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+                }
+                true
+            })
+            .returning(|_, _| Ok(()));
+        let mut log = PluginLog::new("Wasm");
+        let res = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(res, PluginRunningResult::GoodNext);
+        assert!(
+            seen.load(std::sync::atomic::Ordering::Relaxed) >= 1,
+            "tick callouts must have completed and been published via shared data"
+        );
+        assert!(
+            !server.received_requests().await.unwrap().is_empty(),
+            "the tick callout must reach the target"
         );
     }
 

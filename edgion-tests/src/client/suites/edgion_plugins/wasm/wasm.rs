@@ -475,7 +475,56 @@ impl WasmPluginTestSuite {
         )
     }
 
-    // ==================== 9. Response-body read-only observation ====================
+    // ==================== 9. Tick-phase callout ====================
+    fn test_tick_callout() -> TestCase {
+        TestCase::new(
+            "plugin_wasm_tick_callout",
+            "Wasm plugin: on_tick dispatches a callout to the auth server; the callback publishes via shared data",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/headers", ctx.http_url());
+                    // The guest polls <pluginConfig>/verify every 1s tick and
+                    // bumps shared "calloutticks" on each 200. Give it a
+                    // couple of ticks (callouts included) to complete.
+                    tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
+                    let resp = ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", ADV_HOST)
+                        .header("x-wasm-read-callout", "1")
+                        .send()
+                        .await;
+                    match resp {
+                        Ok(r) if r.status() == 200 => match r.json::<Value>().await {
+                            Ok(body) => {
+                                let n = body["headers"]["x-wasm-calloutticks"]
+                                    .as_str()
+                                    .and_then(|s| s.parse::<u64>().ok())
+                                    .unwrap_or(0);
+                                if n >= 1 {
+                                    TestResult::passed_with_message(
+                                        start.elapsed(),
+                                        format!("tick callouts completed; x-wasm-calloutticks={}", n),
+                                    )
+                                } else {
+                                    TestResult::failed(
+                                        start.elapsed(),
+                                        "x-wasm-calloutticks is 0 or missing (tick callout not running?)".to_string(),
+                                    )
+                                }
+                            }
+                            Err(e) => TestResult::failed(start.elapsed(), format!("JSON parse: {}", e)),
+                        },
+                        Ok(r) => TestResult::failed(start.elapsed(), format!("Expected 200, got {}", r.status())),
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    // ==================== 10. Response-body read-only observation ====================
     fn test_body_observation() -> TestCase {
         TestCase::new(
             "plugin_wasm_body_observation",
@@ -540,6 +589,7 @@ impl TestSuite for WasmPluginTestSuite {
             Self::test_callout_authorized(),
             Self::test_callout_denied(),
             Self::test_tick_shared_data(),
+            Self::test_tick_callout(),
             Self::test_body_observation(),
         ]
     }

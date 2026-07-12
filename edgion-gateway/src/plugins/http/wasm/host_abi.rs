@@ -108,7 +108,7 @@ pub struct HostState {
     /// Metrics label of the owning module (set once per Store).
     pub metrics_label: String,
 
-    // ---- Callout state (request phase only; see `arm_dispatch`) ----
+    // ---- Callout state (armed per phase; see `arm_dispatch`) ----
     /// Whether `proxy_dispatch_http_call` is accepted in the current phase.
     pub dispatch_enabled: bool,
     /// Normalized origins the guest may call out to (empty = deny all).
@@ -185,8 +185,8 @@ impl HostState {
         self.body_chunk.clear();
     }
 
-    /// Enable `proxy_dispatch_http_call` for the current phase (request
-    /// phase only — the sync response stages cannot await a callout).
+    /// Enable `proxy_dispatch_http_call` for the current phase (request and
+    /// tick phases — the sync response stages cannot await a callout).
     pub fn arm_dispatch(&mut self, allowlist: Arc<[String]>, timeout_cap_ms: u64) {
         self.dispatch_enabled = true;
         self.callout_allowlist = allowlist;
@@ -358,11 +358,13 @@ fn write_to_guest(caller: &mut Caller<'_, HostState>, data: &[u8], ret_ptr: i32,
 }
 
 /// Host handler for the guest callout dispatch (`proxy_http_call` /
-/// `proxy_dispatch_http_call`). Queues the call in `HostState`; the plugin's
-/// async request path executes it while the guest is paused and delivers the
-/// result via `proxy_on_http_call_response`. Sync stages (response
-/// headers/body, tick) never arm dispatch, so the guest sees UNIMPLEMENTED
-/// there instead of a silent no-op.
+/// `proxy_dispatch_http_call`). Queues the call in `HostState`; an async
+/// host path (the plugin's request path while the guest is paused, or the
+/// module tick task after `on_tick`) executes it and delivers the result via
+/// `proxy_on_http_call_response`. Sync stages (response headers/body) never
+/// arm dispatch — and the tick task arms it only when the module's plugins
+/// agree on one non-empty allowlist — so the guest sees UNIMPLEMENTED
+/// elsewhere instead of a silent no-op.
 ///
 /// A free `fn` (not a closure) so the same handler can be registered under
 /// both import names.
@@ -661,11 +663,15 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 BUF_HTTP_RESPONSE_BODY => caller.data().body_chunk.clone(),
                 _ => return STATUS_NOT_FOUND,
             };
-            let start = start.max(0) as usize;
+            // proxy-wasm treats start/max_size as unsigned; the Rust SDK's
+            // get_plugin_configuration passes usize::MAX (wasm32: u32::MAX,
+            // i.e. -1 as i32) for "the whole buffer". Interpret as u32 —
+            // a signed max(0) clamp would silently read 0 bytes there.
+            let start = start as u32 as usize;
             if start >= data.len() && !data.is_empty() {
                 return STATUS_BAD_ARGUMENT;
             }
-            let slice = slice_buffer(&data, start, max_size.max(0) as usize);
+            let slice = slice_buffer(&data, start, max_size as u32 as usize);
             write_to_guest(&mut caller, &slice, ret_ptr, ret_size)
         },
     )?;

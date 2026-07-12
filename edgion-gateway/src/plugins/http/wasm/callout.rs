@@ -1,15 +1,18 @@
 //! Guest-dispatched HTTP callout execution.
 //!
 //! `proxy_dispatch_http_call` queues a [`PendingCallout`] in `HostState`;
-//! the plugin's async request path calls [`execute_callout`] for each queued
-//! entry while the guest is paused, then delivers the result back through
-//! `proxy_on_http_call_response`. Targets are already allowlist-checked at
-//! dispatch time (see `host_abi`).
+//! an async host path ([`resolve_callouts_on`]) calls [`execute_callout`] for
+//! each queued entry, then delivers the result back through
+//! `proxy_on_http_call_response`. Two callers exist: the plugin's request
+//! path (guest paused on an open per-request context) and the module tick
+//! task (root context). Targets are already allowlist-checked at dispatch
+//! time (see `host_abi`).
 
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use super::host_abi::{CalloutResponse, PendingCallout};
+use super::vm_manager::VmLease;
 use crate::link_sys::http_client::{build_outbound_client, OutboundClientConfig, OutboundRedirect};
 use crate::observe::metrics::registry::record_wasm_callout;
 use crate::plugins::http::common::http_client::get_http_client_arc;
@@ -67,6 +70,57 @@ fn callout_client() -> &'static reqwest::Client {
             (*get_http_client_arc()).clone()
         })
     })
+}
+
+/// Delivery counters from one [`resolve_callouts_on`] run; the caller decides
+/// how to report them (request path: `PluginLog`; tick path: tracing).
+pub struct CalloutOutcome {
+    /// Callouts executed and delivered to the guest.
+    pub delivered: usize,
+    /// Callouts still pending after the round cap (dropped).
+    pub leftover: usize,
+}
+
+/// Execute the callouts queued in the lease's `HostState` and deliver each
+/// result to the guest on `ctx_id` via `proxy_on_http_call_response`.
+/// Bounded: the per-phase dispatch cap is enforced at dispatch time, plus a
+/// round cap here (a callback may dispatch follow-up callouts). Stops early
+/// once the guest resumes or answers locally; anything still pending after
+/// the round cap is dropped (counted in [`CalloutOutcome::leftover`]).
+pub(super) async fn resolve_callouts_on(
+    lease: &mut VmLease,
+    ctx_id: i32,
+    timeout_cap_ms: u64,
+    metrics_label: &str,
+) -> Result<CalloutOutcome, String> {
+    const MAX_ROUNDS: usize = 4;
+    let mut delivered = 0usize;
+    for _round in 0..MAX_ROUNDS {
+        let pending = std::mem::take(&mut lease.state_mut().pending_callouts);
+        if pending.is_empty() {
+            break;
+        }
+        for callout in pending {
+            if lease.state().continue_requested || lease.state().local_response.is_some() {
+                // The guest already decided; remaining callouts are moot.
+                break;
+            }
+            let response = execute_callout(&callout, timeout_cap_ms, metrics_label).await;
+            let num_headers = response.headers.len() as i32;
+            let body_size = response.body.len() as i32;
+            let token = response.token;
+            lease.state_mut().callout_response = Some(response);
+            lease.call_on_http_call_response(ctx_id, token, num_headers, body_size)?;
+            lease.state_mut().callout_response = None;
+            delivered += 1;
+        }
+        if lease.state().continue_requested || lease.state().local_response.is_some() {
+            break;
+        }
+    }
+    let leftover = lease.state_mut().pending_callouts.len();
+    lease.state_mut().pending_callouts.clear();
+    Ok(CalloutOutcome { delivered, leftover })
 }
 
 /// Execute one callout. Always returns a deliverable [`CalloutResponse`]:

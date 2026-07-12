@@ -50,10 +50,11 @@ use wasmtime::{
     Config, Engine, Instance, InstanceAllocationStrategy, InstancePre, Linker, Module, PoolingAllocationConfig, Store,
 };
 
+use super::callout::resolve_callouts_on;
 use super::host_abi::{self, HostState, WasmPhase};
 use super::shared_data::SharedData;
 use crate::observe::metrics::registry::{
-    record_wasm_compile_duration, record_wasm_hook_duration, record_wasm_instance_discard,
+    record_wasm_callout, record_wasm_compile_duration, record_wasm_hook_duration, record_wasm_instance_discard,
     record_wasm_instance_instantiate, record_wasm_module_evicted, record_wasm_module_load, record_wasm_trap,
     set_wasm_modules_loaded, set_wasm_pool_size,
 };
@@ -115,6 +116,127 @@ pub fn global_vm_manager() -> &'static WasmVmManager {
 
 type LoadSlot = Arc<tokio::sync::Mutex<LoadState>>;
 
+/// One plugin instance's callout configuration, registered against its cache
+/// key so the module tick task can decide whether (and with which allowlist)
+/// to arm `proxy_dispatch_http_call` during `on_tick`.
+///
+/// The allowlist must be normalized (via `normalize_callout_origin`) and
+/// sorted, so two plugins granting the same origins in a different spelling
+/// or order compare equal.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct CalloutGrant {
+    pub allowlist: Arc<[String]>,
+    pub timeout_ms: u64,
+}
+
+impl CalloutGrant {
+    /// A grant with no callout opinion (empty allowlist): never enables and
+    /// never conflicts.
+    pub fn none() -> Self {
+        CalloutGrant {
+            allowlist: Arc::from(Vec::new()),
+            timeout_ms: 0,
+        }
+    }
+}
+
+/// Refcounted multiset of the [`CalloutGrant`]s registered for one cache key.
+///
+/// Shared (`Arc`) between the manager's per-key map and the `ModuleEntry`, so
+/// the tick task always sees the CURRENT plugin set: a plugin reload that
+/// changes `calloutAllowlist` swaps its grant here without invalidating the
+/// cached module, and a conflict heals itself once the conflicting plugin is
+/// dropped (no sticky state).
+#[derive(Default)]
+pub struct TickCalloutState {
+    grants: Mutex<Vec<(CalloutGrant, usize)>>,
+    /// Latch so the tick-side conflict WARN fires once per module entry
+    /// lifetime instead of once per tick.
+    conflict_warned: std::sync::atomic::AtomicBool,
+}
+
+/// Tick-phase callout decision derived from the registered grants.
+enum TickCalloutGate {
+    /// No plugin granted a (non-empty) allowlist: dispatch stays unarmed,
+    /// exactly like today's documented behavior.
+    Disabled,
+    /// Two or more plugins granted DIFFERENT non-empty allowlists for the
+    /// same module. Arming any one of them (or their union) would let one
+    /// plugin's grant leak into another's tick execution, so dispatch stays
+    /// unarmed (fail-safe) and the situation is warned + counted.
+    Conflict,
+    /// Exactly one distinct non-empty allowlist is granted: arm it. The
+    /// timeout cap is the minimum across the granting plugins.
+    Enabled { allowlist: Arc<[String]>, timeout_ms: u64 },
+}
+
+impl TickCalloutState {
+    /// Register one plugin's grant. Grants with an empty allowlist carry no
+    /// opinion about tick callouts (the common "same module also wired at a
+    /// response/body stage without callout config" case) and never create a
+    /// conflict — they are still tracked so `remove` stays symmetric.
+    fn add(&self, grant: CalloutGrant) {
+        let mut grants = self.grants.lock();
+        if let Some((_, count)) = grants.iter_mut().find(|(g, _)| *g == grant) {
+            *count += 1;
+            return;
+        }
+        grants.push((grant, 1));
+        // Warn only on a REAL conflict: two distinct non-empty allowlists.
+        // Grant entries are keyed by (allowlist, timeout), so counting entries
+        // would false-positive on same-allowlist/different-timeout grants,
+        // which `gate()` merges (min timeout) rather than disables.
+        let mut distinct_allowlists: Vec<&Arc<[String]>> = Vec::new();
+        for (g, _) in grants.iter() {
+            if !g.allowlist.is_empty() && !distinct_allowlists.iter().any(|a| **a == g.allowlist) {
+                distinct_allowlists.push(&g.allowlist);
+            }
+        }
+        if distinct_allowlists.len() > 1 {
+            tracing::warn!(
+                distinct = distinct_allowlists.len(),
+                "wasm module is shared by plugins with different calloutAllowlists; \
+                 tick-phase callouts stay disabled until the configs agree"
+            );
+        }
+    }
+
+    /// Drop one plugin's grant (paired with `add` in the plugin's Drop).
+    fn remove(&self, grant: &CalloutGrant) {
+        let mut grants = self.grants.lock();
+        if let Some(pos) = grants.iter().position(|(g, _)| g == grant) {
+            grants[pos].1 -= 1;
+            if grants[pos].1 == 0 {
+                grants.swap_remove(pos);
+            }
+        }
+    }
+
+    /// Resolve the current tick-phase callout decision.
+    fn gate(&self) -> TickCalloutGate {
+        let grants = self.grants.lock();
+        let mut enabled: Option<(Arc<[String]>, u64)> = None;
+        for (grant, _) in grants.iter() {
+            if grant.allowlist.is_empty() {
+                continue;
+            }
+            match &mut enabled {
+                None => enabled = Some((grant.allowlist.clone(), grant.timeout_ms)),
+                Some((allowlist, timeout_ms)) => {
+                    if *allowlist != grant.allowlist {
+                        return TickCalloutGate::Conflict;
+                    }
+                    *timeout_ms = (*timeout_ms).min(grant.timeout_ms);
+                }
+            }
+        }
+        match enabled {
+            Some((allowlist, timeout_ms)) => TickCalloutGate::Enabled { allowlist, timeout_ms },
+            None => TickCalloutGate::Disabled,
+        }
+    }
+}
+
 enum LoadState {
     NotLoaded,
     Loaded(Arc<ModuleEntry>),
@@ -143,6 +265,9 @@ struct CacheInner {
     modules: DashMap<String, LoadSlot>,
     /// cache_key → number of live `WasmPlugin` instances built on it.
     refs: DashMap<String, usize>,
+    /// cache_key → the callout grants of those instances (tick-callout
+    /// arming decision). Kept alongside `refs` and evicted with them.
+    tick_callouts: DashMap<String, Arc<TickCalloutState>>,
 }
 
 impl CacheInner {
@@ -150,7 +275,14 @@ impl CacheInner {
         Arc::new(CacheInner {
             modules: DashMap::new(),
             refs: DashMap::new(),
+            tick_callouts: DashMap::new(),
         })
+    }
+
+    /// The shared per-key grant state, created on first touch (register or
+    /// load, whichever happens first).
+    fn tick_callout_state(&self, cache_key: &str) -> Arc<TickCalloutState> {
+        self.tick_callouts.entry(cache_key.to_string()).or_default().clone()
     }
 }
 
@@ -242,19 +374,23 @@ impl WasmVmManager {
         }
     }
 
-    /// Register one live `WasmPlugin` built on `cache_key`. Paired with
+    /// Register one live `WasmPlugin` built on `cache_key`, along with its
+    /// callout grant (tick-callout arming input). Paired with
     /// `unregister_plugin` in the plugin's `Drop`; the count keeps the cache
     /// entry alive across reloads that still reference the same source.
-    pub fn register_plugin(&self, cache_key: &str) {
+    pub fn register_plugin(&self, cache_key: &str, grant: CalloutGrant) {
         *self.cache.refs.entry(cache_key.to_string()).or_insert(0) += 1;
+        self.cache.tick_callout_state(cache_key).add(grant);
     }
 
-    /// Drop one plugin reference. When the count reaches zero the entry is
-    /// evicted after `evict_grace` unless a new plugin re-registers the key
-    /// in the meantime (reload thrash). In-flight `VmLease`s stay safe: they
-    /// hold `Arc<ModuleEntry>` strong refs, so removal from the map only
-    /// unpins the entry — memory is freed once the last lease returns.
-    pub fn unregister_plugin(&self, cache_key: &str, metrics_label: &str) {
+    /// Drop one plugin reference (and its callout grant). When the count
+    /// reaches zero the entry is evicted after `evict_grace` unless a new
+    /// plugin re-registers the key in the meantime (reload thrash).
+    /// In-flight `VmLease`s stay safe: they hold `Arc<ModuleEntry>` strong
+    /// refs, so removal from the map only unpins the entry — memory is freed
+    /// once the last lease returns.
+    pub fn unregister_plugin(&self, cache_key: &str, metrics_label: &str, grant: &CalloutGrant) {
+        self.cache.tick_callout_state(cache_key).remove(grant);
         let now_zero = match self.cache.refs.get_mut(cache_key) {
             Some(mut count) => {
                 *count = count.saturating_sub(1);
@@ -271,10 +407,18 @@ impl WasmVmManager {
         let evict = move || {
             // Re-check: a concurrent register_plugin during the grace period
             // keeps the entry. `remove_if` is atomic per entry.
-            if cache.refs.remove_if(&key, |_, count| *count == 0).is_some() && cache.modules.remove(&key).is_some() {
-                record_wasm_module_evicted(&label);
-                set_wasm_modules_loaded(cache.modules.len());
-                tracing::info!(module = %label, "wasm module cache entry evicted (refcount zero)");
+            if cache.refs.remove_if(&key, |_, count| *count == 0).is_some() {
+                // Clean the grant record whenever the refcount hit zero — NOT
+                // gated on a modules entry existing: a module that never
+                // loaded (engine init failure, or the plugin dropped before
+                // its preload ran) has refs + tick_callouts records but no
+                // modules entry, and the record would otherwise leak forever.
+                cache.tick_callouts.remove(&key);
+                if cache.modules.remove(&key).is_some() {
+                    record_wasm_module_evicted(&label);
+                    set_wasm_modules_loaded(cache.modules.len());
+                    tracing::info!(module = %label, "wasm module cache entry evicted (refcount zero)");
+                }
             }
         };
         match tokio::runtime::Handle::try_current() {
@@ -334,7 +478,7 @@ impl WasmVmManager {
             _ => {}
         }
         let label = config.source.metrics_label();
-        match self.load_inner(config).await {
+        match self.load_inner(config, self.cache.tick_callout_state(cache_key)).await {
             Ok(entry) => {
                 record_wasm_module_load(&label, "ok");
                 *guard = LoadState::Loaded(entry.clone());
@@ -353,7 +497,11 @@ impl WasmVmManager {
         }
     }
 
-    async fn load_inner(&self, config: &WasmConfig) -> Result<Arc<ModuleEntry>, String> {
+    async fn load_inner(
+        &self,
+        config: &WasmConfig,
+        tick_callouts: Arc<TickCalloutState>,
+    ) -> Result<Arc<ModuleEntry>, String> {
         let engine = self.engine()?.clone();
         let bytes = fetch_bytes(&config.source).await?;
         if let Some(expected) = &config.sha256 {
@@ -397,6 +545,7 @@ impl WasmVmManager {
             metrics_label: label,
             hook_timeout_ms: config.timeout_ms,
             tick_task: Mutex::new(None),
+            tick_callouts,
             has_body_hook,
             body_pause_warned: std::sync::atomic::AtomicBool::new(false),
         });
@@ -593,6 +742,10 @@ pub struct ModuleEntry {
     /// Background `proxy_on_tick` driver, started once when a guest sets a
     /// nonzero tick period. Holds a `Weak` back-reference; aborted on Drop.
     tick_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The callout grants of the plugins registered on this entry's cache
+    /// key (shared with the manager's map). Read every tick round to decide
+    /// whether `on_tick` may dispatch callouts, and with which allowlist.
+    tick_callouts: Arc<TickCalloutState>,
     /// Whether the guest exports `proxy_on_response_body`. Computed once
     /// at load; lets the body-filter stage skip the per-chunk lease entirely
     /// for header-only guests.
@@ -699,16 +852,62 @@ impl ModuleEntry {
                         continue;
                     }
                 };
-                // Fresh phase state; dispatch is NOT armed, so callouts from
-                // on_tick observe UNIMPLEMENTED (documented limitation).
                 lease.state_mut().begin_phase(
                     WasmPhase::Tick,
                     Vec::new(),
                     Vec::new(),
                     std::collections::HashMap::new(),
                 );
-                if let Err(e) = lease.call_on_tick() {
-                    tracing::warn!(error = %e, module = %label, "wasm on_tick trapped");
+                // Arm dispatch only when the module's registered plugins
+                // agree on one non-empty allowlist; on conflict the guest
+                // keeps seeing UNIMPLEMENTED (fail-safe, warned + counted).
+                let armed = match entry.tick_callouts.gate() {
+                    TickCalloutGate::Enabled { allowlist, timeout_ms } => {
+                        lease.state_mut().arm_dispatch(allowlist, timeout_ms);
+                        Some(timeout_ms)
+                    }
+                    TickCalloutGate::Conflict => {
+                        record_wasm_callout(&label, "tick_config_conflict");
+                        if !entry
+                            .tick_callouts
+                            .conflict_warned
+                            .swap(true, std::sync::atomic::Ordering::Relaxed)
+                        {
+                            tracing::warn!(
+                                module = %label,
+                                "wasm tick callouts disabled: plugins sharing this module \
+                                 configure different calloutAllowlists"
+                            );
+                        }
+                        None
+                    }
+                    TickCalloutGate::Disabled => None,
+                };
+                match lease.call_on_tick() {
+                    Err(e) => {
+                        tracing::warn!(error = %e, module = %label, "wasm on_tick trapped");
+                    }
+                    Ok(()) => {
+                        // Deliver callouts the guest dispatched from on_tick.
+                        // The root context receives the callbacks; it exists
+                        // for the whole VM lifetime, so unlike the request
+                        // path there is no context to open/close here.
+                        if let Some(timeout_ms) = armed {
+                            if !lease.state().pending_callouts.is_empty() {
+                                match resolve_callouts_on(&mut lease, ROOT_CONTEXT_ID, timeout_ms, &label).await {
+                                    Ok(outcome) => tracing::debug!(
+                                        delivered = outcome.delivered,
+                                        leftover = outcome.leftover,
+                                        module = %label,
+                                        "wasm tick callouts resolved"
+                                    ),
+                                    Err(e) => {
+                                        tracing::warn!(error = %e, module = %label, "wasm tick callout delivery failed")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
                 // The guest may adjust (or stop) its own tick period.
                 let next = lease.state().tick_period_ms;
@@ -1266,11 +1465,11 @@ mod tests {
         let mut mgr = WasmVmManager::new_for_test();
         mgr.set_evict_grace_for_test(Duration::from_millis(50));
 
-        mgr.register_plugin(&key);
+        mgr.register_plugin(&key, CalloutGrant::none());
         let entry = load(&mgr, &config).await.expect("loads");
         let mut lease = entry.acquire(100).expect("lease");
 
-        mgr.unregister_plugin(&key, "test-module");
+        mgr.unregister_plugin(&key, "test-module", &CalloutGrant::none());
         // Poll rather than a single fixed sleep: the eviction task's timer
         // can be delayed under parallel test load.
         let mut evicted = false;
@@ -1299,11 +1498,11 @@ mod tests {
         let mut mgr = WasmVmManager::new_for_test();
         mgr.set_evict_grace_for_test(Duration::from_millis(100));
 
-        mgr.register_plugin(&key);
+        mgr.register_plugin(&key, CalloutGrant::none());
         load(&mgr, &config).await.expect("loads");
-        mgr.unregister_plugin(&key, "test-module");
+        mgr.unregister_plugin(&key, "test-module", &CalloutGrant::none());
         // Reload thrash: a new plugin instance re-registers within the grace.
-        mgr.register_plugin(&key);
+        mgr.register_plugin(&key, CalloutGrant::none());
         tokio::time::sleep(Duration::from_millis(300)).await;
         assert!(
             mgr.try_get(&key).is_some(),
@@ -1573,6 +1772,254 @@ mod tests {
             }
         }
         assert!(cas_seen >= 2, "tick must have fired repeatedly, cas={cas_seen}");
+    }
+
+    /// Tick-callout guest: on_configure reads the plugin configuration (the
+    /// callout origin string) into memory at 256/260 and requests a 100ms
+    /// tick. Every proxy_on_tick dispatches GET /check to that origin with a
+    /// static serialized header map; a rejected dispatch (nonzero status —
+    /// unarmed or denied) sets shared key `df`. The callback sets shared
+    /// `cb` on success (headers present) or `cf` on a failed callout
+    /// (0 headers).
+    const TICK_CALLOUT_GUEST: &str = r#"
+    (module
+      (import "env" "proxy_set_tick_period_milliseconds"
+        (func $set_tick (param i32) (result i32)))
+      (import "env" "proxy_get_buffer_bytes"
+        (func $get_buf (param i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_dispatch_http_call"
+        (func $dispatch (param i32 i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_set_shared_data"
+        (func $set_sd (param i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (global $heap (mut i32) (i32.const 8192))
+      (data (i32.const 0) "df")
+      (data (i32.const 4) "cf")
+      (data (i32.const 8) "cb")
+      (data (i32.const 16) "x")
+      (data (i32.const 32) "\03\00\00\00\07\00\00\00\03\00\00\00\05\00\00\00\06\00\00\00\0a\00\00\00\04\00\00\00:method\00GET\00:path\00/check\00:authority\00test\00")
+      (func (export "proxy_on_memory_allocate") (param i32) (result i32)
+        (local $p i32)
+        global.get $heap
+        local.set $p
+        global.get $heap
+        local.get 0
+        i32.add
+        global.set $heap
+        local.get $p)
+      (func (export "proxy_on_context_create") (param i32 i32))
+      (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_configure") (param i32 i32) (result i32)
+        (drop (call $get_buf (i32.const 7) (i32.const 0) (i32.const 65536)
+                             (i32.const 256) (i32.const 260)))
+        (drop (call $set_tick (i32.const 100)))
+        (i32.const 1))
+      (func (export "proxy_on_tick") (param i32)
+        (if (i32.ne (call $dispatch (i32.load (i32.const 256)) (i32.load (i32.const 260))
+                              (i32.const 32) (i32.const 69)
+                              (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)
+                              (i32.const 1000) (i32.const 264)) (i32.const 0))
+          (then (drop (call $set_sd (i32.const 0) (i32.const 2) (i32.const 16) (i32.const 1) (i32.const 0))))))
+      (func (export "proxy_on_http_call_response") (param i32 i32 i32 i32 i32)
+        (if (i32.gt_s (local.get 2) (i32.const 0))
+          (then (drop (call $set_sd (i32.const 8) (i32.const 2) (i32.const 16) (i32.const 1) (i32.const 0))))
+          (else (drop (call $set_sd (i32.const 4) (i32.const 2) (i32.const 16) (i32.const 1) (i32.const 0))))))
+      (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) (i32.const 0))
+      (func (export "proxy_on_done") (param i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_delete") (param i32))
+    )
+    "#;
+
+    fn grant(origins: Vec<String>, timeout_ms: u64) -> CalloutGrant {
+        let mut allowlist: Vec<String> = origins
+            .iter()
+            .map(|o| edgion_resources::plugin_configs::normalize_callout_origin(o).expect("valid origin"))
+            .collect();
+        allowlist.sort();
+        CalloutGrant {
+            allowlist: Arc::from(allowlist),
+            timeout_ms,
+        }
+    }
+
+    /// Poll the module's shared data until `key` appears (tick markers are
+    /// written by the guest from the background tick task).
+    async fn wait_shared_key(entry: &Arc<ModuleEntry>, key: &str) -> bool {
+        for _ in 0..50 {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            if entry.shared_data_for_test().get(key).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Tick-callout happy path: a single registered non-empty allowlist arms
+    /// dispatch in the tick phase; the callout hits the target and the
+    /// success callback is delivered on the root context.
+    #[tokio::test]
+    async fn tick_callout_dispatches_and_delivers_response() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/check"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"ok".to_vec()))
+            .mount(&server)
+            .await;
+
+        let f = write_temp_wasm(TICK_CALLOUT_GUEST);
+        let mut config = file_config(f.path());
+        config.plugin_config = Some(server.uri());
+        let key = runtime_cache_key(&config);
+        let mgr = WasmVmManager::new_for_test();
+        mgr.register_plugin(&key, grant(vec![server.uri()], 1000));
+
+        let entry = load(&mgr, &config).await.expect("loads");
+        assert!(
+            wait_shared_key(&entry, "cb").await,
+            "success callback must be delivered to the root context"
+        );
+        assert!(
+            !server.received_requests().await.unwrap().is_empty(),
+            "the tick callout must reach the target"
+        );
+    }
+
+    /// Unreachable target: dispatch is accepted (origin allowlisted) but the
+    /// callout fails, so the guest sees the 0-header failure callback.
+    #[tokio::test]
+    async fn tick_callout_unreachable_delivers_failure_callback() {
+        let f = write_temp_wasm(TICK_CALLOUT_GUEST);
+        let mut config = file_config(f.path());
+        // Port 1 is unreachable; still allowlisted so dispatch succeeds.
+        config.plugin_config = Some("http://127.0.0.1:1".to_string());
+        let key = runtime_cache_key(&config);
+        let mgr = WasmVmManager::new_for_test();
+        mgr.register_plugin(&key, grant(vec!["http://127.0.0.1:1".to_string()], 300));
+
+        let entry = load(&mgr, &config).await.expect("loads");
+        assert!(
+            wait_shared_key(&entry, "cf").await,
+            "failed callout must deliver the 0-header callback"
+        );
+    }
+
+    /// Target not in the allowlist: dispatch is rejected in the tick phase
+    /// exactly as in the request phase, and no request leaves the host.
+    #[tokio::test]
+    async fn tick_callout_denied_by_allowlist() {
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(wiremock::matchers::any())
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let f = write_temp_wasm(TICK_CALLOUT_GUEST);
+        let mut config = file_config(f.path());
+        config.plugin_config = Some(server.uri());
+        let key = runtime_cache_key(&config);
+        let mgr = WasmVmManager::new_for_test();
+        // Dispatch IS armed, but for a different origin than the guest targets.
+        mgr.register_plugin(&key, grant(vec!["http://allowed.example.com".to_string()], 1000));
+
+        let entry = load(&mgr, &config).await.expect("loads");
+        assert!(wait_shared_key(&entry, "df").await, "guest must observe the denial");
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "no callout may reach a non-allowlisted origin"
+        );
+    }
+
+    /// Conflicting grants (two distinct non-empty allowlists on one module):
+    /// the tick phase must NOT arm dispatch — the guest sees UNIMPLEMENTED —
+    /// and the conflict heals once the second grant is dropped.
+    #[tokio::test]
+    async fn tick_callout_conflict_not_armed_then_heals() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/check"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let f = write_temp_wasm(TICK_CALLOUT_GUEST);
+        let mut config = file_config(f.path());
+        config.plugin_config = Some(server.uri());
+        let key = runtime_cache_key(&config);
+        let mgr = WasmVmManager::new_for_test();
+        let grant_a = grant(vec![server.uri()], 1000);
+        let grant_b = grant(vec!["http://other.example.com".to_string()], 1000);
+        mgr.register_plugin(&key, grant_a);
+        mgr.register_plugin(&key, grant_b.clone());
+
+        let entry = load(&mgr, &config).await.expect("loads");
+        assert!(
+            wait_shared_key(&entry, "df").await,
+            "conflicting grants must leave dispatch unarmed (guest observes the error)"
+        );
+        assert!(
+            server.received_requests().await.unwrap().is_empty(),
+            "no callout may be sent while the grants conflict"
+        );
+
+        // Healing: dropping the conflicting grant re-enables tick callouts
+        // with the single remaining allowlist.
+        mgr.unregister_plugin(&key, "test-module", &grant_b);
+        assert!(
+            wait_shared_key(&entry, "cb").await,
+            "tick callouts must recover once the conflicting grant is gone"
+        );
+        assert!(!server.received_requests().await.unwrap().is_empty());
+    }
+
+    /// Grant-registry logic: empty allowlists carry no opinion, equal
+    /// allowlists merge (min timeout), distinct non-empty allowlists
+    /// conflict, and removal restores the previous state.
+    #[test]
+    fn tick_callout_gate_transitions() {
+        let state = TickCalloutState::default();
+        assert!(matches!(state.gate(), TickCalloutGate::Disabled));
+
+        // Empty grants never enable or conflict.
+        state.add(CalloutGrant::none());
+        assert!(matches!(state.gate(), TickCalloutGate::Disabled));
+
+        let a = grant(vec!["http://a.example.com".to_string()], 500);
+        state.add(a.clone());
+        match state.gate() {
+            TickCalloutGate::Enabled { allowlist, timeout_ms } => {
+                assert_eq!(&*allowlist, &["http://a.example.com:80".to_string()]);
+                assert_eq!(timeout_ms, 500);
+            }
+            _ => panic!("single non-empty grant must enable"),
+        }
+
+        // Same allowlist with a different timeout: still enabled, min wins.
+        let a_slow = grant(vec!["http://a.example.com".to_string()], 900);
+        state.add(a_slow.clone());
+        match state.gate() {
+            TickCalloutGate::Enabled { timeout_ms, .. } => assert_eq!(timeout_ms, 500),
+            _ => panic!("equal allowlists must not conflict"),
+        }
+
+        // A second distinct non-empty allowlist conflicts…
+        let b = grant(vec!["http://b.example.com".to_string()], 500);
+        state.add(b.clone());
+        assert!(matches!(state.gate(), TickCalloutGate::Conflict));
+
+        // …and removing it heals back to enabled, then to disabled.
+        state.remove(&b);
+        assert!(matches!(state.gate(), TickCalloutGate::Enabled { .. }));
+        state.remove(&a);
+        state.remove(&a_slow);
+        assert!(matches!(state.gate(), TickCalloutGate::Disabled));
     }
 
     /// Fix 1 regression test: a failed engine init (e.g. pooling-allocator

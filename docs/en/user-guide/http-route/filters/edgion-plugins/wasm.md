@@ -8,7 +8,7 @@
 
 proxy-wasm is a portable ABI for writing proxy extensions once and running them on any compliant host (Envoy, this gateway, or others) without recompiling the host itself. Instead of writing a native Rust plugin against Edgion's internal APIs, you compile a small WebAssembly module against the [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) for your language of choice and hand the compiled `.wasm` bytecode to this plugin. The gateway compiles it once, caches the compiled module, and pools initialized instances so per-request execution is cheap.
 
-The implemented ABI is a deliberate subset (see below): header read/write, local responses, **HTTP callouts with Pause/resume** (request phase), **read-only response-body observation**, **shared data**, and **timers** (`on_tick`). Body *modification* and request-body hooks are not implemented.
+The implemented ABI is a deliberate subset (see below): header read/write, local responses, **HTTP callouts** (request phase with Pause/resume, and from `on_tick`), **read-only response-body observation**, **shared data**, and **timers** (`on_tick`). Body *modification* and request-body hooks are not implemented.
 
 ## Supported ABI subset
 
@@ -18,7 +18,7 @@ The implemented ABI is a deliberate subset (see below): header read/write, local
 |---|---|---|
 | `proxy_on_context_create` / `proxy_on_vm_start` / `proxy_on_configure` | — (instance init) | Once per pooled instance, before any request is served |
 | `proxy_on_request_headers` | `requestPlugins` (`RequestFilter`) | Request headers received, before the backend is contacted |
-| `proxy_on_http_call_response` | — (callout callback) | While the request is paused, once per completed callout dispatched from `proxy_on_request_headers` |
+| `proxy_on_http_call_response` | — (callout callback) | Once per completed callout: on the paused request context for callouts dispatched from `proxy_on_request_headers`, or on the root context for callouts dispatched from `proxy_on_tick` |
 | `proxy_on_response_headers` | `upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | Upstream response headers received |
 | `proxy_on_response_body` | `upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | Once per upstream body chunk, **read-only** (see [Body observation](#response-body-observation-read-only)) |
 | `proxy_on_tick` | — (background) | Periodically, once the guest set a tick period (see [Timers](#shared-data-and-timers)) |
@@ -33,7 +33,7 @@ Wasm is **not** available at `upstreamResponsePlugins` (async response stage).
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | Request headers, response headers, and (inside the callout callback) `HttpCallResponseHeaders` — the callout's response headers plus a synthetic `:status` pair |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | Set / add / remove / bulk-replace; applied to the real request/response after the hook returns. Header-map writes to the callout response map are rejected |
 | `proxy_send_local_response` | ✅ | Short-circuits the request with a status, body, and headers. Also valid from inside `proxy_on_http_call_response` (deny after an auth callout) |
-| `proxy_http_call` | ✅ (request phase) | See [HTTP callouts](#http-callouts-pauseresume). In the response/body/tick phases it returns `UNIMPLEMENTED` (12) |
+| `proxy_http_call` | ✅ (request + tick phases) | See [HTTP callouts](#http-callouts-pauseresume). In the response/body phases it returns `UNIMPLEMENTED` (12); in the tick phase it requires an unambiguous allowlist (see [Timers](#shared-data-and-timers)) |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | Resumes a request paused on a callout. `proxy_continue_response` remains an accepted no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | Per-module KV with CAS — see [Shared data](#shared-data-and-timers) |
 | `proxy_set_tick_period_milliseconds` | ✅ | Arms the per-module tick task; `0` stops it. Period floor 100ms |
@@ -136,9 +136,9 @@ Semantics and guardrails:
 
 - **Addressing**: the `upstream` parameter is the target **origin URL** (`https://auth.internal:8443`), not an Envoy cluster name. The `:path`, `:method`, and `:authority` pseudo headers from the dispatched header map drive the outbound request (`:authority` is sent as `Host`).
 - **Allowlist**: the origin must exactly match an entry in `calloutAllowlist` (after normalization). No allowlist = no callouts. A denied dispatch returns `INTERNAL_FAILURE` from `proxy_http_call` synchronously.
-- **Request phase only**: the response-headers/body stages are synchronous and cannot await; dispatch there returns `UNIMPLEMENTED`. Ticks cannot dispatch either (yet).
-- **Pause required**: `dispatch` + `Action::Continue` is not supported — the queued callouts are dropped and logged (`callouts-dropped=N`). Dispatch must be followed by `Pause`.
-- **Budgets**: at most 8 dispatches per request, 4 callback rounds (a callback may dispatch follow-ups), 64 concurrent callouts process-wide, 256KiB response-body cap per callout. Each callout's timeout is `min(guest_timeout, calloutTimeoutMs)`.
+- **Request and tick phases**: the response-headers/body stages are synchronous and cannot await; dispatch there returns `UNIMPLEMENTED`. Callouts from `on_tick` are supported with root-context callbacks — see [Timers](#shared-data-and-timers) for the extra allowlist-agreement condition.
+- **Pause required** (request phase): `dispatch` + `Action::Continue` is not supported — the queued callouts are dropped and logged (`callouts-dropped=N`). Dispatch must be followed by `Pause`. (`on_tick` has no Pause concept: callouts dispatched there are always executed after the hook returns.)
+- **Budgets**: at most 8 dispatches per request (or per tick), 4 callback rounds (a callback may dispatch follow-ups), 64 concurrent callouts process-wide, 256KiB response-body cap per callout. Each callout's timeout is `min(guest_timeout, calloutTimeoutMs)`.
 - **Callout failure** (connect error, timeout, oversized body): the callback fires with **0 headers** — the proxy-wasm convention — and the guest decides its own fail behavior. The host never traps the guest for a failed callout.
 - **Guest never resumes**: if after all callouts the guest neither continued nor answered, the host applies `failOpen` (reason `no-resume`).
 - **Epoch budget**: `timeoutMs` bounds each *guest* hook invocation; the callout's network wait does not consume guest CPU budget.
@@ -167,7 +167,7 @@ Listing a Wasm entry under `upstreamResponseBodyFilterPlugins` invokes `proxy_on
 > ```
 > — would observe **only the last chunk**. For a WAF or secret scanner that is a silent false negative. The host therefore does **not** silently ignore a Pause: it increments `edgion_wasm_body_pause_unsupported_total{module}` and logs a WARN once per module. **Alert on that counter** — it means a deployed guest is seeing partial data.
 >
-> Full spec semantics require request/response body buffering, which is a separate piece of infrastructure (see the roadmap task `tasks/wasm-followups/body-buffering-spec-semantics.md`).
+> Full spec semantics would require request/response body buffering. That is **deliberately not implemented** (it costs memory, breaks streaming uploads, and worsens TTFB; and on this proxy core, request-body *rewrite* additionally conflicts with the upstream `Content-Length` being sent before the body filter runs). **Consequence: off-the-shelf proxy-wasm WAF / body-scanner guests — which all use the Pause-and-buffer idiom — do not work here.** Body observation on this gateway is per-chunk by design; write guests accordingly.
 
 Working within the per-chunk model:
 
@@ -185,14 +185,26 @@ Request-body observation is **not implemented at all** (no `proxy_on_request_bod
 `proxy_get_shared_data` / `proxy_set_shared_data` back a per-module KV store with proxy-wasm CAS semantics (per-key monotonically increasing CAS token; `set` with a nonzero expected CAS fails with `CasMismatch` on mismatch; CAS 0 writes unconditionally; a null value deletes the key).
 
 - **Scope: one module (cache entry) within one gateway process.** All pooled instances of the module share it — across requests, phases, and the tick task. It is **not** cluster-level state: for cluster-wide coordination (e.g. global rate limiting) use `rate_limit_redis`, not shared data.
+- **Trust implication:** every `EdgionPlugins` entry whose source resolves to the same bytecode shares this store — including data a tick-phase callout fetched under one plugin's allowlist, which requests flowing through the *other* plugins can then read. Don't share one module across trust domains whose data must stay separated; ship distinct bytecode (or distinct sources) per tenant instead.
 - Limits: 64KiB per value, 4MiB total per module. An oversized write returns `BAD_ARGUMENT`.
 - Lifecycle: freed when the module's cache entry is evicted (see [Module cache lifecycle](#module-cache-lifecycle)); a reload that changes the module content starts with an empty store.
 
 ### Timers (`on_tick`)
 
-A guest that calls `proxy_set_tick_period_milliseconds(N)` (typically from `on_configure`) gets `proxy_on_tick` invoked every `N` ms (floor 100ms) on a background task, one per module. The tick instance is leased from the same pool as request instances and runs under the normal `timeoutMs` epoch budget. The guest can change the period or stop ticking (`0`) from inside `on_tick`. The tick task stops automatically when the module's cache entry is evicted. Callouts from `on_tick` are not yet supported (dispatch returns `UNIMPLEMENTED`).
+A guest that calls `proxy_set_tick_period_milliseconds(N)` (typically from `on_configure`) gets `proxy_on_tick` invoked every `N` ms (floor 100ms) on a background task, one per module. The tick instance is leased from the same pool as request instances and runs under the normal `timeoutMs` epoch budget, and **consecutive ticks may run on different pooled instances** — root-context struct fields are per-instance, so state that must survive across ticks belongs in shared data (state *initialized* in `on_configure`, like a parsed config, is fine: every pooled instance runs `on_configure` at init). The guest can change the period or stop ticking (`0`) from inside `on_tick`. The tick task stops automatically when the module's cache entry is evicted.
 
-Typical pattern: `on_tick` refreshes a ruleset into shared data; request hooks read it.
+Typical pattern: `on_tick` dispatches a callout to fetch the latest ruleset and writes it into shared data; request hooks read it (rate-limit rule refresh, denylist sync, config polling).
+
+#### Callouts from `on_tick`
+
+`on_tick` may dispatch HTTP callouts like the request phase does. Differences:
+
+- **No Pause/resume**: `proxy_on_tick` has no Action return; callouts queued during the hook are executed right after it returns, and each result is delivered via `proxy_on_http_call_response` on the **root context** (which lives as long as the instance — no per-request context is involved).
+- **Allowlist agreement required.** The tick task is *module-level*, but `calloutAllowlist` is *per-plugin* — and several `EdgionPlugins` entries pointing at the same bytecode share one module (and one tick task). The tick phase therefore arms dispatch only when the plugins referencing the module agree on **one** non-empty allowlist:
+  - Entries with an **empty** `calloutAllowlist` (e.g. the same module also wired at a response/body stage without callout config) carry no opinion and never block tick callouts.
+  - Two or more **different** non-empty allowlists on one module are a **conflict**: tick dispatch stays disabled (`UNIMPLEMENTED`, same as before the feature), a WARN is logged, and `edgion_wasm_callout_total{result="tick_config_conflict"}` is incremented each tick. Fail-safe by design — the alternative would let one plugin's allowlist leak into another's tick execution.
+  - The conflict heals automatically once the disagreeing plugin is removed or its allowlist aligned.
+- The effective timeout cap is the **minimum** `calloutTimeoutMs` across the plugins granting the allowlist; all other callout guardrails (8 dispatches per tick, 4 rounds, concurrency, body cap) apply unchanged.
 
 ## Failure semantics
 
@@ -242,7 +254,7 @@ All metrics carry a `module` label — the human-readable source descriptor (`fi
 | `edgion_wasm_hook_duration_ms` | histogram | `phase` | Guest hook wall time (`request_headers`, `response_headers`, `response_body`, `http_call_response`, `tick`) |
 | `edgion_wasm_trap_total` | counter | `phase` | Traps / protocol violations |
 | `edgion_wasm_fail_mode_total` | counter | `reason`, `mode=open\|close` | Fail-mode decisions |
-| `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit` | Callout outcomes |
+| `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit\|tick_config_conflict` | Callout outcomes; `tick_config_conflict` counts ticks where dispatch stayed disabled because plugins sharing the module configure different `calloutAllowlist`s |
 | `edgion_wasm_modules_loaded` | gauge | | Compiled modules currently in the global cache |
 | `edgion_wasm_shared_data_bytes` | gauge | `module` | Current shared-data byte total per module (cap 4MiB) |
 | `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **Alert on this.** A guest returned `Action::Pause` from the body hook, i.e. it expects the spec's cumulative-buffer semantics this host does not implement — it is silently observing only the current chunk, not the whole body |
@@ -263,7 +275,7 @@ A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_disc
 - **No request-body hooks** (`proxy_on_request_body`): needs request-body buffering the gateway doesn't have; a guest that only implements request-body hooks never gets invoked.
 - **Response body is observe-only, and uses per-chunk (not spec cumulative) semantics**: no body rewrite, no short-circuit from the body phase, and `Action::Pause` cannot be honored — a guest written to the standard buffering idiom sees only the current chunk. See the warning in [Response-body observation](#response-body-observation-read-only).
 - **No gRPC callouts** (`proxy_dispatch_grpc_call`): calling it traps.
-- **Callouts are request-phase only**, and dispatch without `Pause` is dropped.
+- **No callouts from the response/body phases** (sync stages), and request-phase dispatch without `Pause` is dropped. Tick-phase callouts additionally require the module's plugins to agree on one `calloutAllowlist` (see [Timers](#shared-data-and-timers)).
 - **No shared queues, foreign functions, or guest-defined metrics**: calling them traps.
 - **Per-request contexts are per-hook-call**: the request-headers and response-headers hooks of the same request may run on different pooled instances with fresh context ids. Correlate the phases through shared data or a stashed request header, not guest struct fields.
 - **No OCI (`oci://`) source** yet — roadmap.
@@ -340,7 +352,7 @@ See `edgion-tests/wasm/README.md` for the full contract the reference guest impl
 
 ### Q: My callout is never executed?
 
-Check, in order: (1) the target origin is listed in `calloutAllowlist` — empty list disables callouts entirely; (2) the guest returns `Action::Pause` after dispatching — dispatch followed by `Continue` is dropped (`callouts-dropped=N` in the access log); (3) the dispatch happens in the request phase — response/body/tick phases return `UNIMPLEMENTED`.
+Check, in order: (1) the target origin is listed in `calloutAllowlist` — empty list disables callouts entirely; (2) for request-phase dispatch, the guest returns `Action::Pause` — dispatch followed by `Continue` is dropped (`callouts-dropped=N` in the access log); (3) the dispatch happens in the request or tick phase — response/body phases return `UNIMPLEMENTED`; (4) for tick-phase dispatch, no allowlist conflict — check `edgion_wasm_callout_total{result="tick_config_conflict"}` and the WARN log when several plugins share the module with different `calloutAllowlist`s.
 
 ### Q: My guest module isn't taking effect on the response phase?
 

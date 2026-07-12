@@ -8,7 +8,7 @@
 
 proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可运行在任意兼容 host（Envoy、本网关或其他实现）上，无需重新编译 host 本身。你不需要针对 Edgion 内部 API 编写原生 Rust 插件，而是用你偏好语言的 [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) 编译出一个体积较小的 WebAssembly 模块，把编译产物 `.wasm` 字节码交给本插件。网关只编译一次、缓存编译结果，并对初始化好的实例做池化，因此单次请求的执行成本很低。
 
-实现的 ABI 是一个刻意收敛的子集（见下文）：header 读写、本地响应、**HTTP callout + Pause/恢复**（请求阶段）、**响应 body 只读观测**、**shared data** 与**定时器**（`on_tick`）。body *改写*与请求 body 钩子未实现。
+实现的 ABI 是一个刻意收敛的子集（见下文）：header 读写、本地响应、**HTTP callout**（请求阶段 Pause/恢复，以及 `on_tick` 内发起）、**响应 body 只读观测**、**shared data** 与**定时器**（`on_tick`）。body *改写*与请求 body 钩子未实现。
 
 ## 支持的 ABI 子集
 
@@ -18,7 +18,7 @@ proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可�
 |---|---|---|
 | `proxy_on_context_create` / `proxy_on_vm_start` / `proxy_on_configure` | —（实例初始化） | 每个池化实例在服务任何请求之前执行一次 |
 | `proxy_on_request_headers` | `requestPlugins`（`RequestFilter`） | 请求 header 到达、访问后端之前 |
-| `proxy_on_http_call_response` | —（callout 回调） | 请求挂起期间，每个完成的 callout 回调一次 |
+| `proxy_on_http_call_response` | —（callout 回调） | 每个完成的 callout 回调一次：请求阶段发起的在挂起的请求上下文上，`proxy_on_tick` 发起的在 root context 上 |
 | `proxy_on_response_headers` | `upstreamResponseFilterPlugins`（`UpstreamResponseFilter`） | 上游响应 header 到达 |
 | `proxy_on_response_body` | `upstreamResponseBodyFilterPlugins`（`UpstreamResponseBodyFilter`） | 每个上游 body chunk 一次，**只读**（见 [body 观测](#响应-body-观测只读)） |
 | `proxy_on_tick` | —（后台） | guest 设定 tick 周期后周期性触发（见[定时器](#shared-data-与定时器)） |
@@ -33,7 +33,7 @@ Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | 请求头、响应头，以及（callout 回调内）`HttpCallResponseHeaders`——callout 响应头外加合成的 `:status` |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | 设置/追加/删除/整体替换；钩子返回后应用到真实请求/响应。对 callout 响应 map 的写入被拒绝 |
 | `proxy_send_local_response` | ✅ | 以指定状态码/响应体/头短路请求。也可在 `proxy_on_http_call_response` 内调用（鉴权 callout 后拒绝） |
-| `proxy_http_call` | ✅（请求阶段） | 见 [HTTP callout](#http-calloutpause恢复)。响应/body/tick 阶段返回 `UNIMPLEMENTED`（12） |
+| `proxy_http_call` | ✅（请求 + tick 阶段） | 见 [HTTP callout](#http-calloutpause恢复)。响应/body 阶段返回 `UNIMPLEMENTED`（12）；tick 阶段要求 allowlist 无歧义（见[定时器](#shared-data-与定时器)） |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | 恢复因 callout 挂起的请求。`proxy_continue_response` 仍是接受型 no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | 模块级 KV + CAS——见 [shared data](#shared-data-与定时器) |
 | `proxy_set_tick_period_milliseconds` | ✅ | 启动模块级 tick 任务；`0` 停止。周期下限 100ms |
@@ -136,9 +136,9 @@ requestPlugins:
 
 - **寻址**：`upstream` 参数是目标 **origin URL**（`https://auth.internal:8443`），不是 Envoy 的 cluster 名。dispatch 的 header map 里的 `:path`、`:method`、`:authority` 伪头驱动外呼请求（`:authority` 作为 `Host` 发送）。
 - **允许列表**：origin 必须（规范化后）精确匹配 `calloutAllowlist` 的某一项。没有允许列表 = 没有 callout。被拒绝的 dispatch 同步返回 `INTERNAL_FAILURE`。
-- **仅请求阶段**：响应头/body 阶段是同步的、无法 await，dispatch 返回 `UNIMPLEMENTED`；tick 里（暂时）也不能 dispatch。
-- **必须 Pause**：`dispatch` + `Action::Continue` 不受支持——排队的 callout 被丢弃并记日志（`callouts-dropped=N`）。dispatch 之后必须 Pause。
-- **预算**：每请求最多 8 次 dispatch、4 轮回调（回调里可以追发 callout）、全进程 64 个并发 callout、单 callout 响应体上限 256KiB。每个 callout 的超时为 `min(guest 超时, calloutTimeoutMs)`。
+- **请求 + tick 阶段**：响应头/body 阶段是同步的、无法 await，dispatch 返回 `UNIMPLEMENTED`。`on_tick` 内的 callout 已支持，回调投递到 root context——额外的"allowlist 一致"条件见[定时器](#shared-data-与定时器)。
+- **必须 Pause**（请求阶段）：`dispatch` + `Action::Continue` 不受支持——排队的 callout 被丢弃并记日志（`callouts-dropped=N`）。dispatch 之后必须 Pause。（`on_tick` 没有 Pause 概念：在那里 dispatch 的 callout 总是在钩子返回后执行。）
+- **预算**：每请求（或每 tick）最多 8 次 dispatch、4 轮回调（回调里可以追发 callout）、全进程 64 个并发 callout、单 callout 响应体上限 256KiB。每个 callout 的超时为 `min(guest 超时, calloutTimeoutMs)`。
 - **callout 失败**（连接错误、超时、响应体超限）：回调以 **0 个 header** 触发（proxy-wasm 惯例），guest 自行决定失败行为。宿主绝不因 callout 失败而 trap guest。
 - **guest 不恢复**：所有 callout 完成后 guest 既没 continue 也没本地应答 → 宿主按 `failOpen` 处理（reason `no-resume`）。
 - **epoch 预算**：`timeoutMs` 只约束每次 *guest* 钩子调用；callout 的网络等待发生在 guest 调用之间，不消耗 guest CPU 预算。
@@ -167,7 +167,7 @@ requestPlugins:
 > ```
 > ——**只会看到最后一个 chunk**。对 WAF 或敏感数据扫描器来说这是**静默漏检**。因此宿主**不会**静默忽略 Pause：它会递增 `edgion_wasm_body_pause_unsupported_total{module}` 并按模块告警一次。**请对该指标配告警**——它意味着线上某个 guest 正在看不完整的数据。
 >
-> 完整 spec 语义需要请求/响应 body 缓冲基建，是一个独立的工程（见 roadmap 任务 `tasks/wasm-followups/body-buffering-spec-semantics.md`）。
+> 完整 spec 语义需要请求/响应 body 缓冲基建，这是**有意不实现**的（代价是内存、破坏流式上传、TTFB 变差；而且在本代理内核上，请求 body 的*改写*还额外撞上"上游 Content-Length 早于 body filter 发出"的顺序问题）。**后果：现成的 proxy-wasm WAF / body 扫描类 guest——它们清一色用 Pause 攒 body 的范式——在这里跑不了。** 本网关的 body 观测按设计就是每 chunk 的，请照此编写 guest。
 
 在每 chunk 模型下正确的用法：
 
@@ -185,14 +185,26 @@ requestPlugins:
 `proxy_get_shared_data` / `proxy_set_shared_data` 提供带 proxy-wasm CAS 语义的模块级 KV（每 key 单调递增的 CAS 令牌；`set` 携带非零期望 CAS 且不匹配时返回 `CasMismatch`；CAS 0 无条件写；空值删除 key）。
 
 - **作用域：单个网关进程内的一个模块（缓存条目）。** 该模块的所有池化实例共享——跨请求、跨阶段、含 tick 任务。它**不是**集群级状态：集群级协调（如全局限流）仍然用 `rate_limit_redis`，不要用 shared data。
+- **信任含义**：所有解析到同一份字节码的 `EdgionPlugins` 条目共享这个 store——包括 tick 阶段按某一个插件的 allowlist 外呼拉回的数据，流经*其他*插件的请求也读得到。数据必须隔离的信任域之间不要共享同一模块；按租户分发不同的字节码（或不同来源）。
 - 上限：单值 64KiB，每模块总量 4MiB。超限写入返回 `BAD_ARGUMENT`。
 - 生命周期：模块缓存条目被淘汰时释放（见[模块缓存生命周期](#模块缓存生命周期)）；换内容的 reload 从空 store 开始。
 
 ### 定时器（`on_tick`）
 
-guest 调用 `proxy_set_tick_period_milliseconds(N)`（通常在 `on_configure` 里）后，后台任务（每模块一个）每 `N` ms（下限 100ms）调用一次 `proxy_on_tick`。tick 实例从与请求相同的池租借，受正常 `timeoutMs` epoch 预算约束。guest 可在 `on_tick` 内调整周期或停止（`0`）。模块缓存条目被淘汰时 tick 任务自动停止。tick 里暂不支持 callout（dispatch 返回 `UNIMPLEMENTED`）。
+guest 调用 `proxy_set_tick_period_milliseconds(N)`（通常在 `on_configure` 里）后，后台任务（每模块一个）每 `N` ms（下限 100ms）调用一次 `proxy_on_tick`。tick 实例从与请求相同的池租借，受正常 `timeoutMs` epoch 预算约束，且**相邻两次 tick 可能落在不同的池化实例上**——root context 的结构体字段是实例本地的，需要跨 tick 存活的状态请放 shared data（在 `on_configure` 里*初始化*的状态没问题，比如解析好的配置：每个池化实例初始化时都会跑 `on_configure`）。guest 可在 `on_tick` 内调整周期或停止（`0`）。模块缓存条目被淘汰时 tick 任务自动停止。
 
-典型模式：`on_tick` 把规则集刷进 shared data，请求钩子读取。
+典型模式：`on_tick` 发 callout 拉取最新规则集写进 shared data，请求钩子读取（限流规则热刷新、风控名单同步、配置轮询）。
+
+#### `on_tick` 内的 callout
+
+`on_tick` 可以像请求阶段一样 dispatch HTTP callout，差异在于：
+
+- **没有 Pause/恢复**：`proxy_on_tick` 没有 Action 返回值；钩子期间排队的 callout 在钩子返回后立即执行，每个结果经 `proxy_on_http_call_response` 投递到 **root context**（与实例同生命周期——不涉及任何请求级上下文）。
+- **要求 allowlist 一致。** tick 任务是*模块级*的，而 `calloutAllowlist` 是*每插件*的——多个 `EdgionPlugins` 条目指向同一份字节码时共享同一个模块（和同一个 tick 任务）。因此 tick 阶段只有在引用该模块的插件对**唯一**一份非空 allowlist 达成一致时才启用 dispatch：
+  - `calloutAllowlist` 为**空**的条目（例如同一模块还挂在响应/body 阶段但没配 callout）视为"无主张"，不会阻断 tick callout。
+  - 同一模块出现 ≥2 份**不同**的非空 allowlist 即**冲突**：tick dispatch 保持禁用（`UNIMPLEMENTED`，与该特性之前的行为一致），记一条 WARN，并且每个 tick 递增 `edgion_wasm_callout_total{result="tick_config_conflict"}`。这是有意的 fail-safe——否则一个插件的 allowlist 会泄漏到另一个插件的 tick 执行里。
+  - 冲突方被移除或 allowlist 对齐后自动恢复。
+- 生效的超时上限是授权插件中 `calloutTimeoutMs` 的**最小值**；其余 callout 护栏（每 tick 8 次 dispatch、4 轮、并发上限、响应体上限）不变。
 
 ## 失败语义
 
@@ -242,7 +254,7 @@ trap（或其他故障）的 VM 实例会被**污染**：直接丢弃而不回�
 | `edgion_wasm_hook_duration_ms` | histogram | `phase` | guest 钩子耗时（`request_headers`、`response_headers`、`response_body`、`http_call_response`、`tick`） |
 | `edgion_wasm_trap_total` | counter | `phase` | trap / 协议违规 |
 | `edgion_wasm_fail_mode_total` | counter | `reason`、`mode=open\|close` | fail-mode 决策 |
-| `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit` | callout 结果 |
+| `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit\|tick_config_conflict` | callout 结果；`tick_config_conflict` 统计因共享模块的插件配置了不同 `calloutAllowlist` 而保持禁用 dispatch 的 tick 次数 |
 | `edgion_wasm_modules_loaded` | gauge | | 全局缓存中当前的编译模块数 |
 | `edgion_wasm_shared_data_bytes` | gauge | `module` | 每个模块当前 shared-data 字节总量（上限 4MiB） |
 | `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **建议配告警。** guest 在 body 钩子返回了 `Action::Pause`，即它期望 spec 的累积缓冲语义（本 host 未实现）——它正在静默地只看到当前 chunk，而非完整 body |
@@ -263,7 +275,7 @@ trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_
 - **无请求 body 钩子**（`proxy_on_request_body`）：依赖网关尚无的请求 body 缓冲；只实现请求 body 钩子的 guest 永远不会被调用。
 - **响应 body 仅可观测，且是每 chunk 语义（非 spec 的累积语义）**：不能改写 body，不能在 body 阶段短路，`Action::Pause` 无法兑现——按标准缓冲范式写的 guest 只会看到当前 chunk。见[响应 body 观测](#响应-body-观测只读)一节的警告。
 - **无 gRPC callout**（`proxy_dispatch_grpc_call`）：调用即 trap。
-- **callout 仅限请求阶段**，且 dispatch 后不 Pause 会被丢弃。
+- **响应/body 阶段不能 callout**（同步阶段），且请求阶段 dispatch 后不 Pause 会被丢弃。tick 阶段的 callout 还额外要求共享模块的插件对 `calloutAllowlist` 达成一致（见[定时器](#shared-data-与定时器)）。
 - **无 shared queue、foreign function、guest 自定义 metrics**：调用即 trap。
 - **请求级上下文按钩子调用创建**：同一请求的请求头钩子与响应头钩子可能运行在不同池化实例上、拿到全新 context id。跨阶段关联请用 shared data 或塞请求头，不要依赖 guest 结构体字段。
 - **暂无 OCI（`oci://`）来源**——roadmap。
@@ -340,7 +352,7 @@ impl Context for AuthPlugin {
 
 ### Q：我的 callout 从未被执行？
 
-依次检查：（1）目标 origin 是否列在 `calloutAllowlist`——空列表完全禁用 callout；（2）guest dispatch 后是否返回了 `Action::Pause`——dispatch 后 `Continue` 会被丢弃（访问日志出现 `callouts-dropped=N`）；（3）dispatch 是否发生在请求阶段——响应/body/tick 阶段返回 `UNIMPLEMENTED`。
+依次检查：（1）目标 origin 是否列在 `calloutAllowlist`——空列表完全禁用 callout；（2）请求阶段 dispatch 后 guest 是否返回了 `Action::Pause`——dispatch 后 `Continue` 会被丢弃（访问日志出现 `callouts-dropped=N`）；（3）dispatch 是否发生在请求或 tick 阶段——响应/body 阶段返回 `UNIMPLEMENTED`；（4）tick 阶段 dispatch 还要求无 allowlist 冲突——多个插件以不同 `calloutAllowlist` 共享同一模块时，查看 `edgion_wasm_callout_total{result="tick_config_conflict"}` 与 WARN 日志。
 
 ### Q：guest 模块在响应阶段不生效？
 

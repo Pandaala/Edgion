@@ -673,8 +673,10 @@ pub fn record_wasm_fail_mode(module: &str, reason: &str, mode: &'static str) {
     .increment(1);
 }
 
-/// Record a guest-dispatched HTTP callout outcome.
-/// `result` is one of `"ok"`, `"error"`, `"denied"`, `"over_limit"`.
+/// Record a guest-dispatched HTTP callout outcome. `result` is one of
+/// `"ok"`, `"error"`, `"denied"`, `"over_limit"`, `"tick_config_conflict"`
+/// (tick-phase dispatch left disabled: plugins sharing the module configure
+/// different callout allowlists).
 pub fn record_wasm_callout(module: &str, result: &'static str) {
     counter!(names::WASM_CALLOUT_TOTAL, "module" => module.to_string(), "result" => result).increment(1);
 }
