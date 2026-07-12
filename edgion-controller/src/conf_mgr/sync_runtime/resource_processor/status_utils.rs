@@ -245,10 +245,14 @@ pub enum ResolvedRefsError {
     /// loop (see the tls-06 design). The condition reason is the coarse
     /// `INVALID_CERTIFICATE`; `detail` carries the specific human-readable cause.
     CertContentInvalid { detail: String },
-    /// Edgion extension · HTTPRoute delegation: a named child HTTPRoute
-    /// referenced by a delegating rule (`backendRef {kind: HTTPRoute}`) does
-    /// not exist.
-    DelegationChildNotFound { namespace: String, name: String },
+    /// Edgion extension · route delegation: a named child route referenced by
+    /// a delegating rule (`backendRef {kind: HTTPRoute | GRPCRoute}`) does not
+    /// exist. `kind` names the route kind of the missing child.
+    DelegationChildNotFound {
+        kind: &'static str,
+        namespace: String,
+        name: String,
+    },
 }
 
 impl ResolvedRefsError {
@@ -312,8 +316,8 @@ impl ResolvedRefsError {
                 )
             }
             Self::CertContentInvalid { detail } => detail.clone(),
-            Self::DelegationChildNotFound { namespace, name } => {
-                format!("Delegation child HTTPRoute '{}/{}' not found", namespace, name)
+            Self::DelegationChildNotFound { kind, namespace, name } => {
+                format!("Delegation child {} '{}/{}' not found", kind, namespace, name)
             }
         }
     }

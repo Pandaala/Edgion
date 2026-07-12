@@ -118,7 +118,8 @@ pub async fn run_post_cache_ready_revalidations(runtime: Arc<ControllerRuntime>)
     trigger_gateway_secret_revalidation(runtime.clone()).await;
     trigger_gateway_route_revalidation(runtime.clone()).await;
     trigger_gatewayclass_params_revalidation(runtime.clone()).await;
-    trigger_delegation_parent_revalidation(runtime).await;
+    trigger_delegation_parent_revalidation(runtime.clone()).await;
+    trigger_grpc_delegation_parent_revalidation(runtime).await;
 }
 
 /// Requeue all delegating parent HTTPRoutes after caches are ready.
@@ -143,6 +144,30 @@ pub async fn trigger_delegation_parent_revalidation(runtime: Arc<ControllerRunti
 
     for key in parents {
         runtime.processor_registry.requeue("HTTPRoute", key).await;
+    }
+}
+
+/// Requeue all delegating parent GRPCRoutes after caches are ready.
+///
+/// gRPC parallel of `trigger_delegation_parent_revalidation`, over the
+/// separate `grpc_route_delegation_index` instance. Same cold-start ordering
+/// fix: a delegating parent processed before its children on cold start
+/// otherwise keeps transient `MissingChild` status and an empty flatten until
+/// something else requeues it.
+pub async fn trigger_grpc_delegation_parent_revalidation(runtime: Arc<ControllerRuntime>) {
+    let parents = runtime.grpc_route_delegation_index.all_parents();
+    if parents.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        component = "delegation_parent_revalidation",
+        parent_count = parents.len(),
+        "Requeuing all delegating parent GRPCRoutes for post-init re-flatten"
+    );
+
+    for key in parents {
+        runtime.processor_registry.requeue("GRPCRoute", key).await;
     }
 }
 

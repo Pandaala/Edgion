@@ -7,6 +7,7 @@ GRPCRoute defines routing rules for gRPC traffic, including match conditions, fi
 | Document | Description |
 |----------|-------------|
 | [overview.md](overview.md) | GRPCRoute overview |
+| [delegation.md](delegation.md) | Route delegation for multi-tenancy (parent → child GRPCRoute) |
 | [matches/](matches/overview.md) | Match rules |
 | [filters/](filters/overview.md) | Filters |
 | [backends/](backends/overview.md) | Backend configuration |

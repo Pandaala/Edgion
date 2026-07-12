@@ -493,6 +493,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
             match issue {
                 DelegationIssue::MissingChild { namespace, name } => {
                     resolved_refs_errors.push(ResolvedRefsError::DelegationChildNotFound {
+                        kind: "HTTPRoute",
                         namespace: namespace.clone(),
                         name: name.clone(),
                     });

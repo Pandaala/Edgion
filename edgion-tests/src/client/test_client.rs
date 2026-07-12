@@ -248,6 +248,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/DanglingExtensionRef" => "EdgionPlugins",
         // GRPCRoute
         "GRPCRoute/Basic" | "GRPCRoute" => "GRPCRoute/Basic",
+        "GRPCRoute/Delegation" => "GRPCRoute/Delegation",
         "GRPCRoute/Match" => "GRPCRoute/Match",
         "GRPCRoute/UnmatchedRoute" => "GRPCRoute/UnmatchedRoute",
         "GRPCRoute/RateLimit" => "GRPCRoute/RateLimit",
@@ -675,6 +676,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         }
         "GRPCRoute/Basic" => {
             runner.add_suite(Box::new(suites::GrpcTestSuite));
+        }
+        "GRPCRoute/Delegation" => {
+            if !gateway {
+                eprintln!("Error: GRPCRoute/Delegation tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcDelegationTestSuite));
         }
         "GRPCRoute/Match" => {
             if !gateway {

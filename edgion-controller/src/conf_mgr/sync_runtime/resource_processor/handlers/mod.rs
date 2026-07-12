@@ -20,6 +20,7 @@ mod endpoint_slice;
 mod gateway;
 mod gateway_class;
 mod grpc_route;
+pub(crate) mod grpc_route_delegation;
 pub(crate) mod hostname_resolution;
 mod http_route;
 mod link_sys;

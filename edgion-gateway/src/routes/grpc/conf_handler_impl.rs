@@ -147,16 +147,22 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
         ),
     });
 
+    // Delegation: when the controller flattened a delegation tree into
+    // resolved_rules, compile those INSTEAD of the operator-authored rules.
+    // invalid_rule_indices refers to spec.rules; when resolved_rules is
+    // present, flattening already dropped invalid rules and the indices do
+    // not apply.
+    let invalid_rule_indices = if route.spec.resolved_rules.is_some() {
+        None
+    } else {
+        route.spec.invalid_rule_indices.as_ref()
+    };
+
     let mut units = Vec::new();
-    if let Some(rules) = &route.spec.rules {
+    if let Some(rules) = route.effective_rules() {
         for (rule_id, rule) in rules.iter().enumerate() {
             // Skip rules marked invalid by Controller
-            if route
-                .spec
-                .invalid_rule_indices
-                .as_ref()
-                .is_some_and(|inv| inv.contains(&rule_id))
-            {
+            if invalid_rule_indices.is_some_and(|inv| inv.contains(&rule_id)) {
                 continue;
             }
             let rule_arc = Arc::new(rule.clone());
@@ -297,6 +303,101 @@ mod tests {
         let mut route: GRPCRoute = serde_json::from_value(json).expect("Failed to build GRPCRoute");
         route.pre_parse();
         route
+    }
+
+    /// Build a GRPCRoute with two `spec.rules`, each with a distinct backend
+    /// name, so tests can tell which rule(s) actually compiled.
+    fn build_grpc_route_with_two_rules(namespace: &str, name: &str) -> GRPCRoute {
+        let json = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "namespace": namespace, "name": name },
+            "spec": {
+                "parentRefs": [{ "name": "test-gw", "kind": "Gateway" }],
+                "rules": [
+                    { "matches": [{ "method": { "service": "svc.SpecA" } }],
+                      "backendRefs": [{ "name": "spec-svc-a", "port": 8080 }] },
+                    { "matches": [{ "method": { "service": "svc.SpecB" } }],
+                      "backendRefs": [{ "name": "spec-svc-b", "port": 8080 }] }
+                ]
+            }
+        });
+        let mut route: GRPCRoute = serde_json::from_value(json).expect("Failed to build GRPCRoute");
+        route.pre_parse();
+        route
+    }
+
+    /// Extract backend Service names from every unit's compiled rule, so
+    /// tests can assert exactly which backendRefs were compiled.
+    fn unit_backend_names(units: &[Arc<GrpcRouteRuleUnit>]) -> Vec<String> {
+        let mut names: Vec<String> = units
+            .iter()
+            .flat_map(|u| u.rule.backend_refs.iter().flatten())
+            .map(|br| br.name.clone())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn test_grpc_resolved_rules_compiled_instead_of_spec_rules() {
+        // Delegation contract: when resolved_rules is present the gateway
+        // compiles it INSTEAD of spec.rules, including a resolved Service
+        // that is absent from spec.rules entirely (the flattened child).
+        let mut route = build_grpc_route_with_two_rules("test-grpc-deleg", "flat");
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([
+                { "matches": [{ "method": { "service": "svc.Resolved" } }],
+                  "backendRefs": [{ "name": "resolved-svc", "namespace": "test-grpc-deleg", "port": 8080 }] }
+            ]))
+            .unwrap(),
+        );
+        route.pre_parse();
+
+        let route = Arc::new(route);
+        let units = parse_route_to_units("test-grpc-deleg/flat", &route);
+        assert_eq!(
+            unit_backend_names(&units),
+            vec!["resolved-svc"],
+            "resolved_rules must replace spec.rules, compiling the resolved service"
+        );
+    }
+
+    #[test]
+    fn test_grpc_invalid_rule_indices_ignored_when_resolved_rules_present() {
+        // invalid_rule_indices refers to spec.rules; a flattened route must
+        // not have its (pre-filtered) resolved_rules dropped by stale indices.
+        let mut route = build_grpc_route_with_two_rules("test-grpc-deleg-inv", "flat");
+        route.spec.invalid_rule_indices = Some(vec![0]);
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([
+                { "matches": [{ "method": { "service": "svc.RA" } }],
+                  "backendRefs": [{ "name": "svc-r-a", "port": 8080 }] },
+                { "matches": [{ "method": { "service": "svc.RB" } }],
+                  "backendRefs": [{ "name": "svc-r-b", "port": 8080 }] }
+            ]))
+            .unwrap(),
+        );
+        route.pre_parse();
+
+        let route = Arc::new(route);
+        let units = parse_route_to_units("test-grpc-deleg-inv/flat", &route);
+        assert_eq!(
+            unit_backend_names(&units),
+            vec!["svc-r-a", "svc-r-b"],
+            "invalid_rule_indices (index 0) must not apply to resolved_rules"
+        );
+
+        // Control: without resolved_rules the same indices DO drop rule 0.
+        let mut plain = build_grpc_route_with_two_rules("test-grpc-deleg-inv", "plain");
+        plain.spec.invalid_rule_indices = Some(vec![0]);
+        let plain = Arc::new(plain);
+        let units = parse_route_to_units("test-grpc-deleg-inv/plain", &plain);
+        assert_eq!(
+            unit_backend_names(&units),
+            vec!["spec-svc-b"],
+            "indices must still apply to spec.rules"
+        );
     }
 
     #[test]

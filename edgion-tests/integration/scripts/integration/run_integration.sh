@@ -1001,6 +1001,7 @@ run_all_tests() {
             GRPCRoute)
                 if [ -z "$G_ITEM" ]; then
                     run_test "GRPCRoute_Basic" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i Basic" || test_failed=true
+                    run_test "GRPCRoute_Delegation" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i Delegation" || test_failed=true
                     run_test "GRPCRoute_Match" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i Match" || test_failed=true
                     run_test "GRPCRoute_RateLimit" "${PROJECT_ROOT}/target/debug/test_client -g -r GRPCRoute -i RateLimit" || test_failed=true
                 else

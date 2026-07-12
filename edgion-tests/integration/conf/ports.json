@@ -1,5 +1,5 @@
 {
-  "current_max": 31933,
+  "current_max": 31935,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -282,6 +282,12 @@
     },
     "HTTPRoute/Delegation/DynamicTest": {
       "http": 31933
+    },
+    "GRPCRoute/Delegation": {
+      "grpc": 31934
+    },
+    "GRPCRoute/Delegation/DynamicTest": {
+      "grpc": 31935
     }
   }
 }

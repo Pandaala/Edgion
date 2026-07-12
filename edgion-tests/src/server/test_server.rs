@@ -1271,10 +1271,40 @@ impl TestServiceImpl {
 #[tonic::async_trait]
 impl TestService for TestServiceImpl {
     async fn say_hello(&self, request: Request<HelloRequest>) -> Result<Response<HelloResponse>, Status> {
+        // Echo any `x-*` request metadata into the response message. gRPC has
+        // no generic header-echo endpoint the way the HTTP catch-all handler
+        // does (`echo_handler`/`echo_post_handler` above); this is the
+        // minimal extension needed to prove GRPCRoute filter inheritance
+        // (e.g. a delegation parent's RequestHeaderModifier) reaches the
+        // backend, mirroring what the HTTP echo handlers already do for
+        // HTTPRoute filter tests. Only `x-*` names are echoed to keep the
+        // dump small and avoid leaking internal gRPC metadata.
+        let echoed: Vec<String> = request
+            .metadata()
+            .iter()
+            .filter_map(|kv| match kv {
+                tonic::metadata::KeyAndValueRef::Ascii(key, value) => {
+                    let key = key.as_str();
+                    if key.starts_with("x-") {
+                        value.to_str().ok().map(|v| format!("{key}={v}"))
+                    } else {
+                        None
+                    }
+                }
+                tonic::metadata::KeyAndValueRef::Binary(_, _) => None,
+            })
+            .collect();
+
         let name = request.into_inner().name;
 
+        let message = if echoed.is_empty() {
+            format!("Hello, {}!", name)
+        } else {
+            format!("Hello, {}! metadata=({})", name, echoed.join(","))
+        };
+
         let response = HelloResponse {
-            message: format!("Hello, {}!", name),
+            message,
             server_addr: self.server_addr.clone(),
         };
 

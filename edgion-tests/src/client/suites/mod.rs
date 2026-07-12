@@ -30,6 +30,7 @@ pub use http_route::{
 pub use edgion_backend_traffic_policy::EdgionBackendTrafficPolicyTestSuite;
 
 pub use grpc_route::{
+    GrpcDelegationDynamicInitialTestSuite, GrpcDelegationDynamicUpdateTestSuite, GrpcDelegationTestSuite,
     GrpcMatchTestSuite, GrpcRateLimitTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite,
 };
 

@@ -123,6 +123,7 @@ const enSidebar = [
         collapsed: true,
         items: [
           { text: 'Overview', link: '/en/user-guide/grpc-route/overview' },
+          { text: 'Route Delegation', link: '/en/user-guide/grpc-route/delegation' },
           { text: 'Backends', link: '/en/user-guide/grpc-route/backends/overview' },
           { text: 'Matches', link: '/en/user-guide/grpc-route/matches/overview' },
           { text: 'Filters', link: '/en/user-guide/grpc-route/filters/overview' },
@@ -368,6 +369,7 @@ const zhSidebar = [
         collapsed: true,
         items: [
           { text: '概览', link: '/zh-CN/user-guide/grpc-route/overview' },
+          { text: '路由委派', link: '/zh-CN/user-guide/grpc-route/delegation' },
           { text: '后端', link: '/zh-CN/user-guide/grpc-route/backends/overview' },
           { text: '匹配规则', link: '/zh-CN/user-guide/grpc-route/matches/overview' },
           { text: '过滤器', link: '/zh-CN/user-guide/grpc-route/filters/overview' },

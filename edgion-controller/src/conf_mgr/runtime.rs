@@ -48,6 +48,11 @@ pub struct ControllerRuntime {
     /// child HTTPRoute → delegating parent HTTPRoutes reverse index; a child
     /// change requeues its parents for delegation re-flattening.
     pub(crate) route_delegation_index: RouteDelegationIndex,
+    /// child GRPCRoute → delegating parent GRPCRoutes reverse index. Kept as
+    /// a separate `RouteDelegationIndex` instance (same type, reused
+    /// unchanged) so HTTPRoute and GRPCRoute `"ns/name"` keys never collide
+    /// and a GRPCRoute change only requeues gRPC parents.
+    pub(crate) grpc_route_delegation_index: RouteDelegationIndex,
     pub(crate) attached_route_tracker: AttachedRouteTracker,
     pub(crate) listener_port_manager: ListenerPortManager,
     pub(crate) configmap_store: ConfigMapStore,
@@ -91,6 +96,7 @@ impl ControllerRuntime {
             secret_store: SecretStore::new(),
             gateway_route_index: GatewayRouteIndex::new(),
             route_delegation_index: RouteDelegationIndex::new(),
+            grpc_route_delegation_index: RouteDelegationIndex::new(),
             attached_route_tracker: AttachedRouteTracker::new(),
             listener_port_manager: ListenerPortManager::new(),
             configmap_store: ConfigMapStore::new(),
@@ -152,6 +158,12 @@ impl ControllerRuntime {
 
         self.route_delegation_index.clear();
         tracing::info!(component = "controller_runtime", "Cleared RouteDelegationIndex");
+
+        self.grpc_route_delegation_index.clear();
+        tracing::info!(
+            component = "controller_runtime",
+            "Cleared GRPCRoute RouteDelegationIndex"
+        );
 
         self.attached_route_tracker.clear();
         tracing::info!(component = "controller_runtime", "Cleared AttachedRouteTracker");

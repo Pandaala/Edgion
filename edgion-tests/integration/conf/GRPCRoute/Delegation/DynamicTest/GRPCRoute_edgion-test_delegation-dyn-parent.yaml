@@ -1,0 +1,26 @@
+# Parent route for the dynamic scenario: delegates the whole test.TestService
+# service to every GRPCRoute in edgion-grpc-deleg-dyn. The scenario then
+# rewrites the child's narrowed method and asserts the flattened routing
+# follows without touching this parent.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: delegation-dyn-parent
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: grpc-delegation-dyn-gateway
+      namespace: edgion-test
+      sectionName: grpc
+  hostnames:
+    - "grpc-delegation-dyn.example.com"
+  rules:
+    - matches:
+        - method:
+            type: Exact
+            service: test.TestService
+      backendRefs:
+        - group: gateway.networking.k8s.io
+          kind: GRPCRoute
+          name: "*"
+          namespace: edgion-grpc-deleg-dyn

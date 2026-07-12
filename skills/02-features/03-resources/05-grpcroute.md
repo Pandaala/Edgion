@@ -130,6 +130,70 @@ GRPCRoute supports `retry.attempts` (max retry attempts) and `retry.backoff` (ex
 
 Currently, retries are triggered on connection failure (`fail_to_connect`), proxy errors (`error_while_proxy`), and per-try timeouts — with a retry policy present, an attempt exceeding `backendRequest` is canceled and retried while nothing has been sent downstream (GEP-1731, shared with HTTPRoute; see [04-httproute.md](04-httproute.md)). Caution for long-lived gRPC streams: a tight `backendRequest` combined with a retry policy cuts idle streams — size it for the longest expected quiet period.
 
+## Route Delegation (Multi-Tenancy)
+
+A rule delegates a **gRPC service** to child GRPCRoutes (possibly in other
+namespaces) by pointing its **single** `backendRef` at
+`group: gateway.networking.k8s.io, kind: GRPCRoute` (`name: "*"` = every route
+in the target namespace). The controller flattens the tree at parse time into
+the controller-resolved `resolved_rules` field; the data plane never sees the
+nesting. Unlike HTTPRoute's path-prefix scope, the delegated unit here is a
+gRPC service name compared by spec-string equality (no canonicalization gap).
+
+```yaml
+rules:
+  - matches:
+      - method: { type: Exact, service: billing.v1.PaymentService }  # method must be absent
+    filters:              # mandatory, inherited by all child rules
+      - type: RequestHeaderModifier
+        requestHeaderModifier: { set: [{ name: x-tenant, value: billing }] }
+    backendRefs:
+      - group: gateway.networking.k8s.io
+        kind: GRPCRoute
+        name: "*"
+        namespace: billing
+```
+
+Key semantics (canonical user doc: [`docs/en/user-guide/grpc-route/delegation.md`](../../../docs/en/user-guide/grpc-route/delegation.md); design: `docs/superpowers/specs/2026-07-12-grpcroute-delegation-design.md`):
+
+- A delegating rule's `matches` must be present and non-empty, and every match
+  must carry a `method` matcher with `type` Exact-or-omitted, non-empty
+  `service`, and no `method` — **a matchless delegating rule is invalid**
+  (deliberately does NOT mirror HTTPRoute's `"/"` default; delegate-all is out
+  of scope for v1).
+- A child match with a non-empty, non-matching `method.service` is out of
+  scope (dropped); one with an absent/empty `service` (missing matcher, empty
+  `method: {}`, or method-only) inherits the delegated service. A matchless
+  child rule flattens to **one inherited match per delegated scope**, never
+  cloned as-is (a raw clone would compile to a gateway catch-all).
+- `type: RegularExpression` in a child match invalidates that child rule
+  (v1 rejects the regex match outright rather than proving containment).
+- Children must not set `hostnames`; children may delegate further (cycle
+  detection, depth cap 8); children may reverse-lock parents via
+  `parentRefs {kind: GRPCRoute}`.
+- Parent standard filters (`RequestHeaderModifier`/`ResponseHeaderModifier`)
+  are mandatory (same-type child filter ⇒ rule dropped); `ExtensionRef` chains
+  concatenate (parent first). `timeouts` / `retry` / `sessionPersistence`:
+  child-first-else-inherit.
+- Child backendRef namespace defaults to the child's namespace; cross-ns
+  Service refs are ReferenceGrant-checked with the child as referrer.
+- Additive: `backendRef {kind: GRPCRoute}` was previously invalid config;
+  `allowedRoutes` semantics are untouched.
+
+### Failure semantics
+
+| Condition | Surface |
+|-----------|---------|
+| Named delegation child does not exist | `ResolvedRefs=False` / `BackendNotFound` |
+| Delegating rule malformed (matchless, `method.method` set, regex match, header-only match, empty service, `port`/`filters`/multiple backendRefs present) | Rule dropped; `PartiallyInvalid=True` |
+| Child rule has a header conflict, standard-filter conflict, all matches out of scope, or a `RegularExpression` match | Rule dropped; `PartiallyInvalid=True` |
+| Delegation cycle / depth > 8 | Rule dropped; `PartiallyInvalid=True` (`DelegationLoop` / `DelegationDepthExceeded`) |
+| Child sets `spec.hostnames` | Child rules from that route skipped |
+| Wildcard (`name: "*"`) resolves to zero children | Valid — no-op, not an error |
+| Unmatched gRPC request at runtime | `UNIMPLEMENTED` (gRPC status code 12), not HTTP 404 |
+
+Internal processing: [`01-architecture/05-resources/05-grpc-route.md`](../../01-architecture/05-resources/05-grpc-route.md).
+
 ## Differences from HTTPRoute
 
 | Dimension | HTTPRoute | GRPCRoute |
@@ -138,3 +202,5 @@ Currently, retries are triggered on connection failure (`fail_to_connect`), prox
 | Filters | 6 types (including Redirect, URLRewrite) | 4 types (no Redirect, URLRewrite) |
 | Internal implementation | Independent matching engine | Shared route_utils, gRPC-specific MatchInfo |
 | gRPC-Web | Not supported | Auto-detected |
+| Delegation scope unit | Path prefix (containment) | gRPC service name (spec-string equality) |
+| Matchless delegating rule | Delegates `"/"` (default) | Invalid (delegate-all out of scope for v1) |
