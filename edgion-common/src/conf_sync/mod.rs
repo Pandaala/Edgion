@@ -1,3 +1,4 @@
+pub mod cert_expiry_watch;
 pub mod config;
 pub mod proto;
 pub mod traits;

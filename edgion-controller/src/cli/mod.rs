@@ -231,6 +231,20 @@ impl EdgionControllerCli {
             None
         };
 
+        // conf_sync cert expiry safety net (observability only): watch whichever
+        // server cert is in service — the auto-CA in-memory PEM or the configured
+        // cert file. Exports the notAfter gauge + WARN/ERROR as expiry approaches.
+        {
+            use edgion_common::conf_sync::cert_expiry_watch as cert_watch;
+            let source = match &auto_identity {
+                Some(id) => Some(cert_watch::CertSource::Pem(id.cert_pem.clone())),
+                None => cert_watch::file_source_from_tls(security.resolve_active_tls()),
+            };
+            if let Some(source) = source {
+                cert_watch::spawn_expiry_watch(cert_watch::sides::SERVER, source);
+            }
+        }
+
         // Dedicated probe listener (liveness/readiness) — own socket, no auth.
         {
             let probe_state = crate::api::build_admin_state(

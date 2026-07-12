@@ -1,3 +1,4 @@
+pub mod cert_util;
 pub mod conf_sync;
 pub mod dns;
 pub mod ext_proc;

@@ -58,6 +58,18 @@ impl EdgionGatewayCli {
             );
         }
 
+        // conf_sync cert expiry safety net (observability only): re-reads the mounted
+        // client cert every tick (kubelet refreshes Secret mounts in place), exports the
+        // notAfter gauge, and WARN/ERRORs as expiry approaches. Spawned before the client
+        // (and its auto_ca retry loop) so the watch exists even while the provisioned
+        // Secret is still landing — a missing file is logged, not fatal.
+        {
+            use edgion_common::conf_sync::cert_expiry_watch as cert_watch;
+            if let Some(source) = cert_watch::file_source_from_tls(security.resolve_active_tls()) {
+                cert_watch::spawn_expiry_watch(cert_watch::sides::CLIENT, source);
+            }
+        }
+
         // Under auto_ca the gateway-client Secret is provisioned by the Controller and may
         // not exist yet at cold start (the mounted volume is `optional`). Rather than
         // crash-loop on a transient "cert file not found", retry within the startup-probe
