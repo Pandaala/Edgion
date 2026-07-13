@@ -462,7 +462,7 @@ center:
 
 > **Full operator guide:** see `docs/en/ops-guide/federation-rbac.md` for authorization examples, security notes, and the kill-switch reference.
 
-`FedAllowRule.verbs` accepts: `get`, `list`, `list-keys`, `watch`, `create`, `update`, `delete`, `failover`, `acme-trigger`, `reload`, `server-info`, `diagnostics`, `wipe-all`, `debug`.
+`FedAllowRule.verbs` accepts: `get`, `list`, `list-keys`, `watch`, `create`, `update`, `delete`, `failover`, `acme-trigger`, `conf-sync-rotate`, `reload`, `server-info`, `diagnostics`, `wipe-all`, `debug`.
 
 > **Kind casing:** `kinds` MUST use the canonical PascalCase resource Kind name (e.g. `EdgionConfigData`, `HTTPRoute`, `RegionRoute`). Lowercase or alias spellings (e.g. `edgionconfigdata`) are matched case-sensitively against the normalized request kind and will silently never match. Verbs are case-insensitive.
 

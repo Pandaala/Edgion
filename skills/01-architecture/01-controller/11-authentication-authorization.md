@@ -65,7 +65,7 @@ There is a single role variant. `Restricted` is shared by the local admin token,
 
 ```
 get  list  list-keys  watch  create  update  delete
-failover  acme-trigger  reload  server-info  diagnostics  wipe-all  debug
+failover  acme-trigger  conf-sync-rotate  reload  server-info  diagnostics  wipe-all  debug
 ```
 
 `kind` is usually a `ResourceKind` string (e.g. `HTTPRoute`), but some endpoints map to **synthetic** classifier labels that are not ResourceKinds — e.g. `RegionRoute` for the aggregate region-route / failover endpoints. An unknown/unclassifiable route is **denied** (`403`), never allowed through.

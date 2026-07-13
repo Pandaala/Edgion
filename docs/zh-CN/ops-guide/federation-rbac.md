@@ -277,7 +277,7 @@ edgion-cli get httproute -n production
 ### 安全说明
 
 **1. 宽泛的 verb 授权等于完整管理员权限。**
-`rbac` 授予 `verbs: ["*"]` 覆盖完整 admin router（包括 `reload`、`failover`、`acme-trigger`、`server-info` 和 `diagnostics`）的 Token 实际上等同于 allow-all 管理员 Token。授予消费方实际需要的最小 verb 集。
+`rbac` 授予 `verbs: ["*"]` 覆盖完整 admin router（包括 `reload`、`failover`、`acme-trigger`、`conf-sync-rotate`、`server-info` 和 `diagnostics`）的 Token 实际上等同于 allow-all 管理员 Token。授予消费方实际需要的最小 verb 集。
 
 **2. 通配符读取会暴露凭据材料。**
 CLI Token 路径上没有服务端 `Secret` 兜底。对读取 verb 使用 `kinds: ["*"]` 允许 Token 通过盲代理读取 `Secret` 和 `EdgionTls` 的私钥材料。对所有读取授权始终枚举具体 kind。见上方[通配符读取会暴露凭据材料](#通配符读取会暴露凭据材料)。

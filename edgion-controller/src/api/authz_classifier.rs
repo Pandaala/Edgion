@@ -68,6 +68,15 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
         ("POST", "/api/v1/services/acme/{namespace}/{name}/trigger") => {
             return Some((Verb::AcmeTrigger, "Service".into()))
         }
+        // Manual conf_sync cert rotation: a cluster-scoped operation on the
+        // controller's OWN CA — it targets no ResourceKind, hence NON_RESOURCE_KIND.
+        ("POST", "/api/v1/services/conf-sync-ca/rotate") => {
+            return Some((Verb::ConfSyncRotate, NON_RESOURCE_KIND.into()))
+        }
+        // Effective (resolved) GlobalConnectionIpRestriction view for the Center
+        // dashboard: a read-only projection of EdgionStreamPlugins, so it is
+        // classified as `list` on that kind.
+        ("GET", "/api/v1/global-ip-restrictions/effective") => return Some((Verb::List, "EdgionStreamPlugins".into())),
         // test-mode-only routes (registered only under is_test_mode()); axum never
         // matches these in production.
         ("POST", "/api/v1/admin/wipe-all") => return Some((Verb::WipeAll, NON_RESOURCE_KIND.into())),
@@ -204,6 +213,20 @@ mod tests {
     }
 
     #[test]
+    fn conf_sync_rotate_is_nonresource_kind() {
+        let (v, k) = classify("POST", Some("/api/v1/services/conf-sync-ca/rotate"), None).unwrap();
+        assert_eq!(v, Verb::ConfSyncRotate);
+        assert_eq!(k, NON_RESOURCE_KIND);
+    }
+
+    #[test]
+    fn global_ip_restrictions_effective_is_list_stream_plugins() {
+        let (v, k) = classify("GET", Some("/api/v1/global-ip-restrictions/effective"), None).unwrap();
+        assert_eq!(v, Verb::List);
+        assert_eq!(k, "EdgionStreamPlugins");
+    }
+
+    #[test]
     fn server_info_is_server_info() {
         let (v, k) = classify("GET", Some("/api/v1/server-info"), None).unwrap();
         assert_eq!(v, Verb::ServerInfo);
@@ -306,5 +329,140 @@ mod tests {
         assert_eq!(normalize_kind("edgionconfigdata"), "EdgionConfigData");
         assert_eq!(normalize_kind("HTTPRoute"), "HTTPRoute");
         assert_eq!(normalize_kind("zzz"), "zzz");
+    }
+
+    // ===================== route <-> classifier drift guard =====================
+    //
+    // The module doc says "the route table here MUST mirror `create_admin_router`".
+    // Nothing used to enforce that, and the cost of a miss is severe: an admin route
+    // with no `classify()` arm makes `authz_layer` default-deny, so the endpoint
+    // returns 403 to EVERY caller — including the wildcard admin token — and the
+    // request never even reaches policy evaluation. That is exactly how
+    // `POST /api/v1/services/conf-sync-ca/rotate` shipped dead.
+    //
+    // This guard scrapes every `.route("<path>", <method_router>)` registration out
+    // of the router source at compile time (`include_str!`) and asserts that each
+    // (METHOD, path) pair classifies to `Some(..)`.
+
+    /// The router source, embedded at compile time. Any `.route(...)` added to
+    /// `api/mod.rs` is therefore automatically in scope for this guard.
+    const ROUTER_SRC: &str = include_str!("mod.rs");
+
+    /// Extract every `(METHOD, path)` pair registered via `.route(...)` in `src`.
+    ///
+    /// Scans for `.route(` and walks to the matching close paren with a depth
+    /// counter (route registrations are frequently spread over several lines), then
+    /// pulls the first string literal (the path template) and every HTTP method
+    /// constructor (`get`/`post`/`put`/`delete`/`patch`, possibly chained as
+    /// `get(a).post(b)`) out of that slice.
+    fn scrape_routes(src: &str) -> Vec<(String, String)> {
+        let method_re = regex::Regex::new(r"\b(get|post|put|delete|patch)\s*\(").unwrap();
+        let path_re = regex::Regex::new(r#""([^"]*)""#).unwrap();
+        let mut out = Vec::new();
+        let bytes = src.as_bytes();
+        let mut search_from = 0usize;
+        while let Some(rel) = src[search_from..].find(".route(") {
+            let open = search_from + rel + ".route(".len() - 1; // index of '('
+            let mut depth = 0i32;
+            let mut end = open;
+            for (i, b) in bytes.iter().enumerate().skip(open) {
+                match b {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = i;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let body = &src[open + 1..end];
+            search_from = end + 1;
+
+            let Some(path) = path_re.captures(body).map(|c| c[1].to_string()) else {
+                continue;
+            };
+            // Methods are matched on the part AFTER the path literal so a path
+            // segment such as `/get/...` can never be mistaken for a method.
+            let after_path = &body[path_re.find(body).unwrap().end()..];
+            for c in method_re.captures_iter(after_path) {
+                out.push((c[1].to_uppercase(), path.clone()));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn scrape_routes_parses_single_and_chained_registrations() {
+        // Self-test of the scraper, so a silently-broken regex cannot make the
+        // drift guard below vacuously pass.
+        let src = r#"
+            Router::new()
+                .route("/a/{kind}", get(h1).post(h2))
+                .route(
+                    "/b/c",
+                    delete(h3),
+                )
+                .route("/d", get(h4).with_state(s));
+        "#;
+        let mut got = scrape_routes(src);
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("DELETE".to_string(), "/b/c".to_string()),
+                ("GET".to_string(), "/a/{kind}".to_string()),
+                ("GET".to_string(), "/d".to_string()),
+                ("POST".to_string(), "/a/{kind}".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_admin_route_is_classified() {
+        let routes = scrape_routes(ROUTER_SRC);
+        // Sanity: the scraper must actually see the router. If `api/mod.rs` is ever
+        // restructured so the routes no longer live there, fail loudly rather than
+        // pass on an empty set.
+        assert!(
+            routes.len() > 20,
+            "route scraper found only {} routes in api/mod.rs — the guard has gone blind; \
+             fix scrape_routes() or point ROUTER_SRC at the file that now holds create_admin_router()",
+            routes.len()
+        );
+
+        let mut unclassified = Vec::new();
+        for (method, path) in &routes {
+            // Public paths (`/health`, `/ready`, `/metrics`, `/api/v1/auth/status`)
+            // are exempt: `authz_layer` skips them via `public_paths::is_static_public`
+            // BEFORE calling classify(), so they never need a classifier arm.
+            if crate::api::public_paths::is_static_public(path) {
+                continue;
+            }
+            // Test-mode-only routes (`wipe-all`, `debug/store-stats`) are NOT exempt:
+            // they go through the same authz layer, and they do have classifier arms.
+            let kind_param = if path.contains("{kind}") {
+                Some("httproute")
+            } else {
+                None
+            };
+            let m = Method::from_bytes(method.as_bytes()).unwrap();
+            if super::classify(&m, Some(path.as_str()), kind_param).is_none() {
+                unclassified.push(format!("{method} {path}"));
+            }
+        }
+
+        assert!(
+            unclassified.is_empty(),
+            "these admin routes have no arm in authz_classifier::classify():\n  {}\n\n\
+             An unclassified admin route default-denies: authz_layer returns 403 to EVERY caller \
+             (including the wildcard admin token) before any policy is evaluated, so the endpoint is \
+             dead in production. Fix: add an arm to classify() for each route above and, if the \
+             operation needs a new verb, a Verb variant in authz/mod.rs (variant + as_str() + \
+             from_str()). Non-resource operational endpoints carry NON_RESOURCE_KIND.",
+            unclassified.join("\n  ")
+        );
     }
 }

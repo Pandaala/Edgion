@@ -343,7 +343,7 @@ token) or `403 Forbidden` (permission denied). The only public auth endpoint is
 
 **1. Wide verb grants equal full admin access.**
 A token whose `rbac` grants `verbs: ["*"]` on the full admin router — including
-`reload`, `failover`, `acme-trigger`, `server-info`, and `diagnostics` — is
+`reload`, `failover`, `acme-trigger`, `conf-sync-rotate`, `server-info`, and `diagnostics` — is
 effectively equivalent to the allow-all admin token. Grant the minimum set of
 verbs the consumer actually needs.
 

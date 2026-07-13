@@ -327,6 +327,7 @@ mod rbac_metric_tests {
             "delete",
             "failover",
             "acme-trigger",
+            "conf-sync-rotate",
             "reload",
             "server-info",
             "diagnostics",

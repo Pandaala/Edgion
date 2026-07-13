@@ -48,6 +48,29 @@ fn ca_secret_data(ca: &Ca) -> BTreeMap<String, Vec<u8>> {
     ])
 }
 
+/// Server-side-apply params for the Secrets this module owns.
+///
+/// `force` is REQUIRED, not optional hygiene: server-side apply only overwrites
+/// fields the *same* field manager already owns. Every other owner triggers a 409
+/// Conflict instead — and both of our Secrets routinely have another owner:
+///
+/// - `edgion-conf-sync-ca` is CREATED by [`ensure_ca`]'s POST, so the API server
+///   records the fields under the client's default manager (`unknown`), not
+///   [`FIELD_MANAGER`]. A CA-renewal apply without `force` therefore 409s on every
+///   attempt, permanently — the root would expire with the reconciler stuck in
+///   backoff.
+/// - `edgion-conf-sync-certs` is normally apply-created by us, but an operator
+///   `kubectl create/edit/patch` (or the documented "adopt a manually created
+///   leaf" upgrade path) hands field ownership to kubectl and would likewise
+///   wedge every future rotation.
+///
+/// Forcing is the correct semantic here: the controller is the sole authority for
+/// the content of both Secrets, and convergence between replicas is guaranteed by
+/// [`ensure_ca`]'s POST-and-adopt, not by apply conflicts.
+fn apply_params() -> PatchParams {
+    PatchParams::apply(FIELD_MANAGER).force()
+}
+
 /// Extract a UTF-8 data value from a Secret (PEM strings are ASCII).
 fn data_str(s: &Secret, key: &str) -> Option<String> {
     s.data
@@ -97,9 +120,8 @@ pub async fn write_leaf(secret_api: &Api<Secret>, ns: &str, leaf: &LeafPem, ca_c
         ("ca.crt".to_string(), ca_cert_pem.as_bytes().to_vec()),
     ]);
     let secret = build_secret(LEAF_SECRET, ns, data);
-    let pp = PatchParams::apply(FIELD_MANAGER);
     secret_api
-        .patch(LEAF_SECRET, &pp, &Patch::Apply(secret))
+        .patch(LEAF_SECRET, &apply_params(), &Patch::Apply(secret))
         .await
         .context("apply gateway leaf secret")?;
     Ok(())
@@ -111,14 +133,15 @@ pub async fn write_leaf(secret_api: &Api<Secret>, ns: &str, leaf: &LeafPem, ca_c
 /// `renew_root_same_key`: the certificate PEM changes but the key PEM is the
 /// SAME bytes, so `ca.key` MUST be re-applied alongside `ca.crt` (both come from
 /// [`ca_secret_data`]) or a future `ensure_ca`/re-sign would find the key gone.
-/// Unlike [`ensure_ca`]'s POST-create, this is a last-writer-wins apply: the
-/// caller is the elected leader holding the current root, so convergence is not
-/// at stake here — only key preservation is.
+///
+/// The apply is forced ([`apply_params`]): the Secret was POST-created by
+/// [`ensure_ca`], so its fields belong to another manager and an unforced apply
+/// would 409 on every renewal. Convergence between replicas is not at stake here
+/// — the caller is the elected leader re-signing the root it already holds.
 pub async fn write_ca(secret_api: &Api<Secret>, ns: &str, ca: &Ca) -> Result<()> {
     let secret = build_secret(CA_SECRET, ns, ca_secret_data(ca));
-    let pp = PatchParams::apply(FIELD_MANAGER);
     secret_api
-        .patch(CA_SECRET, &pp, &Patch::Apply(secret))
+        .patch(CA_SECRET, &apply_params(), &Patch::Apply(secret))
         .await
         .context("apply renewed CA secret")?;
     Ok(())
@@ -145,6 +168,19 @@ pub async fn read_leaf(secret_api: &Api<Secret>) -> Result<Option<(String, Strin
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    /// Regression (found in cluster verification): an unforced apply 409s against
+    /// the POST-created CA Secret, wedging CA renewal forever. Both Secrets this
+    /// module writes must be force-applied.
+    #[test]
+    fn apply_params_force_and_field_manager() {
+        let pp = apply_params();
+        assert!(
+            pp.force,
+            "SSA apply must be forced or CA renewal 409s (see apply_params docs)"
+        );
+        assert_eq!(pp.field_manager.as_deref(), Some(FIELD_MANAGER));
+    }
 
     #[test]
     fn ca_secret_data_preserves_key_across_renewal() {

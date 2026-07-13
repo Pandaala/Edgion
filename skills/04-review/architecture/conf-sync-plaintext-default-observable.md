@@ -41,7 +41,8 @@ half of this behavior):
 The **legacy omitted path (no `auto_ca`) is unchanged** — still observable-but-not-fail-closed
 (`plaintext_default`), for backward compatibility. The global fail-close flip (reject
 plaintext even without `auto_ca`) remains deferred as a fast-follow with a migration note
-(`tasks/pending/14-mesh-identity-plane-scale-taxes.md` §2.5).
+(tracked in `tasks/pending/15-conf-sync-auto-cert-phase2-execution.md` follow-up item 4,
+gated on the cluster-verification checklist passing).
 
 ## Why not fail-close / not secure-by-default in code
 

@@ -26,6 +26,7 @@ pub enum Verb {
     Delete,
     Failover,
     AcmeTrigger,
+    ConfSyncRotate,
     Reload,
     ServerInfo,
     Diagnostics,
@@ -45,6 +46,7 @@ impl Verb {
             Verb::Delete => "delete",
             Verb::Failover => "failover",
             Verb::AcmeTrigger => "acme-trigger",
+            Verb::ConfSyncRotate => "conf-sync-rotate",
             Verb::Reload => "reload",
             Verb::ServerInfo => "server-info",
             Verb::Diagnostics => "diagnostics",
@@ -65,6 +67,7 @@ impl Verb {
             "delete" => Verb::Delete,
             "failover" => Verb::Failover,
             "acme-trigger" => Verb::AcmeTrigger,
+            "conf-sync-rotate" => Verb::ConfSyncRotate,
             "reload" => Verb::Reload,
             "server-info" => Verb::ServerInfo,
             "diagnostics" => Verb::Diagnostics,
@@ -352,6 +355,8 @@ mod tests {
     fn verb_roundtrips_string() {
         assert_eq!(Verb::Get.as_str(), "get");
         assert_eq!(Verb::from_str("failover"), Some(Verb::Failover));
+        assert_eq!(Verb::ConfSyncRotate.as_str(), "conf-sync-rotate");
+        assert_eq!(Verb::from_str("conf-sync-rotate"), Some(Verb::ConfSyncRotate));
         assert_eq!(Verb::from_str("nonsense"), None);
     }
 

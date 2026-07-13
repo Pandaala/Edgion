@@ -317,9 +317,12 @@ async fn run(mut rx: mpsc::Receiver<RotateScope>, client: Client, generation: u6
                 Some(scope) => {
                     // Manual rotations bypass the backoff.
                     if let Err(e) = rotate(&secret_api, params, scope, "manual", generation).await {
+                        // `{:#}` renders the whole anyhow cause chain on one line; plain
+                        // Display would show only the outermost context and hide the real
+                        // failure (e.g. the API server's 409 detail).
                         tracing::warn!(
                             component = "conf_sync_ca",
-                            error = %e,
+                            error = %format_args!("{e:#}"),
                             ?scope,
                             "manual rotation failed"
                         );
@@ -345,9 +348,11 @@ async fn run(mut rx: mpsc::Receiver<RotateScope>, client: Client, generation: u6
                     }
                     Err(e) => {
                         backoff.bump(Instant::now());
+                        // `{:#}` keeps the full anyhow cause chain (see the manual-rotation
+                        // arm above) — the root cause is never in the outermost context.
                         tracing::warn!(
                             component = "conf_sync_ca",
-                            error = %e,
+                            error = %format_args!("{e:#}"),
                             "rotation check failed; will retry"
                         );
                         edgion_common::observe::system_metrics::mark_system_error(
