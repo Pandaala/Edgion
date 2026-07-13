@@ -131,10 +131,14 @@ When the user says "run check", "check the code", "format the code", "run CI", "
 2. **Compile check**: `cargo check --workspace --all-targets`
 3. **Lint**: `cargo clippy --workspace --all-targets`
 4. **Doc consistency**: `python3 cicd/checks/validate_agent_docs.py`
+5. **SSA force guard**: `python3 cicd/checks/check_ssa_force.py` — every `Patch::Apply` must use
+   forced `PatchParams`; an unforced apply 409-Conflicts forever once any other field manager owns
+   the object (a POST-created object, a `kubectl edit`, a Secret predating the controller). See the
+   script's header for the full rationale and the allowlist rules.
 
 > `--workspace` is intentional: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip it. `--workspace` brings it back into the fast check/clippy signal (matching what `cargo test --all` already compiles).
 
-Steps 2/3/4 may run in parallel. If any step fails, report the error immediately and try to fix it; after fixing, re-run that step. Once all pass, summarize the result.
+Steps 2/3/4/5 may run in parallel. If any step fails, report the error immediately and try to fix it; after fixing, re-run that step. Once all pass, summarize the result.
 
 > `cargo test --all` takes a long time and is not part of the quick check by default. Run it only when the user explicitly asks.
 

@@ -1080,7 +1080,12 @@ async fn create_or_update_cert_secret(
         ..Default::default()
     };
 
-    let pp = PatchParams::apply("edgion-acme-controller");
+    // `force`: this is the data-plane TLS Secret. Adopting a Secret that already exists
+    // (the common `kubectl create secret tls` -> switch-to-ACME migration) leaves its
+    // fields owned by another manager; an unforced apply would then 409 on every
+    // renewal until the certificate expires and TLS breaks. The controller is the sole
+    // authority for the content it writes here. (Guard: cicd/checks/check_ssa_force.py)
+    let pp = PatchParams::apply("edgion-acme-controller").force();
     api.patch(name, &pp, &Patch::Apply(secret))
         .await
         .context("Failed to create/update TLS certificate Secret")?;
@@ -1131,7 +1136,12 @@ async fn create_or_update_edgion_tls(client: &Client, acme: &EdgionAcme) -> Resu
     let ar = kube::api::ApiResource::from_gvk(&gvk);
     let api: Api<kube::api::DynamicObject> = Api::namespaced_with(client.clone(), namespace, &ar);
 
-    let pp = PatchParams::apply("edgion-acme-controller");
+    // `force`: EdgionTls is an operator-facing CRD, so a hand-created or hand-edited
+    // instance (owned by kubectl) is expected; without force the apply 409s and ACME
+    // can never wire its issued cert up. SSA force only claims the fields this apply
+    // writes — operator edits to other fields survive. Mirrors the forced `patch_status`
+    // calls above. (Guard: cicd/checks/check_ssa_force.py)
+    let pp = PatchParams::apply("edgion-acme-controller").force();
     api.patch(&tls_name, &pp, &Patch::Apply(edgion_tls))
         .await
         .context("Failed to create/update EdgionTls")?;
