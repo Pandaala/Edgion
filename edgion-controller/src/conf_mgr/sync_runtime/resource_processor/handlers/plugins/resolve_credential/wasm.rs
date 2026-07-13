@@ -5,7 +5,9 @@
 //! `fetch.tls.clientCertificateRef` → `resolved_client_certificate`, and
 //! `fetch.authHeaderSecretRef` → `resolved_auth_header` (the value the
 //! gateway sends as the `Authorization` header when fetching `source.url`
-//! bytecode from a private artifact repository).
+//! bytecode from a private artifact repository). Also resolves
+//! `source.oci.pullSecretRef` → `resolved_pull_secret` (the raw
+//! dockerconfigjson document used to authenticate an OCI registry pull).
 //!
 //! References are registered with `SecretRefManager` (inside `fetch_secret` /
 //! `resolve_ca_certificate_refs`) so a Secret change re-processes the owning
@@ -54,6 +56,9 @@ fn resolve_wasm_plugin(
     let EdgionPlugin::Wasm(ref mut config) = plugin else {
         return;
     };
+
+    resolve_oci_pull_secret(config, ep_ns, resource_ref, ctx);
+
     let Some(ref mut fetch) = config.source.fetch else {
         return;
     };
@@ -150,5 +155,105 @@ fn resolve_wasm_plugin(
                 );
             }
         }
+    }
+}
+
+/// Resolve `source.oci.pullSecretRef` into `resolved_pull_secret` (the raw
+/// dockerconfigjson document; the gateway matches the registry host at pull
+/// time). An unresolvable reference leaves the field `None`, which the
+/// gateway treats as a load failure — never a silent anonymous pull.
+fn resolve_oci_pull_secret(
+    config: &mut edgion_resources::resources::edgion_plugins::plugin_configs::WasmConfig,
+    ep_ns: Option<&String>,
+    resource_ref: &ResourceRef,
+    ctx: &HandlerContext,
+) {
+    let Some(ref mut oci) = config.source.oci else {
+        return;
+    };
+    // Reset first to avoid stale values on update.
+    oci.resolved_pull_secret = None;
+    let Some(sor) = oci.pull_secret_ref.clone() else {
+        return;
+    };
+    let secret_key = format_secret_key(sor.namespace.as_ref().or(ep_ns), &sor.name);
+    match fetch_secret(ctx, resource_ref, "edgion.io", "EdgionPlugins", &sor) {
+        FetchOutcome::Ok(secret) => match extract_dockerconfigjson(&secret) {
+            Ok(json) => oci.resolved_pull_secret = Some(json),
+            Err(reason) => {
+                tracing::warn!(
+                    edgion_plugins = %resource_ref.key(),
+                    secret_key = %secret_key,
+                    reason = %reason,
+                    "Wasm oci: pull secret found but invalid"
+                );
+            }
+        },
+        FetchOutcome::Pending(PendingReason::SecretNotFound { .. }) => {
+            tracing::info!(
+                edgion_plugins = %resource_ref.key(),
+                secret_key = %secret_key,
+                "Wasm oci: pull secret not found yet, will reprocess when the Secret arrives"
+            );
+        }
+        FetchOutcome::Pending(PendingReason::ReferenceGrantMissing {
+            ref from_ns,
+            ref to_ns,
+            ref secret_name,
+        }) => {
+            tracing::warn!(
+                edgion_plugins = %resource_ref.key(),
+                from_ns = %from_ns,
+                to_ns = %to_ns,
+                secret_name = %secret_name,
+                "Wasm oci: cross-namespace pull secret reference denied (ReferenceGrant missing)"
+            );
+        }
+    }
+}
+
+/// Validate the Secret shape for an image pull secret: type
+/// `kubernetes.io/dockerconfigjson` with a UTF-8 `.dockerconfigjson` key.
+fn extract_dockerconfigjson(secret: &k8s_openapi::api::core::v1::Secret) -> Result<String, String> {
+    if secret.type_.as_deref() != Some("kubernetes.io/dockerconfigjson") {
+        return Err(format!(
+            "Secret type must be kubernetes.io/dockerconfigjson, got '{}'",
+            secret.type_.as_deref().unwrap_or("")
+        ));
+    }
+    super::read_secret_utf8(secret, &[".dockerconfigjson"])
+        .ok_or_else(|| "Secret key .dockerconfigjson is missing or not UTF-8".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_dockerconfigjson;
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::ByteString;
+
+    fn secret(type_: Option<&str>, key: Option<(&str, &[u8])>) -> Secret {
+        let mut s = Secret::default();
+        s.type_ = type_.map(str::to_string);
+        if let Some((k, v)) = key {
+            s.data = Some([(k.to_string(), ByteString(v.to_vec()))].into_iter().collect());
+        }
+        s
+    }
+
+    #[test]
+    fn accepts_wellformed_dockerconfigjson_secret() {
+        let s = secret(
+            Some("kubernetes.io/dockerconfigjson"),
+            Some((".dockerconfigjson", br#"{"auths":{}}"#)),
+        );
+        assert_eq!(extract_dockerconfigjson(&s).unwrap(), r#"{"auths":{}}"#);
+    }
+
+    #[test]
+    fn rejects_wrong_type_and_missing_key() {
+        let s = secret(Some("Opaque"), Some((".dockerconfigjson", b"{}")));
+        assert!(extract_dockerconfigjson(&s).unwrap_err().contains("dockerconfigjson"));
+        let s = secret(Some("kubernetes.io/dockerconfigjson"), None);
+        assert!(extract_dockerconfigjson(&s).unwrap_err().contains(".dockerconfigjson"));
     }
 }

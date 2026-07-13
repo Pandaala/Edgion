@@ -226,11 +226,62 @@ pub struct GatewayConfig {
     #[arg(skip)]
     #[serde(default = "default_outbound_egress_dns_cache_ttl_ms")]
     pub outbound_egress_dns_cache_ttl_ms: u64,
+
+    /// Directory for the Wasm OCI image disk cache (manifests + layer blobs,
+    /// content-addressed). Relative paths resolve against the work directory.
+    /// Unset uses `wasm-oci-cache`; an empty string disables disk caching.
+    #[arg(skip)]
+    #[serde(default)]
+    pub wasm_oci_cache_dir: Option<String>,
+
+    /// Seconds since last use before a cached OCI file is purged (default 24h).
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_cache_ttl_secs")]
+    pub wasm_oci_cache_ttl_secs: u64,
+
+    /// Seconds between purge sweeps of the OCI disk cache (default 1h).
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_cache_purge_interval_secs")]
+    pub wasm_oci_cache_purge_interval_secs: u64,
+
+    /// Total-size budget in bytes for the OCI disk cache (default 512MiB).
+    /// Enforced on every write with LRU eviction; `0` removes the cap.
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_cache_max_bytes")]
+    pub wasm_oci_cache_max_bytes: u64,
+
+    /// Per-request timeout in seconds for OCI pull requests (manifest, token,
+    /// and blob alike; istio-agent WASM_HTTP_REQUEST_TIMEOUT parity). Default 60.
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_pull_timeout_secs")]
+    pub wasm_oci_pull_timeout_secs: u64,
+
+    /// Total attempts (including the first) for each OCI pull request;
+    /// transport errors and 5xx retry, 4xx never does. Default 3.
+    #[arg(skip)]
+    #[serde(default = "default_wasm_oci_pull_attempts")]
+    pub wasm_oci_pull_attempts: u32,
 }
 
 /// 5s — matches `backends::discovery::dns_cache::DEFAULT_DNS_CACHE_TTL`.
 fn default_outbound_egress_dns_cache_ttl_ms() -> u64 {
     5_000
+}
+
+fn default_wasm_oci_cache_ttl_secs() -> u64 {
+    86_400
+}
+fn default_wasm_oci_cache_purge_interval_secs() -> u64 {
+    3_600
+}
+fn default_wasm_oci_cache_max_bytes() -> u64 {
+    512 * 1024 * 1024
+}
+fn default_wasm_oci_pull_timeout_secs() -> u64 {
+    60
+}
+fn default_wasm_oci_pull_attempts() -> u32 {
+    3
 }
 
 impl Default for GatewayConfig {
@@ -244,6 +295,12 @@ impl Default for GatewayConfig {
             fips_policy: None,
             outbound_egress_block_private: false,
             outbound_egress_dns_cache_ttl_ms: default_outbound_egress_dns_cache_ttl_ms(),
+            wasm_oci_cache_dir: None,
+            wasm_oci_cache_ttl_secs: default_wasm_oci_cache_ttl_secs(),
+            wasm_oci_cache_purge_interval_secs: default_wasm_oci_cache_purge_interval_secs(),
+            wasm_oci_cache_max_bytes: default_wasm_oci_cache_max_bytes(),
+            wasm_oci_pull_timeout_secs: default_wasm_oci_pull_timeout_secs(),
+            wasm_oci_pull_attempts: default_wasm_oci_pull_attempts(),
         }
     }
 }
@@ -262,6 +319,15 @@ impl std::fmt::Debug for GatewayConfig {
                 "outbound_egress_dns_cache_ttl_ms",
                 &self.outbound_egress_dns_cache_ttl_ms,
             )
+            .field("wasm_oci_cache_dir", &self.wasm_oci_cache_dir)
+            .field("wasm_oci_cache_ttl_secs", &self.wasm_oci_cache_ttl_secs)
+            .field(
+                "wasm_oci_cache_purge_interval_secs",
+                &self.wasm_oci_cache_purge_interval_secs,
+            )
+            .field("wasm_oci_cache_max_bytes", &self.wasm_oci_cache_max_bytes)
+            .field("wasm_oci_pull_timeout_secs", &self.wasm_oci_pull_timeout_secs)
+            .field("wasm_oci_pull_attempts", &self.wasm_oci_pull_attempts)
             .finish()
     }
 }
@@ -1171,6 +1237,31 @@ access_log_sensitive:
                 .unwrap();
         assert!(cfg.outbound_egress_block_private);
         assert_eq!(cfg.outbound_egress_dns_cache_ttl_ms, 30_000);
+    }
+
+    #[test]
+    fn wasm_oci_cache_fields_parse_and_default() {
+        let cfg = GatewayConfig::default();
+        assert_eq!(cfg.wasm_oci_cache_dir, None);
+        assert_eq!(cfg.wasm_oci_cache_ttl_secs, 86_400);
+        assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 3_600);
+        assert_eq!(cfg.wasm_oci_cache_max_bytes, 512 * 1024 * 1024);
+        let cfg: GatewayConfig = serde_yaml::from_str(
+            "wasm_oci_cache_dir: \"\"\nwasm_oci_cache_ttl_secs: 60\n\
+             wasm_oci_cache_purge_interval_secs: 30\nwasm_oci_cache_max_bytes: 0\n",
+        )
+        .unwrap();
+        assert_eq!(cfg.wasm_oci_cache_dir.as_deref(), Some(""));
+        assert_eq!(cfg.wasm_oci_cache_ttl_secs, 60);
+        assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 30);
+        assert_eq!(cfg.wasm_oci_cache_max_bytes, 0);
+        // Pull tuning defaults + YAML override.
+        assert_eq!(GatewayConfig::default().wasm_oci_pull_timeout_secs, 60);
+        assert_eq!(GatewayConfig::default().wasm_oci_pull_attempts, 3);
+        let cfg: GatewayConfig =
+            serde_yaml::from_str("wasm_oci_pull_timeout_secs: 15\nwasm_oci_pull_attempts: 5\n").unwrap();
+        assert_eq!(cfg.wasm_oci_pull_timeout_secs, 15);
+        assert_eq!(cfg.wasm_oci_pull_attempts, 5);
     }
 
     #[test]

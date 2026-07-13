@@ -76,7 +76,7 @@ spec:
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
 | `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation + immediate-response short-circuit. MVP is header-only (no body); peer of `ForwardAuth`. Runs in the `RequestFilter` and async `UpstreamResponse` stages. |
-| `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No request-body hooks, no body rewrite, no gRPC callouts. Runs in the `RequestFilter`, sync `UpstreamResponseFilter`, and `UpstreamResponseBodyFilter` stages. See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
+| `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No request-body hooks, no body rewrite, no gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a content-addressed disk cache). Runs in the `RequestFilter`, sync `UpstreamResponseFilter`, and `UpstreamResponseBodyFilter` stages. See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
 
 ### Routing/Backend
 
@@ -123,5 +123,6 @@ The following plugin types read Secret data from `GLOBAL_SECRET_STORE` during th
 | `OpenidConnect` | client_secret, session_secret |
 | `HeaderCertAuth` | CA certificates |
 | `Wasm` | `source.fetch`: artifact-repo Authorization header value, fetch TLS CA / client certs |
+| `Wasm` | `source.oci.pullSecretRef`: `kubernetes.io/dockerconfigjson` registry credentials, resolved into `resolved_pull_secret` (redacted in admin output); unresolved ⇒ plugin load failure |
 
 Secret changes automatically trigger reprocessing of EdgionPlugins via SecretRefManager.

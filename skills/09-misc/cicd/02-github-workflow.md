@@ -21,6 +21,7 @@ The repo currently has the following workflows under `.github/workflows/`:
 | `check-english-only.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_english_only.sh` — the English-only gate the project relies on |
 | `check-gateway-no-tracing.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_gateway_no_tracing.py` — forbids `tracing::warn!/error!` on data-plane hot paths (function-level) |
 | `check-edgion-config-data-overlay.yml` | `pull_request` + `push` to `main` | Three gates guarding the EdgionConfigData overlay refactor — see "EdgionConfigData overlay gates" below |
+| `supply-chain.yml` | `pull_request` + `push` to `main` + daily cron | `cargo deny check` against `deny.toml` (RustSec advisories, license allowlist, banned crates, source pinning). Cron runs advisories-only so new advisories surface without waiting for a PR; triage decisions live as commented `ignore` entries in `deny.toml`. Do NOT pass `--all-features` (TLS/allocator features are mutually exclusive) |
 | `docs.yml` | `push` to `main` touching `docs/**` (or `workflow_dispatch`) | VitePress build + GitHub Pages deploy |
 | `build-image.yml` | `workflow_dispatch` (manual only) | Cross-compile binaries, build/push runtime images, merge manifests, create release |
 

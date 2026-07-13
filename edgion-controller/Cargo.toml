@@ -2,6 +2,7 @@
 name = "edgion-controller"
 version.workspace = true
 edition.workspace = true
+publish = false
 authors.workspace = true
 
 [lib]

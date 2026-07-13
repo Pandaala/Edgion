@@ -67,15 +67,16 @@ config:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `source.file` | String | — | Local filesystem path to a `.wasm` file. Relative paths resolve against the gateway work directory. Exactly one of `source.file` / `source.inline` / `source.url` must be set. |
+| `source.file` | String | — | Local filesystem path to a `.wasm` file. Relative paths resolve against the gateway work directory. Exactly one of `source.file` / `source.inline` / `source.url` / `source.oci` must be set. |
 | `source.inline` | String (base64) | — | Wasm bytecode carried inline in the resource, base64-encoded. **Dev/test convenience only** — decoded size is capped at 1MiB (hard validation error above), and above 512KiB the gateway logs a WARN at load time. See [Choosing a source form](#choosing-a-source-form). |
 | `source.url` | String | — | An `http://` or `https://` URL the gateway fetches the bytecode from. **Requires `sha256`.** Connection behavior is tunable via `source.fetch`. |
-| `source.fetch` | Object | — | Optional fetch hardening for `url` sources (invalid with `file`/`inline`): TLS, auth, timeout, retry. See below. |
+| `source.fetch` | Object | — | Optional fetch hardening for `url` sources (invalid with `file`/`inline`/`oci`): TLS, auth, timeout, retry. See below. |
 | `source.fetch.tls` | Object | — | The shared `TlsConfig` block: custom CA bundle (`validation.caCertificateRefs`) and/or client identity (`clientCertificateRef`) for mTLS to the artifact repository. Secret refs are resolved by the controller (cross-namespace refs need a `ReferenceGrant`). |
 | `source.fetch.authHeaderSecretRef` | Object | — | `{name, namespace?, key}` of a Secret whose `key` (default `authorization`) holds the full `Authorization` header value sent with the fetch (e.g. `Bearer <token>`). If the ref is set but the Secret is not yet resolved, the load **fails** rather than silently fetching unauthenticated. |
 | `source.fetch.timeoutMs` | Integer | `10000` | Per-attempt fetch timeout. Range `1..=60000`. |
 | `source.fetch.retry` | Object | — | `{attempts, backoffMs}` — total attempts including the first (`1..=10`, default 3) and base backoff doubled per retry (default 500, max 30000). Fixed policy: transport errors and `5xx` retry; **`4xx` never retries**. |
-| `sha256` | String (64 hex chars) | — | SHA-256 of the raw bytecode, verified before compilation. Optional for `file` / `inline`; **required** for `url`. |
+| `source.oci` | Object | — | Pull the module from an OCI registry: `{image, pullPolicy?, pullSecretRef?}`. See [`source.oci` — pull from an OCI registry](#sourceoci--pull-from-an-oci-registry). |
+| `sha256` | String (64 hex chars) | — | SHA-256 of the raw bytecode, verified before compilation. Optional for `file` / `inline` / `oci`; **required** for `url`. |
 | `pluginConfig` | String | — | Opaque configuration passed to `proxy_on_configure`, readable via the `PluginConfiguration` buffer. |
 | `vmConfig` | String | — | Opaque configuration passed to `proxy_on_vm_start`, readable via the `VmConfiguration` buffer. |
 | `failOpen` | Boolean | `false` | Governs behavior on load failure / trap / timeout / callout no-resume — see [Failure semantics](#failure-semantics). |
@@ -91,9 +92,50 @@ config:
 | `inline` | **Dev/test convenience.** Not a production distribution mechanism. | 1MiB decoded (hard cap); K8s object + etcd limits apply on top | Rides the CR through etcd; every conf_sync carries it in full |
 | `file` | Modules baked into the gateway image or mounted via initContainer | none | Image build / volume mount |
 | `url` | **Recommended for production** — internal artifact repository (Nexus, Artifactory, S3 presigned) | none | Gateway fetches directly, with `source.fetch` TLS/auth/retry and mandatory `sha256` |
-| `oci://` | Roadmap (Istio-style OCI image distribution) — not yet implemented | — | — |
+| `oci` | **Recommended for production** — Istio-style OCI image distribution | none | Gateway pulls directly from an OCI registry, with a content-addressed disk cache |
 
 This mirrors Istio's posture: Istio's `WasmPlugin` has **no inline field** at all and treats `oci://` as the primary channel with `http(s)` as the second. Edgion keeps `inline` for fast iteration but caps and warns on it; a ConfigMap-based form was evaluated and rejected (same etcd object cap as inline, plus ref-tracking complexity, no added value).
+
+### `source.oci` — pull from an OCI registry
+
+```yaml
+source:
+  oci:
+    image: registry.internal/wasm/header-demo:1.2.0   # or ...@sha256:<digest>
+    pullPolicy: IfNotPresent                          # optional: IfNotPresent | Always
+    pullSecretRef:                                    # optional, private registries
+      name: registry-creds                            # kubernetes.io/dockerconfigjson Secret
+```
+
+| Field | Notes |
+|---|---|
+| `image` | `registry/repo:tag` or `registry/repo@sha256:<digest>`. The registry host is required. |
+| `pullPolicy` | Unset follows the Kubernetes convention: `Always` for `latest` / missing tag, `IfNotPresent` otherwise. A digest reference is always pinned. `Always` re-resolves the tag's digest at most every 60s and reloads only when it changed. |
+| `pullSecretRef` | A `kubernetes.io/dockerconfigjson` Secret. Cross-namespace references require a ReferenceGrant. If the Secret cannot be resolved, the plugin load fails — there is no silent anonymous fallback. |
+
+Accepted image shapes (Istio parity): a layer with media type
+`application/vnd.module.wasm.content.layer.v1+wasm` (pushed by `oras`), or a
+single tar+gzip layer containing `plugin.wasm` (plain `docker build` from
+scratch). `sha256` stays optional for OCI sources — the digest chain already
+covers transport integrity — and, when set, is verified against the final
+wasm bytes as for every other source.
+
+Pulled manifests and blobs are cached on local disk (default
+`wasm-oci-cache/` under the gateway work directory; recommend an emptyDir
+mount in Kubernetes) so a gateway restart does not re-download pinned
+content. The cache is bounded: entries unused for 24h are purged, and a
+total-size budget (default 512MiB) is enforced on every write with LRU
+eviction. Pull timeout and retry attempts are tunable too. See the gateway
+config fields `wasm_oci_cache_dir`, `wasm_oci_cache_ttl_secs`,
+`wasm_oci_cache_purge_interval_secs`, `wasm_oci_cache_max_bytes`,
+`wasm_oci_pull_timeout_secs`, `wasm_oci_pull_attempts`.
+
+Limitations (v1): registries must present a publicly-verifiable TLS
+certificate (loopback registries use plain HTTP for local testing); no
+registry mirrors. For static deployments, `source.file` with an
+initContainer (or the Kubernetes `image` volume source) remains the
+kubelet-native alternative — `source.oci` is for dynamically applied plugins
+that must hot-load without a pod restart.
 
 ### `url` with fetch hardening (production example)
 
@@ -278,7 +320,7 @@ A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_disc
 - **No callouts from the response/body phases** (sync stages), and request-phase dispatch without `Pause` is dropped. Tick-phase callouts additionally require the module's plugins to agree on one `calloutAllowlist` (see [Timers](#shared-data-and-timers)).
 - **No shared queues, foreign functions, or guest-defined metrics**: calling them traps.
 - **Per-request contexts are per-hook-call**: the request-headers and response-headers hooks of the same request may run on different pooled instances with fresh context ids. Correlate the phases through shared data or a stashed request header, not guest struct fields.
-- **No OCI (`oci://`) source** yet — roadmap.
+- **`source.oci` v1 constraints**: registries must present a publicly-verifiable TLS certificate (loopback registries may use plain HTTP for local testing); no registry mirrors. See [`source.oci` — pull from an OCI registry](#sourceoci--pull-from-an-oci-registry).
 
 ## Building a guest
 
@@ -360,7 +402,7 @@ Confirm you listed the entry under `upstreamResponseFilterPlugins` (headers) or 
 
 ### Q: The controller rejected my EdgionPlugins resource?
 
-Common causes: `source` has zero or more than one of `file`/`inline`/`url` set; `source.url` without `sha256`; `sha256` isn't 64 hex chars; `source.inline` isn't valid base64 or decodes to more than 1MiB; `source.fetch` without `source.url`; `calloutAllowlist` entries that aren't clean `scheme://host[:port]` origins; `timeoutMs`/`calloutTimeoutMs` out of `1..=10000`; `instancePoolSize` out of `1..=64`.
+Common causes: `source` has zero or more than one of `file`/`inline`/`url`/`oci` set; `source.url` without `sha256`; `sha256` isn't 64 hex chars; `source.inline` isn't valid base64 or decodes to more than 1MiB; `source.fetch` without `source.url`; `source.oci.image` isn't a valid `registry/repo:tag` or `registry/repo@sha256:<digest>` reference; `calloutAllowlist` entries that aren't clean `scheme://host[:port]` origins; `timeoutMs`/`calloutTimeoutMs` out of `1..=10000`; `instancePoolSize` out of `1..=64`.
 
 ### Q: I replaced the `.wasm` file on disk but the gateway still runs the old build?
 

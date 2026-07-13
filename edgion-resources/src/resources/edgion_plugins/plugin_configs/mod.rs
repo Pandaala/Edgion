@@ -36,6 +36,7 @@ mod request_restriction;
 mod response_rewrite;
 mod trace_context;
 mod wasm;
+mod wasm_oci;
 
 pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use bandwidth_limit::BandwidthLimitConfig;
@@ -91,3 +92,4 @@ pub use wasm::{
     normalize_callout_origin, WasmAuthHeaderSecretRef, WasmConfig, WasmFetchRetry, WasmFetchSpec, WasmSourceSpec,
     INLINE_WARN_DECODED_BYTES, MAX_INLINE_DECODED_BYTES,
 };
+pub use wasm_oci::{OciImageRef, OciPullPolicy, WasmOciSpec};

@@ -67,15 +67,16 @@ config:
 
 | 参数 | 类型 | 默认值 | 说明 |
 |-----------|------|---------|-------------|
-| `source.file` | String | — | 本地 `.wasm` 文件路径，相对路径基于网关工作目录解析。`file` / `inline` / `url` 三者必须恰好设置一个。 |
+| `source.file` | String | — | 本地 `.wasm` 文件路径，相对路径基于网关工作目录解析。`file` / `inline` / `url` / `oci` 四者必须恰好设置一个。 |
 | `source.inline` | String (base64) | — | base64 编码、内嵌在资源里的字节码。**仅作为开发/测试便利**——解码后硬上限 1MiB（超出为校验错误），超过 512KiB 网关在加载时 WARN。见[来源形态选型](#来源形态选型)。 |
 | `source.url` | String | — | 网关拉取字节码的 `http://` / `https://` URL。**必须配 `sha256`。** 连接行为可通过 `source.fetch` 调整。 |
-| `source.fetch` | Object | — | `url` 来源的可选拉取强化（与 `file`/`inline` 同用为校验错误）：TLS、认证、超时、重试。 |
+| `source.fetch` | Object | — | `url` 来源的可选拉取强化（与 `file`/`inline`/`oci` 同用为校验错误）：TLS、认证、超时、重试。 |
 | `source.fetch.tls` | Object | — | 共享 `TlsConfig` 结构：自定义 CA（`validation.caCertificateRefs`）和/或 mTLS 客户端身份（`clientCertificateRef`）。Secret 引用由 controller 解析（跨 namespace 需要 `ReferenceGrant`）。 |
 | `source.fetch.authHeaderSecretRef` | Object | — | `{name, namespace?, key}`：Secret 的 `key`（默认 `authorization`）保存拉取时发送的完整 `Authorization` 头值（如 `Bearer <token>`）。设置了引用但 Secret 尚未解析时，加载**失败**而不是静默匿名拉取。 |
 | `source.fetch.timeoutMs` | Integer | `10000` | 单次尝试超时。范围 `1..=60000`。 |
 | `source.fetch.retry` | Object | — | `{attempts, backoffMs}`——含首次的总尝试数（`1..=10`，默认 3）与逐次翻倍的基础退避（默认 500，上限 30000）。策略固定：传输错误与 `5xx` 重试；**`4xx` 永不重试**。 |
-| `sha256` | String (64 hex) | — | 原始字节码的 SHA-256，编译前校验。`file` / `inline` 可选；`url` **必填**。 |
+| `source.oci` | Object | — | 从 OCI 镜像仓库拉取模块：`{image, pullPolicy?, pullSecretRef?}`。见[`source.oci`——从 OCI 镜像仓库拉取](#sourceoci从-oci-镜像仓库拉取)。 |
+| `sha256` | String (64 hex) | — | 原始字节码的 SHA-256，编译前校验。`file` / `inline` / `oci` 可选；`url` **必填**。 |
 | `pluginConfig` | String | — | 传给 `proxy_on_configure` 的不透明配置，经 `PluginConfiguration` buffer 可读。 |
 | `vmConfig` | String | — | 传给 `proxy_on_vm_start` 的不透明配置，经 `VmConfiguration` buffer 可读。 |
 | `failOpen` | Boolean | `false` | 加载失败 / trap / 超时 / callout 不恢复时的行为——见[失败语义](#失败语义)。 |
@@ -91,9 +92,46 @@ config:
 | `inline` | **开发/测试便利**，不是生产分发机制 | 解码后 1MiB（硬上限）；另受 K8s 对象/etcd 限制 | 随 CR 进 etcd；每次 conf_sync 全量携带 |
 | `file` | 打进网关镜像或 initContainer 挂载的模块 | 无 | 镜像构建 / volume 挂载 |
 | `url` | **生产推荐**——内部制品库（Nexus、Artifactory、S3 presigned） | 无 | 网关直拉，配合 `source.fetch` 的 TLS/认证/重试与强制 `sha256` |
-| `oci://` | Roadmap（对齐 Istio 的 OCI 镜像分发）——尚未实现 | — | — |
+| `oci` | **生产推荐**——对齐 Istio 的 OCI 镜像分发 | 无 | 网关直接从 OCI 镜像仓库拉取，配合内容寻址的磁盘缓存 |
 
 这与 Istio 的取向一致：Istio 的 `WasmPlugin` **根本没有 inline 字段**，以 `oci://` 为主通道、`http(s)` 次之。Edgion 保留 inline 用于快速迭代，但加上限并告警；ConfigMap 形态经评估后否决（与 inline 同受 etcd 对象上限，还引入 ref 追踪复杂度，无增量价值）。
+
+### `source.oci`——从 OCI 镜像仓库拉取
+
+```yaml
+source:
+  oci:
+    image: registry.internal/wasm/header-demo:1.2.0   # 或 ...@sha256:<digest>
+    pullPolicy: IfNotPresent                          # 可选：IfNotPresent | Always
+    pullSecretRef:                                    # 可选，私有仓库使用
+      name: registry-creds                            # kubernetes.io/dockerconfigjson 类型 Secret
+```
+
+| 字段 | 说明 |
+|---|---|
+| `image` | `registry/repo:tag` 或 `registry/repo@sha256:<digest>`。registry host 部分必填。 |
+| `pullPolicy` | 不设置时遵循 Kubernetes 惯例：`latest` 或缺省 tag 为 `Always`，其余为 `IfNotPresent`。digest 引用永远视为已固定。`Always` 最多每 60s 重新解析一次 tag 对应的 digest，且仅在 digest 变化时才重新加载。 |
+| `pullSecretRef` | `kubernetes.io/dockerconfigjson` 类型 Secret。跨 namespace 引用需要 ReferenceGrant。如果 Secret 无法解析，插件加载**失败**——不存在静默匿名回退。 |
+
+支持的镜像形态（对齐 Istio）：媒体类型为
+`application/vnd.module.wasm.content.layer.v1+wasm` 的层（由 `oras` 推送），或
+一个包含 `plugin.wasm` 的单个 tar+gzip 层（普通 `docker build` 即可产出）。
+OCI 来源的 `sha256` 仍是可选项——digest 链路本身已覆盖传输完整性——若设置，
+会像其他来源一样对最终 wasm 字节做校验。
+
+拉取到的 manifest 与 blob 会缓存在本地磁盘（默认网关工作目录下的
+`wasm-oci-cache/`；Kubernetes 中建议挂载 emptyDir），因此网关重启不会重新
+下载已固定的内容。缓存有边界：超过 24h 未使用的条目会被清理，写入时按
+总量预算（默认 512MiB）做 LRU 淘汰。拉取超时与重试次数同样可调。参见网关
+配置字段 `wasm_oci_cache_dir`、`wasm_oci_cache_ttl_secs`、
+`wasm_oci_cache_purge_interval_secs`、`wasm_oci_cache_max_bytes`、
+`wasm_oci_pull_timeout_secs`、`wasm_oci_pull_attempts`。
+
+限制（v1）：镜像仓库必须提供可公开验证的 TLS 证书（本地测试用的 loopback
+仓库可使用明文 HTTP）；不支持镜像仓库镜像（registry mirror）。对于静态部署，
+`source.file` 搭配 initContainer（或 Kubernetes 的 `image` volume source）
+仍是 kubelet 原生的替代方案——`source.oci` 面向需要不重启 Pod 就热加载的
+动态下发插件场景。
 
 ### url + 拉取强化（生产示例）
 
@@ -278,7 +316,7 @@ trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_
 - **响应/body 阶段不能 callout**（同步阶段），且请求阶段 dispatch 后不 Pause 会被丢弃。tick 阶段的 callout 还额外要求共享模块的插件对 `calloutAllowlist` 达成一致（见[定时器](#shared-data-与定时器)）。
 - **无 shared queue、foreign function、guest 自定义 metrics**：调用即 trap。
 - **请求级上下文按钩子调用创建**：同一请求的请求头钩子与响应头钩子可能运行在不同池化实例上、拿到全新 context id。跨阶段关联请用 shared data 或塞请求头，不要依赖 guest 结构体字段。
-- **暂无 OCI（`oci://`）来源**——roadmap。
+- **`source.oci` v1 限制**：镜像仓库必须提供可公开验证的 TLS 证书（本地测试用的 loopback 仓库可使用明文 HTTP）；不支持镜像仓库镜像（registry mirror）。见[`source.oci`——从 OCI 镜像仓库拉取](#sourceoci从-oci-镜像仓库拉取)。
 
 ## 编写 guest
 
@@ -360,7 +398,7 @@ impl Context for AuthPlugin {
 
 ### Q：controller 拒绝了我的 EdgionPlugins 资源？
 
-常见原因：`source` 的 `file`/`inline`/`url` 设置了零个或多个；`source.url` 未配 `sha256`；`sha256` 不是 64 位十六进制；`source.inline` 不是合法 base64 或解码超过 1MiB；`source.fetch` 未配 `source.url`；`calloutAllowlist` 条目不是干净的 `scheme://host[:port]` origin；`timeoutMs`/`calloutTimeoutMs` 超出 `1..=10000`；`instancePoolSize` 超出 `1..=64`。
+常见原因：`source` 的 `file`/`inline`/`url`/`oci` 设置了零个或多个；`source.url` 未配 `sha256`；`sha256` 不是 64 位十六进制；`source.inline` 不是合法 base64 或解码超过 1MiB；`source.fetch` 未配 `source.url`；`source.oci.image` 不是合法的 `registry/repo:tag` 或 `registry/repo@sha256:<digest>` 引用；`calloutAllowlist` 条目不是干净的 `scheme://host[:port]` origin；`timeoutMs`/`calloutTimeoutMs` 超出 `1..=10000`；`instancePoolSize` 超出 `1..=64`。
 
 ### Q：我覆写了磁盘上的 `.wasm` 文件，但网关还在跑旧构建？
 

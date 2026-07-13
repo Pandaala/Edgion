@@ -16,9 +16,16 @@
 //!   load error is cached for `LOAD_RETRY_SECS` so a broken source doesn't
 //!   get hammered on every request; after that window it is retried.
 //! - Bytecode fetch supports `file` (read relative to the gateway work dir),
-//!   `inline` (base64), and `url` (plain `reqwest::get` with a fixed
-//!   timeout, 200-only). When `sha256` is configured it is verified before
-//!   compilation; a mismatch is a load error (never compiled).
+//!   `inline` (base64), `url` (plain `reqwest::get` with a fixed timeout,
+//!   200-only), and `oci` (pulled via `super::oci::fetch_oci_bytes`, which is
+//!   disk-cache-first; see `oci::cache` for the on-disk layer). An `oci`
+//!   source with `pullPolicy: Always` is re-checked against the registry at
+//!   most every `OCI_ALWAYS_RECHECK_SECS` on `get_or_load`
+//!   (`oci_needs_refresh`): an unchanged digest keeps the cached entry, a
+//!   changed digest reloads in the same slot, and a re-check failure keeps
+//!   the loaded module (fail-open on transient registry errors). When
+//!   `sha256` is configured it is verified before compilation, covering
+//!   OCI-fetched bytes too; a mismatch is a load error (never compiled).
 //! - Compilation (`Module::new`) runs on `spawn_blocking` since it is a CPU
 //!   bound synchronous call that must not block the async executor.
 //! - Per module: a `Linker` gets the proxy-wasm host functions registered
@@ -66,6 +73,9 @@ const EPOCH_TICK_MS: u64 = 10;
 /// How long a load error is cached before a fresh `get_or_load` retries the
 /// source instead of returning the cached failure immediately.
 const LOAD_RETRY_SECS: u64 = 30;
+/// Minimum interval between manifest re-resolutions for an OCI source with
+/// `pullPolicy: Always`. Bounds registry traffic on hot request paths.
+const OCI_ALWAYS_RECHECK_SECS: u64 = 60;
 /// proxy-wasm root context id (id 1 is reserved for the VM-wide context that
 /// owns `on_vm_start`/`on_configure`; per-request contexts start above it).
 const ROOT_CONTEXT_ID: i32 = 1;
@@ -239,8 +249,21 @@ impl TickCalloutState {
 
 enum LoadState {
     NotLoaded,
-    Loaded(Arc<ModuleEntry>),
-    Failed { at: Instant, error: String },
+    Loaded {
+        entry: Arc<ModuleEntry>,
+        /// OCI digest bookkeeping (`Always` re-check); `None` for other sources.
+        oci: Option<OciLoadedMeta>,
+    },
+    Failed {
+        at: Instant,
+        error: String,
+    },
+}
+
+/// Digest bookkeeping for a loaded OCI-sourced module.
+struct OciLoadedMeta {
+    manifest_digest: String,
+    checked_at: Instant,
 }
 
 /// Global engine + per-source compiled module cache.
@@ -369,7 +392,7 @@ impl WasmVmManager {
         let slot = self.cache.modules.get(cache_key)?;
         let guard = slot.try_lock().ok()?;
         match &*guard {
-            LoadState::Loaded(entry) => Some(entry.clone()),
+            LoadState::Loaded { entry, .. } => Some(entry.clone()),
             _ => None,
         }
     }
@@ -470,8 +493,13 @@ impl WasmVmManager {
             .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(LoadState::NotLoaded)))
             .clone();
         let mut guard = slot.lock().await;
-        match &*guard {
-            LoadState::Loaded(entry) => return Ok(entry.clone()),
+        match &mut *guard {
+            LoadState::Loaded { entry, oci } => {
+                if !oci_needs_refresh(config, oci).await {
+                    return Ok(entry.clone());
+                }
+                // The tag moved to a new digest: fall through and reload.
+            }
             LoadState::Failed { at, error } if at.elapsed() < Duration::from_secs(LOAD_RETRY_SECS) => {
                 return Err(error.clone());
             }
@@ -479,9 +507,12 @@ impl WasmVmManager {
         }
         let label = config.source.metrics_label();
         match self.load_inner(config, self.cache.tick_callout_state(cache_key)).await {
-            Ok(entry) => {
+            Ok((entry, oci)) => {
                 record_wasm_module_load(&label, "ok");
-                *guard = LoadState::Loaded(entry.clone());
+                *guard = LoadState::Loaded {
+                    entry: entry.clone(),
+                    oci,
+                };
                 set_wasm_modules_loaded(self.cache.modules.len());
                 Ok(entry)
             }
@@ -501,9 +532,21 @@ impl WasmVmManager {
         &self,
         config: &WasmConfig,
         tick_callouts: Arc<TickCalloutState>,
-    ) -> Result<Arc<ModuleEntry>, String> {
+    ) -> Result<(Arc<ModuleEntry>, Option<OciLoadedMeta>), String> {
         let engine = self.engine()?.clone();
-        let bytes = fetch_bytes(&config.source).await?;
+        let (bytes, oci_meta) = match &config.source.oci {
+            Some(spec) => {
+                let fetched = super::oci::fetch_oci_bytes(spec).await?;
+                (
+                    fetched.bytes,
+                    Some(OciLoadedMeta {
+                        manifest_digest: fetched.manifest_digest,
+                        checked_at: Instant::now(),
+                    }),
+                )
+            }
+            None => (fetch_bytes(&config.source).await?, None),
+        };
         if let Some(expected) = &config.sha256 {
             let actual = hex::encode(Sha256::digest(&bytes));
             if !actual.eq_ignore_ascii_case(expected) {
@@ -558,7 +601,22 @@ impl WasmVmManager {
             .acquire(entry.hook_timeout_ms)
             .map_err(|e| format!("wasm instance init failed: {e}"))?;
         drop(warm);
-        Ok(entry)
+        Ok((entry, oci_meta))
+    }
+
+    /// Test-only: force the next `get_or_load` on an OCI entry to run the
+    /// `Always` re-check immediately (backdates `checked_at`).
+    #[cfg(test)]
+    pub async fn backdate_oci_check_for_test(&self, cache_key: &str) {
+        let Some(slot) = self.cache.modules.get(cache_key).map(|s| s.clone()) else {
+            return;
+        };
+        let mut guard = slot.lock().await;
+        if let LoadState::Loaded { oci: Some(meta), .. } = &mut *guard {
+            meta.checked_at = Instant::now()
+                .checked_sub(Duration::from_secs(OCI_ALWAYS_RECHECK_SECS + 1))
+                .unwrap_or_else(Instant::now);
+        }
     }
 }
 
@@ -590,6 +648,38 @@ fn check_abi_version(module: &Module) -> Result<(), String> {
     ))
 }
 
+/// `Always`-policy staleness check for a loaded OCI module. Re-resolves the
+/// tag's manifest digest at most every `OCI_ALWAYS_RECHECK_SECS`. A re-check
+/// failure keeps the loaded module (a transient registry error must not take
+/// a healthy plugin down) and pushes the next check a full interval out.
+async fn oci_needs_refresh(config: &WasmConfig, oci: &mut Option<OciLoadedMeta>) -> bool {
+    use edgion_resources::plugin_configs::{OciImageRef, OciPullPolicy};
+    let (Some(spec), Some(meta)) = (&config.source.oci, oci.as_mut()) else {
+        return false;
+    };
+    let Ok(image) = OciImageRef::parse(&spec.image) else {
+        return false; // admission validated this; never refresh on a parse error
+    };
+    if spec.effective_pull_policy(&image) != OciPullPolicy::Always {
+        return false;
+    }
+    if meta.checked_at.elapsed() < Duration::from_secs(OCI_ALWAYS_RECHECK_SECS) {
+        return false;
+    }
+    match super::oci::resolve_manifest_digest(spec).await {
+        Ok(digest) if digest == meta.manifest_digest => {
+            meta.checked_at = Instant::now();
+            false
+        }
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "wasm oci Always re-check failed; keeping the loaded module");
+            meta.checked_at = Instant::now();
+            false
+        }
+    }
+}
+
 async fn fetch_bytes(source: &WasmSourceSpec) -> Result<Vec<u8>, String> {
     if let Some(path) = &source.file {
         // Relative paths resolve against the gateway work dir, same as other
@@ -618,10 +708,10 @@ async fn fetch_bytes(source: &WasmSourceSpec) -> Result<Vec<u8>, String> {
     Err("wasm source has no file/inline/url".to_string())
 }
 
-/// Bound on concurrently in-flight url fetches across all modules. Same-url
+/// Bound on concurrently in-flight url/OCI fetches across all modules. Same-url
 /// callers already share one in-flight load via the per-key `LoadSlot`
 /// mutex; this caps distinct-url fan-out during a startup storm.
-fn url_fetch_permits() -> &'static tokio::sync::Semaphore {
+pub(super) fn url_fetch_permits() -> &'static tokio::sync::Semaphore {
     static PERMITS: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
     PERMITS.get_or_init(|| tokio::sync::Semaphore::new(4))
 }
@@ -2039,5 +2129,115 @@ mod tests {
         // The module never gets far enough to populate the cache, so a
         // sync-path caller sees a plain miss rather than a panic too.
         assert!(mgr.try_get(&config.source.cache_key()).is_none());
+    }
+
+    #[tokio::test]
+    async fn oci_source_loads_and_always_recheck_swaps_on_digest_change() {
+        use sha2::{Digest as _, Sha256};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        const WASM_A: &[u8] = b"\0asm\x01\x00\x00\x00";
+        // Same module plus an empty custom section: different bytes, still valid.
+        const WASM_B: &[u8] = b"\0asm\x01\x00\x00\x00\x00\x01\x00";
+
+        fn digest_of(bytes: &[u8]) -> String {
+            format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+        }
+        fn manifest_for(blob: &[u8]) -> Vec<u8> {
+            serde_json::to_vec(&serde_json::json!({
+                "schemaVersion": 2,
+                "mediaType": "application/vnd.oci.image.manifest.v1+json",
+                "layers": [{
+                    "mediaType": "application/vnd.module.wasm.content.layer.v1+wasm",
+                    "digest": digest_of(blob),
+                    "size": blob.len()
+                }]
+            }))
+            .unwrap()
+        }
+        async fn mount(server: &MockServer, blob: &'static [u8]) {
+            Mock::given(method("GET"))
+                .and(path("/v2/test/wasm/manifests/latest"))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(manifest_for(blob)))
+                .mount(server)
+                .await;
+            Mock::given(method("GET"))
+                .and(path(format!("/v2/test/wasm/blobs/{}", digest_of(blob))))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(blob.to_vec()))
+                .mount(server)
+                .await;
+        }
+
+        let server = MockServer::start().await;
+        mount(&server, WASM_A).await;
+        let host = server.uri().trim_start_matches("http://").to_string();
+        let config: WasmConfig = serde_json::from_value(serde_json::json!({
+            // tag `latest` => effective pullPolicy Always
+            "source": { "oci": { "image": format!("{host}/test/wasm:latest") } },
+            "timeoutMs": 500
+        }))
+        .unwrap();
+        let cache_key = config.source.cache_key();
+
+        let mgr = WasmVmManager::new_for_test();
+        let entry1 = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        // Within the re-check interval: cached entry, no new resolution.
+        let entry1b = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        assert!(Arc::ptr_eq(&entry1, &entry1b));
+
+        // Registry moves the tag to new content; backdate to force a re-check.
+        server.reset().await;
+        mount(&server, WASM_B).await;
+        mgr.backdate_oci_check_for_test(&cache_key).await;
+        let entry2 = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        assert!(!Arc::ptr_eq(&entry1, &entry2), "digest change must reload the module");
+
+        // Unchanged digest after another backdate: entry is kept.
+        mgr.backdate_oci_check_for_test(&cache_key).await;
+        let entry2b = mgr.get_or_load(&config, &cache_key).await.unwrap();
+        assert!(Arc::ptr_eq(&entry2, &entry2b));
+    }
+
+    #[tokio::test]
+    async fn oci_source_verifies_top_level_sha256_against_final_bytes() {
+        use sha2::{Digest as _, Sha256};
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        const WASM: &[u8] = b"\0asm\x01\x00\x00\x00";
+        let digest = format!("sha256:{}", hex::encode(Sha256::digest(WASM)));
+        let manifest = serde_json::to_vec(&serde_json::json!({
+            "schemaVersion": 2,
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "layers": [{
+                "mediaType": "application/vnd.module.wasm.content.layer.v1+wasm",
+                "digest": digest,
+                "size": WASM.len()
+            }]
+        }))
+        .unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v2/test/wasm/manifests/1.0"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(manifest))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v2/test/wasm/blobs/{digest}")))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(WASM.to_vec()))
+            .mount(&server)
+            .await;
+
+        let host = server.uri().trim_start_matches("http://").to_string();
+        let config: WasmConfig = serde_json::from_value(serde_json::json!({
+            "source": { "oci": { "image": format!("{host}/test/wasm:1.0") } },
+            "sha256": "0".repeat(64),
+            "timeoutMs": 500
+        }))
+        .unwrap();
+        let mgr = WasmVmManager::new_for_test();
+        let err = mgr.get_or_load(&config, &config.source.cache_key()).await.unwrap_err();
+        assert!(err.contains("sha256 mismatch"), "got: {err}");
     }
 }

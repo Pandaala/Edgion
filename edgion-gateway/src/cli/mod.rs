@@ -472,6 +472,26 @@ impl EdgionGatewayCli {
             Duration::from_millis(outbound_egress_dns_cache_ttl_ms),
         );
 
+        // 4e. Wasm OCI disk cache: unset dir => default under the work dir;
+        // empty string => disabled (memory-only module cache).
+        {
+            use crate::plugins::http::wasm::oci::cache::{configure_oci_disk_cache, OciDiskCacheConfig};
+            let cache_cfg = match config.gateway.wasm_oci_cache_dir.as_deref() {
+                Some("") => None,
+                other => Some(OciDiskCacheConfig {
+                    dir: edgion_resources::work_dir().resolve(other.unwrap_or("wasm-oci-cache")),
+                    ttl: Duration::from_secs(config.gateway.wasm_oci_cache_ttl_secs),
+                    purge_interval: Duration::from_secs(config.gateway.wasm_oci_cache_purge_interval_secs),
+                    max_bytes: config.gateway.wasm_oci_cache_max_bytes,
+                }),
+            };
+            configure_oci_disk_cache(cache_cfg);
+            crate::plugins::http::wasm::oci::configure_oci_pull(
+                Duration::from_secs(config.gateway.wasm_oci_pull_timeout_secs),
+                config.gateway.wasm_oci_pull_attempts,
+            );
+        }
+
         // 5. Initialize RateLimit / LRU cache / access-log sensitive global configurations
         edgion_resources::rate_limit_config::init_rate_limit_global_config(&config.rate_limit);
         config::init_lru_cache_global_config(&config.lru_cache);

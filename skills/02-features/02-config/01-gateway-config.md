@@ -25,6 +25,13 @@ gateway:
   server_addr: "http://127.0.0.1:12151"   # Required: Controller gRPC address
   admin_listen: "127.0.0.1:12001"         # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
   # probe_listen: "0.0.0.0:12000"         # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
+  # ─── Wasm `source.oci` disk cache + pull tuning (see `### gateway` below) ───
+  # wasm_oci_cache_dir: wasm-oci-cache          # default; "" disables disk caching
+  # wasm_oci_cache_ttl_secs: 86400              # default 24h
+  # wasm_oci_cache_purge_interval_secs: 3600    # default 1h
+  # wasm_oci_cache_max_bytes: 536870912         # default 512MiB; 0 = uncapped
+  # wasm_oci_pull_timeout_secs: 60              # default
+  # wasm_oci_pull_attempts: 3                   # default; includes the first attempt
 
 # ─── gRPC channel security (optional mTLS) ───
 # conf_sync_security:
@@ -126,6 +133,12 @@ access_log_sensitive:
 | `server_addr` | `String` | **Required** | Controller gRPC address |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback — sensitive endpoints not reachable cluster-wide. Remote access: `kubectl port-forward pod/<name> 12001:12001`. |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Probe listen address. Serves `/health` and `/ready` only. Binds all interfaces so kubelet can probe the pod IP directly. Not included in the gateway Service. |
+| `wasm_oci_cache_dir` | `String?` | `wasm-oci-cache` | Directory for the Wasm `source.oci` disk cache (manifests + layer blobs, content-addressed). Relative paths resolve against `work_dir`. **An empty string (`""`) disables disk caching.** |
+| `wasm_oci_cache_ttl_secs` | `u64` | `86400` (24h) | Seconds since a cached OCI file was last used before it is eligible for purge. |
+| `wasm_oci_cache_purge_interval_secs` | `u64` | `3600` (1h) | Interval between purge sweeps of the OCI disk cache. |
+| `wasm_oci_cache_max_bytes` | `u64` | `536870912` (512MiB) | Total-size budget for the OCI disk cache, enforced on every write with LRU eviction. **`0` removes the cap (uncapped).** |
+| `wasm_oci_pull_timeout_secs` | `u64` | `60` | Per-request timeout for OCI pull requests (manifest, token, and blob alike). Istio-agent `WASM_HTTP_REQUEST_TIMEOUT` parity. |
+| `wasm_oci_pull_attempts` | `u32` | `3` | Total attempts (including the first) for each OCI pull request; transport errors and `5xx` retry, `4xx` never does. Istio-agent `WASM_HTTP_REQUEST_MAX_RETRIES` parity. |
 
 ### conf_sync_security.tls
 
@@ -377,3 +390,4 @@ production enablement even when the startup WARN goes unread.
 - Tune Pingora workers and keepalive: change `server`
 - Tune the default RateLimit precision: change `rate_limit`
 - Require the FIPS-validated crypto module at startup (FIPS builds only): change `require_fips` or set `EDGION_REQUIRE_FIPS`
+- Tune the Wasm `source.oci` disk cache / pull behavior: change `gateway.wasm_oci_cache_dir` / `wasm_oci_cache_ttl_secs` / `wasm_oci_cache_purge_interval_secs` / `wasm_oci_cache_max_bytes` / `wasm_oci_pull_timeout_secs` / `wasm_oci_pull_attempts`

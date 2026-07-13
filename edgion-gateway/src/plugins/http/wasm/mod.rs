@@ -4,6 +4,7 @@
 
 pub mod callout;
 pub mod host_abi;
+pub mod oci;
 pub mod plugin;
 pub mod shared_data;
 pub mod vm_manager;

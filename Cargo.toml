@@ -147,6 +147,8 @@ rskafka = { version = "0.6", default-features = false, features = ["transport-tl
 
 # Crypto / encoding
 base64 = "0.22"
+filetime = "0.2"
+flate2 = "1"
 hex = "0.4"
 sha1 = "0.10.6"
 sha2 = "0.10"
@@ -155,6 +157,7 @@ hmac = "0.12"
 aes-gcm = "0.10"
 crc32fast = "1.4"
 subtle = "2"
+tar = "0.4"
 jsonwebtoken = "9"
 zeroize = { version = "1", features = ["derive"] }
 

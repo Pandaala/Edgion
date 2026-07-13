@@ -8,6 +8,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::wasm_oci::{OciImageRef, WasmOciSpec};
 use crate::resources::common::{SecretObjectReference, TlsConfig};
 
 /// Where the Wasm bytecode comes from. Exactly one field must be set.
@@ -28,6 +29,9 @@ pub struct WasmSourceSpec {
     /// Only meaningful when `url` is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fetch: Option<WasmFetchSpec>,
+    /// OCI registry source (pull an image whose layer carries the bytecode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub oci: Option<WasmOciSpec>,
 }
 
 /// Connection settings for fetching `source.url` bytecode from an artifact
@@ -131,10 +135,11 @@ impl WasmSourceSpec {
             None => "inline_sha256=".to_string(),
         };
         format!(
-            "file={};{};url={}",
+            "file={};{};url={};oci={}",
             self.file.as_deref().unwrap_or(""),
             inline_key,
-            self.url.as_deref().unwrap_or("")
+            self.url.as_deref().unwrap_or(""),
+            self.oci.as_ref().map(|o| o.image.as_str()).unwrap_or("")
         )
     }
 
@@ -152,6 +157,24 @@ impl WasmSourceSpec {
             use sha2::{Digest, Sha256};
             let digest = hex::encode(Sha256::digest(b64.as_bytes()));
             return format!("inline:{}", &digest[..8]);
+        }
+        if let Some(oci) = &self.oci {
+            return match OciImageRef::parse(&oci.image) {
+                Ok(r) => match &r.digest {
+                    Some(d) => {
+                        let hex_part = &d["sha256:".len()..];
+                        format!("oci:{}/{}@{}", r.registry, r.repository, &hex_part[..8])
+                    }
+                    None => format!(
+                        "oci:{}/{}:{}",
+                        r.registry,
+                        r.repository,
+                        r.tag.as_deref().unwrap_or("latest")
+                    ),
+                },
+                // validate() rejects unparseable refs; keep a readable fallback.
+                Err(_) => format!("oci:{}", oci.image),
+            };
         }
         "unknown".to_string()
     }
@@ -172,7 +195,7 @@ impl WasmSourceSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct WasmConfig {
-    /// Bytecode source (exactly one of file / inline / url).
+    /// Bytecode source (exactly one of file / inline / url / oci).
     pub source: WasmSourceSpec,
 
     /// Hex-encoded SHA-256 of the bytecode. Optional for file/inline,
@@ -289,12 +312,13 @@ impl WasmConfig {
             self.source.file.is_some(),
             self.source.inline.is_some(),
             self.source.url.is_some(),
+            self.source.oci.is_some(),
         ]
         .iter()
         .filter(|b| **b)
         .count();
         if set != 1 {
-            return Err("source: exactly one of file/inline/url must be set".to_string());
+            return Err("source: exactly one of file/inline/url/oci must be set".to_string());
         }
         if let Some(url) = &self.source.url {
             if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -328,6 +352,9 @@ impl WasmConfig {
                     ));
                 }
             }
+        }
+        if let Some(oci) = &self.source.oci {
+            OciImageRef::parse(&oci.image).map_err(|e| format!("source.oci.image: {e}"))?;
         }
         if let Some(sum) = &self.sha256 {
             if sum.len() != 64 || !sum.bytes().all(|b| b.is_ascii_hexdigit()) {
@@ -641,5 +668,53 @@ mod tests {
         assert!(c.fail_open);
         assert_eq!(c.timeout_ms, 50);
         assert_eq!(c.instance_pool_size, 4);
+    }
+
+    #[test]
+    fn oci_source_counts_in_exactly_one() {
+        // oci alone is a valid single source (sha256 not required).
+        let mut c = WasmConfig::default();
+        c.source.oci = Some(super::super::wasm_oci::WasmOciSpec {
+            image: "registry.internal/wasm/demo:1.0".to_string(),
+            ..Default::default()
+        });
+        assert!(c.validate().is_ok());
+        // oci + file violates exactly-one, and the message names oci.
+        c.source.file = Some("./demo.wasm".to_string());
+        let err = c.validate().unwrap_err();
+        assert!(err.contains("file/inline/url/oci"), "got: {err}");
+    }
+
+    #[test]
+    fn oci_image_syntax_validated() {
+        let mut c = WasmConfig::default();
+        c.source.oci = Some(super::super::wasm_oci::WasmOciSpec {
+            image: "no-registry-host:1.0".to_string(),
+            ..Default::default()
+        });
+        let err = c.validate().unwrap_err();
+        assert!(err.contains("source.oci.image"), "got: {err}");
+    }
+
+    #[test]
+    fn oci_cache_key_and_metrics_label() {
+        let mk = |image: &str| WasmSourceSpec {
+            oci: Some(super::super::wasm_oci::WasmOciSpec {
+                image: image.to_string(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let a = mk("r.io/mod:1.0");
+        let b = mk("r.io/mod:2.0");
+        assert_ne!(a.cache_key(), b.cache_key());
+        assert_eq!(a.metrics_label(), "oci:r.io/mod:1.0");
+        let digest = format!("sha256:{}", "c".repeat(64));
+        let pinned = mk(&format!("r.io/mod@{digest}"));
+        assert_eq!(pinned.metrics_label(), format!("oci:r.io/mod@{}", &"c".repeat(64)[..8]));
+        // resolved_pull_secret must not affect module identity.
+        let mut c = mk("r.io/mod:1.0");
+        c.oci.as_mut().unwrap().resolved_pull_secret = Some("x".to_string());
+        assert_eq!(c.cache_key(), a.cache_key());
     }
 }

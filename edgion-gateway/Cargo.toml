@@ -2,6 +2,7 @@
 name = "edgion-gateway"
 version.workspace = true
 edition.workspace = true
+publish = false
 authors.workspace = true
 
 [lib]
@@ -99,6 +100,8 @@ axum-server.workspace = true
 # Utilities
 bytes.workspace = true
 base64.workspace = true
+filetime.workspace = true
+flate2.workspace = true
 chrono.workspace = true
 parking_lot.workspace = true
 uuid.workspace = true
@@ -111,6 +114,7 @@ smallvec.workspace = true
 indexmap.workspace = true
 sha2.workspace = true
 subtle.workspace = true
+tar.workspace = true
 crc32fast.workspace = true
 hmac.workspace = true
 aes-gcm.workspace = true
