@@ -158,6 +158,41 @@ startup):
 > Without `auto_ca`, an omitted section keeps the legacy plaintext-default behavior (loud
 > telemetry via the `plaintext_default` system-error state, but it connects).
 
+### conf_sync client-cert hot reload (no new config fields)
+
+The Gateway does not gain any new configuration surface from
+`conf_sync_security.rotation` (that block is Controller-only — see the
+[Controller config doc](./00-controller-config.md#conf_sync_securityrotation--conf_sync-auto-ca-cert-rotation)).
+What changes is runtime behavior of the already-existing `conf_sync_security.tls`
+cert/key/ca file paths:
+
+- **In-place file replacement is now hot-reloaded.** The Gateway watches the parent
+  directories of the configured `cert`/`key`/`ca` paths (not the file inodes, since a
+  Kubernetes Secret mount swaps files via an atomic `..data` symlink flip). A 2-second
+  debounce coalesces the burst of filesystem events from that swap, so a rotated cert
+  is picked up roughly ~2 seconds after the files land on disk.
+- **Validate-before-swap.** On change, the new cert/key/ca are read and run through the
+  same `validate_identity` check used at startup (leaf validity window, chain to CA, key
+  match). On success, every consumer of the old gRPC channel is repointed at the new
+  one. On failure, the current channel is kept untouched — a corrupt or mismatched
+  write never severs the control-plane connection — and a
+  `WARN` + `cert_reload_invalid` system-error mark is logged.
+- **5-minute re-stat backstop.** Independent of the filesystem watcher, a periodic
+  mtime/length re-stat catches inotify events dropped during a kubelet remount race
+  (cheap, and removes the "watcher silently dead" failure mode).
+- **The reload deliberately interrupts conf_sync streams for a few seconds — this is
+  control-plane only, with zero data-plane impact.** Dropping the old gRPC channel does
+  not by itself abort in-flight server-streaming responses, so a successful reload
+  actively cancels a reload-generation token that the watch/meta loops select on; those
+  loops break, reconnect on the newly-installed channel, and re-list. Expect a brief
+  (seconds-long) gap in conf_sync resource sync — proxied traffic is unaffected.
+- **Cold start with absent cert files still fails (unchanged).** If the cert files do
+  not exist when the Gateway boots (e.g. auto-CA first install before the Secret has
+  landed), client TLS init fails before any watcher is even created — the gateway
+  crash-loops until the Secret/files appear, exactly as in Phase 1. Hot reload only
+  covers *runtime* changes to an already-successfully-started channel; an absent-file
+  cold start is not a reload bug.
+
 ### server
 
 | Field | Type | Default | Description |

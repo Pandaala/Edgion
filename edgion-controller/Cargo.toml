@@ -62,6 +62,7 @@ schemars.workspace = true
 # gRPC (config sync)
 tonic.workspace = true
 rustls.workspace = true
+rustls-pemfile.workspace = true
 tokio-rustls.workspace = true
 x509-parser.workspace = true
 prost.workspace = true
@@ -116,6 +117,8 @@ rcgen.workspace = true
 time.workspace = true
 sha1.workspace = true
 tower.workspace = true
+croner.workspace = true
+chrono-tz.workspace = true
 
 
 [build-dependencies]

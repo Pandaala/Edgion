@@ -68,6 +68,16 @@ conf_sync:
 #     key: certs/grpc/server.key     # Server private key
 #     ca: certs/grpc/ca.crt          # CA used to verify Gateway client
 #     skip_tls: false                # true = emergency downgrade to plaintext (will log ERROR)
+#   auto_ca: false                   # Kubernetes only: internal CA auto-provisions certs
+#   rotation:                        # Controller-only; consumed only when auto_ca=true
+#     policy: lifetime                     # lifetime | scheduled | manual
+#     lifetime_ratio: 0.5
+#     # schedule: "0 3 * * *"               # required iff policy=scheduled (5-field cron)
+#     schedule_timezone: "UTC"
+#     rotate_if_remaining_below: "336h"
+#     emergency_rotate_below: "24h"
+#     leaf_ttl: "365d"
+#     ca_ttl: "3650d"
 
 # ─── FileSystem mode ───
 conf_center:
@@ -151,6 +161,170 @@ Optional configuration; when enabled, the Controller's gRPC port uses mTLS.
 
 > When this section is not configured, gRPC runs in plaintext, fully compatible with previous versions.
 > Generate certificates with `edgion-cli gen-certs --output file --output-dir <dir>`.
+
+### [conf_sync_security.rotation] — conf_sync Auto-CA Cert Rotation
+
+Optional; **consumed by the Controller only** — the Gateway parses-and-ignores this
+block (unknown-to-the-gateway config, WARN only, never a startup failure). **Applies
+only when `conf_sync_security.auto_ca: true`** (Kubernetes mode). In file mode
+(external cert supply, `auto_ca` omitted/false) this block has no effect on the leaf/CA
+lifecycle — but the **hot-reload behavior still applies** in file mode (see the Gateway
+config doc's client-cert hot-reload section for the consumer side; the Controller has
+its own analogous server-side hot reload). See
+`docs/superpowers/specs/2026-07-12-conf-sync-cert-rotation-design.md` for the full design.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `policy` | `"lifetime" \| "scheduled" \| "manual"` | `"lifetime"` | Rotation trigger strategy (see below) |
+| `lifetime_ratio` | `f64` | `0.5` | `lifetime` policy only: rotate once elapsed leaf age reaches this fraction of `leaf_ttl`. Must be in `(0.0, 1.0)` exclusive |
+| `schedule` | `String?` | `None` | 5-field crontab (e.g. `"0 3 * * *"`). **Required** iff `policy: scheduled`; ignored otherwise |
+| `schedule_timezone` | `String` | `"UTC"` | IANA timezone the `schedule` cron is evaluated in |
+| `rotate_if_remaining_below` | `CertDuration` | `"336h"` (14d) | `scheduled` policy only: guard threshold — rotate at a firing iff the leaf's remaining validity *at that firing time* is `<=` this value |
+| `emergency_rotate_below` | `CertDuration` | `"24h"` | Always-on safety-net threshold, independent of `policy` (see "Emergency safety net" below) |
+| `leaf_ttl` | `CertDuration` | `"365d"` | Validity period minted for new client/server leaf certs |
+| `ca_ttl` | `CertDuration` | `"3650d"` | Validity period minted for a new root CA (renewal keeps the same key, only extends validity) |
+
+**The three policies:**
+
+- **`lifetime`** (default): rotate the client leaf once its elapsed age reaches
+  `lifetime_ratio × leaf_ttl` (e.g. at the default 0.5/365d, rotate at ~182.5 days).
+  Evaluated every reconciler tick against the actual leaf window — no cron involved.
+- **`scheduled`**: rotate only inside a low-traffic cron window. The guard is evaluated
+  **at the firing time**, not at "now": a firing is due iff
+  `leaf_not_after − firing_time <= rotate_if_remaining_below`. This is deliberate —
+  evaluating the guard against `now` instead of the firing collapses the policy into a
+  plain remaining-threshold trigger and defeats the point of a scheduled window (spec
+  §4.2). A firing that has not yet happened, or one the leaf has already been rotated
+  for (via `BACKDATE_SLACK` bookkeeping), never re-triggers.
+- **`manual`**: the reconciler never auto-rotates on lifetime/schedule grounds; rotation
+  only happens via the manual API below (the always-on emergency net below still
+  applies regardless of policy).
+
+**Always-on emergency safety net.** Independent of `policy`, if a leaf's remaining
+validity drops to `<= emergency_rotate_below` (default `24h`), the reconciler rotates
+immediately and logs `WARN event="cert_emergency_rotation"`. Unlike the policy conjunct,
+the net checks **both** the client leaf and the (in-memory, re-minted-per-restart)
+server leaf window — a long-running controller under `policy: manual` can still expire
+its own server leaf. **Evaluation order**: the configured policy conjunct is checked
+first; the emergency net only fires when the policy itself says not-due. This means a
+healthy on-time `scheduled`/`lifetime` rotation is always labeled `Due`, never
+`EmergencyDue` — `EmergencyDue` is reserved for the case where the policy trigger alone
+would have missed the window (mis-sized guard, extended leader outage, forgotten manual
+rotation). Rotation coverage is unaffected either way; only the log/reason label
+differs.
+
+**Duration units (`CertDuration`).** Form `<integer><unit>`, single term only:
+`h` (hour), `d` (=24h), `w` (=7d), `mo` (**fixed 30d approximation**, not calendar
+month), `y` (**fixed 365d approximation**, not calendar year). Zero (`"0h"`) and
+integer overflow are rejected at parse time; a bare unitless number (e.g. `36`) is also
+rejected — the unit suffix is mandatory.
+
+**Validation invariants** (checked at startup only — `conf_sync_security.rotation` is
+not re-validated on config reload; violation aborts startup):
+
+- `leaf_ttl >= 1h`, `ca_ttl >= 1d`, `leaf_ttl < ca_ttl`.
+- `emergency_rotate_below < leaf_ttl` (always).
+- `policy: scheduled` additionally requires: `schedule` present;
+  `emergency_rotate_below < rotate_if_remaining_below`; and
+  `rotate_if_remaining_below <= 0.5 × leaf_ttl` (the "churn hole" guard — a wider window
+  would let the guard span more than half the leaf's life and risk rotating on
+  consecutive firings).
+- `policy: lifetime` additionally requires: `lifetime_ratio` in `(0.0, 1.0)` exclusive;
+  and `emergency_rotate_below < (1 − lifetime_ratio) × leaf_ttl` (the emergency net must
+  not always preempt the lifetime trigger).
+
+**366-day cron feasibility check** (`policy: scheduled` only, Controller startup):
+the configured `schedule`/`schedule_timezone` is simulated over the next 366 days.
+
+- **Never fires within the horizon** (e.g. `0 3 30 2 *` — Feb 30 never exists) →
+  startup **reject**: almost certainly a typo.
+- **Fires, but `rotate_if_remaining_below` is less than 2× the max gap between
+  consecutive firings** → startup **WARN** + `mark_system_error` with reason
+  `cert_rotation_config_suspect` (metric `edgion_system_error_state{reason="cert_rotation_config_suspect"}`):
+  a guard this tight relative to the firing cadence risks a due window being missed
+  entirely between two firings. Not rejected — the operator may have deliberately chosen
+  a tight guard for a fast-firing schedule.
+
+**Manual rotation API**: `POST /api/v1/services/conf-sync-ca/rotate`
+
+Request body `{"scope": "leaf"|"ca"}` (default `"leaf"`).
+
+| Status | Meaning |
+|--------|---------|
+| `202 Accepted` | Enqueued on the elected leader replica |
+| `409 Conflict` | This replica is not the leader; retry against the `edgion-controller-leader` Service |
+| `503 Service Unavailable` | Leader, but the rotation worker is not yet running (mid-init) or its queue is full |
+| `400 Bad Request` | `auto_ca` is disabled — there is no managed rotation to trigger; replace the cert files on disk and rely on hot reload instead |
+
+**Alerting**: the rotation pipeline is covered by three signal layers with a deliberate
+division of labor — do not page on everything just because a signal exists:
+
+- **PAGE on** (act now):
+  - `edgion_conf_sync_cert_expiry_timestamp_seconds - time() < 7 * 86400` — the
+    certificate actually in service is about to expire. This is the external backstop
+    (`skills/03-coding/observability/01-metrics.md`'s arbitrated-exception gauge): it
+    watches the live cert independent of whatever is supposed to be rotating it, so it
+    still fires even if the rotation pipeline itself is wedged.
+  - `edgion_system_error_state{reason="cert_rotation_failed"} == 1` sustained 5m — the
+    rotation pipeline is actively failing (not yet expired, but the mechanism meant to
+    prevent that is broken).
+- **TICKET on** (review, not urgent):
+  - `edgion_system_error_state{reason="cert_rotation_config_suspect"} == 1` — the rotation
+    config combination needs a look (suspect firing-gap-vs-guard sizing, or a healthy
+    steady state that lands inside the expiry-watch WARN band — see the Validation
+    invariants above; the default scheduled guard of 336h is one such case and is
+    expected, not broken).
+  - Expiry-watch WARN-band transition logs (`component="cert_expiry_watch"`, 30-day band)
+    — worth a look, not worth waking anyone up; the ERROR/7-day band is what pages, above.
+- **LOG-ONLY** (triage context; do not page):
+  - `cert_emergency_rotation` (WARN) — the safety net already acted and rotated the leaf;
+    useful to know the primary policy trigger was late, but nothing is broken now.
+  - Reload-reject WARNs (a bad candidate cert/key file was rejected and the previous
+    identity stayed in service) — the `reason="cert_reload_invalid"` system-error gauge
+    (`edgion_system_error_state{reason="cert_reload_invalid"}`) already covers paging if
+    these become sustained; a single rejection is triage context, not an incident.
+
+**Emergency: CA root re-key (private-key compromise)**
+
+**When**: a leaf or root private key has leaked. Routine same-key CA renewal
+(the CA-renewal due-check above) and the manual-rotate API's `scope=ca` do
+**not** revoke anything — the root's public key is unchanged, so old leaves
+still verify against it. A full root **re-key** (new key pair, not just a new
+window) is the only true revocation.
+
+- **Kubernetes auto-CA procedure**:
+  `kubectl -n <ns> delete secret edgion-conf-sync-ca edgion-conf-sync-certs`.
+  The elected leader's next tick (≤60s) sees the leaf Secret missing, re-bootstraps
+  a fresh root + both leaves, and hot-swaps its own in-process server identity.
+  Gateways self-heal via the existing Secret-mount hot-reload path (kubelet sync
+  + the 2s debounce, ≤ ~2min total to fully propagate) — **no process restarts
+  required, on either side**. A leader failover happening during or immediately
+  after the re-key also self-heals within one tick: the reconciler's
+  chain-consistency check (`edgion-controller/src/services/conf_sync_ca/rotation.rs`
+  `out_of_sync_reason`) detects that the new leader's in-memory server identity
+  (minted at its own startup, against the now-deleted root) no longer chains to
+  the current CA, and rotates the leaves immediately regardless of policy.
+  Expected transient: TLS handshake failures during the propagation window —
+  `edgion_system_error_state{reason="tls_handshake_failed"}` sets and then
+  clears itself once every peer has picked up the new root.
+- **Verification checklist**:
+  - A new `edgion-conf-sync-ca` Secret exists with a different `ca.crt` (compare
+    against a saved copy, or just check the Secret's `creationTimestamp`).
+  - Controller log shows `conf_sync_cert_rotated` with reason `"leaf secret missing"`.
+  - Gateway log shows `conf_sync_cert_reloaded` followed by a successful reconnect.
+  - `edgion_system_error_state{reason="tls_handshake_failed"}` is back to `0`.
+  - The expiry gauges (`edgion_conf_sync_cert_expiry_timestamp_seconds`) reflect
+    the new certs' timestamps.
+- **File / solo mode**: there is no auto-CA to delete a Secret for — regenerate the
+  CA and both leaves externally (e.g. `edgion-cli gen-certs`), then replace the
+  files on **both** sides. Order doesn't matter much, but do it promptly: the
+  mismatch window between replacing one side and the other is exactly the
+  handshake-failure window. Hot reload picks up each side's replacement within
+  ~2s once written.
+- **Do NOT use the manual-rotate API for compromise response.** It goes through
+  the (possibly compromised) control plane, and for `scope=ca` it performs the
+  same-key renewal described above — a new window, not a new key, so it revokes
+  nothing.
 
 ### [conf_center] — FileSystem
 

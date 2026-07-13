@@ -14,6 +14,13 @@
 //! operational mode (e.g., `skip_tls` bypass, future similar toggles)
 //! surfaces in monitoring even when operators stop reading startup logs.
 //!
+//! Most reasons are startup-time configuration decisions and latch for the
+//! life of the process (by design — restarting is the only way to change
+//! them). A few reasons instead track a *transient* runtime condition (a TLS
+//! handshake, a cert reload, a rotation tick) and are explicitly cleared via
+//! [`clear_system_error`] on the next matching success — see each reason's
+//! doc comment for whether it latches or clears.
+//!
 //! **Label discipline**: `component` and `reason` must both come from the
 //! bounded constants in `components` and `reasons` below — never pass raw
 //! config values or free-form strings (Prometheus cardinality risk).
@@ -75,13 +82,40 @@ pub mod reasons {
     /// labels, and loopback-upstream allowance. Production-unsafe; surfaced here
     /// so accidental enablement is caught by monitoring, not just a startup log.
     pub const INTEGRATION_TESTING_MODE: &str = "integration_testing_mode";
+    /// A per-connection conf_sync gRPC server TLS handshake failed or timed out
+    /// (bad client cert, untrusted CA, protocol mismatch, 10s handshake timeout).
+    /// The connection is dropped without affecting the listener or other sessions;
+    /// this reason surfaces a sustained rate of such failures to monitoring.
+    /// Set on failure, cleared on the next successful handshake (alert on a
+    /// sustained `== 1`, not a single blip).
+    pub const TLS_HANDSHAKE_FAILED: &str = "tls_handshake_failed";
+    /// The conf_sync auto-CA `rotation` schedule/TTL combination was accepted but
+    /// flagged as a suspect combo by `cert_util::validate_schedule_controller`
+    /// (e.g. a rotation cadence that leaves little headroom before leaf expiry).
+    pub const CERT_ROTATION_CONFIG_SUSPECT: &str = "cert_rotation_config_suspect";
+    /// The controller's file-mode cert watcher detected a change on disk but the
+    /// re-read cert/key/CA failed `ServerIdentity::from_pems` validation (bad PEM,
+    /// mismatched key, untrusted chain, ...). The previous identity is kept in
+    /// place (validate-before-swap); this reason surfaces a rejected reload so a
+    /// bad Secret update doesn't silently freeze the server on stale material.
+    /// Set on a rejected reload, cleared on the next successful reload (alert on
+    /// a sustained `== 1`, not a single blip).
+    pub const CERT_RELOAD_INVALID: &str = "cert_reload_invalid";
+    /// The conf_sync auto-CA rotation reconciler's periodic check-and-rotate tick
+    /// failed (Secret GET/apply error, signing failure, ...). The reconciler backs
+    /// off exponentially and retries on the next tick; the previously served
+    /// identity and leaf Secret stay in place. Set on a failed tick, cleared on
+    /// the next successful tick (alert on a sustained `== 1`, not a single blip;
+    /// a stalled rotation eventually reaches the emergency window).
+    pub const CERT_ROTATION_FAILED: &str = "cert_rotation_failed";
 }
 
 /// Mark a system-level error condition as active.
 ///
-/// Sets `edgion_system_error_state{component, reason} = 1`. The gauge
-/// stays at 1 for the lifetime of the process — these are startup-time
-/// configuration decisions, not transient errors.
+/// Sets `edgion_system_error_state{component, reason} = 1`. Most reasons are
+/// startup-time configuration decisions and stay at 1 for the lifetime of the
+/// process; reasons whose doc comment says they clear on success are reset via
+/// [`clear_system_error`] by their success path.
 ///
 /// `component` should come from [`components`] and `reason` from
 /// [`reasons`]. Callers that pass ad-hoc strings will pollute Prometheus
@@ -93,6 +127,25 @@ pub fn mark_system_error(component: &'static str, reason: &'static str) {
         "reason" => reason,
     )
     .set(1.0);
+}
+
+/// Clear a transient system-level error condition.
+///
+/// Sets `edgion_system_error_state{component, reason} = 0`. Use this only for
+/// reasons whose doc comment says they clear on success (e.g.
+/// `TLS_HANDSHAKE_FAILED`, `CERT_RELOAD_INVALID`, `CERT_ROTATION_FAILED`) —
+/// startup-config reasons are meant to latch and must not be cleared. Calling
+/// this for a `(component, reason)` pair that was never marked is harmless: it
+/// just sets a fresh gauge to 0.
+///
+/// `component` should come from [`components`] and `reason` from [`reasons`].
+pub fn clear_system_error(component: &'static str, reason: &'static str) {
+    gauge!(
+        names::SYSTEM_ERROR_STATE,
+        "component" => component,
+        "reason" => reason,
+    )
+    .set(0.0);
 }
 
 #[cfg(test)]
@@ -200,6 +253,46 @@ mod tests {
                     && l.contains("reason=\"integration_testing_mode\"")
                     && l.trim_end().ends_with(" 1")),
                 "expected gateway_runtime/integration_testing_mode gauge = 1, got:\n{rendered}"
+            );
+        });
+    }
+
+    #[test]
+    fn clear_system_error_resets_gauge_to_zero() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        metrics::with_local_recorder(&recorder, || {
+            mark_system_error(components::CONF_SYNC_SERVER, reasons::CERT_ROTATION_FAILED);
+            clear_system_error(components::CONF_SYNC_SERVER, reasons::CERT_ROTATION_FAILED);
+
+            let rendered = handle.render();
+            assert!(
+                rendered.lines().any(|l| l.contains("edgion_system_error_state{")
+                    && l.contains("component=\"conf_sync_server\"")
+                    && l.contains("reason=\"cert_rotation_failed\"")
+                    && l.trim_end().ends_with(" 0")),
+                "expected cert_rotation_failed gauge reset to 0, got:\n{rendered}"
+            );
+        });
+    }
+
+    #[test]
+    fn clear_system_error_on_never_marked_pair_is_harmless() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        metrics::with_local_recorder(&recorder, || {
+            // No prior mark_system_error call for this pair.
+            clear_system_error(components::CONF_SYNC_CLIENT, reasons::CERT_RELOAD_INVALID);
+
+            let rendered = handle.render();
+            assert!(
+                rendered.lines().any(|l| l.contains("edgion_system_error_state{")
+                    && l.contains("component=\"conf_sync_client\"")
+                    && l.contains("reason=\"cert_reload_invalid\"")
+                    && l.trim_end().ends_with(" 0")),
+                "expected cert_reload_invalid gauge = 0, got:\n{rendered}"
             );
         });
     }

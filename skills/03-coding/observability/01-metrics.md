@@ -187,6 +187,41 @@ Implementation rules:
 5. **Federation metrics**: Controller-side federation metrics go through `edgion-common/src/observe/fed_metrics.rs` (`edgion_fed_*` prefix). Center-side implementation lives in the separate EdgionCenter repository. Label values **must** be `&'static str` constants from the `labels::` submodule; do not splice strings directly
 6. **If a histogram really must be added**: control plane allows it, but: (a) explain why a `_seconds_last` gauge / counter cannot express it; (b) explain why access log aggregation is insufficient; (c) set buckets explicitly via `set_buckets_for_metric` or inject through `RecorderConfig.histogram_buckets` (avoid the default seconds buckets mismatching ms-recorded values, which dumps everything into `+Inf` — see the original `MIRROR_DURATION_MS` incident)
 
+### Arbitrated exception: `edgion_conf_sync_cert_expiry_timestamp_seconds`
+
+The control-plane restraint default above says "reasons-only" — a discrete event should
+be a `tracing::warn!` + status condition / `system_metrics` reason, not a new metric
+family. This gauge is a deliberate, narrow exception to that default (ruled 2026-07-13),
+kept alongside the reason constants added for conf_sync cert rotation (see
+`docs/superpowers/specs/2026-07-12-conf-sync-cert-rotation-design.md` §6 Task 6):
+
+- **Type**: `Gauge`.
+- **Name**: `edgion_conf_sync_cert_expiry_timestamp_seconds`.
+- **Labels**: `side` ∈ `{"server", "client"}` — 2 bounded series total, no cardinality risk.
+- **Value/unit**: the in-service certificate's `notAfter`, Unix seconds.
+- **Source**: `edgion-common/src/conf_sync/cert_expiry_watch.rs`, exported hourly by a
+  background watch spawned on both the controller (`side="server"`, reading the live
+  hot-swappable identity via `CertSource::PemFn`) and the gateway (`side="client"`, reading
+  the active cert file via `CertSource::File`, re-read on every check).
+- **Staleness is by design**: on a read/parse failure the gauge is left at its last
+  successfully observed value rather than cleared — see the module's
+  `check_and_report`. A stuck value still keeps the expiry alert armed instead of going
+  blank while the underlying read is failing; the watch's own WARN/ERROR logs (cold-start
+  vs. persistent failure) carry the failure signal separately.
+- **Why the exception**: `system_metrics` reasons like `CERT_ROTATION_FAILED` only fire if
+  the rotation code path is still alive to raise them. This gauge instead watches the
+  certificate actually in service, so it is the one signal that still moves if the whole
+  rotation pipeline is wedged (dead reconciler, leader-election gap, a stopped file
+  watcher) — a case where every reason-based signal above goes silent right when it
+  matters most.
+- **Alert rule shape**:
+  ```text
+  edgion_conf_sync_cert_expiry_timestamp_seconds - time() < 7 * 86400
+  ```
+  (paired with a 30-day WARN-band transition log from the same watch — see
+  `skills/02-features/02-config/00-controller-config.md`'s Alerting subsection for the full
+  division of labor across this gauge, `system_error` reasons, and log-only events.)
+
 ## Test Metrics exception
 
 `edgion-gateway/src/observe/metrics/test_metrics.rs` is a test-only data-collection module designed for integration tests, **not subject to the production metrics rules above**.

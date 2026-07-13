@@ -6,6 +6,7 @@
 //! client), plus `grpc_tls` which loads the certificates. They live in `common`
 //! as the single shared definition of the link contract.
 
+use crate::conf_sync::cert_duration::CertDuration;
 use clap::Args;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -93,6 +94,9 @@ pub struct ConfSyncSecurityConfig {
     /// manually-mounted cert files. Default false (manual file certs).
     #[serde(default)]
     pub auto_ca: bool,
+    /// Rotation policy for the auto-CA (controller-only; the gateway ignores this).
+    #[serde(default)]
+    pub rotation: Option<ConfSyncRotationConfig>,
     // Reserved: token authentication can be added here later
 }
 
@@ -260,6 +264,106 @@ pub enum MtlsRefusal {
     NoTls,
     /// The active cert set has skip_tls = true.
     SkipTls,
+}
+
+/// Leaf-rotation policy for the conf_sync auto-CA (spec §4). Controller-only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RotationPolicy {
+    #[default]
+    Lifetime,
+    Scheduled,
+    Manual,
+}
+
+/// Rotation configuration (spec §5.1). Parsed by both binaries; CONSUMED BY THE
+/// CONTROLLER ONLY — the gateway ignores it (and must never fail startup on it).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ConfSyncRotationConfig {
+    pub policy: RotationPolicy,
+    pub lifetime_ratio: f64,
+    /// 5-field crontab; required iff policy == scheduled. Cron/timezone parsing is
+    /// validated controller-side only (croner is a controller dependency).
+    pub schedule: Option<String>,
+    pub schedule_timezone: String,
+    pub rotate_if_remaining_below: CertDuration,
+    pub emergency_rotate_below: CertDuration,
+    pub leaf_ttl: CertDuration,
+    pub ca_ttl: CertDuration,
+}
+
+impl Default for ConfSyncRotationConfig {
+    fn default() -> Self {
+        Self {
+            policy: RotationPolicy::Lifetime,
+            lifetime_ratio: 0.5,
+            schedule: None,
+            schedule_timezone: "UTC".to_string(),
+            rotate_if_remaining_below: CertDuration::from_hours(336),
+            emergency_rotate_below: CertDuration::from_hours(24),
+            leaf_ttl: CertDuration::from_hours(365 * 24),
+            ca_ttl: CertDuration::from_hours(3650 * 24),
+        }
+    }
+}
+
+impl ConfSyncRotationConfig {
+    /// Numeric invariants (spec §5.2). Cron parseability / timezone resolution /
+    /// firing-gap feasibility are validated controller-side (needs croner).
+    pub fn validate_numeric(&self) -> anyhow::Result<()> {
+        let leaf = self.leaf_ttl.as_std();
+        let ca = self.ca_ttl.as_std();
+        let guard = self.rotate_if_remaining_below.as_std();
+        let emergency = self.emergency_rotate_below.as_std();
+        anyhow::ensure!(leaf >= std::time::Duration::from_secs(3600), "leaf_ttl must be >= 1h");
+        anyhow::ensure!(ca >= std::time::Duration::from_secs(24 * 3600), "ca_ttl must be >= 1d");
+        anyhow::ensure!(
+            leaf < ca,
+            "leaf_ttl ({}) must be < ca_ttl ({})",
+            self.leaf_ttl,
+            self.ca_ttl
+        );
+        anyhow::ensure!(
+            emergency < leaf,
+            "emergency_rotate_below ({}) must be < leaf_ttl ({})",
+            self.emergency_rotate_below,
+            self.leaf_ttl
+        );
+        match self.policy {
+            RotationPolicy::Scheduled => {
+                anyhow::ensure!(self.schedule.is_some(), "policy=scheduled requires `schedule`");
+                anyhow::ensure!(
+                    emergency < guard,
+                    "emergency_rotate_below ({}) must be < rotate_if_remaining_below ({})",
+                    self.emergency_rotate_below,
+                    self.rotate_if_remaining_below
+                );
+                // Churn hole (spec §5.2): guard capped at half the leaf lifetime.
+                anyhow::ensure!(
+                    guard.as_secs() * 2 <= leaf.as_secs(),
+                    "rotate_if_remaining_below ({}) must be <= 0.5 x leaf_ttl ({})",
+                    self.rotate_if_remaining_below,
+                    self.leaf_ttl
+                );
+            }
+            RotationPolicy::Lifetime => {
+                anyhow::ensure!(
+                    self.lifetime_ratio > 0.0 && self.lifetime_ratio < 1.0,
+                    "lifetime_ratio must be in (0.0, 1.0) exclusive"
+                );
+                // The emergency net must not always preempt the lifetime trigger.
+                let post_trigger = leaf.as_secs_f64() * (1.0 - self.lifetime_ratio);
+                anyhow::ensure!(
+                    (emergency.as_secs() as f64) < post_trigger,
+                    "emergency_rotate_below ({}) must be < (1 - lifetime_ratio) x leaf_ttl",
+                    self.emergency_rotate_below
+                );
+            }
+            RotationPolicy::Manual => {}
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -574,5 +678,64 @@ mod tests {
             format!("{err:?}").contains("active"),
             "error should mention 'active', got: {err:?}"
         );
+    }
+
+    // ── Group H: rotation configuration ──────────────────────────────────────
+
+    #[test]
+    fn rotation_defaults_are_spec_values() {
+        let r = ConfSyncRotationConfig::default();
+        assert!(matches!(r.policy, RotationPolicy::Lifetime));
+        assert_eq!(r.lifetime_ratio, 0.5);
+        assert_eq!(r.schedule, None);
+        assert_eq!(r.schedule_timezone, "UTC");
+        assert_eq!(r.rotate_if_remaining_below, CertDuration::from_hours(336));
+        assert_eq!(r.emergency_rotate_below, CertDuration::from_hours(24));
+        assert_eq!(r.leaf_ttl, CertDuration::from_hours(365 * 24));
+        assert_eq!(r.ca_ttl, CertDuration::from_hours(3650 * 24));
+        assert!(r.validate_numeric().is_ok());
+    }
+
+    #[test]
+    fn rotation_parses_from_security_block() {
+        let parsed: ConfSyncSecurityConfig = serde_json::from_str(
+            r#"{"auto_ca": true, "rotation": {"policy": "scheduled", "schedule": "0 3 * * *", "leaf_ttl": "30d"}}"#,
+        )
+        .unwrap();
+        let r = parsed.rotation.unwrap();
+        assert!(matches!(r.policy, RotationPolicy::Scheduled));
+        assert_eq!(r.leaf_ttl, CertDuration::parse("30d").unwrap());
+    }
+
+    #[test]
+    fn rotation_numeric_validation_rejects_bad_combos() {
+        let ok = ConfSyncRotationConfig::default();
+        // churn hole: guard > 0.5 * leaf_ttl
+        let mut bad = ok.clone();
+        bad.policy = RotationPolicy::Scheduled;
+        bad.schedule = Some("0 3 * * *".into());
+        bad.leaf_ttl = CertDuration::parse("169h").unwrap();
+        bad.rotate_if_remaining_below = CertDuration::parse("168h").unwrap();
+        bad.emergency_rotate_below = CertDuration::parse("1h").unwrap();
+        assert!(bad.validate_numeric().is_err());
+        // lifetime: emergency net would always preempt the lifetime trigger
+        let mut bad = ok.clone();
+        bad.lifetime_ratio = 0.999;
+        assert!(bad.validate_numeric().is_err());
+        // ratio bounds
+        for ratio in [0.0, 1.0, -0.1, 1.5] {
+            let mut bad = ok.clone();
+            bad.lifetime_ratio = ratio;
+            assert!(bad.validate_numeric().is_err());
+        }
+        // scheduled requires a schedule
+        let mut bad = ok.clone();
+        bad.policy = RotationPolicy::Scheduled;
+        bad.schedule = None;
+        assert!(bad.validate_numeric().is_err());
+        // ttl ordering
+        let mut bad = ok.clone();
+        bad.leaf_ttl = CertDuration::parse("11y").unwrap(); // > default ca_ttl (3650d)
+        assert!(bad.validate_numeric().is_err());
     }
 }

@@ -155,6 +155,19 @@ where
                 }
                 is_first_iteration = false;
 
+                // Capture the reload-generation token BEFORE cloning the client so it
+                // governs both the list and the watch of this cycle. Invariant: token
+                // captured before client-clone ⟹ if the token is the new generation,
+                // the clone below happens after the reload's set_all_grpc_clients swap
+                // and reads the new client; if the token is the old generation, it is
+                // already cancelled (or will be shortly) and the select in the watch
+                // loop below breaks out to re-clone the new client. Capturing the token
+                // after the clone would let the reload complete during the RPC
+                // round-trip and hand us the new (uncancelled) token for the old
+                // client, leaking a stream on the retired channel. Mirrors the token-
+                // before-handle order in `start_watch_server_meta` (grpc_client.rs).
+                let gen_token = crate::conf_sync::conf_client::current_reload_generation();
+
                 // Get gRPC conf_client — clone the handle out under a brief write-lock
                 // acquisition so we never hold the async write guard across the RPC.
                 // ConfigSyncClientService<Channel> wraps a tonic Channel which is cheaply
@@ -260,8 +273,20 @@ where
                         }
                     };
 
+                    // gen_token was captured at the top of the outer cycle (before the
+                    // list-clone) so it governs both the list and this watch. When the
+                    // client TLS channel is hot-reloaded the token is cancelled,
+                    // breaking us out of the message loop so the outer loop re-clones
+                    // the (already-swapped) new channel and re-lists.
                     loop {
-                        match stream.message().await {
+                        let watch_msg = tokio::select! {
+                            _ = gen_token.cancelled() => {
+                                tracing::info!(kind = T::kind_name(), "client TLS reloaded, breaking watch to reconnect");
+                                break 'watch_block;
+                            }
+                            msg = stream.message() => msg,
+                        };
+                        match watch_msg {
                             Ok(Some(watch_response)) => {
                                 // Check for server-side protocol errors first
                                 if !watch_response.err.is_empty() {

@@ -542,6 +542,25 @@ impl EdgionGatewayCli {
             sync_client_for_meta.start_watch_server_meta().await;
         });
 
+        // 13b. Hot-reload the conf_sync client TLS identity (spec §6 T4): watch the
+        // active TLS set's file paths for in-place replacement (cert-manager renewal,
+        // Secret update). Only when a real file-backed mTLS set is active — plaintext
+        // and skip_tls have nothing to reload. Flipping `active` remains restart-bound.
+        if let Some(tls) = config.conf_sync_security.resolve_active_tls().filter(|t| !t.skip_tls) {
+            use crate::conf_sync::conf_client::cert_watch::{spawn_client_cert_watcher, CertPaths};
+            let paths = CertPaths {
+                cert: tls.cert_path(),
+                key: tls.key_path(),
+                ca: tls.ca_path(),
+            };
+            // Process-lifetime watcher: the gateway exits the process on shutdown,
+            // so a never-cancelled token is sufficient here.
+            let shutdown = tokio_util::sync::CancellationToken::new();
+            runtime.block_on(async {
+                spawn_client_cert_watcher(sync_client_arc.clone(), paths, shutdown);
+            });
+        }
+
         // 14. Initialize metrics configuration (global OnceLock for hot-path access)
         config::init_request_duration_config(config.metrics.request_duration.clone());
         config::init_backend_requests_config(config.metrics.backend_requests.clone());

@@ -364,6 +364,7 @@ impl KubernetesCenter {
 
             // Stop ACME service and reset ControllerRuntime for retry
             crate::services::acme::stop_acme_service();
+            crate::services::conf_sync_ca::rotation::stop_conf_sync_rotation();
             crate::services::dns_resolver::stop_dns_resolver_service();
             tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
             self.runtime.reset();
@@ -564,6 +565,7 @@ impl KubernetesCenter {
                         "Normal shutdown"
                     );
                     crate::services::acme::stop_acme_service();
+                    crate::services::conf_sync_ca::rotation::stop_conf_sync_rotation();
                     crate::services::dns_resolver::stop_dns_resolver_service();
                     tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
                     self.runtime.reset();
@@ -576,6 +578,7 @@ impl KubernetesCenter {
                         "Lost leadership, will wait for re-election"
                     );
                     crate::services::acme::stop_acme_service();
+                    crate::services::conf_sync_ca::rotation::stop_conf_sync_rotation();
                     crate::services::dns_resolver::stop_dns_resolver_service();
                     tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
                     self.runtime.reset();
@@ -650,6 +653,7 @@ impl KubernetesCenter {
 
                 if let Some(client) = acme_client {
                     crate::services::acme::start_acme_service(client.clone());
+                    crate::services::conf_sync_ca::rotation::start_conf_sync_rotation(client.clone());
                     crate::services::dns_resolver::start_dns_resolver_service(client);
                 }
 
@@ -904,6 +908,7 @@ impl KubernetesCenter {
     async fn start_leader_services(&self, client: &Client) {
         tracing::info!(component = "kubernetes_center", "Starting leader-only services");
         crate::services::acme::start_acme_service(client.clone());
+        crate::services::conf_sync_ca::rotation::start_conf_sync_rotation(client.clone());
         crate::services::dns_resolver::start_dns_resolver_service(client.clone());
         self.runtime.processor_registry.requeue_all().await;
     }
@@ -912,6 +917,7 @@ impl KubernetesCenter {
     async fn stop_leader_services(&self) {
         tracing::info!(component = "kubernetes_center", "Stopping leader-only services");
         crate::services::acme::stop_acme_service();
+        crate::services::conf_sync_ca::rotation::stop_conf_sync_rotation();
         crate::services::dns_resolver::stop_dns_resolver_service();
     }
 }

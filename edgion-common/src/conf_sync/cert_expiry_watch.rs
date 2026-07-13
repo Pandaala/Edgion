@@ -5,8 +5,16 @@
 //! so an alert rule can compute time-to-expiry server-side, and (b) logs
 //! WARN/ERROR once the remaining lifetime crosses the thresholds below.
 //!
-//! This module takes no action on expiry — rotation is a separate concern
-//! (see `tasks/pending/16-conf-sync-cert-hot-rotation.md`). Alert rule shape:
+//! This module takes no action on expiry — rotation, plus an emergency
+//! rotation net, now live in the controller
+//! (`edgion-controller/src/services/conf_sync_ca/rotation.rs`; see
+//! `docs/superpowers/specs/2026-07-12-conf-sync-cert-rotation-design.md` for
+//! the full design). This module is the observability cross-check layered on
+//! top of that rotation pipeline: it catches a silently-stalled rotation from
+//! the outside (e.g. the reconciler wedged, a leader-election gap, a file
+//! watcher that stopped firing) by watching the certificate that is actually
+//! in service, independent of whatever machinery is supposed to be renewing
+//! it. Alert rule shape:
 //!
 //! ```text
 //! edgion_conf_sync_cert_expiry_timestamp_seconds - time() < 30 * 86400
@@ -43,13 +51,26 @@ const CHECK_INTERVAL: Duration = Duration::from_secs(3600);
 ///
 /// `File` is re-read on every check (kubelet refreshes Secret mounts in
 /// place, so the file's content can change under a running process).
+///
+/// `PartialEq`/`Eq` are only exercised by test assertions on the `Pem`/`File`
+/// variants; comparing `PemFn` by function-pointer identity is not relied on
+/// for any runtime decision, so the derive's pointer-identity comparison for
+/// that variant is intentionally allowed here.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(unpredictable_function_pointer_comparisons)]
 pub enum CertSource {
-    /// A certificate held in memory for the process lifetime (controller
-    /// auto-CA server identity).
+    /// A static certificate snapshot held for the process lifetime. Only
+    /// correct when the underlying identity never changes in place (static
+    /// snapshots, tests) — anything that can be hot-rotated or hot-reloaded
+    /// should use `PemFn` or `File` instead, or this source goes stale and
+    /// raises false expiry alarms after the first rotation/reload.
     Pem(String),
     /// A certificate on disk (Secret mount or operator-provided path).
     File(PathBuf),
+    /// Reads the certificate currently in service from live process state on
+    /// every check (e.g. the controller's hot-swappable server identity);
+    /// `None` = no identity currently in service.
+    PemFn(fn() -> Option<String>),
 }
 
 /// Severity of the remaining-lifetime check.
@@ -60,6 +81,79 @@ pub enum ExpirySeverity {
     Warning,
     /// Remaining lifetime is below [`ERROR_THRESHOLD`] or already expired.
     Critical,
+}
+
+/// Numeric ordering used to detect escalation vs. recovery between two
+/// severities (`Ok < Warning < Critical`).
+fn severity_rank(s: ExpirySeverity) -> u8 {
+    match s {
+        ExpirySeverity::Ok => 0,
+        ExpirySeverity::Warning => 1,
+        ExpirySeverity::Critical => 2,
+    }
+}
+
+/// What `check_and_report` should log for a severity change on the success
+/// path. A `None` return means the severity is unchanged since the last
+/// check and nothing should be logged (this is what turns "log every hourly
+/// tick while in band" into "log once per transition").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SeverityLogAction {
+    /// Severity got worse (`Ok -> Warning`, `Warning -> Critical`, or a
+    /// first observation that already starts in `Warning`/`Critical`).
+    Escalate(ExpirySeverity),
+    /// Severity got better (`Critical -> Warning`, `Critical -> Ok`, or
+    /// `Warning -> Ok`) — logged at INFO as a recovery.
+    Recover(ExpirySeverity),
+}
+
+/// Pure transition function: given the previously observed severity (`None`
+/// if this is the first check since the watch started) and the current
+/// severity, decide whether `check_and_report` should log and at what
+/// action. Kept side-effect-free so it can be unit-tested as a state
+/// machine without going through logging or metrics.
+pub fn transition(prev: Option<ExpirySeverity>, current: ExpirySeverity) -> Option<SeverityLogAction> {
+    let prev_rank = prev.map(severity_rank).unwrap_or(0);
+    let current_rank = severity_rank(current);
+    match current_rank.cmp(&prev_rank) {
+        std::cmp::Ordering::Equal => None,
+        std::cmp::Ordering::Greater => Some(SeverityLogAction::Escalate(current)),
+        std::cmp::Ordering::Less => Some(SeverityLogAction::Recover(current)),
+    }
+}
+
+/// What `check_and_report` should log when `load_validity` fails, based on
+/// how many *consecutive* failures have already happened since the last
+/// success (or since the watch started).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FailureLogAction {
+    /// The first failure since spawn/last success — under auto-CA cold
+    /// start the certificate file may simply not exist yet, so this is
+    /// logged at WARN rather than ERROR to avoid a misleading alarm on
+    /// every clean process start.
+    WarnColdStart,
+    /// A second or later consecutive failure — no longer "maybe cold
+    /// start", this is a real, persistent problem.
+    Error,
+}
+
+/// Pure decision function for [`FailureLogAction`], factored out for testing
+/// independent of logging/state plumbing.
+pub fn failure_transition(consecutive_failures_before_this_one: u32) -> FailureLogAction {
+    if consecutive_failures_before_this_one == 0 {
+        FailureLogAction::WarnColdStart
+    } else {
+        FailureLogAction::Error
+    }
+}
+
+/// Mutable state the background loop carries across checks so
+/// `check_and_report` can tell a severity *transition* from a repeat, and a
+/// first (possibly cold-start) load failure from a persistent one.
+#[derive(Debug, Clone, Default)]
+pub struct ExpiryWatchState {
+    last_severity: Option<ExpirySeverity>,
+    consecutive_failures: u32,
 }
 
 /// Derive a watchable file source from a resolved conf_sync TLS config.
@@ -94,34 +188,67 @@ pub fn load_validity(source: &CertSource) -> Result<LeafValidity, String> {
                 .map_err(|e| format!("failed to read cert file {}: {e}", path.display()))?;
             parse_leaf_validity(&pem)
         }
+        CertSource::PemFn(f) => match f() {
+            Some(pem) => parse_leaf_validity(&pem),
+            None => Err("no certificate currently in service".to_string()),
+        },
     }
 }
 
-/// One check: load the cert, export the expiry gauge, and log by severity.
+/// One check: load the cert, export the expiry gauge, and log on severity
+/// *transitions* (not on every hourly tick — see [`transition`]).
 ///
-/// Failures to read/parse the cert are logged at ERROR but do not panic —
-/// the safety net must never take down the process it watches.
-pub fn check_and_report(side: &'static str, source: &CertSource, now: i64) {
+/// Failures to read/parse the cert never panic — the safety net must never
+/// take down the process it watches. The first such failure since spawn/last
+/// success logs at WARN (auto-CA cold start: the cert file may not exist yet
+/// for up to a minute after process start, which is normal); consecutive
+/// failures beyond that log at ERROR. See [`failure_transition`].
+pub fn check_and_report(side: &'static str, source: &CertSource, now: i64, state: &mut ExpiryWatchState) {
     let validity = match load_validity(source) {
         Ok(v) => v,
         Err(e) => {
-            tracing::error!(
-                component = "cert_expiry_watch",
-                side = side,
-                error = %e,
-                "conf_sync certificate could not be read/parsed for expiry check"
-            );
+            let action = failure_transition(state.consecutive_failures);
+            state.consecutive_failures += 1;
+            match action {
+                FailureLogAction::WarnColdStart => {
+                    tracing::warn!(
+                        component = "cert_expiry_watch",
+                        side = side,
+                        error = %e,
+                        "conf_sync certificate could not be read/parsed for expiry check; \
+                         may be a cold start (e.g. auto-CA identity not provisioned yet) — will retry hourly"
+                    );
+                }
+                FailureLogAction::Error => {
+                    tracing::error!(
+                        component = "cert_expiry_watch",
+                        side = side,
+                        error = %e,
+                        consecutive_failures = state.consecutive_failures,
+                        "conf_sync certificate could not be read/parsed for expiry check"
+                    );
+                }
+            }
+            // Deliberately do NOT touch the gauge here: it keeps exporting
+            // the last successfully observed `notAfter`, so a stale value
+            // keeps the server-side expiry alert armed instead of going
+            // blank while the read itself is failing.
             return;
         }
     };
+    state.consecutive_failures = 0;
 
     gauge!(CERT_EXPIRY_METRIC, "side" => side).set(validity.not_after as f64);
 
     let remaining = validity.remaining_seconds(now);
     let remaining_days = remaining / 86_400;
-    match classify_remaining(remaining) {
-        ExpirySeverity::Ok => {}
-        ExpirySeverity::Warning => {
+    let current = classify_remaining(remaining);
+    let action = transition(state.last_severity, current);
+    state.last_severity = Some(current);
+
+    match action {
+        None => {}
+        Some(SeverityLogAction::Escalate(ExpirySeverity::Warning)) => {
             tracing::warn!(
                 component = "cert_expiry_watch",
                 side = side,
@@ -130,13 +257,27 @@ pub fn check_and_report(side: &'static str, source: &CertSource, now: i64) {
                 "conf_sync certificate expires soon; rotation or restart needed before expiry"
             );
         }
-        ExpirySeverity::Critical => {
+        Some(SeverityLogAction::Escalate(ExpirySeverity::Critical)) => {
             tracing::error!(
                 component = "cert_expiry_watch",
                 side = side,
                 remaining_days = remaining_days,
                 not_after = validity.not_after,
                 "conf_sync certificate is expired or about to expire; conf_sync will fail at the next TLS handshake"
+            );
+        }
+        Some(SeverityLogAction::Escalate(ExpirySeverity::Ok)) => {
+            // Unreachable: `transition` never escalates *to* Ok (rank 0 can't
+            // be greater than another rank). No-op if it ever happened.
+        }
+        Some(SeverityLogAction::Recover(severity)) => {
+            tracing::info!(
+                component = "cert_expiry_watch",
+                side = side,
+                remaining_days = remaining_days,
+                not_after = validity.not_after,
+                recovered_to = ?severity,
+                "conf_sync certificate expiry severity recovered"
             );
         }
     }
@@ -146,10 +287,11 @@ pub fn check_and_report(side: &'static str, source: &CertSource, now: i64) {
 pub fn spawn_expiry_watch(side: &'static str, source: CertSource) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(CHECK_INTERVAL);
+        let mut state = ExpiryWatchState::default();
         loop {
             interval.tick().await;
             let now = chrono::Utc::now().timestamp();
-            check_and_report(side, &source, now);
+            check_and_report(side, &source, now, &mut state);
         }
     });
 }
@@ -244,6 +386,26 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    fn pemfn_some() -> Option<String> {
+        Some(test_cert_pem())
+    }
+
+    fn pemfn_none() -> Option<String> {
+        None
+    }
+
+    #[test]
+    fn load_validity_from_pemfn_source() {
+        let v = load_validity(&CertSource::PemFn(pemfn_some)).unwrap();
+        assert!(v.not_after > v.not_before);
+
+        let err = load_validity(&CertSource::PemFn(pemfn_none)).unwrap_err();
+        assert!(
+            err.contains("no certificate currently in service"),
+            "expected 'no certificate currently in service' error, got: {err}"
+        );
+    }
+
     #[test]
     fn load_validity_reports_missing_file() {
         let err = load_validity(&CertSource::File(PathBuf::from("/nonexistent/edgion-test.crt"))).unwrap_err();
@@ -261,8 +423,14 @@ mod tests {
         let pem = test_cert_pem();
         let expected_not_after = parse_leaf_validity(&pem).unwrap().not_after;
 
+        let mut state = ExpiryWatchState::default();
         metrics::with_local_recorder(&recorder, || {
-            check_and_report(sides::SERVER, &CertSource::Pem(pem), chrono::Utc::now().timestamp());
+            check_and_report(
+                sides::SERVER,
+                &CertSource::Pem(pem),
+                chrono::Utc::now().timestamp(),
+                &mut state,
+            );
         });
 
         let rendered = handle.render();
@@ -281,10 +449,112 @@ mod tests {
     #[test]
     fn check_and_report_survives_unreadable_source() {
         // Must not panic — the safety net cannot take down the process.
+        let mut state = ExpiryWatchState::default();
         check_and_report(
             sides::CLIENT,
             &CertSource::File(PathBuf::from("/nonexistent/edgion-test.crt")),
             0,
+            &mut state,
         );
+    }
+
+    #[test]
+    fn check_and_report_resets_consecutive_failures_after_a_success() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let mut state = ExpiryWatchState::default();
+
+        metrics::with_local_recorder(&recorder, || {
+            check_and_report(
+                sides::CLIENT,
+                &CertSource::File(PathBuf::from("/nonexistent/edgion-test.crt")),
+                0,
+                &mut state,
+            );
+        });
+        assert_eq!(state.consecutive_failures, 1, "first failure should be recorded");
+
+        metrics::with_local_recorder(&recorder, || {
+            check_and_report(
+                sides::CLIENT,
+                &CertSource::Pem(test_cert_pem()),
+                chrono::Utc::now().timestamp(),
+                &mut state,
+            );
+        });
+        assert_eq!(state.consecutive_failures, 0, "a success must reset the failure streak");
+    }
+
+    // -- Fix 2: log only on severity *transition*, not every hourly tick --
+
+    #[test]
+    fn transition_from_ok_to_warning_escalates_once() {
+        assert_eq!(
+            transition(Some(ExpirySeverity::Ok), ExpirySeverity::Warning),
+            Some(SeverityLogAction::Escalate(ExpirySeverity::Warning))
+        );
+    }
+
+    #[test]
+    fn transition_staying_in_warning_logs_nothing() {
+        assert_eq!(transition(Some(ExpirySeverity::Warning), ExpirySeverity::Warning), None);
+    }
+
+    #[test]
+    fn transition_from_warning_to_critical_escalates() {
+        assert_eq!(
+            transition(Some(ExpirySeverity::Warning), ExpirySeverity::Critical),
+            Some(SeverityLogAction::Escalate(ExpirySeverity::Critical))
+        );
+    }
+
+    #[test]
+    fn transition_from_critical_to_ok_logs_recovery() {
+        assert_eq!(
+            transition(Some(ExpirySeverity::Critical), ExpirySeverity::Ok),
+            Some(SeverityLogAction::Recover(ExpirySeverity::Ok))
+        );
+    }
+
+    #[test]
+    fn transition_from_critical_to_warning_logs_recovery() {
+        assert_eq!(
+            transition(Some(ExpirySeverity::Critical), ExpirySeverity::Warning),
+            Some(SeverityLogAction::Recover(ExpirySeverity::Warning))
+        );
+    }
+
+    #[test]
+    fn transition_first_observation_ok_logs_nothing() {
+        // No prior state (freshly spawned watch) is treated as an Ok baseline,
+        // so a healthy first check does not log.
+        assert_eq!(transition(None, ExpirySeverity::Ok), None);
+    }
+
+    #[test]
+    fn transition_first_observation_already_in_warning_band_escalates() {
+        // A watch that starts up with an already-aging cert should still
+        // report it once, even though there's no "previous" state.
+        assert_eq!(
+            transition(None, ExpirySeverity::Warning),
+            Some(SeverityLogAction::Escalate(ExpirySeverity::Warning))
+        );
+    }
+
+    #[test]
+    fn transition_repeated_ok_logs_nothing() {
+        assert_eq!(transition(Some(ExpirySeverity::Ok), ExpirySeverity::Ok), None);
+    }
+
+    // -- Fix 3: cold-start-safe failure logging --
+
+    #[test]
+    fn failure_transition_warns_on_the_first_failure() {
+        assert_eq!(failure_transition(0), FailureLogAction::WarnColdStart);
+    }
+
+    #[test]
+    fn failure_transition_errors_on_subsequent_consecutive_failures() {
+        assert_eq!(failure_transition(1), FailureLogAction::Error);
+        assert_eq!(failure_transition(5), FailureLogAction::Error);
     }
 }

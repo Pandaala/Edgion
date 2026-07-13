@@ -21,7 +21,7 @@ pub use types::{ApiResponse, ListResponse};
 
 use crate::conf_mgr::{ConfMgr, SchemaValidator};
 use axum::{
-    extract::{Path, Request, State},
+    extract::{Extension, Path, Request, State},
     http::{header, HeaderValue, StatusCode},
     middleware::Next,
     response::{IntoResponse, Json, Response},
@@ -136,6 +136,25 @@ async fn require_ready_middleware(State(state): State<Arc<AdminState>>, request:
 }
 
 // ============= Handlers =============
+
+/// API request body for manual conf_sync rotation (Task 11).
+#[derive(serde::Deserialize)]
+struct RotateBody {
+    #[serde(default = "default_rotate_scope")]
+    scope: ApiRotateScope,
+}
+
+fn default_rotate_scope() -> ApiRotateScope {
+    ApiRotateScope::Leaf
+}
+
+/// Scope discriminator for manual rotation (API representation).
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+enum ApiRotateScope {
+    Leaf,
+    Ca,
+}
 
 /// Health check endpoint - always returns OK if server is up
 async fn health_check() -> Json<ApiResponse<String>> {
@@ -345,6 +364,65 @@ async fn trigger_acme(Path((namespace, name)): Path<(String, String)>) -> impl I
     }
 }
 
+/// Manually trigger conf_sync certificate rotation (leaf or root).
+///
+/// POST /api/v1/services/conf-sync-ca/rotate
+///
+/// Request body: `{"scope": "leaf"|"ca"}` (default `leaf`).
+/// - 202 Accepted: enqueued on the leader
+/// - 409 Conflict: not the leader; retry via edgion-controller-leader Service
+/// - 503 Service Unavailable: leader, but rotation service not ready yet
+/// - 400 Bad Request: auto_ca disabled; replace files and hot reload applies them
+async fn trigger_conf_sync_rotate(
+    identity: Option<Extension<crate::api::cli_token_middleware::CliTokenIdentity>>,
+    body: Option<Json<RotateBody>>,
+) -> impl IntoResponse {
+    use crate::services::conf_sync_ca::rotation::{trigger_manual_rotation, RotateScope, TriggerResult};
+
+    let scope = match body.map(|Json(b)| b.scope).unwrap_or(ApiRotateScope::Leaf) {
+        ApiRotateScope::Leaf => RotateScope::Leaf,
+        ApiRotateScope::Ca => RotateScope::Ca,
+    };
+
+    // The cli-token authn middleware (`cli_token_pre_authn`) injects this identity
+    // for both the local admin token and scoped `cli_tokens` entries; trivially
+    // available here via the same `Extension` mechanism `authz_middleware` uses
+    // for its deny-audit log, so include it for this security-relevant trigger too.
+    let requester = identity
+        .as_ref()
+        .map(|Extension(id)| id.name.as_str())
+        .unwrap_or("unknown");
+
+    tracing::info!(
+        component = "admin_api",
+        event = "conf_sync_rotate_trigger",
+        scope = ?scope,
+        requester = %requester,
+        "manual rotation requested"
+    );
+
+    match trigger_manual_rotation(scope).await {
+        TriggerResult::Accepted => (StatusCode::ACCEPTED, Json(serde_json::json!({"status": "accepted"}))),
+        TriggerResult::NotLeader => (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({
+                "error": "not leader",
+                "hint": "retry via the edgion-controller-leader Service (admin HTTP port)"
+            })),
+        ),
+        TriggerResult::LeaderNotReady => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"error": "rotation service not ready on the leader; retry shortly"})),
+        ),
+        TriggerResult::NotConfigured => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "auto_ca disabled: rotation is externally managed; replace the cert files (hot reload applies them)"
+            })),
+        ),
+    }
+}
+
 // ============= Router Setup =============
 
 /// Build the shared admin state. Used by the admin router and the dedicated
@@ -476,6 +554,8 @@ pub fn create_admin_router(
         )
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))
+        // Services: conf_sync rotation manual trigger
+        .route("/api/v1/services/conf-sync-ca/rotate", post(trigger_conf_sync_rotate))
         // Diagnostics: roadmap data conditions (e.g. ExtensionRef → Envoy alignment)
         .route(
             "/api/v1/diagnostics/nested_ext_ref_usage",
@@ -1069,5 +1149,19 @@ mod admin_exposure_tests {
     #[test]
     fn ipv4_mapped_nonloopback_empty_allowlist_is_insecure() {
         assert!(admin_exposure_is_insecure(&addr("[::ffff:10.1.2.3]:12101"), &[]));
+    }
+}
+
+#[cfg(test)]
+mod rotate_scope_tests {
+    use super::{ApiRotateScope, RotateBody};
+
+    #[test]
+    fn rotate_scope_parses_with_leaf_default() {
+        let s: RotateBody = serde_json::from_str("{}").unwrap();
+        assert!(matches!(s.scope, ApiRotateScope::Leaf));
+        let s: RotateBody = serde_json::from_str(r#"{"scope":"ca"}"#).unwrap();
+        assert!(matches!(s.scope, ApiRotateScope::Ca));
+        assert!(serde_json::from_str::<RotateBody>(r#"{"scope":"root"}"#).is_err());
     }
 }

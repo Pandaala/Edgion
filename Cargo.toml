@@ -95,6 +95,7 @@ prost = "0.13"
 # TLS / certificates
 rustls = { version = "0.23", features = ["ring"] }
 rustls-native-certs = "0.8"
+rustls-pemfile = "2"
 webpki-roots = "1"
 x509-parser = { version = "0.18", features = ["verify"] }
 rcgen = { version = "0.14.7", features = ["x509-parser"] }
@@ -182,6 +183,8 @@ mimalloc = { version = "0.1", default-features = false }
 # Utilities
 bytes = "1.11.1"
 chrono = "0.4"
+chrono-tz = "0.10"
+croner = "3"
 time = { version = "0.3", features = ["std"] }
 uuid = { version = "1.19", features = ["v4"] }
 parking_lot = "0.12"

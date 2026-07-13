@@ -37,6 +37,17 @@ pub fn build_secret(name: &str, ns: &str, data: BTreeMap<String, Vec<u8>>) -> Se
     }
 }
 
+/// Pure builder for the CA Secret data map (`ca.crt` + `ca.key`). Shared by the
+/// create path in [`ensure_ca`] and the renewal path in [`write_ca`] so both
+/// always carry BOTH fields — a renewal that dropped `ca.key` would orphan the
+/// root key and break all future re-signing.
+fn ca_secret_data(ca: &Ca) -> BTreeMap<String, Vec<u8>> {
+    BTreeMap::from([
+        ("ca.crt".to_string(), ca.ca_cert_pem().as_bytes().to_vec()),
+        ("ca.key".to_string(), ca.ca_key_pem().as_bytes().to_vec()),
+    ])
+}
+
 /// Extract a UTF-8 data value from a Secret (PEM strings are ASCII).
 fn data_str(s: &Secret, key: &str) -> Option<String> {
     s.data
@@ -51,19 +62,15 @@ fn data_str(s: &Secret, key: &str) -> Option<String> {
 /// - Otherwise generate a fresh root and SSA-create it.
 /// - On a concurrent create (HTTP 409 / `AlreadyExists`), re-read and adopt the
 ///   winner's root (leader race / idempotency).
-pub async fn ensure_ca(secret_api: &Api<Secret>, ns: &str, ca_days: u32) -> Result<Ca> {
+pub async fn ensure_ca(secret_api: &Api<Secret>, ns: &str, ca_ttl: time::Duration) -> Result<Ca> {
     if let Some(existing) = secret_api.get_opt(CA_SECRET).await.context("get CA secret")? {
         if let (Some(crt), Some(key)) = (data_str(&existing, "ca.crt"), data_str(&existing, "ca.key")) {
             return Ca::load_from_pem(&crt, &key).context("adopt existing CA secret");
         }
     }
 
-    let ca = Ca::generate_root(ca_days)?;
-    let data = BTreeMap::from([
-        ("ca.crt".to_string(), ca.ca_cert_pem().as_bytes().to_vec()),
-        ("ca.key".to_string(), ca.ca_key_pem().as_bytes().to_vec()),
-    ]);
-    let secret = build_secret(CA_SECRET, ns, data);
+    let ca = Ca::generate_root(ca_ttl)?;
+    let secret = build_secret(CA_SECRET, ns, ca_secret_data(&ca));
     // Use create() (POST), NOT server-side apply: a second apply with the same field
     // manager is last-writer-wins and would NOT 409, letting two replicas persist
     // different roots. A POST yields a real AlreadyExists/409, so the loser re-reads
@@ -98,10 +105,78 @@ pub async fn write_leaf(secret_api: &Api<Secret>, ns: &str, leaf: &LeafPem, ca_c
     Ok(())
 }
 
+/// SSA-write the renewed root CA back to the CA Secret (`ca.crt` + `ca.key`).
+///
+/// Used by the rotation reconciler's `RotateScope::Ca` path after
+/// `renew_root_same_key`: the certificate PEM changes but the key PEM is the
+/// SAME bytes, so `ca.key` MUST be re-applied alongside `ca.crt` (both come from
+/// [`ca_secret_data`]) or a future `ensure_ca`/re-sign would find the key gone.
+/// Unlike [`ensure_ca`]'s POST-create, this is a last-writer-wins apply: the
+/// caller is the elected leader holding the current root, so convergence is not
+/// at stake here — only key preservation is.
+pub async fn write_ca(secret_api: &Api<Secret>, ns: &str, ca: &Ca) -> Result<()> {
+    let secret = build_secret(CA_SECRET, ns, ca_secret_data(ca));
+    let pp = PatchParams::apply(FIELD_MANAGER);
+    secret_api
+        .patch(CA_SECRET, &pp, &Patch::Apply(secret))
+        .await
+        .context("apply renewed CA secret")?;
+    Ok(())
+}
+
+/// Read the gateway leaf Secret if present: (client.crt, client.key, ca.crt).
+pub async fn read_leaf(secret_api: &Api<Secret>) -> Result<Option<(String, String, String)>> {
+    let Some(s) = secret_api.get_opt(LEAF_SECRET).await.context("get leaf secret")? else {
+        return Ok(None);
+    };
+    Ok(
+        match (
+            data_str(&s, "client.crt"),
+            data_str(&s, "client.key"),
+            data_str(&s, "ca.crt"),
+        ) {
+            (Some(c), Some(k), Some(a)) => Some((c, k, a)),
+            _ => None,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn ca_secret_data_preserves_key_across_renewal() {
+        use crate::services::conf_sync_ca::Ca;
+        // A CA renewal re-signs the cert with a fresh window but the SAME key.
+        // The persisted Secret map MUST carry the new cert AND the original key.
+        let ca = Ca::generate_root(::time::Duration::days(3650)).unwrap();
+        let original_key = ca.ca_key_pem().to_string();
+        let renewed = ca.renew_root_same_key(::time::Duration::days(3650)).unwrap();
+        let data = ca_secret_data(&renewed);
+        // Both fields present.
+        assert!(data.contains_key("ca.crt"), "ca.crt must be present");
+        assert!(data.contains_key("ca.key"), "ca.key must be present");
+        // ca.crt is the renewed cert PEM.
+        assert_eq!(
+            data.get("ca.crt").unwrap(),
+            &renewed.ca_cert_pem().as_bytes().to_vec(),
+            "ca.crt must be the renewed certificate"
+        );
+        // ca.key is the ORIGINAL key bytes (renew keeps the key).
+        assert_eq!(
+            data.get("ca.key").unwrap(),
+            &original_key.as_bytes().to_vec(),
+            "ca.key must be preserved as the original root key bytes"
+        );
+        // And the cert actually changed (sanity: this was a real renewal write).
+        assert_ne!(
+            data.get("ca.crt").unwrap(),
+            &ca.ca_cert_pem().as_bytes().to_vec(),
+            "renewed cert should differ from the original cert"
+        );
+    }
 
     #[test]
     fn build_secret_sets_name_ns_label_and_data() {

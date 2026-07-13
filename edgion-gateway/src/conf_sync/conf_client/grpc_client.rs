@@ -1,4 +1,6 @@
+use crate::conf_sync::conf_client::cert_watch::CertPaths;
 use crate::conf_sync::conf_client::ConfigClient;
+use arc_swap::ArcSwap;
 use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
 use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as ConfigSyncClientService;
 use edgion_common::conf_sync::proto::{ServerInfoRequest, ServerInfoResponse, WatchServerMetaRequest};
@@ -6,18 +8,40 @@ use edgion_resources::rate_limit_config::set_gateway_instance_count;
 use edgion_resources::ResourceKind;
 use std::sync::Arc;
 use std::time::Duration;
-use tonic::transport::Channel;
+use tokio_util::sync::CancellationToken;
+use tonic::transport::{Channel, ClientTlsConfig};
 use tracing;
 use uuid::Uuid;
+
+/// Parameters captured at `new()` so the cert watcher can rebuild the TLS
+/// channel in place (spec §6 T4). Present only when the active TLS set is a
+/// real file-backed mTLS identity (not plaintext / `skip_tls`).
+struct ClientTlsReload {
+    paths: CertPaths,
+    grpc_server_addr: String,
+    timeout: Duration,
+}
 
 /// gRPC conf_client for ConfigSync service
 pub struct ConfigSyncClient {
     config_client: Arc<ConfigClient>,
-    conf_client_handle: ConfigSyncClientService<Channel>,
+    /// Swappable service handle. Held behind `ArcSwap` so `reload_client_tls`
+    /// can atomically install a channel built on freshly-rotated certs without
+    /// tearing down the client (spec §6 T4: WatchServerMeta must not retry a
+    /// retired TLS config forever).
+    conf_client_handle: ArcSwap<ConfigSyncClientService<Channel>>,
     /// Client ID for WatchServerMeta registration
     client_id: String,
     /// Client name for WatchServerMeta registration
     client_name: String,
+    /// Reload-generation token. Cancelled on each reload so the WatchServerMeta
+    /// loop breaks out and reconnects on the new channel. Kept in lockstep with
+    /// the process-global token in `conf_client/mod.rs` (which the per-kind
+    /// watch loops read).
+    reload_generation: ArcSwap<CancellationToken>,
+    /// File paths + endpoint params for rebuilding the channel on cert rotation.
+    /// `None` when the channel is plaintext / `skip_tls` (nothing to reload).
+    client_tls: Option<ClientTlsReload>,
 }
 
 impl ConfigSyncClient {
@@ -49,15 +73,20 @@ impl ConfigSyncClient {
             "Initializing gRPC client with lazy connection"
         );
 
-        let mut endpoint = tonic::transport::Endpoint::from_shared(uri.clone())
-            .map_err(|e| anyhow::anyhow!("Invalid gRPC URI '{}': {}", uri, e))?
-            .timeout(timeout)
-            .connect_timeout(timeout)
-            .http2_keep_alive_interval(Duration::from_secs(10))
-            .keep_alive_timeout(Duration::from_secs(5))
-            .keep_alive_while_idle(true);
+        // Rotation is a controller-only concern. The gateway never validates it and
+        // never fails startup on it (spec §5.2) — just surface that it is ignored.
+        if security.rotation.is_some() {
+            tracing::warn!(
+                component = "grpc_client",
+                "conf_sync_security.rotation config present but ignored by the gateway (controller-only)"
+            );
+        }
 
-        if let Some(tls) = tls_config {
+        // Resolve the TLS material (if any) and capture the reload params for the
+        // file-mode cert watcher. `client_tls_reload` stays `None` for plaintext
+        // and `skip_tls` — there is nothing to hot-reload in those modes.
+        let mut client_tls_reload: Option<ClientTlsReload> = None;
+        let tls_config_opt: Option<ClientTlsConfig> = if let Some(tls) = tls_config {
             if tls.skip_tls {
                 // Explicit emergency escape hatch — plaintext even when auto_ca is on.
                 // auto_ca's contract is "always mTLS", so a skip_tls override of it is a
@@ -77,12 +106,20 @@ impl ConfigSyncClient {
                     edgion_common::observe::system_metrics::components::CONF_SYNC_CLIENT,
                     edgion_common::observe::system_metrics::reasons::SKIP_TLS,
                 );
+                None
             } else {
                 let client_tls = edgion_common::grpc_tls::load_client_tls(tls).await?;
-                endpoint = endpoint
-                    .tls_config(client_tls)
-                    .map_err(|e| anyhow::anyhow!("Failed to configure client TLS: {}", e))?;
                 tracing::info!(component = "grpc_client", "conf_sync mTLS enabled for gRPC client");
+                client_tls_reload = Some(ClientTlsReload {
+                    paths: CertPaths {
+                        cert: tls.cert_path(),
+                        key: tls.key_path(),
+                        ca: tls.ca_path(),
+                    },
+                    grpc_server_addr: grpc_server_addr.to_string(),
+                    timeout,
+                });
+                Some(client_tls)
             }
         } else {
             // resolve_active_tls() == None. validate() already rejected the
@@ -109,10 +146,11 @@ impl ConfigSyncClient {
                 edgion_common::observe::system_metrics::components::CONF_SYNC_CLIENT,
                 edgion_common::observe::system_metrics::reasons::PLAINTEXT_DEFAULT,
             );
-        }
+            None
+        };
 
-        // connect_lazy returns a Channel immediately, connection happens on first request
-        let channel = endpoint.connect_lazy();
+        // connect_lazy returns a Channel immediately; connection happens on first request.
+        let channel = build_channel(&uri, timeout, tls_config_opt)?;
         let client = ConfigSyncClientService::new(channel);
 
         // Set gRPC client for all caches via unified dispatch.
@@ -120,12 +158,68 @@ impl ConfigSyncClient {
         // without handling it here will cause a compile error.
         config_client.set_all_grpc_clients(client.clone()).await;
 
+        // Install the initial (never-cancelled) reload-generation token, shared
+        // with the process-global so the per-kind watch loops observe the same one.
+        let generation = Arc::new(CancellationToken::new());
+        super::set_global_reload_generation(generation.clone());
+
         Ok(Self {
             config_client,
-            conf_client_handle: client,
+            conf_client_handle: ArcSwap::from_pointee(client),
             client_id,
             client_name,
+            reload_generation: ArcSwap::new(generation),
+            client_tls: client_tls_reload,
         })
+    }
+
+    /// Rotate the reload-generation token: cancel the current one (so every
+    /// running watch loop selecting on it breaks out) and install a fresh
+    /// never-cancelled token in both the instance field and the process-global.
+    /// Factored out of `reload_client_tls` so it can be unit-tested directly.
+    fn rotate_generation(&self) {
+        // Instance and global point at the same Arc, so one cancel is enough.
+        self.reload_generation.load().cancel();
+        let new_token = Arc::new(CancellationToken::new());
+        self.reload_generation.store(new_token.clone());
+        super::set_global_reload_generation(new_token);
+    }
+
+    /// Hot-reload the client TLS identity from disk (spec §6 T4).
+    ///
+    /// Reads + validates the configured cert/key/CA (`validate_identity`), then
+    /// builds a new lazily-connected channel and installs it. On any error the
+    /// current channel is left untouched — the caller keeps serving on it.
+    ///
+    /// Swap order (see module notes / task report): (1) `set_all_grpc_clients`
+    /// stores the new channel in every per-kind cache's client slot; (2) store
+    /// the new handle for `get_server_info` / `start_watch_server_meta`; (3)
+    /// `rotate_generation` cancels the old token LAST, so when the running watch
+    /// loops break and re-clone their client they read the already-installed new
+    /// channel (never the retired one).
+    pub async fn reload_client_tls(self: &Arc<Self>) -> anyhow::Result<()> {
+        let reload = self
+            .client_tls
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("conf_sync client TLS reload is not configured (plaintext/skip_tls)"))?;
+
+        let (cert, key, ca) = crate::conf_sync::conf_client::cert_watch::read_and_validate(&reload.paths).await?;
+
+        let client_tls = ClientTlsConfig::new()
+            .ca_certificate(tonic::transport::Certificate::from_pem(ca))
+            .identity(tonic::transport::Identity::from_pem(cert, key));
+        let uri = build_grpc_uri(&reload.grpc_server_addr, true);
+        let channel = build_channel(&uri, reload.timeout, Some(client_tls))?;
+        let new_client = ConfigSyncClientService::new(channel);
+
+        // (1) Point every per-kind cache at the new channel BEFORE cancelling, so
+        // a loop that breaks re-clones the new client, never the retired one.
+        self.config_client.set_all_grpc_clients(new_client.clone()).await;
+        // (2) Install the new handle for get_server_info / WatchServerMeta.
+        self.conf_client_handle.store(Arc::new(new_client));
+        // (3) Cancel the old generation LAST → running loops break and reconnect.
+        self.rotate_generation();
+        Ok(())
     }
 
     /// Get a reference to the `ConfigClient`.
@@ -134,8 +228,11 @@ impl ConfigSyncClient {
     }
 
     /// Get server information including endpoint mode and supported resource kinds
-    pub async fn get_server_info(&mut self) -> Result<ServerInfoResponse, tonic::Status> {
-        let response = self.conf_client_handle.get_server_info(ServerInfoRequest {}).await?;
+    pub async fn get_server_info(&self) -> Result<ServerInfoResponse, tonic::Status> {
+        // Read the current handle through the ArcSwap and clone it out (the
+        // service wraps a cheaply-cloneable Channel); do not hold the guard.
+        let mut handle = self.conf_client_handle.load().as_ref().clone();
+        let response = handle.get_server_info(ServerInfoRequest {}).await?;
 
         let info = response.into_inner();
 
@@ -168,9 +265,12 @@ impl ConfigSyncClient {
         loop {
             tracing::info!("Starting WatchServerMeta stream...");
 
-            match self
-                .conf_client_handle
-                .clone()
+            // Load the current handle and generation token per reconnect iteration
+            // so a hot TLS reload is picked up on the very next connect.
+            let gen_token = self.reload_generation.load_full();
+            let mut handle = self.conf_client_handle.load().as_ref().clone();
+
+            match handle
                 .watch_server_meta(WatchServerMetaRequest {
                     client_id: client_id.clone(),
                     client_name: client_name.clone(),
@@ -186,56 +286,70 @@ impl ConfigSyncClient {
                     // server-switch signal from the server side (Stage A); reconnect immediately.
                     let mut stream_server_id: Option<String> = None;
                     let mut server_switched = false;
+                    // Set when the TLS reload token cancels this stream; like a server
+                    // switch it reconnects immediately (on the new channel), no backoff.
+                    let mut reloaded = false;
 
                     loop {
-                        match stream.message().await {
-                            Ok(Some(event)) => {
-                                set_gateway_instance_count(event.gateway_instance_count);
+                        tokio::select! {
+                            _ = gen_token.cancelled() => {
+                                tracing::info!(
+                                    "WatchServerMeta: client TLS reloaded, reconnecting on new channel"
+                                );
+                                reloaded = true;
+                                break;
+                            }
+                            msg = stream.message() => {
+                                match msg {
+                                    Ok(Some(event)) => {
+                                        set_gateway_instance_count(event.gateway_instance_count);
 
-                                if !event.server_id.is_empty() {
-                                    match &stream_server_id {
-                                        None => {
-                                            // First event: record the authoritative server_id
-                                            // and update the config client.
-                                            stream_server_id = Some(event.server_id.clone());
-                                            self.config_client.set_current_server_id(event.server_id);
-                                        }
-                                        Some(sid) if *sid != event.server_id => {
-                                            // server_id changed mid-stream — server has reloaded.
-                                            // Update config client with new server_id and reconnect
-                                            // immediately (skip backoff sleep below).
-                                            tracing::info!(
-                                                old_server_id = %sid,
-                                                new_server_id = %event.server_id,
-                                                "WatchServerMeta: server switch detected, reconnecting immediately"
-                                            );
-                                            self.config_client.set_current_server_id(event.server_id);
-                                            server_switched = true;
-                                            break;
-                                        }
-                                        Some(_) => {
-                                            // Same server_id — normal update.
-                                            self.config_client.set_current_server_id(event.server_id);
+                                        if !event.server_id.is_empty() {
+                                            match &stream_server_id {
+                                                None => {
+                                                    // First event: record the authoritative server_id
+                                                    // and update the config client.
+                                                    stream_server_id = Some(event.server_id.clone());
+                                                    self.config_client.set_current_server_id(event.server_id);
+                                                }
+                                                Some(sid) if *sid != event.server_id => {
+                                                    // server_id changed mid-stream — server has reloaded.
+                                                    // Update config client with new server_id and reconnect
+                                                    // immediately (skip backoff sleep below).
+                                                    tracing::info!(
+                                                        old_server_id = %sid,
+                                                        new_server_id = %event.server_id,
+                                                        "WatchServerMeta: server switch detected, reconnecting immediately"
+                                                    );
+                                                    self.config_client.set_current_server_id(event.server_id);
+                                                    server_switched = true;
+                                                    break;
+                                                }
+                                                Some(_) => {
+                                                    // Same server_id — normal update.
+                                                    self.config_client.set_current_server_id(event.server_id);
+                                                }
+                                            }
                                         }
                                     }
+                                    Ok(None) => {
+                                        tracing::warn!("WatchServerMeta stream ended, reconnecting...");
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            error = %e,
+                                            "WatchServerMeta stream error, reconnecting..."
+                                        );
+                                        break;
+                                    }
                                 }
-                            }
-                            Ok(None) => {
-                                tracing::warn!("WatchServerMeta stream ended, reconnecting...");
-                                break;
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    error = %e,
-                                    "WatchServerMeta stream error, reconnecting..."
-                                );
-                                break;
                             }
                         }
                     }
 
-                    if server_switched {
-                        // Intentional switch — skip backoff and reconnect immediately.
+                    if server_switched || reloaded {
+                        // Intentional switch/reload — skip backoff and reconnect immediately.
                         continue;
                     }
                 }
@@ -311,6 +425,28 @@ impl ConfigSyncClient {
     }
 }
 
+/// Build a lazily-connected gRPC [`Channel`] for `uri` with the shared keepalive
+/// tuning, optionally applying `tls`. Extracted from `new()` so `reload_client_tls`
+/// rebuilds the channel identically. `connect_lazy` defers the actual dial to the
+/// first request, so this never blocks or fails on an unreachable server.
+fn build_channel(uri: &str, timeout: Duration, tls: Option<ClientTlsConfig>) -> anyhow::Result<Channel> {
+    let mut endpoint = tonic::transport::Endpoint::from_shared(uri.to_string())
+        .map_err(|e| anyhow::anyhow!("Invalid gRPC URI '{}': {}", uri, e))?
+        .timeout(timeout)
+        .connect_timeout(timeout)
+        .http2_keep_alive_interval(Duration::from_secs(10))
+        .keep_alive_timeout(Duration::from_secs(5))
+        .keep_alive_while_idle(true);
+
+    if let Some(tls) = tls {
+        endpoint = endpoint
+            .tls_config(tls)
+            .map_err(|e| anyhow::anyhow!("Failed to configure client TLS: {}", e))?;
+    }
+
+    Ok(endpoint.connect_lazy())
+}
+
 /// Build the gRPC URI with the appropriate scheme based on TLS setting.
 fn build_grpc_uri(addr: &str, tls: bool) -> String {
     let host = addr
@@ -339,6 +475,21 @@ mod tests {
 
     /// A loopback address that is never dialed (connect_lazy defers the connect).
     const DUMMY_ADDR: &str = "127.0.0.1:65000";
+
+    #[tokio::test]
+    async fn reload_cancels_previous_generation() {
+        // Uses a plaintext client against no server: connect_lazy never dials until use.
+        let sec = ConfSyncSecurityConfig::default();
+        let client = ConfigSyncClient::new("127.0.0.1:1", "t".into(), Duration::from_secs(1), &sec)
+            .await
+            .unwrap();
+        let client = std::sync::Arc::new(client);
+        let old_gen = client.reload_generation.load_full();
+        assert!(!old_gen.is_cancelled());
+        client.rotate_generation(); // the token-swap half of reload_client_tls, factored out
+        assert!(old_gen.is_cancelled());
+        assert!(!client.reload_generation.load_full().is_cancelled());
+    }
 
     #[tokio::test]
     async fn auto_ca_with_omitted_tls_fails_closed_not_plaintext() {

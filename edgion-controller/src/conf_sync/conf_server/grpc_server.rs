@@ -62,48 +62,24 @@ impl ConfigSyncGrpcServer {
         ConfigSyncService::new(self)
     }
 
-    /// Build a tonic Server with shared HTTP/2 keepalive and conf_sync mTLS settings applied.
-    ///
-    /// When `auto_identity` is supplied (auto-CA path), the controller-server cert is
-    /// minted in memory and used directly, bypassing the file-path / skip_tls / plaintext
-    /// branches below.
-    async fn build_server(
-        security: &ConfSyncSecurityConfig,
-        auto_identity: Option<&crate::services::conf_sync_ca::ServerIdentityPem>,
-    ) -> anyhow::Result<tonic::transport::Server> {
-        let mut builder = tonic::transport::Server::builder()
-            .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
-
-        if let Some(id) = auto_identity {
-            let server_tls = edgion_common::grpc_tls::load_server_tls_from_pem(
-                id.cert_pem.as_bytes(),
-                id.key_pem.as_bytes(),
-                id.ca_cert_pem.as_bytes(),
-            );
-            builder = builder.tls_config(server_tls)?;
-            tracing::info!(
-                component = "grpc_server",
-                "conf_sync mTLS enabled for gRPC server (auto-CA, in-memory server cert)"
-            );
-            return Ok(builder);
-        }
-
+    /// Log + mark the appropriate system-error metric for the plaintext / skip_tls
+    /// path (the `tls_handle = None` branch of `serve_with_shutdown`). Extracted from
+    /// the former `build_server` so the two branches (owned TLS accept loop vs.
+    /// plaintext) stay easy to read side by side.
+    fn log_plaintext_or_skip_tls(security: &ConfSyncSecurityConfig) {
         if let Some(tls) = security.resolve_active_tls() {
-            if tls.skip_tls {
-                tracing::error!(
-                    component = "grpc_server",
-                    "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
-                );
-                edgion_common::observe::system_metrics::mark_system_error(
-                    edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
-                    edgion_common::observe::system_metrics::reasons::SKIP_TLS,
-                );
-            } else {
-                let server_tls = edgion_common::grpc_tls::load_server_tls(tls).await?;
-                builder = builder.tls_config(server_tls)?;
-                tracing::info!(component = "grpc_server", "conf_sync mTLS enabled for gRPC server");
-            }
+            debug_assert!(
+                tls.skip_tls,
+                "resolve_active_tls() with a non-skip_tls entry implies a tls_handle"
+            );
+            tracing::error!(
+                component = "grpc_server",
+                "conf_sync mTLS skip_tls=true: starting WITHOUT TLS. INSECURE, emergency use only!"
+            );
+            edgion_common::observe::system_metrics::mark_system_error(
+                edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
+                edgion_common::observe::system_metrics::reasons::SKIP_TLS,
+            );
         } else {
             // No active TLS resolved. validate() already rejected the dangling-`active`
             // case, so this is the truly-omitted section: plaintext while carrying Secrets.
@@ -118,35 +94,147 @@ impl ConfigSyncGrpcServer {
                 edgion_common::observe::system_metrics::reasons::PLAINTEXT_DEFAULT,
             );
         }
-
-        Ok(builder)
     }
 
-    /// Start the gRPC server with graceful shutdown support
+    /// Start the gRPC server with graceful shutdown support.
+    ///
+    /// `listener` is a pre-bound `TcpListener` (testability + no bind-window between
+    /// resolving the address and accepting connections). `tls_handle = Some(_)` runs
+    /// an owned TLS accept loop that reloads the server identity from the hot-swappable
+    /// handle on every new handshake (spec §6 T3); `tls_handle = None` keeps the existing
+    /// plaintext / skip_tls path unchanged, served directly by tonic.
     pub async fn serve_with_shutdown(
         self,
-        addr: std::net::SocketAddr,
+        listener: tokio::net::TcpListener,
         security: &ConfSyncSecurityConfig,
-        auto_identity: Option<&crate::services::conf_sync_ca::ServerIdentityPem>,
+        tls_handle: Option<Arc<crate::conf_sync::conf_server::tls_identity::ServerIdentityHandle>>,
         shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> anyhow::Result<()> {
-        let mut builder = Self::build_server(security, auto_identity).await?;
+        let mut builder = tonic::transport::Server::builder()
+            .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
+            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
 
-        tracing::info!(
-            component = "grpc_server",
-            addr = %addr,
-            "Starting gRPC server with graceful shutdown support"
-        );
-
-        builder
-            .add_service(self.into_service())
-            .serve_with_shutdown(addr, shutdown_signal)
-            .await?;
+        match tls_handle {
+            Some(handle) => {
+                // Owned TLS accept loop (spec §6 T3): per-connection config load from the
+                // ArcSwap handle; listener is never rebound; established sessions are
+                // never touched by a swap.
+                tracing::info!(
+                    component = "grpc_server",
+                    "conf_sync mTLS enabled (hot-reloadable accept loop)"
+                );
+                let (tx, rx) = tokio::sync::mpsc::channel::<
+                    Result<tokio_rustls::server::TlsStream<tokio::net::TcpStream>, std::io::Error>,
+                >(64);
+                let accept_shutdown = self.shutdown_token.clone();
+                tokio::spawn(async move {
+                    loop {
+                        tokio::select! {
+                            _ = accept_shutdown.cancelled() => break,
+                            accepted = listener.accept() => {
+                                let (tcp, peer) = match accepted {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        // Transient accept errors (e.g. EMFILE) must not kill the loop.
+                                        tracing::warn!(component = "grpc_server", error = %e, "conf_sync accept error, retrying");
+                                        tokio::time::sleep(Duration::from_millis(100)).await;
+                                        continue;
+                                    }
+                                };
+                                // tonic's serve_with_incoming discards Server TCP settings; restore nodelay.
+                                let _ = tcp.set_nodelay(true);
+                                let acceptor = tokio_rustls::TlsAcceptor::from(handle.load().config.clone());
+                                let tx = tx.clone();
+                                tokio::spawn(async move {
+                                    match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await {
+                                        Ok(Ok(tls)) => {
+                                            edgion_common::observe::system_metrics::clear_system_error(
+                                                edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
+                                                edgion_common::observe::system_metrics::reasons::TLS_HANDSHAKE_FAILED,
+                                            );
+                                            let _ = tx.send(Ok(tls)).await;
+                                        }
+                                        Ok(Err(e)) => {
+                                            // NEVER forward as Err: an Err item terminates the whole tonic server.
+                                            warn_handshake_failure(peer, &e);
+                                        }
+                                        Err(_) => {
+                                            warn_handshake_timeout(peer);
+                                        }
+                                    }
+                                });
+                            }
+                        }
+                    }
+                });
+                let incoming = tokio_stream::wrappers::ReceiverStream::new(rx);
+                builder
+                    .add_service(self.into_service())
+                    .serve_with_incoming_shutdown(incoming, shutdown_signal)
+                    .await?;
+            }
+            None => {
+                // Plaintext / skip_tls path: keep the existing direct tonic serve.
+                Self::log_plaintext_or_skip_tls(security);
+                // TcpListenerStream loses TCP_NODELAY; TcpIncoming restores it per-socket.
+                let incoming = tonic::transport::server::TcpIncoming::from_listener(listener, true, None)
+                    .map_err(|e| anyhow::anyhow!("failed to build TCP incoming: {e}"))?;
+                builder
+                    .add_service(self.into_service())
+                    .serve_with_incoming_shutdown(incoming, shutdown_signal)
+                    .await?;
+            }
+        }
 
         tracing::info!(component = "grpc_server", "gRPC server stopped");
 
         Ok(())
     }
+}
+
+/// Rate-limited WARN (at most once per minute; DEBUG otherwise) for a per-connection
+/// TLS handshake failure, plus an always-on system-error metric mark.
+fn warn_handshake_failure(peer: std::net::SocketAddr, error: &std::io::Error) {
+    if should_warn_handshake_failure() {
+        tracing::warn!(component = "grpc_server", peer = %peer, error = %error, "conf_sync TLS handshake failed");
+    } else {
+        tracing::debug!(component = "grpc_server", peer = %peer, error = %error, "conf_sync TLS handshake failed");
+    }
+    edgion_common::observe::system_metrics::mark_system_error(
+        edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
+        edgion_common::observe::system_metrics::reasons::TLS_HANDSHAKE_FAILED,
+    );
+}
+
+/// Rate-limited WARN (at most once per minute; DEBUG otherwise) for a per-connection
+/// TLS handshake timeout, plus an always-on system-error metric mark.
+fn warn_handshake_timeout(peer: std::net::SocketAddr) {
+    if should_warn_handshake_failure() {
+        tracing::warn!(component = "grpc_server", peer = %peer, "conf_sync TLS handshake timed out (10s)");
+    } else {
+        tracing::debug!(component = "grpc_server", peer = %peer, "conf_sync TLS handshake timed out (10s)");
+    }
+    edgion_common::observe::system_metrics::mark_system_error(
+        edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
+        edgion_common::observe::system_metrics::reasons::TLS_HANDSHAKE_FAILED,
+    );
+}
+
+/// Simple rate-limit gate shared by both handshake-failure warning sites: WARN if
+/// more than 60s have elapsed since the last WARN, DEBUG otherwise. `mark_system_error`
+/// is called unconditionally by the caller regardless of this gate's decision.
+fn should_warn_handshake_failure() -> bool {
+    static LAST_WARN: parking_lot::Mutex<Option<std::time::Instant>> = parking_lot::Mutex::new(None);
+    let mut last = LAST_WARN.lock();
+    let now = std::time::Instant::now();
+    let should_warn = match *last {
+        Some(t) => now.duration_since(t) > Duration::from_secs(60),
+        None => true,
+    };
+    if should_warn {
+        *last = Some(now);
+    }
+    should_warn
 }
 
 #[tonic::async_trait]
@@ -705,5 +793,117 @@ mod tests {
         let result = tokio::time::timeout(std::time::Duration::from_secs(3), stream.next()).await;
         let next = result.expect("stream should end within 3 seconds");
         assert!(next.is_none(), "stream should be closed after shutdown");
+    }
+
+    // rustls 0.23 requires a process-level CryptoProvider before `ServerConfig::builder()`
+    // (invoked transitively via `ServerIdentity::from_pems`) can be called. Installing it
+    // here races harmlessly with other test modules doing the same `install_default()`.
+    fn install_test_crypto_provider() {
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        });
+    }
+
+    #[tokio::test]
+    async fn tls_accept_loop_hot_swaps_identity_without_dropping_streams() {
+        use crate::conf_sync::conf_server::tls_identity::{ServerIdentity, ServerIdentityHandle};
+        use crate::services::conf_sync_ca::Ca;
+        use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as GrpcClient;
+        use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
+
+        install_test_crypto_provider();
+
+        fn client_tls(ca: &Ca, leaf: &crate::services::conf_sync_ca::LeafPem) -> ClientTlsConfig {
+            ClientTlsConfig::new()
+                .ca_certificate(Certificate::from_pem(ca.ca_cert_pem()))
+                .identity(Identity::from_pem(&leaf.cert_pem, leaf.key_pem.as_str()))
+                .domain_name("localhost")
+        }
+        async fn connect(
+            addr: std::net::SocketAddr,
+            tls: ClientTlsConfig,
+        ) -> anyhow::Result<GrpcClient<tonic::transport::Channel>> {
+            let ch = Endpoint::from_shared(format!("https://localhost:{}", addr.port()))?
+                .tls_config(tls)?
+                .connect()
+                .await?;
+            Ok(GrpcClient::new(ch))
+        }
+
+        // CA "A" identity
+        let ca_a = Ca::generate_root(time::Duration::days(30)).unwrap();
+        let server_a = ca_a
+            .sign_server(&["localhost".to_string()], time::Duration::days(7))
+            .unwrap();
+        let client_a = ca_a.sign_client(time::Duration::days(7)).unwrap();
+        let handle = std::sync::Arc::new(ServerIdentityHandle::new(
+            ServerIdentity::from_pems(&server_a.cert_pem, &server_a.key_pem, ca_a.ca_cert_pem()).unwrap(),
+        ));
+
+        // Server on an ephemeral port with the mock provider
+        let server = std::sync::Arc::new(ConfigSyncServer::new());
+        let provider = std::sync::Arc::new(MockConfigSyncProvider::new(server));
+        let token = CancellationToken::new();
+        let grpc = ConfigSyncGrpcServer::new(provider, token.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let security = ConfSyncSecurityConfig::default();
+        let shutdown = {
+            let t = token.clone();
+            async move { t.cancelled().await }
+        };
+        let h = handle.clone();
+        tokio::spawn(async move {
+            grpc.serve_with_shutdown(listener, &security, Some(h), shutdown)
+                .await
+                .unwrap();
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        // 1. Client under CA A connects (this also proves ALPN h2: tonic requires it)
+        //    and opens a long-lived WatchServerMeta stream.
+        let mut c1 = connect(addr, client_tls(&ca_a, &client_a)).await.unwrap();
+        let mut meta = c1
+            .watch_server_meta(WatchServerMetaRequest {
+                client_id: "c1".into(),
+                client_name: "g1".into(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let first = meta.message().await.unwrap().unwrap();
+        assert_eq!(first.gateway_instance_count, 1);
+
+        // 2. Hot-swap to a completely different CA "B".
+        let ca_b = Ca::generate_root(time::Duration::days(30)).unwrap();
+        let server_b = ca_b
+            .sign_server(&["localhost".to_string()], time::Duration::days(7))
+            .unwrap();
+        let client_b = ca_b.sign_client(time::Duration::days(7)).unwrap();
+        handle.store(ServerIdentity::from_pems(&server_b.cert_pem, &server_b.key_pem, ca_b.ca_cert_pem()).unwrap());
+
+        // 3. New handshake with the OLD trust anchor now fails...
+        assert!(connect(addr, client_tls(&ca_a, &client_a)).await.is_err());
+
+        // 4. ...a client under CA B succeeds (new registry registration bumps the count,
+        //    which pushes an event to the OLD stream — proving it survived the swap).
+        let mut c2 = connect(addr, client_tls(&ca_b, &client_b)).await.unwrap();
+        let _meta2 = c2
+            .watch_server_meta(WatchServerMetaRequest {
+                client_id: "c2".into(),
+                client_name: "g2".into(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        let ev = tokio::time::timeout(std::time::Duration::from_secs(5), meta.message())
+            .await
+            .expect("old stream must still deliver events after the swap")
+            .unwrap()
+            .unwrap();
+        assert_eq!(ev.gateway_instance_count, 2);
+
+        token.cancel();
     }
 }
