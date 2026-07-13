@@ -269,6 +269,17 @@ spec:
       cookies:
         origin:
           - { name: session_id }
+      body:                                       # optional — omit to send no body
+        type: json                                 # json | form | raw
+        template: |                                # json/raw: ${type:name} template
+          {"userId": "${ctx:userId}", "token": "${secretRef:prod/webhook:token}"}
+        # form uses structured fields instead of a template (gateway percent-encodes):
+        # type: form
+        # fields:
+        #   - name: userId
+        #     template: "${ctx:userId}"
+        #   - name: source
+        #     value: edgion
 
     timeoutMs: 3000
     tls:
@@ -313,7 +324,15 @@ spec:
 - **`CustomField`**: `{ name: String, <source> }` where source is exactly one of (`CustomSource`, externally tagged + flattened):
   - `value: "literal"` → verbatim string.
   - `template: "${ctx:x}/${header:y}"` → ctx-set template, evaluated at call time. Secret values are embedded as `${secretRef:ns/name:key}` inside the template string (e.g., `"Bearer ${secretRef:prod/webhook-token:token}"`); the controller resolves the referenced Secret at config-apply time, embeds the values in `resolved_secrets`, and ships the full struct over conf_sync; the gateway substitutes `${secretRef:...}` vars from the carried map at call time. Admin `/configclient` renders resolved secret values as `"[redacted]"`. Both `ns` and `key` are required in the `secretRef` token.
-- **Validation** (`Accepted=False` on violation): missing `port`; unsupported `kind`; template parse error; same name in both `origin` and `custom`; duplicate name within a block; `headers.origin: [{name: Cookie}]` together with a non-empty `cookies` block.
+- **`request.body`** (`BodySpec`, tagged enum on `type`): optional — omit the whole block to send no body.
+  - `type: json`: `template` (`${type:name}` interpolation). Every variable value is JSON-string-escaped at eval time, so it always renders as (part of) a JSON string. A config-time canary lint substitutes a placeholder for every variable and parses the result as JSON; a template whose skeleton isn't valid JSON is rejected at admission — this also catches an unquoted placeholder like `"count": ${ctx:n}`. Numeric/boolean payload fields need `type: raw`.
+  - `type: form`: `fields: [CustomField]` (same `value`/`template` source as `headers.custom`), sent as `application/x-www-form-urlencoded` with each value percent-encoded by the gateway.
+  - `type: raw`: `template`, sent verbatim after interpolation. No Content-Type is auto-injected — set one via `headers.custom` if needed.
+  - `json`/`form` auto-inject `Content-Type` (`application/json` / `application/x-www-form-urlencoded`) after header assembly, so it overrides any incoming value forwarded via `headers.forwardAll`. An explicit `Content-Type` in `headers.origin`/`headers.custom` combined with `type: json`/`form` is rejected at admission.
+  - `${secretRef:ns/name:key}` works in body templates/fields exactly as in `headers.custom`: controller-resolved and redacted (`"[redacted]"`) in admin output.
+  - Rendered body size is **not** capped — a template referencing a ctx variable of unbounded size flows straight through; keep templates away from unaudited large inputs.
+  - The `request` block, including `body`, is shared with the `forward_auth` plugin's outbound request.
+- **Validation** (`Accepted=False` on violation): missing `port`; unsupported `kind`; template parse error; same name in both `origin` and `custom`; duplicate name within a block; `headers.origin: [{name: Cookie}]` together with a non-empty `cookies` block; `request.body` type `json` whose canary-rendered template does not parse as valid JSON; an explicit `Content-Type` header combined with `request.body` type `json`/`form`.
 - **`statusOnError`** ∈ [200, 599]; `maxResponseBytes` clamped to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`.
 
 **Consumer side:** the outbound request shape is owned entirely by the webhook resource. Consumers (`KeyGet::Webhook`) pass only the `session` and an optional `pathOverride` (honored only when `path.allowOverride: true`); the `forwardHeaders` / `pathSuffix` knobs are gone. Per-call dynamic values flow in via ctx-set `vars` → `${ctx:NAME}` in the webhook templates.

@@ -6,8 +6,10 @@
 //
 // Exercises the 11 redesigned webhook scenarios end to end, plus 6 further
 // scenarios (12-17) covering the URL-target feature (external `target.url`,
-// origin-only validation, SSRF egress guard). Each scenario has a
-// self-contained fixture in conf/EdgionPlugins/WebhookKeyGet/NN-*.yaml that wires
+// origin-only validation, SSRF egress guard), plus 1 further scenario (18)
+// covering the LinkSys webhook `request.body` block (json templating only).
+// Each scenario has a self-contained fixture in
+// conf/EdgionPlugins/WebhookKeyGet/NN-*.yaml that wires
 // up: a backend Service (+ EndpointSlice) OR an external `target.url`, a LinkSys
 // webhook resource declaring the outbound `request` (target + allow-listed
 // origin/custom fields), a CtxSet EdgionPlugins that invokes the webhook via a
@@ -23,9 +25,9 @@
 // To verify *outbound request construction*, the test_server's webhook handler
 // (`/webhook/resolve`, `/webhook/default`, `/webhook/override`) echoes the inbound
 // request back under `data.echo_headers`, `data.echo_args`, `data.echo_cookies`,
-// `data.method`, `data.path`. The relevant fixtures point their `extract` at the
-// echoed field, so the value the webhook backend actually received surfaces into a
-// ctx var and thus the access log.
+// `data.echo_body`, `data.method`, `data.path`. The relevant fixtures point their
+// `extract` at the echoed field, so the value the webhook backend actually received
+// surfaces into a ctx var and thus the access log.
 //
 // Known gaps surfaced by this suite (documented, not worked around):
 //
@@ -42,8 +44,8 @@
 //     match the route backend path) was evaluated and declined as low-value / niche;
 //     see docs/superpowers/specs/2026-06-21-webhook-serviceclusterip-resolution-design.md.
 //
-// Net: 10/10 original scenarios pass, plus 6/6 URL-target scenarios (12-17; see
-// below), for 16/16 total.
+// Net: 10/10 original scenarios pass, plus 6/6 URL-target scenarios (12-17), plus
+// 1/1 body-templating scenario (18; see below), for 17/17 total.
 //
 // URL-target scenarios (12-17)
 // -----------------------------
@@ -71,6 +73,16 @@
 // 17. Origin-only rejection: `target.url` with a path is rejected by schema
 //     validation; asserted purely against the controller's Accepted=False
 //     status condition (no gateway traffic).
+//
+// Body-templating scenario (18)
+// ------------------------------
+// 18. json body: LinkSys webhook `request.body` (`type: json`) renders a JSON
+//     template containing `${header:X-User-Id}` and is sent to the webhook
+//     backend with an auto-injected `Content-Type: application/json`. The
+//     backend parses the received body and echoes it back under
+//     `data.echo_body`; the fixture extracts `data.echo_body.userId` (proving
+//     the template rendered correctly) and `data.echo_headers.content-type`
+//     (proving the auto-injected header reached the wire).
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -961,6 +973,38 @@ impl WebhookKeyGetTestSuite {
             },
         )
     }
+
+    // ==================== 18. json body ====================
+    fn test_json_body() -> TestCase {
+        TestCase::new(
+            "json_body",
+            "LinkSys webhook request.body (type: json) renders a header variable and auto-injects Content-Type",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    run_case(
+                        &ctx,
+                        "wh18.example.com",
+                        "/test/wh18",
+                        &[("X-User-Id", "user-18")],
+                        "wh18",
+                        start,
+                        true,
+                        |log| {
+                            if !log_has(log, "wh18_body_user", "user-18") {
+                                return Err("body template variable did not reach the webhook backend".to_string());
+                            }
+                            if !log_has(log, "wh18_ct", "application/json") {
+                                return Err("auto-injected Content-Type not observed by backend".to_string());
+                            }
+                            Ok("json body rendered + Content-Type auto-injected".to_string())
+                        },
+                    )
+                    .await
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for WebhookKeyGetTestSuite {
@@ -986,6 +1030,7 @@ impl TestSuite for WebhookKeyGetTestSuite {
             Self::test_url_retry_on_5xx(),
             Self::test_url_block_private_rejected(),
             Self::test_url_origin_only_rejected(),
+            Self::test_json_body(),
         ]
     }
 }

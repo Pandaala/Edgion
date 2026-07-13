@@ -148,6 +148,8 @@ percent-encoding.workspace = true
 # HTTP client for link_sys providers (webhook / elasticsearch) and the
 # request_mirror plugin — a runtime dependency, not test-only.
 reqwest.workspace = true
+# Form-body percent-encoding for outbound request bodies (BodySpec::Form).
+url = { workspace = true }
 
 rusqlite.workspace = true
 md-5.workspace = true

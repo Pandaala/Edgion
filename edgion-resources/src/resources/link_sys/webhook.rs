@@ -19,7 +19,8 @@ pub use crate::resources::common::external_http::{
 // Re-export the shared outbound-request types so that existing callers using
 // `link_sys::webhook::{ListFields, CustomField, ...}` continue to compile.
 pub use crate::resources::common::outbound_request::{
-    CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec, PresencePolicy,
+    BodySpec, CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec,
+    PresencePolicy,
 };
 
 // Re-export ResolvedSecrets so existing callers using
@@ -290,6 +291,19 @@ impl WebhookServiceConfig {
                     templates_to_check.push(t);
                 }
             }
+        }
+        match &self.request.body {
+            Some(BodySpec::Json { template }) | Some(BodySpec::Raw { template }) => {
+                templates_to_check.push(template);
+            }
+            Some(BodySpec::Form { fields }) => {
+                for f in fields {
+                    if let CustomSource::Template(t) = &f.source {
+                        templates_to_check.push(t);
+                    }
+                }
+            }
+            None => {}
         }
         for t in templates_to_check {
             if let Ok(compiled) = CompiledTemplate::compile(t) {
@@ -793,6 +807,72 @@ headers:
             serialize_with = "crate::redact::redact_opt::serialize"
         )]
         resolved_secrets: Option<ResolvedSecrets>,
+    }
+
+    #[test]
+    fn collect_secret_ref_names_includes_body_templates() {
+        let yaml_str = r#"
+body:
+  type: json
+  template: '{"token": "${secretRef:prod/webhook:token}"}'
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        assert_eq!(cfg.collect_secret_ref_names(), vec!["prod/webhook:token".to_string()]);
+    }
+
+    #[test]
+    fn collect_secret_ref_names_includes_form_field_templates() {
+        let yaml_str = r#"
+body:
+  type: form
+  fields:
+    - name: token
+      template: "${secretRef:prod/webhook:token}"
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        assert_eq!(cfg.collect_secret_ref_names(), vec!["prod/webhook:token".to_string()]);
+    }
+
+    #[test]
+    fn validation_rejects_malformed_secret_ref_in_body() {
+        // No namespace in the secretRef — validate_secret_ref_segments must reject.
+        let yaml_str = r#"
+body:
+  type: json
+  template: '{"token": "${secretRef:tok:token}"}'
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        let err = cfg
+            .get_validation_error()
+            .expect("must reject malformed body secretRef");
+        assert!(err.contains("secretRef"), "got: {err}");
+    }
+
+    #[test]
+    fn unresolved_secret_refs_reports_body_only_ref() {
+        let yaml_str = r#"
+body:
+  type: json
+  template: '{"token": "${secretRef:prod/webhook:token}"}'
+"#;
+        let req: WebhookOutboundRequest = serde_yaml::from_str(yaml_str).expect("deserialize");
+        let cfg = WebhookServiceConfig {
+            request: req,
+            ..valid_base_config()
+        };
+        assert_eq!(cfg.unresolved_secret_refs(), vec!["prod/webhook:token".to_string()]);
     }
 }
 

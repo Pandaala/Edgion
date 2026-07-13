@@ -219,6 +219,7 @@ const enSidebar = [
           { text: 'Reference Grant', link: '/en/ops-guide/infrastructure/reference-grant' },
           { text: 'Secret Management', link: '/en/ops-guide/infrastructure/secret-management' },
           { text: 'Connectors (LinkSys)', link: '/en/ops-guide/infrastructure/connectors' },
+          { text: 'Service Discovery', link: '/en/ops-guide/infrastructure/service-discovery' },
         ],
       },
       {
@@ -456,6 +457,7 @@ const zhSidebar = [
           { text: 'mTLS', link: '/zh-CN/ops-guide/infrastructure/mtls' },
           { text: '引用授权', link: '/zh-CN/ops-guide/infrastructure/reference-grant' },
           { text: '密钥管理', link: '/zh-CN/ops-guide/infrastructure/secret-management' },
+          { text: '服务发现', link: '/zh-CN/ops-guide/infrastructure/service-discovery' },
         ],
       },
       { text: 'Edgion CLI', link: '/zh-CN/ops-guide/edgion-cli' },

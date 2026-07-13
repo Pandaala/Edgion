@@ -31,6 +31,7 @@ This section is intended for operators, covering Gateway deployment, configurati
 - [Cross-Namespace Reference (ReferenceGrant)](./infrastructure/reference-grant.md): Cross-namespace resource authorization.
 - [mTLS Configuration](./infrastructure/mtls.md): Mutual TLS between gateway and backends.
 - [Connectors (LinkSys) 🔌](./infrastructure/connectors.md): External-system integrations (Redis, Etcd, Elasticsearch, Webhook, Kafka).
+- [Service Discovery Integration](./infrastructure/service-discovery.md): Bring external service registries (Consul, Nacos, Eureka, ZooKeeper) into Edgion.
 
 ### Observability
 

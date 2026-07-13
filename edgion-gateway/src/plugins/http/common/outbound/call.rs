@@ -128,6 +128,9 @@ pub async fn outbound_call(
                 *req.timeout_mut() = Some(client.timeout);
                 // Inject caller-supplied extra headers (e.g. X-Forwarded-* from ForwardAuth).
                 // Silently skip headers with invalid names or values (data-plane rule).
+                // NOTE: these run after build_request, so a caller passing Content-Type
+                // here would override the body-derived CT and bypass the admission-time
+                // conflict check — no current caller does; keep it that way.
                 for &(name, val) in extra_headers {
                     if let (Ok(n), Ok(v)) = (
                         reqwest::header::HeaderName::from_bytes(name.as_bytes()),
@@ -725,5 +728,55 @@ mod tests {
         let session = make_session("GET", "/api");
         let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
         assert_eq!(resp.status, 200, "secretRef should have resolved at runtime");
+    }
+
+    /// End-to-end: a json body with a ${secretRef:...} placeholder is rendered,
+    /// escaped, shipped with Content-Type: application/json, and survives the
+    /// retry loop's try_clone (Bytes-backed body).
+    #[tokio::test]
+    async fn json_body_with_secret_ref_is_sent() {
+        use edgion_resources::resources::common::external_http::ResolvedSecrets;
+        use edgion_resources::resources::common::outbound_request::{
+            BodySpec, MethodSpec, OutboundRequestSpec, PathSpec,
+        };
+        use std::collections::BTreeMap;
+        use wiremock::matchers::{body_json, header, method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/notify"))
+            .and(header("content-type", "application/json"))
+            .and(body_json(serde_json::json!({
+                "token": "test-secret-value",
+                "caller": "edgion-gateway"
+            })))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+
+        let mut secrets = BTreeMap::new();
+        secrets.insert("ns/n:k".to_string(), "test-secret-value".to_string());
+
+        let mut client = make_client(&localhost_uri(&server.uri()));
+        client.compiled_request = CompiledRequest::from_spec(&OutboundRequestSpec {
+            path: Some(PathSpec {
+                template: "/notify".to_string(),
+                allow_override: false,
+            }),
+            method: Some(MethodSpec {
+                template: "POST".to_string(),
+            }),
+            body: Some(BodySpec::Json {
+                template: r#"{"token": "${secretRef:ns/n:k}", "caller": "edgion-gateway"}"#.to_string(),
+            }),
+            ..Default::default()
+        })
+        .expect("must compile");
+        client.resolved_secrets = Some(ResolvedSecrets(secrets));
+
+        let session = MockPluginSession::new();
+        let resp = outbound_call(&client, &session, None, 4096, &[]).await.unwrap();
+        assert_eq!(resp.status, 200, "body + CT + secret must all match the mock");
     }
 }

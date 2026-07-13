@@ -264,4 +264,22 @@ mod tests {
             decision.status_on_error
         );
     }
+
+    #[test]
+    fn forward_auth_inherits_body_content_type_conflict() {
+        use crate::resources::common::outbound_request::{BodySpec, CustomField, CustomSource};
+        let y = "target:\n  name: auth\n  port: 8080\ndecision:\n  statusOnError: 503\n";
+        let mut cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
+        cfg.request.body = Some(BodySpec::Json {
+            template: r#"{"user": "${ctx:user}"}"#.to_string(),
+        });
+        cfg.request.headers.custom.push(CustomField {
+            name: "Content-Type".to_string(),
+            source: CustomSource::Value("text/plain".to_string()),
+        });
+        let err = cfg
+            .validation_error()
+            .expect("forward_auth must inherit body validation");
+        assert!(err.contains("Content-Type"), "got: {err}");
+    }
 }

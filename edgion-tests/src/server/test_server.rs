@@ -1041,7 +1041,8 @@ async fn dns_reset_handler() -> impl IntoResponse {
 ///     "method":"GET","path":"/webhook/resolve","query":"a=b",
 ///     "echo_headers":{"<lowercased-name>":"<value>", ...},
 ///     "echo_args":{"<name>":"<value>", ...},
-///     "echo_cookies":{"<name>":"<value>", ...}
+///     "echo_cookies":{"<name>":"<value>", ...},
+///     "echo_body": <parsed JSON of the received request body, or null>
 ///   }}
 ///   ```
 ///
@@ -1049,6 +1050,9 @@ async fn dns_reset_handler() -> impl IntoResponse {
 /// webhook `extract` of e.g. `data.echo_headers.x-source` surfaces the outbound
 /// header value into a ctx var (and thus the access log) for assertion. The
 /// `data.path` field lets path-override tests prove which path was called.
+/// `echo_body` mirrors the same idea for the request body: it is the request
+/// body parsed as JSON (so `extract` can walk into fields like
+/// `data.echo_body.userId`), or `Null` when the body is empty or not valid JSON.
 ///
 /// If `X-Tenant-Id` is missing, returns a default resolution. The legacy
 /// `user_id`/`tenant` body keys and response headers are preserved so existing
@@ -1057,6 +1061,7 @@ async fn dns_reset_handler() -> impl IntoResponse {
 /// Note: query/cookie values are echoed verbatim (no percent-decoding); tests
 /// that assert on them use plain alphanumeric values.
 async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::Json;
     use serde_json::json;
@@ -1066,7 +1071,13 @@ async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     let path = req.uri().path().to_string();
     let query = req.uri().query().unwrap_or("").to_string();
 
-    let headers = req.headers();
+    let (parts, body) = req.into_parts();
+    let body_bytes = to_bytes(body, 8 * 1024).await.unwrap_or_default();
+    // Echo the received request body: parsed JSON when possible (lets fixtures
+    // extract data.echo_body.<field>), else Null.
+    let echo_body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap_or(serde_json::Value::Null);
+
+    let headers = &parts.headers;
     let tenant = headers
         .get("x-tenant-id")
         .and_then(|v| v.to_str().ok())
@@ -1118,6 +1129,7 @@ async fn webhook_resolve_handler(req: AxumRequest<Body>) -> impl IntoResponse {
             "echo_headers": echo_headers,
             "echo_args": echo_args,
             "echo_cookies": echo_cookies,
+            "echo_body": echo_body,
         }
     });
 

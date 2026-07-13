@@ -30,6 +30,7 @@
 - [跨命名空间引用 (ReferenceGrant)](./infrastructure/reference-grant.md)：跨命名空间资源授权。
 - [mTLS 配置](./infrastructure/mtls.md)：网关到后端的双向 TLS。
 - [连接器 (LinkSys) 🔌](./infrastructure/connectors.md)：外部系统集成（Redis、Etcd、Elasticsearch、Webhook、Kafka）。
+- [服务发现集成](./infrastructure/service-discovery.md)：集成外部服务注册中心（Consul、Nacos、Eureka、ZooKeeper）。
 
 ### 可观测性
 
