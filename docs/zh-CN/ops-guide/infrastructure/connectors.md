@@ -413,6 +413,8 @@ spec:
 
 ## Webhook 连接器
 
+> ⚠️ **破坏性变更，且是静默的：`successStatusCodes` 已被 `success.statusCodes` 取代。** `successStatusCodes` 已不再是可识别字段——`ExternalHttpConnection` 通过 `#[serde(flatten)]` 展平且未启用 `deny_unknown_fields`，因此仍设置 `successStatusCodes` 的 webhook YAML 会在准入时被**无错误、无告警地接受**：该字段被静默丢弃，成功判定退化为"任意 2xx"。这与本文档中其他迁移项（`auth`、`defaultHeaders`、`requestMethod`，均是"接受但打印 WARN"、保留一个版本的过渡期）不同——这里没有过渡期。请立即审查每个 webhook LinkSys（以及共用该连接类型的每个 ForwardAuth 插件）是否还在使用 `successStatusCodes`，并迁移到嵌套的 `success:` 块；详见下文[Success（成功判定）](#成功判定-success)。
+
 Webhook 连接器让插件（ctx-set、key-auth、hmac-auth 等）调用外部 HTTP 服务，用于用户解析、权限校验、上下文增强、审计日志等查询。该连接器是出站请求的**唯一事实来源**：它声明后端（直接写在 `target` 下的 `name`/`namespace`/`port`/`kind`/`group` 字段），并通过 `request` 块精确定义发送的路径、方法、查询参数、请求头和 Cookie。消费方插件不能再静默地改变请求形状——它们只能向 webhook 作者声明的命名槽位填值，可选地覆盖路径（在被允许时），以及解析响应。出站字段遵循**白名单**模型：除非 webhook 明确声明，否则不转发任何内容，因此上游某个行为异常的插件无法泄露运营者从未打算暴露的请求头。
 
 ```yaml
@@ -445,7 +447,8 @@ spec:
               key: token
               prefix: "Bearer "
     timeoutMs: 3000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     maxResponseBytes: 2048
 ```
 
@@ -509,7 +512,7 @@ URL 目标按主机名寻址，因此——与通过 Kubernetes EndpointSlice �
 - **`target.blockPrivate: true` 时额外拒绝**：RFC1918 私有网段（`10/8`、`172.16/12`、`192.168/16`）及唯一本地地址（`fd00::/8`），在始终拒绝的类别之外追加。
 - **默认（`blockPrivate` 未设置或为 `false`）**：私有网段被放行，与 Service 目标一贯的行为保持一致——多数 webhook 合法地指向内部制品库，或只能通过私有网络访问的 SaaS。
 
-被拒绝的地址会导致该次调用连接失败（并按 webhook 通常的语义，`allowDegradation` / `statusOnError` 随后照常生效）。拒绝会使 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` 计数器递增，但这仅在**主机名**路径上成立（`EgressResolver`，会记录全部三种 reason）。在 **IP 字面量**路径上，只有 `reason="private"` 会被记录：`dial_url` 的 `blockPrivate` 检查会记录该指标，但那条路径上的回环/链路本地拒绝要经过早于该指标就已存在的共享后端守卫（`validate_endpoint_backend_addr`），并不会写入该指标。因此，基于该计数器搭建的看板或告警，对主机名目标能获得完整覆盖，但当 `target.url` 是 IP 字面量时，对回环/链路本地拒绝是"看不见"的。
+被拒绝的地址会导致该次调用连接失败（`key_get` 返回 `None`，与其他任何 webhook 失败一样；`allowDegradation` / `statusOnError` 并不会被 webhook 连接器读取，参见[降级与错误处理](#降级与错误处理)）。拒绝会使 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` 计数器递增，但这仅在**主机名**路径上成立（`EgressResolver`，会记录全部三种 reason）。在 **IP 字面量**路径上，只有 `reason="private"` 会被记录：`dial_url` 的 `blockPrivate` 检查会记录该指标，但那条路径上的回环/链路本地拒绝要经过早于该指标就已存在的共享后端守卫（`validate_endpoint_backend_addr`），并不会写入该指标。因此，基于该计数器搭建的看板或告警，对主机名目标能获得完整覆盖，但当 `target.url` 是 IP 字面量时，对回环/链路本地拒绝是"看不见"的。
 
 **网关本地默认值。** 当 webhook 未显式设置 `target.blockPrivate` 时，生效值来自网关自身的配置：
 
@@ -601,9 +604,9 @@ request:
 |------|------------------|----------|
 | `skipIfMissing`（默认） | 从出站请求中静默省略该字段，不记录日志。 | 缺失属正常的可选增强。 |
 | `warnIfMissing` | 省略该字段，写入一条 PluginLog 告警，请求继续。 | *应当*存在的字段——你想要可见性但不想让调用失败。 |
-| `required` | webhook 调用被视为失败。随后 `statusOnError` / `allowDegradation` 与其他任何 webhook 失败完全一样地生效。 | 后端缺之不可的字段。 |
+| `required` | webhook 调用被视为失败：`key_get` 返回 `None`（无值），与其他任何 webhook 失败一样。 | 后端缺之不可的字段。 |
 
-`presence` 与 `allowDegradation` 正交且可组合：`presence: required` 决定缺失字段是否*算作失败*；`allowDegradation` 随后决定该失败是中止插件链（`false`，默认）还是静默跳过 webhook 并继续（`true`）。
+`allowDegradation` / `statusOnError` 存在于该连接器的 schema 中（它与 ForwardAuth 插件共用 `ExternalHttpConnection`），但**webhook 连接器本身并不读取它们**：任何失败——包括某个 `presence: required` 字段缺失——`key_get` 都只是返回 `None`，真正决定后续行为的是*消费方*插件自己的回退逻辑（例如 ctx-set 会让目标变量保持未设置，请求继续往下走）。在 webhook `LinkSys` 上设置这两个字段没有任何效果；它们只在同一个结构体被直接嵌入 ForwardAuth 插件配置时才有意义。
 
 #### 自定义字段来源
 
@@ -663,30 +666,109 @@ custom:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `timeoutMs` | Integer | `5000` | 请求超时（毫秒），必须大于 0。 |
+| `timeoutMsTemplate` | String | none | 渲染单次请求超时的模板，如 `"${ctx:desired_timeout_ms}"`。仅限一组受信任的变量白名单——详见下文 [Templates（模板）](#模板-templates)。 |
 | `tls` | Object | none | TLS 配置；详见 [TLS](#tls)。未设置时使用系统 CA 包。 |
-| `successStatusCodes` | Array\<Integer\> | 任意 2xx | 视为成功的 HTTP 状态码。 |
-| `maxResponseBytes` | Integer | `1024` | 读取的最大响应体大小（字节），受 `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`（默认 16 KiB）限制。 |
+| `success` | Object | 任意 2xx | 成功判定条件：状态码加上可选的 JSON body 断言。**取代已移除的 `successStatusCodes`**——详见下文 [Success（成功判定）](#成功判定-success)。 |
+| `maxResponseBytes` | Integer | `1024` | 读取的最大响应体大小（字节），受 `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`（默认 16 KiB）限制。当设置了 `success.body` 断言时必须 `>= 4096`——详见 [Success（成功判定）](#成功判定-success)。 |
 
 > **已移除的字段。** `requestMethod`、`auth` 和 `defaultHeaders` 已弃用。在滚动升级期间它们仍被接受但运行时忽略，控制器在遇到时记录 WARN。它们将在下一个版本中移除——请在此之前迁移。详见[从旧 schema 迁移](#从旧-schema-迁移)。
+>
+> `successStatusCodes` 不属于这条弃用路径：它根本不被展平后的连接结构体识别，会被静默丢弃且**不打印 WARN**。详见本节开头的警告以及 [Success（成功判定）](#成功判定-success)。
 
 ### 降级与错误处理
 
+> ⚠️ **这两个字段在 webhook 连接器上是惰性的。** `allowDegradation` 和 `statusOnError` 之所以出现在这里，只是因为该连接器与 ForwardAuth 插件共用 `ExternalHttpConnection` schema，而 ForwardAuth 确实会读取它们。webhook 连接器自身的 `key_get` 没有 fail-open/fail-closed 的决策要做：任何失败都只是返回 `None`（无值），真正接管后续行为的是调用方插件自己的 fallback 逻辑——webhook 连接器本身并不会向客户端返回任何状态码。在 webhook `LinkSys` 上设置 `allowDegradation`/`statusOnError` 会被准入接受，但在运行时没有任何效果。
+
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `allowDegradation` | Boolean | `false` | 为 `true` 时，webhook 失败会被静默跳过，继续消费方的 fallback 链。为 `false` 时，失败导致查询失败。 |
-| `statusOnError` | Integer | `503` | `allowDegradation=false` 且 webhook 为唯一来源时返回的状态码，取值范围 `[200, 599]`。 |
+| `allowDegradation` | Boolean | `false` | 仅为与 ForwardAuth 保持 schema 兼容而接受；webhook 连接器不读取该字段。 |
+| `allowDegradationTemplate` | String | none | 仅为与 ForwardAuth 保持 schema 兼容而接受；webhook 连接器不读取该字段。 |
+| `statusOnError` | Integer | `503` | 仅为与 ForwardAuth 保持 schema 兼容而接受；webhook 连接器不读取该字段。 |
+
+### Success（成功判定）
+
+取代旧的 `successStatusCodes` 字段（已移除；预发布阶段，不设别名——详见本节开头的警告）。只有当状态码检查**和**可选的 body 断言**同时**通过时，响应才被判定为成功：
+
+```yaml
+success:
+  statusCodes: [200]          # 省略 -> 任意 2xx（200-299），与之前行为一致
+  body:                       # 可选；与 statusCodes 按与运算组合
+    - pointer: "/code"        # 指向已解析响应 body 的 RFC 6901 JSON Pointer
+      equals: 0
+    - pointer: "/data/status"
+      in: ["ok", "accepted"]
+```
+
+动机：一些后端总是返回 `200 OK`，把真实结果放在 body 里，例如 `{"code": -101, "message": "invalid user"}`。没有 body 断言时，网关会把这种响应当作成功，重试和降级都不会触发。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `success.statusCodes` | Array\<Integer\> | 任意 2xx | 视为成功的状态码。省略 → 任意 2xx（200-299）。显式的空列表（`statusCodes: []`）会在**准入时被拒绝**，而不是静默地等同于"任意 2xx"——因为二者效果相同却少了可见性，例如 Helm 模板渲染出空列表会在无人察觉的情况下放宽鉴权白名单。 |
+| `success.body` | Array\<Object\> | `[]` | JSON-Pointer body 断言，与状态码检查、以及断言之间彼此按与运算组合。 |
+| `success.body[].pointer` | String | **必填** | 指向已解析响应 body 的 RFC 6901 JSON Pointer，如 `/code` 或 `/data/status`。 |
+| `success.body[].equals` / `.notEquals` / `.exists` / `.in` | — | — | 每项恰好一个操作符（在反序列化时强制校验——多于一个或一个都没有都会解析失败）。`equals` / `notEquals` / `in` 按严格的 `serde_json::Value` 比较——**不做类型转换**：`equals: 0` 匹配 JSON 的 `0`，但不匹配字符串 `"0"`。`exists: true/false` 仅检查是否存在。`in` 接受一个非空的取值列表。 |
+
+**非 JSON body → 判定为失败，而非报错。** 当配置了任意 `success.body` 断言，且响应 body 不是合法 JSON（`Content-Type` 不对或无法解析）时，响应被判定为**失败**——不 panic，不报错。
+
+**指针缺失 → 判定为失败，`exists: false` 除外。** 当 body 确实是合法 JSON，但某条断言的 `pointer` 指向不存在的位置时，`equals`/`notEquals`/`in` 都会判定为失败——不能对一个根本不存在的字段做相等/成员关系断言。唯一合法的例外是 `exists: false`，它的定义就是"该指针不存在"，因此在这种情况下会成功。例如，`{pointer: /error, notEquals: true}` 应用于 `200 {"authenticated": false}`（完全没有 `/error` 键）的响应体上，结果是**失败**，而不是通过——一个隐藏在不同字段名下的业务错误，不能借由一个指向别处字段的 `notEquals` 断言蒙混过关。
+
+**使用 body 断言时必须调高 `maxResponseBytes`。** 默认上限是 1024 字节（1 KiB）。若 `success.body` 非空，准入时要求 `maxResponseBytes >= 4096`，否则资源会被拒绝并报 `Accepted=False`。原因是：超过上限的 body 会在分类**之前**就被截断——截断的 body 会呈现为独立的 `ResponseTooLarge` 失败，**而不是**"断言未通过"。排查时请区分二者：`ResponseTooLarge` 失败意味着要调高 `maxResponseBytes`；断言失败意味着后端的响应确实不匹配。
+
+**不影响被动健康检查。** 被动健康检查（`healthCheck.passive.failureStatusCodes`）仍然只看 HTTP 状态码——200 响应体里的业务错误不会触发连接器的健康状态变化或熔断。
 
 ### 重试
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `retry.maxRetries` | Integer | `1` | 最大重试次数（不含首次调用）。 |
-| `retry.retryDelayMs` | Integer | `100` | 重试间隔（毫秒）。 |
-| `retry.retryOnTimeout` | Boolean | `true` | 请求超时时重试。 |
-| `retry.retryOnConnectError` | Boolean | `true` | 连接错误时重试。 |
-| `retry.retryOnStatus` | Array\<Integer\> | `[]` | 触发重试的 HTTP 状态码。 |
+| `retry.maxRetries` | Integer | `1` | 最大重试次数（不含首次调用）。范围 `0..=10`——更大的值在准入时被拒绝（`Accepted=False`）。这条限制与下方 `maxDelayMs` 的上限共同存在：即便每次退避都有上限，不受限的 `maxRetries`（例如 200）仍会让一个存活的数据面请求内联阻塞长达数十分钟的 `tokio::time::sleep`。 |
+| `retry.retryDelayMs` | Integer | `100` | **退避曲线的基础延迟**（毫秒）——不是固定的"重试间隔"。在 `backoffPolicy: fixed` 下它就是恒定延迟；在 `exponential`（默认）下它是曲线的第一项。必须大于 0。 |
+| `retry.backoffPolicy` | Enum | `exponential` | `exponential` \| `fixed`。`exponential`：`delay = min(maxDelayMs, retryDelayMs << (attempt-1))`。`fixed`：`delay = retryDelayMs`（每次恒定）。 |
+| `retry.maxDelayMs` | Integer | `1000` | 单次退避的上限（毫秒），在抖动**之前**应用。范围 `1..=10000`——更大的值在准入时被拒绝（`Accepted=False`）。重试的休眠会内联阻塞数据面上一个活跃的客户端请求，因此这是硬性安全上限，而不是用于等待故障恢复的调节旋钮（那是健康检查/熔断器的职责）。 |
+| `retry.jitter` | Boolean | `true` | 为每次退避延迟增加 50%–100% 的抖动（`d = uniform(d/2 ..= d)`，在 `maxDelayMs` 上限**之后**应用，因此结果永远不会超过该上限）。防止重试风暴。 |
+| `retry.honorRetryAfter` | Boolean | `false` | 可选启用。当响应状态码为 `429` 或 `503`，**且**该状态码已列在 `retryOnStatus` 中时，采用响应的 `Retry-After` 头（同时支持 `delta-seconds` 和 HTTP-date 两种形式）代替计算出的退避值。解析值 `<= maxDelayMs` 时用作本次尝试的延迟；解析值 `> maxDelayMs` 时网关会**停止重试**并将后端的响应原样返回——既不会立即重试，也不会报错。缺失或无法解析的 `Retry-After` 会回退到计算出的退避值。`honorRetryAfter` 只改变重试发生的**时机**，不改变是否重试的**决定**。 |
+| `retry.retryOnTimeout` | Boolean | **按消费方决定——见下文** | 请求超时时重试。 |
+| `retry.retryOnConnectError` | Boolean | `true` | 连接错误（拒绝、重置）时重试。连接失败意味着请求从未到达后端，因此重试总是幂等安全的——这个默认值不受下文消费方拆分的影响。 |
+| `retry.retryOnStatus` | Array\<Integer\> | `[]` | 触发重试的 HTTP 状态码。状态码重试保持可选启用。 |
+| `retry.retryOnBodyFailure` | Boolean | `false` | 当 `success.body` 断言（见 [Success（成功判定）](#成功判定-success)）将响应判定为失败时重试。默认关闭：像 `{"code": -101}` 这样的业务错误，第十次尝试仍然是 `-101`——重试纯属浪费。只有确认 body 失败是瞬时性的才应启用。 |
 
 省略 `retry` 时，webhook 在首次出错后立即失败。
+
+> **`retryOnTimeout` 的默认值已改变，现在按消费方决定：webhook 为 `false`，ForwardAuth 为 `true`。** 超时意味着结果*未知*——后端可能已经完整处理了请求。webhook 调用绝大多数是非幂等的 POST（发送通知、扣款、写审计记录），因此对超时的 webhook 重试有导致重复执行的风险——所以默认 `false`。ForwardAuth 调用是幂等的鉴权检查，对瞬时超时重试是真实的可用性收益——所以默认 `true`。**这是一次真实的行为变更**：任何设置了 `retry:` 块、且此前依赖旧的无条件 `true` 默认值的 webhook LinkSys 都会受影响；运营者始终可以显式覆盖该字段。`retryOnConnectError` 不受影响（两者都保持 `true` 不变），因为连接失败总是可以安全重试的。
+
+### Templates（模板）
+
+有两个连接层字段可以由 `request.*` 所用的同一套单次请求模板引擎驱动（见[模板变量](#模板变量)）——但它们的变量白名单比 `request.*` **窄得多**。两者都会在准入时编译并校验；格式错误的模板，或引用了不允许的变量类型的模板，都会被拒绝并报 `Accepted=False`。
+
+> ⚠️ **`timeoutMsTemplate` / `allowDegradationTemplate` 只接受 `${ctx:...}`、`${clientIp}`、`${matchedHttpRoute:...}` 和 `${matchedGrpcRoute:...}`。** `${header:...}`、`${query:...}`、`${cookie:...}`、`${path}`、`${uri}`、`${requestPath}`、`${requestUri}`、`${method}` 以及 `${secretRef:...}` 在这两个字段上都会被专门拒绝（它们在 `request.*` 中仍然完全可用）。这两个字段都是安全敏感的：`timeoutMsTemplate` 设置鉴权服务调用的截止时间，`allowDegradationTemplate` 是 forward_auth 的 fail-open 开关。一个客户端可控的来源会让攻击者把超时压到小到必然超时的值（可靠的拒绝服务），或者——结合 `allowDegradation: true`——通过一个请求头直接强制走 fail-open 路径，随时产生 100% 未鉴权绕过。
+
+```yaml
+timeoutMsTemplate: "${ctx:desired_timeout_ms}"     # 回退到 timeoutMs
+allowDegradationTemplate: "${ctx:is_staging}"      # 回退到 allowDegradation
+```
+
+**规则：模板渲染为可解析的值时优先采用；否则回退到静态字段。**
+
+| 参数 | 渲染为 | 回退目标 | 说明 |
+|------|--------|----------|------|
+| `timeoutMsTemplate` | `u64` 毫秒数 | `timeoutMs` | 渲染结果非数字、为空或低于下限时回退。下限是 `MIN_OUTBOUND_TIMEOUT_MS` = 50 毫秒（低于该值的渲染结果与 0/空一视同仁）。无论如何，渲染值在上限侧都会被**限幅到 60000 毫秒（60 秒）**。 |
+| `allowDegradationTemplate` | `true` \| `false` | `allowDegradation` | **严格语法**：去除首尾空白、大小写不敏感后的渲染结果必须恰好等于 `true` 或 `false`。其他任何值——`1`、`0`、`yes`、空字符串——都会回退。不支持数字或 yes/no 别名。 |
+
+每次静默回退都会使 `edgion_outbound_template_fallback_total{field="timeout_ms"|"allow_degradation"}` 计数器递增——详见下文 [Observability metrics（可观测性指标）](#可观测性指标)，因为数据面无法通过 `tracing` 记录该回退。
+
+**总阻塞时间。** 重试休眠和出站调用都内联在请求路径上，因此最坏情况的阻塞时间是 `(有效超时 × 最大尝试次数) + Σ 退避延迟`，每一项都独立设有上限：`timeoutMsTemplate` 受 60 秒限幅（以及下限的 50 毫秒下限）约束，退避延迟受 `maxDelayMs` 及其 10 秒硬上限约束，`maxRetries` 本身也受其 10 次的上限约束（见上方 [重试](#重试)）。
+
+这两个字段都不能重定向出站连接——本版本没有模板化的 `target.url`——而且有了上面的变量白名单，这两个字段也不能被这次调用所处理的客户端请求中的任何内容驱动。
+
+### Observability metrics（可观测性指标）
+
+Webhook 连接器（以及共用同一个 `ExternalHttpConnection` 的 ForwardAuth 插件）会输出两个 Prometheus 计数器，用于覆盖那些在数据面上原本不可见的结果（数据面无法通过 `tracing` 记录日志）：
+
+| 指标 | 标签 | 触发条件 |
+|------|------|----------|
+| `edgion_outbound_template_fallback_total` | `field` ∈ `timeout_ms` \| `allow_degradation` | `timeoutMsTemplate` / `allowDegradationTemplate` 渲染结果无法解析（对超时字段而言，渲染为 0 或空也算），连接回退到静态字段。 |
+| `edgion_outbound_success_predicate_fail_total` | 无 | 响应状态码已被 `success.statusCodes` 接受，但 `success.body` 断言将其判定为失败——即"200 OK 但 body 里有错误"的情形。 |
+
+关于 Prometheus 的通用参考（抓取配置、基数、Gateway 指标监听端口），见 [Metrics](../observability/metrics.md)。
 
 ### 限流
 
@@ -857,14 +939,12 @@ spec:
   type: webhook
   config:
     target: { kind: Service, name: authz, port: 8080 }
-    allowDegradation: false        # required 字段失败时暴露 statusOnError
-    statusOnError: 503
     request:
       headers:
         origin:
           - name: X-Trace-Id                       # 默认：skipIfMissing
           - name: X-User-Id
-            presence: required                     # 缺失 → 调用失败 → 503
+            presence: required                     # 缺失 → key_get 返回 None
           - name: X-Org-Id
             presence: warnIfMissing                # 缺失 → PluginLog 告警，继续
 ```
@@ -952,12 +1032,13 @@ spec:
               key: token
               prefix: "Bearer "
     timeoutMs: 3000
-    allowDegradation: false
-    statusOnError: 503
     retry:
       maxRetries: 1
-      retryDelayMs: 100
-      retryOnTimeout: true
+      retryDelayMs: 100          # 退避曲线的基础延迟，不是固定间隔
+      backoffPolicy: exponential # exponential（默认）| fixed
+      maxDelayMs: 1000           # 单次退避上限，范围 1..=10000
+      jitter: true               # 50%-100% 抖动，在 maxDelayMs 上限之后应用
+      retryOnTimeout: false      # webhook 的默认值；forward_auth 默认改为 true
       retryOnConnectError: true
       retryOnStatus: [502, 503, 504]
     rateLimit:
@@ -1061,8 +1142,8 @@ spec:
 **关于 `kind` 值的 `Accepted=False`。**
 只有 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 和留空有效。`ExternalName` 和 `ServiceImport` 被拒绝——请改用代理 Service。
 
-**Required 字段错误 / 意外的 `statusOnError`。**
-某个 `presence: required` 的 `origin` 字段在传入请求中缺失，这算作 webhook 失败。确认客户端确实发送了该 header/arg/cookie（注意大小写：请求头大小写不敏感，arg 和 cookie 大小写敏感）。要降级而非失败，设置 `allowDegradation: true`；要仅记录，用 `presence: warnIfMissing`。
+**Required 字段错误 / key 解析结果为空。**
+某个 `presence: required` 的 `origin` 字段在传入请求中缺失，这算作 webhook 失败：`key_get` 返回 `None`，由消费方插件自己的回退逻辑决定接下来发生什么（例如 ctx-set 会让目标变量保持未设置）。`allowDegradation`/`statusOnError` 在这里**不适用**——它们在 webhook 连接器上是惰性的（参见[降级与错误处理](#降级与错误处理)）。请确认客户端确实发送了该 header/arg/cookie（注意大小写：请求头大小写不敏感，arg 和 cookie 大小写敏感），或用 `presence: warnIfMissing` 仅记录而不失败。
 
 **模板变量解析为空。**
 `${ctx:NAME}` 在变量从未设置时返回空。确保在 webhook 被调用之前有一个 ctx-set 步骤设置它，并检查 `${type:name}` 拼写。要强制存在性，优先在 `origin` 字段上用 `presence: required` 而非模板。
@@ -1233,3 +1314,4 @@ spec:
 - [mTLS 配置](./mtls.md)
 - [Redis 限流](../../user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md)
 - [Access Log](../observability/access-log.md)
+- [Metrics](../observability/metrics.md)

@@ -49,13 +49,13 @@
 //!       origin:
 //!         - name: Authorization
 //!         - name: Cookie
+//!   allowDegradation: true
+//!   statusOnError: 503
 //!   decision:
 //!     upstreamHeaders:
 //!       - X-User-ID
 //!     clientHeaders:
 //!       - WWW-Authenticate
-//!     allowDegradation: true
-//!     statusOnError: 503
 //! ```
 
 use async_trait::async_trait;
@@ -69,6 +69,7 @@ use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::common::success::SuccessOutcome;
 use edgion_resources::resources::edgion_plugins::{ForwardAuthConfig, ForwardAuthDecision};
 
 /// Maximum bytes of the auth service error body to buffer and return to the client.
@@ -83,6 +84,12 @@ pub struct ForwardAuth {
     /// Wrapped in `Arc` so that when the plugin is replaced on hot-reload, the old
     /// client's `Drop` impl aborts the active-health background task.
     client: Arc<ManagedOutboundClient>,
+    /// HTTP status code to return when the auth service is unreachable and
+    /// the effective degradation decision (see
+    /// [`ManagedOutboundClient::effective_allow_degradation`]) is false.
+    /// Sourced from the shared `ExternalHttpConnection.status_on_error` at
+    /// construction time.
+    status_on_error: u16,
     /// Decision phase: header propagation, degradation, error status, and timing.
     decision: ForwardAuthDecision,
 }
@@ -101,10 +108,14 @@ impl ForwardAuth {
             &config.request,
             config.resolved_secrets.as_ref(),
             "ForwardAuth",
+            // Auth checks are idempotent GET/HEAD-style calls: retry a timed-out
+            // request by default.
+            true,
         )?;
         Ok(ForwardAuth {
             name: "ForwardAuth".to_string(),
             client: Arc::new(client),
+            status_on_error: config.conn.status_on_error,
             decision: config.decision.clone(),
         })
     }
@@ -148,17 +159,6 @@ impl ForwardAuth {
             .await;
         session.shutdown().await;
         PluginRunningResult::ErrTerminateRequest
-    }
-
-    /// Check whether the auth response status code indicates success.
-    ///
-    /// Uses `conn.success_status_codes` when configured; falls back to the
-    /// standard 2xx range (200–299).
-    fn is_success_status(&self, status: u16) -> bool {
-        match &self.client.success_status_codes {
-            Some(codes) => codes.contains(&status),
-            None => (200u16..300u16).contains(&status),
-        }
     }
 }
 
@@ -205,7 +205,7 @@ impl RequestFilter for ForwardAuth {
                 // Surface in the access log `errors` for gateway-level visibility; PluginLog
                 // captures the per-request plugin-side detail.
                 session.add_error(edgion_resources::EdgionStatus::ForwardAuthServiceUnreachable);
-                if self.decision.allow_degradation {
+                if self.client.effective_allow_degradation(session) {
                     plugin_log.push_err("upstream unreachable:degraded");
                     return PluginRunningResult::GoodNext;
                 }
@@ -214,7 +214,7 @@ impl RequestFilter for ForwardAuth {
                     .send_error_response(
                         session,
                         plugin_log,
-                        self.decision.status_on_error,
+                        self.status_on_error,
                         b"{\"message\":\"Auth service unavailable\"}",
                         None,
                     )
@@ -222,7 +222,8 @@ impl RequestFilter for ForwardAuth {
             }
         };
 
-        if self.is_success_status(resp.status) {
+        let outcome = self.client.classify_detail(&resp);
+        if outcome == SuccessOutcome::Success {
             // Auth passed: copy specified response headers to the upstream request.
             for header_name in &self.decision.upstream_headers {
                 if let Some(value) = resp.headers.get(header_name.as_str()) {
@@ -254,10 +255,32 @@ impl RequestFilter for ForwardAuth {
             // The body was already size-capped by the outbound engine; pass it through.
             let body = resp.body;
 
-            plugin_log.push_fmt("auth deny {}", la![resp.status.to_string().as_str()]);
+            // `StatusFail` is a genuine non-2xx from the auth service: relay it
+            // unchanged. `BodyFail` means the auth service answered with an
+            // otherwise-accepted status (e.g. 200) but the `success.body`
+            // predicate rejected it — relaying that status verbatim would tell
+            // the client "200 OK" for a denied request, so force 403 instead.
+            let client_status = if outcome == SuccessOutcome::BodyFail {
+                http::StatusCode::FORBIDDEN.as_u16()
+            } else {
+                resp.status
+            };
+
+            plugin_log.push_fmt(
+                "auth deny upstream_status={} client_status={} reason={}",
+                la![
+                    resp.status.to_string().as_str(),
+                    client_status.to_string().as_str(),
+                    if outcome == SuccessOutcome::BodyFail {
+                        "body_predicate_failed"
+                    } else {
+                        "status_rejected"
+                    }
+                ],
+            );
             // Apply anti-brute-force delay before responding to the client.
             apply_auth_failure_delay(self.decision.auth_failure_delay_ms).await;
-            self.send_error_response(session, plugin_log, resp.status, &body, Some(&extra))
+            self.send_error_response(session, plugin_log, client_status, &body, Some(&extra))
                 .await
         }
     }
@@ -274,6 +297,7 @@ mod tests {
     use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
     use crate::plugins::runtime::log::PluginLog;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_resources::resources::common::success::{BodyPredicate, PredicateOp, SuccessSpec};
     use edgion_resources::resources::edgion_plugins::ForwardAuthDecision;
 
     // ── Helpers ──────────────────────────────────────────────────────────────
@@ -297,6 +321,20 @@ mod tests {
         ForwardAuth {
             name: "ForwardAuth".to_string(),
             client: Arc::new(client),
+            status_on_error: 503,
+            decision,
+        }
+    }
+
+    /// Same as `make_forward_auth`, but with a `success` spec installed on the
+    /// client so `classify_detail` can distinguish `StatusFail` from `BodyFail`.
+    fn make_forward_auth_with_success(url: &str, decision: ForwardAuthDecision, success: SuccessSpec) -> ForwardAuth {
+        let mut client = ManagedOutboundClient::test_with_static_target(url);
+        client.success = Some(success);
+        ForwardAuth {
+            name: "ForwardAuth".to_string(),
+            client: Arc::new(client),
+            status_on_error: 503,
             decision,
         }
     }
@@ -391,7 +429,12 @@ mod tests {
 
         let mut session = make_session();
         // The error response is written to the session via the standard Pingora path.
-        session.expect_write_response_header().returning(|_, _| Ok(()));
+        // Regression: a genuine StatusFail (auth service's own non-2xx) must be
+        // relayed to the client UNCHANGED — never overridden to 403.
+        session
+            .expect_write_response_header()
+            .withf(|resp, _| resp.status.as_u16() == 401)
+            .returning(|_, _| Ok(()));
         session.expect_write_response_body().returning(|_, _| Ok(()));
         session.expect_shutdown().returning(|| {});
 
@@ -408,6 +451,57 @@ mod tests {
         );
     }
 
+    /// P0 TDD: the auth service returns `200` (an otherwise-accepted status) but
+    /// the configured `success.body` predicate FAILS on the body — this is a
+    /// `BodyFail`, not a `StatusFail`. The client-facing status must be
+    /// overridden to 403 (NOT relayed as the auth service's 200), so a client
+    /// keying off the status code cannot mistake a deny for a success.
+    #[tokio::test]
+    async fn body_predicate_denial_overrides_status_to_403() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/check"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/json")
+                    .set_body_bytes(br#"{"allowed":false}"#.to_vec()),
+            )
+            .mount(&server)
+            .await;
+
+        let success = SuccessSpec {
+            status_codes: None,
+            body: vec![BodyPredicate {
+                pointer: "/allowed".to_string(),
+                op: PredicateOp::Equals(serde_json::Value::Bool(true)),
+            }],
+        };
+        let fa = make_forward_auth_with_success(&localhost_uri(&server.uri()), ForwardAuthDecision::default(), success);
+
+        let mut session = make_session();
+        // The client must see 403, NOT the auth service's own 200.
+        session
+            .expect_write_response_header()
+            .withf(|resp, _| resp.status.as_u16() == 403)
+            .returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+
+        let mut log = PluginLog::new("ForwardAuth");
+        let result = fa.run_request(&mut session, &mut log).await;
+        assert!(
+            matches!(result, PluginRunningResult::ErrTerminateRequest),
+            "expected ErrTerminateRequest on body-predicate deny, got {result:?}"
+        );
+        assert!(
+            log.contains("auth deny"),
+            "expected plugin log to mention auth deny; got: {log:?}"
+        );
+    }
+
     /// P0 TDD: when the auth service is unreachable and `allow_degradation` is
     /// true, the plugin returns `GoodNext` (fail-open / degraded mode).
     #[tokio::test]
@@ -418,17 +512,16 @@ mod tests {
         // client unhealthy so `outbound_call` immediately returns `Err(Unhealthy)`
         // without touching the network.
         let fa = {
-            let client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
+            let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
             // Force unhealthy state so `outbound_call` returns Err(Unhealthy) instantly.
             client.health.healthy.store(false, Ordering::Relaxed);
+            client.allow_degradation = true;
 
             ForwardAuth {
                 name: "ForwardAuth".to_string(),
                 client: Arc::new(client),
-                decision: ForwardAuthDecision {
-                    allow_degradation: true,
-                    ..ForwardAuthDecision::default()
-                },
+                status_on_error: 503,
+                decision: ForwardAuthDecision::default(),
             }
         };
 

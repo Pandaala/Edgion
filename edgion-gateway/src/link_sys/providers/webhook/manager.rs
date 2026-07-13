@@ -97,6 +97,9 @@ impl WebhookManager {
             &config.request,
             config.resolved_secrets.as_ref(),
             webhook_ref,
+            // Webhook deliveries are typically non-idempotent POSTs: do not retry
+            // a timed-out request by default.
+            false,
         )
         .map_err(|e| anyhow::anyhow!("failed to register webhook '{}': {}", webhook_ref, e))?;
 

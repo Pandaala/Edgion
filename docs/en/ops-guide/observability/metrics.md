@@ -70,6 +70,8 @@ scrape_configs:
 | `edgion_rr_selector_truncated_total` | Counter | none | RoundRobin selector truncation events (backend count exceeded `u16::MAX`); used to alert on configuration anomalies |
 | `edgion_lb_panic_mode` | Gauge | `service` | `1` when load-balancer panic mode is engaged for the named service (healthy fraction below the configured threshold), `0` when normal. `service` format: `namespace/name`. |
 | `edgion_link_sys_es_bulk_channel_full_total` | Counter | none | Elasticsearch producer→bulk-loop channel was full at submit time; a sustained-backpressure signal on the log-shipping path |
+| `edgion_outbound_template_fallback_total` | Counter | `field` (`timeout_ms` \| `allow_degradation`) | A webhook / ForwardAuth `timeoutMsTemplate` or `allowDegradationTemplate` render failed to parse and fell back to the static field. See [Connectors → Templates](../infrastructure/connectors.md#templates) |
+| `edgion_outbound_success_predicate_fail_total` | Counter | none | A webhook / ForwardAuth response's status was accepted but a `success.body` predicate classified it as a failure (the "200 OK but error in the body" case). See [Connectors → Success](../infrastructure/connectors.md#success) |
 
 ### `edgion_backend_requests_total` labels
 

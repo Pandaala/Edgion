@@ -17,8 +17,8 @@ spec:
           namespace: edgion-default
           port: 30098
         timeoutMs: 2000
+        allowDegradation: false
+        statusOnError: 503
         decision:
           upstreamHeaders: []
           clientHeaders: []
-          allowDegradation: false
-          statusOnError: 503

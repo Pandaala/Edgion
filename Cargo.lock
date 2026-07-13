@@ -1709,6 +1709,7 @@ dependencies = [
  "hex",
  "hmac",
  "http",
+ "httpdate",
  "hyper-util",
  "indexmap 2.14.0",
  "instant-acme",

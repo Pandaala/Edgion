@@ -4,9 +4,14 @@
 >
 > ForwardAuth is an external authentication plugin provided by the `EdgionPlugins` CRD, not part of the standard Gateway API.
 
+> ⚠️ **Breaking, and silent: `successStatusCodes` → `success.statusCodes`, and `allowDegradation`/`statusOnError` moved out of `decision:`.**
+>
+> - `successStatusCodes` is no longer a recognized field. `ForwardAuthConfig`'s connection block (`ExternalHttpConnection`) is `#[serde(flatten)]`-ed with no `deny_unknown_fields`, so a YAML that still sets `successStatusCodes` is accepted at admission with **no error and no warning** — the field is silently dropped and success falls back to "any 2xx". For ForwardAuth this means **any 200 response from the auth service is treated as auth success**, even if the operator intended to restrict success to a narrower set of codes or a body condition — a fail-open authentication gap that produces no admission error and no log line. Migrate every ForwardAuth config to the nested `success:` block (see [Field Reference](#connection-level-fields-top-level) below).
+> - `decision.allowDegradation` and `decision.statusOnError` have moved to the top level of `config:` (they are now shared, connection-level fields on `ExternalHttpConnection`, also used by the Webhook LinkSys connector). `decision:` no longer accepts these keys — unlike `successStatusCodes` above, this is **not** a silent drop: `ForwardAuthDecision` has `#[serde(deny_unknown_fields)]`, so a stale `decision.allowDegradation` / `decision.statusOnError` now **fails to parse** — the resource is rejected at admission with an error naming the unknown field, instead of quietly reverting `allowDegradation` to its `false` default. Update every YAML example: `decision.allowDegradation` → `allowDegradation`, `decision.statusOnError` → `statusOnError`.
+
 ## Overview
 
-The ForwardAuth plugin delegates authentication to an external service. For each incoming request it builds an outbound auth request (forwarding headers and injecting `X-Forwarded-*` metadata) and sends it to the configured backend. If the auth service responds with a success status code (2xx by default, or the codes listed in `successStatusCodes`), the original request is forwarded to upstream. Otherwise the auth service response is returned to the client.
+The ForwardAuth plugin delegates authentication to an external service. For each incoming request it builds an outbound auth request (forwarding headers and injecting `X-Forwarded-*` metadata) and sends it to the configured backend. If the auth service's response matches the connection's `success` criteria (2xx by default, or the criteria configured in `success.statusCodes` / `success.body`), the original request is forwarded to upstream. Otherwise the auth service response is returned to the client.
 
 This is the classic external auth pattern, comparable to:
 - **Traefik**: `forwardAuth` middleware
@@ -21,7 +26,8 @@ This is the classic external auth pattern, comparable to:
 - **Bidirectional header passing** — on success, copy identity headers to the upstream request; on failure, copy error headers to the client response
 - **Secret injection** — inject Kubernetes Secret values as custom request headers via `${secretRef:ns/name:key}` templates
 - **Graceful degradation** — when the auth service is unreachable, allow requests through (fail-open) or return a custom error status (fail-close)
-- **Custom success status codes** — not limited to 2xx; configure exactly which status codes count as auth success
+- **Declarative success predicate** — not limited to 2xx status; optionally require specific JSON body fields via `success.body` (for auth services that return `200 OK` with an error payload)
+- **Configurable retry backoff** — exponential or fixed backoff, jitter, a `Retry-After`-aware opt-in, and (for ForwardAuth) retrying on timeout by default, since an auth check is idempotent
 - **Service or URL target** — `target` is a Kubernetes Service `backendRef` by default, or an external URL (`target.url`); see [Target](#target) below
 - **SSRF protection** — a Service target's resolved pod IPs are validated by `validate_endpoint_backend_addr` before dialing; a URL target has its own egress guard (see [Target](#target))
 - **Brute-force mitigation** — optional `authFailureDelayMs` delay on auth failure responses
@@ -35,16 +41,16 @@ flowchart TD
     B --> C["Build auth request\n(headers + X-Forwarded-* metadata)"]
     C --> D["Send to auth service\n(target backendRef)"]
     D --> E{"Auth service\nreachable?"}
-    E -->|Yes| F{"Status in\nsuccessStatusCodes?"}
+    E -->|Yes| F{"Response matches\nsuccess criteria?"}
     F -->|Yes| G["Copy decision.upstreamHeaders\nto original request"]
     G --> H1{"decision.hideCredentials?"}
     H1 -->|Yes| H2["Remove authorization header"]
     H1 -->|No| I["Forward to upstream"]
     H2 --> I
     F -->|No| J["Copy decision.clientHeaders +\nreturn auth service status + body"]
-    E -->|No| K{"decision.allowDegradation?"}
+    E -->|No| K{"allowDegradation?"}
     K -->|"true"| L["Skip auth, allow through (fail-open)"]
-    K -->|"false"| M["Return decision.statusOnError (default 503)"]
+    K -->|"false"| M["Return statusOnError (default 503)"]
 ```
 
 ## Configuration
@@ -62,7 +68,10 @@ spec:
       config:
         target: { name: auth-svc, namespace: edgion-default, port: 30040 }
         timeoutMs: 5000                    # connection-level, default 5000
-        successStatusCodes: [200, 204]     # connection-level, default: any 2xx
+        success:
+          statusCodes: [200, 204]          # connection-level, default: any 2xx
+        allowDegradation: false            # connection-level (moved out of decision:, see the breaking-change note above)
+        statusOnError:    503              # connection-level (moved out of decision:, see the breaking-change note above)
         tls: { verify: true }              # connection-level, optional
         request:
           path:   { template: "/verify" }
@@ -76,8 +85,6 @@ spec:
         decision:
           upstreamHeaders: [X-User-ID, X-User-Role]
           clientHeaders:   [WWW-Authenticate]
-          allowDegradation: false
-          statusOnError:    503
           hideCredentials:  true
           authFailureDelayMs: 0
 ```
@@ -90,9 +97,13 @@ spec:
 |-------|------|---------|-------------|
 | `target` | object | required | Either a Kubernetes Service backend `{name, namespace, port}` (port required; namespace defaults to the plugin namespace), or an external URL target `{url, blockPrivate}`. The two forms are mutually exclusive. See [Target](#target). |
 | `timeoutMs` | integer | `5000` | Request timeout in milliseconds. |
-| `successStatusCodes` | array\<integer\> | `null` | Status codes treated as auth success. Default: any 2xx (200–299). |
+| `timeoutMsTemplate` | string | `null` | Template rendering a per-request timeout, e.g. `"${ctx:desired_timeout_ms}"`. **Only `${ctx:...}`, `${clientIp}`, and matched-route variables are accepted** — a client-controlled source (`header`/`query`/`cookie`/`path`/`method`/`uri`) is rejected at admission, because it would let an attacker pin the auth-service deadline low enough to force every call to time out. A non-numeric, empty, or below-floor (< 50 ms) render falls back to `timeoutMs`; the rendered value is clamped to 60000 ms regardless. Compiled and validated at admission. |
+| `success` | object | `null` | Success criteria: `statusCodes` (array, omitted or present-but-non-empty → any 2xx; an explicit empty list is rejected at admission) plus optional `body` predicates (`pointer` + **exactly one** of `equals`/`notEquals`/`exists`/`in`, enforced at admission). ANDed. **Replaces the removed `successStatusCodes`** — see the breaking-change note above and [Ops guide → Connectors → Success](../../ops-guide/infrastructure/connectors.md#success) for the full schema, strict-typing rule, missing-pointer semantics, and the `maxResponseBytes >= 4096` requirement when `body` is set. |
+| `allowDegradation` | boolean | `false` | Fail-open: when `true`, requests pass through if the auth service is unreachable or fails. **Moved from `decision.allowDegradation`** — see the breaking-change note above. |
+| `statusOnError` | integer | `503` | Status code returned when the auth service fails and `allowDegradation` is `false`. Range: 200–599. **Moved from `decision.statusOnError`** — see the breaking-change note above. |
+| `allowDegradationTemplate` | string | `null` | Template rendering the per-request degradation decision, e.g. `"${ctx:is_staging}"`. **Only `${ctx:...}`, `${clientIp}`, and matched-route variables are accepted** — a client-controlled source is rejected at admission, since this is a fail-open switch and must never be driven directly by an attacker-supplied header/query/cookie/path/method/uri. Must render to exactly `true` or `false` (trimmed, case-insensitive); anything else falls back to `allowDegradation`. Compiled and validated at admission. |
 | `tls` | object | `null` | TLS settings for the outbound auth request. Fields: `verify` (default `true`; `false` is honored, operator responsibility); `validation.caCertificateRefs` (list of `{kind, name, namespace}` refs — Secret or ConfigMap — each holding a `ca.crt` key); `validation.wellKnownCACertificates: System` (built-in webpki roots); `clientCertificateRef` (Secret with `tls.crt`/`tls.key` for client mTLS). Inline CA is no longer supported; use a Secret or ConfigMap with a `ca.crt` key. Phase 1 note: `validation.hostname` and `validation.subjectAltNames` (SAN pinning) are schema-exposed but not enforced; configuring them causes `Accepted=False`. |
-| `retry` | object | `null` | Retry configuration: `maxRetries`, `retryDelayMs`, `retryOnTimeout`, `retryOnConnectError`, `retryOnStatus`. |
+| `retry` | object | `null` | Retry configuration: `maxRetries`, `retryDelayMs` (base delay of the backoff curve, not a fixed interval), `backoffPolicy` (`exponential` default \| `fixed`), `maxDelayMs` (default 1000, ceiling 10000), `jitter` (default `true`), `honorRetryAfter` (default `false`), `retryOnTimeout` (**per-consumer default: ForwardAuth `true`**, since an auth check is idempotent), `retryOnConnectError` (default `true`), `retryOnStatus` (default `[]`), `retryOnBodyFailure` (default `false`). Full schema: [Ops guide → Connectors → Retry](../../ops-guide/infrastructure/connectors.md#retry). |
 | `rateLimit` | object | `null` | Outbound call rate limit: `rate` (calls per window) + `windowSec`. |
 | `healthCheck` | object | `null` | Health check: `active` (probe path + interval) and/or `passive` (failure threshold). |
 
@@ -108,12 +119,12 @@ spec:
 
 #### `decision` — post-auth behavior
 
+`decision` no longer carries `allowDegradation` / `statusOnError` — those moved to the top level (see the breaking-change note above and the connection-level table). `decision` now holds only the following:
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `decision.upstreamHeaders` | array\<string\> | `[]` | Headers copied from the auth response to the upstream request on success. Example: `[X-User-ID, X-User-Role]`. |
 | `decision.clientHeaders` | array\<string\> | `[]` | Headers copied from the auth response to the client response on auth failure. Example: `[WWW-Authenticate]`. |
-| `decision.allowDegradation` | boolean | `false` | Fail-open: when `true`, requests pass through if the auth service is unreachable. |
-| `decision.statusOnError` | integer | `503` | Status code returned when the auth service is unreachable and `allowDegradation` is `false`. Range: 200–599. |
 | `decision.hideCredentials` | boolean | `false` | Remove the `authorization` header from the upstream request after successful auth. |
 | `decision.authFailureDelayMs` | integer | `0` | Delay in milliseconds before sending an auth failure response. Increases the cost of brute-force attacks. |
 
@@ -161,9 +172,9 @@ The secret namespace and name follow the pattern `namespace/secretName` (e.g. `e
 
 When the auth service is unreachable (connection refused, timeout, rate-limited, health check failed):
 
-| `decision.allowDegradation` | Behavior |
-|-----------------------------|----------|
-| `false` (default) | Return `decision.statusOnError` (default 503) to the client — **fail-close** |
+| `allowDegradation` | Behavior |
+|---------------------|----------|
+| `false` (default) | Return `statusOnError` (default 503) to the client — **fail-close** |
 | `true` | Skip auth and forward the request to upstream — **fail-open** |
 
 For security-critical APIs, keep `allowDegradation: false`. Use `allowDegradation: true` only when authentication is not on the critical security path (for example, analytics or low-sensitivity APIs where availability takes priority).
@@ -245,7 +256,8 @@ spec:
         tls:
           verify: true
         timeoutMs: 5000
-        successStatusCodes: [200, 204]
+        success:
+          statusCodes: [200, 204]
         request:
           path: { template: "/verify" }
           method: { template: "POST" }
@@ -306,9 +318,9 @@ spec:
           name: auth-service
           namespace: production
           port: 8080
+        allowDegradation: true
+        statusOnError: 503
         decision:
-          allowDegradation: true
-          statusOnError: 503
           upstreamHeaders: [X-User-ID]
 ```
 
@@ -330,9 +342,9 @@ spec:
           name: auth-service
           namespace: production
           port: 8080
+        allowDegradation: false
+        statusOnError: 502
         decision:
-          allowDegradation: false
-          statusOnError: 502
           upstreamHeaders: [X-User-ID]
 ```
 
@@ -377,9 +389,9 @@ spec:
 | Secret injection | `${secretRef:ns/name:key}` | no | no | no |
 | Upstream header passing | `decision.upstreamHeaders` | `authResponseHeaders` | `upstream_headers` | `auth_request_set` |
 | Client header passing | `decision.clientHeaders` | no | `client_headers` | limited |
-| Custom success codes | `successStatusCodes` | no (2xx only) | no (2xx only) | no (2xx only) |
-| Graceful degradation | `decision.allowDegradation` | no | `allow_degradation` | no |
-| Custom error status | `decision.statusOnError` | no | `status_on_error` | no |
+| Custom success codes / body predicate | `success.statusCodes` / `success.body` | no (2xx only) | no (2xx only) | no (2xx only) |
+| Graceful degradation | `allowDegradation` | no | `allow_degradation` | no |
+| Custom error status | `statusOnError` | no | `status_on_error` | no |
 | Hide credentials | `decision.hideCredentials` | no | no | no |
 | Brute-force delay | `decision.authFailureDelayMs` | no | no | no |
 | SSRF protection | Service backendRef IP guard, or URL target egress guard (`blockPrivate`) | no | no | no |
@@ -397,7 +409,7 @@ spec:
 - Headers: original request headers (or a selected subset) + `X-Forwarded-*` metadata + `request.headers.custom`
 
 **Response from auth service to gateway:**
-- **Success** (status in `successStatusCodes`, default 2xx): authentication passed
+- **Success** (matches `success` criteria — status in `success.statusCodes`, default any 2xx, ANDed with any `success.body` predicates): authentication passed
   - Headers listed in `decision.upstreamHeaders` are copied to the upstream request
   - Response body is ignored
 - **Failure** (any other status): authentication denied

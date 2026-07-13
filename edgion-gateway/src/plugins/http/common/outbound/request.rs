@@ -457,7 +457,7 @@ fn push_json_escaped(out: &mut String, value: &str) {
 ///
 /// Missing variable values are silently substituted with an empty string —
 /// the same convention used by the ctx_set plugin.
-fn evaluate_template(
+pub(crate) fn evaluate_template(
     tpl: &CompiledTemplate,
     session: &dyn PluginSession,
     resolved: Option<&ResolvedSecrets>,
@@ -492,6 +492,11 @@ fn evaluate_template_with(
 }
 
 /// Resolve a single template variable from the session.
+///
+/// Private: the only caller is `evaluate_template_with` in this module —
+/// `evaluate_template` itself is `pub(crate)` for cross-module callers (e.g.
+/// `outbound::call::resolve_timeout`), but `resolve_var` has no cross-module
+/// caller and does not need the wider visibility.
 fn resolve_var(
     var_type: &TemplateVarType,
     var_name: Option<&str>,

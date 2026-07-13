@@ -49,10 +49,7 @@ pub async fn resolve_webhook_key(
     .await
     {
         Ok(resp) => {
-            let is_success = match &client.success_status_codes {
-                Some(codes) => codes.contains(&resp.status),
-                None => (200u16..300u16).contains(&resp.status),
-            };
+            let is_success = client.classify(&resp);
             if is_success {
                 extract_value_from_response(&resp, extract)
             } else {
@@ -262,8 +259,8 @@ mod tests {
     /// TDD: a completed response with non-success status records `status_error` metric and returns None.
     ///
     /// Verifies that the classification logic in resolve_webhook_key correctly
-    /// identifies a 500 response as non-success (when success_status_codes is None,
-    /// meaning only 2xx is considered success) and returns None.
+    /// identifies a 500 response as non-success (when `success` is None, meaning
+    /// only 2xx is considered success — see `classify`) and returns None.
     #[tokio::test]
     async fn webhook_non_success_records_status_error_and_returns_none() {
         // Build a fake OutboundResponse with status 500
@@ -273,7 +270,7 @@ mod tests {
             body: Bytes::new(),
         };
 
-        // Classify as non-success (success_status_codes = None means 2xx only)
+        // Classify as non-success (success = None means 2xx only, per `classify`)
         let success_codes: Option<Vec<u16>> = None; // None = any 2xx
         let is_success = match &success_codes {
             Some(codes) => codes.contains(&resp.status),

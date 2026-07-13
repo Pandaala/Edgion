@@ -1,10 +1,14 @@
 # Scenario 5: presence-required-fail
 # ---------------------------------------------------------------------------
-# A required origin header (X-Required) with presence: required, and
-# allowDegradation: false + statusOnError: 403.
+# A required origin header (X-Required) with presence: required. The
+# allowDegradation/statusOnError fields below are part of the shared
+# ExternalHttpConnection schema but are NOT honored by the webhook connector
+# (they are only read by forward_auth) -- key_get simply returns None on any
+# failure, including a missing required field.
 # Test sends a request WITHOUT X-Required -> the missing required field is
-# treated as a webhook call failure -> because allowDegradation is false the
-# gateway returns statusOnError (403) to the client.
+# treated as a webhook call failure -> key_get returns None -> the consuming
+# CtxSet plugin just leaves wh5_user_id unset and the request continues (no
+# 403, no gateway-side status override).
 # Backend via Service + EndpointSlice.
 apiVersion: v1
 kind: Service
@@ -59,7 +63,8 @@ spec:
           - name: X-Required
             presence: required
     timeoutMs: 5000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     allowDegradation: false
     statusOnError: 403
     maxResponseBytes: 4096

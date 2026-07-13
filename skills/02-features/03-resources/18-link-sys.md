@@ -229,6 +229,17 @@ spec:
 > [01-architecture/03-controller-gateway-link/webhook.md](../../01-architecture/03-controller-gateway-link/webhook.md).
 > The old `uri` / `requestMethod` / `auth` / `defaultHeaders` fields and the consumer-side
 > `forwardHeaders` / `pathSuffix` are **removed** (see Migration in that doc).
+>
+> **Breaking, silent:** `successStatusCodes` is likewise gone, replaced by the nested `success`
+> block below — but unlike the fields above, it carries **no WARN-and-ignore shim**. It is simply
+> unrecognized by the flattened `ExternalHttpConnection` (`#[serde(flatten)]`, no
+> `deny_unknown_fields`), so a resource that still sets it is `Accepted=True` with the field
+> silently dropped and success falling back to "any 2xx". `allowDegradation` / `statusOnError`
+> stay top-level for webhook (unchanged); for `forward_auth` they moved out of `decision:` to the
+> top level — a breaking schema change for that consumer only. That move is silent too:
+> `ForwardAuthDecision` has no `deny_unknown_fields`, so a stale `decision.allowDegradation` /
+> `decision.statusOnError` is silently ignored — no admission error and no warning — and
+> `allowDegradation` quietly reverts to its `false` default.
 
 ```yaml
 spec:
@@ -282,19 +293,30 @@ spec:
         #     value: edgion
 
     timeoutMs: 3000
+    timeoutMsTemplate: "${ctx:desired_timeout_ms}"   # optional; only ctx/clientIp/matchedRoute vars allowed (see below); falls back to timeoutMs; rendered value clamped to 60000ms
     tls:
       enabled: true
       clientCertificateRef: { name: webhook-client-tls }
-    successStatusCodes: [200]
-    maxResponseBytes: 2048                         # clamped to EdgionGatewayConfig.linkSys.webhookMaxResponseBytes (default 16 KiB)
-    allowDegradation: true                         # silently degrade to None on failure
-    statusOnError: 503                             # returned when allowDegradation=false and webhook is the sole key source
+    success:                                       # replaces the removed `successStatusCodes` (see the note above)
+      statusCodes: [200]                           # omitted -> any 2xx
+      body:                                        # optional; ANDed with statusCodes
+        - pointer: /code
+          equals: 0
+    maxResponseBytes: 4096                         # must be >= 4096 when success.body is set; clamped to EdgionGatewayConfig.linkSys.webhookMaxResponseBytes (default 16 KiB)
+    # allowDegradation / allowDegradationTemplate / statusOnError are accepted here for schema
+    # compatibility with forward_auth (same ExternalHttpConnection struct) but are NOT read by
+    # the webhook connector: key_get always returns None on failure, full stop. See below.
     retry:
-      maxRetries: 1
-      retryDelayMs: 100
-      retryOnTimeout: true
+      maxRetries: 1              # range 0..=10 (admission ceiling)
+      retryDelayMs: 100          # base delay of the backoff curve, not a fixed interval
+      backoffPolicy: exponential # exponential (default) | fixed
+      maxDelayMs: 1000           # per-attempt ceiling, range 1..=10000
+      jitter: true               # 50-100% jitter, applied after the maxDelayMs cap
+      honorRetryAfter: false     # opt-in; only for 429/503 already in retryOnStatus
+      retryOnTimeout: false      # webhook default false (forward_auth default true; see below)
       retryOnConnectError: true
       retryOnStatus: [502, 503, 504]
+      retryOnBodyFailure: false  # retry when a success.body predicate fails
     rateLimit:
       rate: 200
       windowSec: 1
@@ -320,7 +342,7 @@ spec:
 - **`request.method`** (`MethodSpec`): `{ template: String }`. Omit → reuse the frozen incoming method.
 - **`request.{args,headers,cookies}`** (`ListFields`): `{ origin: [OriginField], custom: [CustomField] }`, both default empty. An allow-list — only named fields appear on the wire. Cookies are emitted as a combined `Cookie` header.
 - **`OriginField`**: `{ name: String, presence: PresencePolicy = skipIfMissing }`. Copies `name` from the **frozen** entry-time incoming request.
-- **`PresencePolicy`** enum (camelCase): `skipIfMissing` (default — omit, no log), `warnIfMissing` (omit + PluginLog alert + continue), `required` (treat as webhook failure; `statusOnError`/`allowDegradation` apply).
+- **`PresencePolicy`** enum (camelCase): `skipIfMissing` (default — omit, no log), `warnIfMissing` (omit + PluginLog alert + continue), `required` (treat as webhook failure: `key_get` returns `None`; `statusOnError`/`allowDegradation` are not read by the webhook connector — see the note on those fields below).
 - **`CustomField`**: `{ name: String, <source> }` where source is exactly one of (`CustomSource`, externally tagged + flattened):
   - `value: "literal"` → verbatim string.
   - `template: "${ctx:x}/${header:y}"` → ctx-set template, evaluated at call time. Secret values are embedded as `${secretRef:ns/name:key}` inside the template string (e.g., `"Bearer ${secretRef:prod/webhook-token:token}"`); the controller resolves the referenced Secret at config-apply time, embeds the values in `resolved_secrets`, and ships the full struct over conf_sync; the gateway substitutes `${secretRef:...}` vars from the carried map at call time. Admin `/configclient` renders resolved secret values as `"[redacted]"`. Both `ns` and `key` are required in the `secretRef` token.
@@ -332,12 +354,15 @@ spec:
   - `${secretRef:ns/name:key}` works in body templates/fields exactly as in `headers.custom`: controller-resolved and redacted (`"[redacted]"`) in admin output.
   - Rendered body size is **not** capped — a template referencing a ctx variable of unbounded size flows straight through; keep templates away from unaudited large inputs.
   - The `request` block, including `body`, is shared with the `forward_auth` plugin's outbound request.
-- **Validation** (`Accepted=False` on violation): missing `port`; unsupported `kind`; template parse error; same name in both `origin` and `custom`; duplicate name within a block; `headers.origin: [{name: Cookie}]` together with a non-empty `cookies` block; `request.body` type `json` whose canary-rendered template does not parse as valid JSON; an explicit `Content-Type` header combined with `request.body` type `json`/`form`.
-- **`statusOnError`** ∈ [200, 599]; `maxResponseBytes` clamped to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`.
+- **`success`** (`SuccessSpec`, replaces the removed `successStatusCodes`): `{ statusCodes: [u16], body: [BodyPredicate] }`, both optional. `statusCodes` omitted → any 2xx; an explicit empty list (`[]`) is rejected at admission rather than silently meaning the same thing. `BodyPredicate`'s operator field (`equals`/`notEquals`/`exists`/`in`) has a custom `Deserialize` that enforces **exactly one** operator key at parse time — two operators (or zero) fails to deserialize, so `{pointer: /code, exists: true, equals: 0}` cannot silently keep only the first-matching key. Predicates are ANDed with the status check and with each other; matched as strict `serde_json::Value` (no coercion — `equals: 0` ≠ `"0"`). A non-JSON body is a `BodyFail` (not an error) when any `body` predicate is configured. A missing `pointer` is also a `BodyFail` for `equals`/`notEquals`/`in` — you cannot assert an equality/membership claim about a field that isn't there — with `exists: false` as the one operator defined to succeed on a missing pointer. Admission requires `maxResponseBytes >= 4096` whenever `success.body` is non-empty; a body truncated by the cap surfaces as `ResponseTooLarge`, not a failed predicate. Passive health (`healthCheck.passive.failureStatusCodes`) still keys off status only — a `success.body` failure never trips the circuit.
+- **`retry`** (`WebhookRetry`) gained `backoffPolicy` (`exponential` default | `fixed`), `maxDelayMs` (default 1000, admission ceiling 10000), `jitter` (default true, 50-100% band applied after the cap), `honorRetryAfter` (default false; only takes effect for a 429/503 already listed in `retryOnStatus`; a `Retry-After` above `maxDelayMs` stops the retry loop and returns the response as-is rather than erroring), and `retryOnBodyFailure` (default false; retries a `success.body` predicate failure). `retryDelayMs` is the **base delay of the backoff curve** (`delay = min(maxDelayMs, retryDelayMs << (attempt-1))` under `exponential`), not a fixed interval. **`retryOnTimeout`'s default is now per-consumer**: webhook `false`, `forward_auth` `true` — a connect failure is always safe to retry either way, so `retryOnConnectError` stays `true` for both; only the timeout default is split (webhook POSTs are typically non-idempotent, forward_auth checks are idempotent).
+- **`timeoutMsTemplate`** / **`allowDegradationTemplate`**: optional per-request templates on the same `${type:name}` engine as `request.*`, but restricted to a **much narrower variable allow-list**: only `${ctx:...}`, `${clientIp}`, `${matchedHttpRoute:...}`, `${matchedGrpcRoute:...}`. `${header:...}`/`${query:...}`/`${cookie:...}`/`${path}`/`${uri}`/`${requestPath}`/`${requestUri}`/`${method}`/`${secretRef:...}` are all rejected at admission specifically for these two fields (they remain fully allowed in `request.*`) — both fields are security-sensitive (call deadline / forward_auth's fail-open switch), so neither may be driven by anything the client controls on the request. Both are compiled and validated at admission (a malformed template, or one using a disallowed variable type, is `Accepted=False`). `timeoutMsTemplate` parses as `u64` ms, falls back to `timeoutMs` on a non-numeric/empty/below-floor render (floor: `MIN_OUTBOUND_TIMEOUT_MS` = 50ms), and is clamped to 60000ms on the upper end regardless of the render. `allowDegradationTemplate` must render to exactly `true`/`false` (trimmed, case-insensitive) or falls back to `allowDegradation` — no numeric/yes-no aliases. Every silent fallback increments `edgion_outbound_template_fallback_total{field="timeout_ms"|"allow_degradation"}` (data-plane observability goes through Prometheus, not `tracing`). A `success.body` predicate that fails a 2xx-status response increments `edgion_outbound_success_predicate_fail_total`. **Note:** `allowDegradation`/`allowDegradationTemplate`/`statusOnError` are part of the shared `ExternalHttpConnection` schema but are honored by `forward_auth` only — the webhook connector's `key_get` has no fail-open/fail-closed decision to make and simply returns `None` on any failure; these three fields are inert when set on a webhook `LinkSys`.
+- **Validation** (`Accepted=False` on violation): missing `port`; unsupported `kind`; template parse error, or a client-controlled variable type, in `timeoutMsTemplate`/`allowDegradationTemplate` (`request.*` templates keep the full variable set); same name in both `origin` and `custom`; duplicate name within a block; `headers.origin: [{name: Cookie}]` together with a non-empty `cookies` block; `request.body` type `json` whose canary-rendered template does not parse as valid JSON; an explicit `Content-Type` header combined with `request.body` type `json`/`form`; `retry.retryDelayMs == 0`; `retry.maxDelayMs` outside `1..=10000`; `retry.maxRetries` outside `0..=10`; `timeoutMs == 0`; `maxResponseBytes == 0`; `success.statusCodes == []` (explicit empty list); `success.body` non-empty with `maxResponseBytes < 4096`; a `success.body` predicate with zero or more than one operator key (rejected at deserialize time, before this validation function even runs).
+- **`statusOnError`** ∈ [200, 599] (validated, but inert for webhook — see above); `maxResponseBytes` clamped to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes`.
 
 **Consumer side:** the outbound request shape is owned entirely by the webhook resource. Consumers (`KeyGet::Webhook`) pass only the `session` and an optional `pathOverride` (honored only when `path.allowOverride: true`); the `forwardHeaders` / `pathSuffix` knobs are gone. Per-call dynamic values flow in via ctx-set `vars` → `${ctx:NAME}` in the webhook templates.
 
-**Rolling-upgrade shim:** the removed `auth` / `defaultHeaders` / `requestMethod` fields are accepted as ignored no-ops for one release (old-controller → new-gateway compatibility); the controller logs a WARN. They are removed next release. Migration table in the architecture doc.
+**Rolling-upgrade shim:** the removed `auth` / `defaultHeaders` / `requestMethod` fields are accepted as ignored no-ops for one release (old-controller → new-gateway compatibility); the controller logs a WARN. They are removed next release. Migration table in the architecture doc. `successStatusCodes` has **no such shim** — see the note at the top of this section.
 
 ### `type: kafka`
 

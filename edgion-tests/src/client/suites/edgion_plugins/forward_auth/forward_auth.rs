@@ -1281,21 +1281,21 @@ impl ForwardAuthTestSuite {
     }
 
     // ============================================================
-    // successStatusCodes tests
+    // success.statusCodes tests
     // ============================================================
 
-    /// Test: successStatusCodes: [200, 204] — auth returns 204, gateway treats it as success.
+    /// Test: success.statusCodes: [200, 204] — auth returns 204, gateway treats it as success.
     ///
     /// Config: forward-auth-204
-    ///   successStatusCodes: [200, 204]   (top-level, not inside decision)
+    ///   success.statusCodes: [200, 204]   (top-level, not inside decision)
     ///
     /// The auth server returns 204 No Content for "Bearer valid-204-token".
     /// Gateway classifies 204 as success (it is in [200, 204]) and forwards the
     /// request to the backend. Client sees 200 from the backend.
-    fn test_success_status_codes_accepts_custom_204() -> TestCase {
+    fn test_success_accepts_custom_204() -> TestCase {
         TestCase::new(
-            "success_status_codes_accepts_custom_204",
-            "successStatusCodes [200,204]: auth returns 204 => treated as success => backend reached (200)",
+            "success_accepts_custom_204",
+            "success.statusCodes [200,204]: auth returns 204 => treated as success => backend reached (200)",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -1317,7 +1317,7 @@ impl ForwardAuthTestSuite {
                     if status == 200 {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "successStatusCodes [200,204]: auth 204 treated as success, backend reached (200)".into(),
+                            "success.statusCodes [200,204]: auth 204 treated as success, backend reached (200)".into(),
                         )
                     } else {
                         let body = resp.text().await.unwrap_or_default();
@@ -1335,10 +1335,10 @@ impl ForwardAuthTestSuite {
         )
     }
 
-    /// Test: successStatusCodes: [204] only — auth returns 200, gateway treats it as failure.
+    /// Test: success.statusCodes: [204] only — auth returns 200, gateway treats it as failure.
     ///
     /// Config: forward-auth-strict-204
-    ///   successStatusCodes: [204]   (200 is NOT success)
+    ///   success.statusCodes: [204]   (200 is NOT success)
     ///
     /// The auth server returns 200 for "Bearer valid-token". Gateway classifies 200 as
     /// non-success (200 not in [204]) and short-circuits with the auth server's 200 response
@@ -1348,10 +1348,10 @@ impl ForwardAuthTestSuite {
     /// The backend's /health response is plain "OK".
     /// So we distinguish the two paths by checking for "test-user" (auth body marker)
     /// in the response — if present the failure path was taken; absent means backend was reached.
-    fn test_success_status_codes_excludes_200_treats_as_failure() -> TestCase {
+    fn test_success_excludes_200_treats_as_failure() -> TestCase {
         TestCase::new(
-            "success_status_codes_excludes_200_treats_as_failure",
-            "successStatusCodes [204] only: auth returns 200 => treated as failure => auth body returned",
+            "success_excludes_200_treats_as_failure",
+            "success.statusCodes [204] only: auth returns 200 => treated as failure => auth body returned",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -1385,7 +1385,7 @@ impl ForwardAuthTestSuite {
                         TestResult::passed_with_message(
                             start.elapsed(),
                             format!(
-                                "successStatusCodes [204]: auth 200 treated as failure, got status=200 + auth body \
+                                "success.statusCodes [204]: auth 200 treated as failure, got status=200 + auth body \
                                  (not backend). Body: {}",
                                 &body[..body.len().min(200)]
                             ),
@@ -1395,7 +1395,7 @@ impl ForwardAuthTestSuite {
                         TestResult::passed_with_message(
                             start.elapsed(),
                             format!(
-                                "successStatusCodes [204]: auth 200 treated as failure, status=200 \
+                                "success.statusCodes [204]: auth 200 treated as failure, status=200 \
                                  (short-circuit confirmed). Body: {}",
                                 &body[..body.len().min(200)]
                             ),
@@ -1549,9 +1549,9 @@ impl TestSuite for ForwardAuthTestSuite {
             Self::test_required_origin_present_passes(),
             // RFC 9110 §7.6.1: dynamic hop-by-hop stripping under forwardAll
             Self::test_forward_all_strips_dynamic_hop_by_hop_header(),
-            // successStatusCodes: custom list classification
-            Self::test_success_status_codes_accepts_custom_204(),
-            Self::test_success_status_codes_excludes_200_treats_as_failure(),
+            // success.statusCodes: custom list classification
+            Self::test_success_accepts_custom_204(),
+            Self::test_success_excludes_200_treats_as_failure(),
             // LB round-robin smoke test (multi-endpoint EndpointSlice)
             Self::test_backendref_lb_round_robin(),
         ]

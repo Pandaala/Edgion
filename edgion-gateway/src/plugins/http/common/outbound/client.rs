@@ -17,7 +17,9 @@ use edgion_resources::resources::common::external_http::{
     ActiveHealthCheck, ExternalHttpConnection, PassiveHealthCheck, TargetKind, WebhookRetry, WebhookTarget,
 };
 use edgion_resources::resources::common::outbound_request::OutboundRequestSpec;
+use edgion_resources::resources::common::success::SuccessSpec;
 use edgion_resources::resources::common::ResolvedSecrets;
+use edgion_resources::resources::edgion_plugins::plugin_configs::CompiledTemplate;
 
 use edgion_common::dns::ResolverSpec;
 
@@ -108,13 +110,26 @@ pub struct ManagedOutboundClient {
     pub health: Arc<HealthState>,
     /// Optional sliding-window rate counter for outbound call rate limiting.
     pub rate: Option<SlidingWindowCounter>,
-    /// Status codes considered successful; `None` = any 2xx.
-    /// Used by callers to classify completed responses — not used by `outbound_call` itself.
-    pub success_status_codes: Option<Vec<u16>>,
+    /// Success criteria (status codes + optional JSON-Pointer body predicates);
+    /// `None` = any 2xx status. Used by [`ManagedOutboundClient::classify`] to
+    /// classify completed responses — not read directly by `outbound_call`.
+    pub success: Option<SuccessSpec>,
     /// Maximum response body bytes to read.
     pub max_response_bytes: usize,
     /// Per-call request timeout.
     pub timeout: Duration,
+    /// Optional compiled template rendering a per-request timeout override.
+    /// When present and it renders to a parseable, non-zero value, it wins over
+    /// `timeout` (clamped to `MAX_OUTBOUND_TIMEOUT_MS`); otherwise `timeout` is used.
+    pub timeout_template: Option<CompiledTemplate>,
+    /// Static per-request degradation flag from `ExternalHttpConnection.allow_degradation`.
+    /// Used directly when `degradation_template` is absent or fails to render to a
+    /// usable value; see [`ManagedOutboundClient::effective_allow_degradation`].
+    pub allow_degradation: bool,
+    /// Optional compiled template rendering a per-request degradation decision.
+    /// When present and it renders to exactly "true"/"false", it wins over
+    /// `allow_degradation`; otherwise `allow_degradation` is used.
+    pub degradation_template: Option<CompiledTemplate>,
     /// Retry configuration. `None` = no retry.
     pub retry: Option<WebhookRetry>,
     /// Egress policy for URL targets. `None` for Service targets, whose addresses
@@ -165,12 +180,18 @@ impl ManagedOutboundClient {
     /// * Spawns an active-health probe task when `conn.health_check.active` is set.
     /// * Initialises a rate counter when `conn.rate_limit` is set.
     ///
+    /// `timeout_retry_default` is the consumer's default for `retry_on_timeout`
+    /// when the operator leaves it unset (`None`) on the resource: webhook
+    /// callers pass `false` (non-idempotent POSTs), forward_auth callers pass
+    /// `true` (idempotent auth checks).
+    ///
     /// Returns `Err` with a human-readable message on any validation or compile failure.
     pub fn from_parts(
         conn: &ExternalHttpConnection,
         request: &OutboundRequestSpec,
         secrets: Option<&ResolvedSecrets>,
         ref_label: &str,
+        timeout_retry_default: bool,
     ) -> Result<Self, String> {
         // ── 1. Validate target ─────────────────────────────────────────────
         if let Some(e) = validate_connection_target(conn) {
@@ -218,6 +239,26 @@ impl ManagedOutboundClient {
         let compiled_request = CompiledRequest::from_spec(request)
             .map_err(|e| format!("failed to compile request spec for '{}': {}", ref_label, e))?;
 
+        // ── 5b. Compile the timeout template (admission already validated syntax
+        //        via `validate_connection_target`, but from_parts is also reachable
+        //        directly in tests, so compile again defensively) ────────────────
+        let timeout_template = conn
+            .timeout_ms_template
+            .as_deref()
+            .map(CompiledTemplate::compile)
+            .transpose()
+            .map_err(|e| format!("failed to compile timeoutMsTemplate for '{}': {}", ref_label, e))?;
+
+        // ── 5c. Compile the degradation template (admission already validated syntax
+        //        via `validate_connection_target`, but from_parts is also reachable
+        //        directly in tests, so compile again defensively) ────────────────────
+        let degradation_template = conn
+            .allow_degradation_template
+            .as_deref()
+            .map(CompiledTemplate::compile)
+            .transpose()
+            .map_err(|e| format!("failed to compile allowDegradationTemplate for '{}': {}", ref_label, e))?;
+
         // ── 6. Health state ────────────────────────────────────────────────
         let health = HealthState::new();
 
@@ -247,7 +288,14 @@ impl ManagedOutboundClient {
             None
         };
 
-        let retry = conn.retry.clone();
+        // Resolve the per-consumer retry_on_timeout default. `ref_label` cannot
+        // carry the consumer identity, so the caller passes it via `timeout_retry_default`.
+        let retry = conn.retry.clone().map(|mut r| {
+            if r.retry_on_timeout.is_none() {
+                r.retry_on_timeout = Some(timeout_retry_default);
+            }
+            r
+        });
         let passive_health_check = conn.health_check.as_ref().and_then(|hc| hc.passive.as_ref()).cloned();
 
         Ok(ManagedOutboundClient {
@@ -256,9 +304,12 @@ impl ManagedOutboundClient {
             compiled_request,
             health,
             rate,
-            success_status_codes: conn.success_status_codes.clone(),
+            success: conn.success.clone(),
             max_response_bytes: conn.max_response_bytes,
             timeout: Duration::from_millis(conn.timeout_ms),
+            timeout_template,
+            allow_degradation: conn.allow_degradation,
+            degradation_template,
             retry,
             egress_policy,
             passive_health_check,
@@ -330,6 +381,57 @@ impl ManagedOutboundClient {
     }
 
     // ============================================================
+    // Response classification
+    // ============================================================
+
+    /// Classify a completed response, reporting WHICH dimension (status vs.
+    /// body) failed. Used by the outbound retry loop to gate
+    /// `retry_on_body_failure` on the body dimension only.
+    pub fn classify_detail(
+        &self,
+        resp: &super::call::OutboundResponse,
+    ) -> edgion_resources::resources::common::success::SuccessOutcome {
+        // Media types are case-insensitive (RFC 7231 §3.1.1.5); lowercase before
+        // matching so e.g. "Application/JSON" is still recognized as JSON.
+        let is_json = resp
+            .headers
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|ct| ct.to_ascii_lowercase())
+            .is_some_and(|ct| ct.starts_with("application/json") || ct.contains("+json"));
+        edgion_resources::resources::common::success::classify_detail(
+            self.success.as_ref(),
+            resp.status,
+            &resp.body,
+            is_json,
+        )
+    }
+
+    /// Classify a completed response as success/failure per `self.success`.
+    pub fn classify(&self, resp: &super::call::OutboundResponse) -> bool {
+        self.classify_detail(resp) == edgion_resources::resources::common::success::SuccessOutcome::Success
+    }
+
+    // ============================================================
+    // Degradation
+    // ============================================================
+
+    /// Effective degradation flag for this call: the template wins when it renders
+    /// to exactly "true"/"false"; otherwise the static `allow_degradation`.
+    pub fn effective_allow_degradation(&self, session: &dyn crate::plugins::runtime::PluginSession) -> bool {
+        use edgion_resources::resources::common::external_http::resolve_bool_template;
+        if let Some(tpl) = self.degradation_template.as_ref() {
+            if let Ok(rendered) = super::request::evaluate_template(tpl, session, self.resolved_secrets.as_ref()) {
+                if let Some(b) = resolve_bool_template(&rendered) {
+                    return b;
+                }
+            }
+            crate::observe::metrics::record_outbound_template_fallback("allow_degradation");
+        }
+        self.allow_degradation
+    }
+
+    // ============================================================
     // Test-only constructors
     // ============================================================
 
@@ -347,9 +449,12 @@ impl ManagedOutboundClient {
                 .expect("default spec must compile"),
             health: HealthState::new(),
             rate: None,
-            success_status_codes: None,
+            success: None,
             max_response_bytes: 1024,
             timeout: Duration::from_secs(5),
+            timeout_template: None,
+            allow_degradation: false,
+            degradation_template: None,
             retry: None,
             egress_policy: None,
             passive_health_check: None,
@@ -645,9 +750,12 @@ mod tests {
             .unwrap(),
             health: HealthState::new(),
             rate: None,
-            success_status_codes: None,
+            success: None,
             max_response_bytes: 1024,
             timeout: Duration::from_secs(5),
+            timeout_template: None,
+            allow_degradation: false,
+            degradation_template: None,
             retry: None,
             egress_policy: None,
             passive_health_check: None,
@@ -682,7 +790,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let result = ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test");
+        let result = ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test", false);
         assert!(result.is_err(), "from_parts must reject missing port");
         let msg = result.unwrap_err();
         assert!(msg.contains("port"), "error should mention port, got: {msg}");
@@ -747,8 +855,9 @@ mod tests {
             tls: None,
             ..Default::default()
         };
-        let client = ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/url-hook")
-            .expect("url target must build");
+        let client =
+            ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/url-hook", false)
+                .expect("url target must build");
 
         // The shared global client is a distinct Arc allocation; a dedicated client
         // must not alias it.
@@ -773,9 +882,82 @@ mod tests {
             tls: None,
             ..Default::default()
         };
-        let client = ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/svc-hook")
-            .expect("service target must build");
+        let client =
+            ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/svc-hook", false)
+                .expect("service target must build");
         assert!(Arc::ptr_eq(&client.http_client, &get_http_client_arc()));
+    }
+
+    /// Helper: a `WebhookRetry` block with every field set explicitly (no `Default`
+    /// impl exists), used by the `from_parts` retry-resolution tests below.
+    fn retry_block(retry_on_timeout: Option<bool>) -> WebhookRetry {
+        use edgion_resources::resources::common::external_http::BackoffPolicy;
+        WebhookRetry {
+            max_retries: 3,
+            retry_delay_ms: 100,
+            retry_on_timeout,
+            retry_on_connect_error: true,
+            retry_on_status: vec![],
+            backoff_policy: BackoffPolicy::Exponential,
+            max_delay_ms: 10_000,
+            jitter: false,
+            honor_retry_after: false,
+            retry_on_body_failure: false,
+        }
+    }
+
+    /// Helper: build a valid URL-target `ExternalHttpConnection` carrying the given
+    /// retry block, for driving `from_parts`'s retry-resolution logic.
+    fn conn_with_retry(retry: WebhookRetry) -> ExternalHttpConnection {
+        ExternalHttpConnection {
+            target: WebhookTarget {
+                url: Some("https://api.example.com".to_string()),
+                ..Default::default()
+            },
+            retry: Some(retry),
+            ..Default::default()
+        }
+    }
+
+    /// `from_parts(..., true)` fills an unset `retry_on_timeout` with `Some(true)` —
+    /// this is the forward_auth call-site default (idempotent auth checks).
+    #[test]
+    fn from_parts_resolves_unset_retry_on_timeout_to_true_default() {
+        let conn = conn_with_retry(retry_block(None));
+        let client =
+            ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/forward-auth", true)
+                .expect("valid URL-target config must build");
+
+        let retry = client.retry.as_ref().expect("retry block must survive from_parts");
+        assert_eq!(retry.retry_on_timeout, Some(true));
+    }
+
+    /// `from_parts(..., false)` fills an unset `retry_on_timeout` with `Some(false)` —
+    /// this is the webhook call-site default (non-idempotent POSTs).
+    #[test]
+    fn from_parts_resolves_unset_retry_on_timeout_to_false_default() {
+        let conn = conn_with_retry(retry_block(None));
+        let client =
+            ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/webhook", false)
+                .expect("valid URL-target config must build");
+
+        let retry = client.retry.as_ref().expect("retry block must survive from_parts");
+        assert_eq!(retry.retry_on_timeout, Some(false));
+    }
+
+    /// An operator's explicit `retry_on_timeout` must survive `from_parts` unchanged —
+    /// the per-consumer default only fills the gap when the operator leaves it unset.
+    #[test]
+    fn from_parts_does_not_clobber_explicit_retry_on_timeout() {
+        let conn = conn_with_retry(retry_block(Some(true)));
+        // Consumer default is `false`; the explicit `Some(true)` on the resource
+        // must win regardless.
+        let client =
+            ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/webhook", false)
+                .expect("valid URL-target config must build");
+
+        let retry = client.retry.as_ref().expect("retry block must survive from_parts");
+        assert_eq!(retry.retry_on_timeout, Some(true));
     }
 
     /// Helper: build a ManagedOutboundClient with an active health check config so
@@ -811,7 +993,73 @@ mod tests {
         };
         let request = OutboundRequestSpec::default();
 
-        ManagedOutboundClient::from_parts(&conn, &request, None, "test/client")
+        ManagedOutboundClient::from_parts(&conn, &request, None, "test/client", false)
             .expect("from_parts must succeed for valid config")
+    }
+
+    // ============================================================
+    // effective_allow_degradation
+    // ============================================================
+
+    fn compile_tpl(s: &str) -> CompiledTemplate {
+        CompiledTemplate::compile(s).unwrap()
+    }
+
+    /// TDD: a `degradation_template` that renders "true" wins over a static
+    /// `allow_degradation: false`.
+    #[test]
+    fn effective_allow_degradation_template_wins_over_static() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+
+        let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
+        client.allow_degradation = false;
+        client.degradation_template = Some(compile_tpl("${ctx:is_staging}"));
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_get_ctx_var()
+            .withf(|n| n == "is_staging")
+            .return_const(Some("true".to_string()));
+
+        assert!(
+            client.effective_allow_degradation(&session),
+            "template rendering \"true\" must win over the static false"
+        );
+    }
+
+    /// TDD: a `degradation_template` that renders a non-strict token ("1") falls
+    /// back to the static `allow_degradation` — this proves the strict grammar
+    /// (only exact "true"/"false" are accepted).
+    #[test]
+    fn effective_allow_degradation_falls_back_on_non_strict_render() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+
+        let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
+        client.allow_degradation = false;
+        client.degradation_template = Some(compile_tpl("${ctx:is_staging}"));
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_get_ctx_var()
+            .withf(|n| n == "is_staging")
+            .return_const(Some("1".to_string()));
+
+        assert!(
+            !client.effective_allow_degradation(&session),
+            "a non-strict render (\"1\") must fall back to the static allow_degradation"
+        );
+    }
+
+    /// No template set: the static `allow_degradation` is used directly.
+    #[test]
+    fn effective_allow_degradation_uses_static_when_no_template() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+
+        let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
+        client.allow_degradation = true;
+        client.degradation_template = None;
+
+        let session = MockPluginSession::new();
+        assert!(client.effective_allow_degradation(&session));
     }
 }

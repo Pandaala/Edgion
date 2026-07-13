@@ -58,7 +58,8 @@ spec:
         type: json
         template: '{"userId": "${header:X-User-Id}", "source": "edgion"}'
     timeoutMs: 5000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     allowDegradation: false
     maxResponseBytes: 4096
 ---

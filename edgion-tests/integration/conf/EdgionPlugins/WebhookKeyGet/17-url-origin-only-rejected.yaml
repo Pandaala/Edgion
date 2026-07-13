@@ -28,5 +28,6 @@ spec:
       method:
         template: "GET"
     timeoutMs: 5000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     maxResponseBytes: 4096

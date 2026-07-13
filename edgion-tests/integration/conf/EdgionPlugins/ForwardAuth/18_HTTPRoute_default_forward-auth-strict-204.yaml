@@ -1,4 +1,4 @@
-# HTTPRoute for forward-auth-strict-204 test (successStatusCodes: [204] only)
+# HTTPRoute for forward-auth-strict-204 test (success.statusCodes: [204] only)
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:

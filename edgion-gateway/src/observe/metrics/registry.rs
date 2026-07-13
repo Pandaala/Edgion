@@ -66,6 +66,13 @@ pub mod names {
     pub const WEBHOOK_RESOLVE_ERRORS_TOTAL: &str = "edgion_webhook_resolve_errors_total";
     // Egress resolver: outbound address rejected by the SSRF egress policy, by reason
     pub const EGRESS_BLOCKED_TOTAL: &str = "edgion_outbound_egress_blocked_total";
+    // Outbound call: terminal response accepted at the status layer but classified as
+    // failure by a `success.body` predicate — the "200 OK but error in the body" case.
+    pub const OUTBOUND_SUCCESS_PREDICATE_FAIL_TOTAL: &str = "edgion_outbound_success_predicate_fail_total";
+    // Outbound call: a templated field (e.g. timeoutMsTemplate) failed to render to a
+    // usable value and silently fell back to its static default. The data plane must
+    // not log, so this counter is the only signal an operator gets.
+    pub const OUTBOUND_TEMPLATE_FALLBACK_TOTAL: &str = "edgion_outbound_template_fallback_total";
     // Access-log backfill: docs re-ingested into ES from the fallback file,
     // and lines that failed to backfill (kept for retry). Cold/failure-path.
     pub const ACCESS_LOG_BACKFILL_INGESTED_TOTAL: &str = "edgion_access_log_backfill_ingested_total";
@@ -605,6 +612,21 @@ pub fn record_webhook_resolve_error(reason: &'static str) {
 /// `reason` is one of `"loopback"`, `"link_local"`, `"private"`, `"unspecified"`.
 pub fn record_egress_blocked(reason: &'static str) {
     counter!(names::EGRESS_BLOCKED_TOTAL, "reason" => reason).increment(1);
+}
+
+/// Record a response whose status was accepted but whose `success.body` predicate
+/// classified it as a failure — the "200 OK but error in the body" case, which is
+/// otherwise invisible (the data plane must not log).
+pub fn record_outbound_success_predicate_fail() {
+    counter!(names::OUTBOUND_SUCCESS_PREDICATE_FAIL_TOTAL).increment(1);
+}
+
+/// Record a template field that failed to render to a usable value and fell back
+/// to its static default. `field` is one of `"timeout_ms"`, `"allow_degradation"`.
+/// Fixed cardinality — safe as a label. The data plane must not log, so this
+/// counter is the only signal an operator gets for a silently-falling-back template.
+pub fn record_outbound_template_fallback(field: &'static str) {
+    counter!(names::OUTBOUND_TEMPLATE_FALLBACK_TOTAL, "field" => field).increment(1);
 }
 
 // ============================================================

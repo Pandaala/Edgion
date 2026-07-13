@@ -21,7 +21,8 @@ spec:
           namespace: edgion-default
           port: 30040
         timeoutMs: 5000
-        successStatusCodes: [200, 204]
+        success:
+          statusCodes: [200, 204]
         request:
           path:
             template: "/verify"

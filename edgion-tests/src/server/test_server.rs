@@ -2120,7 +2120,7 @@ async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
             )
                 .into_response()
         }
-        // Valid token that returns 204 No Content (for successStatusCodes integration test).
+        // Valid token that returns 204 No Content (for success.statusCodes integration test).
         // Sends an empty body with X-User-ID so upstream-header propagation can be verified.
         "Bearer valid-204-token" => (
             StatusCode::NO_CONTENT,

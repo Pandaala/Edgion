@@ -1,12 +1,14 @@
 # Scenario 7: presence-required-degrade
 # ---------------------------------------------------------------------------
-# A required origin header (X-Auth) with presence: required AND
-# allowDegradation: true. presence and allowDegradation are orthogonal:
-#   - presence: required  -> missing X-Auth counts as a webhook call FAILURE
-#   - allowDegradation: true -> that failure does NOT abort the chain; the
-#     gateway skips the webhook result and continues (degraded mode, not 5xx).
-# Test sends a request WITHOUT X-Auth -> webhook fails -> gateway continues;
-# the CtxSet var falls back to its `default`. PluginLog records the failure.
+# A required origin header (X-Auth) with presence: required. The
+# allowDegradation/statusOnError fields below are part of the shared
+# ExternalHttpConnection schema but are NOT honored by the webhook connector
+# (they are only read by forward_auth) -- key_get simply returns None on any
+# failure, including a missing required field.
+# Test sends a request WITHOUT X-Auth -> the missing required field is
+# treated as a webhook call failure -> key_get returns None -> the consuming
+# CtxSet plugin falls back to its `default` and the request continues (no
+# 403, no gateway-side status override). PluginLog records the failure.
 # Backend via Service + EndpointSlice.
 apiVersion: v1
 kind: Service
@@ -61,7 +63,8 @@ spec:
           - name: X-Auth
             presence: required
     timeoutMs: 5000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     allowDegradation: true
     statusOnError: 503
     maxResponseBytes: 4096

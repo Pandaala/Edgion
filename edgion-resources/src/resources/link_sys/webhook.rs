@@ -109,7 +109,8 @@ pub enum WebhookAuth {
 ///         - name: "X-Source"
 ///           value: "edgion"
 ///     timeoutMs: 3000
-///     successStatusCodes: [200]
+///     success:
+///       statusCodes: [200]
 ///     allowDegradation: true
 ///     statusOnError: 503
 ///     healthCheck:
@@ -126,11 +127,11 @@ pub enum WebhookAuth {
 pub struct WebhookServiceConfig {
     // ============================================================
     // Connection (flattened — target, tls, timeout, retry, rate_limit,
-    // health_check, max_response_bytes, success_status_codes)
+    // health_check, max_response_bytes, success)
     // ============================================================
     /// Shared external HTTP connection configuration.
     /// Contains target, TLS, timeout, retry, rate-limit, health-check,
-    /// max_response_bytes, and success_status_codes.
+    /// max_response_bytes, and success.
     #[serde(flatten)]
     pub conn: ExternalHttpConnection,
 
@@ -194,31 +195,6 @@ pub struct WebhookServiceConfig {
     /// Accepted but ignored in this release.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_headers: Option<serde_json::Value>,
-
-    // ============================================================
-    // Degradation
-    // ============================================================
-    /// Whether to skip webhook resolution when the service is unavailable.
-    ///
-    /// - false (default): webhook failure causes key resolution to fail (returns None)
-    /// - true: webhook failure is silently skipped, key_get returns None and the
-    ///   fallback chain continues to the next source
-    #[serde(default)]
-    pub allow_degradation: bool,
-
-    /// HTTP status code to return when the webhook is unreachable and
-    /// allow_degradation is false. Only relevant when webhook is the sole key source.
-    /// Default: 503
-    #[serde(default = "default_status_on_error")]
-    pub status_on_error: u16,
-}
-
-// ============================================================
-// Defaults (webhook-only — not part of ExternalHttpConnection)
-// ============================================================
-
-fn default_status_on_error() -> u16 {
-    503
 }
 
 // ============================================================
@@ -234,8 +210,6 @@ impl Default for WebhookServiceConfig {
             resolved_secrets: None,
             request_method: None,
             default_headers: None,
-            allow_degradation: false,
-            status_on_error: default_status_on_error(),
         }
     }
 }
@@ -254,19 +228,14 @@ impl WebhookServiceConfig {
         // Note: request_method is now a deprecated shim field and is not validated.
         // It was previously validated as a valid HTTP method, but is no longer used at runtime.
 
-        // Validate timeout
-        if self.conn.timeout_ms == 0 {
-            return Some("timeoutMs must be greater than 0".to_string());
-        }
+        // Note: `1 <= timeoutMs <= MAX_OUTBOUND_TIMEOUT_MS` and `maxResponseBytes > 0`
+        // are validated by `validate_connection_target` above (shared with
+        // forward_auth), so both consumers inherit the same checks instead of
+        // duplicating them here.
 
-        // Validate status on error
-        if !(200..=599).contains(&self.status_on_error) {
+        // Validate status on error (now on the shared connection struct)
+        if !(200..=599).contains(&self.conn.status_on_error) {
             return Some("statusOnError must be between 200 and 599".to_string());
-        }
-
-        // Validate max response bytes
-        if self.conn.max_response_bytes == 0 {
-            return Some("maxResponseBytes must be greater than 0".to_string());
         }
 
         // Validate the request field-name invariants (args/headers/cookies).

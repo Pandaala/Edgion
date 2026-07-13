@@ -1,7 +1,7 @@
-# ForwardAuth successStatusCodes test: custom list [200, 204] accepts 204 as success.
+# ForwardAuth success.statusCodes test: custom list [200, 204] accepts 204 as success.
 #
 # The auth server returns 204 No Content for "Bearer valid-204-token".
-# With successStatusCodes: [200, 204] the gateway treats 204 as success and
+# With success.statusCodes: [200, 204] the gateway treats 204 as success and
 # forwards the request to the backend. The client sees 200 from the backend,
 # proving the full chain completed.
 #
@@ -21,7 +21,8 @@ spec:
           namespace: edgion-default
           port: 30040
         timeoutMs: 5000
-        successStatusCodes: [200, 204]
+        success:
+          statusCodes: [200, 204]
         request:
           path:
             template: "/verify"

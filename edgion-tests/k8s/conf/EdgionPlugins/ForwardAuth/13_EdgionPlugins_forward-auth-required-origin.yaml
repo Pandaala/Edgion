@@ -31,9 +31,9 @@ spec:
                 presence: required
               - name: Authorization
                 presence: skipIfMissing
+        allowDegradation: false
+        statusOnError: 500
         decision:
           upstreamHeaders:
             - X-User-ID
           clientHeaders: []
-          allowDegradation: false
-          statusOnError: 500

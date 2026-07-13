@@ -250,12 +250,160 @@ pub fn validate_connection_target(conn: &ExternalHttpConnection) -> Option<Strin
             }
         }
     }
+    if let Some(retry) = conn.retry.as_ref() {
+        if let Some(e) = validate_retry(retry) {
+            return Some(e);
+        }
+    }
+    if let Some(success) = conn.success.as_ref() {
+        if let Some(e) = crate::resources::common::success::validate_success(success) {
+            return Some(e);
+        }
+    }
+    if let Some(s) = conn.success.as_ref() {
+        if !s.body.is_empty() && conn.max_response_bytes < MIN_BODY_PREDICATE_BYTES {
+            return Some(format!(
+                "maxResponseBytes must be at least {MIN_BODY_PREDICATE_BYTES} when success.body predicates are set"
+            ));
+        }
+    }
+    if let Some(tpl) = conn.timeout_ms_template.as_ref() {
+        let compiled = match crate::resources::edgion_plugins::plugin_configs::CompiledTemplate::compile(tpl) {
+            Ok(c) => c,
+            Err(e) => return Some(format!("timeoutMsTemplate: {e}")),
+        };
+        if tpl.contains("${secretRef:") {
+            return Some("timeoutMsTemplate must not reference ${secretRef:...}".to_string());
+        }
+        if let Some(e) = reject_client_controlled_vars(&compiled, "timeoutMsTemplate") {
+            return Some(e);
+        }
+    }
+    if let Some(tpl) = conn.allow_degradation_template.as_ref() {
+        let compiled = match crate::resources::edgion_plugins::plugin_configs::CompiledTemplate::compile(tpl) {
+            Ok(c) => c,
+            Err(e) => return Some(format!("allowDegradationTemplate: {e}")),
+        };
+        if tpl.contains("${secretRef:") {
+            return Some("allowDegradationTemplate must not reference ${secretRef:...}".to_string());
+        }
+        if let Some(e) = reject_client_controlled_vars(&compiled, "allowDegradationTemplate") {
+            return Some(e);
+        }
+    }
+    if conn.timeout_ms == 0 || conn.timeout_ms > MAX_OUTBOUND_TIMEOUT_MS {
+        return Some(format!("timeoutMs must be between 1 and {MAX_OUTBOUND_TIMEOUT_MS}"));
+    }
+    if conn.max_response_bytes == 0 {
+        return Some("maxResponseBytes must be greater than 0".to_string());
+    }
     None
 }
+
+/// Reject any template variable that is not on the trusted allow-list for
+/// `timeoutMsTemplate` / `allowDegradationTemplate`.
+///
+/// These two fields drive a per-request timeout deadline and a fail-open
+/// switch (respectively). Both are security-sensitive: a client-controlled
+/// value would let an attacker pin the timeout to something tiny (forcing a
+/// timeout on every call — either a reliable DoS, or, combined with
+/// `allowDegradation`, an authentication bypass) or directly flip the
+/// degradation decision via a request header/query/cookie.
+///
+/// ALLOW ONLY `${ctx:...}` (set by a trusted upstream plugin, never the raw
+/// client request), `${clientIp}`, and matched-route metadata
+/// (`${matchedHttpRoute:...}` / `${matchedGrpcRoute:...}`). Everything else —
+/// `header`/`query`/`cookie`/`path`/`uri`/`requestPath`/`requestUri`/`method`/
+/// `secretRef` — is rejected, even though some of those (path, method, uri)
+/// are not literally "attacker-supplied storage" like a header, they are
+/// still chosen by the client on every request and so are not a safe basis
+/// for a fail-open decision.
+fn reject_client_controlled_vars(
+    tpl: &crate::resources::edgion_plugins::plugin_configs::CompiledTemplate,
+    field_name: &str,
+) -> Option<String> {
+    use crate::resources::edgion_plugins::plugin_configs::{TemplateSegment, TemplateVarType};
+    for seg in tpl.segments() {
+        if let TemplateSegment::Variable { var_type, .. } = seg {
+            let allowed = matches!(
+                var_type,
+                TemplateVarType::Ctx
+                    | TemplateVarType::ClientIp
+                    | TemplateVarType::MatchedHttpRoute
+                    | TemplateVarType::MatchedGrpcRoute
+            );
+            if !allowed {
+                return Some(format!(
+                    "{field_name} must not read client-controlled input (header/query/cookie/path/method/uri); \
+                     use ${{ctx:...}} (set by a trusted upstream plugin), ${{clientIp}}, or a matched-route variable"
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Parse a rendered boolean template. Accepts ONLY "true"/"false" (trimmed,
+/// case-insensitive). Anything else — "1", "0", "yes", "" — returns None so the
+/// caller falls back to the static field. One spelling, to avoid grammar churn.
+pub fn resolve_bool_template(rendered: &str) -> Option<bool> {
+    match rendered.trim().to_ascii_lowercase().as_str() {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// Minimum `max_response_bytes` required when `success.body` predicates are set.
+/// The default 1 KB cap is too small to reliably hold the inspected field, and a
+/// truncated body surfaces as `ResponseTooLarge`, not as a failed predicate.
+pub const MIN_BODY_PREDICATE_BYTES: usize = 4096;
+
+/// Upper bound for a template-rendered per-request timeout, in milliseconds.
+/// A client-supplied `${header:...}` timeout must not be able to pin a worker.
+pub const MAX_OUTBOUND_TIMEOUT_MS: u64 = 60_000;
+
+/// Lower bound for a template-rendered per-request timeout, in milliseconds.
+/// A render below this floor is treated exactly like a non-numeric/zero/empty
+/// render: it falls back to the static `timeoutMs`. Without a floor, a
+/// tiny-but-nonzero value (e.g. "1") would make the outbound call time out on
+/// (near-)every attempt — a reliable denial of service, or — combined with
+/// `allowDegradation: true` on forward_auth — a forced fail-open
+/// authentication bypass.
+pub const MIN_OUTBOUND_TIMEOUT_MS: u64 = 50;
 
 // ============================================================
 // WebhookRetry
 // ============================================================
+
+/// Absolute upper bound for any single outbound retry backoff, in milliseconds.
+/// The retry sleep is inline on the data-plane request path, so an operator must
+/// not be able to configure a multi-minute stall.
+pub const MAX_RETRY_BACKOFF_CEILING_MS: u64 = 10_000;
+
+/// Absolute upper bound for `maxRetries`. Combined with `MAX_RETRY_BACKOFF_CEILING_MS`,
+/// this is what actually makes the "no multi-minute stall" invariant above
+/// hold: an unbounded `maxRetries` (e.g. 200) would still allow tens of
+/// minutes of inline `tokio::time::sleep` on a live data-plane request even
+/// with a capped per-attempt backoff.
+///
+/// Note this only bounds the *retry backoff* portion of the stall. The static
+/// `timeout_ms` field is independently bounded by `MAX_OUTBOUND_TIMEOUT_MS` in
+/// `validate_connection_target` — without that bound, a large per-attempt
+/// timeout combined with `maxRetries` would still allow a multi-minute inline
+/// stall regardless of how tight the backoff ceiling is.
+pub const MAX_RETRIES_CEILING: u32 = 10;
+
+/// Backoff growth policy between retry attempts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BackoffPolicy {
+    /// delay = min(maxDelayMs, retryDelayMs << (attempt-1)).
+    #[default]
+    Exponential,
+    /// delay = retryDelayMs (constant).
+    Fixed,
+}
 
 /// Retry configuration for failed webhook calls.
 ///
@@ -269,15 +417,18 @@ pub struct WebhookRetry {
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
 
-    /// Delay between retries in milliseconds.
+    /// Base delay of the backoff curve, in milliseconds. Under
+    /// `backoffPolicy: exponential` the Nth retry waits
+    /// `retryDelayMs << (N-1)`, capped by `maxDelayMs`; under `fixed` it is the
+    /// constant delay for every retry.
     /// Default: 100
     #[serde(default = "default_retry_delay")]
     pub retry_delay_ms: u64,
 
-    /// Retry on timeout errors.
-    /// Default: true
-    #[serde(default = "default_true")]
-    pub retry_on_timeout: bool,
+    /// Retry on timeout errors. `None` = the consumer's default (webhook: false,
+    /// forward_auth: true). See design §4.3.
+    #[serde(default)]
+    pub retry_on_timeout: Option<bool>,
 
     /// Retry on connection errors (refused, reset, etc.).
     /// Default: true
@@ -288,6 +439,45 @@ pub struct WebhookRetry {
     /// Default: [] (do not retry on status codes by default)
     #[serde(default)]
     pub retry_on_status: Vec<u16>,
+
+    /// Backoff growth policy between retries. Default: exponential.
+    #[serde(default)]
+    pub backoff_policy: BackoffPolicy,
+
+    /// Per-attempt backoff ceiling in milliseconds. Range 1..=10000.
+    /// Default: 1000.
+    #[serde(default = "default_max_delay")]
+    pub max_delay_ms: u64,
+
+    /// Add 50-100% jitter to each backoff delay. Default: true.
+    #[serde(default = "default_true")]
+    pub jitter: bool,
+
+    /// On a 429/503 whose status is also in `retry_on_status`, honor the
+    /// `Retry-After` header (clamped to `max_delay_ms`). Default: false.
+    #[serde(default)]
+    pub honor_retry_after: bool,
+
+    /// Retry when a `success.body` predicate classifies the response as failure.
+    /// Default: false (a business error like {"code":-101} is not transient).
+    #[serde(default)]
+    pub retry_on_body_failure: bool,
+}
+
+/// Validate a retry block. Returns the first error message, or None.
+pub fn validate_retry(retry: &WebhookRetry) -> Option<String> {
+    if retry.retry_delay_ms == 0 {
+        return Some("retryDelayMs must be greater than 0".to_string());
+    }
+    if !(1..=MAX_RETRY_BACKOFF_CEILING_MS).contains(&retry.max_delay_ms) {
+        return Some(format!(
+            "maxDelayMs must be between 1 and {MAX_RETRY_BACKOFF_CEILING_MS}"
+        ));
+    }
+    if retry.max_retries > MAX_RETRIES_CEILING {
+        return Some(format!("maxRetries must be between 0 and {MAX_RETRIES_CEILING}"));
+    }
+    None
 }
 
 // ============================================================
@@ -443,6 +633,17 @@ pub struct ExternalHttpConnection {
     #[serde(default = "default_timeout_ms")]
     pub timeout_ms: u64,
 
+    /// Template rendering a per-request timeout in milliseconds, e.g.
+    /// "${ctx:desired_timeout_ms}". Only `${ctx:...}`, `${clientIp}`, and
+    /// matched-route variables are accepted at admission (see
+    /// `reject_client_controlled_vars`) — a client-controlled source
+    /// (header/query/cookie/path/method/uri) would let an attacker pin the
+    /// deadline to a tiny value. A non-numeric, empty, or below-floor
+    /// (< `MIN_OUTBOUND_TIMEOUT_MS`) render falls back to `timeout_ms`. The
+    /// rendered value is clamped to `MAX_OUTBOUND_TIMEOUT_MS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms_template: Option<String>,
+
     // ---- Retry ----
     /// Retry configuration for failed webhook calls.
     /// Default: no retry (fail immediately on first error).
@@ -472,10 +673,45 @@ pub struct ExternalHttpConnection {
     #[serde(default = "default_max_response_bytes")]
     pub max_response_bytes: usize,
 
-    /// Status codes considered as success.
-    /// Default: any 2xx status code
+    /// Success criteria (status codes + optional JSON-Pointer body predicates).
+    /// Default: any 2xx status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub success: Option<crate::resources::common::success::SuccessSpec>,
+
+    // ---- Failure policy (currently honored by forward_auth only) ----
+    /// Whether to skip/allow the request when the outbound call fails.
+    ///
+    /// Only the forward_auth plugin reads this field:
+    /// - false (default): forward_auth returns `status_on_error` to the client.
+    /// - true: forward_auth is silently skipped (degraded mode) and the
+    ///   request proceeds to upstream.
+    ///
+    /// The webhook connector's `key_get` has no fail-open/fail-closed
+    /// decision to make: on any failure it simply returns `None` (no value),
+    /// and the caller's normal fallback chain continues. This field is
+    /// therefore inert when set on a webhook `ExternalHttpConnection`.
     #[serde(default)]
-    pub success_status_codes: Option<Vec<u16>>,
+    pub allow_degradation: bool,
+
+    /// HTTP status code to return when the outbound call fails and
+    /// `allow_degradation` is false. Range 200-599.
+    /// Default: 503.
+    ///
+    /// Only the forward_auth plugin reads this field; it is inert for
+    /// webhook (see `allow_degradation` doc above).
+    #[serde(default = "default_status_on_error")]
+    pub status_on_error: u16,
+
+    /// Template rendering the per-request degradation decision, e.g.
+    /// "${ctx:is_staging}". Only `${ctx:...}`, `${clientIp}`, and
+    /// matched-route variables are accepted at admission (see
+    /// `reject_client_controlled_vars`) — this is a fail-open switch on
+    /// forward_auth, so it must never be driven by a client-controlled
+    /// header/query/cookie/path/method/uri. Must render to exactly "true" or
+    /// "false" (trimmed, case-insensitive); anything else falls back to
+    /// `allow_degradation`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_degradation_template: Option<String>,
 }
 
 impl Default for ExternalHttpConnection {
@@ -484,11 +720,15 @@ impl Default for ExternalHttpConnection {
             target: WebhookTarget::default(),
             tls: None,
             timeout_ms: default_timeout_ms(),
+            timeout_ms_template: None,
             retry: None,
             rate_limit: None,
             health_check: None,
             max_response_bytes: default_max_response_bytes(),
-            success_status_codes: None,
+            success: None,
+            allow_degradation: false,
+            status_on_error: default_status_on_error(),
+            allow_degradation_template: None,
         }
     }
 }
@@ -508,6 +748,9 @@ fn default_max_retries() -> u32 {
 }
 fn default_retry_delay() -> u64 {
     100
+}
+fn default_max_delay() -> u64 {
+    1000
 }
 pub fn default_true() -> bool {
     true
@@ -541,4 +784,345 @@ fn default_backoff_multiplier() -> f64 {
 }
 fn default_max_backoff() -> u64 {
     60
+}
+pub fn default_status_on_error() -> u16 {
+    503
+}
+
+// ============================================================
+// Tests
+// ============================================================
+
+#[cfg(test)]
+mod failure_policy_tests {
+    use super::*;
+
+    #[test]
+    fn failure_policy_defaults() {
+        let c = ExternalHttpConnection::default();
+        assert!(!c.allow_degradation);
+        assert_eq!(c.status_on_error, 503);
+    }
+
+    #[test]
+    fn failure_policy_parses_top_level() {
+        let c: ExternalHttpConnection = serde_yaml::from_str(
+            "target:\n  url: https://api.example.com\nallowDegradation: true\nstatusOnError: 502\n",
+        )
+        .unwrap();
+        assert!(c.allow_degradation);
+        assert_eq!(c.status_on_error, 502);
+    }
+}
+
+#[cfg(test)]
+mod success_body_max_response_bytes_tests {
+    use super::*;
+
+    #[test]
+    fn body_predicate_requires_explicit_max_response_bytes() {
+        // A success.body predicate on a connection left at the 1KB default must be rejected.
+        let c: ExternalHttpConnection = serde_yaml::from_str(
+            "target:\n  url: https://api.example.com\nmaxResponseBytes: 512\nsuccess:\n  body:\n    - pointer: /code\n      equals: 0\n",
+        )
+        .unwrap();
+        let err = validate_connection_target(&c).expect("must require explicit maxResponseBytes");
+        assert!(err.contains("maxResponseBytes"), "got: {err}");
+    }
+
+    #[test]
+    fn body_predicate_passes_with_adequate_max_response_bytes() {
+        let c: ExternalHttpConnection = serde_yaml::from_str(
+            "target:\n  url: https://api.example.com\nmaxResponseBytes: 8192\nsuccess:\n  body:\n    - pointer: /code\n      equals: 0\n",
+        )
+        .unwrap();
+        assert!(validate_connection_target(&c).is_none());
+    }
+
+    #[test]
+    fn no_body_predicate_allows_default_max_response_bytes() {
+        // The default 1KB cap is fine when there's no body predicate to inspect.
+        let c: ExternalHttpConnection = serde_yaml::from_str("target:\n  url: https://api.example.com\n").unwrap();
+        assert!(validate_connection_target(&c).is_none());
+    }
+}
+
+#[cfg(test)]
+mod timeout_ms_template_tests {
+    use super::*;
+
+    #[test]
+    fn default_has_no_timeout_template() {
+        let c = ExternalHttpConnection::default();
+        assert!(c.timeout_ms_template.is_none());
+    }
+
+    #[test]
+    fn valid_template_passes_validation() {
+        let c: ExternalHttpConnection = serde_yaml::from_str(
+            "target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"${ctx:desired_timeout_ms}\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.timeout_ms_template.as_deref(), Some("${ctx:desired_timeout_ms}"));
+        assert!(validate_connection_target(&c).is_none());
+    }
+
+    #[test]
+    fn malformed_template_is_rejected_at_admission() {
+        // Unclosed "${" must be caught by CompiledTemplate::compile at validation
+        // time, not silently at runtime.
+        let c: ExternalHttpConnection =
+            serde_yaml::from_str("target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"${ctx:X-Test\"\n")
+                .unwrap();
+        let err = validate_connection_target(&c).expect("malformed template must be rejected");
+        assert!(err.contains("timeoutMsTemplate"), "got: {err}");
+    }
+
+    #[test]
+    fn secret_ref_in_template_is_rejected_at_admission() {
+        // ${secretRef:...} is never resolved for timeoutMsTemplate (not scanned by
+        // collect_secret_ref_names nor the forward_auth credential resolver), so a
+        // config that references one would silently fall back to the static
+        // timeoutMs at runtime with no visible error. Reject it at admission instead.
+        let c: ExternalHttpConnection = serde_yaml::from_str(
+            "target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"${secretRef:ns/name:key}\"\n",
+        )
+        .unwrap();
+        let err = validate_connection_target(&c).expect("secretRef in timeoutMsTemplate must be rejected");
+        assert!(err.contains("timeoutMsTemplate"), "got: {err}");
+        assert!(err.contains("secretRef"), "got: {err}");
+    }
+
+    /// CRITICAL 1 regression: a client-controlled var in `timeoutMsTemplate` is an
+    /// auth-bypass / DoS vector on forward_auth (a client-chosen 1ms deadline makes
+    /// the auth call always time out). `${header:...}`, `${query:...}`,
+    /// `${cookie:...}`, and `${method}` must all be rejected at admission.
+    #[test]
+    fn timeout_template_rejects_client_controlled_vars() {
+        for expr in [
+            "${header:X-Auth-Timeout}",
+            "${query:timeout}",
+            "${cookie:timeout}",
+            "${method}",
+            "${path}",
+            "${uri}",
+            "${requestPath}",
+            "${requestUri}",
+        ] {
+            let c: ExternalHttpConnection = serde_yaml::from_str(&format!(
+                "target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"{expr}\"\n"
+            ))
+            .unwrap();
+            let err = validate_connection_target(&c)
+                .unwrap_or_else(|| panic!("{expr} must be rejected in timeoutMsTemplate"));
+            assert!(err.contains("timeoutMsTemplate"), "got: {err}");
+            assert!(err.contains("client-controlled"), "got: {err}");
+        }
+    }
+
+    /// Trusted variable types must still be accepted for `timeoutMsTemplate`.
+    #[test]
+    fn timeout_template_accepts_trusted_vars() {
+        for expr in [
+            "${ctx:is_staging}",
+            "${clientIp}",
+            "${matchedHttpRoute:name}",
+            "${matchedGrpcRoute:name}",
+        ] {
+            let c: ExternalHttpConnection = serde_yaml::from_str(&format!(
+                "target:\n  url: https://api.example.com\ntimeoutMsTemplate: \"{expr}\"\n"
+            ))
+            .unwrap();
+            assert!(
+                validate_connection_target(&c).is_none(),
+                "{expr} should be accepted in timeoutMsTemplate"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod timeout_ms_bound_tests {
+    use super::*;
+
+    /// The static `timeoutMs` field must share the same upper bound as the
+    /// template-rendered timeout (`MAX_OUTBOUND_TIMEOUT_MS`). Without this, a
+    /// `timeoutMs: 600000` + `maxRetries: 10` config would be admitted and
+    /// stall the data-plane request inline for ~110 minutes.
+    #[test]
+    fn rejects_timeout_ms_above_ceiling() {
+        let c: ExternalHttpConnection =
+            serde_yaml::from_str("target:\n  url: https://api.example.com\ntimeoutMs: 120000\n").unwrap();
+        let err = validate_connection_target(&c).expect("120000 exceeds MAX_OUTBOUND_TIMEOUT_MS");
+        assert!(err.contains("timeoutMs"), "got: {err}");
+    }
+
+    #[test]
+    fn accepts_reasonable_timeout_ms() {
+        let c: ExternalHttpConnection =
+            serde_yaml::from_str("target:\n  url: https://api.example.com\ntimeoutMs: 5000\n").unwrap();
+        assert!(validate_connection_target(&c).is_none());
+    }
+
+    #[test]
+    fn accepts_timeout_ms_at_ceiling() {
+        let c: ExternalHttpConnection = serde_yaml::from_str(&format!(
+            "target:\n  url: https://api.example.com\ntimeoutMs: {MAX_OUTBOUND_TIMEOUT_MS}\n"
+        ))
+        .unwrap();
+        assert!(validate_connection_target(&c).is_none());
+    }
+}
+
+#[cfg(test)]
+mod allow_degradation_template_tests {
+    use super::*;
+
+    #[test]
+    fn resolve_bool_template_accepts_only_strict_true_false() {
+        assert_eq!(resolve_bool_template("true"), Some(true));
+        assert_eq!(resolve_bool_template("FALSE"), Some(false));
+        assert_eq!(resolve_bool_template("  true  "), Some(true));
+        assert_eq!(resolve_bool_template("1"), None); // not accepted
+        assert_eq!(resolve_bool_template("yes"), None);
+        assert_eq!(resolve_bool_template(""), None);
+    }
+
+    #[test]
+    fn default_has_no_allow_degradation_template() {
+        let c = ExternalHttpConnection::default();
+        assert!(c.allow_degradation_template.is_none());
+    }
+
+    #[test]
+    fn valid_template_passes_validation() {
+        let c: ExternalHttpConnection = serde_yaml::from_str(
+            "target:\n  url: https://api.example.com\nallowDegradationTemplate: \"${ctx:is_staging}\"\n",
+        )
+        .unwrap();
+        assert_eq!(c.allow_degradation_template.as_deref(), Some("${ctx:is_staging}"));
+        assert!(validate_connection_target(&c).is_none());
+    }
+
+    #[test]
+    fn malformed_template_is_rejected_at_admission() {
+        let c: ExternalHttpConnection = serde_yaml::from_str(
+            "target:\n  url: https://api.example.com\nallowDegradationTemplate: \"${ctx:is_staging\"\n",
+        )
+        .unwrap();
+        let err = validate_connection_target(&c).expect("malformed template must be rejected");
+        assert!(err.contains("allowDegradationTemplate"), "got: {err}");
+    }
+
+    #[test]
+    fn secret_ref_in_template_is_rejected_at_admission() {
+        // A boolean degradation decision does not legitimately come from a Secret;
+        // ${secretRef:...} is never resolved for allowDegradationTemplate, so it
+        // would silently fall back to the static allowDegradation with no visible
+        // error. Reject it at admission instead.
+        let c: ExternalHttpConnection = serde_yaml::from_str(
+            "target:\n  url: https://api.example.com\nallowDegradationTemplate: \"${secretRef:ns/name:key}\"\n",
+        )
+        .unwrap();
+        let err = validate_connection_target(&c).expect("secretRef in allowDegradationTemplate must be rejected");
+        assert!(err.contains("allowDegradationTemplate"), "got: {err}");
+        assert!(err.contains("secretRef"), "got: {err}");
+    }
+
+    /// CRITICAL 1 regression: `allowDegradationTemplate` is a fail-open switch on
+    /// forward_auth. `${header:X-Degrade}` + an attacker-supplied `X-Degrade: true`
+    /// would force fail-open on auth-service errors — must be rejected at admission.
+    #[test]
+    fn degradation_template_rejects_client_controlled_vars() {
+        for expr in [
+            "${header:X-Degrade}",
+            "${query:degrade}",
+            "${cookie:degrade}",
+            "${method}",
+            "${path}",
+            "${uri}",
+            "${requestPath}",
+            "${requestUri}",
+        ] {
+            let c: ExternalHttpConnection = serde_yaml::from_str(&format!(
+                "target:\n  url: https://api.example.com\nallowDegradationTemplate: \"{expr}\"\n"
+            ))
+            .unwrap();
+            let err = validate_connection_target(&c)
+                .unwrap_or_else(|| panic!("{expr} must be rejected in allowDegradationTemplate"));
+            assert!(err.contains("allowDegradationTemplate"), "got: {err}");
+            assert!(err.contains("client-controlled"), "got: {err}");
+        }
+    }
+
+    /// Trusted variable types must still be accepted for `allowDegradationTemplate`.
+    #[test]
+    fn degradation_template_accepts_trusted_vars() {
+        for expr in [
+            "${ctx:is_staging}",
+            "${clientIp}",
+            "${matchedHttpRoute:name}",
+            "${matchedGrpcRoute:name}",
+        ] {
+            let c: ExternalHttpConnection = serde_yaml::from_str(&format!(
+                "target:\n  url: https://api.example.com\nallowDegradationTemplate: \"{expr}\"\n"
+            ))
+            .unwrap();
+            assert!(
+                validate_connection_target(&c).is_none(),
+                "{expr} should be accepted in allowDegradationTemplate"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod retry_schema_tests {
+    use super::*;
+
+    #[test]
+    fn retry_new_fields_default() {
+        let r: WebhookRetry = serde_yaml::from_str("maxRetries: 3\n").unwrap();
+        assert!(matches!(r.backoff_policy, BackoffPolicy::Exponential));
+        assert_eq!(r.max_delay_ms, 1000);
+        assert!(r.jitter);
+        assert!(!r.honor_retry_after);
+        assert_eq!(r.retry_on_timeout, None); // per-consumer default resolved later
+    }
+
+    #[test]
+    fn retry_rejects_excessive_max_delay() {
+        let r: WebhookRetry = serde_yaml::from_str("maxRetries: 1\nmaxDelayMs: 20000\n").unwrap();
+        let err = validate_retry(&r).expect("20000 exceeds ceiling");
+        assert!(err.contains("maxDelayMs"), "got: {err}");
+    }
+
+    #[test]
+    fn retry_rejects_zero_base_delay() {
+        let r: WebhookRetry = serde_yaml::from_str("maxRetries: 1\nretryDelayMs: 0\n").unwrap();
+        assert!(validate_retry(&r).is_some());
+    }
+
+    #[test]
+    fn retry_policy_parses_lowercase() {
+        let r: WebhookRetry = serde_yaml::from_str("maxRetries: 1\nbackoffPolicy: fixed\n").unwrap();
+        assert!(matches!(r.backoff_policy, BackoffPolicy::Fixed));
+    }
+
+    /// IMPORTANT 4 regression: `maxRetries: 200` + `maxDelayMs: 10000` would allow
+    /// ~33 minutes of inline `tokio::time::sleep` on a live data-plane request —
+    /// the very multi-minute stall `MAX_RETRY_BACKOFF_CEILING_MS`'s doc says must
+    /// be impossible. `maxRetries` itself must also be bounded.
+    #[test]
+    fn retry_rejects_excessive_max_retries() {
+        let r: WebhookRetry = serde_yaml::from_str("maxRetries: 200\n").unwrap();
+        let err = validate_retry(&r).expect("200 exceeds the maxRetries ceiling");
+        assert!(err.contains("maxRetries"), "got: {err}");
+    }
+
+    #[test]
+    fn retry_accepts_max_retries_at_ceiling() {
+        let r: WebhookRetry = serde_yaml::from_str(&format!("maxRetries: {MAX_RETRIES_CEILING}\n")).unwrap();
+        assert!(validate_retry(&r).is_none());
+    }
 }

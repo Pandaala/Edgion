@@ -65,7 +65,8 @@ spec:
           - name: mode
             value: "literal"
     timeoutMs: 5000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     allowDegradation: false
     maxResponseBytes: 4096
 ---

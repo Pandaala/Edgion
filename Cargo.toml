@@ -121,6 +121,7 @@ axum = { version = "0.8.8", features = ["macros", "ws"] }
 axum-server = { version = "0.8", features = ["tls-rustls"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots", "http2", "stream"] }
 http = "1.4.0"
+httpdate = "1"
 h2 = "0.4"
 hyper-util = { version = "0.1", features = ["client", "client-legacy", "tokio"] }
 tower = { version = "0.5", features = ["util"] }

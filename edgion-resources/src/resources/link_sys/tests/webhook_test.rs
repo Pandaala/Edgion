@@ -8,8 +8,8 @@ fn test_default_config() {
     assert!(config.request_method.is_none());
     assert_eq!(config.conn.timeout_ms, 5000);
     assert_eq!(config.conn.max_response_bytes, 1024);
-    assert!(!config.allow_degradation);
-    assert_eq!(config.status_on_error, 503);
+    assert!(!config.conn.allow_degradation);
+    assert_eq!(config.conn.status_on_error, 503);
     assert!(config.conn.retry.is_none());
     assert!(config.conn.rate_limit.is_none());
     assert!(config.conn.health_check.is_none());
@@ -76,7 +76,7 @@ fn test_validation_zero_timeout() {
     };
     assert_eq!(
         config.get_validation_error().as_deref(),
-        Some("timeoutMs must be greater than 0")
+        Some("timeoutMs must be between 1 and 60000")
     );
 }
 
@@ -293,7 +293,8 @@ target:
   kind: "Service"
 requestMethod: POST
 timeoutMs: 3000
-successStatusCodes: [200]
+success:
+  statusCodes: [200]
 maxResponseBytes: 2048
 allowDegradation: true
 statusOnError: 503
@@ -325,13 +326,15 @@ healthCheck:
     assert!(config.request_method.is_some());
     assert_eq!(config.conn.timeout_ms, 3000);
     assert_eq!(config.conn.max_response_bytes, 2048);
-    assert!(config.allow_degradation);
+    assert!(config.conn.allow_degradation);
+    let success = config.conn.success.as_ref().expect("success block must deserialize");
+    assert_eq!(success.status_codes, Some(vec![200]));
     // Validate before consuming fields with unwrap()
     assert!(config.get_validation_error().is_none());
     assert!(config.conn.retry.is_some());
     let retry = config.conn.retry.unwrap();
     assert_eq!(retry.max_retries, 1);
-    assert!(retry.retry_on_timeout);
+    assert_eq!(retry.retry_on_timeout, Some(true));
     assert_eq!(retry.retry_on_status, vec![502, 503, 504]);
     assert!(config.conn.rate_limit.is_some());
     let rl = config.conn.rate_limit.unwrap();

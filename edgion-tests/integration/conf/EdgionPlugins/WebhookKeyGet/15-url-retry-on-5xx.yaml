@@ -5,7 +5,7 @@
 # `status_list` in order per `test_id` (503, then 503, then 200), tracked by a
 # process-wide in-memory counter keyed by `test_id`; each response's
 # `x-attempt-history` header lists every status returned so far for that
-# `test_id`. Because `successStatusCodes: [200]` accepts the 3rd attempt and
+# `test_id`. Because `success.statusCodes: [200]` accepts the 3rd attempt and
 # `retryOnStatus: [503]` covers the first two, the gateway must retry exactly
 # twice (3 total attempts) before extracting the key.
 #
@@ -45,7 +45,8 @@ spec:
       maxRetries: 2
       retryDelayMs: 50
       retryOnStatus: [503]
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     allowDegradation: false
     maxResponseBytes: 4096
 ---

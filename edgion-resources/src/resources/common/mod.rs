@@ -8,6 +8,7 @@ pub mod outbound_tls;
 pub mod secret_object_ref;
 pub mod secret_slot;
 pub mod service_kind;
+pub mod success;
 pub mod tls;
 
 pub use external_http::{
@@ -23,6 +24,7 @@ pub use outbound_tls::{OutboundTlsConfig, OutboundTlsLocal, OutboundTlsValidatio
 pub use secret_object_ref::SecretObjectReference;
 pub use secret_slot::SecretSlot;
 pub use service_kind::EdgionService;
+pub use success::{classify_detail, validate_success, BodyPredicate, PredicateOp, SuccessOutcome, SuccessSpec};
 pub use tls::TlsConfig;
 
 // ---- Types shared across all route resources ----

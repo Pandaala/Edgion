@@ -415,6 +415,8 @@ spec:
 
 ## Webhook connector
 
+> ⚠️ **Breaking, and silent: `successStatusCodes` has been replaced by `success.statusCodes`.** `successStatusCodes` is no longer a recognized field — `ExternalHttpConnection` is `#[serde(flatten)]`-ed with no `deny_unknown_fields`, so a webhook YAML that still sets `successStatusCodes` is accepted at admission with **no error and no warning**: the field is silently pruned and success falls back to "any 2xx". This is unlike the other migrations in this document (`auth`, `defaultHeaders`, `requestMethod`), which are accepted-with-WARN for one release — there is no such shim here. Audit every webhook LinkSys (and every ForwardAuth plugin, which shares this connection type) for `successStatusCodes` and migrate to the nested `success:` block now; see [Success](#success) below.
+
 A webhook connector lets plugins (ctx-set, key-auth, hmac-auth, and so on) call an external HTTP service for user resolution, permission checks, context enrichment, audit logging, and similar lookups. The connector is the **single source of truth** for the outbound request: it declares the backend (the `name`/`namespace`/`port`/`kind`/`group` fields set directly under `target`), and a `request` block that defines exactly which path, method, query args, headers, and cookies are sent. Consuming plugins can no longer silently reshape the request — they can only feed values into the named slots the webhook author declared, optionally override the path (when allowed), and parse the response. Outbound fields follow an **allow-list** model: nothing is forwarded unless the webhook explicitly names it, so a misbehaving upstream plugin cannot leak headers the operator never intended to expose.
 
 ```yaml
@@ -447,7 +449,8 @@ spec:
               key: token
               prefix: "Bearer "
     timeoutMs: 3000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     maxResponseBytes: 2048
 ```
 
@@ -534,8 +537,9 @@ whether `target.url` names a hostname or an IP literal:
   behavior for Service targets — most webhooks legitimately point at an internal artifact repository
   or SaaS reachable only over a private network.
 
-A rejected address surfaces as a connect failure for that call (and, per the usual webhook
-semantics, `allowDegradation` / `statusOnError` then apply). Rejections increment the
+A rejected address surfaces as a connect failure for that call (`key_get` returns `None`, same
+as any other webhook failure — `allowDegradation` / `statusOnError` are not read by the webhook
+connector; see [Degradation and error handling](#degradation-and-error-handling)). Rejections increment the
 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` counter, but only
 on the **hostname** path (`EgressResolver`, which records all three reasons). On the **IP-literal**
 path, only `reason="private"` is ever recorded: the `dial_url` `blockPrivate` check records that
@@ -647,9 +651,9 @@ If you instead want the **current** (possibly rewritten) view of a header, use a
 |--------|-----------------------------------|-------------|
 | `skipIfMissing` (default) | The field is silently omitted from the outbound request; no log. | Optional enrichment where absence is normal. |
 | `warnIfMissing` | The field is omitted, a PluginLog alert is written, and the request continues. | Fields that *should* be present — you want visibility without failing the call. |
-| `required` | The webhook call is treated as failed. `statusOnError` / `allowDegradation` then apply exactly as for any other webhook failure. | Fields the backend cannot function without. |
+| `required` | The webhook call is treated as failed: `key_get` returns `None` (no value), same as any other webhook failure. | Fields the backend cannot function without. |
 
-`presence` and `allowDegradation` are orthogonal and compose: `presence: required` decides whether a missing field *counts as a failure*; `allowDegradation` then decides whether that failure aborts the plugin chain (`false`, default) or silently skips the webhook and continues (`true`).
+`allowDegradation` / `statusOnError` are declared on this connector's schema (it shares `ExternalHttpConnection` with the ForwardAuth plugin), but the **webhook connector itself does not read them**: on any failure — including a missing `presence: required` field — `key_get` simply returns `None`, and it is the *consuming* plugin's own fallback logic that decides what happens next (e.g. ctx-set leaves the target variable unset and the request continues). Setting these two fields on a webhook `LinkSys` has no effect; they are meaningful only when the same struct is embedded directly in a ForwardAuth plugin config.
 
 #### Custom field sources
 
@@ -709,30 +713,109 @@ The following combinations are rejected at admission with `Accepted=False`:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `timeoutMs` | Integer | `5000` | Request timeout in milliseconds; must be greater than 0. |
+| `timeoutMsTemplate` | String | none | Template rendering a per-request timeout in milliseconds, e.g. `"${ctx:desired_timeout_ms}"`. Restricted to a trusted variable allow-list — see [Templates](#templates) below. |
 | `tls` | Object | none | TLS configuration; see [TLS](#tls). Defaults to the system CA bundle when unset. |
-| `successStatusCodes` | Array\<Integer\> | any 2xx | HTTP status codes treated as success. |
-| `maxResponseBytes` | Integer | `1024` | Maximum response body size to read in bytes. Clamped at call time to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes` (default 16 KiB). |
+| `success` | Object | any 2xx | Success criteria: status codes plus optional JSON body predicates. **Replaces the removed `successStatusCodes`** — see [Success](#success) below. |
+| `maxResponseBytes` | Integer | `1024` | Maximum response body size to read in bytes. Clamped at call time to `EdgionGatewayConfig.linkSys.webhookMaxResponseBytes` (default 16 KiB). Must be `>= 4096` when `success.body` predicates are set — see [Success](#success). |
 
 > **Removed fields.** `requestMethod`, `auth`, and `defaultHeaders` are deprecated. They are still accepted during a rolling upgrade but ignored at runtime, and the controller logs a WARN when it sees them. They will be removed in the next release — migrate before then. See [Migration from the old schema](#migration-from-the-old-schema).
+>
+> `successStatusCodes` is different: it is not on this deprecation path at all. It is simply unrecognized by the flattened connection struct and is dropped with **no WARN**. See the warning at the top of this section and [Success](#success) below.
 
 ### Degradation and error handling
 
+> ⚠️ **These two fields are inert on the webhook connector.** `allowDegradation` and `statusOnError` exist here only because this connector shares its `ExternalHttpConnection` schema with the ForwardAuth plugin, which does honor them. The webhook connector's own `key_get` has no fail-open/fail-closed decision to make: on any failure it always returns `None` (no value), and the calling plugin's own fallback behavior takes over from there — there is no status code the webhook connector itself returns to a client. Setting `allowDegradation`/`statusOnError` on a webhook `LinkSys` is accepted at admission but has no runtime effect.
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `allowDegradation` | Boolean | `false` | When `true`, a webhook failure is silently skipped and the consumer's fallback chain continues. When `false`, failure causes the lookup to fail. |
-| `statusOnError` | Integer | `503` | Status code returned when `allowDegradation=false` and the webhook is the sole source. Must be in `[200, 599]`. |
+| `allowDegradation` | Boolean | `false` | Accepted for schema compatibility with ForwardAuth; not read by the webhook connector. |
+| `allowDegradationTemplate` | String | none | Accepted for schema compatibility with ForwardAuth; not read by the webhook connector. |
+| `statusOnError` | Integer | `503` | Accepted for schema compatibility with ForwardAuth; not read by the webhook connector. |
+
+### Success
+
+Replaces the old `successStatusCodes` field (removed; pre-release, no alias — see the warning at the top of this section). A response is classified as success only when **both** the status check and the optional body predicates pass:
+
+```yaml
+success:
+  statusCodes: [200]          # omitted -> any 2xx (200-299), same as before
+  body:                       # optional; ANDed with statusCodes
+    - pointer: "/code"        # RFC 6901 JSON Pointer into the parsed response body
+      equals: 0
+    - pointer: "/data/status"
+      in: ["ok", "accepted"]
+```
+
+Motivation: some backends always return `200 OK` and put the real outcome in the body, e.g. `{"code": -101, "message": "invalid user"}`. Without a body predicate, the gateway treats that as success and retry / degradation never trigger.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `success.statusCodes` | Array\<Integer\> | any 2xx | Status codes considered successful. Omitted → any 2xx (200-299). An explicit empty list (`statusCodes: []`) is **rejected at admission** rather than silently meaning "any 2xx" — the same effect as omitting the field with none of the visibility, which would let e.g. a Helm template that renders an empty list widen an auth allow-list unnoticed. |
+| `success.body` | Array\<Object\> | `[]` | JSON-Pointer body predicates, ANDed with the status check and with each other. |
+| `success.body[].pointer` | String | **Required** | RFC 6901 JSON Pointer into the parsed response body, e.g. `/code` or `/data/status`. |
+| `success.body[].equals` / `.notEquals` / `.exists` / `.in` | — | — | Exactly one operator per entry (admission-enforced at deserialize time — more than one, or none, fails to parse). `equals` / `notEquals` / `in` compare as strict `serde_json::Value` — **no type coercion**: `equals: 0` matches JSON `0` but not the string `"0"`. `exists: true/false` checks presence only. `in` takes a non-empty list of values. |
+
+**Non-JSON body → failure, not an error.** When any `success.body` predicate is configured and the response body is not valid JSON (wrong `Content-Type` or unparseable), the response is classified as a **failure** — no panic, no error surfaced to the caller.
+
+**Missing pointer → failure, except for `exists: false`.** When the body IS valid JSON but a predicate's `pointer` resolves to nothing, the predicate fails for `equals`/`notEquals`/`in` — you cannot assert an equality/membership claim about a field that isn't there. The one legitimate exception is `exists: false`, which is defined to *mean* "the pointer is absent" and therefore succeeds in exactly that case. For example, `{pointer: /error, notEquals: true}` against a `200 {"authenticated": false}` body (no `/error` key at all) is a **failure**, not a pass — a business error hiding behind a differently-named field must not be able to slip through a `notEquals` check aimed at a field it doesn't populate.
+
+**`maxResponseBytes` must be raised when using body predicates.** The default cap is 1024 bytes (1 KiB). If `success.body` is non-empty, admission requires `maxResponseBytes >= 4096`; otherwise the resource is rejected with `Accepted=False`. This exists because a body larger than the cap is truncated *before* classification — and a truncated body surfaces as a distinct `ResponseTooLarge` failure, **not** as "the predicate failed". Distinguish the two when debugging: a `ResponseTooLarge` failure means raise `maxResponseBytes`; a predicate failure means the backend's response genuinely did not match.
+
+**Not evaluated by passive health.** Passive health checks (`healthCheck.passive.failureStatusCodes`) still key off the HTTP status only — a business-level error in a 200 body does not trip the connector's health state or its circuit breaker.
 
 ### Retry
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `retry.maxRetries` | Integer | `1` | Maximum retries (not counting the initial call). |
-| `retry.retryDelayMs` | Integer | `100` | Delay between retries in milliseconds. |
-| `retry.retryOnTimeout` | Boolean | `true` | Retry on request timeout. |
-| `retry.retryOnConnectError` | Boolean | `true` | Retry on connection error. |
-| `retry.retryOnStatus` | Array\<Integer\> | `[]` | HTTP status codes that trigger a retry. |
+| `retry.maxRetries` | Integer | `1` | Maximum retries (not counting the initial call). Range `0..=10` — a larger value is rejected at admission (`Accepted=False`). This exists alongside `maxDelayMs`'s ceiling below: an unbounded `maxRetries` (e.g. 200) would still allow tens of minutes of inline `tokio::time::sleep` on a live data-plane request even with a capped per-attempt backoff. |
+| `retry.retryDelayMs` | Integer | `100` | **Base delay of the backoff curve** in milliseconds — not a fixed "retry interval". Under `backoffPolicy: fixed` it *is* the constant delay; under `exponential` (default) it is the first term of the curve. Must be greater than 0. |
+| `retry.backoffPolicy` | Enum | `exponential` | `exponential` \| `fixed`. `exponential`: `delay = min(maxDelayMs, retryDelayMs << (attempt-1))`. `fixed`: `delay = retryDelayMs` (constant every attempt). |
+| `retry.maxDelayMs` | Integer | `1000` | Per-attempt backoff ceiling in milliseconds, applied **before** jitter. Range `1..=10000` — a larger value is rejected at admission (`Accepted=False`). The retry sleep blocks a live client request inline on the data-plane path, so this is a hard safety cap, not a tuning knob for waiting out an outage (that is the health-check / circuit-breaker's job). |
+| `retry.jitter` | Boolean | `true` | Add 50–100% jitter to each backoff delay (`d = uniform(d/2 ..= d)`, applied *after* the `maxDelayMs` cap, so the result never exceeds it). Protects against thundering-herd retries. |
+| `retry.honorRetryAfter` | Boolean | `false` | Opt-in. When the response status is `429` or `503` **and** that status is already listed in `retryOnStatus`, honor the response's `Retry-After` header (both `delta-seconds` and HTTP-date forms) in place of the computed backoff. A parsed value `<= maxDelayMs` is used as this attempt's delay; a value `> maxDelayMs` makes the gateway **stop retrying** and return the backend's response as-is — it does not retry immediately and does not error. An absent or unparseable `Retry-After` falls back to the computed backoff. `honorRetryAfter` changes *when* a retry happens, never *whether* one happens. |
+| `retry.retryOnTimeout` | Boolean | **per-consumer — see below** | Retry on request timeout. |
+| `retry.retryOnConnectError` | Boolean | `true` | Retry on connection error (refused, reset). A connect failure means the request never reached the backend, so retrying is always idempotency-safe — this default is unaffected by the consumer split below. |
+| `retry.retryOnStatus` | Array\<Integer\> | `[]` | HTTP status codes that trigger a retry. Status retry stays opt-in. |
+| `retry.retryOnBodyFailure` | Boolean | `false` | Retry when a `success.body` predicate (see [Success](#success)) classifies the response as a failure. Default off: a business error like `{"code": -101}` will still be `-101` on the tenth attempt — retrying it is pure waste. Enable only when you know the body failure is transient. |
 
 When `retry` is omitted, the webhook fails immediately on the first error.
+
+> **`retryOnTimeout` default changed and is now per-consumer: webhook `false`, ForwardAuth `true`.** A timeout means the outcome is *unknown* — the backend may have already fully processed the request. Webhook calls are overwhelmingly non-idempotent POSTs (send a notification, charge a card, write an audit record), so retrying a timed-out webhook risks double execution — hence `false`. ForwardAuth calls are idempotent authorization checks, where retrying a transient timeout is a genuine availability win — hence `true`. **This is a real behavior change** for any webhook LinkSys that sets a `retry:` block and previously relied on the old unconditional `true` default; an operator can always override the field explicitly. `retryOnConnectError` is unaffected (`true` for both, unchanged) because a connect failure is always safe to retry.
+
+### Templates
+
+Two connection-level fields can be driven by the same per-request template engine used in `request.*` (see [Template variables](#template-variables)) — but with a **much narrower variable allow-list** than `request.*`. Both are compiled and validated at admission; a malformed template, or one that references a disallowed variable type, is rejected with `Accepted=False`.
+
+> ⚠️ **Only `${ctx:...}`, `${clientIp}`, `${matchedHttpRoute:...}`, and `${matchedGrpcRoute:...}` are accepted in `timeoutMsTemplate` / `allowDegradationTemplate`.** `${header:...}`, `${query:...}`, `${cookie:...}`, `${path}`, `${uri}`, `${requestPath}`, `${requestUri}`, `${method}`, and `${secretRef:...}` are all rejected at admission for these two fields specifically (they remain fully allowed in `request.*`). Both fields are security-sensitive: `timeoutMsTemplate` sets the auth-service call deadline, and `allowDegradationTemplate` is forward_auth's fail-open switch. A client-controlled source would let an attacker pin the deadline to a value so small the call always times out (a reliable denial of service), or — combined with `allowDegradation: true` — force the fail-open path directly via a request header, producing a 100% unauthenticated bypass on demand.
+
+```yaml
+timeoutMsTemplate: "${ctx:desired_timeout_ms}"     # falls back to timeoutMs
+allowDegradationTemplate: "${ctx:is_staging}"      # falls back to allowDegradation
+```
+
+**Rule: the template wins when it renders to a parseable value; otherwise fall back to the static field.**
+
+| Parameter | Renders to | Fallback | Notes |
+|-----------|-----------|----------|-------|
+| `timeoutMsTemplate` | `u64` milliseconds | `timeoutMs` | A non-numeric, empty, or below-floor render falls back. The floor is `MIN_OUTBOUND_TIMEOUT_MS` = 50 ms (a render below that is treated the same as zero/empty). The rendered value is **clamped to 60000 ms (60 s)** on the upper end regardless. |
+| `allowDegradationTemplate` | `true` \| `false` | `allowDegradation` | **Strict grammar**: the trimmed, case-insensitive render must equal exactly `true` or `false`. Anything else — `1`, `0`, `yes`, empty — falls back. No numeric or yes/no aliases. |
+
+Every silent fallback increments `edgion_outbound_template_fallback_total{field="timeout_ms"|"allow_degradation"}` — see [Observability metrics](#observability-metrics) below, since the data plane cannot log the fallback via `tracing`.
+
+**Total blocking time.** The retry sleep and the outbound call are both inline on the request path, so the worst-case block is `(effective_timeout × max_attempts) + Σ backoffs`, each term bounded independently: `timeoutMsTemplate` by the 60 s clamp (and, on the low end, the 50 ms floor), backoff by `maxDelayMs` and its 10 s hard ceiling, and `maxRetries` itself by its own 10-attempt ceiling (see [Retry](#retry) above).
+
+Neither field can redirect the outbound connection — there is no templated `target.url` in this release — and, with the variable allow-list above, neither field can be driven by anything the client sends on the request that reaches this call.
+
+### Observability metrics
+
+The webhook connector (and the ForwardAuth plugin, which shares the same `ExternalHttpConnection`) emits two Prometheus counters for outcomes that would otherwise be invisible on the data plane (which cannot log via `tracing`):
+
+| Metric | Labels | Fires when |
+|--------|--------|-----------|
+| `edgion_outbound_template_fallback_total` | `field` ∈ `timeout_ms` \| `allow_degradation` | A `timeoutMsTemplate` / `allowDegradationTemplate` render failed to parse (or, for the timeout field, rendered to zero/empty) and the connection fell back to the static field. |
+| `edgion_outbound_success_predicate_fail_total` | none | A response's status was accepted by `success.statusCodes` but a `success.body` predicate classified it as a failure — the "200 OK but error in the body" case. |
+
+See [Metrics](../observability/metrics.md) for the general Prometheus reference (scrape config, cardinality, Gateway metrics listener).
 
 ### Rate limit
 
@@ -903,14 +986,12 @@ spec:
   type: webhook
   config:
     target: { kind: Service, name: authz, port: 8080 }
-    allowDegradation: false        # required-field failure surfaces statusOnError
-    statusOnError: 503
     request:
       headers:
         origin:
           - name: X-Trace-Id                       # default: skipIfMissing
           - name: X-User-Id
-            presence: required                     # missing → call fails → 503
+            presence: required                     # missing → key_get returns None
           - name: X-Org-Id
             presence: warnIfMissing                # missing → PluginLog alert, continues
 ```
@@ -998,12 +1079,13 @@ spec:
               key: token
               prefix: "Bearer "
     timeoutMs: 3000
-    allowDegradation: false
-    statusOnError: 503
     retry:
       maxRetries: 1
-      retryDelayMs: 100
-      retryOnTimeout: true
+      retryDelayMs: 100          # base delay of the backoff curve, not a fixed interval
+      backoffPolicy: exponential # exponential (default) | fixed
+      maxDelayMs: 1000           # per-attempt ceiling, range 1..=10000
+      jitter: true               # 50-100% jitter, applied after the maxDelayMs cap
+      retryOnTimeout: false      # webhook default; forward_auth defaults to true instead
       retryOnConnectError: true
       retryOnStatus: [502, 503, 504]
     rateLimit:
@@ -1107,8 +1189,8 @@ Verify the Service fields under `target` (`name`/`namespace`/`port`/`kind`): the
 **`Accepted=False` on a `kind` value.**
 Only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, and empty are valid. `ExternalName` and `ServiceImport` are rejected — use a proxy Service instead.
 
-**Required-field error / unexpected `statusOnError`.**
-An `origin` field with `presence: required` was missing from the incoming request, which counts as a webhook failure. Confirm the client actually sends the header/arg/cookie (mind case: headers are case-insensitive, args and cookies are case-sensitive). To degrade instead of failing, set `allowDegradation: true`; to merely log, use `presence: warnIfMissing`.
+**Required-field error / key resolves to nothing.**
+An `origin` field with `presence: required` was missing from the incoming request, which counts as a webhook failure: `key_get` returns `None` and the consuming plugin's own fallback logic decides what happens (e.g. ctx-set leaves the target variable unset). `allowDegradation`/`statusOnError` do **not** apply here — they are inert on the webhook connector (see [Degradation and error handling](#degradation-and-error-handling)). Confirm the client actually sends the header/arg/cookie (mind case: headers are case-insensitive, args and cookies are case-sensitive), or use `presence: warnIfMissing` to merely log instead of failing.
 
 **Template variable resolves to empty.**
 `${ctx:NAME}` returns empty when the variable was never set. Ensure a ctx-set step sets it before the webhook is called, and check the `${type:name}` spelling. To enforce presence, prefer `presence: required` on an `origin` field over a template.
@@ -1279,3 +1361,4 @@ If you run into problems:
 - [mTLS Configuration](./mtls.md)
 - [Redis-backed Rate Limit](../../user-guide/http-route/filters/edgion-plugins/rate-limit-redis.md)
 - [Access Log](../observability/access-log.md)
+- [Metrics](../observability/metrics.md)

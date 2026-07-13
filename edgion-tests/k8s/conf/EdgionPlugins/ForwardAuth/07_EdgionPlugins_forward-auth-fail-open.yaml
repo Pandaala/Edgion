@@ -33,7 +33,7 @@ spec:
           namespace: edgion-default
           port: 30098
         timeoutMs: 2000
+        allowDegradation: true
         decision:
           upstreamHeaders: []
           clientHeaders: []
-          allowDegradation: true

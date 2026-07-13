@@ -42,7 +42,8 @@ spec:
       method:
         template: "GET"
     timeoutMs: 2000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     allowDegradation: false
     maxResponseBytes: 4096
 ---
@@ -112,7 +113,8 @@ spec:
       method:
         template: "GET"
     timeoutMs: 2000
-    successStatusCodes: [200]
+    success:
+      statusCodes: [200]
     allowDegradation: false
     maxResponseBytes: 4096
 ---
