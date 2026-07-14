@@ -111,12 +111,83 @@ The following resource types are not synced to the Gateway via gRPC:
 
 ## Channel security (mTLS)
 
-Both gRPC channels support optional mTLS encryption:
+Both gRPC channels support mTLS encryption:
 
 | Channel | Direction | Configuration field |
 |------|------|---------|
 | **conf_sync** | Controller (server) ↔ Gateway (client) | `conf_sync_security` |
 | **federation** | Center (server) ↔ Controller (client) | `center.security` (client) / `grpc_security` (Center server) |
+
+The conf_sync channel **streams resolved Secrets** (TLS private keys, backend
+credentials) to the data plane, so its identity story is load-bearing, not optional
+hardening. Two ways its certificates come to exist:
+
+- **auto-CA (`conf_sync_security.auto_ca: true`, the shipped Kubernetes default)** — the
+  Controller's embedded CA auto-provisions and rotates everything; no operator cert
+  handling. This is the section below.
+- **file mode (`auto_ca` omitted/false)** — the operator supplies cert/key/ca paths (the
+  `ConfSyncSecurityConfig` structure further down). Hot reload still applies; generation
+  is external.
+
+### Certificate lifecycle architecture (auto-CA)
+
+This is the *design*; operator-facing knobs, the alerting table, and the emergency
+re-key runbook live in
+[`skills/02-features/02-config/00-controller-config.md`](../../02-features/02-config/00-controller-config.md)
+(the single canonical operator source — do not duplicate it here).
+
+**Material.** An embedded CA (rcgen, ECDSA P-256) is persisted in the
+`edgion-conf-sync-ca` Secret (controller-only RBAC). It signs two leaves: a **shared
+gateway client leaf** (the `edgion-conf-sync-certs` Secret every gateway mounts) and a
+**per-replica controller server leaf** (minted in memory, never persisted). Code:
+`edgion-controller/src/services/conf_sync_ca/`.
+
+**Two reconcilers, deliberately split — this is the crux of correctness under HA:**
+
+| Loop | Scope | Job | Why |
+|------|-------|-----|-----|
+| Rotation reconciler (`rotation.rs`) | **leader only** | The single *writer*: rotates both leaves, same-key CA renewal, writes Secrets | Secret writes must be serialized to one writer |
+| Identity sync (`identity_sync.rs`) | **every replica** (NOT leader-gated) | Keeps *this replica's own* serving identity chained to the current root; **read-only** on Secrets | Under `ha_mode: all-serve` every replica serves the API, so every replica must reconcile its own trust anchor — not just the leader |
+
+The per-replica loop mirrors istiod's `watchRootCertAndGenKeyCert` (runs on every pod,
+polls the root, re-signs that pod's own serving cert; istio leader-elects only
+controllers that must not run concurrently, never the cert path). It is what makes
+`auto_ca` safe under **both** `ha_mode` values. A frozen-at-boot server identity on a
+non-leader — which is what this loop prevents — would let a revoked client leaf keep
+authenticating after a re-key. Convergence is **eventual, not instantaneous**: a
+non-leader tears its sessions down when *its own* tick runs (≤ one 60s interval), and a
+tick that is failing is surfaced by `cert_identity_sync_failed` (see the config doc's
+alerting table) — that metric is precisely the signal that revocation has not yet reached
+a pod. The leader-only CA bootstrap is split-brain-safe by construction: `ensure_ca`
+POST-creates and adopts on a 409, so two replicas racing at cold start converge on one
+root.
+
+**Hot reload, both ends, no process restarts.** Controller: an owned TCP accept loop
+feeds tonic `serve_with_incoming_shutdown` from an `ArcSwap<ServerIdentity>`, so the
+listener is never rebound and the identity swaps atomically
+(`conf_sync/conf_server/{tls_identity,grpc_server,cert_watch}.rs`). Gateway: a `notify`
+file-watch (+ 5-min re-stat backstop) rebuilds the client Channel and cancels old streams
+via a generation token (`conf_sync/conf_client/{grpc_client,cert_watch}.rs`).
+
+**Rotation vs. re-key — the security hinge.** Certificates are consumed exactly once, at
+handshake, so swapping the client-CA verifier governs only *future* handshakes.
+
+- **Leaf rotation (same trust root)** → established sessions are **kept**. The peers on
+  them are still authorized; zero-disruption is the point (matches Istio/Envoy SDS, which
+  also let existing connections finish on the old cert).
+- **Root change (re-key — the only true revocation, or a BYO-root swap)** → every
+  controller **tears its existing sessions down**. `ServerIdentityHandle::store()`
+  compares the incoming CA bytes to the held ones and, iff the root changed, bumps a trust
+  generation and cancels a `CancellationToken`; each accepted connection is wrapped in a
+  `TrustScopedStream` that holds the token captured at accept time and fails the socket
+  (`ConnectionAborted`) the instant it is cancelled. Without this, an attacker on an
+  already-open connection with a leaked leaf would keep streaming Secrets forever after a
+  re-key — the client-CA swap alone never re-authenticates a live session. There is
+  deliberately **no** `max_connection_age` backstop: a blanket age cap would recycle every
+  healthy connection (a full relist each time, since gateways share one client-leaf Secret)
+  for no benefit outside a re-key. Emergency re-key is driven by
+  `cicd/deploy/kubernetes/scripts/rekey_conf_sync_ca.sh`, which proves the teardown on
+  every run (holds an old-key session across the re-key and asserts it dies).
 
 ### Configuration structure
 
@@ -199,28 +270,40 @@ center:
 
 | Configuration state | Server (Controller / Center) | Client (Gateway / Controller) |
 |----------|------------------------------|-------------------------------|
-| No security configured | Plaintext gRPC (backward compatible) | Plaintext connection |
-| TLS config + valid certificates | mTLS gRPC | mTLS connection |
-| TLS config + missing certificates | **Refuses to start** (strict mode) | Connection fails, retries with backoff |
+| `auto_ca: true` (K8s default) | mTLS; embedded CA self-provisions + rotates certs | mTLS; `auto_ca` **enforces** mTLS — refuses plaintext |
+| File-mode TLS config + valid certificates | mTLS gRPC | mTLS connection |
+| File-mode TLS config + missing certificates | **Refuses to start** (strict mode) | Connection fails, retries with backoff |
+| No security configured (`auto_ca` off, no certs) | Plaintext gRPC + ERROR + `plaintext_default` metric | Plaintext connection |
 | `skip_tls = true` | Plaintext + ERROR log | Plaintext + ERROR log |
 
-### Shared TLS loading layer
+> The plaintext (no-security) path is observable-but-not-fail-closed for backward
+> compatibility; a proposed flip to fail-close is tracked as a decision in
+> `tasks/todo/conf-sync-plaintext-fail-close.md`.
 
-TLS file reading logic is centralized in `edgion-common/src/grpc_tls.rs`:
+### Shared TLS layer
+
+`edgion-common/src/grpc_tls.rs`:
 
 | Function | Purpose |
 |------|------|
-| `load_server_tls(cfg)` | Read cert/key/ca, return `ServerTlsConfig` |
-| `load_client_tls(cfg)` | Read ca/cert/key, return `ClientTlsConfig` |
+| `load_client_tls(cfg)` | Read ca/cert/key, return `ClientTlsConfig` (file-mode client side) |
+| `validate_identity(cert, key, ca)` | Validate-before-swap gate: chain + key-match check every hot-reload / identity swap runs before installing new material |
+
+> Note: there is intentionally **no** `load_server_tls` builder. The controller server
+> side goes through `ServerIdentity::from_pems` → `validate_identity` → the owned rustls
+> accept loop, so no server-TLS config is ever built without validation. (A former
+> unvalidated `load_server_tls_from_pem` was deleted for exactly this reason.)
 
 ### Implementation locations
 
 | Component | File | Key function |
 |------|------|---------|
-| Shared TLS loading | `common/grpc_tls.rs` | `load_server_tls()` / `load_client_tls()` |
-| conf_sync Server TLS | `controller/conf_sync/conf_server/grpc_server.rs` | `serve_with_shutdown(security: &ConfSyncSecurityConfig)` |
-| conf_sync Client TLS | `gateway/conf_sync/conf_client/grpc_client.rs` | `new(security: &ConfSyncSecurityConfig)` |
-| Controller CLI | `controller/cli/mod.rs` | `start_services(security: ConfSyncSecurityConfig)` |
+| Validate-before-swap gate | `common/grpc_tls.rs` | `validate_identity()` |
+| File-mode client TLS | `common/grpc_tls.rs` | `load_client_tls()` |
+| conf_sync server (accept loop + identity swap) | `controller/conf_sync/conf_server/{grpc_server,tls_identity,cert_watch}.rs` | `serve_with_shutdown(listener, security, tls_handle, ..)`, `ServerIdentityHandle`, `TrustScopedStream` |
+| conf_sync client (hot reload) | `gateway/conf_sync/conf_client/{grpc_client,cert_watch}.rs` | `new(..)`, `reload_client_tls()` |
+| auto-CA lifecycle | `controller/services/conf_sync_ca/{ca,secret_io,provision,rotation,identity_sync,cert_util}.rs` | `provision()`, `rotation` reconciler, `identity_sync` reconciler |
+| Controller CLI wiring | `controller/cli/mod.rs` | `start_services(..)` provisions, sets `global_handle`, starts `identity_sync` unconditionally; `rotation` is wired via `rotation::init` and *started* by the ConfMgr leadership callback (`center.rs`) |
 | Gateway CLI | `gateway/cli/mod.rs` | `create_config_sync_client()` passes `&config.conf_sync_security` |
 | Center Server TLS | `center/cli/mod.rs` | TLS-aware `tonic::transport::Server::builder()` |
 | Federation Client TLS | `controller/fed_sync/fed_client/mod.rs` | `connect_and_run()` uses `config.security` |

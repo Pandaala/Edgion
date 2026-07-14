@@ -19,37 +19,6 @@ const HTTP2_KEEPALIVE_INTERVAL_SECS: u64 = 10;
 /// HTTP/2 keepalive timeout — how long to wait for PING ACK before treating connection as dead (seconds).
 const HTTP2_KEEPALIVE_TIMEOUT_SECS: u64 = 5;
 
-/// Hard upper bound on the lifetime of a single conf_sync HTTP/2 connection.
-///
-/// **Defense in depth, not the primary control.** The primary revocation control is the
-/// trust token ([`tls_identity::ServerIdentityHandle::store`]): a trust-root change kills
-/// every session established under the old root, immediately. This is the belt to that
-/// suspenders — whatever else goes wrong (a bug in the token plumbing, a code path that
-/// forgets to wire it), no session that streams resolved Secrets may live forever without
-/// the peer ever re-proving its identity against the CURRENT client-CA verifier.
-///
-/// 1h: gateways number in the low tens, so one re-handshake per gateway per hour is
-/// nothing (a handshake, and a resumed watch from the client's last `sync_version` — no
-/// full relist storm; tonic sends a GOAWAY first, so the client finishes in-flight RPCs).
-/// Short enough that a lost revocation is bounded by an hour instead of by the pod's
-/// lifetime; long enough that the control plane never churns.
-const MAX_CONNECTION_AGE_SECS: u64 = 3600;
-
-/// Grace period after [`MAX_CONNECTION_AGE_SECS`] before the socket is forcibly aborted.
-///
-/// tonic 0.12's `max_connection_age` only calls hyper's `graceful_shutdown` (GOAWAY, then
-/// wait for open streams to finish) — and a conf_sync `Watch` stream NEVER finishes on its
-/// own, so the GOAWAY alone would let the connection live indefinitely and the "hard upper
-/// bound" would not be a bound at all. tonic 0.12.3 exposes no grace-period knob (verified
-/// against the vendored source: the only builder method is `max_connection_age`), so the
-/// deadline is enforced where we already own the socket — [`TrustScopedStream`] fails the
-/// connection with `ConnectionAborted` at age + grace.
-///
-/// 5m: far more than the round trip a gateway needs to see the GOAWAY, tear down its watch
-/// streams and reconnect, so a healthy client always closes on its own and never sees the
-/// hard abort.
-const MAX_CONNECTION_AGE_GRACE_SECS: u64 = 300;
-
 /// Upper bound on TLS handshakes in flight at once in the owned accept loop.
 ///
 /// What this actually bounds: the number of spawned tasks that are simultaneously
@@ -114,16 +83,19 @@ use super::ConfigSyncServer;
 /// stream on it with it. A same-root leaf rotation cancels nothing, so routine rotation
 /// stays zero-disruption.
 ///
-/// It additionally enforces the hard connection-age deadline (see
-/// [`MAX_CONNECTION_AGE_GRACE_SECS`]).
+/// Revocation is driven ENTIRELY by this trust-token cancellation — deliberately not by a
+/// blanket connection-age limit. A periodic max-age would recycle every healthy connection
+/// forever (each reconnect is a full relist across all kinds, since the gateways share one
+/// client-leaf Secret), permanently undermining the zero-disruption property for zero
+/// benefit in the normal case. The emergency re-key script proves the teardown works on
+/// every re-key (it holds an old-key session open across the re-key and asserts it dies),
+/// so the belt-and-suspenders age cap is not worth the churn.
 struct TrustScopedStream {
     inner: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
     /// Prompt wakeup: registers our waker with the token, so a cancel fails the
     /// connection immediately instead of on its next (possibly never) poll.
     trust_cancelled: Pin<Box<WaitForCancellationFutureOwned>>,
-    /// Hard age bound; fires at MAX_CONNECTION_AGE + grace.
-    age_deadline: Pin<Box<tokio::time::Sleep>>,
-    /// Latched once we have returned the abort error: neither future may be polled
+    /// Latched once we have returned the abort error: the future must not be polled
     /// after completion.
     dead: bool,
 }
@@ -133,15 +105,12 @@ impl TrustScopedStream {
         Self {
             inner,
             trust_cancelled: Box::pin(trust.clone().cancelled_owned()),
-            age_deadline: Box::pin(tokio::time::sleep(Duration::from_secs(
-                MAX_CONNECTION_AGE_SECS + MAX_CONNECTION_AGE_GRACE_SECS,
-            ))),
             dead: false,
         }
     }
 
-    /// `Some(err)` once this connection must die (trust root replaced, or the hard age
-    /// bound elapsed). Registers the waker on both futures while it is still alive.
+    /// `Some(err)` once this connection must die (the trust root was replaced). Registers
+    /// the waker on the cancellation future while the connection is still alive.
     fn poll_alive(&mut self, cx: &mut Context<'_>) -> Option<io::Error> {
         if self.dead {
             return Some(aborted("conf_sync connection revoked"));
@@ -151,10 +120,6 @@ impl TrustScopedStream {
             return Some(aborted(
                 "conf_sync trust root changed; connections established under the previous root are revoked",
             ));
-        }
-        if self.age_deadline.as_mut().poll(cx).is_ready() {
-            self.dead = true;
-            return Some(aborted("conf_sync connection exceeded its maximum age"));
         }
         None
     }
@@ -296,15 +261,13 @@ impl ConfigSyncGrpcServer {
         tls_handle: Option<Arc<crate::conf_sync::conf_server::tls_identity::ServerIdentityHandle>>,
         shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> anyhow::Result<()> {
+        // No `max_connection_age`: revocation on a trust-root change is driven precisely
+        // by TrustScopedStream (the re-key script proves it on every re-key), so a blanket
+        // age cap would only churn healthy connections — each reconnect is a full relist
+        // across all kinds — for no benefit in the normal case. See TrustScopedStream.
         let mut builder = tonic::transport::Server::builder()
             .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)))
-            // Defense in depth: no conf_sync session (this channel streams resolved
-            // Secrets) may outlive a bounded window without the peer re-handshaking
-            // against the CURRENT client-CA verifier. See MAX_CONNECTION_AGE_SECS; the
-            // hard cutoff at age + grace lives in TrustScopedStream, because tonic's
-            // graceful GOAWAY alone never closes a connection carrying a live Watch.
-            .max_connection_age(Duration::from_secs(MAX_CONNECTION_AGE_SECS));
+            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
 
         match tls_handle {
             Some(handle) => {

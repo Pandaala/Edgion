@@ -395,9 +395,10 @@ window) is the only true revocation.
   credentials) forever. So each controller scopes every accepted connection to the trust
   root that authenticated it and **cancels those connections when the root changes**
   (`tls_identity.rs` trust generation → `grpc_server.rs` `TrustScopedStream`). Gateways
-  reconnect and relist; the data plane keeps serving throughout. As a backstop, no
-  conf_sync connection may live longer than `max_connection_age` (1h) + a 5m grace,
-  regardless.
+  reconnect and relist; the data plane keeps serving throughout. There is deliberately no
+  blanket connection-age cap: it would recycle every healthy connection (a full relist
+  each time, since all gateways share one client-leaf Secret) for no benefit outside a
+  re-key. The re-key script proves the teardown on every re-key instead.
 
   A leader failover happening during or immediately
   after the re-key also self-heals within one tick: the reconciler's
