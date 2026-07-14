@@ -40,9 +40,17 @@ pub fn leaf_needs_rewrite(
 
 /// Ensure the CA, adopt-or-(re)provision the gateway-client leaf Secret, and mint
 /// the controller-server cert in memory. Idempotent (safe to run on every
-/// startup; the CA SSA-create adopts on a 409 race). TTLs come from
+/// startup; the CA POST-create adopts on a 409 race). TTLs come from
 /// `rotation.leaf_ttl`/`rotation.ca_ttl`. The in-memory server leaf is minted
 /// fresh on every call regardless of the leaf-Secret adopt decision.
+///
+/// **This is the deliberate bootstrap exception to "the leader is the single
+/// writer"**: `cli/mod.rs` calls it on EVERY replica at startup, before leadership
+/// is known, because a replica cannot serve conf_sync mTLS until it holds a root and
+/// must not wait for an election to start. The CA half is race-safe by construction
+/// (POST + 409-adopt). The leaf half is a forced apply whose concurrent-boot race is
+/// benign (churn, not compromise) and is narrowed by the re-read below — see
+/// `secret_io::ensure_ca` for the full argument.
 pub async fn provision(
     client: Client,
     ns: &str,
@@ -61,9 +69,43 @@ pub async fn provision(
         rotation.emergency_rotate_below.as_time(),
         now,
     ) {
-        let client_leaf = ca.sign_client(rotation.leaf_ttl.as_time())?;
-        write_leaf(&secret_api, ns, &client_leaf, ca.ca_cert_pem()).await?;
-        tracing::info!(component = "conf_sync_ca", ns = %ns, "gateway leaf Secret (re)provisioned");
+        // Re-read once, immediately before writing.
+        //
+        // `provision()` runs on EVERY replica at startup (before leadership is known),
+        // and `write_leaf` is a FORCED apply — last-writer-wins. Two replicas booting
+        // concurrently into a "needs rewrite" state (leaf Secret missing or inside its
+        // emergency window: a rolling restart right after a re-key, a node drain) would
+        // each mint a different leaf and force-apply it, causing two consecutive gateway
+        // Secret swaps and therefore two fleet-wide conf_sync channel rebuilds — exactly
+        // while an operator is trying to read whether the re-key landed.
+        //
+        // Between our first read above and here we have done a CA round-trip and, on the
+        // decision path, nothing else; the other replica has usually landed its write in
+        // that gap. Re-running the same check on fresh bytes lets us adopt its healthy
+        // leaf instead of clobbering it.
+        //
+        // This is a cheap read-then-act NARROWING, not a lock: it shrinks the race window
+        // from "the whole provision() prologue" to "one GET + one sign", it does not close
+        // it, and it does not need to — a double write is churn, never a split trust
+        // anchor (both leaves chain to the single 409-arbitrated root; see
+        // `secret_io::ensure_ca`).
+        let fresh = read_leaf(&secret_api).await?;
+        if !leaf_needs_rewrite(
+            fresh.as_ref().map(|(c, k, _)| (c.as_str(), k.as_str())),
+            ca.ca_cert_pem(),
+            rotation.emergency_rotate_below.as_time(),
+            time::OffsetDateTime::now_utc(),
+        ) {
+            tracing::info!(
+                component = "conf_sync_ca",
+                ns = %ns,
+                "another replica provisioned a healthy gateway leaf Secret concurrently; adopting it"
+            );
+        } else {
+            let client_leaf = ca.sign_client(rotation.leaf_ttl.as_time())?;
+            write_leaf(&secret_api, ns, &client_leaf, ca.ca_cert_pem()).await?;
+            tracing::info!(component = "conf_sync_ca", ns = %ns, "gateway leaf Secret (re)provisioned");
+        }
     } else {
         tracing::info!(component = "conf_sync_ca", ns = %ns, "existing gateway leaf Secret adopted");
     }

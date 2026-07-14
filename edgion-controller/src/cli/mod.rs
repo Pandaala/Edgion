@@ -256,6 +256,15 @@ impl EdgionControllerCli {
             }
         }
 
+        // Inputs for the per-replica server-identity reconciler, captured in the
+        // auto_ca branch below and consumed right after `global_handle().set(..)`.
+        let mut auto_ca_identity_sync: Option<(
+            kube::Client,
+            String,
+            Vec<String>,
+            edgion_common::conf_sync::config::ConfSyncRotationConfig,
+        )> = None;
+
         let tls_handle: Option<Arc<ServerIdentityHandle>> = if security.auto_ca {
             // ns/sans were already computed once by the caller (`run_after_logging`)
             // so `rotation::init` could run before the ConfMgr leadership spawn
@@ -266,16 +275,18 @@ impl EdgionControllerCli {
                 .expect("auto_ca_ns_sans is Some whenever security.auto_ca is set (computed by the caller)");
             let client = kube::Client::try_default().await?;
             let rotation = security.rotation.clone().unwrap_or_default();
-            let id = crate::services::conf_sync_ca::provision(client, &ns, sans, &rotation).await?;
+            let id = crate::services::conf_sync_ca::provision(client.clone(), &ns, sans.clone(), &rotation).await?;
             tracing::info!(
                 component = COMPONENT_EDGION_CONTROLLER,
                 "conf_sync mTLS enabled for gRPC server (auto-CA, in-memory server cert)"
             );
-            Some(Arc::new(ServerIdentityHandle::new(ServerIdentity::from_pems(
+            let h = Arc::new(ServerIdentityHandle::new(ServerIdentity::from_pems(
                 &id.cert_pem,
                 id.key_pem.as_str(),
                 &id.ca_cert_pem,
-            )?)))
+            )?));
+            auto_ca_identity_sync = Some((client, ns, sans, rotation));
+            Some(h)
         } else if let Some(tls) = security.resolve_active_tls().filter(|t| !t.skip_tls) {
             let cert = tokio::fs::read_to_string(tls.cert_path()).await?;
             let key = tokio::fs::read_to_string(tls.key_path()).await?;
@@ -303,6 +314,18 @@ impl EdgionControllerCli {
         };
         if let Some(h) = &tls_handle {
             let _ = global_handle().set(h.clone());
+        }
+
+        // Per-replica server-identity reconciler (auto_ca only). Started
+        // UNCONDITIONALLY — leadership is deliberately NOT involved. Under
+        // `ha_mode: all-serve` every replica serves the conf_sync API (which
+        // streams resolved Secrets), so every replica must keep its own served
+        // leaf AND its client-CA verifier in sync with the current root, or an
+        // emergency CA re-key never revokes anything on the non-leaders. Mirrors
+        // istiod's `watchRootCertAndGenKeyCert`. Read-only on Secrets; the only
+        // mutation is this process's own in-memory identity handle.
+        if let Some((client, ns, sans, rotation)) = auto_ca_identity_sync {
+            crate::services::conf_sync_ca::start_identity_sync(client, ns, sans, rotation, grpc_shutdown_token.clone());
         }
 
         let grpc_listener = tokio::net::TcpListener::bind(grpc_addr).await?;

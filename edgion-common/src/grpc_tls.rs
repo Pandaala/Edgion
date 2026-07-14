@@ -2,30 +2,6 @@
 
 use crate::conf_sync::config::ConfSyncTlsConfig;
 
-/// Load server TLS config from certificate files.
-///
-/// Returns error if any file is missing or invalid — caller must not start the listener.
-pub async fn load_server_tls(cfg: &ConfSyncTlsConfig) -> anyhow::Result<tonic::transport::ServerTlsConfig> {
-    cfg.validate()?;
-    let cert_path = cfg.cert_path();
-    let key_path = cfg.key_path();
-    let ca_path = cfg.ca_path();
-
-    let cert = tokio::fs::read(&cert_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read server cert {:?}: {}", cert_path, e))?;
-    let key = tokio::fs::read(&key_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read server key {:?}: {}", key_path, e))?;
-    let ca = tokio::fs::read(&ca_path)
-        .await
-        .map_err(|e| anyhow::anyhow!("Failed to read CA cert {:?}: {}", ca_path, e))?;
-
-    Ok(tonic::transport::ServerTlsConfig::new()
-        .identity(tonic::transport::Identity::from_pem(cert, key))
-        .client_ca_root(tonic::transport::Certificate::from_pem(ca)))
-}
-
 /// Load client TLS config from certificate files.
 ///
 /// Returns error if any file is missing or invalid — caller must not connect.
@@ -50,13 +26,13 @@ pub async fn load_client_tls(cfg: &ConfSyncTlsConfig) -> anyhow::Result<tonic::t
         .identity(tonic::transport::Identity::from_pem(cert, key)))
 }
 
-/// Build a server TLS config from in-memory PEM bytes (used by the auto-CA path,
-/// which mints the controller-server cert in memory rather than mounting files).
-pub fn load_server_tls_from_pem(cert_pem: &[u8], key_pem: &[u8], ca_pem: &[u8]) -> tonic::transport::ServerTlsConfig {
-    tonic::transport::ServerTlsConfig::new()
-        .identity(tonic::transport::Identity::from_pem(cert_pem, key_pem))
-        .client_ca_root(tonic::transport::Certificate::from_pem(ca_pem))
-}
+// NOTE: there is deliberately NO server-side TLS builder here. The controller's
+// conf_sync server owns its own rustls accept loop and builds every serving
+// config through `ServerIdentity::from_pems`, which runs `validate_identity`
+// (below) first. The former `load_server_tls` / `load_server_tls_from_pem`
+// helpers built a SERVING config with no validation at all — exactly the
+// unvalidated-swap path the design forbids — and had no callers left; they were
+// removed rather than left as a trap. `load_client_tls` above is live.
 
 /// Validate a leaf identity before hot-swapping it into a live TLS config
 /// (spec §6 Task 1 item 3). Checks: PEMs parse; leaf within validity NOW;
@@ -101,20 +77,6 @@ pub fn validate_identity(cert_pem: &[u8], key_pem: &[u8], ca_pem: &[u8]) -> anyh
         anyhow::bail!("cannot verify private key matches certificate: signing key does not expose its public key");
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // Minimal valid PEMs are not needed: this constructor does not parse/validate
-    // eagerly (tonic defers to handshake). We assert it builds without panicking
-    // and returns the expected type.
-    #[test]
-    fn from_pem_builders_construct() {
-        let dummy = b"-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n";
-        let _s: tonic::transport::ServerTlsConfig = load_server_tls_from_pem(dummy, dummy, dummy);
-    }
 }
 
 #[cfg(test)]

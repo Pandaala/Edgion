@@ -3,15 +3,90 @@
 //! Implements the ConfigSync service using `ConfigSyncServer` and a provider
 //! pattern so the gRPC layer always uses the latest server instance after reload.
 
+use std::future::Future;
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio_util::sync::CancellationToken;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio_util::sync::{CancellationToken, WaitForCancellationFutureOwned};
+use tonic::transport::server::Connected;
 use tonic::{Request, Response, Status};
 
 /// HTTP/2 keepalive interval — how often to send PING frames (seconds).
 const HTTP2_KEEPALIVE_INTERVAL_SECS: u64 = 10;
 /// HTTP/2 keepalive timeout — how long to wait for PING ACK before treating connection as dead (seconds).
 const HTTP2_KEEPALIVE_TIMEOUT_SECS: u64 = 5;
+
+/// Hard upper bound on the lifetime of a single conf_sync HTTP/2 connection.
+///
+/// **Defense in depth, not the primary control.** The primary revocation control is the
+/// trust token ([`tls_identity::ServerIdentityHandle::store`]): a trust-root change kills
+/// every session established under the old root, immediately. This is the belt to that
+/// suspenders — whatever else goes wrong (a bug in the token plumbing, a code path that
+/// forgets to wire it), no session that streams resolved Secrets may live forever without
+/// the peer ever re-proving its identity against the CURRENT client-CA verifier.
+///
+/// 1h: gateways number in the low tens, so one re-handshake per gateway per hour is
+/// nothing (a handshake, and a resumed watch from the client's last `sync_version` — no
+/// full relist storm; tonic sends a GOAWAY first, so the client finishes in-flight RPCs).
+/// Short enough that a lost revocation is bounded by an hour instead of by the pod's
+/// lifetime; long enough that the control plane never churns.
+const MAX_CONNECTION_AGE_SECS: u64 = 3600;
+
+/// Grace period after [`MAX_CONNECTION_AGE_SECS`] before the socket is forcibly aborted.
+///
+/// tonic 0.12's `max_connection_age` only calls hyper's `graceful_shutdown` (GOAWAY, then
+/// wait for open streams to finish) — and a conf_sync `Watch` stream NEVER finishes on its
+/// own, so the GOAWAY alone would let the connection live indefinitely and the "hard upper
+/// bound" would not be a bound at all. tonic 0.12.3 exposes no grace-period knob (verified
+/// against the vendored source: the only builder method is `max_connection_age`), so the
+/// deadline is enforced where we already own the socket — [`TrustScopedStream`] fails the
+/// connection with `ConnectionAborted` at age + grace.
+///
+/// 5m: far more than the round trip a gateway needs to see the GOAWAY, tear down its watch
+/// streams and reconnect, so a healthy client always closes on its own and never sees the
+/// hard abort.
+const MAX_CONNECTION_AGE_GRACE_SECS: u64 = 300;
+
+/// Upper bound on TLS handshakes in flight at once in the owned accept loop.
+///
+/// What this actually bounds: the number of spawned tasks that are simultaneously
+/// **(a) performing a TLS handshake, or (b) waiting to hand the finished stream to
+/// tonic over `tx`**. It is a **backpressure bound, not a connection limit**:
+/// legitimate conf_sync peers are gateway replicas, which number in the low tens,
+/// and both phases are time-bounded (10s handshake timeout,
+/// [`TLS_HANDOFF_TIMEOUT_SECS`] handoff timeout). 256 is therefore orders of
+/// magnitude above any healthy steady state — it exists purely so that a
+/// pathological case (a flood of half-open TLS clients) cannot spawn unbounded
+/// tasks and leak their sockets. Once saturated, the loop stops calling `accept()`
+/// and the burst waits in the kernel backlog.
+///
+/// The permit alone is NOT sufficient to survive a wedged consumer: because it is
+/// held across the `tx.send(..)` handoff, an unbounded send on a full channel would
+/// pin permits forever and, at 256 of them, stop `accept()` **permanently** — no
+/// gateway could ever (re)connect. That is why the handoff is time-bounded; see
+/// [`TLS_HANDOFF_TIMEOUT_SECS`].
+const MAX_INFLIGHT_HANDSHAKES: usize = 256;
+
+/// Upper bound on how long a completed TLS handshake may wait to be handed to the
+/// tonic consumer over the bounded (64-slot) `tx` channel.
+///
+/// Without it, `tx.send(..)` is an **unbounded** wait whenever the channel is full
+/// and the consumer is not draining it. Since the handshake permit is held across
+/// the send, a wedged consumer would convert a leaky failure into a fatal one: 256
+/// stuck senders exhaust [`MAX_INFLIGHT_HANDSHAKES`] and the accept loop stalls for
+/// good. With the timeout, the failure degrades to what it should be — connections
+/// are DROPPED (and counted via `tls_handshake_failed`) while the accept loop keeps
+/// breathing and recovers the instant the consumer drains.
+///
+/// 30s: comfortably longer than any legitimate scheduling hiccup on a busy runtime
+/// (tonic pulls from the channel as fast as it can spawn connection tasks, so a
+/// healthy handoff is sub-millisecond), and shorter than the gateway's own connect
+/// deadline — a client that has been waiting this long has given up anyway, so the
+/// stream we would hand over is already worthless.
+const TLS_HANDOFF_TIMEOUT_SECS: u64 = 30;
 
 use crate::conf_mgr::sync_runtime::metrics::reload_metrics;
 use edgion_common::conf_sync::config::ConfSyncSecurityConfig;
@@ -23,6 +98,117 @@ use edgion_common::conf_sync::proto::{
 use edgion_resources::{WATCH_ERR_SERVER_ID_MISMATCH, WATCH_ERR_SERVER_RELOAD};
 
 use super::ConfigSyncServer;
+
+/// A conf_sync TLS connection scoped to the trust root that authenticated it.
+///
+/// Certificates are consumed exactly once, at handshake. Swapping the client-CA verifier
+/// therefore governs FUTURE handshakes only — an already-established HTTP/2 connection
+/// keeps issuing `List`/`Watch` RPCs (and keeps receiving the resolved-Secret stream)
+/// without ever re-authenticating. After an emergency CA re-key that is precisely the
+/// attacker's connection.
+///
+/// This wrapper carries the trust token captured **at accept time** and turns the whole
+/// stream into a dead socket (`ConnectionAborted`) the moment that token is cancelled —
+/// which [`super::tls_identity::ServerIdentityHandle::store`] does if and only if the
+/// trust ROOT changed. hyper sees the I/O error and drops the connection, taking every
+/// stream on it with it. A same-root leaf rotation cancels nothing, so routine rotation
+/// stays zero-disruption.
+///
+/// It additionally enforces the hard connection-age deadline (see
+/// [`MAX_CONNECTION_AGE_GRACE_SECS`]).
+struct TrustScopedStream {
+    inner: tokio_rustls::server::TlsStream<tokio::net::TcpStream>,
+    /// Prompt wakeup: registers our waker with the token, so a cancel fails the
+    /// connection immediately instead of on its next (possibly never) poll.
+    trust_cancelled: Pin<Box<WaitForCancellationFutureOwned>>,
+    /// Hard age bound; fires at MAX_CONNECTION_AGE + grace.
+    age_deadline: Pin<Box<tokio::time::Sleep>>,
+    /// Latched once we have returned the abort error: neither future may be polled
+    /// after completion.
+    dead: bool,
+}
+
+impl TrustScopedStream {
+    fn new(inner: tokio_rustls::server::TlsStream<tokio::net::TcpStream>, trust: &CancellationToken) -> Self {
+        Self {
+            inner,
+            trust_cancelled: Box::pin(trust.clone().cancelled_owned()),
+            age_deadline: Box::pin(tokio::time::sleep(Duration::from_secs(
+                MAX_CONNECTION_AGE_SECS + MAX_CONNECTION_AGE_GRACE_SECS,
+            ))),
+            dead: false,
+        }
+    }
+
+    /// `Some(err)` once this connection must die (trust root replaced, or the hard age
+    /// bound elapsed). Registers the waker on both futures while it is still alive.
+    fn poll_alive(&mut self, cx: &mut Context<'_>) -> Option<io::Error> {
+        if self.dead {
+            return Some(aborted("conf_sync connection revoked"));
+        }
+        if self.trust_cancelled.as_mut().poll(cx).is_ready() {
+            self.dead = true;
+            return Some(aborted(
+                "conf_sync trust root changed; connections established under the previous root are revoked",
+            ));
+        }
+        if self.age_deadline.as_mut().poll(cx).is_ready() {
+            self.dead = true;
+            return Some(aborted("conf_sync connection exceeded its maximum age"));
+        }
+        None
+    }
+}
+
+fn aborted(msg: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::ConnectionAborted, msg)
+}
+
+impl AsyncRead for TrustScopedStream {
+    fn poll_read(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &mut ReadBuf<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        if let Some(e) = this.poll_alive(cx) {
+            return Poll::Ready(Err(e));
+        }
+        Pin::new(&mut this.inner).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for TrustScopedStream {
+    fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        if let Some(e) = this.poll_alive(cx) {
+            return Poll::Ready(Err(e));
+        }
+        Pin::new(&mut this.inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        if let Some(e) = this.poll_alive(cx) {
+            return Poll::Ready(Err(e));
+        }
+        Pin::new(&mut this.inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        if let Some(e) = this.poll_alive(cx) {
+            return Poll::Ready(Err(e));
+        }
+        Pin::new(&mut this.inner).poll_shutdown(cx)
+    }
+}
+
+impl Connected for TrustScopedStream {
+    // Mirror the inner TLS stream's ConnectInfo verbatim so tonic request extensions
+    // (peer certificates, peer address) are unchanged by the wrapper.
+    type ConnectInfo = <tokio_rustls::server::TlsStream<tokio::net::TcpStream> as Connected>::ConnectInfo;
+
+    fn connect_info(&self) -> Self::ConnectInfo {
+        self.inner.connect_info()
+    }
+}
 
 /// Provider trait for dynamically obtaining ConfigSyncServer
 ///
@@ -112,7 +298,13 @@ impl ConfigSyncGrpcServer {
     ) -> anyhow::Result<()> {
         let mut builder = tonic::transport::Server::builder()
             .http2_keepalive_interval(Some(Duration::from_secs(HTTP2_KEEPALIVE_INTERVAL_SECS)))
-            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)));
+            .http2_keepalive_timeout(Some(Duration::from_secs(HTTP2_KEEPALIVE_TIMEOUT_SECS)))
+            // Defense in depth: no conf_sync session (this channel streams resolved
+            // Secrets) may outlive a bounded window without the peer re-handshaking
+            // against the CURRENT client-CA verifier. See MAX_CONNECTION_AGE_SECS; the
+            // hard cutoff at age + grace lives in TrustScopedStream, because tonic's
+            // graceful GOAWAY alone never closes a connection carrying a live Watch.
+            .max_connection_age(Duration::from_secs(MAX_CONNECTION_AGE_SECS));
 
         match tls_handle {
             Some(handle) => {
@@ -123,12 +315,27 @@ impl ConfigSyncGrpcServer {
                     component = "grpc_server",
                     "conf_sync mTLS enabled (hot-reloadable accept loop)"
                 );
-                let (tx, rx) = tokio::sync::mpsc::channel::<
-                    Result<tokio_rustls::server::TlsStream<tokio::net::TcpStream>, std::io::Error>,
-                >(64);
+                let (tx, rx) = tokio::sync::mpsc::channel::<Result<TrustScopedStream, std::io::Error>>(64);
                 let accept_shutdown = self.shutdown_token.clone();
+                let handshake_slots = Arc::new(tokio::sync::Semaphore::new(MAX_INFLIGHT_HANDSHAKES));
                 tokio::spawn(async move {
                     loop {
+                        // Take a handshake slot BEFORE accepting. When all
+                        // MAX_INFLIGHT_HANDSHAKES slots are held we simply stop calling
+                        // accept(), so the pressure lands in the kernel accept backlog
+                        // instead of in an unbounded pile of spawned tasks holding
+                        // sockets. This *pauses* accepting; it never drops a connection.
+                        // The acquire sits inside the shutdown select! so cancellation
+                        // still breaks the loop promptly even while saturated.
+                        let permit = tokio::select! {
+                            _ = accept_shutdown.cancelled() => break,
+                            p = handshake_slots.clone().acquire_owned() => match p {
+                                Ok(p) => p,
+                                // The semaphore is never closed; treat it as a fatal
+                                // invariant break rather than spinning.
+                                Err(_) => break,
+                            },
+                        };
                         tokio::select! {
                             _ = accept_shutdown.cancelled() => break,
                             accepted = listener.accept() => {
@@ -136,6 +343,7 @@ impl ConfigSyncGrpcServer {
                                     Ok(v) => v,
                                     Err(e) => {
                                         // Transient accept errors (e.g. EMFILE) must not kill the loop.
+                                        // `permit` is released here (end of scope) — no slot leak.
                                         tracing::warn!(component = "grpc_server", error = %e, "conf_sync accept error, retrying");
                                         tokio::time::sleep(Duration::from_millis(100)).await;
                                         continue;
@@ -144,15 +352,56 @@ impl ConfigSyncGrpcServer {
                                 // tonic's serve_with_incoming discards Server TCP settings; restore nodelay.
                                 let _ = tcp.set_nodelay(true);
                                 let acceptor = tokio_rustls::TlsAcceptor::from(handle.load().config.clone());
+                                // Capture the trust token that governs the root we are about to
+                                // authenticate this peer against. Taken BEFORE the handshake, so a
+                                // re-key that lands mid-handshake cancels this connection too
+                                // (the token is already cancelled when the stream is built, and
+                                // TrustScopedStream fails on its first poll).
+                                let trust = handle.trust_token();
                                 let tx = tx.clone();
+                                let handoff_shutdown = accept_shutdown.clone();
                                 tokio::spawn(async move {
+                                    // Held until the handshake resolves and its result has been
+                                    // handed off (or the handoff timed out), then dropped, freeing
+                                    // the slot. The handoff MUST stay time-bounded or this permit
+                                    // becomes a permanent hostage of a wedged consumer — see
+                                    // TLS_HANDOFF_TIMEOUT_SECS.
+                                    let _permit = permit;
                                     match tokio::time::timeout(Duration::from_secs(10), acceptor.accept(tcp)).await {
                                         Ok(Ok(tls)) => {
-                                            edgion_common::observe::system_metrics::clear_system_error(
-                                                edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
-                                                edgion_common::observe::system_metrics::reasons::TLS_HANDSHAKE_FAILED,
-                                            );
-                                            let _ = tx.send(Ok(tls)).await;
+                                            // The stream tonic gets dies the moment `trust` is
+                                            // cancelled (a trust-ROOT change) — that, not the
+                                            // verifier swap alone, is what revokes a leaked leaf
+                                            // whose connection is already open.
+                                            let scoped = TrustScopedStream::new(tls, &trust);
+                                            let handoff = tokio::select! {
+                                                // Graceful shutdown: the tonic consumer is going
+                                                // away, so a pending send would otherwise sit for
+                                                // the full 30s and then report a spurious
+                                                // TLS_HANDSHAKE_FAILED on a perfectly healthy exit.
+                                                _ = handoff_shutdown.cancelled() => None,
+                                                r = tokio::time::timeout(
+                                                    Duration::from_secs(TLS_HANDOFF_TIMEOUT_SECS),
+                                                    tx.send(Ok(scoped)),
+                                                ) => Some(r),
+                                            };
+                                            match handoff {
+                                                // Handed off: the connection is tonic's now.
+                                                Some(Ok(Ok(()))) => {
+                                                    edgion_common::observe::system_metrics::clear_system_error(
+                                                        edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
+                                                        edgion_common::observe::system_metrics::reasons::TLS_HANDSHAKE_FAILED,
+                                                    );
+                                                }
+                                                // Receiver gone = the tonic server stopped (shutdown).
+                                                // Not an error condition worth marking.
+                                                Some(Ok(Err(_))) => {}
+                                                // Consumer wedged/backlogged for 30s: DROP this
+                                                // connection rather than hold the permit forever.
+                                                Some(Err(_)) => warn_handoff_timeout(peer),
+                                                // Shutting down: drop the connection silently.
+                                                None => {}
+                                            }
                                         }
                                         Ok(Err(e)) => {
                                             // NEVER forward as Err: an Err item terminates the whole tonic server.
@@ -213,6 +462,35 @@ fn warn_handshake_timeout(peer: std::net::SocketAddr) {
         tracing::warn!(component = "grpc_server", peer = %peer, "conf_sync TLS handshake timed out (10s)");
     } else {
         tracing::debug!(component = "grpc_server", peer = %peer, "conf_sync TLS handshake timed out (10s)");
+    }
+    edgion_common::observe::system_metrics::mark_system_error(
+        edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
+        edgion_common::observe::system_metrics::reasons::TLS_HANDSHAKE_FAILED,
+    );
+}
+
+/// Rate-limited WARN (at most once per minute; DEBUG otherwise) for a successfully
+/// handshaked connection that could not be handed to the tonic consumer within
+/// [`TLS_HANDOFF_TIMEOUT_SECS`], plus the same system-error mark as a handshake
+/// failure — from the peer's point of view the outcome is identical (the connection
+/// is dropped), and the operator response is the same (look at conf_sync server
+/// health). The connection is dropped and the handshake permit released, which is
+/// what keeps the accept loop alive under a wedged/backlogged consumer.
+fn warn_handoff_timeout(peer: std::net::SocketAddr) {
+    if should_warn_handshake_failure() {
+        tracing::warn!(
+            component = "grpc_server",
+            peer = %peer,
+            timeout_secs = TLS_HANDOFF_TIMEOUT_SECS,
+            "conf_sync TLS connection handoff timed out (tonic consumer not draining); dropping the connection"
+        );
+    } else {
+        tracing::debug!(
+            component = "grpc_server",
+            peer = %peer,
+            timeout_secs = TLS_HANDOFF_TIMEOUT_SECS,
+            "conf_sync TLS connection handoff timed out; dropping the connection"
+        );
     }
     edgion_common::observe::system_metrics::mark_system_error(
         edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
@@ -805,45 +1083,34 @@ mod tests {
         });
     }
 
-    #[tokio::test]
-    async fn tls_accept_loop_hot_swaps_identity_without_dropping_streams() {
-        use crate::conf_sync::conf_server::tls_identity::{ServerIdentity, ServerIdentityHandle};
-        use crate::services::conf_sync_ca::Ca;
-        use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as GrpcClient;
-        use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
+    use crate::conf_sync::conf_server::tls_identity::{ServerIdentity, ServerIdentityHandle};
+    use crate::services::conf_sync_ca::Ca;
+    use edgion_common::conf_sync::proto::config_sync_client::ConfigSyncClient as GrpcClient;
+    use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
 
-        install_test_crypto_provider();
+    fn client_tls(ca: &Ca, leaf: &crate::services::conf_sync_ca::LeafPem) -> ClientTlsConfig {
+        ClientTlsConfig::new()
+            .ca_certificate(Certificate::from_pem(ca.ca_cert_pem()))
+            .identity(Identity::from_pem(&leaf.cert_pem, leaf.key_pem.as_str()))
+            .domain_name("localhost")
+    }
 
-        fn client_tls(ca: &Ca, leaf: &crate::services::conf_sync_ca::LeafPem) -> ClientTlsConfig {
-            ClientTlsConfig::new()
-                .ca_certificate(Certificate::from_pem(ca.ca_cert_pem()))
-                .identity(Identity::from_pem(&leaf.cert_pem, leaf.key_pem.as_str()))
-                .domain_name("localhost")
-        }
-        async fn connect(
-            addr: std::net::SocketAddr,
-            tls: ClientTlsConfig,
-        ) -> anyhow::Result<GrpcClient<tonic::transport::Channel>> {
-            let ch = Endpoint::from_shared(format!("https://localhost:{}", addr.port()))?
-                .tls_config(tls)?
-                .connect()
-                .await?;
-            Ok(GrpcClient::new(ch))
-        }
+    async fn connect(
+        addr: std::net::SocketAddr,
+        tls: ClientTlsConfig,
+    ) -> anyhow::Result<GrpcClient<tonic::transport::Channel>> {
+        let ch = Endpoint::from_shared(format!("https://localhost:{}", addr.port()))?
+            .tls_config(tls)?
+            .connect()
+            .await?;
+        Ok(GrpcClient::new(ch))
+    }
 
-        // CA "A" identity
-        let ca_a = Ca::generate_root(time::Duration::days(30)).unwrap();
-        let server_a = ca_a
-            .sign_server(&["localhost".to_string()], time::Duration::days(7))
-            .unwrap();
-        let client_a = ca_a.sign_client(time::Duration::days(7)).unwrap();
-        let handle = std::sync::Arc::new(ServerIdentityHandle::new(
-            ServerIdentity::from_pems(&server_a.cert_pem, &server_a.key_pem, ca_a.ca_cert_pem()).unwrap(),
-        ));
-
-        // Server on an ephemeral port with the mock provider
-        let server = std::sync::Arc::new(ConfigSyncServer::new());
-        let provider = std::sync::Arc::new(MockConfigSyncProvider::new(server));
+    /// Spin up the owned TLS accept loop on an ephemeral port with a mock provider.
+    /// Returns the address and the shutdown token.
+    async fn spawn_tls_server(handle: Arc<ServerIdentityHandle>) -> (std::net::SocketAddr, CancellationToken) {
+        let server = Arc::new(ConfigSyncServer::new());
+        let provider = Arc::new(MockConfigSyncProvider::new(server));
         let token = CancellationToken::new();
         let grpc = ConfigSyncGrpcServer::new(provider, token.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -853,17 +1120,34 @@ mod tests {
             let t = token.clone();
             async move { t.cancelled().await }
         };
-        let h = handle.clone();
         tokio::spawn(async move {
-            grpc.serve_with_shutdown(listener, &security, Some(h), shutdown)
+            grpc.serve_with_shutdown(listener, &security, Some(handle), shutdown)
                 .await
                 .unwrap();
         });
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        (addr, token)
+    }
 
-        // 1. Client under CA A connects (this also proves ALPN h2: tonic requires it)
-        //    and opens a long-lived WatchServerMeta stream.
-        let mut c1 = connect(addr, client_tls(&ca_a, &client_a)).await.unwrap();
+    /// Routine LEAF rotation (same trust root): established streams MUST survive.
+    /// Zero-disruption rotation is the whole point of the hot-swap design — the peers on
+    /// those sessions are still authorized.
+    #[tokio::test]
+    async fn tls_accept_loop_hot_swaps_leaf_without_dropping_streams() {
+        install_test_crypto_provider();
+
+        let ca = Ca::generate_root(time::Duration::days(30)).unwrap();
+        let server_a = ca
+            .sign_server(&["localhost".to_string()], time::Duration::days(7))
+            .unwrap();
+        let client = ca.sign_client(time::Duration::days(7)).unwrap();
+        let handle = Arc::new(ServerIdentityHandle::new(
+            ServerIdentity::from_pems(&server_a.cert_pem, &server_a.key_pem, ca.ca_cert_pem()).unwrap(),
+        ));
+        let (addr, token) = spawn_tls_server(handle.clone()).await;
+
+        // Connect (this also proves ALPN h2: tonic requires it) and open a long-lived stream.
+        let mut c1 = connect(addr, client_tls(&ca, &client)).await.unwrap();
         let mut meta = c1
             .watch_server_meta(WatchServerMetaRequest {
                 client_id: "c1".into(),
@@ -875,20 +1159,16 @@ mod tests {
         let first = meta.message().await.unwrap().unwrap();
         assert_eq!(first.gateway_instance_count, 1);
 
-        // 2. Hot-swap to a completely different CA "B".
-        let ca_b = Ca::generate_root(time::Duration::days(30)).unwrap();
-        let server_b = ca_b
-            .sign_server(&["localhost".to_string()], time::Duration::days(7))
+        // Re-sign the SERVER LEAF against the SAME root (exactly what identity_sync does
+        // every half-life).
+        let server_b = ca
+            .sign_server(&["localhost".to_string()], time::Duration::days(14))
             .unwrap();
-        let client_b = ca_b.sign_client(time::Duration::days(7)).unwrap();
-        handle.store(ServerIdentity::from_pems(&server_b.cert_pem, &server_b.key_pem, ca_b.ca_cert_pem()).unwrap());
+        handle.store(ServerIdentity::from_pems(&server_b.cert_pem, &server_b.key_pem, ca.ca_cert_pem()).unwrap());
 
-        // 3. New handshake with the OLD trust anchor now fails...
-        assert!(connect(addr, client_tls(&ca_a, &client_a)).await.is_err());
-
-        // 4. ...a client under CA B succeeds (new registry registration bumps the count,
-        //    which pushes an event to the OLD stream — proving it survived the swap).
-        let mut c2 = connect(addr, client_tls(&ca_b, &client_b)).await.unwrap();
+        // A second client registers, which pushes a count event onto the OLD stream —
+        // proving that stream survived the swap.
+        let mut c2 = connect(addr, client_tls(&ca, &client)).await.unwrap();
         let _meta2 = c2
             .watch_server_meta(WatchServerMetaRequest {
                 client_id: "c2".into(),
@@ -899,10 +1179,75 @@ mod tests {
             .into_inner();
         let ev = tokio::time::timeout(std::time::Duration::from_secs(5), meta.message())
             .await
-            .expect("old stream must still deliver events after the swap")
+            .expect("old stream must still deliver events after a same-root leaf rotation")
             .unwrap()
             .unwrap();
         assert_eq!(ev.gateway_instance_count, 2);
+
+        token.cancel();
+    }
+
+    /// Trust-ROOT change (emergency CA re-key): an ALREADY-ESTABLISHED session — i.e. the
+    /// attacker holding the leaked leaf, who never has to handshake again — MUST be torn
+    /// down. Swapping the client-CA verifier alone only governs future handshakes; without
+    /// the trust token this stream keeps receiving resolved Secrets forever.
+    #[tokio::test]
+    async fn tls_accept_loop_tears_down_established_streams_on_root_change() {
+        install_test_crypto_provider();
+
+        let ca_a = Ca::generate_root(time::Duration::days(30)).unwrap();
+        let server_a = ca_a
+            .sign_server(&["localhost".to_string()], time::Duration::days(7))
+            .unwrap();
+        let client_a = ca_a.sign_client(time::Duration::days(7)).unwrap();
+        let handle = Arc::new(ServerIdentityHandle::new(
+            ServerIdentity::from_pems(&server_a.cert_pem, &server_a.key_pem, ca_a.ca_cert_pem()).unwrap(),
+        ));
+        let (addr, token) = spawn_tls_server(handle.clone()).await;
+
+        let mut c1 = connect(addr, client_tls(&ca_a, &client_a)).await.unwrap();
+        let mut meta = c1
+            .watch_server_meta(WatchServerMetaRequest {
+                client_id: "c1".into(),
+                client_name: "g1".into(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(meta.message().await.unwrap().unwrap().gateway_instance_count, 1);
+
+        // Re-key: a BRAND-NEW root (new private key).
+        let ca_b = Ca::generate_root(time::Duration::days(30)).unwrap();
+        let server_b = ca_b
+            .sign_server(&["localhost".to_string()], time::Duration::days(7))
+            .unwrap();
+        let client_b = ca_b.sign_client(time::Duration::days(7)).unwrap();
+        handle.store(ServerIdentity::from_pems(&server_b.cert_pem, &server_b.key_pem, ca_b.ca_cert_pem()).unwrap());
+
+        // 1. The LIVE session established under the old root is killed (the connection is
+        //    aborted, so the stream ends — either with a transport error or with EOF).
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(5), meta.message())
+            .await
+            .expect("the established session must be torn down by the re-key, not left open");
+        assert!(
+            matches!(&ended, Err(_) | Ok(None)),
+            "expected the revoked session to end, got {ended:?}"
+        );
+
+        // 2. A NEW handshake with the old (compromised) identity is rejected.
+        assert!(connect(addr, client_tls(&ca_a, &client_a)).await.is_err());
+
+        // 3. The server still works for a client under the new root.
+        let mut c2 = connect(addr, client_tls(&ca_b, &client_b)).await.unwrap();
+        let mut meta2 = c2
+            .watch_server_meta(WatchServerMetaRequest {
+                client_id: "c2".into(),
+                client_name: "g2".into(),
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(meta2.message().await.unwrap().is_some());
 
         token.cancel();
     }

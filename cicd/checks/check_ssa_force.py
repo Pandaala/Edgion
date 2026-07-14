@@ -27,6 +27,18 @@ other fields intact (the standard controller-runtime recommendation).
 `Patch::Json` / `Patch::Strategic`, which have no field-ownership conflicts. Such
 call sites legitimately build `PatchParams::apply(...)` just to set the field
 manager (kube exposes no other setter) and live in ALLOWLIST below.
+
+KNOWN LIMITS (this is a lint, not a type system)
+------------------------------------------------
+It keys on the literal `PatchParams::apply(` construction and requires `.force()`
+within the same statement. It therefore does NOT catch:
+  * a `PatchParams` built via struct literal (`PatchParams { force: false, .. }`)
+    or mutated after construction (`pp.force = false;`);
+  * params constructed in one function and passed into another.
+Both forms are absent from the tree today; if one appears, extend this check
+rather than routing around it. It also skips only FULL-LINE `//` comments, so a
+trailing comment that merely names `PatchParams::apply(` would false-positive —
+move such prose to its own line.
 """
 
 import re

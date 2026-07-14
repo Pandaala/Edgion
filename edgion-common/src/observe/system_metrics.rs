@@ -108,6 +108,32 @@ pub mod reasons {
     /// the next successful tick (alert on a sustained `== 1`, not a single blip;
     /// a stalled rotation eventually reaches the emergency window).
     pub const CERT_ROTATION_FAILED: &str = "cert_rotation_failed";
+    /// The per-replica conf_sync server-identity reconciler's tick failed (CA Secret
+    /// GET error, signing failure, identity build failure, ...). That loop runs on
+    /// EVERY controller replica (leader or not) and keeps this replica's own serving
+    /// leaf — and the client-CA verifier that authenticates gateways — in sync with
+    /// the current root. While it is failing, this replica's serving identity may be
+    /// STALE against the current root: under `ha_mode: all-serve` that means it may
+    /// still accept a client leaf signed by a revoked root (an emergency CA re-key
+    /// would not actually revoke on this pod). Set on a failed tick, cleared on the
+    /// next successful one.
+    ///
+    /// **Deliberately distinct from [`CERT_ROTATION_FAILED`]**: that reason belongs to
+    /// the leader-only rotation reconciler, which is a WRITE path (Secret applies,
+    /// signing) and backs off exponentially. The two loops share a component
+    /// (`conf_sync_server`) and both run on the leader, so if they shared a reason the
+    /// read-only identity loop — which succeeds almost always, even with nothing to do
+    /// — would clear the rotation loop's mark every 60s and silence the page. Never let
+    /// a loop clear a mark it did not set.
+    pub const CERT_IDENTITY_SYNC_FAILED: &str = "cert_identity_sync_failed";
+    /// The filesystem watcher backing cert hot reload could not be established —
+    /// either the `notify` watcher itself failed to construct, or one of the cert
+    /// parent directories could not be watched. Cert hot reload has degraded to
+    /// the periodic re-stat backstop only: a rotated cert is still picked up, but
+    /// after up to one re-stat interval (5 minutes) instead of ~2 seconds.
+    /// **Latches** — the watch is never retried, so this stays at 1 until the
+    /// process restarts. Do NOT clear it via [`clear_system_error`].
+    pub const CERT_WATCH_FAILED: &str = "cert_watch_failed";
 }
 
 /// Mark a system-level error condition as active.
@@ -273,6 +299,43 @@ mod tests {
                     && l.contains("reason=\"cert_rotation_failed\"")
                     && l.trim_end().ends_with(" 0")),
                 "expected cert_rotation_failed gauge reset to 0, got:\n{rendered}"
+            );
+        });
+    }
+
+    /// Regression guard for the alert-suppression bug: the per-replica identity
+    /// reconciler must NOT share `CERT_ROTATION_FAILED` with the leader-only rotation
+    /// reconciler. Both run on the leader under the same component, and the read-only
+    /// identity loop succeeds almost always — sharing the reason would drive the
+    /// rotation page's gauge back to 0 every tick. Never let a loop clear a mark it
+    /// did not set.
+    #[test]
+    fn identity_sync_failure_does_not_clear_the_rotation_mark() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+
+        assert_ne!(reasons::CERT_IDENTITY_SYNC_FAILED, reasons::CERT_ROTATION_FAILED);
+
+        metrics::with_local_recorder(&recorder, || {
+            // The rotation reconciler is failing (write path: RBAC denied, apply rejected).
+            mark_system_error(components::CONF_SYNC_SERVER, reasons::CERT_ROTATION_FAILED);
+            // The read-only identity reconciler ticks successfully on the same replica.
+            clear_system_error(components::CONF_SYNC_SERVER, reasons::CERT_IDENTITY_SYNC_FAILED);
+
+            let rendered = handle.render();
+            assert!(
+                rendered.lines().any(|l| l.contains("edgion_system_error_state{")
+                    && l.contains("component=\"conf_sync_server\"")
+                    && l.contains("reason=\"cert_rotation_failed\"")
+                    && l.trim_end().ends_with(" 1")),
+                "the rotation page must stay armed at 1, got:\n{rendered}"
+            );
+            assert!(
+                rendered.lines().any(|l| l.contains("edgion_system_error_state{")
+                    && l.contains("component=\"conf_sync_server\"")
+                    && l.contains("reason=\"cert_identity_sync_failed\"")
+                    && l.trim_end().ends_with(" 0")),
+                "expected cert_identity_sync_failed gauge = 0, got:\n{rendered}"
             );
         });
     }

@@ -72,11 +72,44 @@ pub(crate) fn stat_signature(paths: &[PathBuf]) -> std::io::Result<Vec<(SystemTi
         .collect()
 }
 
+/// Pure reload decision: reload only when the on-disk signature actually moved.
+///
+/// Both the notify-event arm and the re-stat backstop arm gate on this, so a
+/// no-op filesystem event never triggers a channel rebuild (which would cancel
+/// every conf_sync watch stream), and a quiet re-stat interval is free.
+///
+/// `None` means "could not stat" (mount vanished). present→missing and
+/// missing→present therefore both count as a change, while missing→missing does
+/// not — a vanished mount is reported once, not re-attempted every interval.
+///
+/// Kept byte-identical to the controller's twin in
+/// `edgion-controller/src/conf_sync/conf_server/cert_watch.rs`; the two crates
+/// cannot share it, so they are deliberately duplicated rather than allowed to
+/// drift into two different comparison shapes.
+fn signature_changed(last: &Option<Vec<(SystemTime, u64)>>, now: &Option<Vec<(SystemTime, u64)>>) -> bool {
+    last != now
+}
+
+/// Mark the latching `cert_watch_failed` system error: the filesystem watcher is
+/// (partially or wholly) unavailable, so hot reload has degraded to the
+/// [`RESTAT_INTERVAL`] backstop. Never cleared — we do not retry the watch.
+fn mark_watch_failed() {
+    edgion_common::observe::system_metrics::mark_system_error(
+        edgion_common::observe::system_metrics::components::CONF_SYNC_CLIENT,
+        edgion_common::observe::system_metrics::reasons::CERT_WATCH_FAILED,
+    );
+}
+
 /// Spawn a background task that watches the parent directories of `paths`'
 /// cert/key/CA files and hot-reloads the client TLS channel on change,
 /// debounced by [`DEBOUNCE`], with a [`RESTAT_INTERVAL`] re-stat backstop.
 /// Stops when `shutdown` is cancelled. On reload failure the current channel is
 /// kept (WARN + `CERT_RELOAD_INVALID` system-error mark).
+///
+/// If the watcher cannot be constructed, or a directory cannot be watched, the
+/// task does **not** die: it marks `cert_watch_failed` and keeps running in
+/// backstop-only mode, so a rotated cert is still picked up (within one re-stat
+/// interval rather than ~2 seconds).
 pub fn spawn_client_cert_watcher(client: Arc<ConfigSyncClient>, paths: CertPaths, shutdown: CancellationToken) {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(8);
     // Watch the parent dirs (non-recursive): the Secret-mount `..data` swap
@@ -94,20 +127,43 @@ pub fn spawn_client_cert_watcher(client: Arc<ConfigSyncClient>, paths: CertPaths
             }
         })
     };
+    // Keepalive sender: if the watcher failed to construct, the notify closure
+    // (which owns the only other `tx` clone) never exists, so without this the
+    // last sender would drop when this function returns and `rx.recv()` would
+    // immediately yield `None` — which the loop below would treat as "break",
+    // killing the backstop-only mode. Moving a sender into the task guarantees
+    // the channel stays open, so the loop only exits via `shutdown.cancelled()`.
+    let tx_keepalive = tx;
     tokio::spawn(async move {
+        let _tx_keepalive = tx_keepalive;
         // The watcher must stay alive for the lifetime of the task, so it is
         // moved in rather than dropped after setup.
         let mut watcher = match watcher {
-            Ok(w) => w,
+            Ok(w) => Some(w),
             Err(e) => {
-                tracing::error!(component = "grpc_client", error = %e, "conf_sync client cert watcher failed to start");
-                return;
+                tracing::error!(
+                    component = "grpc_client",
+                    error = %e,
+                    "conf_sync client cert watcher failed to start; cert hot reload has fallen back to \
+                     the periodic re-stat backstop (rotations picked up within 5 minutes, not seconds)"
+                );
+                mark_watch_failed();
+                None
             }
         };
         use notify::Watcher;
-        for d in &dirs {
-            if let Err(e) = watcher.watch(d, notify::RecursiveMode::NonRecursive) {
-                tracing::error!(component = "grpc_client", dir = %d.display(), error = %e, "conf_sync client cert watch failed");
+        if let Some(w) = watcher.as_mut() {
+            for d in &dirs {
+                if let Err(e) = w.watch(d, notify::RecursiveMode::NonRecursive) {
+                    tracing::error!(
+                        component = "grpc_client",
+                        dir = %d.display(),
+                        error = %e,
+                        "conf_sync client cert watch failed for directory; hot reload for its files has \
+                         fallen back to the periodic re-stat backstop"
+                    );
+                    mark_watch_failed();
+                }
             }
         }
 
@@ -122,7 +178,11 @@ pub fn spawn_client_cert_watcher(client: Arc<ConfigSyncClient>, paths: CertPaths
             tokio::select! {
                 _ = shutdown.cancelled() => break,
                 ev = rx.recv() => {
-                    if ev.is_none() { break; }
+                    // Unreachable-but-harmless: `_tx_keepalive` above keeps a sender
+                    // alive for the life of this task, so the channel never closes.
+                    // Treat a `None` as "nothing to do" rather than breaking, so a
+                    // hypothetical future change cannot silently kill the backstop.
+                    if ev.is_none() { continue; }
                     // 2s debounce: coalesce the burst from an atomic Secret swap.
                     tokio::time::sleep(DEBOUNCE).await;
                     while rx.try_recv().is_ok() {}
@@ -132,18 +192,18 @@ pub fn spawn_client_cert_watcher(client: Arc<ConfigSyncClient>, paths: CertPaths
                     // (e.g. a directory metadata touch that isn't a content
                     // change) must not trigger a full reconnect storm.
                     let now_sig = stat_signature(&watched).ok();
-                    if now_sig == last_sig {
-                        tracing::debug!(component = "grpc_client", "conf_sync client cert event with unchanged signature; skipping reload");
-                    } else {
+                    if signature_changed(&last_sig, &now_sig) {
                         do_reload(&client).await;
                         last_sig = now_sig;
+                    } else {
+                        tracing::debug!(component = "grpc_client", "conf_sync client cert event with unchanged signature; skipping reload");
                     }
                 }
                 _ = restat.tick() => {
                     // Backstop: reload only when the on-disk signature changed,
                     // so a quiet interval never churns the channel.
                     let now_sig = stat_signature(&watched).ok();
-                    if now_sig != last_sig {
+                    if signature_changed(&last_sig, &now_sig) {
                         tracing::info!(component = "grpc_client", "conf_sync client cert re-stat detected a change; reloading");
                         do_reload(&client).await;
                         last_sig = now_sig;

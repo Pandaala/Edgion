@@ -173,6 +173,17 @@ config doc's client-cert hot-reload section for the consumer side; the Controlle
 its own analogous server-side hot reload). See
 `docs/superpowers/specs/2026-07-12-conf-sync-cert-rotation-design.md` for the full design.
 
+> **`auto_ca` is safe under both `ha_mode` values** (`leader-only` and `all-serve`).
+> Secret WRITES (CA renewal + the shared gateway client leaf) stay leader-only, but each
+> replica independently keeps **its own** conf_sync server identity — the served leaf AND
+> the client-CA verifier that authenticates gateways — in sync with the current root, via a
+> 60s read-only reconciler that runs on every replica (`services/conf_sync_ca/identity_sync.rs`,
+> mirroring istiod's `watchRootCertAndGenKeyCert`). This is what makes an emergency CA
+> re-key actually revoke: without it, a non-leader under `all-serve` would keep accepting
+> the old (compromised) gateway client cert — and keep streaming resolved Secrets to it —
+> until that pod happened to restart. The reconciler is read-only on Secrets, so it needs no
+> coordination and cannot split-brain the root.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `policy` | `"lifetime" \| "scheduled" \| "manual"` | `"lifetime"` | Rotation trigger strategy (see below) |
@@ -199,6 +210,20 @@ its own analogous server-side hot reload). See
 - **`manual`**: the reconciler never auto-rotates on lifetime/schedule grounds; rotation
   only happens via the manual API below (the always-on emergency net below still
   applies regardless of policy).
+
+**What `policy` does NOT govern: each replica's own server identity.** The three policies
+above control when the **shared gateway client leaf Secret** (`edgion-conf-sync-certs`)
+changes — a change that disrupts *every* gateway in the fleet and therefore belongs in a
+maintenance window. They do **not** apply to the per-replica reconciler
+(`identity_sync.rs`), which re-signs **this replica's own in-memory server leaf** — and
+rebuilds the client-CA verifier that authenticates gateways — whenever it drifts from the
+current root, or at plain half-life (`lifetime_ratio`), **regardless of `policy`**. That
+asymmetry is deliberate: re-signing a private, in-memory server leaf disrupts nothing
+(established TLS sessions are untouched — certificates are consumed only at handshake —
+and new handshakes simply pick up the new cert), so there is nothing to defer. Deferring
+it under `policy: manual` would instead recreate the very bug the reconciler exists to fix
+(a replica serving behind a stale trust root after an emergency re-key). Each re-sign logs
+`conf_sync_server_identity_resigned`.
 
 **Always-on emergency safety net.** Independent of `policy`, if a leaf's remaining
 validity drops to `<= emergency_rotate_below` (default `24h`), the reconciler rotates
@@ -266,17 +291,46 @@ division of labor — do not page on everything just because a signal exists:
     watches the live cert independent of whatever is supposed to be rotating it, so it
     still fires even if the rotation pipeline itself is wedged.
   - `edgion_system_error_state{reason="cert_rotation_failed"} == 1` sustained 5m — the
-    rotation pipeline is actively failing (not yet expired, but the mechanism meant to
-    prevent that is broken).
+    **leader's** rotation pipeline (the Secret-writing one) is actively failing (not yet
+    expired, but the mechanism meant to prevent that is broken). Set on a failed tick,
+    cleared on the next successful one.
+  - `edgion_system_error_state{reason="cert_identity_sync_failed"} == 1` sustained 5m —
+    **this replica cannot resync its own conf_sync serving identity** against the current
+    root (the per-replica reconciler's tick is failing). It is deliberately a *separate*
+    reason from `cert_rotation_failed`: the two loops both run on the leader under the
+    same `conf_sync_server` component, and if they shared a reason the read-only identity
+    loop — which succeeds on almost every tick — would clear the rotation loop's mark
+    every 60s and silence the page above. Page on it because a replica that cannot resync
+    its identity is a replica that **may still trust a revoked root**: under
+    `ha_mode: all-serve` it keeps serving resolved Secrets and may keep accepting a
+    gateway client leaf that an emergency re-key was supposed to revoke. Set on a failed
+    tick, cleared on the next successful one.
 - **TICKET on** (review, not urgent):
   - `edgion_system_error_state{reason="cert_rotation_config_suspect"} == 1` — the rotation
     config combination needs a look (suspect firing-gap-vs-guard sizing, or a healthy
     steady state that lands inside the expiry-watch WARN band — see the Validation
     invariants above; the default scheduled guard of 336h is one such case and is
     expected, not broken).
+  - `edgion_system_error_state{reason="cert_watch_failed"} == 1` — the filesystem watcher
+    backing cert hot reload could not be established (watcher construction failed, or a cert
+    parent directory could not be watched), on either the controller (`conf_sync_server`) or
+    the gateway (`conf_sync_client`). **This is not an outage**: hot reload has degraded to
+    the 5-minute periodic re-stat backstop, so a rotated cert is still picked up — just in
+    minutes rather than seconds. The gauge **latches** (the watch is never retried), so it
+    stays at 1 until the process restarts; it is a fix-at-leisure ticket, not a page.
   - Expiry-watch WARN-band transition logs (`component="cert_expiry_watch"`, 30-day band)
     — worth a look, not worth waking anyone up; the ERROR/7-day band is what pages, above.
 - **LOG-ONLY** (triage context; do not page):
+  - `conf_sync_server_identity_resigned` (INFO, `component="conf_sync_ca"`) — a replica
+    re-signed **its own** conf_sync server leaf (and rebuilt its client-CA verifier)
+    against the current root. Security-relevant and worth grepping for during an
+    incident: after an emergency CA re-key, **every** controller pod must log one of
+    these (or, on the leader, a `conf_sync_cert_rotated`) — that is what says the
+    revocation actually reached that pod, and it is what
+    `rekey_conf_sync_ca.sh` asserts per pod. Steady-state occurrences (half-life
+    re-signs, a same-key root renewal) are routine, so this is not a page. Carries a
+    `reason` field (`does not chain` / `trust anchor is not the current root cert` /
+    `emergency window` / `lifetime ratio`) plus the old/new serials.
   - `cert_emergency_rotation` (WARN) — the safety net already acted and rotated the leaf;
     useful to know the primary policy trigger was late, but nothing is broken now.
   - Reload-reject WARNs (a bad candidate cert/key file was rejected and the previous
@@ -292,13 +346,60 @@ division of labor — do not page on everything just because a signal exists:
 still verify against it. A full root **re-key** (new key pair, not just a new
 window) is the only true revocation.
 
-- **Kubernetes auto-CA procedure**:
+- **Kubernetes auto-CA procedure** — use the script. It performs the steps below and then
+  asserts the post-conditions, proving **both halves** of a revocation — that the NEW root
+  works everywhere, *and* that the OLD key no longer does — on **every controller and
+  every gateway**. Any failed assertion exits non-zero and prints
+  `RE-KEY INCOMPLETE`; "cannot check" never reads as "passed":
+
+  | Proof | Assertion |
+  |-------|-----------|
+  | New root is really new | the root's **SPKI changed** (a new key pair, not a same-key renewal, which revokes nothing) |
+  | Leaf Secret | `edgion-conf-sync-certs`'s `client.crt` chains to the new root |
+  | Every **gateway** | its **mounted** `client.crt`, read off the pod, chains to the new root (restart-proof) |
+  | Every **controller** (positive) | port-forward + `openssl s_client` → the leaf it **actually serves** chains to the new root. This is the only way to see a non-leader's in-memory trust root; under `ha_mode: all-serve` every replica serves resolved Secrets behind its own copy of it |
+  | Every **controller** (negative, new handshakes) | the **pre-re-key client cert+key** (captured before the delete) are **REJECTED** in an mTLS handshake. Everything else only shows a new key started working, not that the leaked one stopped. A successful old-key handshake is a hard failure: the compromise is NOT contained |
+  | **Live session** (negative) | an mTLS session opened with the OLD client identity **before** the delete and held open **across** the re-key must be **TORN DOWN**. This is the attacker's actual position — they never have to re-handshake — and no other check in the suite can see it. A surviving session is a hard failure; a session whose *port-forward* died is **inconclusive**, not a pass |
+  | Every **controller** (logs) | a NEW `conf_sync_cert_rotated` (leader) **or** `conf_sync_server_identity_resigned` (any replica), asserted **per pod** — a fleet-wide sum would let the leader's single event vouch for replicas that never moved. Unreadable logs are reported as UNKNOWN, never as a pass |
+
+  A run whose old client identity could not be captured (leaf Secret absent/malformed), or
+  that could not open the pre-delete session, **exits non-zero**: it can only show that a
+  new root started working, never that the leaked one stopped.
+
+  ```bash
+  cicd/deploy/kubernetes/scripts/rekey_conf_sync_ca.sh            # dry run: plan + current root
+  cicd/deploy/kubernetes/scripts/rekey_conf_sync_ca.sh --yes      # re-key, then verify
+  cicd/deploy/kubernetes/scripts/rekey_conf_sync_ca.sh --verify   # re-check post-conditions later
+  ```
+
+  What it does under the hood:
   `kubectl -n <ns> delete secret edgion-conf-sync-ca edgion-conf-sync-certs`.
   The elected leader's next tick (≤60s) sees the leaf Secret missing, re-bootstraps
   a fresh root + both leaves, and hot-swaps its own in-process server identity.
+  Every **other** controller replica re-signs its own serving identity — and the
+  client-CA verifier that authenticates gateways — on its own 60s tick
+  (`identity_sync.rs`); that is what makes the re-key actually revoke under
+  `ha_mode: all-serve`, and it is what the script's per-controller proofs assert.
   Gateways self-heal via the existing Secret-mount hot-reload path (kubelet sync
   + the 2s debounce, ≤ ~2min total to fully propagate) — **no process restarts
-  required, on either side**. A leader failover happening during or immediately
+  required, on either side**.
+
+  **Rotation does not disturb live sessions; a re-key does — and that is the point.**
+  A certificate is consumed once, at handshake, so a routine leaf rotation (same trust
+  root) deliberately leaves established conf_sync streams running: the peer is still
+  authorized, and zero disruption is the whole reason for the hot-swap design. A
+  **trust-root change** (this re-key, or an out-of-band BYO-root swap) is different: the
+  peers on those sessions were authenticated by a root that is now revoked, and on an
+  established HTTP/2 connection they never re-handshake — they would keep issuing
+  `List`/`Watch` and keep receiving resolved Secrets (TLS private keys, backend
+  credentials) forever. So each controller scopes every accepted connection to the trust
+  root that authenticated it and **cancels those connections when the root changes**
+  (`tls_identity.rs` trust generation → `grpc_server.rs` `TrustScopedStream`). Gateways
+  reconnect and relist; the data plane keeps serving throughout. As a backstop, no
+  conf_sync connection may live longer than `max_connection_age` (1h) + a 5m grace,
+  regardless.
+
+  A leader failover happening during or immediately
   after the re-key also self-heals within one tick: the reconciler's
   chain-consistency check (`edgion-controller/src/services/conf_sync_ca/rotation.rs`
   `out_of_sync_reason`) detects that the new leader's in-memory server identity
@@ -307,12 +408,19 @@ window) is the only true revocation.
   Expected transient: TLS handshake failures during the propagation window —
   `edgion_system_error_state{reason="tls_handshake_failed"}` sets and then
   clears itself once every peer has picked up the new root.
-- **Verification checklist**:
+- **Verification checklist** (the script asserts all of the mechanical ones — this is
+  what to eyeball if you are doing it by hand):
   - A new `edgion-conf-sync-ca` Secret exists with a different `ca.crt` (compare
     against a saved copy, or just check the Secret's `creationTimestamp`).
-  - Controller log shows `conf_sync_cert_rotated` with reason `"leaf secret missing"`.
+  - The leader logs `conf_sync_cert_rotated` with reason `"leaf secret missing"`, and
+    **every other controller pod** logs `conf_sync_server_identity_resigned`.
+  - Every controller pod serves a leaf chaining to the new root **and rejects the old
+    client key** (see the script's per-controller proofs; a pod that still accepts the
+    old key has not revoked anything).
   - Gateway log shows `conf_sync_cert_reloaded` followed by a successful reconnect.
-  - `edgion_system_error_state{reason="tls_handshake_failed"}` is back to `0`.
+  - `edgion_system_error_state{reason="tls_handshake_failed"}` is back to `0`, and
+    `{reason="cert_identity_sync_failed"}` is `0` on every replica (a replica stuck at 1
+    may still be trusting the compromised root).
   - The expiry gauges (`edgion_conf_sync_cert_expiry_timestamp_seconds`) reflect
     the new certs' timestamps.
 - **File / solo mode**: there is no auto-CA to delete a Secret for — regenerate the

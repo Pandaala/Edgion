@@ -373,14 +373,50 @@ async fn run(mut rx: mpsc::Receiver<RotateScope>, client: Client, generation: u6
 }
 
 /// Out-of-sync detection (spec: emergency re-key / out-of-band BYO-root swap):
-/// either in-service cert not chaining to the CURRENT root means the trust
+/// any in-service artifact that disagrees with the CURRENT root means the trust
 /// root changed under us — rotate immediately, regardless of policy.
-pub(crate) fn out_of_sync_reason(client_leaf_pem: &str, server_cert_pem: &str, ca_pem: &str) -> Option<&'static str> {
+///
+/// Four arms, in order:
+/// 1. the gateway's client leaf does not chain to the current root,
+/// 2. this replica's served server identity does not chain to the current root,
+/// 3. the leaf Secret's OWN `ca.crt` is not the current root cert. This is the
+///    torn-write repair arm: a CA renewal writes the CA Secret
+///    (`write_ca`) and then the leaf Secret (`write_leaf`); a crash in between
+///    leaves the gateway's mounted trust anchor permanently stale. Nothing else
+///    catches it — `ca_renewal_due` is false (the root was just renewed), arms 1
+///    and 2 are false (a same-key renewal keeps old leaves chaining), and the
+///    policy is not due for months. The gateway would keep trusting a root cert
+///    that no longer matches what the controller serves once the leaves rotate.
+/// 4. the leaf Secret's `client.crt` / `client.key` / `ca.crt` do not form a
+///    valid identity (mismatched key, expired leaf, corrupted PEM) — the key half
+///    of the Secret was never validated anywhere before this.
+pub(crate) fn out_of_sync_reason(
+    client_leaf_pem: &str,
+    client_key_pem: &str,
+    leaf_secret_ca_pem: &str,
+    server_cert_pem: &str,
+    ca_pem: &str,
+) -> Option<&'static str> {
     if !super::cert_util::chains_to(client_leaf_pem, ca_pem) {
         return Some("client leaf does not chain to current CA");
     }
     if !super::cert_util::chains_to(server_cert_pem, ca_pem) {
         return Some("server identity does not chain to current CA");
+    }
+    // Byte comparison, whitespace-normalized: the leaf Secret's ca.crt must BE the
+    // current root cert, not merely something the leaves happen to chain to (a
+    // same-key renewal produces a different cert that old leaves still chain to).
+    if leaf_secret_ca_pem.trim() != ca_pem.trim() {
+        return Some("leaf secret ca.crt is not the current root cert");
+    }
+    if edgion_common::grpc_tls::validate_identity(
+        client_leaf_pem.as_bytes(),
+        client_key_pem.as_bytes(),
+        leaf_secret_ca_pem.as_bytes(),
+    )
+    .is_err()
+    {
+        return Some("leaf secret identity fails validation");
     }
     None
 }
@@ -396,10 +432,13 @@ async fn check_and_rotate(
     let now = OffsetDateTime::now_utc();
 
     // Fresh GET every tick — NO caching (spec §6 T2). Missing/unparsable leaf =
-    // immediately due.
-    let (client_leaf_pem, client_leaf) = match read_leaf(secret_api).await? {
-        Some((cert, _, _)) => match parse_cert_window(&cert) {
-            Ok(w) => (cert, w),
+    // immediately due. ALL THREE Secret fields are kept: the key and the Secret's
+    // own ca.crt feed the extra `out_of_sync_reason` arms below (a torn
+    // write_ca/write_leaf pair, or a key that does not match its cert, is
+    // otherwise invisible to every other check).
+    let (client_leaf_pem, client_key_pem, leaf_secret_ca_pem, client_leaf) = match read_leaf(secret_api).await? {
+        Some((cert, key, secret_ca)) => match parse_cert_window(&cert) {
+            Ok(w) => (cert, key, secret_ca, w),
             Err(_) => return rotate(secret_api, p, RotateScope::Leaf, "leaf secret unparsable", generation).await,
         },
         None => return rotate(secret_api, p, RotateScope::Leaf, "leaf secret missing", generation).await,
@@ -440,7 +479,13 @@ async fn check_and_rotate(
     // scenario is caught by the validity-window due-checks below, so it is
     // checked FIRST and unconditionally rotates the leaves — regardless of
     // policy — skipping the rest of this tick.
-    if let Some(reason) = out_of_sync_reason(&client_leaf_pem, &server_cert_pem, ca.ca_cert_pem()) {
+    if let Some(reason) = out_of_sync_reason(
+        &client_leaf_pem,
+        &client_key_pem,
+        &leaf_secret_ca_pem,
+        &server_cert_pem,
+        ca.ca_cert_pem(),
+    ) {
         tracing::warn!(
             component = "conf_sync_ca",
             reason,
@@ -553,6 +598,10 @@ async fn rotate(secret_api: &Api<Secret>, p: &Params, scope: RotateScope, reason
         );
         return Ok(());
     }
+    // Fast path only: the per-replica reconciler (`identity_sync`) is the backstop
+    // that keeps EVERY replica's identity current. Storing here immediately means
+    // the leader's own identity does not lag by up to one 60s tick after a re-key
+    // (during which it would reject freshly-issued gateway certs).
     handle.store(new_identity);
 
     tracing::info!(
@@ -727,8 +776,18 @@ mod tests {
 
     use crate::services::conf_sync_ca::Ca;
 
+    fn install_test_crypto_provider() {
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            let _ = rustls::crypto::ring::default_provider().install_default();
+        });
+    }
+
     #[test]
     fn out_of_sync_reason_table() {
+        // `validate_identity` (arm 4) needs a rustls CryptoProvider.
+        install_test_crypto_provider();
+
         let ca_a = Ca::generate_root(time::Duration::days(3650)).unwrap();
         let ca_b = Ca::generate_root(time::Duration::days(3650)).unwrap();
         let client_a = ca_a.sign_client(time::Duration::days(30)).unwrap();
@@ -740,25 +799,49 @@ mod tests {
             .sign_server(&["example.svc".into()], time::Duration::days(30))
             .unwrap();
 
-        // In-sync: both leaves chain to the current CA -> None.
-        assert!(out_of_sync_reason(&client_a.cert_pem, &server_a.cert_pem, ca_a.ca_cert_pem()).is_none());
+        // In-sync: both leaves chain, the Secret's ca.crt IS the current root, and
+        // the Secret's cert/key pair validates -> None.
+        assert!(out_of_sync_reason(
+            &client_a.cert_pem,
+            &client_a.key_pem,
+            ca_a.ca_cert_pem(),
+            &server_a.cert_pem,
+            ca_a.ca_cert_pem()
+        )
+        .is_none());
 
         // Stale client leaf only -> Some(client...).
-        let reason = out_of_sync_reason(&client_b.cert_pem, &server_a.cert_pem, ca_a.ca_cert_pem());
+        let reason = out_of_sync_reason(
+            &client_b.cert_pem,
+            &client_b.key_pem,
+            ca_b.ca_cert_pem(),
+            &server_a.cert_pem,
+            ca_a.ca_cert_pem(),
+        );
         assert_eq!(reason, Some("client leaf does not chain to current CA"));
 
         // Stale server leaf only -> Some(server...).
-        let reason = out_of_sync_reason(&client_a.cert_pem, &server_b.cert_pem, ca_a.ca_cert_pem());
+        let reason = out_of_sync_reason(
+            &client_a.cert_pem,
+            &client_a.key_pem,
+            ca_a.ca_cert_pem(),
+            &server_b.cert_pem,
+            ca_a.ca_cert_pem(),
+        );
         assert_eq!(reason, Some("server identity does not chain to current CA"));
 
         // Both stale -> client reason wins (checked first).
-        let reason = out_of_sync_reason(&client_b.cert_pem, &server_b.cert_pem, ca_a.ca_cert_pem());
+        let reason = out_of_sync_reason(
+            &client_b.cert_pem,
+            &client_b.key_pem,
+            ca_b.ca_cert_pem(),
+            &server_b.cert_pem,
+            ca_a.ca_cert_pem(),
+        );
         assert_eq!(reason, Some("client leaf does not chain to current CA"));
 
-        // Renewed-same-key root: leaves signed by the OLD root still chain to the
-        // renewed root's cert per issuer/key equivalence... actually the check is
-        // against the CURRENT (renewed) CA cert with leaves signed by the renewed
-        // CA -> None (normal renewal never trips the check).
+        // Renewed-same-key root, everything rewritten consistently -> None (normal
+        // renewal never trips the check).
         let renewed = ca_a.renew_root_same_key(time::Duration::days(3650)).unwrap();
         let client_renewed = renewed.sign_client(time::Duration::days(30)).unwrap();
         let server_renewed = renewed
@@ -766,12 +849,59 @@ mod tests {
             .unwrap();
         assert!(out_of_sync_reason(
             &client_renewed.cert_pem,
+            &client_renewed.key_pem,
+            renewed.ca_cert_pem(),
             &server_renewed.cert_pem,
             renewed.ca_cert_pem()
         )
         .is_none());
-        // And leaves signed by the OLD root still chain to the OLD root cert (sanity,
-        // same-key property, mirrors cert_util's dedicated test).
-        assert!(out_of_sync_reason(&client_a.cert_pem, &server_a.cert_pem, ca_a.ca_cert_pem()).is_none());
+
+        // ARM 3 — TORN WRITE: `write_ca` landed (root is now the renewed cert) but
+        // `write_leaf` did not, so the leaf Secret still carries the OLD ca.crt. Both
+        // leaves still chain (same key!), the CA was just renewed so `ca_renewal_due`
+        // is false, and the policy is not due — arms 1/2 see nothing. Arm 3 is the
+        // ONLY thing that catches it.
+        let reason = out_of_sync_reason(
+            &client_a.cert_pem,
+            &client_a.key_pem,
+            ca_a.ca_cert_pem(), // stale: the pre-renewal root cert
+            &server_a.cert_pem,
+            renewed.ca_cert_pem(), // current root
+        );
+        assert_eq!(reason, Some("leaf secret ca.crt is not the current root cert"));
+
+        // Arm 3 tolerates trailing-whitespace differences in the PEM encoding.
+        let padded = format!("{}\n\n", ca_a.ca_cert_pem());
+        assert!(out_of_sync_reason(
+            &client_a.cert_pem,
+            &client_a.key_pem,
+            &padded,
+            &server_a.cert_pem,
+            ca_a.ca_cert_pem()
+        )
+        .is_none());
+
+        // ARM 4 — the Secret's client.key does not match its client.crt (bad manual
+        // edit / partially-applied Secret). Chains are fine, ca.crt is the current
+        // root; only `validate_identity` catches it.
+        let other_client = ca_a.sign_client(time::Duration::days(30)).unwrap();
+        let reason = out_of_sync_reason(
+            &client_a.cert_pem,
+            &other_client.key_pem, // mismatched key
+            ca_a.ca_cert_pem(),
+            &server_a.cert_pem,
+            ca_a.ca_cert_pem(),
+        );
+        assert_eq!(reason, Some("leaf secret identity fails validation"));
+
+        // ARM 4 — garbage key material.
+        let reason = out_of_sync_reason(
+            &client_a.cert_pem,
+            "not a key",
+            ca_a.ca_cert_pem(),
+            &server_a.cert_pem,
+            ca_a.ca_cert_pem(),
+        );
+        assert_eq!(reason, Some("leaf secret identity fails validation"));
     }
 }

@@ -79,12 +79,67 @@ fn data_str(s: &Secret, key: &str) -> Option<String> {
         .map(|b| String::from_utf8_lossy(&b.0).to_string())
 }
 
-/// Get-or-create-or-adopt the CA.
+/// READ-ONLY CA load. GETs the CA Secret and returns the adopted root, or `None`
+/// when the Secret is absent or does not carry both `ca.crt` and `ca.key`.
+///
+/// **This function NEVER creates anything.** That is the whole point of it
+/// existing next to [`ensure_ca`]:
+///
+/// - [`ensure_ca`] is a WRITE path — on absence it POST-creates a brand-new root.
+///   After startup, the elected LEADER's rotation reconciler is its only caller
+///   (see the bootstrap exception documented on [`ensure_ca`]).
+/// - [`load_ca`] is the READ path used by every replica's steady-state loops
+///   (leader and non-leader alike; see `services::conf_sync_ca::identity_sync`). A
+///   periodic non-leader loop that called `ensure_ca` would POST a second,
+///   unrelated root whenever the Secret happened to be absent — split-braining the
+///   trust anchor for the rest of the fleet's uptime.
+///
+/// So: absence is reported as `None` (the caller waits for the leader), never
+/// papered over by minting a root.
+pub async fn load_ca(secret_api: &Api<Secret>) -> Result<Option<Ca>> {
+    let Some(existing) = secret_api.get_opt(CA_SECRET).await.context("get CA secret")? else {
+        return Ok(None);
+    };
+    let (Some(crt), Some(key)) = (data_str(&existing, "ca.crt"), data_str(&existing, "ca.key")) else {
+        return Ok(None);
+    };
+    Ok(Some(Ca::load_from_pem(&crt, &key).context("load existing CA secret")?))
+}
+
+/// Get-or-create-or-adopt the CA. **WRITE PATH.**
 ///
 /// - If `edgion-conf-sync-ca` exists with `ca.crt` + `ca.key`, adopt it (BYO-root).
-/// - Otherwise generate a fresh root and SSA-create it.
+/// - Otherwise generate a fresh root and POST-create it.
 /// - On a concurrent create (HTTP 409 / `AlreadyExists`), re-read and adopt the
 ///   winner's root (leader race / idempotency).
+///
+/// # Who may call this
+///
+/// In **steady state**, the elected leader's rotation reconciler is the single
+/// writer. A periodic non-leader loop must NOT call this — it would mint a rival
+/// root during any window where the Secret is absent. Use the read-only [`load_ca`]
+/// there (that is exactly what `identity_sync` does).
+///
+/// **The deliberate bootstrap exception**: `provision()` (`provision.rs`) calls this
+/// — and [`write_leaf`] — from **every** replica at startup, before leadership is
+/// known (`cli/mod.rs` calls `provision()` unconditionally). That is load-bearing:
+/// a replica cannot serve conf_sync mTLS at all until it holds a root, and it must
+/// not have to wait for a leader election to start. It is safe for the CA half
+/// precisely because of the POST-and-adopt above: concurrent bootstrappers race on a
+/// real HTTP 409, exactly one root survives, and the losers adopt it. An SSA apply
+/// here would be last-writer-wins and would NOT 409 — which is why the create path
+/// deliberately uses POST.
+///
+/// The leaf half of that bootstrap has a **known, benign race**: [`write_leaf`] is a
+/// FORCED apply (last-writer-wins), so if two replicas boot concurrently while the
+/// leaf Secret is missing or past its emergency window (a rolling restart right
+/// after a re-key, a node drain), each mints a *different* client leaf and force-
+/// applies it — two consecutive gateway Secret swaps, hence two fleet-wide conf_sync
+/// channel rebuilds. Nothing is compromised: both leaves are valid and chain to the
+/// same (single, 409-arbitrated) root, and the gateways converge on whichever landed
+/// last. The cost is churn, not a split trust anchor. `provision()` narrows the
+/// window with a re-read immediately before the write; it does not close it, and it
+/// does not need to.
 pub async fn ensure_ca(secret_api: &Api<Secret>, ns: &str, ca_ttl: time::Duration) -> Result<Ca> {
     if let Some(existing) = secret_api.get_opt(CA_SECRET).await.context("get CA secret")? {
         if let (Some(crt), Some(key)) = (data_str(&existing, "ca.crt"), data_str(&existing, "ca.key")) {
@@ -113,6 +168,10 @@ pub async fn ensure_ca(secret_api: &Api<Secret>, ns: &str, ca_ttl: time::Duratio
 
 /// SSA-write the controller-owned gateway leaf Secret (client cert/key + ca.crt).
 /// Overwrites any existing content to keep the leaf consistent with the active CA.
+///
+/// **Forced apply = last-writer-wins.** In steady state the elected leader is the
+/// only caller, so that is unambiguous. The one exception is startup `provision()`,
+/// which every replica runs — see the "known, benign race" paragraph on [`ensure_ca`].
 pub async fn write_leaf(secret_api: &Api<Secret>, ns: &str, leaf: &LeafPem, ca_cert_pem: &str) -> Result<()> {
     let data = BTreeMap::from([
         ("client.crt".to_string(), leaf.cert_pem.as_bytes().to_vec()),

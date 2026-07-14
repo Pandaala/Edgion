@@ -192,7 +192,13 @@ cert/key/ca file paths:
   `WARN` + `cert_reload_invalid` system-error mark is logged.
 - **5-minute re-stat backstop.** Independent of the filesystem watcher, a periodic
   mtime/length re-stat catches inotify events dropped during a kubelet remount race
-  (cheap, and removes the "watcher silently dead" failure mode).
+  (cheap, and removes the "watcher silently dead" failure mode). If the watcher itself
+  cannot be established (construction failure, or an unwatchable cert directory), the
+  watcher task does **not** exit: it marks the latching
+  `edgion_system_error_state{reason="cert_watch_failed"}` gauge, logs an ERROR, and keeps
+  running in backstop-only mode — reloads then land within 5 minutes instead of ~2 seconds.
+  Ticket-level, not an outage; see the
+  [Controller config alerting section](./00-controller-config.md).
 - **The reload deliberately interrupts conf_sync streams for a few seconds — this is
   control-plane only, with zero data-plane impact.** Dropping the old gRPC channel does
   not by itself abort in-flight server-streaming responses, so a successful reload
