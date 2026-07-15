@@ -44,8 +44,11 @@ work_dir: "."
 # K8s  conf_center.type = "kubernetes"
 
 server:
-  # gRPC
-  #  Gateway
+  # gRPC listener for the Gateway conf_sync channel.
+  #
+  # This listener carries resolved Secrets (TLS private keys, backend credentials) to the
+  # data plane -- and it is mTLS by default (see the conf_sync_security section at the
+  # bottom), so binding it on all interfaces does not expose them in cleartext.
   grpc_listen: "0.0.0.0:12151"
 
   # Admin HTTP API (/api/v1, /configclient); used by edgion-cli and Web Dashboard.
@@ -248,25 +251,33 @@ conf_sync:
 # ============================================================================
 # conf_sync Channel Security (mTLS)
 # ============================================================================
-# PRODUCTION: enable mTLS. This channel carries resolved Secrets (TLS private
-# keys, backend credentials) from Controller to Gateway. Following the Istio
-# principle that certificate/secret distribution is never served over plaintext,
-# the shipped Kubernetes manifests (cicd/deploy/kubernetes/) default to mTLS.
+# This channel carries resolved Secrets (TLS private keys, backend credentials)
+# from Controller to Gateway. Following the Istio principle that certificate /
+# secret distribution is never served over plaintext, mTLS is the DEFAULT in every
+# environment — this file included. The shipped Kubernetes manifests
+# (cicd/deploy/kubernetes/) use the Controller's internal CA (auto_ca: true).
 #
-# Omitting this section keeps plaintext gRPC (LOCAL DEV / NON-PRODUCTION only).
-# When omitted, Controller and Gateway both log an ERROR and raise the metric
-# edgion_system_error_state{reason="plaintext_default"} so the degraded state
-# is visible in monitoring.
+# REQUIRED: this section must be present. Omitting it entirely makes the
+# Controller REFUSE TO START (fail-close, since 2026-07-14) — plaintext must be an
+# explicit, audited choice, never the consequence of a forgotten config block.
+# Pick one of: auto_ca (Kubernetes), cert paths (file mode), or skip_tls (plaintext).
 #
-# --- Option A: Legacy single-cert format (backward compatible) ---
-# conf_sync_security:
-#   tls:
-#     cert: certs/grpc/server.crt   # Controller server certificate
-#     key: certs/grpc/server.key    # Controller server private key
-#     ca: certs/grpc/ca.crt         # CA certificate (verifies Gateway client cert)
-#     skip_tls: false               # Emergency bypass: true = skip TLS (INSECURE)
+# Cert paths are resolved relative to work_dir. Generate the referenced set with:
+#   ./edgion-tests/integration/scripts/gen_certs/generate_conf_sync_certs.sh
+# and distribute it into <work_dir>/certs/grpc/ (the integration `prepare` step
+# does this for the repo root, so a bare `cargo run` works off this file as-is).
 #
-# --- Option B: Multi-cert format (supports cert rotation / CA migration) ---
+# `skip_tls: true` (plaintext) still exists as an emergency escape hatch, but it
+# is never a default: both ends log an ERROR and raise the metric
+# edgion_system_error_state{reason="skip_tls"}, and the Controller additionally
+# emits a high-severity WARN when it is combined with a non-loopback grpc_listen.
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/server.crt   # Controller server certificate
+    key: certs/grpc/primary/server.key    # Controller server private key
+    ca: certs/grpc/primary/ca.crt         # CA certificate (verifies Gateway client cert)
+#
+# --- Multi-cert format (supports cert rotation / CA migration) ---
 # conf_sync_security:
 #   active: primary               # Name of the active cert set
 #   certs:

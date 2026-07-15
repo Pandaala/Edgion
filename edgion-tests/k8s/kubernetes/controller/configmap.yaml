@@ -54,3 +54,16 @@ data:
     conf_sync:
       no_sync_kinds: [ReferenceGrant, Secret]
       default_capacity: 200
+
+    # conf_sync channel security. REQUIRED: omitting this section entirely makes the
+    # process refuse to start (fail-close).
+    #
+    # This test stack mirrors PRODUCTION: auto_ca means the Controller's internal CA mints
+    # (and rotates) the serving identity and the gateway client leaf Secret in-cluster, so
+    # the K8s integration suite exercises the same auto-CA + rotation path the shipped
+    # manifests (cicd/deploy/kubernetes/) run. The Controller ServiceAccount already has the
+    # secrets create/update/patch RBAC this needs (see rbac.yaml). The Controller side needs
+    # only auto_ca: true -- it derives an in-memory identity; the Gateway side is asymmetric
+    # (it also needs the mounted cert paths, see the gateway configmap).
+    conf_sync_security:
+      auto_ca: true

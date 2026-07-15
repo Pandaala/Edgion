@@ -135,7 +135,13 @@ pub struct EdgionGatewayConfig {
     pub integration_testing_mode: bool,
 
     /// conf_sync gRPC channel security (mTLS).
-    /// Omit this section to keep plaintext gRPC (backward compatible).
+    ///
+    /// REQUIRED: this section carries the transport choice for a channel that delivers
+    /// resolved Secrets to this data plane, so it must be made explicitly. Omitting it
+    /// makes the Gateway REFUSE TO START (see
+    /// `ConfSyncSecurityConfig::ensure_transport_configured`). Configure exactly one of:
+    /// `auto_ca: true` (Kubernetes), `certs`/legacy `tls` cert paths (file-mode mTLS), or
+    /// `tls.skip_tls: true` — the explicit opt-in for plaintext. Must match the Controller.
     #[arg(skip)]
     #[serde(default)]
     pub conf_sync_security: edgion_common::conf_sync::config::ConfSyncSecurityConfig,
@@ -993,14 +999,27 @@ mod tests {
         DEFAULT_MAX_ESTIMATOR_SLOTS_K,
     };
 
+    /// The gateway instance count is a PROCESS-GLOBAL, and `cargo test` runs the tests in
+    /// this binary on parallel threads. Without serialization, `set_and_get` writing 5 can
+    /// land between `never_zero`'s write of 0 and its read, so `never_zero` observes 5 and
+    /// fails an assertion about clamping that has nothing to do with what actually broke.
+    /// (Observed exactly once under a full `cargo test --all`, where cross-binary CPU
+    /// contention widens the window; the three tests pass on their own.)
+    ///
+    /// `parking_lot::Mutex` per the workspace lint: it does not poison, so a sibling test
+    /// panicking while holding the lock cannot cascade into unrelated failures here.
+    static INSTANCE_COUNT_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
     #[test]
     fn test_gateway_instance_count_default() {
+        let _guard = INSTANCE_COUNT_LOCK.lock();
         // Default should be at least 1
         assert!(get_gateway_instance_count() >= 1);
     }
 
     #[test]
     fn test_gateway_instance_count_set_and_get() {
+        let _guard = INSTANCE_COUNT_LOCK.lock();
         set_gateway_instance_count(5);
         assert_eq!(get_gateway_instance_count(), 5);
         set_gateway_instance_count(1); // cleanup
@@ -1008,8 +1027,10 @@ mod tests {
 
     #[test]
     fn test_gateway_instance_count_never_zero() {
+        let _guard = INSTANCE_COUNT_LOCK.lock();
         set_gateway_instance_count(0); // Try to set zero
         assert_eq!(get_gateway_instance_count(), 1); // Should be clamped to 1
+        set_gateway_instance_count(1); // cleanup: leave the global in its default state
     }
 
     #[test]

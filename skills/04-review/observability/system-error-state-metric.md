@@ -18,7 +18,7 @@ When a review reports "Edgion permits an unsafe mode somewhere (`skip_tls`, `All
    - `component`: reporting subject (defined in `edgion-common/src/observe/system_metrics.rs::components`)
      - Currently: `conf_sync_client`, `conf_sync_server`, `fed_sync_client`, `fed_sync_server`
    - `reason`: degradation condition type (defined in `system_metrics.rs::reasons`)
-     - Currently: `skip_tls`, `plaintext_default`, `peer_identity_self_check`
+     - Currently: `skip_tls`, `peer_identity_self_check` (the conf_sync `plaintext_default` reason was retired on 2026-07-14 when plaintext-by-omission became fail-close — see [../architecture/conf-sync-plaintext-default-observable.md](../architecture/conf-sync-plaintext-default-observable.md))
 3. **Label values must be drawn from bounded constants**; passing free-form strings is not allowed (Prometheus cardinality risk)
 4. **Set once and done**: these are **configuration degradations determined at startup**, not transient faults; no zeroing logic is needed (process restart semantics already cover it)
 5. **Pair with `tracing::error!`**: log gives a one-shot startup warning; the metric provides continuous observability; both coexist

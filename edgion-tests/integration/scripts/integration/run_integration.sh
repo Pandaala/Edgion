@@ -1630,6 +1630,21 @@ main() {
         log_info "Skip build step"
     fi
 
+    # Step 1.5: conf_sync mTLS certificates.
+    #
+    # Runs OUTSIDE the $do_prepare guard on purpose: the checked-in
+    # config/edgion-*.yaml default to file-mode mTLS, so every scenario below needs
+    # the cert store to exist — including a `--no-prepare` run, which skips
+    # prepare.sh (where the same, idempotent, step also runs).
+    log_section "Step 1.5: conf_sync mTLS certificates"
+    # shellcheck source=../utils/conf_sync_certs.sh
+    source "${UTILS_DIR}/conf_sync_certs.sh"
+    if ! conf_sync_distribute_certs "$PROJECT_ROOT"; then
+        log_error "conf_sync cert generation/distribution failed"
+        exit 1
+    fi
+    log_success "conf_sync certs ready (${PROJECT_ROOT}/certs/grpc/)"
+
     # Step 1.6: Controller no-auth + token-auth startup (standalone, no Gateway).
     # Only runs in the default full sweep (no -r / -i targeting). Two phases:
     #   Phase 1 (no-auth): no [local_auth]/[auth] + no EDGION_ADMIN_TOKEN →

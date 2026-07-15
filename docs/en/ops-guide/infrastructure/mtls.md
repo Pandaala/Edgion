@@ -330,17 +330,61 @@ When mTLS is enabled, the Gateway automatically upgrades the `server_addr` conne
 | Multiple `[[certs]]` entries + `active = "name"` | Entry matching `name` |
 | Multiple `[[certs]]` entries, no `active` | Startup error |
 | No `[[certs]]`, legacy `[tls]` present | Legacy `[tls]` entry |
-| No mTLS config | Plaintext gRPC |
+| No mTLS config | Startup failure (see the Behavior Matrix below) |
 
 ### Behavior Matrix
 
 | Configuration | Result |
 |--------------|--------|
-| No `[conf_sync_security]` section | Plaintext gRPC (backward compatible) |
+| No `conf_sync_security` section | **Refuses to start** (non-zero exit, both Controller and Gateway) |
 | Valid active cert | mTLS gRPC |
+| `auto_ca: true` (Controller: alone; Gateway: **plus** `tls` cert paths) | mTLS gRPC (Controller's internal CA provisions the certs) |
+| `auto_ca: true` with no cert paths, on the **Gateway** | Startup failure (`auto_ca` implies mTLS; the client cert must be readable from disk) |
 | `active` not matching any cert name | Startup failure |
 | Missing or invalid cert files | Startup failure (Controller) / connection failure with retry (Gateway) |
-| `skip_tls = true` | Plaintext with ERROR-level warning logs |
+| `skip_tls: true` | Plaintext with ERROR-level warning logs |
+
+### Migration: `conf_sync_security` is now required
+
+The conf_sync channel streams **resolved Secrets** (TLS private keys, backend credentials)
+from the Controller to the Gateway. Plaintext on that channel must therefore be an explicit,
+audited choice — never the silent consequence of a forgotten config block.
+
+Omitting `conf_sync_security` used to mean "plaintext gRPC". It now makes **both binaries
+refuse to start** with a non-zero exit. If your deployment relied on the omitted section,
+pick one before upgrading:
+
+- **Kubernetes (recommended)**: enable the Controller's internal CA. The two sides are **not**
+  symmetric — copying the Controller's block onto the Gateway makes the Gateway exit non-zero:
+
+  ```yaml
+  # Controller — auto_ca alone (it mints its own server identity in memory)
+  conf_sync_security:
+    auto_ca: true
+
+  # Gateway — auto_ca AND the paths to the Controller-provisioned client cert
+  # (Secret `edgion-conf-sync-certs`, mounted by the shipped manifests)
+  conf_sync_security:
+    auto_ca: true
+    tls:
+      cert: /etc/edgion/conf-sync-certs/client.crt
+      key: /etc/edgion/conf-sync-certs/client.key
+      ca: /etc/edgion/conf-sync-certs/ca.crt
+  ```
+
+- **File-mode mTLS**: configure `conf_sync_security.certs` (or the legacy
+  `conf_sync_security.tls` block) with `cert` / `key` / `ca` paths.
+- **Keep plaintext**: opt in explicitly.
+
+```yaml
+conf_sync_security:
+  tls:
+    skip_tls: true    # INSECURE: plaintext conf_sync. Local dev / non-production only.
+```
+
+Plaintext (`skip_tls: true`) still logs an ERROR at startup on both ends and raises
+`edgion_system_error_state{reason="skip_tls"}`, so the degraded state stays visible in
+monitoring.
 
 ### Certificate Rotation
 

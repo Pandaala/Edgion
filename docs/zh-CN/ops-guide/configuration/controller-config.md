@@ -40,13 +40,25 @@ conf_sync:
   # no_sync_kinds: [ReferenceGrant, Secret]
   # 不同步到 Gateway 的资源列表（设置后完全替换默认列表，不是追加）
 
-# ─── gRPC 通道安全（可选 mTLS）────────────────────────────────────
+# ─── gRPC 通道安全（必填）─────────────────────────────────────────
+# 省略此段会导致 Controller 拒绝启动。必须从下面三个选项中选择其一
+# （auto_ca / 证书路径 / skip_tls）。
+#
+# 选项 1 —— Kubernetes：由 Controller 内置 CA 自动签发。
+conf_sync_security:
+  auto_ca: true
+#
+# 选项 2 —— 文件模式 mTLS：
 # conf_sync_security:
 #   tls:
 #     cert: certs/grpc/server.crt   # Controller 服务端证书（PEM）
 #     key: certs/grpc/server.key    # 服务端私钥（PEM）
 #     ca: certs/grpc/ca.crt         # 验证 Gateway 客户端证书的 CA
-#     skip_tls: false               # true = 紧急降级明文，会输出 ERROR 日志
+#
+# 选项 3 —— 显式选择明文（仅限本地开发 / 非生产，会输出 ERROR 日志）：
+# conf_sync_security:
+#   tls:
+#     skip_tls: true
 
 # ─── conf_center：FileSystem 模式（本地开发）─────────────────────
 conf_center:
@@ -116,16 +128,33 @@ conf_center:
 | `capacity_overrides` | `Map<String, Integer>` | `{}` | 按资源 kind 单独覆盖容量，例如 `HTTPRoute = 500` |
 | `no_sync_kinds` | `Array<String>` | `["ReferenceGrant", "Secret"]` | 不同步到 Gateway 的资源列表，**设置后完全替换默认列表，不是追加**，可选 |
 
-### [conf_sync_security.tls]
+### [conf_sync_security]
 
-可选配置。启用后 Controller 的 gRPC 端口使用 mTLS；不配置此 section 时，gRPC 以明文运行。
+**必填配置。** conf_sync gRPC 通道会把解析后的 Secret（TLS 私钥、后端凭证）下发到数据面，
+因此其传输方式必须由运维显式选择。
+
+**完全省略 `conf_sync_security` 段会导致 Controller 拒绝启动**（非零退出码，并打印可操作的错误信息）。
+必须且只能配置以下之一：
+
+| 配置状态 | 结果 |
+|---------|------|
+| `auto_ca: true` | mTLS —— 由 Controller 内置 CA 自动签发 CA 与 Gateway 客户端证书（Kubernetes 推荐） |
+| `certs` / 旧格式 `tls` 段，含 `cert` + `key` + `ca` | 文件模式 mTLS |
+| `tls.skip_tls: true` | 显式选择明文（输出 ERROR 日志；仅限本地开发 / 非生产） |
+| *（省略该段）* | **拒绝启动** |
+
+> **迁移提示**：过去省略该段意味着"明文 gRPC"，依赖此行为的部署现在将无法启动。
+> 若要继续使用明文，请显式声明 `conf_sync_security: {tls: {skip_tls: true}}`；
+> 否则请配置 `auto_ca` 或证书路径。
+
+#### [conf_sync_security.tls]
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `cert` | `String` | — | 服务端证书路径（PEM，相对 work_dir） |
 | `key` | `String` | — | 服务端私钥路径（PEM） |
 | `ca` | `String` | — | CA 证书路径，用于验证 Gateway 客户端证书 |
-| `skip_tls` | `Boolean` | `false` | 紧急降级开关，`true` 时跳过 TLS 以明文启动，会输出 ERROR 日志 |
+| `skip_tls` | `Boolean` | `false` | 显式明文开关，`true` 时跳过 TLS 以明文启动，会输出 ERROR 日志并置位 `edgion_system_error_state{reason="skip_tls"}` |
 
 证书可通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
 

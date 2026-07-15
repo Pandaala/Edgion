@@ -45,6 +45,11 @@ CONFIG_DIR="${WORK_DIR}/config"
 CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
 GATEWAY_CONFIG="${PROJECT_ROOT}/config/edgion-gateway.yaml"
 
+# conf_sync mTLS certs. Both binaries below run with the REPO ROOT as their work dir
+# (the controller via --work-dir, the gateway via the config's `work_dir: "."` and a
+# repo-root cwd), and the checked-in configs resolve certs/grpc/primary/... against it.
+source "${SCRIPT_DIR}/conf_sync_certs.sh"
+
 # serviceport
 TEST_SERVER_HTTP_PORT=30001
 CONTROLLER_ADMIN_PORT=12101
@@ -377,9 +382,14 @@ main() {
         exit 1
     fi
     
+    # : conf_sync mTLS certs (work dir = repo root for both binaries here)
+    log_section "conf_sync mTLS certificates"
+    conf_sync_distribute_certs "$PROJECT_ROOT"
+    log_success "conf_sync certs ready: ${PROJECT_ROOT}/certs/grpc/"
+
     # : Prepareconfigfile
     prepare_config
-    
+
     # : Startservice
     start_test_server
     start_controller

@@ -213,11 +213,18 @@ impl ConfigSyncGrpcServer {
         ConfigSyncService::new(self)
     }
 
-    /// Log + mark the appropriate system-error metric for the plaintext / skip_tls
-    /// path (the `tls_handle = None` branch of `serve_with_shutdown`). Extracted from
-    /// the former `build_server` so the two branches (owned TLS accept loop vs.
-    /// plaintext) stay easy to read side by side.
-    fn log_plaintext_or_skip_tls(security: &ConfSyncSecurityConfig) {
+    /// Gate the plaintext path (the `tls_handle = None` branch of `serve_with_shutdown`).
+    ///
+    /// `skip_tls: true` is the ONE supported way to run this channel in plaintext: it is
+    /// logged loudly and raises the `skip_tls` system-error reason, then serves. Anything
+    /// else reaching this branch is an omitted `conf_sync_security`, which since 2026-07-14
+    /// is FATAL — the channel carries resolved Secrets, so plaintext-by-omission refuses to
+    /// start rather than silently downgrading. The Err propagates out of
+    /// `serve_with_shutdown` (`anyhow::Result<()>`) to the binary, which exits non-zero.
+    fn accept_skip_tls_or_refuse(
+        security: &ConfSyncSecurityConfig,
+        local_addr: Option<std::net::SocketAddr>,
+    ) -> anyhow::Result<()> {
         if let Some(tls) = security.resolve_active_tls() {
             debug_assert!(
                 tls.skip_tls,
@@ -231,20 +238,36 @@ impl ConfigSyncGrpcServer {
                 edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
                 edgion_common::observe::system_metrics::reasons::SKIP_TLS,
             );
-        } else {
-            // No active TLS resolved. validate() already rejected the dangling-`active`
-            // case, so this is the truly-omitted section: plaintext while carrying Secrets.
-            debug_assert!(security.is_plaintext_omitted());
-            tracing::error!(
-                component = "grpc_server",
-                "conf_sync_security omitted: starting gRPC server in PLAINTEXT. This channel \
-                 carries resolved Secrets (TLS keys, backend credentials). Configure mTLS for production."
-            );
-            edgion_common::observe::system_metrics::mark_system_error(
-                edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
-                edgion_common::observe::system_metrics::reasons::PLAINTEXT_DEFAULT,
-            );
+            // `skip_tls` on a loopback bind is a defensible local/single-host choice: the
+            // channel never reaches a network. On any other bind the same setting puts the
+            // resolved Secrets this channel carries (TLS private keys, backend credentials)
+            // on the wire in cleartext, reachable by anything that can route to this address.
+            // We do not hard-reject it -- skip_tls is the deliberate emergency escape hatch,
+            // and an operator with a broken cert chain must retain a way back -- but the
+            // combination must never be silent.
+            if let Some(addr) = local_addr.filter(|a| !a.ip().is_loopback()) {
+                tracing::warn!(
+                    component = "grpc_server",
+                    bind = %addr,
+                    "conf_sync skip_tls=true on a NON-LOOPBACK bind: resolved Secrets (TLS private \
+                     keys, backend credentials) are served in CLEARTEXT on every interface this \
+                     address covers. Bind server.grpc_listen to 127.0.0.1, or configure mTLS certs."
+                );
+            }
+            return Ok(());
         }
+        // No active TLS resolved. validate() already rejected the dangling-`active`
+        // case, so this is the truly-omitted section: fail closed.
+        debug_assert!(security.is_plaintext_omitted());
+        // auto_ca guarantees mTLS (the serving identity is minted in memory), so a
+        // missing `tls_handle` under auto_ca is a provisioning bug, never a license to
+        // serve plaintext. Mirrors the gateway's auto_ca fail-close.
+        anyhow::ensure!(
+            !security.auto_ca,
+            "conf_sync_security.auto_ca=true but no server TLS identity was provisioned; \
+             auto_ca requires mTLS — refusing to serve the conf_sync channel in plaintext."
+        );
+        security.ensure_transport_configured()
     }
 
     /// Start the gRPC server with graceful shutdown support.
@@ -386,8 +409,9 @@ impl ConfigSyncGrpcServer {
                     .await?;
             }
             None => {
-                // Plaintext / skip_tls path: keep the existing direct tonic serve.
-                Self::log_plaintext_or_skip_tls(security);
+                // skip_tls path (the only plaintext path left): direct tonic serve.
+                // An omitted `conf_sync_security` returns Err here and aborts startup.
+                Self::accept_skip_tls_or_refuse(security, listener.local_addr().ok())?;
                 // TcpListenerStream loses TCP_NODELAY; TcpIncoming restores it per-socket.
                 let incoming = tonic::transport::server::TcpIncoming::from_listener(listener, true, None)
                     .map_err(|e| anyhow::anyhow!("failed to build TCP incoming: {e}"))?;
@@ -844,6 +868,89 @@ mod tests {
         fn config_sync_server(&self) -> Option<Arc<ConfigSyncServer>> {
             Some(self.server.lock().clone())
         }
+    }
+
+    #[test]
+    fn omitted_security_refuses_to_serve_plaintext() {
+        // Fail-close (2026-07-14): the plaintext branch of `serve_with_shutdown` must
+        // reject an omitted `conf_sync_security` instead of serving Secrets in the clear.
+        let err = ConfigSyncGrpcServer::accept_skip_tls_or_refuse(&ConfSyncSecurityConfig::default(), None)
+            .expect_err("omitted conf_sync_security must refuse to start");
+        let msg = format!("{err:?}");
+        for needle in ["auto_ca", "skip_tls", "Secrets"] {
+            assert!(msg.contains(needle), "error must mention {needle:?}, got: {msg}");
+        }
+    }
+
+    #[test]
+    fn skip_tls_still_serves_plaintext() {
+        // The explicit escape hatch is untouched: skip_tls is accepted (and marks SKIP_TLS).
+        let security = ConfSyncSecurityConfig {
+            tls: Some(edgion_common::conf_sync::config::ConfSyncTlsConfig {
+                name: None,
+                cert: String::new(),
+                key: String::new(),
+                ca: String::new(),
+                skip_tls: true,
+            }),
+            ..Default::default()
+        };
+        assert!(
+            ConfigSyncGrpcServer::accept_skip_tls_or_refuse(&security, None).is_ok(),
+            "skip_tls must remain the explicit plaintext escape hatch"
+        );
+    }
+
+    #[test]
+    fn skip_tls_on_non_loopback_bind_is_accepted_but_never_silent() {
+        // `skip_tls` is the deliberate escape hatch, so a non-loopback bind must NOT be
+        // hard-rejected -- an operator with a broken cert chain needs a way back. But the
+        // combination (cleartext Secrets on a routable address) must always be loud: this
+        // pins the WARN branch so a future refactor cannot drop it back into silence.
+        let security = ConfSyncSecurityConfig {
+            tls: Some(edgion_common::conf_sync::config::ConfSyncTlsConfig {
+                name: None,
+                cert: String::new(),
+                key: String::new(),
+                ca: String::new(),
+                skip_tls: true,
+            }),
+            ..Default::default()
+        };
+        for bind in ["0.0.0.0:12151", "192.168.1.10:12151", "[::]:12151"] {
+            let addr: std::net::SocketAddr = bind.parse().expect("valid bind");
+            assert!(!addr.ip().is_loopback(), "{bind} must be treated as network-reachable");
+            assert!(
+                ConfigSyncGrpcServer::accept_skip_tls_or_refuse(&security, Some(addr)).is_ok(),
+                "skip_tls on {bind} must still start (escape hatch), only warn"
+            );
+        }
+        for bind in ["127.0.0.1:12151", "[::1]:12151"] {
+            let addr: std::net::SocketAddr = bind.parse().expect("valid bind");
+            assert!(addr.ip().is_loopback(), "{bind} must be treated as loopback");
+            assert!(
+                ConfigSyncGrpcServer::accept_skip_tls_or_refuse(&security, Some(addr)).is_ok(),
+                "skip_tls on {bind} is the defensible single-host case"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn serve_with_shutdown_aborts_when_security_omitted() {
+        // End-to-end on the server entry point: no tls_handle + omitted security => Err,
+        // which propagates out of `serve_with_shutdown` and aborts controller startup.
+        let provider = Arc::new(MockConfigSyncProvider::new(Arc::new(ConfigSyncServer::new())));
+        let grpc = ConfigSyncGrpcServer::new(provider, CancellationToken::new());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let result = grpc
+            .serve_with_shutdown(
+                listener,
+                &ConfSyncSecurityConfig::default(),
+                None,
+                std::future::pending(),
+            )
+            .await;
+        assert!(result.is_err(), "omitted conf_sync_security must not serve plaintext");
     }
 
     #[tokio::test]

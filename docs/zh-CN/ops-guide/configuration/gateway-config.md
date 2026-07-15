@@ -14,13 +14,34 @@ gateway:
   admin_listen: "127.0.0.1:12001"        # Admin API 监听地址（默认：127.0.0.1:12001，仅 loopback）
   # probe_listen: "0.0.0.0:12000"        # 存活/就绪探针端口（默认：0.0.0.0:12000）；绑定 0.0.0.0 以便 kubelet 可通过 Pod IP 访问
 
-# ─── gRPC 通道安全（可选 mTLS）────────────────────────────────────
+# ─── gRPC 通道安全（必填）─────────────────────────────────────────
+# 省略此段会导致 Gateway 拒绝启动。必须从下面三个选项中选择其一，
+# 且需与 Controller 侧的配置保持一致。
+#
+# 选项 1 —— Kubernetes：由 Controller 内置 CA 自动签发客户端证书。
+# 注意：在 GATEWAY 侧，只写 `auto_ca` 是不够的 —— auto_ca 意味着强制 mTLS，因此必须同时
+# 配置证书路径，否则 Gateway 会以非零码退出（"auto_ca=true but no cert paths are configured"）。
+# 这些路径指向 Controller 自动签发的 Secret（`edgion-conf-sync-certs`），官方 manifest 将其
+# 挂载在 /etc/edgion/conf-sync-certs/。只有 CONTROLLER 侧可以只写 `auto_ca: true`
+# （它在内存中自签服务端身份）。
+conf_sync_security:
+  auto_ca: true
+  tls:
+    cert: /etc/edgion/conf-sync-certs/client.crt
+    key: /etc/edgion/conf-sync-certs/client.key
+    ca: /etc/edgion/conf-sync-certs/ca.crt
+#
+# 选项 2 —— 文件模式 mTLS：
 # conf_sync_security:
 #   tls:
 #     cert: certs/grpc/client.crt   # Gateway 客户端证书（PEM）
 #     key: certs/grpc/client.key    # 客户端私钥（PEM）
 #     ca: certs/grpc/ca.crt         # 验证 Controller 服务端证书的 CA
-#     skip_tls: false               # true = 紧急降级明文，会输出 ERROR 日志
+#
+# 选项 3 —— 显式选择明文（仅限本地开发 / 非生产，会输出 ERROR 日志）：
+# conf_sync_security:
+#   tls:
+#     skip_tls: true
 
 logging:
   # 系统日志（不影响业务日志路径）
@@ -116,16 +137,58 @@ Gateway 采用**三端口模型**：
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API 监听地址，默认绑 loopback（`127.0.0.1:12001`）——敏感端点（`/configclient`、`/api/v1/server-info`）不对集群暴露。远程访问请使用 `kubectl port-forward pod/<name> 12001:12001`。 |
 | `probe_listen` | `String` | `0.0.0.0:12000` | 存活/就绪探针监听地址，绑定所有接口以便 kubelet 通过 Pod IP 访问。仅提供 `/health` 和 `/ready`，不加入 gateway Service。 |
 
-### conf_sync_security.tls
+### conf_sync_security
 
-可选配置。启用后 Gateway 使用 mTLS 连接 Controller gRPC；不配置此 section 时，gRPC 以明文连接。
+**必填配置。** conf_sync gRPC 通道会把解析后的 Secret（TLS 私钥、后端凭证）下发到 Gateway，
+因此其传输方式必须由运维显式选择。
+
+**完全省略 `conf_sync_security` 段会导致 Gateway 拒绝启动**（非零退出码，并打印可操作的错误信息）。
+必须且只能配置以下之一：
+
+| 配置状态 | 结果 |
+|---------|------|
+| `auto_ca: true` **并且**配置 `tls` 证书路径 | mTLS —— 由 Controller 内置 CA 自动签发客户端证书（Kubernetes 推荐） |
+| **只写** `auto_ca: true`、没有证书路径 | **拒绝启动** —— auto_ca 意味着强制 mTLS，Gateway 必须知道自动签发的证书文件在哪里 |
+| `certs` / 旧格式 `tls` 段，含 `cert` + `key` + `ca` | 文件模式 mTLS |
+| `tls.skip_tls: true` | 显式选择明文（输出 ERROR 日志；仅限本地开发 / 非生产） |
+| *（省略该段）* | **拒绝启动** |
+
+> **`auto_ca` 两端不对称——不要直接照抄 Controller 的配置块。** **Controller** 只需要
+> `auto_ca: true`：它在内存中自签服务端身份。**Gateway** 则需要 `auto_ca: true` **加上**
+> `tls` 证书路径，因为它的客户端证书是由 Controller 签发进 Secret、必须从磁盘读取的。
+> Gateway 上只写 `auto_ca: true` 会以非零码退出，报
+> `conf_sync_security.auto_ca=true but no cert paths are configured`。
+
+该选择必须与 Controller 侧一致——两端不匹配会导致握手失败。
+
+> **迁移提示**：过去省略该段意味着"明文 gRPC"，依赖此行为的部署现在将无法启动。请从以下三者中选择其一：
+>
+> ```yaml
+> # (a) Kubernetes —— auto_ca + 自动签发的证书路径（与官方 ConfigMap 一致）
+> conf_sync_security:
+>   auto_ca: true
+>   tls:
+>     cert: /etc/edgion/conf-sync-certs/client.crt
+>     key: /etc/edgion/conf-sync-certs/client.key
+>     ca: /etc/edgion/conf-sync-certs/ca.crt
+>
+> # (b) 文件模式 mTLS
+> conf_sync_security:
+>   tls: { cert: certs/grpc/client.crt, key: certs/grpc/client.key, ca: certs/grpc/ca.crt }
+>
+> # (c) 继续使用明文，显式声明（不安全）
+> conf_sync_security:
+>   tls: { skip_tls: true }
+> ```
+
+#### conf_sync_security.tls
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `cert` | `String` | — | 客户端证书路径（PEM，相对 work_dir） |
 | `key` | `String` | — | 客户端私钥路径（PEM） |
 | `ca` | `String` | — | CA 证书路径，用于验证 Controller 服务端证书 |
-| `skip_tls` | `Boolean` | `false` | 紧急降级开关，`true` 时跳过 TLS 以明文连接，会输出 ERROR 日志 |
+| `skip_tls` | `Boolean` | `false` | 显式明文开关，`true` 时跳过 TLS 以明文连接，会输出 ERROR 日志并置位 `edgion_system_error_state{reason="skip_tls"}` |
 
 启用 mTLS 时，`gateway.server_addr` 的 URI scheme 会自动切换为 `https://`。证书可通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
 

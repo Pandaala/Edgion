@@ -58,6 +58,11 @@ impl EdgionGatewayCli {
             );
         }
 
+        // Fail-close (2026-07-14): an omitted `conf_sync_security` refuses to start. The
+        // conf_sync client has the same guard (`ConfigSyncClient::new`); checking here too
+        // fails fast, before the cert-expiry watcher and the auto_ca retry loop.
+        security.ensure_transport_configured()?;
+
         // conf_sync cert expiry safety net (observability only): re-reads the mounted
         // client cert every tick (kubelet refreshes Secret mounts in place), exports the
         // notAfter gauge, and WARN/ERRORs as expiry approaches. Spawned before the client
@@ -352,9 +357,9 @@ impl EdgionGatewayCli {
         }
 
         // 4b. Install the process-wide Prometheus recorder eagerly, before any
-        // startup-time metric is emitted (e.g. the conf_sync client's
-        // plaintext_default / skip_tls system-error gauge during config-sync
-        // client construction, or the integration-testing-mode gauge below).
+        // startup-time metric is emitted (e.g. the conf_sync client's skip_tls
+        // system-error gauge during config-sync client construction, or the
+        // integration-testing-mode gauge below).
         // Reuses the gateway's MetricsConfig so custom histogram buckets are
         // preserved; install_global_recorder is OnceLock-guarded, so the metrics
         // server's later lazy install no-ops. Mirrors the controller's "1b" eager install.

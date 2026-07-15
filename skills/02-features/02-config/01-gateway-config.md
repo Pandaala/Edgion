@@ -33,13 +33,30 @@ gateway:
   # wasm_oci_pull_timeout_secs: 60              # default
   # wasm_oci_pull_attempts: 3                   # default; includes the first attempt
 
-# ─── gRPC channel security (optional mTLS) ───
+# ─── gRPC channel security (REQUIRED — omitting it refuses to start) ───
+# Pick exactly one; it must match the Controller's choice.
+#
+# (a) Kubernetes: auto_ca AND the cert paths. `auto_ca` alone is a startup failure on the
+#     GATEWAY (auto_ca implies mTLS; the Controller-provisioned client cert must be readable
+#     from disk). Only the Controller may set a bare `auto_ca: true`.
+conf_sync_security:
+  auto_ca: true
+  tls:
+    cert: /etc/edgion/conf-sync-certs/client.crt
+    key: /etc/edgion/conf-sync-certs/client.key
+    ca: /etc/edgion/conf-sync-certs/ca.crt
+#
+# (b) file mode: real mTLS from operator-supplied certs
 # conf_sync_security:
 #   tls:
 #     cert: certs/grpc/client.crt    # Gateway client certificate
 #     key: certs/grpc/client.key     # Client private key
 #     ca: certs/grpc/ca.crt          # CA used to verify the Controller server
-#     skip_tls: false                # true = emergency downgrade to plaintext (logs ERROR)
+#
+# (c) explicit plaintext opt-in (INSECURE; ERROR log + skip_tls metric)
+# conf_sync_security:
+#   tls:
+#     skip_tls: true
 
 logging:
   # System log (not the business log)
@@ -142,17 +159,24 @@ access_log_sensitive:
 
 ### conf_sync_security.tls
 
-Optional configuration; when enabled, the Gateway connects to the Controller's gRPC using mTLS.
+**Required section** (one of `auto_ca` + cert paths, cert paths alone, or `skip_tls`); when cert
+paths are set, the Gateway connects to the Controller's gRPC using mTLS.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `cert` | `String` | — | Client certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Client private key path (PEM) |
 | `ca` | `String` | — | CA certificate path (used to verify the Controller server certificate) |
-| `skip_tls` | `bool` | `false` | Emergency downgrade switch: `true` skips TLS and connects in plaintext (logs ERROR) |
-| `auto_ca` | `bool` | `false` | Kubernetes only. `true` = the Controller's internal CA provisions the gateway client Secret (`edgion-conf-sync-certs`). On the data plane `auto_ca` is an **enforced** switch (see below), not just documentation. |
+| `skip_tls` | `bool` | `false` | Explicit plaintext opt-in: `true` skips TLS and connects in plaintext (ERROR log + `skip_tls` metric). The ONLY way to run this channel in plaintext. |
+| `auto_ca` | `bool` | `false` | Kubernetes only. `true` = the Controller's internal CA provisions the gateway client Secret (`edgion-conf-sync-certs`). On the data plane `auto_ca` is an **enforced** switch (see below), not just documentation — and on the Gateway it must be paired with the cert paths. |
 
-> When this section is not configured, gRPC connects in plaintext, fully compatible with previous versions.
+> **`auto_ca` is asymmetric.** The Controller needs only `auto_ca: true` (it mints its own
+> server identity in memory). The **Gateway** needs `auto_ca: true` **plus** the `tls` cert
+> paths — a bare `auto_ca: true` exits non-zero (`edgion-gateway/src/cli/mod.rs`). The shipped
+> `cicd/deploy/kubernetes/gateway/configmap.yaml` is the reference.
+>
+> **Omitting this section entirely makes the Gateway refuse to start** (non-zero exit) — it is
+> not a plaintext default and it is not backward compatible with pre-2026-07-14 behavior.
 > When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically switched to `https://`.
 > Generate certificates with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
@@ -168,8 +192,24 @@ startup):
 > - `skip_tls: true` remains the only explicit plaintext escape hatch; it overrides `auto_ca`
 >   but logs a high-visibility WARN.
 >
-> Without `auto_ca`, an omitted section keeps the legacy plaintext-default behavior (loud
-> telemetry via the `plaintext_default` system-error state, but it connects).
+> **Fail-close (2026-07-14, BREAKING):** an omitted `conf_sync_security` section — with or
+> without `auto_ca` — makes the Gateway **refuse to start** (non-zero exit). This channel
+> carries resolved Secrets, so plaintext must be an explicit choice. The startup error names
+> the three ways forward: `auto_ca: true`, cert paths, or `skip_tls: true`.
+>
+> **Migration:** a deployment that relied on omitting `conf_sync_security` will not start
+> after upgrading. To keep plaintext, opt in explicitly:
+>
+> ```yaml
+> conf_sync_security:
+>   tls:
+>     skip_tls: true   # INSECURE: plaintext conf_sync, ERROR log + skip_tls metric
+> ```
+>
+> Otherwise configure `auto_ca: true` **together with the cert paths** (Kubernetes — a bare
+> `auto_ca` is a second fail-close on the Gateway), or the cert paths alone (file mode). The
+> retired `plaintext_default` system-error reason no longer exists; alert on
+> `edgion_system_error_state{reason="skip_tls"}`.
 
 ### conf_sync client-cert hot reload (no new config fields)
 

@@ -22,8 +22,11 @@ command -v python3 >/dev/null || { log_warn "python3 required; SKIP"; exit 0; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+UTILS_DIR="${PROJECT_ROOT}/edgion-tests/integration/scripts/utils"
 CONTROLLER_BIN="${PROJECT_ROOT}/target/debug/edgion-controller"
 CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
+# shellcheck source=../utils/conf_sync_certs.sh
+source "${UTILS_DIR}/conf_sync_certs.sh"
 
 [[ -x "$CONTROLLER_BIN" ]] || { log_warn "edgion-controller not built; SKIP"; exit 0; }
 [[ -x "$CLI" ]]            || { log_warn "edgion-cli not built; SKIP"; exit 0; }
@@ -65,6 +68,9 @@ trap cleanup EXIT
 log_section "Setup"
 mkdir -p "$CONFIG_DIR" "$CONF_WATCH_DIR" "$LOG_DIR"
 ln -s "${PROJECT_ROOT}/config/crd" "${CONFIG_DIR}/crd"
+# conf_sync is mTLS by default: put the certs where the emitted block expects them
+# (work-dir relative), then let the shared emitter write the transport block.
+conf_sync_distribute_certs "$WORK_DIR"
 
 cat > "${CONFIG_DIR}/edgion-controller.yaml" <<EOF
 work_dir: "${WORK_DIR}"
@@ -89,6 +95,7 @@ conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]
   default_capacity: 200
 EOF
+conf_sync_security_block server >> "${CONFIG_DIR}/edgion-controller.yaml"
 
 # Seed one HTTPRoute with non-empty labels so the wide-mode columns are exercised.
 NAMESPACE="ns-cli-table"

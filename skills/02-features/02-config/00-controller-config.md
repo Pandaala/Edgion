@@ -61,13 +61,13 @@ conf_sync:
     # Service: 1000
   # no_sync_kinds: [ReferenceGrant, Secret]   # Resources not synced to Gateway
 
-# ─── gRPC channel security (optional mTLS) ───
+# ─── gRPC channel security (REQUIRED — omitting it refuses to start) ───
 # conf_sync_security:
 #   tls:
 #     cert: certs/grpc/server.crt    # Controller server certificate
 #     key: certs/grpc/server.key     # Server private key
 #     ca: certs/grpc/ca.crt          # CA used to verify Gateway client
-#     skip_tls: false                # true = emergency downgrade to plaintext (will log ERROR)
+#     skip_tls: false                # true = explicit plaintext opt-in (ERROR log + skip_tls metric)
 #   auto_ca: false                   # Kubernetes only: internal CA auto-provisions certs
 #   rotation:                        # Controller-only; consumed only when auto_ca=true
 #     policy: lifetime                     # lifetime | scheduled | manual
@@ -150,16 +150,41 @@ conf_center:
 
 ### [conf_sync_security.tls]
 
-Optional configuration; when enabled, the Controller's gRPC port uses mTLS.
+**Required section** (one of `auto_ca`, cert paths, or `skip_tls`); when cert paths are
+set, the Controller's gRPC port uses mTLS.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `cert` | `String` | — | Server certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Server private key path (PEM) |
 | `ca` | `String` | — | CA certificate path (used to verify the Gateway client certificate) |
-| `skip_tls` | `bool` | `false` | Emergency downgrade switch: `true` skips TLS and starts in plaintext (logs ERROR) |
+| `skip_tls` | `bool` | `false` | Explicit plaintext opt-in: `true` skips TLS and starts in plaintext (ERROR log + `skip_tls` metric). The ONLY way to run this channel in plaintext. |
 
-> When this section is not configured, gRPC runs in plaintext, fully compatible with previous versions.
+> **Fail-close (2026-07-14, BREAKING):** if `conf_sync_security` is **omitted entirely**,
+> the Controller **refuses to start** (non-zero exit). The conf_sync channel carries
+> resolved Secrets (TLS private keys, backend credentials) to the data plane, so plaintext
+> must be an explicit, audited choice — never the consequence of a forgotten config block.
+> The startup error names the three ways forward.
+>
+> **Migration:** a deployment that relied on omitting `conf_sync_security` will not start
+> after upgrading. Pick one:
+>
+> ```yaml
+> # (a) Kubernetes: the Controller's internal CA provisions everything
+> conf_sync_security:
+>   auto_ca: true
+>
+> # (b) file mode: real mTLS from mounted certs
+> conf_sync_security:
+>   tls: { cert: certs/grpc/server.crt, key: certs/grpc/server.key, ca: certs/grpc/ca.crt }
+>
+> # (c) keep plaintext, explicitly (INSECURE)
+> conf_sync_security:
+>   tls: { skip_tls: true }
+> ```
+>
+> The `plaintext_default` system-error reason was retired (that state is now unreachable);
+> alert on `edgion_system_error_state{reason="skip_tls"}` instead.
 > Generate certificates with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
 ### [conf_sync_security.rotation] — conf_sync Auto-CA Cert Rotation

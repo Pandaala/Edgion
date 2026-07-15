@@ -94,9 +94,19 @@ spec:
           readOnly: true
         - name: logs
           mountPath: /usr/local/edgion/logs
+        - name: conf-sync-certs
+          mountPath: /etc/edgion/conf-sync-certs
+          readOnly: true
       volumes:
       - name: config
         configMap:
           name: edgion-gateway-config
       - name: logs
         emptyDir: {}
+      - name: conf-sync-certs
+        secret:
+          secretName: edgion-conf-sync-certs
+          # optional: the Controller's internal CA provisions this Secret. The pod must
+          # start before it exists; the conf_sync client connects lazily and retries until
+          # the cert appears.
+          optional: true

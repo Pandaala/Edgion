@@ -14,13 +14,35 @@ gateway:
   admin_listen: "127.0.0.1:12001"        # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
   # probe_listen: "0.0.0.0:12000"        # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
 
-# ─── gRPC channel security (optional mTLS) ────────────────────────
+# ─── gRPC channel security (REQUIRED) ─────────────────────────────
+# Omitting this section makes the Gateway REFUSE TO START. Pick exactly one of the
+# three options below, and keep it consistent with the Controller's configuration.
+#
+# Option 1 — Kubernetes: the Controller's internal CA provisions the client cert.
+# NOTE: on the GATEWAY, `auto_ca` alone is NOT enough — auto_ca implies mTLS, so the cert
+# paths must also be set (the Gateway exits non-zero with "auto_ca=true but no cert paths
+# are configured" otherwise). They point at the Secret the Controller provisions
+# (`edgion-conf-sync-certs`), mounted at /etc/edgion/conf-sync-certs/ by the shipped
+# manifests. Only the CONTROLLER may set a bare `auto_ca: true` (it mints its own identity
+# in memory).
+conf_sync_security:
+  auto_ca: true
+  tls:
+    cert: /etc/edgion/conf-sync-certs/client.crt
+    key: /etc/edgion/conf-sync-certs/client.key
+    ca: /etc/edgion/conf-sync-certs/ca.crt
+#
+# Option 2 — file-mode mTLS:
 # conf_sync_security:
 #   tls:
 #     cert: certs/grpc/client.crt   # Gateway client certificate (PEM)
 #     key: certs/grpc/client.key    # Client private key (PEM)
 #     ca: certs/grpc/ca.crt         # CA to verify Controller server certificate
-#     skip_tls: false               # true = emergency plaintext fallback, logs ERROR
+#
+# Option 3 — explicit plaintext opt-in (local dev / non-production only, logs ERROR):
+# conf_sync_security:
+#   tls:
+#     skip_tls: true
 
 logging:
   # System logs only — does NOT affect business log paths
@@ -166,16 +188,60 @@ curl -H "Authorization: Bearer $(kubectl -n <ns> get secret \
 > kubectl -n <ns> rollout restart deployment/edgion-gateway
 > ```
 
-### conf_sync_security.tls
+### conf_sync_security
 
-Optional. When present, Gateway connects to Controller gRPC using mTLS. When absent, gRPC runs in plaintext (compatible with older versions).
+**Required.** The conf_sync gRPC channel delivers resolved Secrets (TLS private keys, backend
+credentials) to the Gateway, so its transport must be chosen explicitly.
+
+**Omitting the `conf_sync_security` section entirely makes the Gateway refuse to start**
+(non-zero exit, with an actionable error). Configure exactly one of:
+
+| Configuration | Result |
+|---------------|--------|
+| `auto_ca: true` **plus** `tls` cert paths | mTLS — the Controller's internal CA provisions the client cert (recommended on Kubernetes) |
+| `auto_ca: true` **alone**, no cert paths | **Refuses to start** — `auto_ca` implies mTLS, so the Gateway needs the paths to the provisioned cert files |
+| `certs` / legacy `tls` block with `cert` + `key` + `ca` | File-mode mTLS |
+| `tls.skip_tls: true` | Plaintext, explicitly opted in (logs ERROR; local dev / non-production only) |
+| *(section omitted)* | **Refuses to start** |
+
+> **`auto_ca` is asymmetric — do not copy the Controller's block.** The **Controller** needs
+> only `auto_ca: true`: it mints its own server identity in memory. The **Gateway** needs
+> `auto_ca: true` **and** the `tls` cert paths, because its client cert arrives as a
+> Controller-provisioned Secret that must be read from disk. A bare `auto_ca: true` on the
+> Gateway exits non-zero with `conf_sync_security.auto_ca=true but no cert paths are
+> configured`.
+
+The choice must match the Controller's — a mismatch causes a handshake failure.
+
+> **Migration**: omitting the section used to mean "plaintext gRPC". Deployments that relied on
+> that will now fail to start. Pick one:
+>
+> ```yaml
+> # (a) Kubernetes — auto_ca + the provisioned cert paths (matches the shipped ConfigMap)
+> conf_sync_security:
+>   auto_ca: true
+>   tls:
+>     cert: /etc/edgion/conf-sync-certs/client.crt
+>     key: /etc/edgion/conf-sync-certs/client.key
+>     ca: /etc/edgion/conf-sync-certs/ca.crt
+>
+> # (b) file-mode mTLS
+> conf_sync_security:
+>   tls: { cert: certs/grpc/client.crt, key: certs/grpc/client.key, ca: certs/grpc/ca.crt }
+>
+> # (c) keep plaintext, explicitly (INSECURE)
+> conf_sync_security:
+>   tls: { skip_tls: true }
+> ```
+
+#### conf_sync_security.tls
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cert` | `String` | — | Client certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Client private key path (PEM) |
 | `ca` | `String` | — | CA certificate path used to verify the Controller server certificate |
-| `skip_tls` | `Boolean` | `false` | Emergency fallback: `true` skips TLS and connects in plaintext (logs ERROR) |
+| `skip_tls` | `Boolean` | `false` | Explicit plaintext opt-in: `true` skips TLS and connects in plaintext (logs ERROR and raises `edgion_system_error_state{reason="skip_tls"}`) |
 
 When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically switched to `https://`. Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
 

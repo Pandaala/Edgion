@@ -33,7 +33,10 @@ NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+UTILS_DIR="${PROJECT_ROOT}/edgion-tests/integration/scripts/utils"
 FIXTURE_DIR="${PROJECT_ROOT}/edgion-tests/integration/conf/Status/ResourceAbnormalMetrics"
+# shellcheck source=../utils/conf_sync_certs.sh
+source "${UTILS_DIR}/conf_sync_certs.sh"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/resource_abnormal_metrics_${TIMESTAMP}"
@@ -90,6 +93,10 @@ log_info "WORK_DIR=$WORK_DIR"
 # Make CRD schemas reachable from work_dir (non-K8s mode requires config/crd).
 ln -s "${PROJECT_ROOT}/config/crd" "${CONFIG_DIR}/crd"
 
+# conf_sync is mTLS by default: put the certs where the emitted block expects them
+# (work-dir relative), then let the shared emitter write the transport block.
+conf_sync_distribute_certs "$WORK_DIR"
+
 # Controller config pinned at the minimum tick (30s) so the snapshot loop
 # rebuilds as quickly as the validator allows.
 cat > "${CONFIG_DIR}/edgion-controller.yaml" <<EOF
@@ -125,6 +132,7 @@ metrics:
     enabled: true
     tick_secs: ${TICK_SECS}
 EOF
+conf_sync_security_block server >> "${CONFIG_DIR}/edgion-controller.yaml"
 log_info "Config file written: ${CONFIG_DIR}/edgion-controller.yaml"
 
 # Pre-seed the watched conf_dir with the bad route + its parent Gateway /

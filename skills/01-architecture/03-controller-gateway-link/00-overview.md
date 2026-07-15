@@ -273,12 +273,16 @@ center:
 | `auto_ca: true` (K8s default) | mTLS; embedded CA self-provisions + rotates certs | mTLS; `auto_ca` **enforces** mTLS — refuses plaintext |
 | File-mode TLS config + valid certificates | mTLS gRPC | mTLS connection |
 | File-mode TLS config + missing certificates | **Refuses to start** (strict mode) | Connection fails, retries with backoff |
-| No security configured (`auto_ca` off, no certs) | Plaintext gRPC + ERROR + `plaintext_default` metric | Plaintext connection |
-| `skip_tls = true` | Plaintext + ERROR log | Plaintext + ERROR log |
+| No security configured (section omitted entirely) | **Refuses to start** (fail-close) | **Refuses to start** (fail-close) |
+| `skip_tls = true` | Plaintext + ERROR log + `skip_tls` metric | Plaintext + ERROR log + `skip_tls` metric |
 
-> The plaintext (no-security) path is observable-but-not-fail-closed for backward
-> compatibility; a proposed flip to fail-close is tracked as a decision in
-> `tasks/todo/conf-sync-plaintext-fail-close.md`.
+> **Fail-close since 2026-07-14 (breaking).** This channel carries resolved Secrets
+> (TLS private keys, backend credentials), so an omitted `conf_sync_security` no longer
+> downgrades to plaintext — both binaries exit non-zero with an actionable error naming
+> the three ways forward (`auto_ca`, cert paths, or `skip_tls`). `skip_tls: true` is the
+> ONLY way to run this channel in plaintext, and it stays loud. The retired
+> `plaintext_default` metric reason is gone; alert on `reason="skip_tls"`.
+> Decision record: [skills/04-review/architecture/conf-sync-plaintext-default-observable.md](../../04-review/architecture/conf-sync-plaintext-default-observable.md).
 
 ### Shared TLS layer
 

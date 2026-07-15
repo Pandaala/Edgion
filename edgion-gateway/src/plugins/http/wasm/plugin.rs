@@ -1271,24 +1271,36 @@ mod tests {
         // Building the plugin registers its callout grant and preloads the
         // module; the eager warm instance runs on_configure (1s tick).
         let plugin = WasmPlugin::create_request(&c).unwrap();
-        // Wait for at least two ticks (and their callout round-trips).
-        tokio::time::sleep(std::time::Duration::from_millis(2500)).await;
 
+        // Poll until a tick's callout has been published, rather than sleeping a fixed 2.5s
+        // and asserting once. The tick is 1s and each one does an HTTP callout round-trip, so
+        // a fixed wait is a bet on wall-clock scheduling: under a full `cargo test --all` the
+        // machine is saturated and 2.5s can pass without two ticks landing, which failed this
+        // assertion for a reason that has nothing to do with what it is testing. Polling to a
+        // generous deadline keeps the test fast on an idle machine and honest on a busy one.
         let seen = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
-        let seen2 = seen.clone();
-        let mut session = ref_mock(vec![("host", "t.example.com"), ("x-wasm-read-callout", "1")]);
-        session
-            .expect_set_request_header()
-            .withf(move |k, v| {
-                if k == "x-wasm-calloutticks" {
-                    seen2.store(v.parse().unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
-                }
-                true
-            })
-            .returning(|_, _| Ok(()));
-        let mut log = PluginLog::new("Wasm");
-        let res = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(res, PluginRunningResult::GoodNext);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        let mut res = None;
+        while std::time::Instant::now() < deadline {
+            let seen2 = seen.clone();
+            let mut session = ref_mock(vec![("host", "t.example.com"), ("x-wasm-read-callout", "1")]);
+            session
+                .expect_set_request_header()
+                .withf(move |k, v| {
+                    if k == "x-wasm-calloutticks" {
+                        seen2.store(v.parse().unwrap_or(0), std::sync::atomic::Ordering::Relaxed);
+                    }
+                    true
+                })
+                .returning(|_, _| Ok(()));
+            let mut log = PluginLog::new("Wasm");
+            res = Some(plugin.run_request(&mut session, &mut log).await);
+            if seen.load(std::sync::atomic::Ordering::Relaxed) >= 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+        }
+        assert_eq!(res, Some(PluginRunningResult::GoodNext));
         assert!(
             seen.load(std::sync::atomic::Ordering::Relaxed) >= 1,
             "tick callouts must have completed and been published via shared data"

@@ -583,18 +583,20 @@ p1_4() {  # Gateway pod starts (optional volume; doesn't hang while Secret absen
   fi
 }
 
-p1_5() {  # Gateway connects via auto mTLS; no plaintext_default
-  step "P1.5 gateway connects via auto mTLS (no plaintext_default)"
+p1_5() {  # Gateway connects via auto mTLS; no plaintext on the channel
+  # Plaintext-by-omission is fail-close (2026-07-14), so the only plaintext state a
+  # RUNNING pod can be in is the explicit `skip_tls` escape hatch. Assert it is off.
+  step "P1.5 gateway connects via auto mTLS (no skip_tls plaintext)"
   local gw_ok=1 ctrl_ok=1 plaintext=0
   [[ -n "$(gw_log_grep 'conf_sync mTLS enabled for gRPC client')" ]] || gw_ok=0
   [[ -n "$(ctrl_log_grep 'conf_sync mTLS enabled (hot-reloadable accept loop)')" ]] \
     || [[ -n "$(ctrl_log_grep 'auto-CA, in-memory server cert')" ]] || ctrl_ok=0
-  [[ -n "$(gw_log_grep 'plaintext_default')" ]] && plaintext=1
-  [[ -n "$(ctrl_log_grep 'plaintext_default')" ]] && plaintext=1
+  [[ -n "$(gw_log_grep 'skip_tls=true')" ]] && plaintext=1
+  [[ -n "$(ctrl_log_grep 'skip_tls=true')" ]] && plaintext=1
   if [[ "$gw_ok" == 1 && "$ctrl_ok" == 1 && "$plaintext" == 0 ]]; then
-    record P1.5 PASS "gateway 'mTLS enabled' + controller auto-CA path present; no plaintext_default"
+    record P1.5 PASS "gateway 'mTLS enabled' + controller auto-CA path present; no plaintext"
   else
-    record P1.5 FAIL "gw_mtls=${gw_ok} ctrl_autoCA=${ctrl_ok} plaintext_default=${plaintext}"
+    record P1.5 FAIL "gw_mtls=${gw_ok} ctrl_autoCA=${ctrl_ok} plaintext=${plaintext}"
   fi
 }
 

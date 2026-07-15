@@ -161,7 +161,7 @@ ensure_builder() {
     --platform "${PLATFORM}" \
     --build-arg "RUST_VERSION=${RUST_VERSION:-1.92}" \
     -t "${tag}" \
-    -f "${PROJECT_ROOT}/docker/Dockerfile.builder" \
+    -f "${PROJECT_ROOT}/cicd/docker/Dockerfile.builder" \
     "${PROJECT_ROOT}"
   log_ok "Builder image ${tag} created"
 }
@@ -172,10 +172,15 @@ ensure_builder() {
 cross_compile() {
   local builder_tag="${BUILDER_IMAGE}:${PLATFORM//\//-}"
 
-  # Build cargo command for bins
+  # Build cargo command for bins. The `ctl` alias maps to the real bin name
+  # `edgion-cli` (there is no `edgion-ctl` target); all other bins are `edgion-<name>`.
   local cargo_bin_args=""
   for b in "${BUILD_BINS[@]}"; do
-    cargo_bin_args+=" --bin edgion-${b}"
+    if [[ "${b}" == "ctl" ]]; then
+      cargo_bin_args+=" --bin edgion-cli"
+    else
+      cargo_bin_args+=" --bin edgion-${b}"
+    fi
   done
 
   # The harness binaries (test_server/test_client) are [[bin]] targets of the
@@ -276,7 +281,7 @@ build_one_image() {
   log_info "Building image: ${image_tag}"
 
   DOCKER_BUILDKIT=1 docker build \
-    --file "${PROJECT_ROOT}/docker/Dockerfile.runtime" \
+    --file "${PROJECT_ROOT}/cicd/docker/Dockerfile.runtime" \
     --build-arg "BINARY=${binary_name}" \
     --build-arg "BUILD_TYPE=${build_type}" \
     --build-arg "BINARY_PATH=${BIN_PATH}" \

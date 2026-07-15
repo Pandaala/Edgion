@@ -9,6 +9,13 @@
 # Resources (Gateway, Route, Plugin, etc.) are stored in etcd instead of
 # the local file system or Kubernetes API.
 #
+# Like file_system mode, etcd is a NON-Kubernetes mode: the controller loads CRD schemas
+# from <work_dir>/config/crd at startup (K8s mode gets them from the API server instead).
+# The release tarball ships these; the container image does NOT bundle them -- if you run
+# this mode from the container image, mount config/crd into <work_dir>/config/crd. See
+# docs/en/getting-started/installation-and-deployment.md ("Running the container image in a
+# non-Kubernetes mode").
+#
 # ================================================================================
 
 work_dir: "."
@@ -25,6 +32,9 @@ logging:
 # Server Configuration
 # ============================================================================
 server:
+  # conf_sync listener. It carries resolved Secrets (TLS private keys, backend
+  # credentials) to the data plane and is mTLS by default (see the conf_sync_security
+  # section at the bottom), so binding it on all interfaces is safe.
   grpc_listen: "0.0.0.0:12151"
   # Secure default: loopback. A distributed etcd-backed deployment that needs
   # remote admin access must set 0.0.0.0 plus allow_admin_ips.
@@ -71,3 +81,33 @@ conf_center:
 conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]
   default_capacity: 200
+
+# ============================================================================
+# conf_sync Channel Security (mTLS)
+# ============================================================================
+# REQUIRED: omitting this section entirely makes the process REFUSE TO START
+# (fail-close, since 2026-07-14) -- the conf_sync channel carries resolved Secrets
+# (TLS private keys, backend credentials), so plaintext must be an explicit choice.
+# Pick one of: auto_ca (Kubernetes), cert paths (file mode), or skip_tls (plaintext).
+#
+# etcd mode is the profile MOST likely to be split across hosts, which is exactly why
+# it defaults to file-mode mTLS: the moment the Gateway runs on a different machine
+# than the Controller, plaintext here would put TLS private keys on the wire.
+#
+# Paths are resolved relative to work_dir. Generate the referenced set with:
+#   ./edgion-tests/integration/scripts/gen_certs/generate_conf_sync_certs.sh
+# and distribute it into <work_dir>/certs/grpc/. In a real deployment point these at
+# the operator-managed absolute paths instead, e.g.:
+#
+#   conf_sync_security:
+#     tls:
+#       cert: /etc/edgion/conf-sync-certs/server.crt
+#       key:  /etc/edgion/conf-sync-certs/server.key
+#       ca:   /etc/edgion/conf-sync-certs/ca.crt
+#
+# and give the Gateway the matching client cert / key / ca.
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/server.crt
+    key: certs/grpc/primary/server.key
+    ca: certs/grpc/primary/ca.crt

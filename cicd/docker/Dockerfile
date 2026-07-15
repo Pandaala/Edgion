@@ -195,6 +195,14 @@ EXPOSE 80 443 10080 10443 18443 19000 19002 19010 12151 12101
 # Restart-loop entrypoint: when the binary is killed (e.g. by kubectl exec pkill during hot-patch),
 # the shell restarts it automatically without triggering a K8s pod restart.
 # This enables: kubectl cp new-binary → pkill → binary restarts in-place.
+#
+# WARNING — this loop MASKS every fail-close exit. A binary that refuses to start on a bad
+# config (e.g. a missing `conf_sync_security` section: both binaries exit non-zero by design)
+# is simply relaunched every second, so the container stays Running and never reaches
+# CrashLoopBackOff. Symptom: "the pod is Running but does nothing" — check the container
+# LOGS for the startup error rather than the pod status/restart count.
+# This is a dev/test-image-only hazard: released images are built from Dockerfile.runtime,
+# which `exec`s the binary directly and surfaces a fail-close as a proper CrashLoopBackOff.
 ENTRYPOINT ["/bin/sh", "-c"]
 CMD ["while true; do /usr/local/edgion/${BINARY}; echo '[edgion] process exited, restarting in 1s...'; sleep 1; done"]
 

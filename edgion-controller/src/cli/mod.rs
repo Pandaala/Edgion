@@ -772,6 +772,12 @@ impl EdgionControllerCli {
         let metrics_addr = parse_listen_addr(Some(&config.metrics_listen()), "0.0.0.0:12190")?;
         let security = config.conf_sync_security.clone();
         security.validate()?;
+        // Fail-close (2026-07-14): an omitted `conf_sync_security` aborts startup here,
+        // BEFORE any listener is bound. The gRPC server has the same guard
+        // (`accept_skip_tls_or_refuse`), but it runs inside a `tokio::join!` with the
+        // Admin API, so an error there would not promptly stop the process — this is the
+        // check that turns the misconfiguration into a non-zero exit (`run()` -> `main`).
+        security.ensure_transport_configured()?;
 
         Self::start_services(
             conf_mgr,

@@ -1,7 +1,10 @@
 work_dir: /usr/local/edgion
 
 gateway:
-  server_addr: "http://127.0.0.1:12151"
+  # mTLS by default (see conf_sync_security at the bottom); dial the Controller over https.
+  # On a split-host deployment, change 127.0.0.1 to the Controller's reachable host/IP --
+  # it must match a --server-san baked into the Controller's server cert.
+  server_addr: "https://127.0.0.1:12151"
   admin_listen: "127.0.0.1:12001"        # Admin API — loopback-only (sensitive: /configclient, /api/v1/server-info)
   # probe_listen: "0.0.0.0:12000"        # Liveness/readiness probe port (default: 0.0.0.0:12000); serves /health and /ready
 
@@ -49,3 +52,28 @@ tcp_log:
 
 udp_log:
   enabled: false
+
+# ============================================================================
+# conf_sync Channel Security
+# ============================================================================
+# REQUIRED: omitting this section entirely makes the process REFUSE TO START
+# (fail-close, since 2026-07-14) -- the conf_sync channel carries resolved Secrets
+# (TLS private keys, backend credentials), so plaintext must be an explicit choice.
+# Pick one of: auto_ca (Kubernetes), cert paths (file mode, below), or skip_tls (plaintext).
+#
+# File-mode mTLS is the standalone default. The client cert below comes from the SAME set
+# the Controller generated (see edgion-controller.yaml) -- generate it once with:
+#
+#   edgion-cli gen-certs --output file --output-dir /usr/local/edgion/certs/grpc \
+#       --server-san 127.0.0.1 --server-san localhost
+#
+# SPLITTING CONTROLLER AND GATEWAY ONTO DIFFERENT HOSTS? Copy client.crt/client.key/ca.crt
+# from the Controller host to this host, and point `server_addr` above at the Controller's
+# reachable host/IP (which must be a --server-san in the Controller's server cert). The
+# mTLS handshake protects the Secrets this channel carries -- no plaintext crosses the
+# network. `server_addr` uses the https:// scheme under mTLS (it is normalized either way).
+conf_sync_security:
+  tls:
+    cert: certs/grpc/primary/client.crt   # Gateway client certificate (PEM)
+    key: certs/grpc/primary/client.key    # Client private key (PEM)
+    ca: certs/grpc/primary/ca.crt         # CA used to verify the Controller server certificate

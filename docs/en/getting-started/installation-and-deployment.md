@@ -62,6 +62,27 @@ If you need to understand process-level configuration and working directories, c
 
 - [Developer Guide / Work Directory Design](../dev-guide/work-directory.md)
 
+### Running the container image in a non-Kubernetes mode
+
+The `start.sh` path above uses the release binaries with the CRD schemas already on disk under
+`config/crd`, so nothing extra is required.
+
+If you instead run the **controller container image** in a non-Kubernetes config-center mode
+(`conf_center.type: file_system` or `etcd`), be aware that the runtime image does **not** bundle the
+CRD schemas — they are only needed in non-Kubernetes mode, and in Kubernetes mode the schema comes
+from the API server. Without them the controller exits at startup with `FATAL: No schemas loaded in
+non-K8s mode`. Mount the CRD directory into `<work_dir>/config/crd`, for example:
+
+```bash
+docker run \
+  -v "$PWD/config/crd:/usr/local/edgion/config/crd:ro" \
+  -v "$PWD/edgion-controller.yaml:/usr/local/edgion/edgion-controller.yaml:ro" \
+  docker.io/pandaala/edgion-controller:<tag> \
+  edgion-controller --config-file /usr/local/edgion/edgion-controller.yaml
+```
+
+The gateway image never loads CRD schemas, so this applies to the controller only.
+
 ## Configuration and example entry points
 
 The repository already contains a few useful starting points:

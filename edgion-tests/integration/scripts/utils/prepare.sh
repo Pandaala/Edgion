@@ -149,7 +149,25 @@ main() {
         log_error "Build failed! Exiting..."
         exit 1
     fi
-    
+
+    # conf_sync mTLS certificates.
+    #
+    # The checked-in config/edgion-*.yaml default to file-mode mTLS with work-dir
+    # relative paths (certs/grpc/primary/...). Generate the cert store (idempotent,
+    # needs edgion-cli, hence after the builds) and distribute it into the REPO ROOT,
+    # which is the work_dir of a bare `cargo run` / any binary launched from a fresh
+    # clone without --work-dir. Per-run work dirs get their own copy from the scripts
+    # that create them.
+    log_section "conf_sync mTLS certificates"
+    # shellcheck source=conf_sync_certs.sh
+    source "${SCRIPT_DIR}/conf_sync_certs.sh"
+    if ! conf_sync_distribute_certs "$PROJECT_ROOT"; then
+        log_error "conf_sync cert generation/distribution failed! Exiting..."
+        exit 1
+    fi
+    log_success "conf_sync certs available at ${PROJECT_ROOT}/certs/grpc/{primary,secondary}"
+
+
     # 
     local end_time=$(date +%s)
     local duration=$((end_time - start_time))

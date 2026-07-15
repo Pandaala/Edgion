@@ -67,7 +67,12 @@ WORK_DIR=""
 LOG_DIR=""
 PID_DIR=""
 CONFIG_DIR=""
-CONTROLLER_CONFIG="${PROJECT_ROOT}/config/edgion-controller.yaml"
+# Resolved in resolve_work_dir() to the WORK-DIR COPY that start_all_with_conf.sh produced.
+# The repo config/edgion-controller.yaml carries the same (mTLS) transport block, but its
+# work-dir relative cert paths only resolve against the run's WORK_DIR — which is where
+# start_all_with_conf.sh distributed the cert set. Restart from the work-dir copy with
+# --work-dir "${WORK_DIR}" so the Controller finds the certs the running Gateway trusts.
+CONTROLLER_CONFIG=""
 
 # =============================================================================
 # Log helpers (same style as run_conf_sync_test.sh)
@@ -124,6 +129,12 @@ resolve_work_dir() {
     LOG_DIR="${WORK_DIR}/logs"
     PID_DIR="${WORK_DIR}/pids"
     CONFIG_DIR="${WORK_DIR}/config"
+    # The work-dir copy of the checked-in (mTLS) config; its cert paths resolve under WORK_DIR.
+    CONTROLLER_CONFIG="${CONFIG_DIR}/edgion-controller.yaml"
+    if [ ! -f "$CONTROLLER_CONFIG" ]; then
+        log_error "Controller config not found: ${CONTROLLER_CONFIG} -- run start_all_with_conf.sh first"
+        exit 1
+    fi
 
     export EDGION_WORK_DIR="${WORK_DIR}"
 
@@ -393,9 +404,19 @@ main() {
     # Right after a restart the Controller's config subsystem may still be
     # initializing ("controller initializing, please retry after init completes").
     # Retry the (idempotent) apply until it is accepted or we time out.
+    #
+    # The budget must comfortably exceed real init time: it was measured at ~16s against a
+    # 15x1s budget, so this case failed by ~1s and looked like a propagation bug. Keep the
+    # headroom generous — a budget that sits just under init time is a flake generator, not
+    # a bug detector.
+    #
+    # Keep the last error, too: swallowing it into /dev/null made a genuine apply rejection
+    # indistinguishable from "still initializing", which is exactly how the ~1s shortfall got
+    # misread as the Controller never leaving init at all.
     apply_ok=false
-    for _ in $(seq 1 15); do
-        if "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f /tmp/reconnect-route.yaml > /dev/null 2>&1; then
+    apply_err=""
+    for _ in $(seq 1 60); do
+        if apply_err=$("$EDGION_CLI" --server "$CONTROLLER_URL" apply -f /tmp/reconnect-route.yaml 2>&1); then
             apply_ok=true
             break
         fi
@@ -427,7 +448,7 @@ main() {
         fi
     else
         assert_pass "new_route_propagates_after_reconnect" "fail" \
-            "edgion-cli apply failed — Controller may not have accepted the fixture"
+            "edgion-cli apply never accepted within 60s; last error: ${apply_err}"
     fi
 
     # -------------------------------------------------------------------------

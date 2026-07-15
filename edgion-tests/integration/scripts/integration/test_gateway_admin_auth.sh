@@ -27,6 +27,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+UTILS_DIR="${REPO_ROOT}/edgion-tests/integration/scripts/utils"
+# shellcheck source=../utils/conf_sync_certs.sh
+source "${UTILS_DIR}/conf_sync_certs.sh"
 
 GATEWAY_BIN="${EDGION_GATEWAY_BIN:-$REPO_ROOT/target/debug/edgion-gateway}"
 CONTROLLER_BIN="${EDGION_CONTROLLER_BIN:-$REPO_ROOT/target/debug/edgion-controller}"
@@ -174,11 +177,16 @@ EOF
     # Minimal controller config — file_system conf center seeded above. No
     # [local_auth] / [auth]: the gateway↔controller gRPC sync path does not use
     # the admin HTTP auth, and this test never calls the controller's admin API.
+    # conf_sync is mTLS by default: distribute the certs into the Controller's work
+    # dir (CTRL_TMPDIR), then let the shared emitter write the transport block.
+    conf_sync_distribute_certs "$CTRL_TMPDIR"
+
     cat > "$CTRL_TMPDIR/controller.yaml" <<EOF
 conf_center:
   type: file_system
   conf_dir: ${CONF_DIR}
 EOF
+    conf_sync_security_block server >> "$CTRL_TMPDIR/controller.yaml"
 
     precheck_port "$CTRL_ADMIN_PORT" "controller admin" || return 1
     precheck_port "$CTRL_GRPC_PORT"  "controller gRPC"  || return 1
@@ -235,6 +243,10 @@ start_gateway() {
     #   - metrics.listen is moved off the 12090 default so the two sequential
     #     launches (and the host) cannot collide on it.
     # admin/probe listens come from CLI flags below.
+    # conf_sync is mTLS by default: the Gateway needs the CLIENT half of the same
+    # cert set, in its own work dir (GW_TMPDIR, passed as --work-dir below).
+    conf_sync_distribute_certs "$GW_TMPDIR"
+
     cat > "$GW_TMPDIR/gateway.yaml" <<EOF
 work_dir: "."
 logging:
@@ -242,6 +254,7 @@ logging:
 metrics:
   listen: "127.0.0.1:${GW_METRICS_PORT}"
 EOF
+    conf_sync_security_block client >> "$GW_TMPDIR/gateway.yaml"
 
     precheck_port "$GW_ADMIN_PORT"     "gateway admin"     || return 1
     precheck_port "$GW_PROBE_PORT"     "gateway probe"     || return 1
@@ -254,7 +267,7 @@ EOF
     "$GATEWAY_BIN" \
         -c "$GW_TMPDIR/gateway.yaml" \
         --work-dir "$GW_TMPDIR" \
-        --server-addr "http://127.0.0.1:${CTRL_GRPC_PORT}" \
+        --server-addr "https://127.0.0.1:${CTRL_GRPC_PORT}" \
         --integration-testing-mode \
         --admin-listen "127.0.0.1:${GW_ADMIN_PORT}" \
         --probe-listen "127.0.0.1:${GW_PROBE_PORT}" \

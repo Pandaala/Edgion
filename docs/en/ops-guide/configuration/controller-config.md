@@ -40,13 +40,25 @@ conf_sync:
   # no_sync_kinds: [ReferenceGrant, Secret]
   # Kinds NOT synced to Gateway — setting this REPLACES the default list entirely, not appended
 
-# ─── gRPC channel security (optional mTLS) ────────────────────────
+# ─── gRPC channel security (REQUIRED) ─────────────────────────────
+# Omitting this section makes the Controller REFUSE TO START. Pick exactly one of
+# the three options below (auto_ca / cert paths / skip_tls).
+#
+# Option 1 — Kubernetes: the Controller's internal CA provisions everything.
+conf_sync_security:
+  auto_ca: true
+#
+# Option 2 — file-mode mTLS:
 # conf_sync_security:
 #   tls:
 #     cert: certs/grpc/server.crt   # Controller server certificate (PEM)
 #     key: certs/grpc/server.key    # Server private key (PEM)
 #     ca: certs/grpc/ca.crt         # CA to verify Gateway client certificates
-#     skip_tls: false               # true = emergency plaintext fallback, logs ERROR
+#
+# Option 3 — explicit plaintext opt-in (local dev / non-production only, logs ERROR):
+# conf_sync_security:
+#   tls:
+#     skip_tls: true
 
 # ─── conf_center: FileSystem mode (local development) ─────────────
 conf_center:
@@ -118,16 +130,33 @@ conf_center:
 | `capacity_overrides` | `Map<String, Integer>` | `{}` | Per-kind capacity overrides, e.g. `HTTPRoute = 500` |
 | `no_sync_kinds` | `Array<String>` | `["ReferenceGrant", "Secret"]` | Kinds NOT synced to Gateway. **Setting this replaces the default list entirely — it is not appended**. Optional |
 
-### [conf_sync_security.tls]
+### [conf_sync_security]
 
-Optional. When present, the Controller gRPC port uses mTLS. When absent, gRPC runs in plaintext (compatible with older versions).
+**Required.** The conf_sync gRPC channel carries resolved Secrets (TLS private keys, backend
+credentials) to the data plane, so its transport must be chosen explicitly.
+
+**Omitting the `conf_sync_security` section entirely makes the Controller refuse to start**
+(non-zero exit, with an actionable error). Configure exactly one of:
+
+| Configuration | Result |
+|---------------|--------|
+| `auto_ca: true` | mTLS — the Controller's internal CA provisions the CA and the Gateway client cert (recommended on Kubernetes) |
+| `certs` / legacy `tls` block with `cert` + `key` + `ca` | File-mode mTLS |
+| `tls.skip_tls: true` | Plaintext, explicitly opted in (logs ERROR; local dev / non-production only) |
+| *(section omitted)* | **Refuses to start** |
+
+> **Migration**: omitting the section used to mean "plaintext gRPC". Deployments that relied on
+> that will now fail to start. To keep plaintext, opt in explicitly with
+> `conf_sync_security: {tls: {skip_tls: true}}`; otherwise configure `auto_ca` or cert paths.
+
+#### [conf_sync_security.tls]
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `cert` | `String` | — | Server certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Server private key path (PEM) |
 | `ca` | `String` | — | CA certificate path used to verify Gateway client certificates |
-| `skip_tls` | `Boolean` | `false` | Emergency fallback: `true` skips TLS and starts in plaintext mode (logs ERROR) |
+| `skip_tls` | `Boolean` | `false` | Explicit plaintext opt-in: `true` skips TLS and starts in plaintext mode (logs ERROR and raises `edgion_system_error_state{reason="skip_tls"}`) |
 
 Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
 

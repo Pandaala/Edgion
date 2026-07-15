@@ -137,16 +137,16 @@ impl ConfigSyncClient {
                      cert paths (the Controller's internal CA provisions the gateway Secret)."
                 );
             }
-            tracing::error!(
-                component = "grpc_client",
-                "conf_sync_security omitted: connecting in PLAINTEXT. This channel carries \
-                 resolved Secrets (TLS keys, backend credentials). Configure mTLS for production."
+            // Fail-close (2026-07-14): plaintext-by-omission is no longer connected. Only an
+            // explicit `skip_tls: true` (handled above) may run this channel in plaintext.
+            security.ensure_transport_configured()?;
+            // Unreachable in practice: the only other shape that resolves to no TLS is a
+            // dangling `active`, which `validate()` already rejects. Refuse anyway rather
+            // than fall through to a plaintext channel.
+            anyhow::bail!(
+                "conf_sync_security resolves to no TLS material; refusing to connect the \
+                 Secret-carrying conf_sync channel in plaintext"
             );
-            edgion_common::observe::system_metrics::mark_system_error(
-                edgion_common::observe::system_metrics::components::CONF_SYNC_CLIENT,
-                edgion_common::observe::system_metrics::reasons::PLAINTEXT_DEFAULT,
-            );
-            None
         };
 
         // connect_lazy returns a Channel immediately; connection happens on first request.
@@ -476,10 +476,25 @@ mod tests {
     /// A loopback address that is never dialed (connect_lazy defers the connect).
     const DUMMY_ADDR: &str = "127.0.0.1:65000";
 
+    /// An explicit `skip_tls` section — the only supported plaintext config, and the
+    /// cheapest way to build a client without touching cert files.
+    fn skip_tls_security() -> ConfSyncSecurityConfig {
+        ConfSyncSecurityConfig {
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: String::new(),
+                key: String::new(),
+                ca: String::new(),
+                skip_tls: true,
+            }),
+            ..Default::default()
+        }
+    }
+
     #[tokio::test]
     async fn reload_cancels_previous_generation() {
-        // Uses a plaintext client against no server: connect_lazy never dials until use.
-        let sec = ConfSyncSecurityConfig::default();
+        // Uses a plaintext (skip_tls) client against no server: connect_lazy never dials.
+        let sec = skip_tls_security();
         let client = ConfigSyncClient::new("127.0.0.1:1", "t".into(), Duration::from_secs(1), &sec)
             .await
             .unwrap();
@@ -512,12 +527,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_auto_ca_with_omitted_tls_still_connects_plaintext() {
-        // Backward-compatible interim stance: without auto_ca, an omitted section
-        // keeps the plaintext-default behavior (loud telemetry, but connects).
+    async fn omitted_security_fails_closed_instead_of_plaintext() {
+        // Fail-close (2026-07-14): an omitted `conf_sync_security` no longer connects in
+        // plaintext — it refuses to start. `skip_tls: true` is the only plaintext path.
         let security = ConfSyncSecurityConfig::default();
+        let Err(err) = ConfigSyncClient::new(DUMMY_ADDR, "test".to_string(), Duration::from_secs(1), &security).await
+        else {
+            panic!("omitted conf_sync_security must fail closed, not connect in plaintext");
+        };
+        let msg = format!("{err:?}");
+        for needle in ["skip_tls", "auto_ca", "Secrets"] {
+            assert!(msg.contains(needle), "error must mention {needle:?}, got: {msg}");
+        }
+    }
+
+    #[tokio::test]
+    async fn skip_tls_without_auto_ca_still_connects_plaintext() {
+        // The explicit escape hatch is untouched: skip_tls still yields a usable client.
+        let security = skip_tls_security();
         let client = ConfigSyncClient::new(DUMMY_ADDR, "test".to_string(), Duration::from_secs(1), &security).await;
-        assert!(client.is_ok(), "non-auto_ca omitted must keep plaintext-default (Ok)");
+        assert!(
+            client.is_ok(),
+            "skip_tls must remain the explicit plaintext escape hatch"
+        );
     }
 
     #[tokio::test]

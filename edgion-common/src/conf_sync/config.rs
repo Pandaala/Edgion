@@ -122,13 +122,51 @@ impl ConfSyncSecurityConfig {
     }
 
     /// True when the security section is entirely unconfigured: no cert sets,
-    /// no legacy `tls`, and no `active` selector. In this state conf_sync runs
-    /// in plaintext and the channel builder marks `PLAINTEXT_DEFAULT`.
+    /// no legacy `tls`, and no `active` selector. Since 2026-07-14 this state is
+    /// FATAL for conf_sync on both planes — see [`Self::ensure_transport_configured`].
     ///
-    /// Distinct from `skip_tls` (certs present but bypassed) and from a dangling
-    /// `active` selector (rejected by `validate()`).
+    /// Distinct from `skip_tls` (certs present but bypassed — still the explicit,
+    /// supported way to run plaintext) and from a dangling `active` selector
+    /// (rejected by `validate()`).
     pub fn is_plaintext_omitted(&self) -> bool {
         self.certs.is_empty() && self.tls.is_none() && self.active.is_none()
+    }
+
+    /// Fail-close guard for the conf_sync transport (Controller↔Gateway).
+    ///
+    /// The conf_sync channel streams **resolved Secrets** (TLS private keys,
+    /// backend credentials) to the data plane. An omitted `conf_sync_security`
+    /// therefore must never mean "run in plaintext": plaintext has to be an
+    /// explicit, audited choice (`skip_tls: true`), never the consequence of a
+    /// forgotten config block. Both the Controller (conf_sync gRPC server) and
+    /// the Gateway (conf_sync gRPC client) call this at startup and refuse to
+    /// start when it errors.
+    ///
+    /// `auto_ca: true` is itself a complete transport choice (the shipped Kubernetes
+    /// default): the Controller mints its serving identity in memory from its internal
+    /// CA, so it legitimately carries no cert paths and is NOT the omitted state here.
+    /// The gateway separately requires cert paths under `auto_ca` and fails closed on
+    /// its own (`ConfigSyncClient::new`).
+    ///
+    /// Deliberately NOT folded into [`Self::validate`]: `validate` is also run
+    /// by consumers that only parse the block (e.g. the gateway parsing the
+    /// controller-only `rotation` sub-block) and must stay lenient about an
+    /// entirely-empty section.
+    pub fn ensure_transport_configured(&self) -> anyhow::Result<()> {
+        if self.is_plaintext_omitted() && !self.auto_ca {
+            anyhow::bail!(
+                "conf_sync_security is not configured: refusing to start. The conf_sync channel \
+                 carries resolved Secrets (TLS private keys, backend credentials) to the data \
+                 plane, so plaintext must be an explicit, audited choice — never the result of an \
+                 omitted config block. Choose one: (a) set `conf_sync_security.auto_ca: true` \
+                 (Kubernetes: the Controller's internal CA provisions the CA and the gateway \
+                 client cert automatically); (b) configure `conf_sync_security.certs` (or the \
+                 legacy `conf_sync_security.tls` block) with `cert`/`key`/`ca` paths for file-mode \
+                 mTLS; (c) if you genuinely intend plaintext, set `skip_tls: true` on the active \
+                 cert set to opt in explicitly."
+            );
+        }
+        Ok(())
     }
 
     /// Federation requires real mTLS. Returns the active cert set only when one
@@ -199,14 +237,22 @@ pub struct ConfSyncTlsConfig {
     /// Unique name for this cert set. Required when using [[certs]] array format.
     #[serde(default)]
     pub name: Option<String>,
-    /// Certificate file path (relative to work_dir or absolute)
+    /// Certificate file path (relative to work_dir or absolute).
+    /// Optional ONLY so the `skip_tls: true` escape hatch can be written without
+    /// dummy paths; `validate()` still rejects an empty path on an active cert set
+    /// that is not `skip_tls`.
+    #[serde(default)]
     pub cert: String,
-    /// Private key file path
+    /// Private key file path (see `cert` for why this is `#[serde(default)]`).
+    #[serde(default)]
     pub key: String,
-    /// CA certificate path (used to verify the peer)
+    /// CA certificate path, used to verify the peer (see `cert`).
+    #[serde(default)]
     pub ca: String,
-    /// Emergency bypass: skip TLS and start in plaintext with ERROR log.
-    /// Only for emergency use during cert rotation failures. Must not stay enabled.
+    /// Explicit plaintext opt-in: skip TLS and start in plaintext with an ERROR log
+    /// and the `skip_tls` system-error metric. This is the ONLY way to run the
+    /// Secret-carrying conf_sync channel in plaintext — an omitted `conf_sync_security`
+    /// refuses to start. Emergency / local-dev use only; must not stay enabled.
     #[serde(default)]
     pub skip_tls: bool,
 }
@@ -665,6 +711,87 @@ mod tests {
             ..Default::default()
         };
         assert!(!dangling.is_plaintext_omitted());
+    }
+
+    #[test]
+    fn ensure_transport_configured_rejects_omitted_section() {
+        // Fail-close (2026-07-14): an omitted section must refuse to start.
+        let err = ConfSyncSecurityConfig::default()
+            .ensure_transport_configured()
+            .expect_err("omitted conf_sync_security must be rejected");
+        let msg = format!("{err:?}");
+        // The message must name all three ways forward.
+        for needle in ["auto_ca", "certs", "skip_tls", "Secrets"] {
+            assert!(msg.contains(needle), "error must mention {needle:?}, got: {msg}");
+        }
+    }
+
+    #[test]
+    fn ensure_transport_configured_accepts_skip_tls_and_file_mode() {
+        // skip_tls stays the explicit plaintext escape hatch.
+        let skip = ConfSyncSecurityConfig {
+            tls: Some(ConfSyncTlsConfig {
+                name: None,
+                cert: String::new(),
+                key: String::new(),
+                ca: String::new(),
+                skip_tls: true,
+            }),
+            ..Default::default()
+        };
+        assert!(skip.ensure_transport_configured().is_ok());
+
+        // File-mode mTLS is unaffected.
+        let file_mode = ConfSyncSecurityConfig {
+            certs: vec![make_tls(Some("primary"), "p.crt")],
+            ..Default::default()
+        };
+        assert!(file_mode.ensure_transport_configured().is_ok());
+    }
+
+    #[test]
+    fn ensure_transport_configured_accepts_bare_auto_ca() {
+        // The shipped Kubernetes controller configmap is exactly `{auto_ca: true}` with
+        // no cert paths (the serving identity is minted in memory). That is a complete
+        // transport choice, NOT the omitted state — it must keep starting.
+        let k8s_default: ConfSyncSecurityConfig = serde_json::from_str(r#"{"auto_ca": true}"#).unwrap();
+        assert!(k8s_default.is_plaintext_omitted(), "no cert paths are configured");
+        assert!(
+            k8s_default.ensure_transport_configured().is_ok(),
+            "auto_ca is a configured transport; the K8s default must not fail-close"
+        );
+    }
+
+    #[test]
+    fn skip_tls_escape_hatch_parses_without_cert_paths() {
+        // The documented migration must be writable as a bare `skip_tls: true` — no
+        // dummy cert/key/ca paths. It stays valid and is NOT the omitted state.
+        let parsed: ConfSyncSecurityConfig = serde_json::from_str(r#"{"tls": {"skip_tls": true}}"#).unwrap();
+        assert!(!parsed.is_plaintext_omitted());
+        assert!(parsed.validate().is_ok());
+        assert!(parsed.ensure_transport_configured().is_ok());
+        assert!(parsed.resolve_active_tls().unwrap().skip_tls);
+    }
+
+    #[test]
+    fn validate_still_rejects_empty_paths_without_skip_tls() {
+        // Making cert/key/ca `#[serde(default)]` must not let a real mTLS set through
+        // with missing paths.
+        let parsed: ConfSyncSecurityConfig = serde_json::from_str(r#"{"tls": {"cert": "c.crt"}}"#).unwrap();
+        let err = parsed.validate().expect_err("missing key/ca must still be rejected");
+        assert!(format!("{err:?}").contains("must not be empty"));
+    }
+
+    #[test]
+    fn validate_stays_lenient_on_empty_section() {
+        // The fail-close lives in `ensure_transport_configured`, NOT in `validate`:
+        // `validate` is also used by consumers that merely parse the block (the
+        // gateway parsing the controller-only `rotation` sub-block) and must keep
+        // accepting an entirely-empty section.
+        assert!(ConfSyncSecurityConfig::default().validate().is_ok());
+        let rotation_only: ConfSyncSecurityConfig =
+            serde_json::from_str(r#"{"rotation": {"policy": "lifetime"}}"#).unwrap();
+        assert!(rotation_only.validate().is_ok());
     }
 
     #[test]

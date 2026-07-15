@@ -330,17 +330,57 @@ conf_sync_security:
 | 多条 `[[certs]]` + `active = "name"` | 与 `name` 匹配的那条 |
 | 多条 `[[certs]]` 且无 `active` | 启动报错 |
 | 无 `[[certs]]`，存在旧格式 `[tls]` | 使用 `[tls]` 配置 |
-| 无任何 mTLS 配置 | 明文 gRPC |
+| 无任何 mTLS 配置 | 启动失败（见下方行为矩阵） |
 
 ### 行为矩阵
 
 | 配置状态 | 结果 |
 |---------|------|
-| 无 `[conf_sync_security]` 段 | 明文 gRPC（向后兼容） |
+| 无 `conf_sync_security` 段 | **拒绝启动**（Controller 与 Gateway 均以非零码退出） |
 | active 证书有效 | mTLS gRPC |
+| `auto_ca: true`（Controller：只写它即可；Gateway：**还需**配 `tls` 证书路径） | mTLS gRPC（由 Controller 内置 CA 自动签发证书） |
+| **Gateway** 上只写 `auto_ca: true`、没有证书路径 | 启动失败（auto_ca 意味着强制 mTLS，客户端证书必须能从磁盘读到） |
 | `active` 名称不匹配任何证书集 | 启动失败 |
 | 证书文件缺失或无效 | Controller 启动失败 / Gateway 连接失败并重试 |
-| `skip_tls = true` | 明文 + ERROR 级别警告日志 |
+| `skip_tls: true` | 明文 + ERROR 级别警告日志 |
+
+### 迁移说明：`conf_sync_security` 现为必填
+
+conf_sync 通道会把**解析后的 Secret**（TLS 私钥、后端凭证）从 Controller 推送到 Gateway。
+因此该通道上的明文必须是一个显式的、可审计的选择，绝不能是"忘记写配置块"的静默后果。
+
+过去省略 `conf_sync_security` 意味着"明文 gRPC"，现在则会让**两个二进制都拒绝启动**（非零退出码）。
+如果你的部署依赖于"省略该段"，请在升级前从以下三者中选择其一：
+
+- **Kubernetes（推荐）**：启用 Controller 内置 CA。**两端配置并不对称** —— 把 Controller 的配置块直接
+  照抄到 Gateway 会导致 Gateway 以非零码退出：
+
+  ```yaml
+  # Controller —— 只写 auto_ca 即可（它在内存中自签服务端身份）
+  conf_sync_security:
+    auto_ca: true
+
+  # Gateway —— auto_ca 加上 Controller 自动签发的客户端证书路径
+  # （Secret `edgion-conf-sync-certs`，由官方 manifest 挂载）
+  conf_sync_security:
+    auto_ca: true
+    tls:
+      cert: /etc/edgion/conf-sync-certs/client.crt
+      key: /etc/edgion/conf-sync-certs/client.key
+      ca: /etc/edgion/conf-sync-certs/ca.crt
+  ```
+
+- **文件模式 mTLS**：配置 `conf_sync_security.certs`（或旧格式 `conf_sync_security.tls`），提供 `cert` / `key` / `ca` 路径。
+- **继续使用明文**：显式声明。
+
+```yaml
+conf_sync_security:
+  tls:
+    skip_tls: true    # 不安全：conf_sync 走明文。仅限本地开发 / 非生产环境。
+```
+
+明文（`skip_tls: true`）在两端启动时仍会打印 ERROR 日志，并置位
+`edgion_system_error_state{reason="skip_tls"}`，使这一降级状态在监控中保持可见。
 
 ### 证书轮换
 

@@ -20,7 +20,7 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
 CERTS_DIR="${SCRIPT_DIR}/../gen_certs"
-source "${SCRIPT_DIR}/inject_conf_sync_mtls.sh"
+source "${SCRIPT_DIR}/conf_sync_certs.sh"
 
 # Coverage mode: switch to instrumented binary directory and export coverage env to children.
 # LLVM_PROFILE_FILE override is critical: show-env defaults to target/Edgion-*.profraw,
@@ -893,23 +893,29 @@ main() {
     # : Generatecertificate（mustconfig，willGenerate Secret file）
     generate_certs
 
-    # conf_sync channel: default to mTLS (dogfood the production default).
-    # Copy base configs into the work dir and append the security block to the
-    # COPIES — never mutate the checked-in config/edgion-*.yaml. Set
-    # EDGION_CONF_SYNC_PLAINTEXT=1 to keep plaintext (used by the metric test).
+    # conf_sync channel: mTLS, no injection.
+    #
+    # The checked-in config/edgion-*.yaml ALREADY carry the mTLS block with work-dir
+    # relative cert paths, so the default path only has to make the certs exist at
+    # <WORK_DIR>/certs/grpc/primary/ — there is nothing to rewrite. The configs are
+    # still copied into the work dir because downstream scripts (reconnect / stress /
+    # restart tests) restart the Controller from that copy.
+    #
+    # EDGION_CONF_SYNC_PLAINTEXT=1 is the ONE rewrite left here, and it exists solely
+    # to drive run_conf_sync_skip_tls_metric_test.sh, whose subject is skip_tls.
     mkdir -p "${CONFIG_DIR}"
     cp "${PROJECT_ROOT}/config/edgion-controller.yaml" "${CONFIG_DIR}/edgion-controller.yaml"
     cp "${PROJECT_ROOT}/config/edgion-gateway.yaml" "${CONFIG_DIR}/edgion-gateway.yaml"
     CONTROLLER_CONFIG="${CONFIG_DIR}/edgion-controller.yaml"
     GATEWAY_CONFIG="${CONFIG_DIR}/edgion-gateway.yaml"
     if [ "${EDGION_CONF_SYNC_PLAINTEXT:-0}" = "1" ]; then
-        echo -e "${YELLOW}conf_sync: PLAINTEXT mode (EDGION_CONF_SYNC_PLAINTEXT=1)${NC}"
+        conf_sync_replace_with_skip_tls "${CONTROLLER_CONFIG}" "${GATEWAY_CONFIG}"
         CONF_SYNC_SCHEME="http"
+        echo -e "${YELLOW}conf_sync: PLAINTEXT mode (EDGION_CONF_SYNC_PLAINTEXT=1)${NC}"
     else
-        conf_sync_generate_and_distribute_certs "${WORK_DIR}"
-        conf_sync_append_single_cert_block "${CONTROLLER_CONFIG}" "${GATEWAY_CONFIG}"
+        conf_sync_distribute_certs "${WORK_DIR}"
         CONF_SYNC_SCHEME="https"
-        echo -e "${GREEN}conf_sync: mTLS mode (default)${NC}"
+        echo -e "${GREEN}conf_sync: mTLS mode (default, from the checked-in config)${NC}"
     fi
 
     # : Start test_server

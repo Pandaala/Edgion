@@ -26,9 +26,20 @@ only): it creates `edgion-conf-sync-ca` (the CA, controller-only) and the
   chain consistency); expect a brief one-time conf_sync reconnect (control-plane
   only, no data-plane impact).
 - **Cert rotation** is added in a follow-up (Phase 2); v0 issues 1-year leaves.
-- For non-production plaintext, set `conf_sync_security.auto_ca: false` and omit the
-  cert config — the Controller and Gateway then log an ERROR and raise
-  `edgion_system_error_state{reason="plaintext_default"}`.
+- **Plaintext is fail-close (since 2026-07-14):** omitting `conf_sync_security`
+  entirely makes both the Controller and the Gateway **refuse to start** — this
+  channel carries resolved Secrets (TLS private keys, backend credentials), so
+  plaintext must be explicit. For non-production plaintext, set `auto_ca: false`
+  **and** opt in explicitly:
+
+  ```yaml
+  conf_sync_security:
+    tls:
+      skip_tls: true   # INSECURE: plaintext conf_sync
+  ```
+
+  Both processes then log an ERROR and raise
+  `edgion_system_error_state{reason="skip_tls"}`.
 
 ## Quick Start
 

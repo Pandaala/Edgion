@@ -140,7 +140,13 @@ pub struct EdgionControllerConfig {
     pub conf_center: ConfCenterConfig,
 
     /// conf_sync gRPC channel security (mTLS).
-    /// Omit this section to keep plaintext gRPC (backward compatible).
+    ///
+    /// REQUIRED: this section carries the transport choice for a channel that streams
+    /// resolved Secrets to the data plane, so it must be made explicitly. Omitting it
+    /// makes the Controller REFUSE TO START (see
+    /// [`ConfSyncSecurityConfig::ensure_transport_configured`]). Configure exactly one of:
+    /// `auto_ca: true` (Kubernetes), `certs`/legacy `tls` cert paths (file-mode mTLS), or
+    /// `tls.skip_tls: true` — the explicit opt-in for plaintext.
     #[arg(skip)]
     #[serde(default)]
     pub conf_sync_security: ConfSyncSecurityConfig,
