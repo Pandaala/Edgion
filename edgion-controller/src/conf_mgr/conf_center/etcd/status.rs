@@ -8,17 +8,45 @@ use std::sync::Arc;
 use serde::Serialize;
 
 use super::super::common::ErrorStatus;
+use super::leadership_gate::LeadershipGate;
 use edgion_common::link_sys_core::providers::etcd::EtcdLinkClient;
 
 /// Etcd-backed status handler.
 pub struct EtcdStatusHandler {
     client: Arc<EtcdLinkClient>,
     key_prefix: String,
+    /// Optional leadership fence. When `Some`, every status write is rejected
+    /// unless the gate reports this node is the fresh leader (spec §4.6b).
+    gate: Option<LeadershipGate>,
 }
 
 impl EtcdStatusHandler {
     pub fn new(client: Arc<EtcdLinkClient>, key_prefix: String) -> Self {
-        Self { client, key_prefix }
+        Self {
+            client,
+            key_prefix,
+            gate: None,
+        }
+    }
+
+    /// Construct a leadership-gated status handler. Every status write checks the
+    /// gate first and fails closed when this node is not the fresh leader.
+    pub fn new_gated(client: Arc<EtcdLinkClient>, key_prefix: String, gate: LeadershipGate) -> Self {
+        Self {
+            client,
+            key_prefix,
+            gate: Some(gate),
+        }
+    }
+
+    /// Fail closed when this node is not the fresh leader. A no-op when ungated.
+    fn ensure_leader(&self) -> std::io::Result<()> {
+        if let Some(gate) = &self.gate {
+            if gate.check().is_err() {
+                return Err(std::io::Error::other("not leader: refusing etcd status write"));
+            }
+        }
+        Ok(())
     }
 
     /// Build the status key for a resource.
@@ -36,6 +64,7 @@ impl EtcdStatusHandler {
 
     /// Write native status to etcd in YAML format.
     pub async fn write_native_status<S: Serialize>(&self, kind: &str, key: &str, status: &S) -> std::io::Result<()> {
+        self.ensure_leader()?;
         let status_key = self.build_status_key(kind, key);
         let yaml =
             serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -56,6 +85,7 @@ impl EtcdStatusHandler {
 
     /// Write status from a serde_json::Value.
     pub async fn write_status_value(&self, kind: &str, key: &str, status: &serde_json::Value) -> std::io::Result<()> {
+        self.ensure_leader()?;
         let status_key = self.build_status_key(kind, key);
         let yaml =
             serde_yaml::to_string(status).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -76,6 +106,7 @@ impl EtcdStatusHandler {
 
     /// Write error status (for parse errors, etc.)
     pub async fn write_error_status(&self, kind: &str, key: &str, reason: &str, message: &str) -> std::io::Result<()> {
+        self.ensure_leader()?;
         let status = ErrorStatus::error(reason, message);
         self.write_native_status(kind, key, &status).await
     }
@@ -119,6 +150,7 @@ impl EtcdStatusHandler {
 
     /// Delete status entry.
     pub async fn delete_status(&self, kind: &str, key: &str) -> std::io::Result<()> {
+        self.ensure_leader()?;
         let status_key = self.build_status_key(kind, key);
         self.client
             .delete(&status_key)

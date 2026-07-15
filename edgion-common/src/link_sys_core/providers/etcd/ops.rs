@@ -18,6 +18,19 @@ use super::client::EtcdLinkClient;
 use super::config_mapping::health_probe_timeout;
 use crate::link_sys_core::LinkSysHealth;
 
+/// Raw view of an etcd KeyValue exposing the fields leader election needs.
+///
+/// The existing `get()` intentionally returns only `(value, mod_revision)`;
+/// election's guard txn (spec §4.4) additionally needs `lease` and
+/// `create_revision`.
+#[derive(Debug, Clone)]
+pub struct KeyValueRaw {
+    pub value: Vec<u8>,
+    pub lease: i64,
+    pub mod_revision: i64,
+    pub create_revision: i64,
+}
+
 // ============================================================================
 // KV Operations
 // ============================================================================
@@ -211,6 +224,56 @@ impl EtcdLinkClient {
             .map_err(|e| anyhow::anyhow!("Etcd DELETE prefix {}: {:?}", prefix, e))?;
         Ok(resp.deleted())
     }
+
+    /// Linearizable single-key read exposing lease + both revisions.
+    ///
+    /// This is the raw read leader election needs (spec §4.3.1/§4.4): the
+    /// existing `get()` discards `lease`/`create_revision`.
+    pub async fn get_kv(&self, key: &str) -> Result<Option<KeyValueRaw>> {
+        let mut client = self
+            .get_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
+        let full = self.full_key(key);
+        let resp = client
+            .get(full, None)
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd GET_KV {}: {:?}", key, e))?;
+        Ok(resp.kvs().first().map(|kv| KeyValueRaw {
+            value: kv.value().to_vec(),
+            lease: kv.lease(),
+            mod_revision: kv.mod_revision(),
+            create_revision: kv.create_revision(),
+        }))
+    }
+
+    /// Guard txn (spec §4.4). Returns `Ok(true)` iff the key is STILL ours by all
+    /// three compares. All three are required: `create_revision` alone survives an
+    /// in-place overwrite; `lease` catches a lease detach; `value` catches any
+    /// overwrite. `Ok(false)` is authoritative demotion; `Err` is transport.
+    pub async fn leader_guard_txn(
+        &self,
+        key: &str,
+        create_revision: i64,
+        lease_id: i64,
+        expected_value: &[u8],
+    ) -> Result<bool> {
+        let mut client = self
+            .get_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
+        let full = self.full_key(key);
+        let txn = Txn::new().when(vec![
+            Compare::create_revision(full.clone(), CompareOp::Equal, create_revision),
+            Compare::lease(full.clone(), CompareOp::Equal, lease_id),
+            Compare::value(full, CompareOp::Equal, expected_value.to_vec()),
+        ]);
+        let resp = client
+            .txn(txn)
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd GUARD_TXN {}: {:?}", key, e))?;
+        Ok(resp.succeeded())
+    }
 }
 
 // ============================================================================
@@ -259,6 +322,29 @@ impl EtcdLinkClient {
             .map_err(|e| anyhow::anyhow!("Etcd LEASE TTL {}: {:?}", lease_id, e))?;
         Ok(resp.ttl())
     }
+
+    /// Establish a keepalive stream for `lease_id`.
+    ///
+    /// IMPORTANT (spec §4.2): etcd-client reads the first response inside this
+    /// establish call; if the lease is already gone (`ttl <= 0`) it returns
+    /// `Error::LeaseKeepAliveError`. Callers MUST treat this `Err` as
+    /// authoritative lease death, not as a transient transport error. Driving
+    /// the returned keeper only pushes into a bounded channel and is NOT
+    /// evidence the lease is alive; only a `LeaseKeepAliveResponse` with
+    /// `ttl > 0` off the stream is.
+    pub async fn lease_keep_alive(
+        &self,
+        lease_id: i64,
+    ) -> Result<(etcd_client::LeaseKeeper, etcd_client::LeaseKeepAliveStream)> {
+        let mut client = self
+            .get_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
+        client
+            .lease_keep_alive(lease_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd LEASE KEEPALIVE {}: {:?}", lease_id, e))
+    }
 }
 
 // ============================================================================
@@ -282,6 +368,23 @@ impl EtcdLinkClient {
             .watch(full_prefix, Some(options))
             .await
             .map_err(|e| anyhow::anyhow!("Etcd WATCH prefix (rev={}) {}: {:?}", start_revision, prefix, e))?;
+        Ok(stream)
+    }
+
+    /// Watch a single key from a revision (single-key analogue of
+    /// `watch_prefix_from_revision`). Used for a leader's self-watch / a
+    /// follower's leader-key watch as a latency optimization on top of polling.
+    pub async fn watch_key_from_revision(&self, key: &str, start_revision: i64) -> Result<WatchStream> {
+        let mut client = self
+            .get_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
+        let full = self.full_key(key);
+        let options = WatchOptions::new().with_start_revision(start_revision);
+        let stream = client
+            .watch(full, Some(options))
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd WATCH key (rev={}) {}: {:?}", start_revision, key, e))?;
         Ok(stream)
     }
 }
@@ -413,5 +516,112 @@ impl EtcdLinkClient {
                 error: Some(e.to_string()),
             },
         }
+    }
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+//
+// Every test here talks to a REAL etcd; a mock gives near-zero confidence in
+// the lease/txn failure modes these primitives target (spec §10). They are
+// therefore `#[ignore]`-gated so the offline `cargo test` stays green, and are
+// run under `edgion-tests/integration/scripts/integration/link_sys/run_etcd_test.sh`.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::link_sys_core::credential::CredentialState;
+    use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
+
+    /// Minimal config pointing at a local etcd, mirroring the fixture in
+    /// `client.rs`'s test module.
+    fn minimal_config() -> EtcdClientConfig {
+        EtcdClientConfig {
+            endpoints: vec!["http://localhost:2379".to_string()],
+            auth: None,
+            tls: None,
+            timeout: None,
+            keep_alive: None,
+            namespace: None,
+            auto_sync_interval: None,
+            max_call_send_size: None,
+            max_call_recv_size: None,
+            user_agent: None,
+            reject_old_cluster: None,
+            observability: None,
+        }
+    }
+
+    /// Build + connect an `EtcdLinkClient` against a local etcd.
+    async fn test_client() -> EtcdLinkClient {
+        let config = minimal_config();
+        let client = EtcdLinkClient::from_config("default/etcd-test", &config, &CredentialState::NotRequired)
+            .expect("from_config must succeed");
+        client.init().await.expect("etcd init must connect");
+        client
+    }
+
+    /// A per-test unique key prefix so parallel/repeated runs never collide.
+    fn unique_prefix() -> String {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        format!("/edgion-test/{}", nanos)
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a real etcd on localhost:2379"]
+    async fn lease_keep_alive_refreshes_then_errors_after_revoke() {
+        let client = test_client().await;
+        let lease = client.lease_grant(5).await.unwrap();
+        let (mut keeper, mut stream) = client.lease_keep_alive(lease).await.unwrap();
+        keeper.keep_alive().await.unwrap();
+        let resp = stream.message().await.unwrap().expect("a keepalive response");
+        assert!(resp.ttl() > 0, "healthy lease must report ttl > 0");
+
+        client.lease_revoke(lease).await.unwrap();
+        // A re-establish against the now-dead lease must surface as Err (spec §4.2 fact 4).
+        let err = client.lease_keep_alive(lease).await;
+        assert!(err.is_err(), "keepalive establish on a revoked lease must Err");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a real etcd on localhost:2379"]
+    async fn get_kv_surfaces_lease_and_revisions() {
+        let client = test_client().await;
+        let lease = client.lease_grant(30).await.unwrap();
+        let key = format!("{}/kvtest", unique_prefix());
+        client.put(&key, "v", Some(lease)).await.unwrap();
+        let kv = client.get_kv(&key).await.unwrap().expect("present");
+        assert_eq!(kv.value, b"v");
+        assert_eq!(kv.lease, lease);
+        assert!(kv.create_revision > 0 && kv.mod_revision >= kv.create_revision);
+    }
+
+    #[tokio::test]
+    #[ignore = "requires a real etcd on localhost:2379"]
+    async fn guard_txn_detects_inplace_overwrite() {
+        let client = test_client().await;
+        let lease = client.lease_grant(30).await.unwrap();
+        let key = format!("{}/guardtest", unique_prefix());
+        client.put(&key, "mine", Some(lease)).await.unwrap();
+        let kv = client.get_kv(&key).await.unwrap().unwrap();
+        assert!(client
+            .leader_guard_txn(&key, kv.create_revision, lease, b"mine")
+            .await
+            .unwrap());
+
+        // Blind PUT without lease: create_revision is PRESERVED, lease is detached.
+        // A create_revision-only guard would wrongly pass; ours must fail (spec §4.4).
+        client.put_string(&key, "stolen").await.unwrap();
+        assert!(
+            !client
+                .leader_guard_txn(&key, kv.create_revision, lease, b"mine")
+                .await
+                .unwrap(),
+            "guard must reject an in-place overwrite that preserves create_revision"
+        );
     }
 }

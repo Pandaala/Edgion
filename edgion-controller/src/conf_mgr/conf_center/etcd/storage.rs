@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
+use super::leadership_gate::LeadershipGate;
 use crate::conf_mgr::conf_center::traits::{CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult};
 use edgion_common::link_sys_core::providers::etcd::EtcdLinkClient;
 
@@ -18,6 +19,11 @@ pub struct EtcdStorage {
     key_prefix: String,
     /// Pre-computed "{key_prefix}/conf/" to avoid per-call allocation in parse_key.
     cached_conf_prefix: String,
+    /// Optional leadership fence. When `Some`, every mutating operation is
+    /// rejected unless the gate reports this node is the fresh leader (spec
+    /// §4.6). `None` = ungated (FileSystem/K8s never use this type; a bare
+    /// `new` keeps the historical no-fence behavior for non-election callers).
+    gate: Option<LeadershipGate>,
 }
 
 impl EtcdStorage {
@@ -27,7 +33,33 @@ impl EtcdStorage {
             client,
             key_prefix,
             cached_conf_prefix,
+            gate: None,
         }
+    }
+
+    /// Construct a leadership-gated storage. Every mutating operation checks the
+    /// gate first and fails closed with an `EtcdError` when this node is not the
+    /// fresh leader (spec §4.6).
+    pub fn new_gated(client: Arc<EtcdLinkClient>, key_prefix: String, gate: LeadershipGate) -> Self {
+        let cached_conf_prefix = format!("{}/conf/", key_prefix);
+        Self {
+            client,
+            key_prefix,
+            cached_conf_prefix,
+            gate: Some(gate),
+        }
+    }
+
+    /// Fail closed when this node is not the fresh leader. A no-op when ungated.
+    fn ensure_leader(&self) -> Result<(), ConfWriterError> {
+        if let Some(gate) = &self.gate {
+            if gate.check().is_err() {
+                return Err(ConfWriterError::EtcdError(
+                    "not leader: refusing etcd write".to_string(),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Build the full etcd key for a resource.
@@ -108,6 +140,7 @@ impl CenterApi for EtcdStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
+        self.ensure_leader()?;
         let key = self.build_key(kind, namespace, name);
         self.client.put_string(&key, &content).await.map_err(Self::map_err)?;
 
@@ -129,6 +162,7 @@ impl CenterApi for EtcdStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
+        self.ensure_leader()?;
         let key = self.build_key(kind, namespace, name);
 
         let created = self
@@ -164,6 +198,7 @@ impl CenterApi for EtcdStorage {
         name: &str,
         content: String,
     ) -> Result<(), ConfWriterError> {
+        self.ensure_leader()?;
         let key = self.build_key(kind, namespace, name);
 
         let updated = self
@@ -202,6 +237,7 @@ impl CenterApi for EtcdStorage {
     }
 
     async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
+        self.ensure_leader()?;
         let key = self.build_key(kind, namespace, name);
         let deleted = self.client.delete(&key).await.map_err(Self::map_err)?;
 
@@ -246,5 +282,54 @@ impl CenterApi for EtcdStorage {
         let prefix = self.conf_prefix();
         let kvs = self.client.get_prefix(&prefix).await.map_err(Self::map_err)?;
         Ok(self.kvs_to_list_result(kvs))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conf_mgr::conf_center::etcd::leadership_gate::{LeaderState, LeadershipGate};
+    use edgion_common::link_sys_core::credential::CredentialState;
+    use edgion_resources::resources::link_sys::etcd::EtcdClientConfig;
+    use std::time::Duration;
+
+    /// Build + connect an `EtcdLinkClient` against a local etcd, mirroring the
+    /// `leader_election.rs` test helper.
+    async fn test_link_client() -> EtcdLinkClient {
+        let config = EtcdClientConfig {
+            endpoints: vec!["http://localhost:2379".to_string()],
+            auth: None,
+            tls: None,
+            timeout: None,
+            keep_alive: None,
+            namespace: None,
+            auto_sync_interval: None,
+            max_call_send_size: None,
+            max_call_recv_size: None,
+            user_agent: None,
+            reject_old_cluster: None,
+            observability: None,
+        };
+        let client = EtcdLinkClient::from_config("default/etcd-storage-test", &config, &CredentialState::NotRequired)
+            .expect("from_config must succeed");
+        client.init().await.expect("etcd init must connect");
+        client
+    }
+
+    /// A non-leader (default `is_leader=false`) `LeadershipGate` must fence every
+    /// mutating storage op. `set_one` must return an error without touching etcd.
+    #[tokio::test]
+    #[ignore = "requires a real etcd on localhost:2379"]
+    async fn storage_write_blocked_when_not_leader() {
+        let client = Arc::new(test_link_client().await);
+        // Default LeaderState has is_leader=false, so the gate is closed.
+        let st = LeaderState::new(Duration::from_secs(15));
+        let gate = LeadershipGate::from_state(st);
+        let storage = EtcdStorage::new_gated(client, "/edgion-test-gate".into(), gate);
+
+        let err = storage
+            .set_one("EdgionRoute", Some("default"), "r1", "content".to_string())
+            .await;
+        assert!(err.is_err(), "a non-leader must not write to etcd");
     }
 }

@@ -16,6 +16,7 @@ use serde::Serialize;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 
+use crate::conf_mgr::conf_center::etcd::leadership_gate::LeaderHandle;
 use crate::conf_mgr::sync_runtime::metrics::reload_metrics;
 use crate::conf_mgr::sync_runtime::resource_processor::{
     run_post_cache_ready_revalidations, BackendTlsPolicyHandler, ConfigMapHandler, EdgionAcmeHandler,
@@ -169,6 +170,34 @@ impl CenterBase {
         component: &'static str,
         make_handle: impl Fn(ShutdownSignal, Arc<ControllerRuntime>, oneshot::Sender<String>) -> JoinHandle<()>,
     ) -> Result<()> {
+        self.run_lifecycle_gated(shutdown_handle, component, None, make_handle)
+            .await
+    }
+
+    /// Run the shared controller lifecycle loop with an optional leadership gate.
+    ///
+    /// This is the gated variant of [`CenterBase::run_lifecycle`]. When
+    /// `leadership` is `Some`, each iteration blocks at the top of the loop until
+    /// the handle reports leadership, and a mid-term loss of leadership tears the
+    /// iteration down and re-parks at the gate. When `leadership` is `None` the
+    /// gate is a no-op — the unconditional-leader path used by FileSystem mode
+    /// (K8s mode never calls this path at all). See spec §5.
+    ///
+    /// # Parameters
+    ///
+    /// - `shutdown_handle`: The top-level shutdown handle for this center instance.
+    /// - `component`: A `'static` string used as the `component` field in every log line.
+    /// - `leadership`: Optional leadership handle. `None` = unconditional leader.
+    /// - `make_handle`: A synchronous closure that spawns the backend-specific controller
+    ///   and returns its `JoinHandle`. Receives the iteration-scoped shutdown signal,
+    ///   the shared runtime, and a oneshot sender for reporting fatal errors.
+    pub async fn run_lifecycle_gated(
+        &self,
+        shutdown_handle: ShutdownHandle,
+        component: &'static str,
+        leadership: Option<LeaderHandle>,
+        make_handle: impl Fn(ShutdownSignal, Arc<ControllerRuntime>, oneshot::Sender<String>) -> JoinHandle<()>,
+    ) -> Result<()> {
         self.set_shutdown_handle(shutdown_handle.clone());
 
         let mut reload_start_time: Option<Instant> = None;
@@ -179,6 +208,22 @@ impl CenterBase {
                 let duration = Instant::now().saturating_duration_since(start_time).as_secs_f64();
                 reload_metrics().reload_completed(duration);
                 tracing::info!(component = component, duration_secs = duration, "Reload completed");
+            }
+
+            // 0. Leadership gate (spec §5). `None` ⇒ unconditional leader
+            // (FileSystem mode; K8s never calls this path at all). When `Some`,
+            // park here until this node is the leader, letting shutdown break out.
+            if let Some(ref lh) = leadership {
+                let mut gate_shutdown = shutdown_handle.signal();
+                loop {
+                    if lh.is_leader() {
+                        break;
+                    }
+                    tokio::select! {
+                        _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+                        _ = gate_shutdown.wait() => { return Ok(()); }
+                    }
+                }
             }
 
             // 1. Iteration-specific shutdown handle.
@@ -222,6 +267,7 @@ impl CenterBase {
             let action = tokio::select! {
                 _ = global_shutdown.wait() => LoopAction::Shutdown,
                 _ = reload_rx.recv() => LoopAction::Reload,
+                _ = leadership_lost_wait(&leadership) => LoopAction::LeadershipLost,
                 result = &mut error_rx => {
                     match result {
                         Ok(msg) => LoopAction::Error(msg),
@@ -264,6 +310,17 @@ impl CenterBase {
                     reload_start_time = Some(Instant::now());
                     continue;
                 }
+                LoopAction::LeadershipLost => {
+                    // Lost leadership mid-term. The teardown above already ran;
+                    // loop back to the gate and park until leadership is
+                    // regained. Do NOT release leadership here — the election
+                    // supervisor owns demotion (spec §5.1a).
+                    tracing::warn!(
+                        component = component,
+                        "Lost leadership, tearing down and re-parking at the gate"
+                    );
+                    continue;
+                }
                 LoopAction::Error(msg) => {
                     tracing::error!(
                         component = component,
@@ -289,6 +346,24 @@ enum LoopAction {
     Shutdown,
     Reload,
     Error(String),
+    LeadershipLost,
+}
+
+/// Resolve when leadership is lost.
+///
+/// With `None` leadership (FileSystem / unconditional-leader path) this never
+/// resolves, so the corresponding `select!` arm is inert. With `Some`, it polls
+/// `is_leader()` and returns as soon as leadership drops.
+async fn leadership_lost_wait(leadership: &Option<LeaderHandle>) {
+    match leadership {
+        None => std::future::pending::<()>().await,
+        Some(lh) => loop {
+            if !lh.is_leader() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        },
+    }
 }
 
 // ============================================================================
@@ -452,4 +527,41 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     runtime.processor_registry.mark_registration_complete();
 
     Ok(handles)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crate::conf_mgr::sync_runtime::ShutdownHandle;
+
+    use super::CenterBase;
+
+    #[tokio::test]
+    async fn filesystem_none_leadership_runs_immediately() {
+        // With leadership=None the gate must not block; the make_handle closure runs at once.
+        let base = CenterBase::new();
+        let ran = Arc::new(AtomicBool::new(false));
+        let r = ran.clone();
+        let sd = ShutdownHandle::new();
+        let h = {
+            let sd2 = sd.clone();
+            tokio::spawn(async move {
+                base.run_lifecycle_gated(sd2, "test", None, move |shutdown, _rt, _err| {
+                    r.store(true, Ordering::Release);
+                    tokio::spawn(async move {
+                        let mut s = shutdown;
+                        s.wait().await;
+                    })
+                })
+                .await
+            })
+        };
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(ran.load(Ordering::Acquire), "None leadership must not gate");
+        sd.shutdown();
+        let _ = h.await;
+    }
 }

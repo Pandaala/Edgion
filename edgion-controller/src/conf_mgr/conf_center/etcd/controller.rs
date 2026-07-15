@@ -14,6 +14,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use tokio::task::JoinHandle;
 
+use super::leadership_gate::LeadershipGate;
 use super::resource_controller::EtcdResourceController;
 use super::status::EtcdStatusHandler;
 use super::watcher::{EtcdWatcher, KindEventReceiver};
@@ -59,16 +60,23 @@ impl LocalControllerBackend for EtcdControllerBackend {
 pub struct EtcdController {
     client: Arc<EtcdLinkClient>,
     key_prefix: String,
+    /// Optional leadership fence threaded into the status handler so a
+    /// non-leader controller cannot write resource status to etcd (spec §4.6b).
+    gate: Option<LeadershipGate>,
 }
 
 impl EtcdController {
-    pub fn new(client: Arc<EtcdLinkClient>, key_prefix: String) -> Self {
+    pub fn new(client: Arc<EtcdLinkClient>, key_prefix: String, gate: Option<LeadershipGate>) -> Self {
         tracing::info!(
             component = "etcd_controller",
             key_prefix = %key_prefix,
             "Creating EtcdController"
         );
-        Self { client, key_prefix }
+        Self {
+            client,
+            key_prefix,
+            gate,
+        }
     }
 
     /// Run the controller.
@@ -81,7 +89,14 @@ impl EtcdController {
 
         // Create shared components
         let watcher = Arc::new(EtcdWatcher::new(self.client.clone(), &self.key_prefix));
-        let status_handler = Arc::new(EtcdStatusHandler::new(self.client.clone(), self.key_prefix.clone()));
+        let status_handler = match &self.gate {
+            Some(gate) => Arc::new(EtcdStatusHandler::new_gated(
+                self.client.clone(),
+                self.key_prefix.clone(),
+                gate.clone(),
+            )),
+            None => Arc::new(EtcdStatusHandler::new(self.client.clone(), self.key_prefix.clone())),
+        };
 
         let backend = EtcdControllerBackend {
             watcher: watcher.clone(),

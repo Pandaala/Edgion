@@ -71,10 +71,123 @@ pub struct EtcdConfig {
     /// HTTP/2 keep-alive timeout in seconds
     #[serde(default)]
     pub keep_alive_timeout_secs: Option<u64>,
+
+    /// Leader election (etcd HA). Always on in etcd mode (spec §8).
+    #[serde(default)]
+    pub leader_election: EtcdLeaderElectionConfig,
 }
 
 pub(crate) fn default_key_prefix() -> String {
     "/edgion".to_string()
+}
+
+fn default_lease_duration_secs() -> u64 {
+    15
+}
+fn default_renew_deadline_secs() -> u64 {
+    10
+}
+fn default_retry_period_secs() -> u64 {
+    2
+}
+
+/// Etcd-mode leader election settings. Always on; there is no enable switch
+/// (spec §8). `identity` is human-facing only.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EtcdLeaderElectionConfig {
+    /// Human-readable identity for logs and the not-leader 409 body. Never used
+    /// for an ownership decision. Defaults to the hostname.
+    #[serde(default)]
+    pub identity: Option<String>,
+    /// conf_sync gRPC address gateways rotate to. Required; must be routable.
+    pub grpc_addr: String,
+    /// Admin HTTP address the not-leader 409 body names. Required; must be routable.
+    pub admin_addr: String,
+    #[serde(default = "default_lease_duration_secs")]
+    pub lease_duration_secs: u64,
+    #[serde(default = "default_renew_deadline_secs")]
+    pub renew_deadline_secs: u64,
+    #[serde(default = "default_retry_period_secs")]
+    pub retry_period_secs: u64,
+}
+
+impl Default for EtcdLeaderElectionConfig {
+    fn default() -> Self {
+        Self {
+            identity: None,
+            grpc_addr: String::new(),
+            admin_addr: String::new(),
+            lease_duration_secs: default_lease_duration_secs(),
+            renew_deadline_secs: default_renew_deadline_secs(),
+            retry_period_secs: default_retry_period_secs(),
+        }
+    }
+}
+
+impl EtcdLeaderElectionConfig {
+    /// Resolve the human-facing identity: explicit `identity`, else the
+    /// `HOSTNAME` environment variable, else a fixed fallback. Identity is never
+    /// used for an ownership decision (spec §8).
+    pub fn resolved_identity(&self) -> String {
+        if let Some(id) = self.identity.as_ref() {
+            if !id.is_empty() {
+                return id.clone();
+            }
+        }
+        match std::env::var("HOSTNAME") {
+            Ok(h) if !h.is_empty() => h,
+            _ => "edgion-controller".to_string(),
+        }
+    }
+
+    fn addr_is_routable(addr: &str) -> bool {
+        if addr.is_empty() {
+            return false;
+        }
+        // Reject loopback / unspecified host portions. A leader advertising
+        // 127.0.0.1 or 0.0.0.0 yields a 409 body / rotation target that can
+        // never work (spec §8).
+        let host = addr.rsplit_once(':').map(|(h, _)| h).unwrap_or(addr);
+        let host = host.trim_start_matches('[').trim_end_matches(']');
+        !(host == "127.0.0.1" || host == "0.0.0.0" || host == "::1" || host == "::" || host == "localhost")
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        let (r, d, l) = (
+            self.retry_period_secs,
+            self.renew_deadline_secs,
+            self.lease_duration_secs,
+        );
+        if r == 0 || d == 0 || l == 0 {
+            anyhow::bail!("etcd leader_election: all timing values must be > 0 (retry={r}, renew={d}, lease={l})");
+        }
+        if !(r < d && d < l) {
+            anyhow::bail!(
+                "etcd leader_election: require retry_period < renew_deadline < lease_duration \
+                 (got {r} < {d} < {l})"
+            );
+        }
+        if d / r < 3 {
+            anyhow::bail!(
+                "etcd leader_election: floor(renew_deadline/retry_period) must be >= 3 for enough \
+                 keepalive attempts (got floor({d}/{r})={})",
+                d / r
+            );
+        }
+        if !Self::addr_is_routable(&self.grpc_addr) {
+            anyhow::bail!(
+                "etcd leader_election: grpc_addr must be a routable non-loopback address (got {:?})",
+                self.grpc_addr
+            );
+        }
+        if !Self::addr_is_routable(&self.admin_addr) {
+            anyhow::bail!(
+                "etcd leader_election: admin_addr must be a routable non-loopback address (got {:?})",
+                self.admin_addr
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Authentication configuration for etcd (YAML snake_case)
@@ -278,6 +391,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn leader_election_defaults_are_valid() {
+        let c = EtcdLeaderElectionConfig {
+            identity: None,
+            grpc_addr: "10.0.0.11:9090".into(),
+            admin_addr: "10.0.0.11:8080".into(),
+            ..Default::default()
+        };
+        assert_eq!(c.lease_duration_secs, 15);
+        assert_eq!(c.renew_deadline_secs, 10);
+        assert_eq!(c.retry_period_secs, 2);
+        c.validate().expect("defaults must validate");
+    }
+
+    #[test]
+    fn leader_election_rejects_bad_timing() {
+        // renew_deadline >= lease_duration
+        let c = EtcdLeaderElectionConfig {
+            grpc_addr: "10.0.0.11:9090".into(),
+            admin_addr: "10.0.0.11:8080".into(),
+            lease_duration_secs: 10,
+            renew_deadline_secs: 10,
+            retry_period_secs: 2,
+            identity: None,
+        };
+        assert!(c.validate().is_err());
+        // fewer than 3 keepalive attempts: floor(4/2)=2
+        let c = EtcdLeaderElectionConfig {
+            grpc_addr: "10.0.0.11:9090".into(),
+            admin_addr: "10.0.0.11:8080".into(),
+            lease_duration_secs: 6,
+            renew_deadline_secs: 4,
+            retry_period_secs: 2,
+            identity: None,
+        };
+        assert!(c.validate().is_err());
+    }
+
+    #[test]
+    fn leader_election_rejects_loopback_and_missing_addr() {
+        let c = EtcdLeaderElectionConfig {
+            grpc_addr: "127.0.0.1:9090".into(),
+            admin_addr: "10.0.0.11:8080".into(),
+            identity: None,
+            ..Default::default()
+        };
+        assert!(c.validate().is_err(), "loopback grpc_addr must be rejected");
+        let c = EtcdLeaderElectionConfig {
+            grpc_addr: "".into(),
+            admin_addr: "10.0.0.11:8080".into(),
+            identity: None,
+            ..Default::default()
+        };
+        assert!(c.validate().is_err(), "empty grpc_addr must be rejected");
+    }
+
+    #[test]
     fn test_deserialize_minimal() {
         let yaml = r#"
 endpoints: ["http://127.0.0.1:2379"]
@@ -328,6 +497,7 @@ auth:
             request_timeout_ms: None,
             keep_alive_time_secs: None,
             keep_alive_timeout_secs: None,
+            leader_election: EtcdLeaderElectionConfig::default(),
         };
 
         let (client_config, auth_state) = config.to_client_config().unwrap();
@@ -353,6 +523,7 @@ auth:
             request_timeout_ms: Some(10000),
             keep_alive_time_secs: None,
             keep_alive_timeout_secs: None,
+            leader_election: EtcdLeaderElectionConfig::default(),
         };
 
         let (client_config, auth_state) = config.to_client_config().unwrap();
@@ -385,6 +556,7 @@ auth:
             request_timeout_ms: None,
             keep_alive_time_secs: None,
             keep_alive_timeout_secs: None,
+            leader_election: EtcdLeaderElectionConfig::default(),
         };
 
         let (client_config, auth_state) = config.to_client_config().unwrap();
@@ -429,6 +601,7 @@ auth:
             request_timeout_ms: None,
             keep_alive_time_secs: None,
             keep_alive_timeout_secs: None,
+            leader_election: EtcdLeaderElectionConfig::default(),
         };
 
         let (client_config, _) = config.to_client_config().unwrap();

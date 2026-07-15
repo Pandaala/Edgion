@@ -62,11 +62,13 @@ pub fn build_connect_options(
     }
 
     // Dial (connection) timeout
+    let mut dial_configured = false;
     if let Some(timeout) = &crd.timeout {
         if let Some(dial_ms) = timeout.dial {
             let dial = dial_ms.min(MAX_DIAL_TIMEOUT_MS);
             options = options.with_connect_timeout(Duration::from_millis(dial));
             has_options = true;
+            dial_configured = true;
         }
         // Per-request timeout
         if let Some(request_ms) = timeout.request {
@@ -77,10 +79,12 @@ pub fn build_connect_options(
     }
 
     // HTTP/2 keep-alive
+    let mut keepalive_configured = false;
     if let Some(ka) = &crd.keep_alive {
         if let (Some(time), Some(timeout)) = (ka.time, ka.timeout) {
             options = options.with_keep_alive(Duration::from_secs(time), Duration::from_secs(timeout));
             has_options = true;
+            keepalive_configured = true;
 
             if ka.permit_without_stream == Some(true) {
                 options = options.with_keep_alive_while_idle(true);
@@ -88,7 +92,46 @@ pub fn build_connect_options(
         }
     }
 
+    // Spec §4.2 fact 2: h2 PING keepalive is the ONLY thing that kills a
+    // blackholed established stream (a per-request timeout does not bound a bidi
+    // stream body, so it cannot detect a hung lease-keepalive). Ensure keepalive
+    // — and the baseline dial timeout — are always present on the conf_center
+    // client unless the operator explicitly configured their own, so a
+    // partially-configured client never silently loses blackhole detection that
+    // leader election depends on. This makes the returned options a superset of
+    // `default_connect_options()`; the `None`/default fallback below is retained
+    // only for a fully-empty config for symmetry.
+    if !dial_configured {
+        options = options.with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS));
+        has_options = true;
+    }
+    if !keepalive_configured {
+        options = options
+            .with_keep_alive(Duration::from_secs(5), Duration::from_secs(3))
+            .with_keep_alive_while_idle(true);
+        has_options = true;
+    }
+
     Ok(if has_options { Some(options) } else { None })
+}
+
+/// Connect options for the DEDICATED leader-election client (spec §4.2/§3.2).
+///
+/// Identical to [`build_connect_options`] EXCEPT the channel-wide per-request
+/// timeout is stripped. etcd's v3election `campaign()` is a unary RPC that
+/// blocks server-side until this candidate wins; a channel-wide request timeout
+/// would abort it every `request_timeout_ms`, turning a healthy standby into a
+/// re-campaign hot loop and breaking active-passive HA. h2 keepalive is retained
+/// (from the shared builder) so a blackholed campaign connection still dies.
+pub fn election_connect_options(
+    crd: &EtcdClientConfig,
+    auth: &CredentialState<BasicAuthMaterial>,
+) -> Result<ConnectOptions> {
+    let mut crd = crd.clone();
+    if let Some(t) = crd.timeout.as_mut() {
+        t.request = None;
+    }
+    Ok(build_connect_options(&crd, auth)?.unwrap_or_else(default_connect_options))
 }
 
 /// Build TLS options from CRD config.
@@ -135,7 +178,15 @@ fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
 /// Get default connect options with a reasonable dial timeout.
 /// Used when no specific options are configured but we still want a timeout.
 pub fn default_connect_options() -> ConnectOptions {
-    ConnectOptions::new().with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS))
+    // Spec §4.2: a per-request timeout does NOT bound a hung bidi keepalive
+    // stream; only h2 PING keepalive kills a blackholed established stream.
+    // Default it on for the conf_center client so leader election can detect a
+    // blackhole. Do NOT default a channel-wide request timeout — it would kill
+    // the blocking v3election campaign() RPC.
+    ConnectOptions::new()
+        .with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS))
+        .with_keep_alive(Duration::from_secs(5), Duration::from_secs(3))
+        .with_keep_alive_while_idle(true)
 }
 
 /// Default ceiling for live health-probe `status()` calls when the CRD does not

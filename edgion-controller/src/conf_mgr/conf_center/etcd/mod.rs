@@ -20,6 +20,8 @@ pub mod center;
 pub mod config;
 pub mod controller;
 pub mod event;
+pub mod leader_election;
+pub mod leadership_gate;
 pub mod resource_controller;
 pub mod status;
 pub mod storage;
