@@ -150,6 +150,11 @@ impl ConfMgr {
         self.conf_center.runtime().processor_registry.collect_stats_if_dirty()
     }
 
+    /// Collect an unconditional stats snapshot for a new federation session.
+    pub fn collect_stats_snapshot(&self) -> (std::collections::HashMap<String, u32>, u32) {
+        self.conf_center.runtime().processor_registry.collect_stats_snapshot()
+    }
+
     /// Request a reload (re-initialize all processors and stores)
     ///
     /// This triggers a full restart of the configuration center:

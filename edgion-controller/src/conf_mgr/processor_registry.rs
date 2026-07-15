@@ -144,6 +144,25 @@ impl ProcessorRegistry {
         Some((per_kind, total))
     }
 
+    /// Snapshot all processor sizes regardless of dirty flags and consume the
+    /// current dirty state, just like an emitted incremental report.
+    ///
+    /// Federation uses this once for every newly established session so a
+    /// restarted Center receives an initial resource count even when the
+    /// Controller's resources have not changed since the previous session.
+    pub fn collect_stats_snapshot(&self) -> (HashMap<String, u32>, u32) {
+        let processors = self.processors.read();
+        let mut per_kind: HashMap<String, u32> = HashMap::with_capacity(processors.len());
+        let mut total: u32 = 0;
+        for (kind, processor) in processors.iter() {
+            let _ = processor.take_stats_dirty();
+            let size = processor.store_size() as u32;
+            per_kind.insert((*kind).to_string(), size);
+            total = total.saturating_add(size);
+        }
+        (per_kind, total)
+    }
+
     /// Get all WatchObjs for ConfigSyncServer registration
     ///
     /// Returns a HashMap that can be passed to ConfigSyncServer::register_all()
@@ -305,5 +324,6 @@ mod tests {
         assert_eq!(registry.count(), 0);
         // Empty registry is NOT ready - must have at least one processor
         assert!(!registry.is_all_ready());
+        assert_eq!(registry.collect_stats_snapshot(), (HashMap::new(), 0));
     }
 }

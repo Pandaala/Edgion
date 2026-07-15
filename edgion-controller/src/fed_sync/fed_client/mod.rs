@@ -319,12 +319,20 @@ async fn connect_and_run(
         let cancel = stats_cancel.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(STATS_COALESCE_INTERVAL);
-            // First tick fires immediately; ResourceProcessor initializes
-            // stats_dirty=true so this emits the initial report after register.
+            // First tick fires immediately. Force a full snapshot for every
+            // federation session: a restarted Center has an empty aggregator
+            // even when this long-running Controller has no newly dirty resources.
+            let mut initial = true;
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        if let Some((per_kind, total)) = conf_mgr.collect_stats_if_dirty() {
+                        let report = if initial {
+                            initial = false;
+                            Some(conf_mgr.collect_stats_snapshot())
+                        } else {
+                            conf_mgr.collect_stats_if_dirty()
+                        };
+                        if let Some((per_kind, total)) = report {
                             let msg = ControllerMessage {
                                 payload: Some(CtrlPayload::StatsReport(StatsReport { per_kind, total })),
                             };
