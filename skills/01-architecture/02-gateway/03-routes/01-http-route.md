@@ -59,7 +59,8 @@ The radix tree internally supports `:param` parameter matching; a double colon `
 - All regex patterns are compiled into a single `RegexSet`; match complexity is O(M) where M is the input path length.
 - Routes are sorted by pattern string length descending; longer (more specific) patterns are preferred.
 - When `RegexSet` construction fails, falls back to linear matching one by one.
-- The regex engine runs before the radix engine inside `RouteRules.match_route`.
+- `RouteRules.match_route` tries the radix Exact/PathPrefix engine first and uses the regex engine
+  only as a fallback, preserving `Exact > PathPrefix > RegularExpression`.
 
 ## proxy_http implementation
 
@@ -115,16 +116,17 @@ from the target Service key at selection time, via the
 
 ### full_set
 
-1. Sync LB policies.
-2. Clear `route_cache` and replace fully.
-3. Call `rebuild_all_listener_managers` to rebuild every listener route table.
+1. Clear `route_cache` and replace it fully.
+2. Call `rebuild_all_listener_managers` to rebuild every listener route table.
 
 ### partial_update
 
 1. Compute the set of affected listeners (from changed routes' `resolved_listeners`).
-2. Merge add+update, sync LB policies, clean up LB policies for removed routes.
-3. Update `route_cache`.
-4. Call `rebuild_affected_listener_managers` to rebuild only affected listeners.
+2. Merge add+update and update `route_cache`; remove deleted route keys.
+3. Call `rebuild_affected_listener_managers` to rebuild only affected listeners.
+
+LB policy is not synchronized from routes. It is resolved from the target Service's
+`EdgionBackendTrafficPolicy` at backend selection time.
 
 ### Route parsing
 

@@ -265,20 +265,19 @@ LOCAL="target/x86_64-unknown-linux-gnu/release/$BIN"
 # 1. Copy the binary into a temp dir in the Pod
 kubectl cp "$LOCAL" "$NS/$POD:/tmp/$BIN" -c "$BIN"
 
-# 2. Move it to the runtime-override path
+# 2. Install it atomically at the runtime-override path
 kubectl exec -n "$NS" "$POD" -c "$BIN" -- sh -c \
-  "rm -f /usr/local/edgion/$BIN && \
-   cp /tmp/$BIN /usr/local/edgion/$BIN && \
-   chmod +x /usr/local/edgion/$BIN"
+  "chmod +x /tmp/$BIN && mv /tmp/$BIN /usr/local/edgion/$BIN"
 
 # 3. Kill the business child process so the shell loop relaunches with the new binary
 PID=$(kubectl exec -n "$NS" "$POD" -c "$BIN" -- \
-  pgrep -f "/usr/local/edgion/$BIN" | grep -v '^1$' | head -1)
-kubectl exec -n "$NS" "$POD" -c "$BIN" -- kill -9 "$PID"
+  pgrep -f "^(/usr/local/edgion/|/usr/local/bin/)?$BIN( |$)" | grep -v '^1$' | head -1)
+test -n "$PID"
+kubectl exec -n "$NS" "$POD" -c "$BIN" -- kill -TERM "$PID"
 ```
 
 Common pitfalls:
-- `Text file busy`: `rm -f` first, then `cp`
+- `Text file busy`: stage under `/tmp`, then replace the path with `mv` as shown
 - `Permission denied`: you wrote to `/usr/local/bin/`; switch to `/usr/local/edgion/`
 - Logs still show the old error: most likely an old child process wasn't killed, or the old binary ran once between `cp` and `kill`
 

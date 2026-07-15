@@ -32,7 +32,7 @@ When a feature has an incompatible change, add an alert to the affected document
 ```markdown
 > ⚠️ **Breaking Change (v0.X)**
 > 
-> Starting from v0.X, `old_field` has been renamed to `new_field`. The old field name will be removed in v0.Y.
+> In v0.X, `old_field` was replaced by `new_field`. Update manifests before upgrading; the old field is not accepted.
 ```
 
 ### Callout rules
@@ -40,41 +40,27 @@ When a feature has an incompatible change, add an alert to the affected document
 - Place at the top of the page (after the H1, before the overview)
 - Note the version number
 - Describe what changed and how to migrate
-- Note the timeline for removing the old behavior (if any)
-- Once the change has fully landed (old behavior removed), remove the alert
+- State that the old behavior or field is unavailable and give the exact migration
+- Keep the alert while the affected version remains relevant; move durable upgrade details to `migrations/`
 
-## Feature deprecation callouts
+## Pre-release compatibility policy
 
-### Parameter deprecation
+Edgion has not shipped to production. Renames and removals therefore land
+atomically across code, CRDs, configuration examples, and documentation. Do not
+document deprecated aliases, dual fields, migration shims, or a multi-release
+compatibility window unless the user explicitly requests a released-version
+compatibility policy.
 
-Mark deprecated parameters in the parameter table:
+For a pre-release rename, show only the current field in parameter tables:
 
 ```markdown
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `old_field` | String | — | ⚠️ **Deprecated**, use `new_field` instead. Will be removed in v0.Y |
-| `new_field` | String | — | The new field replacing `old_field` |
+| `new_field` | String | — | Current field; `old_field` was removed in v0.X |
 ```
 
-### Feature deprecation
-
-When an entire feature is deprecated, add the following to the top of the page:
-
-```markdown
-> ⚠️ **Deprecated**
-> 
-> This feature is deprecated and will be removed in v0.Y. Please migrate to the new feature (link to the replacement documentation).
-```
-
-### Deprecation lifecycle
-
-```
-v0.X: Mark as deprecated (doc callout + log warning)
-  ↓
-v0.X+1~2: Maintain compatibility, encourage migration
-  ↓
-v0.Y: Remove the old feature + remove deprecation callouts + update migration documentation
-```
+When an entire feature is removed, point readers to the replacement and an
+explicit migration page. Do not imply the removed feature remains executable.
 
 ## Version-sensitive content
 

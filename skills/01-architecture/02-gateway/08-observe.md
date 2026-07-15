@@ -84,13 +84,17 @@ Logging infrastructure:
 
 ### Exposed port
 
-Metrics are exposed on port `:12090` via Axum routes:
+Metrics use `metrics.listen` (default `0.0.0.0:12090`) and expose Axum routes:
 - `GET /metrics` — Prometheus-format metrics.
 - `GET /health` — health-check endpoint.
 
 ### Metric registry
 
-`GatewayMetrics` is a global singleton that registers the following metrics using the `metrics` crate:
+The authoritative gateway metric-name registry is
+`edgion-gateway/src/observe/metrics/registry.rs`. Do not copy Controller metrics into this list;
+Controller schema/status/connected-gateway metrics are owned by the control plane.
+
+Gateway metric families include:
 
 | Metric name | Type | Description |
 |-------------|------|-------------|
@@ -101,9 +105,6 @@ Metrics are exposed on port `:12090` via Axum routes:
 | `edgion_tcp_log_dropped_total` | Counter | Number of dropped TCP logs |
 | `edgion_tls_log_dropped_total` | Counter | Number of dropped TLS logs |
 | `edgion_udp_log_dropped_total` | Counter | Number of dropped UDP logs |
-| `edgion_status_update_total` | Counter | Total K8s status updates |
-| `edgion_status_update_failed_total` | Counter | Failed K8s status updates |
-| `edgion_status_update_skipped_total` | Counter | Skipped K8s status updates |
 | `edgion_config_reload_signals_total` | Counter | Configuration reload signals |
 | `edgion_config_relist_total` | Counter | Configuration relist count |
 | `edgion_config_event_parse_errors_total` | Counter | Watch-event JSON parse failures (label: `kind`); fires when `ClientCache::start_watch` cannot deserialize a `WatchResponse.data` batch or a per-event `T` payload — primary symptom of controller↔gateway schema drift |
@@ -111,8 +112,11 @@ Metrics are exposed on port `:12090` via Axum routes:
 | `edgion_gateway_request_bytes_total` | Counter | Gateway request bytes |
 | `edgion_gateway_response_bytes_total` | Counter | Gateway response bytes |
 | `edgion_mirror_requests_total` | Counter | Mirror requests (the `status` label distinguishes `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout`; mirror is fire-and-forget; for per-request latency look up the `et` field in the mirror access log — no longer exposed as a histogram) |
-| `edgion_controller_connected_gateways` | Gauge | Number of connected gateway instances |
-| `edgion_controller_schema_validation_errors_total` | Counter | Schema validation error count |
+
+The registry also covers FIPS host/module/policy state, Wasm runtime behavior, outbound/egress
+blocking and TLS, LinkSys health, circuit breakers, retries, and access-log backfill. Consult the
+registry and the specific emission site when adding alerts; this page intentionally does not freeze
+an exhaustive copy that will drift.
 
 Global label: `service=edgion-gateway`.
 
@@ -168,7 +172,7 @@ edgion-gateway/src/observe/
 │   ├── logger_factory.rs     # logger factory
 │   └── mod.rs
 └── metrics/                  # Prometheus metrics
-    ├── api.rs                # Axum HTTP endpoint (:12090)
+    ├── api.rs                # Axum HTTP endpoint (metrics.listen)
     ├── registry.rs           # GatewayMetrics definition
     ├── test_metrics.rs       # test-only metric injection
     └── mod.rs

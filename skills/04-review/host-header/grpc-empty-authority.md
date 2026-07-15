@@ -44,6 +44,6 @@ HTTP/2 carries the equivalent in the `:authority` pseudo-header (RFC 9113 §8.3.
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a1.md → V7` (CONFIRM)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a1.md → V7` (CONFIRM)
 - Sibling rule: [../rfc-divergence/duplicate-host.md](../rfc-divergence/duplicate-host.md) (duplicate Host rejection, same RFC §7.2 family)
 - Conformance: `skills/08-kubernetes/01-gateway-api/SKILL.md` (GATEWAY-GRPC ALL PASS, must remain so)

@@ -136,11 +136,10 @@ expect_file!["./snapshots/large_output.txt"].assert_eq(&big_debug_string);
 This is the central operation. Run it, then **read the diff before doing anything else**.
 
 ```bash
-# Default form for Edgion — all unit tests live in inline #[cfg(test)] mod blocks.
-# -p edgion     selects the single crate
+# Select the workspace member that owns the snapshot.
 # --lib         scopes to the library target (avoids running bin + integration targets)
 # <filter>      module-path filter, e.g. plugins::http::dsl::tests::decision_log
-UPDATE_EXPECT=1 cargo test -p edgion --lib <module::path::filter>
+UPDATE_EXPECT=1 cargo test -p edgion-gateway --lib <module::path::filter>
 
 # MANDATORY: inspect every changed snapshot before moving on
 git diff
@@ -151,9 +150,9 @@ git diff
 > Using `--lib` makes the output deterministic and prevents accidentally refilling unrelated targets.
 > This is a real footgun encountered during the B1 pilot.
 
-> **Note on `--test <suite>`.** That flag is only for top-level integration-test binaries under a
-> project-level `tests/` directory. Edgion has no such directory as of 2026-05-27 — all unit tests
-> are inline `#[cfg(test)] mod` blocks. Use the module-path filter form above.
+> **Note on `--test <suite>`.** That flag selects crate-level integration tests, such
+> as the CRD guards under `edgion-resources/tests/`. Inline `#[cfg(test)]` modules use
+> `-p <owning-crate> --lib <module-filter>` instead.
 
 ---
 
@@ -189,7 +188,7 @@ Run the suite ≥5 times with the raw output dumped to separate files, then diff
 
 ```bash
 for i in $(seq 5); do
-    cargo test -p edgion --lib <filter> -- --nocapture 2>&1 | grep -A50 'RUNNING' > /tmp/run_$i.txt
+    cargo test -p edgion-gateway --lib <filter> -- --nocapture 2>&1 | grep -A50 'RUNNING' > /tmp/run_$i.txt
 done
 diff /tmp/run_1.txt /tmp/run_2.txt
 ```

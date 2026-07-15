@@ -204,21 +204,14 @@ spec:
     index:
       prefix: "edgion-logs"
       datePattern: "%Y.%m.%d"
-    failedCache:                  # PLANNED, not yet implemented — pruned by the API server, no effect today
-      type: localFile             # localFile | redis
-      localFile:
-        path: "/var/log/edgion/es-failed"
-      # redis:
-      #   linkSysRef: "default/redis-cache"
-      #   listKey: "es-failed"
-      #   maxEntries: 100000
     compatibility:
       vendor: elasticsearch       # elasticsearch | opensearch
 ```
 
 - Auth tagged-enum: `type: basic` → `BasicAuthResolver`, `type: apiKey` → `EsApiKeyResolver`, `type: bearer` → `BearerResolver`.
 - At runtime, requests are issued via reqwest directly over HTTP, without depending on the official `elasticsearch` crate; OpenSearch-compatible.
-- `failedCache` (spill-on-outage + replay-on-recovery) is **planned, not yet implemented** — the field shown above is a design placeholder and is pruned by the API server today (it has no effect). See `edgion-gateway/src/link_sys/readme`.
+- Failed-cache spill/replay is planned but is not an accepted YAML field. Do not put it in a
+  LinkSys resource until both the Rust schema and CRD declare it.
 
 ### `type: webhook`
 
@@ -362,7 +355,13 @@ spec:
 
 **Consumer side:** the outbound request shape is owned entirely by the webhook resource. Consumers (`KeyGet::Webhook`) pass only the `session` and an optional `pathOverride` (honored only when `path.allowOverride: true`); the `forwardHeaders` / `pathSuffix` knobs are gone. Per-call dynamic values flow in via ctx-set `vars` → `${ctx:NAME}` in the webhook templates.
 
-**Rolling-upgrade shim:** the removed `auth` / `defaultHeaders` / `requestMethod` fields are accepted as ignored no-ops for one release (old-controller → new-gateway compatibility); the controller logs a WARN. They are removed next release. Migration table in the architecture doc. `successStatusCodes` has **no such shim** — see the note at the top of this section.
+**Removed-field debt:** current code still accepts `auth` / `defaultHeaders` /
+`requestMethod` as ignored no-ops and logs a warning. This is not a supported
+rolling-upgrade contract; it conflicts with the repository's pre-release
+no-compatibility policy. Do not use or extend these fields. Remove the
+placeholders, warning, and associated tests together when code changes are in
+scope. `successStatusCodes` is already rejected; see the note at the top of this
+section.
 
 ### `type: kafka`
 
@@ -374,7 +373,7 @@ spec:
       - "kafka:9092"
 ```
 
-- Kafka is currently a placeholder (the schema is valid, but the Gateway side has not yet integrated a provider). `Accepted=True`; runtime availability depends on later releases.
+- Kafka has a live Gateway provider, runtime store, and full/partial update lifecycle.
 
 ### `type: httpdns`
 

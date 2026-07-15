@@ -107,7 +107,7 @@ cert_cb fail-closed convention and the "do not silently drop" intent.
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a4.md → V07`
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a4.md → V07`
 - Integration test: `gateway_tls_dual_cert` (TLS1.3 ECDSA/RSA sigalg pinning +
   TLS1.2 RSA guard) in
   `edgion-tests/src/client/suites/gateway/tls/gateway_tls/gateway_tls.rs`

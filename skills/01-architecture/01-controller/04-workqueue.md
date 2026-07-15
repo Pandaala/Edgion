@@ -46,9 +46,8 @@ pub struct WorkItem {
 }
 ```
 
-Two construction methods:
-- `WorkItem::new(key)` — original event, empty chain
-- `WorkItem::with_chain(key, chain)` — cross-resource requeue, carrying a causality chain
+`WorkItem::new(key)` creates an original event with an empty chain. Cross-resource
+paths pass the chain through queue APIs; there is no `WorkItem::with_chain` constructor.
 
 Only the `key` (a `String`) flows through the ready-queue channel. The `enqueue_time` and merged
 `trigger_chain` live in the `pending: DashMap<String, PendingEntry>`; `dequeue()` reconstructs the
@@ -87,11 +86,12 @@ enqueue_after("ns/my-route", 100ms, chain):
     └─ no  → insert into scheduled → send to delay heap → return true
 ```
 
-Therefore, the same key can simultaneously exist in both `pending` and `scheduled` (the two paths run in parallel). When the delayed item expires, the delay loop performs a second dedup check against `pending`: if `pending.insert` fails (an immediate item is already present), the delayed version is silently dropped.
+Therefore, the same key can simultaneously exist in both `pending` and `scheduled`. When a delayed item expires and the key is already pending, `promote_delayed_item` merges in the deeper TriggerChain so cycle history is not lost; it does not silently discard that causality information.
 
 This design is deliberate: processing is idempotent, so processing once more does not affect correctness; forcing cross-set mutual exclusion would only increase lock contention and false skips.
 
-When the queue depth reaches 80% of capacity, a warning log is printed (once per 500 items).
+High-water logging uses hysteresis: crossing 80% emits the enter warning once,
+and falling to 70% emits recovery and rearms the latch.
 
 ## Dirty Requeue Pattern
 
@@ -108,7 +108,9 @@ Timeline:
 
 This guarantees that updates arriving during processing are not lost: even if a key is currently being processed, new changes can still be enqueued and processed afterwards.
 
-The `done()` method is currently a no-op (only logs); the API is preserved for compatibility.
+The `done()` method is currently a no-op (only logs). It remains a lifecycle
+hook used by the current queue interface, not a compatibility promise; remove
+it if all current call sites and the trait no longer need the hook.
 
 ## Delayed Enqueue (enqueue_after)
 
@@ -139,7 +141,9 @@ loop {
 }
 ```
 
-Once a delayed item is due, it is removed from `scheduled`, checked against `pending` to avoid duplicates, inserted into `pending`, and sent to the ready queue.
+Once a delayed item is due, it is removed from `scheduled`. A new key is inserted
+into `pending` and sent to the ready queue; an existing key keeps one ready item
+but merges the deeper TriggerChain into its `PendingEntry`.
 
 ## TriggerChain — Cascade Causality Tracking
 
@@ -218,3 +222,4 @@ All metrics use `Ordering::Relaxed` atomic operations — fine for monitoring bu
 | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/processor.rs` | ResourceProcessor; uses Workqueue |
 | `edgion-controller/src/conf_mgr/conf_center/kubernetes/resource_controller.rs` | K8s ResourceController, spawn_worker |
 | `edgion-controller/src/conf_mgr/conf_center/file_system/resource_controller.rs` | File-system ResourceController, spawn_worker |
+| `edgion-controller/src/conf_mgr/conf_center/etcd/resource_controller.rs` | Etcd ResourceController, spawn_worker |

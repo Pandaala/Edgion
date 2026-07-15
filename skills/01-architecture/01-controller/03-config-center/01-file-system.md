@@ -5,8 +5,7 @@ description: FileSystemCenter implementation — local YAML directory watching, 
 
 # FileSystemCenter Implementation
 
-FileSystemCenter is a ConfigCenter backend designed for development and testing. It watches a local YAML directory,
-turning file changes into resource events, then runs them through the same Workqueue + ResourceProcessor pipeline used by KubernetesCenter.
+FileSystemCenter watches a recursive local YAML tree and runs changes through the same runtime-owned processing model as Etcd and Kubernetes.
 
 ## Architecture
 
@@ -14,34 +13,36 @@ turning file changes into resource events, then runs them through the same Workq
 FileSystemCenter
 ├── writer: FileSystemStorage       # CenterApi delegate (CRUD operations)
 ├── config: FileSystemConfig        # configuration (conf_dir, etc.)
-├── config_sync_server: RwLock<Option<Arc<ConfigSyncServer>>>
-├── reload_tx: Mutex<Option<mpsc::Sender<()>>>
-└── controller_handle: Mutex<Option<JoinHandle<()>>>
+└── base: CenterBase                # ControllerRuntime, ConfigSyncServer slot, reload/lifecycle state
 
 FileSystemController.run()
 ├── FileSystemWatcher (shared, centralized file watching)
-│   ├── [PollWatcher (1s stat-diff)] → [dispatcher] → [kind channels]
+│   ├── [PollWatcher (adaptive/overridden interval)] → [dispatcher] → [kind channels]
 │   │                                        ├── HTTPRoute channel
 │   │                                        ├── Gateway channel
 │   │                                        └── ... other kind channels
 │
 ├── spawn::<HTTPRoute, _>(HttpRouteHandler)
-│   ├── ResourceProcessor + register into PROCESSOR_REGISTRY
+│   ├── ResourceProcessor + register into ControllerRuntime.processor_registry
 │   └── FileSystemResourceController (subscribes to its kind channel)
 │
 ├── spawn::<Gateway, _>(GatewayHandler)
 │   └── ...
-└── ~20 resource types, all running independently in parallel
+└── registry-defined resource kinds, spawned from the shared non-K8s list
 ```
 
 ## File Naming Convention
 
-All resource files live in a single flat directory; resource metadata is encoded in the file name:
+The watcher scans recursively. New CRUD writes and supported inputs use the
+canonical subdirectories below. Current code can still discover older
+locations; that behavior is pre-release removal debt, not a supported layout.
+Do not add new fallback locations. `PathRegistry` must choose a deterministic
+winner if duplicate files are encountered while that debt remains.
 
 | Resource scope | File-name format | Example |
 |----------------|------------------|---------|
-| Namespaced | `{Kind}_{namespace}_{name}.yaml` | `HTTPRoute_default_my-route.yaml` |
-| Cluster-scoped | `{Kind}__{name}.yaml` (double underscore) | `GatewayClass__edgion.yaml` |
+| Namespaced | `{root}/{namespace}/{Kind}_{namespace}_{name}.yaml` | `default/HTTPRoute_default_my-route.yaml` |
+| Cluster-scoped | `{root}/cluster/{Kind}__{name}.yaml` | `cluster/GatewayClass__edgion.yaml` |
 
 Status files: append a `.status` suffix to the corresponding configuration file name.
 
@@ -76,21 +77,21 @@ start(shutdown_handle)
     ├── 2. FileSystemController.run()
     │   ├── Clean up orphan .status files
     │   ├── Phase 1: spawn base resource controllers
-    │   │   (GatewayClass, Gateway, Secret, ReferenceGrant, Service, EndpointSlice)
+    │   │   (GatewayClass, Gateway, Secret, ConfigMap, ReferenceGrant, Service, EndpointSlice)
     │   ├── wait_kinds_ready(phase1_kinds, 15s)
     │   ├── Phase 2: spawn dependent resource controllers
     │   │   (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, EdgionTls,
     │   │    BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData,
-    │   │    LinkSys, EdgionAcme, EdgionGatewayConfig)
+    │   │    LinkSys, EdgionAcme, EdgionGatewayConfig, EdgionBackendTrafficPolicy)
     │   └── FileSystemWatcher.run()
-    │       ├── init_phase: scan directory → group by kind → Init/InitApply/InitDone
-    │       └── runtime_phase: PollWatcher (1s stat diff) → Apply/Delete dispatched directly
+    │       ├── init_phase: recursively scan → resolve key collisions → Init/InitApply/InitDone
+    │       └── runtime_phase: PollWatcher (adaptive interval) → Apply/Delete dispatched directly
     ├── 3. wait_registry_ready(30s)
     ├── 4. Trigger cross-namespace revalidation
     ├── 5. Create ConfigSyncServer + register all WatchObjs
     ├── 6. set_config_sync_server(Some)  ← gRPC service becomes available
     ├── 7. select! { shutdown / reload / error }
-    └── 8. Cleanup: set_config_sync_server(None), abort controller, clear registry
+    └── 8. Cleanup: clear ConfigSyncServer, abort controllers, ControllerRuntime::reset()
         ├── Shutdown → return
         ├── Reload → continue loop (new server_id)
         └── Error → wait for shutdown signal then return
@@ -100,7 +101,7 @@ start(shutdown_handle)
 
 `FileSystemWatcher.init_phase()` performs a synchronous directory scan:
 
-1. `read_dir()` traverses the configuration directory
+1. WalkDir recursively traverses the configuration directory
 2. Filter `.yaml` / `.yml` files, exclude `.status` files
 3. Read file contents and identify Kind via `ResourceKind::from_content()`
 4. After grouping by kind, for each Kind send `Init` → `InitApply(path, content) * N` → `InitDone` in order
@@ -110,7 +111,7 @@ start(shutdown_handle)
 
 `FileSystemWatcher.runtime_phase()` uses the `PollWatcher` from the `notify` crate:
 
-1. Create a `PollWatcher` (poll_interval = 1s) and forward raw events to `mpsc::unbounded_channel`
+1. Count YAML files and choose a 1–5 second PollWatcher interval (or use `fs_poll_interval_ms` override), then forward raw events to `mpsc::unbounded_channel`
 2. Ignore `EventKind::Access` (read-only access does not trigger processing)
 3. The main loop calls `dispatch_file_event` directly for each event, with no application-level debounce —
    PollWatcher already coalesces multiple events on the same path into one within each poll cycle
@@ -133,13 +134,14 @@ After switching to `PollWatcher`:
 - The application layer no longer needs debounce / pending HashMap / `had_genuine_remove`; about 100 lines of code were removed
 - Cross-platform behavior is consistent (PollWatcher is a pure user-space implementation, decoupled from OS push APIs)
 
-**Cost**: a fixed 1s latency (poll_interval). This is fully acceptable for a config controller.
+**Cost**: polling latency. The default is 1 second through 2,000 files, then
+steps by one second per additional 2,000-file bucket and caps at 5 seconds.
+`fs_poll_interval_ms` overrides this selection.
 
 **Lower bound on FS-mode latency**
 
-In FileSystemCenter mode, the minimum latency from "writing a config file" to "Apply event dispatch" is 1 second (the next poll tick of PollWatcher). This is a property of PollWatcher's design, not a bug.
-
-Tests and tools that assert on FS-mode response time (e.g. "status should update within < N seconds after writing the file") need to budget timeouts of at least 1.5 seconds.
+Tests and tools must budget at least the configured/selected poll interval plus
+processing time; do not assume a universal 1.5-second bound for large trees.
 
 **Known limitations**
 
@@ -152,16 +154,16 @@ Like KubernetesCenter, FileSystemCenter uses a two-phase initialization:
 
 | Phase | Resources | Description |
 |-------|-----------|-------------|
-| Phase 1 (base) | GatewayClass, Gateway, Secret, ReferenceGrant, Service, EndpointSlice | Other resources need to query these base resources during `parse()` |
-| Phase 2 (dependent) | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls, BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData, LinkSys, EdgionAcme, EdgionGatewayConfig | Started after Phase 1 completes |
+| Phase 1 (base) | GatewayClass, Gateway, Secret, ConfigMap, ReferenceGrant, Service, EndpointSlice | Other resources query these during `parse()` |
+| Phase 2 (dependent) | Remaining kinds in `non_kube_common::spawn_all_controllers`, including routes, policies, extensions, ACME, and LinkSys | Started after Phase 1 completes |
 
-Phase 2 waits for all Phase 1 kinds to be marked ready in `PROCESSOR_REGISTRY` (after a 15-second timeout, it falls back to parallel initialization).
+Phase 2 waits on `runtime.processor_registry` for Phase 1 readiness.
 
-## FsRawStore Maintenance
+## LocalRawStore Maintenance
 
-`FileSystemResourceController` creates an `FsRawStore<K>` in `new()` and injects it into the `processor`. It is then maintained synchronously along every event path:
+`FileSystemResourceController` creates a `LocalRawStore<K>` and maintains it along every event path. Etcd uses the same local-store type.
 
-| Event / path | FsRawStore operation |
+| Event / path | LocalRawStore operation |
 |---|---|
 | `InitApply` parsed successfully | `upsert(key, Arc::new(obj))` |
 | `Apply` parsed successfully (init phase) | `upsert(key, Arc::new(obj))` |
@@ -176,30 +178,33 @@ Maintaining via both the main loop and the worker is necessary: the main loop gu
 
 | Aspect | FileSystemCenter | KubernetesCenter |
 |--------|------------------|------------------|
-| Event source | `notify::PollWatcher` (1s stat-diff) | K8s API Reflector watch stream |
+| Event source | `notify::PollWatcher` (adaptive/overridden stat-diff) | K8s API Reflector watch stream |
 | Status persistence | `.status` file (YAML) | K8s API `PATCH /status` (JSON Merge Patch) |
 | Leader election | None (single instance, `leader_handle = None`) | Lease-based distributed election |
 | Status-write guard | `is_none_or` always returns true | Guarded by `leader_handle.is_leader()` |
 | 410 Gone handling | N/A | Triggers a full KubernetesController rebuild |
 | File parsing | Extracts Kind/namespace/name from the file name | K8s API returns structured objects |
-| RawStore implementation | `FsRawStore` (manually maintained HashMap, dual-path maintenance) | `KubeRawStore` (wraps the reflector Store, automatically synced) |
+| RawStore implementation | `LocalRawStore` (manually maintained HashMap, also used by Etcd) | `KubeRawStore` (wraps the reflector Store) |
 | Reload | Supported (triggered by Admin API, new server_id) | Supported (same as left) |
 | Use cases | Development, testing, CI | Production K8s deployments |
 
 ## Multi-version Resource Compatibility
 
-FileSystemCenter has no API Server to perform CRD multi-version conversion, so multi-version compatibility must be handled at the file-read boundary:
+FileSystemCenter has no API Server to perform CRD multi-version conversion.
+The current contract therefore accepts only the repository's canonical API
+versions at the file-read boundary. Do not add legacy deserializers or
+conversion shims for older YAML in this pre-release project.
 
 - The watcher still dispatches by `kind`, not by `apiVersion`
 - After `ResourceController` reads YAML, it must first identify the `apiVersion`
-- For older-version resources (e.g. `BackendTLSPolicy/v1alpha3`), deserialize into the legacy type first
-- Then immediately convert into the internal canonical type before writing to `FsRawStore`, entering the workqueue, and running the handler
-- When the worker re-reads the file after dequeue, it must reuse the same "parse and normalize" logic
+- Reject a noncanonical `apiVersion` with a clear validation error before writing
+  to `LocalRawStore` or entering the workqueue.
+- When the worker re-reads the file after dequeue, it must reuse the same
+  canonical parse-and-validate logic.
 
 Recommended principles:
 
 - Each FileSystem controller maintains only one internal type
-- Older-version YAML is only an input compatibility layer
 - Status persistence and downstream Gateway sync use the canonical type
 
 ## Key Files

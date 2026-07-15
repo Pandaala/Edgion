@@ -13,7 +13,7 @@ Two runtimes coexist within the Gateway process:
 
 | Runtime | Responsibility | Lifecycle |
 |---------|----------------|-----------|
-| **Tokio** | gRPC Watch/List, configuration handling, auxiliary services (Admin API, Metrics API, health checks), all async tasks | Created at startup, moved to a background thread before Phase 2, kept alive via `std::future::pending` permanent suspension |
+| **Tokio** | gRPC Watch/List, configuration handling, auxiliary services (Admin API, Metrics API, health checks), all async tasks | Created at startup, moved to a shutdown-aware background thread, drained and joined after Pingora stops |
 | **Pingora** | Proxy main loop: TCP connection accept, TLS handshake, HTTP/gRPC request handling, upstream connection reuse | Runs blocking on the main thread via `Server::run_forever()` |
 
 The two runtimes share configuration data via an **ArcSwap** atomic pointer — the Tokio side writes, the Pingora side reads lock-free. This design ensures that hot configuration updates do not block proxy request handling.
@@ -33,7 +33,7 @@ Key components:
 - **ConfigSyncClient** (`conf_sync/conf_client/grpc_client.rs`): manages the gRPC connection to the Controller, handles List/Watch calls, version tracking, and reconnection. Calls `get_server_info()` to obtain server_id and supported_kinds.
 - **ClientCache\<T\>** (`conf_sync/cache_client/cache.rs`): one cache instance per resource kind, holding `CacheData<T>` (RwLock-protected) and a gRPC client reference. Implements the `DynClientCache` trait to enable type-erased unified dispatching.
 - **event_dispatch** (`conf_sync/cache_client/event_dispatch.rs`): implements the `CacheEventDispatch<T>` trait, applying gRPC events (InitAdd/EventAdd/EventUpdate/EventDelete) to CacheData and compressing event batches.
-- **ConfHandler\<T\>** (`core/common/conf_sync/traits.rs`): a resource-handler trait, one implementation per resource kind. Provides two callbacks, `full_set()` and `partial_update(add, update, remove)`, responsible for writing resources into runtime stores.
+- **ConfHandler\<T\>** (`edgion-common/src/conf_sync/traits.rs`): a resource-handler trait, one implementation per resource kind. Provides two callbacks, `full_set()` and `partial_update(add, update, remove)`, responsible for writing resources into runtime stores.
 - **ConfigClient** (`conf_sync/conf_client/config_client.rs`): aggregates ClientCache instances of all resource kinds and exposes type-safe query interfaces such as `list_gateways()`, `get_gateway_class()`, `get_edgion_gateway_config()`, plus an `is_ready()` readiness check.
 
 ## Pingora proxy layer
@@ -61,16 +61,15 @@ Each protocol has an independent `routes_mgr` (route manager) and `route_table`,
 edgion-gateway/src/
 ├── api/           # Admin API server (default :12001, configurable via admin_listen), exposes runtime state queries
 ├── backends/      # Backend management
-│   ├── discovery/ # Backend discovery: Endpoint / EndpointSlice / Service stores
-│   ├── health/    # Health checks: annotation-driven probes, status store, manager scheduling
-│   ├── policy/    # BackendTLSPolicy handling
-│   ├── preload.rs # Preload load balancers for all routes at startup
+│   ├── discovery/ # Backend discovery: EndpointSlice / Service stores
+│   ├── health/    # Health checks, status store, manager scheduling
+│   ├── policy/    # BackendTLSPolicy + EdgionBackendTrafficPolicy
+│   ├── preload.rs # Hydrate referenced Service backend lists at startup
 │   └── validation.rs
 ├── cache/         # LRU cache
 ├── cli/           # Startup entry (EdgionGatewayCli::run())
 │   ├── config.rs  # EdgionGatewayConfig YAML configuration structure
-│   ├── pingora.rs # Pingora Server creation and run (two-phase)
-│   └── log_config.rs
+│   └── pingora.rs # Pingora Server creation and run (two-phase)
 ├── conf_sync/     # Configuration sync
 │   ├── cache_client/ # ClientCache<T>, CacheData, event_dispatch
 │   └── conf_client/  # ConfigSyncClient (gRPC), ConfigClient (aggregated queries)
@@ -82,10 +81,10 @@ edgion-gateway/src/
 │   ├── selection/        # Strategy implementations: ConsistentHash, EWMA, LeastConn
 │   ├── ewma/             # EWMA metric collection
 │   ├── leastconn/        # Least-connection state and cleaner
-│   ├── lb_policy/        # LB policy configuration and types
+│   ├── compiled_selector.rs # per-Service compiled selector cells
 │   └── runtime_state/    # Runtime LB state (increment/decrement/update_ewma)
-├── link_sys/      # External system integration (LinkSys)
-│   ├── providers/ # Elasticsearch, Etcd, Redis, Webhook, LocalFile
+├── link_sys/      # Gateway LinkSys providers/runtime; common core + Etcd live in edgion-common
+│   ├── providers/ # Elasticsearch, Kafka, Redis, Webhook, LocalFile, OTLP
 │   └── runtime/   # ConfHandler, DataSender
 ├── observe/       # Observability
 │   ├── access_log/  # AccessLog: entry definition, logger, store
@@ -106,11 +105,11 @@ edgion-gateway/src/
 │   ├── matching/  # Gateway matching, TLS certificate matching (ArcSwap)
 │   ├── store/     # GatewayStore, ListenerGatewayInfoStore (ArcSwap)
 │   ├── handler.rs # ConfHandler implementation for the Gateway resource
-│   └── gateway_info.rs
+│   └── gateway_info.rs # compiled Gateway/listener runtime information
 ├── services/      # Auxiliary services
 │   └── acme/      # ACME automatic certificate issuance (challenge store)
 └── tls/           # TLS certificate management
-    ├── boringssl/ # BoringSSL backend (the rustls backend is feature-gated, not a separate dir)
+    ├── boringssl/ # BoringSSL custom callback support
     ├── runtime/   # TLS callbacks (SNI matching, certificate selection)
     ├── store/     # Certificate storage
     └── validation/ # Certificate validation

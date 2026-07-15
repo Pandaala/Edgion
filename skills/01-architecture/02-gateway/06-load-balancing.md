@@ -46,13 +46,10 @@ one onto the other.
 
 ## EWMA and LeastConn selection algorithm
 
-EWMA and LeastConn share the `select_by_min_metric()` algorithm:
-
-1. Build a min-heap (BinaryHeap + Reverse) sorted by metric value.
-2. Skip inactive backends (checked via `runtime_state::is_backend_active()`).
-3. Pop candidates from the heap one by one and check health via the `health_filter`.
-4. Return the first backend with the lowest metric that passes the health check.
-5. Iterate at most `max_iterations` times.
+EWMA and LeastConn use power-of-two choices (P2C): sample two eligible backends and select the
+lower-metric candidate. LeastConn compares atomic active-connection counts; EWMA compares the
+atomic latency score. Repeated bounded sampling applies health/activity filtering without scanning
+or heap-building across the entire backend set.
 
 ## BackendSelector
 
@@ -71,10 +68,12 @@ enum SelectorState<T> {
 ```
 
 Characteristics:
-- Lazy initialization: initialized on first use via `init(items, weights)`.
+- Route compilation initializes the selector with `init(items, weights)` before the unit is published;
+  request handling only selects from the compiled state.
 - Thread-safe: uses ArcSwap internally.
 - Weight validation: weights must be configured for all or for none; backends with weight 0 are filtered out.
-- Error codes: `ERR_NO_BACKEND_REFS`(1) and `ERR_INCONSISTENT_WEIGHT`(2).
+- Error codes include `ERR_NO_BACKEND_REFS`, `ERR_INCONSISTENT_WEIGHT`, and
+  `ERR_WRR_BUILD_FAILED`.
 
 ## Backend selection flow
 
@@ -139,9 +138,10 @@ in the resource schema doc.
    consumed LB policy, only the service key set, so it needed no change when LB policy moved off
    the route.
 2. Deduplicate using HashSet.
-3. For each key, warm the `ServiceSelectorCell` (which pre-creates the RoundRobin LB instance).
-4. LeastConn / EWMA / ConsistentHash read RR's backend list and the algorithm resolved from the
-   `EdgionBackendTrafficPolicy` store at selection time; no separate pre-creation is needed.
+3. For each key, hydrate the `ServiceSelectorCell` backend list if it is empty.
+4. Algorithm-specific compiled selectors remain lazy and are built by `get_or_build` when that
+   policy is first selected. LeastConn / EWMA / ConsistentHash resolve the effective
+   `EdgionBackendTrafficPolicy` at selection time.
 
 ## Directory layout
 

@@ -6,7 +6,7 @@ description: Full HTTPRoute schema and features: match conditions, filters, back
 # HTTPRoute Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.4.0 Core resource
+> Gateway API v1.5.0 Core resource
 
 HTTPRoute is the most complex routing resource in Edgion, defining routing rules at the HTTP/HTTPS layer.
 
@@ -242,7 +242,9 @@ A rule that violates the constraint is marked `PartiallyInvalid`; that rule does
 - **Aggregate mode**: combine multiple plugins into one `EdgionPlugins` resource; the route only needs a single `ExtensionRef`.
 - **Side-by-side mode**: write multiple `ExtensionRef` entries side-by-side in `rules[].filters`, each pointing to a different `EdgionPlugins`.
 
-See `docs/zh-CN/user-guide/http-route/filters/plugin-composition.md` and `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
+See `docs/en/user-guide/http-route/filters/plugin-composition.md` and
+`docs/en/migrations/<version>-extension-ref.md` for details; paired Chinese
+pages live under `docs/zh-CN/`.
 
 ## Timeouts and Retries
 

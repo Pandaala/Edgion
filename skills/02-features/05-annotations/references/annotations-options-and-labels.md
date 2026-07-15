@@ -24,7 +24,7 @@ spec:
 
 | Key | Value | Effect |
 |-----|-------|--------|
-| `edgion.io/cert-provider` | currently `EdgionTls` in examples | Tells Gateway TLS matching logic that listener certificates may come from the `EdgionTls` CRD instead of static `certificateRefs`. |
+| `edgion.io/cert-provider` | exact, case-sensitive `EdgionTls` | Selects the dynamic EdgionTls provider. Any other value is not recognized; absent uses normal `certificateRefs` behavior. |
 
 Important:
 
@@ -56,8 +56,8 @@ These are labels, not annotations.
 
 | Key | Where | Effect |
 |-----|-------|--------|
-| `edgion.io/leader` | controller Pod / leader Service selection | Marks leader state in Kubernetes HA mode. |
-| `edgion.io/managed-by` | ACME-managed Secrets and related internal resources | Indicates ownership by the ACME subsystem. |
+| `edgion.io/leader` | controller Pod / leader Service selection | String `"true"` or `"false"`; the leader Service selects `"true"`. |
+| `edgion.io/managed-by` | managed resources | Indicates lifecycle ownership, including ACME resources and conf-sync CA/certificate Secrets. |
 | `edgion.io/acme-resource` | ACME-managed Secrets and related internal resources | Stores the owning `EdgionAcme` resource name/key. |
 
 ## Quick Placement Test

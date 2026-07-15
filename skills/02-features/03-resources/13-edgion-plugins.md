@@ -88,7 +88,7 @@ spec:
 | `AllEndpointStatus` | All-endpoint status query |
 | `RegionRoute` | Multi-region traffic routing. The EdgionPlugins config only holds a `serviceRegionRouteRef`; all routing rules live in EdgionConfigData (ServiceRegionRoute → ClusterRegionRoute), resolved at plugin-build time. See `05-resources/15-edgion-config-data.md`. |
 
-> Note: `EdgionPlugin::ExtensionRef` (the nested form) has been removed. Multi-plugin reuse is achieved via an aggregate EdgionPlugins resource or by listing multiple ExtensionRef entries side-by-side in the HTTPRoute filter list. See `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
+> Note: `EdgionPlugin::ExtensionRef` (the nested form) has been removed. Multi-plugin reuse is achieved via an aggregate EdgionPlugins resource or by listing multiple ExtensionRef entries side-by-side in the HTTPRoute filter list. See `docs/en/migrations/<version>-extension-ref.md`; the paired Chinese page is under `docs/zh-CN/migrations/`.
 
 ### Debugging/Testing
 
@@ -111,7 +111,7 @@ HTTP plugins execute across Pingora's 4 stages:
 
 ## Secret Dependencies
 
-The following plugin types read Secret data from `GLOBAL_SECRET_STORE` during the Controller-side `parse()` stage:
+The following plugin types read Secret data from `ControllerRuntime.secret_store` during the Controller-side `parse()` stage:
 
 | Plugin | Secret Fields Read |
 |--------|--------------------|

@@ -81,5 +81,5 @@ Do not re-file backend CA bundle reports against tls-06.
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a4.md → V09`
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a4.md → V09`
 - Related (distinct): [terminate-mtls-ca-ordering.md](terminate-mtls-ca-ordering.md)

@@ -47,18 +47,23 @@ service ConfigSync {
 ```
 Gateway startup:
   1. GetServerInfo() → fetch server_id, supported_kinds
-  2. For each kind: List(kind) → full snapshot (InitStart → InitAdd × N → InitDone)
-  3. For each kind: Watch(kind, from_version) → continuously receive incremental changes
+  2. Spawn one sync loop per supported Gateway cache kind
+  3. Each loop: List(kind) → one JSON Vec snapshot + sync_version
+  4. CacheData.reset(snapshot) → ConfHandler.full_set() → mark the kind ready
+  5. Watch(kind, from_version=list.sync_version) → incremental changes
 ```
 
-Gateway uses `supported_kinds` to determine which resource types to sync, then issues List and Watch calls one by one. The `sync_version` returned by List is used as the `from_version` for Watch, providing seamless continuation.
+The per-kind loops run concurrently. Every loop performs a new full List before its Watch on
+startup and after a watch retry/reconnect; it does not resume from a Gateway-retained version across
+reconnects. `InitStart`/`InitAdd`/`InitDone` are Controller-side `ServerCache` construction events,
+not frames in the List RPC.
 
 ### Controller reload flow
 
 ```
 Controller reload:
   1. Controller generates a new server_id
-  2. Watch stream sends a WATCH_ERR_SERVER_RELOAD error
+  2. Existing Watch detects the provider/server_id change and ends with reload metadata
   3. Gateway detects the server_id change
   4. Gateway re-runs List for all kinds (full re-sync)
 ```
@@ -67,7 +72,9 @@ When Controller performs a reload (for example, reconnecting to the K8s API Serv
 
 ### server_id mismatch detection
 
-Both List and Watch requests carry `expected_server_id`. If the `expected_server_id` sent by Gateway does not match Controller's current `server_id`, Controller returns a `WATCH_ERR_SERVER_ID_MISMATCH` error; Gateway will then re-fetch ServerInfo and perform a full sync.
+List and Watch validate a non-empty `expected_server_id` and return gRPC
+`failed_precondition` on mismatch. The per-kind retry loop relists against the current provider;
+`GetServerInfo` remains startup orchestration rather than a required step for each mismatch.
 
 ## Version tracking
 
@@ -100,14 +107,27 @@ Initialization-phase events (InitStart/InitAdd/InitDone) do not enter the ring b
 
 ## Non-synced resources (no_sync_kinds)
 
-The following resource types are not synced to the Gateway via gRPC:
+The default `no_sync_kinds` are:
 
 | Resource | Reason |
 |------|------|
 | `ReferenceGrant` | Used only for cross-namespace reference validation on the Controller side |
 | `Secret` | Used only for certificate/key handling on the Controller side; resolved TLS data is synced via EdgionTls |
 
-`no_sync_kinds` are excluded when `ProcessorRegistry.all_watch_objs()` is called; they will not appear in the `supported_kinds` list.
+An explicit `conf_sync.no_sync_kinds` replaces, rather than extends, this default. Excluded kinds
+are removed by `ProcessorRegistry.all_watch_objs()`. Separately, Gateway has no caches for Secret,
+ReferenceGrant, or ConfigMap; advertised unsupported cache kinds are skipped. Mandatory
+GatewayClass/Gateway/EdgionGatewayConfig caches are injected into effective readiness.
+
+## Operational limits
+
+- A serialized List snapshot larger than 64 MiB is rejected.
+- The TLS accept path permits at most 256 in-flight handshakes, with a 10-second handshake timeout
+  and a 30-second handoff timeout.
+- Internal list/watch forwarding channels are bounded (currently 100 entries).
+
+Large EndpointSlice snapshots that exceed the List cap cannot complete initial sync; diagnose size
+and sharding rather than treating the failure as a transient Watch error.
 
 ## Channel security (mTLS)
 
@@ -196,7 +216,9 @@ handshake, so swapping the client-CA verifier governs only *future* handshakes.
 pub struct ConfSyncSecurityConfig {
     pub active: Option<String>,          // Name of the active certificate set
     pub certs: Vec<ConfSyncTlsConfig>,   // Multi-cert sets ([[...certs]] array)
-    pub tls: Option<ConfSyncTlsConfig>,  // Legacy single-cert format (backward compatible)
+    pub tls: Option<ConfSyncTlsConfig>,  // Pre-release removal debt; do not use
+    pub auto_ca: bool,                   // Kubernetes internal-CA provisioning
+    pub rotation: Option<ConfSyncRotationConfig>, // controller-only rotation policy
 }
 
 pub struct ConfSyncTlsConfig {
@@ -211,21 +233,13 @@ pub struct ConfSyncTlsConfig {
 `resolve_active_tls()` resolves the effective TLS configuration by priority:
 1. `certs` array: find the entry where `name == active`
 2. `certs` has only one entry and `active` is None: pick it automatically
-3. Fall back to the legacy `tls` field
-4. None configured → plaintext gRPC
+3. Current code falls back to `tls`; this is removal debt, not a supported configuration contract
+4. None configured → no resolved TLS set; startup fail-close rejects this unless `auto_ca` is the
+   selected provisioning mode
 
 Path resolution is handled via `ConfSyncTlsConfig::resolve_path()` based on `work_dir`, consistent with the behavior of other configuration paths.
 
 ### YAML configuration examples
-
-**Legacy single-cert format (backward compatible):**
-```yaml
-conf_sync_security:
-  tls:
-    cert: certs/grpc/server.crt
-    key: certs/grpc/server.key
-    ca: certs/grpc/ca.crt
-```
 
 **Multi-cert format (supports certificate rotation / CA migration):**
 ```yaml
@@ -270,11 +284,14 @@ center:
 
 | Configuration state | Server (Controller / Center) | Client (Gateway / Controller) |
 |----------|------------------------------|-------------------------------|
-| `auto_ca: true` (K8s default) | mTLS; embedded CA self-provisions + rotates certs | mTLS; `auto_ca` **enforces** mTLS — refuses plaintext |
+| `auto_ca: true` (K8s default) | mTLS; embedded CA self-provisions + rotates certs | mTLS after the provisioned files appear |
 | File-mode TLS config + valid certificates | mTLS gRPC | mTLS connection |
 | File-mode TLS config + missing certificates | **Refuses to start** (strict mode) | Connection fails, retries with backoff |
 | No security configured (section omitted entirely) | **Refuses to start** (fail-close) | **Refuses to start** (fail-close) |
 | `skip_tls = true` | Plaintext + ERROR log + `skip_tls` metric | Plaintext + ERROR log + `skip_tls` metric |
+
+An explicitly active `skip_tls: true` set is the emergency override even when `auto_ca` is also
+true; `auto_ca` does not silently cancel that explicit choice.
 
 > **Fail-close since 2026-07-14 (breaking).** This channel carries resolved Secrets
 > (TLS private keys, backend credentials), so an omitted `conf_sync_security` no longer
@@ -302,15 +319,16 @@ center:
 
 | Component | File | Key function |
 |------|------|---------|
-| Validate-before-swap gate | `common/grpc_tls.rs` | `validate_identity()` |
-| File-mode client TLS | `common/grpc_tls.rs` | `load_client_tls()` |
-| conf_sync server (accept loop + identity swap) | `controller/conf_sync/conf_server/{grpc_server,tls_identity,cert_watch}.rs` | `serve_with_shutdown(listener, security, tls_handle, ..)`, `ServerIdentityHandle`, `TrustScopedStream` |
-| conf_sync client (hot reload) | `gateway/conf_sync/conf_client/{grpc_client,cert_watch}.rs` | `new(..)`, `reload_client_tls()` |
-| auto-CA lifecycle | `controller/services/conf_sync_ca/{ca,secret_io,provision,rotation,identity_sync,cert_util}.rs` | `provision()`, `rotation` reconciler, `identity_sync` reconciler |
-| Controller CLI wiring | `controller/cli/mod.rs` | `start_services(..)` provisions, sets `global_handle`, starts `identity_sync` unconditionally; `rotation` is wired via `rotation::init` and *started* by the ConfMgr leadership callback (`center.rs`) |
-| Gateway CLI | `gateway/cli/mod.rs` | `create_config_sync_client()` passes `&config.conf_sync_security` |
-| Center Server TLS | `center/cli/mod.rs` | TLS-aware `tonic::transport::Server::builder()` |
-| Federation Client TLS | `controller/fed_sync/fed_client/mod.rs` | `connect_and_run()` uses `config.security` |
+| Validate-before-swap gate | `edgion-common/src/grpc_tls.rs` | `validate_identity()` |
+| File-mode client TLS | `edgion-common/src/grpc_tls.rs` | `load_client_tls()` |
+| conf_sync server (accept loop + identity swap) | `edgion-controller/src/conf_sync/conf_server/{grpc_server,tls_identity,cert_watch}.rs` | `serve_with_shutdown(listener, security, tls_handle, ..)`, `ServerIdentityHandle`, `TrustScopedStream` |
+| conf_sync client (hot reload) | `edgion-gateway/src/conf_sync/conf_client/{grpc_client,cert_watch}.rs` | `new(..)`, `reload_client_tls()` |
+| auto-CA lifecycle | `edgion-controller/src/services/conf_sync_ca/{ca,secret_io,provision,rotation,identity_sync,cert_util}.rs` | `provision()`, `rotation` reconciler, `identity_sync` reconciler |
+| Controller CLI wiring | `edgion-controller/src/cli/mod.rs` | `start_services(..)` provisions, sets `global_handle`, starts `identity_sync` unconditionally; `rotation` is wired via `rotation::init` and *started* by the ConfMgr leadership callback (`center.rs`) |
+| Gateway CLI | `edgion-gateway/src/cli/mod.rs` | `create_config_sync_client()` passes `&config.conf_sync_security` |
+| Federation Client TLS | `edgion-controller/src/fed_sync/fed_client/mod.rs` | `connect_and_run()` uses `config.security` |
+
+The Center server implementation is maintained in the separate EdgionCenter repository.
 
 ### Certificate generation
 

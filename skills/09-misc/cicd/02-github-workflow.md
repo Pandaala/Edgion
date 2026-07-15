@@ -11,7 +11,7 @@ Use this skill to answer:
 - How to modify the `setup-rust` local action without simultaneously breaking `ci.yml` and `build-image.yml`
 - How to reproduce the CI / release build path locally as closely as possible
 
-## The four workflows
+## Workflow Inventory
 
 The repo currently has the following workflows under `.github/workflows/`:
 
@@ -19,7 +19,8 @@ The repo currently has the following workflows under `.github/workflows/`:
 |----------|---------|---------|
 | `ci.yml` | `push` / `pull_request` to `main` / `master` | Rust check / fmt / clippy / test + agent-docs gate |
 | `check-english-only.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_english_only.sh` — the English-only gate the project relies on |
-| `check-gateway-no-tracing.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_gateway_no_tracing.py` — forbids `tracing::warn!/error!` on data-plane hot paths (function-level) |
+| `check-gateway-no-tracing.yml` | `pull_request` + `push` to `main` | Runs `./cicd/checks/check_gateway_no_tracing.py` — forbids unapproved `tracing::*` macros on data-plane hot paths (function-level) |
+| `check-ssa-force.yml` | repository workflow trigger | Ensures every server-side apply uses forced `PatchParams`, subject to the script allowlist |
 | `check-edgion-config-data-overlay.yml` | `pull_request` + `push` to `main` | Three gates guarding the EdgionConfigData overlay refactor — see "EdgionConfigData overlay gates" below |
 | `supply-chain.yml` | `pull_request` + `push` to `main` + daily cron | `cargo deny check` against `deny.toml` (RustSec advisories, license allowlist, banned crates, source pinning). Cron runs advisories-only so new advisories surface without waiting for a PR; triage decisions live as commented `ignore` entries in `deny.toml`. Do NOT pass `--all-features` (TLS/allocator features are mutually exclusive) |
 | `docs.yml` | `push` to `main` touching `docs/**` (or `workflow_dispatch`) | VitePress build + GitHub Pages deploy |
@@ -37,6 +38,8 @@ The repo currently has the following workflows under `.github/workflows/`:
 - [../../../.github/workflows/ci.yml](../../../.github/workflows/ci.yml)
 - [../../../.github/workflows/build-image.yml](../../../.github/workflows/build-image.yml)
 - [../../../.github/workflows/check-english-only.yml](../../../.github/workflows/check-english-only.yml)
+- [../../../.github/workflows/check-ssa-force.yml](../../../.github/workflows/check-ssa-force.yml)
+- [../../../.github/workflows/check-gateway-no-tracing.yml](../../../.github/workflows/check-gateway-no-tracing.yml)
 - [../../../.github/workflows/docs.yml](../../../.github/workflows/docs.yml)
 - [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml)
 - [../../../cicd/docker/Dockerfile.runtime](../../../cicd/docker/Dockerfile.runtime)
@@ -148,11 +151,17 @@ When changing it, treat it as "shared infrastructure", not as a private script f
 
 ```bash
 cargo check --workspace --all-targets
-cargo fmt --all -- --check
+cargo fmt --all
 python3 cicd/checks/validate_agent_docs.py
 cargo clippy --workspace --all-targets
+python3 cicd/checks/check_ssa_force.py
 cargo test --all
 ```
+
+This block is the project quick/pre-commit sequence plus tests. Branch protection also
+uses independent workflows for English-only content, Gateway hot-path tracing,
+EdgionConfigData overlays, SSA force, and supply-chain checks. Inspect
+`.github/workflows/` before claiming full CI parity.
 
 ### Reproduce the release binary builds
 

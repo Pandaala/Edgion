@@ -148,7 +148,14 @@ Tests: `manager.rs::upsert_resets_health_on_request_change` (reset path) and the
 
 ## Migration (operator-facing)
 
-The redesign carries a one-release **shim**: removed fields `auth` / `defaultHeaders` / `requestMethod` are accepted as ignored `Option<serde_json::Value>` no-ops so an old-controller → new-gateway rolling upgrade deserializes cleanly; the controller logs a WARN naming them. They are removed next release (controller-first ordering required from then on). Migration map:
+The current contract uses only the replacement fields below. The code still
+contains ignored `auth` / `defaultHeaders` / `requestMethod` placeholders from
+an earlier migration; those placeholders violate the project's pre-release
+no-compatibility policy. Treat them as removal debt, not supported input: do not
+document, extend, or copy the pattern into new schemas. A future code change
+should remove the fields and their warning/tests atomically.
+
+Migration map:
 
 | Old | New |
 |-----|-----|

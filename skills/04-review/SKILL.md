@@ -5,20 +5,13 @@ description: Review-specific knowledge for Edgion. Use when auditing code review
 
 # 04 Review
 
-> Per-finding review rules and decision notes. Each topic sub-directory holds concrete decision criteria, false-positive verdicts, and accepted tradeoffs. For closed findings (previously fixed or accepted) see [CLOSED-FINDINGS.md](CLOSED-FINDINGS.md). For global-codebase review workflow (6-subagent batch pattern) see [10-fully-review/](../10-fully-review/SKILL.md).
+> Per-finding review rules and decision notes. Each topic sub-directory holds concrete decision criteria, false-positive verdicts, and accepted tradeoffs. For closed findings (previously fixed or accepted) see [CLOSED-FINDINGS.md](CLOSED-FINDINGS.md). For the capacity-aware global-codebase review workflow see [10-fully-review/](../10-fully-review/SKILL.md).
 
 ## Review issue fix workflow
 
 To process a single finding from any `tasks/review-*/` directory, use [`fix-review-issue.skill`](fix-review-issue.skill).
 Invoke it (or the `/fix-issue` global slash command) when the user says "review issue", "handle issue", "next issue", or any equivalent phrasing in another language.
 Supports auto-detection of the issue directory, issue ID lookup, or explicit path arguments.
-
-## RFC-compliance issue fix workflow
-
-To process a single finding from `tasks/todo/rfc-review/` (`rfc-violation-*`, `rfc-naming-*`, `rfc-refactor-*`, or one section of `rfc-doc-comments-additions.md`), use [`fix-rfc-issue.skill`](fix-rfc-issue.skill).
-Invoke it (or the `/fix-rfc` slash command) when the user says "fix RFC", "next RFC", "handle RFC", "review RFC findings", or any equivalent phrasing in another language.
-The skill adds an explicit **Step 1.5 Design / Constraint analysis** that weighs the RFC clause against Gateway API conformance, existing `skills/` decisions, plugin SDK stability, hot-path performance, and operator escape hatches — RFC compliance is one constraint, not the overriding one.
-RFC-divergence-accepted findings are recorded as per-finding files under [`rfc-divergence/`](rfc-divergence/) (one descriptive `<slug>.md` per entry, with the finding ID kept in the file's H1/body; see [`CLOSED-FINDINGS.md`](CLOSED-FINDINGS.md) for the ⚠️ rows that point into it).
 
 ## Routing by topic
 
@@ -52,22 +45,23 @@ New review-rule entries should follow the canonical shape in [`_template.md`](_t
 
 ## Closed findings log
 
-See [`CLOSED-FINDINGS.md`](CLOSED-FINDINGS.md) for the per-issue closure index (chronological log of closed/accepted findings from both 04-review and 10-fully-review, each linking to its canonical decision file).
+See [`CLOSED-FINDINGS.md`](CLOSED-FINDINGS.md) for the chronological coverage
+index. The linked topic file is the canonical detailed decision when present;
+some legacy rows without a topic file keep their rationale in the index itself.
 
 ## Usage principles
 
-> **Index discipline** — each entry below is a ONE-LINE pointer: a trigger phrase + a
-> verdict tag + a link to the per-finding file that holds the full rationale. Do **not**
-> inline the full review here (doing so once bloated this file past 60K tokens). When
-> adding an entry:
+> **Index discipline** — entries below are a quick decision index. Older entries
+> may contain more rationale than the preferred shape; do not expand that pattern.
+> When adding an entry:
 > - Add only after the conclusion is verified against the current code and design semantics.
 > - Keep it to a single line. The reusable judgment criteria, rejected fixes, source paths,
 >   and regression-test names live in the linked per-finding file (the canonical home);
->   give CLOSED-FINDINGS.md a one-line row.
+>   add a concise `CLOSED-FINDINGS.md` row.
 > - If design goals change, update the per-finding file first (the canonical home), then
 >   this pointer if its trigger or verdict changed.
 
-- When reviewing plugin findings of the form "response/request body filter cannot modify body content / `UpstreamResponseBodyFilter` only gets a read-only `&Option<Bytes>` and returns only `Option<Duration>` / plugins can't drop/replace body bytes like Envoy's `encodeData`/`decodeData` / no request-body access for plugins / HMAC `validate_request_body` returns 'body not supported' (filter-01, filter-05)": **accepted tradeoff (filter-01, 2026-05-29)**. Read [architecture/body-filter-read-only-by-design.md](architecture/body-filter-read-only-by-design.md). The body-filter phase is intentionally bandwidth-throttle-only; the read-only contract is chosen at the runtime boundary (`plugin_runtime.rs:1114-1138` narrows Pingora's `&mut Option<Bytes>` to `&Option<Bytes>`), the only shipping consumer is `BandwidthLimit`, and no plugin needs body mutation today. The "make the trait `&mut` + `BodyFilterResult`" and "add a `RequestBodyFilter` trait" fixes are not accepted as narrow review fixes — body mutation is a wide-impact plugin-SDK feature that belongs in `tasks/todo/` via brainstorming. Verify the absence of a shipping body-mutation consumer before re-reporting.
+- When reviewing plugin findings of the form "response/request body filter cannot modify body content / `UpstreamResponseBodyFilter` only gets a read-only `&Option<Bytes>` and returns only `Option<Duration>` / plugins can't drop/replace body bytes like Envoy's `encodeData`/`decodeData` / no request-body access for plugins / HMAC `validate_request_body` returns 'body not supported' (filter-01, filter-05)": **accepted tradeoff (filter-01, 2026-05-29)**. Read [architecture/body-filter-read-only-by-design.md](architecture/body-filter-read-only-by-design.md). The body-filter phase is intentionally bandwidth-throttle-only; the read-only contract is chosen at `PluginRuntime::run_upstream_response_body_plugins`, the only shipping consumer is `BandwidthLimit`, and no plugin needs body mutation today. The "make the trait `&mut` + `BodyFilterResult`" and "add a `RequestBodyFilter` trait" fixes are not accepted as narrow review fixes — body mutation is a wide-impact plugin-SDK feature that belongs in `tasks/todo/` via brainstorming. Verify the absence of a shipping body-mutation consumer before re-reporting.
 
 - When reviewing controller findings of the form "status write failures are silently dropped / `persist_k8s_status` failure only logs a `tracing::warn!` with no re-queue / no eventual consistency / `observedGeneration` left stale / `kubectl wait --for=condition` may hang / should re-queue on reconcile error like controller-runtime (controller-01)": **accepted tradeoff (controller-01, 2026-05-29)**. Read [handler-requeue/status-write-no-retry-accepted.md](handler-requeue/status-write-no-retry-accepted.md). Non-404 write failures decompose into two self-healing classes — configuration/setup errors (admission webhook reject, 422 schema, 403 RBAC) heal when the operator fixes the spec → `MODIFIED` → reprocess; reference errors heal via the six cross-resource requeue paths. `requeue_with_backoff` was deliberately removed (`skills/01-architecture/01-controller/04-workqueue.md`) because this layer cannot distinguish transient from permanent failures, so a blind "re-queue on non-404" would loop forever on permanent errors (403/422/409). The residual purely-transient case (429/503 + healthy watch + no follow-up event) is rare and self-heals on the next relevant event. The "`enqueue_after` on non-404", "reintroduce exponential backoff", and "add a status-write-failure condition" fixes are not accepted. Verify against `persist_k8s_status` in `resource_controller.rs` before re-reporting.
 
@@ -89,7 +83,7 @@ See [`CLOSED-FINDINGS.md`](CLOSED-FINDINGS.md) for the per-issue closure index (
 
 - When reviewing/implementing `let _ = LOCK.set(config)` on `OnceLock` initializers in `edgion-gateway/src/cli/config.rs` (or any `init_*` calling `OnceLock::set`) that propose `debug_assert!(LOCK.set(config).is_ok())` (infra-cluster-F011): **the macro-wrapped form silently breaks release builds** — [architecture/oncelock-debug-assert-pitfall.md](architecture/oncelock-debug-assert-pitfall.md). Correct form binds the side-effecting call to a local first; the original `tasks/infra/infra-cluster-F011-*.md` Suggested fix carried the buggy form — verify the local-bind pattern before merging.
 
-- When reviewing DSL `BuiltinId` dispatch proposals to add `#![warn/deny(non_exhaustive_omitted_patterns)]` to `lang/builtins.rs` / `lang/compiler/builtins.rs` so a forgotten arm fails the build: **not accepted** — [architecture/builtin-dispatch-non-exhaustive-lint.md](architecture/builtin-dispatch-non-exhaustive-lint.md). Lint only fires for other-crate `#[non_exhaustive]` types; real protection is removing `_ =>` catch-alls (`resolve_namespace_method` matching `(&str,&str)` cannot be exhaustive — caught by tests).
+- When reviewing DSL `BuiltinId` dispatch proposals to add `#![warn/deny(non_exhaustive_omitted_patterns)]` to the gateway runtime dispatcher or `edgion-dsl/src/compiler/builtins.rs` so a forgotten arm fails the build: **not accepted** — [architecture/builtin-dispatch-non-exhaustive-lint.md](architecture/builtin-dispatch-non-exhaustive-lint.md). `BuiltinId` is an exhaustive public enum in `edgion-dsl`; normal exhaustiveness checking protects enum matches in both crates. `resolve_namespace_method` matches `(&str,&str)` and needs tests because its domain cannot be exhaustive.
 
 - When reviewing proposals to add `tracing::*` (any level incl. `debug!`) on the DSL `Vm::execute` / `execute_safe` runtime-error path (e.g. `tracing::debug!(target:"edgion::dsl", pc, err)`): **not accepted** — [observability/dsl-vm-execute-tracing-declined.md](observability/dsl-vm-execute-tracing-declined.md). Data-plane hot path; Iron rule 3 forbids any level; debug-cfg / separate-target / mpsc / `trace!` re-entries all rejected. Compile path (`Compiler::*`, `compile_dsl_source`, `DslPlugin::build_from_config`) is exempt.
 
@@ -117,7 +111,7 @@ See [`CLOSED-FINDINGS.md`](CLOSED-FINDINGS.md) for the per-issue closure index (
 
 - Findings of the form "operator `[auth].skip_paths` / `[local_auth].skip_paths` accepts any path with no allowlist → a business route bypasses `unified_auth` → `assign_superuser_if_no_role` grants `Superuser`" are **obsolete (2026-06-12)**: the whole browser-login subsystem (`local_auth`, `unified_auth`, `skip_paths`, `assign_superuser_if_no_role`, `Role::Superuser`) was deleted when Admin API auth went token-only. There is now a fixed static-public set (`/health`, `/ready`, `/metrics`, `/api/v1/auth/status`), no operator-configurable skip list, and no role-assignment fallback (a role-less request to a business route is denied 403). Do not re-file against the old model. See [`../01-architecture/01-controller/11-authentication-authorization.md`](../01-architecture/01-controller/11-authentication-authorization.md).
 
-- Admin REST API (controller + center `/api/v1/...`) RFC 9110/9111 / REST-convention / admin-type-naming (e.g. `ApiResponse`) findings: **out of scope** — [rfc-divergence/admin-rest-rfc-compliance-out-of-scope.md](rfc-divergence/admin-rest-rfc-compliance-out-of-scope.md). Only data-plane gateway RFC compliance is tracked; verify the endpoint is data-plane before re-reporting.
+- Controller Admin REST API (`/api/v1/...`) RFC 9110/9111 / REST-convention / admin-type-naming (e.g. `ApiResponse`) findings: **out of scope** — [rfc-divergence/admin-rest-rfc-compliance-out-of-scope.md](rfc-divergence/admin-rest-rfc-compliance-out-of-scope.md). EdgionCenter is maintained in a separate repository. Only data-plane gateway RFC compliance is tracked here; verify the endpoint is data-plane before re-reporting.
 
 - When reviewing `conf_sync` watch handshake / `client.watch(request).await` has no bounding timeout / blocks indefinitely if controller stalls (h2-grpc-06): **false positive (h2-grpc-06)** — [concurrency/conf-sync-watch-endpoint-timeout.md](concurrency/conf-sync-watch-endpoint-timeout.md). Endpoint-level `.timeout(10s)` tower layer bounds the handshake; verify `grpc_client.rs` no longer sets the endpoint timeout before re-reporting.
 

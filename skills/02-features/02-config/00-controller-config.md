@@ -11,14 +11,15 @@ description: Full schema for the edgion-controller YAML configuration.
 
 - Sample configuration: `config/edgion-controller.yaml`
 - Configuration structure: `edgion-controller/src/config/mod.rs`
-- `conf_center` top level: `edgion-controller/src/conf_mgr/conf_center/config.rs`
-- FileSystem mode: `edgion-controller/src/conf_mgr/conf_center/file_system/config.rs`
-- Kubernetes mode: `edgion-controller/src/conf_mgr/conf_center/kubernetes/config.rs`
+- `conf_center` top level: `edgion-controller/src/config/conf_center/config.rs`
+- FileSystem mode: `edgion-controller/src/config/conf_center/file_system.rs`
+- Etcd mode: `edgion-controller/src/config/conf_center/etcd.rs`
+- Kubernetes mode: `edgion-controller/src/config/conf_center/kubernetes.rs`
 
 ## Full Schema
 
 ```yaml
-# Working directory (all relative paths are resolved against this directory)
+# Working directory (only fields that explicitly use the work-dir resolver use this base)
 # Priority: CLI --work-dir > ENV EDGION_WORK_DIR > this value > "."
 work_dir: "."
 
@@ -63,11 +64,13 @@ conf_sync:
 
 # ─── gRPC channel security (REQUIRED — omitting it refuses to start) ───
 # conf_sync_security:
-#   tls:
-#     cert: certs/grpc/server.crt    # Controller server certificate
-#     key: certs/grpc/server.key     # Server private key
-#     ca: certs/grpc/ca.crt          # CA used to verify Gateway client
-#     skip_tls: false                # true = explicit plaintext opt-in (ERROR log + skip_tls metric)
+#   active: primary
+#   certs:
+#     - name: primary
+#       cert: certs/grpc/server.crt    # Controller server certificate
+#       key: certs/grpc/server.key     # Server private key
+#       ca: certs/grpc/ca.crt          # CA used to verify Gateway client
+#       skip_tls: false                # true = explicit plaintext opt-in (ERROR log + skip_tls metric)
 #   auto_ca: false                   # Kubernetes only: internal CA auto-provisions certs
 #   rotation:                        # Controller-only; consumed only when auto_ca=true
 #     policy: lifetime                     # lifetime | scheduled | manual
@@ -81,7 +84,7 @@ conf_sync:
 
 # ─── FileSystem mode ───
 conf_center:
-  type: filesystem
+  type: file_system
   conf_dir: config/resources              # YAML resource directory
 
 # ─── Kubernetes mode ───
@@ -90,21 +93,36 @@ conf_center:
 #   gateway_class: edgion                 # Required: GatewayClass to match
 #   controller_name: edgion.io/gateway-controller  # controllerName reported in Gateway API status
 #   watch_namespaces: []                  # Empty = all namespaces
-#   label_selector: ""                    # Label filter
+#   label_selector: ""                    # Resource label selector (top-level in this variant)
 #   gateway_address: ""                   # Address reported in Gateway status
 #   ha_mode: leader-only                  # "leader-only" | "all-serve"
 #   no_watch_kinds: [TCPRoute, UDPRoute]  # Resource kinds to skip CRD precheck and watch for
 #   leader_election:
 #     lease_name: edgion-controller-leader
-#     lease_namespace: edgion-system
+#     lease_namespace: edgion-system      # Default: POD_NAMESPACE, else "default"
 #     lease_duration_secs: 15
 #     renew_deadline_secs: 10
 #     retry_period_secs: 2
 #   metadata_filter:
-#     label_selector: ""                  # Resource label filter
-#     field_selector: ""                  # Resource field filter
 #     blocked_annotations: []             # Annotations removed before entering memory (defaults remove common large kubectl/helm annotations)
 #     remove_managed_fields: true         # Reduce object size
+
+# ─── Etcd mode ───
+# conf_center:
+#   type: etcd
+#   endpoints: ["https://etcd-0:2379", "https://etcd-1:2379"]
+#   key_prefix: /edgion                   # Default: /edgion
+#   connect_timeout_ms: 5000              # Optional
+#   request_timeout_ms: 10000             # Optional
+#   keep_alive_time_secs: 30              # Optional
+#   keep_alive_timeout_secs: 10           # Optional
+#   auth:                                 # Optional; this file must be Secret-mounted if used
+#     username: edgion
+#     password: "..."
+#   tls:                                  # Optional
+#     ca_cert_file: /etc/edgion/etcd/ca.pem
+#     client_cert_file: /etc/edgion/etcd/client.pem
+#     client_key_file: /etc/edgion/etcd/client-key.pem
 ```
 
 ## Field Details
@@ -117,7 +135,7 @@ conf_center:
 | `admin_listen` | `String` | `127.0.0.1:12101` | Admin HTTP API address — serves `/api/v1/*` and `/configclient`. Defaults to loopback; set to `0.0.0.0` for cluster-wide access and pair with `allow_admin_ips` and/or a NetworkPolicy (see [Admin API network exposure](./03-auth-bootstrap.md#admin-api-network-exposure)). |
 | `probe_listen` | `String` | `0.0.0.0:12100` | Probe listener — serves `/health` (liveness) and `/ready` (readiness) |
 | `metrics_listen` | `String` | `0.0.0.0:12190` | Metrics listener — serves `/metrics` (Prometheus) |
-| `allow_admin_ips` | `Vec<String>` | `[]` (allow all) | CIDR allowlist for the Admin API listener. **Unset or empty = allow all** (backward compatible). Matched against the **TCP peer address only**; `X-Forwarded-For` is never trusted, so it is meaningful only for direct connections to the admin socket (behind an L7 proxy it degrades to matching the proxy IP). Probe/metrics run on dedicated ports and are unaffected. Dual-stack: when the listener binds `::`, list CIDRs for both families; NAT64 `64:ff9b::/96` embedded IPv4 is not extracted. **Recommended whenever `admin_listen` is bound to a non-loopback address**; leaving it empty in that case triggers the `insecure_admin_exposure` gauge (see [Admin API network exposure](./03-auth-bootstrap.md#admin-api-network-exposure)). Example: `["10.0.0.0/8", "127.0.0.1/32", "::1/128"]` |
+| `allow_admin_ips` | `Vec<String>` | `[]` (allow all) | CIDR allowlist for the Admin API listener. **Unset or empty = allow all.** Matched against the **TCP peer address only**; `X-Forwarded-For` is never trusted, so it is meaningful only for direct connections to the admin socket (behind an L7 proxy it degrades to matching the proxy IP). Probe/metrics run on dedicated ports and are unaffected. Dual-stack: when the listener binds `::`, list CIDRs for both families; NAT64 `64:ff9b::/96` embedded IPv4 is not extracted. **Recommended whenever `admin_listen` is bound to a non-loopback address**; leaving it empty in that case triggers the `insecure_admin_exposure` gauge (see [Admin API network exposure](./03-auth-bootstrap.md#admin-api-network-exposure)). Example: `["10.0.0.0/8", "127.0.0.1/32", "::1/128"]` |
 
 > **Admin API transport is plaintext HTTP.** The Controller Admin API listener is always served over plain HTTP — there is no `admin_tls` config surface. Transport security is delegated to the deployment environment: bind it to a private interface, restrict peers with `allow_admin_ips`, and rely on Kubernetes ClusterIP / NetworkPolicy. Authentication is still enforced independently via the Bearer token (see [auth bootstrap](./03-auth-bootstrap.md)); a request reaching a plaintext socket without a valid token is rejected.
 
@@ -134,6 +152,21 @@ conf_center:
 
 > Note: `log_dir` is resolved via `work_dir().resolve()`, so a relative path typically lands in `work_dir/logs/...`.
 
+### [conf_center]
+
+The tagged enum accepts exactly `file_system`, `kubernetes`, or `etcd`.
+
+- FileSystem `conf_dir` is resolved relative to the process current working directory,
+  not `work_dir`; `--conf-dir` replaces the YAML FileSystem variant.
+- Kubernetes `label_selector` is a direct field of the Kubernetes variant. It must not
+  be nested under `metadata_filter`, whose only fields are `blocked_annotations` and
+  `remove_managed_fields`.
+- Kubernetes leader election is always enabled. `ha_mode` accepts `leader-only`
+  (default: only the leader watches/processes/serves gRPC) or `all-serve` (all replicas
+  watch/process/serve; coordinated writes remain leader-only).
+- Etcd `auth.password` is raw secret material. Keep the configuration in a
+  Secret-mounted file and use TLS for the etcd connection.
+
 ### [validation]
 
 | Field | Type | Default | Description |
@@ -148,17 +181,31 @@ conf_center:
 | `capacity_overrides` | `Map<String, u32>` | `{}` | Per-kind capacity override |
 | `no_sync_kinds` | `Vec<String>?` | `["ReferenceGrant", "Secret"]` | List of resources not synced to Gateway (when set, completely replaces the default) |
 
-### [conf_sync_security.tls]
+### conf_sync_security
 
-**Required section** (one of `auto_ca`, cert paths, or `skip_tls`); when cert paths are
-set, the Controller's gRPC port uses mTLS.
+**Required section**: use `auto_ca`, or select an entry from `certs`. When the
+selected entry carries certificate paths, the Controller's gRPC port uses mTLS.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `active` | `String?` | — | Name of the selected `certs` entry. Optional only when `certs` contains exactly one entry. |
+| `certs` | `Vec<ConfSyncTlsConfig>` | `[]` | Named channel-security entries. This is the current file-mode schema. |
+| `auto_ca` | `bool` | `false` | Kubernetes only: provision Controller and Gateway identities from the internal CA. |
+| `rotation` | `ConfSyncRotationConfig?` | — | Controller-only auto-CA rotation policy. |
+
+Each `certs` entry has:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `String?` | — | Entry name; required when more than one entry exists. |
 | `cert` | `String` | — | Server certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Server private key path (PEM) |
 | `ca` | `String` | — | CA certificate path (used to verify the Gateway client certificate) |
 | `skip_tls` | `bool` | `false` | Explicit plaintext opt-in: `true` skips TLS and starts in plaintext (ERROR log + `skip_tls` metric). The ONLY way to run this channel in plaintext. |
+
+> **Removal debt:** code still accepts the old singular
+> `conf_sync_security.tls` field. It is not a supported configuration contract;
+> do not use it in new configuration or examples.
 
 > **Fail-close (2026-07-14, BREAKING):** if `conf_sync_security` is **omitted entirely**,
 > the Controller **refuses to start** (non-zero exit). The conf_sync channel carries
@@ -166,8 +213,7 @@ set, the Controller's gRPC port uses mTLS.
 > must be an explicit, audited choice — never the consequence of a forgotten config block.
 > The startup error names the three ways forward.
 >
-> **Migration:** a deployment that relied on omitting `conf_sync_security` will not start
-> after upgrading. Pick one:
+> Choose one current configuration:
 >
 > ```yaml
 > # (a) Kubernetes: the Controller's internal CA provisions everything
@@ -176,11 +222,19 @@ set, the Controller's gRPC port uses mTLS.
 >
 > # (b) file mode: real mTLS from mounted certs
 > conf_sync_security:
->   tls: { cert: certs/grpc/server.crt, key: certs/grpc/server.key, ca: certs/grpc/ca.crt }
+>   active: primary
+>   certs:
+>     - name: primary
+>       cert: certs/grpc/server.crt
+>       key: certs/grpc/server.key
+>       ca: certs/grpc/ca.crt
 >
-> # (c) keep plaintext, explicitly (INSECURE)
+> # (c) plaintext, explicitly (INSECURE)
 > conf_sync_security:
->   tls: { skip_tls: true }
+>   active: insecure
+>   certs:
+>     - name: insecure
+>       skip_tls: true
 > ```
 >
 > The `plaintext_default` system-error reason was retired (that state is now unreachable);
@@ -464,8 +518,9 @@ window) is the only true revocation.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `type` | `String` | — | `"filesystem"` |
-| `conf_dir` | `PathBuf` | — | Resource configuration directory |
+| `type` | `String` | — | `"file_system"` |
+| `conf_dir` | `PathBuf` | `conf` | Resource configuration directory |
+| `poll_interval_ms` | `u64?` | Watcher-calculated | Poll interval override; minimum 100 ms |
 
 Important practical constraints:
 - `conf_dir` is currently resolved by `FileSystemStorage::new()` directly against the process cwd
@@ -494,10 +549,24 @@ CLI special cases:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `lease_name` | `String` | `edgion-controller-leader` | K8s Lease name |
-| `lease_namespace` | `String` | `edgion-system` | K8s Lease namespace |
+| `lease_namespace` | `String` | `POD_NAMESPACE`, else `default` | K8s Lease namespace |
 | `lease_duration_secs` | `u64` | `15` | Lease duration in seconds (validity on the apiserver side) |
 | `renew_deadline_secs` | `u64` | `10` | Renewal deadline window: within this window after the most recent successful renewal, the Leader retains leadership and retries even when transient errors (5xx / network) occur, avoiding spurious leader flips caused by apiserver flapping. Constraint: `retry_period_secs < renew_deadline_secs < lease_duration_secs`. |
 | `retry_period_secs` | `u64` | `2` | Uniform sleep interval between each acquire/renew attempt (corresponds to client-go `RetryPeriod`). Roughly `renew_deadline_secs / retry_period_secs` retries occur within a single `renew_deadline_secs` window. |
+
+### [conf_center] — Etcd
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `type` | `String` | — | `"etcd"` |
+| `endpoints` | `Vec<String>` | **Required** | etcd cluster endpoints |
+| `key_prefix` | `String` | `/edgion` | Prefix for configuration and status keys |
+| `auth` | `{username,password}?` | — | Optional basic credentials; secret material |
+| `tls` | object? | — | Optional CA and client certificate/key file paths |
+| `connect_timeout_ms` | `u64?` | Provider default | Dial timeout |
+| `request_timeout_ms` | `u64?` | Provider default | Per-request timeout |
+| `keep_alive_time_secs` | `u64?` | Provider default | HTTP/2 keepalive interval |
+| `keep_alive_timeout_secs` | `u64?` | Provider default | HTTP/2 keepalive timeout |
 
 ### [conf_center.metadata_filter]
 
@@ -542,7 +611,7 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 | `tag` | `Vec<String>` | `[]` | Arbitrary extension tags reported to Center. |
 | `ping_interval_secs` | `u64` | `30` | Heartbeat interval in seconds for the federation keep-alive ping. |
 | `security` | `ConfSyncSecurityConfig` | — | mTLS certificates for the gRPC channel (same format as `conf_sync_security`). Required -- federation fails closed without it. |
-| `rbac` | `FedRbacConfig?` | `null` | RBAC for Center operations. **Absent => built-in default policy applies (read `get`/`list`/`watch`/`list-keys` on all ResourceKinds except `Secret`; write `create`/`update`/`delete` on `EdgionConfigData`; `get`/`list`/`failover` on the synthetic `RegionRoute`). Present => the explicit rules fully override the default.** |
+| `rbac` | `FedRbacConfig?` | `null` | RBAC for Center operations. **Absent => built-in default policy applies (read `get`/`list`/`watch`/`list-keys` on all ResourceKinds except `Secret`; write `create`/`update`/`delete` on `EdgionConfigData`; `list`/`failover` on synthetic `RegionRoute`; `server-info` on synthetic `NonResource`). Present => the explicit rules fully override the default.** |
 
 ### `[center.rbac]` -- Federation RBAC
 
@@ -552,8 +621,9 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 |------|---------|
 | Read (`get`, `list`, `watch`, `list-keys`) | All resource kinds **except** `Secret` (EdgionTls IS readable; only the Secret kind is excluded for credential safety) |
 | Write (`create`, `update`, `delete`) | `EdgionConfigData` only (drives IP-restriction sync + region-route sync; grants write to ALL plugin metadata) |
-| `get`, `list`, `failover` | `RegionRoute` (synthetic label): get/list allow the aggregate read endpoints; failover covers the POST failover endpoint |
-| Everything else (`reload`, `server-info`, `diagnostics`, etc.) | Denied |
+| `list`, `failover` | `RegionRoute` (synthetic label): `list` covers the aggregate read endpoints; `failover` covers the POST failover endpoint. No route classifies as `(get, RegionRoute)`. |
+| `server-info` | `NonResource` (synthetic label), for read-only server identity/readiness checks |
+| Everything else (`reload`, `diagnostics`, `wipe-all`, `debug`, etc.) | Denied |
 
 **When `rbac` is present**, the explicit rules fully override the built-in default. This is how operators grant more (e.g., Secret read or reload) or less than the default.
 

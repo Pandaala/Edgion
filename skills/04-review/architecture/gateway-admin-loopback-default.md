@@ -21,7 +21,7 @@ are not accepted — see below.
 ## Core Rationale
 
 - The admin default is consumed only by `EdgionGatewayConfig::admin_listen_or_default()`, whose only
-  caller is `gateway/cli/mod.rs` (`start_auxiliary_services`). init-only path, not the data-plane hot path.
+  caller is `edgion-gateway/src/cli/mod.rs` (`start_auxiliary_services`). init-only path, not the data-plane hot path.
 - A secure default makes "expose to the cluster" an explicit operator opt-in (`admin_listen: 0.0.0.0`)
   rather than the factory behavior. Unconfigured operators get the safe default automatically.
 - Since the probe-port-separation change (2026-06-02), the shipped manifests no longer carry an

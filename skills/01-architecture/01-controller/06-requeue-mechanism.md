@@ -1,6 +1,6 @@
 ---
 name: controller-requeue
-description: Cross-resource requeue mechanism — 6 trigger paths, cycle detection, post-init revalidation, handler on_change/on_delete inventory.
+description: Cross-resource requeue mechanism — runtime-owned dispatch, dependency managers/indexes, post-init revalidation, intentional cycles, and TriggerChain safety.
 ---
 
 # Cross-resource Requeue Mechanism
@@ -12,10 +12,14 @@ The Controller uses a requeue-based reconciliation pattern to handle dependencie
 Core components:
 
 - **Workqueue** (one per resource type) — ready queue + delay heap, supports dedup (dirty requeue pattern)
-- **PROCESSOR_REGISTRY** (global singleton) — registers all Processors and provides cross-resource dispatch via `requeue(kind, key)` and `requeue_with_chain(kind, key, chain)`
+- **ControllerRuntime.processor_registry** — per-ConfCenter processor ownership and cross-resource dispatch
 - **TriggerChain** — causality trace chain that records the requeue cascade path to prevent infinite loops
 
-## 6 Trigger Paths
+## Core Trigger Categories
+
+The categories below are navigation aids, not an exhaustive fixed count. Handler
+hooks also cover route delegation, policy-sibling precedence, EndpointSlice,
+ConfigMap, plugin/config-data references, and other runtime-owned indexes.
 
 ### 1. GatewayRouteIndex
 
@@ -106,7 +110,7 @@ Core components:
 
 ## Post-Init Revalidation (CachesReady)
 
-After all Processors complete `on_init_done()`, four revalidation functions run to resolve resource arrival-order issues from the init phase:
+After all processors are cache-ready, `run_post_cache_ready_revalidations()` runs the authoritative sequence:
 
 | # | Function | Effect |
 |---|---|---|
@@ -114,10 +118,12 @@ After all Processors complete `on_init_done()`, four revalidation functions run 
 | 2 | `trigger_gateway_secret_revalidation()` | Requeue all Gateways |
 | 3 | `trigger_gateway_route_revalidation()` | Requeue all routes registered in gateway_route_index |
 | 4 | `trigger_gatewayclass_params_revalidation()` | Requeue all GatewayClasses to re-resolve `parametersRef` |
+| 5 | `trigger_delegation_parent_revalidation()` | Re-flatten delegating parent HTTPRoutes |
+| 6 | `trigger_grpc_delegation_parent_revalidation()` | Re-flatten delegating parent GRPCRoutes |
 
 Call sites:
 - `kubernetes/center.rs` (main initialization + HA all-serve reload)
-- `file_system/center.rs`
+- shared non-Kubernetes lifecycle (FileSystem and Etcd)
 
 ## Handler on_change/on_delete Inventory
 
@@ -133,9 +139,8 @@ Call sites:
 | Secret | yes | yes | triggers cascading requeue |
 | Service | yes | yes | triggers requeue of dependent routes |
 | ReferenceGrant | yes | yes | CrossNsRevalidationListener |
-| ConfigMap | yes | yes | no requeue dependency |
-| EndpointSlice | — | — | stored directly; consumed by Gateway on demand |
-| Endpoints | — | — | stored directly; consumed by Gateway on demand |
+| ConfigMap | yes | yes | requeues resources that depend on referenced ConfigMap data |
+| EndpointSlice | yes | yes | requeues affected backend/route consumers |
 | GatewayClass | — | — | requeue **target** of EdgionGatewayConfig (path 6); resolves its own `parametersRef` in `update_status` |
 | EdgionGatewayConfig | yes | yes | requeues all GatewayClasses (path 6); still no requeue toward Gateway (see note) |
 
@@ -153,15 +158,17 @@ Call sites:
 
 `TriggerChain` records the full requeue cascade path (e.g. `HTTPRoute/ns/r1 → Gateway/ns/gw1 → HTTPRoute/ns/r2`). Every call to `ctx.requeue(kind, key)` checks whether the target (kind, key) appears in the chain more times than `max_trigger_cycles` (default 5). If so, the requeue is dropped and an error is logged.
 
-### Breaking the Route ↔ Gateway Cycle
+### Common Cycles and Change Guards
 
-There is a potential bidirectional requeue between Route and Gateway:
+Route ↔ Gateway is one important bidirectional relationship:
 
 - **Gateway on_change → requeue Routes**: triggered only when hostname/port **actually changed** (compared via the `gateway_route_index` cache)
 - **Route on_change → requeue Gateway**: triggered only when the **attachment list actually changed** (decided by `AttachedRouteTracker`)
 
-These two conditions ensure that, in the vast majority of cases, no cycle forms. Even when one does, TriggerChain's `max_trigger_cycles=5` will force termination.
+Route delegation can also requeue parents and children of the same kind, and
+policy sibling-precedence changes can requeue peers. Change-detection guards
+reduce churn; TriggerChain remains the final bound for every cycle.
 
-### DAG Constraint
-
-The requeue relations between resource types are essentially a DAG (directed acyclic graph) — there are no cycles other than the Route ↔ Gateway pair. The breaking mechanisms above ensure that this single cycle does not result in unbounded cascading.
+Do not model the full requeue graph as a DAG. Before adding an edge, identify its
+reverse or sibling paths, ensure stable no-change behavior, and preserve the
+TriggerChain through delayed-queue dedup/merge.

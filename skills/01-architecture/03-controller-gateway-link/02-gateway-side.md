@@ -24,8 +24,9 @@ pub struct ConfigSyncClient {
 
 1. **Connection establishment**: connect to the Controller's gRPC port (default :12151) via tonic
 2. **GetServerInfo**: fetch `server_id`, `supported_kinds`
-3. **Per-kind List**: for each resource in `supported_kinds`, issue a List call and fetch the full snapshot
-4. **Per-kind Watch**: use the `sync_version` returned by List as `from_version` and start the Watch stream
+3. **Per-kind loops**: concurrently start one loop for every supported kind that has a Gateway cache
+4. **List then Watch**: each loop resets its cache from one List snapshot, marks it ready, then
+   Watches from the returned `sync_version`
 5. **WatchServerMeta**: register with the Controller's ClientRegistry and receive `gateway_instance_count` changes
 
 ### Reconnection mechanism
@@ -35,11 +36,12 @@ ConfigSyncClient triggers a reconnection in the following situations:
 | Trigger condition | Behavior |
 |---------|------|
 | Watch stream receives `WATCH_ERR_SERVER_RELOAD` | Controller performed a reload, full relist |
-| Watch stream receives `WATCH_ERR_SERVER_ID_MISMATCH` | Controller restarted, re-run GetServerInfo + full relist |
-| gRPC connection broken | Reconnect with exponential backoff, re-establish connection and full sync |
-| `server_id` changed | Full relist for all kinds |
+| Watch/server generation changes | End that loop's stream and relist the kind |
+| gRPC connection broken | Reconnect with exponential backoff and List before the next Watch |
+| TooOld / unexpected version / not-ready | Relist the affected kind |
 
-After reconnecting, Gateway re-runs the full sync sequence (GetServerInfo → List → Watch) to ensure the configuration is fully consistent with the Controller.
+Each per-kind retry always performs List before Watch and therefore does not resume from a retained
+pre-disconnect cache version. `GetServerInfo` is not rerun for every per-kind retry.
 
 ## ClientCache\<T\>
 
@@ -57,7 +59,7 @@ pub struct ClientCache<T> where T: kube::Resource {
 ### CacheData\<T\>
 
 ClientCache internally holds `CacheData<T>` (RwLock-protected), which contains:
-- A full resource snapshot (`HashMap<String, T>`)
+- A full resource snapshot (`HashMap<String, Arc<T>>`)
 - The current `sync_version`
 - `server_id` (used to detect Controller restarts)
 - `CompressEvent`: a queue of pending incremental events (inside the `handler`)
@@ -87,18 +89,19 @@ The `CacheEventDispatch<T>` trait defines the cache event handling interface:
 
 ```rust
 pub trait CacheEventDispatch<T> {
-    fn apply_change(&self, change: ResourceChange, resource: T) where T: Send + 'static;
+    fn apply_change(&self, change: ResourceChange, resource: T, sv: Option<u64>) where T: Send + 'static;
     fn set_ready(&self);
 }
 ```
 
-ClientCache implements this trait, mapping gRPC events (from WatchResponse on the Watch stream) to ResourceChange operations:
+`ResourceChange` initialization variants are used while building the Controller's `ServerCache`.
+They are not wire frames in a List response. Gateway full sync instead deserializes List's single
+JSON Vec and calls `CacheData::reset`, which invokes `ConfHandler.full_set`; the cache is marked
+ready after that List succeeds. Runtime Watch changes use `apply_change(..., sv)` and the debounce
+path below.
 
 | Watch event | ResourceChange | Handling logic |
 |-----------|---------------|---------|
-| Init start | `InitStart` | Log it, prepare to receive initialization data |
-| Init data | `InitAdd` | Write to the CacheData snapshot (does not trigger ConfHandler) |
-| Init done | `InitDone` | Mark cache ready, call ConfHandler.full_set() |
 | Runtime add | `EventAdd` | Update CacheData + call ConfHandler.partial_update(add) |
 | Runtime update | `EventUpdate` | Update CacheData + call ConfHandler.partial_update(update) |
 | Runtime delete | `EventDelete` | Remove from CacheData + call ConfHandler.partial_update(remove) |
@@ -111,14 +114,20 @@ The configuration handler for each resource type, defined in `edgion-common/src/
 
 ```rust
 pub trait ConfHandler<T>: Send + Sync {
-    fn full_set(&self, data: &HashMap<String, T>);
-    fn partial_update(&self, add: HashMap<String, T>, update: HashMap<String, T>, remove: HashSet<String>);
+    fn full_set(&self, data: &HashMap<String, Arc<T>>);
+    fn partial_update(
+        &self,
+        add: HashMap<String, Arc<T>>,
+        update: HashMap<String, Arc<T>>,
+        remove: HashSet<String>,
+    );
 }
 ```
 
 ### full_set
 
-Called when initialization sync completes (after InitDone), with a full resource snapshot. Based on this, ConfHandler builds a complete runtime structure and atomically replaces it via ArcSwap.
+Called by `CacheData::reset` after a successful List snapshot is decoded. Resource values are
+shared as `Arc<T>` to avoid deep cloning across cache and handler stores.
 
 ### partial_update
 

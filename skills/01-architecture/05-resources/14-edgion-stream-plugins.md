@@ -18,7 +18,12 @@ EdgionStreamPlugins is Edgion's custom-extension resource that defines Stream/TC
 
 ### preparse
 
-Scan the Stage 1 `plugins` array and detect legacy HTTP fields written into the L4 `IpRestriction` config — a stale schema. Return an error prefixed with `[LEGACY_SCHEMA_DEPRECATED]`. update_status recognizes the prefix and maps reason to `LegacySchemaDeprecated` rather than the generic `Invalid`, making it easier for operators to find migration guidance.
+Current code scans the Stage 1 `plugins` array for removed HTTP fields and maps
+the marker to `LegacySchemaDeprecated`. That special legacy reason is
+pre-release removal debt: current manifests must use the L4 schema, and new
+validation must not add more legacy markers. Remove the detector, reason, and
+its tests together when code changes are in scope; ordinary current-schema
+errors use `Invalid`.
 
 ### parse
 
@@ -33,7 +38,10 @@ Scan the Stage 1 `plugins` array and detect legacy HTTP fields written into the 
 
 Uses `k8s_openapi::Condition`, writing three conditions:
 
-- **`Accepted`**: True (reason=Accepted) when there are no validation_errors; False/`LegacySchemaDeprecated` for legacy-schema errors; False/`Invalid` for other errors. Stays `True` even when inline IP lists have bad entries (partial-good; see `PartiallyInvalid` below).
+- **`Accepted`**: True (reason=Accepted) when there are no validation errors;
+  current code still emits `LegacySchemaDeprecated` for the removal debt above,
+  and `Invalid` for current-schema errors. It stays `True` when inline IP lists
+  have bad entries (partial-good; see `PartiallyInvalid` below).
 - **`ResolvedRefs`**: iterates all EdgionConfigData references:
   - `GlobalConnectionIpRestriction.activeProfileRef` (→ Selector): must exist as a `Selector` EdgionConfigData. If `ref_denied` is set (cross-ns without grant / target `visibility: Namespace` without a `ReferenceGrant`): reason `RefNotPermitted`. If missing or wrong-type: reason `InvalidEdgionConfigDataRef`.
   - `IpRestriction.allowRefs`/`denyRefs` (Stage 1 + Stage 2) and GCIR per-profile `ProfileRules.allowRefs`/`denyRefs` (→ IpList): each named `IpList` EdgionConfigData must exist and be enabled. Denied cross-ns ref → reason `RefNotPermitted`; missing/disabled/wrong-type → reason `InvalidEdgionConfigDataRef`.

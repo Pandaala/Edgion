@@ -16,7 +16,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
    - **Look up features / config** (how to use / how to configure) → `02-features/`
    - **Write code** (coding conventions) → `03-coding/`
 3. **Cross-domain tasks**: modifying a resource Handler typically requires architecture (understand the processing flow) → features (feature/Schema reference) → coding (coding constraints) → testing (verification), loaded layer by layer as needed.
-4. **Resource-related tasks** — the two directories are aligned by number with complementary responsibilities:
+4. **Resource-related tasks** — the two directories have complementary responsibilities and share stable numbers where both pages exist:
    - [01-architecture/05-resources/](01-architecture/05-resources/SKILL.md) — **internal implementation**: Handler flow, requeue links, matching engine, source locations
    - [02-features/03-resources/](02-features/03-resources/SKILL.md) — **external contract**: YAML Schema, field types and default values, configuration examples
    - When changing code you typically need both: check 02 to confirm field definitions in the Schema, check 01 to confirm processing logic in the implementation
@@ -32,21 +32,23 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 
 | What you want to learn | Direct entry |
 |-----------|---------|
-| **System architecture** — relationship between the four Controller/Gateway/Center/Ctl binaries, internal modules, development guides | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
+| **System architecture** — multi-crate workspace, the three in-repo Controller/Gateway/CLI binaries, internal modules, development guides | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
 | **Binary startup and deployment** — CLI arguments, deployment modes | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
 | **Config Schema** — Controller (YAML) / Gateway (YAML) configuration | [02-features/02-config/](02-features/02-config/SKILL.md) |
-| **Controller authentication & authorization** — admin login, cli token RBAC, the (verb,kind) engine, middleware onion, default Center policy | [01-architecture/01-controller/11-authentication-authorization.md](01-architecture/01-controller/11-authentication-authorization.md) |
+| **Controller authentication & authorization** — bearer-token admin auth, scoped CLI tokens, the (verb,kind) engine, middleware onion, federation policy | [01-architecture/01-controller/11-authentication-authorization.md](01-architecture/01-controller/11-authentication-authorization.md) |
 | **Resource feature Schema** — Gateway/Route/TLS/Plugin/Backend/LinkSys | [02-features/03-resources/](02-features/03-resources/SKILL.md) |
+| **Resource field safety** — CRD pruning, `schemars` vs serde/conf_sync, resolved Secret redaction, coverage guards | [01-architecture/05-resources/00-schema-transport-contract.md](01-architecture/05-resources/00-schema-transport-contract.md) |
 | **conf_sync mTLS cert lifecycle** — auto-CA provisioning, leader-rotation vs per-replica identity-sync split, hot reload, rotation-vs-re-key (trust generation + `TrustScopedStream` revocation), emergency re-key | [01-architecture/03-controller-gateway-link/00-overview.md](01-architecture/03-controller-gateway-link/00-overview.md) (design) + [02-features/02-config/00-controller-config.md](02-features/02-config/00-controller-config.md) (config + runbook) |
 | **Webhook provider** — backendRef target, request-templating allow-list (origin/custom + presence), consumer `path_override` API, secret resolution flow | [01-architecture/03-controller-gateway-link/webhook.md](01-architecture/03-controller-gateway-link/webhook.md) |
 | **Observability** — Access Log, Metrics, protocol logs | [02-features/04-observability/](02-features/04-observability/SKILL.md) |
 | **Annotation reference** — all edgion.io/* keys | [02-features/05-annotations/](02-features/05-annotations/SKILL.md) |
 | **Coding conventions** — log IDs, log safety, observability | [03-coding/SKILL.md](03-coding/SKILL.md) |
-| **Grouped-list design pattern** — `*_groups` schema, rolling-upgrade serde, first-wins, group-in-ok-log iron rule | [01-architecture/00-common/04-grouped-list-pattern.md](01-architecture/00-common/04-grouped-list-pattern.md) |
+| **EdgionDSL** — architecture/security, builtin implementation, and user API | [01-architecture/02-gateway/dsl-engine.md](01-architecture/02-gateway/dsl-engine.md) (engine) + [03-coding/dsl/SKILL.md](03-coding/dsl/SKILL.md) (builtins) + `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md` (script API) |
+| **Grouped-list design pattern** — `*_groups` schema, atomic flat-field replacement, first-wins, group-in-ok-log iron rule | [01-architecture/00-common/04-grouped-list-pattern.md](01-architecture/00-common/04-grouped-list-pattern.md) |
 | **Integration testing** — architecture, running, adding test cases | [05-testing/01-integration-testing.md](05-testing/01-integration-testing.md) |
-| **Global review** — security/correctness/observability checklists + closed false-positive entries | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
+| **Global review orchestration** — coverage ledger, capacity-aware review waves, and finding output | [10-fully-review/SKILL.md](10-fully-review/SKILL.md); closed decisions live in [04-review/CLOSED-FINDINGS.md](04-review/CLOSED-FINDINGS.md) |
 | **User documentation conventions** — writing conventions for authoring/reviewing docs/ documentation | [11-doc/SKILL.md](11-doc/SKILL.md) |
-| **Pre-commit / local checks** (fmt + check + clippy + check-agent-docs) | [09-misc/SKILL.md](09-misc/SKILL.md) |
+| **Pre-commit / local checks** (fmt + workspace check + workspace clippy + agent-doc validation + SSA-force guard) | [09-misc/SKILL.md](09-misc/SKILL.md) |
 | **GitHub Actions / Docker / Release** — tag pushes, Docker images, release-notes files | [09-misc/cicd/02-github-workflow.md](09-misc/cicd/02-github-workflow.md) |
 | **Dev-deployment hot-swap** — native image + shell loop + cross-compilation + kubectl cp | [09-misc/03-dev-deploy-hot-replace.md](09-misc/03-dev-deploy-hot-replace.md) |
 
@@ -59,12 +61,14 @@ Verbed entries for the most common developer workflows. The Quick locator above 
 | Task | Entry point |
 |------|-------------|
 | Add a new resource type | [01-architecture/01-controller/09-add-new-resource/00-guide.md](01-architecture/01-controller/09-add-new-resource/00-guide.md) |
+| Add or rename a resource field | [01-architecture/05-resources/00-schema-transport-contract.md](01-architecture/05-resources/00-schema-transport-contract.md) |
 | Develop a new HTTP plugin | [01-architecture/02-gateway/12-edgion-plugin-dev.md](01-architecture/02-gateway/12-edgion-plugin-dev.md) |
 | Develop a new Stream plugin | [01-architecture/02-gateway/13-stream-plugin-dev.md](01-architecture/02-gateway/13-stream-plugin-dev.md) |
+| Add or debug an EdgionDSL builtin | [03-coding/dsl/SKILL.md](03-coding/dsl/SKILL.md) |
 | Debug a runtime issue (404 / 421 / 502 / 503 / Unknown kind) | [06-tracing/00-debugging.md](06-tracing/00-debugging.md) |
 | Debug a Controller → Gateway sync issue | [01-architecture/03-controller-gateway-link/SKILL.md](01-architecture/03-controller-gateway-link/SKILL.md) |
 | Add a new edgion.io/* annotation | [02-features/05-annotations/00-annotations-overview.md](02-features/05-annotations/00-annotations-overview.md) |
-| Run pre-commit / local checks (fmt + check + clippy + check-agent-docs) | [09-misc/SKILL.md](09-misc/SKILL.md) |
+| Run pre-commit / local checks (fmt + workspace check + workspace clippy + agent-doc validation + SSA-force guard) | [09-misc/SKILL.md](09-misc/SKILL.md) |
 | Review a PR (per-feature) | [04-review/SKILL.md](04-review/SKILL.md) |
 | Run a global codebase review | [10-fully-review/SKILL.md](10-fully-review/SKILL.md) |
 
@@ -107,7 +111,7 @@ Verbed entries for the most common developer workflows. The Quick locator above 
 | 07 | [tasks/](07-tasks/SKILL.md) | Task management: directory rules, templates, lifecycle phases, completion checklists |
 | 08 | [kubernetes/](08-kubernetes/SKILL.md) | Kubernetes-related: Gateway API compatibility, API version upgrade strategy |
 | 09 | [misc/](09-misc/SKILL.md) | Miscellaneous (TLS troubleshooting, etc.) |
-| 10 | [fully-review/](10-fully-review/SKILL.md) | Global review guide: per-dimension checklists, security misjudgement rules, closed entries |
+| 10 | [fully-review/](10-fully-review/SKILL.md) | Global review orchestration: scope ledger, capacity-aware waves, finding format, and coverage closure |
 | 11 | [11-doc/](11-doc/SKILL.md) | User documentation conventions: directory layout, writing style, page templates, multilingual, version management, review checklist |
 
 ## Development lifecycle

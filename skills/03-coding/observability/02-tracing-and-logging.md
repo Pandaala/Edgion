@@ -75,14 +75,14 @@ tracing::error!("error: {}", e);
 
 ## Graceful degradation
 
-In observability-related code, a data-collection failure must not cause request failure:
+In observability-related code, a data-collection failure must not cause request failure.
+On the request hot path, use the access-log object's bounded fallback rather than adding
+a tracing event:
 
 ```rust
-// Graceful degradation: collection failure does not break the request
-let json = serde_json::to_string(&entry).unwrap_or_else(|e| {
-    tracing::warn!(component = "access_log", error = %e, "Failed to serialize log entry");
-    String::new()
-});
+// AccessLogEntry::to_json returns bounded fallback JSON containing
+// AccessLogSerializeFailed; it does not trace from the hot path.
+let json = entry.to_json();
 
 // panic interrupts the request
 let json = serde_json::to_string(&entry).unwrap();

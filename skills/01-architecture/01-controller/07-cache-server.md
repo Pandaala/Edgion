@@ -15,10 +15,12 @@ A generic in-memory cache, one instance per resource type, created and held by t
 pub struct ServerCache<T: ResourceMeta + Resource + Send + Sync> {
     ready: RwLock<bool>,                          // initialization-complete flag
     store: Arc<RwLock<EventStore<T>>>,             // event store
-    watchers: RwLock<Vec<WatchClient<T>>>,          // pending watch requests
     notify: Arc<Notify>,                            // broadcast notification (wakes all watcher tasks)
 }
 ```
+
+Watcher state is owned by each spawned watch task and its channel; ServerCache
+does not retain a central watcher list.
 
 ### Lifecycle
 
@@ -132,11 +134,16 @@ pub struct ConfigSyncServer {
 
 ### server_id
 
-A millisecond-timestamp string generated at startup, used by clients to detect server restarts. When the Gateway sees a `server_id` different from the previous one, it triggers a full re-list. On relink, `regenerate_server_id()` produces a new ID.
+A millisecond-timestamp string generated when a ConfigSyncServer instance is
+created and attached to list/watch responses. Rebuild/reload creates a new server
+instance and therefore a new ID; there is no production `regenerate_server_id()` API.
 
 ### WatchObj Registration
 
-The ResourceProcessor registers itself during initialization via `register_watch_obj(kind, Arc<ServerCache<T>>)`. Once all registrations complete and they are ready (`is_all_ready()` returns true), the gRPC service starts serving data.
+After the expected processors finish initialization, the center obtains the
+runtime registry's complete WatchObj set and calls `ConfigSyncServer::register_all`.
+The single-object `register_watch_obj` helper is test-only. Readiness is checked
+before batch publication so clients never observe a partially registered kind set.
 
 ### list/watch Operations
 
@@ -151,16 +158,16 @@ The watch operation spawns a tokio task that converts `WatchResponseSimple` to `
 
 | Method | Description |
 |---|---|
-| `is_all_ready()` | All WatchObjs are ready |
 | `not_ready_kinds()` | Return the list of kinds that are not yet ready |
-| `set_all_not_ready()` | Mark all caches as not-ready on relink |
 | `clear_all()` | Clear data in all caches |
-| `reset_for_relink()` | Full reset: set_all_not_ready + clear_all + regenerate_server_id |
+
+Lifecycle reset belongs to the ConfCenter and `ControllerRuntime`, not to a
+`ConfigSyncServer::reset_for_relink` method.
 
 ## Full Data Flow
 
 ```
-K8s API / FileSystem
+K8s API / FileSystem / Etcd
         │
         ▼
   ConfCenter (watcher)

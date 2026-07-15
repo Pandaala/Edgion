@@ -1,6 +1,6 @@
 ---
 name: deployment-patterns
-description: Common Edgion deployment patterns: FileSystem local development, K8s production deployment, HA mode.
+description: Common Edgion deployment patterns: FileSystem, Etcd, Kubernetes, and Kubernetes HA.
 ---
 
 # Deployment Patterns
@@ -9,9 +9,10 @@ description: Common Edgion deployment patterns: FileSystem local development, K8
 
 | Pattern | conf_center | Use Case | Characteristics |
 |---------|-------------|----------|-----------------|
-| FileSystem | `type = "filesystem"` | Local development/testing/CI | Driven by YAML files, no K8s required |
+| FileSystem | `type: file_system` | Local development/testing/CI | Driven by YAML files, no K8s required |
+| Etcd | `type: etcd` | Non-Kubernetes persistent control plane | Watches a prefixed etcd key space |
 | Kubernetes single instance | `type = "kubernetes"` | Small scale/K8s testing | Watches the K8s API directly |
-| Kubernetes HA | `type = "kubernetes"` + `ha_mode = true` | Production | Leader election, multi-replica high availability |
+| Kubernetes HA | `type: kubernetes` + `ha_mode: leader-only` or `all-serve` | Production | Lease election is always enabled |
 
 ## FileSystem Mode
 
@@ -26,8 +27,13 @@ description: Common Edgion deployment patterns: FileSystem local development, K8
 ```yaml
 # edgion-controller.yaml
 conf_center:
-  type: filesystem
+  type: file_system
   conf_dir: config/resources     # YAML resource directory
+
+# Required explicit transport choice for local plaintext development only.
+conf_sync_security:
+  tls:
+    skip_tls: true
 ```
 
 ### Use Cases
@@ -42,8 +48,36 @@ conf_center:
 edgion-controller --conf-dir config/resources
 
 # Terminal 2: Gateway
-edgion-gateway --server-addr http://127.0.0.1:12151
+edgion-gateway --config-file config/dev-gateway.yaml --server-addr http://127.0.0.1:12151
 ```
+
+`config/dev-gateway.yaml` must also contain the explicit insecure choice
+`conf_sync_security: { tls: { skip_tls: true } }`. Prefer matching mTLS certificate
+paths outside isolated local development.
+
+---
+
+## Etcd Mode
+
+```yaml
+conf_center:
+  type: etcd
+  endpoints: ["https://etcd-0:2379", "https://etcd-1:2379"]
+  key_prefix: /edgion
+  connect_timeout_ms: 5000
+  request_timeout_ms: 10000
+  tls:
+    ca_cert_file: /etc/edgion/etcd/ca.pem
+    client_cert_file: /etc/edgion/etcd/client.pem
+    client_key_file: /etc/edgion/etcd/client-key.pem
+  # auth:                              # Optional; keep credentials in a Secret-mounted file
+  #   username: edgion
+  #   password: "..."
+```
+
+Etcd uses the same Controller processing pipeline as FileSystem mode and persists
+resource status under the configured prefix. Configure `conf_sync_security` separately;
+it protects Controller-to-Gateway traffic, not Controller-to-etcd traffic.
 
 ---
 
@@ -71,8 +105,7 @@ conf_center:
   watch_namespaces: [default, production]
 
   # Optional: label filter
-  metadata_filter:
-    label_selector: app=edgion
+  label_selector: app=edgion
 ```
 
 ### Key Fields
@@ -102,7 +135,7 @@ conf_center:
 conf_center:
   type: kubernetes
   gateway_class: edgion
-  ha_mode: "true"
+  ha_mode: leader-only
   leader_election:
     lease_name: edgion-controller-leader
     lease_namespace: edgion-system
@@ -116,15 +149,15 @@ conf_center:
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `lease_name` | `String` | `"edgion-controller-leader"` | Lease resource name |
-| `lease_namespace` | `String` | `"edgion-system"` | Lease resource namespace |
+| `lease_namespace` | `String` | `POD_NAMESPACE`, else `"default"` | Lease resource namespace |
 | `lease_duration_secs` | `u64` | `15` | Lease duration (validity on the apiserver side) |
 | `renew_deadline_secs` | `u64` | `10` | Renewal deadline window (window absorbing transient errors) |
 | `retry_period_secs` | `u64` | `2` | Uniform sleep interval between each acquire/renew attempt (corresponds to client-go `RetryPeriod`) |
 
 ### HA Behavior
-- **Leader only** performs: resource processing, status write-back, ACME certificate issuance, gRPC push.
-- **Standby** behavior: watches K8s resources but does not process them, waiting for Leader failover.
-- **Failover**: after the Leader lease expires, Standbys compete to become the new Leader and fully reprocess from scratch.
+- `leader-only` (default): only the leader runs watchers, processing, and gRPC; followers wait for the lease and do not watch resources.
+- `all-serve`: every replica watches, processes, and serves gRPC; only the leader performs coordinated writes such as status and ACME work.
+- After lease loss, replicas compete according to the configured retry/deadline windows. A newly active leader rebuilds state through the normal list/watch lifecycle.
 
 ---
 
@@ -134,7 +167,7 @@ conf_center:
 |----------|------------|---------|----------------|
 | Development | 1 (FileSystem) | 1 | Single process, fast iteration |
 | Testing | 1 (K8s) | 1-2 | Validate K8s integration |
-| Production | 3 (K8s HA) | 2+ | High availability, scale Gateway as needed |
+| Production | 3 (K8s HA) | 2+ | Start with `leader-only`; use `all-serve` when every Controller replica must serve conf_sync |
 
 ### Gateway Scaling
 - Gateway is a **stateless** data plane and can be horizontally scaled freely.

@@ -8,6 +8,15 @@ description: DSL plugin implementation skills for Edgion — builtin development
 > Implementation-level guides for the EdgionDSL plugin: how to use the existing builtins from script-author and gateway-developer viewpoints, and how to add a new function inside an existing namespace.
 > Engine-internal architecture (VM, bytecode, panic isolation, DslRuntime lifecycle) lives in [`../../01-architecture/02-gateway/dsl-engine.md`](../../01-architecture/02-gateway/dsl-engine.md); user-facing syntax and the full function catalogue live under `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/`.
 
+Ownership is deliberately split across three layers:
+
+- `edgion-dsl`: parser, bytecode compiler, values/errors, and static validation.
+- `edgion-resources`: `DslConfig` plus the shared compile/validate entry used during resource ingest.
+- `edgion-gateway`: VM execution, host session integration, async builtins, and runtime provider dispatch.
+
+Keep new code in the lowest layer that has the required dependencies; never move Gateway
+runtime dependencies into the leaf DSL crate.
+
 ## File list
 
 | File | Topic |

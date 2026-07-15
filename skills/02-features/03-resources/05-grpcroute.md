@@ -6,7 +6,7 @@ description: Full GRPCRoute schema: gRPC service/method matching, filters, gRPC-
 # GRPCRoute Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.4.0 Core resource
+> Gateway API v1.5.0 Core resource
 
 GRPCRoute defines routing rules for the gRPC protocol, supporting matching by service/method and gRPC-Web.
 

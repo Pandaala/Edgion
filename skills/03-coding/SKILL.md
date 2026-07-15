@@ -12,7 +12,7 @@ description: Coding standards skill for Edgion. Use when reviewing or writing co
 
 1. **Single-line access log reconstruction** — one access log entry contains enough information to locate a problem without flipping through other logs
 2. **Record only key checkpoints** — record final decisions and exception paths; do not record process steps or intermediate state
-3. **Avoid metrics explosion** — no histograms, strict label cardinality, unified management
+3. **Avoid metrics explosion** — no new histogram without explicit review, strict label cardinality, unified management
 4. **Zero tracing on the data plane** — `tracing::*` macros are forbidden on the data-plane hot path
 
 ## Information layering
@@ -63,11 +63,11 @@ description: Coding standards skill for Edgion. Use when reviewing or writing co
 - [ ] Do error messages carry enough context?
 
 ### Observability
-- [ ] Each PluginLog entry ≤ 40 bytes, ending with `; `
-- [ ] Error paths go through `plugin_log.push_err("<static kind>")`, not `push(&format!("err: {}", e))` (avoids token / claim leakage)
-- [ ] No debug information written into PluginLog (use `tracing::debug!` instead)
+- [ ] Keep ordinary PluginLog entries concise (target 15–40 bytes); no trailing `"; "` contract exists
+- [ ] Static error classes use `plugin_log.push_err("<static kind>")`; approved masked dynamic operator messages use `push_err_sensitive`, never raw `push(format!(...error...))`
+- [ ] Do not duplicate low-value debug steps in PluginLog; on a hot path omit them or add a justified bounded access-log signal, never `tracing::debug!`
 - [ ] New metrics are managed via the `GatewayMetrics` struct, not the `metrics::counter!()` macro directly
-- [ ] No Histogram type for new metrics
+- [ ] Any new Histogram has an explicit bucket/cardinality review and exception rationale
 - [ ] Label value domain is bounded (≤ tens), no high-cardinality labels
 - [ ] Every +1 path on a Gauge has a matching -1
 - [ ] New access log fields actually carry troubleshooting value

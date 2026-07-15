@@ -10,7 +10,7 @@
 Controller → gRPC Watch/List → ClientCache → ConfHandler<T>.full_set / partial_update
 ```
 
-- `full_set(&HashMap<String, T>)` — full replace, triggered by `List()` or after a gRPC reconnect.
+- `full_set(&HashMap<String, Arc<T>>)` — full replace, triggered by `List()` or after a gRPC reconnect.
 - `partial_update(add, update, remove)` — incremental update, triggered by Watch events after the 100 ms compression window.
 
 Each K8s / CRD resource registers one `ConfHandler` in `ConfigClient::new()`.
@@ -39,7 +39,8 @@ partial_update(add, update, remove)
   → unaffected parts are reused via Arc
 ```
 
-Reference implementation: HTTPRoute's `build_affected_hostnames` + per-hostname `rebuild_exact_hostname`.
+Reference implementation: HTTPRoute computes affected `ListenerKey`s from the old and new
+`resolved_listeners`, then rebuilds only those per-listener managers.
 
 ### 3.3 ArcSwap is data-plane only
 
@@ -56,7 +57,8 @@ Reference implementation: HTTPRoute's `build_affected_hostnames` + per-hostname 
 
 ## 5. Notes
 
-- `full_set` and `partial_update` execute on the same thread (the compressed-event handling thread); they are never invoked concurrently.
+- Do not assume all rebuild triggers are serialized by the cache callback thread. HTTP route state,
+  for example, also rebuilds after Gateway changes and uses `rebuild_lock` to serialize publication.
 - `full_set` is triggered on gRPC reconnect / relist and must handle empty data (clearing state).
 - `add` / `update` in `partial_update` have already been preparsed (Controller side), but Gateway-side may need additional preparse (e.g., GRPCRoute, EdgionPlugins).
 - Route table updates must be atomic (`ArcSwap::store`); no "half-built" intermediate state.
@@ -75,13 +77,14 @@ Reference implementation: HTTPRoute's `build_affected_hostnames` + per-hostname 
 | TlsStore | EdgionTls | `tls/store/conf_handler.rs` |
 | ServiceStore | Service | `backends/discovery/services/conf_handler_impl.rs` |
 | EpSliceHandler | EndpointSlice | `backends/discovery/endpoint_slice/conf_handler_impl.rs` |
-| EndpointHandler | Endpoints | `backends/discovery/endpoint/conf_handler_impl.rs` |
 | BackendTLSPolicyStore | BackendTLSPolicy | `backends/policy/backend_tls/conf_handler_impl.rs` |
+| BackendTrafficPolicyStore | EdgionBackendTrafficPolicy | `backends/policy/backend_traffic/conf_handler_impl.rs` |
 | GatewayHandler | Gateway | `runtime/handler.rs` |
 | GatewayClassHandler | GatewayClass | `config/gateway_class/conf_handler_impl.rs` |
 | EdgionGatewayConfigHandler | EdgionGatewayConfig | `config/edgion_gateway/conf_handler_impl.rs` |
 | AcmeConfHandler | EdgionAcme | `services/acme/conf_handler_impl.rs` |
 | LinkSysStore | LinkSys | `link_sys/runtime/conf_handler.rs` |
+| EdgionConfigDataStore | EdgionConfigData | `plugins/runtime/edgion_config_data/conf_handler.rs` |
 
 > All paths are relative to `edgion-gateway/src/`.
 
@@ -103,8 +106,7 @@ partial_update:
 ```
 
 References:
-- HTTPRoute `build_affected_hostnames` → per-hostname `rebuild_exact_hostname`.
-- TLSRoute `rebuild_affected_listener_managers(&affected_listeners)`.
+- HTTPRoute and TLSRoute `rebuild_affected_listener_managers(&affected_listeners)`.
 
 ### 7.2 Cache parsed results (suboptimal)
 
@@ -133,20 +135,21 @@ partial_update:
 
 | Resource | Rating | Strategy |
 |----------|--------|----------|
-| HTTPRoute | A | Rebuild by affected hostname; unchanged hostnames are reused via Arc |
+| HTTPRoute | A | Rebuild by affected listener; unchanged listener snapshots are untouched |
 | TLSRoute | A | Rebuild by affected listener; unchanged listeners are not touched |
-| TCPRoute | A | Per-route add_route / remove_route; no full rebuild |
-| UDPRoute | A | Same as TCPRoute |
+| TCPRoute | A | Update route cache and rebuild affected listener snapshots |
+| UDPRoute | A | Update route cache and rebuild affected listener snapshots |
 | EndpointSlice | A | Update LB incrementally by affected_services |
-| Endpoints | A | Same as EndpointSlice |
 | GRPCRoute | B | Incremental route_units_cache, but still merges all units to rebuild GrpcMatchEngine |
 | Service | B | Incremental store + per-item health check reconciliation |
 | EdgionPlugins | B | ArcSwap clone-modify-swap |
 | EdgionTls | B | RwLock per-item insert / remove |
 | EdgionStreamPlugins | B | ArcSwap clone-modify-swap |
 | BackendTLSPolicy | B | ArcSwap clone-modify-swap |
+| EdgionBackendTrafficPolicy | B | Incremental policy arbitration for affected Service keys |
 | LinkSys | B | ArcSwap clone-modify-swap |
 | EdgionAcme | B | Incremental challenge store |
+| EdgionConfigData | B | Incremental runtime data-store update |
 | Gateway | B | Incremental updates to GatewayStore + ListenerGatewayInfoStore; full TLS matcher rebuild (with short-circuit optimization) |
 | GatewayClass | C | Linear Vec scan, acceptable due to very small count |
 | EdgionGatewayConfig | C | Same as GatewayClass |

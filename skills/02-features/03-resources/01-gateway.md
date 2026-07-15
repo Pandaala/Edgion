@@ -6,7 +6,7 @@ description: Full Gateway resource schema: Listener, protocol, TLS, AllowedRoute
 # Gateway Resource
 
 > API: `gateway.networking.k8s.io/v1` | Scope: Namespaced
-> Gateway API v1.4.0 Core resource
+> Gateway API v1.5.0 Core resource
 
 Gateway is Edgion's core entry resource, defining a gateway instance's Listeners (listening ports, protocols, hostnames, TLS configuration). It is the attachment point for all route resources.
 

@@ -1,138 +1,114 @@
 ---
 name: add-new-annotation
-description: Use when adding a new edgion.io/* annotation; checklist of: classify (scope, parse phase), files to touch (controller preparse, gateway runtime, schema reference), validation hooks, and common failure modes.
+description: Developer workflow for adding or changing an edgion.io metadata annotation, options key, or related label.
 ---
 
-# Add New `edgion.io/*` Annotation
+# Add or Change an `edgion.io/*` Key
 
-Use this checklist when introducing a new `edgion.io/*` annotation key. Read
-[00-annotations-overview.md](00-annotations-overview.md) and
-[references/annotations-metadata.md](references/annotations-metadata.md) first
-to understand the existing key taxonomy before adding a new one.
+Read the overview and the relevant reference first. Not every `edgion.io/*` key is a
+`metadata.annotations` entry: some live in listener/policy `options`, some are labels,
+and some are system/test-only.
 
-## Step 1 — Classify the Annotation
+## 1. Define the Contract
 
-Answer these four questions before touching any file:
+Record these decisions before coding:
 
-| Question | Options |
-|----------|---------|
-| **Scope** | `metadata.annotations` (resource-level, parsed from K8s object) vs `spec.options` (listener/policy options block) vs Labels |
-| **Parse phase** | Controller-side preparse (during resource processing, before sync) vs Gateway-side runtime (read after the resource arrives at Gateway) |
-| **Namespace** | Normal user-facing key, system-managed (do not set manually), or test-only (e.g., `metrics-test-*`) |
-| **Cardinality** | Gateway-level, route-level, per-rule, or service-level |
+| Decision | Examples |
+|----------|----------|
+| Carrier | `metadata.annotations`, `tls.options`, policy `spec.options`, label |
+| Resource/scope | Gateway, HTTPRoute rule set, Service, EdgionTls, synthetic EndpointSlice |
+| Owner | Operator-facing, Controller-written, Gateway-written, test-only |
+| Parse owner | Shared resource preparse, Controller resolution, Gateway runtime |
+| Value grammar | Exact enum, tolerant boolean, integer/range, ordered reference list |
+| Invalid behavior | Reject/status failure, WARN/INFO + inherit/default, or ignore |
+| Hot reload | Whether an update affects existing listeners/sessions or only new ones |
 
-Most keys fall into one of two paths:
+Do not impose one universal parser policy. Existing contracts deliberately differ:
+`enable-http2` accepts several falsy tokens, `cert-provider` requires exact
+case-sensitive `EdgionTls`, and malformed reference-bearing DNS options may produce
+`ResolvedRefs=False`. Preserve the behavior appropriate to the risk.
 
-- **Controller preparse path**: the Controller reads the annotation, derives runtime
-  fields, and stores them in the resource's preparse struct before syncing.
-  Example: `edgion.io/forward-raw-path` is parsed in `http_route_preparse.rs`
-  and stored in `HTTPRouteRule.parsed_forward_raw_path`.
-- **Gateway runtime path**: the Gateway reads the annotation directly from the
-  synced resource struct at runtime.
-  Example: `edgion.io/enable-http2` is read in `listener_builder.rs` and
-  `listener_gateway_info.rs`.
+## 2. Locate Ownership Before Adding a Constant
 
-## Step 2 — Add the Constant
+For product metadata annotations, prefer a named constant in
+`edgion-resources/src/constants/annotations.rs::edgion`. That file has no `test_only`
+submodule. Options and labels may currently have constants beside their owning schema or
+consumer; follow the nearest established pattern and avoid creating duplicate literals.
 
-Always register the key string as a named constant first:
+Search both definitions and consumers:
 
-1. Open `edgion-resources/src/constants/annotations.rs`.
-2. Add a `pub const YOUR_KEY: &str = "edgion.io/your-key";` entry under the
-   appropriate submodule (`edgion` module for standard keys; `test_only` for
-   test/diagnostics keys).
-3. Use the constant everywhere; never inline the string literal at a call site.
+```bash
+rg -n 'edgion\.io/|YOUR_KEY' edgion-resources edgion-controller edgion-gateway edgion-tests config skills
+```
 
-## Step 3 — Checklist of Files to Touch
+If an existing key is still an inline literal, centralizing it can be part of the same
+minimal change when all consumers are updated and tests cover the exact string.
 
-### 3a. Controller preparse path (`metadata.annotations`)
+## 3. Choose the Parse Path
 
-| Step | File | What to do |
-|------|------|------------|
-| 1 | `edgion-resources/src/resources/<resource>_preparse.rs` or the resource's main `rs` file | Add a parsed field (e.g., `pub parsed_your_key: Option<bool>`) to the preparse struct |
-| 2 | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/<resource>.rs` | Read the annotation in `on_change` / parse phase; populate the parsed field |
-| 3 | `edgion-resources/src/constants/annotations.rs` | Constant (Step 2 above) |
-| 4 | `skills/02-features/05-annotations/references/annotations-metadata.md` | Add a row to the relevant table and describe behavior, default, and effect |
-| 5 | `skills/02-features/05-annotations/00-annotations-overview.md` | Add a row to the quick-lookup table for the resource type |
+### Shared resource preparse
 
-> TODO: confirm the exact preparse file path for non-HTTP route types (e.g., GRPCRoute uses a separate handler; TCPRoute / TLSRoute handler is in `routes/tcp/` and `routes/tls/`).
+Use this when the normalized result should travel with the resource through conf_sync.
+For example, HTTP route annotation parsing lives in
+`edgion-resources/src/resources/http_route_preparse.rs`; it is not automatically a
+Controller-handler responsibility. Add only the parsed runtime field needed by the
+Gateway and follow the schema/transport rules in
+`../../01-architecture/05-resources/00-schema-transport-contract.md`.
 
-### 3b. Gateway runtime path (`metadata.annotations`)
+### Controller resolution
 
-| Step | File | What to do |
-|------|------|------------|
-| 1 | `edgion-resources/src/constants/annotations.rs` | Constant (Step 2 above) |
-| 2 | Gateway runtime consumer — varies by resource type (see table below) | Read the annotation at the correct point in the processing pipeline |
-| 3 | `skills/02-features/05-annotations/references/annotations-metadata.md` | Document the key |
-| 4 | `skills/02-features/05-annotations/00-annotations-overview.md` | Quick-lookup row |
+Use the relevant handler/service when the result depends on other resources,
+ReferenceGrant, Secrets, or status conditions. Current consumers include:
 
-Gateway runtime consumer locations by resource:
+- `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway.rs`
+- route handlers under the same directory
+- `edgion-controller/src/services/dns_resolver/`
 
-| Resource | Runtime consumer file |
-|----------|-----------------------|
-| Gateway listeners | `edgion-gateway/src/runtime/server/listener_builder.rs`, `edgion-gateway/src/runtime/store/listener_gateway_info.rs` |
-| TCPRoute / TLSRoute | `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`, `edgion-gateway/src/routes/tls/conf_handler_impl.rs` |
-| EdgionTls | `edgion-resources/src/resources/edgion_tls.rs` |
+Keep controller-resolved fields serialized for conf_sync and excluded from the CRD with
+`#[schemars(skip)]`; do not use `#[serde(skip)]` when the Gateway needs the value.
 
-> Service-level backend behavior (health checks, outlier detection, panic
-> threshold, LB algorithm) is no longer an annotation at all — it moved to the
-> `EdgionBackendTrafficPolicy` CRD, a normal `ProcessorHandler`/`ConfHandler`
-> resource pair (see
-> [03-resources/20-edgion-backend-traffic-policy.md](../03-resources/20-edgion-backend-traffic-policy.md)
-> and the resource-registration guide) rather than an annotation-parsing path.
-> Do not use this checklist for that kind of config; use
-> [01-controller/09-add-new-resource/00-guide.md](../../01-architecture/01-controller/09-add-new-resource/00-guide.md) instead.
+### Gateway runtime
 
-### 3c. `spec.options` path (listener options / policy options)
+Read directly when the resource annotation itself is the runtime contract. Locate the
+actual current consumer rather than assuming one listener file:
 
-| Step | File | What to do |
-|------|------|------------|
-| 1 | `edgion-resources/src/constants/annotations.rs` | Constant |
-| 2 | The resource type file that parses `spec.options` | Add the options key read |
-| 3 | `skills/02-features/05-annotations/references/annotations-options-and-labels.md` | Document the key |
+- Gateway HTTP/2/redirect: `edgion-gateway/src/runtime/server/base.rs`
+- Gateway-derived settings: `edgion-gateway/src/runtime/gateway_info.rs`
+- TLS provider selection: `edgion-gateway/src/runtime/matching/tls.rs`
+- TCP/TLS/UDP route consumers: `edgion-gateway/src/routes/{tcp,tls,udp}/`
+- Log projection: `edgion-resources/src/resources/common/log_labels.rs`
 
-## Step 4 — Validation and Defaults
+## 4. Validation Boundaries
 
-- **CRD-side**: if the annotation value has a restricted value set (e.g., enum
-  strings), add a `x-kubernetes-validations` CEL rule in the CRD YAML under
-  `config/crd/edgion-crd/`. For Gateway API resources, add a validating webhook
-  or rely on annotation parsing to reject bad values.
-- **Missing / absent value**: return the documented default (do not panic).
-  Pattern: `annotations.get(edgion::YOUR_KEY).map(|v| v == "true").unwrap_or(false)`.
-- **Malformed value**: log at INFO level with resource ns/name and the raw value,
-  then fall back to the default. Do NOT reject the resource for a malformed
-  annotation unless the error is unrecoverable.
-  Pattern followed by `edgion.io/forward-raw-path` (see
-  `references/annotations-metadata.md` §forward-raw-path): emit a tracing INFO
-  event with ns / name / value and treat as absent.
+- For an Edgion-owned structural CRD field, update its schema and run the CRD coverage
+  guard. An annotation remains a map entry; adding a Rust constant does not add a typed
+  CRD field.
+- Do not patch vendored Gateway API/native Kubernetes CRDs merely to validate one Edgion
+  annotation. Use existing admission/status/runtime parsing unless the project explicitly
+  introduces a validating webhook contract.
+- Reference-bearing keys must use the project's ReferenceGrant and status conventions.
+- System-written annotations need a clearly documented writer and must not be presented
+  as operator configuration.
 
-## Step 5 — Test Coverage
+## 5. Documentation and Tests
 
-1. Add a unit test in the handler or preparse file covering the annotation's
-   parse logic (present/absent/malformed).
-2. Add an integration scenario in `edgion-tests/` that exercises the annotation
-   end-to-end. Consult
-   [05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md)
-   for the scenario structure.
-3. If the annotation controls a hot-reload-observable behavior, add a dynamic
-   (hot reload) scenario — see the integration testing guide's dynamic section.
+Update all applicable files:
 
-## Step 6 — Common Failure Modes
+- `00-annotations-overview.md` for quick lookup
+- `references/annotations-metadata.md` for metadata annotations
+- `references/annotations-options-and-labels.md` for options/labels
+- `references/annotations-system-and-test-keys.md` for reserved/test keys
 
-| Failure mode | How to avoid |
-|--------------|-------------|
-| **Parse silently swallows the value** | Always log the malformed-value case at INFO before treating as absent; add a unit test for the malformed path |
-| **Runtime consumer reads the annotation before preparse populates it** | If Controller preparse is the canonical source, store the result in the parsed field and read that field on Gateway — never re-parse the raw annotation string on the Gateway side |
-| **Key collision with system / test-only namespace** | Check `references/annotations-system-and-test-keys.md` before choosing the key name; avoid names that could be confused with system-managed keys |
-| **Legacy key forward-port** | If an older doc or example uses a legacy key (e.g., `edgion.io/stream-plugins`), update the example to the current key; never copy legacy keys into new code |
-| **Constant string diverges from the actual key** | Derive the constant from the literal once in `annotations.rs`; all consumers use the constant, never an inline string |
-| **CRD YAML and Rust type disagree** | After updating the Rust constant, grep the CRD YAML for the old string; update it if it appears as an example or default value |
+Tests should cover absent, valid, invalid, boundary, precedence/inheritance, and hot
+update behavior as applicable. Add a targeted integration scenario when the key changes
+observable routing, TLS, DNS, plugin, or logging behavior. Use
+`../../05-testing/01-integration-testing.md` for the harness.
 
-## Linked References
+## Review Checklist
 
-- [00-annotations-overview.md](00-annotations-overview.md) — quick-lookup table for all current keys
-- [references/annotations-metadata.md](references/annotations-metadata.md) — detailed per-key reference; lists exact source files verified per key
-- [references/annotations-options-and-labels.md](references/annotations-options-and-labels.md) — `spec.options` and Labels reference
-- [references/annotations-system-and-test-keys.md](references/annotations-system-and-test-keys.md) — system-managed and test-only keys; check before naming a new key
-- `edgion-resources/src/constants/annotations.rs` — single source of truth for key string constants
-- [../../01-architecture/01-controller/09-add-new-resource/00-guide.md](../../01-architecture/01-controller/09-add-new-resource/00-guide.md) — resource-level wiring guide (required companion when the annotation is part of a new resource)
-- [../../05-testing/01-integration-testing.md](../../05-testing/01-integration-testing.md) — integration test structure and dynamic-scenario guide
+- The carrier and exact case-sensitive key/value grammar match the consumer.
+- Scope and precedence are documented, including explicit false vs absent when tri-state.
+- Invalid input behavior is intentional and tested; no blanket fallback rule was copied.
+- Controller-resolved transport fields follow schemars/serde/redaction invariants.
+- Current and legacy keys are not both carried forward without an explicit requirement.
+- Quick lookup, detailed reference, source constant/consumer, and examples agree.

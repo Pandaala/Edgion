@@ -40,7 +40,8 @@ only concrete current limitation is HMAC body validation, which already fails *g
 
 Pingora hands `pg_upstream_response_body_filter.rs:14-20` a `body: &mut Option<bytes::Bytes>`.
 The plugin runtime *deliberately* narrows it: `PluginRuntime::run_upstream_response_body_plugins`
-(`plugin_runtime.rs:1114-1138`) takes `body: &Option<bytes::Bytes>` and forwards `&body` to each
+in `edgion-gateway/src/plugins/runtime/plugin_runtime.rs` takes
+`body: &Option<bytes::Bytes>` and forwards `&body` to each
 plugin. So the read-only signature is a chosen contract at the runtime boundary, not a place
 where a mutable reference was lost by oversight. Widening it would mean a new chunk-rewrite
 result type, a max-expanded-chunk cap to bound allocation, and re-validating every plugin in the
@@ -88,7 +89,7 @@ Re-open this decision only if:
   the same boundary)
 - `edgion-gateway/src/plugins/runtime/traits/upstream_response_body_filter.rs`
 - `edgion-gateway/src/routes/http/proxy_http/pg_upstream_response_body_filter.rs`
-- `edgion-gateway/src/plugins/runtime/plugin_runtime.rs:1114-1138`
+- `edgion-gateway/src/plugins/runtime/plugin_runtime.rs::PluginRuntime::run_upstream_response_body_plugins`
 - `edgion-gateway/src/plugins/http/hmac_auth/plugin.rs:361-362`
 </content>
 </invoke>

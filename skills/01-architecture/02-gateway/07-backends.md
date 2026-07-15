@@ -133,7 +133,7 @@ circuit_breaker/
   `spec.outlierDetection`, normalized) — see
   [Backend Traffic Policy](#backend-traffic-policy-edgionbackendtrafficpolicy)
   below. There is no annotation parsing anymore.
-- During EP/EPS `cleanup_removed_backends` → `remove_backend` cleans
+- During EndpointSlice `cleanup_removed_backends` → `remove_backend` cleans
   per-backend ejection state (this stays owned by the Service/EndpointSlice
   handlers — only the per-service *policy config* moved).
 - A Service/EndpointSlice `full_set` resync (e.g. every gateway reconnect)
@@ -211,10 +211,11 @@ policy/
 
 `preload_load_balancers()` is invoked after all configuration sync completes:
 
-1. Iterate all route kinds (HTTP/gRPC/TCP/UDP/TLS) and collect (service_key, lb_policy) pairs.
+1. Iterate all route kinds (HTTP/gRPC/TCP/UDP/TLS) and collect referenced Service keys.
 2. Deduplicate using HashSet.
-3. Pre-create RoundRobin LB instances by calling `get_or_create()` on the EndpointSlice store.
-4. Log the preload result (total, success, skipped).
+3. Hydrate each `ServiceSelectorCell` backend list if empty; algorithm-specific compiled selectors
+   remain lazy.
+4. Log the preload result.
 
 ## Endpoint validation
 

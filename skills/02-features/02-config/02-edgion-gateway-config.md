@@ -68,6 +68,11 @@ spec:
       defaultRequestTimeout: "60s"
       defaultIdleTimeout: "300s"
 
+  # ─── L4 TCP relay timeouts (UDP is unaffected) ───
+  tcpTimeout:
+    idleTimeout: "1h"
+    connectTimeout: "10s"
+
   # ─── Max retries ───
   maxRetries: 3                             # uint32, max upstream connection retries
 
@@ -93,6 +98,8 @@ spec:
     requireSniHostMatch: true               # bool, HTTPS listener-level 421 Misdirected Request detection
     fallbackSni: ""                         # string?, fallback value when the client provides no SNI
     tlsProxyLogRecord: true                 # bool, record TLS proxy connection logs
+    allowLoopbackUpstream: false            # bool, explicit loopback upstream opt-in
+    rejectDuplicateHost: true               # bool, reject duplicate HTTP/1.1 Host fields
 
   # ─── Global plugins ───
   globalPluginsRef:                         # Vec<PluginReference>, applied to all routes
@@ -107,14 +114,24 @@ spec:
   # ─── ReferenceGrant validation ───
   enableReferenceGrantValidation: false     # bool
 
-  # ─── Path normalization ───
-  pathNormalization:
-    rejectEscapedSlashes: false             # bool, whether requests containing %2F / %5C are rejected with 400. Default false.
-    rejectInvalidPercentEncoding: false     # bool, whether requests with invalid percent-encoding (invalid hex or non-UTF-8 after decoding) are rejected with 400. Default false.
-
   # ─── LinkSys global configuration ───
   linkSys:
     webhookMaxResponseBytes: 16384          # usize, hard upper bound for webhook response body (default 16 KiB)
+
+  # ─── Cluster-wide outbound TLS defaults for plugins and LinkSys ───
+  outboundTls:
+    verify: true
+    validation:
+      wellKnownCACertificates: System
+      # hostname: api.example.com
+      # caCertificateRefs: [{ kind: ConfigMap, name: corporate-ca }]
+    # clientCertificateRef: { kind: Secret, name: outbound-client }
+
+  # ─── Data-plane ExternalName DNS fallback ───
+  dnsResolver:
+    servers: ["1.1.1.1:53"]                # Mutually exclusive with linkSysRef
+    # linkSysRef: { namespace: edgion-system, name: corporate-httpdns }
+    cacheTtl: "5s"
 ```
 
 ## spec Field Details
@@ -148,6 +165,13 @@ spec:
 | `defaultRequestTimeout` | `Duration` | `60s` | Total request timeout (including retries) |
 | `defaultIdleTimeout` | `Duration` | `300s` | Connection pool idle timeout |
 
+### spec.tcpTimeout
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `idleTimeout` | `Duration` | `1h` | Established L4 relay inactivity timeout; `0` disables it. Applies to TCP, TLS termination, and TLS passthrough, not UDP. |
+| `connectTimeout` | `Duration` | `10s` | Upstream TCP connection bound; `0` delegates to the OS bound. |
+
 ### spec.loadBalancing
 
 | Field | Type | Default | Description |
@@ -177,6 +201,7 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 | `fallbackSni` | `String?` | — | Fallback hostname when the client does not provide SNI |
 | `tlsProxyLogRecord` | `bool` | `true` | Record TLS proxy connection logs |
 | `allowLoopbackUpstream` | `bool` | `false` | Explicitly allow loopback upstream; link-local / metadata are not allowed |
+| `rejectDuplicateHost` | `bool` | `true` | Reject HTTP/1.1 requests containing multiple Host field lines with 400. |
 
 ### spec.preflightPolicy
 
@@ -185,19 +210,6 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 | `mode` | `String` | `cors-standard` | `cors-standard`: OPTIONS + Origin + ACRM; `all-options`: all OPTIONS requests |
 | `statusCode` | `u16` | `204` | Preflight response status code when no CORS plugin is present |
 
-### spec.pathNormalization
-
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `rejectEscapedSlashes` | `bool` | `false` | Reject requests containing `%2F` / `%5C` directly with 400. Can be enabled in high-security scenarios (where literal `/` characters in the path are not allowed). Note: this affects legitimate APIs (e.g., base64 URL parameters containing `/`). |
-| `rejectInvalidPercentEncoding` | `bool` | `false` | Reject requests with invalid percent-encoding (invalid hex or non-UTF-8 after decoding) directly with 400. Once enabled, captures abnormal inputs such as IIS-style overlong UTF-8 (`%c0%ae`), broadening the security guarantee scope. |
-
-**Important notes**:
-
-- **No `enabled` field** — path normalization is Edgion's default behavior and **cannot be disabled**.
-- **No per-Gateway / per-Listener override** — these two switches are global.
-- For the security guarantee scope see the URI normalization architecture doc: [../../01-architecture/02-gateway/uri-normalization/SKILL.md](../../01-architecture/02-gateway/uri-normalization/SKILL.md).
-
 ### spec.linkSys
 
 | Field | Type | Default | Description |
@@ -205,6 +217,25 @@ Extraction logic: traverse `realIpHeader` right-to-left, skip addresses listed i
 | `webhookMaxResponseBytes` | `usize` | `16384` | Hard upper bound for the LinkSys webhook response body (bytes). All webhook call response sizes are clamped to `min(per-resource maxResponseBytes, this value)`. When larger responses are needed (e.g., a plugin calling an external API that returns a sizable JSON), increase both values together. |
 
 > Modifications take effect immediately via `EdgionGatewayConfig` partial-update; no Gateway restart is required.
+
+### spec.outboundTls
+
+Cluster-wide default for plugin and LinkSys outbound TLS. `verify` defaults to `true`.
+`validation` selects well-known roots or referenced Secret/ConfigMap CA bundles and may
+add hostname/SAN constraints. `clientCertificateRef` supplies an outbound mTLS identity.
+Controller-resolved certificate material stays out of the CRD schema and is redacted in
+Admin output while remaining available to conf_sync.
+
+### spec.dnsResolver
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `linkSysRef` | `LinkSysRef?` | — | Namespaced httpdns LinkSys reference. |
+| `servers` | `Vec<String>?` | — | Inline `ip[:port]` DNS servers. |
+| `cacheTtl` | `Duration` | `5s` | Data-plane ExternalName resolution cache TTL. |
+
+`linkSysRef` and `servers` are mutually exclusive and validated at ingest. This is the
+data-plane fallback; Controller-side resolution uses Controller YAML.
 
 ### spec.globalPluginsRef
 
@@ -230,4 +261,7 @@ Do not use `EdgionGatewayConfig` to solve these problems:
 
 - Which Controller the Gateway process connects to: that is `server_addr` in the Gateway YAML.
 - Gateway Admin / Metrics ports: that is the process startup layer.
-- Whether the Controller uses file_system or kubernetes: that is `conf_center` in the Controller YAML.
+- Path-normalization rejection switches: those are `path_normalization` in Gateway YAML
+  and require restart. They are not CRD fields; adding them here would be pruned by the
+  Kubernetes structural schema.
+- Whether the Controller uses file_system, etcd, or kubernetes: that is `conf_center` in the Controller YAML.

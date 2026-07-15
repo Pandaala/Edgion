@@ -3,7 +3,7 @@
 Use this for tasks such as:
 
 - Adding or extending an external system connection capability in `LinkSys`.
-- Adjusting the runtime wiring for Redis / Etcd / Elasticsearch / Webhook.
+- Adjusting runtime wiring for Redis / Etcd / Elasticsearch / Kafka / Webhook / HttpDns.
 - Troubleshooting "the LinkSys YAML has synced but the gateway-side runtime client / webhook manager has not updated".
 
 ## Read these real entry points first
@@ -23,7 +23,8 @@ LinkSys is no longer "one resource kind per external system" — it is a single 
 - `Etcd`
 - `Elasticsearch`
 - `Webhook`
-- `Kafka` currently has only a schema placeholder; full runtime is not landed yet.
+- `Kafka`
+- `HttpDns`
 
 Another easy point of confusion:
 
@@ -52,6 +53,7 @@ The current main pipeline:
    - `get_redis_client("namespace/name")`
    - `get_etcd_client("namespace/name")`
    - `get_es_client("namespace/name")`
+   - `get_kafka_client("namespace/name")`
    - `get_webhook_manager().get("namespace/name")`
 
 In short:
@@ -87,60 +89,35 @@ because it now also serves `DataSender<String>` scenarios such as logs.
 
 ### 2. Webhook
 
-Webhook is a **general-purpose outbound HTTP client**: the LinkSys CRD only describes "how to connect" (uri, auth, tls, timeouts, retries, health checks); call semantics (method/path/headers/body) are passed by the consumer in `WebhookCallRequest`.
+Webhook is a compiled outbound-request provider. The resource owns both the backend target and the
+allow-listed request template; consumers supply the inbound session plus an optional path override.
+Do not reintroduce the removed consumer-owned `WebhookCallRequest`, `forwardHeaders`, or
+`pathSuffix` model.
 
 Module layout:
 
-- `providers/webhook/manager.rs`: global registry + a global `webhookMaxResponseBytes` AtomicUsize + the public `WebhookCallHandle`.
-- `providers/webhook/runtime.rs`: runtime state (`WebhookRuntime` containing health / rate counter / http client).
+- `providers/webhook/manager.rs`: global registry and upsert/remove lifecycle.
+- `providers/webhook/compiled_request.rs`: compile resource-owned method/path/headers/args/cookies.
+- `providers/webhook/runtime.rs`: compiled request, resolved target, client, and health state.
 - `providers/webhook/health.rs`: active + passive health checks.
-- `providers/webhook/call.rs`: unified call interface `webhook_call()` / `WebhookCallRequest` / `WebhookCallResult` / `WebhookCallError`.
-- `providers/webhook/resolver.rs`: `KeyGet::Webhook` adapter (wraps forwardHeaders / pathSuffix / extract).
-- `providers/webhook/client.rs`: `WebhookLinkClient` (LinkSysLifecycle adapter, syncs the resource into the manager).
+- `providers/webhook/call.rs`: bounded provider call implementation.
+- `providers/webhook/resolver.rs`: `KeyGet::Webhook` consumer adapter.
+- `providers/webhook/client.rs`: HTTP client construction and TLS material.
 
 Key points:
 
 - The key remains `namespace/name`.
-- `WebhookManager.upsert()` rebuilds the HTTP client and the health-check task based on configuration (idempotent); on resource deletion, abort the old health task.
-- Don't reinvent call logic — every outbound call goes through `webhook_call(&runtime, req, get_webhook_global_max())`, which uniformly handles the health gate, rate limiting, auth injection, retries, and response-size limits.
-- `WebhookServiceConfig.defaultHeaders` are static connection-layer headers; caller-supplied headers have higher priority (caller wins on conflict).
+- `WebhookManager.upsert()` compiles the request, resolves credentials/target, and replaces runtime state.
+- The target is `backendRef`-only; request shape and presence policy are resource-owned.
+- Consumers must use the resolver/call APIs instead of building arbitrary outbound requests.
+- Full architecture: [09-link-sys.md](09-link-sys.md#webhook) and
+  [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
 
-#### Public API for plugin / gateway internal consumers
+### 3. Kafka and HttpDns
 
-```rust
-use crate::core::gateway::link_sys::{get_webhook_call_handle, WebhookCallRequest};
-
-let handle = get_webhook_call_handle("prod/notifier").await
-    .ok_or("webhook not registered")?;
-
-let result = handle.call(WebhookCallRequest {
-    method: "POST".into(),
-    path: "/events".into(),       // appended after uri; an empty string keeps uri as-is
-    headers: my_headers,          // merged with defaultHeaders, caller takes precedence
-    body: Some(json_body.into()),
-}).await?;
-
-// result.status / result.headers / result.body
-```
-
-Error variants: `Unhealthy` / `RateLimited` / `Timeout` / `Connect` / `StatusNotSuccess` / `ResponseTooLarge` / `Exhausted`.
-
-#### `KeyGet::Webhook` call semantics
-
-```yaml
-from:
-  type: webhook
-  webhookRef: "ns/name"
-  forwardHeaders: [X-Tenant-Id]   # header names forwarded from the inbound request to the webhook (hop-by-hop are skipped automatically)
-  pathSuffix: "/v2/resolve"        # appended after uri
-  extract: { source: bodyText }
-```
-
-resolver.rs always appends the `X-Forwarded-For/Method/Uri/Host` context headers; you don't need to list them in forwardHeaders.
-
-### 3. Kafka
-
-Currently `SystemConfig::Kafka` has only a placeholder schema. Don't treat it as a fully wired implementation with provider/runtime/store integration.
+Kafka is fully wired through its provider, `KAFKA_RUNTIME`, full/partial LinkSys dispatch, and
+`get_kafka_client`. HttpDns is a `SystemConfig` variant consumed by the DNS resolver path; it is
+intentionally not inserted into a generic LinkSys runtime-client store.
 
 ## The real ConfHandler bridging pattern
 
@@ -151,7 +128,8 @@ The bridging for LinkSys is now fixed:
 3. `create_link_sys_handler()` returns the global `LinkSysStore`.
 4. `ConfHandler<LinkSys>::full_set()` / `partial_update()` first runs `validate_config()`.
 5. Then calls `LinkSysStore.replace_all()` / `update()`.
-6. `dispatch_full_set()` / `dispatch_partial_update()` in `runtime/store.rs` async-dispatches to the Redis / Etcd / ES / Webhook runtimes.
+6. `dispatch_full_set()` / `dispatch_partial_update()` in `runtime/store.rs` async-dispatches to
+   Redis / Etcd / Elasticsearch / Kafka / Webhook runtimes and deliberately skips HttpDns runtime-client creation.
 
 So if you are changing gateway-side runtime behavior, focus on:
 
@@ -264,7 +242,8 @@ These resemble the `local_file` provider rather than a new `SystemConfig`.
 Run the smallest static check first:
 
 ```bash
-cargo check
+cargo check -p edgion-gateway --all-targets
+cargo check --workspace --all-targets
 ```
 
 If you modified an existing system, run the corresponding entry point first:

@@ -68,6 +68,6 @@ they pivot Edgion from a transparent tunnel into a terminating WS server.
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a3.md → V1 (ws-01), V2 (ws-02), V3 (ws-03)`
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a3.md → V1 (ws-01), V2 (ws-02), V3 (ws-03)`
 - Related divergence: [[origin-not-validated]] (same transparent-tunnel rationale, SHOULD/MAY)
 - WS-over-H2 (RFC 8441) downgrade gap is tracked separately as ws-05.

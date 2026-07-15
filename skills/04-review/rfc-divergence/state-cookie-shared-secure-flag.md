@@ -42,5 +42,5 @@ OAuth 2.0 Security BCP (RFC 9700 §4.2.4): protect intermediate artefacts (state
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a5.md → V-A5-06` (CONFIRM with nuance; encryption noted as mitigation)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a5.md → V-A5-06` (CONFIRM with nuance; encryption noted as mitigation)
 - Sibling decision: cookie-auth-04 — [csrf/cookie-secure-configurable.md](../csrf/cookie-secure-configurable.md)

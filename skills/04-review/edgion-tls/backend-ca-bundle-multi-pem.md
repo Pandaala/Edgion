@@ -68,4 +68,4 @@ BackendTLSPolicy conformance suite.
 ## Reference
 
 - Frontend sibling (closed): [ca-bundle-multi-pem.md](ca-bundle-multi-pem.md)
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a4.md → V09` (frontend pattern); backend extension confirmed by two subagents during tls-06 closure
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a4.md → V09` (frontend pattern); backend extension confirmed by two subagents during tls-06 closure

@@ -6,8 +6,8 @@ description: End-to-end workflow for deploying Edgion to K8s using stock images 
 # Dev Deploy & Hot-Replace Workflow
 
 Use stock Docker images with a shell `command` restart loop, cross-compile
-locally, then `kubectl cp` + `pkill` to hot-replace binaries without rebuilding
-images.
+locally, then stage with `kubectl cp`, atomically install, and terminate the
+exact business child to hot-replace binaries without rebuilding images.
 
 ## Overview
 
@@ -74,7 +74,7 @@ command:
 - PID 1 is always the `/bin/sh` loop, NOT the business binary.
 - Binary lookup order: `/usr/local/edgion/` (writable overlay) →
   `/usr/local/bin/` (image default, root-owned, read-only).
-- After `pkill`, the loop automatically restarts with the new binary.
+- After the exact child exits, the loop automatically restarts with the new binary.
 - `|| true` prevents CrashLoopBackOff when the binary exits non-zero.
 
 Gateway uses the same pattern with `--integration-testing-mode`.
@@ -121,15 +121,46 @@ GW_POD=$(kubectl get pods -n $NS -l app=edgion-gateway -o jsonpath='{.items[0].m
 kubectl cp target/x86_64-unknown-linux-gnu/release/edgion-controller $NS/$CTRL_POD:/tmp/edgion-controller
 kubectl cp target/x86_64-unknown-linux-gnu/release/edgion-gateway    $NS/$GW_POD:/tmp/edgion-gateway
 
-# Move to runtime overlay path (/usr/local/edgion/ is owned by edgion user)
+# Make the staged file executable, then atomically replace the overlay path
+# (/usr/local/edgion/ is owned by the edgion user).
 kubectl exec -n $NS $CTRL_POD -- sh -c \
-  "mv /tmp/edgion-controller /usr/local/edgion/edgion-controller && chmod +x /usr/local/edgion/edgion-controller"
+  "chmod +x /tmp/edgion-controller && mv /tmp/edgion-controller /usr/local/edgion/edgion-controller"
 kubectl exec -n $NS $GW_POD -- sh -c \
-  "mv /tmp/edgion-gateway /usr/local/edgion/edgion-gateway && chmod +x /usr/local/edgion/edgion-gateway"
+  "chmod +x /tmp/edgion-gateway && mv /tmp/edgion-gateway /usr/local/edgion/edgion-gateway"
 
-# Restart: kill the business process, NOT PID 1
-kubectl exec -n $NS $CTRL_POD -- pkill -f edgion-controller
-kubectl exec -n $NS $GW_POD   -- pkill -f edgion-gateway
+# Restart the exact business child, NOT PID 1. TERM gets a 30-second graceful
+# window; KILL is used only after that timeout. Then wait for a distinct child.
+restart_child() {
+  pod="$1"
+  binary="$2"
+  pattern="^(/usr/local/edgion/|/usr/local/bin/)?${binary}( |$)"
+  old_pid=$(kubectl exec -n "$NS" "$pod" -- pgrep -f "$pattern" | grep -v '^1$' | head -1)
+  test -n "$old_pid"
+  kubectl exec -n "$NS" "$pod" -- kill -TERM "$old_pid"
+
+  for _ in $(seq 1 30); do
+    if ! kubectl exec -n "$NS" "$pod" -- kill -0 "$old_pid" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
+  if kubectl exec -n "$NS" "$pod" -- kill -0 "$old_pid" >/dev/null 2>&1; then
+    kubectl exec -n "$NS" "$pod" -- kill -KILL "$old_pid"
+  fi
+
+  for _ in $(seq 1 30); do
+    new_pid=$(kubectl exec -n "$NS" "$pod" -- pgrep -f "$pattern" | grep -v '^1$' | head -1)
+    if test -n "$new_pid" && test "$new_pid" != "$old_pid"; then
+      echo "$binary restarted: $old_pid -> $new_pid"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+restart_child "$CTRL_POD" edgion-controller
+restart_child "$GW_POD" edgion-gateway
 ```
 
 ### Conformance Runner
@@ -142,9 +173,6 @@ kubectl cp --retries=5 edgion-tests/conformance/conformance-test.bin \
 ### Verify
 
 ```bash
-# Wait a few seconds for restart loop
-sleep 8
-
 kubectl get pods -n $NS
 kubectl get gatewayclass edgion -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}'
 # Should print: True
@@ -169,10 +197,10 @@ overwrite a running binary there (Text file busy). Always stage in `/tmp/` then
 | `tar: Cannot open: File exists` | `kubectl cp` to a path with running binary | Upload to `/tmp/` first, then `mv` |
 | `Permission denied` on `mv` | Target dir owned by root | Use `/usr/local/edgion/` not `/usr/local/bin/` |
 | Binary lost after restart | Killed PID 1 | Kill the child process, not PID 1 |
-| `Text file busy` | Overwriting running binary in-place | `rm -f` then `cp`, or use `mv` (atomic) |
+| `Text file busy` | Overwriting the running path in-place | Stage an executable file under `/tmp`, then atomically `mv` it as shown; never remove/copy the live path in two steps |
 | Wrong architecture | Built for darwin/arm64 | Use `cargo zigbuild --target x86_64-unknown-linux-gnu` |
 | GatewayClass not Accepted | Controller crashed on new binary | Check logs: `kubectl logs -n $NS $CTRL_POD --tail=50` |
-| `pkill: executable file not found in $PATH` | Runtime image missing `procps` | Rebuild from current `cicd/docker/Dockerfile*` (already installs `procps`); on a legacy image, find the PID from `/proc/*/comm` and `kill -TERM` it instead. |
+| `pgrep: executable file not found in $PATH` | Runtime image missing `procps` | Rebuild from current `cicd/docker/Dockerfile*` (already installs `procps`); otherwise identify the exact non-PID-1 child from `/proc` before sending `TERM`. |
 
 ## 7. Related Docs
 

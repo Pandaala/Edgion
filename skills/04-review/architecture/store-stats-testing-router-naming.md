@@ -99,16 +99,16 @@ the K8s layer). The current gating is conservative and correct.
 ## Fix Suggestions Not Accepted
 
 - Move `/api/v1/debug/store-stats` registration from `create_testing_router`
-  into `create_admin_router` — breaks three-binary contract (Controller/Center
-  still gated by test mode), creates a new production disclosure surface that
+  into `create_admin_router` — breaks the in-repo Gateway/Controller contract
+  (both are gated by test mode), creates a new production disclosure surface that
   was never threat-modelled.
 - Rename `/api/v1/debug/store-stats` to `/api/v1/testing/store-stats` to match
   sibling-route prefixes — ~30-file blast radius across scripts/validator/auth
-  /authz/docs/three binaries, zero functional change, inverts the
+  /authz/docs/both binaries, zero functional change, inverts the
   function-vs-gate decoupling documented above.
 - Add a third intermediate router (e.g. `create_debug_router`) to make the
   prefix-vs-gate mapping name-aligned — adds structural complexity for the
-  cosmetic concern only, multiplies the three-binary coordination surface.
+  cosmetic concern only, multiplies the cross-binary coordination surface.
 
 ## Re-evaluation Triggers
 

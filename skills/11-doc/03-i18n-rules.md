@@ -25,7 +25,7 @@ Workflow:
 
 ### Directory structure symmetry
 
-The directory structures of en/ and zh-CN/ must be fully consistent:
+The intended steady state is matching relative paths under `en/` and `zh-CN/`:
 
 ```
 ✅ Correct:
@@ -133,7 +133,9 @@ The following terms remain in English (untranslated) in Chinese documentation:
 
 ### Sync-status tracking
 
-When a translation lags behind, you may add a temporary callout at the top of the English document:
+When a translation temporarily lags behind, track the gap in the PR/task and add
+a temporary callout at the top of the lagging document. A marker is not a reason
+to leave the trees divergent indefinitely.
 
 ```markdown
 > ⚠️ This page may be out of date with the zh-CN version. Last synced: 2026-03-15.

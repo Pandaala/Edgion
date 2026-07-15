@@ -9,7 +9,8 @@ description: LinkSys resource — external system connector definition, multiple
 > **Credential resolution layer**: see the "Secret → Material resolution layer" section in [10-secret.md](10-secret.md)
 > **External contract / YAML schema**: see [../../02-features/03-resources/18-link-sys.md](../../02-features/03-resources/18-link-sys.md)
 
-LinkSys defines external system connectors (Redis / Etcd / Elasticsearch / Webhook / Kafka), used by AccessLog, rate-limiting plugins, Webhook Key resolution, and similar features. All credentials reference K8s `Secret`s via `secretRef`; **the CRD does not accept any inline sensitive fields** (hard-rejected by `deny_unknown_fields`).
+LinkSys defines Redis, Etcd, Elasticsearch, Webhook, Kafka, and HttpDns configuration. It is used
+by access logging, rate limiting, Webhook key resolution, DNS resolution, and related features.
 
 ## Source code locations
 
@@ -17,13 +18,13 @@ LinkSys defines external system connectors (Redis / Etcd / Elasticsearch / Webho
 |------|------|
 | Controller Handler | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/link_sys.rs` |
 | Credential pipeline (Controller) | `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/credential/` |
-| Resource type definitions | `edgion-resources/src/resources/link_sys/` (mod.rs, redis.rs, etcd.rs, elasticsearch.rs, webhook.rs, common.rs) |
+| Resource type definitions | `edgion-resources/src/resources/link_sys/` |
 | Shared SecretObjectReference / SecretSlot / TLS types | `edgion-resources/src/resources/common/{secret_object_ref,secret_slot,tls}.rs` |
 | Credential resolution layer (Controller + Gateway shared) | `edgion-resources/src/credentials/` (materials / resolver / resolvers) |
 | Gateway credential four-state | `edgion-common/src/link_sys_core/credential.rs` |
 | Gateway TLS assembly | `edgion-common/src/link_sys_core/tls.rs` |
 | Gateway runtime Store | `edgion-gateway/src/link_sys/runtime/store.rs` |
-| Provider clients | `edgion-gateway/src/link_sys/providers/{redis,etcd,elasticsearch}/` |
+| Provider clients | Gateway providers under `edgion-gateway/src/link_sys/providers/`; shared Etcd under `edgion-common/src/link_sys_core/providers/etcd/` |
 
 ## Recommended `use` paths (avoiding name confusion)
 
@@ -31,17 +32,15 @@ The LinkSys CRD and the log-output / rotation configuration (used by link_sys ru
 
 | What you want | Recommended `use` path |
 |------|------|
-| LinkSys CRD structs (Redis/Etcd/ES/Webhook connection definitions) | `use crate::types::{LinkSys, LinkSysSpec};` (top-level re-export)<br>or `use crate::types::resources::link_sys::*;` (direct path) |
-| Log output / file rotation configuration (`StringOutput`, `RotationConfig`, `LocalFileWriterCfg`) | `use crate::types::output::*;` (**the only path**; the previous `crate::types::link_sys` alias has been removed) |
-| link_sys runtime (`DataSender` trait, provider clients) | `use crate::core::gateway::link_sys::*;` |
-
-The module path `crate::types::link_sys` **no longer exists**. If you still see this notation, it is a residual legacy alias — change it to one of the paths above.
+| LinkSys resource structs | `edgion_resources::resources::link_sys::*` |
+| Log output / file rotation configuration | `edgion_resources::resources::output::*` |
+| Gateway LinkSys runtime | `crate::link_sys::*` inside `edgion-gateway` |
 
 ## CRD top-level layout
 
 `LinkSysSpec` is a tagged enum with `#[serde(tag = "type", content = "config")]`:
 - The top level has only two fields: `spec.type` and `spec.config`
-- `config`'s type is determined by `type`: `redis` → `RedisClientConfig`, `etcd` → `EtcdClientConfig`, `elasticsearch` → `ElasticsearchClientConfig`, `webhook` → `WebhookServiceConfig`, `kafka` → `KafkaClientConfig` (placeholder)
+- `config` is selected by `type`: Redis, Etcd, Elasticsearch, Webhook, Kafka, or HttpDns
 - The legacy nested `spec.config.type` / `spec.config.config` form is no longer accepted
 
 `SecretObjectReference` (`edgion-resources/src/resources/common/secret_object_ref.rs`), `SecretSlot` (`edgion-resources/src/resources/common/secret_slot.rs`), and `TlsConfig` / `TlsCerts` (`edgion-resources/src/resources/common/tls.rs`) have been extracted from each provider module into a shared common module to avoid multiple near-duplicate copies. `SecretObjectReference` carries `group / kind / name / namespace` (the first two are optional, defaulting to `core/Secret`), reserving room for non-Secret credential sources (Vault / ExternalSecret) in the future. `SecretSlot` is the `{ secret_ref: SecretObjectReference, secret: Option<Secret> }` slot, embedded into each `*Auth` via `#[serde(flatten)]`, with no change in YAML form. The LinkSys subcrates keep stable paths via `pub use`.
@@ -54,14 +53,15 @@ The module path `crate::types::link_sys` **no longer exists**. If you still see 
   - Redis/Etcd/Elasticsearch with empty `endpoints` → error
   - Redis with `topology.mode=sentinel` but no `sentinel` sub-object / `mode=cluster` but no `cluster` sub-object → error
   - Webhook (redesigned): a Service target (`target.name`/`target.port`) missing `name`/`port` or with an unsupported `kind`, OR a `url` target that is not origin-only, is set together with any Service field (mutually exclusive), or combines `http://` with `tls.enabled: true`; `request` template parse error; a field name in both `origin` and `custom`, duplicate names within a block, or a `headers.origin: [{name: Cookie}]` / non-empty `cookies` conflict; `statusOnError` out of range; `maxResponseBytes` over the cap → error. See [03-controller-gateway-link/webhook.md](../03-controller-gateway-link/webhook.md).
-- Unimplemented providers (e.g., `Kafka`) **do not** produce errors and stay `Accepted=True` (the schema is valid; the backend is simply not yet wired up — this avoids flipping existing resources to Invalid on upgrade).
+- Kafka has a live Gateway runtime client/store. HttpDns is consumed by the DNS resolver path and
+  intentionally has no generic LinkSys runtime-client store.
 
 ### parse — credential resolution
 
 Unlike the older "pass through directly", the new parse goes through the full **credential pipeline** (`resource_processor/credential/pipeline.rs`):
 
 1. Via `AuthSpec` / `TlsSpec` traits + the generic `drive_standard`, walks every `SecretObjectReference` in the spec uniformly:
-   - The `AuthSpec` trait binds "declaration → resolver selection → material extraction" to a concrete `*Auth` type (Redis/Etcd's `RedisAuth`/`EtcdAuth`; Elasticsearch's tagged-enum variants). **Webhook no longer participates here:** after the redesign its top-level `auth` is a deprecated shim and the handler's `SystemConfig::Webhook` arm resolves only TLS; outbound credentials are `request.headers.custom` entries using `template: "... ${secretRef:ns/name:key} ..."` — the handler scans `collect_secret_ref_names`, fetches each Secret via `fetch_secret` (ReferenceGrant enforced for cross-namespace), and embeds resolved values in `spec.resolved_secrets`, which rides the normal conf_sync path to the gateway (see [webhook.md](../03-controller-gateway-link/webhook.md))
+   - The `AuthSpec` trait binds "declaration → resolver selection → material extraction" to a concrete `*Auth` type (Redis/Etcd's `RedisAuth`/`EtcdAuth`; Elasticsearch's tagged-enum variants). **Webhook no longer participates here:** its handler resolves only TLS; outbound credentials are `request.headers.custom` entries using `template: "... ${secretRef:ns/name:key} ..."` — the handler scans `collect_secret_ref_names`, fetches each Secret via `fetch_secret` (ReferenceGrant enforced for cross-namespace), and embeds resolved values in `spec.resolved_secrets`, which rides the normal conf_sync path to the gateway. The ignored top-level `auth` field still present in code is removal debt, not a supported compatibility contract; see [webhook.md](../03-controller-gateway-link/webhook.md).
    - The `TlsSpec` trait handles each provider's optional `tls.certs.secretRef` (`TlsConfig` already implements this trait, reusable directly)
    - `resolve_for_spec` calls `drive_standard::<A: AuthSpec, T: TlsSpec>` to fold over all ref handling
    - Adding a new backend just needs: (1) impl `AuthSpec`; (2) add a `SystemConfig` variant; (3) add one line of `drive_standard(...)` in `resolve_for_spec`; (4) if it has TLS, `TlsConfig` already impls `TlsSpec` and can be reused directly
@@ -73,7 +73,10 @@ Unlike the older "pass through directly", the new parse goes through the full **
    5. Validate `Secret.type` is in the resolver's allowlist
    6. Extract `Secret.data`
    7. Call the corresponding `SecretMaterialResolver::parse` for missing-key / decoding validation (Material is discarded; the Gateway recomputes it)
-3. On success, write the **entire `k8s_openapi::Secret` object** back into the spec's `auth.secret` / `tls.certs.secret` field (not just data; type / metadata is preserved so the Gateway can perform the secondary `allowed_secret_types` check). These fields have `skip_serializing_if = "Option::is_none"` in the CRD schema, so they do not appear in user YAML, while still being serialized to the Gateway via conf_sync's `serde_json`.
+3. On success, write the resolved Secret into the transport slot. `#[schemars(skip)]` keeps the
+   field out of the CRD, serde keeps it in conf_sync, and the redaction adapter hides it from Admin
+   config output. `skip_serializing_if` only omits `None`; it is not a schema control. See
+   [00-schema-transport-contract.md](00-schema-transport-contract.md).
 4. Pipeline three-state `ResolveOutcome` (applies only to **the current ref** and does not stop other refs in the same LinkSys from continuing the pipeline — see "ResolvedRefs multi-error collection" in [10-secret.md](10-secret.md)):
    - `Ok(Secret)` → embed Secret into spec
    - `Pending(SecretNotFound | ReferenceGrantMissing)` → leave `secret: None` on the current ref, accumulate errors; auto-requeue once the Secret / Grant arrives
@@ -104,7 +107,8 @@ Handler maintains two Gateway-API-style conditions in tandem:
 
 ### Credential second-stage resolution: `CredentialState`
 
-In the spec the Gateway receives, `auth.secret` / `tls.certs.secret` already contain the embedded `Secret` object. The `core::gateway::link_sys::credential` module abstracts credentials into four states:
+In the resolved spec, transport Secret slots contain the embedded object. The
+`edgion_common::link_sys_core::credential` module abstracts credentials into four states:
 
 ```rust
 enum CredentialState<M> {

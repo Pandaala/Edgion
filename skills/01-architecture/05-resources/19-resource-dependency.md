@@ -63,4 +63,4 @@ flowchart LR
 
 ## Resources without external dependencies
 
-EdgionGatewayConfig, EdgionStreamPlugins, LinkSys, EdgionConfigData, Endpoints/EndpointSlice, Namespace
+EdgionGatewayConfig, EdgionStreamPlugins, LinkSys, EdgionConfigData, ConfigMap, EndpointSlice, Namespace

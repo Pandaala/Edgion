@@ -1,81 +1,65 @@
 ---
 name: feature-flags
-description: Full Cargo Feature Flags reference: allocator, TLS backend, mutual-exclusion rules, runtime notes, and build combinations.
+description: Per-package Cargo feature reference for allocators, TLS backends, Gateway FIPS, and build commands.
 ---
 
 # Feature Flags
 
-## Source Locations
+Edgion has a virtual workspace manifest and no root package. Features belong to
+individual binary crates, so feature-selecting commands must name a package with `-p`.
 
-- `Cargo.toml`
-- `src/lib.rs` (global allocator installation)
-- `edgion-gateway/src/runtime/server/listener_builder.rs` (TLS listener guards)
-- `edgion-gateway/src/tls/runtime/` (TLS runtime guards)
-- `edgion-gateway/src/bin/edgion_gateway.rs`, `edgion-controller/src/bin/edgion_controller.rs`, `edgion-cli/src/bin/edgion_ctl.rs` (rustls crypto provider initialization)
+## Package Matrix
 
-## Default Build
+| Feature | Gateway | Controller | CLI | Default / rule |
+|---------|---------|------------|-----|----------------|
+| `allocator-jemalloc` | Yes | Yes | Yes | Default; mutually exclusive with the other allocators |
+| `allocator-mimalloc` | Yes | Yes | Yes | Optional |
+| `allocator-system` | Yes | Yes | Yes | Optional |
+| `boringssl` | Yes | Yes | No | Default TLS backend where present; mutually exclusive with `rustls` |
+| `rustls` | Yes | Yes | No | Alternate Pingora TLS backend |
+| `fips` | Yes | No | No | Release/image-only; implies `boringssl`, requires the precompiled FIPS module |
+| `legacy_route_tests` | Yes | No | No | Non-default legacy test surface |
 
-```bash
-cargo build    # Equivalent to --features allocator-jemalloc,boringssl
-```
+Allocator selection and `#[global_allocator]` live in each binary entry point, not
+in a workspace-root library. The Controller selects a Pingora TLS backend because it
+links Pingora directly. The CLI has allocator features only.
 
-## Feature Matrix
+## Gateway TLS and FIPS
 
-| Feature | Mutex Group | Default | Compile-time Effect | Runtime Meaning |
-|---------|-------------|---------|---------------------|-----------------|
-| `allocator-jemalloc` | Allocator | Yes | Pulls in `tikv-jemallocator` | Set as the global allocator on non-MSVC targets |
-| `allocator-mimalloc` | Allocator | No | Pulls in `mimalloc` | Set as the global allocator |
-| `allocator-system` | Allocator | No | No extra dependency | Use the system allocator |
-| `boringssl` | TLS Backend | Yes | Enables Pingora BoringSSL + `boring-sys` | Unlocks the full Gateway TLS runtime path |
-| `rustls` | TLS Backend | No | Enables the Pingora rustls backend | **Not fully equivalent**, see notes below |
-| `legacy_route_tests` | Standalone | No | Declared only | Reserved/placeholder, currently no actual `cfg` call site |
+Gateway custom TLS termination paths are BoringSSL-only. A `rustls` build is not
+feature-equivalent for HTTPS listeners, TLSRoute proxying, or all data-plane TLS hooks.
+Use `boringssl` for the normal Gateway build.
 
-## Mutual Exclusion Rules
+The `fips` feature is a build-time property, not a runtime toggle. It is enabled only
+for release/CI image builds and requires
+`BORING_BSSL_FIPS_PRECOMPILED_BCM_O`. Runtime `require_fips` and `fips_policy` are
+documented in `../02-config/01-gateway-config.md`.
 
-- **Allocator group**: `jemalloc` / `mimalloc` / `system`, pick one. Do not stack multiple in the same build unless you also modify the global allocator wiring in `src/lib.rs`.
-- **TLS Backend group**: `boringssl` / `rustls`, pick one.
-- Cross-group combinations are free.
-
-## rustls Notes
-
-The Gateway TLS runtime code uses `#[cfg(feature = "boringssl")]` guards in several places:
-
-- `edgion-gateway/src/runtime/server/listener_builder.rs`
-- `edgion-gateway/src/tls/runtime/gateway/mod.rs`
-- `edgion-gateway/src/tls/runtime/backend/mod.rs`
-
-Practical impact:
-
-- `rustls` is still used for the Controller / CLI / client-side TLS stack
-- A `rustls` build ≠ "all Gateway TLS listener and backend runtime features are available"
-- If your task involves HTTPS listeners, TLSRoute proxying, or the data-plane TLS runtime, use `boringssl`
-
-## Allocator Notes
-
-The global jemalloc installation guard in `src/lib.rs` is:
-
-```rust
-#[cfg(all(feature = "allocator-jemalloc", not(target_env = "msvc")))]
-```
-
-On Windows/MSVC, even if `allocator-jemalloc` is specified, it is not actually installed.
-
-## Binary Startup Notes
-
-All three binaries install the rustls crypto provider on startup:
-
-- `edgion-gateway/src/bin/edgion_gateway.rs`
-- `edgion-controller/src/bin/edgion_controller.rs`
-- `edgion-cli/src/bin/edgion_ctl.rs` (binary name `edgion-cli`)
-
-This supports libraries in the repo that depend on rustls and **does not** override the Cargo feature matrix's choice of Gateway data-plane TLS backend.
+All three binaries still install the rustls crypto provider at startup for libraries
+that use rustls; this does not change the selected Pingora data-plane backend.
 
 ## Build Examples
 
-| Scenario | Command |
-|----------|---------|
-| Default development build | `cargo build` |
-| Default release | `cargo build --release` |
-| mimalloc + BoringSSL | `cargo build --release --no-default-features --features "allocator-mimalloc,boringssl"` |
-| System allocator + BoringSSL | `cargo build --release --no-default-features --features "allocator-system,boringssl"` |
-| rustls experiment | `cargo build --no-default-features --features "allocator-jemalloc,rustls"` |
+```bash
+# Default members, default features
+cargo build
+
+# A specific default binary
+cargo build -p edgion-gateway --bin edgion-gateway
+
+# Gateway with mimalloc + BoringSSL
+cargo build -p edgion-gateway --bin edgion-gateway --release \
+  --no-default-features --features allocator-mimalloc,boringssl
+
+# Controller with system allocator + rustls
+cargo build -p edgion-controller --bin edgion-controller \
+  --no-default-features --features allocator-system,rustls
+
+# CLI with mimalloc (there is no CLI TLS-backend feature)
+cargo build -p edgion-cli --bin edgion-cli \
+  --no-default-features --features allocator-mimalloc
+```
+
+Never enable two allocators or both TLS backends in one package build. For the FIPS
+image toolchain, follow `skills/09-misc/cicd/01-docker-build.md` rather than treating
+the feature as a normal local build switch.

@@ -42,6 +42,9 @@ All handlers share state through Axum's `State<Arc<AdminState>>`:
 pub struct AdminState {
     pub conf_mgr: Arc<ConfMgr>,
     pub schema_validator: Arc<SchemaValidator>,
+    pub config_file: Option<String>,
+    pub authorizer: Arc<Authorizer>,
+    pub center_reload_tx: watch::Sender<CenterClientConfig>,
 }
 ```
 
@@ -56,7 +59,7 @@ Helper methods:
 
 - `config_sync_server()` — get an `Arc<ConfigSyncServer>`; returns `503` if not ready
 - `is_ready()` — check whether ConfigSyncServer exists
-- `require_ready()` — `Ok(())` if ready, `Err(503)` otherwise; used by the write-path readiness middleware (see "Write-path readiness gate" below)
+- `runtime()` — access the ConfCenter's `ControllerRuntime` for diagnostic/effective views
 - `is_k8s_mode()` — whether the mode is Kubernetes (in K8s mode local schema validation is skipped)
 
 ## Full Endpoint List
@@ -80,7 +83,7 @@ The following endpoints are served on the **probe listener** (`:12100`, `probe_l
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/v1/reload` | Trigger a full reload. Runs asynchronously: stop current controller -> clear PROCESSOR_REGISTRY -> create new ConfigSyncServer (new server_id) -> restart controller (full Init -> InitApply -> InitDone flow). Gateway clients re-list automatically once they detect the server_id change |
+| POST | `/api/v1/reload` | Request asynchronous lifecycle rebuild: stop controllers, clear the current ConfigSyncServer, call `ControllerRuntime::reset()`, build a new server, and replay initialization |
 
 ### Namespaced Resource CRUD
 
@@ -117,7 +120,12 @@ Cluster-scoped resources (such as GatewayClass) have no namespace dimension. The
 
 ### Metadata-only Keys (list-keys-api card 01)
 
-Parallel read-only endpoints returning `ResourceKey` (`apiVersion` / `kind` / `metadata` only — no `spec` / `status`). The legacy `/api/v1/{cluster,namespaced}/...` paths above are unchanged; the two families coexist by design.
+Parallel read-only endpoints returning `ResourceKey` (`apiVersion` / `kind` /
+`metadata` only — no `spec` / `status`). The
+`/api/v1/{cluster,namespaced}/...` family above remains the full-resource CRUD
+API used by Controller clients; `/api/v1/keys/...` is a metadata-only listing
+surface. The two families differ by payload and purpose, not by legacy/current
+status.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -126,6 +134,24 @@ Parallel read-only endpoints returning `ResourceKey` (`apiVersion` / `kind` / `m
 | GET | `/api/v1/keys/namespaced/{kind}/{namespace}` | List keys in one namespace |
 
 Query params: `limit=N` (page size) and `continue=<token>` (K8s-style cursor). Response carries `continue_token` for the next page (`null` on the last page).
+
+### Effective Views, Operations, and Diagnostics
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/v1/region-routes/effective` | Effective region-route view |
+| GET | `/api/v1/cluster-region-routes` | Cluster region-route config data |
+| GET | `/api/v1/service-region-routes` | Service region-route config data |
+| GET | `/api/v1/global-ip-restrictions/effective` | Effective global IP restrictions |
+| POST | `/api/v1/cluster-region-routes/failover` | Patch cluster failover state |
+| POST | `/api/v1/service-region-routes/failover` | Patch service failover state |
+| POST | `/api/v1/services/acme/{namespace}/{name}/trigger` | Trigger ACME processing |
+| POST | `/api/v1/services/conf-sync-ca/rotate` | Trigger conf_sync CA rotation |
+| GET | `/api/v1/diagnostics/nested_ext_ref_usage` | ExtensionRef usage diagnostics |
+| GET | `/api/v1/diagnostics/conf-conflicts` | Configuration-conflict diagnostics |
+
+Test mode additionally mounts authenticated `/api/v1/debug/store-stats` and
+`/api/v1/admin/wipe-all`; they are not production routes.
 
 Backend behaviour:
 
@@ -191,7 +217,9 @@ readinessProbe:
     port: 12100
 ```
 
-Readiness is determined via `AdminState::is_ready()` -> `ConfMgr::is_ready()` -> `ConfCenter::is_ready()`, ultimately checking whether ConfigSyncServer has been created.
+Readiness is determined via `AdminState::is_ready()` → `ConfMgr::is_ready()` →
+`ConfCenter::is_ready()`. It requires both a ConfigSyncServer and all expected
+processors to be ready; server existence alone is insufficient.
 
 ## Write-path readiness gate
 
@@ -242,13 +270,14 @@ Mapping from `ConfWriterError` to HTTP status codes:
 | `ParseError` | 400 Bad Request |
 | `IOError` | 500 Internal Server Error |
 | `KubeError` | 500 Internal Server Error |
+| `EtcdError` | 500 Internal Server Error |
 | `InternalError` | 500 Internal Server Error |
 | `NotSupported` | 501 Not Implemented |
 | `StalePagination` | 410 Gone |
 
 ## Authentication System
 
-The Admin API uses **token-only** authentication (2026-06-12): a single pre-shared bearer token (Istio-style), supplied in the `Authorization: Bearer <token>` header. There is no username/password login, no OIDC admin, no httpOnly cookie, and no session. The former browser-login stack (`local_auth` / `unified_auth`) was removed.
+The Admin API uses **token-only** authentication: one operator admin token and optional scoped CLI tokens, all supplied as `Authorization: Bearer <token>`. There is no username/password login, OIDC admin, cookie, or session.
 
 > This section covers **authentication** (who you are) only. For **authorization** (the `(verb, kind)` RBAC engine, the `Role` model, cli tokens, the local admin token, and the full middleware onion), see [11-authentication-authorization.md](11-authentication-authorization.md).
 
@@ -261,7 +290,7 @@ Request authentication order:
 1. Static public paths (`/health`, `/ready`, `/metrics`, `/api/v1/auth/status`) → pass through (probes are also served on dedicated listeners).
 2. Read the `Authorization: Bearer <token>` header (case-insensitive; no cookie).
 3. Hash the token (`sha256_hex`) and look it up in the `Authorizer` token map (`cli_lookup`). On a hit, inject `Role::Restricted` + `CliTokenIdentity`.
-4. On a miss or no bearer, inject nothing — `authz_layer` then denies any non-public route with `403`.
+4. On a miss or no bearer, inject nothing — `authz_layer` returns `401` with `WWW-Authenticate: Bearer`. A recognized token denied by RBAC gets `403`.
 
 ### Authentication Endpoints
 
@@ -269,7 +298,7 @@ The only auth endpoint is the public status probe; login/logout/me are gone.
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/v1/auth/status` | not required (public) | Return `{ auth_required, mode: "token", status }` where `status` is `Ready` (a token is registered) / `Initializing` (none yet) / `Disabled` |
+| GET | `/api/v1/auth/status` | not required (public) | Return `{ auth_required: true, mode: "token", status }`, where status is `Ready` when any token is registered or `Initializing` when none is configured |
 
 ### Admin Token Bootstrap (Controller)
 

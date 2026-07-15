@@ -193,8 +193,7 @@ shows multiple `conformance-test.bin` or `<defunct>` processes.
 **Fix:**
 
 ```bash
-kubectl exec -n edgion-system conformance-runner -- \
-  sh -c 'for p in $(pgrep -f conformance-test); do kill -9 $p; done'
+kubectl delete pod -n edgion-system conformance-runner
 ```
 
 ### 2.5 `kill PID 1` restarts container with old binary
@@ -206,14 +205,12 @@ from the original image — the new binary is lost.
 Killing PID 1 causes the container to restart from the image, discarding the
 overlaid binary.
 
-**Fix:** Kill the **application** subprocess, not PID 1:
+**Fix:** Prefer the repository helper, which identifies the application child
+and preserves the copied overlay binary:
 
 ```bash
-kubectl exec -n edgion-system "$POD" -- \
-  sh -c 'kill -9 $(pgrep -f edgion-controller | grep -v "^1$" | head -1)'
+./edgion-tests/conformance/scripts/orbstack-dev.sh hotpatch c
 ```
-
-Or use `orbstack-dev.sh hotpatch c` which handles this correctly.
 
 ### 2.6 Controller pods crash with `Address already in use`
 

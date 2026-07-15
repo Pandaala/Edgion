@@ -45,4 +45,4 @@ data-plane hot path (see [../../03-coding/01-log-safety.md](../../03-coding/01-l
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a4.md → V03` (CONFIRM)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a4.md → V03` (CONFIRM)

@@ -27,7 +27,7 @@ Important note:
 
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/gateway_class.rs`
 - `edgion-controller/src/conf_mgr/sync_runtime/resource_processor/handlers/edgion_gateway_config.rs`
-- `edgion-controller/src/conf_mgr/conf_center/file_system/controller.rs`
+- `edgion-controller/src/conf_mgr/conf_center/non_kube_common.rs` (FileSystem + Etcd)
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/controller.rs`
 
 What this pattern shows:
@@ -83,7 +83,7 @@ What to copy:
 - Add the type and register it in `kind.rs`, `defs.rs`, `meta/impls.rs`
 - Make sure scope is cluster-scoped in both the Rust type and K8s storage mapping
 - Add `ProcessorHandler<T>`
-- Spawn it in both controller centers, using the cluster-scoped path in Kubernetes mode
+- Spawn it in the shared FileSystem/Etcd list and the cluster-scoped Kubernetes path
 - Add cluster Admin API support in `cluster_handlers.rs`
 - Add Gateway `ClientCache<T>` wiring if the resource syncs to Gateway
 - Add a Gateway `ConfHandler<T>` if runtime startup or lookup depends on it

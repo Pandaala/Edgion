@@ -5,8 +5,8 @@ Use this file when the task is about real Kubernetes object annotations under `m
 ## Verify In Code
 
 - `edgion-resources/src/constants/annotations.rs`
-- `edgion-gateway/src/runtime/server/listener_builder.rs`
-- `edgion-gateway/src/runtime/store/listener_gateway_info.rs`
+- `edgion-gateway/src/runtime/server/base.rs`
+- `edgion-gateway/src/runtime/gateway_info.rs`
 - `edgion-gateway/src/routes/tcp/conf_handler_impl.rs`
 - `edgion-gateway/src/routes/tls/conf_handler_impl.rs`
 - `edgion-resources/src/resources/http_route_preparse.rs`
@@ -20,13 +20,14 @@ These are read from `Gateway.metadata.annotations`, not per-listener metadata.
 
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|
-| `edgion.io/enable-http2` | `"true"` / `"false"` | enabled | **Frontend (Listener-side) only.** Controls HTTP/2 support for listeners built from this Gateway. For HTTP listeners this enables h2c; for HTTPS listeners it enables ALPN h2. When disabled, pure gRPC requests are rejected with 500. Does not affect backend protocol selection (use Service `appProtocol` for that). |
-| `edgion.io/http-to-https-redirect` | `"true"` / `"false"` | disabled | On non-TLS listeners, enables redirect before normal HTTP proxying. |
+| `edgion.io/enable-http2` | string | enabled | Frontend only. Case-insensitive `false`/`0`/`no`/`off` disables; any other present value enables. HTTP listeners use h2c and HTTPS listeners advertise ALPN h2. Backend protocol uses Service `appProtocol`. |
+| `edgion.io/http-to-https-redirect` | string | disabled | On non-TLS listeners, only case-insensitive `true` enables redirect. |
 | `edgion.io/https-redirect-port` | integer string | `443` | Target port used when HTTP-to-HTTPS redirect is enabled. |
 | `edgion.io/metrics-test-key` | string | none | Test-only metrics correlation key. Consumed by Gateway runtime for integration metrics scenarios. |
 | `edgion.io/metrics-test-type` | `lb` / `retry` / `latency` | none | Test-only metrics mode selector. |
 | `edgion.io/edgion-stream-plugins` | `name` or `namespace/name` | none | Enables Gateway-level connection filtering before HTTP parsing or TLS handshake. Short names are expanded with the Gateway's namespace. Current verified runtime path is in `listener_builder.rs`. |
-| `edgion.io/require-sni-host-match` | `"true"` / `"false"` | inherits `EdgionGatewayConfig.spec.requireSniHostMatch` | When `true`, on HTTPS listeners the SNI must match the request `Host` header (otherwise the request is rejected). Read in `listener_gateway_info.rs`; falls back to the cluster-wide `EdgionGatewayConfig` setting when absent. |
+| `edgion.io/edgion-plugins` | comma/space-separated refs | none | Ordered HTTP plugins applied to every request on this Gateway before route plugins. Bare names use the Gateway namespace; duplicates preserve first occurrence. |
+| `edgion.io/require-sni-host-match` | `"true"` / `"false"` | inherits `EdgionGatewayConfig.spec.securityProtect.requireSniHostMatch` | Explicit true or false overrides the global value for this Gateway; absent inherits. HTTPS mismatch returns 421. |
 | `edgion.io/dns-resolver` | `ip[:port]` list (comma/space-separated) | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway inline standard-DNS resolver for `ServiceExternalName` backends. **Data-plane only** (D3a): overrides the EGC default but not control-plane resolution. Mutually exclusive with `dns-resolver-ref`. |
 | `edgion.io/dns-resolver-ref` | `namespace/name` | inherits `EdgionGatewayConfig.spec.dnsResolver` | Per-Gateway httpdns LinkSys resolver reference. Explicit namespace required (bare names rejected). **Data-plane only**. A cross-namespace ref is ReferenceGrant-gated (from-kind `Gateway`, to-kind `edgion.io/LinkSys`); a denied ref is reported via `ResolvedRefs=False` and stripped before it reaches the data plane. Mutually exclusive with `dns-resolver`. |
 
@@ -34,6 +35,19 @@ Important:
 
 - `metrics-test-*` keys are meant for integration testing and diagnostics, not normal production config.
 - `edgion.io/edgion-stream-plugins` is the current key used by the runtime path. Older docs used `edgion.io/stream-plugins`.
+
+## Log Projection Annotations
+
+| Key | Scope | Effect |
+|-----|-------|--------|
+| `edgion.io/log-label.<key>` | HTTPRoute, GRPCRoute, TLSRoute, EdgionTls | Adds the suffix/value to resolved log labels. The same prefix may also be used on `metadata.labels`. |
+| `edgion.io/log-ctx-keys` | HTTPRoute, GRPCRoute | Comma-separated allowlist of plugin context keys for access-log projection. Sensitive keys remain blocked. |
+| `edgion.io/log-keys` | HTTPRoute, GRPCRoute; label/annotation entries also TLSRoute, EdgionTls | JSON entries of type `ctx`, `label`, or `annotation`; malformed entries are skipped independently. |
+
+Resolved projection is deterministic and capped at 16 entries, 63 bytes per key, and
+256 bytes per value. Collision order is metadata labels, then metadata annotations,
+then explicit `log-keys`. See
+`edgion-resources/src/resources/common/log_labels.rs` for parsing and caps.
 
 ## HTTPRoute / GRPCRoute `metadata.annotations`
 
@@ -125,7 +139,7 @@ Verify in code: `edgion-gateway/src/backends/mod.rs` (`detect_backend_app_protoc
 
 GatewayClass declares `HTTPRouteBackendProtocolH2C` as a supported feature.
 
-## Service / EndpointSlice / Endpoints `metadata.annotations`
+## Service / EndpointSlice `metadata.annotations`
 
 | Key | Value | Default | Effect |
 |-----|-------|---------|--------|

@@ -20,7 +20,10 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 | `edgion.io/http-to-https-redirect` | `"true"\|"false"` | HTTP→HTTPS redirect |
 | `edgion.io/https-redirect-port` | `port` | HTTPS redirect port |
 | `edgion.io/edgion-stream-plugins` | `ns/name` | StreamPlugins binding |
-| `edgion.io/require-sni-host-match` | `"true"` | Enable HTTPS listener 421 Misdirected Request detection (per-Gateway opt-in when globally disabled) |
+| `edgion.io/edgion-plugins` | comma/space-separated refs | Ordered global HTTP plugins; bare names use the Gateway namespace |
+| `edgion.io/require-sni-host-match` | `"true"\|"false"` | Per-Gateway override of `spec.securityProtect.requireSniHostMatch` |
+| `edgion.io/dns-resolver` | comma/space-separated `ip[:port]` | Data-plane DNS servers; mutually exclusive with `dns-resolver-ref` |
+| `edgion.io/dns-resolver-ref` | `namespace/name` | Data-plane httpdns LinkSys reference; mutually exclusive with `dns-resolver` |
 | `edgion.io/metrics-test-key` | `string` | Metrics label key for testing |
 | `edgion.io/metrics-test-type` | `string` | Metrics label value for testing |
 
@@ -29,9 +32,13 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 | Annotation | Value | Description |
 |------------|-------|-------------|
 | `edgion.io/hostname-resolution` | — | System-managed (do not set manually) |
-| `edgion.io/log-label.<key>` | string | Adds `<key>=<value>` to `rsc.labels` in the access log (also on `metadata.labels`). |
+| `edgion.io/log-label.<key>` | string | Adds `<key>=<value>` to `rsc.labels`; label/annotation projection also applies to TLSRoute and EdgionTls. |
 | `edgion.io/log-ctx-keys` | comma-separated list | Opt-in allowlist of plugin-set ctx-var (`ctx_map`) keys to project into the access log. Context variables are **not** logged by default; only keys named here are emitted (known-sensitive keys like claims stay hard-blocked). Shorthand for `log-keys` entries of `type: ctx`. |
 | `edgion.io/log-keys` | JSON array | Unified opt-in log-projection carrier. Each entry is `{"key": "<name>", "type": "ctx"\|"label"\|"annotation"}`. `type: ctx` adds `<name>` to the access-log ctx allowlist; `type: label` / `type: annotation` projects the value of the existing `metadata.labels[<name>]` / `metadata.annotations[<name>]` into `rsc.labels`. Malformed entries are skipped individually; merges with `log-label.<key>` and `log-ctx-keys`. |
+
+Log projection is capped at 16 entries; keys at 63 bytes and values at 256 bytes.
+Context projection applies only to HTTPRoute/GRPCRoute. Label/annotation projection also
+applies to TLSRoute and EdgionTls.
 
 - `edgion.io/forward-raw-path` (HTTPRoute) — three-state control over the upstream path forwarding view:
   - `"true"` forces raw, `"false"` forces normalized (overrides region_route); absent falls back to the default flow.
@@ -63,9 +70,15 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 
 | Annotation | Value | Description |
 |------------|-------|-------------|
-| `edgion.io/expose-client-cert` | `"true"\|"false"` | Expose client certificate to request headers |
+| `edgion.io/expose-client-cert` | `"true"\|"false"` | Expose parsed client-certificate information to plugin/session/DSL/auth consumers; does not inject headers automatically |
 
-### Service / EndpointSlice / Endpoints
+### Service / EndpointSlice
+
+| Annotation | Value | Description |
+|------------|-------|-------------|
+| `edgion.io/dns-resolution-mode` | `controller\|gateway\|per-request` | ExternalName resolution authority/cache mode; default `controller` |
+| `edgion.io/dns-resolver` | comma/space-separated `ip[:port]` | Service resolver override for both planes |
+| `edgion.io/dns-resolver-ref` | `namespace/name` | Service httpdns LinkSys override for both planes |
 
 Active health checks, outlier detection (passive ejection / circuit breaking), and
 the per-Service panic-threshold override are **not** annotations — they are
@@ -83,19 +96,19 @@ for the full schema, defaults, and conflict semantics.
 
 | Key | Value | Description |
 |-----|-------|-------------|
-| `edgion.io/cert-provider` | `"secret"\|"edgion-tls"` | Certificate source |
+| `edgion.io/cert-provider` | exact `"EdgionTls"` | Enable the dynamic EdgionTls provider; absent uses normal certificateRefs/Secret behavior |
 
 ### BackendTLSPolicy `spec.options`
 
 | Key | Value | Description |
 |-----|-------|-------------|
-| `edgion.io/client-certificate-ref` | `ns/name` | Client certificate Secret |
+| `edgion.io/client-certificate-ref` | same-namespace Secret name | Upstream mTLS client certificate; slash/cross-namespace values are invalid |
 
 ## Labels
 
 | Label | Value | Description |
 |-------|-------|-------------|
-| `edgion.io/leader` | pod name | Leader election marker |
+| `edgion.io/leader` | `"true"\|"false"` | Pod leader-election marker; the leader Service selects `"true"` |
 | `edgion.io/managed-by` | see below | Lifecycle ownership of the labeled resource |
 | `edgion.io/acme-resource` | resource name | ACME resource association |
 
@@ -121,5 +134,6 @@ The following annotations are managed automatically by the system; **do not set 
 |------------|-------------|
 | `edgion.io/hostname-resolution` | DNS resolution results injected by the Controller |
 | `edgion.io/sync-version` | Configuration sync version number |
+| `edgion.io/dns-resolved-at` | Controller-written freshness timestamp on synthetic EndpointSlices |
 
 See the [references/](references/) directory for the detailed reference.

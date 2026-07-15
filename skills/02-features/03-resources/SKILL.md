@@ -6,7 +6,7 @@ description: Feature and configuration schema reference for all Kubernetes resou
 # 03 Resource Feature Reference
 
 > **External contracts** for all Gateway API standard resources and Edgion extension resources: full YAML schema, field types and default values, configuration examples.
-> The **internal implementation** of resources (Handler flow, requeue associations, source locations) is in [01-architecture/05-resources/](../../01-architecture/05-resources/SKILL.md) — both sides share the same numbering one-to-one; you typically need to look at both when modifying code.
+> The **internal implementation** of resources (Handler flow, requeue associations, source locations) is in [01-architecture/05-resources/](../../01-architecture/05-resources/SKILL.md). Stable resource numbers align where both pages exist; Controller-only ConfigMap and other explicit exceptions are listed by the architecture index.
 
 ## Numbering Alignment
 
@@ -26,14 +26,15 @@ description: Feature and configuration schema reference for all Kubernetes resou
 | 13 | EdgionPlugins | `05-resources/13-edgion-plugins.md` | [13-edgion-plugins.md](13-edgion-plugins.md) |
 | 14 | EdgionStreamPlugins | `05-resources/14-edgion-stream-plugins.md` | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) |
 | 15 | EdgionConfigData | `05-resources/15-edgion-config-data.md` | Plugin metadata, including the RegionRoute state-management variant |
-| 16 | Service/Endpoints | `05-resources/16-service-endpoints.md` | [16-service-backends.md](16-service-backends.md) |
+| 16 | Service/EndpointSlice | `05-resources/16-service-endpoints.md` | [16-service-backends.md](16-service-backends.md) |
 | 17 | EdgionAcme | `05-resources/17-edgion-acme.md` | [17-acme.md](17-acme.md) |
 | 18 | LinkSys | `05-resources/18-link-sys.md` | [18-link-sys.md](18-link-sys.md) |
-| 20 | EdgionBackendTrafficPolicy | → [../../01-architecture/02-gateway/07-backends.md](../../01-architecture/02-gateway/07-backends.md) + [06-load-balancing.md](../../01-architecture/02-gateway/06-load-balancing.md) | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) |
+| 20 | EdgionBackendTrafficPolicy | `05-resources/20-edgion-backend-traffic-policy.md` | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) |
 
 > The feature documentation for #03 (EdgionGatewayConfig) lives under `02-config/` because it is essentially a configuration-layer resource.
 > #10 (Secret), #11 (ReferenceGrant), and #15 (EdgionConfigData) currently have no standalone feature documentation; see the architecture documentation.
-> #20 (EdgionBackendTrafficPolicy) has no numbered `05-resources/` counterpart file: its internal processing flow is covered by the existing gateway backend/LB architecture docs (#07/#06 under `01-architecture/02-gateway/`) rather than a new per-resource file, since it slots into the pre-existing `backends/policy/backend_traffic/` module rather than a standalone Controller/Gateway pipeline.
+> ConfigMap is Controller-only and is documented at
+> [01-architecture/05-resources/21-configmap.md](../../01-architecture/05-resources/21-configmap.md).
 
 ## Browse by Category
 
@@ -67,7 +68,7 @@ description: Feature and configuration schema reference for all Kubernetes resou
 
 | Resource | Description |
 |----------|-------------|
-| [13-edgion-plugins.md](13-edgion-plugins.md) | Catalog and configuration of 33 HTTP plugins |
+| [13-edgion-plugins.md](13-edgion-plugins.md) | HTTP plugin catalog; `EdgionPlugin` enum is authoritative |
 | [14-edgion-stream-plugins.md](14-edgion-stream-plugins.md) | Stream plugin two-stage model |
 
 ### Backends and External Systems
@@ -76,7 +77,7 @@ description: Feature and configuration schema reference for all Kubernetes resou
 |----------|-------------|
 | [16-service-backends.md](16-service-backends.md) | Service discovery |
 | [20-edgion-backend-traffic-policy.md](20-edgion-backend-traffic-policy.md) | Per-destination load balancing, active health checks, outlier detection (attached to a Service via targetRefs) |
-| [18-link-sys.md](18-link-sys.md) | Redis/Etcd/ES/Webhook/Kafka connectors |
+| [18-link-sys.md](18-link-sys.md) | Redis/Etcd/ES/Webhook/Kafka/HttpDns connector configuration |
 
 ## Quick Lookup
 

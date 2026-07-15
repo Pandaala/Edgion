@@ -27,7 +27,7 @@ Filters by `gatewayClassName`. If `gateway_class_name` is configured as `Some(na
 2. **Resolve TLS certificates**: iterate over each Listener's `tls.certificateRefs`:
    - Register the reference relationship in SecretRefManager (Secret changes will automatically requeue this Gateway)
    - If it is a cross-namespace reference, also register it in CrossNsRefManager
-   - Read Secret data from `GLOBAL_SECRET_STORE` and populate the `tls.secrets` field
+   - Read Secret data from `ctx.runtime().secret_store` and populate the resolved TLS transport field
    - If the Secret has not yet arrived, do not error out; SecretRefManager guarantees automatic re-processing later
 
 ### on_change

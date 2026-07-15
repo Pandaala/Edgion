@@ -40,5 +40,5 @@ Suggestions of the form "add `allowedOrigins` to the route config / a dedicated 
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a3.md → V4` (CONFIRM, SHOULD/MAY qualification)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a3.md → V4` (CONFIRM, SHOULD/MAY qualification)
 - Industry research (2026-05-20): L7 gateways delegate to backend; ASP.NET / Spring first-class; Gateway API has no GEP. OWASP WebSocket Security Cheat Sheet; CWE-1385 Missing Origin Validation in WebSockets.

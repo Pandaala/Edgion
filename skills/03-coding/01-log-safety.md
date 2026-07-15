@@ -107,7 +107,9 @@ The data plane (request/connection processing path) produces logs only through t
 
 **Any `tracing::` macro is forbidden on the request/connection processing hot path**, including `debug!`.
 
-**`println!` / `eprintln!` are globally forbidden**: production code must not use `println!` or `eprintln!`; use `tracing::` macros with a `component` field. Fatal errors at startup use `tracing::error!` + `std::process::exit(1)`.
+Long-running Controller/Gateway services must not use `println!` / `eprintln!` after
+tracing initialization; use structured tracing on cold/control paths. CLI user-facing
+stdout/stderr and pre-tracing startup/fatal fallbacks are intentional exceptions.
 
 ### Reasons
 
@@ -176,7 +178,7 @@ Includes `certificate_callback` / `handshake_complete_callback`.
 |------|------|
 | `plugins/**/conf_handler_impl.rs`, `PluginRuntime::build_*` | Plugin construction during config/sync; one-shot |
 | `plugins/**::new()` / `::from_config()` | Constructors, not request path |
-| `conf_sync/**`, `link_sys/**` | Controller↔Gateway gRPC, unrelated to requests |
+| `conf_sync/**`, LinkSys configuration/store management | Control/config paths; however LinkSys provider calls reached from DSL/plugins are request hot paths and remain tracing-free |
 | `api/**` | Admin API (control plane) |
 | Startup/shutdown under `runtime/server/**` | One-shot events |
 | Registration in `observe/metrics/registry.rs` | Startup phase |
@@ -219,20 +221,27 @@ tracing::info!("Selected backend: {:?}", backend_ref);  // Leakage + performance
 
 Use during code review:
 
-- [ ] Any `println!` / `eprintln!` use? Must be replaced by a `tracing::` macro
+- [ ] Any `println!` / `eprintln!` in a long-running service after tracing init? Replace it; do not flag CLI output or pre-init fallback blindly
 - [ ] Are newly added `tracing::info!/warn!/error!` calls on the data-plane hot path? If so, switch to ctx-based
 - [ ] Do logs contain sensitive data such as Secret / Token / keys?
 - [ ] Do logs contain a full resource spec / backend address? If so, downgrade to debug
 - [ ] Do new control-plane logs include `kind` + `name/namespace` + `rv`? (Can be omitted inside a span — provided automatically by the span)
 - [ ] If the resource has been synced to the data plane, is `sv` present in the access log?
-- [ ] Do new keys added to `ctx_map` potentially contain sensitive information? (Deferred: logs are admin-level access; not a review-blocking item)
-- [ ] Do plugin stage_logs record full username / token? (Deferred: same as above)
+- [ ] Do new `ctx_map` keys contain sensitive information? This is review-blocking: keep deny-by-default projection and hard blocks/masking
+- [ ] Do plugin stage logs record a full username/token or unmasked dynamic error? This is review-blocking
 
 ---
 
 ## Periodic maintenance (run quarterly or after each "data-plane entry list" change)
 
-> **Automated gate**: `cicd/checks/check_gateway_no_tracing.py` enforces this rule in CI. The data/control boundary here is *function-level* — the same file often holds a constructor (`new`/`from_config`/`build`, control-plane, `tracing` allowed) and a per-request method (`run_request`, hot path, `tracing` forbidden) — which a file/regex scanner cannot separate, so the gate resolves the **enclosing function** of each `tracing` line. Over the "Data-plane entry list" files below (including every `plugins/http/*/plugin.rs`, `gateway_api_filters/`, the match engines, `lb/selection`, `backends/`, and the TLS-handshake callbacks), it flags a `tracing` use only when its enclosing function is **not** construction/config-build/once-init — recognised by name via the `COLD_FN` knob (`new`, `from_config`, `create`, `build`, `load_*`, `compile_*`, `init_*`, `parse_*`, `update`, `spawn_*`, …). It is **zero-tolerance** (the request/connection functions are already clean), with registered exceptions carrying an inline `// tracing-allow: <reason>` marker (currently only `pg_logging.rs`'s access-log-store-send warn). Run `--list` to see current matches; if a genuinely-cold function is flagged, rename it to a cold prefix or add its name to `COLD_FN`. Keep the gate's entry-list (`DP_DIRS`/`DP_FILES`/`DP_GLOBS`) in sync with the list below when either changes. The manual `rg` recipes here remain useful for the per-line decision context. (See also [../04-review/observability/observability-review-rule.md](../04-review/observability/observability-review-rule.md) → "Zero Tracing on the Data Plane".)
+> **Automated gate**: `cicd/checks/check_gateway_no_tracing.py` resolves the enclosing
+> function so cold constructors/config builders can trace while hot callbacks cannot.
+> Run it (and `--list`) rather than relying on a prose baseline. Any unregistered output
+> is live debt to fix, not an implied exemption. At the time of this update the list still
+> reports Wasm plugin hot-path calls; do not copy that pattern into new code. Approved
+> exceptional sites require an inline `// tracing-allow: <reason>` and review. Keep the
+> gate's function/directory coverage synchronized with this boundary, including provider
+> operations invoked by plugins.
 
 **1. Scan data-plane entry files for newly introduced tracing** (note: only check **the entry files themselves** — `conf_handler_impl.rs` / `routes_mgr.rs` / `conf_handler.rs` in those directories belong to the config phase, do not scan the whole directory):
 
@@ -280,8 +289,8 @@ rg -n 'tracing::' \
 - be switched to ctx-based log / access log / PluginLog / metrics, **or**
 - be added to the exception table after review with a stated reason.
 
-> **Current baseline** (2026-04-19): Wave 4 tickets #03–#13 are not yet finished, so the command above is **expected** to hit `pg_*.rs` / `mtls_verify_callback.rs` init log / `lb/runtime_state/mod.rs` / `lb/selection/round_robin.rs` / `match_engine/radix_*.rs` and similar locations. Those are existing technical debt to be cleared by Wave 4, not new exemptions.
-> `parse_timeout.rs` is on the config-loading path (`ParsedTimeouts::from_config` is called only at listener build time) and has been registered in the exception table above; it can stay.
+`parse_timeout.rs` is on the config-loading path (`ParsedTimeouts::from_config` is called
+only at listener build time) and may trace as a cold function.
 
 **2. Verify that no new unregistered entries have been added to Pingora / plugin trait impls**:
 

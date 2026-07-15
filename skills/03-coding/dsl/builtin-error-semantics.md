@@ -8,19 +8,23 @@ description: DSL builtin error-handling contract — which functions silently re
 > User-facing contract: `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md`
 > Engine error variants: `edgion-dsl/src/error.rs::RuntimeError`
 
-## Three error-handling shapes
+## Common error-handling shapes
 
 DSL builtins fall into three groups for invalid / boundary input. The group is the **contract**, not an accident — script authors rely on these shapes for null-safe pipelining, and changing a group is a behavior change that breaks deployed scripts.
 
 | Shape | Examples | When invalid / OOB |
 |---|---|---|
 | **Silent fallback** (nil / empty / clamped / false) | `substr`, `to_int`, `base64_decode`, `hex_decode`, `url_decode`, `ip_in_cidr`, `time_format` (bad timestamp) | Returns a benign value; script continues |
-| **`RuntimeError::TypeError`** | Any builtin given the wrong `Value` variant (e.g. `substr(int, 0, 1)`) | Bytecode bug or scripting-level type confusion |
+| **`RuntimeError::TypeError`** | Operations that explicitly require a particular `Value` variant | Scripting-level type mismatch; some builtins deliberately coerce via `into_string` instead |
 | **`RuntimeError::ApiError`** | Session-mutation builtins on host failure; `time_format` invalid format specifier; `resp.set_status` out of range | Real I/O or contract failure that scripts cannot avoid |
+| **Limit errors** | Output exceeds VM string/list/map limits | `StringTooLong`, `ListTooLong`, or `MapTooLarge`; some I/O builtins instead document truncation |
 
 ## Silent-fallback contracts to preserve
 
-Locked in by tests under `tests/utility_functions.rs`, `tests/p3_utility_tests.rs`, `tests/runtime_errors.rs`, `tests/api_errors.rs`. If a reviewer suggests changing any of these to raise `ApiError` or `TypeError`, decline: see `skills/04-review/dsl-builtins/` for the design rationale.
+Locked in by tests under `edgion-gateway/src/plugins/http/dsl/tests/` (including
+`utility_functions.rs`, `p3_utility_tests.rs`, `runtime_errors.rs`, and
+`api_errors.rs`). If a reviewer suggests changing one, inspect the current test and
+design note before altering the observable contract.
 
 | Builtin | Input class | Returns | Test |
 |---|---|---|---|
@@ -46,7 +50,11 @@ Locked in by tests under `tests/utility_functions.rs`, `tests/p3_utility_tests.r
 | `resp.set_status` | status code outside `100..=599`, or session returns `Err` | `"resp.set_status"` |
 | `time_format` | format string exceeds 256 bytes, or contains an invalid chrono specifier | `"time_format"` |
 | `ctx.set` / `ctx.remove` | host returns `Err` | `"ctx.set"` / `"ctx.remove"` |
-| Result length check (any builtin) | `check_string_len` exceeds `VmLimits::max_string_len` | varies |
+
+Size-limit errors are their own runtime variants (`StringTooLong`, `ListTooLong`, and
+`MapTooLarge`), not `ApiError`. Some I/O builtins intentionally truncate bounded output
+instead. Check the individual builtin and its lock-in tests rather than applying a single
+“all result lengths” rule.
 
 `ApiError` flows through `DslErrorPolicy` (`lang/vm.rs`):
 - `Ignore` (default) — logs `"api error"` in `PluginLog`, returns `GoodNext`.
@@ -69,4 +77,4 @@ After implementing, add a lock-in test to the appropriate file (mirroring the ex
 - Panic-via-Display prevention rule → [chrono-display-panic](../../04-review/dsl-builtins/chrono-display-panic.md)
 - Engine architecture & error policy → `skills/01-architecture/02-gateway/dsl-engine.md`
 - User-facing function reference → `docs/en/user-guide/http-route/filters/edgion-plugins/dsl/api-reference.md`
-- Test helpers → `tests/mod.rs::assert_sets_request_header`, `tests/mod.rs::run_expect_runtime_err`
+- Test helpers → `edgion-gateway/src/plugins/http/dsl/tests/mod.rs`

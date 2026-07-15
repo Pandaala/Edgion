@@ -1,13 +1,17 @@
 # Metrics rules
 
-> Core principle of metrics: the Gateway **data plane** avoids metrics explosion (no Histogram + strict label cardinality + unified `GatewayMetrics` management). Data-plane exceptions do not get a separate counter/tracing — they go through the access log (`AccessLogEntry.errors` + `EdgionStatus`). The Controller **control plane** also restrains adding metrics; control-plane events go through `tracing::{info,warn,error}!` + status condition first, and only get a metric when the case is "second-level alert threshold" or "core SLI for long-term Grafana trend". Detailed observation → access log / structured tracing log aggregation; do not extend metrics in Prometheus.
+> Core principle: keep Gateway metrics bounded through strict label review and unified
+> `GatewayMetrics` management. Most request detail belongs in access logs. Existing
+> histograms are explicit exceptions, not a general pattern. The Controller similarly
+> prefers structured tracing and status conditions unless a low-cardinality metric is
+> needed for alerting, trends, or cross-process aggregation.
 
 ## Core principles
 
-- **No Histogram type in the Gateway data plane** (no `_bucket` / `_sum` / `_count` triple)
+- **Do not add a Gateway histogram without explicit review** (`_bucket` / `_sum` / `_count` multiply every label combination)
   - **Scope**: every per-request hot-path metric under `edgion-gateway/src/`. Because the data plane is hit on every request, the Cartesian product of histogram buckets × multiple labels easily explodes (a single histogram emits `N_buckets × high cardinality` time series), and Prometheus storage and scrape cannot cope.
-  - **The only existing exception**: `edgion_gateway_request_duration_ms` — Gateway end-to-end request latency, a core SLI (p50/p95/p99 are the main basis for production alerts). The Gateway data plane has only this single histogram; it is gated by the `MetricsConfig::request_duration` config item, off by default and written only with explicit `enabled=true`. Buckets are injected explicitly via `set_buckets_for_metric` (see `gateway/observe/metrics/api.rs`), and labels are per-label togglable.
-  - **To add a second histogram on the data plane**: first revise this rule + reasoning (why counter/gauge cannot express it, why access log aggregation is insufficient), and treat it as an explicit topic in code review.
+  - **Existing reviewed histograms**: `edgion_gateway_request_duration_ms` (off by default, configurable resource labels), `edgion_wasm_module_compile_duration_ms`, and `edgion_wasm_hook_duration_ms`. The Wasm families use a `module` label; keep deployed module identity bounded and monitor series count.
+  - **To add another histogram**: explain why a counter/gauge and access-log aggregation are insufficient, define units and buckets, calculate the label × bucket bound, and make the exception an explicit review topic.
 - **Controller control plane proactively restrains new metrics**: scope is `edgion-controller/src/`, controller-side federation helpers in `edgion-common/src/observe/fed_metrics.rs`, etc. While control-plane cardinality risk is low (low trigger frequency, label values driven by deployment scale), "easy to add" is not a reason "to add" — control-plane events **go through `tracing::{info,warn,error}!` structured logs + K8s status condition (`Accepted/Ready/Programmed`) by default**, and the log-collection side aggregates the answer to "how many times this kind of event occurred / which resources are problematic". A metric is only considered when the event satisfies one of:
   - **Needs to act as a second-level alert threshold** (e.g., `edgion_fed_watch_errors_total` triggers a Prometheus alert)
   - **Core SLI for long-term Grafana trend** (low-dimensional, high-value health signal, e.g., `edgion_fed_connected_controllers`)
@@ -21,7 +25,10 @@
   - "What exactly happened on that 5xx just now? x-trace-id is abc123" → access log
   - "What's mirror's p99 latency?" → aggregate the `et` field of the mirror access log; **do not** add a histogram
   - "What's a backend's 2xx ratio?" → counter rate, already exists
-- **Strictly control label cardinality**: label values must be bounded and predictable (namespace, name, status group, etc.). **Never** use high-cardinality values like path, user_id, trace_id as labels. This rule applies to both data plane and control plane.
+- **Strictly control label cardinality**: prefer compile-time enums such as status groups.
+  Namespace/resource/module names scale with deployment size and require explicit opt-in,
+  series-count estimates, and operational monitoring. Never use unbounded request values
+  such as path, user ID, IP, or trace ID as labels.
 - **Hybrid registration policy**: the handles in `GatewayMetrics` are split into two categories by "call hotness":
   - **Hot (per-request path)** → `Counter`/`Gauge` stored directly; eagerly registered in `new()` via `counter!()/gauge!()`. Zero per-call overhead; a brief 0 value before the first request is acceptable (ctx_created, ctx_active, gateway_request_bytes, gateway_response_bytes)
   - **Cold / failure path / low-frequency control plane** → stored as `OnceLock<Counter>/<Gauge>`, registered only on the first record call. Untriggered metrics do not appear in `/metrics`, avoiding zero-value noise and scrape waste
@@ -91,7 +98,7 @@ pub fn my_cold_event(&self) {
 **5. Use it at the call site**
 
 ```rust
-use crate::core::gateway::observe::metrics::global_metrics;
+use crate::observe::metrics::global_metrics;
 
 global_metrics().my_event();
 ```
@@ -102,7 +109,7 @@ global_metrics().my_event();
 
 | Forbidden | Scope | Reason |
 |------|--------|------|
-| `metrics::histogram!(...)` | **Gateway data plane** | The histogram × label Cartesian product on the hot path easily explodes. **Only the existing `edgion_gateway_request_duration_ms` is exempt** |
+| Unreviewed `metrics::histogram!(...)` | **Gateway data plane** | Existing request-duration and Wasm histograms are adjudicated exceptions; every new family needs bucket/cardinality review |
 | Using path / user_id / ip etc. as label values | Data plane + control plane | Causes metrics explosion (time-series count = number of label combinations) |
 | Each plugin registers its own metrics | Gateway data plane | Distributed management is hard to audit; unified through `GatewayMetrics` |
 | Counter incremented with floats | Data plane + control plane | Use the integer `increment(n: u64)` |
@@ -135,7 +142,7 @@ counter!(
 
 For metrics like `edgion_backend_requests_total` and `edgion_gateway_request_duration_ms` that simultaneously carry gateway / route / backend / protocol / status multi-dimensional labels, **do not push all labels in one go**; follow the pattern of `record_request_duration` / `record_backend_request`:
 
-1. Define an `XxxLabels` struct in `gateway/cli/config.rs` whose fields are a bool toggle per resource category. **Do not split `*_namespace` and `*_name` into two toggles** — K8s resource identity is naturally paired; one toggle controls the pair
+1. Define an `XxxLabels` struct in `edgion-gateway/src/cli/config.rs` whose fields are a bool toggle per resource category. **Do not split `*_namespace` and `*_name` into two toggles** — K8s resource identity is naturally paired; one toggle controls the pair
 2. Hang the config off `MetricsConfig`; a global `OnceLock<...Config>` is initialized at startup (see `init_request_duration_config` / `init_backend_requests_config`)
 3. The first parameter of the record function takes `&XxxLabels`; internally use `Vec::with_capacity(N)` + `labels.push(...)` conditionally accumulated by toggle, and finally `counter!(..., &labels[..]).increment(1)`
 4. Default values are conservative: enable the gateway identity + bounded enum labels (protocol/status); do not enable route/backend. Let operators **explicitly opt-in** to drill-down dimensions
@@ -145,11 +152,11 @@ Any new "per-request path × multi-dimensional resource label" counter/gauge mus
 
 ## Acceptable metric types
 
-| Type | Gateway data plane | Controller / Center control plane | Examples |
+| Type | Gateway data plane | Controller control plane | Examples |
 |------|-------------|-------------------------|------|
 | `Counter` | Yes | Yes | Total requests, total errors, bytes |
 | `Gauge` | Yes | Yes | Active connection count, connected gateway count |
-| `Histogram` | Forbidden (only the SLI exception) | Allowed but restrained, 0 by default | Data plane: `edgion_gateway_request_duration_ms` (existing SLI) |
+| `Histogram` | Exception-only | Allowed but restrained | Existing Gateway request-duration and two Wasm duration families |
 
 ---
 
@@ -161,9 +168,12 @@ For Gauge operations, prefer enforcing symmetry in a `Drop` implementation or an
 
 ---
 
-## Controller / Center Metrics
+## Controller Metrics and Federation Boundary
 
-The Controller and Center are the control plane and do not run on the data-plane hot path. While cardinality risk is low, **proactively restrain new metrics** (not only histograms but also counter/gauge) — control-plane events go through `tracing` structured logs + status condition by default, and log-collection-side aggregation answers most "how many times happened / which resources have issues" questions.
+The Controller is control plane and does not run on the data-plane hot path. The Center
+is maintained in the separate EdgionCenter repository. While Controller cardinality risk
+is lower, proactively restrain all new metric types: structured logs plus status
+conditions answer most event/detail questions.
 
 ### Decision threshold for adding a control-plane metric
 
@@ -181,8 +191,11 @@ Before adding a control-plane metric, ask three questions; **any "no" means use 
 Implementation rules:
 
 1. **Unified entry**: install the global `PrometheusRecorder` via `edgion-common/src/observe/metrics_api.rs::install_global_recorder(RecorderConfig)`. Each in-repo service binary calls it once near `run()` (for example, `service: "edgion-controller"` or `"edgion-gateway"`)
-2. **`/metrics` reuses the admin router**: call `crate::core::common::observe::metrics_api::metrics_handler` and mount it on the `/metrics` path of each axum Router; do not open a separate port
-3. **Auth skip**: `/metrics` is hard-coded in `PUBLIC_PROBE_PATHS` of `edgion-controller/src/api/public_paths.rs` and is exempt from auth alongside `/health` and `/ready` (it is also served on a dedicated metrics listener). Do not modify this static public set when adding sensitive routes
+2. **Dedicated listener**: Controller uses `api::create_metrics_router()` on
+   `server.metrics_listen`; Gateway uses `observe::metrics::serve_with_shutdown()` on
+   `metrics.listen`. Do not mount scrape output onto the Admin listener.
+3. **No application auth**: restrict the dedicated listener at the network layer. Metric
+   labels may reveal resource identity even though request bodies and Secrets are absent.
 4. **Registration style**: follow the style of `edgion-controller/src/conf_mgr/sync_runtime/metrics.rs` — direct `counter!/gauge!` macros without `OnceLock` lazy wrapping (control-plane call frequency is low; eager registration suffices)
 5. **Federation metrics**: Controller-side federation metrics go through `edgion-common/src/observe/fed_metrics.rs` (`edgion_fed_*` prefix). Center-side implementation lives in the separate EdgionCenter repository. Label values **must** be `&'static str` constants from the `labels::` submodule; do not splice strings directly
 6. **If a histogram really must be added**: control plane allows it, but: (a) explain why a `_seconds_last` gauge / counter cannot express it; (b) explain why access log aggregation is insufficient; (c) set buckets explicitly via `set_buckets_for_metric` or inject through `RecorderConfig.histogram_buckets` (avoid the default seconds buckets mismatching ms-recorded values, which dumps everything into `+Inf` — see the original `MIRROR_DURATION_MS` incident)

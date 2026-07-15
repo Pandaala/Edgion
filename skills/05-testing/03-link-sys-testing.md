@@ -36,7 +36,7 @@ Gateway (Admin :12001)             Test Script (bash)
 ```
 run_<type>_test.sh orchestrates the full flow:
 
-Step 0: Kill old    →  pkill -9 -f edgion-* (same as kill_all.sh)
+Step 0: Stop old    →  use the integration harness cleanup helper
 Step 1: Build       →  cargo build --bin edgion-controller --bin edgion-gateway --bin edgion-cli
 Step 2: Work dir    →  mkdir tmp/integration_testing/<type>_testing_YYYYMMDD_HHMMSS/
 Step 3: Start Infra →  docker compose up -d (e.g. Redis)

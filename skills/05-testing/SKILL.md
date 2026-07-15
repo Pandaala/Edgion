@@ -41,11 +41,12 @@ cargo test --all
 # LinkSys/Redis, dynamic scenarios, …)
 ./edgion-tests/integration/scripts/integration/run_integration.sh
 
-# Top-level orchestrator — main runner PLUS every standalone integration script
-# (Etcd / Elasticsearch LinkSys, ACME, Center watch-sync, edgion-cli E2E,
-# FileWatcher). Sequential; continues on failure; unified report at the end.
+# Top-level in-repo orchestrator — main runner plus standalone Etcd, Elasticsearch,
+# OTLP, Kafka, ACME, CLI, and FileWatcher jobs. Sequential; unified report at the end.
 ./edgion-tests/integration/scripts/integration/run_all_integration.sh
 ```
+
+Federation Center tests belong to the separate EdgionCenter repository.
 
 ### Run dynamic (hot reload) tests
 Dynamic scenarios run by default as the final step of the full `run_integration.sh` (without `-r`) and the `-r Gateway` path; narrow paths (`-r EdgionPlugins -i ...` etc.) skip them.

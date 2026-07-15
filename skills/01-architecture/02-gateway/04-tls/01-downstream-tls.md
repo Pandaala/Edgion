@@ -133,7 +133,7 @@ When EdgionTls has `spec.client_auth` configured, `configure_mtls` enables clien
 1. Get the CA certificate PEM from EdgionTls and build an `X509Store`.
 2. Set the verify depth (`verify_depth`, range 1–9).
 3. If `allowed_sans` or `allowed_cns` is configured, set a custom verify callback (`set_mtls_verify_callback`) for allowlist checks.
-4. Otherwise use the standard OpenSSL/BoringSSL verification chain.
+4. Otherwise use the standard BoringSSL verification chain.
 
 ### Client certificate info extraction
 

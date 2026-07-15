@@ -26,10 +26,16 @@ If any of the three is missing, it is a "based on line count / looks similar"-dr
 - **Premise wrong**: the `secret_object_ref` / `secret_slot` / `tls` submodules are **shared by all resource types** including `gateway.rs`, `edgion_acme`, `EdgionTls`, `EdgionPlugins`, `link_sys`; not LinkSys-only.
 - **Verdict**: false positive. 124 lines is also far below any threshold worth splitting.
 
-### (b) `edgion-resources/src/lib.rs:53` `pub use self::resources::*` "new resources automatically become public API"
+### (b) `edgion-resources/src/lib.rs` `pub use self::resources::*` "new resources automatically become public API"
 
-- **Premise does not apply**: Edgion is a binary project (Controller / Gateway / edgion-cli / Center); does not publish a lib; there is no concept of "stable public API boundary".
-- **Verdict**: not applicable. Glob re-export inside a binary is a reasonable choice.
+- **Correct scope**: Edgion is a seven-member workspace with several library
+  crates. `edgion-resources` is an internal, unpublished workspace library, so
+  its broad re-export is a real intra-workspace API surface but carries no
+  external semver stability commitment. The federation Center is not a member
+  of this repository.
+- **Verdict**: a glob re-export is acceptable while the crate remains internal
+  and consumers intentionally use the unified resource namespace. Re-evaluate
+  if the crate is published or unrelated consumers need a narrower boundary.
 
 ### (c) `edgion_acme.rs` parse "all-branch inline big match for ResolveOutcome"
 
@@ -57,18 +63,21 @@ If any of the three is missing, it is a "based on line count / looks similar"-dr
 - **No coupling leak**: the only `pub` symbol with an external caller is `serve_with_shutdown` (single site at `edgion-gateway/src/cli/mod.rs:103`); `pub fn create_admin_router` has zero external grep callers (only the in-file `serve` and `serve_with_shutdown` consume it); testing handlers and `get_*_client_by_name` helpers are not referenced from outside the file. Splitting changes nothing about the public surface.
 - **Story line is linear**: admin core router build → conditional testing-mode merge → testing handlers (access-log + store-stats + LinkSys) → bind & serve. A single startup story currently reads top-to-bottom; splitting forces readers to jump across `api/admin.rs` / `api/testing/mod.rs` / `api/testing/link_sys/*.rs` to follow one boot path.
 - **Severity Low + zero runtime impact**: the finding itself acknowledges "no runtime impact". Refactoring 1600+ lines for maintainability-only gain is exactly the kind of churn this skill exists to reject.
-- **The `serve` / `serve_with_shutdown` sub-point is already covered by F-014** (its own narrow scope: delete dead `serve()` or implement it as a thin wrapper, per the controller's pattern at `controller/api/mod.rs:457` — `pub async fn serve` body is a single delegation to `serve_with_shutdown(..., std::future::pending::<()>())`). F-003 should not bundle that work — F-014 is the correct unit.
+- **The `serve` / `serve_with_shutdown` sub-point is already covered by F-014** (its own narrow scope: delete dead `serve()` or implement it as a thin wrapper, per the Controller pattern in `edgion-controller/src/api/mod.rs`). F-003 should not bundle that work — F-014 is the correct unit.
 - **Verdict**: ⚠️ accepted tradeoff. Re-open only on (i) a third `get_*_client_by_name` clone landing for a fourth provider (then dedup the helper alone, single-file change — not a whole-file split); (ii) external code starting to import handler symbols from this file (real coupling leak); (iii) a concrete operability incident traced to the file size (e.g. a bug fix that demonstrably required cross-referencing two unrelated handlers).
 
 ## When to Re-Evaluate
 
 - Any of the above files develop **real** line-level duplication (≥ 2 places with 30+ similar blocks); re-evaluate (d).
 - (f) is moot — the `unified_auth` module was deleted (token-only admin auth); no file-split question remains there.
-- A grep-verifiable "stable public API commitment" mechanism is added; re-evaluate (b).
+- `edgion-resources` is published or an external stability policy is added;
+  re-evaluate (b).
 
 ## Fix Suggestions Not Accepted (list)
 
 - "File X has too many lines, should be split" — close directly without the three pieces of evidence.
 - "Two modules look like they both do Y; should extract common code" — close directly without ≥ 2 places of 30+ line-level near-duplicate evidence.
-- "Adding X automatically becomes public API" — close directly without distinguishing binary / lib projects.
+- "Adding X automatically becomes public API" — distinguish an internal
+  workspace library surface from a published external API before assigning
+  stability cost.
 - "Single-file admin/testing router mixes admin core + integration-test routes + LinkSys testing handlers + serve helpers, should be split into submodules" — close per (g); pure-position-only refactor of a 1600-line file with no coupling leak and no real duplication. The narrow `serve` / `serve_with_shutdown` dedup is a separate issue (infra-cluster F-014), not a reason to bundle a whole-file split.

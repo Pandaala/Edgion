@@ -42,7 +42,7 @@ unambiguous: **all content written into source files must be English** — ident
 `//` / `///` / `/* */` comments, doc comments, TODO/FIXME, and log/error literals
 (see both the global and project `CLAUDE.md`). The `python3 cicd/checks/validate_agent_docs.py` /
 `check-english-only` lint enforces this. The only on-disk Chinese exception is
-user-facing documentation under `docs/zh/`.
+user-facing documentation under `docs/zh-CN/`.
 
 So a Chinese internal comment in a `.rs` file is a defect, not a "convention" — translate
 it to English. The earlier "internal explanations may be Chinese / translating loses

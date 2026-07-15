@@ -21,11 +21,15 @@ pub struct ConfigSyncServer {
 
 ### server_id
 
-A millisecond-timestamp string generated at startup, used by clients to detect server restarts. When the `server_id` Gateway sees changes, it triggers a full relist. On relink the `regenerate_server_id()` call generates a new ID.
+A process-monotonic millisecond string generated when a new `ConfigSyncServer` is constructed.
+ConfCenter reload/relink publishes a new server instance rather than mutating an existing ID.
 
 ### WatchObj registration
 
-When ResourceProcessor initializes, it registers with ConfigSyncServer via `register_watch_obj(kind, Arc<ServerCache<T>>)`. Once all registrations are complete and ready (`is_all_ready()` returns true), the gRPC service starts serving data.
+Processors register in the runtime-owned `ProcessorRegistry`. After every expected processor is
+registered and every sync kind is ready, the ConfCenter collects
+`processor_registry.all_watch_objs(no_sync_kinds)`, calls production `register_all`, and publishes
+the complete server. Per-kind `register_watch_obj` exists only for tests.
 
 ### list/watch operations
 
@@ -38,7 +42,9 @@ The watch operation spawns a tokio task that converts `WatchResponseSimple` into
 
 ### State management
 
-ConfigSyncServer's readiness/relink lifecycle methods (`is_all_ready()`, `not_ready_kinds()`, `set_all_not_ready()`, `clear_all()`, `reset_for_relink()`) are documented canonically in [01-controller/07-cache-server.md](../01-controller/07-cache-server.md#state-management).
+`ConfigSyncServer` exposes `not_ready_kinds()` and `clear_all()` for its registered WatchObjs.
+Processor registration/readiness and reload reset belong to `ProcessorRegistry`, ConfCenter, and
+`ControllerRuntime`, not to fictional `is_all_ready`/`reset_for_relink` server methods.
 
 ## ConfigSyncGrpcServer
 
@@ -62,6 +68,9 @@ ConfigSyncGrpcServer does not hold ConfigSyncServer directly; instead it dynamic
 | `WatchServerMeta` | Register the Gateway instance into ClientRegistry → push gateway_instance_count change-event stream |
 
 When `expected_server_id` does not match the current `server_id`, returns a `WATCH_ERR_SERVER_ID_MISMATCH` error to inform Gateway to re-sync.
+
+List additionally rejects a serialized JSON snapshot larger than 64 MiB. The TLS accept layer
+bounds in-flight handshakes at 256 and applies 10-second handshake / 30-second handoff timeouts.
 
 ## ConfigSyncServerProvider
 

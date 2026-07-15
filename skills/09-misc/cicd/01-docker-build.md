@@ -31,7 +31,7 @@ Other variants in `cicd/docker/` (not detailed here):
 
 ### 2. `planner`
 
-- Copies `Cargo.toml`, `Cargo.lock`, `src/lib.rs`, `src/bin`
+- Copies the workspace tree because cargo-chef must see every member manifest in the virtual workspace
 - Runs `cargo chef prepare --recipe-path recipe.json`
 - Generates the dependency recipe; does not compile business code
 
@@ -45,7 +45,8 @@ Other variants in `cicd/docker/` (not detailed here):
   - `perl`
   - `pkg-config`
   - `protobuf-compiler`
-- Runs `cargo chef cook --release --features "${FEATURES}" --recipe-path recipe.json` first
+- Maps `PROFILE` to `--release` / no flag / `--profile <name>`, then runs
+  package-qualified `cargo chef cook -p <package>` (feature args only for product crates)
 - Then copies the full source and runs the actual `cargo build`
 
 Caching meaning:
@@ -56,7 +57,7 @@ Caching meaning:
 ### 4. `runtime`
 
 - Runtime image: `debian:trixie-slim`
-- Installs only `ca-certificates` and `libssl3`
+- Installs `ca-certificates`, `libssl3`, and `procps`
 - Creates a non-root user `edgion`
 - Copies the final binary and default configuration
 
@@ -64,10 +65,11 @@ Caching meaning:
 
 | Argument | Default | Purpose |
 |----------|---------|---------|
-| `RUST_VERSION` | `1.92` | Rust toolchain version |
+| `RUST_VERSION` | `1.94` | Rust toolchain version |
 | `BINARY` | `edgion-gateway` | Name of the bin or example to build |
 | `BUILD_TYPE` | `bin` | `bin` or `example` |
 | `FEATURES` | `default` | Cargo features passed to `cargo build` / `cargo chef cook` |
+| `PROFILE` | `release` | `dev`/`debug`, `release`, or a named profile such as `production` |
 
 ## Common commands
 

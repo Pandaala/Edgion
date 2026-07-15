@@ -13,7 +13,7 @@ flowchart TD
     CLI["edgion-cli"] --> AdminCtrl
 
     subgraph Controller["edgion-controller"]
-        CC["ConfCenter\n(File/K8s)"] --> WQ["Workqueue\n(per-kind)"] --> RP["ResourceProcessor\n(validate/preparse/parse)"]
+        CC["ConfCenter\n(File/K8s/Etcd)"] --> WQ["Workqueue\n(per-kind)"] --> RP["ResourceProcessor\n(validate/preparse/parse)"]
         AdminCtrl["Admin API (:12101)"]
         ProbeCtrl["Probe (:12100)"]
         MetricsCtrl["Metrics (:12190)"]
@@ -50,17 +50,18 @@ Cargo workspace with crate-owned binary entry points:
 |--------|---------|-----------|------|
 | `edgion-gateway` | `edgion-gateway/src/bin/edgion_gateway.rs` | Synchronous entry; internally manages its own Tokio + Pingora main loop | Data plane |
 | `edgion-controller` | `edgion-controller/src/bin/edgion_controller.rs` | `#[tokio::main(multi_thread)]` | Control plane |
-| `edgion-cli` | `edgion-cli/src/bin/edgion_ctl.rs` | `#[tokio::main]` single-threaded | CLI tool |
+| `edgion-cli` | `edgion-cli/src/bin/edgion_ctl.rs` | `#[tokio::main]` | CLI tool |
 
 > The federation Center binary (`edgion-center`) has been extracted to the separate EdgionCenter repository.
 
 Example binaries (used in testing): `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`.
 
-Default features: `allocator-jemalloc` + `boringssl`.
+The Gateway and Controller binary crates default to `allocator-jemalloc` + `boringssl`; the CLI defaults only to `allocator-jemalloc`. Library crates do not share that binary-feature default.
 
 ## Code directory organization
 
 ```
+edgion-dsl/                      # DSL parser, compiler, and static validator (leaf crate)
 edgion-resources/                # Shared resource/config schemas and validation helpers
 edgion-common/                   # Shared infra: config, observability, secret store, link system, proto codegen
 edgion-controller/               # Control plane binary and library
@@ -69,10 +70,12 @@ edgion-cli/                      # CLI binary and library
 edgion-tests/                    # Integration test assets, scripts, and validators
 ```
 
-**Design principles**: `edgion-resources` is the schema leaf crate;
+**Design principles**: `edgion-dsl` is the leaf crate and `edgion-resources`
+depends on it for real DSL compilation and static validation;
 `edgion-common` holds backend-agnostic shared infrastructure; controller,
 gateway, and CLI code stay in their owning crates. The in-repo dependency graph
-remains a DAG (`resources → common → {controller, gateway, cli}`).
+remains a DAG (`dsl → resources → common → {controller, gateway, cli}`); the
+Gateway also uses `edgion-dsl` directly for VM/runtime integration.
 
 ## EdgionHttpContext — per-request state container
 
@@ -114,7 +117,7 @@ Created in `new_ctx()` and consumed in `logging()`. Plugins interact with it thr
 | **Proxy core** | `pingora-core`, `pingora-proxy`, `pingora-http`, `pingora-load-balancing` | HTTP proxy engine |
 | **Async** | `tokio`, `tokio-stream`, `futures`, `async-trait` | Async runtime |
 | **gRPC** | `tonic`, `tonic-reflection`, `prost` | Controller ↔ Gateway communication |
-| **HTTP API** | `axum`, `tower-http`, `hyper-util` | Admin API |
+| **HTTP API** | `axum`, `tower`, `hyper-util` | Admin API |
 | **K8s** | `kube`, `k8s-openapi`, `schemars` | K8s integration + CRD Schema |
 | **Serialization** | `serde`, `serde_json`, `serde_yaml` | Configuration parsing |
 | **TLS** | `rustls`, `tokio-rustls`, `boring-sys` | TLS termination (rustls or BoringSSL) |

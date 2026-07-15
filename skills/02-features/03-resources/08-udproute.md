@@ -6,7 +6,7 @@ description: Full UDPRoute schema: UDP layer-4 routing.
 # UDPRoute Resource
 
 > API: `gateway.networking.k8s.io/v1alpha2` | Scope: Namespaced
-> Gateway API v1.4.0 Experimental resource
+> Gateway API v1.5.0 Experimental resource
 
 UDPRoute defines routing rules for UDP traffic.
 

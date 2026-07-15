@@ -78,7 +78,10 @@ edgion-gateway/src/plugins/stream/
 
 - The Stage-2 runtime (`run_tls_route_plugins`) is invoked from **both** TLS proxies: the TLS-terminate proxy [../../../edgion-gateway/src/routes/tls/proxy.rs](../../../edgion-gateway/src/routes/tls/proxy.rs) and the TLS-passthrough proxy [../../../edgion-gateway/src/routes/tls/passthrough_proxy.rs](../../../edgion-gateway/src/routes/tls/passthrough_proxy.rs). Any binding-site change must touch both paths.
 - `tls_route_plugin_runtime` runs first.
-- If a resource has no `tlsRoutePlugins` but has the legacy `plugins`, the current implementation falls back to the Stage 1 runtime for compatibility.
+- Current code falls back from missing `tlsRoutePlugins` to `plugins`. This is a
+  pre-release compatibility debt, not a Stage-2 contract. New code and fixtures
+  must populate `tlsRoutePlugins`; do not depend on or extend the fallback, and
+  remove it when the corresponding code change is in scope.
 - Suitable for:
   - SNI-dependent logic.
   - Logic that depends on which `TLSRoute` was matched.

@@ -25,6 +25,11 @@ gateway:
   server_addr: "http://127.0.0.1:12151"   # Required: Controller gRPC address
   admin_listen: "127.0.0.1:12001"         # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
   # probe_listen: "0.0.0.0:12000"         # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
+  # admin_token: "edg_..."                # Prefer EDGION_GATEWAY_ADMIN_TOKEN from a Secret
+  # require_fips: false                    # Require a FIPS build at startup
+  # fips_policy: auto                      # auto | "on" | "off"; strings only
+  # outbound_egress_block_private: false   # Env can force on: EDGION_OUTBOUND_BLOCK_PRIVATE
+  # outbound_egress_dns_cache_ttl_ms: 5000
   # ─── Wasm `source.oci` disk cache + pull tuning (see `### gateway` below) ───
   # wasm_oci_cache_dir: wasm-oci-cache          # default; "" disables disk caching
   # wasm_oci_cache_ttl_secs: 86400              # default 24h
@@ -41,22 +46,28 @@ gateway:
 #     from disk). Only the Controller may set a bare `auto_ca: true`.
 conf_sync_security:
   auto_ca: true
-  tls:
-    cert: /etc/edgion/conf-sync-certs/client.crt
-    key: /etc/edgion/conf-sync-certs/client.key
-    ca: /etc/edgion/conf-sync-certs/ca.crt
+  active: primary
+  certs:
+    - name: primary
+      cert: /etc/edgion/conf-sync-certs/client.crt
+      key: /etc/edgion/conf-sync-certs/client.key
+      ca: /etc/edgion/conf-sync-certs/ca.crt
 #
 # (b) file mode: real mTLS from operator-supplied certs
 # conf_sync_security:
-#   tls:
-#     cert: certs/grpc/client.crt    # Gateway client certificate
-#     key: certs/grpc/client.key     # Client private key
-#     ca: certs/grpc/ca.crt          # CA used to verify the Controller server
+#   active: primary
+#   certs:
+#     - name: primary
+#       cert: certs/grpc/client.crt    # Gateway client certificate
+#       key: certs/grpc/client.key     # Client private key
+#       ca: certs/grpc/ca.crt          # CA used to verify the Controller server
 #
 # (c) explicit plaintext opt-in (INSECURE; ERROR log + skip_tls metric)
 # conf_sync_security:
-#   tls:
-#     skip_tls: true
+#   active: insecure
+#   certs:
+#     - name: insecure
+#       skip_tls: true
 
 logging:
   # System log (not the business log)
@@ -90,6 +101,9 @@ access_log:
       #   max_files: 7
       #   check_interval_secs: 30
 
+access_log_options:
+  include_raw_uri: false                  # Include the pre-normalization URI field
+
 ssl_log:
   enabled: true
   output:
@@ -121,6 +135,37 @@ rate_limit:
   max_estimator_slots_k: 1024             # CMS maximum precision cap
   gateway_instance_count: 1               # Static instance count (fallback when no Controller push)
 
+lru_cache:
+  default_capacity: 1024
+  default_shards: 0                        # 0 = unsharded
+
+all_endpoint_status:
+  max_endpoints: 20                        # Hard ceiling remains 50
+  min_interval_ms: 1000
+
+path_normalization:
+  reject_escaped_slashes: false
+  reject_invalid_percent_encoding: false
+
+metrics:
+  listen: "0.0.0.0:12090"
+  request_duration:
+    enabled: false
+    buckets: [1, 5, 10, 25, 50, 100, 200, 500, 1000, 2500, 5000, 10000]
+    idle_timeout_secs: 600
+    labels:
+      route_name: true
+      backend_name: true
+      protocol: true
+      status: true
+  backend_requests:
+    labels:
+      gateway: true
+      route: false
+      backend: false
+      protocol: true
+      status: true
+
 # ─── Log redaction (off by default) ───
 
 access_log_sensitive:
@@ -129,8 +174,6 @@ access_log_sensitive:
   # wrap_prefix: "<E>"             # Prefix when mode=wrap
   # wrap_suffix: "</E>"            # Suffix when mode=wrap
 
-# require_fips: false              # Startup guard: require the FIPS-validated module (see below)
-# fips_policy: false               # Force FIPS-approved cipher/curve policy even on a non-FIPS build (see below)
 ```
 
 ## Field Details
@@ -150,6 +193,11 @@ access_log_sensitive:
 | `server_addr` | `String` | **Required** | Controller gRPC address |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback — sensitive endpoints not reachable cluster-wide. Remote access: `kubectl port-forward pod/<name> 12001:12001`. |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Probe listen address. Serves `/health` and `/ready` only. Binds all interfaces so kubelet can probe the pod IP directly. Not included in the gateway Service. |
+| `admin_token` | `String?` | — | Shared Gateway Admin API bearer token. Config-file only; `EDGION_GATEWAY_ADMIN_TOKEN` takes precedence. Keep it in a Secret. No token means Admin business routes fail closed with 503. |
+| `require_fips` | `bool` | `false` | Require the FIPS module; `EDGION_REQUIRE_FIPS` can force it on. |
+| `fips_policy` | `auto \| on \| off` | `auto` | Downstream approved cipher/curve policy. Quote YAML `"on"`/`"off"`; booleans are invalid. Resolution: env → CLI → file → auto. |
+| `outbound_egress_block_private` | `bool` | `false` | Reject private outbound URL targets by default; loopback/link-local remain blocked. Env can force it on. |
+| `outbound_egress_dns_cache_ttl_ms` | `u64` | `5000` | Per-client outbound address memo TTL; env override: `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`. |
 | `wasm_oci_cache_dir` | `String?` | `wasm-oci-cache` | Directory for the Wasm `source.oci` disk cache (manifests + layer blobs, content-addressed). Relative paths resolve against `work_dir`. **An empty string (`""`) disables disk caching.** |
 | `wasm_oci_cache_ttl_secs` | `u64` | `86400` (24h) | Seconds since a cached OCI file was last used before it is eligible for purge. |
 | `wasm_oci_cache_purge_interval_secs` | `u64` | `3600` (1h) | Interval between purge sweeps of the OCI disk cache. |
@@ -157,22 +205,35 @@ access_log_sensitive:
 | `wasm_oci_pull_timeout_secs` | `u64` | `60` | Per-request timeout for OCI pull requests (manifest, token, and blob alike). Istio-agent `WASM_HTTP_REQUEST_TIMEOUT` parity. |
 | `wasm_oci_pull_attempts` | `u32` | `3` | Total attempts (including the first) for each OCI pull request; transport errors and `5xx` retry, `4xx` never does. Istio-agent `WASM_HTTP_REQUEST_MAX_RETRIES` parity. |
 
-### conf_sync_security.tls
+### conf_sync_security
 
-**Required section** (one of `auto_ca` + cert paths, cert paths alone, or `skip_tls`); when cert
-paths are set, the Gateway connects to the Controller's gRPC using mTLS.
+**Required section**: select a named `certs` entry (with optional `auto_ca`), or
+select an explicit plaintext entry. Certificate paths make the Gateway connect
+to the Controller's gRPC endpoint with mTLS.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `active` | `String?` | — | Name of the selected `certs` entry. Optional only when exactly one entry exists. |
+| `certs` | `Vec<ConfSyncTlsConfig>` | `[]` | Named channel-security entries. |
+| `auto_ca` | `bool` | `false` | Kubernetes only. The Controller provisions the Gateway client Secret; the Gateway must also configure the mounted cert paths in a selected entry. |
+
+Each `certs` entry has:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `String?` | — | Entry name; required when more than one entry exists. |
 | `cert` | `String` | — | Client certificate path (PEM, relative to work_dir) |
 | `key` | `String` | — | Client private key path (PEM) |
 | `ca` | `String` | — | CA certificate path (used to verify the Controller server certificate) |
 | `skip_tls` | `bool` | `false` | Explicit plaintext opt-in: `true` skips TLS and connects in plaintext (ERROR log + `skip_tls` metric). The ONLY way to run this channel in plaintext. |
-| `auto_ca` | `bool` | `false` | Kubernetes only. `true` = the Controller's internal CA provisions the gateway client Secret (`edgion-conf-sync-certs`). On the data plane `auto_ca` is an **enforced** switch (see below), not just documentation — and on the Gateway it must be paired with the cert paths. |
+
+> **Removal debt:** code still accepts the old singular
+> `conf_sync_security.tls` field. It is not a supported configuration contract;
+> do not use it in new configuration or examples.
 
 > **`auto_ca` is asymmetric.** The Controller needs only `auto_ca: true` (it mints its own
-> server identity in memory). The **Gateway** needs `auto_ca: true` **plus** the `tls` cert
-> paths — a bare `auto_ca: true` exits non-zero (`edgion-gateway/src/cli/mod.rs`). The shipped
+> server identity in memory). The **Gateway** needs `auto_ca: true` **plus** a selected cert
+> entry with certificate paths — a bare `auto_ca: true` exits non-zero (`edgion-gateway/src/cli/mod.rs`). The shipped
 > `cicd/deploy/kubernetes/gateway/configmap.yaml` is the reference.
 >
 > **Omitting this section entirely makes the Gateway refuse to start** (non-zero exit) — it is
@@ -183,7 +244,7 @@ paths are set, the Gateway connects to the Controller's gRPC using mTLS.
 **`auto_ca` fail-close (data plane).** When `auto_ca: true` the gateway refuses to run the
 conf_sync channel in plaintext, mirroring the Controller (whose provisioning failure aborts
 startup):
-> - `auto_ca: true` **with no `tls`/`certs` block at all** → permanent misconfiguration:
+> - `auto_ca: true` **with no `certs` entry at all** → permanent misconfiguration:
 >   the gateway fails fast at startup (no plaintext, no retry). auto_ca implies mTLS, so the
 >   cert paths must be set.
 > - `auto_ca: true` **with cert paths but the Secret not yet provisioned** (cold start, the
@@ -197,13 +258,14 @@ startup):
 > carries resolved Secrets, so plaintext must be an explicit choice. The startup error names
 > the three ways forward: `auto_ca: true`, cert paths, or `skip_tls: true`.
 >
-> **Migration:** a deployment that relied on omitting `conf_sync_security` will not start
-> after upgrading. To keep plaintext, opt in explicitly:
+> To use plaintext, opt in explicitly:
 >
 > ```yaml
 > conf_sync_security:
->   tls:
->     skip_tls: true   # INSECURE: plaintext conf_sync, ERROR log + skip_tls metric
+>   active: insecure
+>   certs:
+>     - name: insecure
+>       skip_tls: true   # INSECURE: plaintext conf_sync, ERROR log + skip_tls metric
 > ```
 >
 > Otherwise configure `auto_ca: true` **together with the cert paths** (Kubernetes — a bare
@@ -216,8 +278,8 @@ startup):
 The Gateway does not gain any new configuration surface from
 `conf_sync_security.rotation` (that block is Controller-only — see the
 [Controller config doc](./00-controller-config.md#conf_sync_securityrotation--conf_sync-auto-ca-cert-rotation)).
-What changes is runtime behavior of the already-existing `conf_sync_security.tls`
-cert/key/ca file paths:
+Hot reload watches the cert/key/ca paths in the selected
+`conf_sync_security.certs` entry:
 
 - **In-place file replacement is now hot-reloaded.** The Gateway watches the parent
   directories of the configured `cert`/`key`/`ca` paths (not the file inodes, since a
@@ -245,12 +307,28 @@ cert/key/ca file paths:
   actively cancels a reload-generation token that the watch/meta loops select on; those
   loops break, reconnect on the newly-installed channel, and re-list. Expect a brief
   (seconds-long) gap in conf_sync resource sync — proxied traffic is unaffected.
-- **Cold start with absent cert files still fails (unchanged).** If the cert files do
-  not exist when the Gateway boots (e.g. auto-CA first install before the Secret has
-  landed), client TLS init fails before any watcher is even created — the gateway
-  crash-loops until the Secret/files appear, exactly as in Phase 1. Hot reload only
-  covers *runtime* changes to an already-successfully-started channel; an absent-file
-  cold start is not a reload bug.
+- **Cold start in auto-CA mode has a bounded retry.** With configured paths but files
+  not yet mounted, Gateway client TLS initialization retries 20 times at 2-second
+  intervals (within the startup-probe budget). It never downgrades to plaintext. If the
+  files remain unavailable after that window, startup fails. Non-auto-CA missing files
+  fail without this provisioning retry.
+
+### Admin API authentication
+
+Gateway Admin auth is independent from Controller auth. Configure
+`EDGION_GATEWAY_ADMIN_TOKEN` (recommended) or `gateway.admin_token`; blank means
+unconfigured. The process still starts, but Admin business routes return 503. There is
+no CLI token flag. See [03-auth-bootstrap.md](03-auth-bootstrap.md#gateway-providing-the-admin-token).
+
+### metrics and process-global plugin limits
+
+- `metrics.listen` controls the dedicated Prometheus listener. The request-duration
+  histogram is disabled by default; enabling labels increases cardinality.
+- `metrics.backend_requests.labels` controls labels on the always-on backend counter.
+- `lru_cache` supplies process-wide plugin cache defaults.
+- `all_endpoint_status` sets security ceilings for that plugin.
+- `path_normalization` is process-local and restart-bound. It is not an
+  `EdgionGatewayConfig` CRD field.
 
 ### server
 

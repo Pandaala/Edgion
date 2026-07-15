@@ -51,6 +51,6 @@ Suggestions of the form "accept and pick the first/last Host", "downgrade to `tr
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a1.md → V2` (CONFIRM)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a1.md → V2` (CONFIRM)
 - Operator docs: `docs/en/ops-guide/configuration/edgion-gateway-config.md` → `spec.securityProtect.rejectDuplicateHost`
 - Industry reference: Envoy `source/common/http/header_utility.cc::authorityIsValid` (single-value authority enforcement)

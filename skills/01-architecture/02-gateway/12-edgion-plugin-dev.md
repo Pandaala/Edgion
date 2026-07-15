@@ -43,7 +43,7 @@ This path mainly serves:
 
 The chain is:
 
-- During `HTTPRoute` / `GRPCRoute` preparse, the runtime is built per scope: rule-level uses `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`; backend-level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. The legacy `from_httproute_filters()` / `from_grpcroute_filters()` are `#[deprecated]` and forward to the new entry points with rule scope by default.
+- During `HTTPRoute` / `GRPCRoute` preparse, the runtime is built per scope: rule-level uses `PluginRuntime::from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`; backend-level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. Do not use the deprecated forwarding methods still present in code; they are pre-release removal debt, not supported extension points.
 
 This path mainly serves:
 
@@ -260,7 +260,7 @@ Don't reparse the entire request just to read a previous plugin's result.
 
 ## ExtensionRef has only one form: HTTPRoute / GRPCRoute filter list
 
-> **Note:** `EdgionPlugin::ExtensionRef` (the nested form, i.e. writing `type: ExtensionRef` inside `EdgionPlugins.spec.*Plugins`) has been removed (release `<version>`) — "plugin referencing plugin" is no longer supported. Route- and backend-level `ExtensionRef` (HTTPRoute / GRPCRoute / HTTPBackendRef filter lists, the Gateway API standard) is retained. See `docs/zh-CN/migrations/<version>-extension-ref.md` for details.
+> **Note:** `EdgionPlugin::ExtensionRef` (the nested form, i.e. writing `type: ExtensionRef` inside `EdgionPlugins.spec.*Plugins`) has been removed (release `<version>`) — "plugin referencing plugin" is no longer supported. Route- and backend-level `ExtensionRef` (HTTPRoute / GRPCRoute / HTTPBackendRef filter lists, the Gateway API standard) is retained. See `docs/en/migrations/<version>-extension-ref.md`; the paired Chinese page is under `docs/zh-CN/migrations/`.
 
 ```yaml
 HTTPRoute.rules[].filters:
@@ -410,7 +410,8 @@ Keep the rules simple:
 
 - Record results, not lengthy internal traces.
 - Use short phrases ending with semicolons, e.g., `OK u=jack; `.
-- For verbose debugging, use `tracing::debug!()`; do not treat the access log as a debug dump.
+- Data-plane plugin callbacks must not use `tracing::` macros. Use concise `PluginLog` results in
+  phases that receive a log, or bounded metrics/per-request aggregation where appropriate.
 - Conditional skip (`cond_skip`) is written automatically by the conditional wrapper — do not invent your own format.
 - **No PluginLog in the `UpstreamResponseBodyFilter` phase**: the trait signature deliberately omits the log parameter; the body phase fires once per chunk, and per-chunk logging blows up. See the full constraint in [05-plugin-system.md](05-plugin-system.md#-critical-constraint-no-pluginlog-in-body-phase-per-chunk-path-must-allocate-zero).
 
@@ -528,7 +529,8 @@ Other references:
 
 ## Related
 
-- [docs/zh-CN/dev-guide/http-plugin-development.md](../../../docs/zh-CN/dev-guide/http-plugin-development.md)
+- [docs/en/dev-guide/http-plugin-development.md](../../../docs/en/dev-guide/http-plugin-development.md)
+- [docs/zh-CN/dev-guide/http-plugin-development.md](../../../docs/zh-CN/dev-guide/http-plugin-development.md) (Chinese mirror)
 - [observability/00-access-log.md](../../03-coding/observability/00-access-log.md)
 - [13-stream-plugin-dev.md](13-stream-plugin-dev.md)
 - [14-link-sys-dev.md](14-link-sys-dev.md)

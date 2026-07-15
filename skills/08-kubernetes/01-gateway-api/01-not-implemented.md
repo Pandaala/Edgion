@@ -215,14 +215,12 @@ Current behavior: when the Controller parses a GRPCRoute, if `retry.codes` is no
 - Workaround: configure a retry policy in the client gRPC SDK (such as `retryPolicy.retryableStatusCodes` in the gRPC service config); the client can read trailers in full and retry by status code
 - Related code: `edgion-resources/src/resources/grpc_route.rs` lines 526–541
 
-## GATEWAY-TLS ConformanceProfile
+## Conformance profile boundaries
 
-**Decision: not yet declared**
+`GATEWAY-TLS` is declared and its committed split-profile report passes. It is
+therefore not an unimplemented item. Keep HTTP/gRPC and TLS profile runs
+separate because their upstream manifests both reserve port 443; see
+[02-conformance-testing.md](02-conformance-testing.md).
 
-TLS Passthrough is implemented; TLS Terminate also has the data-plane main path, but TLSRoute conformance tests have not yet been driven through systematically. Status-condition-related logic (ResolvedRefs, Accepted, supportedKinds for TLSRoute) is expected to need fixes, and terminate tests need to be filled in, before the profile can be declared.
-
-- Need to declare `SupportTLSRoute` in SupportedFeatures and pass core passthrough tests before declaring the profile
-- `TLSRouteModeTerminate` can continue to be pursued as a follow-up enhancement
-- `TLSRouteModeMixed` is explicitly not implemented
-- MESH-HTTP / MESH-GRPC: Edgion is not a service mesh; not applicable
-- A related tracking item has not yet been filed under `tasks/` (file a new task to drive this).
+- `TLSRouteModeMixed` is explicitly not implemented.
+- MESH-HTTP / MESH-GRPC are not applicable because Edgion is not a service mesh.

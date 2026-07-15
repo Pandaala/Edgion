@@ -1,6 +1,6 @@
 ---
 name: architecture
-description: Use when understanding how Edgion works internally — Controller/Gateway/Center/Ctl architecture, gRPC sync, resource processing flow, or adding a new plugin/resource/connector.
+description: Use when understanding how Edgion works internally — the multi-crate Controller/Gateway/CLI architecture, gRPC sync, resource processing flow, or adding a new plugin/resource/connector. The federation Center is maintained in the separate EdgionCenter repository.
 ---
 
 # 01 Architecture and core features
@@ -9,7 +9,7 @@ description: Use when understanding how Edgion works internally — Controller/G
 
 ## Overall architecture
 
-Edgion is a single-Crate, three-binary project. **Controller decides, Gateway executes, Ctl operates.**
+Edgion is a multi-crate Cargo workspace with three in-repo main binaries. **Controller decides, Gateway executes, CLI operates.** The federation Center is maintained in the separate EdgionCenter repository.
 
 ```mermaid
 flowchart TD
@@ -17,7 +17,7 @@ flowchart TD
     Traffic["Client traffic"] --> Gateway
 
     subgraph Controller["edgion-controller (control plane)"]
-        CC["ConfCenter (File/K8s)"] --> WQ["Workqueue (per-kind)"]
+        CC["ConfCenter (File/K8s/Etcd)"] --> WQ["Workqueue (per-kind)"]
         WQ --> RP["ResourceProcessor\n(validate/preparse/parse)"]
         RP --> SC["ServerCache"]
         CrossRef["Cross-resource dependencies\nSecretRefManager\nServiceRefManager\nCrossNamespaceRefManager\nRequeueChain"]
@@ -40,7 +40,7 @@ flowchart TD
     end
 
     subgraph CLI["edgion-cli (CLI tool)"]
-        CliOps["apply/delete/get/reload\n3 targets: center/server/client"]
+        CliOps["apply/get/delete/reload + utility commands\n3 targets: center/server/client"]
     end
 
     CLI -- "HTTP API" --> Controller
@@ -52,11 +52,12 @@ flowchart TD
 |-----------|-----------|
 | Project at a glance, code organization, conventions shared by the in-repo binaries | [00-common/](00-common/SKILL.md) |
 | How the Controller processes resources internally | [01-controller/](01-controller/SKILL.md) |
-| Controller authentication & authorization (admin login, cli tokens, RBAC, 401/403 debugging) | [01-controller/11-authentication-authorization.md](01-controller/11-authentication-authorization.md) |
+| Controller authentication & authorization (bearer tokens, CLI token persistence, RBAC, 403/503 debugging) | [01-controller/11-authentication-authorization.md](01-controller/11-authentication-authorization.md) |
 | How the Gateway processes requests | [02-gateway/](02-gateway/SKILL.md) |
 | How Controller and Gateway sync | [03-controller-gateway-link/](03-controller-gateway-link/SKILL.md) |
 | edgion-cli commands and target modes | [04-ctl/](04-ctl/SKILL.md) |
 | The full processing chain for a specific resource | [05-resources/](05-resources/SKILL.md) |
+| CRD ↔ struct ↔ conf_sync field and secret-redaction rules | [05-resources/00-schema-transport-contract.md](05-resources/00-schema-transport-contract.md) |
 | Troubleshoot route mismatch | [02-gateway/03-routes/](02-gateway/03-routes/SKILL.md) |
 | Troubleshoot TLS certificate issues | [02-gateway/04-tls/](02-gateway/04-tls/SKILL.md) |
 | Troubleshoot gRPC sync issues | [03-controller-gateway-link/00-overview.md](03-controller-gateway-link/00-overview.md) |
@@ -84,15 +85,15 @@ Internal architecture of the control plane, broken down by module:
 | Overall architecture | ConfMgr facade, ProcessorRegistry |
 | Startup / shutdown | Leader election, HA mode, event-driven main loop |
 | Admin API | port :12101, CRUD, health/ready |
-| ConfigCenter | ConfCenter trait, FileSystem / Kubernetes implementations |
+| ConfigCenter | ConfCenter trait, FileSystem / Kubernetes / Etcd implementations |
 | Workqueue | deduplication, delayed (coalesced) requeue, dirty requeue |
-| ResourceProcessor | 11-step processing pipeline, 20 Handler kinds |
+| ResourceProcessor | Processing pipeline and registry-defined Handler kinds |
 | Requeue | cross-resource linkage, TriggerChain cycle detection |
 | CacheServer | ServerCache + EventStore, gRPC data source |
 | ACME | Let's Encrypt automated certificates, Leader only |
 | Adding a new resource | workflow + 4 template categories (route-like / controller-only / plugin-like / cluster-scoped) |
 | Status management | update_status implementation conventions, known pitfalls |
-| Authentication & authorization | token-only admin authn (Istio-style bearer), cli token RBAC, Role/Verb/CenterPolicy, middleware onion, default Center policy |
+| Authentication & authorization | token-only admin authn (Istio-style bearer), CLI token RBAC, Role/Verb/CenterPolicy, middleware onion, default federation policy |
 
 ### [02-gateway/](02-gateway/SKILL.md) — edgion-gateway architecture
 
@@ -105,11 +106,11 @@ Internal architecture of the data plane, broken down by subsystem:
 | Pingora lifecycle | 7-phase ProxyHttp callbacks, ConnectionFilter |
 | [Routes](02-gateway/03-routes/) | multi-stage matching pipeline, separate engines for HTTP/gRPC/TCP/TLS/UDP |
 | [TLS](02-gateway/04-tls/) | downstream/upstream TLS, SNI matching, BoringSSL/OpenSSL |
-| Plugin system | 4-phase execution, 28 HTTP plugins, conditional execution |
+| Plugin system | Multi-phase execution, `EdgionPlugin` variants, conditional execution |
 | Load balancing | RoundRobin/EWMA/LeastConn/ConsistentHash/Weighted |
 | Backends | Service/EndpointSlice discovery, health checks |
 | Observability | AccessLog (zero-copy JSON), Prometheus Metrics |
-| LinkSys | ES/Redis/Etcd/Webhook/File external integrations |
+| LinkSys | Gateway providers plus shared-core providers for external integrations |
 | Runtime store | Gateway/Route configuration, ArcSwap atomic swap |
 | ConfHandler development | full_set/partial_update conventions, incremental update constraints |
 | HTTP plugin development | EdgionPlugin phase selection, runtime wiring, ExtensionRef |
@@ -122,12 +123,12 @@ The ConfigSync protocol (GetServerInfo / List / Watch / WatchServerMeta), the Co
 
 ### [04-ctl/](04-ctl/SKILL.md) — edgion-cli architecture
 
-CLI tool: 3 target modes (center/server/client), apply/delete/get/reload subcommands.
+CLI tool with three target modes (`center` = Controller ConfCenter API, `server` = Controller cache, `client` = Gateway cache), resource commands, certificate generation, and token utilities. This `center` target is unrelated to the external federation Center binary.
 
 ### [05-resources/](05-resources/SKILL.md) — Resource architecture
 
-Common processing flow + features, special handling, and cross-resource links for all 20 resources.
-For resource Schema (field definitions, default values) see [02-features/03-resources/](../02-features/03-resources/SKILL.md) (numbered to align, complementary responsibilities).
+Common processing flow, special handling, and cross-resource links for the resource kinds declared by `edgion-resources/src/resource/defs.rs`.
+For resource Schema (field definitions, default values) see [02-features/03-resources/](../02-features/03-resources/SKILL.md); stable numbers align where counterpart pages exist.
 
 | Category | Resources |
 |------|------|
@@ -135,7 +136,7 @@ For resource Schema (field definitions, default values) see [02-features/03-reso
 | Routes | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute |
 | Security / policy | EdgionTls, Secret, ReferenceGrant, BackendTLSPolicy |
 | Plugins / extensions | EdgionPlugins, EdgionStreamPlugins, EdgionConfigData |
-| Backends / services | Service, EndpointSlice |
+| Backends / services | Service, EndpointSlice, ConfigMap, EdgionBackendTrafficPolicy |
 | Automation | EdgionAcme |
 | Infrastructure | LinkSys |
 

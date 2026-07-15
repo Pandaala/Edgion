@@ -29,10 +29,10 @@ BackendTLSPolicy is a Gateway API standard policy resource used to configure ups
 2. **Clear stale references**: clear records for this BackendTLSPolicy in SecretRefManager
 3. **Resolve CA certificates**: iterate `spec.validation.caCertificateRefs`; for each kind=Secret or kind=ConfigMap reference:
    - Register the reference relationship in SecretRefManager
-   - Read data from GLOBAL_SECRET_STORE / ConfigMap Store and populate `spec.resolved_ca_certificates`
+   - Read data from `runtime.secret_store` / `runtime.configmap_store` and populate `spec.resolved_ca_certificates`
 4. **Resolve client certificate Secret**: obtain the client certificate reference via `client_certificate_secret_ref()`:
    - Register the reference relationship in SecretRefManager
-   - Read Secret data from GLOBAL_SECRET_STORE and populate `spec.resolved_client_certificate`
+   - Read Secret data from `runtime.secret_store` and populate `spec.resolved_client_certificate`
 
 ### on_change
 

@@ -37,7 +37,7 @@ pub struct PluginRuntime {
 }
 ```
 
-**Build timing**: HTTPRoute / GRPCRoute preparse phase (not per-request). Entry points (Gateway API standard filters) are split by scope: rule level uses `from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`, backend level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. The legacy `from_httproute_filters()` / `from_grpcroute_filters()` are `#[deprecated]` and forward to the new entries with rule scope by default. EdgionPlugins CRD entries are loaded via `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()`, each returning `Vec<String>` of validation errors. `clone()` returns an empty instance (rebuilt during preparse). Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log.
+**Build timing**: HTTPRoute / GRPCRoute preparse phase (not per-request). Entry points (Gateway API standard filters) are split by scope: rule level uses `from_httproute_filters_for_rule()` / `from_grpcroute_filters_for_rule()`, backend level uses `from_httproute_filters_for_backend()` / `from_grpcroute_filters_for_backend()`. Use only these scope-specific entries. The deprecated forwarding methods still present in code are pre-release removal debt and must not be called or copied. EdgionPlugins CRD entries are loaded via `add_from_request_filters()` / `add_from_upstream_response_filters()` / `add_from_upstream_response_body_filters()` / `add_from_upstream_responses()`, each returning `Vec<String>` of validation errors. `clone()` returns an empty instance (rebuilt during preparse). Each entry may also carry an optional `alias: String` (`^[a-zA-Z0-9._-]{1,32}$`), echoed verbatim into `PluginLog.alias` so multiple entries of the same plugin type can be distinguished in the access log.
 
 ## Conditional execution
 
@@ -98,7 +98,8 @@ resource.pre_parse()                        # event_dispatch.rs
 **Hard constraints to follow when designing new plugins, conditions, or wrappers**:
 
 1. **Do not add `&mut PluginLog` to `UpstreamResponseBodyFilter::run_upstream_response_body_filter`**. The trait signature is the contract; it promises no per-chunk logging in this phase. If diagnostics are truly needed someday, follow #4.
-2. **When implementing a new body-phase filter**, do not call `log.push*` or `log.set_*` inside the filter — there is no log; use `tracing::debug!` for dev logs.
+2. **When implementing a new body-phase filter**, do not call `log.push*`, `log.set_*`, or any
+   `tracing::` macro. Use bounded metrics or per-request aggregation emitted outside the per-chunk path.
 3. **When adding a new body-phase wrapper** (similar to `ConditionalUpstreamResponseBodyFilter`), do not create temporary logs via `PluginLog::new(...)`. Condition evaluation must go through `PluginConditions::evaluate_sync` or the `Condition::evaluate_sync_silent` chain — not `evaluate_detail_sync`.
 4. **For "body-phase summaries"** (e.g., how many times this request hit rate limiting): aggregate per-request, not push per-chunk. Add an aggregation slot in `EdgionHttpContext`, accumulate during the body phase, and emit once at the end of the request into `stage_logs`. **Never** write per-chunk execution traces into the access log.
 5. **ExtensionRef body path**: use `ExtensionRefFilter::resolve_runtime_silent`, **not** `prepare_execution` (the latter calls `start_edgion_plugins_log`).
@@ -111,7 +112,14 @@ resource.pre_parse()                        # event_dispatch.rs
 - [ ] Condition evaluation uses the silent chain (grep for `evaluate_sync_silent` / `evaluate_sync` rather than `evaluate_detail_sync`).
 - [ ] No `ctx.pending_edgion_plugins_logs.push` or `session.start_edgion_plugins_log` calls on the body path.
 
-## HTTP plugin list (29 total)
+## HTTP plugin inventory
+
+The schema enum `EdgionPlugin` in
+`edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs` is the authoritative inventory.
+Do not rely on a hard-coded total: adding or removing an enum variant must be reflected in the
+gateway creation factory and stage support. The current inventory includes Gateway API filters and
+custom plugins such as FaultInjection, TraceContext, ExtProc, GlobalAccessControl, Canary, and Wasm.
+The category tables below are a conceptual guide, not an exhaustive registry.
 
 ### Authentication (8)
 
@@ -199,7 +207,7 @@ Stream plugins run at the TCP/UDP layer and use a two-stage architecture:
 
 ```
 edgion-gateway/src/plugins/
-├── http/                          # HTTP plugin directory (28; with DebugAccessLogToHeader in gateway_api_filters/, total 29)
+├── http/                          # HTTP plugins; authoritative variants live in EdgionPlugin
 │   ├── basic_auth/                # one subdirectory per plugin
 │   ├── jwt_auth/
 │   ├── cors/
@@ -235,7 +243,7 @@ edgion-gateway/src/plugins/
         ├── response_header_modifier.rs
         ├── request_redirect.rs
         ├── url_rewrite.rs
-        ├── extension_ref.rs       # ExtensionRef (route/backend filter list referencing EdgionPlugins, Gateway API standard) — nested form removed; see docs/zh-CN/migrations/<version>-extension-ref.md
+        ├── extension_ref.rs       # ExtensionRef (route/backend filter list referencing EdgionPlugins, Gateway API standard) — nested form removed; see docs/en/migrations/<version>-extension-ref.md
         ├── cors_filter.rs
         └── debug_access_log.rs
 ```

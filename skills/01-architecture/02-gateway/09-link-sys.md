@@ -1,6 +1,6 @@
 ---
 name: gateway-link-sys
-description: LinkSys external system integration — 5 providers, LinkSysStore management, DataSender abstraction, ConfHandler resource updates.
+description: LinkSys external system integration — CRD connector variants, runtime clients, logging DataSenders, and ConfHandler updates.
 ---
 
 # LinkSys external system integration
@@ -8,7 +8,7 @@ description: LinkSys external system integration — 5 providers, LinkSysStore m
 > LinkSys is Edgion's unified framework for integrating with external storage / services.
 > External system connections are declared via the LinkSys CRD resource; the Gateway manages client lifecycles automatically.
 
-## 5 providers
+## LinkSys CRD variants
 
 | Provider | Module | Client type | Connection method | Core capabilities |
 |----------|--------|-------------|-------------------|-------------------|
@@ -16,7 +16,11 @@ description: LinkSys external system integration — 5 providers, LinkSysStore m
 | Etcd | `providers/etcd/` | `EtcdLinkClient` | gRPC (v3 API) | KV read/write |
 | Redis | `providers/redis/` | `RedisLinkClient` | standalone / sentinel / cluster (fred) | Data read/write, distributed rate limiting support |
 | Webhook | `providers/webhook/` | WebhookManager | HTTP | External service calls, KeyGet::Webhook resolution |
-| LocalFile | `providers/local_file/` | `LocalFileWriter` | Local file I/O | File logging (supports daily / hourly rotation) |
+| Kafka | `providers/kafka/` | `KafkaLinkClient` | Kafka producer | Persistent runtime client and log delivery |
+| HttpDns | resource + DNS resolver service | resolver configuration | HTTP DNS | DNS-resolution configuration; not a LinkSys runtime-client store |
+
+`LocalFileWriter` and the OTLP exporter are logging `DataSender` implementations, not
+`SystemConfig` variants in the LinkSys CRD.
 
 ### Elasticsearch
 
@@ -120,6 +124,7 @@ Each provider that requires a persistent connection has its own ArcSwap runtime 
 | Redis | `REDIS_RUNTIME: ArcSwap<HashMap<String, Arc<RedisLinkClient>>>` | `get_redis_client(name)` |
 | Etcd | `ETCD_RUNTIME: ArcSwap<HashMap<String, Arc<EtcdLinkClient>>>` | `get_etcd_client(name)` |
 | Elasticsearch | `ES_RUNTIME: ArcSwap<HashMap<String, Arc<EsLinkClient>>>` | `get_es_client(name)` |
+| Kafka | `KAFKA_RUNTIME` provider store | `get_kafka_client(name)` |
 | Webhook | `WebhookManager` (managed internally) | via `get_webhook_manager()` |
 
 Key format: `"namespace/name"`.
@@ -144,11 +149,13 @@ pub trait DataSender<T>: Send + Sync where T: Send + 'static {
     async fn init(&mut self) -> Result<()>;
     fn healthy(&self) -> bool;
     async fn send(&self, data: T) -> Result<()>;
+    async fn send_with_meta(&self, data: T, meta: &LogMeta) -> Result<()>;
     fn name(&self) -> &str;
 }
 ```
 
-- `DataSender<String>` — text logs (LocalFile, ES, Redis).
+- `DataSender<String>` — log delivery (LocalFile, Elasticsearch, Kafka, OTLP). The default
+  `send_with_meta` delegates to `send`; structured exporters such as OTLP can use `LogMeta`.
 - The FailedCache pattern (spill to LocalFile / Redis when ES is unavailable, replay after recovery) is **planned, not yet implemented** — see `edgion-gateway/src/link_sys/readme`. Today a failed/unhealthy sink is handled only by the `AccessLogger` first-healthy fallback (drop + `access_log_dropped` metric when all senders are unhealthy).
 
 ## ConfHandler

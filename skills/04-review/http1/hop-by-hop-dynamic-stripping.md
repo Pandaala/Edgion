@@ -124,4 +124,4 @@ common-case attack surface (single `Connection: X-Custom`).
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a1.md → V5` (CONFIRM)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a1.md → V5` (CONFIRM)

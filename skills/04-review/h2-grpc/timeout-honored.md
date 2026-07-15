@@ -63,6 +63,6 @@ Pingora's `peer.options.read_timeout` / `write_timeout` are **per-I/O-call**, no
 
 ## Reference
 
-- Verifier: `tasks/todo/rfc-review/_raw/verification-a2.md → V3` (CONFIRM)
+- Historical verifier (source queue removed): `tasks/todo/rfc-review/_raw/verification-a2.md → V3` (CONFIRM)
 - Architecture: `skills/01-architecture/02-gateway/03-routes/02-grpc-route.md`
 - Mapping table: `edgion-gateway/src/runtime/server/error_response.rs::http_to_grpc_status` (`504 → (4, "deadline exceeded")`)

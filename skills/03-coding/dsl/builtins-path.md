@@ -11,14 +11,18 @@ description: DSL builtin path/uri/query variable reference — views, behavior, 
 
 ## Variable cheat sheet
 
-| Variable | View | Meaning | Affected by rewrite | Alloc cost |
-|------|------|------|----------------|-----------|
-| `req.path` | current (normalized) | Current path, post-rewrite | Yes | 1 (DSL `Value::Str`) |
-| `req.uri` | current (normalized) | Current path + current query | Yes | 1 (format + Value) |
-| `req.query_string` | current | Whole current query string, raw (not decoded, not normalized) | Yes | 1 |
-| `req.query("name")` | entry (frozen) | Single query parameter, **percent-decoded** (`+` → space) | No | 1 |
-| `req.request_path` | entry (frozen) | Raw client-entry path | No | 1 |
-| `req.request_uri` | entry (frozen) | Raw client-entry path + raw query | No | 1 (format) |
+| Variable | View | Meaning | Affected by rewrite |
+|------|------|------|----------------|
+| `req.path` | current (normalized) | Current path, post-rewrite | Yes |
+| `req.uri` | current (normalized) | Current path + current query | Yes |
+| `req.query_string` | current | Whole current query string, raw (not decoded, not normalized) | Yes |
+| `req.query("name")` | entry (frozen) | Single query parameter, **percent-decoded** (`+` → space) | No |
+| `req.request_path` | entry (frozen) | Raw client-entry path | No |
+| `req.request_uri` | entry (frozen) | Raw client-entry path + raw query | No |
+
+Allocation counts are implementation details, not a script contract: `Value::Str` uses
+`Arc<str>`, and formatting/ownership depends on the selected view. Benchmark the actual
+call path before making an optimization claim.
 
 `req.query("name")` is sourced from `EdgionHttpContext::cached_query` — a per-request decoded HashMap shared with the route matcher and `PluginSession::get_query_param`. Built once at the first reader, then reused; later `req.set_uri(...)` rewrites do **not** change what `req.query("name")` returns within the same request.
 

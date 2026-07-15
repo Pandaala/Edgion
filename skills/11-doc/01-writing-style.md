@@ -294,7 +294,14 @@ Prefer linking to authoritative sources (Gateway API official, MDN, K8s official
 
 ### Between docs/ and skills/
 
-`docs/` should **not** link to `skills/`. When you need architectural information, link to dev-guide/.
+End-user pages under `getting-started/`, `user-guide/`, and `ops-guide/`
+should not send readers into agent-internal workflows. Prefer a human-facing
+`dev-guide/` page or an authoritative external source.
+
+Contributor-facing `dev-guide/` pages may deliberately link to canonical
+`skills/` workflows when the link is a curated handoff rather than duplicated
+content. Use a repository URL for rendered-site links; a bare repository path is
+acceptable only as inline code, not as a clickable site-relative link.
 
 ### Link maintenance
 

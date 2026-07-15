@@ -14,7 +14,7 @@ description: User-documentation writing standards. Use this skill when writing o
 1. **User first** — Documentation targets users (operators, developers, integrators), not internal implementers
 2. **Example-driven** — Every feature page must include a complete, working YAML example; "read it and use it"
 3. **Progressive disclosure** — Quick start → detailed configuration → advanced scenarios → FAQ; go deeper as needed
-4. **Multilingual symmetry** — `en/` and `zh-CN/` keep fully consistent directory and file structure
+4. **Multilingual parity** — new and changed user-facing pages update `en/` and `zh-CN/` together; any temporary gap is explicitly tracked
 5. **Do not duplicate skills/** — `docs/` does not cover internal implementation; link to dev-guide or external docs when needed
 
 ## File list

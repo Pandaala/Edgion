@@ -28,7 +28,10 @@ Integration is the project's key control point, so `run_integration.sh` enforces
 | Agent-doc Validation | `python3 cicd/checks/validate_agent_docs.py` | `AGENTS.md` / `skills/` links, frontmatter, indexes, stale `src/` refs |
 | Types Purity | `cicd/checks/check_types_purity.sh` | `edgion-resources` stays a clean leaf crate (no `crate::core::` edges) |
 
-These are the same `cicd/checks/*` entry points CI uses — there is no `Makefile` (the former `make check-*` targets were dissolved into standalone `cicd/` scripts). To reproduce a gate failure standalone, run its entry point directly, e.g. `python3 cicd/checks/validate_agent_docs.py`. A common cause is doc-vs-code drift after a refactor (e.g. a `skills/` file referencing a moved/deleted `src/` path) — fix the reference, not the gate.
+These are a subset of repository quality gates, not a replacement for pre-commit or all
+GitHub workflows. The runner does not run fmt, workspace check/clippy, SSA-force,
+Gateway no-tracing, or every independent CI guard. To reproduce one of these three
+preflights, run its `cicd/checks/*` entry point directly.
 
 ## Quick start
 
@@ -51,7 +54,9 @@ These are the same `cicd/checks/*` entry points CI uses — there is no `Makefil
 
 ### Run every integration test in one shot
 
-`run_integration.sh` only covers the suites that share its single controller/gateway topology. Several other tests live in standalone scripts (Etcd / Elasticsearch LinkSys, ACME, Center watch-sync, edgion-cli E2E, FileWatcher) — each with its own service lifecycle and port layout. To exercise *everything* end-to-end use the sequential orchestrator:
+`run_integration.sh` covers suites sharing one Controller/Gateway topology. The in-repo
+orchestrator also runs the declared standalone LinkSys, ACME, CLI, and FileWatcher jobs.
+It does not cover tests owned by the separate EdgionCenter repository.
 
 ```bash
 # Run every job in fast mode, continue on failure, unified report at the end
@@ -65,10 +70,13 @@ These are the same `cicd/checks/*` entry points CI uses — there is no `Makefil
 
 # Limit the run
 ./edgion-tests/integration/scripts/integration/run_all_integration.sh --only main,linksys_etcd
-./edgion-tests/integration/scripts/integration/run_all_integration.sh --skip acme,center
+./edgion-tests/integration/scripts/integration/run_all_integration.sh --skip acme,file_watcher
 ```
 
-Each job's stdout/stderr is captured to `tmp/integration_testing/run_all_<timestamp>/<job>.log` plus a machine-readable `summary.txt`. Job names: `main`, `linksys_etcd`, `linksys_es`, `acme`, `center`, `cli`, `file_watcher`. All children share controller/gateway ports (12101/12001) so they run sequentially even when their topologies differ.
+Each job's stdout/stderr is captured under the run directory with a machine-readable
+summary. Current names are `main`, `linksys_etcd`, `linksys_es`, `linksys_otlp`,
+`linksys_kafka`, `acme`, `cli`, and `file_watcher`. Treat
+`run_all_integration.sh::JOB_NAMES` as authoritative.
 
 ## Memorize the actual directory layout
 
@@ -77,7 +85,7 @@ Each job's stdout/stderr is captured to `tmp/integration_testing/run_all_<timest
 - `edgion-tests/src/server/test_server.rs`: local HTTP/gRPC/WebSocket/TCP/UDP test backend
 - `edgion-tests/src/validator/`: `resource_diff`, `config_load_validator`
 - `edgion-tests/integration/scripts/integration/run_integration.sh`: main entry (shared controller/gateway suites)
-- `edgion-tests/integration/scripts/integration/run_all_integration.sh`: top-level orchestrator that sequences `run_integration.sh` plus every standalone integration script (Etcd / ES LinkSys, ACME, Center, CLI, FileWatcher) and emits a unified report
+- `edgion-tests/integration/scripts/integration/run_all_integration.sh`: in-repo orchestrator for the stable job list above
 - `edgion-tests/integration/scripts/utils/`: `prepare.sh`, `start_all_with_conf.sh`, `load_conf.sh`, `kill_all.sh`
 - `edgion-tests/integration/scripts/gen_certs/`: test certificate generation scripts
 - `tmp/integration_testing/testing_<timestamp>/`: this run's logs, PIDs, generated Secrets, and report directory
@@ -259,7 +267,7 @@ After that `--list-dynamic-scenarios` lists it automatically, and `run_integrati
 
 ### Manual phase-by-phase debugging
 
-A scenario internally schedules suites via `ctx.assert_phase(scenario, "initial"|"update")`. To bypass the orchestration manually, the legacy path is still available (after preserving the scene):
+A scenario internally schedules suites via `ctx.assert_phase(scenario, "initial"|"update")`. For low-level debugging, you can bypass orchestration and invoke the current phase flags directly after preserving the scene:
 
 ```bash
 # Run only the initial-phase assertions
@@ -318,13 +326,12 @@ Only when a **completely different process-level configuration** is needed shoul
 |---|---|
 | `test_file_watcher.sh` | Controller FileSystem source (mutually exclusive with K8s mode) |
 | `test_resource_abnormal_metrics.sh` | Slow-test-only Controller `tick_secs=30` |
-| `test_center_no_auth.sh` | Center fail-close validation without auth (no Controller/Gateway) |
-| `run_center_test.sh` | 1 Center + 2 Controllers federation validation |
-| `run_center_mtls_test.sh` | Center federation mTLS + SPIFFE peer-identity binding (cert SAN ↔ controller_id), wrong-identity rejection, plaintext fail-close |
 | `run_conf_sync_mtls_test.sh` | Controller↔Gateway mTLS channel |
 | `run_acme_test.sh` | Standalone ACME topology |
 
 A new standalone script must include a header comment explaining "why the main environment cannot be reused"; otherwise the PR cannot be merged.
+
+Center/federation topology tests are maintained in the separate EdgionCenter repository.
 
 ### Antipatterns (signals that block reviewer approval)
 

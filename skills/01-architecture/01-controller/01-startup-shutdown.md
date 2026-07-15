@@ -18,18 +18,27 @@ EdgionControllerCli::parse_args()   // clap parses the command line
 
 ## Startup Sequence (`run()` method)
 
-`run()` executes the steps below in order; each step depends on the previous one finishing:
+The startup path is split between `run()`, `run_after_logging()`, and
+`start_services()`. The operational phases are:
 
 | Step | Action | Description |
 |------|--------|-------------|
 | 1 | `EdgionControllerConfig::load()` | Merge CLI, environment variables, and config-file parameters |
 | 2 | `init_controller_config()` / `init_global_test_mode()` | Initialize global config and test-mode flag |
 | 3 | `init_environment()` | Initialize the working directory (work_dir priority: CLI > ENV > Config > default `.`), and the logging system |
-| 4 | `ShutdownHandle::new()` | Create the shutdown handle and spawn a background task to wait for SIGINT/SIGTERM |
-| 5 | `ConfMgr::create()` | Create the configuration manager (ConfigSyncServer is None at this point) |
-| 6 | spawn `ConfMgr::start_with_shutdown()` | Start the ConfMgr lifecycle in the background (leader election, watcher, link) |
-| 7 | `load_schemas()` | Load CRD schemas (only in non-K8s mode; in K8s mode the API Server validates) |
-| 8 | `start_services()` | Start gRPC + Admin API; blocks until shutdown |
+| 4 | Observability initialization | Install metrics recorder and process-level observability |
+| 5 | `ShutdownHandle::new()` | Create the shared signal broadcaster |
+| 6 | `ConfMgr::create()` | Select FileSystem/Kubernetes/Etcd and create its `ControllerRuntime` |
+| 7 | Security/auth initialization | Resolve admin/scoped tokens, build Authorizer, federation reload channel, and optional federation supervisor |
+| 8 | Schema loading | Load CRD schemas in non-K8s mode; K8s delegates structural admission to the API server |
+| 9 | Auto-CA pre-initialization | Prepare Kubernetes auto-CA rotation/identity inputs when enabled |
+| 10 | Spawn ConfMgr lifecycle | Run backend watchers/leader lifecycle in a detached task |
+| 11 | Validate conf_sync transport | `validate()` + `ensure_transport_configured()` fail startup before listeners when transport security is omitted/invalid |
+| 12 | `start_services()` | Bind gRPC, Admin, probe, and metrics listeners; initialize TLS identity/cert watchers; block until shutdown |
+
+The detached ConfMgr task logs lifecycle errors and leaves readiness false; such
+an error does not by itself propagate as a non-zero process exit after listeners
+have started. Operators must use `/ready` and the error metrics/logs.
 
 ### init_environment Details
 
@@ -44,16 +53,20 @@ EdgionControllerCli::parse_args()   // clap parses the command line
 
 ### start_services Details
 
-gRPC and Admin API run concurrently via `tokio::join!`, each holding its own `ShutdownSignal`:
+Four listeners are involved:
 
 ```text
-tokio::join!(
-    grpc_server.serve_with_shutdown(grpc_addr, grpc_shutdown),
-    serve_admin_api_with_shutdown(conf_mgr, schema_validator, admin_addr, admin_shutdown),
-)
+gRPC :12151       conf_sync (mTLS/explicit skip_tls)
+Admin :12101      authenticated business API
+Probe :12100      public health/readiness
+Metrics :12190    public Prometheus scrape endpoint
 ```
 
-The gRPC server uses a Provider pattern (`ConfMgrProvider`) to dynamically obtain the latest `ConfigSyncServer` instance, allowing reload without restarting the service. Before `ConfigSyncServer` is ready, gRPC returns `UNAVAILABLE`.
+Probe and metrics run in spawned listener tasks. Admin and gRPC are joined in the
+main service future. The gRPC Provider dynamically obtains the latest
+ConfigSyncServer after reload and returns `UNAVAILABLE` while it is absent.
+Auto-CA can provision the in-memory server identity and start per-replica
+identity sync; file-backed TLS starts a certificate watcher.
 
 ## ShutdownHandle Architecture
 
@@ -98,8 +111,8 @@ SIGINT / SIGTERM
 ShutdownHandle::wait_for_signals()
   │  self.shutdown() → watch::Sender sends true
   │
-  ├─► gRPC server shutdown signal → tonic graceful_shutdown
-  ├─► Admin API shutdown signal → axum graceful_shutdown
+  ├─► Admin / probe / metrics drain immediately
+  ├─► gRPC stream cancellation starts; listener drain is delayed 2 seconds
   └─► ConfMgr shutdown signal → stop watcher, ResourceController, worker
 ```
 
@@ -107,9 +120,9 @@ Shutdown order:
 
 1. The OS signal is captured by `wait_for_signals()`
 2. `watch::Sender` sends `true`; all `ShutdownSignal::wait()` calls return
-3. The shutdown futures of gRPC and Admin API complete; `tokio::join!` unblocks
-4. ConfMgr receives the signal and stops watcher and worker loops
-5. `run()` returns and `main()` exits
+3. Admin, probe, and metrics begin graceful shutdown; gRPC gets a two-second final-sync window
+4. ConfMgr receives the signal and stops watcher/worker loops
+5. The service join is bounded by the process shutdown budget (25 seconds after the signal); the process exits after completion or timeout
 
 ### Design Highlights
 

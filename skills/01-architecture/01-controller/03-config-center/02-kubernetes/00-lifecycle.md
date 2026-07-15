@@ -13,7 +13,7 @@ description: KubernetesCenter startup flow and leader election — Lease-based e
 start(shutdown_handle)
 ├── 1. Client::try_default()              # create K8s client (in-cluster ServiceAccount or kubeconfig)
 ├── 2. LeaderElection::new(client, config) # initialize leader election
-├── 3. leader_election.preflight_check()   # preflight checks (failure returns Err and the process exits)
+├── 3. leader_election.preflight_check()   # preflight checks (failure returns Err; readiness stays false)
 │      ├── ensure_lease_exists()           #   verify the Lease object is readable/creatable
 │      └── ensure_pod_label_patch_ready()  #   verify Pod label is patchable (RBAC permission check)
 ├── 4. tokio::spawn(le.run())             # only start the background election loop after preflight passes
@@ -31,14 +31,15 @@ run_leader_only_lifecycle()
     ├── run_main_flow()                   # run all watchers + gRPC
     │   ├── start_event_watchers()
     │   ├── event loop (CachesReady → set gRPC server)
-    │   └── cleanup on exit (stop ACME, clear registry)
+    │   └── cleanup on exit (stop leader services, reset ControllerRuntime)
     └── match exit:
         ├── Shutdown → return
-        └── LostLeadership → set_config_sync_server(None) + clear + loop back
+        └── LostLeadership → unpublish ConfigSyncServer + reset runtime + wait again
 ```
 
-Non-leader replicas are entirely idle: they start no watchers and consume no K8s API connections or memory.
-On loss of leadership, all state is cleared and the loop returns to waiting.
+Non-leader replicas do not start resource watchers, resource caches, or ConfigSyncServer. They still run
+the election loop and the process-level Admin, probe, metrics, and gRPC listeners. On loss of leadership,
+the leader-only resource state is reset and the lifecycle returns to waiting.
 
 ## All-Serve Lifecycle
 
@@ -59,10 +60,11 @@ run_all_serve_lifecycle()
         │   ├── LeadershipLost
         │   │   └── stop_leader_services() (continue serving gRPC!)
         │   └── ControllerExit / ReloadRequested → exit
-        └── cleanup: set_config_sync_server(None), clear registry
+        └── cleanup: unpublish ConfigSyncServer, stop leader services, reset runtime
 ```
 
-All replicas independently run K8s watchers and the gRPC service; the Leader additionally takes on status writeback and ACME.
+All replicas independently run K8s watchers and can publish a ConfigSyncServer. The Leader additionally
+writes status, runs ACME, rotates the conf-sync CA, runs the DNS resolver, and performs a full requeue on acquisition.
 For a detailed comparison see [01-ha-mode.md](01-ha-mode.md).
 
 ## Leader Election (Lease-based)
@@ -92,12 +94,16 @@ run():                                    # tokio::spawn background task
     ├── try_acquire_or_renew()
     │   ├── read the current Lease
     │   ├── check holder_identity and expiration
-    │   └── update the Lease via Server-Side Apply
+    │   └── replace the Lease with its observed resourceVersion (OCC)
     └── match result:
-        ├── Ok(true)  → store is_leader=true (Release), update Pod label
-        ├── Ok(false) → store is_leader=false (Release), update Pod label
-        └── Err       → assume lost, store is_leader=false (Release), update Pod label
+        ├── Ok(true)  → record a successful acquire/renew and converge the Pod label
+        ├── Ok(false) → clean step-down (another holder or an OCC race)
+        ├── Err(404)  → step down immediately, recreate the Lease, retry
+        └── other Err → retain leadership inside renew_deadline; step down after it expires
 ```
+
+Lease updates use `GET` followed by `replace` with the observed `resourceVersion`, so concurrent contenders
+are resolved through Kubernetes optimistic concurrency control rather than Server-Side Apply.
 
 **Memory ordering note**: writes to `is_leader` use `Ordering::Release`, reads use `Ordering::Acquire`,
 guaranteeing cross-thread happens-before semantics so that the status-write guard remains correct on weakly-ordered architectures (e.g. ARM/M1).
@@ -113,7 +119,8 @@ metadata:
 ```
 
 The `edgion-controller-leader` Service uses this selector to route only to the leader Pod.
-Label updates are fire-and-forget; failures do not block the election loop.
+Label-update failures do not block the election loop, but leave the label marked unsynchronized so every
+subsequent election tick retries the patch until it converges.
 
 ### LeaderHandle
 
@@ -153,7 +160,7 @@ The main loop is a simple `match event_rx.recv().await`, with no complex `select
 | Event | leader-only handling | all-serve handling |
 |-------|-----------------------|--------------------|
 | `CachesReady` | Create ConfigSyncServer + register WatchObjs | Same as left; if already leader, additionally start_leader_services |
-| `CachesTimeout` | Same as above (degraded) | Same as above |
+| `CachesTimeout` | Treat as controller failure and rebuild | Treat as controller failure and rebuild |
 | `LeadershipLost` | Exit run_main_flow | stop_leader_services, keep serving gRPC |
 | `LeadershipAcquired` | Not used | If caches_ready, start_leader_services |
 | `ControllerExit` | Exit the loop, trigger retry/rebuild | Same as left |
@@ -200,14 +207,14 @@ The publication of ConfigSyncServer (`set_config_sync_server(Some(...))`) must s
 ### Problem Scenario
 
 In Kubernetes phased initialization, Phase 2 resources (HTTPRoute, GRPCRoute, EdgionTls, EdgionPlugins, etc.)
-are registered into `PROCESSOR_REGISTRY` only after Phase 1. If the Caches watcher emits `CachesReady` based purely on
+are registered into the runtime-owned processor registry only after Phase 1. If the Caches watcher emits `CachesReady` based purely on
 "the registry currently has no not_ready kinds", the ConfigSyncServer would only contain the Phase 1 WatchObj set. A Gateway calling `List(kind)` for Phase 2 kinds would receive `Unknown kind`.
 
 ### Correct Rule
 
 1. **Wait for all phased processors to finish registering** (Phase 1 + Phase 2 are all spawned)
 2. **Wait for all kinds that sync to Gateway to be marked ready** (init phase complete)
-3. **Run `PROCESSOR_REGISTRY.all_watch_objs(no_sync_kinds)` and emit `CachesReady`**
+3. **Run `runtime.processor_registry.all_watch_objs(no_sync_kinds)` and emit `CachesReady`**
 
 ### Troubleshooting Tip
 
@@ -221,11 +228,13 @@ but existing traffic still works, prioritize checking whether only a partial set
 | Parameter | Value |
 |-----------|-------|
 | Backoff formula | `2^min(failures, 6)` seconds (1s → 2s → 4s → 8s → 16s → 32s → 64s) |
-| Max consecutive failures | Give up after 10 (process exits) |
+| Max consecutive failures | Give up after 10 lifecycle failures |
 | Stable-run reset | Reset the failure counter after 5 minutes of continuous running |
 
 Each abnormal controller exit or 410 Gone-triggered rebuild increments the consecutive-failure count by 1.
 If a single iteration runs stably for more than 5 minutes, the count is reset to zero.
+When the detached ConfMgr lifecycle gives up, it returns an error/terminal result and readiness remains false;
+the already-started process listeners are not synchronously terminated by this loop itself.
 
 ## Configuration Reference
 

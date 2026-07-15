@@ -50,7 +50,7 @@ If the task lands under `tasks/`, the default documents are:
 | 7 Test execution | `02-implementation.md` |
 | 8 Wrap-up summary | `<task-name>.md` or `07-changelog.md` |
 
-## 8-step flow
+## Steps 0–8
 
 ### 0. Receive requirement and establish context
 
@@ -147,7 +147,10 @@ Done when:
 
 What to do:
 
-- At minimum run the related formatter, static checks, unit tests, and relevant integration tests
+- Run the repository quick checks in their required order: formatter, workspace
+  compile, workspace lint, agent-doc consistency, and SSA-force guard
+- Run targeted unit and integration tests appropriate to the change; run
+  `cargo test --all` only when the user explicitly requests it
 - Distinguish between issues from this change, environment issues, and pre-existing failures
 
 Done when:
@@ -188,3 +191,5 @@ Considered done only when:
 - Related tests have actually been run
 - A final summary and residual-risk description exist
 - All subagent outputs have been rechecked and converged by the main agent
+- The result is handed off without committing, pushing, or opening a PR unless
+  the user explicitly authorized that external mutation

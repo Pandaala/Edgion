@@ -19,7 +19,7 @@ Each access log entry must contain enough information for an operator to locate 
 **Do not record**:
 - Plugin-internal intermediate states ("starting auth check", "token parsed")
 - Every header read or every conditional check
-- Verbose duplicate debug info (those belong to `tracing::debug!()`)
+- Verbose duplicate debug steps (omit on the hot path; do not move them to `tracing::debug!`)
 
 **Do record**:
 - The plugin's **final decision** (allow / deny / what value was rewritten)
@@ -213,7 +213,7 @@ log.push("Successfully parsed and validated JWT token with RSA256 algorithm");
 log.push("Checking rate limit window...");
 log.push("Window size = 60s");
 
-// Belongs to tracing::debug!
+// Sensitive internal detail: do not record on the request hot path
 log.push(&format!("token_claims = {:?}", claims));
 
 // Error path via push + format! — leak risk + bypasses the push_err constraint
@@ -245,8 +245,8 @@ they serialize as **one merged `"log"` array** in push order:
 
 The JSON output is always a single `"log"` array — there is no separate `ulog`
 field and no in-band overflow marker. When even tier 2 is full, further entries
-are dropped and `log_full: true` is set. For detailed debug info, use
-`tracing::debug!` instead of relying on tier 2.
+are dropped and `log_full: true` is set. Do not use tier 2 as a request-level
+debug stream; omit intermediate detail or add a deliberately bounded final signal.
 
 ---
 
@@ -257,7 +257,8 @@ are dropped and `log_full: true` is set. For detailed debug info, use
 log.push("OK u=alice");          // allowed
 log.push("Deny missing-token");  // rejected, with reason
 ```
-No metric needed (the auth result already shows up in the status of `requests_failed` and `backend_requests_total`).
+No extra metric is needed; the result is reflected in the response status and
+`edgion_backend_requests_total`.
 
 ### Scenario 2: plugin rewrote the request
 ```rust
@@ -272,8 +273,9 @@ The upstream error message flows into the access log via the `UpstreamInfo.err` 
 | Information type | Destination |
 |---------|------|
 | Final request decision | `PluginLog` → access log |
-| Intermediate steps for troubleshooting | `tracing::debug!()` → system log |
-| Exception/alert | `tracing::warn!()` / `tracing::error!()` → system log |
+| Intermediate request steps | Omit; reconstruct from bounded final access-log fields |
+| Request exception | `errors`, `PluginLog`, or an existing bounded metric |
+| Cold/config/background exception | Structured `tracing::warn!()` / `tracing::error!()` |
 | Performance data | `Gauge` / `Counter` in `metrics.rs` → Prometheus |
 
 ---

@@ -57,7 +57,9 @@ Handler side (`EdgionAcmeHandler::update_status`) **only** manages the Gateway-A
 
 - validation_errors empty → `Accepted=True/Accepted`
 - validation_errors non-empty → `Accepted=False/Invalid`, with message being the joined errors
-- The `last_failure_reason` text field is also kept for legacy tools that still read it
+- Current code still carries `last_failure_reason` alongside structured status.
+  This is pre-release removal debt for old tooling, not a field new consumers
+  should read or writers should extend.
 
 **phase and other ACME lifecycle fields** (`certificate_serial`, `last_renewal_time`, `secret_name`, etc.) are not written by the handler; they are updated independently by the background `AcmeService` via Server-Side Apply (field manager `edgion-acme-controller`). The three writers' field ownership does not overlap:
 - Handler writes `status.conditions` (Merge Patch)

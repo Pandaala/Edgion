@@ -7,6 +7,7 @@ description: edgion-cli CLI tool architecture — three target modes, subcommand
 
 > edgion-cli is Edgion's command-line management tool, interacting with Controller/Gateway via HTTP API.
 > Supports three target modes; can compare the three-tier center/server/client cache for sync troubleshooting.
+> Here `center` means the Controller's ConfCenter CRUD API; it is unrelated to the federation Center in the separate EdgionCenter repository.
 
 ## File index
 
@@ -41,4 +42,8 @@ edgion-cli reload
 
 # Generate conf_sync gRPC mTLS certificates
 edgion-cli gen-certs --output file --output-dir certs/grpc/
+
+# Generate and persist bearer-token material
+edgion-cli gen-token
+edgion-cli login --token <token>
 ```

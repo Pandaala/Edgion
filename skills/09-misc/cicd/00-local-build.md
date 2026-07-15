@@ -14,7 +14,7 @@ Use this skill to answer:
 ## Facts to check first
 
 - The default features are `allocator-jemalloc` + `boringssl`
-- proto compilation comes from the repository root `build.rs`, so a working `protoc` is required locally
+- proto generation is owned by member build scripts (notably `edgion-common/build.rs`), so a working `protoc` is required locally
 - The Docker build environment explicitly installs the following dependencies; treat it as a trustworthy reference for local dependencies:
   - `cmake`
   - `protobuf-compiler`
@@ -61,14 +61,14 @@ Common combinations:
 # Default: jemalloc + boringssl
 cargo build
 
-# rustls experimental build
-cargo build --release --no-default-features --features "allocator-jemalloc,rustls"
+# Gateway rustls build
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls"
 
 # mimalloc + boringssl
-cargo build --release --no-default-features --features "allocator-mimalloc,boringssl"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-mimalloc,boringssl"
 
 # system allocator + boringssl
-cargo build --release --no-default-features --features "allocator-system,boringssl"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl"
 ```
 
 For more detailed feature semantics:
@@ -115,7 +115,7 @@ sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
 | BoringSSL build failure | Whether `cmake` is installed; whether `boringssl` is enabled in the current features |
 | OpenSSL / `pkg-config` / `ssl` link failure | Whether `pkg-config`, `libssl-dev`, or the platform-equivalent OpenSSL development package is installed |
 | ARM64 cross-compilation failure | Whether the `aarch64` cross compiler is installed and the target is set up correctly |
-| Build succeeds but the Gateway TLS path is unavailable | Whether you mistakenly used the `rustls` combination; the Gateway TLS runtime currently still depends mainly on `boringssl` / `openssl` |
+| Build succeeds but a custom Gateway TLS callback/path is unavailable | Check the specific `#[cfg(feature = "boringssl")]` guard; BoringSSL is required for custom termination hooks, while rustls remains a supported alternate backend for the paths it implements |
 
 ## When you need a clean, reproducible build environment
 

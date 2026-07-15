@@ -20,10 +20,13 @@ reason=no_tls_configured}` (when no TLS block is configured) or
 The federation path now **also routes through the Admin API authorization layer**
 (RBAC, added 2026-05-21): the fed router carries `route_layer(authz)` +
 `inject_center_identity`, assigning the `CenterRestricted` role to every request.
-`center.rbac` is default-deny -- an absent `rbac` block authorizes nothing. This
-replaces the old bare unauthenticated router and closes the residual authorization
-gap that mTLS alone did not cover. See `skills/02-features/02-config/00-controller-config.md`
-for the `[center.rbac]` starter allowlist operators must add after upgrade.
+An absent `center.rbac` block installs the built-in policy from
+`edgion-controller/src/fed_sync/default_policy.rs`: read access to every
+`ResourceKind` except `Secret`, writes only to `EdgionConfigData`, the required
+RegionRoute operations, and read-only server-info. An explicit `center.rbac`
+fully replaces that default, including the option to configure deny-all. This
+replaces the old bare unauthenticated router and closes the residual
+authorization gap that mTLS alone did not cover.
 
 Fix suggestions of the form "wrap the fed router with the local admin token
 authn layer", "add a Controller-side `allow_plaintext` / `allow_insecure_federation`
@@ -58,7 +61,8 @@ The local Admin API authenticates with a pre-shared Bearer token (`cli_token_pre
 format. Instead, the fed router uses a `route_layer(authz)` + `inject_center_identity`
 pair: `inject_center_identity` stamps every federation request with a `Role::Restricted`
 carrying the Center policy (no Bearer needed -- mTLS authenticates the peer); `authz_layer`
-then evaluates `(Restricted, verb, kind)` against `center.rbac` (default-deny). This
+then evaluates `(Restricted, verb, kind)` against the explicit policy or the
+built-in default. This
 provides per-endpoint authorization without a token protocol change, and the fed router
 deliberately omits the token authn layer and the 503 token gate.
 
@@ -67,7 +71,9 @@ deliberately omits the token authn layer and the 503 token gate.
 - Wrap the fed_client admin router with the local admin token authn — not needed and would require a protocol change (a pre-shared Bearer token over the HttpProxy wire); the RBAC `route_layer` + `inject_center_identity` is the correct mechanism.
 - Add a `allow_plaintext` / `allow_insecure_federation` opt-out on either side -- explicitly rejected by the operator; both the Controller and the Center insist on mTLS with no escape hatch.
 - "`connect_and_run` still has a `skip_tls` plaintext branch" -- `run()` fails closed before `connect_and_run` is ever reached, so that branch is unreachable defensive code; verify the `resolve_mtls_or_refuse` gate in `run()` before re-reporting.
-- "Center can read Secrets via the blind proxy" -- the RBAC layer is default-deny and the starter allowlist enumerates only `EdgionConfigData`; wildcard-read rules are explicitly prohibited by operator policy and documented in `skills/02-features/02-config/00-controller-config.md`.
+- "Center can read Secrets via the default policy" -- the exhaustive default
+  policy explicitly excludes `ResourceKind::Secret`. An operator-supplied
+  policy replaces the default and must be reviewed on its own merits.
 
 ## Re-evaluation Triggers
 
@@ -78,6 +84,6 @@ Re-open this decision only if:
 
 ## Reference Cases
 
-- `controller-01` (P1, Security), mTLS fail-close fixed 2026-05-20; RBAC layer fixed 2026-05-21: `resolve_mtls_or_refuse` + fail-close in `fed_client::run()`; fed router now carries `route_layer(authz)` + `inject_center_identity`; operators must add `center.rbac.allow` rules after upgrade.
+- `controller-01` (P1, Security), mTLS fail-close fixed 2026-05-20; RBAC layer fixed 2026-05-21: `resolve_mtls_or_refuse` + fail-close in `fed_client::run()`; fed router now carries `route_layer(authz)` + `inject_center_identity`; `center_policy_from(None)` supplies the built-in policy.
 - Sibling P0 `common-center-01` (Center fail-close + SPIFFE peer-identity binding): `docs/superpowers/specs/2026-05-20-center-fed-peer-auth-design.md`.
 - Related: [admin-cors/admin-cors-same-origin-rule.md](../admin-cors/admin-cors-same-origin-rule.md) -- its "unified auth applied to every consumer" premise is what the old fed path violated; the RBAC layer closes this gap for the federation channel.
