@@ -172,6 +172,11 @@ impl FileSystemWatcher {
         .context("init scan join failed")?;
 
         let mut files_by_kind: HashMap<&'static str, Vec<(PathBuf, String)>> = HashMap::new();
+        // Build the next path generation privately. Reusing the live registry
+        // would classify every path from the previous watcher generation as
+        // AlreadyKnown and reload empty processor caches. The final atomic swap
+        // keeps read APIs on a complete generation throughout the scan.
+        let next_registry = PathRegistry::new();
 
         for (path, content) in scan {
             let Some(kind) = ResourceKind::from_content(&content) else {
@@ -187,7 +192,7 @@ impl FileSystemWatcher {
                 continue;
             };
             let rkey = ResourceKey::new(info.kind.clone(), info.key.clone());
-            match self.registry.record(rkey, path.clone()) {
+            match next_registry.record(rkey, path.clone()) {
                 RecordOutcome::NewWinner { .. } => {
                     files_by_kind.entry(kind_str).or_default().push((path, content));
                 }
@@ -210,6 +215,8 @@ impl FileSystemWatcher {
                 }
             }
         }
+
+        self.registry.replace_from(&next_registry);
 
         let senders = self.senders.read().await;
 
@@ -880,5 +887,38 @@ mod tests {
         let conflicts = registry.snapshot_conflicts();
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].losers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn second_watcher_generation_replays_existing_resources() {
+        use crate::conf_mgr::conf_center::file_system::event::FileSystemEvent;
+        use crate::conf_mgr::conf_center::file_system::path_registry::PathRegistry;
+        use std::sync::Arc;
+        use tempfile::TempDir;
+
+        async fn init_apply_count(watcher: &FileSystemWatcher) -> usize {
+            let mut rx = watcher.subscribe("HTTPRoute").await;
+            watcher.init_phase().await.unwrap();
+            let mut count = 0;
+            loop {
+                match rx.recv().await.unwrap() {
+                    FileSystemEvent::InitApply { .. } => count += 1,
+                    FileSystemEvent::InitDone => return count,
+                    _ => {}
+                }
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let yaml =
+            "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: r1\n  namespace: default\n";
+        std::fs::write(dir.path().join("HTTPRoute_default_r1.yaml"), yaml).unwrap();
+        let registry = Arc::new(PathRegistry::new());
+
+        let first = FileSystemWatcher::new(dir.path().to_path_buf(), registry.clone(), None);
+        assert_eq!(init_apply_count(&first).await, 1);
+
+        let second = FileSystemWatcher::new(dir.path().to_path_buf(), registry, None);
+        assert_eq!(init_apply_count(&second).await, 1);
     }
 }

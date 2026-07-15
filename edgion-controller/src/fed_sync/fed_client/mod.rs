@@ -52,6 +52,29 @@ const ALLOWED_PROXY_PATH_PREFIXES: &[&str] = &["/api/v1/", "/configserver/", "/h
 /// per `STATS_COALESCE_INTERVAL` when its resource counts change.
 const STATS_COALESCE_INTERVAL: Duration = Duration::from_secs(5);
 
+#[derive(Debug, PartialEq, Eq)]
+enum StatsCollectionMode {
+    Skip,
+    Snapshot,
+    DirtyOnly,
+}
+
+fn stats_collection_mode(
+    initial: bool,
+    ready: bool,
+    previous_server_id: Option<&str>,
+    current_server_id: Option<&str>,
+) -> StatsCollectionMode {
+    if !ready || current_server_id.is_none() {
+        return StatsCollectionMode::Skip;
+    }
+    if initial || previous_server_id != current_server_id {
+        StatsCollectionMode::Snapshot
+    } else {
+        StatsCollectionMode::DirtyOnly
+    }
+}
+
 /// Exponential backoff state for reconnection attempts.
 pub struct ReconnectBackoff {
     current: u64,
@@ -323,15 +346,44 @@ async fn connect_and_run(
             // federation session: a restarted Center has an empty aggregator
             // even when this long-running Controller has no newly dirty resources.
             let mut initial = true;
+            let mut last_server_id: Option<String> = None;
             loop {
                 tokio::select! {
                     _ = interval.tick() => {
-                        let report = if initial {
-                            initial = false;
-                            Some(conf_mgr.collect_stats_snapshot())
-                        } else {
-                            conf_mgr.collect_stats_if_dirty()
+                        // Do not publish transient empty/partial counts while a
+                        // reload is rebuilding the processor registry. A new
+                        // ConfigSyncServer ID marks reload completion and forces
+                        // a full snapshot on the existing federation stream.
+                        let current_css = conf_mgr.config_sync_server();
+                        let current_server_id = current_css.as_ref().map(|server| server.server_id());
+                        let mode = stats_collection_mode(
+                            initial,
+                            conf_mgr.is_ready(),
+                            last_server_id.as_deref(),
+                            current_server_id.as_deref(),
+                        );
+                        let report = match mode {
+                            StatsCollectionMode::Skip => None,
+                            StatsCollectionMode::Snapshot => Some(conf_mgr.collect_stats_snapshot()),
+                            StatsCollectionMode::DirtyOnly => conf_mgr.collect_stats_if_dirty(),
                         };
+                        // Reload can start after the pre-check but before (or
+                        // during) collection. Only publish and commit the
+                        // generation after verifying that the exact CSS Arc is
+                        // still current and the rebuilt registry remains ready.
+                        let report = report.filter(|_| {
+                            conf_mgr.is_ready()
+                                && current_css.as_ref().is_some_and(|observed| {
+                                    conf_mgr
+                                        .config_sync_server()
+                                        .as_ref()
+                                        .is_some_and(|current| Arc::ptr_eq(observed, current))
+                                })
+                        });
+                        if report.is_some() {
+                            initial = false;
+                            last_server_id = current_server_id;
+                        }
                         if let Some((per_kind, total)) = report {
                             let msg = ControllerMessage {
                                 payload: Some(CtrlPayload::StatsReport(StatsReport { per_kind, total })),
@@ -882,6 +934,30 @@ mod tests {
         backoff.next(); // 4
         backoff.reset();
         assert_eq!(backoff.current_secs(), 1);
+    }
+
+    #[test]
+    fn stats_snapshot_is_gated_by_readiness_and_server_generation() {
+        assert_eq!(
+            stats_collection_mode(true, false, None, None),
+            StatsCollectionMode::Skip
+        );
+        assert_eq!(
+            stats_collection_mode(true, true, None, Some("server-a")),
+            StatsCollectionMode::Snapshot
+        );
+        assert_eq!(
+            stats_collection_mode(false, true, Some("server-a"), Some("server-a")),
+            StatsCollectionMode::DirtyOnly
+        );
+        assert_eq!(
+            stats_collection_mode(false, false, Some("server-a"), None),
+            StatsCollectionMode::Skip
+        );
+        assert_eq!(
+            stats_collection_mode(false, true, Some("server-a"), Some("server-b")),
+            StatsCollectionMode::Snapshot
+        );
     }
 
     #[test]

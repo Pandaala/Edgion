@@ -61,7 +61,7 @@ pub struct ConflictReport {
     pub losers: Vec<PathBuf>,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct RegistryInner {
     by_key: HashMap<ResourceKey, Vec<PathBuf>>,
     by_path: HashMap<PathBuf, ResourceKey>,
@@ -81,6 +81,15 @@ pub struct PathRegistry {
 impl PathRegistry {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Atomically replace the index with a fully built scan generation.
+    ///
+    /// The watcher builds `next` privately, then swaps it in after scanning so
+    /// readers keep seeing the complete previous generation instead of a
+    /// partially rebuilt registry during reload.
+    pub fn replace_from(&self, next: &Self) {
+        *self.inner.write() = next.inner.read().clone();
     }
 
     pub fn record(&self, key: ResourceKey, path: PathBuf) -> RecordOutcome {
@@ -243,6 +252,21 @@ mod tests {
             }
         );
         assert_eq!(r.winner_of(&k("Service", "default/x")), Some(p("/conf/a.yaml")));
+    }
+
+    #[test]
+    fn replace_from_atomically_installs_a_new_scan_generation() {
+        let current = PathRegistry::new();
+        let key = k("Service", "default/x");
+        current.record(key.clone(), p("/old/service.yaml"));
+        let next = PathRegistry::new();
+        let new_path = p("/new/service.yaml");
+        next.record(key.clone(), new_path.clone());
+
+        current.replace_from(&next);
+
+        assert_eq!(current.winner_of(&key), Some(new_path));
+        assert!(current.snapshot_conflicts().is_empty());
     }
 
     #[test]
