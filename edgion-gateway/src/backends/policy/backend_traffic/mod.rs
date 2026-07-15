@@ -5,6 +5,7 @@
 //!   and load-balancer stores.
 //! - `conf_handler_impl` — the `ConfHandler` that receives synced policies.
 
+pub mod authority;
 pub mod conf_handler_impl;
 pub mod store;
 

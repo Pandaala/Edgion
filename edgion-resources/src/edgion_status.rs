@@ -132,6 +132,13 @@ pub enum EdgionStatus {
     /// to the system trust store when the operator opted out of it.
     BackendTlsCaInvalid = 502_03,
 
+    /// The dynamic `upstreamAuthority` template rendered to an empty label, or
+    /// the rendered label failed DNS-label validation. Fail-closed: silently
+    /// keeping the static SNI/Host would present the right TLS identity to the
+    /// wrong virtual host. See `AuthorityError` in
+    /// `edgion-gateway/src/backends/policy/backend_traffic/authority.rs`.
+    UpstreamAuthorityRejected = 502_04,
+
     /// Plugin returned `ErrTerminateRequest` without committing a response.
     /// Runtime applied a 502 fallback to ensure the client receives a response.
     /// Operators: grep the `errors` field in access logs to find plugins violating
@@ -257,6 +264,7 @@ mod tests {
             EdgionStatus::StickyBackendUnhealthy => Some(500),
             EdgionStatus::BackendTlsSanValidationFailed => Some(502),
             EdgionStatus::BackendTlsCaInvalid => Some(502),
+            EdgionStatus::UpstreamAuthorityRejected => Some(502),
             EdgionStatus::PluginTerminateWithoutResponse => Some(502),
             EdgionStatus::ForwardAuthServiceUnreachable => Some(503),
             EdgionStatus::RequestTimeoutExceeded => Some(504),
@@ -324,6 +332,7 @@ mod tests {
             EdgionStatus::StickyBackendUnhealthy,
             EdgionStatus::BackendTlsSanValidationFailed,
             EdgionStatus::BackendTlsCaInvalid,
+            EdgionStatus::UpstreamAuthorityRejected,
             EdgionStatus::PluginTerminateWithoutResponse,
             EdgionStatus::ForwardAuthServiceUnreachable,
             EdgionStatus::RequestTimeoutExceeded,

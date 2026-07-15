@@ -30,9 +30,12 @@ use crate::plugins::http::common::http_client::{build_webhook_client, get_http_c
 use crate::util::net::IpClass;
 use edgion_resources::resources::common::external_http::validate_connection_target;
 
+use super::call::replace_url_host;
 use super::egress::{default_block_private, egress_dns_cache_ttl, EgressPolicy, EgressResolver};
+use super::pinned_resolver::AnchorPinnedResolver;
 use super::request::CompiledRequest;
 use super::target::ResolvedTarget;
+use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 
 // Re-export SlidingWindowCounter from the webhook runtime for outbound rate limiting.
 use crate::link_sys::providers::webhook::runtime::SlidingWindowCounter;
@@ -198,32 +201,81 @@ impl ManagedOutboundClient {
             return Err(format!("invalid target for '{}': {}", ref_label, e));
         }
 
-        // ── 2. Build the DNS resolver / egress policy for URL targets ──────
-        // A URL target is addressed by hostname, so the literal-level guard in
-        // `dial_url` cannot see its addresses. `EgressResolver` classifies them at
-        // connect time. Service targets keep reqwest's default resolver: their
-        // addresses arrive as IP literals from the EndpointSlice store and are
-        // already guarded by `dial_url`.
-        let egress_policy: Option<EgressPolicy> = match conn.target.kind() {
-            Ok(TargetKind::Url { block_private, .. }) => Some(EgressPolicy {
-                block_private: block_private.unwrap_or_else(default_block_private),
-            }),
-            Ok(TargetKind::Service(_)) => None,
+        // ── 2. Egress policy for URL targets ───────────────────────────────
+        let target_kind = match conn.target.kind() {
+            Ok(k) => k,
             // `validate_connection_target` above already returned on this error.
             Err(e) => return Err(format!("invalid target for '{ref_label}': {e}")),
         };
-        let dns_resolver: Option<Arc<dyn reqwest::dns::Resolve>> = egress_policy.map(|policy| {
-            Arc::new(EgressResolver::new(
-                ResolverSpec::System,
-                policy,
-                egress_dns_cache_ttl(),
-            )) as Arc<dyn reqwest::dns::Resolve>
-        });
 
-        // ── 3. Build HTTP client ───────────────────────────────────────────
+        let egress_policy: Option<EgressPolicy> = match &target_kind {
+            TargetKind::Url { block_private, .. } => Some(EgressPolicy {
+                block_private: block_private.unwrap_or_else(default_block_private),
+            }),
+            TargetKind::Service(_) => None,
+        };
+
+        // ── 3. Resolve target ──────────────────────────────────────────────
+        // Resolved before the DNS resolver / client are built so that resolver
+        // selection (step 4) can key off `ResolvedTarget` itself rather than a
+        // second, independently-derived classification of the target kind.
+        let resolved_target = build_resolved_target(&conn.target, conn.tls.is_some())?;
+
+        // ── 4. Build the DNS resolver: EgressResolver for URL targets, or the
+        //      pinned resolver for a Service-pool anchor ────────────────────
+        // A URL target is addressed by hostname, so the literal-level guard in
+        // `dial_url` cannot see its addresses. `EgressResolver` classifies them at
+        // connect time.
+        //
+        // A Service-pool target (`ResolvedTarget::Service`, i.e. the
+        // `Service`/`ServiceEndpointSlice` sub-kinds) ALWAYS gets
+        // `AnchorPinnedResolver`, regardless of whether an `upstreamAuthority`
+        // policy currently exists for it. This is deliberate: `outbound_call`
+        // decides, per request, whether to rewrite the URL host to a
+        // request-composed authority via a FRESH `get_authority` lookup against
+        // the same mutable policy store. If resolver installation here were
+        // gated on that SAME lookup at build time, a client built before a
+        // policy existed would carry no pinned resolver — and a policy attached
+        // later would make `outbound_call` rewrite the host to a
+        // request-influenced hostname with nothing but the system DNS resolver
+        // behind it (a split-brain SSRF: two decisions about the same store,
+        // made at two different times, can disagree). Installing the resolver
+        // unconditionally for every Service-pool target closes that window
+        // structurally: "has a pinned resolver" and "`authority_service_key()`
+        // is `Some`" are now provably the same set, since both are derived from
+        // `resolved_target` being `ResolvedTarget::Service`.
+        //
+        // It costs nothing when no policy is active: the URL host stays an IP
+        // literal from `pick_url()`, and reqwest/hyper-util skips the injected
+        // resolver entirely for IP-literal hosts (see the `dial_url` /
+        // `extract_ip_literal` comments below) — the resolver only does
+        // anything once `call.rs` rewrites the host to a real hostname.
+        //
+        // `ServiceClusterIp` is NOT part of this set: it resolves to
+        // `ResolvedTarget::Static("http://name.ns.svc.cluster.local:port")`, and
+        // `authority_service_key()` returns `None` for `Static` — the host swap
+        // in `call.rs` never engages for it. A pinned resolver here would
+        // wrongly resolve the cluster.local name to pod IPs, bypassing the
+        // ClusterIP that mode explicitly wants, so it keeps the default resolver.
+        let dns_resolver: Option<Arc<dyn reqwest::dns::Resolve>> = match (&target_kind, &resolved_target) {
+            (TargetKind::Url { .. }, _) => egress_policy.map(|policy| {
+                Arc::new(EgressResolver::new(
+                    ResolverSpec::System,
+                    policy,
+                    egress_dns_cache_ttl(),
+                )) as Arc<dyn reqwest::dns::Resolve>
+            }),
+            (TargetKind::Service(_), ResolvedTarget::Service { service_key, port, .. }) => {
+                Some(Arc::new(AnchorPinnedResolver::new(service_key.clone(), *port)) as Arc<dyn reqwest::dns::Resolve>)
+            }
+            (TargetKind::Service(_), ResolvedTarget::Static(_)) => None,
+        };
+
+        // ── 5. Build HTTP client ───────────────────────────────────────────
         // `build_webhook_client` returns None only when neither TLS nor a resolver
-        // is needed; a URL target always supplies a resolver, so it never falls back
-        // to the shared global client.
+        // is needed; a URL target and a Service-pool target both always supply a
+        // resolver (steps 2-4 above), so only a `ServiceClusterIp` (`Static`)
+        // target with no TLS block falls back to the shared global client.
         let http_client = match build_webhook_client(&conn.tls, dns_resolver) {
             None => get_http_client_arc(),
             Some(Ok(client)) => Arc::new(client),
@@ -232,14 +284,11 @@ impl ManagedOutboundClient {
             }
         };
 
-        // ── 4. Resolve target ──────────────────────────────────────────────
-        let resolved_target = build_resolved_target(&conn.target, conn.tls.is_some())?;
-
-        // ── 5. Compile request spec ────────────────────────────────────────
+        // ── 6. Compile request spec ────────────────────────────────────────
         let compiled_request = CompiledRequest::from_spec(request)
             .map_err(|e| format!("failed to compile request spec for '{}': {}", ref_label, e))?;
 
-        // ── 5b. Compile the timeout template (admission already validated syntax
+        // ── 6b. Compile the timeout template (admission already validated syntax
         //        via `validate_connection_target`, but from_parts is also reachable
         //        directly in tests, so compile again defensively) ────────────────
         let timeout_template = conn
@@ -249,7 +298,7 @@ impl ManagedOutboundClient {
             .transpose()
             .map_err(|e| format!("failed to compile timeoutMsTemplate for '{}': {}", ref_label, e))?;
 
-        // ── 5c. Compile the degradation template (admission already validated syntax
+        // ── 6c. Compile the degradation template (admission already validated syntax
         //        via `validate_connection_target`, but from_parts is also reachable
         //        directly in tests, so compile again defensively) ────────────────────
         let degradation_template = conn
@@ -259,16 +308,16 @@ impl ManagedOutboundClient {
             .transpose()
             .map_err(|e| format!("failed to compile allowDegradationTemplate for '{}': {}", ref_label, e))?;
 
-        // ── 6. Health state ────────────────────────────────────────────────
+        // ── 7. Health state ────────────────────────────────────────────────
         let health = HealthState::new();
 
-        // ── 7. Rate counter ────────────────────────────────────────────────
+        // ── 8. Rate counter ────────────────────────────────────────────────
         let rate = conn
             .rate_limit
             .as_ref()
             .map(|rl| SlidingWindowCounter::new(rl.rate, Duration::from_secs(rl.window_sec.max(1))));
 
-        // ── 8. Spawn active-health task ────────────────────────────────────
+        // ── 9. Spawn active-health task ────────────────────────────────────
         let health_task = if let Some(active) = conn.health_check.as_ref().and_then(|hc| hc.active.as_ref()) {
             let active_clone = active.clone();
             let health_clone = Arc::clone(&health);
@@ -378,6 +427,16 @@ impl ManagedOutboundClient {
         }
 
         Ok(url)
+    }
+
+    /// The `service_key` when this client's target is a Service anchor, else
+    /// `None`. Used by `outbound_call` to look up an `upstreamAuthority` policy
+    /// for this client without re-matching `ResolvedTarget` at the call site.
+    pub fn authority_service_key(&self) -> Option<&str> {
+        match &self.resolved_target {
+            ResolvedTarget::Service { service_key, .. } => Some(service_key.as_str()),
+            ResolvedTarget::Static(_) => None,
+        }
     }
 
     // ============================================================
@@ -558,6 +617,13 @@ async fn run_active_health_check(
     let interval = Duration::from_secs(active.interval_sec.max(1));
     let timeout = Duration::from_millis(active.timeout_ms.max(100));
 
+    // Fixed for this task's lifetime, mirroring `ManagedOutboundClient::authority_service_key`:
+    // only a `ResolvedTarget::Service` anchor can carry an `upstreamAuthority` policy.
+    let service_key: Option<String> = match &target {
+        ResolvedTarget::Service { service_key, .. } => Some(service_key.clone()),
+        ResolvedTarget::Static(_) => None,
+    };
+
     let mut consecutive_failures: u32 = 0;
     let mut consecutive_successes: u32 = 0;
 
@@ -569,6 +635,15 @@ async fn run_active_health_check(
             let _ = &ref_label; // suppress unused-variable lint
             continue;
         };
+
+        // A Service anchor carrying an `upstreamAuthority` policy dispatches by
+        // Host/SNI; the active probe has no request to render a per-request
+        // label from, so it sends the static `healthCheckHost` instead. Looked
+        // up fresh every tick (not cached at task-spawn time) so a policy
+        // attached or detached after this task started still takes effect on
+        // the very next probe — mirrors the per-call fresh `get_authority`
+        // lookup in `outbound_call` against the same mutable policy store.
+        let base = resolve_probe_base(base, service_key.as_deref());
 
         let check_url = match &active.path {
             Some(path) => format!("{}{}", base.trim_end_matches('/'), path),
@@ -593,6 +668,24 @@ async fn run_active_health_check(
                 }
             }
         }
+    }
+}
+
+/// Resolve the effective probe base URL for one active-health tick.
+///
+/// When `service_key` names a Service anchor carrying an `upstreamAuthority`
+/// policy with `health_check_host` set, the probe's Host header AND URL host
+/// (and, over TLS, its SNI) are rewritten to that static authority — an active
+/// probe has no request to render a per-request label from. Otherwise (no
+/// `service_key`, no policy, or a policy with no `health_check_host`) `base`
+/// is returned unchanged, exactly as before this override existed.
+fn resolve_probe_base(base: String, service_key: Option<&str>) -> String {
+    match service_key
+        .and_then(|key| get_backend_traffic_policy_store().get_authority(key))
+        .and_then(|compiled| compiled.health_check_host.clone())
+    {
+        Some(host) => replace_url_host(&base, &host),
+        None => base,
     }
 }
 
@@ -867,9 +960,16 @@ mod tests {
         );
     }
 
-    /// A Service target with no TLS block still reuses the shared global client.
+    /// A Service-POOL target (`Service`/`ServiceEndpointSlice`, i.e. it resolves
+    /// to `ResolvedTarget::Service`) with no TLS block now gets its OWN client
+    /// carrying `AnchorPinnedResolver`, even with no TLS and no
+    /// `upstreamAuthority` policy currently active. This is the intended cost
+    /// of closing the build-time/request-time split-brain SSRF: resolver
+    /// installation must not depend on whether a policy exists yet, so it is
+    /// unconditional for every target that can become the host-rewrite target
+    /// in `outbound_call` (see `ManagedOutboundClient::from_parts` step 4).
     #[test]
-    fn service_target_without_tls_reuses_global_client() {
+    fn service_pool_target_without_tls_gets_a_dedicated_client() {
         let conn = ExternalHttpConnection {
             target: WebhookTarget {
                 service: WebhookServiceRef {
@@ -885,7 +985,285 @@ mod tests {
         let client =
             ManagedOutboundClient::from_parts(&conn, &OutboundRequestSpec::default(), None, "test/svc-hook", false)
                 .expect("service target must build");
-        assert!(Arc::ptr_eq(&client.http_client, &get_http_client_arc()));
+        assert!(
+            !Arc::ptr_eq(&client.http_client, &get_http_client_arc()),
+            "a Service-pool target must carry its own client with the pinned resolver, \
+             never the shared global client"
+        );
+    }
+
+    /// `ServiceClusterIp` is NOT a Service-pool target — it resolves to a
+    /// `Static` cluster.local URL, `authority_service_key()` is `None` for it,
+    /// and a pinned resolver would wrongly bypass the ClusterIP. It must keep
+    /// reusing the shared global client when no TLS block is configured.
+    #[test]
+    fn service_cluster_ip_target_without_tls_reuses_global_client() {
+        let conn = ExternalHttpConnection {
+            target: WebhookTarget {
+                service: WebhookServiceRef {
+                    kind: Some("ServiceClusterIp".to_string()),
+                    name: Some("auth-svc".to_string()),
+                    port: Some(8080),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            tls: None,
+            ..Default::default()
+        };
+        let client = ManagedOutboundClient::from_parts(
+            &conn,
+            &OutboundRequestSpec::default(),
+            None,
+            "test/cluster-ip-hook",
+            false,
+        )
+        .expect("ServiceClusterIp target must build");
+        assert!(
+            Arc::ptr_eq(&client.http_client, &get_http_client_arc()),
+            "ServiceClusterIp must keep reusing the shared global client, unchanged"
+        );
+        assert!(
+            client.authority_service_key().is_none(),
+            "ServiceClusterIp resolves to Static, so it has no authority_service_key"
+        );
+    }
+
+    /// CRITICAL regression (SSRF split-brain fix): a Service-pool client built
+    /// BEFORE an `upstreamAuthority` policy exists for its Service must
+    /// nonetheless carry a pinned resolver — closing the window where a policy
+    /// attached AFTER the client was built (a routine hot-reload ordering)
+    /// would otherwise leave `outbound_call`'s request-composed host to
+    /// resolve through the real system DNS resolver.
+    ///
+    /// Reproduces the exact operator flow: (1) seed EndpointSlice endpoints and
+    /// build the client with no authority policy in the store, (2) attach an
+    /// `upstreamAuthority` policy to the SAME Service key afterward, (3) assert
+    /// the client (built in step 1) does not alias the shared global client —
+    /// the only way it can carry the pinned resolver reqwest needs before the
+    /// composed authority is ever rendered.
+    #[test]
+    fn service_pool_client_gets_pinned_resolver_before_authority_policy_exists() {
+        use crate::backends::discovery::endpoint_slice::get_roundrobin_store;
+        use crate::backends::policy::backend_traffic::store::{
+            get_backend_traffic_policy_store, GLOBAL_STORE_TEST_LOCK,
+        };
+        use edgion_resources::resources::edgion_backend_traffic_policy::{
+            EdgionBackendTrafficPolicySpec, PolicyTargetRef,
+        };
+        use edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig;
+        use edgion_resources::resources::EdgionBackendTrafficPolicy;
+        use k8s_openapi::api::discovery::v1::{Endpoint, EndpointConditions, EndpointPort, EndpointSlice};
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+        use std::collections::{BTreeMap, HashMap, HashSet};
+
+        // Serializes against every other test that writes the process-global
+        // backend-traffic-policy store (see `GLOBAL_STORE_TEST_LOCK`'s doc).
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+
+        // Unique namespace/service so a leaked entry cannot collide with any
+        // other test running in this process.
+        let ns = "pinned-resolver-order-test";
+        let svc = "anchor-svc";
+        let service_key = format!("{ns}/{svc}");
+
+        // ── Step 0: seed a ready endpoint for the anchor Service. ───────────
+        let mut labels = BTreeMap::new();
+        labels.insert(
+            edgion_resources::constants::labels::k8s::SERVICE_NAME.to_string(),
+            svc.to_string(),
+        );
+        let slice = EndpointSlice {
+            metadata: ObjectMeta {
+                name: Some("anchor-svc-eps1".to_string()),
+                namespace: Some(ns.to_string()),
+                labels: Some(labels),
+                ..Default::default()
+            },
+            address_type: "IPv4".to_string(),
+            ports: Some(vec![EndpointPort {
+                port: Some(8080),
+                ..Default::default()
+            }]),
+            endpoints: vec![Endpoint {
+                addresses: vec!["10.1.2.3".to_string()],
+                conditions: Some(EndpointConditions {
+                    ready: Some(true),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }],
+        };
+        let mut add_eps = HashMap::new();
+        add_eps.insert(format!("{ns}/anchor-svc-eps1"), slice);
+        get_roundrobin_store().update_data_only(add_eps, HashMap::new(), &HashSet::new());
+
+        // ── Step 1: build the client while NO authority policy exists. ──────
+        assert!(
+            get_backend_traffic_policy_store().get_authority(&service_key).is_none(),
+            "precondition: no authority policy must exist yet"
+        );
+        let conn = ExternalHttpConnection {
+            target: WebhookTarget {
+                service: WebhookServiceRef {
+                    name: Some(svc.to_string()),
+                    namespace: Some(ns.to_string()),
+                    port: Some(8080),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            tls: None,
+            ..Default::default()
+        };
+        let client = ManagedOutboundClient::from_parts(
+            &conn,
+            &OutboundRequestSpec::default(),
+            None,
+            "test/pinned-resolver-order",
+            false,
+        )
+        .expect("service target must build");
+
+        // ── Step 2: attach an upstreamAuthority policy AFTER the client exists. ──
+        let policy_key = format!("{ns}/authtest");
+        let mut add_policy = HashMap::new();
+        add_policy.insert(
+            policy_key.clone(),
+            Arc::new(EdgionBackendTrafficPolicy {
+                metadata: ObjectMeta {
+                    name: Some("authtest".to_string()),
+                    namespace: Some(ns.to_string()),
+                    ..Default::default()
+                },
+                spec: EdgionBackendTrafficPolicySpec {
+                    target_refs: vec![PolicyTargetRef {
+                        group: String::new(),
+                        kind: "Service".to_string(),
+                        name: svc.to_string(),
+                    }],
+                    load_balancer: None,
+                    health_check: None,
+                    outlier_detection: None,
+                    upstream_authority: Some(UpstreamAuthorityConfig {
+                        pattern: "*.sandbox.internal".to_string(),
+                        template: "${ctx:tenant}.sandbox.internal".to_string(),
+                        health_check_host: None,
+                    }),
+                },
+                status: None,
+            }),
+        );
+        get_backend_traffic_policy_store().partial_update_policies(add_policy, HashMap::new(), HashSet::new());
+        assert!(
+            get_backend_traffic_policy_store().get_authority(&service_key).is_some(),
+            "the authority policy must now be active for this Service key"
+        );
+
+        // ── Step 3: the client built in step 1 must ALREADY be safe. ────────
+        // If resolver installation were still gated on `get_authority` at
+        // build time (the bug), this client would alias the shared global
+        // client — which has no injected resolver at all — and the host
+        // rewrite `outbound_call` now performs would resolve through the real
+        // system DNS resolver.
+        assert!(
+            !Arc::ptr_eq(&client.http_client, &get_http_client_arc()),
+            "a Service-pool client must carry its own pinned-resolver client \
+             even when built before any upstreamAuthority policy existed"
+        );
+
+        // Cleanup: remove the policy this test inserted into the global store
+        // so it doesn't leak into other tests running in the same process.
+        get_backend_traffic_policy_store().partial_update_policies(
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::from([policy_key]),
+        );
+    }
+
+    /// `resolve_probe_base` — the outbound active-health task's per-tick host
+    /// override — must rewrite the probe URL's host to `healthCheckHost` when
+    /// the Service anchor carries an `upstreamAuthority` policy that sets one.
+    #[test]
+    fn resolve_probe_base_uses_authority_health_check_host() {
+        use crate::backends::policy::backend_traffic::store::{
+            get_backend_traffic_policy_store, GLOBAL_STORE_TEST_LOCK,
+        };
+        use edgion_resources::resources::edgion_backend_traffic_policy::{
+            EdgionBackendTrafficPolicySpec, PolicyTargetRef,
+        };
+        use edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig;
+        use edgion_resources::resources::EdgionBackendTrafficPolicy;
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+        use std::collections::{HashMap, HashSet};
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+
+        let ns = "probe-base-authority-test";
+        let svc = "anchor-svc";
+        let service_key = format!("{ns}/{svc}");
+
+        let policy_key = format!("{ns}/hc-authority");
+        let mut add_policy = HashMap::new();
+        add_policy.insert(
+            policy_key.clone(),
+            Arc::new(EdgionBackendTrafficPolicy {
+                metadata: ObjectMeta {
+                    name: Some("hc-authority".to_string()),
+                    namespace: Some(ns.to_string()),
+                    ..Default::default()
+                },
+                spec: EdgionBackendTrafficPolicySpec {
+                    target_refs: vec![PolicyTargetRef {
+                        group: String::new(),
+                        kind: "Service".to_string(),
+                        name: svc.to_string(),
+                    }],
+                    load_balancer: None,
+                    health_check: None,
+                    outlier_detection: None,
+                    upstream_authority: Some(UpstreamAuthorityConfig {
+                        pattern: "*.sandbox.internal".to_string(),
+                        template: "${ctx:tenant}.sandbox.internal".to_string(),
+                        health_check_host: Some("probe.sandbox.internal".to_string()),
+                    }),
+                },
+                status: None,
+            }),
+        );
+        get_backend_traffic_policy_store().partial_update_policies(add_policy, HashMap::new(), HashSet::new());
+
+        // `Url::to_string()` normalizes an authority-only URL by appending the
+        // root path, so the rewritten host carries a trailing `/`.
+        let out = resolve_probe_base("http://10.1.2.3:8080".to_string(), Some(&service_key));
+        assert_eq!(out, "http://probe.sandbox.internal:8080/");
+
+        // Cleanup: remove the policy this test inserted so it doesn't leak
+        // into other tests running in the same process.
+        get_backend_traffic_policy_store().partial_update_policies(
+            HashMap::new(),
+            HashMap::new(),
+            HashSet::from([policy_key]),
+        );
+    }
+
+    /// Without an `upstreamAuthority` policy for the service key (or with no
+    /// service key at all, i.e. a `Static` target), `resolve_probe_base` must
+    /// leave the probe URL byte-for-byte unchanged.
+    #[test]
+    fn resolve_probe_base_unchanged_without_authority() {
+        use crate::backends::policy::backend_traffic::store::GLOBAL_STORE_TEST_LOCK;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+
+        let out = resolve_probe_base(
+            "http://10.1.2.3:8080".to_string(),
+            Some("probe-base-authority-test/nonexistent-svc"),
+        );
+        assert_eq!(out, "http://10.1.2.3:8080");
+
+        let out_static = resolve_probe_base("http://10.1.2.3:8080".to_string(), None);
+        assert_eq!(out_static, "http://10.1.2.3:8080");
     }
 
     /// Helper: a `WebhookRetry` block with every field set explicitly (no `Default`

@@ -325,6 +325,8 @@ start_test_server() {
     BACKEND_KEY_A="${PROJECT_ROOT}/edgion-tests/certs/backend/server-a.key"
     BACKEND_CERT_B="${PROJECT_ROOT}/edgion-tests/certs/backend/server-b.crt"
     BACKEND_KEY_B="${PROJECT_ROOT}/edgion-tests/certs/backend/server-b.key"
+    BACKEND_CERT_WILDCARD="${PROJECT_ROOT}/edgion-tests/certs/backend/server-wildcard.crt"
+    BACKEND_KEY_WILDCARD="${PROJECT_ROOT}/edgion-tests/certs/backend/server-wildcard.key"
 
     # Checkafter TLS certificate
     local https_backend_args=""
@@ -361,6 +363,16 @@ start_test_server() {
         log_warning "Backend multi-SNI certs not found, skipping multi-SNI backend (port 30026)"
     fi
 
+    # EdgionBackendTrafficPolicy/UpstreamAuthority scenario: a single
+    # *.sandbox.internal wildcard cert covers every tenant subdomain.
+    local https_backend_wildcard_args=""
+    if [ -f "$BACKEND_CERT_WILDCARD" ] && [ -f "$BACKEND_KEY_WILDCARD" ]; then
+        https_backend_wildcard_args="--https-backend-wildcard-port 30028 --wildcard-cert $BACKEND_CERT_WILDCARD --wildcard-key $BACKEND_KEY_WILDCARD"
+        log_info "HTTPS wildcard (*.sandbox.internal) backend on port 30028"
+    else
+        log_warning "Backend wildcard cert not found, skipping wildcard backend (port 30028)"
+    fi
+
     "${BIN_DIR}/test_server" \
         --http-ports "30001,30002,30003" \
         --grpc-ports "30021,30022,30023" \
@@ -376,6 +388,7 @@ start_test_server() {
         $https_backend_args \
         $https_backend_mtls_args \
         $https_backend_multi_sni_args \
+        $https_backend_wildcard_args \
         > "${LOG_DIR}/test_server.log" 2>&1 &
     
     local pid=$!

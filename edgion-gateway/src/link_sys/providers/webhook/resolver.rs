@@ -65,6 +65,10 @@ pub async fn resolve_webhook_key(
             record_webhook_resolve_error("rate_limited");
             None
         }
+        Err(OutboundCallError::AuthorityRejected) => {
+            record_webhook_resolve_error("authority_rejected");
+            None
+        }
         Err(_) => {
             record_webhook_resolve_error("call_failed");
             None

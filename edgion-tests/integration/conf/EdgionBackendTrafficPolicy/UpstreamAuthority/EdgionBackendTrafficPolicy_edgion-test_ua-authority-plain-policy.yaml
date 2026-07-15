@@ -1,0 +1,32 @@
+# upstreamAuthority + an active HTTP health check for the cleartext Service.
+# `healthCheckHost` is what Task 8 wires into the Pingora active-health-check
+# probe (edgion-gateway/src/backends/health/check/manager.rs): the probe path
+# `/vhost-health` on the shared echo backend only returns 200 when it
+# receives a Host inside "*.sandbox.internal" (see test_server.rs
+# `vhost_health_handler`). Without the healthCheckHost override the probe
+# would send the raw socket-address Host, which the endpoint would reject
+# with 421, eventually ejecting the (only) endpoint and 503-ing all real
+# traffic on this Service.
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ua-authority-plain-policy
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ua-svc-plain
+  upstreamAuthority:
+    pattern: "*.sandbox.internal"
+    template: "${ctx:tenant}.sandbox.internal"
+    healthCheckHost: "probe.sandbox.internal"
+  healthCheck:
+    active:
+      type: http
+      path: /vhost-health
+      interval: 1s
+      timeout: 1s
+      healthyThreshold: 1
+      unhealthyThreshold: 1
+      expectedStatuses:
+        - 200

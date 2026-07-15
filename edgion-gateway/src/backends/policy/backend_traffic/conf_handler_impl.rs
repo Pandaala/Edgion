@@ -84,6 +84,7 @@ mod tests {
                     active: Some(ActiveHealthCheckConfig::default()),
                 }),
                 outlier_detection: None,
+                upstream_authority: None,
             },
             status: None,
         })

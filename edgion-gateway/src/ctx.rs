@@ -846,6 +846,12 @@ pub struct EdgionHttpContext {
     /// Plugins can set values (e.g., KeySet plugin) and conditions can read them
     pub ctx_map: HashMap<String, String>,
 
+    /// Composed upstream authority for this request, when the target Service
+    /// carries an `upstreamAuthority` policy. Written in `upstream_peer` (which
+    /// also sets it as the peer SNI) and read in `upstream_request_filter`, which
+    /// is the only place the upstream `Host` header can be written.
+    pub upstream_authority: Option<String>,
+
     /// Lazily extracted path parameters from route pattern (e.g., "/api/:uid/profile")
     /// - None: not yet extracted
     /// - Some(HashMap): already extracted (may be empty if no params or no match)
@@ -1058,6 +1064,7 @@ impl EdgionHttpContext {
             upstream_start_time: None,
             hash_key: None,
             ctx_map: HashMap::new(),
+            upstream_authority: None,
             path_params: None,
             cached_query_cell: std::sync::OnceLock::new(),
             jump: None,

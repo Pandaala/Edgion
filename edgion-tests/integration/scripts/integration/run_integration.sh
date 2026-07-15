@@ -1043,9 +1043,16 @@ run_all_tests() {
                 fi
                 ;;
             EdgionBackendTrafficPolicy)
-                # Control-plane group: the suite applies/edits/deletes policies at
-                # runtime and asserts the Gateway store/config state. No item split.
-                run_test "EdgionBackendTrafficPolicy" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionBackendTrafficPolicy" || test_failed=true
+                if [ -z "$G_ITEM" ]; then
+                    # Control-plane group: the suite applies/edits/deletes policies at
+                    # runtime and asserts the Gateway store/config state. No item split.
+                    run_test "EdgionBackendTrafficPolicy" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionBackendTrafficPolicy" || test_failed=true
+                else
+                    # e.g. -i upstream_authority: EdgionBackendTrafficPolicy/UpstreamAuthority
+                    # data-plane suite (dynamic upstream authority, Host/SNI dispatch).
+                    local item_safe=$(echo "$G_ITEM" | tr '/' '_')
+                    run_test "EdgionBackendTrafficPolicy_${item_safe}" "${PROJECT_ROOT}/target/debug/test_client -g -r EdgionBackendTrafficPolicy -i ${G_ITEM}" || test_failed=true
+                fi
                 ;;
             Gateway)
                 if [ -z "$G_ITEM" ]; then

@@ -26,5 +26,7 @@
 //                                gateway-reconnect variant).
 
 mod control_plane;
+mod upstream_authority;
 
 pub use control_plane::EdgionBackendTrafficPolicyTestSuite;
+pub use upstream_authority::UpstreamAuthorityTestSuite;

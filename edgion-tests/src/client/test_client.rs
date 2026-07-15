@@ -209,6 +209,14 @@ fn suite_to_port_key(suite: &str) -> &str {
         // Control-plane suite: no data-plane listener of its own; borrow a valid
         // HTTP port key so the per-suite context still resolves a port.
         "EdgionBackendTrafficPolicy" => "HTTPRoute/Backend/CircuitBreaker",
+        // Data-plane suite: dynamic upstream authority (Host/SNI dispatch). Has
+        // its own Gateway/HTTPRoute fixture and its own ports.json entry, so
+        // (unlike the control-plane suite above) it does not borrow another
+        // suite's port. Accept both the brief's literal `-i upstream_authority`
+        // and the repo's usual CamelCase item spelling.
+        "EdgionBackendTrafficPolicy/upstream_authority" | "EdgionBackendTrafficPolicy/UpstreamAuthority" => {
+            "EdgionBackendTrafficPolicy/UpstreamAuthority"
+        }
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => "HTTPRoute/Basic",
         "HTTPRoute/Delegation" => "HTTPRoute/Delegation",
@@ -364,6 +372,12 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         // mapping, oldest-wins conflict, hot reload, resync survival).
         "EdgionBackendTrafficPolicy" => {
             runner.add_suite(Box::new(suites::EdgionBackendTrafficPolicyTestSuite));
+        }
+        // Dynamic upstream authority (Task 8 of the dynamic-upstream-authority
+        // feature): HTTPS/cleartext per-tenant dispatch, fail-closed, injection,
+        // outbound-path degradation, pinning, and health-probe authority.
+        "EdgionBackendTrafficPolicy/upstream_authority" | "EdgionBackendTrafficPolicy/UpstreamAuthority" => {
+            runner.add_suite(Box::new(suites::UpstreamAuthorityTestSuite));
         }
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => {

@@ -66,6 +66,9 @@ pub mod names {
     pub const WEBHOOK_RESOLVE_ERRORS_TOTAL: &str = "edgion_webhook_resolve_errors_total";
     // Egress resolver: outbound address rejected by the SSRF egress policy, by reason
     pub const EGRESS_BLOCKED_TOTAL: &str = "edgion_outbound_egress_blocked_total";
+    // Upstream authority render: request-time authority the gateway refused to
+    // use, by reason ("render_empty" / "invalid_label").
+    pub const UPSTREAM_AUTHORITY_REJECTED_TOTAL: &str = "edgion_gateway_upstream_authority_rejected_total";
     // Outbound call: terminal response accepted at the status layer but classified as
     // failure by a `success.body` predicate — the "200 OK but error in the body" case.
     pub const OUTBOUND_SUCCESS_PREDICATE_FAIL_TOTAL: &str = "edgion_outbound_success_predicate_fail_total";
@@ -602,7 +605,8 @@ pub fn record_outbound_tls_san_mismatch(plugin: &'static str) {
 /// Record a webhook key-resolver failure.
 ///
 /// `reason` must be one of: `"not_found"`, `"unhealthy"`, `"rate_limited"`,
-/// `"status_error"`, `"call_failed"`. Fixed cardinality — safe as a label.
+/// `"status_error"`, `"call_failed"`, `"authority_rejected"`. Fixed cardinality —
+/// safe as a label.
 pub fn record_webhook_resolve_error(reason: &'static str) {
     counter!(names::WEBHOOK_RESOLVE_ERRORS_TOTAL, "reason" => reason).increment(1);
 }
@@ -612,6 +616,14 @@ pub fn record_webhook_resolve_error(reason: &'static str) {
 /// `reason` is one of `"loopback"`, `"link_local"`, `"private"`, `"unspecified"`.
 pub fn record_egress_blocked(reason: &'static str) {
     counter!(names::EGRESS_BLOCKED_TOTAL, "reason" => reason).increment(1);
+}
+
+/// Record an upstream authority the gateway refused to use. `reason` is
+/// `"render_empty"` (the template produced nothing — usually a `${ctx:…}` written
+/// by a plugin that runs after `upstream_peer`) or `"invalid_label"` (the rendered
+/// label is not a valid DNS label — a broken template, or an attack).
+pub fn record_authority_rejected(reason: &'static str) {
+    counter!(names::UPSTREAM_AUTHORITY_REJECTED_TOTAL, "reason" => reason).increment(1);
 }
 
 /// Record a response whose status was accepted but whose `success.body` predicate

@@ -160,6 +160,30 @@ spec:
                       description: "Max percent of a service's endpoints that may be ejected at once (0 disables the cap)"
                       minimum: 0
                       default: 50
+                upstreamAuthority:
+                  type: object
+                  description: >-
+                    Dynamic upstream authority (Host + SNI) within a wildcard pattern this
+                    backend declares. The connection stays pinned to the Service's endpoints;
+                    only the authority varies.
+                  required:
+                    - pattern
+                    - template
+                  properties:
+                    pattern:
+                      type: string
+                      description: Wildcard pattern, exactly one leading '*.' label (e.g. '*.sandbox.internal').
+                    template:
+                      type: string
+                      description: >-
+                        Per-request template for the wildcard label. Its literal tail must equal
+                        the pattern's suffix and its dynamic slot must contain no literal '.'
+                        (e.g. '${ctx:tenant}.sandbox.internal').
+                    healthCheckHost:
+                      type: string
+                      description: >-
+                        Static authority for active health probes. Required when healthCheck.active
+                        is set. Must match `pattern`.
             status:
               type: object
               properties:

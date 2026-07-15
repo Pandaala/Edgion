@@ -1,0 +1,32 @@
+# Service anchoring the HTTPS wildcard backend (test_server
+# --https-backend-wildcard-port 30028, cert SAN "*.sandbox.internal").
+# Used by the HTTPS dispatch, fail-closed, injection, and pinning cases.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ua-svc-tls
+  namespace: edgion-test
+spec:
+  ports:
+    - name: https
+      port: 30028
+      targetPort: 30028
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ua-svc-tls-slice
+  namespace: edgion-test
+  labels:
+    kubernetes.io/service-name: ua-svc-tls
+addressType: IPv4
+ports:
+  - name: https
+    port: 30028
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true

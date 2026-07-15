@@ -7,6 +7,7 @@ use super::common::Condition;
 use super::health_check::ServiceHealthCheck;
 use super::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
 use super::outlier_detection::OutlierDetectionConfig;
+use super::upstream_authority::{validate_upstream_authority, UpstreamAuthorityConfig};
 use kube::core::ObjectMeta;
 use kube::CustomResource;
 use schemars::JsonSchema;
@@ -35,6 +36,10 @@ pub struct EdgionBackendTrafficPolicySpec {
     /// Outlier detection (passive ejection) configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outlier_detection: Option<OutlierDetectionConfig>,
+    /// Dynamic upstream authority (Host + SNI) within a wildcard pattern the
+    /// backend declares. Absent = today's behaviour, unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub upstream_authority: Option<UpstreamAuthorityConfig>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
@@ -142,6 +147,10 @@ impl EdgionBackendTrafficPolicySpec {
             if let Some(err) = od.clone().normalize().validate() {
                 errors.push(format!("outlierDetection: {err}"));
             }
+        }
+        if let Some(ua) = &self.upstream_authority {
+            let has_active_hc = self.health_check.as_ref().map(|h| h.active.is_some()).unwrap_or(false);
+            errors.extend(validate_upstream_authority(ua, has_active_hc));
         }
         errors
     }
@@ -355,5 +364,51 @@ outlierDetection:
         let tie_a = precedence_key(&mk("a", Some("2026-01-01T00:00:00Z")));
         let tie_b = precedence_key(&mk("b", Some("2026-01-01T00:00:00Z")));
         assert!(tie_a < tie_b, "equal timestamps break ties by name (a < b)");
+    }
+
+    #[test]
+    fn upstream_authority_validation_flows_through_spec() {
+        use crate::resources::health_check::{ActiveHealthCheckConfig, ServiceHealthCheck};
+        use crate::resources::upstream_authority::UpstreamAuthorityConfig;
+
+        let base = |ua: Option<UpstreamAuthorityConfig>, hc: bool| EdgionBackendTrafficPolicySpec {
+            target_refs: vec![PolicyTargetRef {
+                group: String::new(),
+                kind: "Service".to_string(),
+                name: "sandbox-gw".to_string(),
+            }],
+            load_balancer: None,
+            health_check: hc.then(|| ServiceHealthCheck {
+                active: Some(ActiveHealthCheckConfig::default()),
+            }),
+            outlier_detection: None,
+            upstream_authority: ua,
+        };
+
+        // Valid, no health check.
+        let ok = UpstreamAuthorityConfig {
+            pattern: "*.sandbox.internal".to_string(),
+            template: "${ctx:tenant}.sandbox.internal".to_string(),
+            health_check_host: None,
+        };
+        assert!(base(Some(ok.clone()), false).get_validation_errors().is_empty());
+
+        // Same config, but an active health check now demands healthCheckHost.
+        let errs = base(Some(ok), true).get_validation_errors();
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].contains("healthCheckHost"), "got: {}", errs[0]);
+
+        // A template whose suffix does not match the pattern is rejected.
+        let bad = UpstreamAuthorityConfig {
+            pattern: "*.sandbox.internal".to_string(),
+            template: "${ctx:tenant}.evil.com".to_string(),
+            health_check_host: None,
+        };
+        let errs = base(Some(bad), false).get_validation_errors();
+        assert_eq!(errs.len(), 1);
+        assert!(errs[0].contains("upstreamAuthority"), "got: {}", errs[0]);
+
+        // Absent section => unchanged behaviour, no errors.
+        assert!(base(None, true).get_validation_errors().is_empty());
     }
 }

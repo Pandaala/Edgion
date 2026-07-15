@@ -1,0 +1,19 @@
+# Gateway for the EdgionBackendTrafficPolicy/UpstreamAuthority integration
+# scenario (Task 8 of the dynamic-upstream-authority feature). The listener
+# itself is plain HTTP: the client-facing hop never carries TLS/SNI for this
+# scenario, only the gateway->backend hop does (via BackendTLSPolicy on the
+# TLS Service). Port from ports.json "EdgionBackendTrafficPolicy/UpstreamAuthority".
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ua-gateway
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31936
+      allowedRoutes:
+        namespaces:
+          from: All

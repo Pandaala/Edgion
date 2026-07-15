@@ -1,5 +1,5 @@
 {
-  "current_max": 31935,
+  "current_max": 31936,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -288,6 +288,9 @@
     },
     "GRPCRoute/Delegation/DynamicTest": {
       "grpc": 31935
+    },
+    "EdgionBackendTrafficPolicy/UpstreamAuthority": {
+      "http": 31936
     }
   }
 }

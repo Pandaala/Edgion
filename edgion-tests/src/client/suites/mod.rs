@@ -27,7 +27,7 @@ pub use http_route::{
     SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
-pub use edgion_backend_traffic_policy::EdgionBackendTrafficPolicyTestSuite;
+pub use edgion_backend_traffic_policy::{EdgionBackendTrafficPolicyTestSuite, UpstreamAuthorityTestSuite};
 
 pub use grpc_route::{
     GrpcDelegationDynamicInitialTestSuite, GrpcDelegationDynamicUpdateTestSuite, GrpcDelegationTestSuite,

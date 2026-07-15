@@ -154,6 +154,23 @@ struct Cli {
     #[arg(long)]
     multi_sni_key_b: Option<String>,
 
+    /// HTTPS backend wildcard port (for the EdgionBackendTrafficPolicy/UpstreamAuthority
+    /// integration scenario). Serves a genuine `*.sandbox.internal` wildcard certificate;
+    /// the TLS resolver accepts any SNI inside that pattern (rejecting the bare parent
+    /// domain and anything outside it), so a successful handshake already proves the
+    /// gateway sent an in-pattern SNI. The exact composed authority is then verified at
+    /// the HTTP layer via the `Host` header the shared `/echo` handler echoes back.
+    #[arg(long)]
+    https_backend_wildcard_port: Option<u16>,
+
+    /// TLS certificate file for the wildcard backend (SAN: *.sandbox.internal)
+    #[arg(long)]
+    wildcard_cert: Option<String>,
+
+    /// TLS private key file for the wildcard backend
+    #[arg(long)]
+    wildcard_key: Option<String>,
+
     /// Log level
     #[arg(long, default_value = "info")]
     log_level: String,
@@ -315,6 +332,23 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Start HTTPS wildcard backend server (if configured)
+    if let Some(wildcard_port) = cli.https_backend_wildcard_port {
+        match (cli.wildcard_cert.as_ref(), cli.wildcard_key.as_ref()) {
+            (Some(cert), Some(key)) => {
+                let handle = tokio::spawn(start_https_backend_wildcard_server(
+                    wildcard_port,
+                    cert.clone(),
+                    key.clone(),
+                ));
+                handles.push(handle);
+            }
+            _ => {
+                error!("https-backend-wildcard-port specified but wildcard-cert / wildcard-key is missing");
+            }
+        }
+    }
+
     info!("");
     info!("========================================");
     info!("All servers started, press Ctrl+C to stop");
@@ -378,6 +412,7 @@ fn create_echo_router(server_addr_str: String) -> Router {
         .route("/multi-value-append-test", get(header_echo_handler))
         .route("/response-header-test", get(header_echo_handler))
         .route("/headers", get(headers_handler))
+        .route("/vhost-health", get(vhost_health_handler))
         .route("/multi-set-cookie", get(multi_set_cookie_handler))
         .route("/auth-header-probe", get(auth_header_probe_handler))
         .route(
@@ -484,6 +519,35 @@ async fn header_echo_handler(
 
 async fn health_handler() -> impl IntoResponse {
     "OK"
+}
+
+/// Health endpoint for the EdgionBackendTrafficPolicy/UpstreamAuthority
+/// integration scenario (Task 8: probe authority for health checks). Returns
+/// 200 only when the received `Host` header falls inside the
+/// `*.sandbox.internal` wildcard the scenario's `upstreamAuthority` policy
+/// declares; any other Host — notably the raw socket-address Host a probe
+/// sends when it has no `healthCheckHost` override — gets 421. This makes a
+/// passing probe genuine evidence that the override reached this endpoint,
+/// rather than a check that always passes regardless of Host.
+async fn vhost_health_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::http::StatusCode;
+
+    let host = req
+        .headers()
+        .get(axum::http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    if host.ends_with(".sandbox.internal") {
+        (StatusCode::OK, "OK").into_response()
+    } else {
+        (
+            StatusCode::MISDIRECTED_REQUEST,
+            format!("unexpected Host for vhost-health: {host}"),
+        )
+            .into_response()
+    }
 }
 
 fn format_http_version(version: Version) -> &'static str {
@@ -2392,6 +2456,72 @@ async fn start_https_backend_multi_sni_server(
     info!("Multi-SNI HTTPS backend listening on https://{}", addr);
     info!("  Cert A (hostname-a.example.com): {}", cert_a_path);
     info!("  Cert B (hostname-b.example.com): {}", cert_b_path);
+
+    let app_with_connect_info = app.into_make_service_with_connect_info::<SocketAddr>();
+    axum_server::bind_rustls(addr, tls_config)
+        .serve(app_with_connect_info)
+        .await?;
+
+    Ok(())
+}
+
+// ============================================================================
+// Wildcard-cert HTTPS Backend (for EdgionBackendTrafficPolicy/UpstreamAuthority
+// integration testing — Task 8 of the dynamic-upstream-authority feature)
+// ============================================================================
+//
+// A single wildcard certificate (`*.sandbox.internal`) covers every tenant
+// subdomain the scenario dispatches to (`acme.sandbox.internal`,
+// `globex.sandbox.internal`, the health-probe authority `probe.sandbox.internal`,
+// ...). Unlike `MultiSniResolver` (which recognizes exactly two fixed
+// hostnames), this resolver accepts any SNI *inside* the wildcard pattern and
+// rejects everything else — including the bare parent domain
+// `sandbox.internal`, which a wildcard certificate does not cover per RFC 6125.
+// A successful handshake is therefore already proof the gateway sent an
+// in-pattern SNI; the exact per-tenant value is verified at the HTTP layer via
+// the `Host` header the shared `/echo` handler echoes back.
+
+#[derive(Debug)]
+struct VhostWildcardResolver {
+    cert: Arc<CertifiedKey>,
+}
+
+impl ResolvesServerCert for VhostWildcardResolver {
+    fn resolve(&self, hello: ClientHello<'_>) -> Option<Arc<CertifiedKey>> {
+        match hello.server_name() {
+            // `ends_with(".sandbox.internal")` cannot match the bare parent
+            // domain "sandbox.internal" itself (the needle is strictly longer
+            // than the parent), so the RFC 6125 exclusion falls out for free.
+            Some(name) if name.to_ascii_lowercase().ends_with(".sandbox.internal") => Some(self.cert.clone()),
+            // Reject everything else (including absent SNI). rustls turns a
+            // `None` return into an `unrecognized_name` TLS alert.
+            _ => None,
+        }
+    }
+}
+
+async fn start_https_backend_wildcard_server(port: u16, cert_path: String, key_path: String) -> Result<()> {
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let server_addr_str = format!("0.0.0.0:{}", port);
+
+    let cert = load_certified_key(&cert_path, &key_path)?;
+    let resolver = Arc::new(VhostWildcardResolver { cert });
+
+    let mut tls_config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_cert_resolver(resolver);
+
+    // Advertise HTTP/1.1 only; this test verifies Host/SNI dispatch, not protocol version.
+    tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+
+    let tls_config = RustlsConfig::from_config(Arc::new(tls_config));
+    let app = create_echo_router(server_addr_str.clone());
+
+    info!(
+        "Wildcard HTTPS backend (*.sandbox.internal) listening on https://{}",
+        addr
+    );
+    info!("  Certificate: {}", cert_path);
 
     let app_with_connect_info = app.into_make_service_with_connect_info::<SocketAddr>();
     axum_server::bind_rustls(addr, tls_config)

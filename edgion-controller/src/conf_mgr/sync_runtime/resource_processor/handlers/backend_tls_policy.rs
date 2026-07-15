@@ -48,6 +48,41 @@ fn should_requeue_siblings(
     old_target_keys != new_target_keys || old_timestamp != new_timestamp
 }
 
+/// Requeue every `EdgionBackendTrafficPolicy` that depends on one of this BackendTLSPolicy's
+/// target Services, so a BackendTLSPolicy add/edit/delete re-evaluates the EBTP
+/// `upstreamAuthority` cross-object admission rule (`edgion_backend_traffic_policy.rs::validate`)
+/// instead of leaving a stale `Accepted`/`Conflicted` status. Without this edge, EBTP is only
+/// requeued by its own object change, an EBTP sibling, or a Service change — never by the
+/// BackendTLSPolicy it cross-references — so the rule is order-dependent (only catches an
+/// out-of-pattern hostname if the EBTP happens to reconcile again for an unrelated reason) and
+/// fails open on the canonical "apply the offending BackendTLSPolicy after the EBTP already
+/// exists" ops sequence.
+///
+/// `EdgionBackendTrafficPolicyHandler::parse` registers each EBTP into
+/// `ctx.runtime().edgion_backend_traffic_policy.target_mgr()` under
+/// `make_target_conflict_key(ns, svc, None)` — the bare `"ns/svc"` key, since v1 EBTP targets are
+/// same-namespace core Services with no sectionName. This function looks up that same key per
+/// targetRef (section names on the BackendTLSPolicy side are irrelevant to the EBTP index) and
+/// requeues every dependent ref found.
+///
+/// Note: an EBTP only enters that index when its own spec is locally valid (see `spec_valid` in
+/// `edgion_backend_traffic_policy.rs::parse`) — a spec-invalid EBTP is already `Accepted=False`
+/// and intentionally does not participate.
+async fn requeue_dependent_ebtps(meta: &ObjectMeta, target_refs: &[BackendTLSPolicyTargetRef], ctx: &HandlerContext) {
+    let ns = meta.namespace.as_deref().unwrap_or("default");
+    for target_ref in target_refs {
+        let target_key = make_target_conflict_key(ns, &target_ref.name, None);
+        for ebtp_ref in ctx
+            .runtime()
+            .edgion_backend_traffic_policy
+            .target_mgr()
+            .get_refs(&target_key)
+        {
+            ctx.requeue(ebtp_ref.kind_str(), ebtp_ref.resource_key()).await;
+        }
+    }
+}
+
 /// BackendTLSPolicy handler
 pub struct BackendTlsPolicyHandler {
     controller_name: String,
@@ -275,7 +310,12 @@ impl BackendTlsPolicyHandler {
         ProcessResult::Continue(btp)
     }
 
-    async fn on_delete_policy(&self, meta: &ObjectMeta, ctx: &HandlerContext) {
+    async fn on_delete_policy(
+        &self,
+        meta: &ObjectMeta,
+        target_refs: &[BackendTLSPolicyTargetRef],
+        ctx: &HandlerContext,
+    ) {
         let resource_ref = ResourceRef::new(
             ResourceKind::BackendTLSPolicy,
             meta.namespace.clone(),
@@ -307,6 +347,11 @@ impl BackendTlsPolicyHandler {
         for sibling in siblings {
             ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
         }
+
+        // Requeue dependent EdgionBackendTrafficPolicies — deleting the offending
+        // BackendTLSPolicy must clear a stale Accepted=False on the EBTP, otherwise the
+        // rejection outlives the object that caused it.
+        requeue_dependent_ebtps(meta, target_refs, ctx).await;
     }
 
     fn update_policy_status<S: BtpSpecView>(
@@ -500,11 +545,26 @@ impl BackendTlsPolicyHandler {
         }
     }
 
-    async fn on_change_policy(&self, _ctx: &HandlerContext) {
+    async fn on_change_policy(
+        &self,
+        meta: &ObjectMeta,
+        target_refs: &[BackendTLSPolicyTargetRef],
+        ctx: &HandlerContext,
+    ) {
         // Sibling requeue is handled in parse_policy() (only when targetRefs
-        // actually change), so nothing to do here. Unconditionally requeuing
-        // siblings in both parse and on_change was causing A→B→A→B ping-pong
-        // cycles between conflicting policies.
+        // actually change), so nothing to do here for siblings. Unconditionally
+        // requeuing siblings in both parse and on_change was causing A→B→A→B
+        // ping-pong cycles between conflicting policies.
+        //
+        // Dependent EdgionBackendTrafficPolicies are different: `on_change` fires
+        // unconditionally on every successful create/update (see
+        // `ProcessorHandler::on_change` doc), which is exactly the trigger needed to
+        // re-evaluate the `upstreamAuthority` cross-object rule whenever this
+        // BackendTLSPolicy's targetRefs or `validation.hostname` may have changed —
+        // there is no separate diff/dedup gate to hook into, and requeuing on every
+        // change cannot ping-pong because EBTP's own `parse`/`on_change` never write
+        // back into `backend_tls_policy`'s state.
+        requeue_dependent_ebtps(meta, target_refs, ctx).await;
     }
 
     /// Resolve the Gateway ancestors for a BackendTLSPolicy.
@@ -600,12 +660,12 @@ impl ProcessorHandler<BackendTLSPolicy> for BackendTlsPolicyHandler {
         self.parse_policy(btp, ctx).await
     }
 
-    async fn on_change(&self, _btp: &BackendTLSPolicy, ctx: &HandlerContext) {
-        self.on_change_policy(ctx).await;
+    async fn on_change(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
+        self.on_change_policy(&btp.metadata, btp.spec.target_refs(), ctx).await;
     }
 
     async fn on_delete(&self, btp: &BackendTLSPolicy, ctx: &HandlerContext) {
-        self.on_delete_policy(&btp.metadata, ctx).await;
+        self.on_delete_policy(&btp.metadata, btp.spec.target_refs(), ctx).await;
     }
 
     fn update_status(&self, btp: &mut BackendTLSPolicy, ctx: &HandlerContext, validation_errors: &[String]) {
@@ -648,12 +708,16 @@ impl ProcessorHandler<BackendTLSPolicyAlpha3> for BackendTlsPolicyAlpha3Handler 
         }
     }
 
-    async fn on_change(&self, _btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {
-        self.inner.on_change_policy(ctx).await;
+    async fn on_change(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {
+        self.inner
+            .on_change_policy(&btp.metadata, btp.spec.target_refs(), ctx)
+            .await;
     }
 
     async fn on_delete(&self, btp: &BackendTLSPolicyAlpha3, ctx: &HandlerContext) {
-        self.inner.on_delete_policy(&btp.metadata, ctx).await;
+        self.inner
+            .on_delete_policy(&btp.metadata, btp.spec.target_refs(), ctx)
+            .await;
     }
 
     fn update_status(&self, btp: &mut BackendTLSPolicyAlpha3, ctx: &HandlerContext, validation_errors: &[String]) {
@@ -886,5 +950,120 @@ mod tests {
 
         let siblings_of_winner = runtime.backend_tls_policy.get_siblings(&winner);
         assert_eq!(siblings_of_winner, vec![sibling]);
+    }
+
+    // -------- Critical 2 regression: BackendTLSPolicy change/delete requeues the
+    // -------- dependent EdgionBackendTrafficPolicy --------
+
+    /// Build a minimal, spec-locally-valid EdgionBackendTrafficPolicy targeting
+    /// `namespace/service` and register it into the target-conflict index via
+    /// `EdgionBackendTrafficPolicyHandler::parse` — mirroring what a real EBTP reconcile does
+    /// (`edgion_backend_traffic_policy.rs::parse` registers into
+    /// `ctx.runtime().edgion_backend_traffic_policy.target_mgr()` under
+    /// `make_target_conflict_key(ns, svc, None)` for a valid spec).
+    async fn register_ebtp_target(namespace: &str, name: &str, service: &str, ctx: &HandlerContext) {
+        use crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendTrafficPolicyHandler;
+        use edgion_resources::prelude_resources::EdgionBackendTrafficPolicy;
+        use serde_json::json;
+
+        let ebtp: EdgionBackendTrafficPolicy = serde_json::from_value(json!({
+            "apiVersion": "edgion.io/v1",
+            "kind": "EdgionBackendTrafficPolicy",
+            "metadata": { "name": name, "namespace": namespace },
+            "spec": { "targetRefs": [ { "kind": "Service", "name": service } ] },
+        }))
+        .expect("valid EdgionBackendTrafficPolicy JSON");
+        let _ = EdgionBackendTrafficPolicyHandler::new().parse(ebtp, ctx).await;
+    }
+
+    /// CRITICAL regression test: applying/changing a BackendTLSPolicy must requeue every
+    /// EdgionBackendTrafficPolicy that targets the same Service. Without this edge, the EBTP
+    /// `upstreamAuthority` cross-object admission rule — which runs only inside EBTP's own
+    /// `validate()` — is order-dependent: applying the offending BackendTLSPolicy AFTER the
+    /// EBTP already exists (the canonical ops sequence this rule is meant to catch) would
+    /// otherwise never re-trigger the EBTP's reconcile, leaving a stale `Accepted=True` forever.
+    #[tokio::test]
+    async fn backend_tls_policy_change_requeues_dependent_ebtp() {
+        use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+        use edgion_resources::prelude_resources::EdgionBackendTrafficPolicy;
+        use std::sync::atomic::Ordering;
+
+        let (ctx, rt) = make_ctx();
+
+        // Register an EdgionBackendTrafficPolicy processor so `ctx.requeue("EdgionBackendTrafficPolicy", ..)`
+        // has somewhere to land; its workqueue metrics are the test's observation point.
+        let ebtp_proc = Arc::new(ResourceProcessor::<EdgionBackendTrafficPolicy>::new(
+            "EdgionBackendTrafficPolicy",
+            128,
+            Arc::new(
+                crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendTrafficPolicyHandler::new(),
+            ),
+            rt.clone(),
+        ));
+        rt.processor_registry.register(ebtp_proc.clone());
+
+        register_ebtp_target("ns", "ebtp", "payments", &ctx).await;
+
+        assert_eq!(
+            ebtp_proc.workqueue().metrics().delayed_total.load(Ordering::Relaxed),
+            0,
+            "sanity: nothing requeued yet"
+        );
+
+        // Apply a BackendTLSPolicy targeting the same Service, THEN drive on_change (mirrors
+        // the reconcile pipeline: parse() followed unconditionally by on_change()).
+        let handler = BackendTlsPolicyHandler::default();
+        let btp = make_btp("ns", "tls", "payments", "2026-01-01T00:00:00+00:00");
+        let _ = handler.parse(btp.clone(), &ctx).await;
+        handler.on_change(&btp, &ctx).await;
+
+        assert_eq!(
+            ebtp_proc.workqueue().metrics().delayed_total.load(Ordering::Relaxed),
+            1,
+            "BackendTLSPolicy on_change must requeue the dependent EdgionBackendTrafficPolicy"
+        );
+    }
+
+    /// CRITICAL regression test: deleting a BackendTLSPolicy must requeue every
+    /// EdgionBackendTrafficPolicy that targeted the same Service, otherwise a stale
+    /// `Accepted=False` (from the now-removed offending hostname) outlives the object that
+    /// caused it.
+    #[tokio::test]
+    async fn backend_tls_policy_delete_requeues_dependent_ebtp() {
+        use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+        use edgion_resources::prelude_resources::EdgionBackendTrafficPolicy;
+        use std::sync::atomic::Ordering;
+
+        let (ctx, rt) = make_ctx();
+
+        let ebtp_proc = Arc::new(ResourceProcessor::<EdgionBackendTrafficPolicy>::new(
+            "EdgionBackendTrafficPolicy",
+            128,
+            Arc::new(
+                crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendTrafficPolicyHandler::new(),
+            ),
+            rt.clone(),
+        ));
+        rt.processor_registry.register(ebtp_proc.clone());
+
+        register_ebtp_target("ns", "ebtp", "payments", &ctx).await;
+
+        let handler = BackendTlsPolicyHandler::default();
+        let btp = make_btp("ns", "tls", "payments", "2026-01-01T00:00:00+00:00");
+        let _ = handler.parse(btp.clone(), &ctx).await;
+
+        assert_eq!(
+            ebtp_proc.workqueue().metrics().delayed_total.load(Ordering::Relaxed),
+            0,
+            "sanity: parse() alone (no on_delete yet) must not requeue the EBTP"
+        );
+
+        handler.on_delete(&btp, &ctx).await;
+
+        assert_eq!(
+            ebtp_proc.workqueue().metrics().delayed_total.load(Ordering::Relaxed),
+            1,
+            "BackendTLSPolicy on_delete must requeue the dependent EdgionBackendTrafficPolicy"
+        );
     }
 }

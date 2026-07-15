@@ -1,11 +1,12 @@
 //! Runtime store + conflict arbitration for `EdgionBackendTrafficPolicy`.
 //!
-//! Holds the synced policy cache plus the resolved per-service load-balancer
-//! map. On every change it recomputes the winning policy per affected Service
-//! key (oldest-wins via `precedence_key`) and pushes the effective config into
-//! the four data-plane stores: active health check, circuit breaker (outlier
-//! detection), panic threshold, and the load-balancer policy map read on the
-//! request path by `resolve_lb_policy`.
+//! Holds the synced policy cache plus the resolved per-service load-balancer and
+//! upstream-authority maps. On every change it recomputes the winning policy per
+//! affected Service key (oldest-wins via `precedence_key`) and pushes the effective
+//! config into the four data-plane stores: active health check, circuit breaker
+//! (outlier detection), panic threshold, and the load-balancer policy map read on
+//! the request path by `resolve_lb_policy` — plus the upstream-authority map read
+//! on the request path by both data paths via `get_authority`.
 
 use crate::backends::circuit_breaker::get_circuit_breaker_store;
 use crate::backends::health::check::{get_hc_config_store, get_health_check_manager};
@@ -13,6 +14,7 @@ use crate::backends::panic_threshold::get_panic_threshold_store;
 use dashmap::DashMap;
 use edgion_resources::resources::edgion_backend_traffic_policy::precedence_key;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
+use edgion_resources::resources::upstream_authority::CompiledUpstreamAuthority;
 use edgion_resources::resources::EdgionBackendTrafficPolicy;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, LazyLock};
@@ -25,8 +27,8 @@ pub fn get_backend_traffic_policy_store() -> Arc<BackendTrafficPolicyStore> {
     BACKEND_TRAFFIC_POLICY_STORE.clone()
 }
 
-/// Store owning the synced policy cache, the resolved winner per Service key,
-/// and the request-path load-balancer policy map.
+/// Store owning the synced policy cache, the resolved winner per Service key, and
+/// the request-path load-balancer policy and upstream-authority maps.
 pub struct BackendTrafficPolicyStore {
     /// Synced policies keyed by resource key (`namespace/name`).
     policies: DashMap<String, Arc<EdgionBackendTrafficPolicy>>,
@@ -34,6 +36,8 @@ pub struct BackendTrafficPolicyStore {
     applied: DashMap<String, String>,
     /// Resolved load-balancer policy per Service key (read on the request path).
     lb_policies: DashMap<String, ParsedLBPolicy>,
+    /// Resolved upstream authority per Service key (read on the request path).
+    authorities: DashMap<String, Arc<CompiledUpstreamAuthority>>,
 }
 
 impl Default for BackendTrafficPolicyStore {
@@ -48,6 +52,7 @@ impl BackendTrafficPolicyStore {
             policies: DashMap::new(),
             applied: DashMap::new(),
             lb_policies: DashMap::new(),
+            authorities: DashMap::new(),
         }
     }
 
@@ -67,6 +72,12 @@ impl BackendTrafficPolicyStore {
     /// a single `DashMap` get + clone, no tracing.
     pub fn get_lb_policy(&self, service_key: &str) -> Option<ParsedLBPolicy> {
         self.lb_policies.get(service_key).map(|v| v.value().clone())
+    }
+
+    /// Resolved upstream authority for a Service key. Request-path read:
+    /// a single `DashMap` get + `Arc` clone, no tracing.
+    pub fn get_authority(&self, service_key: &str) -> Option<Arc<CompiledUpstreamAuthority>> {
+        self.authorities.get(service_key).map(|v| Arc::clone(v.value()))
     }
 
     /// Admin snapshot of the resolved load-balancer map: Service key -> debug
@@ -112,6 +123,31 @@ impl BackendTrafficPolicyStore {
 
         let (new_lb, new_winner) = match winner {
             Some((_, policy_key_str, policy)) => {
+                // Must run BEFORE `hc_store.set_service_config` + `hc_manager.reconcile_service`
+                // below: `reconcile_service` spawns a fresh `health_check_loop` task, which
+                // resolves the probe `Host` via `get_authority(service_key)` exactly ONCE at
+                // task startup and never refreshes it. On a multi-worker runtime that spawned
+                // task can be polled before this write lands, so it would read the stale (or
+                // absent) authority and probe with the wrong Host until the next policy change
+                // respawns it. Writing the authority first guarantees the spawned probe always
+                // observes the fresh value.
+                //
+                // `compile` cannot fail here: `get_validation_errors()` (checked above)
+                // already rejected every spec whose authority does not compile.
+                match policy
+                    .spec
+                    .upstream_authority
+                    .as_ref()
+                    .and_then(|ua| CompiledUpstreamAuthority::compile(ua).ok())
+                {
+                    Some(c) => {
+                        self.authorities.insert(service_key.to_string(), Arc::new(c));
+                    }
+                    None => {
+                        self.authorities.remove(service_key);
+                    }
+                }
+
                 let hc = policy.spec.health_check.as_ref().and_then(|h| h.active.clone());
                 hc_store.set_service_config(service_key, hc);
                 hc_manager.reconcile_service(service_key);
@@ -140,6 +176,7 @@ impl BackendTrafficPolicyStore {
                 cb_store.set_service_config(service_key, None);
                 pt_store.set_service_threshold(service_key, None);
                 self.lb_policies.remove(service_key);
+                self.authorities.remove(service_key);
                 self.applied.remove(service_key);
                 (None, None)
             }
@@ -281,6 +318,7 @@ mod tests {
                 load_balancer,
                 health_check,
                 outlier_detection,
+                upstream_authority: None,
             },
             status: None,
         })
@@ -488,6 +526,7 @@ mod tests {
                 }),
                 health_check: None,
                 outlier_detection: None,
+                upstream_authority: None,
             },
             status: None,
         });
@@ -586,5 +625,42 @@ mod tests {
             !get_circuit_breaker_store().keys().contains(&key_b.to_string()),
             "B CB cleared"
         );
+    }
+
+    // (g) upstreamAuthority resolves per Service key through the same oldest-wins
+    // arbitration as the other sections, and clears when the policy goes away.
+    #[test]
+    fn upstream_authority_resolves_and_clears() {
+        use edgion_resources::resources::upstream_authority::UpstreamAuthorityConfig;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = BackendTrafficPolicyStore::new();
+        let key = "bt6h/svc";
+
+        let mut p = policy(
+            "bt6h",
+            "p1",
+            "svc",
+            Some(ts("2026-01-01T00:00:00Z")),
+            None,
+            None,
+            false,
+            false,
+        );
+        Arc::get_mut(&mut p).unwrap().spec.upstream_authority = Some(UpstreamAuthorityConfig {
+            pattern: "*.sandbox.internal".to_string(),
+            template: "${ctx:tenant}.sandbox.internal".to_string(),
+            health_check_host: None,
+        });
+        store.policies.insert("bt6h/p1".to_string(), p);
+
+        store.reapply_service(key);
+        let resolved = store.get_authority(key).expect("authority resolved");
+        assert_eq!(resolved.suffix, ".sandbox.internal");
+        assert_eq!(resolved.compose("tenant-a"), "tenant-a.sandbox.internal");
+
+        store.policies.clear();
+        store.reapply_service(key);
+        assert!(store.get_authority(key).is_none(), "cleared on removal");
     }
 }

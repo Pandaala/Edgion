@@ -112,6 +112,11 @@ pub struct AccessLogEntry<'a> {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conn_est: Option<bool>,
+
+    /// Composed upstream authority (Host + SNI) when the target Service carries an
+    /// `upstreamAuthority` policy; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_authority: Option<&'a str>,
 }
 
 impl<'a> AccessLogEntry<'a> {
@@ -159,6 +164,7 @@ impl<'a> AccessLogEntry<'a> {
                 allow: log_ctx_keys,
             },
             conn_est: None,
+            upstream_authority: ctx.upstream_authority.as_deref(),
         }
     }
 
@@ -218,6 +224,21 @@ mod tests {
             !json.contains("jwt_claims") && !json.contains("alice"),
             "sensitive ctx keys must never be logged, got: {json}"
         );
+    }
+
+    #[test]
+    fn upstream_authority_is_logged_only_when_present() {
+        let mut ctx = EdgionHttpContext::new();
+        assert!(
+            !AccessLogEntry::from_context(&ctx)
+                .to_json()
+                .contains("upstream_authority"),
+            "absent authority must be omitted from the access log"
+        );
+
+        ctx.upstream_authority = Some("tenant-a.sandbox.internal".to_string());
+        let json = AccessLogEntry::from_context(&ctx).to_json();
+        assert!(json.contains("tenant-a.sandbox.internal"), "got: {json}");
     }
 
     #[test]

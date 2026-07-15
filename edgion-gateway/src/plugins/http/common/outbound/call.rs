@@ -14,6 +14,9 @@ use futures::StreamExt;
 
 use edgion_resources::resources::common::success::SuccessOutcome;
 
+use crate::backends::policy::backend_traffic::authority::render_authority;
+use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
+
 use super::client::{HealthState, ManagedOutboundClient};
 use crate::plugins::runtime::PluginSession;
 
@@ -53,6 +56,10 @@ pub enum OutboundCallError {
     ResponseTooLarge,
     /// All retry attempts were exhausted after transport failures.
     Exhausted(String),
+    /// The request's composed upstream authority failed to render or validate
+    /// (see `AuthorityError`). The call is aborted rather than falling back to
+    /// the IP-based base URL, which would silently reach the wrong vhost.
+    AuthorityRejected,
 }
 
 impl std::fmt::Display for OutboundCallError {
@@ -64,6 +71,7 @@ impl std::fmt::Display for OutboundCallError {
             Self::Connect(msg) => write!(f, "outbound connection error: {msg}"),
             Self::ResponseTooLarge => write!(f, "outbound response body exceeded size cap"),
             Self::Exhausted(msg) => write!(f, "outbound retries exhausted: {msg}"),
+            Self::AuthorityRejected => write!(f, "outbound request rejected: invalid upstream authority"),
         }
     }
 }
@@ -120,6 +128,28 @@ pub async fn outbound_call(
     let base = client
         .dial_url()
         .map_err(|e| OutboundCallError::Connect(e.to_string()))?;
+
+    // Dynamic upstream authority: for a Service anchor carrying an
+    // `upstreamAuthority` policy, swap the IP-based host for the composed
+    // authority. Resolution of that authority is pinned to the same Service's
+    // ready endpoints by `AnchorPinnedResolver` (installed in
+    // `ManagedOutboundClient::from_parts`), so the dial destination is
+    // unchanged — only Host/SNI move. This is never a fallback path: a
+    // rejected authority aborts the call rather than silently dialing the
+    // static/IP-based base URL.
+    let base = match client
+        .authority_service_key()
+        .and_then(|key| get_backend_traffic_policy_store().get_authority(key))
+    {
+        Some(compiled) => match render_authority(&compiled, session) {
+            Ok(authority) => replace_url_host(&base, &authority),
+            Err(e) => {
+                crate::observe::metrics::record_authority_rejected(e.reason());
+                return Err(OutboundCallError::AuthorityRejected);
+            }
+        },
+        None => base,
+    };
 
     // Resolved once per call, not per retry attempt: the timeout template reads
     // the (frozen) incoming request via `session`, so its render cannot change
@@ -416,6 +446,22 @@ fn compute_retry_delay_ms(
     } else {
         capped
     }
+}
+
+/// Replace `base`'s host with `authority`, keeping the scheme and port.
+///
+/// `base` is always a well-formed URL produced by `ManagedOutboundClient::dial_url`
+/// (built from `ResolvedTarget::pick_url`), and `authority` is `<validated label>
+/// <fixed suffix>` — a DNS label already checked by `validate_label` in
+/// `render_authority`, concatenated with a compile-time-constant suffix — so
+/// neither `Url::parse` nor `set_host` can fail in practice. `unwrap_or_else`
+/// falls back to the unmodified `base` rather than panicking, since this runs on
+/// the data-plane request path.
+pub(crate) fn replace_url_host(base: &str, authority: &str) -> String {
+    reqwest::Url::parse(base)
+        .and_then(|mut url| url.set_host(Some(authority)).map(|()| url))
+        .map(|url| url.to_string())
+        .unwrap_or_else(|_| base.to_string())
 }
 
 /// Parse a `Retry-After` header into milliseconds. Accepts delta-seconds

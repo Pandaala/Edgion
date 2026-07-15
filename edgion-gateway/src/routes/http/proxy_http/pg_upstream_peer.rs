@@ -1,7 +1,11 @@
 use super::EdgionHttpProxy;
+use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
+use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 use crate::backends::EdgionService;
 use crate::backends::{get_peer, try_get_peer};
 use crate::ctx::BackendSource;
+use crate::observe::metrics::record_authority_rejected;
+use crate::plugins::runtime::session_adapter::PingoraSessionAdapter;
 use crate::routes::common::UNSAFE_UPSTREAM_ADDRESS_LOG;
 use crate::routes::grpc::handle_grpc_upstream;
 use crate::routes::http::routes_mgr::RouteRules;
@@ -182,11 +186,145 @@ pub async fn upstream_peer(
     }
 
     // Route to appropriate handler based on matched route type (not protocol)
-    if ctx.is_grpc_route_matched {
-        upstream_peer_grpc(edgion_http, session, ctx).await
+    let mut peer = if ctx.is_grpc_route_matched {
+        upstream_peer_grpc(edgion_http, session, ctx).await?
     } else {
-        upstream_peer_http(edgion_http, session, ctx).await
+        upstream_peer_http(edgion_http, session, ctx).await?
+    };
+
+    apply_upstream_authority(session, ctx, &mut peer)?;
+
+    Ok(peer)
+}
+
+/// What `upstream_peer` should do about the upstream authority for this request.
+/// Pure output of [`decide_upstream_authority`] — carries no `Session`/`ctx`/`peer`
+/// reference so the decision can be unit-tested without a live `Session`.
+#[derive(Debug, PartialEq, Eq)]
+enum AuthorityDecision {
+    /// No policy on this Service (or no Service key) — leave the peer untouched.
+    NoOp,
+    /// Use this composed authority for BOTH the peer SNI and the upstream Host.
+    Set(String),
+    /// The label could not be rendered or was invalid — fail closed with 502.
+    Reject(AuthorityError),
+}
+
+/// Pure decision step for `apply_upstream_authority`. `rendered` is `None` when
+/// no `upstreamAuthority` policy applies to this Service (no Service key, or none
+/// configured for it) — the caller never had anything to render; `Some(result)`
+/// is the outcome of `render_authority` when a policy does apply.
+///
+/// Kept free of `Session` / `ctx` / `HttpPeer` so all three arms are directly
+/// unit-testable; the effects (peer.sni, ctx.upstream_authority, the recorded
+/// access-log SNI, the 502 fail-closed response) live in
+/// [`apply_upstream_authority_decision`].
+#[inline]
+fn decide_upstream_authority(rendered: Option<Result<String, AuthorityError>>) -> AuthorityDecision {
+    match rendered {
+        None => AuthorityDecision::NoOp,
+        Some(Ok(host)) => AuthorityDecision::Set(host),
+        Some(Err(e)) => AuthorityDecision::Reject(e),
     }
+}
+
+/// Apply the effects of an [`AuthorityDecision`] to `ctx` / `peer`. Split out
+/// from `apply_upstream_authority` so the fail-closed `Reject` path (peer left
+/// untouched, `ctx.upstream_authority` cleared, 502 `EdgionStatus` + metric
+/// recorded) is unit-testable without a live `Session`.
+#[inline]
+fn apply_upstream_authority_decision(
+    decision: AuthorityDecision,
+    ctx: &mut EdgionHttpContext,
+    peer: &mut HttpPeer,
+) -> pingora_core::Result<()> {
+    match decision {
+        AuthorityDecision::NoOp => {
+            ctx.upstream_authority = None;
+            Ok(())
+        }
+        AuthorityDecision::Set(host) => {
+            // `HttpPeer::sni` participates in `reuse_hash` (pingora's keepalive
+            // pool key). On a cleartext peer the SNI is meaningless on the wire,
+            // so setting it per-tenant would fragment one shared connection pool
+            // into one bucket per rendered label. Only TLS peers need it.
+            if peer.is_tls() {
+                peer.sni = host.clone();
+            }
+            // Refresh the access-log-recorded SNI too: `record_tls_to_upstream`
+            // already wrote the STATIC BackendTLSPolicy hostname onto the current
+            // upstream entry during peer construction, before this authority was
+            // composed. Without this, the access log would keep reporting the
+            // stale static SNI even though the wire SNI (and Host) changed.
+            if let Some(up) = ctx.get_current_upstream_mut() {
+                if let Some(tls) = up.tls.as_mut() {
+                    tls.sni = Some(host.clone());
+                }
+            }
+            // Host header is written later by `upstream_request_filter` — see
+            // `pg_upstream_request_filter::apply_upstream_authority`, which reads
+            // this field. Written unconditionally (TLS or not) so cleartext
+            // backends still get the rewritten Host.
+            ctx.upstream_authority = Some(host);
+            Ok(())
+        }
+        AuthorityDecision::Reject(e) => {
+            record_authority_rejected(e.reason());
+            ctx.add_error(EdgionStatus::UpstreamAuthorityRejected);
+            if let Some(upstream) = ctx.get_current_upstream_mut() {
+                upstream.status = Some(502);
+            }
+            // Fail closed: never leave a stale composed authority from an
+            // earlier attempt lying around for a retry to pick up.
+            ctx.upstream_authority = None;
+            Err(PingoraError::explain(
+                ErrorType::HTTPStatus(502),
+                "upstream authority rejected",
+            ))
+        }
+    }
+}
+
+/// Dynamic upstream authority (Task 6): render the wildcard label, compose the
+/// host, and use it for BOTH the TLS SNI (set here on `peer`) and the upstream
+/// `Host` header (written later by `upstream_request_filter` from
+/// `ctx.upstream_authority` — `upstream_peer` cannot touch request headers).
+///
+/// A no-op when the chosen backend has no Service key (bypass paths —
+/// DirectEndpoint / ExternalJump — leave `backend_context.service_key` unset)
+/// or when the Service carries no `upstreamAuthority` policy, so an
+/// unconfigured Service behaves byte-for-byte as today. Both early-return
+/// paths clear `ctx.upstream_authority` so a conf_sync policy removal between
+/// retry attempts of the same request cannot leave a stale composed authority
+/// (and therefore a stale upstream `Host`) from a previous attempt.
+///
+/// Fail-closed on a bad render: silently keeping the static SNI would present
+/// the right TLS identity to the wrong virtual host.
+#[inline]
+fn apply_upstream_authority(
+    session: &mut Session,
+    ctx: &mut EdgionHttpContext,
+    peer: &mut HttpPeer,
+) -> pingora_core::Result<()> {
+    // Borrow instead of `.clone()`-ing the service key: the design budget is one
+    // DashMap get per request on the common (no-policy) path, and this borrow
+    // ends at the `get_authority` call below, so there is no borrowck conflict
+    // with the mutable `ctx.upstream_authority` write in either early return.
+    let Some(service_key) = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.as_deref()) else {
+        ctx.upstream_authority = None;
+        return Ok(());
+    };
+    let Some(compiled) = get_backend_traffic_policy_store().get_authority(service_key) else {
+        ctx.upstream_authority = None;
+        return Ok(());
+    };
+
+    let rendered = {
+        let adapter = PingoraSessionAdapter::new(session, ctx);
+        render_authority(&compiled, &adapter)
+    };
+
+    apply_upstream_authority_decision(decide_upstream_authority(Some(rendered)), ctx, peer)
 }
 
 /// Handle gRPC upstream peer selection
@@ -1013,10 +1151,16 @@ fn sp_should_repin_on_strict_retry(
 #[cfg(test)]
 mod tests {
     use super::{
-        backoff_action, decide_want_raw, fold_peer_timeouts, sp_should_refresh_on_cross_attempt_retry,
-        sp_should_repin_on_strict_retry, BackoffAction,
+        apply_upstream_authority_decision, backoff_action, decide_upstream_authority, decide_want_raw,
+        fold_peer_timeouts, sp_should_refresh_on_cross_attempt_retry, sp_should_repin_on_strict_retry,
+        AuthorityDecision, BackoffAction,
     };
+    use crate::backends::policy::backend_traffic::authority::AuthorityError;
+    use crate::{BackendContext, BackendTlsInfo, EdgionHttpContext, UpstreamInfo};
     use crate::{PeerTimeoutSource, SessionPersistenceState};
+    use edgion_resources::EdgionStatus;
+    use pingora_core::prelude::HttpPeer;
+    use pingora_core::protocols::l4::socket::SocketAddr as PingoraSocketAddr;
     use std::time::Duration;
 
     #[test]
@@ -1488,5 +1632,189 @@ mod tests {
             backoff_action(Duration::from_secs(2), None, Some(Duration::from_secs(1))),
             BackoffAction::FailBudgetTooSmall { prefer_request: false }
         );
+    }
+
+    // ─── decide_upstream_authority: pure decision, all three arms ───
+
+    #[test]
+    fn decide_upstream_authority_no_policy_is_noop() {
+        // No Service key / no policy for this Service — caller never rendered.
+        assert_eq!(decide_upstream_authority(None), AuthorityDecision::NoOp);
+    }
+
+    #[test]
+    fn decide_upstream_authority_ok_render_is_set() {
+        assert_eq!(
+            decide_upstream_authority(Some(Ok("tenant-b.sandbox.internal".to_string()))),
+            AuthorityDecision::Set("tenant-b.sandbox.internal".to_string())
+        );
+    }
+
+    #[test]
+    fn decide_upstream_authority_err_render_is_reject() {
+        assert_eq!(
+            decide_upstream_authority(Some(Err(AuthorityError::InvalidLabel))),
+            AuthorityDecision::Reject(AuthorityError::InvalidLabel)
+        );
+        assert_eq!(
+            decide_upstream_authority(Some(Err(AuthorityError::RenderEmpty))),
+            AuthorityDecision::Reject(AuthorityError::RenderEmpty)
+        );
+    }
+
+    // ─── apply_upstream_authority_decision: effects wiring ───
+
+    /// Build a ctx with one "current" upstream entry carrying a TLS record whose
+    /// `sni` holds the STATIC BackendTLSPolicy hostname (as `record_tls_to_upstream`
+    /// would have written it during peer construction, before the dynamic
+    /// authority is composed).
+    fn ctx_with_static_tls_sni(sni: &str) -> EdgionHttpContext {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.backend_context = Some(BackendContext {
+            source: None,
+            rsc: None,
+            service_key: Some("default/svc".to_string()),
+            service_kind: None,
+            upstreams: Vec::new(),
+            current_upstream_id: None,
+            backend_ref_idx: None,
+        });
+        let bc = ctx.backend_context.as_mut().unwrap();
+        bc.upstreams.push(UpstreamInfo {
+            ip: None,
+            port: None,
+            status: None,
+            ct: None,
+            ht: None,
+            bt: None,
+            et: None,
+            wpt: None,
+            response_body_size: None,
+            start_time: std::time::Instant::now(),
+            err: Vec::new(),
+            lb_backend_addr: None,
+            lb_edgion_backend: None,
+            service_key: None,
+            lb_policy: None,
+            tls: Some(BackendTlsInfo {
+                sni: Some(sni.to_string()),
+                handshake_ok: None,
+                protocol: None,
+                cipher: None,
+            }),
+            lb_committed: None,
+        });
+        bc.current_upstream_id = Some(bc.upstreams.len() - 1);
+        ctx
+    }
+
+    fn tls_peer(sni: &str) -> HttpPeer {
+        HttpPeer::new(
+            PingoraSocketAddr::Inet(std::net::SocketAddr::from(([127, 0, 0, 1], 8080))),
+            true,
+            sni.to_string(),
+        )
+    }
+
+    fn cleartext_peer() -> HttpPeer {
+        HttpPeer::new(
+            PingoraSocketAddr::Inet(std::net::SocketAddr::from(([127, 0, 0, 1], 8080))),
+            false,
+            String::new(),
+        )
+    }
+
+    #[test]
+    fn apply_upstream_authority_decision_set_refreshes_recorded_sni_not_static_hostname() {
+        // IMPORTANT-1 regression: the access-log-recorded SNI must be updated to
+        // the composed authority, not left at the static BackendTLSPolicy hostname.
+        let mut ctx = ctx_with_static_tls_sni("svc.default.svc.cluster.local");
+        let mut peer = tls_peer("svc.default.svc.cluster.local");
+
+        let result = apply_upstream_authority_decision(
+            AuthorityDecision::Set("tenant-b.sandbox.internal".to_string()),
+            &mut ctx,
+            &mut peer,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(peer.sni, "tenant-b.sandbox.internal");
+        assert_eq!(ctx.upstream_authority.as_deref(), Some("tenant-b.sandbox.internal"));
+
+        let recorded_sni = ctx
+            .get_current_upstream_mut()
+            .and_then(|u| u.tls.as_ref())
+            .and_then(|t| t.sni.as_deref());
+        assert_eq!(
+            recorded_sni,
+            Some("tenant-b.sandbox.internal"),
+            "access log must record the composed authority, not the static hostname"
+        );
+        assert_ne!(recorded_sni, Some("svc.default.svc.cluster.local"));
+    }
+
+    #[test]
+    fn apply_upstream_authority_decision_set_skips_sni_on_cleartext_peer() {
+        // MINOR-5 regression: setting SNI on a cleartext peer fragments the
+        // pingora keepalive pool (sni is hashed into HttpPeer::reuse_hash), and
+        // the SNI is meaningless on the wire for a non-TLS backend.
+        let mut ctx = EdgionHttpContext::new();
+        let mut peer = cleartext_peer();
+
+        let result = apply_upstream_authority_decision(
+            AuthorityDecision::Set("tenant-b.sandbox.internal".to_string()),
+            &mut ctx,
+            &mut peer,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(peer.sni, "", "cleartext peer must not get a pool-fragmenting SNI");
+        // The Host header rewrite must still happen regardless of TLS — ctx is
+        // what `upstream_request_filter` reads to write the upstream Host.
+        assert_eq!(ctx.upstream_authority.as_deref(), Some("tenant-b.sandbox.internal"));
+    }
+
+    #[test]
+    fn apply_upstream_authority_decision_reject_fails_closed_and_leaves_peer_untouched() {
+        // IMPORTANT-2 regression: pins that the fail-closed path cannot silently
+        // fall through to the static SNI. If `Reject` were ever replaced with an
+        // `Ok(())` no-op (silently keeping the static SNI), `result.is_err()`
+        // would flip to false and this test would fail.
+        let mut ctx = ctx_with_static_tls_sni("svc.default.svc.cluster.local");
+        let mut peer = tls_peer("svc.default.svc.cluster.local");
+        let original_sni = peer.sni.clone();
+
+        let result = apply_upstream_authority_decision(
+            AuthorityDecision::Reject(AuthorityError::InvalidLabel),
+            &mut ctx,
+            &mut peer,
+        );
+
+        assert!(result.is_err(), "a bad render must fail closed, never silently succeed");
+        assert_eq!(
+            peer.sni, original_sni,
+            "peer must be left with the static SNI, not a usable altered one"
+        );
+        assert!(ctx.edgion_status.contains(&EdgionStatus::UpstreamAuthorityRejected));
+        assert_eq!(ctx.get_current_upstream_mut().and_then(|u| u.status), Some(502));
+        assert_eq!(ctx.upstream_authority, None);
+    }
+
+    #[test]
+    fn noop_decision_clears_stale_upstream_authority() {
+        // MINOR-3 regression: a stale ctx.upstream_authority from an earlier
+        // attempt (e.g. a conf_sync policy removal between retries) must not
+        // survive into a NoOp decision, or `upstream_request_filter` would write
+        // a stale Host while the peer carries the (correct) static SNI.
+        let mut ctx = ctx_with_static_tls_sni("svc.default.svc.cluster.local");
+        ctx.upstream_authority = Some("stale-from-prior-attempt.sandbox.internal".to_string());
+        let mut peer = tls_peer("svc.default.svc.cluster.local");
+        let original_sni = peer.sni.clone();
+
+        let result = apply_upstream_authority_decision(AuthorityDecision::NoOp, &mut ctx, &mut peer);
+
+        assert!(result.is_ok());
+        assert_eq!(peer.sni, original_sni);
+        assert_eq!(ctx.upstream_authority, None);
     }
 }

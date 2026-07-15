@@ -24,6 +24,7 @@ pub mod reference_grant;
 pub mod tcp_route;
 pub mod tls_route;
 pub mod udp_route;
+pub mod upstream_authority;
 
 // Re-export all resource types
 pub use self::backend_tls_policy::*;
