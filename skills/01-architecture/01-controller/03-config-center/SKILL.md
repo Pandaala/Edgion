@@ -24,7 +24,7 @@ Regardless of whether the source is the file system, Kubernetes API, or Etcd, re
 | [00-overview.md](00-overview.md) | ConfCenter trait architecture | Understanding the ConfigCenter abstraction design |
 | [01-file-system.md](01-file-system.md) | FileSystemCenter implementation | Local development / debugging mode |
 | [02-kubernetes/](02-kubernetes/SKILL.md) | Kubernetes ConfigCenter | Production environments, HA, leader election |
-| [00-overview.md](00-overview.md#backend-comparison) | EtcdCenter summary and source entry points | Etcd persistence and watch behavior |
+| (etcd has no standalone document) | EtcdCenter implementation | Non-K8s production; supports active-passive HA (multiple Controllers) via leader election |
 
 ## Architecture Comparison
 
@@ -36,12 +36,9 @@ ConfCenter trait
 FileSystemCenter      KubernetesCenter         EtcdCenter
 ├── Local YAML files  ├── K8s API Server        ├── etcd KV store
 ├── inotify watching  ├── Reflector watch        ├── etcd watch events
-├── .status files     ├── Status subresource    ├── Status key prefix
-├── No leader elect   ├── Lease-based election  ├── No leader election
-└── Use: dev/test     └── Use: production K8s   └── Use: external KV storage
+├── .status files     ├── Status subresource    ├── No status persistence
+├── No leader elect   ├── Lease-based election  ├── v3election + lease keepalive
+└── Use: dev/test     └── Use: production K8s   └── Use: non-K8s production (HA)
 ```
 
-Etcd resource create/update operations use conditional transactions, status is
-stored under the status prefix, and watchers track Etcd revisions. Consult
-`edgion-controller/src/conf_mgr/conf_center/etcd/` before making concurrency or
-multi-controller guarantees; do not infer them from the old check-then-write implementation.
+**EtcdCenter HA**: `EtcdStorage::create_one`/`update_one` are non-atomic check-then-write operations, so a single active writer is still required. Multiple Controllers may now run **active-passive**: etcd `v3election` leader election plus a self-managed lease keepalive ensures exactly one active leader (which runs the resource controllers and serves conf_sync), while standbys stand by and take over on failover. A pre-write leadership gate backs up the election on the write path. See `docs/superpowers/specs/2026-07-14-etcd-leader-election-design.md` for the full design.

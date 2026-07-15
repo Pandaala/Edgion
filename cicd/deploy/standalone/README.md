@@ -152,6 +152,19 @@ conf_sync_security:
 
 Key difference from Kubernetes mode: `conf_center.type: file_system` replaces `kubernetes`. The controller watches the `conf_dir` directory for YAML files and hot-reloads on changes.
 
+#### Etcd HA (multi-controller)
+
+For a highly-available control plane without Kubernetes, switch `conf_center.type` to `etcd` and point
+2+ controllers at a shared etcd cluster. Leader election (etcd `v3election` + a self-managed lease
+keepalive) is **always on**: exactly one controller becomes leader (runs the controllers and serves
+conf_sync); standbys reject traffic and return `409` naming the leader on the Admin API. Gateways list
+every controller's address in `gateway.server_addrs` and rotate to the current leader. A commented-out
+example lives in `edgion-controller.yaml`. Two caveats: etcd must expose the `v3election` gRPC service
+(probed at startup), and conf_sync mTLS requires **manually-issued** certs whose server-cert SAN covers
+**every** controller's `grpc_addr` (`auto_ca` is Kubernetes-only). See
+[Controller Configuration → Etcd Mode](../../../docs/en/ops-guide/configuration/controller-config.md#conf_center--etcd-mode)
+for the full field reference and failover behavior.
+
 ### Gateway (`edgion-gateway.yaml`)
 
 ```yaml

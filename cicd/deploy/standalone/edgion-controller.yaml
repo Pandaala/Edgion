@@ -23,6 +23,35 @@ conf_center:
   type: file_system
   conf_dir: conf
 
+# ----------------------------------------------------------------------------
+# Etcd HA mode (multi-controller active-passive) -- ALTERNATIVE to file_system.
+# ----------------------------------------------------------------------------
+# Store/watch resources in a shared etcd cluster and run 2+ controllers for HA.
+# Leader election (etcd v3election + a self-managed lease keepalive) is ALWAYS ON:
+# exactly one controller becomes leader (runs the controllers + serves conf_sync);
+# standbys reject traffic and return 409 naming the leader on the Admin API.
+#
+# REQUIREMENTS (see docs/en/ops-guide/configuration/controller-config.md,
+# "[conf_center.leader_election] -- Etcd Mode"):
+#   * etcd must expose the v3election gRPC service (probed at startup; fail-fast if absent).
+#   * conf_sync mTLS needs MANUALLY-issued certs -- auto_ca is Kubernetes-only. The server
+#     cert SAN must cover EVERY controller's grpc_addr a gateway may fail over to, e.g.:
+#       edgion-cli gen-certs --output file --output-dir /usr/local/edgion/certs/grpc \
+#           --server-san 10.0.0.11 --server-san 10.0.0.12
+#   * grpc_addr / admin_addr must be routable non-loopback addresses (not 127.0.0.1/0.0.0.0).
+#
+# conf_center:
+#   type: etcd
+#   endpoints: ["http://10.0.0.1:2379", "http://10.0.0.2:2379", "http://10.0.0.3:2379"]
+#   key_prefix: /edgion
+#   leader_election:
+#     identity: controller-a        # optional; human-facing (logs + 409 body) only
+#     grpc_addr: 10.0.0.11:12151    # this controller's reachable conf_sync gRPC address
+#     admin_addr: 10.0.0.11:12101   # this controller's reachable Admin HTTP address
+#     lease_duration_secs: 15
+#     renew_deadline_secs: 10
+#     retry_period_secs: 2
+
 debug:
   enabled: false
 

@@ -190,6 +190,60 @@ conf_center:
 | `renew_deadline_seconds` | `Integer` | `10` | 续约截止秒数 |
 | `retry_period_seconds` | `Integer` | `2` | 竞选重试间隔秒数 |
 
+### [conf_center] — Etcd 模式
+
+Etcd 模式面向非 Kubernetes（裸金属 / 虚拟机）生产环境：Controller 将资源存储到 etcd 集群并监听变更，
+而不使用 Kubernetes API。它通过下方的 `leader_election` 段支持主备（active-passive）HA。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `type` | `String` | — | 固定填 `etcd` |
+| `endpoints` | `Array<String>` | **必填** | etcd 集群端点列表，如 `["http://10.0.0.1:2379"]` |
+| `key_prefix` | `String` | `/edgion` | 存入 etcd 的所有配置键的前缀 |
+| `auth` | Object | — | 可选的 etcd 用户名 / 密码认证（`auth.username`、`auth.password`） |
+| `tls` | Object | — | 可选，用于 **Controller→etcd** 连接的 TLS（文件路径）：`tls.ca_cert_file`、`tls.client_cert_file`、`tls.client_key_file`。与 conf_sync mTLS 通道无关 |
+| `connect_timeout_ms` | `Integer` | `5000` | etcd 连接（拨号）超时，毫秒 |
+| `request_timeout_ms` | `Integer` | `10000` | 共享 conf_center etcd 客户端一元调用的单请求超时，毫秒。**注意**：它**不会**作用于阻塞式的 Leader 竞选 `campaign()` RPC（竞选客户端刻意不设置通道级超时），因此运维无需为竞选调整此值 |
+| `leader_election` | Object | — | 主备 HA 设置（见下文）。**始终开启**，没有启用 / 禁用开关 |
+
+### [conf_center.leader_election] — Etcd 模式
+
+Etcd 模式的 Leader Election 使用 etcd 官方的 `v3election` gRPC 服务，外加自管理的租约 keepalive。
+**这些字段与上方的 Kubernetes `leader_election` 段完全不同**——Etcd 段**没有**
+`lease_name`/`lease_namespace`（不存在 K8s Lease 对象），而是**必须**提供 `grpc_addr` 和 `admin_addr`。
+
+恰好一个 Controller 成为 Leader（运行资源控制器并对外提供 conf_sync）；备节点拒绝数据面流量，并在
+Admin API 上返回 `409` 且指明 Leader 的 `admin_addr`。单节点部署时唯一的候选者会立即赢得竞选。
+Kubernetes 模式（拥有自己基于 Lease 的 HA）不受影响。
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `identity` | `String` | 主机名 | 仅用于展示——出现在日志和非 Leader 的 `409` 响应体中。**绝不**用于所有权判定（按租约的键天然区分各届任期）。默认取主机的 `HOSTNAME` |
+| `grpc_addr` | `String` | **必填** | 网关连接的 conf_sync gRPC 地址。必须是**可路由的非回环**地址（不能是 `127.0.0.1` / `0.0.0.0` / `localhost`）——它是网关故障转移时轮换的目标 |
+| `admin_addr` | `String` | **必填** | 非 Leader `409` 响应体中指明的 Admin HTTP 地址。必须是**可路由的非回环**地址 |
+| `lease_duration_secs` | `Integer` | `15` | 会话租约 TTL。双 Leader 窗口与拆除预算都被 `lease_duration − renew_deadline` 界定 |
+| `renew_deadline_secs` | `Integer` | `10` | 若在此窗口内无法记录一次成功的 keepalive，Leader 会自行退位 |
+| `retry_period_secs` | `Integer` | `2` | keepalive / 守卫事务（guard txn）节奏 |
+
+**启动校验（fail fast）。** 除非满足 `retry_period_secs < renew_deadline_secs < lease_duration_secs`
+且三者均 `> 0`，**并且** `floor(renew_deadline_secs / retry_period_secs) >= 3`，否则 Controller 在启动时
+拒绝该配置。默认值 `2 / 10 / 15` 满足此约束。
+
+**部署要求与注意事项：**
+
+- **必须提供 `v3election`。** 原生 etcd 默认提供该服务，但某些代理 / 托管的 etcd 部署（以及某些
+  `grpc-proxy` 配置）会禁用 `v3election`/`v3lock` gRPC 服务。Controller 在启动时探测它，缺失则以可操作
+  的错误信息快速失败。
+- **默认值假设 etcd 位于 LAN 内。** 跨 WAN 的 etcd 应调高这三个值，且 etcd 自身的选举超时必须远小于
+  `renew_deadline_secs`（校验无法检查这一点）。
+- **etcd 模式下 conf_sync mTLS 需手动签发证书。** `auto_ca` 自动签发是 **Kubernetes 专用**的（需要
+  kube API 客户端且硬编码 K8s Service DNS SAN），在裸金属 / 虚拟机上会在启动时失败。请使用
+  `edgion-cli gen-certs --server-san <name>`（可重复），并确保 conf_sync **服务端**证书的 SAN 覆盖网关
+  在故障转移时可能轮换到的**每一个** Controller 的 `grpc_addr`——否则网关重连到新 Leader 时会 TLS 校验
+  失败。
+- **备节点的 `/ready` 返回 `503`**（它没有 ConfigSyncServer）。**不要**在 Admin/探针端口前放置会杀死健康
+  备节点的 TCP/HTTP 存活检查；健康与指标端点仍可访问。
+
 ### [conf_center.metadata_filter]
 
 | 参数 | 类型 | 默认值 | 说明 |
@@ -385,6 +439,60 @@ conf_sync_security:
     key: certs/grpc/server.key
     ca: certs/grpc/ca.crt
 ```
+
+### 非 Kubernetes（虚拟机 / 裸金属）HA 部署
+
+让两个（或更多）Controller 连接同一个 etcd 集群，实现主备 HA。Leader Election **始终开启**——恰好一个
+Controller 成为 Leader，其余待命并在故障时接管。网关列出每个 Controller 的 `grpc_addr`，并轮换到当前的
+Leader。
+
+Controller **A**（`10.0.0.11`）：
+
+```yaml
+conf_center:
+  type: etcd
+  endpoints: ["http://10.0.0.1:2379", "http://10.0.0.2:2379", "http://10.0.0.3:2379"]
+  key_prefix: /edgion
+  leader_election:
+    identity: controller-a          # 可选；仅用于展示（日志 + 409 响应体）
+    grpc_addr: 10.0.0.11:12151      # 可路由；网关轮换到的 conf_sync gRPC 端口
+    admin_addr: 10.0.0.11:12101     # 可路由；非 Leader 409 响应体中指明的地址
+    lease_duration_secs: 15
+    renew_deadline_secs: 10
+    retry_period_secs: 2
+```
+
+Controller **B**（`10.0.0.12`）除地址外完全相同：
+
+```yaml
+  leader_election:
+    identity: controller-b
+    grpc_addr: 10.0.0.12:12151
+    admin_addr: 10.0.0.12:12101
+```
+
+每个网关列出两个 Controller 并轮换到当前 Leader（单元素列表即保持今天的单 Controller 行为）：
+
+```yaml
+# edgion-gateway.yaml
+gateway:
+  server_addrs:
+    - "https://10.0.0.11:12151"
+    - "https://10.0.0.12:12151"
+```
+
+**注意事项（详见上文 [conf_center.leader_election] — Etcd 模式）：**
+
+- **必须提供 `v3election`。** Controller 在启动时探测它；若托管 / 代理的 etcd 禁用了它，则快速失败。
+- **conf_sync mTLS 需手动签发证书**——`auto_ca` 仅限 Kubernetes。**服务端**证书的 SAN 必须覆盖**每一个**
+  Controller 的 `grpc_addr`（此处即 `10.0.0.11` 和 `10.0.0.12`），否则网关在故障转移后会 TLS 校验失败：
+
+  ```bash
+  edgion-cli gen-certs --output file --output-dir /usr/local/edgion/certs/grpc \
+      --server-san 10.0.0.11 --server-san 10.0.0.12
+  ```
+
+- **备节点的 `/ready` 返回 `503`。** 不要把 Admin `/ready` 当作普通存活检查，否则会重启健康的备节点。
 
 ## 相关文档
 

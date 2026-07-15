@@ -14,7 +14,7 @@ ConfMgr (facade, manager.rs)
 └── Arc<dyn ConfCenter>
     ├── FileSystemCenter   — watches a local YAML directory
     ├── KubernetesCenter   — K8s API watchers + leader election
-    └── EtcdCenter         — etcd KV store + watch events (single-Controller only)
+    └── EtcdCenter         — etcd KV store + watch events (active-passive HA via v3election leader election)
 ```
 
 Trait composition:
@@ -58,10 +58,10 @@ The differences are only at the two ends:
 | Difference | FileSystemCenter | KubernetesCenter | EtcdCenter |
 |------------|-----------------|-----------------|------------|
 | Event source | `notify` crate, inotify/kqueue file watching | K8s API Reflector watch stream | etcd watch stream |
-| Status persistence | `.status` file (YAML) | K8s API `PATCH /status` (JSON Merge Patch) | Separate Etcd status key prefix |
-| Leader election | None (single instance) | Lease-based distributed election | None (single instance) |
+| Status persistence | `.status` file (YAML) | K8s API `PATCH /status` (JSON Merge Patch) | None (status is not persisted) |
+| Leader election | None (single instance) | Lease-based distributed election | etcd `v3election` + self-managed lease keepalive (active-passive) |
 | 410 Gone handling | N/A | When detected, watcher reconnect triggers KubernetesController rebuild | N/A |
-| Write coordination | Filesystem path registry + local writes | K8s API resource-version/patch semantics | Conditional Etcd transactions for create/update |
+| Concurrent-write constraint | Single process; check-then-write is non-atomic | K8s API Server provides atomicity | **Single active writer, guaranteed by leader election**; check-then-write is non-atomic, but active-passive HA (etcd `v3election` + a pre-write leadership gate) ensures exactly one leader writes at a time. The single-writer assumption is now enforced by leader election, not by operator discipline |
 
 The middle layers (Workqueue, ResourceProcessor, ProcessorHandler, ServerCache, reference managers, etc.) are fully reused.
 
