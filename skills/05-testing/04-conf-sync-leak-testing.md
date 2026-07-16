@@ -29,7 +29,7 @@ Baseline comparison (not absolute-zero) accounts for pre-existing resources from
 |--------|---------|----------|
 | `run_conf_sync_test.sh` | Basic: N cycles of full inject → verify → delete → verify | ~25s (5 cycles) |
 | `run_conf_sync_advanced_test.sh` | Advanced: 10 edge-case scenarios (orphan, wildcard, out-of-order, rapid-fire, etc.) | ~100s |
-| `run_controller_reconnect_test.sh` | Gateway recovers gracefully when the Controller dies and restarts (config not dropped, then reconverges) | — |
+| `run_controller_reconnect_test.sh` | Gateway recovers gracefully when the Controller dies and restarts: config not dropped, and the Gateway's `confsync_disconnected` gauge is asserted through the full `0 → 1 → 0` transition (it must *notice* the loss, not just survive it), then a new route propagates over the re-established stream | ~90s |
 | `run_controller_stress_restart_test.sh` | Controller reconverges 200+ HTTPRoute / 50+ BackendTLSPolicy after a restart with no Gateway-side resource loss | — |
 
 Both scripts are **self-contained** — they auto-start and auto-stop the environment via `start_all_with_conf.sh` / `kill_all.sh`.

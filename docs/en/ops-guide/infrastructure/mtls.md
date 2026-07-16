@@ -408,7 +408,7 @@ Mount the secrets into Controller and Gateway pods, and reference the mount path
 
 ### Verification
 
-After enabling mTLS, verify by checking the logs:
+After enabling mTLS, first check that both sides came up in the mode you intended:
 
 ```
 # Controller log
@@ -417,6 +417,23 @@ conf_sync mTLS enabled for gRPC server
 # Gateway log
 conf_sync mTLS enabled for gRPC client
 ```
+
+**These two lines prove intent, not a working link.** They are emitted at startup from each side's
+own configuration, so they both appear even when the two ends cannot actually talk — a CA mismatch,
+an expired leaf, or a SAN that does not match all produce two happy startup logs and a link that
+never establishes. Worse, a Gateway in that state keeps serving traffic from its last-known config
+and stays `Ready`, so nothing else looks wrong either.
+
+For the mechanical proof, scrape each **Gateway**'s metrics listener (`:12090`):
+
+```promql
+edgion_system_error_state{component="conf_sync_client",reason="confsync_disconnected"} == 0
+```
+
+`0` on every Gateway means every one of them currently holds an established conf_sync stream to the
+Controller — which is only possible if the mTLS handshake actually succeeded. A Gateway sitting at
+`1` has not connected; check that Gateway's own logs, and the Controller's rate-limited
+`conf_sync TLS handshake failed` WARN (it names the peer), for the reason.
 
 You can also confirm by attempting a plaintext gRPC connection to the Controller's gRPC port — it should be rejected.
 

@@ -12,10 +12,14 @@
 #   2. Sanity: GET via Gateway returns 200 (initial config synced).
 #   3. SIGKILL the Controller process. Wait briefly.
 #   4. Sanity (degraded): GET still returns 200 — Gateway must NOT drop
-#      already-loaded config when the upstream Controller dies.
+#      already-loaded config when the upstream Controller dies — and the Gateway
+#      must RAISE confsync_disconnected (it kept serving, but it noticed).
 #   5. Restart Controller (same args / config dir / port).
-#   6. Wait for Gateway to reconnect: poll Controller health until stable,
-#      with timeout (default 30s).
+#   6. Wait for Gateway to reconnect: assert the Gateway's own
+#      confsync_disconnected gauge returns to 0 (LINK_UP_TIMEOUT, default 90s —
+#      bounded by the Gateway's reconnect backoff, not the Controller's boot).
+#      Controller /health is a precondition check only — it says nothing about
+#      whether THIS Gateway reattached.
 #   7. Apply a NEW HTTPRoute via edgion-cli — exercises the reconnected
 #      stream end-to-end.
 #   8. Verify new route works: GET via Gateway with the new hostname → 200.
@@ -50,11 +54,23 @@ GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:12001}"
 # Gateway admin API requires a bearer token; default for standalone invocation.
 : "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
 GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
+# Gateway Prometheus listener (MetricsConfig::default().listen) — carries the
+# conf_sync link-health gauge the reconnect assertions below read.
+GATEWAY_METRICS_URL="${EDGION_GATEWAY_METRICS_URL:-http://127.0.0.1:12090/metrics}"
 CONTROLLER_ADMIN_PORT=12101
 CONTROLLER_GRPC_PORT="${EDGION_TEST_CONTROLLER_GRPC_PORT:-12151}"
 
 RECONNECT_TIMEOUT=30   # seconds to wait for Gateway to reconnect after Controller restart
 SYNC_WAIT=3            # seconds to wait after applying new route before verification
+# Budget for the Gateway's conf_sync link to come back UP. Deliberately much larger
+# than RECONNECT_TIMEOUT: this one is not bounded by how fast the Controller boots,
+# but by the Gateway's own reconnect backoff (start_watch_server_meta: 1s doubling
+# to a 30s cap). The Controller takes ~16s to init, during which the Gateway keeps
+# failing and its backoff climbs to the cap — so the Gateway can be mid-30s-sleep
+# exactly when the Controller becomes ready, putting a legitimate reconnect at
+# ~46s. A 30s budget here passed with 2s to spare on a quiet dev box and would
+# flake on a loaded CI runner.
+LINK_UP_TIMEOUT=90
 
 PASSED=0
 FAILED=0
@@ -220,6 +236,57 @@ wait_for_gateway_routes() {
 }
 
 # =============================================================================
+# Gateway-side conf_sync link health
+#
+# Reads edgion_system_error_state{reason="confsync_disconnected"} off the
+# Gateway's own metrics listener: 1 = its WatchServerMeta stream to the
+# Controller is down and it is serving last-known config; 0 = the stream is
+# established. This is the only assertion here that the GATEWAY makes about the
+# link — polling the Controller's /health proves the Controller is up, not that
+# this Gateway reattached to it (a Gateway left on plaintext against a TLS
+# Controller passes every such check while never syncing again).
+#
+# The series exists from Gateway startup (the first successful connect clears
+# it to 0), so an empty result means the metrics listener is unreachable, not
+# that the link is healthy — the callers below treat "" as not-yet-matching.
+# =============================================================================
+gw_confsync_disconnected() {
+    # Pin BOTH labels: matching on `reason` alone would match two lines the day any
+    # other component raises the same reason, and `head -1` would then silently pick
+    # whichever the exporter rendered first (registry order is not a contract).
+    # Chained greps rather than one regex on purpose — a single pattern would have to
+    # fix an order for the two labels, and their render order is not a contract either.
+    # `^` + literal `{` excludes the `# HELP` / `# TYPE` lines and any sibling metric
+    # whose name merely starts the same. `$NF+0` normalizes the exporter's float
+    # rendering (1 / 1.0) to an integer.
+    curl -sf "${GATEWAY_METRICS_URL}" 2>/dev/null \
+        | grep -E '^edgion_system_error_state\{' \
+        | grep -F 'component="conf_sync_client"' \
+        | grep -F 'reason="confsync_disconnected"' \
+        | awk '{print $NF+0}' \
+        | head -1
+}
+
+# Poll until the Gateway's conf_sync gauge reaches $1 (0 = linked, 1 = down).
+wait_for_confsync_state() {
+    local want=$1
+    local timeout=${2:-$RECONNECT_TIMEOUT}
+    local label=$3
+    local elapsed=0
+    log_info "Waiting up to ${timeout}s for Gateway conf_sync link to be ${label}..."
+    while [ $elapsed -lt $timeout ]; do
+        if [ "$(gw_confsync_disconnected)" = "$want" ]; then
+            log_success "Gateway conf_sync link ${label} after ${elapsed}s"
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    log_warn "Gateway conf_sync gauge is '$(gw_confsync_disconnected)' (wanted ${want}) after ${timeout}s"
+    return 1
+}
+
+# =============================================================================
 # Write the new-route fixture to a temp file (inline heredoc)
 # =============================================================================
 write_reconnect_fixture() {
@@ -330,6 +397,26 @@ main() {
     fi
 
     # -------------------------------------------------------------------------
+    # Case 1b: gateway_reports_confsync_up_initially
+    #
+    # Pins the gauge's healthy baseline. Without this, a gauge stuck at 1 from
+    # startup would make Case 2b ("link went down") pass vacuously — the exact
+    # failure mode this suite exists to catch.
+    # -------------------------------------------------------------------------
+    log_section "Case 1b: gateway_reports_confsync_up_initially"
+    # `|| true` is load-bearing: under `set -euo pipefail` a bare assignment takes the
+    # command substitution's status, so an unreachable metrics listener (curl -sf) or an
+    # absent series (grep) would abort the whole script here — killing every later case
+    # and printing no diagnosis. The empty-string branch below must stay reachable.
+    INITIAL_LINK=$(gw_confsync_disconnected || true)
+    if [ "$INITIAL_LINK" = "0" ]; then
+        assert_pass "gateway_reports_confsync_up_initially" "pass"
+    else
+        assert_pass "gateway_reports_confsync_up_initially" "fail" \
+            "expected confsync_disconnected=0 on a freshly synced Gateway, got '${INITIAL_LINK}' (empty = metrics listener unreachable at ${GATEWAY_METRICS_URL})"
+    fi
+
+    # -------------------------------------------------------------------------
     # Case 2: gateway_serves_after_controller_killed
     # -------------------------------------------------------------------------
     log_section "Case 2: gateway_serves_after_controller_killed"
@@ -356,12 +443,32 @@ main() {
     fi
 
     # -------------------------------------------------------------------------
+    # Case 2b: gateway_reports_confsync_down
+    #
+    # Serving 200 above proves the Gateway kept its config; it does NOT prove the
+    # Gateway noticed the Controller is gone. Without this, a Gateway that silently
+    # drifts out of sync forever looks identical to a healthy one.
+    # -------------------------------------------------------------------------
+    log_section "Case 2b: gateway_reports_confsync_down"
+    LINK_WENT_DOWN=false
+    if wait_for_confsync_state 1 "$RECONNECT_TIMEOUT" "DOWN"; then
+        LINK_WENT_DOWN=true
+        assert_pass "gateway_reports_confsync_down" "pass"
+    else
+        assert_pass "gateway_reports_confsync_down" "fail" \
+            "Gateway did not raise confsync_disconnected after the Controller was killed"
+    fi
+
+    # -------------------------------------------------------------------------
     # Case 3: gateway_reconnects_to_new_controller
     # -------------------------------------------------------------------------
     log_section "Case 3: gateway_reconnects_to_new_controller"
     restart_controller
 
-    # Poll Controller health; track elapsed time for reporting
+    # Poll Controller health first — this only establishes that the restarted
+    # Controller is up, which is a precondition for the real assertion below, not
+    # evidence of a reconnect. Kept non-fatal for that reason: the Gateway-side
+    # gauge is what decides this case.
     reconnect_elapsed=0
     controller_alive=false
     while [ $reconnect_elapsed -lt $RECONNECT_TIMEOUT ]; do
@@ -372,15 +479,31 @@ main() {
         sleep 1
         reconnect_elapsed=$((reconnect_elapsed + 1))
     done
-
     if $controller_alive; then
-        log_success "Controller healthy after ${reconnect_elapsed}s"
+        log_info "Controller back up after ${reconnect_elapsed}s; now checking the Gateway reattached"
+    else
+        log_warn "Controller did not report healthy within ${RECONNECT_TIMEOUT}s"
+    fi
+
+    # The actual assertion: a 0->1->0 TRANSITION, not just a 0 now.
+    #
+    # Requiring case 2b's observed 1 is what stops this from passing vacuously: a gauge
+    # that never rises at all (a regressed mark, or a code path that skips it) sits at 0
+    # from startup, and a bare level check would then report "link UP after 0s" — PASS,
+    # having proven nothing about a reconnect. That is the same disease this suite was
+    # rewritten to cure, so do not "simplify" the LINK_WENT_DOWN gate away.
+    #
+    # Budgeted by LINK_UP_TIMEOUT, not RECONNECT_TIMEOUT — see that variable for why the
+    # Gateway's own backoff, not the Controller's boot, sets the worst case.
+    if ! $LINK_WENT_DOWN; then
+        assert_pass "gateway_reconnects_to_new_controller" "fail" \
+            "cannot judge a reconnect: the link was never observed DOWN (case 2b failed), so a 0 here would prove nothing"
+    elif wait_for_confsync_state 0 "$LINK_UP_TIMEOUT" "UP"; then
         assert_pass "gateway_reconnects_to_new_controller" "pass"
     else
         assert_pass "gateway_reconnects_to_new_controller" "fail" \
-            "Controller did not become healthy within ${RECONNECT_TIMEOUT}s"
+            "Gateway never cleared confsync_disconnected — it has not resynced with the restarted Controller (controller_alive=${controller_alive})"
     fi
-    log_info "Controller reconnect elapsed: ~${reconnect_elapsed}s"
 
     # -------------------------------------------------------------------------
     # Case 4: gateway_admin_shows_routes
@@ -455,8 +578,13 @@ main() {
     # Case 6: gateway_alive_throughout
     # -------------------------------------------------------------------------
     log_section "Case 6: gateway_alive_throughout"
-    # pgrep -c is Linux-only; on macOS use pgrep | wc -l
-    GW_COUNT=$(pgrep -f "edgion-gateway" 2>/dev/null | wc -l | tr -d ' ')
+    # pgrep -c is Linux-only; on macOS use pgrep | wc -l.
+    # `|| true` is load-bearing for the same reason as case 1b's: pgrep exits 1 when it
+    # matches nothing, pipefail propagates that, and a bare assignment inherits it — so
+    # under `set -e` a DEAD Gateway would abort the script here instead of failing this
+    # case, discarding the FAIL and the whole summary. The one condition this case exists
+    # to catch is exactly the one that would silence it.
+    GW_COUNT=$(pgrep -f "edgion-gateway" 2>/dev/null | wc -l | tr -d ' ' || true)
     if [ "$GW_COUNT" -ge 1 ]; then
         assert_pass "gateway_alive_throughout" "pass"
     else

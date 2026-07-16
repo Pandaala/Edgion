@@ -16,10 +16,21 @@
 //!
 //! Most reasons are startup-time configuration decisions and latch for the
 //! life of the process (by design — restarting is the only way to change
-//! them). A few reasons instead track a *transient* runtime condition (a TLS
-//! handshake, a cert reload, a rotation tick) and are explicitly cleared via
+//! them). A few reasons instead track a *transient* runtime condition (a link
+//! going down, a cert reload, a rotation tick) and are explicitly cleared via
 //! [`clear_system_error`] on the next matching success — see each reason's
 //! doc comment for whether it latches or clears.
+//!
+//! **A latching reason needs a single owner — and the owner must be the process
+//! that is actually broken.** This gauge is keyed only by `(component, reason)`,
+//! so a condition observed once *per peer* (many gateways against one controller)
+//! must NOT be a reason here: the healthy peers' successes would clear the broken
+//! peer's mark and the alert could never fire. Do not reach for a `peer` label to
+//! fix that — on a pre-auth path (a TLS handshake *is* the authentication) any
+//! remote caller could then mint unbounded series at will. Prefer instead: let the
+//! broken peer raise the mark on *its own* registry (as the gateway does with
+//! `CONFSYNC_DISCONNECTED`), and leave the per-peer detail in a rate-limited log,
+//! which carries the peer identity a bounded metric never could.
 //!
 //! **Label discipline**: `component` and `reason` must both come from the
 //! bounded constants in `components` and `reasons` below — never pass raw
@@ -76,13 +87,34 @@ pub mod reasons {
     /// labels, and loopback-upstream allowance. Production-unsafe; surfaced here
     /// so accidental enablement is caught by monitoring, not just a startup log.
     pub const INTEGRATION_TESTING_MODE: &str = "integration_testing_mode";
-    /// A per-connection conf_sync gRPC server TLS handshake failed or timed out
-    /// (bad client cert, untrusted CA, protocol mismatch, 10s handshake timeout).
-    /// The connection is dropped without affecting the listener or other sessions;
-    /// this reason surfaces a sustained rate of such failures to monitoring.
-    /// Set on failure, cleared on the next successful handshake (alert on a
-    /// sustained `== 1`, not a single blip).
-    pub const TLS_HANDSHAKE_FAILED: &str = "tls_handshake_failed";
+    /// The gateway's conf_sync `WatchServerMeta` stream to the controller is down: it
+    /// could not be established, or an established stream ended/errored and the client
+    /// is backing off to reconnect. The gateway keeps serving traffic from its
+    /// last-known config while this is set — that is deliberate (a control-plane blip
+    /// must not cost data-plane availability), which is why the condition needs a
+    /// signal at all: a gateway that can *never* reconnect (expired cert, dead
+    /// controller) otherwise serves ever-staler config indefinitely, and its `/ready`
+    /// probe keeps saying yes (readiness latches at boot, by design).
+    ///
+    /// Set when a reconnect cycle fails, cleared once the stream is re-established.
+    /// An intentional reconnect (server switch, client TLS hot reload) does NOT set
+    /// it — those skip backoff and reconnect on the next channel immediately.
+    ///
+    /// **Scope — do not read this as "the gateway is in sync".** It tracks the
+    /// `WatchServerMeta` stream only. The per-resource-kind list/watch loops
+    /// (`edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs`) are independent
+    /// tasks with their own backoff and do not touch this gauge, so an
+    /// application-level failure confined to them (a list response the gateway cannot
+    /// parse, a persistent server-id mismatch) leaves this at 0 while those caches go
+    /// stale. Transport-level failures do surface here, since every kind's watch shares
+    /// the one tonic `Channel` this stream rides. Their absence of a metric is
+    /// pre-existing and deliberate (`tracing::error!` + status is the control-plane
+    /// default); this gauge does not claim to cover them.
+    ///
+    /// **Alert on a sustained `== 1`** (e.g. `for: 10m`), never on a single blip:
+    /// a controller rollout legitimately flips this to 1 for a few seconds. Naturally
+    /// per-pod — each gateway has its own registry and exactly one controller peer.
+    pub const CONFSYNC_DISCONNECTED: &str = "confsync_disconnected";
     /// The conf_sync auto-CA `rotation` schedule/TTL combination was accepted but
     /// flagged as a suspect combo by `cert_util::validate_schedule_controller`
     /// (e.g. a rotation cadence that leaves little headroom before leaf expiry).
@@ -153,7 +185,7 @@ pub fn mark_system_error(component: &'static str, reason: &'static str) {
 ///
 /// Sets `edgion_system_error_state{component, reason} = 0`. Use this only for
 /// reasons whose doc comment says they clear on success (e.g.
-/// `TLS_HANDSHAKE_FAILED`, `CERT_RELOAD_INVALID`, `CERT_ROTATION_FAILED`) —
+/// `CONFSYNC_DISCONNECTED`, `CERT_RELOAD_INVALID`, `CERT_ROTATION_FAILED`) —
 /// startup-config reasons are meant to latch and must not be cleared. Calling
 /// this for a `(component, reason)` pair that was never marked is harmless: it
 /// just sets a fresh gauge to 0.

@@ -384,6 +384,19 @@ division of labor — do not page on everything just because a signal exists:
     `ha_mode: all-serve` it keeps serving resolved Secrets and may keep accepting a
     gateway client leaf that an emergency re-key was supposed to revoke. Set on a failed
     tick, cleared on the next successful one.
+  - `edgion_system_error_state{component="conf_sync_client",reason="confsync_disconnected"} == 1`
+    sustained 10m — **that gateway's conf_sync link to the controller is down and has not come
+    back**. Scraped from the *gateway* pods, not the controller: each gateway raises this on its
+    own registry, so the pod that is broken is the one that tells you. It is **not** a data-plane
+    outage — the gateway keeps serving traffic from its last-known config, which is deliberate —
+    but its config is frozen: every subsequent route/backend/cert change silently does not reach
+    it, so a deploy "succeeds" while that pod keeps serving the old world. Nothing else catches
+    this; `/ready` latches true at boot by design and stays green throughout.
+    Use **10m**, not the 5m above: a controller rollout legitimately flips this to 1 for a few
+    seconds, and the gateway's own reconnect backoff caps at 30s. Scope: this tracks the
+    `WatchServerMeta` stream, so an application-level failure confined to the per-kind resource
+    watches (unparseable list response, persistent server-id mismatch) will *not* raise it — see
+    the reason's doc comment in `edgion-common/src/observe/system_metrics.rs`.
 - **TICKET on** (review, not urgent):
   - `edgion_system_error_state{reason="cert_rotation_config_suspect"} == 1` — the rotation
     config combination needs a look (suspect firing-gap-vs-guard sizing, or a healthy
@@ -485,9 +498,11 @@ window) is the only true revocation.
   `out_of_sync_reason`) detects that the new leader's in-memory server identity
   (minted at its own startup, against the now-deleted root) no longer chains to
   the current CA, and rotates the leaves immediately regardless of policy.
-  Expected transient: TLS handshake failures during the propagation window —
-  `edgion_system_error_state{reason="tls_handshake_failed"}` sets and then
-  clears itself once every peer has picked up the new root.
+  Expected transient: TLS handshake failures during the propagation window — the
+  controller logs rate-limited `conf_sync TLS handshake failed` WARNs (with the peer),
+  and the affected gateways raise
+  `edgion_system_error_state{reason="confsync_disconnected"}`. Both subside on their
+  own once every peer has picked up the new root.
 - **Verification checklist** (the script asserts all of the mechanical ones — this is
   what to eyeball if you are doing it by hand):
   - A new `edgion-conf-sync-ca` Secret exists with a different `ca.crt` (compare
@@ -498,9 +513,11 @@ window) is the only true revocation.
     client key** (see the script's per-controller proofs; a pod that still accepts the
     old key has not revoked anything).
   - Gateway log shows `conf_sync_cert_reloaded` followed by a successful reconnect.
-  - `edgion_system_error_state{reason="tls_handshake_failed"}` is back to `0`, and
-    `{reason="cert_identity_sync_failed"}` is `0` on every replica (a replica stuck at 1
-    may still be trusting the compromised root).
+  - No gateway is stuck at `edgion_system_error_state{reason="confsync_disconnected"} == 1`
+    (one that is has not reconnected to the controller and is serving stale config —
+    grep that pod's controller-side `conf_sync TLS handshake failed` WARN for the
+    reason), and `edgion_system_error_state{reason="cert_identity_sync_failed"}` is `0`
+    on every replica (a replica stuck at 1 may still be trusting the compromised root).
   - The expiry gauges (`edgion_conf_sync_cert_expiry_timestamp_seconds`) reflect
     the new certs' timestamps.
 - **File / solo mode**: there is no auto-CA to delete a Secret for — regenerate the

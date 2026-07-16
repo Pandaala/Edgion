@@ -188,6 +188,34 @@ Before adding a control-plane metric, ask three questions; **any "no" means use 
 - Specific cause classification of resource parse / reconcile failure → already in the status condition; do not restate via a counter
 - "How many times this config combination was used" → log at debug/info; aggregate at query time
 
+### Precondition: is the state per-process, or per-peer?
+
+Ask this **before** the three questions above. "Restrain the metric → use a `system_metrics`
+reason instead" only holds for state the **emitting process** owns. `edgion_system_error_state`
+is keyed by `(component, reason)` and nothing else, so a condition observed once *per peer* —
+one controller against many gateways — cannot live there: every healthy peer's success clears
+the broken peer's mark, and a `sustained == 1` alert can never fire. **Reaching for a `peer`
+label to fix that is worse**, especially pre-auth (a TLS handshake *is* the authentication),
+where any unauthenticated caller could then mint unbounded series at will.
+
+When neither fits, the answer is **not** "add a family anyway":
+
+1. **Let the broken peer flag itself.** A per-peer condition is per-*process* on the other
+   end — the peer that is failing can mark it on its own registry, where it has exactly one
+   owner and nothing can mask it. This is also strictly better signal: it fires on the pod
+   that is actually broken.
+2. **Leave the per-peer detail in a rate-limited log.** The log carries the peer identity a
+   bounded metric never could, so it is what you grep once (1) alerts.
+
+Worked example (2026-07-16): `TLS_HANDSHAKE_FAILED` was added as a reason on
+`CONF_SYNC_SERVER` under exactly the "no new metric families" constraint, and could never
+fire — healthy gateways' handshakes cleared it continuously. It was **deleted**, not
+converted to a counter: the gateway already flags its own conf_sync link via
+`CONFSYNC_DISCONNECTED` (per-pod, unmaskable), and the controller's existing rate-limited
+WARN names the peer. Net: one bad signal removed, one good one added, no new family. See the
+amendment note atop `docs/superpowers/specs/2026-07-12-conf-sync-cert-rotation-design.md`,
+and the "single owner" rule in `edgion-common/src/observe/system_metrics.rs`.
+
 Implementation rules:
 
 1. **Unified entry**: install the global `PrometheusRecorder` via `edgion-common/src/observe/metrics_api.rs::install_global_recorder(RecorderConfig)`. Each in-repo service binary calls it once near `run()` (for example, `service: "edgion-controller"` or `"edgion-gateway"`)

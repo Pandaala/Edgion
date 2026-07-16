@@ -69,8 +69,11 @@
 #   established conf_sync session is torn down (see above — that is the revocation).
 #   Gateways reconnect and relist. The DATA PLANE is unaffected throughout — gateways
 #   keep serving traffic from their in-memory config. What pauses is control-plane
-#   config propagation. `edgion_system_error_state{reason="tls_handshake_failed"}`
-#   will set and then clear itself; that is expected, not a failure.
+#   config propagation. Each gateway raises
+#   `edgion_system_error_state{reason="confsync_disconnected"}` on ITS OWN metrics
+#   listener while its link is down and clears it on reattach; that set-then-clear is
+#   expected, not a failure. A gauge that never clears IS a failure — that gateway did
+#   not come back and is serving frozen config.
 #
 # FILE / SOLO MODE (auto_ca: false)
 #   Not applicable — this script drives the Kubernetes auto-CA path. In file mode
@@ -836,8 +839,14 @@ verify_rekey() {
   fi
 
   step "Reminder: transient handshake failures are EXPECTED during propagation"
-  echo "  Confirm the gauge has cleared once traffic settles:"
-  echo "    edgion_system_error_state{reason=\"tls_handshake_failed\"} == 0"
+  echo "  Each gateway raises this on its OWN metrics listener while its conf_sync link"
+  echo "  is down, and clears it when it reattaches. Confirm EVERY gateway has cleared"
+  echo "  once traffic settles — a pod stuck at 1 never reconnected and is serving"
+  echo "  frozen config (which is exactly what the Ready check above cannot tell you):"
+  echo "    edgion_system_error_state{component=\"conf_sync_client\",reason=\"confsync_disconnected\"} == 0"
+  echo "  Scrape the GATEWAY pods (metrics listener, default :12090) — not the"
+  echo "  controller; this script's port-forwards only reach the controller, so this"
+  echo "  one is on you."
   return $rc
 }
 

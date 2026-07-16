@@ -151,6 +151,56 @@ Controller 在独立的指标监听器（`:12190`，与 Admin 端口 `:12101` �
 | `edgion_fed_fanout_total` | Counter | `op`、`result` | Center |
 | `edgion_fed_ready_gate_wait_seconds_last` | Gauge | none | Controller |
 
+## 系统降级状态（System error state）
+
+`edgion_system_error_state` 是一个用于登记**"进程还在运行，但处于已知降级状态"**的 Gauge。Gateway 和
+Controller 两侧都会发射它（所以它在本文单列一节），条件生效期间为 `1`，否则为 `0` 或不存在。
+
+| 指标 | 类型 | 标签 | 进程 |
+|------|------|------|------|
+| `edgion_system_error_state` | Gauge | `component`、`reason` | 两者 |
+
+两个标签都取自封闭集合，因此整个指标族在每个 Pod 上只有个位数条 series。`component` / `reason`
+取值的权威清单在
+[`edgion-common/src/observe/system_metrics.rs`](https://github.com/Pandaala/Edgion/blob/main/edgion-common/src/observe/system_metrics.rs)，
+每个 reason 的文档注释说明了它由什么触发、以及是否会被清零。
+
+这里有两类 reason，区别决定了你的告警怎么写：
+
+- **锁存型（latching）**——启动期的配置决策（如 `skip_tls`、`cert_watch_failed`）。置位后不再清零，
+  只有重启才能复位。直接对 `== 1` 告警即可。
+- **瞬态型（transient）**——由同一进程置位、并在恢复时自行清零的运行时状态（如
+  `confsync_disconnected`、`cert_rotation_failed`）。必须对**持续**的 `== 1` 告警并加 `for:` 约束——
+  单次闪断是正常现象，对它告警只会制造噪音。
+
+完整的 PAGE / TICKET / 仅日志分层（含推荐的 `for:` 时长及每一条的取舍理由）维护在
+[conf_sync 运维参考](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/02-config/00-controller-config.md)
+的 **Alerting** 小节。那里是唯一权威来源，本文有意不复述。
+
+### 某个 Gateway 还在和 Controller 同步吗？
+
+这个指标族里最值得配上的一条查询：
+
+```promql
+edgion_system_error_state{component="conf_sync_client",reason="confsync_disconnected"} == 1
+```
+
+要从 **Gateway** Pod（`:12090`）抓取，而不是 Controller——每个 Gateway 在自己的 registry 上置位这个
+标记，所以**坏掉的那个 Pod 就是报告它的那个 Pod**。
+
+持续 1 超过约 10 分钟，说明那个 Gateway 的配置同步链路已断且未恢复。这**不是**流量故障：Gateway 会
+继续用最后一份已知配置提供服务，这是刻意设计——控制面抖动绝不该拿数据面可用性去换。它真正意味着这个
+Gateway 的配置已经**冻结**：从那一刻起，所有路由、后端、证书变更都会静默地到不了它，于是一次发布可以
+"成功"，而那个 Pod 仍在服务旧世界。没有别的信号能暴露这一点：该 Pod 会一直是 `Ready`（readiness 按设计
+在启动时锁存一次），也会一直返回 200。
+
+用约 10 分钟而不是更短的窗口：Controller 滚动重启会合法地让这个 gauge 置 1 几秒，而 Gateway 自身的重连
+退避上限是 30 秒。
+
+适用范围：它跟踪的是 Gateway 的 `WatchServerMeta` 流，这正是传输层故障（Controller 挂掉、证书过期、CA
+不匹配）会打断的东西。仅限于某一种资源 kind 的 watch 的故障——例如某个 list 响应这个 Gateway 解析不
+了——**不会**让它置位，那类问题只出现在 Gateway 的日志里。
+
 ## 基数
 
 ⚠️ 最重要的基数控制杠杆是 `edgion_backend_requests_total` 标签集。
@@ -217,7 +267,14 @@ histogram_quantile(0.99, sum(rate(edgion_gateway_request_duration_ms_bucket[5m])
 
 **A**：抓取 Controller 的 `/metrics`，并对 `edgion_controller_resource_abnormal{err!=""}` 告警。每个序列通过 `kind` / `namespace` / `name` 标识一个资源，失败条件在 `err` / `warn` 标签中。
 
-### Q5：`/metrics` 无需认证暴露是否安全？
+### Q5：某个 Gateway 流量一切正常，但我的配置变更在它上面就是不生效，为什么？
+
+**答**：多半是它到 Controller 的配置同步链路断了。检查那个 Gateway 自己的 `:12090` 上的
+`edgion_system_error_state{component="conf_sync_client",reason="confsync_disconnected"}`——持续为
+`1` 说明它一直没重连上，正在服务冻结的配置。注意这种状态下 `/ready` 和流量按设计都是绿的，所以这两个
+都不会告诉你。参见[系统降级状态](#系统降级状态system-error-state)。
+
+### Q6：`/metrics` 无需认证暴露是否安全？
 
 **A**：端点只返回聚合数字——不含请求体，默认设置下不含资源名称。如有需要，在集群级别限制网络访问，但数据本身不敏感。
 

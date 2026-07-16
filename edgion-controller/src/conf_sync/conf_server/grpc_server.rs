@@ -47,7 +47,7 @@ const MAX_INFLIGHT_HANDSHAKES: usize = 256;
 /// the send, a wedged consumer would convert a leaky failure into a fatal one: 256
 /// stuck senders exhaust [`MAX_INFLIGHT_HANDSHAKES`] and the accept loop stalls for
 /// good. With the timeout, the failure degrades to what it should be — connections
-/// are DROPPED (and counted via `tls_handshake_failed`) while the accept loop keeps
+/// are DROPPED (and logged by `warn_handoff_timeout`) while the accept loop keeps
 /// breathing and recovers the instant the consumer drains.
 ///
 /// 30s: comfortably longer than any legitimate scheduling hiccup on a busy runtime
@@ -363,8 +363,8 @@ impl ConfigSyncGrpcServer {
                                             let handoff = tokio::select! {
                                                 // Graceful shutdown: the tonic consumer is going
                                                 // away, so a pending send would otherwise sit for
-                                                // the full 30s and then report a spurious
-                                                // TLS_HANDSHAKE_FAILED on a perfectly healthy exit.
+                                                // the full 30s and then log a spurious handoff
+                                                // timeout on a perfectly healthy exit.
                                                 _ = handoff_shutdown.cancelled() => None,
                                                 r = tokio::time::timeout(
                                                     Duration::from_secs(TLS_HANDOFF_TIMEOUT_SECS),
@@ -373,12 +373,13 @@ impl ConfigSyncGrpcServer {
                                             };
                                             match handoff {
                                                 // Handed off: the connection is tonic's now.
-                                                Some(Ok(Ok(()))) => {
-                                                    edgion_common::observe::system_metrics::clear_system_error(
-                                                        edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
-                                                        edgion_common::observe::system_metrics::reasons::TLS_HANDSHAKE_FAILED,
-                                                    );
-                                                }
+                                                // Nothing to record: failures here are logged, not
+                                                // metered, so a success has no counterpart to clear.
+                                                // Restoring a clear here would be actively wrong —
+                                                // one controller serves many gateways, so this
+                                                // peer's success must never erase another peer's
+                                                // failure. See `warn_handshake_failure`.
+                                                Some(Ok(Ok(()))) => {}
                                                 // Receiver gone = the tonic server stopped (shutdown).
                                                 // Not an error condition worth marking.
                                                 Some(Ok(Err(_))) => {}
@@ -429,40 +430,42 @@ impl ConfigSyncGrpcServer {
 }
 
 /// Rate-limited WARN (at most once per minute; DEBUG otherwise) for a per-connection
-/// TLS handshake failure, plus an always-on system-error metric mark.
+/// TLS handshake failure.
+///
+/// Log-only by design. A handshake failure is observed once *per peer*, and one
+/// controller serves many gateways: a `system_error` reason cannot express it (the
+/// healthy peers' successes would clear it — see that module's "single owner" rule),
+/// and a `peer` label on a counter would let any unauthenticated caller mint
+/// unbounded series. A gateway that cannot handshake raises `confsync_disconnected`
+/// on its *own* registry, which is the alertable signal; this log carries the peer
+/// identity needed to tell *which* one, and is what to grep once that alert fires.
 fn warn_handshake_failure(peer: std::net::SocketAddr, error: &std::io::Error) {
     if should_warn_handshake_failure() {
         tracing::warn!(component = "grpc_server", peer = %peer, error = %error, "conf_sync TLS handshake failed");
     } else {
         tracing::debug!(component = "grpc_server", peer = %peer, error = %error, "conf_sync TLS handshake failed");
     }
-    edgion_common::observe::system_metrics::mark_system_error(
-        edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
-        edgion_common::observe::system_metrics::reasons::TLS_HANDSHAKE_FAILED,
-    );
 }
 
 /// Rate-limited WARN (at most once per minute; DEBUG otherwise) for a per-connection
-/// TLS handshake timeout, plus an always-on system-error metric mark.
+/// TLS handshake timeout. Log-only for the same reason as [`warn_handshake_failure`].
 fn warn_handshake_timeout(peer: std::net::SocketAddr) {
     if should_warn_handshake_failure() {
         tracing::warn!(component = "grpc_server", peer = %peer, "conf_sync TLS handshake timed out (10s)");
     } else {
         tracing::debug!(component = "grpc_server", peer = %peer, "conf_sync TLS handshake timed out (10s)");
     }
-    edgion_common::observe::system_metrics::mark_system_error(
-        edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
-        edgion_common::observe::system_metrics::reasons::TLS_HANDSHAKE_FAILED,
-    );
 }
 
 /// Rate-limited WARN (at most once per minute; DEBUG otherwise) for a successfully
 /// handshaked connection that could not be handed to the tonic consumer within
-/// [`TLS_HANDOFF_TIMEOUT_SECS`], plus the same system-error mark as a handshake
-/// failure — from the peer's point of view the outcome is identical (the connection
-/// is dropped), and the operator response is the same (look at conf_sync server
-/// health). The connection is dropped and the handshake permit released, which is
-/// what keeps the accept loop alive under a wedged/backlogged consumer.
+/// [`TLS_HANDOFF_TIMEOUT_SECS`]. Log-only like the two handshake sites above, but
+/// worth telling apart when reading the log: from the peer's point of view the
+/// outcome is identical (the connection is dropped), yet the remediation is not —
+/// this one points at a wedged/backlogged local consumer, not at the peer's certs.
+/// Its own message text is what distinguishes the two. The connection is dropped and
+/// the handshake permit released, which is what keeps the accept loop alive under a
+/// wedged/backlogged consumer.
 fn warn_handoff_timeout(peer: std::net::SocketAddr) {
     if should_warn_handshake_failure() {
         tracing::warn!(
@@ -479,15 +482,12 @@ fn warn_handoff_timeout(peer: std::net::SocketAddr) {
             "conf_sync TLS connection handoff timed out; dropping the connection"
         );
     }
-    edgion_common::observe::system_metrics::mark_system_error(
-        edgion_common::observe::system_metrics::components::CONF_SYNC_SERVER,
-        edgion_common::observe::system_metrics::reasons::TLS_HANDSHAKE_FAILED,
-    );
 }
 
-/// Simple rate-limit gate shared by both handshake-failure warning sites: WARN if
-/// more than 60s have elapsed since the last WARN, DEBUG otherwise. `mark_system_error`
-/// is called unconditionally by the caller regardless of this gate's decision.
+/// Simple rate-limit gate shared by all three handshake-failure warning sites: WARN
+/// if more than 60s have elapsed since the last WARN, DEBUG otherwise. The gate is
+/// shared, so a flood on one site suppresses the others' WARNs for that minute —
+/// acceptable, since the point is to prove the condition is ongoing, not to count it.
 fn should_warn_handshake_failure() -> bool {
     static LAST_WARN: parking_lot::Mutex<Option<std::time::Instant>> = parking_lot::Mutex::new(None);
     let mut last = LAST_WARN.lock();

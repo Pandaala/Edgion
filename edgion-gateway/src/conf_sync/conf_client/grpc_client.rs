@@ -13,6 +13,24 @@ use tonic::transport::{Channel, ClientTlsConfig};
 use tracing;
 use uuid::Uuid;
 
+/// Mark the conf_sync link to the controller as down: a reconnect cycle failed
+/// and the client is backing off. Cleared by [`mark_confsync_connected`] once the
+/// `WatchServerMeta` stream is re-established.
+fn mark_confsync_disconnected() {
+    edgion_common::observe::system_metrics::mark_system_error(
+        edgion_common::observe::system_metrics::components::CONF_SYNC_CLIENT,
+        edgion_common::observe::system_metrics::reasons::CONFSYNC_DISCONNECTED,
+    );
+}
+
+/// Clear the `confsync_disconnected` mark — the link to the controller is back up.
+fn mark_confsync_connected() {
+    edgion_common::observe::system_metrics::clear_system_error(
+        edgion_common::observe::system_metrics::components::CONF_SYNC_CLIENT,
+        edgion_common::observe::system_metrics::reasons::CONFSYNC_DISCONNECTED,
+    );
+}
+
 /// Parameters captured at `new()` so the cert watcher can rebuild the TLS
 /// channel in place (spec §6 T4). Present only when the active TLS set is a
 /// real file-backed mTLS identity (not plaintext / `skip_tls`).
@@ -279,6 +297,7 @@ impl ConfigSyncClient {
             {
                 Ok(response) => {
                     backoff = Duration::from_secs(1); // Reset on successful connection
+                    mark_confsync_connected();
                     let mut stream = response.into_inner();
 
                     // Track the server_id seen on the first event of this stream session.
@@ -349,7 +368,10 @@ impl ConfigSyncClient {
                     }
 
                     if server_switched || reloaded {
-                        // Intentional switch/reload — skip backoff and reconnect immediately.
+                        // Intentional switch/reload — skip backoff and reconnect
+                        // immediately. Deliberately does NOT mark the link down:
+                        // these reconnect on the next channel without a gap worth
+                        // paging about.
                         continue;
                     }
                 }
@@ -361,6 +383,13 @@ impl ConfigSyncClient {
                     );
                 }
             }
+
+            // Reached only on an unintentional disconnect (connect failed, or an
+            // established stream ended/errored). The gateway keeps serving its
+            // last-known config; this mark is what makes that visible, and it clears
+            // on the next successful connect above. Scope note: this tracks THIS
+            // stream, not overall sync health — see `reasons::CONFSYNC_DISCONNECTED`.
+            mark_confsync_disconnected();
 
             tokio::time::sleep(backoff).await;
             backoff = (backoff * 2).min(max_backoff); // Exponential backoff for real failures

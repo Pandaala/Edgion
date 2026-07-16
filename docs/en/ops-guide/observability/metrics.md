@@ -152,6 +152,62 @@ Federation baseline metrics are exposed under the `edgion_fed_*` prefix. All lab
 | `edgion_fed_fanout_total` | Counter | `op`, `result` | Center |
 | `edgion_fed_ready_gate_wait_seconds_last` | Gauge | none | Controller |
 
+## System error state
+
+`edgion_system_error_state` is a single gauge registering **"the process is running, but in a known
+degraded state"**. It is emitted by both the Gateway and the Controller (hence its own section here),
+and is `1` while a condition is active, `0` or absent otherwise.
+
+| Metric | Type | Labels | Process |
+|--------|------|--------|---------|
+| `edgion_system_error_state` | Gauge | `component`, `reason` | Both |
+
+Both labels come from closed sets, so the whole family stays at a handful of series per pod. The
+authoritative list of `component` / `reason` values is
+[`edgion-common/src/observe/system_metrics.rs`](https://github.com/Pandaala/Edgion/blob/main/edgion-common/src/observe/system_metrics.rs);
+each reason's doc comment states what raises it and whether it clears.
+
+Two kinds of reason live here, and the difference decides your alert:
+
+- **Latching** — a startup configuration decision (e.g. `skip_tls`, `cert_watch_failed`). Set once
+  and never zeroed; only a restart clears it. Alert on `== 1` directly.
+- **Transient** — a runtime condition the same process raises and clears (e.g.
+  `confsync_disconnected`, `cert_rotation_failed`). Alert on a **sustained** `== 1` with a `for:`
+  guard — a single blip is normal and pages on it will be noise.
+
+The full PAGE / TICKET / log-only division of labor, with a recommended `for:` duration and the
+reasoning behind each, is maintained in the
+[conf_sync operations reference](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/02-config/00-controller-config.md)
+(see its **Alerting** subsection). That is the canonical source; this page deliberately does not
+restate it.
+
+### Is a Gateway still in sync with the Controller?
+
+The one query most worth wiring up from this family:
+
+```promql
+edgion_system_error_state{component="conf_sync_client",reason="confsync_disconnected"} == 1
+```
+
+Scrape it from the **Gateway** pods (`:12090`), not the Controller — each Gateway raises this on its
+own registry, so the pod that is broken is the pod that reports it.
+
+A `1` sustained for more than ~10 minutes means that Gateway's config-sync link is down and has not
+recovered. This is **not** a traffic outage: the Gateway keeps serving from its last-known config on
+purpose, so that a control-plane blip never costs data-plane availability. What it means is that the
+Gateway's configuration is **frozen** — every route, backend, and certificate change from that point
+on silently fails to reach it, so a rollout can report success while that pod keeps serving the old
+world. Nothing else surfaces this: the pod stays `Ready` (readiness latches once at boot, by design)
+and keeps returning 200s.
+
+Use ~10 minutes rather than a tighter window: a Controller rolling restart legitimately flips the
+gauge to 1 for a few seconds, and the Gateway's own reconnect backoff caps at 30s.
+
+Scope: this tracks the Gateway's `WatchServerMeta` stream, which is what a transport-level failure
+(dead Controller, expired cert, bad CA) breaks. A failure confined to a single resource kind's
+watch — for example a list response this Gateway cannot parse — does not raise it; those surface in
+the Gateway's logs instead.
+
 ## Cardinality
 
 ⚠️ The single most important cardinality lever is the `edgion_backend_requests_total` label set.
@@ -218,7 +274,15 @@ histogram_quantile(0.99, sum(rate(edgion_gateway_request_duration_ms_bucket[5m])
 
 **A**: Scrape the Controller `/metrics` and alert on `edgion_controller_resource_abnormal{err!=""}`. Each series identifies one resource by `kind` / `namespace` / `name`, with the failing conditions in the `err` / `warn` labels.
 
-### Q5: Is `/metrics` safe to expose without authentication?
+### Q5: A Gateway is serving traffic fine, but my config changes are not taking effect on it. Why?
+
+**A**: Its config-sync link to the Controller is probably down. Check
+`edgion_system_error_state{component="conf_sync_client",reason="confsync_disconnected"}` on that
+Gateway's own `:12090` — a sustained `1` means it never reconnected and is serving frozen config.
+Note that `/ready` and traffic both stay green in this state by design, so neither will tell you.
+See [System error state](#system-error-state).
+
+### Q6: Is `/metrics` safe to expose without authentication?
 
 **A**: The endpoint returns aggregated numbers only — no request bodies, and (at default settings) no resource names. Restrict network access at the cluster level if needed, but the data itself is not sensitive.
 

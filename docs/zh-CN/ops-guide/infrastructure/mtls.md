@@ -404,7 +404,7 @@ edgion-cli gen-certs --output k8s --cert-name primary
 
 ### 验证
 
-启用 mTLS 后，通过检查日志确认：
+启用 mTLS 后，先确认两侧都以你预期的模式启动了：
 
 ```
 # Controller 日志
@@ -413,6 +413,20 @@ conf_sync mTLS enabled for gRPC server
 # Gateway 日志
 conf_sync mTLS enabled for gRPC client
 ```
+
+**这两行只能证明配置意图，不能证明链路真的通。** 它们是各自根据自己的配置在启动时打印的，所以哪怕两端
+根本连不上——CA 不匹配、叶证书过期、SAN 对不上——两行照样都会出现，而链路始终建立不起来。更麻烦的是，
+处于这种状态的 Gateway 会继续用最后一份已知配置服务流量，并且一直是 `Ready`，所以别的地方也看不出异常。
+
+要拿到机械证明，请抓取每个 **Gateway** 的指标监听端口（`:12090`）：
+
+```promql
+edgion_system_error_state{component="conf_sync_client",reason="confsync_disconnected"} == 0
+```
+
+每个 Gateway 都为 `0`，才说明它们当前都持有一条到 Controller 的、已建立的 conf_sync 流——而这只有在
+mTLS 握手真正成功时才可能。停在 `1` 的 Gateway 就是没连上；去看那个 Gateway 自己的日志，以及 Controller
+侧限流的 `conf_sync TLS handshake failed` WARN（它会带上 peer），找原因。
 
 也可以尝试明文 gRPC 连接 Controller 的 gRPC 端口——应被拒绝。
 
