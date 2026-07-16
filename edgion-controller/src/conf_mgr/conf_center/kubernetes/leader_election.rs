@@ -25,6 +25,13 @@ const DEFAULT_RENEW_DEADLINE_SECS: u64 = 10;
 /// Default retry period in seconds: sleep between every renew/acquire
 /// attempt. Mirrors client-go's `RetryPeriod`.
 const DEFAULT_RETRY_PERIOD_SECS: u64 = 2;
+/// Bound on the best-effort lease release during shutdown. The election task
+/// is detached (nothing joins it), so a release still in flight when the
+/// process exits is silently cut off — this bound does not gate process exit;
+/// it keeps the shutdown arm from stalling the pod-label patch behind the kube
+/// client's much longer default request timeout. Any failure mode degrades to
+/// natural lease expiry, i.e. the pre-release behavior.
+const RELEASE_LEASE_TIMEOUT_SECS: u64 = 3;
 
 /// Leader election configuration
 #[derive(Clone, Debug)]
@@ -235,6 +242,32 @@ impl LeaderElection {
                         );
                         if self.is_leader.swap(false, Ordering::Release) {
                             controller_metrics().set_leader(false);
+                            // Release the lease so a successor can take over on
+                            // its next tick instead of waiting out
+                            // lease_duration_secs (~17s of leaderless time on
+                            // every rolling upgrade). Best-effort and bounded:
+                            // on failure the lease simply expires naturally,
+                            // which is the pre-release behavior.
+                            match tokio::time::timeout(
+                                Duration::from_secs(RELEASE_LEASE_TIMEOUT_SECS),
+                                self.release_lease(&lease_api),
+                            )
+                            .await
+                            {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => tracing::warn!(
+                                    component = "leader_election",
+                                    identity = %self.config.identity,
+                                    error = %e,
+                                    "Failed to release lease on shutdown; successor takeover falls back to lease expiry (or recreate)"
+                                ),
+                                Err(_) => tracing::warn!(
+                                    component = "leader_election",
+                                    identity = %self.config.identity,
+                                    timeout_secs = RELEASE_LEASE_TIMEOUT_SECS,
+                                    "Timed out releasing lease on shutdown; successor takeover falls back to lease expiry"
+                                ),
+                            }
                             // Best-effort: the loop exits here, so there is no
                             // tick left to retry on. A restarting pod resets the
                             // label in preflight, and a terminating pod drops
@@ -571,6 +604,62 @@ impl LeaderElection {
                 );
                 Ok(false)
             }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Release the lease held by this instance (client-go `ReleaseOnCancel`
+    /// equivalent): clear `holder_identity` and `renew_time` so the next
+    /// `try_acquire_or_renew` on any replica sees the lease as expired
+    /// ("no renew time means expired") and acquires it on its next tick,
+    /// instead of waiting out `lease_duration_secs`. Clearing the holder
+    /// alone would NOT unblock a successor — the acquire path only checks
+    /// `is_current_holder || is_expired`, never holder vacancy.
+    ///
+    /// Only writes if this instance is still the recorded holder; the
+    /// `resourceVersion` CAS on `replace()` protects against racing a
+    /// successor that acquired in between.
+    async fn release_lease(&self, api: &Api<Lease>) -> Result<()> {
+        let lease = api.get(&self.config.lease_name).await?;
+        let spec = lease.spec.as_ref();
+
+        let current_holder = spec.and_then(|s| s.holder_identity.as_deref()).unwrap_or("");
+        if current_holder != self.config.identity {
+            // Another replica already holds (or the lease is vacant) —
+            // nothing to release.
+            return Ok(());
+        }
+
+        let transitions = spec.and_then(|s| s.lease_transitions).unwrap_or(0);
+        let mut updated = lease.clone();
+        updated.spec = Some(k8s_openapi::api::coordination::v1::LeaseSpec {
+            holder_identity: None,
+            lease_duration_seconds: Some(self.config.lease_duration_secs),
+            acquire_time: None,
+            renew_time: None,
+            lease_transitions: Some(transitions),
+            ..Default::default()
+        });
+
+        match api
+            .replace(&self.config.lease_name, &PostParams::default(), &updated)
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    component = "leader_election",
+                    identity = %self.config.identity,
+                    lease_name = %self.config.lease_name,
+                    "Released leader lease on shutdown"
+                );
+                Ok(())
+            }
+            // 409 Conflict: another writer modified the Lease between our get
+            // and replace. Usually a successor acquiring (release goal met);
+            // in the worst case a delayed renew of our own landed server-side,
+            // which degrades to natural expiry — the pre-release behavior.
+            // Either way there is nothing worth retrying on an exit path.
+            Err(kube::Error::Api(e)) if e.code == 409 => Ok(()),
             Err(e) => Err(e.into()),
         }
     }
