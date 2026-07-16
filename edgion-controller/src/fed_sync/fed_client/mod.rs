@@ -789,7 +789,7 @@ async fn handle_center_message(
             // Step 1: if from_version == 0, send list first
             // Use the pre-normalized `kind` so the store op matches what authz authorized.
             let watch_from = if req.from_version == 0 {
-                match css.list(&kind) {
+                match css.list_sync_cached(&kind).await {
                     Ok(list_data) => {
                         let list_msg = ControllerMessage {
                             payload: Some(CtrlPayload::WatchListResponse(FedWatchListResponse {

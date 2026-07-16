@@ -483,4 +483,39 @@ mod cache_redact_tests {
             with_guard.data
         );
     }
+
+    /// The cached transport path ships real secrets; the admin path stays
+    /// redacted; neither poisons the other, in either call order.
+    #[tokio::test]
+    async fn sync_cached_path_ships_real_secrets_and_stays_unpoisoned() {
+        // AdminRedactGuard is a thread-local. This test relies on the
+        // current-thread runtime (#[tokio::test] default): every poll of
+        // list_sync_cached runs on the guard's thread, so redact_active() is
+        // observable across the .await. On a multi-thread runtime this test
+        // would silently assert nothing.
+        let cache = make_link_sys_cache();
+        let server = ConfigSyncServer::new();
+        server.register_watch_obj("LinkSys", Arc::new(cache));
+
+        // conf_sync transport (cached): real value.
+        let synced = server.list_sync_cached("LinkSys").await.expect("cached list");
+        assert!(synced.data.contains("supersecret"));
+
+        {
+            let _redact = AdminRedactGuard::new();
+            // Admin path: redacted.
+            let admin = server.list("LinkSys").expect("admin list");
+            assert!(!admin.data.contains("supersecret"));
+            assert!(admin.data.contains("[redacted]"));
+            // Even through the cached method, a redacting caller never sees the
+            // warm real-bytes entry.
+            let guarded = server.list_sync_cached("LinkSys").await.expect("guarded list");
+            assert!(!guarded.data.contains("supersecret"));
+            assert!(guarded.data.contains("[redacted]"));
+        }
+
+        // The cache still serves real bytes afterwards (not poisoned).
+        let again = server.list_sync_cached("LinkSys").await.expect("cached list again");
+        assert!(again.data.contains("supersecret"));
+    }
 }

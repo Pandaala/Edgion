@@ -35,7 +35,8 @@ the complete server. Per-kind `register_watch_obj` exists only for tests.
 
 | Operation | Flow |
 |------|------|
-| `list(kind)` | Look up WatchObj → `list_json()` → return `ListDataSimple { data, sync_version, server_id }` |
+| `list(kind)` | Look up WatchObj → `list_json()` → return `ListDataSimple { data, sync_version, server_id }`. Uncached; used only by the Admin `/configserver` path (redaction isolation). |
+| `list_sync_cached(kind)` | Look up WatchObj → per-(kind, sync_version) serialized-bytes cache with single-flight fill → `list_json()` only on a version miss → return `ListDataSimple`. Used by the gRPC `List` RPC and the federation client — both real-secret transports; serialization happens at most once per (kind, sync_version). |
 | `watch(kind, client_id, ...)` | Look up WatchObj → `watch_json()` → start a conversion task that attaches server_id → return an `mpsc::Receiver<EventDataSimple>` |
 
 The watch operation spawns a tokio task that converts `WatchResponseSimple` into `EventDataSimple` (attaching server_id), ensuring clients can detect server restarts.
@@ -63,7 +64,7 @@ ConfigSyncGrpcServer does not hold ConfigSyncServer directly; instead it dynamic
 | RPC | Implementation |
 |-----|---------|
 | `GetServerInfo` | Returns server_id and supported_kinds (kinds of all registered WatchObjs) |
-| `List` | Validate expected_server_id → look up the WatchObj for the kind → call `list_json()` → return ListResponse |
+| `List` | Validate expected_server_id → look up the WatchObj for the kind → call `list_sync_cached()` (per-(kind, sync_version) serialized-bytes cache, single-flight fill) → return ListResponse |
 | `Watch` | Validate expected_server_id → look up the WatchObj → call `watch_json()` → return a streaming WatchResponse |
 | `WatchServerMeta` | Register the Gateway instance into ClientRegistry → push gateway_instance_count change-event stream |
 

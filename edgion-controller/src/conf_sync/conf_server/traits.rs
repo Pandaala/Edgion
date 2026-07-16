@@ -50,6 +50,14 @@ pub trait WatchObj: Send + Sync {
     /// Returns (json_data, sync_version) on success
     fn list_json(&self) -> Result<(String, u64), String>;
 
+    /// Current sync version of the underlying store (O(1), no serialization).
+    ///
+    /// Contract: must read the same store that `list_json` serializes, and be
+    /// monotone non-decreasing for the lifetime of this instance. The list
+    /// serialization cache uses `current_version() == cached.sync_version` as
+    /// its hit criterion; violating this contract can serve stale bytes.
+    fn current_version(&self) -> u64;
+
     /// Watch for changes starting from a specific version
     ///
     /// Returns a receiver that continuously receives JSON-serialized watch responses

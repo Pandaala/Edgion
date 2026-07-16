@@ -254,6 +254,10 @@ where
             .map_err(|e| format!("Failed to serialize {} data: {}", T::kind_name(), e))
     }
 
+    fn current_version(&self) -> u64 {
+        self.store.read().sync_version()
+    }
+
     fn watch_json(
         &self,
         client_id: String,
@@ -535,5 +539,18 @@ mod tests {
             "cache must contain the last (highest-versioned) state after rapid updates"
         );
         assert!(snapshot.sync_version > 0);
+    }
+
+    #[tokio::test]
+    async fn current_version_tracks_store_version() {
+        let cache = ServerCache::<TestResource>::new(10);
+        assert_eq!(WatchObj::current_version(&cache), 0);
+
+        cache.apply_change(ResourceChange::EventAdd, make_resource("foo", 1), Some(42));
+        assert_eq!(WatchObj::current_version(&cache), 42);
+
+        // Contract: same store list_json serializes.
+        let (_json, v) = cache.list_json().unwrap();
+        assert_eq!(v, 42);
     }
 }

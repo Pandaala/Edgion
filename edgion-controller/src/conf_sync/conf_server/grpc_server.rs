@@ -547,7 +547,8 @@ impl ConfigSync for ConfigSyncGrpcServer {
         }
 
         let list_data = server
-            .list(&req.kind)
+            .list_sync_cached(&req.kind)
+            .await
             .map_err(|e| Status::internal(format!("Failed to list resources: {}", e)))?;
 
         Ok(Response::new(ListResponse {
@@ -1068,6 +1069,11 @@ mod tests {
 
         fn list_json(&self) -> Result<(String, u64), String> {
             Ok(("[]".to_string(), 0))
+        }
+
+        fn current_version(&self) -> u64 {
+            // Must match the version stamped by this mock's list_json (0).
+            0
         }
 
         fn watch_json(

@@ -133,6 +133,11 @@ impl<T> EventStore<T> {
         self.data.len()
     }
 
+    /// Current sync version (O(1) field read).
+    pub fn sync_version(&self) -> u64 {
+        self.sync_version
+    }
+
     /// Get a single resource by key
     /// Key format: "namespace/name" for namespaced resources, or just "name" for cluster-scoped
     pub fn get_by_key(&self, key: &str) -> Option<T>
@@ -515,5 +520,18 @@ mod tests {
         let events = events_opt.expect("expected events");
         let versions: Vec<u64> = events.iter().map(|e| e.sync_version).collect();
         assert_eq!(versions, vec![1, 3], "only in-order events should be in the queue");
+    }
+
+    #[test]
+    fn sync_version_getter_tracks_applied_events() {
+        let mut store = make_store();
+        assert_eq!(store.sync_version(), 0);
+
+        let resource = TestResource::new("alpha", Some("default"));
+        store.apply_event(EventType::Add, resource, 7);
+        assert_eq!(store.sync_version(), 7);
+
+        store.clear();
+        assert_eq!(store.sync_version(), 0);
     }
 }
