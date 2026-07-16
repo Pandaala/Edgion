@@ -362,10 +362,8 @@ impl KubernetesCenter {
                 self.set_config_sync_server(None);
             }
 
-            // Stop ACME service and reset ControllerRuntime for retry
-            crate::services::acme::stop_acme_service();
-            crate::services::conf_sync_ca::rotation::stop_conf_sync_rotation();
-            crate::services::dns_resolver::stop_dns_resolver_service();
+            // Stop leader-only jobs and reset ControllerRuntime for retry
+            Self::stop_leader_jobs();
             tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
             self.runtime.reset();
 
@@ -564,9 +562,6 @@ impl KubernetesCenter {
                         ha_mode = "leader-only",
                         "Normal shutdown"
                     );
-                    crate::services::acme::stop_acme_service();
-                    crate::services::conf_sync_ca::rotation::stop_conf_sync_rotation();
-                    crate::services::dns_resolver::stop_dns_resolver_service();
                     tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
                     self.runtime.reset();
                     return Ok(());
@@ -577,9 +572,6 @@ impl KubernetesCenter {
                         ha_mode = "leader-only",
                         "Lost leadership, will wait for re-election"
                     );
-                    crate::services::acme::stop_acme_service();
-                    crate::services::conf_sync_ca::rotation::stop_conf_sync_rotation();
-                    crate::services::dns_resolver::stop_dns_resolver_service();
                     tracing::info!(component = "kubernetes_center", "ControllerRuntime reset");
                     self.runtime.reset();
                     continue;
@@ -652,9 +644,7 @@ impl KubernetesCenter {
                     .await;
 
                 if let Some(client) = acme_client {
-                    crate::services::acme::start_acme_service(client.clone());
-                    crate::services::conf_sync_ca::rotation::start_conf_sync_rotation(client.clone());
-                    crate::services::dns_resolver::start_dns_resolver_service(client);
+                    Self::start_leader_jobs(&client);
                 }
 
                 let _ = tx.send(LifecycleEvent::CachesReady).await;
@@ -904,21 +894,44 @@ impl KubernetesCenter {
         ))
     }
 
-    /// Start leader-only services (ACME + status reconciliation)
-    async fn start_leader_services(&self, client: &Client) {
-        tracing::info!(component = "kubernetes_center", "Starting leader-only services");
+    /// The single source of truth for which services are leader-only.
+    ///
+    /// NOTE: `start_conf_sync_rotation` is not merely "start a worker" — it also sets the
+    /// module-global `LEADER` flag (`conf_sync_ca/rotation.rs`) that gates the Admin
+    /// API's manual-rotation endpoint (`decide_trigger` / `trigger_manual_rotation`). Do
+    /// not reorder or conditionally skip it without accounting for that.
+    fn start_leader_jobs(client: &Client) {
         crate::services::acme::start_acme_service(client.clone());
         crate::services::conf_sync_ca::rotation::start_conf_sync_rotation(client.clone());
         crate::services::dns_resolver::start_dns_resolver_service(client.clone());
+    }
+
+    /// Stop counterpart of [`Self::start_leader_jobs`]. All stops are no-op-if-absent.
+    fn stop_leader_jobs() {
+        crate::services::acme::stop_acme_service();
+        crate::services::conf_sync_ca::rotation::stop_conf_sync_rotation();
+        crate::services::dns_resolver::stop_dns_resolver_service();
+    }
+
+    /// Start leader-only services (ACME + status reconciliation)
+    ///
+    /// The `requeue_all` below has no counterpart on the leader-only path
+    /// (`spawn_caches_ready_task`) by design: all-serve runs the controllers on
+    /// followers too (status writes gated on leadership), so a newly promoted
+    /// replica has warm caches and needs a forced reconcile to write the statuses
+    /// it previously dropped. Leader-only starts controllers only after winning,
+    /// and `runtime.reset()` clears the registry on every exit, so every key is
+    /// reconciled from scratch as leader anyway.
+    async fn start_leader_services(&self, client: &Client) {
+        tracing::info!(component = "kubernetes_center", "Starting leader-only services");
+        Self::start_leader_jobs(client);
         self.runtime.processor_registry.requeue_all().await;
     }
 
     /// Stop leader-only services
     async fn stop_leader_services(&self) {
         tracing::info!(component = "kubernetes_center", "Stopping leader-only services");
-        crate::services::acme::stop_acme_service();
-        crate::services::conf_sync_ca::rotation::stop_conf_sync_rotation();
-        crate::services::dns_resolver::stop_dns_resolver_service();
+        Self::stop_leader_jobs();
     }
 }
 
