@@ -509,7 +509,12 @@ start_gateway() {
             exit 1
         fi
         sleep 1
-        ((lb_waited++))
+        # NOT `((lb_waited++))`: post-increment evaluates to the OLD value, so the
+        # first pass evaluates to 0, which makes `((...))` return exit status 1 and
+        # `set -e` (line 10) kill the script. bash 3.2 (macOS) does not enforce -e
+        # here, so this only ever fired on Linux/bash 5 — i.e. in CI, never on a dev
+        # Mac. An assignment always returns 0.
+        lb_waited=$((lb_waited + 1))
     done
     log_info "LB preload  (waited ${lb_waited}s)"
 
@@ -522,7 +527,8 @@ start_gateway() {
             break
         fi
         sleep 1
-        ((listener_wait++))
+        # Same bash-3.2-vs-5 `set -e` trap as lb_waited above.
+        listener_wait=$((listener_wait + 1))
     done
     # Extra grace period for port binding after listeners are configured
     sleep 2
@@ -795,7 +801,10 @@ verify_sync() {
             log_info "verify attempt $attempt failed, retrying in ${retry_delay}s..."
             sleep $retry_delay
         fi
-        ((attempt++))
+        # Safe today only because `attempt` starts at 1, so `((attempt++))` never
+        # evaluates to 0 — but that is a property of the initial value, not of the
+        # code. Written as an assignment so it stays correct if that ever changes.
+        attempt=$((attempt + 1))
     done
     
     log_error "resourcesyncverifyfailed after $max_retries attempts，viewlog: ${LOG_DIR}/resource_diff.log"

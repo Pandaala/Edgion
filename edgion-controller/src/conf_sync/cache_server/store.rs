@@ -454,6 +454,46 @@ mod tests {
         assert_eq!(snapshot[0].name, "test-route");
     }
 
+    /// Regression: the stale-event guard must be scoped PER RESOURCE, not per kind.
+    ///
+    /// Reproduces the 2026-07-17 integration failure (cache residue after wipe-all).
+    /// Real trace from the controller log:
+    ///
+    ///   .129972  process_delete Gateway/invalid-ca-cert-gw  sv=4589  (slow: clearing 2 secret refs)
+    ///   .130127  process_delete Gateway/security-gateway    sv=4591  -> applied, store version = 4591
+    ///   .130811  process_delete Gateway/invalid-ca-cert-gw  sv=4589  -> DROPPED as "stale"
+    ///
+    /// Two unrelated Gateways. The second delete was dropped because a *different*
+    /// resource of the same kind had already pushed the store's single high-water
+    /// mark past it, so the Gateway never learned about the deletion and kept the
+    /// object in its cache forever.
+    #[test]
+    fn stale_guard_must_not_drop_events_for_a_different_resource() {
+        let mut store = make_store();
+
+        let slow = TestResource::new("invalid-ca-cert-gw", Some("edgion-test"));
+        let fast = TestResource::new("security-gateway", Some("edgion-test"));
+
+        store.apply_event(EventType::Add, slow.clone(), 4589);
+        store.apply_event(EventType::Add, fast.clone(), 4590);
+
+        // `fast` is deleted first and carries the higher version.
+        store.apply_event(EventType::Delete, fast, 4591);
+
+        // `slow`'s delete was allocated an EARLIER version but arrives LATER.
+        // It concerns a different key, so it must still be applied.
+        store.apply_event(EventType::Delete, slow, 4589);
+
+        let (snapshot, _) = store.snapshot_owned();
+        assert_eq!(
+            snapshot.len(),
+            0,
+            "both resources were deleted; a delete for one key must not be \
+             suppressed by a newer event for a different key. Residual: {:?}",
+            snapshot.iter().map(|r| &r.name).collect::<Vec<_>>()
+        );
+    }
+
     /// A stale event (lower sync_version) must not overwrite state written by a newer event.
     #[test]
     fn stale_event_does_not_overwrite_newer_state() {

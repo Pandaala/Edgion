@@ -25,9 +25,13 @@
 #   8. Verify new route works: GET via Gateway with the new hostname → 200.
 #   9. Cleanup (unless --keep-alive).
 #
+# Prerequisite:
+#   Binaries must already be built — this script does NOT build. start_all_with_conf.sh
+#   verifies they exist and exits 1 if not. Run edgion-tests/integration/scripts/utils/prepare.sh
+#   first (CI does exactly this; see .github/workflows/conf-sync-integration.yml).
+#
 # Usage:
 #   ./run_controller_reconnect_test.sh                # Full run (start → test → stop)
-#   ./run_controller_reconnect_test.sh --no-build     # Skip cargo build
 #   ./run_controller_reconnect_test.sh --no-start     # Use existing env
 #   ./run_controller_reconnect_test.sh --keep-alive   # Don't kill services
 # =============================================================================
@@ -77,7 +81,6 @@ FAILED=0
 
 DO_START=true
 DO_CLEANUP=true
-DO_BUILD=true
 
 WORK_DIR=""
 LOG_DIR=""
@@ -355,9 +358,8 @@ main() {
         case $1 in
             --no-start)    DO_START=false;   shift ;;
             --keep-alive)  DO_CLEANUP=false; shift ;;
-            --no-build)    DO_BUILD=false;   shift ;;
             -h|--help)
-                echo "Usage: $0 [--no-start] [--keep-alive] [--no-build]"
+                echo "Usage: $0 [--no-start] [--keep-alive]"
                 exit 0
                 ;;
             *) log_error "Unknown option: $1"; exit 1 ;;
