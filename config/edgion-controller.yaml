@@ -262,10 +262,11 @@ conf_sync:
 # explicit, audited choice, never the consequence of a forgotten config block.
 # Pick one of: auto_ca (Kubernetes), cert paths (file mode), or skip_tls (plaintext).
 #
-# Cert paths are resolved relative to work_dir. Generate the referenced set with:
-#   ./edgion-tests/integration/scripts/gen_certs/generate_conf_sync_certs.sh
-# and distribute it into <work_dir>/certs/grpc/ (the integration `prepare` step
-# does this for the repo root, so a bare `cargo run` works off this file as-is).
+# Cert paths are resolved relative to work_dir. To run this file as-is with a bare
+# `cargo run` (work_dir = repo root), bootstrap the cert set explicitly first:
+#   cargo run --bin edgion-cli -- gen-certs --output file --output-dir certs/grpc --cert-name primary
+# No test script populates the repo root implicitly; integration runs generate
+# their certs inside their own per-run work directory.
 #
 # `skip_tls: true` (plaintext) still exists as an emergency escape hatch, but it
 # is never a default: both ends log an ERROR and raise the metric

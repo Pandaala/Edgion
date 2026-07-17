@@ -7,8 +7,11 @@
 #   ${CERTS_DIR}/primary/{ca.crt,server.crt,server.key,client.crt,client.key}
 #   ${CERTS_DIR}/secondary/{ca.crt,server.crt,server.key,client.crt,client.key}
 #
-# Output directory:
-#   ${EDGION_CONF_SYNC_CERTS_DIR:-$PROJECT_ROOT/edgion-tests/certs/conf-sync-grpc}
+# Output directory: EDGION_CONF_SYNC_CERTS_DIR (REQUIRED). The caller owns the
+# output directory — normally <work_dir>/certs/grpc of the process about to be
+# started (conf_sync_distribute_certs sets this). There is deliberately no
+# default: an implicit shared store outside the per-run work directory is
+# exactly the repo-root/private-key-residue bug this contract prevents.
 #
 # The script is idempotent: skips generation when all files already exist
 # (unless --force is passed).
@@ -29,7 +32,11 @@ log_error()   { echo -e "${RED}[ERR]${NC} $1"; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
-CERTS_DIR="${EDGION_CONF_SYNC_CERTS_DIR:-$PROJECT_ROOT/edgion-tests/certs/conf-sync-grpc}"
+if [ -z "${EDGION_CONF_SYNC_CERTS_DIR:-}" ]; then
+    echo -e "\033[0;31m[ERR]\033[0m EDGION_CONF_SYNC_CERTS_DIR must be set to a caller-owned output directory (e.g. <work_dir>/certs/grpc)" >&2
+    exit 1
+fi
+CERTS_DIR="$EDGION_CONF_SYNC_CERTS_DIR"
 EDGION_CLI="${PROJECT_ROOT}/target/debug/edgion-cli"
 
 FORCE=false

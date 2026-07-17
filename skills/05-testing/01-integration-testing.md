@@ -110,6 +110,10 @@ A few key facts:
 - `--full-test` additionally includes slow tests and requires Docker to be available
 - `run_integration.sh` first checks `ulimit -n` and tries to raise it to `65535` if insufficient
 - `start_all_with_conf.sh` exports `EDGION_WORK_DIR` and `EDGION_GENERATED_SECRET_DIR`
+- conf_sync mTLS certs live at `${WORK_DIR}/certs/grpc/{primary,secondary}/`, generated in place
+  by `conf_sync_distribute_certs "$WORK_DIR"` (the script that creates a work directory owns its
+  certs — standalone scripts generate into their own `WORK_DIR`/`mktemp` dir; nothing is written
+  to the repo root or any shared cache; `prepare.sh` is build-only)
 - `load_conf.sh` skips template Secrets; the generated version in the working directory takes precedence at the end
 
 ## Categorize first, then write the test

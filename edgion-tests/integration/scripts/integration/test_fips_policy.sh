@@ -267,9 +267,11 @@ start_gateway() {
     mkdir -p "$LOG_DIR"
     GW_LOG="$LOG_DIR/gateway.log"
 
-    # conf_sync is mTLS by default: the Gateway needs the CLIENT half of the same
-    # cert set, in its own work dir (GW_TMPDIR, passed as --work-dir below).
-    conf_sync_distribute_certs "$GW_TMPDIR"
+    # conf_sync is mTLS by default: the Gateway needs the CLIENT half of the SAME
+    # cert set the Controller serves (one CA), in its own work dir (GW_TMPDIR,
+    # passed as --work-dir below) — copy from the Controller's work dir instead
+    # of generating an unrelated set.
+    conf_sync_copy_certs "$CTRL_TMPDIR" "$GW_TMPDIR"
 
     cat > "$GW_TMPDIR/gateway.yaml" <<EOF
 work_dir: "."

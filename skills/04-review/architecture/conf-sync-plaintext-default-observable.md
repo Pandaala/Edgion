@@ -51,8 +51,10 @@ migration cost for an affected deployment is one config block.
 | **Section omitted entirely** | **Refuses to start** (non-zero exit) on both the Controller and the Gateway. |
 
 Since 2026-07-14 the **checked-in `config/edgion-{controller,gateway,controller-etcd}.yaml` carry
-file-mode mTLS**, not `skip_tls` — a bare `cargo run` speaks mTLS. Certs are *pre-generated* into
-`<work_dir>/certs/grpc/primary/` (the integration `prepare` step populates the repo root); nothing
+file-mode mTLS**, not `skip_tls` — a bare `cargo run` speaks mTLS once the operator bootstraps
+the cert set. Certs are generated into `<work_dir>/certs/grpc/primary/` — integration scripts
+generate them inside their own per-run work directory, and a bare `cargo run` requires an explicit
+`edgion-cli gen-certs` into the repo root (no test script populates the repo root); nothing
 injects or rewrites the transport block any more. `skip_tls: true` survives only in
 `run_conf_sync_skip_tls_metric_test.sh` (its subject) and the conformance stack (deliberate, and
 commented). A finding of the shape "the dev/test configs default to plaintext" is therefore

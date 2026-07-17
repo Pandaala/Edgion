@@ -21,7 +21,7 @@ scripts/
 │   ├── run_direct.sh   # Direct tests without the Gateway
 │   └── run_integration.sh  # End-to-end tests through the Gateway
 └── utils/              # Utility scripts
-    ├── prepare.sh      # Prebuild test components + pre-generate the conf_sync certs
+    ├── prepare.sh      # Prebuild test components (build-only, no runtime artifacts)
     ├── conf_sync_certs.sh      # Shared conf_sync mTLS helpers (see below)
     ├── start_all.sh    # Start all test services
     ├── start_all_with_conf.sh  # Start with config loading
@@ -37,7 +37,7 @@ in the work dir of the process it starts:
 
 ```bash
 source utils/conf_sync_certs.sh
-conf_sync_distribute_certs "$WORK_DIR"   # generate (idempotent) + copy into $WORK_DIR/certs/grpc/
+conf_sync_distribute_certs "$WORK_DIR"   # generate (idempotent) directly into $WORK_DIR/certs/grpc/
 ```
 
 A script that generates its **own** binary config must never hardcode a transport — it
@@ -48,9 +48,14 @@ conf_sync_security_block server >> controller.yaml   # cert/key/ca for the Contr
 conf_sync_security_block client >> gateway.yaml      # cert/key/ca for the Gateway
 ```
 
-`prepare.sh` (and `run_integration.sh`, even under `--no-prepare`) distributes the certs
-into the **repo root**, which is the work dir of a bare `cargo run` off the checked-in
-configs.
+Every cert set is owned by the per-run work directory of the process it serves —
+no script writes certificates into the repo root or any shared cache. `prepare.sh`
+is build-only. A developer who intentionally wants a bare `cargo run` off the
+checked-in configs (work dir = repo root) bootstraps the cert set explicitly:
+
+```bash
+cargo run --bin edgion-cli -- gen-certs --output file --output-dir certs/grpc --cert-name primary
+```
 
 `skip_tls: true` (plaintext) survives in exactly one place: `run_conf_sync_skip_tls_metric_test.sh`,
 where it is the subject under test (driven through `start_all_with_conf.sh`'s

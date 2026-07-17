@@ -94,9 +94,9 @@ conf_sync:
 # it defaults to file-mode mTLS: the moment the Gateway runs on a different machine
 # than the Controller, plaintext here would put TLS private keys on the wire.
 #
-# Paths are resolved relative to work_dir. Generate the referenced set with:
-#   ./edgion-tests/integration/scripts/gen_certs/generate_conf_sync_certs.sh
-# and distribute it into <work_dir>/certs/grpc/. In a real deployment point these at
+# Paths are resolved relative to work_dir. Generate the referenced set explicitly with:
+#   cargo run --bin edgion-cli -- gen-certs --output file --output-dir <work_dir>/certs/grpc --cert-name primary
+# In a real deployment point these at
 # the operator-managed absolute paths instead, e.g.:
 #
 #   conf_sync_security:

@@ -25,29 +25,46 @@
 # call `conf_sync_security_block server|client` and append its output.
 # =============================================================================
 
-# Generate (idempotent) and distribute the primary+secondary cert sets into
+# Generate (idempotent) the primary+secondary cert sets directly into
 # <target_dir>/certs/grpc/{primary,secondary}/ — the layout the checked-in
 # configs reference relative to the work directory.
 #
-# Call it with the WORK DIR of the process you are about to start. For a bare
-# `cargo run` from the repo root that work dir is the repo root itself, which is
-# what the integration prepare step pre-populates.
+# Call it with the WORK DIR of the process you are about to start. Certs are
+# generated in place; there is no shared source store and nothing is ever
+# written outside <target_dir>. A developer who wants a bare `cargo run` off
+# the checked-in configs bootstraps the repo root explicitly (see the
+# `conf_sync_security` comment in config/edgion-*.yaml) — no test script does
+# that implicitly.
 conf_sync_distribute_certs() {
     local target_dir="$1"
-    local script_dir src_dir gen_script
+    local script_dir gen_script
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     gen_script="${script_dir}/../gen_certs/generate_conf_sync_certs.sh"
-    src_dir="${EDGION_CONF_SYNC_CERTS_DIR:-$(cd "${script_dir}/../../../.." && pwd)/edgion-tests/certs/conf-sync-grpc}"
 
-    # Idempotent: the generator reuses an existing complete cert store.
-    bash "$gen_script"
+    # Idempotent: the generator reuses an existing complete cert store in the
+    # target and validates completeness of both named sets after generation.
+    EDGION_CONF_SYNC_CERTS_DIR="${target_dir}/certs/grpc" bash "$gen_script"
+}
 
-    mkdir -p "${target_dir}/certs/grpc"
-    # Idempotent: replace whatever was there, so a re-run after a --force cert
-    # regeneration cannot leave a stale mix of old and new material behind.
-    rm -rf "${target_dir}/certs/grpc/primary" "${target_dir}/certs/grpc/secondary"
-    cp -R "${src_dir}/primary" "${target_dir}/certs/grpc/primary"
-    cp -R "${src_dir}/secondary" "${target_dir}/certs/grpc/secondary"
+# Copy an already-generated cert tree from one work dir into another.
+#
+# For tests that run the Controller and the Gateway with SEPARATE work dirs
+# (test_gateway_admin_auth.sh, test_fips_policy.sh): mTLS requires both ends to
+# present certs from the SAME set (one CA signs the server and client leaves),
+# so the Gateway side must copy the Controller's set — two independent
+# conf_sync_distribute_certs calls would mint two unrelated CAs and the
+# handshake would fail. The source is the sibling per-run dir of the same test,
+# so nothing leaves per-run ownership.
+conf_sync_copy_certs() {
+    local src_dir="$1" dst_dir="$2"
+    if [ ! -d "${src_dir}/certs/grpc/primary" ] || [ ! -d "${src_dir}/certs/grpc/secondary" ]; then
+        echo "conf_sync_copy_certs: ${src_dir}/certs/grpc lacks primary/secondary sets — run conf_sync_distribute_certs on the source work dir first" >&2
+        return 1
+    fi
+    mkdir -p "${dst_dir}/certs/grpc"
+    rm -rf "${dst_dir}/certs/grpc/primary" "${dst_dir}/certs/grpc/secondary"
+    cp -R "${src_dir}/certs/grpc/primary" "${dst_dir}/certs/grpc/primary"
+    cp -R "${src_dir}/certs/grpc/secondary" "${dst_dir}/certs/grpc/secondary"
 }
 
 # Echo the canonical single-cert `conf_sync_security` block for one role.
