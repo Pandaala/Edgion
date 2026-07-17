@@ -491,8 +491,11 @@ where
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
         let rv = edgion_resources::resource::meta::extract_version(obj.meta());
 
-        // Generate sv early so the entire processing span carries it for telemetry correlation
-        let sv = crate::conf_mgr::sync_runtime::resource_version::next_resource_version();
+        // No `sv` field here: sync_version is drawn inside the store's write lock (see
+        // ServerCache::push_event), so it does not exist yet and must not be predicted.
+        // Drawing it early for span correlation is what opened the reordering window that
+        // got legitimate events discarded as stale. The cache_server's "apply change" log
+        // line reports the assigned version and correlates to this span via kind + name/ns.
         let span = tracing::info_span!(
             "process_resource",
             component = "resource_processor",
@@ -500,9 +503,8 @@ where
             name = %name,
             ns = %namespace,
             rv,
-            sv,
         );
-        self.process_resource_inner(obj, ctx, is_init, existing_status_json, sv)
+        self.process_resource_inner(obj, ctx, is_init, existing_status_json)
             .instrument(span)
             .await
     }
@@ -513,7 +515,6 @@ where
         ctx: &HandlerContext,
         is_init: bool,
         existing_status_json: Option<String>,
-        sv: u64,
     ) -> WorkItemResult<K> {
         let namespace = obj.meta().namespace.clone().unwrap_or_default();
 
@@ -631,13 +632,14 @@ where
                 );
 
                 // 11. Save to cache
-                // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async)
+                // Use InitAdd during init phase (synchronous), EventUpdate at runtime (async).
+                // `None` means "assign sync_version at the store, under its write lock".
                 let obj_for_result = parsed_obj.clone();
                 if is_init {
-                    self.cache.apply_change(ResourceChange::InitAdd, parsed_obj, Some(sv));
+                    self.cache.apply_change(ResourceChange::InitAdd, parsed_obj, None);
                     self.stats_dirty.store(true, Ordering::Relaxed);
                 } else {
-                    self.save(parsed_obj, Some(sv));
+                    self.save(parsed_obj, None);
                 }
 
                 WorkItemResult::Processed {
@@ -655,21 +657,24 @@ where
     /// Process resource deletion
     async fn process_delete(&self, cached_obj: &K, ctx: &HandlerContext) {
         let key = make_resource_key(cached_obj);
-        let sv = crate::conf_mgr::sync_runtime::resource_version::next_resource_version();
+        // No `sv` field / no early allocation: the version is drawn inside the store's write
+        // lock. This method is where the cache-residue incident originated -- a version drawn
+        // here, then ~839us of on_delete work (clearing secret refs), then a store write that
+        // a parallel task had already overtaken. The store then discarded this delete as
+        // "stale" against a kind-wide high-water mark set by an unrelated Gateway.
         let span = tracing::info_span!(
             "process_delete",
             component = "resource_processor",
             kind = self.kind,
             key = %key,
-            sv,
         );
 
         async {
             // 1. Execute handler's delete cleanup
             self.handler.on_delete(cached_obj, ctx).await;
 
-            // 2. Remove from cache
-            self.remove(&key, Some(sv));
+            // 2. Remove from cache (sync_version assigned at the store)
+            self.remove(&key, None);
 
             tracing::debug!("Resource deleted from cache");
         }

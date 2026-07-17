@@ -1,0 +1,85 @@
+name: conf-sync integration
+
+# The conf-sync integration scripts each start and tear down their OWN
+# Controller+Gateway topology (they kill the Controller, swap certs, restart it),
+# which is incompatible with run_integration.sh's single-shared-Gateway model.
+# They therefore live here rather than in the aggregate runner. See
+# docs/superpowers/specs/2026-07-16-conf-sync-reconnect-ci-design.md.
+#
+# DELIBERATELY NOT part of ci.yml's `ci-success` needs list: this job is advisory
+# until it earns the right to gate. Promotion criterion: 10 consecutive green runs
+# on main AND observed max reconnect wait < 45s (half the script's 90s
+# LINK_UP_TIMEOUT). If runs are green but the margin is thin, raise the budget and
+# restart the count -- do not promote on thin margin. Tracked in
+# tasks/todo/conf-sync-ci-promote-to-gating.md.
+#
+# Only run_controller_reconnect_test.sh runs here. The other five scripts in
+# edgion-tests/integration/scripts/conf-sync/ have not been reviewed and are
+# expected to need the same kind of Linux fixes this one did; add them one at a
+# time, each after its own vetting.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Cancel superseded runs of the same ref. Development here is change-dense and a
+# run that has already been superseded is nobody's signal. This is NOT about port
+# collisions -- each GitHub-hosted job gets its own VM, so the scripts' hard-coded
+# ports (12000/12001/12100/12101/12151/31000) cannot collide across jobs.
+concurrency:
+  group: conf-sync-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reconnect:
+    name: Controller Reconnect
+    runs-on: ubuntu-latest
+    # Bounds a wedged Gateway/Controller. The script's internal timeouts do not
+    # cover a process that hangs without exiting.
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      # NOTE: `toolchain: "1.94"` matches every job in ci.yml but does not actually
+      # govern -- rust-toolchain.toml pins `channel = "stable"`, and rustup ranks a
+      # directory's rust-toolchain.toml above `rustup default`. The real toolchain
+      # here is stable. Kept consistent with the other jobs on purpose; see
+      # tasks/todo/ci-toolchain-pin-is-ineffective.md.
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-rust
+        with:
+          toolchain: "1.94"
+          install-deps: "true"
+          cache-enabled: "true"
+          cache-key-prefix: "conf-sync"
+
+      # The script does NOT build -- start_all_with_conf.sh only verifies the
+      # binaries exist and exits 1 pointing here. prepare.sh builds a few binaries
+      # this test does not need; that is accepted to keep the CI path and the local
+      # path identical.
+      - name: Build binaries
+        run: ./edgion-tests/integration/scripts/utils/prepare.sh
+
+      # Verified green on Linux (bash 5.2, Debian bookworm) in a container on
+      # 2026-07-17: 8/8 cases, reconnect in 28s -- identical to macOS, because that
+      # wait is set by the Gateway's own backoff timer, not by machine speed.
+      - name: Run controller reconnect test
+        run: ./edgion-tests/integration/scripts/conf-sync/run_controller_reconnect_test.sh
+
+      # always(), not failure(): green runs carry the timing data that decides when
+      # this job can be promoted to gating. Uploading only on failure would leave
+      # that decision to guesswork.
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conf-sync-reconnect-logs
+          path: tmp/integration_testing/
+          retention-days: 7
+          if-no-files-found: warn

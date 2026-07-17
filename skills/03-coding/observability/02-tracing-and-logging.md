@@ -38,7 +38,7 @@ tracing::info!(component = "k8s_status", ...);
 tracing::info!(component = "conf_client", ...);
 ```
 
-**Span inheritance rule**: if `component` is already declared in an outer span, logs inside the span inherit it automatically and do not need to repeat it. For example, the span of `process_resource` carries `component = "resource_processor"`, so all logs inside it do not need `component`, `kind`, `name`, `ns`, `rv`, or `sv` repeated.
+**Span inheritance rule**: if `component` is already declared in an outer span, logs inside the span inherit it automatically and do not need to repeat it. For example, the span of `process_resource` carries `component = "resource_processor"`, so all logs inside it do not need `component`, `kind`, `name`, `ns`, or `rv` repeated.
 
 ---
 
@@ -108,13 +108,21 @@ pub async fn start_watch_server_meta(self: Arc<Self>) {
 `process_resource` / `process_delete` use `info_span` + `.instrument()` to wrap the whole processing flow (async-compatible; `.entered()` cannot be used):
 
 ```rust
-let span = tracing::info_span!("process_resource", kind = self.kind, name = %name, ns = %namespace, rv, sv);
-self.process_resource_inner(obj, ctx, is_init, existing_status_json, sv)
+let span = tracing::info_span!("process_resource", kind = self.kind, name = %name, ns = %namespace, rv);
+self.process_resource_inner(obj, ctx, is_init, existing_status_json)
     .instrument(span)
     .await
 ```
 
-All logs inside the span inherit `kind/name/ns/rv/sv` automatically — **do not repeat those fields manually**; just write the message and extra fields (such as `error`, `reason`, `phase`).
+All logs inside the span inherit `kind/name/ns/rv` automatically — **do not repeat those fields manually**; just write the message and extra fields (such as `error`, `reason`, `phase`).
+
+**These spans deliberately do NOT carry `sv`.** `sync_version` is drawn inside the event store's
+write lock (`ServerCache::push_event`), so it does not exist when the span opens and must not be
+predicted. It used to be allocated early precisely so the span could carry it — and that early
+allocation is what let a parallel task overtake the write and get a legitimate Delete discarded as
+"stale", stranding a deleted Gateway in the data plane's cache. To correlate a span with the version
+it produced, use `kind` + `name`/`ns` against the `cache_server` `"apply change"` line, which reports
+the assigned `sync_version`.
 
 ---
 
