@@ -3,6 +3,7 @@
 //! This server only handles gRPC list/watch operations.
 //! It holds a HashMap<kind, Arc<dyn WatchObj>> registered by ResourceProcessors.
 
+use bytes::Bytes;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -25,7 +26,7 @@ pub struct EventDataSimple {
 /// Simplified list data response
 #[derive(Debug, Clone)]
 pub struct ListDataSimple {
-    pub data: String,
+    pub data: Bytes,
     pub sync_version: u64,
     pub server_id: String,
 }
@@ -44,7 +45,7 @@ fn oversize_error(kind: &str, size: usize) -> String {
 /// Cached serialization result for one kind at one sync_version.
 enum CachedPayload {
     /// Serialized snapshot bytes, shared across concurrent hits.
-    Bytes(Arc<str>),
+    Bytes(Bytes),
     /// Negative cache: serialization at this version exceeded MAX_LIST_BYTES.
     Oversize { size: usize },
 }
@@ -183,7 +184,7 @@ impl ConfigSyncServer {
         }
 
         Ok(ListDataSimple {
-            data,
+            data: Bytes::from(data),
             sync_version,
             server_id: self.server_id(),
         })
@@ -199,7 +200,7 @@ impl ConfigSyncServer {
 
     /// Version-equality cache lookup. `None` = miss; `Some(Ok)` = bytes hit;
     /// `Some(Err)` = negative (oversize) hit.
-    fn cache_lookup(kind: &str, kc: &KindListCache, current_version: u64) -> Option<Result<Arc<str>, String>> {
+    fn cache_lookup(kind: &str, kc: &KindListCache, current_version: u64) -> Option<Result<Bytes, String>> {
         let cached = kc.cached.read();
         let entry = cached.as_ref()?;
         if entry.sync_version != current_version {
@@ -211,9 +212,9 @@ impl ConfigSyncServer {
         })
     }
 
-    fn hit_to_response(&self, hit: Result<Arc<str>, String>, sync_version: u64) -> Result<ListDataSimple, String> {
+    fn hit_to_response(&self, hit: Result<Bytes, String>, sync_version: u64) -> Result<ListDataSimple, String> {
         hit.map(|bytes| ListDataSimple {
-            data: bytes.to_string(),
+            data: bytes,
             sync_version,
             server_id: self.server_id(),
         })
@@ -287,7 +288,7 @@ impl ConfigSyncServer {
             return Err(oversize_error(kind, size));
         }
 
-        let bytes: Arc<str> = Arc::from(data);
+        let bytes = Bytes::from(data);
         *kc.cached.write() = Some(CachedList {
             sync_version,
             payload: CachedPayload::Bytes(bytes.clone()),
@@ -302,7 +303,7 @@ impl ConfigSyncServer {
         );
 
         Ok(ListDataSimple {
-            data: bytes.to_string(),
+            data: bytes,
             sync_version,
             server_id: self.server_id(),
         })
@@ -628,5 +629,21 @@ mod tests {
         // same version hits without a new serialization.
         server.list_sync_cached("CountingKind").await.unwrap();
         assert_eq!(obj.calls(), 2, "guarded call must not have filled the cache");
+    }
+
+    /// The core claim of the bytes migration: repeated cache hits must hand
+    /// out the SAME underlying buffer (refcount clone), not a fresh copy.
+    #[tokio::test]
+    async fn cache_hits_share_one_buffer() {
+        let obj = Arc::new(CountingWatchObj::new(1, "[\"a\"]"));
+        let server = server_with(obj.clone());
+
+        let first = server.list_sync_cached("CountingKind").await.unwrap();
+        let second = server.list_sync_cached("CountingKind").await.unwrap();
+        assert_eq!(
+            first.data.as_ptr(),
+            second.data.as_ptr(),
+            "cache hits must share one buffer (refcount clone, no copy)"
+        );
     }
 }

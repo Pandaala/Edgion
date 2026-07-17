@@ -90,7 +90,7 @@ where
             "Listing resources"
         );
 
-        let mut resources: Vec<T> = serde_json::from_str(&list_data.data).map_err(|e| {
+        let mut resources: Vec<T> = serde_json::from_slice(&list_data.data).map_err(|e| {
             tracing::error!(kind = T::kind_name(), error = %e, context = log_context, "Failed to parse list response");
             tonic::Status::internal(format!("Failed to parse list response: {}", e))
         })?;

@@ -14,7 +14,7 @@ message FedWatchRequest {
 
 message FedWatchListResponse {
     string request_id    = 1;  // Echo FedWatchRequest.request_id
-    string data          = 2;  // JSON-serialized full list
+    bytes data           = 2;  // JSON-serialized full list; bytes for zero-copy (wire-compatible with string)
     uint64 sync_version  = 3;  // Current version
     string server_id     = 4;  // ConfigSyncServer instance ID (restart detection)
 }

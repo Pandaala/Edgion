@@ -284,7 +284,7 @@ impl AdminState {
         })?;
 
         // Parse JSON data to Vec<Value>
-        let values: Vec<serde_json::Value> = serde_json::from_str(&result.data).map_err(|e| {
+        let values: Vec<serde_json::Value> = serde_json::from_slice(&result.data).map_err(|e| {
             tracing::warn!(
                 component = "admin_state",
                 kind = kind_str,
@@ -437,6 +437,11 @@ mod cache_redact_tests {
         cache
     }
 
+    /// `ListDataSimple.data` is `Bytes` now; tests assert on its UTF-8 view.
+    fn data_str(d: &bytes::Bytes) -> &str {
+        std::str::from_utf8(d).expect("list payload is serde_json output, always valid UTF-8")
+    }
+
     /// Prove that holding `AdminRedactGuard` across `ConfigSyncServer::list()` causes
     /// `resolved_secrets` to appear as `"[redacted]"` instead of the real value.
     ///
@@ -457,14 +462,14 @@ mod cache_redact_tests {
         // Without guard: real value must be present (confirms the adapter IS the gate).
         let no_guard = server.list("LinkSys").expect("list without guard");
         assert!(
-            no_guard.data.contains("supersecret"),
+            data_str(&no_guard.data).contains("supersecret"),
             "without guard: real value must appear — got: {}",
-            no_guard.data
+            data_str(&no_guard.data)
         );
         assert!(
-            !no_guard.data.contains("[redacted]"),
+            !data_str(&no_guard.data).contains("[redacted]"),
             "without guard: must not redact — got: {}",
-            no_guard.data
+            data_str(&no_guard.data)
         );
 
         // With guard: secret must be redacted and real value must not appear.
@@ -473,14 +478,14 @@ mod cache_redact_tests {
             server.list("LinkSys").expect("list with guard")
         };
         assert!(
-            with_guard.data.contains("[redacted]"),
+            data_str(&with_guard.data).contains("[redacted]"),
             "with guard: must redact — got: {}",
-            with_guard.data
+            data_str(&with_guard.data)
         );
         assert!(
-            !with_guard.data.contains("supersecret"),
+            !data_str(&with_guard.data).contains("supersecret"),
             "with guard: real value must not leak — got: {}",
-            with_guard.data
+            data_str(&with_guard.data)
         );
     }
 
@@ -499,23 +504,23 @@ mod cache_redact_tests {
 
         // conf_sync transport (cached): real value.
         let synced = server.list_sync_cached("LinkSys").await.expect("cached list");
-        assert!(synced.data.contains("supersecret"));
+        assert!(data_str(&synced.data).contains("supersecret"));
 
         {
             let _redact = AdminRedactGuard::new();
             // Admin path: redacted.
             let admin = server.list("LinkSys").expect("admin list");
-            assert!(!admin.data.contains("supersecret"));
-            assert!(admin.data.contains("[redacted]"));
+            assert!(!data_str(&admin.data).contains("supersecret"));
+            assert!(data_str(&admin.data).contains("[redacted]"));
             // Even through the cached method, a redacting caller never sees the
             // warm real-bytes entry.
             let guarded = server.list_sync_cached("LinkSys").await.expect("guarded list");
-            assert!(!guarded.data.contains("supersecret"));
-            assert!(guarded.data.contains("[redacted]"));
+            assert!(!data_str(&guarded.data).contains("supersecret"));
+            assert!(data_str(&guarded.data).contains("[redacted]"));
         }
 
         // The cache still serves real bytes afterwards (not poisoned).
         let again = server.list_sync_cached("LinkSys").await.expect("cached list again");
-        assert!(again.data.contains("supersecret"));
+        assert!(data_str(&again.data).contains("supersecret"));
     }
 }
