@@ -9,6 +9,7 @@ use crate::routes::HttpRouteRuleUnit;
 use crate::runtime::GatewayInfo;
 use bytes::Bytes;
 use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::http_route::SessionPersistence;
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::uri_utils;
 use edgion_resources::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
@@ -1207,6 +1208,30 @@ impl EdgionHttpContext {
             })
     }
 
+    /// Resolve the effective `sessionPersistence` config with field-level
+    /// fallback between HTTP and gRPC route units (mirrors `retry_attempts`).
+    /// Only one route unit is set per request; the order pins the tie-break
+    /// for consistency with the retry helpers.
+    #[inline]
+    pub fn effective_session_persistence(&self) -> Option<&SessionPersistence> {
+        pick_effective_sp(
+            self.route_unit
+                .as_ref()
+                .and_then(|u| u.rule.session_persistence.as_ref()),
+            self.grpc_route_unit
+                .as_ref()
+                .and_then(|u| u.rule.session_persistence.as_ref()),
+        )
+    }
+
+    /// True when the effective `sessionPersistence` declares `strict: true`.
+    #[inline]
+    pub fn effective_sp_strict(&self) -> bool {
+        self.effective_session_persistence()
+            .and_then(|sp| sp.strict)
+            .unwrap_or(false)
+    }
+
     /// True when the matched route opted into retrying non-idempotent methods
     /// on the reused-connection retry path via the
     /// `edgion.io/retry-non-idempotent: "true"` annotation. Defaults to `false`
@@ -1386,6 +1411,17 @@ impl EdgionHttpContext {
         self.jump = Some(target);
         SetJumpOutcome::Set
     }
+}
+
+/// Pure precedence step for `effective_session_persistence`: the HTTP rule's
+/// config wins over the gRPC rule's. Split out so the precedence is
+/// unit-testable without constructing route units.
+#[inline]
+pub(crate) fn pick_effective_sp<'a>(
+    http_sp: Option<&'a SessionPersistence>,
+    grpc_sp: Option<&'a SessionPersistence>,
+) -> Option<&'a SessionPersistence> {
+    http_sp.or(grpc_sp)
 }
 
 fn compose_uri(path: &str, query: Option<&str>) -> String {
@@ -1841,5 +1877,51 @@ mod local_reply_tests {
         assert!(ctx.local_reply_header.is_none());
         assert!(ctx.local_reply_body.is_none());
         assert!(!ctx.local_reply_written);
+    }
+}
+
+#[cfg(test)]
+mod sp_config_tests {
+    use super::pick_effective_sp;
+    use edgion_resources::resources::http_route::SessionPersistence;
+
+    fn sp(name: &str) -> SessionPersistence {
+        SessionPersistence {
+            session_name: Some(name.to_string()),
+            absolute_timeout: None,
+            idle_timeout: None,
+            persistence_type: None,
+            cookie_config: None,
+            strict: None,
+        }
+    }
+
+    #[test]
+    fn http_only_uses_http() {
+        let http = sp("http-sp");
+        let picked = pick_effective_sp(Some(&http), None).expect("http-only must resolve");
+        assert_eq!(picked.session_name.as_deref(), Some("http-sp"));
+    }
+
+    #[test]
+    fn grpc_only_falls_back_to_grpc() {
+        let grpc = sp("grpc-sp");
+        let picked = pick_effective_sp(None, Some(&grpc)).expect("grpc-only must resolve");
+        assert_eq!(picked.session_name.as_deref(), Some("grpc-sp"));
+    }
+
+    #[test]
+    fn neither_yields_none() {
+        assert!(pick_effective_sp(None, None).is_none());
+    }
+
+    #[test]
+    fn http_wins_over_grpc() {
+        // Only one route unit is ever set per request; this pins the tie-break
+        // order for consistency with retry_attempts()/retry_backoff().
+        let http = sp("http-sp");
+        let grpc = sp("grpc-sp");
+        let picked = pick_effective_sp(Some(&http), Some(&grpc)).expect("must resolve");
+        assert_eq!(picked.session_name.as_deref(), Some("http-sp"));
     }
 }

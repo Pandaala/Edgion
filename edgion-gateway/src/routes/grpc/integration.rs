@@ -4,6 +4,7 @@
 //! encapsulating all gRPC-specific logic within the `grpc` module.
 
 use crate::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
+use crate::routes::http::session_persistence::{sp_extract_token, sp_resolve_target};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::EdgionHttpContext;
 use edgion_resources::err::EdError;
@@ -65,6 +66,17 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         None => return Ok(None), // No gRPC route
     };
 
+    // Session Persistence step 1 of 2: extract token + set initial state
+    // (mirrors select_http_backend). Step 2 (affinity lookup) runs below after
+    // backend_ref is selected, since the affinity map is keyed by
+    // `{namespace}/{backend_ref.name}`. The `selected_grpc_backend.is_some()`
+    // early return above guarantees this never re-runs on a retry attempt.
+    let sp_token = sp_extract_token(
+        session,
+        &mut ctx.sp_state,
+        grpc_route_unit.rule.session_persistence.as_ref(),
+    );
+
     let mut backend_ref = grpc_route_unit
         .backend_finder
         .select()
@@ -95,6 +107,10 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     backend_ref.schema.backend_tls_policy =
         crate::backends::query_backend_tls_policy_for_service(service_name, service_namespace, backend_ref.port);
 
+    // Pre-extract route namespace before mutable ctx borrows (borrow checker),
+    // mirroring select_http_backend.
+    let route_ns = grpc_route_unit.matched_info.rsc.ns.clone();
+
     // Run backend-level request plugins.
     // TODO: evaluate whether backend plugins should run before route-level plugins
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
@@ -105,6 +121,16 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         }
         return Err(EdError::PluginTerminated());
     }
+
+    // Session Persistence step 2 of 2: resolve token to a sticky target via the
+    // affinity map. Step 1 ran above before backend_ref selection.
+    sp_resolve_target(
+        ctx,
+        &backend_ref.name,
+        backend_ref.namespace.as_deref(),
+        &route_ns,
+        sp_token.as_deref(),
+    );
 
     // Backend context is initialized in upstream_peer_grpc by init_backend_context_if_needed
     ctx.selected_grpc_backend = Some(backend_ref);

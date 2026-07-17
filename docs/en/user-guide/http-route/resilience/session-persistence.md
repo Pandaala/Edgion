@@ -150,7 +150,7 @@ spec:
 
 - **Multi-instance consistency**: Based on consistent hashing; as long as backend lists are identical across Gateway instances, the same token routes to the same backend. Backend scaling may cause minor session drift.
 - **idleTimeout**: Not supported in the current version (pure client-side Cookie approach cannot implement server-side idle tracking), reserved for future Redis mode.
-- **GRPCRoute**: Shares the same session persistence logic, configured identically.
+- **GRPCRoute**: Natively supported with the same configuration surface and verified by backend-identity integration tests. gRPC-specific semantics: with `strict: true`, an unavailable pinned backend fails closed with `grpc-status: 14` (UNAVAILABLE) rather than HTTP 503. Native gRPC clients (tonic, grpc-go) must echo the session cookie at the application layer; browser grpc-web clients send it automatically only for same-site requests with credentials enabled (the cookie carries `SameSite=Lax`), so cross-site grpc-web deployments should prefer `type: Header`. Session persistence requires EndpointSlice-backed Services (ClusterIP-kind backends bypass it, same as HTTPRoute).
 
 ## Related Documentation
 

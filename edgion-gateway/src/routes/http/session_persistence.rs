@@ -6,6 +6,8 @@
 use edgion_resources::resources::http_route::{CookieLifetimeType, SessionPersistence, SessionPersistenceType};
 use pingora_proxy::Session;
 
+use crate::{EdgionHttpContext, SessionPersistenceState};
+
 /// Default session persistence cookie/header name.
 const DEFAULT_SESSION_NAME: &str = "edgion-session-affinity";
 
@@ -75,6 +77,65 @@ pub fn extract_session_token(session: &Session, sp: &SessionPersistence) -> Opti
     match get_persistence_type(sp) {
         SessionPersistenceType::Cookie => extract_token_from_cookie(session, name),
         SessionPersistenceType::Header => extract_token_from_header(session, name),
+    }
+}
+
+/// Session Persistence step 1 of 2: extract the session token (if SP is
+/// configured on the effective rule) and pin the initial state.
+/// Protocol-neutral: callers pass the rule's `session_persistence` regardless
+/// of HTTPRoute or GRPCRoute origin.
+///
+/// Takes `&mut SessionPersistenceState` rather than `&mut EdgionHttpContext`
+/// to keep the borrow disjoint from the caller's live route-unit borrow.
+///
+/// - SP not configured → returns `None`, state untouched.
+/// - SP configured, token present → state = `Inactive` (a fallback later may flip it).
+/// - SP configured, no token → state = `InjectNew` (first request; the response injects one).
+#[inline]
+pub(crate) fn sp_extract_token(
+    session: &Session,
+    sp_state: &mut SessionPersistenceState,
+    sp: Option<&SessionPersistence>,
+) -> Option<String> {
+    let sp = sp?;
+    let token = extract_session_token(session, sp);
+    *sp_state = if token.is_some() {
+        SessionPersistenceState::Inactive
+    } else {
+        SessionPersistenceState::InjectNew
+    };
+    token
+}
+
+/// Session Persistence step 2 of 2: resolve a token to a sticky upstream
+/// address via the per-service affinity map. Protocol-neutral: keyed by
+/// `{namespace}/{name}` of the selected backend ref, which both HTTP and gRPC
+/// backend refs provide.
+///
+/// - Token absent → no-op (first request: state was already set to `InjectNew` in step 1).
+/// - Token hits in map → set `sp_target_addr` so `try_get_peer` routes directly to it.
+/// - Token misses (stale/unknown) → flip state to `InjectNew` so the response refreshes it.
+#[inline]
+pub(crate) fn sp_resolve_target(
+    ctx: &mut EdgionHttpContext,
+    backend_name: &str,
+    backend_ns: Option<&str>,
+    route_ns: &str,
+    token: Option<&str>,
+) {
+    let Some(token) = token else { return };
+
+    let ns = backend_ns.unwrap_or(route_ns);
+    let service_key = format!("{}/{}", ns, backend_name);
+    let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, || {
+        crate::backends::selector::get_backends_for_service_key(&service_key)
+    });
+
+    if let Some(&addr) = affinity_map.get(token) {
+        ctx.sp_target_addr = Some(addr);
+        ctx.sp_sticky_addr = Some(addr);
+    } else {
+        ctx.sp_state = SessionPersistenceState::InjectNew;
     }
 }
 

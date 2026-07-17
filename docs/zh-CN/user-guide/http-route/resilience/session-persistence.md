@@ -150,7 +150,7 @@ spec:
 
 - **多实例一致性**：基于一致性哈希算法，多 Gateway 实例间只要后端列表一致，同一 token 会路由到同一后端。后端扩缩容时哈希环变化可能导致少量 session 漂移。
 - **idleTimeout**：当前版本不支持服务端 idle timeout（纯客户端 Cookie 方案无法实现），预留给后续 Redis 模式。
-- **GRPCRoute**：共享同一套会话保持逻辑，配置方式相同。
+- **GRPCRoute**：原生支持，配置方式与 HTTPRoute 相同，并有基于后端身份的集成测试验证。gRPC 特有语义：`strict: true` 时，粘性后端不可用将以 `grpc-status: 14`（UNAVAILABLE）失败关闭，而非 HTTP 503。原生 gRPC 客户端（tonic、grpc-go）需要在应用层自行回传会话 Cookie；浏览器 grpc-web 客户端仅在同站（same-site）且启用凭据（credentials）时自动携带（Cookie 带有 `SameSite=Lax`），跨站 grpc-web 部署建议使用 `type: Header`。会话保持依赖 EndpointSlice 类后端（ClusterIP 类后端会静默绕过，与 HTTPRoute 行为一致）。
 
 ## 相关文档
 

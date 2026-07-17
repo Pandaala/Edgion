@@ -1,5 +1,5 @@
 {
-  "current_max": 31936,
+  "current_max": 31937,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -294,6 +294,9 @@
     },
     "EdgionBackendTrafficPolicy/UpstreamAuthority": {
       "http": 31936
+    },
+    "GRPCRoute/Backend/SessionPersistence": {
+      "grpc": 31937
     }
   }
 }

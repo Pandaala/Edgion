@@ -111,10 +111,11 @@ pub fn upstream_response_filter(
     if !upstream_response.status.is_informational() {
         match ctx.sp_state {
             SessionPersistenceState::InjectNew | SessionPersistenceState::InjectUpdate => {
-                let sp_config = ctx
-                    .route_unit
-                    .as_ref()
-                    .and_then(|ru| ru.rule.session_persistence.clone());
+                // Read the effective rule config (HTTP or gRPC route unit) so
+                // GRPCRoute responses inject tokens too. Placement is unchanged:
+                // still after the retry-on-status decision, so a discarded
+                // response never consumes the inject state.
+                let sp_config = ctx.effective_session_persistence().cloned();
 
                 if let Some(sp) = sp_config {
                     // Derive the token from the LB cell address (`lb_backend_addr`),

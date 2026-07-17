@@ -234,11 +234,12 @@ where
             return Vec::new();
         }
 
-        // Fail closed when no EndpointSlice declares a usable port. Returning no
-        // backends surfaces a BackendEndpointSliceNotFoundByRoundRobinDefault error
-        // (HTTP 500) in the access log rather than silently misdirecting to a
-        // guessed port. No tracing: data-plane request path (Iron rule 3).
-        let Some(port) = slices
+        // Fallback for slices that declare no usable port themselves; fail closed
+        // when no slice declares one at all. Returning no backends surfaces a
+        // BackendEndpointSliceNotFoundByRoundRobinDefault error (HTTP 500) in the
+        // access log rather than silently misdirecting to a guessed port. No
+        // tracing: data-plane request path (Iron rule 3).
+        let Some(fallback_port) = slices
             .iter()
             .find_map(|s| s.ports.as_ref()?.first()?.port.map(|p| p as u16))
         else {
@@ -247,6 +248,15 @@ where
 
         let mut backends = BTreeSet::new();
         for slice in slices {
+            // K8s semantics: a slice's `ports` apply to that slice's own endpoints,
+            // and slices of one Service may declare different ports.
+            let port = slice
+                .ports
+                .as_ref()
+                .and_then(|p| p.first())
+                .and_then(|p| p.port)
+                .map(|p| p as u16)
+                .unwrap_or(fallback_port);
             backends.extend(slice.build_backends(port));
         }
         backends.into_iter().map(EdgionBackend::new).collect()
@@ -494,6 +504,88 @@ mod tests {
         store.replace_data_only(data);
 
         assert_eq!(store.get_backends_for_service("default/svc-port").len(), 1);
+    }
+
+    /// K8s semantics: an EndpointSlice's `ports` apply to that slice's own
+    /// endpoints only. A Service backed by two slices declaring different
+    /// ports must yield backends for BOTH ports, not just the first slice's.
+    #[test]
+    fn test_get_backends_for_service_per_slice_port_resolution() {
+        let store = EpSliceStore::<RoundRobin>::new();
+
+        let mut data = HashMap::new();
+        data.insert(
+            "default/svc-multi-slice1".to_string(),
+            ready_slice_with_ports(
+                "svc-multi-slice1",
+                "default",
+                "svc-multi",
+                "127.0.0.1",
+                Some(vec![EndpointPort {
+                    port: Some(30021),
+                    ..Default::default()
+                }]),
+            ),
+        );
+        data.insert(
+            "default/svc-multi-slice2".to_string(),
+            ready_slice_with_ports(
+                "svc-multi-slice2",
+                "default",
+                "svc-multi",
+                "127.0.0.1",
+                Some(vec![EndpointPort {
+                    port: Some(30022),
+                    ..Default::default()
+                }]),
+            ),
+        );
+        store.replace_data_only(data);
+
+        let backends = store.get_backends_for_service("default/svc-multi");
+        let addrs: std::collections::BTreeSet<String> = backends.iter().map(|b| b.addr.to_string()).collect();
+
+        assert_eq!(
+            addrs,
+            std::collections::BTreeSet::from(["127.0.0.1:30021".to_string(), "127.0.0.1:30022".to_string()])
+        );
+    }
+
+    /// A slice with NO declared port falls back to the first usable port found
+    /// across all slices for the service (today's borrowed-port behavior for
+    /// this degenerate case; kube-controller always sets ports in practice).
+    #[test]
+    fn test_get_backends_for_service_portless_slice_falls_back_to_other_slices_port() {
+        let store = EpSliceStore::<RoundRobin>::new();
+
+        let mut data = HashMap::new();
+        data.insert(
+            "default/svc-fallback-slice1".to_string(),
+            ready_slice_with_ports("svc-fallback-slice1", "default", "svc-fallback", "10.0.0.1", None),
+        );
+        data.insert(
+            "default/svc-fallback-slice2".to_string(),
+            ready_slice_with_ports(
+                "svc-fallback-slice2",
+                "default",
+                "svc-fallback",
+                "10.0.0.2",
+                Some(vec![EndpointPort {
+                    port: Some(9090),
+                    ..Default::default()
+                }]),
+            ),
+        );
+        store.replace_data_only(data);
+
+        let backends = store.get_backends_for_service("default/svc-fallback");
+        let addrs: std::collections::BTreeSet<String> = backends.iter().map(|b| b.addr.to_string()).collect();
+
+        // The portless slice's endpoint (10.0.0.1) borrows the other slice's port.
+        assert_eq!(
+            addrs,
+            std::collections::BTreeSet::from(["10.0.0.1:9090".to_string(), "10.0.0.2:9090".to_string()])
+        );
     }
 
     #[test]

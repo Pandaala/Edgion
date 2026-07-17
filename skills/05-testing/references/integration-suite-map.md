@@ -18,6 +18,7 @@ This file only answers three things:
 | `HTTPRoute/Protocol/WebSocket` | `edgion-tests/integration/conf/HTTPRoute/Protocol/WebSocket/` | `WebSocketTestSuite` | No | WebSocket backend validation |
 | `GRPCRoute/Basic` | `edgion-tests/integration/conf/GRPCRoute/Basic/` | `GrpcTestSuite` | No | gRPC direct basics |
 | `GRPCRoute/Match` | `edgion-tests/integration/conf/GRPCRoute/Match/` | `GrpcMatchTestSuite` | Yes | gRPC route matching (Exact + RegularExpression) |
+| `GRPCRoute/Backend/SessionPersistence` | `edgion-tests/integration/conf/GRPCRoute/Backend/SessionPersistence/` | `GrpcSessionPersistenceTestSuite` | Yes | Cookie/Header session persistence, stale-token fallback, on Service backed by per-port EndpointSlices |
 | `TCPRoute/Basic` | `edgion-tests/integration/conf/TCPRoute/Basic/` | `TcpTestSuite` | No | TCP echo |
 | `TCPRoute/StreamPlugins` | `edgion-tests/integration/conf/TCPRoute/StreamPlugins/` | `TcpStreamPluginsTestSuite` | Yes | Stream plugin wiring on TCP |
 | `TLSRoute/Basic` | `edgion-tests/integration/conf/TLSRoute/Basic/` | `TlsRouteTestSuite` | Yes | SNI/TLS route basics |

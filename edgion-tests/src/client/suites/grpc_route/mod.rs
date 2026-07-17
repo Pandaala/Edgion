@@ -5,6 +5,7 @@
 #[path = "../../../proto_gen/test.rs"]
 pub mod test;
 
+mod backend;
 mod basic;
 mod delegation;
 mod grpc_web;
@@ -12,6 +13,7 @@ mod r#match;
 mod rate_limit;
 mod unmatched_route;
 
+pub use backend::GrpcSessionPersistenceTestSuite;
 pub use basic::GrpcTestSuite;
 pub use delegation::{
     GrpcDelegationDynamicInitialTestSuite, GrpcDelegationDynamicUpdateTestSuite, GrpcDelegationTestSuite,

@@ -34,7 +34,7 @@ traffic.
 **2. A forged token cannot inject an arbitrary address.**
 
 The affinity map (`sp_affinity_get_or_build_key`) is built solely from the service's *real*
-backends. `sp_resolve_target` (`pg_upstream_peer.rs`) does `affinity_map.get(token)`, so a forged
+backends. `sp_resolve_target` (`session_persistence.rs`) does `affinity_map.get(token)`, so a forged
 token can only ever select an already-registered backend of that service — never an attacker-chosen
 address. The resolved sticky target then still passes the normal SSRF / DNS validation in
 `get_peer_with_sp_fallback` (loopback / link-local rejected). So the blast radius is bounded to
@@ -71,5 +71,6 @@ Re-open this decision (and implement the HMAC fix) only if:
 - `edgion-gateway/src/routes/http/session_persistence.rs` — `generate_session_token` (threat-model comment)
 - `edgion-gateway/src/lb/runtime_state/mod.rs` — `build_sp_affinity_map` (threat-model comment),
   `sp_affinity_lookup`, `sp_affinity_get_or_build_key`
-- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` — `sp_resolve_target`,
-  `get_peer_with_sp_fallback` (SSRF validation on the resolved sticky target)
+- `edgion-gateway/src/routes/http/session_persistence.rs` — `sp_resolve_target`
+- `edgion-gateway/src/routes/http/proxy_http/pg_upstream_peer.rs` — `get_peer_with_sp_fallback`
+  (SSRF validation on the resolved sticky target)

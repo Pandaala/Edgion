@@ -127,7 +127,7 @@ pub fn select_roundrobin_backend_key(service_key: &str) -> Option<Arc<EdgionBack
 ///
 /// Reads from the per-service `ServiceSelectorCell`, which the control plane
 /// keeps in sync with the EP/EPS data layer. Used by health/CB convenience
-/// APIs and by `pg_upstream_peer::sp_resolve_target` for session-affinity map
+/// APIs and by `session_persistence::sp_resolve_target` for session-affinity map
 /// construction.
 pub fn get_backends_for_service_key(service_key: &str) -> Arc<Vec<Arc<EdgionBackend>>> {
     let cell = compiled_selector::get_or_create_cell(service_key);

@@ -31,7 +31,8 @@ pub use edgion_backend_traffic_policy::{EdgionBackendTrafficPolicyTestSuite, Ups
 
 pub use grpc_route::{
     GrpcDelegationDynamicInitialTestSuite, GrpcDelegationDynamicUpdateTestSuite, GrpcDelegationTestSuite,
-    GrpcMatchTestSuite, GrpcRateLimitTestSuite, GrpcTestSuite, GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite,
+    GrpcMatchTestSuite, GrpcRateLimitTestSuite, GrpcSessionPersistenceTestSuite, GrpcTestSuite,
+    GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite,
 };
 
 pub use tcp_route::{

@@ -359,7 +359,18 @@ pub async fn upstream_peer_grpc(
     //    a valid entry (`current_upstream_id` is None right after `init_backend_context`).
     begin_upstream_attempt(ctx);
 
-    let mut peer = get_peer(session, ctx, true, &edgion_http.server_header_opts).await?;
+    // 5. Get peer — mirrors upstream_peer_http: on a strict cross-attempt retry,
+    // restore the sticky target so the retry re-pins (and fail-closes if it is
+    // now unhealthy) instead of migrating via plain LB; with a resolved sticky
+    // target, route through the SP fallback helper; otherwise refresh the token
+    // when a cross-attempt retry re-selects via plain LB.
+    sp_repin_on_strict_retry(ctx);
+    let mut peer = if ctx.sp_target_addr.is_some() {
+        get_peer_with_sp_fallback(edgion_http, session, ctx, true).await?
+    } else {
+        sp_refresh_on_cross_attempt_retry(ctx);
+        get_peer(session, ctx, true, &edgion_http.server_header_opts).await?
+    };
 
     // 6. Force HTTP/2 for gRPC
     peer.options.set_http_version(2, 2);
@@ -415,7 +426,7 @@ pub async fn upstream_peer_http(
     // instead of migrating via plain LB.
     sp_repin_on_strict_retry(ctx);
     let mut peer = if ctx.sp_target_addr.is_some() {
-        get_peer_with_sp_fallback(edgion_http, session, ctx).await?
+        get_peer_with_sp_fallback(edgion_http, session, ctx, false).await?
     } else {
         // A retry that re-selects via plain LB after an earlier attempt consumed
         // the sticky target must refresh the token to the backend now serving.
@@ -448,7 +459,8 @@ pub async fn select_http_backend(
     // Session Persistence step 1 of 2: extract token + set initial state. Step 2
     // (affinity lookup) runs below after backend_ref is selected, since the affinity
     // map is keyed by `{namespace}/{backend_ref.name}`.
-    let sp_token = sp_extract_token(session, &mut ctx.sp_state, &route_unit.rule);
+    let sp_token =
+        session_persistence::sp_extract_token(session, &mut ctx.sp_state, route_unit.rule.session_persistence.as_ref());
 
     // Pick backend_ref: InternalJump (plugin-injected) tries by name first and falls back to
     // weighted round-robin on miss; without InternalJump, plain weighted round-robin.
@@ -489,64 +501,16 @@ pub async fn select_http_backend(
 
     // Session Persistence step 2 of 2: resolve token to a sticky target via the
     // affinity map. Step 1 ran above before backend_ref selection.
-    sp_resolve_target(ctx, &backend_ref, &route_ns, sp_token.as_deref());
+    session_persistence::sp_resolve_target(
+        ctx,
+        &backend_ref.name,
+        backend_ref.namespace.as_deref(),
+        &route_ns,
+        sp_token.as_deref(),
+    );
 
     ctx.selected_backend = Some(backend_ref);
     Ok(())
-}
-
-/// Session Persistence step 1: extract the session token (if SP is configured on the route)
-/// and pin the initial `sp_state`. Returns the token for the later affinity lookup.
-///
-/// Takes `&mut SessionPersistenceState` rather than `&mut EdgionHttpContext` to keep the
-/// borrow disjoint from `&route_unit.rule` (which the caller still needs for backend selection).
-///
-/// - SP not configured → returns `None`, state untouched.
-/// - SP configured, token present → state = `Inactive` (a fallback later may flip it).
-/// - SP configured, no token → state = `InjectNew` (first request; response will inject one).
-#[inline]
-fn sp_extract_token(
-    session: &Session,
-    sp_state: &mut SessionPersistenceState,
-    rule: &edgion_resources::HTTPRouteRule,
-) -> Option<String> {
-    let sp = rule.session_persistence.as_ref()?;
-    let token = session_persistence::extract_session_token(session, sp);
-    *sp_state = if token.is_some() {
-        SessionPersistenceState::Inactive
-    } else {
-        SessionPersistenceState::InjectNew
-    };
-    token
-}
-
-/// Session Persistence step 2: resolve a token to a sticky upstream address via the
-/// per-service affinity map.
-///
-/// - Token absent → no-op (first request: state was already set to `InjectNew` in step 1).
-/// - Token hits in map → set `sp_target_addr` so `try_get_peer` routes directly to it.
-/// - Token misses (stale/unknown) → flip state to `InjectNew` so the response refreshes it.
-#[inline]
-fn sp_resolve_target(
-    ctx: &mut EdgionHttpContext,
-    backend_ref: &edgion_resources::HTTPBackendRef,
-    route_ns: &str,
-    token: Option<&str>,
-) {
-    let Some(token) = token else { return };
-
-    let ns = backend_ref.namespace.as_deref().unwrap_or(route_ns);
-    let service_key = format!("{}/{}", ns, backend_ref.name);
-    let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, || {
-        crate::backends::selector::get_backends_for_service_key(&service_key)
-    });
-
-    if let Some(&addr) = affinity_map.get(token) {
-        ctx.sp_target_addr = Some(addr);
-        ctx.sp_sticky_addr = Some(addr);
-    } else {
-        ctx.sp_state = SessionPersistenceState::InjectNew;
-    }
 }
 
 /// Get peer when session persistence resolved a sticky target (`sp_target_addr` is set).
@@ -564,19 +528,29 @@ fn sp_resolve_target(
 /// Strict mode keeps the original `try_get_peer` error from `get_peer`'s second call,
 /// rather than synthesising one — `get_peer` will return whichever backend it can find,
 /// or surface its own error to the proxy layer.
+///
+/// `is_grpc` selects the `try_get_peer` protocol branch and the fail-closed
+/// error type: gRPC error paths report `HTTPStatus(200)` (the committed
+/// response is a trailers-only `grpc-status: 14` frame emitted by the
+/// gRPC-aware `end_response_503`), while HTTP keeps `InternalError`. Using
+/// `InternalError` for gRPC would make `fail_to_proxy` stamp a spurious 500
+/// into the access log, diverging from every other gRPC error path.
 async fn get_peer_with_sp_fallback(
     edgion_http: &EdgionHttpProxy,
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
+    is_grpc: bool,
 ) -> pingora_core::Result<Box<HttpPeer>> {
-    let sp_strict = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|ru| ru.rule.session_persistence.as_ref())
-        .and_then(|sp| sp.strict)
-        .unwrap_or(false);
+    let sp_strict = ctx.effective_sp_strict();
+    let fail_closed_err = || {
+        if is_grpc {
+            PingoraError::new(ErrorType::HTTPStatus(200))
+        } else {
+            PingoraError::new(ErrorType::InternalError)
+        }
+    };
 
-    match try_get_peer(ctx, session, false).await {
+    match try_get_peer(ctx, session, is_grpc).await {
         Ok(peer) => Ok(peer),
         Err(
             status @ (EdgionStatus::BackendLocalhostNotAllowed
@@ -585,22 +559,23 @@ async fn get_peer_with_sp_fallback(
         ) => {
             ctx.add_error(status);
             end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
-            Err(PingoraError::new(ErrorType::InternalError))
+            Err(fail_closed_err())
         }
         Err(_) if !sp_strict => {
             // Sticky target unhealthy → drop the SP target and refresh the token in the response.
             ctx.sp_target_addr = None; // already consumed by try_get_peer, but be explicit
             ctx.sp_state = SessionPersistenceState::InjectUpdate;
-            get_peer(session, ctx, false, &edgion_http.server_header_opts).await
+            get_peer(session, ctx, is_grpc, &edgion_http.server_header_opts).await
         }
         Err(status) => {
             // Strict mode: the resolved sticky target cannot serve. Fail closed
-            // with 503 instead of silently load-balancing to a different backend.
-            // end_response_503 commits the downstream response; the returned Err
-            // terminates without a pingora retry (same mechanism as the SSRF arm).
+            // instead of silently load-balancing to a different backend.
+            // end_response_503 commits the downstream response (for gRPC it is
+            // already trailers-only grpc-status 14); the returned Err terminates
+            // without a pingora retry (same mechanism as the SSRF arm).
             ctx.add_error(status); // status: typically StickyBackendUnhealthy; any non-SSRF/DNS peer error fails closed here
             end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
-            Err(PingoraError::new(ErrorType::InternalError))
+            Err(fail_closed_err())
         }
     }
 }
@@ -611,10 +586,7 @@ async fn get_peer_with_sp_fallback(
 /// `sp_should_refresh_on_cross_attempt_retry`.
 #[inline]
 fn sp_refresh_on_cross_attempt_retry(ctx: &mut EdgionHttpContext) {
-    let sp = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|ru| ru.rule.session_persistence.as_ref());
+    let sp = ctx.effective_session_persistence();
     let sp_configured = sp.is_some();
     let strict = sp.and_then(|sp| sp.strict).unwrap_or(false);
 
@@ -636,10 +608,7 @@ fn sp_refresh_on_cross_attempt_retry(ctx: &mut EdgionHttpContext) {
 /// decision to the pure `sp_should_repin_on_strict_retry`.
 #[inline]
 fn sp_repin_on_strict_retry(ctx: &mut EdgionHttpContext) {
-    let sp = ctx
-        .route_unit
-        .as_ref()
-        .and_then(|ru| ru.rule.session_persistence.as_ref());
+    let sp = ctx.effective_session_persistence();
     let sp_configured = sp.is_some();
     let strict = sp.and_then(|sp| sp.strict).unwrap_or(false);
 
