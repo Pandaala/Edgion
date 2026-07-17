@@ -136,6 +136,29 @@ async fn require_ready_middleware(State(state): State<Arc<AdminState>>, request:
     }
 }
 
+/// Deadman flag: set (sticky) when the control-plane lifecycle task ends for
+/// any reason other than an orderly shutdown — including a lifecycle panic.
+/// `/health` returns 503 while set, so the liveness probe finally has a
+/// failure mode ("a liveness probe that cannot fail is not a liveness probe").
+/// The lifecycle is spawned exactly once per process (cli step 5), so there is
+/// no legitimate reset path outside tests.
+static LIFECYCLE_TERMINATED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Mark the control-plane lifecycle as abnormally terminated (see
+/// `LIFECYCLE_TERMINATED`). Called from the lifecycle spawn wrapper in cli.
+pub fn mark_lifecycle_terminated() {
+    LIFECYCLE_TERMINATED.store(true, std::sync::atomic::Ordering::Release);
+}
+
+fn lifecycle_terminated() -> bool {
+    LIFECYCLE_TERMINATED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(test)]
+pub(crate) fn reset_lifecycle_terminated_for_test() {
+    LIFECYCLE_TERMINATED.store(false, std::sync::atomic::Ordering::Release);
+}
+
 // ============= Handlers =============
 
 /// API request body for manual conf_sync rotation (Task 11).
@@ -157,9 +180,18 @@ enum ApiRotateScope {
     Ca,
 }
 
-/// Health check endpoint - always returns OK if server is up
-async fn health_check() -> Json<ApiResponse<String>> {
-    Json(ApiResponse::ok_body("OK".to_string()))
+/// Health check endpoint. 200 while the process is healthy; 503 once the
+/// control-plane lifecycle has terminated abnormally (deadman — the liveness
+/// probe's failure mode of last resort).
+async fn health_check() -> Response {
+    if lifecycle_terminated() {
+        let body = Json(ApiResponse::<()>::err_body(
+            "control-plane lifecycle terminated".to_string(),
+        ));
+        (StatusCode::SERVICE_UNAVAILABLE, body).into_response()
+    } else {
+        Json(ApiResponse::ok_body("OK".to_string())).into_response()
+    }
 }
 
 /// Readiness check endpoint - returns OK only when ConfigServer is ready
@@ -1151,6 +1183,29 @@ mod admin_exposure_tests {
     #[test]
     fn ipv4_mapped_nonloopback_empty_allowlist_is_insecure() {
         assert!(admin_exposure_is_insecure(&addr("[::ffff:10.1.2.3]:12101"), &[]));
+    }
+}
+
+#[cfg(test)]
+mod deadman_tests {
+    use super::*;
+
+    // NOTE: LIFECYCLE_TERMINATED is process-global and sticky by design; these
+    // tests reset it and must not run concurrently with each other. Keeping
+    // them in one #[tokio::test] serializes them.
+    #[tokio::test]
+    async fn health_check_reflects_lifecycle_flag() {
+        reset_lifecycle_terminated_for_test();
+        let resp = health_check().await;
+        assert_eq!(resp.status(), StatusCode::OK);
+
+        mark_lifecycle_terminated();
+        let resp = health_check().await;
+        assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        reset_lifecycle_terminated_for_test();
+        let resp = health_check().await;
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
 

@@ -160,7 +160,9 @@ enum LifecycleEvent {
 }
 ```
 
-The main loop is a simple `match event_rx.recv().await`, with no complex `select!`; the event-handling logic is straightforward:
+The loop drives a shared `next_loop_turn()` helper (a three-way `select!`, not a bare `recv()` — see
+[Supervision & recovery](#supervision--recovery) for the mechanics); the event-handling logic per
+`LifecycleEvent` is straightforward:
 
 | Event | leader-only handling | all-serve handling |
 |-------|-----------------------|--------------------|
@@ -203,7 +205,11 @@ Preflight logic (`version_detection.rs`):
 At startup, the leader watcher checks the current state immediately; if it is already leader it emits a `LeadershipAcquired` immediately rather than waiting for the next 100ms tick.
 This ensures that, after a replica restart (when it was already leader), it can resume leader services right away.
 
-The `WatcherHandles` struct holds the `JoinHandle` for all four tasks and uses `abort_and_wait()` to terminate them uniformly during cleanup.
+The `WatcherSet` struct (a `JoinSet<&'static str>` plus a task-id→name map and the iteration's
+leadership-epoch `CancellationToken`) holds all four tasks and uses `abort_and_wait()` — cooperative
+cancel, then abort-and-drain — to terminate them uniformly during cleanup. See
+[Supervision & recovery](#supervision--recovery) for how the set is also used to detect a hung or
+panicked watcher while the loop is running, not just to clean up after it exits.
 
 ## ConfigSyncServer Publish Timing
 
@@ -238,8 +244,154 @@ but existing traffic still works, prioritize checking whether only a partial set
 
 Each abnormal controller exit or 410 Gone-triggered rebuild increments the consecutive-failure count by 1.
 If a single iteration runs stably for more than 5 minutes, the count is reset to zero.
-When the detached ConfMgr lifecycle gives up, it returns an error/terminal result and readiness remains false;
-the already-started process listeners are not synchronously terminated by this loop itself.
+`run_all_serve_lifecycle` uses the identical backoff formula, failure cap, and stable-run reset — see
+[Give-up triggers graceful shutdown](#give-up-triggers-graceful-shutdown-both-flows) below for how the two
+flows now share the same give-up behavior (both call `shutdown_handle.shutdown()` on give-up, so the
+process actually exits instead of idling with readiness stuck false).
+
+## Supervision & Recovery
+
+Origin: `docs/superpowers/specs/2026-07-16-leader-wedge-recovery-design.md`. Before this design, a hang
+anywhere in the post-readiness-poll tail (`register_all` → revalidations → `start_leader_jobs` → the
+`CachesReady` send) or a panic in a watcher task left the event loop `Pending` forever — leadership held,
+`/health` an unconditional `200`, no automatic recovery. The mechanisms below close that gap.
+
+### Supervised event loop
+
+Both `run_main_flow` and `run_serving_flow` replaced the bare `event_rx.recv().await` with a shared
+`next_loop_turn()` helper — a `biased` three-way `select!` over the event channel, the `WatcherSet`'s
+`JoinSet`, and a pre-ready deadline:
+
+```rust
+tokio::select! {
+    biased;   // drain queued events before join results, deterministically
+    ev = event_rx.recv() => /* Some(event) -> LoopTurn::Event, None -> ChannelClosed */,
+    Some(res) = watchers.set.join_next_with_id(), if !watchers.set.is_empty() =>
+        /* Ok -> WatcherFinished(name), Err(join_err) -> WatcherPanicked(name) */,
+    _ = deadline, if deadline_armed => LoopTurn::DeadlineExpired,
+}
+```
+
+- **`biased` matters**: every watcher task sends its event before returning, so even if a `WatcherFinished`
+  turn wins a race against the event that task just sent, the event is still queued and gets delivered on
+  the very next turn — normal completion never loses an event.
+- **Hang-vs-panic detector split**: `JoinHandle`/`JoinSet` observation alone cannot detect a *hang* (a hung
+  task neither completes nor errors), and a bare deadline alone cannot attribute a *panic* to the task that
+  caused it. The two detectors are complementary and both are required: `WatcherPanicked(name)` (an
+  `Err(JoinError)` — in-loop this can only be a panic, since our own aborts happen only in post-break
+  cleanup) and `DeadlineExpired` both map conservatively to `ControllerExitReason::AllControllersStopped`,
+  funneling into the same failure-budget/backoff/give-up path documented above instead of introducing a
+  parallel recovery mechanism.
+- A closed event channel (`LoopTurn::ChannelClosed`, all senders dropped) is treated the same way.
+
+### `cache_ready_deadline_secs`
+
+The pre-ready deadline is armed for the whole watcher-set lifetime and disarmed once `CachesReady` is
+observed (`deadline_armed = !caches_ready`). Its duration is `cache_ready_deadline_secs` on
+`KubernetesConfig` (default **90 s** = the internal 30 s readiness-poll budget + a 60 s tail allowance for
+`register_all` + revalidations + leader-job start).
+
+- **Validation**: rejected at startup unless `> 30` (the internal readiness-poll budget) — a deadline that
+  cannot even cover the poll is a designed-in restart loop. See
+  `KubernetesConfig::validate()` in `edgion-controller/src/config/conf_center/kubernetes.rs`.
+- **Restart-bound, not hot-reloadable**: the value is read from `self.config`, captured once at
+  `KubernetesCenter` construction. `POST /api/v1/reload` restarts the loop iteration (a benign
+  `RelinkRequested` exit) and every iteration arms a fresh deadline, but always with the **boot-time**
+  value — changing this field requires a process restart, not just a reload.
+  See [`skills/02-features/02-config/00-controller-config.md`](../../../../02-features/02-config/00-controller-config.md)
+  for the operator-facing field reference.
+- **Sizing rule of thumb**: raise the deadline when a single resource kind's count approaches the per-kind
+  workqueue capacity (5000) — the revalidation tail drains that queue at apiserver status-write rates, and
+  because every deadline restart runs `runtime.reset()` and replays from scratch, a too-small deadline is a
+  *permanent* crash loop (`STABLE_RUN_DURATION` = 300 s is never reached).
+- **Worst-case pre-ready wait before a restart fires is ≈ 2× the configured value**: the deadline budget
+  also wraps `start_event_watchers`/`start_event_watchers_all_serve` itself via `tokio::time::timeout`
+  (guarding a hung `preflight_check_gateway_api_crds`), and if that returns `Ok` the loop's own deadline then
+  arms fresh for the tail — so a hang straddling the boundary can consume close to two full budgets before
+  the loop gives up.
+
+### Leadership-epoch cancellation token
+
+Each watcher-set generation (one per outer-loop iteration) gets its own `CancellationToken`
+(`WatcherSet::new(CancellationToken::new())`); a clone is passed to the caches task.
+
+- **Leader-only** (`start_event_watchers`): the leadership watcher cancels the token **first**, then sends
+  `LeadershipLost` — so the caches task's tail is stopped even while the event loop is still busy handling
+  other turns. `run_caches_ready`'s tail races `select!` against `cancel.cancelled()`, and re-checks
+  `cancel.is_cancelled()` as a synchronous, no-await checkpoint immediately before `start_leader_jobs`: a
+  cancelled tail neither starts leader jobs nor sends `CachesReady` — it just returns. This is what prevents
+  a replica from reporting ready with all leader jobs dead.
+- **All-serve** (`start_event_watchers_all_serve`): **cleanup-only** cancellation. The bidirectional
+  leadership watcher there does **not** touch the token — `LeadershipLost` is a routine, non-fatal event in
+  this mode (the loop just stops leader services and keeps serving gRPC). A `CancellationToken` is not
+  resettable, so wiring the watcher to cancel it would permanently kill the caches task of a replica that
+  briefly held leadership during its own startup window. The token is cancelled only by loop cleanup
+  (`abort_and_wait`). **The wiring is deliberately different between the two `start_event_watchers*`
+  variants — do not copy-paste one into the other.**
+- Residual: the `is_leader` flag's inherent 2–10 s staleness window (see Known limitations below).
+  `leader_election.rs` itself is unmodified.
+
+### Give-up triggers graceful shutdown (both flows)
+
+When the failure budget's `on_failure()` returns `FailureAction::GiveUp` (the failure count exceeds
+`MAX_CONSECUTIVE_FAILURES` = 10 — i.e. on the 11th consecutive failure with no 5-minute stable run in
+between), the lifecycle calls
+`shutdown_handle.shutdown()` **before** returning — releasing the lease (best-effort, see below) and letting
+the process exit so Kubernetes restarts the pod and another replica can take over. This is symmetric across
+both HA modes:
+
+- **`run_main_flow`** (leader-only): both the watcher-start-failure path and the
+  `ControllerExitReason::AllControllersStopped` path call `shutdown_handle.shutdown()` on give-up.
+- **`run_all_serve_lifecycle`**: gained the same failure counter + backoff + give-up, replacing the previous
+  fixed 1 s / 5 s sleep-and-retry-forever behavior. `ServingFlowExit` distinguishes real failures
+  (`CachesTimeout` / `AllControllersStopped` / watcher panic / deadline / channel closed — counted toward
+  give-up) from **benign** exits (manual `/api/v1/reload`, 410 GONE relink — reset the counter and do
+  **not** count toward give-up), mirroring the leader-only classification.
+
+Without this, all-serve mode's previous behavior was to retry forever on persistent failure (~90 s cycle by
+default), never triggering failover or paging anyone.
+
+### `/health` deadman
+
+`cli/mod.rs` step 5 spawns the control-plane lifecycle (`ConfMgr.start_with_shutdown()`) inside an *inner*
+task and observes it as a `JoinHandle` — necessary because a panic in the lifecycle body itself (not a
+watcher task, but the loop/cleanup code around it) unwinds past any flag-setting code written linearly after
+the `.await`, and tokio silently swallows a panic at a task boundary otherwise.
+
+- A process-global, sticky `static AtomicBool` (`LIFECYCLE_TERMINATED` in `edgion-controller/src/api/mod.rs`,
+  set via `mark_lifecycle_terminated()`) is marked when the lifecycle ends **for any reason other than an
+  orderly shutdown** — a foreseen `Err` return, an `Ok(())` early return, or a lifecycle **panic**
+  (`Err(JoinError)`) are all treated identically. `health_check()` returns a plain `503` (JSON error body,
+  no extra headers — the `Retry-After: 30` header belongs to a different handler, `require_ready_middleware`
+  on admin write routes, which explicitly does not gate `/health`) while the flag is set, `200` otherwise.
+  A normal, requested shutdown checks
+  `shutdown_handle.is_shutdown()` first and never trips the flag; the give-up path above triggers shutdown
+  before returning, so it does not trip it either.
+- **On an abnormal end, the wrapper also triggers shutdown itself** — mark the flag first (so `/health` is
+  immediately correct), then call `shutdown_handle.shutdown()`, releasing the lease within seconds instead
+  of waiting out kubelet's liveness-failure threshold (~30 s+). The `/health` 503 remains the backstop for
+  the residual case where the shutdown itself wedges.
+- **Deliberate behavior change**: K8s-mode `start()` can return `Err` early — without ever calling
+  `shutdown()` — on `KubernetesStorage::new`, `Client::try_default`, a missing `POD_NAME`, or a
+  `preflight_check()` (RBAC) failure. Before this design such a pod idled forever with a live Admin API and
+  green probes; now the deadman marks + triggers shutdown on that path too, so the pod reaches
+  `CrashLoopBackOff` via a fast clean-exit restart loop instead of hiding the misconfiguration. Non-K8s conf
+  centers are unaffected: their `start()` only returns after the shutdown signal, so the flag cannot
+  false-positive there.
+- **Lease release on exit is best-effort, not guaranteed**: `release_lease` is bounded to 3 s (see
+  [Leader Election](#leader-election-lease-based) above); on any failure or timeout it falls back to natural
+  lease expiry (~`lease_duration_secs`). Do not treat "give-up shuts down" as "failover is instant" — it is
+  instant only when the release succeeds within the bound.
+
+### Known limitations (accepted)
+
+- **Post-ready stalls stay silent.** The deadline branch is disabled once `caches_ready` is set
+  (`deadline_armed = !caches_ready`), so a steady-state backpressure stall after readiness (e.g. a
+  workqueue-full requeue loop) or a hung-but-not-dead controller task is not caught by this mechanism. This
+  design's scope is the *startup* wedge; a general post-ready progress-liveness signal is a separate,
+  unbuilt feature.
+- **Leadership fencing.** The `is_leader` flag's 2–10 s staleness window (a lease-design property, not a bug)
+  remains: a demoted replica can keep running leader jobs for up to that long. Out of scope for this design.
 
 ## Configuration Reference
 
@@ -249,6 +401,7 @@ conf_center:
   gateway_class: edgion
   controller_name: edgion.io/gateway-controller
   ha_mode: leader-only            # or "all-serve"
+  cache_ready_deadline_secs: 90   # default; restart-bound, see "Supervision & Recovery" above
   leader_election:
     lease_name: edgion-controller-leader
     lease_namespace: edgion-system

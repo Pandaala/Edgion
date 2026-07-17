@@ -154,8 +154,17 @@ pub fn start_conf_sync_rotation(client: Client) {
     *guard = Some(Handle { tx, generation });
     drop(guard); // release the lock before spawning
 
-    tokio::spawn(async move {
+    let worker_handle = tokio::spawn(async move {
         run(rx, client, generation).await;
+    });
+    crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("conf_sync_rotation").set(1.0);
+    crate::services::supervision::observe_worker("conf_sync_rotation", worker_handle, move || {
+        let guard = ROTATION_SERVICE.lock();
+        let current = guard.as_ref().map(|h| h.generation) == Some(generation);
+        if current {
+            crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("conf_sync_rotation").set(0.0);
+        }
+        current
     });
 
     tracing::info!(
@@ -174,6 +183,7 @@ pub fn stop_conf_sync_rotation() {
     LEADER.store(false, Ordering::SeqCst);
     let mut guard = ROTATION_SERVICE.lock();
     if guard.take().is_some() {
+        crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("conf_sync_rotation").set(0.0);
         tracing::info!(component = "conf_sync_ca", "conf_sync rotation service stopped");
     }
 }

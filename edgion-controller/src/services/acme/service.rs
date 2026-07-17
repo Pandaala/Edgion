@@ -98,8 +98,20 @@ pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>) {
     drop(guard); // Release lock before spawning tasks
 
     let service = AcmeServiceWorker::new(client.clone(), generation);
-    tokio::spawn(async move {
+    let worker_handle = tokio::spawn(async move {
         service.run(rx).await;
+    });
+    crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("acme").set(1.0);
+    crate::services::supervision::observe_worker("acme", worker_handle, move || {
+        // Lock + generation check + gauge write are one critical section: a
+        // check-then-write outside the lock could interleave with a full
+        // stop+start and zero the NEW generation's series.
+        let guard = ACME_SERVICE.lock();
+        let current = guard.as_ref().map(|h| h.generation) == Some(generation);
+        if current {
+            crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("acme").set(0.0);
+        }
+        current
     });
 
     // Spawn startup scan: re-schedule renewal checks for all existing EdgionAcme resources.
@@ -143,6 +155,7 @@ pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>) {
 pub fn stop_acme_service() {
     let mut guard = ACME_SERVICE.lock();
     if guard.take().is_some() {
+        crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("acme").set(0.0);
         tracing::info!(component = "acme_service", "ACME service stopped");
     }
     // Dropping the AcmeServiceHandle drops the mpsc::Sender, which closes

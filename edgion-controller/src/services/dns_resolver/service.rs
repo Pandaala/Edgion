@@ -22,7 +22,6 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::api::{Api, DeleteParams, ListParams, ObjectMeta, Patch, PatchParams};
 use kube::Client;
 use parking_lot::Mutex;
-use tokio::task::JoinHandle;
 
 use edgion_common::dns::resolver_select::{
     candidate_from_annotations, resolve_effective_spec, LinkSysKey, ResolverCandidate,
@@ -44,13 +43,25 @@ const DEFAULT_REFRESH: Duration = Duration::from_secs(15);
 /// up. Also enforced at config load (`DnsResolverConfig::validate`).
 const MIN_REFRESH: Duration = Duration::from_secs(1);
 
-/// Global singleton handle. Holds the loop's `JoinHandle` so `stop` can abort it
-/// promptly on leadership loss / shutdown (mirrors the leader-only ACME service).
-static DNS_RESOLVER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
+/// Handle to the running resolver loop. Stores an `AbortHandle` (not the
+/// `JoinHandle` — the supervision observer owns that, and `JoinHandle` is not
+/// cloneable) plus a generation so a stale observer can recognize a restart.
+struct DnsResolverHandle {
+    abort: tokio::task::AbortHandle,
+    generation: u64,
+}
+
+/// Global singleton handle (mirrors the leader-only ACME service shape).
+static DNS_RESOLVER: Mutex<Option<DnsResolverHandle>> = Mutex::new(None);
+
+/// Monotonic generation counter; first running generation is 1.
+static DNS_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// Start the control-plane DNS resolver loop. Idempotent: a warning + no-op if
 /// already running (call [`stop_dns_resolver_service`] first on re-election).
 pub fn start_dns_resolver_service(client: Client, watch_namespaces: Vec<String>) {
+    use std::sync::atomic::Ordering;
+
     let mut guard = DNS_RESOLVER.lock();
     if guard.is_some() {
         tracing::warn!(
@@ -59,15 +70,32 @@ pub fn start_dns_resolver_service(client: Client, watch_namespaces: Vec<String>)
         );
         return;
     }
+    let generation = DNS_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     let handle = tokio::spawn(async move { run(client, watch_namespaces).await });
-    *guard = Some(handle);
+    *guard = Some(DnsResolverHandle {
+        abort: handle.abort_handle(),
+        generation,
+    });
+    drop(guard);
+
+    crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("dns_resolver").set(1.0);
+    crate::services::supervision::observe_worker("dns_resolver", handle, move || {
+        let guard = DNS_RESOLVER.lock();
+        let current = guard.as_ref().map(|h| h.generation) == Some(generation);
+        if current {
+            crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("dns_resolver").set(0.0);
+        }
+        current
+    });
     tracing::info!(component = "dns_resolver_service", "DNS resolver service started");
 }
 
-/// Stop the loop (leadership loss / shutdown). Aborts the background task.
+/// Stop the loop (leadership loss / shutdown). Aborts the background task; the
+/// observer sees `JoinError::is_cancelled()` and classifies it orderly.
 pub fn stop_dns_resolver_service() {
     if let Some(handle) = DNS_RESOLVER.lock().take() {
-        handle.abort();
+        handle.abort.abort();
+        crate::conf_mgr::sync_runtime::metrics::leader_job_gauge("dns_resolver").set(0.0);
         tracing::info!(component = "dns_resolver_service", "DNS resolver service stopped");
     }
 }

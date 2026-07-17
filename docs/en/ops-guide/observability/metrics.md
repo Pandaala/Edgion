@@ -130,8 +130,36 @@ The Controller exposes control-plane metrics under the `edgion_controller_*` pre
 | `edgion_controller_status_writes_skipped_total` | Counter | `kind` | Status writes skipped because a semantic diff found no change |
 | `edgion_controller_unexpected_apply_during_init_total` | Counter | `kind` | Apply events received during init (should stay 0; non-zero indicates watcher-stream ordering anomalies) |
 | `edgion_controller_resource_abnormal` | Gauge | `kind`, `namespace`, `name`, `err`, `warn` | One series per resource that has at least one failing status condition. `err` / `warn` are JSON arrays of the triggering conditions; empty string means none at that severity |
+| `edgion_controller_leader_job_alive` | Gauge | `leader_job` (`acme` \| `conf_sync_rotation` \| `dns_resolver`) | Leader-job worker liveness: `1` = running, `0` = stopped or dead. The label is deliberately `leader_job`, not `job` — Prometheus reserves `job` as a target label and would rename an exported one to `exported_job` under default `honor_labels: false`, breaking any alert written against the documented name |
 
 The `edgion_controller_resource_abnormal` snapshot is rebuilt on a timer and capped (default 1000 entries) to bound cardinality. Use it to alert on resources stuck in a bad state, e.g. `edgion_controller_resource_abnormal{err!=""}`.
+
+### Leader-job death alert
+
+`edgion_controller_leader_job_alive` has one series per leader-job worker that has ever started **on this
+replica** — the series is **absent**, not `0`, for a job that never started there (e.g.
+`conf_sync_rotation` is never spawned on a replica with `conf_sync_security.auto_ca` off, so it mints no
+`{leader_job="conf_sync_rotation"}` series at all; an absent series correctly suppresses the alert instead
+of paging forever on a job that was never supposed to run).
+
+```promql
+edgion_controller_leader_job_alive == 0
+  and on(instance) edgion_controller_leader == 1
+```
+
+Alert with `for: 2m` — the gauge legitimately dips to `0` for a moment during every normal backoff-restart
+iteration of the worker, so a shorter window pages on routine restarts instead of an actually-dead worker.
+`on(instance) edgion_controller_leader
+== 1` scopes the alert to the replica currently holding leadership — a `0` on a non-leader replica (job
+never started there) is expected and must not page. The `and` keeps the `leader_job` label from the left
+side in the alert output, so the page names which job died.
+
+By design there is **no automatic restart** of a dead leader-job worker (a panic usually means corrupted
+state; a blind restart risks a panic loop) — recovery is by alert + operator action
+(`POST /api/v1/reload` or a pod restart). Separately, `/health` now returns `503` if the control-plane
+lifecycle itself terminates abnormally (a deadman, distinct from this per-worker gauge) — see
+[Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery)
+for the full lifecycle-recovery design.
 
 ## Federation metrics (Center and Controller)
 

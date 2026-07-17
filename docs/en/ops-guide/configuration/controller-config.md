@@ -75,6 +75,7 @@ conf_center:
 #   gateway_address: ""                            # Address reported in Gateway status
 #   ha_mode: leader-only                           # "leader-only" | "all-serve"
 #   no_watch_kinds: [TCPRoute, UDPRoute]           # Skip CRD pre-check and watch for these kinds
+#   cache_ready_deadline_secs: 90                  # Pre-CachesReady deadline (secs); restart-bound, not hot-reloadable
 #   leader_election:
 #     lease_name: edgion-controller-leader
 #     lease_namespace: edgion-system
@@ -184,6 +185,7 @@ Note: The `--conf-dir` CLI flag overrides `conf_dir` and switches `conf_center` 
 | `gateway_address` | `String` | — | Address reported in Gateway status. Optional |
 | `ha_mode` | `String` | — | HA mode: `"leader-only"` or `"all-serve"` |
 | `no_watch_kinds` | `Array<String>` | `[]` | Resource kinds to skip CRD pre-check and watch for (PascalCase), e.g. `["TCPRoute", "UDPRoute"]` |
+| `cache_ready_deadline_secs` | `Integer` | `90` | Deadline (seconds) for a started watcher set to reach `CachesReady` — covers the internal 30 s readiness-poll budget plus the post-ready tail (WatchObj registration, revalidations, leader-job start). **Must be `> 30`** (startup validation error otherwise). **Restart-bound, not hot-reloadable** — `POST /api/v1/reload` re-arms the deadline every iteration but always with the boot-time value; changing it requires a process restart. Sizing rule of thumb: raise it when a single resource kind's count approaches the per-kind workqueue capacity (5000) — a too-small value is a *permanent* restart loop, not a one-off failure, since the pod replays from scratch on every deadline expiry. Worst case, the pre-ready wait before a restart fires is ≈2× the configured value (the same deadline budget also wraps the initial `start_event_watchers` call via a timeout, then re-arms fresh for the tail). See [Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery) for the full mechanism |
 
 ### [conf_center.leader_election] — Kubernetes Mode
 

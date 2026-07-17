@@ -584,19 +584,49 @@ impl EdgionControllerCli {
             None
         };
 
-        // 5. Spawn ConfMgr.start_with_shutdown() in background
-        // Pass the shutdown_handle so ConfMgr uses the same signal source
-        // This avoids duplicate signal handlers and ensures coordinated shutdown
+        // 5. Spawn ConfMgr.start_with_shutdown() in background, wrapped in an
+        // inner task so a lifecycle PANIC is observed as a JoinError — a panic
+        // unwinds past any linear code after the .await and tokio would
+        // otherwise swallow it at the task boundary, reproducing exactly the
+        // "lifecycle-dead-but-process-alive" wedge the deadman exists for.
         let start_conf_mgr = conf_mgr.clone();
         let conf_mgr_shutdown = shutdown_handle.clone();
+        let deadman_shutdown = shutdown_handle.clone();
         tokio::spawn(async move {
-            if let Err(e) = start_conf_mgr.start_with_shutdown(conf_mgr_shutdown).await {
+            let lifecycle = tokio::spawn(async move { start_conf_mgr.start_with_shutdown(conf_mgr_shutdown).await });
+            let outcome = lifecycle.await;
+            match &outcome {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::error!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        event = "conf_mgr_start_error",
+                        error = %e,
+                        "ConfMgr start failed"
+                    );
+                }
+                Err(join_err) => {
+                    tracing::error!(
+                        component = COMPONENT_EDGION_CONTROLLER,
+                        event = "conf_mgr_lifecycle_panic",
+                        error = %join_err,
+                        "ConfMgr lifecycle task panicked"
+                    );
+                }
+            }
+            // Deadman: any end without an orderly shutdown is abnormal. Mark
+            // FIRST (sticky /health 503 backstop), then trigger shutdown so the
+            // lease is released within seconds instead of waiting ~30 s+ for
+            // kubelet's liveness failure threshold.
+            if !deadman_shutdown.is_shutdown() {
+                crate::api::mark_lifecycle_terminated();
                 tracing::error!(
                     component = COMPONENT_EDGION_CONTROLLER,
-                    event = "conf_mgr_start_error",
-                    error = %e,
-                    "ConfMgr start failed"
+                    event = "conf_mgr_lifecycle_terminated",
+                    "Control-plane lifecycle ended without a shutdown request; \
+                     marking deadman and triggering graceful shutdown"
                 );
+                deadman_shutdown.shutdown();
             }
         });
 

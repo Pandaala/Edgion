@@ -27,7 +27,7 @@ data:
       log_prefix: edgion-controller
       log_level: info
       json_format: true
-      console: false
+      console: true
       buffer_size: 10000
 
     conf_center:

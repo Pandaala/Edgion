@@ -37,6 +37,12 @@ pub mod names {
     /// is treated as an InitApply with a warning log. Monitor this in production
     /// to detect watcher stream ordering anomalies.
     pub const UNEXPECTED_APPLY_DURING_INIT_TOTAL: &str = "edgion_controller_unexpected_apply_during_init_total";
+    /// Leader-job worker liveness (1 = running, 0 = stopped or dead;
+    /// label: leader_job = acme | conf_sync_rotation | dns_resolver).
+    /// The label is deliberately NOT `job`: Prometheus reserves `job` as a
+    /// target label and would rename an exported one to `exported_job`,
+    /// breaking any alert written against the documented name.
+    pub const LEADER_JOB_ALIVE: &str = "edgion_controller_leader_job_alive";
 }
 
 /// Global controller metrics singleton
@@ -45,6 +51,19 @@ static CONTROLLER_METRICS: LazyLock<ControllerMetrics> = LazyLock::new(Controlle
 /// Get the global controller metrics instance
 pub fn controller_metrics() -> &'static ControllerMetrics {
     &CONTROLLER_METRICS
+}
+
+/// Gauge handle for one leader job's liveness series.
+///
+/// Write discipline (see the wedge-recovery design spec): 1 is written by the
+/// start path; 0 on orderly stop is written by each service's `stop_*` fn,
+/// gated on a handle actually being taken; 0 on unexpected death is written by
+/// the supervision observer only while holding the service's own lock with the
+/// generation confirmed current. An ungated write can wedge the series for a
+/// live worker (drain-based stops outlive the stop call) or mint a permanent
+/// 0-series for a job that never started.
+pub fn leader_job_gauge(job: &'static str) -> Gauge {
+    gauge!(names::LEADER_JOB_ALIVE, "leader_job" => job)
 }
 
 /// Controller metrics collection

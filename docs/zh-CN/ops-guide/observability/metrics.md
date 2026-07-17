@@ -129,8 +129,32 @@ Controller 在独立的指标监听器（`:12190`，与 Admin 端口 `:12101` �
 | `edgion_controller_status_writes_skipped_total` | Counter | `kind` | 语义差异检查后跳过的状态写入次数 |
 | `edgion_controller_unexpected_apply_during_init_total` | Counter | `kind` | 初始化期间收到的 Apply 事件（应保持为 0；非零表示 watcher 流排序异常） |
 | `edgion_controller_resource_abnormal` | Gauge | `kind`、`namespace`、`name`、`err`、`warn` | 至少有一个失败状态条件的每个资源的一个序列。`err` / `warn` 是触发条件的 JSON 数组；该严重级别无条件时为空字符串 |
+| `edgion_controller_leader_job_alive` | Gauge | `leader_job`（`acme` \| `conf_sync_rotation` \| `dns_resolver`） | Leader-job worker 的存活状态：`1` = 正在运行，`0` = 已停止或死亡。标签刻意使用 `leader_job` 而非 `job`——Prometheus 把 `job` 保留作为 target 标签，在默认 `honor_labels: false` 下会把导出的 `job` 标签重命名为 `exported_job`，从而破坏按文档名称编写的告警 |
 
 `edgion_controller_resource_abnormal` 快照定时重建，默认上限 1000 条，以控制基数。用于对卡在异常状态的资源告警，如 `edgion_controller_resource_abnormal{err!=""}`。
+
+### Leader-job 死亡告警
+
+`edgion_controller_leader_job_alive` 为**每个副本上曾经启动过的每个 leader-job worker**各生成一个序列——
+对于从未在该副本上启动过的 job，序列**不存在**，而不是 `0`（例如 `conf_sync_security.auto_ca` 关闭时，
+该副本上永远不会启动 `conf_sync_rotation` worker，因此完全不会产生 `{leader_job="conf_sync_rotation"}`
+这个序列；序列不存在可以正确抑制告警，而不是对一个本就不该运行的 job 无休止地报警）。
+
+```promql
+edgion_controller_leader_job_alive == 0
+  and on(instance) edgion_controller_leader == 1
+```
+
+告警配置 `for: 2m`——该 Gauge 在 worker 每次正常的 backoff-restart 迭代期间都会短暂降到 `0`，窗口太短会对
+常规重启报警，而不是真正死亡的 worker。`on(instance) edgion_controller_leader == 1` 把告警范围限定在当前
+持有 leadership 的副本上——非 leader 副本上的 `0`（job 从未在那里启动）是预期状态，不应报警。`and` 保留了
+左侧的 `leader_job` 标签，使告警输出能直接指明是哪个 job 死亡。
+
+按设计，**不会自动重启**死亡的 leader-job worker（panic 通常意味着状态已损坏，盲目重启有陷入 panic 循环
+的风险）——恢复方式是告警 + 运维介入（`POST /api/v1/reload` 或重启 Pod）。另外，如果控制面 lifecycle 本身
+异常终止，`/health` 现在会返回 `503`（这是一个 deadman 机制，与本节这个逐 worker 的 Gauge 是不同的信号）——
+完整的 lifecycle 恢复设计参见
+[Supervision & recovery](https://github.com/Pandaala/Edgion/blob/main/skills/01-architecture/01-controller/03-config-center/02-kubernetes/00-lifecycle.md#supervision--recovery)。
 
 ## 联邦指标（Center 和 Controller）
 
