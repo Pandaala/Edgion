@@ -237,6 +237,7 @@ mod tests {
                 real_ip: None,
                 security_protect: None,
                 global_plugins_ref: None,
+                access_log_extern: None,
                 preflight_policy: None,
                 link_sys: None,
                 tcp_timeout: None,

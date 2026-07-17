@@ -29,12 +29,13 @@ struct ValidatedHttpRoute<'a> {
     rules: &'a Vec<edgion_resources::HTTPRouteRule>,
     namespace: String,
     name: String,
-    /// Operator-defined log labels, resolved once per route at build time and
-    /// shared (Arc) into every match-item unit's `MatchInfo`.
-    labels: Option<crate::LogLabels>,
-    /// Opt-in allowlist of `ctx_map` keys to project into the access log,
-    /// resolved once per route and Arc-shared into each match-item unit.
-    log_ctx_keys: crate::ctx::LogCtxKeys,
+    /// Route's raw `metadata.labels`/`metadata.annotations`, resolved once per
+    /// route for `AccessLogExtern`'s `from: routeLabel`/`routeAnnotation`.
+    /// HTTPRoute carries no operator log labels into `MatchInfo.rsc.labels`
+    /// anymore — the `edgion.io/log-label.<suffix>` carrier is narrowed to
+    /// TLS resources (see `extract_log_labels`'s doc).
+    route_labels_meta: crate::ctx::RouteMeta,
+    route_annotations_meta: crate::ctx::RouteMeta,
 }
 
 /// Sentinel hostname used when an HTTPRoute has no spec.hostnames.
@@ -218,12 +219,10 @@ struct RouteUnitCtx<'a> {
     backend_finder: Arc<BackendSelector<CompiledBackend>>,
     /// Per-rule compiled backends (Arc-shared), for by-name lookup.
     backends: Arc<Vec<CompiledBackend>>,
-    /// Operator-defined log labels, resolved once per route, Arc-shared into
-    /// each match-item unit's `MatchInfo`.
-    labels: Option<crate::LogLabels>,
-    /// Opt-in allowlist of `ctx_map` keys to project into the access log,
-    /// resolved once per route, Arc-shared into each match-item unit's `MatchInfo`.
-    log_ctx_keys: crate::ctx::LogCtxKeys,
+    /// Route's raw metadata maps, resolved once per route, Arc-shared into
+    /// each match-item unit's `MatchInfo` for `AccessLogExtern`.
+    route_labels_meta: crate::ctx::RouteMeta,
+    route_annotations_meta: crate::ctx::RouteMeta,
     /// Shared handle to the full route (for metadata-only template access).
     route: Arc<HTTPRoute>,
 }
@@ -261,9 +260,8 @@ fn create_regex_route_unit(ctx: RouteUnitCtx<'_>) -> Result<HttpRouteRuleUnit, S
             ctx.match_id,
             ctx.match_item.clone(),
             ctx.route_sv,
-            ctx.labels.clone(),
         )
-        .with_log_ctx_keys(ctx.log_ctx_keys.clone()),
+        .with_route_meta(ctx.route_labels_meta.clone(), ctx.route_annotations_meta.clone()),
         rule: ctx.rule.clone(),
         route: Some(ctx.route.clone()),
         path_regex: Some(regex),
@@ -305,9 +303,8 @@ fn build_normal_route_unit(ctx: RouteUnitCtx<'_>) -> HttpRouteRuleUnit {
             ctx.match_id,
             ctx.match_item.clone(),
             ctx.route_sv,
-            ctx.labels.clone(),
         )
-        .with_log_ctx_keys(ctx.log_ctx_keys.clone()),
+        .with_route_meta(ctx.route_labels_meta.clone(), ctx.route_annotations_meta.clone()),
         rule: ctx.rule.clone(),
         route: Some(ctx.route.clone()),
         path_regex: None,
@@ -400,8 +397,8 @@ fn append_route_to_hostname(
                     plugin_runtime: rule_rt.plugin_runtime.clone(),
                     backend_finder: backend_finder.clone(),
                     backends: rule_rt.backends.clone(),
-                    labels: validated.labels.clone(),
-                    log_ctx_keys: validated.log_ctx_keys.clone(),
+                    route_labels_meta: validated.route_labels_meta.clone(),
+                    route_annotations_meta: validated.route_annotations_meta.clone(),
                     route: route_arc.clone(),
                 },
             );
@@ -522,15 +519,14 @@ fn validate_http_route(route: &HTTPRoute) -> Option<ValidatedHttpRoute<'_>> {
         }
     };
 
-    let labels = crate::extract_log_labels(&route.metadata);
-    let log_ctx_keys = crate::ctx::extract_log_ctx_keys(&route.metadata);
+    let (route_labels_meta, route_annotations_meta) = crate::ctx::extract_route_meta(&route.metadata);
 
     Some(ValidatedHttpRoute {
         rules,
         namespace: route_namespace,
         name: route_name,
-        labels,
-        log_ctx_keys,
+        route_labels_meta,
+        route_annotations_meta,
     })
 }
 
@@ -846,6 +842,41 @@ mod tests {
         let domain_rules = parse_http_routes_to_domain_rules(&data);
         let paths = domain_unit_paths(&domain_rules, "test.example.com");
         assert_eq!(paths, vec!["/spec-b"], "indices must still apply to spec.rules");
+    }
+
+    #[test]
+    fn http_route_log_label_annotation_does_not_reach_match_info() {
+        // Regression guard: `edgion.io/log-label.<suffix>` was narrowed to
+        // TLS resources only (TLSRoute / EdgionTls); HTTPRoute/GRPCRoute log
+        // projection is now `AccessLogExtern`'s job. An HTTPRoute carrying the
+        // annotation must NOT get it into `MatchInfo.rsc.labels`, or the two
+        // mechanisms double-log the same data.
+        use edgion_resources::constants::annotations::edgion::LOG_LABEL_PREFIX;
+
+        let mut route = build_route_with_two_rules("test-log-label", "labeled");
+        route.metadata.annotations = Some(
+            [(format!("{LOG_LABEL_PREFIX}tenant"), "internal".to_string())]
+                .into_iter()
+                .collect(),
+        );
+        route.pre_parse();
+
+        let mut data = HashMap::new();
+        data.insert("test-log-label/labeled".to_string(), Arc::new(route));
+        let domain_rules = parse_http_routes_to_domain_rules(&data);
+
+        let (normal, regex) = domain_rules.get("test.example.com").expect("domain must be present");
+        let unit = normal
+            .iter()
+            .chain(regex.iter())
+            .next()
+            .expect("at least one unit built");
+        assert!(
+            unit.matched_info.rsc.labels.is_none(),
+            "HTTPRoute's edgion.io/log-label.* annotation must not reach MatchInfo.rsc.labels; \
+             got: {:?}",
+            unit.matched_info.rsc.labels
+        );
     }
 
     #[test]

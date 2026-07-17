@@ -48,6 +48,7 @@ Each access log entry must contain enough information for an operator to locate 
 | `match_info.sv` | sync_version — gRPC sync version, used to correlate control-plane logs (omitted when 0). See [../00-logging-and-tracing-ids.md](../00-logging-and-tracing-ids.md) |
 | stage_logs | Per-phase plugin logs (see PluginLog below) |
 | upstreams | Upstream connection details (ip, port, ct/ht/bt/et); per-attempt retry reason in `err`: etype strings / `RetryOnStatus` / `ConnectionReuseRetry`. Client-disconnect waste is marked request-level via `errors: ["ClientClosed"]` |
+| `ext` | Operator-declared fields from `AccessLogExtern` (see below); omitted when nothing was collected |
 
 ### When to add a new field
 
@@ -64,36 +65,144 @@ Each access log entry must contain enough information for an operator to locate 
 - Putting the full request body into the access log
 - Expanding every header into the access log
 
-### Context variables (`ctx_map`) in the access log — opt-in only
+### Extending the access log: `AccessLogExtern`
 
-Plugin-set context variables (`CtxSet`, DSL `ctx.set`, `KeySet { Ctx }`, the
-webhook KeyGet result, …) are **not** logged by default. To project specific
-ctx vars into the access log, allow-list their keys on the HTTPRoute / GRPCRoute.
-Two equivalent carriers exist (they union):
+`AccessLogExtern` is the single mechanism for projecting request/response
+data, route metadata, or plugin-derived ctx vars into the access log. It
+superseded the `edgion.io/log-label.<suffix>` prefix on HTTP/gRPC routes, a
+unified JSON-array annotation, and a comma-separated ctx-key shorthand
+annotation — all deleted — and fixed the undocumented "CtxSet writes
+`ctx_map`, an annotation allowlist projects it" two-resource coupling. Full
+design: `docs/superpowers/specs/2026-07-16-access-log-extern-plugin-design.md`.
+
+**It is a declaration, not a plugin — it never executes in any stage.** It
+lives at `EdgionPlugins.spec.accessLogExtern`, a dedicated array sibling to
+`requestPlugins` (**not** one of the four stage arrays), and is read only when
+the access log entry is serialized in `logging()`. This is load-bearing: a
+`run_request` filter would never see 404 / 421 / the 400 family / ACME / gRPC
+`UNIMPLEMENTED` (they short-circuit before any plugin runs), and would race
+route-stage producers like `CtxSet` if attached globally. Resolving at
+`logging()` fixes both at once.
 
 ```yaml
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
 metadata:
-  annotations:
-    # Shorthand: comma-separated ctx-var names.
-    edgion.io/log-ctx-keys: "tenant_id,tier"
-    # Unified carrier: JSON array, also covers label/annotation projection.
-    edgion.io/log-keys: '[{"key":"tenant_id","type":"ctx"},{"key":"tier","type":"ctx"}]'
+  name: audit-fields
+spec:
+  accessLogExtern:
+    - key: tenant       # field name inside the entry's `ext` block
+      from: ctx          # source type
+      name: tenant_id    # key within the source
+    - key: ua
+      from: header
+      name: user-agent
 ```
 
-The unified `edgion.io/log-keys` carrier additionally supports projecting the
-value of an existing `metadata.labels` / `metadata.annotations` key into
-`rsc.labels` via `type: label` / `type: annotation` (a more flexible alternative
-to the `edgion.io/log-label.<suffix>` prefix, which gives the value inline). All
-three carriers merge; malformed `log-keys` entries are skipped individually.
+Each entry declares **exactly one field with exactly one source** — template
+composition (`a|b|c` in one field) is deliberately unsupported, because a
+composed string loses the provenance per-key masking needs. Compose in
+`CtxSet` and log the resulting ctx var with `from: ctx` instead.
 
-Only the named keys are flattened into the entry (e.g. `"tenant_id":"acme"`).
-This is deny-by-default: with no annotation, no ctx var is logged. Resolution
-happens once at route build time (`resolve_log_ctx_keys`); the per-request log
-path only filters by the resolved set. Known-sensitive keys
-(`ACCESS_LOG_BLOCKED_CTX_KEYS`: `jwt_claims` / `oidc_claims` / `jwe_payload`)
-are dropped even if explicitly allow-listed — defense-in-depth so claims /
-decrypted payloads can never reach the log. Implementation: `AllowlistedCtx` in
-`edgion-gateway/src/observe/access_log/entry.rs`.
+`from` is one of:
+
+| `from` | Reads | Masking |
+|---|---|---|
+| `routeLabel` | Matched HTTPRoute/GRPCRoute `metadata.labels[name]` | Never masked |
+| `routeAnnotation` | Matched HTTPRoute/GRPCRoute `metadata.annotations[name]` | Never masked |
+| `header` | Request header (first value wins; non-UTF-8 is absent) | Masked unless whitelisted |
+| `query` | The **entry-time raw query**, frozen at request entry — not the post-rewrite URI | Masked unless whitelisted |
+| `cookie` | Request cookie (response `set-cookie` is unreachable — hard-blocklisted) | Masked unless whitelisted |
+| `respHeader` | Written response header; absent when upstream never responded | Masked unless whitelisted |
+| `ctx` | `ctx.ctx_map`, unconditionally after every producer at every stage | Masked unless whitelisted |
+
+`routeLabel`/`routeAnnotation` are never masked because the value is
+operator-authored route configuration, not request data — but `routeAnnotation`
+additionally hard-blocks any `name` under the `kubectl.kubernetes.io/`
+or `edgion.io/` prefixes (reported at ingest, dropped at load — see below),
+because a route author is a tenant who did not write those keys
+(`last-applied-configuration` holds the whole route spec JSON; `edgion.io/*`
+holds plugin wiring).
+
+**Hard blocklist** (reported on `Accepted=False` at ingest, dropped at load,
+un-whitelistable, requires a code change to alter): `header`/`respHeader` —
+`authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`,
+`api-key`, `apikey`, `x-auth-token`, `authentication`,
+`x-amz-security-token`, `www-authenticate`, `proxy-authenticate`; `ctx` —
+`jwt_claims`, `oidc_claims`, `jwe_payload` (`ACCESS_LOG_BLOCKED_CTX_KEYS`, the
+same list as the old mechanism — but the *enforcement point* moved: the
+controller's `preparse` only reports `Accepted=False` (lenient admission, the
+resource is still cached and synced), so the actual drop now happens in
+`compile_plugins`, which `retain()`s out any field `validation_error()`
+rejects before the compiled spec is stored). A whitelist **miss** still emits
+the key, masked — absence from `ext` means only "the source had no value",
+never "was blocked".
+
+**Output** lands in a nested `ext` block, one level deep, values always
+strings:
+
+```json
+{"ts":1752633600000,"request_info":{"path":"/api/users"},"ext":{"tenant":"acme","ua":"***"}}
+```
+
+`ext` is omitted entirely when nothing was collected. This removes the old
+duplicate-key hazard (`ctx_map` used to flatten at the entry's top level);
+nesting means an `ext` key can never collide with a built-in field.
+
+**Three attachment tiers**, later overwriting earlier on key collision
+(**global → Gateway → route**):
+
+| Tier | Carrier |
+|---|---|
+| GatewayClass-global | `EdgionGatewayConfig.spec.globalPluginsRef` |
+| Gateway | `edgion.io/edgion-plugins` annotation on the Gateway |
+| Route | HTTPRoute / GRPCRoute `ExtensionRef` filter |
+
+**Two things to know before you configure this — both are easy to learn the
+hard way**:
+
+1. **`access_log_sensitive.mode` now defaults to `replace`.** `ext` rendering
+   reuses the same global switch as the nine built-in masked fields (`path`,
+   `client-addr`, `remote-addr`, `x-forwarded-for`, `sni`, `request_uri`, and
+   the client-cert fields), 46 `sensitive()` plugin-log sites, DSL
+   `log_warn`/`log_error` args, and ssl.log cert fields. All of it renders
+   `***` out of the box now, not just `ext`.
+2. **There is no configuration giving readable `path` + masked `ext` cookie.**
+   `off` makes the EGC whitelist inert (everything clear); `wrap` puts the raw
+   value in the log file, tagged `<E>value</E>` for the downstream pipeline to
+   drop — the gateway's local file/stdout still has it in clear. This is a
+   deliberate design trade (one uniform switch, not per-category rendering
+   policy), not an oversight.
+
+**Naming convention for global fields.** Because collision resolves
+route-beats-Gateway-beats-global with no enforcement, a route can silently
+shadow a global audit field and the log gives no sign it happened. Prefix
+global-tier keys distinctively (e.g. `gw_tenant`) so a shadowed field is at
+least visually distinguishable from an unshadowed one. This is a documented
+risk, not something the controller defends against — enforcing it would need
+a reverse dependency from global config to every route.
+
+**Accepted limitations (not bugs, do not "fix" these):**
+
+- **The Gateway tier (Tier 2) is empty on pre-routing short-circuits** — 404,
+  421, the 400 family, ACME, gRPC `UNIMPLEMENTED`. `ctx.gateway_info` is
+  *produced by* route matching, so on a 404 no Gateway is attributable at all.
+  Put audit fields that must appear on every path — including 404 — on
+  **Tier 1** (`globalPluginsRef`), which resolves from the proxy service and
+  is present unconditionally.
+- **`redirect_http` listeners never emit `ext`.** It is a separate `ProxyHttp`
+  impl with its own `RedirectLogEntry` schema, which has no `ext` field at all.
+- **Two other call sites emit no `ext`, both correctly:**
+  `pg_connected_to_upstream.rs` writes a *second* access-log line for
+  grpc-web/websocket at connection establishment (the request's final
+  `logging()` line still carries `ext`); and `DebugAccessLogToHeader` echoes
+  the entry JSON into the `X-Debug-Access-Log` **response header** — `ext`
+  staying absent there is desirable, since populating it would ship
+  operator-declared values back to the client.
+
+**EGC masking whitelist** — `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys`,
+keyed by source type (`header`/`respHeader`/`query`/`cookie`/`ctx`). Full
+schema in [`../../02-features/02-config/02-edgion-gateway-config.md`](../../02-features/02-config/02-edgion-gateway-config.md).
 
 ---
 

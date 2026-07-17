@@ -22,9 +22,12 @@
 //! `validation_error()`, alias validation, and wrong-stage placement — is
 //! reproduced with the same message text and ordering as `compile_plugins`.
 
+use std::collections::BTreeSet;
+
 use super::conditions::PluginConditions;
 use super::edgion_plugin::EdgionPlugin;
 use super::EdgionPlugins;
+use crate::resources::common::log_labels::LOG_LABEL_MAX_COUNT;
 
 /// Per-variant stage applicability, mirroring the four
 /// `PluginRuntime::create_*_from_edgion` matches in `edgion-gateway`. The
@@ -218,6 +221,30 @@ impl EdgionPlugins {
                 errors.push(format!(
                     "requestPlugins: at most one TraceContext plugin is allowed, found {count}"
                 ));
+            }
+        }
+
+        // Pass 3: access log extension declarations. Not a stage — no
+        // `applicable_stages` check applies. Per-entry config validity, plus a
+        // resource-level uniqueness and count cap: a duplicate `key` would
+        // silently last-win on YAML order, and an over-cap list would be
+        // silently truncated on the data path.
+        if let Some(fields) = &self.spec.access_log_extern {
+            if fields.len() > LOG_LABEL_MAX_COUNT {
+                errors.push(format!(
+                    "accessLogExtern: at most {LOG_LABEL_MAX_COUNT} fields per resource (got {})",
+                    fields.len()
+                ));
+            }
+            let mut seen: BTreeSet<&str> = BTreeSet::new();
+            for (i, field) in fields.iter().enumerate() {
+                if let Some(err) = field.validation_error() {
+                    errors.push(format!("accessLogExtern[{i}]: {err}"));
+                    continue;
+                }
+                if !seen.insert(field.key.as_str()) {
+                    errors.push(format!("accessLogExtern[{i}]: duplicate key '{}'", field.key));
+                }
             }
         }
 

@@ -15,7 +15,7 @@ use edgion_resources::{EdgionStatus, HTTPBackendRef, HTTPRouteMatch};
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::fmt;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -62,29 +62,38 @@ impl<'de> Deserialize<'de> for LogLabels {
 ///
 /// Thin gateway-side wrapper over
 /// [`edgion_resources::resources::common::resolve_log_labels`] (the single
-/// implementation of the prefix scan + guardrails). Call this at route
-/// conf-handler build time (HTTP/gRPC/TLSRoute); resources that cache the
-/// resolved map in `pre_parse` (e.g. EdgionTls) should instead wrap the cached
-/// `Arc` via [`LogLabels::from_resolved`] to avoid re-scanning.
+/// implementation of the prefix scan + guardrails). Called from TLSRoute
+/// build only (`routes::tls::route_unit`) — the `edgion.io/log-label.<suffix>`
+/// carrier is narrowed to TLS resources, whose handshake layer has no plugin
+/// chain and no `logging()` stage to hook an `AccessLogExtern` declaration
+/// onto. HTTPRoute/GRPCRoute build no longer calls this: their log projection
+/// goes through `AccessLogExtern`'s `from: routeLabel` / `from:
+/// routeAnnotation` instead. EdgionTls caches its resolved map in
+/// `pre_parse`, so it wraps the cached `Arc` via [`LogLabels::from_resolved`]
+/// rather than calling this function.
 pub fn extract_log_labels(meta: &kube::api::ObjectMeta) -> Option<LogLabels> {
     edgion_resources::resources::common::resolve_log_labels(meta).map(LogLabels)
 }
 
-/// Opt-in allowlist of plugin-set `ctx_map` keys to project into the access log
-/// for a route. Resolved once at route conf-handler build time from the
-/// `edgion.io/log-ctx-keys` annotation and shared (`Arc`) onto each match-item
-/// unit's `MatchInfo`. `None` means no context variable is logged for the route
-/// (default-off). The deny-by-default model replaces the former "flatten every
-/// `ctx_map` entry minus a blocklist" behavior; known-sensitive keys remain
-/// hard-blocked at log time as defense-in-depth (see the access-log `entry`).
-pub type LogCtxKeys = Option<Arc<BTreeSet<String>>>;
+/// A route's raw `metadata.labels` or `metadata.annotations`, resolved once at
+/// route build and `Arc`-shared onto every match unit.
+///
+/// Distinct from [`LogLabels`], which is the *projected* log-label set. This is
+/// the raw metadata, needed to answer `AccessLogExtern`'s `from: routeLabel` /
+/// `from: routeAnnotation` lookups without touching `ObjectMeta` per request.
+pub type RouteMeta = Option<Arc<BTreeMap<String, String>>>;
 
-/// Thin gateway-side wrapper over
-/// [`edgion_resources::resources::common::resolve_log_ctx_keys`] (the single
-/// implementation of the annotation parse + guardrails). Call at route
-/// conf-handler build time (HTTP/gRPC).
-pub fn extract_log_ctx_keys(meta: &kube::api::ObjectMeta) -> LogCtxKeys {
-    edgion_resources::resources::common::resolve_log_ctx_keys(meta)
+/// Clone a route's labels and annotations into `Arc`s at build time.
+/// Returns `(labels, annotations)`; `None` when the map is absent or empty, so
+/// the common case stores nothing.
+pub fn extract_route_meta(meta: &kube::api::ObjectMeta) -> (RouteMeta, RouteMeta) {
+    let take = |m: Option<&BTreeMap<String, String>>| -> RouteMeta {
+        match m {
+            Some(map) if !map.is_empty() => Some(Arc::new(map.clone())),
+            _ => None,
+        }
+    };
+    (take(meta.labels.as_ref()), take(meta.annotations.as_ref()))
 }
 
 /// Unified resource identifier for access log.
@@ -139,11 +148,14 @@ pub struct MatchInfo {
     #[serde(skip)]
     pub m: HTTPRouteMatch,
 
-    /// Opt-in allowlist of `ctx_map` keys to project into the access log for
-    /// this route (`edgion.io/log-ctx-keys`). In-process only — never part of
-    /// the serialized log entry.
+    /// Raw route labels for `AccessLogExtern` `from: routeLabel`. In-process
+    /// only — never part of the serialized entry; only declared keys reach `ext`.
     #[serde(skip)]
-    pub log_ctx_keys: LogCtxKeys,
+    pub labels_meta: RouteMeta,
+
+    /// Raw route annotations for `AccessLogExtern` `from: routeAnnotation`.
+    #[serde(skip)]
+    pub annotations_meta: RouteMeta,
 }
 
 pub fn is_zero(v: &u64) -> bool {
@@ -151,33 +163,32 @@ pub fn is_zero(v: &u64) -> bool {
 }
 
 impl MatchInfo {
-    pub fn new(
-        ns: String,
-        name: String,
-        rule_id: usize,
-        match_id: usize,
-        m: HTTPRouteMatch,
-        sv: u64,
-        labels: Option<LogLabels>,
-    ) -> Self {
+    /// HTTPRoute no longer carries operator log labels (see
+    /// [`extract_log_labels`]'s doc) — `rsc.labels` is always `None` here.
+    /// `AccessLogExtern`'s `from: routeLabel` / `from: routeAnnotation` reads
+    /// `labels_meta` / `annotations_meta` instead (attached via
+    /// [`MatchInfo::with_route_meta`]).
+    pub fn new(ns: String, name: String, rule_id: usize, match_id: usize, m: HTTPRouteMatch, sv: u64) -> Self {
         Self {
             rsc: Rsc {
                 kind: "HTTPRoute".to_string(),
                 ns,
                 name,
-                labels,
+                labels: None,
             },
             m,
             rule_id,
             match_id,
             sv,
-            log_ctx_keys: None,
+            labels_meta: None,
+            annotations_meta: None,
         }
     }
 
-    /// Attach the resolved ctx-key allowlist, consuming and returning `self`.
-    pub fn with_log_ctx_keys(mut self, keys: LogCtxKeys) -> Self {
-        self.log_ctx_keys = keys;
+    /// Attach the route's raw metadata maps, resolved once at route build.
+    pub fn with_route_meta(mut self, labels: RouteMeta, annotations: RouteMeta) -> Self {
+        self.labels_meta = labels;
+        self.annotations_meta = annotations;
         self
     }
 }
@@ -1443,6 +1454,50 @@ mod log_label_tests {
     #[test]
     fn labels_field_omitted_when_absent() {
         assert_eq!(json_of(&None), r#"{"kind":"HTTPRoute","ns":"ns","name":"name"}"#);
+    }
+}
+
+#[cfg(test)]
+mod route_meta_tests {
+    use super::*;
+
+    #[test]
+    fn route_meta_is_resolved_once_and_shared() {
+        use std::collections::BTreeMap;
+
+        let meta = kube::api::ObjectMeta {
+            labels: Some(BTreeMap::from([("app".to_string(), "web".to_string())])),
+            annotations: Some(BTreeMap::from([("owner".to_string(), "platform".to_string())])),
+            ..Default::default()
+        };
+
+        let (labels, annotations) = extract_route_meta(&meta);
+        assert_eq!(labels.as_ref().unwrap().get("app").unwrap(), "web");
+        assert_eq!(annotations.as_ref().unwrap().get("owner").unwrap(), "platform");
+    }
+
+    #[test]
+    fn route_meta_is_none_when_absent() {
+        let (labels, annotations) = extract_route_meta(&kube::api::ObjectMeta::default());
+        assert!(labels.is_none());
+        assert!(annotations.is_none());
+    }
+
+    #[test]
+    fn route_meta_is_not_serialized_into_the_log_entry() {
+        // The maps exist to answer `from: routeLabel` lookups. They must never
+        // leak into `match_info` wholesale — only declared keys reach `ext`.
+        // `HTTPRouteMatch` has no `Default` impl, so build it explicitly with
+        // every field empty/None (all optional matchers).
+        let match_item = HTTPRouteMatch {
+            path: None,
+            headers: None,
+            query_params: None,
+            method: None,
+        };
+        let info = MatchInfo::new("default".to_string(), "r".to_string(), 0, 0, match_item, 0);
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(!json.contains("annotations"), "got: {json}");
     }
 }
 

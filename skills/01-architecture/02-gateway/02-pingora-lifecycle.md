@@ -232,11 +232,11 @@ pub struct AccessLogEntry<'a> {
     pub backend_context: Option<&'a BackendContext>, // borrowed (includes upstreams list)
     pub stage_logs: &'a [StageLogs],          // borrowed
     pub conn_est: Option<bool>,               // WebSocket/gRPC-Web connection-established marker
-    pub ctx: AllowlistedCtx<'a>,              // ctx_map projection (deny-by-default opt-in allowlist)
+    pub ext: LogExt,                          // AccessLogExtern-declared fields
 }
 ```
 
-`ctx` is a deny-by-default projection of the plugin `ctx_map`: a ctx var reaches the log only when allow-listed on the matched route (`edgion.io/log-ctx-keys` / `edgion.io/log-keys` `type: ctx`), and known-sensitive keys stay hard-blocked.
+`ext` is populated at serialization time (inside `logging()`, not by any request-stage filter) by resolving up to three tiers of `AccessLogExtern` declarations (`EdgionGatewayConfig.spec.globalPluginsRef` → Gateway `edgion.io/edgion-plugins` → route `ExtensionRef`) against the live plugin store; a `ctx` field within it is masked unless whitelisted in `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys`, and known-sensitive ctx keys (`jwt_claims`/`oidc_claims`/`jwe_payload`) stay hard-blocked: naming one is reported on the `EdgionPlugins` resource's `Accepted=False` status condition at ingest, and the gateway separately drops the field when it loads the resource. See `skills/03-coding/observability/00-access-log.md`.
 
 It is serialized to a JSON string directly via `serde_json`'s `to_string()`, producing the output in a single allocation. The `#[serde(skip_serializing_if)]` annotation omits empty fields to reduce log volume.
 

@@ -1,3 +1,4 @@
+pub mod access_log_extern;
 pub mod all_endpoint_status;
 mod bandwidth_limit;
 mod basic_auth;
@@ -38,6 +39,7 @@ mod trace_context;
 mod wasm;
 mod wasm_oci;
 
+pub use access_log_extern::{is_blocked, AccessLogExternField, LogExtSource, ACCESS_LOG_BLOCKED_CTX_KEYS};
 pub use all_endpoint_status::AllEndpointStatusConfig;
 pub use bandwidth_limit::BandwidthLimitConfig;
 pub use basic_auth::{BasicAuthConfig, BasicAuthSecretGroup, ResolvedBasicAuthUser};

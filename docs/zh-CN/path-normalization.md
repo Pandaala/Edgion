@@ -61,6 +61,8 @@ access_log_options:
 
 启用后 access log JSON 多一个字段 `request_uri`，值为客户端入口完整 raw URI（raw path + raw query）。详见 [Access Log](ops-guide/observability/access-log.md)。
 
+**注意**：`access_log_sensitive.mode` 默认值为 `replace`，因此 `request_uri` 与 `path` 一样，在未修改该模式的情况下会渲染为 `***`。仅开启 `include_raw_uri` 不再能得到可读的原始入口视图；详见 [access_log_sensitive](ops-guide/configuration/gateway-config.md#access_log_sensitive)。
+
 ---
 
 ## 安全承诺范围
@@ -159,12 +161,24 @@ path normalization 会剥除每个 segment 中的 `;param=...`（防 `..;/` 类�
 
 ### 审计日志记录客户端原始 URI
 
+先用 `CtxSet` 计算出该值，再用 `AccessLogExtern from: ctx` 声明记录这个 ctx 变量——`AccessLogExtern` 是唯一能把 ctx 变量投影进 access log 的载体；仅靠 `CtxSet` 并不会使其出现在日志中。详见 [Access Log — 扩展日志：AccessLogExtern](ops-guide/observability/access-log.md#扩展日志accesslogextern)。
+
 ```yaml
 - type: CtxSet
   config:
     rules:
       - name: entry_uri
         template: "${requestUri}"  # 客户端入口 raw URI，冻结
+---
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
+metadata:
+  name: audit-fields
+spec:
+  accessLogExtern:
+    - key: entry_uri
+      from: ctx
+      name: entry_uri
 ```
 
 ---

@@ -75,6 +75,14 @@ spec:
     - name: "global-cors"
       namespace: "edgion-system"
 
+  accessLogExtern:
+    unmaskedKeys:
+      header: [user-agent, origin, content-type, content-length, accept, x-request-id]
+      respHeader: [content-type, content-length, cache-control, retry-after, x-request-id]
+      query: []
+      cookie: []
+      ctx: []
+
   preflightPolicy:
     mode: "cors-standard"
     statusCode: 204
@@ -171,6 +179,32 @@ globalPluginsRef:
   - name: "global-cors"       # EdgionPlugins 资源名称
     namespace: "edgion-system" # 默认 "default"
 ```
+
+### spec.accessLogExtern
+
+[`AccessLogExtern`](../observability/access-log.md#扩展日志accesslogextern) 声明字段的脱敏白名单。平台方所有——是 Cluster 作用域，与 `globalPluginsRef` 同级——因此某个 namespace 下自己的 `EdgionPlugins` 无法为整个集群放宽脱敏。
+
+```yaml
+accessLogExtern:
+  unmaskedKeys:
+    header:     [user-agent, origin, content-type, content-length, accept, x-request-id]
+    respHeader: [content-type, content-length, cache-control, retry-after, x-request-id]
+    query:      []
+    cookie:     []
+    ctx:        []
+```
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `unmaskedKeys.header` | `[]String` | `[user-agent, origin, content-type, content-length, accept, x-request-id]` | 明文记录的请求头名称（大小写不敏感） |
+| `unmaskedKeys.respHeader` | `[]String` | `[content-type, content-length, cache-control, retry-after, x-request-id]` | 明文记录的响应头名称（大小写不敏感） |
+| `unmaskedKeys.query` | `[]String` | `[]` | 明文记录的 query 参数名（大小写敏感） |
+| `unmaskedKeys.cookie` | `[]String` | `[]` | 明文记录的 cookie 名（大小写敏感） |
+| `unmaskedKeys.ctx` | `[]String` | `[]` | 明文记录的 ctx 变量名（大小写敏感） |
+
+白名单按来源类型分开维护，而非一张扁平列表——名为 `user-agent` 的请求头是无害的，但同名的 cookie 是完全不同的对象。`query`/`cookie`/`ctx` 默认为空，因为它们的 key 名称完全由业务决定，不存在放之四海皆安全的默认名。未命中白名单的字段仍会输出，只是被脱敏，而非直接丢弃。`routeLabel`/`routeAnnotation` 来源永远不脱敏，完全绕过该白名单。凭证类请求头、claim/payload 类 ctx key 等硬黑名单在 `EdgionPlugins` 准入阶段就被拒绝，不受此白名单配置影响。
+
+**生效范围实际是按监听器而非按 Gateway**：当两个不同 GatewayClass 的 Gateway 共享同一个监听地址/端口时，只有第一个 Gateway 的 `EdgionGatewayConfig`（包括这份白名单）会绑定到该监听器。
 
 ### spec.preflightPolicy
 

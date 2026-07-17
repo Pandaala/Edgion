@@ -125,15 +125,23 @@ pub struct GrpcMatchInfo {
     #[serde(skip)]
     #[schemars(skip)]
     pub compiled_method_regex: Option<Regex>,
-    /// Opt-in allowlist of `ctx_map` keys to project into the access log for
-    /// this route (`edgion.io/log-ctx-keys`). In-process only.
+    /// Raw route labels for `AccessLogExtern` `from: routeLabel`. In-process
+    /// only — never part of the serialized entry; only declared keys reach `ext`.
     #[serde(skip)]
     #[schemars(skip)]
-    pub log_ctx_keys: crate::ctx::LogCtxKeys,
+    pub labels_meta: crate::ctx::RouteMeta,
+    /// Raw route annotations for `AccessLogExtern` `from: routeAnnotation`.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub annotations_meta: crate::ctx::RouteMeta,
 }
 
 impl GrpcMatchInfo {
-    #[allow(clippy::too_many_arguments)] // mirrors the resource fields needed to build a gRPC match unit
+    /// GRPCRoute no longer carries operator log labels (see
+    /// `crate::extract_log_labels`'s doc) — `rsc.labels` is always `None`
+    /// here. `AccessLogExtern`'s `from: routeLabel` / `from: routeAnnotation`
+    /// reads `labels_meta` / `annotations_meta` instead (attached via
+    /// [`GrpcMatchInfo::with_route_meta`]).
     pub fn new(
         route_ns: String,
         route_name: String,
@@ -142,7 +150,6 @@ impl GrpcMatchInfo {
         matched: GRPCRouteMatch,
         sv: u64,
         rule_name: Option<String>,
-        labels: Option<crate::LogLabels>,
     ) -> Self {
         // Pre-compile regex patterns for header matching
         let compiled_header_regexes = if let Some(ref headers) = matched.headers {
@@ -212,7 +219,7 @@ impl GrpcMatchInfo {
                 kind: "GRPCRoute".to_string(),
                 ns: route_ns,
                 name: route_name,
-                labels,
+                labels: None,
             },
             rule_id,
             rule_name,
@@ -222,13 +229,15 @@ impl GrpcMatchInfo {
             compiled_header_regexes,
             compiled_service_regex,
             compiled_method_regex,
-            log_ctx_keys: None,
+            labels_meta: None,
+            annotations_meta: None,
         }
     }
 
-    /// Attach the resolved ctx-key allowlist, consuming and returning `self`.
-    pub fn with_log_ctx_keys(mut self, keys: crate::ctx::LogCtxKeys) -> Self {
-        self.log_ctx_keys = keys;
+    /// Attach the route's raw metadata maps, resolved once at route build.
+    pub fn with_route_meta(mut self, labels: crate::ctx::RouteMeta, annotations: crate::ctx::RouteMeta) -> Self {
+        self.labels_meta = labels;
+        self.annotations_meta = annotations;
         self
     }
 }

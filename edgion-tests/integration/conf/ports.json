@@ -97,6 +97,9 @@
     "EdgionPlugins": {
       "http": 31180
     },
+    "EdgionPlugins/AccessLogExtern": {
+      "http": 31395
+    },
     "EdgionTls/https": {
       "https": 31190
     },

@@ -69,6 +69,13 @@ metadata:
   name: wh18-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh18_body_user
+      from: ctx
+      name: wh18_body_user
+    - key: wh18_ct
+      from: ctx
+      name: wh18_ct
   requestPlugins:
     - enable: true
       type: CtxSet
@@ -101,8 +108,6 @@ kind: HTTPRoute
 metadata:
   name: wh18-route
   namespace: edgion-default
-  annotations:
-    edgion.io/log-ctx-keys: "wh18_body_user,wh18_ct"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

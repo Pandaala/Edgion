@@ -16,7 +16,7 @@ pub use external_http::{
     PassiveHealthCheck, ResolvedSecrets, TargetKind, WebhookHealthCheck, WebhookRateLimit, WebhookRetry,
     WebhookServiceRef, WebhookTarget,
 };
-pub use log_labels::{resolve_log_ctx_keys, resolve_log_labels};
+pub use log_labels::resolve_log_labels;
 pub use outbound_request::{
     CustomField, CustomSource, ListFields, MethodSpec, OriginField, OutboundRequestSpec, PathSpec, PresencePolicy,
 };

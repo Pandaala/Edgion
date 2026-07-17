@@ -172,10 +172,10 @@ metrics:
       protocol: true
       status: true
 
-# ─── Log redaction (off by default) ───
+# ─── Log redaction (replace by default) ───
 
 access_log_sensitive:
-  mode: off                        # off | replace | wrap
+  mode: replace                    # off | replace | wrap
   # replace_with: "***"            # Replacement string when mode=replace
   # wrap_prefix: "<E>"             # Prefix when mode=wrap
   # wrap_suffix: "</E>"            # Suffix when mode=wrap
@@ -398,11 +398,11 @@ LogConfig:
 
 ### access_log_sensitive
 
-Controls the redaction behavior of fields marked as sensitive in access log, ssl.log, and plugin log. **`mode=off` by default**: all sensitive values are emitted in plaintext (preserving historical behavior).
+Controls the redaction behavior of fields marked as sensitive in access log, ssl.log, and plugin log. **`mode=replace` by default** (flipped from `off` — see rationale below): sensitive values render `***` out of the box.
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `mode` | `Enum` | `"off"` | `"off"` / `"replace"` / `"wrap"` |
+| `mode` | `Enum` | `"replace"` | `"off"` / `"replace"` / `"wrap"` |
 | `replace_with` | `String` | `"***"` | When `mode=replace`, replace the entire sensitive value |
 | `wrap_prefix` | `String` | `"<E>"` | Prefix appended when `mode=wrap` |
 | `wrap_suffix` | `String` | `"</E>"` | Suffix appended when `mode=wrap` |
@@ -415,16 +415,20 @@ Controls the redaction behavior of fields marked as sensitive in access log, ssl
 | `replace` | `"***"` |
 | `wrap` | `"<E>1.2.3.4</E>"` |
 
-**Scope**:
-- Access log fields: `client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` / client certificate `subject` / `sans` / `cn`.
-- Plugin log: parameters annotated via `sensitive(...)`; user parameters of DSL `log_warn` / `log_error`.
+**Scope** — larger than the field list on this page alone; do not assume it stops at the built-ins:
+- Access log fields: `client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` / `request_uri` / client certificate `subject` / `sans` / `cn`.
+- `ext` fields declared via `AccessLogExtern` (`EdgionPlugins.spec.accessLogExtern`) render under this same switch: `routeLabel`/`routeAnnotation` sources are always clear, everything else follows `mode` unless whitelisted in `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys` (a whitelist **miss** still emits the key, rendered per `mode` — it does not drop the field). See [`../../03-coding/observability/00-access-log.md`](../../03-coding/observability/00-access-log.md).
+- Plugin log: 46 `sensitive()`-marked parameter sites across 13 plugins (real_ip's IP, basic/key/ldap/jwt/hmac usernames, direct_endpoint's address, region_route's keys/regions/hosts, proxy_rewrite's method); user parameters of DSL `log_warn` / `log_error`.
 - ssl.log: client certificate fields in mTLS allowlist validation failure errors.
+
+**Why the default flipped to `replace`.** Because `ext` rendering follows this same switch, `mode=replace` by default is the only thing making `AccessLogExtern` "masked by default" true. **There is no configuration that gives readable `path` + masked `ext` cookie**: `off` makes the whitelist inert (everything clear, including `ext`); `wrap` puts the raw value into the local log file/stdout (tagged `<E>...</E>` so a downstream ES/ClickHouse pipeline can drop it, but the gateway's own file already has it in clear). This is a deliberate one-switch design, not an oversight — pick one of the two trade-offs. Note the interaction with `access_log_options.include_raw_uri`: under the `replace` default, `request_uri` itself renders `***`, so enabling that toggle alone no longer yields a readable raw-entry view.
 
 **Implementation details**:
 - A global `AtomicU8` controls the mode, written once by `init_sensitive` at startup; immutable at runtime.
-- When `off` (the default), there is only a single atomic load overhead, effectively zero cost.
+- When `off`, there is only a single atomic load overhead, effectively zero cost. This is no longer the default.
 - Wrap mode uses a thread-local buffer with no heap allocation.
 - For custom wrap prefixes/suffixes, the total length should not exceed 36 bytes; otherwise it reduces the per-entry writable length of the plugin log.
+- Integration test fixtures set `access_log_sensitive.mode: off` explicitly in the baseline so assertions on `path` / `stage_logs` content stay readable; production defaults to `replace`.
 
 ### require_fips
 

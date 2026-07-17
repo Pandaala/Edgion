@@ -1,0 +1,12 @@
+# value_truncated_at_cap: a 400-byte header value must be truncated to
+# LOG_LABEL_MAX_VALUE_LEN (256 bytes) in `ext` — see LogExt::insert.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-truncate
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: big_field
+      from: header
+      name: x-big-header

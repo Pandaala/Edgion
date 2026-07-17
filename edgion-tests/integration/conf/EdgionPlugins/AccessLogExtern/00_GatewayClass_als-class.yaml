@@ -1,0 +1,16 @@
+# Dedicated GatewayClass for this suite so its Gateway (als-gateway) binds to
+# the private als-egc EdgionGatewayConfig, instead of the shared
+# "public-gateway" GatewayClass (which points at the shared, cluster-scoped
+# base EdgionGatewayConfig also used by other suites — see
+# 00_EdgionGatewayConfig_als-egc.yaml for why this suite does not overlay it).
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: als-class
+spec:
+  controllerName: edgion.io/gateway-controller
+  description: "AccessLogExtern suite gateway (private EdgionGatewayConfig)"
+  parametersRef:
+    group: edgion.io
+    kind: EdgionGatewayConfig
+    name: als-egc

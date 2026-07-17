@@ -32,13 +32,18 @@ description: Edgion annotations overview: a quick lookup for all edgion.io/* ann
 | Annotation | Value | Description |
 |------------|-------|-------------|
 | `edgion.io/hostname-resolution` | — | System-managed (do not set manually) |
-| `edgion.io/log-label.<key>` | string | Adds `<key>=<value>` to `rsc.labels`; label/annotation projection also applies to TLSRoute and EdgionTls. |
-| `edgion.io/log-ctx-keys` | comma-separated list | Opt-in allowlist of plugin-set ctx-var (`ctx_map`) keys to project into the access log. Context variables are **not** logged by default; only keys named here are emitted (known-sensitive keys like claims stay hard-blocked). Shorthand for `log-keys` entries of `type: ctx`. |
-| `edgion.io/log-keys` | JSON array | Unified opt-in log-projection carrier. Each entry is `{"key": "<name>", "type": "ctx"\|"label"\|"annotation"}`. `type: ctx` adds `<name>` to the access-log ctx allowlist; `type: label` / `type: annotation` projects the value of the existing `metadata.labels[<name>]` / `metadata.annotations[<name>]` into `rsc.labels`. Malformed entries are skipped individually; merges with `log-label.<key>` and `log-ctx-keys`. |
 
-Log projection is capped at 16 entries; keys at 63 bytes and values at 256 bytes.
-Context projection applies only to HTTPRoute/GRPCRoute. Label/annotation projection also
-applies to TLSRoute and EdgionTls.
+To project route metadata, request/response fields, or plugin-set ctx vars
+into the access log on HTTPRoute / GRPCRoute, use an `AccessLogExtern`
+declaration (`EdgionPlugins.spec.accessLogExtern`, attached via an
+`ExtensionRef` filter) — **not** an annotation. See
+[`../../03-coding/observability/00-access-log.md`](../../03-coding/observability/00-access-log.md#extending-the-access-log-accesslogextern).
+The old ctx-key allowlist annotation and the old unified JSON log-projection
+annotation have both been removed entirely (no aliases, no migration shim);
+`edgion.io/log-label.<key>` is **narrowed to
+TLSRoute / EdgionTls only** — see the TCPRoute/TLSRoute/UDPRoute table below —
+because the HTTP/gRPC path now has `AccessLogExtern` and the TLS handshake
+layer has no plugin chain to attach a declaration to.
 
 - `edgion.io/forward-raw-path` (HTTPRoute) — three-state control over the upstream path forwarding view:
   - `"true"` forces raw, `"false"` forces normalized (overrides region_route); absent falls back to the default flow.
@@ -63,6 +68,7 @@ applies to TLSRoute and EdgionTls.
 | `edgion.io/tcp-keepalive-time` | positive integer string | Idle seconds before the first keepalive probe on the upstream L4 connection (clamped 1–7200). Presence enables keepalive; absent = disabled (TCPRoute / TLSRoute) |
 | `edgion.io/tcp-keepalive-interval` | integer string | Seconds between keepalive probes; clamped 1–75; absent or invalid = 75. Only applied when `tcp-keepalive-time` is set (TCPRoute / TLSRoute) |
 | `edgion.io/tcp-keepalive-probes` | integer string | Failed probe count before connection is declared dead; clamped 1–20; absent or invalid = 9. Only applied when `tcp-keepalive-time` is set (TCPRoute / TLSRoute) |
+| `edgion.io/log-label.<key>` | string | **TLSRoute only.** Adds `<key>=<value>` to `Rsc.labels` for `ssl.log`. The TLS handshake layer has no plugin chain, so it cannot carry an `AccessLogExtern` declaration — this prefix is TLS's only log-projection carrier. |
 
 - On `UDPRoute`, `edgion.io/edgion-stream-plugins` runs only the Stage-1 ConnectionFilter (`spec.plugins`, IP-based, fail-close); there is no TLS stage.
 
@@ -71,6 +77,7 @@ applies to TLSRoute and EdgionTls.
 | Annotation | Value | Description |
 |------------|-------|-------------|
 | `edgion.io/expose-client-cert` | `"true"\|"false"` | Expose parsed client-certificate information to plugin/session/DSL/auth consumers; does not inject headers automatically |
+| `edgion.io/log-label.<key>` | string | **TLS-only.** Adds `<key>=<value>` to `Rsc.labels` for `ssl.log`; same rationale as the TLSRoute row above. |
 
 ### Service / EndpointSlice
 

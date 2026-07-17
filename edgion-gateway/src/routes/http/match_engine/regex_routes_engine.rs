@@ -178,7 +178,7 @@ mod tests {
             backends,
             backend_finder,
             resource_key: format!("{}/{}", namespace, name),
-            matched_info: MatchInfo::new(namespace.to_string(), name.to_string(), rule_id, 0, match_item, 0, None),
+            matched_info: MatchInfo::new(namespace.to_string(), name.to_string(), rule_id, 0, match_item, 0),
             rule,
             route: None,
             path_regex: Some(regex),

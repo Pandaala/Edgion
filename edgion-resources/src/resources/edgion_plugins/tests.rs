@@ -1,6 +1,7 @@
 //! Tests for EdgionPlugins module
 
 use super::*;
+use crate::resources::common::log_labels::LOG_LABEL_MAX_COUNT;
 use crate::resources::http_route::{HTTPHeader, HTTPHeaderFilter};
 
 /// Helper function to create EdgionPlugins for testing
@@ -142,4 +143,87 @@ fn test_edgion_plugin_type_name() {
     } else {
         panic!("Expected RequestHeaderModifier variant");
     }
+}
+
+#[test]
+fn access_log_extern_valid_declaration_passes_validation() {
+    let yaml = r#"
+accessLogExtern:
+  - key: tenant
+    from: ctx
+    name: tenant_id
+  - key: ua
+    from: header
+    name: user-agent
+"#;
+    let spec: EdgionPluginsSpec = serde_yaml::from_str(yaml).unwrap();
+    let ep = EdgionPlugins {
+        metadata: Default::default(),
+        spec,
+        status: None,
+    };
+    assert!(ep.validate_plugins().is_empty(), "{:?}", ep.validate_plugins());
+    assert_eq!(ep.access_log_extern_fields().len(), 2);
+}
+
+#[test]
+fn access_log_extern_blocked_header_is_reported_at_ingest() {
+    let yaml = r#"
+accessLogExtern:
+  - key: auth
+    from: header
+    name: Authorization
+"#;
+    let spec: EdgionPluginsSpec = serde_yaml::from_str(yaml).unwrap();
+    let ep = EdgionPlugins {
+        metadata: Default::default(),
+        spec,
+        status: None,
+    };
+    let errors = ep.validate_plugins();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].starts_with("accessLogExtern[0]"), "{errors:?}");
+    assert!(errors[0].contains("blocked"), "{errors:?}");
+}
+
+#[test]
+fn access_log_extern_duplicate_key_is_reported_at_ingest() {
+    // Silent last-wins on YAML order would be undebuggable; reject instead.
+    let yaml = r#"
+accessLogExtern:
+  - key: tenant
+    from: ctx
+    name: tenant_id
+  - key: tenant
+    from: header
+    name: x-tenant
+"#;
+    let spec: EdgionPluginsSpec = serde_yaml::from_str(yaml).unwrap();
+    let ep = EdgionPlugins {
+        metadata: Default::default(),
+        spec,
+        status: None,
+    };
+    let errors = ep.validate_plugins();
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert!(errors[0].contains("duplicate key"), "{errors:?}");
+}
+
+#[test]
+fn access_log_extern_over_count_cap_is_reported_at_ingest() {
+    let mut yaml = String::from("accessLogExtern:\n");
+    for i in 0..(LOG_LABEL_MAX_COUNT + 1) {
+        yaml.push_str(&format!("  - key: k{i}\n    from: ctx\n    name: n{i}\n"));
+    }
+    let spec: EdgionPluginsSpec = serde_yaml::from_str(&yaml).unwrap();
+    let ep = EdgionPlugins {
+        metadata: Default::default(),
+        spec,
+        status: None,
+    };
+    let errors = ep.validate_plugins();
+    assert!(
+        errors.iter().any(|e| e.contains("at most")),
+        "expected a count-cap error, got {errors:?}"
+    );
 }

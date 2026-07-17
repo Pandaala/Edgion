@@ -61,6 +61,8 @@ access_log_options:
 
 This adds a `request_uri` field to access log JSON, containing the client entry full raw URI (raw path + raw query). See [Access Log](ops-guide/observability/access-log.md).
 
+**Note**: `access_log_sensitive.mode` defaults to `replace`, so `request_uri` (like `path`) renders as `***` unless the mode is changed. Enabling `include_raw_uri` alone no longer yields a readable raw-entry view; see [access_log_sensitive](ops-guide/configuration/gateway-config.md#access_log_sensitive).
+
 ---
 
 ## Security Commitment Scope
@@ -159,12 +161,28 @@ The upstream still receives the raw path with `;param` intact; applications rely
 
 ### Audit log records client raw URI
 
+Compute the value with `CtxSet`, then log the resulting ctx var with an
+`AccessLogExtern from: ctx` declaration — `AccessLogExtern` is the only
+carrier that projects a ctx var into the access log; `CtxSet` alone does not
+make it appear there. See [Access Log — Extending the log:
+AccessLogExtern](ops-guide/observability/access-log.md#extending-the-log-accesslogextern).
+
 ```yaml
 - type: CtxSet
   config:
     rules:
       - name: entry_uri
         template: "${requestUri}"   # entry raw URI, frozen
+---
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
+metadata:
+  name: audit-fields
+spec:
+  accessLogExtern:
+    - key: entry_uri
+      from: ctx
+      name: entry_uri
 ```
 
 ---

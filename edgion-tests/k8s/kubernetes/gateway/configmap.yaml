@@ -45,6 +45,12 @@ data:
             max_files: 7
             check_interval_secs: 60
 
+    # Integration tests assert on `path` and on plugin-log values written through
+    # `sensitive(...)`. The shipped default is `replace`; the harness opts out so
+    # those assertions keep reading real values.
+    access_log_sensitive:
+      mode: off
+
     ssl_log:
       enabled: true
       output:

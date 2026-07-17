@@ -1,0 +1,29 @@
+# resp_header_absent_on_upstream_timeout: the route's rule sets a 1s
+# `timeouts.request` (see HTTPRoute below); requests to /delay/2 exceed it, so
+# the gateway returns 504 before the backend ever responds.
+#
+#   - req_field (header, request-side) must still be present: it depends only
+#     on the inbound request, never reaching the backend.
+#   - resp_field (respHeader) must be absent: `session.response_written()`
+#     never sees the backend's response (ResponseHeaderModifier — an
+#     upstream-response-stage filter — never runs either).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-timeout
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - enable: true
+      type: ResponseHeaderModifier
+      config:
+        add:
+          - name: "X-Resp-Marker"
+            value: "resp-marker-value"
+  accessLogExtern:
+    - key: req_field
+      from: header
+      name: x-req-marker
+    - key: resp_field
+      from: respHeader
+      name: X-Resp-Marker

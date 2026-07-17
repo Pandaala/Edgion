@@ -154,10 +154,12 @@ The log is always JSON, one entry per line. Optional fields are omitted entirely
 ```json
 {
   "ts": 1767089146376,
-  "client-addr": "192.168.1.20",
-  "host": "api.example.com",
-  "path": "/health",
-  "status": 200,
+  "request_info": {
+    "client-addr": "192.168.1.20",
+    "host": "api.example.com",
+    "path": "/health",
+    "status": 200
+  },
   "match_info": { },
   "backend_context": { },
   "plugin_logs": [ ],
@@ -166,7 +168,7 @@ The log is always JSON, one entry per line. Optional fields are omitted entirely
 }
 ```
 
-Request-scoped fields (`client-addr`, `host`, `path`, `status`, etc.) are flattened directly into the top-level object; routing, backend, and plugin information are nested.
+Request-scoped fields (`client-addr`, `host`, `path`, `status`, etc.) nest one level deep under `request_info`; routing, backend, and plugin information sit alongside it at the top level.
 
 ## Field reference
 
@@ -175,15 +177,17 @@ Request-scoped fields (`client-addr`, `host`, `path`, `status`, etc.) are flatte
 | Field | Type | Description |
 |-------|------|-------------|
 | `ts` | Integer | Entry timestamp, epoch milliseconds |
+| `request_info` | Object | Request-scoped fields — see [Request fields](#request-fields) below |
 | `match_info` | Object | Matched route identity (omitted when no route matched) |
 | `backend_context` | Object | Backend identity and upstream timing (omitted/`null` when no backend was used) |
 | `plugin_logs` | Array\<Object\> | Per-plugin execution logs grouped by stage (omitted when empty) |
 | `info` | Array\<String\> | Gateway-internal informational events (omitted when empty) |
 | `errors` | Array\<String\> | Error reasons captured during processing (omitted when empty) |
+| `ext` | Object | Operator-declared fields from [`AccessLogExtern`](#extending-the-log-accesslogextern) (omitted when nothing was collected) |
 
 ### Request fields
 
-Flattened into the top-level object. Every field is omitted when not present.
+Nested one level deep under the top-level `request_info` object (see [Top-level fields](#top-level-fields) above) — not flattened into the entry's top level. Every field is omitted when not present.
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -282,6 +286,189 @@ Common plugin log lines:
 | `BackendNotFound` | Backend service could not be resolved |
 | `UpstreamConnectError` | Connection to the upstream failed |
 
+## Extending the log: AccessLogExtern
+
+The access log ships a fixed field set. To add route metadata, request/response
+fields, or plugin-derived values, declare them with `AccessLogExtern` — the
+single supported extension mechanism. It replaced five older, unrelated
+carriers (route-annotation label projection, a JSON allowlist annotation, a
+comma-separated ctx-key annotation, and an implicit CtxSet-to-annotation
+coupling), all of which are gone with no aliases.
+
+### It is a declaration, not a plugin
+
+`AccessLogExtern` entries never execute as a request filter. They live at
+`EdgionPlugins.spec.accessLogExtern` — a dedicated array, not one of the
+request/response plugin stages — and are read only when the log line is
+written. This is why `AccessLogExtern` fields still appear on responses that
+never reach a plugin at all: a 404 with no matching route, a 421 SNI
+mismatch, the 400 family, an ACME challenge response, or a CORS preflight
+short-circuit.
+
+```yaml
+apiVersion: edgion.io/v1alpha1
+kind: EdgionPlugins
+metadata:
+  name: audit-fields
+  namespace: default
+spec:
+  accessLogExtern:
+    - key: tenant        # field name inside the log entry's `ext` block
+      from: ctx           # source type
+      name: tenant_id     # key within that source
+    - key: ua
+      from: header
+      name: user-agent
+```
+
+Each entry names exactly one source for exactly one field — there is no
+template syntax for composing multiple values into one field. If you need a
+composed value (e.g. `"{tenant}:{tier}"`), compute it once with the `CtxSet`
+plugin and log the resulting ctx variable with `from: ctx`. Composing at the
+`AccessLogExtern` layer was considered and rejected: a composed string has no
+single provenance, so per-field masking could not apply to it correctly.
+
+### Sources
+
+| `from` | Reads | Masked? |
+|---|---|---|
+| `routeLabel` | A `metadata.labels` key on the matched HTTPRoute/GRPCRoute | Never |
+| `routeAnnotation` | A `metadata.annotations` key on the matched HTTPRoute/GRPCRoute (`kubectl.kubernetes.io/*` and `edgion.io/*` keys are reported on `Accepted=False` at ingest and dropped when the gateway loads the resource — see the hard blocklist below) | Never |
+| `header` | A request header (first value wins on repeats; non-UTF-8 values are absent) | Yes, unless whitelisted |
+| `query` | The query string **as the client sent it**, frozen at request entry — unaffected by any later rewrite | Yes, unless whitelisted |
+| `cookie` | A request cookie (`set-cookie`/response cookies are unreachable — see the hard blocklist) | Yes, unless whitelisted |
+| `respHeader` | The response header actually written; absent when the upstream never responded (connect failure, timeout) | Yes, unless whitelisted |
+| `ctx` | A plugin-set context variable (`CtxSet`, DSL `ctx.set`, a webhook `KeyGet` result, ...) — read after every producer at every stage | Yes, unless whitelisted |
+
+A handful of names can never be named as a source, at any masking setting.
+Naming one is reported on the `EdgionPlugins` resource's `Accepted=False`
+status condition, and — independently of that report — the gateway drops the
+field when it loads the resource, so it is never actually projected into a
+log line:
+
+| Source | Blocked names |
+|---|---|
+| `header` / `respHeader` | `authorization`, `proxy-authorization`, `cookie`, `set-cookie`, `x-api-key`, `api-key`, `apikey`, `x-auth-token`, `authentication`, `x-amz-security-token`, `www-authenticate`, `proxy-authenticate` |
+| `ctx` | `jwt_claims`, `oidc_claims`, `jwe_payload` |
+| `routeAnnotation` | anything under `kubectl.kubernetes.io/` or `edgion.io/` |
+
+### Where fields land
+
+All collected fields go into one nested `ext` object, one level deep, values
+always rendered as strings:
+
+```json
+{"ts": 1752633600000, "request_info": {"host": "api.example.com", "path": "/users"}, "ext": {"tenant": "acme", "ua": "***"}}
+```
+
+`ext` is omitted from the line entirely when no field was collected for that
+request.
+
+### Attachment tiers
+
+`AccessLogExtern` can be declared at up to three layers, applied in this
+order — a later tier overwrites an earlier one's field on a key collision:
+
+| Order | Tier | Where it's declared |
+|---|---|---|
+| 1 | GatewayClass-global | `EdgionGatewayConfig.spec.globalPluginsRef` |
+| 2 | Gateway | `edgion.io/edgion-plugins` annotation on the `Gateway` |
+| 3 | Route | An `ExtensionRef` filter on the HTTPRoute / GRPCRoute, pointing at an `EdgionPlugins` |
+
+**Put fleet-wide audit fields on tier 1.** Tier 2 (the Gateway annotation) is
+empty on any response that never matched a route — 404, 421, the 400 family,
+ACME, gRPC `UNIMPLEMENTED` — because the Gateway a request would have used is
+only known *after* route matching resolves it. Tier 1 resolves from the proxy
+service directly and is present on every response, including those. This is
+accepted behavior, not a bug: assigning a Gateway before matching would mean
+guessing among the several Gateways a listener may serve.
+
+**Give global-tier keys a distinct prefix** (e.g. `gw_tenant` instead of
+`tenant`), because collision resolution is silent: if a route-level field
+happens to share a key with a global field, the route's value wins and the
+log gives no indication that a global field was overridden.
+
+### Masking
+
+`routeLabel` and `routeAnnotation` values are never masked — they are
+operator-authored route configuration, not request data. Every other source
+is masked unless the specific key is whitelisted in
+`EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys` (keyed by source
+type — `header`, `respHeader`, `query`, `cookie`, `ctx`). See
+[EdgionGatewayConfig](../configuration/edgion-gateway-config.md) for the
+whitelist schema and default entries.
+
+A whitelist **miss still emits the field** — masked, not dropped — so an
+operator sees `"ext":{"session":"***"}` and knows the value resolved but is
+unwhitelisted, rather than staring at an absent field wondering whether the
+source had no value, whether the field name was misspelled, or whether it was
+a blocked name reported on `Accepted=False` and dropped when the gateway
+loaded the resource.
+
+Masked rendering follows the same global `access_log_sensitive.mode` switch
+as the log's built-in sensitive fields (see [gateway configuration →
+access_log_sensitive](../configuration/gateway-config.md#access_log_sensitive)).
+**As of this release `access_log_sensitive.mode` defaults to `replace`**, so
+`ext` fields — along with `path`, `client-addr`, `remote-addr`,
+`x-forwarded-for`, `sni`, and `request_uri` — render `***` unless whitelisted,
+out of the box, with no configuration required.
+
+**There is no configuration that gives readable `path` alongside a masked
+`ext` cookie.** `mode: off` makes the whitelist inert (everything renders
+clear, `ext` included); `mode: wrap` writes the raw value into the gateway's
+own local log file/stdout, tagged `<E>value</E>` for a downstream pipeline to
+strip before indexing — the raw value is still on local disk. Choose one of
+these two trade-offs deliberately if you need readable paths; there is no
+third option that keeps built-ins clear while masking `ext`.
+
+### Known gaps (by design, not bugs)
+
+- **`redirect_http` listeners (the plain HTTP→HTTPS redirect service) never
+  emit `ext`.** They use a separate, minimal log schema with no `ext` field
+  at all — there is no plugin chain on that path to attach a declaration to.
+- **A second access-log line for gRPC-web/WebSocket connection establishment
+  carries no `ext`** — only the request's final log line does. This is
+  correct: the final line is the one the collector runs against.
+- **The `X-Debug-Access-Log` response header (from the `debug-access-log`
+  plugin) never carries `ext`, on purpose.** Populating it would ship
+  operator-declared field values back to the client that sent the request.
+
+### Full example
+
+```yaml
+apiVersion: edgion.io/v1alpha1
+kind: EdgionGatewayConfig
+metadata:
+  name: default-config
+spec:
+  accessLogExtern:
+    unmaskedKeys:
+      header: [user-agent, origin, content-type, content-length, accept, x-request-id]
+      ctx: [tenant_id]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: api-route
+  namespace: production
+spec:
+  rules:
+    - backendRefs: [{ name: api-service, port: 8080 }]
+      filters:
+        - type: ExtensionRef
+          extensionRef:
+            group: edgion.io
+            kind: EdgionPlugins
+            name: audit-fields
+```
+
+```json
+{"ts": 1752633600000, "request_info": {"host": "api.example.com", "path": "/users", "status": 200},
+ "ext": {"tenant": "acme", "ua": "Mozilla/5.0"}}
+```
+
+Both fields declared by the `audit-fields` resource [above](#it-is-a-declaration-not-a-plugin) render clear here: `ua` (`from: header, name: user-agent`) is whitelisted by `unmaskedKeys.header`, and `tenant` (`from: ctx, name: tenant_id`) is whitelisted by `unmaskedKeys.ctx`.
+
 ## Special fields
 
 ### Raw request URI
@@ -353,13 +540,15 @@ access_log_options:
 ```json
 {
   "ts": 1767089146376,
-  "client-addr": "192.168.1.20",
-  "client-port": 54882,
-  "remote-addr": "192.168.1.20",
-  "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
-  "host": "test.example.com",
-  "path": "/health",
-  "status": 200,
+  "request_info": {
+    "client-addr": "192.168.1.20",
+    "client-port": 54882,
+    "remote-addr": "192.168.1.20",
+    "x-trace-id": "eff524a7-10a4-483c-a534-3c50b1199aa0",
+    "host": "test.example.com",
+    "path": "/health",
+    "status": 200
+  },
   "match_info": { "rns": "production", "rn": "api-route", "rule_id": 0, "match_id": 0 },
   "backend_context": {
     "name": "api-service",
@@ -376,9 +565,11 @@ access_log_options:
 ```json
 {
   "ts": 1767089146377,
-  "host": "api.example.com",
-  "path": "/api/data",
-  "status": 200,
+  "request_info": {
+    "host": "api.example.com",
+    "path": "/api/data",
+    "status": 200
+  },
   "backend_context": {
     "name": "api-service",
     "namespace": "production",
@@ -407,7 +598,7 @@ that had already given up:
 
 ```json
 {
-  "status": 499,
+  "request_info": { "status": 499 },
   "errors": ["ClientClosed"],
   "backend_context": {
     "upstreams": [
@@ -422,9 +613,11 @@ that had already given up:
 ```json
 {
   "ts": 1767089149015,
-  "host": "wrong-hostname.example.com",
-  "path": "/test",
-  "status": 404,
+  "request_info": {
+    "host": "wrong-hostname.example.com",
+    "path": "/test",
+    "status": 404
+  },
   "errors": ["RouteNotFound"],
   "backend_context": null
 }
@@ -435,12 +628,14 @@ that had already given up:
 ```json
 {
   "ts": 1767089148470,
-  "host": "grpc.example.com",
-  "path": "/test.TestService/SayHello",
-  "status": 200,
-  "discover_protocol": "grpc",
-  "grpc_service": "test.TestService",
-  "grpc_method": "SayHello",
+  "request_info": {
+    "host": "grpc.example.com",
+    "path": "/test.TestService/SayHello",
+    "status": 200,
+    "discover_protocol": "grpc",
+    "grpc_service": "test.TestService",
+    "grpc_method": "SayHello"
+  },
   "backend_context": {
     "name": "grpc-service",
     "namespace": "production",
@@ -455,16 +650,16 @@ that had already given up:
 
 ```bash
 # All 4xx responses
-cat logs/edgion_access.log | jq 'select(.status >= 400 and .status < 500)'
+cat logs/edgion_access.log | jq 'select(.request_info.status >= 400 and .request_info.status < 500)'
 
 # Slowest requests by upstream header time
-cat logs/edgion_access.log | jq -r '[.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
+cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
 
 # Plugin executions over 100 microseconds
 cat logs/edgion_access.log | jq '.plugin_logs[]?.logs[]? | select(.time_cost > 100)'
 
 # Trace one request end to end
-cat logs/edgion_access.log | jq 'select(.["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
+cat logs/edgion_access.log | jq 'select(.request_info["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
 ```
 
 Key fields to watch:

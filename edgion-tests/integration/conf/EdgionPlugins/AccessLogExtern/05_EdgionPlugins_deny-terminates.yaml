@@ -1,0 +1,25 @@
+# ext_present_when_deny_terminates: a KeyAuth entry with no secretGroups/
+# anonymous, so any request without a key is unconditionally denied
+# (401 — KeyAuth's `unauthorized()` path). `run_request_plugins` breaks the
+# plugin loop on the resulting Deny, but the route was already matched before
+# Step 2 runs, so ctx.route_unit is populated and the route-tier
+# accessLogExtern declaration below still resolves at logging().
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-deny-terminates
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: KeyAuth
+      config:
+        keySources:
+          - type: header
+            name: "X-API-Key"
+        realm: "AccessLogExtern Deny Test"
+        keyField: "key"
+  accessLogExtern:
+    - key: deny_field
+      from: routeAnnotation
+      name: owner

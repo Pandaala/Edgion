@@ -10,6 +10,7 @@
 
 use arc_swap::ArcSwap;
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::sync::LazyLock;
 
@@ -20,6 +21,14 @@ static GLOBAL_PLUGIN_STORE: LazyLock<Arc<PluginStore>> = LazyLock::new(|| Arc::n
 
 pub fn get_global_plugin_store() -> Arc<PluginStore> {
     GLOBAL_PLUGIN_STORE.clone()
+}
+
+/// Borrow the global store without paying the `Arc` clone (an atomic RMW pair).
+/// Prefer this over [`get_global_plugin_store`] on the per-request hot path — e.g.
+/// `log_ext::collect`, which reads `has_access_log_extern()` on every request and
+/// must not pay a clone before its own fast-path check.
+pub fn global_plugin_store() -> &'static PluginStore {
+    &GLOBAL_PLUGIN_STORE
 }
 
 /// Compiled EdgionPlugins: immutable schema + the gateway plugin runtime.
@@ -58,6 +67,38 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // condition evaluators. add_from_* clones the (now-compiled) conditions into
     // the runtime's ConditionalFilters.
     compile_plugin_conditions(&mut spec, &mut errors);
+
+    // Sanitize `accessLogExtern` declarations: drop any entry `validation_error()`
+    // rejects (hard-blocklisted name, empty/over-length key or name) from the
+    // *stored* spec before it is Arc-wrapped. `AccessLogExternField` is never a
+    // plugin — it has no stage and never runs through `seal_fail_closed` — so this
+    // is the only place in the data plane that can enforce the hard blocklist. The
+    // controller's admission-time `validation_error()` call (in `preparse`) only
+    // reports `Accepted=False`; per the repo's lenient-admission policy the
+    // resource is still cached and synced. Without this retain, a hard-blocklisted
+    // name (e.g. `authorization`) would reach `apply_declarations` and be logged
+    // in clear whenever `access_log_sensitive.mode` is `off` or `wrap`.
+    //
+    // O(1) per store mutation, zero per-request cost — the alternative (checking
+    // `validation_error()` per request in `apply_declarations`) would allocate
+    // format strings on the data-plane hot path. Dropping the field (not the
+    // request) fails safe: a bad log declaration must not turn into a fail-closed
+    // 500 for live traffic, which is why this pushes into `errors` (surfaced only
+    // as a status condition) rather than anything `seal_fail_closed` reads.
+    if let Some(fields) = spec.spec.access_log_extern.as_mut() {
+        let mut idx = 0usize;
+        fields.retain(|f| {
+            let keep = match f.validation_error() {
+                Some(e) => {
+                    errors.push(format!("accessLogExtern[{idx}]: {e}"));
+                    false
+                }
+                None => true,
+            };
+            idx += 1;
+            keep
+        });
+    }
 
     let mut runtime = PluginRuntime::new();
 
@@ -133,6 +174,14 @@ type PluginMap = HashMap<String, Arc<CompiledPlugins>>;
 
 pub struct PluginStore {
     plugins: ArcSwap<PluginMap>,
+    /// Precomputed hint: true when at least one stored `CompiledPlugins`
+    /// declares a non-empty `accessLogExtern`. Recomputed on every store
+    /// mutation (`replace_all` / `update`), never on the per-request read path.
+    ///
+    /// `Relaxed` is sufficient: this is a monotonic hint, not a synchronization
+    /// edge — the `ArcSwap` above already provides the happens-before for the
+    /// map contents a reader may subsequently look up.
+    has_access_log_extern: AtomicBool,
 }
 
 impl Default for PluginStore {
@@ -141,11 +190,24 @@ impl Default for PluginStore {
     }
 }
 
+/// Whether any compiled plugin in the map declares a non-empty `accessLogExtern`.
+fn any_declares_access_log_extern(map: &PluginMap) -> bool {
+    map.values().any(|c| !c.spec.access_log_extern_fields().is_empty())
+}
+
 impl PluginStore {
     pub fn new() -> Self {
         Self {
             plugins: ArcSwap::from_pointee(HashMap::new()),
+            has_access_log_extern: AtomicBool::new(false),
         }
+    }
+
+    /// Fast-path hint for `log_ext::collect`: true when at least one stored
+    /// `EdgionPlugins` declares a non-empty `accessLogExtern`. When false, the
+    /// caller can skip the plugin-store lookups entirely for this request.
+    pub fn has_access_log_extern(&self) -> bool {
+        self.has_access_log_extern.load(Ordering::Relaxed)
     }
 
     /// Check if a plugin exists
@@ -170,6 +232,8 @@ impl PluginStore {
 
     /// Replace all compiled plugins atomically
     pub fn replace_all(&self, plugins: HashMap<String, Arc<CompiledPlugins>>) {
+        self.has_access_log_extern
+            .store(any_declares_access_log_extern(&plugins), Ordering::Relaxed);
         self.plugins.store(Arc::new(plugins));
     }
 
@@ -186,6 +250,8 @@ impl PluginStore {
             new_map.insert(key, plugin);
         }
 
+        self.has_access_log_extern
+            .store(any_declares_access_log_extern(&new_map), Ordering::Relaxed);
         self.plugins.store(Arc::new(new_map));
     }
 
@@ -265,8 +331,106 @@ mod kind_stats_tests {
 }
 
 #[cfg(test)]
+mod access_log_extern_flag_tests {
+    use super::*;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::access_log_extern::{
+        AccessLogExternField, LogExtSource,
+    };
+    use edgion_resources::resources::edgion_plugins::EdgionPluginsSpec;
+    use edgion_resources::resources::EdgionPlugins;
+
+    fn ep_without_access_log_extern() -> EdgionPlugins {
+        EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec::default(),
+            status: None,
+        }
+    }
+
+    fn ep_with_access_log_extern() -> EdgionPlugins {
+        EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                access_log_extern: Some(vec![AccessLogExternField {
+                    key: "tenant".to_string(),
+                    from: LogExtSource::Header,
+                    name: "x-tenant".to_string(),
+                }]),
+                ..Default::default()
+            },
+            status: None,
+        }
+    }
+
+    /// The flag must reflect what is currently *stored*, not merely what
+    /// entered the store historically: no plugins, plugins without
+    /// `accessLogExtern`, then adding one, then removing it.
+    #[test]
+    fn flag_flips_as_the_store_gains_and_loses_an_access_log_extern_declaration() {
+        let store = PluginStore::new();
+        assert!(!store.has_access_log_extern(), "empty store must report false");
+
+        let mut plugins = HashMap::new();
+        plugins.insert(
+            "ns/no-ext".to_string(),
+            compile_plugins(&ep_without_access_log_extern()),
+        );
+        store.replace_all(plugins);
+        assert!(
+            !store.has_access_log_extern(),
+            "a store with plugins but no accessLogExtern must report false"
+        );
+
+        // Add one resource declaring accessLogExtern via `update`.
+        let mut add = HashMap::new();
+        add.insert("ns/with-ext".to_string(), compile_plugins(&ep_with_access_log_extern()));
+        store.update(add, &HashSet::new());
+        assert!(
+            store.has_access_log_extern(),
+            "adding a resource with accessLogExtern must flip the flag to true"
+        );
+
+        // Remove it again: the flag must flip back to false.
+        let mut remove = HashSet::new();
+        remove.insert("ns/with-ext".to_string());
+        store.update(HashMap::new(), &remove);
+        assert!(
+            !store.has_access_log_extern(),
+            "removing the only resource with accessLogExtern must flip the flag back to false"
+        );
+    }
+
+    /// `replace_all` is the conf_sync full-sync path: it must SET the flag, not
+    /// merely leave it. Without this the `new()` default (false) masks a missing
+    /// store in `replace_all`.
+    #[test]
+    fn replace_all_sets_flag_based_on_content() {
+        let store = PluginStore::new();
+
+        // replace_all with a resource declaring accessLogExtern must set the flag.
+        let mut full = HashMap::new();
+        full.insert("ns/with-ext".to_string(), compile_plugins(&ep_with_access_log_extern()));
+        store.replace_all(full);
+        assert!(
+            store.has_access_log_extern(),
+            "replace_all with an accessLogExtern resource must set the flag"
+        );
+
+        // replace_all with an empty set must clear the flag.
+        store.replace_all(HashMap::new());
+        assert!(
+            !store.has_access_log_extern(),
+            "replace_all with an empty set must clear the flag"
+        );
+    }
+}
+
+#[cfg(test)]
 mod compile_plugins_tests {
     use super::*;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::access_log_extern::{
+        AccessLogExternField, LogExtSource,
+    };
     use edgion_resources::resources::edgion_plugins::plugin_configs::DslConfig;
     use edgion_resources::resources::edgion_plugins::{
         EdgionPlugin, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
@@ -365,6 +529,53 @@ mod compile_plugins_tests {
         );
     }
 
+    /// C1 regression test: a hard-blocklisted `accessLogExtern` declaration must
+    /// be dropped from the *stored* spec by `compile_plugins`, not merely reported.
+    /// Without the `retain` in `compile_plugins`, `authorization` would survive
+    /// into `compiled.spec` and `apply_declarations` would log it in clear
+    /// whenever `access_log_sensitive.mode` is `off` or `wrap`.
+    #[test]
+    fn compile_plugins_drops_blocked_access_log_extern_fields() {
+        let ep = EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                access_log_extern: Some(vec![
+                    AccessLogExternField {
+                        key: "leak".to_string(),
+                        from: LogExtSource::Header,
+                        name: "authorization".to_string(),
+                    },
+                    AccessLogExternField {
+                        key: "tenant".to_string(),
+                        from: LogExtSource::Ctx,
+                        name: "tenant_id".to_string(),
+                    },
+                ]),
+                ..Default::default()
+            },
+            status: None,
+        };
+
+        let compiled = compile_plugins(&ep);
+
+        let stored = compiled.spec.access_log_extern_fields();
+        assert_eq!(
+            stored.len(),
+            1,
+            "the blocked field must not survive into the stored spec"
+        );
+        assert_eq!(stored[0].key, "tenant", "the valid field must be retained");
+
+        assert!(
+            compiled
+                .preparse_errors
+                .iter()
+                .any(|e| e.contains("accessLogExtern") && e.contains("authorization") && e.contains("blocked")),
+            "expected a preparse error naming the dropped 'authorization' field, got: {:?}",
+            compiled.preparse_errors
+        );
+    }
+
     /// Drift guard between the two independent validation implementations.
     ///
     /// Since the controller no longer depends on `edgion-gateway`, it collects
@@ -383,6 +594,20 @@ mod compile_plugins_tests {
     /// lacks. DSL entries are included: since the edgion-dsl extraction, both
     /// paths call the same `DslConfig::validation_error()` pipeline, so they
     /// must match exactly.
+    ///
+    /// **Deliberate exclusion**: `validate_plugins`'s `accessLogExtern` Pass 3
+    /// also enforces a `LOG_LABEL_MAX_COUNT` cap and a duplicate-`key` check
+    /// (`edgion-resources/src/resources/edgion_plugins/validate.rs`), which
+    /// `compile_plugins`'s `retain()` does not mirror and which this guard does
+    /// not probe. That is intentional, not a gap to close: the data plane is
+    /// already structurally immune to both without needing to reject anything —
+    /// `LogExt::insert` caps stored fields at 16 regardless of how many were
+    /// declared, and a duplicate key resolves last-write-wins in place. So
+    /// `validate_plugins` over-reports relative to `compile_plugins` on these
+    /// two rules specifically (controller status flags something the gateway
+    /// was never going to mis-render), which is the safe direction for the
+    /// asymmetry to run. Do not add these two rules to `compile_plugins` to
+    /// "fix" this guard — there is no safety gain, only duplicated logic.
     #[test]
     fn validate_plugins_matches_compile_plugins_error_set() {
         fn sorted(mut v: Vec<String>) -> Vec<String> {
@@ -425,6 +650,24 @@ mod compile_plugins_tests {
                 spec: EdgionPluginsSpec {
                     request_plugins: request,
                     upstream_response_filter_plugins: urf,
+                    ..Default::default()
+                },
+                status: None,
+            }
+        }
+        // C1 case: a hard-blocklisted `accessLogExtern` field. Before the C1 fix,
+        // `compile_plugins` never looked at `access_log_extern` at all, so this
+        // case failed with `from_runtime` empty and `from_schema` carrying the
+        // blocked-name error — exactly the drift class this guard exists to catch.
+        fn ep_with_blocked_access_log_extern() -> EdgionPlugins {
+            EdgionPlugins {
+                metadata: Default::default(),
+                spec: EdgionPluginsSpec {
+                    access_log_extern: Some(vec![AccessLogExternField {
+                        key: "leak".to_string(),
+                        from: LogExtSource::Header,
+                        name: "authorization".to_string(),
+                    }]),
                     ..Default::default()
                 },
                 status: None,
@@ -487,6 +730,7 @@ mod compile_plugins_tests {
                     None,
                 ),
             ),
+            ("access_log_extern_blocked", ep_with_blocked_access_log_extern()),
         ];
 
         for (name, ep) in cases {

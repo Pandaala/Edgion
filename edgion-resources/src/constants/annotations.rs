@@ -81,35 +81,15 @@ pub mod edgion {
     /// to enable listener-level 421 detection for that Gateway's HTTPS listeners.
     pub const REQUIRE_SNI_HOST_MATCH: &str = "edgion.io/require-sni-host-match";
 
-    /// Prefix for operator-defined log labels. Any `metadata.annotations` or
-    /// `metadata.labels` entry whose key starts with this prefix contributes
-    /// `<suffix> = <value>` to the resource's `rsc.labels` in access / TLS logs.
+    /// Prefix for operator-defined log labels on resources whose handshake layer
+    /// has no plugin chain and no `logging()` stage to hook an `AccessLogExtern`
+    /// declaration onto. Any `metadata.annotations` or `metadata.labels` entry
+    /// whose key starts with this prefix contributes `<suffix> = <value>` to the
+    /// resource's `rsc.labels` in the TLS log.
     /// Example: `edgion.io/log-label.tenant: internal` -> label `tenant=internal`.
-    /// Supported on HTTPRoute, GRPCRoute, EdgionTls, and TLSRoute.
+    /// Supported on EdgionTls and TLSRoute. HTTPRoute/GRPCRoute log projection is
+    /// declared via `AccessLogExtern` instead (see `resources::edgion_plugins`).
     pub const LOG_LABEL_PREFIX: &str = "edgion.io/log-label.";
-
-    /// Opt-in allowlist of plugin-set context variable (`ctx_map`) keys to project
-    /// into the access log for requests matching this route. Value: a
-    /// comma-separated list of ctx-var names, e.g.
-    /// `edgion.io/log-ctx-keys: "tenant_id,tier"`. Context variables are
-    /// **not** logged by default; only keys named here are emitted (and known
-    /// sensitive keys such as claims/payloads stay hard-blocked regardless).
-    /// Supported on HTTPRoute and GRPCRoute (the request paths that populate
-    /// `ctx_map`).
-    pub const LOG_CTX_KEYS: &str = "edgion.io/log-ctx-keys";
-
-    /// Unified opt-in carrier for log projection. Value: a JSON array of
-    /// `{"key": "<name>", "type": "ctx"|"label"|"annotation"}` entries.
-    /// - `type: ctx` adds `<name>` to the access-log ctx allowlist (same effect
-    ///   as listing it in `log-ctx-keys`).
-    /// - `type: label` / `type: annotation` projects the value of the existing
-    ///   `metadata.labels[<name>]` / `metadata.annotations[<name>]` into
-    ///   `rsc.labels` (a more flexible alternative to the `log-label.<suffix>`
-    ///   prefix: it references an existing key by name instead of requiring a
-    ///   prefixed copy).
-    /// Malformed entries are skipped individually (fail-safe). This carrier
-    /// merges with `log-label.<suffix>` and `log-ctx-keys`.
-    pub const LOG_KEYS: &str = "edgion.io/log-keys";
 
     /// Reference EdgionPlugins resources to run for every request on this Gateway
     /// (L7, before route-level plugins). Value: comma/space-separated "namespace/name"

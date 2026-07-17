@@ -77,19 +77,28 @@ The data plane does not use `tracing::*` for request-level logs (see [01-log-saf
 The `MatchInfo` struct carries `sv` automatically, injected from `route.get_sync_version()` at route compilation time:
 
 ```rust
-MatchInfo::new(ns, name, rule_id, match_id, match_item, route_sv, log_labels)
+MatchInfo::new(ns, name, rule_id, match_id, match_item, route_sv)
 ```
 
-`log_labels` is the `Option<LogLabels>` resolved **at resource-parse time, never
-on the data path** (keys prefixed `edgion.io/log-label.`, serialized under
-`rsc.labels`). The single resolver + guardrails live in
+**HTTP/gRPC route metadata (`rsc.labels`) is always `None`** — the
+`edgion.io/log-label.<suffix>` prefix is narrowed to TLSRoute / EdgionTls only
+and is not resolved for HTTPRoute/GRPCRoute at all (see
+`crate::extract_log_labels`'s doc at `edgion-gateway/src/ctx.rs`). On
+HTTP/gRPC, projecting route metadata into the access log goes through an
+`AccessLogExtern from: routeLabel` / `from: routeAnnotation` declaration
+instead, resolved at `logging()` from route metadata retained on the match
+unit — not through `log_labels`/`rsc.labels`.
+
+`log_labels` (`Option<LogLabels>`, keys prefixed `edgion.io/log-label.`,
+serialized under `rsc.labels`) still exists for **TLSRoute and EdgionTls**,
+resolved **at resource-parse time, never on the data path**. The single
+resolver + guardrails live in
 `edgion_resources::resources::common::resolve_log_labels`; the gateway
-`extract_log_labels(&metadata)` is a thin wrapper used at route conf-handler
-build (HTTP/gRPC) and `TlsRouteUnit::from_route` (TLSRoute). `EdgionTls` instead
-caches the resolved map in `EdgionTlsSpec::resolved_log_labels` during
-`pre_parse`, and the handshake callback only `LogLabels::from_resolved`-wraps the
-cached `Arc` (no per-handshake scan). See
-`skills/03-coding/observability/00-access-log.md`.
+`extract_log_labels(&metadata)` is a thin wrapper used at `TlsRouteUnit::from_route`
+(TLSRoute). `EdgionTls` instead caches the resolved map in
+`EdgionTlsSpec::resolved_log_labels` during `pre_parse`, and the handshake
+callback only `LogLabels::from_resolved`-wraps the cached `Arc` (no
+per-handshake scan). See `skills/03-coding/observability/00-access-log.md`.
 
 ### TLS / TCP / Stream routes
 

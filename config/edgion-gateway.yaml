@@ -148,6 +148,12 @@ access_log:
       #   brokers: [localhost:9092]
       #   topic: edgion-access
 
+# Integration tests assert on `path` and on plugin-log values written through
+# `sensitive(...)`. The shipped default is `replace`; the harness opts out so
+# those assertions keep reading real values.
+access_log_sensitive:
+  mode: off
+
 # ================================================================================
 # SSL/TLS Callback Log Configuration
 # ================================================================================

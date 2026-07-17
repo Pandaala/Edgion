@@ -70,6 +70,10 @@ metadata:
   name: wh6-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh6_user_id
+      from: ctx
+      name: wh6_user_id
   requestPlugins:
     - enable: true
       type: CtxSet
@@ -89,8 +93,6 @@ kind: HTTPRoute
 metadata:
   name: wh6-route
   namespace: edgion-default
-  annotations:
-    edgion.io/log-ctx-keys: "wh6_user_id"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

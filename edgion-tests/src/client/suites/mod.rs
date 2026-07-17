@@ -65,7 +65,7 @@ pub use gateway::{
 
 // EdgionPlugins tests
 pub use edgion_plugins::{
-    AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite,
+    AccessLogExternTestSuite, AllConditionsTestSuite, AllEndpointStatusTestSuite, BandwidthLimitTestSuite,
     BasicAuthDynamicGroupedInitialTestSuite, BasicAuthDynamicGroupedUpdateTestSuite, BasicAuthDynamicInitialTestSuite,
     BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite, CanaryHotSwapFinalTestSuite, CanaryHotSwapInitialTestSuite,
     CanaryTestSuite, CorsPluginTestSuite, CsrfTestSuite, CtxSetTestSuite, DirectEndpointTestSuite,

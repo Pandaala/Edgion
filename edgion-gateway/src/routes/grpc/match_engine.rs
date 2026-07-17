@@ -470,7 +470,7 @@ mod tests {
         });
         Arc::new(GrpcRouteRuleUnit {
             resource_key: format!("default/{}", name),
-            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None, None),
+            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None),
             rule,
             route_info,
             route: None,
@@ -713,7 +713,7 @@ mod tests {
         });
         Arc::new(GrpcRouteRuleUnit {
             resource_key: format!("default/{}", name),
-            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None, None),
+            matched_info: GrpcMatchInfo::new("default".to_string(), name.to_string(), 0, 0, grpc_match, 0, None),
             rule,
             route_info,
             route: None,

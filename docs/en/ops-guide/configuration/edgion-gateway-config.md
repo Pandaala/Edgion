@@ -75,6 +75,14 @@ spec:
     - name: "global-cors"
       namespace: "edgion-system"
 
+  accessLogExtern:
+    unmaskedKeys:
+      header: [user-agent, origin, content-type, content-length, accept, x-request-id]
+      respHeader: [content-type, content-length, cache-control, retry-after, x-request-id]
+      query: []
+      cookie: []
+      ctx: []
+
   preflightPolicy:
     mode: "cors-standard"
     statusCode: 204
@@ -178,6 +186,44 @@ globalPluginsRef:
   - name: "global-cors"       # EdgionPlugins resource name
     namespace: "edgion-system" # Defaults to "default"
 ```
+
+### spec.accessLogExtern
+
+The masking whitelist for [`AccessLogExtern`](../observability/access-log.md#extending-the-log-accesslogextern)-declared
+access-log fields. Platform-owned — cluster-scoped, next to `globalPluginsRef`
+— so a namespaced `EdgionPlugins` cannot widen masking for the whole fleet.
+
+```yaml
+accessLogExtern:
+  unmaskedKeys:
+    header:     [user-agent, origin, content-type, content-length, accept, x-request-id]
+    respHeader: [content-type, content-length, cache-control, retry-after, x-request-id]
+    query:      []
+    cookie:     []
+    ctx:        []
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `unmaskedKeys.header` | `[]String` | `[user-agent, origin, content-type, content-length, accept, x-request-id]` | Request header names logged in clear (case-insensitive) |
+| `unmaskedKeys.respHeader` | `[]String` | `[content-type, content-length, cache-control, retry-after, x-request-id]` | Response header names logged in clear (case-insensitive) |
+| `unmaskedKeys.query` | `[]String` | `[]` | Query parameter names logged in clear (case-sensitive) |
+| `unmaskedKeys.cookie` | `[]String` | `[]` | Cookie names logged in clear (case-sensitive) |
+| `unmaskedKeys.ctx` | `[]String` | `[]` | Ctx-var names logged in clear (case-sensitive) |
+
+The whitelist is keyed by source type, not one flat list — a header named
+`user-agent` is harmless, a cookie of the same name is not. `query`/`cookie`/`ctx`
+default empty because their key names are entirely business-defined; there is
+no name that is safe by default across every cluster. A miss still emits the
+field, masked, rather than dropping it. `routeLabel`/`routeAnnotation` sources
+are never masked and bypass this whitelist entirely. A hard blocklist (credential
+headers, claim/payload ctx keys) is rejected at `EdgionPlugins` admission and
+is not configurable through this whitelist.
+
+**Effective scope is per-listener, not per-Gateway**: when two Gateways of
+different GatewayClasses share the same bind address/port, only the first
+Gateway's `EdgionGatewayConfig` — including this whitelist — is bound for that
+listener.
 
 ### spec.preflightPolicy
 

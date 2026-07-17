@@ -4,8 +4,6 @@ kind: HTTPRoute
 metadata:
   name: webhook-keyget-test-route
   namespace: edgion-default
-  annotations:
-    edgion.io/log-ctx-keys: "webhook_user_id,webhook_resolved_key,webhook_body_text,local_tenant,webhook_path_suffix_id,webhook_apikey_user,webhook_svc_user_id"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

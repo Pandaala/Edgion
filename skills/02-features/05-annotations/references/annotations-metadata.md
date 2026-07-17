@@ -40,14 +40,24 @@ Important:
 
 | Key | Scope | Effect |
 |-----|-------|--------|
-| `edgion.io/log-label.<key>` | HTTPRoute, GRPCRoute, TLSRoute, EdgionTls | Adds the suffix/value to resolved log labels. The same prefix may also be used on `metadata.labels`. |
-| `edgion.io/log-ctx-keys` | HTTPRoute, GRPCRoute | Comma-separated allowlist of plugin context keys for access-log projection. Sensitive keys remain blocked. |
-| `edgion.io/log-keys` | HTTPRoute, GRPCRoute; label/annotation entries also TLSRoute, EdgionTls | JSON entries of type `ctx`, `label`, or `annotation`; malformed entries are skipped independently. |
+| `edgion.io/log-label.<key>` | **TLSRoute, EdgionTls only** | Adds the suffix/value to resolved `Rsc.labels`, consumed by `ssl.log`. The same prefix may also be used on `metadata.labels`. **Not honored on HTTPRoute / GRPCRoute** — the TLS handshake layer has no plugin chain to attach a declaration to, so this prefix remains its only log-projection carrier. |
 
-Resolved projection is deterministic and capped at 16 entries, 63 bytes per key, and
-256 bytes per value. Collision order is metadata labels, then metadata annotations,
-then explicit `log-keys`. See
-`edgion-resources/src/resources/common/log_labels.rs` for parsing and caps.
+The old comma-separated ctx-key allowlist annotation and the old unified
+JSON log-projection annotation have both been **removed entirely** (no
+aliases, no migration shim). On HTTPRoute / GRPCRoute, all log projection —
+route label/annotation values, request/response fields, plugin-set ctx vars —
+now goes through an `AccessLogExtern` declaration
+(`EdgionPlugins.spec.accessLogExtern`, attached via an `ExtensionRef` filter),
+which lands the collected fields in a nested `ext` block instead of flattening
+them at the entry's top level. See
+`skills/03-coding/observability/00-access-log.md` and
+`docs/superpowers/specs/2026-07-16-access-log-extern-plugin-design.md`.
+
+The `log-label.<key>` prefix on TLSRoute/EdgionTls is resolved by
+`resolve_log_labels` in `edgion-resources/src/resources/common/log_labels.rs`
+(capped at 16 entries, 63 bytes per key, 256 bytes per value); the function's
+JSON-array-parsing half (for the deleted unified log-projection annotation)
+has been removed.
 
 ## HTTPRoute / GRPCRoute `metadata.annotations`
 

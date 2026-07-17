@@ -204,6 +204,42 @@ spec:
                         description: "Namespace of the EdgionPlugins resource (defaults to 'default')"
 
                 # ============================================
+                # Access Log Extension Policy (masking whitelist)
+                # ============================================
+                accessLogExtern:
+                  type: object
+                  description: "Access log extension policy: which keys bypass masking"
+                  properties:
+                    unmaskedKeys:
+                      type: object
+                      description: >-
+                        Per-source lists of keys logged in clear. Everything else is
+                        masked per the gateway's access_log_sensitive.mode. Header
+                        names match case-insensitively; query/cookie/ctx names are
+                        case-sensitive.
+                      properties:
+                        header:
+                          type: array
+                          items:
+                            type: string
+                        respHeader:
+                          type: array
+                          items:
+                            type: string
+                        query:
+                          type: array
+                          items:
+                            type: string
+                        cookie:
+                          type: array
+                          items:
+                            type: string
+                        ctx:
+                          type: array
+                          items:
+                            type: string
+
+                # ============================================
                 # Preflight Policy Configuration
                 # ============================================
                 preflightPolicy:

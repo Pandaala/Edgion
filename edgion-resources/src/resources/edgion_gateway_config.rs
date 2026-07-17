@@ -5,7 +5,7 @@
 
 use super::common::Condition;
 use super::edgion_plugins::plugin_configs::LinkSysRef;
-use super::edgion_plugins::RealIpConfig;
+use super::edgion_plugins::{LogExtSource, RealIpConfig};
 use kube::CustomResource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -47,6 +47,10 @@ pub struct EdgionGatewayConfigSpec {
     /// These plugins are executed before route-level plugins
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub global_plugins_ref: Option<Vec<PluginReference>>,
+
+    /// Access log extension policy (the masking whitelist).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_log_extern: Option<AccessLogExternPolicy>,
 
     /// Preflight request handling policy
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -389,6 +393,7 @@ impl Default for EdgionGatewayConfigSpec {
             real_ip: None,
             security_protect: None,
             global_plugins_ref: None,
+            access_log_extern: None,
             preflight_policy: None,
             link_sys: None,
             tcp_timeout: None,
@@ -566,6 +571,101 @@ pub struct LinkSysGlobalConfig {
 
 fn default_webhook_max_response_bytes() -> usize {
     16384
+}
+
+// ============================================
+// Access Log Extension Policy (masking whitelist)
+// ============================================
+
+/// Access log extension policy. Platform-owned: it lives on the cluster-scoped
+/// `EdgionGatewayConfig` (referenced via `GatewayClass.spec.parametersRef`) so a
+/// tenant who owns a route and its `EdgionPlugins` cannot widen masking.
+///
+/// Scope caveat: `bound_listeners` dedup (`runtime/server/base.rs`) skips a
+/// listener already bound at the same addr/protocol, so two Gateways of
+/// different GatewayClasses sharing an addr:port share the first one's config.
+/// The whitelist is therefore effectively per-listener, not per-Gateway.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AccessLogExternPolicy {
+    /// Keys logged in clear. Everything else is masked per
+    /// `access_log_sensitive.mode`.
+    pub unmasked_keys: UnmaskedKeys,
+}
+
+/// Per-source whitelists of keys that bypass masking.
+///
+/// Keyed by source rather than one flat list: `user-agent` as a header is
+/// harmless, while a cookie of the same name is a different object entirely, and
+/// a flat list could not tell them apart.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UnmaskedKeys {
+    /// Request header names. Matched case-insensitively.
+    pub header: Vec<String>,
+    /// Response header names. Matched case-insensitively.
+    pub resp_header: Vec<String>,
+    /// Query parameter names. Case-sensitive.
+    pub query: Vec<String>,
+    /// Cookie names. Case-sensitive.
+    pub cookie: Vec<String>,
+    /// Context variable names. Case-sensitive.
+    pub ctx: Vec<String>,
+}
+
+impl Default for UnmaskedKeys {
+    /// The defaults are the fields every access log already records that carry
+    /// no identity: content negotiation plus `x-request-id` for correlation.
+    ///
+    /// `referer` and `location` are deliberately absent — see the design spec.
+    /// `query` / `cookie` / `ctx` are empty because their key names are entirely
+    /// business-defined; there is no universally safe name.
+    fn default() -> Self {
+        Self {
+            header: [
+                "user-agent",
+                "origin",
+                "content-type",
+                "content-length",
+                "accept",
+                "x-request-id",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            resp_header: [
+                "content-type",
+                "content-length",
+                "cache-control",
+                "retry-after",
+                "x-request-id",
+            ]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+            query: Vec::new(),
+            cookie: Vec::new(),
+            ctx: Vec::new(),
+        }
+    }
+}
+
+impl UnmaskedKeys {
+    /// Whether `name` from `source` may be logged in clear.
+    ///
+    /// Category-1 sources (`routeLabel` / `routeAnnotation`) are never masked and
+    /// bypass this check upstream; they answer `false` here so a caller that
+    /// wrongly consults this cannot widen anything.
+    pub fn allows(&self, source: LogExtSource, name: &str) -> bool {
+        match source {
+            LogExtSource::Header => self.header.iter().any(|k| k.eq_ignore_ascii_case(name)),
+            LogExtSource::RespHeader => self.resp_header.iter().any(|k| k.eq_ignore_ascii_case(name)),
+            LogExtSource::Query => self.query.iter().any(|k| k == name),
+            LogExtSource::Cookie => self.cookie.iter().any(|k| k == name),
+            LogExtSource::Ctx => self.ctx.iter().any(|k| k == name),
+            LogExtSource::RouteLabel | LogExtSource::RouteAnnotation => false,
+        }
+    }
 }
 
 impl EdgionGatewayConfigSpec {
@@ -872,5 +972,70 @@ spec:
         let config: EdgionGatewayConfig = serde_yaml::from_str(yaml).expect("Should parse");
         assert_eq!(config.spec.max_retries, 10);
         assert!(config.spec.http_timeout.is_none());
+    }
+}
+
+#[cfg(test)]
+mod access_log_extern_policy_tests {
+    use super::*;
+    use crate::resources::edgion_plugins::LogExtSource;
+
+    #[test]
+    fn default_whitelist_allows_safe_headers_only() {
+        let w = UnmaskedKeys::default();
+        assert!(w.allows(LogExtSource::Header, "user-agent"));
+        assert!(w.allows(LogExtSource::Header, "content-type"));
+        // Header matching is case-insensitive (HTTP semantics).
+        assert!(w.allows(LogExtSource::Header, "User-Agent"));
+
+        // `referer` leaks someone else's full URL (session ids in the query);
+        // `location` carries OAuth implicit tokens and reset links. Neither is a
+        // default. Both remain addable by an operator.
+        assert!(!w.allows(LogExtSource::Header, "referer"));
+        assert!(!w.allows(LogExtSource::RespHeader, "location"));
+        // Weak PII / noise.
+        assert!(!w.allows(LogExtSource::Header, "accept-language"));
+        assert!(!w.allows(LogExtSource::Header, "accept-encoding"));
+    }
+
+    #[test]
+    fn default_whitelist_is_empty_for_business_defined_sources() {
+        // No key name is universally safe for these — operators opt in per cluster.
+        let w = UnmaskedKeys::default();
+        assert!(!w.allows(LogExtSource::Query, "page"));
+        assert!(!w.allows(LogExtSource::Cookie, "session"));
+        assert!(!w.allows(LogExtSource::Ctx, "tenant_id"));
+    }
+
+    #[test]
+    fn category_one_sources_are_never_consulted() {
+        // routeLabel/routeAnnotation bypass the whitelist entirely upstream of
+        // this call; `allows` must still answer false so a caller that wrongly
+        // consults it cannot accidentally widen anything.
+        let w = UnmaskedKeys::default();
+        assert!(!w.allows(LogExtSource::RouteLabel, "app"));
+        assert!(!w.allows(LogExtSource::RouteAnnotation, "owner"));
+    }
+
+    #[test]
+    fn cookie_and_ctx_names_are_case_sensitive() {
+        let w = UnmaskedKeys {
+            cookie: vec!["Session".to_string()],
+            ctx: vec!["tenant_id".to_string()],
+            ..Default::default()
+        };
+        assert!(w.allows(LogExtSource::Cookie, "Session"));
+        assert!(!w.allows(LogExtSource::Cookie, "session"));
+        assert!(w.allows(LogExtSource::Ctx, "tenant_id"));
+        assert!(!w.allows(LogExtSource::Ctx, "TENANT_ID"));
+    }
+
+    #[test]
+    fn operator_overrides_only_the_named_list() {
+        let policy: AccessLogExternPolicy = serde_yaml::from_str("unmaskedKeys:\n  cookie: [tier]\n").unwrap();
+        // The named list is replaced...
+        assert!(policy.unmasked_keys.allows(LogExtSource::Cookie, "tier"));
+        // ...and the unnamed ones keep their defaults.
+        assert!(policy.unmasked_keys.allows(LogExtSource::Header, "user-agent"));
     }
 }

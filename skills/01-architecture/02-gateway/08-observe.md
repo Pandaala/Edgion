@@ -35,12 +35,12 @@ pub struct AccessLogEntry<'a> {
     pub backend_context: Option<&'a BackendContext>,
     pub stage_logs: &'a [StageLogs],             // plugin execution logs
     pub conn_est: Option<bool>,                   // whether the upstream connection is established
-    pub ctx: AllowlistedCtx<'a>,                  // ctx_map projection (deny-by-default opt-in)
+    pub ext: LogExt,                              // AccessLogExtern-declared fields
 }
 ```
 
 - `RouteMatchInfo` is an `untagged` enum supporting both HTTP (`MatchInfo`) and gRPC (`GrpcMatchInfo`) match info.
-- `ctx` projects plugin context variables (`ctx_map`) into the log **deny-by-default**: only keys allow-listed on the matched route (`edgion.io/log-ctx-keys` / `edgion.io/log-keys` `type: ctx`) are emitted, and known-sensitive keys stay hard-blocked. See `skills/03-coding/observability/00-access-log.md`.
+- `ext` is populated at serialization time (inside `logging()`) by resolving up to three tiers of `AccessLogExtern` declarations (`EdgionGatewayConfig.spec.globalPluginsRef` → Gateway `edgion.io/edgion-plugins` → route `ExtensionRef`) against the live plugin store — **not** by anything that ran earlier in the request. `AccessLogExtern` is a declaration, never an executed filter; this is why it survives 404 / 421 / the 400 family, which return before any plugin runs. Omitted when nothing was collected. See `skills/03-coding/observability/00-access-log.md`.
 - Built from EdgionHttpContext via `AccessLogEntry::from_context(ctx)`.
 - JSON serialization uses serde's `skip_serializing_if` to reduce output size.
 

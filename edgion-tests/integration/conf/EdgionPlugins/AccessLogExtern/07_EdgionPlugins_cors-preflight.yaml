@@ -1,0 +1,21 @@
+# ext_present_on_cors_preflight: the global preflight handler short-circuits
+# an OPTIONS request (Origin + Access-Control-Request-Method) before Step 2
+# plugin execution — but route matching already ran, so the route-tier
+# accessLogExtern declaration below still resolves at logging().
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-cors-preflight
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Cors
+      config:
+        allowOrigins: "https://preflight-client.example.com"
+        allowMethods: "GET,POST"
+        allowHeaders: "Content-Type"
+  accessLogExtern:
+    - key: preflight_field
+      from: routeLabel
+      name: tier

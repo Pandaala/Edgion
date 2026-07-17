@@ -60,7 +60,8 @@ pub struct EdgionGatewayConfig {
     #[serde(default = "default_access_log_config")]
     pub access_log: LogConfig,
 
-    /// Sensitive data masking for access logs. Disabled by default.
+    /// Sensitive data masking for access logs. Defaults to `replace`
+    /// (privacy-by-default); set `mode: off` to opt out.
     ///
     /// YAML example (replace mode):
     ///   access_log_sensitive:
@@ -1102,11 +1103,14 @@ mod tests {
     }
 
     #[test]
-    fn test_access_log_sensitive_default_is_off() {
+    fn test_access_log_sensitive_default_is_replace() {
+        // Privacy-by-default: `ext` rendering (and the built-in sensitive
+        // fields) follow this mode, so shipping `off` would leave the
+        // EdgionGatewayConfig whitelist inert out of the box.
         let cfg: EdgionGatewayConfig = serde_yaml::from_str("{}").unwrap();
         assert!(matches!(
             cfg.access_log_sensitive.mode,
-            edgion_resources::sensitive::SensitiveMode::Off
+            edgion_resources::sensitive::SensitiveMode::Replace
         ));
     }
 

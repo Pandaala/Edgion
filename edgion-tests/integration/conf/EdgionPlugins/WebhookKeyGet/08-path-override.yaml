@@ -96,6 +96,13 @@ metadata:
   name: wh8-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh8_overridden
+      from: ctx
+      name: wh8_overridden
+    - key: wh8_ignored
+      from: ctx
+      name: wh8_ignored
   requestPlugins:
     - enable: true
       type: CtxSet
@@ -127,8 +134,6 @@ kind: HTTPRoute
 metadata:
   name: wh8-route
   namespace: edgion-default
-  annotations:
-    edgion.io/log-ctx-keys: "wh8_overridden,wh8_ignored"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

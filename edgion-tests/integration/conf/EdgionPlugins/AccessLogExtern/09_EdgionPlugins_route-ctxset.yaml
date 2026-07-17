@@ -1,0 +1,19 @@
+# global_ctx_reads_route_stage_ctxset: this route-tier resource only runs a
+# CtxSet plugin (writes ctx var `tenant_id`); the AccessLogExtern declaration
+# that reads it (`from: ctx name: tenant_id`, key `tenant`) lives on the
+# GLOBAL tier (03_EdgionPlugins_als-global.yaml). Collection happens once, at
+# logging() time, after every stage has run — so the global tier's collector
+# call sees the final ctx state regardless of which tier's plugin wrote it.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-route-ctxset
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: CtxSet
+      config:
+        vars:
+          - name: tenant_id
+            template: "acme-tenant-42"

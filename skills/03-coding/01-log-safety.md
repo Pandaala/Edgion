@@ -227,7 +227,7 @@ Use during code review:
 - [ ] Do logs contain a full resource spec / backend address? If so, downgrade to debug
 - [ ] Do new control-plane logs include `kind` + `name/namespace` + `rv`? (Can be omitted inside a span — provided automatically by the span)
 - [ ] If the resource has been synced to the data plane, is `sv` present in the access log?
-- [ ] Do new `ctx_map` keys contain sensitive information? This is review-blocking: keep deny-by-default projection and hard blocks/masking
+- [ ] Does a new `ctx_map` key store claims/decrypted payloads/tokens/secrets? Add it to `ACCESS_LOG_BLOCKED_CTX_KEYS` (`edgion-resources/src/resources/edgion_plugins/plugin_configs/access_log_extern.rs`) so no `AccessLogExtern from: ctx` declaration can ever project it. This is review-blocking.
 - [ ] Do plugin stage logs record a full username/token or unmasked dynamic error? This is review-blocking
 
 ---
@@ -319,5 +319,5 @@ This table is kept as a historical record; there are no remaining open items in 
 | ~~`connection_filter_bridge.rs`~~ | ~~Connection-filter debug/info~~ | ~~Remove all~~ | Fixed |
 | ~~`grpc/match_unit.rs`~~ | ~~Request-level warn~~ | ~~Remove~~ | Fixed |
 | ~~`preflight_handler.rs`~~ | ~~preflight debug~~ | ~~Remove~~ | Fixed |
-| ~~Access log `ctx_map`~~ | ~~Sensitive claim keys (`jwt_claims` / `oidc_claims` / `jwe_payload`) flattened verbatim into the access log~~ | `entry.rs` `AllowlistedCtx` is deny-by-default: ctx vars reach the log only via the per-route opt-in allowlist (`edgion.io/log-ctx-keys` or `edgion.io/log-keys` `type: ctx`), and the three sensitive keys stay hard-blocked even if allow-listed | Fixed |
+| ~~Access log `ctx_map`~~ | ~~Sensitive claim keys (`jwt_claims` / `oidc_claims` / `jwe_payload`) flattened verbatim into the access log~~ | Ctx vars reach the log only via an explicit `AccessLogExtern from: ctx` declaration; the three sensitive keys stay hard-blocked (`ACCESS_LOG_BLOCKED_CTX_KEYS`) even if declared. (Superseded the earlier per-route ctx-key allowlist annotation / `AllowlistedCtx`, both deleted.) | Fixed |
 | ~~LDAP/JWT auth plugin username~~ | ~~username flowing into stage_logs~~ | Wired into the `access_log_sensitive` global masking switch with explicit `sensitive(...)` markers | Fixed |

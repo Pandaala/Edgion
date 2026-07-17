@@ -107,10 +107,10 @@ rate_limit:
   max_estimator_slots_k: 1024     # CMS maximum precision cap
   gateway_instance_count: 1       # Cluster rate limiting: instance count (static fallback when no Controller push)
 
-# ─── Log redaction (off by default) ────────────────────────────────
+# ─── Log redaction (replace by default) ────────────────────────────
 
 access_log_sensitive:
-  mode: off                       # off | replace | wrap
+  mode: replace                   # off | replace | wrap
   # replace_with: "***"           # Replacement string when mode=replace
   # wrap_prefix: "<E>"            # Prefix when mode=wrap
   # wrap_suffix: "</E>"           # Suffix when mode=wrap
@@ -302,11 +302,11 @@ All business log types (`access_log`, `ssl_log`, `tcp_log`, `tls_log`, `udp_log`
 
 ### access_log_sensitive
 
-Controls redaction of fields marked sensitive in the access log, ssl.log, and plugin log. **Disabled (`off`) by default** — all sensitive values are emitted in plaintext.
+Controls redaction of fields marked sensitive in the access log, ssl.log, and plugin log. **`mode=replace` by default** — sensitive values render `***` out of the box. This is a wider blast radius than the built-in field list alone: the nine built-in fields (`client_addr` / `remote_addr` / `path` / `x_forwarded_for` / `sni` / `request_uri` / client-cert `subject`/`sans`/`cn`), 46 `sensitive()`-marked plugin-log parameters across 13 plugins, DSL `log_warn`/`log_error` user args, ssl.log mTLS-failure cert fields, and — new — any `ext` field declared via [`AccessLogExtern`](../observability/access-log.md) that is not whitelisted in `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys`.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `mode` | `Enum` | `off` | Redaction mode: `off`, `replace`, or `wrap` |
+| `mode` | `Enum` | `replace` | Redaction mode: `off`, `replace`, or `wrap` |
 | `replace_with` | `String` | `"***"` | Replacement string used when `mode=replace` |
 | `wrap_prefix` | `String` | `"<E>"` | Prefix added when `mode=wrap` |
 | `wrap_suffix` | `String` | `"</E>"` | Suffix added when `mode=wrap` |
@@ -318,6 +318,8 @@ Behavior (using `client_addr=192.168.1.10`):
 | `off` | `192.168.1.10` |
 | `replace` | `***` |
 | `wrap` | `<E>192.168.1.10</E>` |
+
+**There is no configuration that gives readable `path` + masked `AccessLogExtern` cookie.** `off` makes the whitelist inert (every `ext` field clear); `wrap` writes the raw value into the local log file/stdout (tagged for a downstream ES/ClickHouse pipeline to drop, but present locally). Pick one of the two trade-offs deliberately — this is a design choice, not a gap.
 
 ## Common Scenarios
 
@@ -355,7 +357,7 @@ rate_limit:
 
 ### Redacting Sensitive Fields in Access Logs
 
-Replace sensitive values (client IPs, SNI, client-certificate fields, etc.) with a placeholder in the access log:
+`mode: replace` is already the default, so the sensitive built-in fields (client IPs, SNI, client-certificate fields, `AccessLogExtern` `ext` fields not on the whitelist, etc.) are masked out of the box. Only add the block explicitly if you want to override `replace_with`, or opt back into plaintext:
 
 ```yaml
 access_log_sensitive:

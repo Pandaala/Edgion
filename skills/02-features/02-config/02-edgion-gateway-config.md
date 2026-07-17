@@ -106,6 +106,15 @@ spec:
     - name: "global-cors"
       namespace: "edgion-system"            # default "default"
 
+  # ─── Access log extension masking whitelist ───
+  accessLogExtern:
+    unmaskedKeys:
+      header:     [user-agent, origin, content-type, content-length, accept, x-request-id]  # default set
+      respHeader: [content-type, content-length, cache-control, retry-after, x-request-id]   # default set
+      query: []                             # default empty; key names are 100% business-defined
+      cookie: []                            # default empty
+      ctx: []                               # default empty
+
   # ─── Preflight policy ───
   preflightPolicy:
     mode: "cors-standard"                   # "cors-standard" | "all-options"
@@ -243,6 +252,70 @@ globalPluginsRef:
 ```
 
 Global plugins are applied to all routes and execute before route-level plugins.
+
+### spec.accessLogExtern
+
+The masking whitelist for `AccessLogExtern`-declared access-log fields
+(`EdgionPlugins.spec.accessLogExtern`). Platform-owned: it lives here —
+cluster-scoped, next to `globalPluginsRef` — rather than in a namespaced
+resource, so a tenant who owns a route and its own `EdgionPlugins` cannot
+widen masking for the fleet. See
+[`../../03-coding/observability/00-access-log.md`](../../03-coding/observability/00-access-log.md)
+for the full `AccessLogExtern` design.
+
+```yaml
+accessLogExtern:
+  unmaskedKeys:
+    header:     [user-agent, origin, content-type, content-length, accept, x-request-id]
+    respHeader: [content-type, content-length, cache-control, retry-after, x-request-id]
+    query:      []
+    cookie:     []
+    ctx:        []
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `unmaskedKeys.header` | `Vec<String>` | `[user-agent, origin, content-type, content-length, accept, x-request-id]` | Request header names logged in clear. Matched case-insensitively. |
+| `unmaskedKeys.respHeader` | `Vec<String>` | `[content-type, content-length, cache-control, retry-after, x-request-id]` | Response header names logged in clear. Matched case-insensitively. |
+| `unmaskedKeys.query` | `Vec<String>` | `[]` | Query parameter names logged in clear. Case-sensitive. |
+| `unmaskedKeys.cookie` | `Vec<String>` | `[]` | Cookie names logged in clear. Case-sensitive. |
+| `unmaskedKeys.ctx` | `Vec<String>` | `[]` | Ctx-var names logged in clear. Case-sensitive. |
+
+**Keyed by source type, not a flat list**: `user-agent` as a header is
+harmless, but a cookie of the same name is a different object — a flat list
+could not distinguish them.
+
+**Why `query`/`cookie`/`ctx` default empty and `header`/`respHeader` don't.**
+The header/respHeader defaults are fields every access log already effectively
+carries and that identify no one: content negotiation plus `x-request-id` for
+correlation. `referer` and `location` are deliberately excluded even though
+they are common in other gateways' combined-log defaults — `referer` is
+someone else's full URL, often carrying a session id in its query, and
+`location` can carry OAuth implicit-flow tokens or presigned-URL signatures.
+`query`/`cookie`/`ctx` default to empty because their key names are entirely
+business-defined; there is no name that is universally safe across clusters
+(`page` looks harmless until the next tenant uses it for something else).
+
+**A whitelist hit bypasses masking; a miss does not drop the field** — it
+still emits the key, rendered per `access_log_sensitive.mode` (see
+[`01-gateway-config.md`](01-gateway-config.md#access_log_sensitive)). Category
+1 sources (`routeLabel`/`routeAnnotation`) bypass this whitelist entirely and
+are always clear — they are operator-authored route configuration, not
+request data.
+
+**Hard blocklist is separate from this whitelist and is not configurable
+here.** Names like `authorization`, `set-cookie`, `x-api-key` (`header`), and
+`jwt_claims`/`oidc_claims`/`jwe_payload` (`ctx`) are rejected at `EdgionPlugins`
+ingest regardless of this whitelist — widening them requires a code change,
+not a CR edit.
+
+**Scope caveat.** `bound_listeners` dedup (`runtime/server/base.rs`) skips a
+listener already bound at the same addr/protocol, so when two Gateways of
+different GatewayClasses share an addr:port, the first Gateway's
+`EdgionGatewayConfig` — including this whitelist — wins for that listener.
+The whitelist is therefore effectively **per-listener**, not per-Gateway.
+Document this in deployment topology; there is no mechanism enforcing
+per-Gateway isolation here.
 
 ## Differences from Gateway YAML Configuration
 

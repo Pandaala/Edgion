@@ -29,9 +29,9 @@ pub use entry::{
     UpstreamResponseFilterEntry,
 };
 pub use plugin_configs::{
-    AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, BasicAuthSecretGroup, CaseType, CertHeaderFormat,
-    CertSourceMode, CompiledTemplate, ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig, CtxVarRule,
-    DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid,
+    AccessLogExternField, AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, BasicAuthSecretGroup,
+    CaseType, CertHeaderFormat, CertSourceMode, CompiledTemplate, ConsumerBy, CorsConfig, CsrfConfig, CtxSetConfig,
+    CtxVarRule, DebugAccessLogToHeaderConfig, DefaultAction, DirectEndpointConfig, DirectEndpointOnInvalid,
     DirectEndpointOnMissing, DomainTarget, DslConfig, DynUpstreamOnInvalid, DynUpstreamOnMissing, DynUpstreamOnNoMatch,
     DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig, EndpointAuthMethod, EndpointExtract, ExtProcConfig,
     ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, FaultHeaderEntry,
@@ -39,7 +39,7 @@ pub use plugin_configs::{
     HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup,
     HmacCredential, HttpMethod, IpRestrictionConfig, IpSource, JweContentEncryption, JweDecryptConfig,
     JweKeyManagement, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, KeyAuthConfig, KeyMetadata, LdapAuthConfig,
-    LimitHeaderNames, LruCacheConfig, MappingConfig, MockConfig, OnMissing, OnMissingKey, OnRedisFailure,
+    LimitHeaderNames, LogExtSource, LruCacheConfig, MappingConfig, MockConfig, OnMissing, OnMissingKey, OnRedisFailure,
     OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy,
     RateLimitRedisConfig, RealIpConfig, RegexUri, RegionDef, RegionRouteConfig, ReplaceConfig,
     RequestRestrictionConfig, ResolvedBasicAuthUser, ResolvedJweCredential, ResolvedJwtCredential,
@@ -78,6 +78,16 @@ pub struct EdgionPluginsSpec {
     /// Upstream response stage plugins (async)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_response_plugins: Option<Vec<UpstreamResponseEntry>>,
+
+    /// Access log extension declarations.
+    ///
+    /// **Not an execution stage.** These entries never run as filters; they are
+    /// read when the access log entry is serialized. Modeling them as a
+    /// request-stage filter would lose them on every short-circuit path (404,
+    /// 403 from an earlier Deny, CORS preflight, ACME, redirect) — exactly the
+    /// entries an auditor needs — and would race `CtxSet` for `from: ctx`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_log_extern: Option<Vec<AccessLogExternField>>,
 }
 
 /// Status of EdgionPlugins
@@ -156,5 +166,10 @@ impl EdgionPlugins {
     /// Get upstream response entries as a slice
     pub fn upstream_response_entries(&self) -> &[UpstreamResponseEntry] {
         self.spec.upstream_response_plugins.as_deref().unwrap_or(&[])
+    }
+
+    /// Get the access log extension declarations as a slice.
+    pub fn access_log_extern_fields(&self) -> &[AccessLogExternField] {
+        self.spec.access_log_extern.as_deref().unwrap_or(&[])
     }
 }

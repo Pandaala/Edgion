@@ -36,7 +36,11 @@ pub async fn logging(
 
     record_request_metrics(ctx, _e);
 
-    let entry = AccessLogEntry::from_context(ctx);
+    let mut entry = AccessLogEntry::from_context(ctx);
+    // Resolve operator-declared `ext` fields here rather than in a request-stage
+    // filter: this is the only point every request reaches, including the ones
+    // that short-circuited before any plugin ran and the ones a Deny terminated.
+    entry.ext = crate::observe::access_log::collect(edgion_http, session, ctx);
     // Extract LogMeta BEFORE serialization — typed fields needed by OTLP sender.
     // entry.timestamp is i64 milliseconds; guard negative values before casting.
     let meta = LogMeta {

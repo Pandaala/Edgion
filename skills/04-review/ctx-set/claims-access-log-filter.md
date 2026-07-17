@@ -1,16 +1,44 @@
 ---
 name: claims-access-log-filter
-description: Read when reviewing store_claims_in_ctx / store_payload_in_ctx flowing JWT/JWE claims unfiltered into the access log / jwt_claims / oidc_claims / jwe_payload keys flatten into access-log JSON via ctx_map (gateway-plugins-03).
+description: Read when reviewing store_claims_in_ctx / store_payload_in_ctx flowing JWT/JWE claims unfiltered into the access log / jwt_claims / oidc_claims / jwe_payload keys reaching access-log JSON via ctx_map (gateway-plugins-03).
 ---
 
 # gateway-plugins-03 — JWT/JWE claims unfiltered into access log
 
-**Status / verdict**: fixed (gateway-plugins-03, 2026-05-25; blocklist `FilteredCtx` lost from the tree and re-landed 2026-06-14; **root-cause hardened 2026-06-21** — the default-on flatten was removed entirely in favor of a deny-by-default opt-in allowlist).
+**Status / verdict**: fixed (gateway-plugins-03, 2026-05-25; blocklist `FilteredCtx` lost from the tree and re-landed 2026-06-14; root-cause hardened 2026-06-21 with a deny-by-default per-route allowlist; **superseded again 2026-07-16** — the per-route allowlist annotation was itself deleted in favor of an explicit `AccessLogExtern` declaration).
 
-When reviewing findings of the form "`store_claims_in_ctx` / `store_payload_in_ctx` flow JWT/JWE claims unfiltered into the access log / `jwt_claims` / `oidc_claims` / `jwe_payload` keys flatten into access-log JSON via `#[serde(flatten)] ctx_map` / no allowlist or masking on `ctx_map` claim keys (gateway-plugins-03)": fixed.
+When reviewing findings of the form "`store_claims_in_ctx` / `store_payload_in_ctx` flow JWT/JWE claims unfiltered into the access log / `jwt_claims` / `oidc_claims` / `jwe_payload` keys reach access-log JSON via `ctx_map` / no allowlist or masking on `ctx_map` claim keys (gateway-plugins-03)": fixed.
 
-**Current design (2026-06-21): deny-by-default allowlist.** The access-log projection of `ctx_map` goes through `AllowlistedCtx` (`edgion-gateway/src/observe/access_log/entry.rs`). A `ctx_map` entry is emitted **only** when its key appears in the matched route's opt-in allowlist (the `edgion.io/log-ctx-keys` annotation — or the `type: ctx` entries of the unified `edgion.io/log-keys` JSON annotation — on HTTPRoute / GRPCRoute, resolved once at conf-handler build time via `resolve_log_ctx_keys` and carried on `MatchInfo`/`GrpcMatchInfo.log_ctx_keys`). When a route opts nothing in (the default), **no** context variable is logged. The former "flatten every `ctx_map` entry minus a blocklist" behavior is gone — this removes the standing risk that a future plugin writing a secret into `ctx_map` would leak by default unless someone remembered to blocklist it.
+**Current design (2026-07-16): explicit declaration, hard-blocked at the source-type level.** A `ctx_map` value only reaches the log when an operator writes an `AccessLogExtern` entry naming it — `{key: <field>, from: ctx, name: <ctx_map key>}` on `EdgionPlugins.spec.accessLogExtern` — and that declaration is resolved only at `logging()` (never inside a request-stage filter). This superseded the 2026-06-21 `AllowlistedCtx` design (a per-route ctx-key allowlist annotation, plus a separate unified JSON log-projection annotation), both of which are now deleted entirely; there is no compatibility shim.
 
-The `ACCESS_LOG_BLOCKED_CTX_KEYS` blocklist (`jwt_claims`, `oidc_claims`, `jwe_payload`) is **kept as a secondary, defense-in-depth guard**: a hard-blocked key is dropped even if an operator explicitly allow-lists it, so claims/payloads can never be logged by mistake. Downstream plugins still read these keys via `session.get_ctx_var` (in-memory, per request); only the log projection is gated. Serialization stays allocation-free (no rebuilt map), since the access log runs on the data-plane path.
+The `jwt_claims` / `oidc_claims` / `jwe_payload` blocklist survives as `ACCESS_LOG_BLOCKED_CTX_KEYS`
+(`edgion-resources/src/resources/edgion_plugins/plugin_configs/access_log_extern.rs`) and enforcement
+is two-part, not a single ingest gate — **admission in this repo is lenient**: a preparse error is
+reported on the resource's status, but the resource still lands in the cache conf_sync serves to the
+gateway.
 
-This supersedes the previously-rejected "Option B" (config-driven `[access_log] ctx_keys` allowlist, default empty). That was rejected on the grounds that default-empty regresses the documented `flatten` observability contract; that contract was **intentionally retired** here in favor of explicit opt-in. Unit regressions: `access_log_omits_ctx_without_allowlist` and `allowlisted_ctx_projects_only_allowed_non_blocked_keys` in `entry.rs`. Any new `ctx_map` key that stores claims/payloads/secrets SHOULD still be added to `ACCESS_LOG_BLOCKED_CTX_KEYS` (belt-and-suspenders). Re-reports of the unfiltered-flatten form are not accepted; verify `from_context` builds `AllowlistedCtx` gated by `log_ctx_keys` before re-reporting.
+- **Reported at `EdgionPlugins` ingest**: an `AccessLogExtern` entry naming a blocked `ctx` key
+  produces a preparse error surfaced on the resource's `Accepted=False` status condition. This is
+  the operator-facing signal — it does **not** keep the resource off the cluster; the entry is
+  still present in the spec the controller caches and syncs.
+- **Dropped at gateway load**: the actual enforcement is `compile_plugins`
+  (`edgion-gateway/src/plugins/http/plugin_store.rs`), which `retain()`s the declared fields and
+  drops any whose `validation_error()` is `Some` when the gateway loads the resource. A blocked
+  `ctx` key never reaches `ext` because it is never in the compiled `LogExt` field list — not
+  because it was kept off the cluster.
+
+Downstream plugins still read these keys via `session.get_ctx_var` (in-memory, per request); only
+the log projection is gated. Any new `ctx_map` key that stores claims, decrypted payloads, tokens,
+or other secrets SHOULD still be added to `ACCESS_LOG_BLOCKED_CTX_KEYS` (belt-and-suspenders — it
+stays a hard, un-whitelistable block regardless of the EGC masking whitelist).
+
+Full design: `docs/superpowers/specs/2026-07-16-access-log-extern-plugin-design.md`. Unit coverage:
+`blocked_ctx_keys_are_rejected` in `access_log_extern.rs`;
+`access_log_extern_blocked_header_is_reported_at_ingest` in
+`edgion-resources/src/resources/edgion_plugins/tests.rs` (reports on `Accepted=False`; does not
+keep the resource off the cluster); `compile_plugins` drop coverage in
+`edgion-gateway/src/plugins/http/plugin_store.rs` (the actual enforcement). To confirm the blocklist
+holds, check both halves: `is_blocked(LogExtSource::Ctx, ...)` (the shared list the report and the
+drop both consult) and the `compile_plugins` `retain()` (where the drop actually happens) —
+`validate_plugins`/ingest reporting alone does not prove the field is kept out of the log; the
+`retain()` is what does.

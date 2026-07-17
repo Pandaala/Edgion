@@ -3,6 +3,7 @@
 // Tests for EdgionPlugins functionality (independent from Gateway tests)
 // Corresponds to conf/EdgionPlugins/ directory structure
 
+mod access_log_extern;
 mod all_endpoint_status;
 mod bandwidth_limit;
 mod basic_auth;
@@ -51,6 +52,7 @@ mod trace_context;
 mod wasm;
 mod webhook_key_get;
 
+pub use access_log_extern::AccessLogExternTestSuite;
 pub use all_endpoint_status::AllEndpointStatusTestSuite;
 pub use bandwidth_limit::BandwidthLimitTestSuite;
 pub use basic_auth::{

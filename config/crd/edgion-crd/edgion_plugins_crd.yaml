@@ -421,6 +421,49 @@ spec:
                         type: object
                         x-kubernetes-preserve-unknown-fields: true
 
+                # ============================================
+                # Access Log Extension Declarations (not a stage)
+                # ============================================
+                accessLogExtern:
+                  type: array
+                  description: >-
+                    Access log extension declarations. Not an execution stage: these
+                    entries never run as filters, they are read when the access log
+                    entry is serialized. Each entry projects exactly one value into
+                    the entry's `ext` block.
+                  maxItems: 16
+                  items:
+                    type: object
+                    required:
+                      - key
+                      - from
+                      - name
+                    properties:
+                      key:
+                        type: string
+                        description: "Field name inside the entry's ext block"
+                        minLength: 1
+                        maxLength: 63
+                      from:
+                        type: string
+                        description: >-
+                          Source type. routeLabel/routeAnnotation are never masked;
+                          header/query/cookie/respHeader/ctx are masked unless the
+                          key is whitelisted in EdgionGatewayConfig.
+                        enum:
+                          - routeLabel
+                          - routeAnnotation
+                          - header
+                          - query
+                          - cookie
+                          - respHeader
+                          - ctx
+                      name:
+                        type: string
+                        description: "Key within the source"
+                        minLength: 1
+                        maxLength: 63
+
             status:
               type: object
               description: "Status of EdgionPlugins"

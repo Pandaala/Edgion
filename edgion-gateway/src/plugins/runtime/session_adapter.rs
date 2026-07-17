@@ -35,6 +35,26 @@ pub(crate) fn route_meta_field(meta: &kube::api::ObjectMeta, selector: &str) -> 
     }
 }
 
+/// Read one cookie from a request's `Cookie` header.
+///
+/// Free function so both `PluginSession::get_cookie` and the access-log `ext`
+/// collector share one parser — the collector cannot build a
+/// `PingoraSessionAdapter` (that needs `&mut` borrows the logging stage does not
+/// have).
+pub fn cookie_value(headers: &http::HeaderMap, name: &str) -> Option<String> {
+    headers.get("Cookie").and_then(|v| v.to_str().ok()).and_then(|cookies| {
+        cookies.split(';').find_map(|pair| {
+            let mut parts = pair.trim().splitn(2, '=');
+            let key = parts.next()?;
+            if key == name {
+                parts.next().map(|v| v.to_string())
+            } else {
+                None
+            }
+        })
+    })
+}
+
 pub struct PingoraSessionAdapter<'a> {
     inner: &'a mut Session,
     ctx: &'a mut EdgionHttpContext,
@@ -330,22 +350,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     fn get_cookie(&self, name: &str) -> Option<String> {
-        self.inner
-            .req_header()
-            .headers
-            .get("Cookie")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|cookies| {
-                cookies.split(';').find_map(|pair| {
-                    let mut parts = pair.trim().splitn(2, '=');
-                    let key = parts.next()?;
-                    if key == name {
-                        parts.next().map(|v| v.to_string())
-                    } else {
-                        None
-                    }
-                })
-            })
+        cookie_value(&self.inner.req_header().headers, name)
     }
 
     fn get_path(&self) -> &str {
@@ -926,6 +931,14 @@ mod route_meta_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cookie_value_finds_named_cookie_among_others() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("Cookie", http::HeaderValue::from_static("a=1; b=2"));
+        assert_eq!(cookie_value(&headers, "b").as_deref(), Some("2"));
+        assert_eq!(cookie_value(&headers, "c"), None);
+    }
 
     #[test]
     fn test_parse_path_params_single_param() {

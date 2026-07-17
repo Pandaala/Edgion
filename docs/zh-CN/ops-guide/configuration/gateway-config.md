@@ -106,10 +106,10 @@ rate_limit:
   max_estimator_slots_k: 1024     # CMS 最大精度上限
   gateway_instance_count: 1       # 集群限流：实例数（无 Controller 推送时的静态 fallback）
 
-# ─── 日志脱敏（默认关闭）──────────────────────────────────────────
+# ─── 日志脱敏（默认 replace）────────────────────────────────────
 
 access_log_sensitive:
-  mode: off                        # off | replace | wrap
+  mode: replace                    # off | replace | wrap
   # replace_with: "***"            # mode=replace 时的替换字符串
   # wrap_prefix: "<E>"             # mode=wrap 时的前缀
   # wrap_suffix: "</E>"            # mode=wrap 时的后缀
@@ -249,11 +249,11 @@ Gateway 采用**三端口模型**：
 
 ### access_log_sensitive
 
-控制 access log、ssl.log、plugin log 中已标注敏感字段的脱敏行为。**默认关闭**——所有敏感字段以明文输出，与历史行为一致。
+控制 access log、ssl.log、plugin log 中已标注敏感字段的脱敏行为。**默认 `mode=replace`**（已从旧默认 `off` 切换）——敏感字段开箱即渲染为 `***`。
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `mode` | `Enum` | `"off"` | 脱敏模式：`"off"`（关闭，明文）/ `"replace"`（整体替换）/ `"wrap"`（包裹标记） |
+| `mode` | `Enum` | `"replace"` | 脱敏模式：`"off"`（关闭，明文）/ `"replace"`（整体替换）/ `"wrap"`（包裹标记） |
 | `replace_with` | `String` | `"***"` | `mode=replace` 时整体替换敏感值的字符串 |
 | `wrap_prefix` | `String` | `"<E>"` | `mode=wrap` 时附加在敏感值前的前缀 |
 | `wrap_suffix` | `String` | `"</E>"` | `mode=wrap` 时附加在敏感值后的后缀 |
@@ -262,17 +262,20 @@ Gateway 采用**三端口模型**：
 
 | 模式 | 输出 | 用途 |
 |------|------|------|
-| `off` | `"1.2.3.4"` | 默认，明文，便于运维和调试 |
-| `replace` | `"***"` | 完全屏蔽敏感值，最强保护 |
+| `off` | `"1.2.3.4"` | 明文，便于运维和调试 |
+| `replace` | `"***"` | 默认，完全屏蔽敏感值，最强保护 |
 | `wrap` | `"<E>1.2.3.4</E>"` | 保留原值，但标记敏感片段，便于下游日志系统识别后做二次脱敏或审计 |
 
-**生效范围**：
+**生效范围**——比内置字段列表本身更大，不要假设它只覆盖内置字段：
 
-- **access log**：`client_addr`、`remote_addr`、`path`、`x_forwarded_for`、`sni`、客户端证书的 `subject`/`sans`/`cn`
-- **plugin log**：插件代码中通过 `sensitive(...)` 标注的参数；DSL 脚本里 `log_warn(value)` / `log_error(value)` 的用户参数
+- **access log**：`client_addr`、`remote_addr`、`path`、`x_forwarded_for`、`sni`、`request_uri`、客户端证书的 `subject`/`sans`/`cn`
+- **`AccessLogExtern` 声明的 `ext` 字段**（`EdgionPlugins.spec.accessLogExtern`）遵循同一个开关：`routeLabel`/`routeAnnotation` 来源永远明文，其余来源除非在 `EdgionGatewayConfig.spec.accessLogExtern.unmaskedKeys` 中列入白名单，否则按此 `mode` 渲染（白名单未命中仍会输出该字段，只是被脱敏，而非丢弃）。详见 [Access Log](../observability/access-log.md#扩展日志accesslogextern)。
+- **plugin log**：13 个插件中 46 处通过 `sensitive(...)` 标注的参数（real_ip 的 IP、basic/key/ldap/jwt/hmac 的用户名、direct_endpoint 的地址、region_route 的 key/region/host、proxy_rewrite 的 method 等）；DSL 脚本里 `log_warn(value)` / `log_error(value)` 的用户参数
 - **ssl.log**：mTLS 白名单校验失败时错误信息里的客户端证书字段
 
-**注意**：Wrap 模式自定义前后缀时，建议总长度（`wrap_prefix.len() + wrap_suffix.len()`）不超过 36 字节，否则会压缩 plugin log 单条目可写长度。
+**默认切换为 `replace` 的原因。** 由于 `ext` 渲染复用同一个开关，`mode=replace` 默认值是让 `AccessLogExtern` "默认脱敏" 成立的唯一因素。**不存在既保留可读 `path`、又对 `ext` 中的 cookie 脱敏的配置**：`off` 会让白名单失效（一切都明文，包括 `ext`）；`wrap` 会把原始值写进网关本地日志文件/stdout（用 `<E>...</E>` 标记以便下游 ES/ClickHouse 管道剥离，但网关自己的本地文件已经是明文）。这是刻意的单开关设计，不是疏漏——需要可读 path 时请在这两种权衡里二选一。同时注意 `access_log_options.include_raw_uri` 的交互：`replace` 默认下 `request_uri` 本身也会渲染为 `***`，仅开启该开关不再能得到可读的原始视图。
+
+**注意**：Wrap 模式自定义前后缀时，建议总长度（`wrap_prefix.len() + wrap_suffix.len()`）不超过 36 字节，否则会压缩 plugin log 单条目可写长度。集成测试基线在配置中显式设置 `access_log_sensitive.mode: off`，以便断言 `path` / `stage_logs` 内容保持可读；生产环境默认 `replace`。
 
 ## 常见配置场景
 
@@ -310,7 +313,7 @@ rate_limit:
 
 ### 启用日志脱敏
 
-合规场景下需要保护用户 IP、路径等敏感字段时，使用 `replace` 模式整体屏蔽：
+`mode: replace` 现在已是默认值，内置敏感字段（用户 IP、路径、`AccessLogExtern` 未列入白名单的 `ext` 字段等）开箱即被屏蔽。仅在需要自定义 `replace_with`、或需要主动切回明文时才显式写这个段：
 
 ```yaml
 access_log_sensitive:

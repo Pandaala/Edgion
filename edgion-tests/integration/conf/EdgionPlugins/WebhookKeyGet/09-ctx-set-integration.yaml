@@ -70,6 +70,10 @@ metadata:
   name: wh9-ctx-set
   namespace: edgion-default
 spec:
+  accessLogExtern:
+    - key: wh9_result
+      from: ctx
+      name: wh9_result
   requestPlugins:
     - enable: true
       type: CtxSet
@@ -104,8 +108,6 @@ kind: HTTPRoute
 metadata:
   name: wh9-route
   namespace: edgion-default
-  annotations:
-    edgion.io/log-ctx-keys: "wh9_result"
 spec:
   parentRefs:
     - name: edgion-plugins-gateway

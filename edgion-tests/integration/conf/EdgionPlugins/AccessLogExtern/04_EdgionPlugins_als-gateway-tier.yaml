@@ -1,0 +1,13 @@
+# Tier 2 (gateway-annotation) AccessLogExtern declaration, referenced by
+# 02_Gateway_edgion-test_als-gateway.yaml's `edgion.io/edgion-plugins`
+# annotation. Used only by three_tier_collision_route_wins.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: als-gateway-tier
+  namespace: edgion-default
+spec:
+  accessLogExtern:
+    - key: collide
+      from: header
+      name: x-gateway-val

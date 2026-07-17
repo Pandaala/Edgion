@@ -39,7 +39,7 @@ description: Use when reviewing observability code changes; provides the checkli
 | Print Secret.data | `tracing::info!(data = ?secret.data, ...)` | Print only `name/namespace` + field key list |
 | PluginLog writes original key value | `log.push(&format!("key={}", api_key))` | `log.push(&format!("kl={}", api_key.len()))` |
 | `{:?}` entire resource spec | `tracing::debug!(spec = ?route.spec)` | Forbidden even at debug level — print key_name + rv instead |
-| `ctx_map` serialized as-is | `serde_json::to_string(&ctx_map)` | Project via a deny-by-default allowlist (the access log uses `AllowlistedCtx` gated by the per-route `edgion.io/log-ctx-keys` / `edgion.io/log-keys` `type: ctx` opt-in) |
+| `ctx_map` serialized as-is | `serde_json::to_string(&ctx_map)` | Project via an explicit `AccessLogExtern from: ctx` declaration (`EdgionPlugins.spec.accessLogExtern`), resolved only at `logging()` — never inside a request-stage filter |
 
 **Historical cases** (used to identify the same pattern during reviews):
 
@@ -97,7 +97,7 @@ See [coding-standards/01-log-safety.md](../../03-coding/01-log-safety.md) Iron R
 
 - [ ] New keys added to `ctx_map` do not contain JWT / OIDC / JWE claims or other sensitive info
 - [ ] If sensitive-related keys must be stored, is the access-log projection still safe?
-  - The access-log projection of `ctx_map` is **deny-by-default** in `gateway/observe/access_log/entry.rs` (`AllowlistedCtx`): a ctx var is logged only when the matched route opts it in via the `edgion.io/log-ctx-keys` annotation (or the `type: ctx` entries of the unified `edgion.io/log-keys` annotation). The `ACCESS_LOG_BLOCKED_CTX_KEYS` blocklist remains as defense-in-depth — any new key that stores claims / payloads / secrets for downstream `get_ctx_var` reads SHOULD still be added there so it can never be logged even if mistakenly allow-listed.
+  - The access-log projection of `ctx_map` requires an explicit `AccessLogExtern from: ctx` declaration (`EdgionPlugins.spec.accessLogExtern`) naming the key; nothing reaches the log otherwise. The `ACCESS_LOG_BLOCKED_CTX_KEYS` blocklist (`jwt_claims`/`oidc_claims`/`jwe_payload`) is enforced at `EdgionPlugins` ingest — a declaration naming a blocked key is rejected outright (`Accepted=False`), not merely dropped at render time. Any new key that stores claims / payloads / secrets for downstream `get_ctx_var` reads SHOULD still be added to that blocklist so it can never be declared even by mistake.
 
 ---
 
