@@ -52,12 +52,6 @@ pub struct EdgionGatewayConfigSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preflight_policy: Option<PreflightPolicy>,
 
-    /// Enable ReferenceGrant validation for cross-namespace references (default: false)
-    /// When enabled, cross-namespace references in Routes and Gateways will be validated
-    /// against ReferenceGrant policies
-    #[serde(default)]
-    pub enable_reference_grant_validation: bool,
-
     /// Global LinkSys provider configuration
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub link_sys: Option<LinkSysGlobalConfig>,
@@ -396,7 +390,6 @@ impl Default for EdgionGatewayConfigSpec {
             security_protect: None,
             global_plugins_ref: None,
             preflight_policy: None,
-            enable_reference_grant_validation: false,
             link_sys: None,
             tcp_timeout: None,
             load_balancing: None,

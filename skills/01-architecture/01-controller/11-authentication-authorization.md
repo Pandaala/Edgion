@@ -66,9 +66,20 @@ There is a single role variant. `Restricted` is shared by the local admin token,
 ```
 get  list  list-keys  watch  create  update  delete
 failover  acme-trigger  conf-sync-rotate  reload  server-info  diagnostics  wipe-all  debug
+access-self
 ```
 
 `kind` is usually a `ResourceKind` string (e.g. `HTTPRoute`), but some endpoints map to **synthetic** classifier labels that are not ResourceKinds — e.g. `RegionRoute` for the aggregate region-route / failover endpoints. An unknown/unclassifiable route is **denied** (`403`), never allowed through.
+
+#### `access-self` is inherent, not grantable
+
+`access-self` (`GET /api/v1/access`, see [02-admin-api.md](02-admin-api.md)) is the one verb that is **not** subject to `CenterPolicy`. It is deliberately outside the policy engine in both directions:
+
+- `CenterPolicy::permits` returns `false` for it unconditionally, so **no rule — not even `verbs: ["*"]` + `kinds: ["*"]` — can grant it**.
+- `Verb::from_str("access-self")` returns `None`, so an operator cannot name it in `cli_tokens` / `center.rbac` config at all.
+- `authz_layer` instead short-circuits it **after** the `Role` lookup, so it is available to every authenticated identity and to none that is unauthenticated.
+
+The ordering is the security property: a missing `Role` still returns `401` before the short-circuit is reached, so this is authenticated-only self-introspection, never a public endpoint. It reports only the caller's own effective access, so it grants no visibility an identity did not already have.
 
 ### CenterPolicy semantics
 

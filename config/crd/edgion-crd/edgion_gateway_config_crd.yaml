@@ -223,14 +223,6 @@ spec:
                       minimum: 100
                       maximum: 599
 
-                # ============================================
-                # ReferenceGrant Validation
-                # ============================================
-                enableReferenceGrantValidation:
-                  type: boolean
-                  description: "Enable ReferenceGrant validation for cross-namespace references (default: true)"
-                  default: true
-
                 tcpTimeout:
                   type: object
                   description: "Timeout configuration for L4 TCP-transport relays"

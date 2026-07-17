@@ -4,6 +4,9 @@
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
+
+use crate::conf_mgr::conf_center::traits::ConfWriterError;
 
 use edgion_resources::resources::common::Condition;
 
@@ -108,4 +111,311 @@ where
 fn extract_api_version(content: &str) -> Option<String> {
     let value: serde_yaml::Value = serde_yaml::from_str(content).ok()?;
     value.get("apiVersion")?.as_str().map(ToString::to_string)
+}
+
+/// Merge an operator update with the server-owned portions of the current resource.
+///
+/// The request is authoritative for the resource body, including `spec` and
+/// top-level operator fields such as ConfigMap `data`. Only labels and
+/// annotations are mutable inside metadata. Identity, all other current
+/// metadata (including Kubernetes lifecycle fields), and status remain
+/// server-owned. Starting from the request is important: controller-resolved
+/// fields that happen to live below the current `spec` must never be copied
+/// back into an operator update.
+pub(crate) fn merge_operator_update_values(current: Value, requested: Value) -> Result<Value, ConfWriterError> {
+    let current_obj = current
+        .as_object()
+        .ok_or_else(|| ConfWriterError::ValidationError("current resource must be an object".to_string()))?;
+    let requested_obj = requested
+        .as_object()
+        .ok_or_else(|| ConfWriterError::ValidationError("updated resource must be an object".to_string()))?;
+
+    let current_meta = current_obj
+        .get("metadata")
+        .and_then(Value::as_object)
+        .ok_or_else(|| ConfWriterError::ValidationError("current resource metadata must be an object".to_string()))?;
+    let requested_meta = requested_obj
+        .get("metadata")
+        .and_then(Value::as_object)
+        .ok_or_else(|| ConfWriterError::ValidationError("updated resource metadata must be an object".to_string()))?;
+
+    let mut merged = requested_obj.clone();
+
+    // API identity is immutable. Copying it from the current resource also
+    // prevents a request from changing a dynamic Kubernetes endpoint's GVK.
+    for key in ["apiVersion", "kind"] {
+        match current_obj.get(key) {
+            Some(value) => {
+                merged.insert(key.to_string(), value.clone());
+            }
+            None => {
+                merged.remove(key);
+            }
+        }
+    }
+
+    // Preserve every server-created metadata field, while making the two
+    // operator-owned maps exact replacements (absence clears the map).
+    let mut merged_meta = current_meta.clone();
+    for key in ["labels", "annotations"] {
+        match requested_meta.get(key) {
+            Some(value) => {
+                merged_meta.insert(key.to_string(), value.clone());
+            }
+            None => {
+                merged_meta.remove(key);
+            }
+        }
+    }
+    merged.insert("metadata".to_string(), Value::Object(merged_meta));
+
+    match current_obj.get("status") {
+        Some(status) => {
+            merged.insert("status".to_string(), status.clone());
+        }
+        None => {
+            merged.remove("status");
+        }
+    }
+
+    Ok(Value::Object(merged))
+}
+
+/// YAML adapter for non-Kubernetes configuration centers.
+///
+/// The Admin API assigns a fresh `metadata.resourceVersion` before calling a
+/// FileSystem or etcd writer. Unlike Kubernetes replace, where the current
+/// resourceVersion is the optimistic-concurrency token, local backends must
+/// persist that newly assigned request value so successful updates remain
+/// monotonically versioned. Direct storage callers that omit it retain the
+/// current value.
+///
+/// `metadata.generation` follows the same rule for the same reason: no local
+/// backend advances it, so it is operator-supplied here rather than
+/// server-owned as it is on the Kubernetes path. Dropping the requested value
+/// would freeze generation at its create-time value forever, stalling every
+/// `observedGeneration` reconciliation, and would diverge from the file-watcher
+/// path, which takes generation straight from the operator's YAML.
+pub(crate) fn merge_operator_update_yaml(current: &str, requested: &str) -> Result<String, ConfWriterError> {
+    let current: Value = serde_yaml::from_str(current).map_err(|source| ConfWriterError::ParseError {
+        context: "Failed to parse current resource for update",
+        source: source.into(),
+    })?;
+    let requested: Value = serde_yaml::from_str(requested).map_err(|source| ConfWriterError::ParseError {
+        context: "Failed to parse updated resource",
+        source: source.into(),
+    })?;
+    let requested_meta = requested.get("metadata").and_then(Value::as_object);
+    let operator_owned: Vec<(String, Value)> = ["resourceVersion", "generation"]
+        .into_iter()
+        .filter_map(|key| {
+            requested_meta
+                .and_then(|metadata| metadata.get(key))
+                .map(|value| (key.to_string(), value.clone()))
+        })
+        .collect();
+    let mut merged = merge_operator_update_values(current, requested)?;
+    if !operator_owned.is_empty() {
+        let metadata = merged
+            .get_mut("metadata")
+            .and_then(Value::as_object_mut)
+            .ok_or_else(|| {
+                ConfWriterError::ValidationError("merged resource metadata must be an object".to_string())
+            })?;
+        for (key, value) in operator_owned {
+            metadata.insert(key, value);
+        }
+    }
+    serde_yaml::to_string(&merged).map_err(|source| ConfWriterError::ParseError {
+        context: "Failed to serialize merged resource update",
+        source: source.into(),
+    })
+}
+
+/// Enforce an optional client precondition against the resource read inside
+/// the backend's atomic update window.
+pub(crate) fn ensure_expected_resource_version(current: &str, expected: Option<&str>) -> Result<(), ConfWriterError> {
+    let current: Value = serde_yaml::from_str(current).map_err(|source| ConfWriterError::ParseError {
+        context: "Failed to parse current resourceVersion",
+        source: source.into(),
+    })?;
+    ensure_expected_resource_version_value(&current, expected)
+}
+
+pub(crate) fn ensure_expected_resource_version_value(
+    current: &Value,
+    expected: Option<&str>,
+) -> Result<(), ConfWriterError> {
+    let Some(expected) = expected else {
+        return Ok(());
+    };
+    let actual = current
+        .get("metadata")
+        .and_then(Value::as_object)
+        .and_then(|metadata| metadata.get("resourceVersion"))
+        .and_then(Value::as_str);
+    if actual != Some(expected) {
+        return Err(ConfWriterError::Conflict(format!(
+            "resourceVersion precondition failed: expected {expected}, current {}",
+            actual.unwrap_or("<missing>")
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod update_merge_tests {
+    use super::*;
+
+    #[test]
+    fn operator_update_preserves_server_fields_without_restoring_current_spec() {
+        let current = serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {
+                "name": "route",
+                "namespace": "default",
+                "uid": "uid-1",
+                "resourceVersion": "42",
+                "generation": 7,
+                "managedFields": [{"manager": "controller"}],
+                "creationTimestamp": "2026-07-15T00:00:00Z",
+                "deletionTimestamp": "2026-07-16T00:00:00Z",
+                "ownerReferences": [{"name": "owner"}],
+                "finalizers": ["edgion.io/finalizer"],
+                "labels": {"old": "label"},
+                "annotations": {"old": "annotation"}
+            },
+            "spec": {
+                "hostnames": ["old.example"],
+                "resolvedListeners": [{"name": "runtime-only"}]
+            },
+            "status": {"conditions": [{"type": "Accepted", "status": "True"}]}
+        });
+        let requested = serde_json::json!({
+            "apiVersion": "spoofed/v9",
+            "kind": "Gateway",
+            "metadata": {
+                "name": "renamed",
+                "namespace": "other",
+                "uid": "spoofed",
+                "resourceVersion": "999",
+                "finalizers": [],
+                "labels": {"new": "label"}
+            },
+            "spec": {"hostnames": ["new.example"]},
+            "status": {"conditions": []},
+            "data": {"operator": "field"}
+        });
+
+        let merged = merge_operator_update_values(current, requested).expect("merge must succeed");
+
+        assert_eq!(merged["apiVersion"], "gateway.networking.k8s.io/v1");
+        assert_eq!(merged["kind"], "HTTPRoute");
+        assert_eq!(merged["metadata"]["name"], "route");
+        assert_eq!(merged["metadata"]["namespace"], "default");
+        assert_eq!(merged["metadata"]["uid"], "uid-1");
+        assert_eq!(merged["metadata"]["resourceVersion"], "42");
+        assert_eq!(merged["metadata"]["generation"], 7);
+        assert_eq!(merged["metadata"]["managedFields"][0]["manager"], "controller");
+        assert_eq!(merged["metadata"]["creationTimestamp"], "2026-07-15T00:00:00Z");
+        assert_eq!(merged["metadata"]["deletionTimestamp"], "2026-07-16T00:00:00Z");
+        assert_eq!(merged["metadata"]["ownerReferences"][0]["name"], "owner");
+        assert_eq!(merged["metadata"]["finalizers"][0], "edgion.io/finalizer");
+        assert_eq!(merged["metadata"]["labels"]["new"], "label");
+        assert!(merged["metadata"].get("annotations").is_none());
+        assert_eq!(merged["spec"]["hostnames"][0], "new.example");
+        assert!(merged["spec"].get("resolvedListeners").is_none());
+        assert_eq!(merged["status"]["conditions"][0]["type"], "Accepted");
+        assert_eq!(merged["data"]["operator"], "field");
+    }
+
+    #[test]
+    fn non_kubernetes_yaml_update_uses_generated_request_resource_version() {
+        let current = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: route
+  namespace: default
+  resourceVersion: "42"
+  uid: uid-1
+spec:
+  hostnames: [old.example]
+"#;
+        let requested = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: route
+  namespace: default
+  resourceVersion: "43"
+spec:
+  hostnames: [new.example]
+"#;
+
+        let merged = merge_operator_update_yaml(current, requested).expect("non-Kubernetes merge must succeed");
+        let merged: Value = serde_yaml::from_str(&merged).expect("merged resource must remain valid YAML");
+        assert_eq!(merged["metadata"]["resourceVersion"], "43");
+        assert_eq!(merged["metadata"]["uid"], "uid-1");
+        assert_eq!(merged["spec"]["hostnames"][0], "new.example");
+    }
+
+    #[test]
+    fn non_kubernetes_yaml_update_uses_requested_generation() {
+        let current = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gw
+  namespace: default
+  generation: 1
+  uid: uid-1
+spec:
+  listeners: [{name: http}]
+"#;
+        let requested = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gw
+  namespace: default
+  generation: 11
+spec:
+  listeners: [{name: http-v10}]
+"#;
+
+        let merged = merge_operator_update_yaml(current, requested).expect("non-Kubernetes merge must succeed");
+        let merged: Value = serde_yaml::from_str(&merged).expect("merged resource must remain valid YAML");
+        assert_eq!(merged["metadata"]["generation"], 11);
+        assert_eq!(merged["metadata"]["uid"], "uid-1");
+        assert_eq!(merged["spec"]["listeners"][0]["name"], "http-v10");
+    }
+
+    #[test]
+    fn non_kubernetes_yaml_update_retains_generation_when_request_omits_it() {
+        let current = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gw
+  namespace: default
+  generation: 7
+spec:
+  listeners: [{name: http}]
+"#;
+        let requested = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: gw
+  namespace: default
+spec:
+  listeners: [{name: http-v1}]
+"#;
+
+        let merged = merge_operator_update_yaml(current, requested).expect("non-Kubernetes merge must succeed");
+        let merged: Value = serde_yaml::from_str(&merged).expect("merged resource must remain valid YAML");
+        assert_eq!(merged["metadata"]["generation"], 7);
+    }
 }

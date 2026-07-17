@@ -264,6 +264,20 @@ pub trait CenterApi: Send + Sync {
         namespace: Option<&str>,
         name: &str,
         content: String,
+    ) -> Result<(), ConfWriterError> {
+        self.update_one_if_version(kind, namespace, name, content, None).await
+    }
+
+    /// Update an existing resource when its current resourceVersion matches.
+    /// `None` preserves the unconditional behavior used by legacy clients and
+    /// internal controller writers.
+    async fn update_one_if_version(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        content: String,
+        expected_resource_version: Option<&str>,
     ) -> Result<(), ConfWriterError>;
 
     /// Get a single configuration YAML content
@@ -289,8 +303,21 @@ pub trait CenterApi: Send + Sync {
         opts: Option<ListOptions>,
     ) -> Result<ListResult, ConfWriterError>;
 
-    /// Delete a single configuration
-    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError>;
+    /// Delete a single configuration without a concurrency precondition.
+    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
+        self.delete_one_if_version(kind, namespace, name, None).await
+    }
+
+    /// Delete a single configuration when its current resourceVersion matches.
+    /// `None` preserves the unconditional behavior used by legacy clients and
+    /// internal controller writers.
+    async fn delete_one_if_version(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        expected_resource_version: Option<&str>,
+    ) -> Result<(), ConfWriterError>;
 
     /// List all configurations across all kinds.
     ///
@@ -458,6 +485,19 @@ macro_rules! impl_center_api_delegate {
                 self.$field.update_one(kind, namespace, name, content).await
             }
 
+            async fn update_one_if_version(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+                name: &str,
+                content: String,
+                expected_resource_version: Option<&str>,
+            ) -> Result<(), ConfWriterError> {
+                self.$field
+                    .update_one_if_version(kind, namespace, name, content, expected_resource_version)
+                    .await
+            }
+
             async fn get_one(
                 &self,
                 kind: &str,
@@ -486,6 +526,18 @@ macro_rules! impl_center_api_delegate {
 
             async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
                 self.$field.delete_one(kind, namespace, name).await
+            }
+
+            async fn delete_one_if_version(
+                &self,
+                kind: &str,
+                namespace: Option<&str>,
+                name: &str,
+                expected_resource_version: Option<&str>,
+            ) -> Result<(), ConfWriterError> {
+                self.$field
+                    .delete_one_if_version(kind, namespace, name, expected_resource_version)
+                    .await
             }
 
             async fn list_all(&self, opts: Option<ListOptions>) -> Result<ListResult, ConfWriterError> {

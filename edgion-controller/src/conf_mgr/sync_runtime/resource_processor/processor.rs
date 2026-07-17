@@ -183,6 +183,28 @@ pub trait ProcessorObj: Send + Sync {
     /// List all resource keys in cache
     fn list_keys(&self) -> Vec<String>;
 
+    /// Serialize the processed cache snapshot. Unlike `get_raw_any`, this exposes
+    /// Controller-derived fields such as delegated route `resolvedRules` and
+    /// internal reference-denial markers used by read-only effective APIs.
+    ///
+    /// # Secret boundary — read before returning this to a client
+    ///
+    /// The output is **not redacted**. `crate::redact`'s `AdminRedactGuard` is a
+    /// gateway-admin mechanism; the controller never installs it, so the
+    /// `redact_opt` / `redact_required` field adapters here emit the *real*
+    /// value. For kinds carrying controller-resolved secrets (`EdgionPlugins`
+    /// with `openid_connect` / `ldap_auth` / `jwe_decrypt` configs, `EdgionTls`,
+    /// `EdgionAcme`, `LinkSys`, ...) this snapshot therefore contains live
+    /// credentials.
+    ///
+    /// Existing callers are safe because they project a fixed set of
+    /// non-secret fields out of the snapshot rather than returning it.
+    /// A caller that serializes the snapshot straight into a response — or adds
+    /// a passthrough field — leaks credentials to any identity holding the
+    /// endpoint's verb, including one explicitly denied `Secret` access.
+    /// Project explicit fields, never pass the value through.
+    fn list_cached_json(&self) -> Vec<serde_json::Value>;
+
     /// Number of resources currently held in cache. Must be O(1).
     fn store_size(&self) -> usize;
 
@@ -712,6 +734,15 @@ where
         self.cache.list_keys()
     }
 
+    fn list_cached_json(&self) -> Vec<serde_json::Value> {
+        self.cache
+            .list_keys()
+            .into_iter()
+            .filter_map(|key| self.cache.get_by_key(&key))
+            .filter_map(|resource| serde_json::to_value(&resource).ok())
+            .collect()
+    }
+
     fn store_size(&self) -> usize {
         self.cache.len()
     }
@@ -851,6 +882,9 @@ mod tests {
         let cached = processor.get("default/test");
         assert!(cached.is_some());
         assert_eq!(cached.unwrap().spec, "test spec");
+        let snapshot = ProcessorObj::list_cached_json(&processor);
+        assert_eq!(snapshot.len(), 1);
+        assert_eq!(snapshot[0]["spec"], "test spec");
     }
 
     #[tokio::test]

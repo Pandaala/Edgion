@@ -13,7 +13,7 @@ use axum::http::StatusCode;
 use axum::Json;
 
 use edgion_resources::prelude_resources::EdgionStreamPlugins;
-use edgion_resources::resources::edgion_config_data::{ConfigEntry, Selector};
+use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigData, Selector};
 use edgion_resources::resources::edgion_stream_plugins::{EdgionStreamPlugin, ProfileRules};
 use edgion_resources::ResourceKind;
 use serde::Serialize;
@@ -30,9 +30,17 @@ pub struct EffectiveGir {
     /// Effective active profile after Selector resolution (fail-to-base).
     pub active_profile: String,
     pub profiles: HashMap<String, ProfileRules>,
-    pub active_profile_ref: Option<String>,
+    pub active_profile_ref: Option<EffectiveConfigDataRef>,
     /// True if a Selector overlay successfully changed the active profile.
     pub selector_applied: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveConfigDataRef {
+    pub namespace: String,
+    pub name: String,
+    pub permitted: bool,
 }
 
 /// Resolve effective GIR view from a set of EdgionStreamPlugins.
@@ -57,12 +65,19 @@ pub fn resolve_gir_effective(
                 let mut ref_name = None;
                 if let Some(ref aref) = gir.active_profile_ref {
                     let aref_ns = aref.namespace.as_deref().unwrap_or(ns);
-                    ref_name = Some(aref.name.clone());
-                    if let Some(sel) = lookup(aref_ns, &aref.name) {
-                        if let Some(cand) = sel.active.as_ref() {
-                            if gir.profiles.contains_key(cand) {
-                                active = cand.clone();
-                                applied = true;
+                    let permitted = aref.ref_denied.is_none();
+                    ref_name = Some(EffectiveConfigDataRef {
+                        namespace: aref_ns.to_string(),
+                        name: aref.name.clone(),
+                        permitted,
+                    });
+                    if permitted {
+                        if let Some(sel) = lookup(aref_ns, &aref.name) {
+                            if let Some(cand) = sel.active.as_ref() {
+                                if gir.profiles.contains_key(cand) {
+                                    active = cand.clone();
+                                    applied = true;
+                                }
                             }
                         }
                     }
@@ -90,9 +105,7 @@ pub fn resolve_gir_effective(
 pub async fn global_ip_restrictions_effective(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let (items, _) = state
-        .center_list_resources(ResourceKind::EdgionStreamPlugins, None)
-        .await?;
+    let items = state.runtime_list_resources(ResourceKind::EdgionStreamPlugins)?;
     let plugins: Vec<EdgionStreamPlugins> = items
         .into_iter()
         .filter_map(|v| serde_json::from_value(v).ok())
@@ -101,19 +114,27 @@ pub async fn global_ip_restrictions_effective(
     let lookup = |ns: &str, name: &str| -> Option<Selector> {
         rt.edgion_config_data_store
             .get(Some(ns), name)
-            .and_then(|cd| match cd.spec.data {
-                ConfigEntry::Selector(s) => Some(s),
-                _ => None,
-            })
+            .and_then(|cd| enabled_selector(&cd))
     };
     let effective = resolve_gir_effective(&plugins, &lookup);
     Ok(Json(serde_json::json!({ "success": true, "data": effective })))
+}
+
+fn enabled_selector(config_data: &EdgionConfigData) -> Option<Selector> {
+    if !config_data.spec.enable {
+        return None;
+    }
+    match &config_data.spec.data {
+        ConfigEntry::Selector(selector) => Some(selector.clone()),
+        _ => None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use edgion_resources::resources::edgion_config_data::EdgionConfigDataSpec;
     use edgion_resources::resources::edgion_stream_plugins::{
         DefaultAction, EdgionStreamPluginsSpec, GlobalConnectionIpRestrictionConfig, ProfileRules as PR,
         StreamPluginEntry,
@@ -184,6 +205,13 @@ mod tests {
         });
         assert_eq!(result[0].active_profile, "open");
         assert!(result[0].selector_applied);
+        let reference = result[0]
+            .active_profile_ref
+            .as_ref()
+            .expect("effective view keeps selector identity");
+        assert_eq!(reference.namespace, "default");
+        assert_eq!(reference.name, "sel");
+        assert!(reference.permitted);
     }
 
     #[test]
@@ -197,5 +225,27 @@ mod tests {
         });
         assert_eq!(result[0].active_profile, "strict");
         assert!(!result[0].selector_applied);
+    }
+
+    #[test]
+    fn disabled_selector_is_ignored() {
+        let mut selector = EdgionConfigData::new(
+            "selector",
+            EdgionConfigDataSpec {
+                enable: false,
+                active: None,
+                visibility: Default::default(),
+                data: ConfigEntry::Selector(Selector {
+                    active: Some("open".to_string()),
+                    description: None,
+                }),
+            },
+        );
+        assert!(enabled_selector(&selector).is_none());
+        selector.spec.enable = true;
+        assert_eq!(
+            enabled_selector(&selector).and_then(|value| value.active),
+            Some("open".to_string())
+        );
     }
 }

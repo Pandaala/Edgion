@@ -56,6 +56,7 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
 
     // Literal (no-{kind}-param) routes first.
     match (m.as_str(), template) {
+        ("GET", "/api/v1/access") => return Some((Verb::AccessSelf, NON_RESOURCE_KIND.into())),
         ("POST", "/api/v1/reload") => return Some((Verb::Reload, NON_RESOURCE_KIND.into())),
         ("GET", "/api/v1/server-info") => return Some((Verb::ServerInfo, NON_RESOURCE_KIND.into())),
         ("POST", "/api/v1/cluster-region-routes/failover") | ("POST", "/api/v1/service-region-routes/failover") => {
@@ -173,6 +174,13 @@ mod tests {
     fn reload_is_nonresource_kind() {
         let (v, k) = classify("POST", Some("/api/v1/reload"), None).unwrap();
         assert_eq!(v, Verb::Reload);
+        assert_eq!(k, NON_RESOURCE_KIND);
+    }
+
+    #[test]
+    fn access_is_inherent_self_action() {
+        let (v, k) = classify("GET", Some("/api/v1/access"), None).unwrap();
+        assert_eq!(v, Verb::AccessSelf);
         assert_eq!(k, NON_RESOURCE_KIND);
     }
 

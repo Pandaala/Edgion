@@ -14,7 +14,7 @@
 //!
 //! Key features:
 //! - Each resource type runs completely independently
-//! - Single watcher connection per resource type (efficient)
+//! - One watcher per configured namespace, or one cluster-wide watcher
 //! - Processor handles all lifecycle events directly
 //! - Go operator-style workqueue: ALL events enqueue key, worker decides update/delete
 //! - Graceful shutdown support via ShutdownSignal
@@ -29,7 +29,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
 };
 use anyhow::Result;
 use edgion_resources::ResourceMeta;
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use kube::api::{Patch, PatchParams};
 use kube::runtime::reflector::{ObjectRef, Store};
 use kube::runtime::watcher::Event;
@@ -39,6 +39,7 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use std::fmt::Debug;
 use std::hash::Hash;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -60,7 +61,7 @@ pub enum RelinkReason {
 
 /// Generic ResourceController that encapsulates the complete lifecycle for a single resource type
 ///
-/// Uses a single watcher + reflector stream with Go operator-style workqueue:
+/// Uses a merged watcher + reflector stream with Go operator-style workqueue:
 /// - Init phase: InitApply events are processed directly via processor.on_init_apply()
 /// - Runtime phase: ALL events (Apply/Delete) enqueue key, worker decides update/delete
 pub struct ResourceController<K>
@@ -98,6 +99,53 @@ pub enum ApiScope {
     Namespaced(NamespaceWatchMode),
     /// Cluster-scoped resource
     ClusterScoped,
+}
+
+type NamespacedWatcher<K> = Pin<Box<dyn Stream<Item = watcher::Result<Event<K>>> + Send>>;
+
+/// Merge namespace-scoped watchers into the single initialization sequence
+/// expected by the reflector and processor. Each source performs its own LIST,
+/// but the shared store receives one Init, the union of all InitApply events,
+/// and one InitDone after every namespace has completed initialization.
+fn merge_namespaced_watchers<K>(
+    streams: Vec<NamespacedWatcher<K>>,
+    namespace_count: usize,
+) -> impl Stream<Item = watcher::Result<Event<K>>>
+where
+    K: Resource + Clone + Send + 'static,
+    K::DynamicType: Eq + Hash + Clone,
+{
+    let indexed = streams
+        .into_iter()
+        .enumerate()
+        .map(|(index, stream)| Box::pin(stream.map(move |event| (index, event))));
+    futures::stream::select_all(indexed)
+        .scan(
+            (false, vec![false; namespace_count], false),
+            move |state, (index, event)| {
+                let output = match event {
+                    Ok(Event::Init) if state.2 => Some(Ok(Event::Init)),
+                    Ok(Event::Init) if !state.0 => {
+                        state.0 = true;
+                        Some(Ok(Event::Init))
+                    }
+                    Ok(Event::Init) => None,
+                    Ok(Event::InitDone) if state.2 => Some(Ok(Event::InitDone)),
+                    Ok(Event::InitDone) => {
+                        state.1[index] = true;
+                        if state.1.iter().all(|done| *done) {
+                            state.2 = true;
+                            Some(Ok(Event::InitDone))
+                        } else {
+                            None
+                        }
+                    }
+                    other => Some(other),
+                };
+                futures::future::ready(Some(output))
+            },
+        )
+        .filter_map(futures::future::ready)
 }
 
 impl ApiScope {
@@ -166,19 +214,28 @@ where
     where
         K: Resource<Scope = kube::core::NamespaceResourceScope>,
     {
-        let api: Api<K> = match &self.api_scope {
-            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces) => Api::all(self.client.clone()),
-            ApiScope::Namespaced(NamespaceWatchMode::SingleNamespace(ns)) => Api::namespaced(self.client.clone(), ns),
-            ApiScope::Namespaced(NamespaceWatchMode::MultipleNamespaces(_)) => {
-                // For multiple namespaces, we watch all and filter in processing
-                Api::all(self.client.clone())
+        match self.api_scope.clone() {
+            ApiScope::Namespaced(NamespaceWatchMode::AllNamespaces) => {
+                let api = Api::all(self.client.clone());
+                self.run_with_api(api).await
             }
-            ApiScope::ClusterScoped => {
-                return Err(anyhow::anyhow!("Cannot run cluster-scoped resource as namespaced"));
+            ApiScope::Namespaced(NamespaceWatchMode::SingleNamespace(ns)) => {
+                let api = Api::namespaced(self.client.clone(), &ns);
+                self.run_with_api(api).await
             }
-        };
-
-        self.run_with_api(api).await
+            ApiScope::Namespaced(NamespaceWatchMode::MultipleNamespaces(namespaces)) => {
+                let streams: Vec<NamespacedWatcher<K>> = namespaces
+                    .iter()
+                    .map(|namespace| {
+                        let api = Api::namespaced(self.client.clone(), namespace);
+                        Box::pin(watcher(api, self.watcher_config.clone())) as NamespacedWatcher<K>
+                    })
+                    .collect();
+                let stream = merge_namespaced_watchers(streams, namespaces.len());
+                self.run_with_stream(stream).await
+            }
+            ApiScope::ClusterScoped => Err(anyhow::anyhow!("Cannot run cluster-scoped resource as namespaced")),
+        }
     }
 
     /// Run for cluster-scoped resources
@@ -192,6 +249,15 @@ where
 
     /// Internal run with API
     async fn run_with_api(self, api: Api<K>) -> Result<()> {
+        let watcher_stream = watcher(api, self.watcher_config.clone());
+        self.run_with_stream(watcher_stream).await
+    }
+
+    /// Internal run with a watcher stream.
+    async fn run_with_stream<W>(self, watcher_stream: W) -> Result<()>
+    where
+        W: Stream<Item = watcher::Result<Event<K>>>,
+    {
         let kind = self.kind;
 
         controller_metrics().controller_started();
@@ -210,7 +276,6 @@ where
             std::sync::Arc::new(KubeRawStore::new(store.clone()));
         self.processor.set_raw_store(raw_store.clone());
         crate::observe::status_metrics::register_status_renderer::<K>(kind, raw_store);
-        let watcher_stream = watcher(api, self.watcher_config.clone());
         let mut stream = Box::pin(reflector(writer, watcher_stream));
 
         let mut init_done = false;
@@ -453,6 +518,62 @@ where
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::stream;
+    use k8s_openapi::api::core::v1::ConfigMap;
+    use kube::api::ObjectMeta;
+
+    fn config_map(namespace: &str, name: &str) -> ConfigMap {
+        ConfigMap {
+            metadata: ObjectMeta {
+                namespace: Some(namespace.to_string()),
+                name: Some(name.to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn namespace_watchers_expose_one_union_initialization_sequence() {
+        let source = |namespace: &'static str| -> NamespacedWatcher<ConfigMap> {
+            Box::pin(stream::iter(vec![
+                Ok(Event::Init),
+                Ok(Event::InitApply(config_map(namespace, "fixture"))),
+                Ok(Event::InitDone),
+            ]))
+        };
+        let events = merge_namespaced_watchers(vec![source("a"), source("b")], 2)
+            .collect::<Vec<_>>()
+            .await;
+
+        assert!(matches!(events.first(), Some(Ok(Event::Init))));
+        assert!(matches!(events.last(), Some(Ok(Event::InitDone))));
+        let mut namespaces = events
+            .iter()
+            .filter_map(|event| match event {
+                Ok(Event::InitApply(object)) => object.namespace(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        namespaces.sort();
+        assert_eq!(namespaces, ["a", "b"]);
+        assert_eq!(
+            events.iter().filter(|event| matches!(event, Ok(Event::Init))).count(),
+            1
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Ok(Event::InitDone)))
+                .count(),
+            1
+        );
     }
 }
 

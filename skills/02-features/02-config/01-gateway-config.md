@@ -87,6 +87,12 @@ server:
   downstream_keepalive_request_limit: 1000 # Maximum requests per downstream connection (0 = unlimited)
   # error_log: logs/pingora_error.log      # Pingora internal error log
 
+# ─── URI path normalization policy ───
+# This is Gateway process configuration, not EdgionGatewayConfig CRD state.
+path_normalization:
+  reject_escaped_slashes: false            # Reject encoded / or \\ (%2F / %5C)
+  reject_invalid_percent_encoding: false   # Reject malformed or non-UTF-8 %XX
+
 # ─── Business logs ───
 # Each log type has its own enable switch and path; logging.log_dir does not affect these paths
 
@@ -177,6 +183,17 @@ access_log_sensitive:
 ```
 
 ## Field Details
+
+### path_normalization
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `reject_escaped_slashes` | `bool` | `false` | Reject paths containing encoded slash or backslash (`%2F` / `%5C`) instead of forwarding them upstream. |
+| `reject_invalid_percent_encoding` | `bool` | `false` | Reject malformed hexadecimal escapes and percent-decoded non-UTF-8 input. |
+
+The base normalization algorithm always runs. These flags only tighten rejection
+behavior and are configured per Gateway process; there is no
+`EdgionGatewayConfig.spec.pathNormalization` field.
 
 ### gateway
 

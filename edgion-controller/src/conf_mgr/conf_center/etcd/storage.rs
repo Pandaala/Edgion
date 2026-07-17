@@ -10,6 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use super::leadership_gate::LeadershipGate;
+use crate::conf_mgr::conf_center::common::{ensure_expected_resource_version, merge_operator_update_yaml};
 use crate::conf_mgr::conf_center::traits::{CenterApi, ConfEntry, ConfWriterError, ListOptions, ListResult};
 use edgion_common::link_sys_core::providers::etcd::EtcdLinkClient;
 
@@ -191,29 +192,40 @@ impl CenterApi for EtcdStorage {
         Ok(())
     }
 
-    async fn update_one(
+    async fn update_one_if_version(
         &self,
         kind: &str,
         namespace: Option<&str>,
         name: &str,
         content: String,
+        expected_resource_version: Option<&str>,
     ) -> Result<(), ConfWriterError> {
         self.ensure_leader()?;
         let key = self.build_key(kind, namespace, name);
 
-        let updated = self
-            .client
-            .txn_put_if_exists(&key, content.into_bytes())
-            .await
-            .map_err(Self::map_err)?;
-
-        if !updated {
+        let Some((current, mod_revision)) = self.client.get(&key).await.map_err(Self::map_err)? else {
             return Err(ConfWriterError::NotFound(format!(
                 "{}/{}/{}",
                 kind,
                 namespace.unwrap_or("_"),
                 name
             )));
+        };
+        let current = String::from_utf8(current).map_err(|source| ConfWriterError::ParseError {
+            context: "Current etcd resource is not valid UTF-8",
+            source: source.into(),
+        })?;
+        ensure_expected_resource_version(&current, expected_resource_version)?;
+        let merged = merge_operator_update_yaml(&current, &content)?;
+
+        let updated = self
+            .client
+            .txn_put_if_mod_revision(&key, mod_revision, merged.into_bytes())
+            .await
+            .map_err(Self::map_err)?;
+
+        if !updated {
+            return cas_conflict(kind, namespace, name, mod_revision);
         }
 
         tracing::info!(
@@ -236,10 +248,42 @@ impl CenterApi for EtcdStorage {
             .ok_or_else(|| ConfWriterError::NotFound(format!("{}/{}/{}", kind, namespace.unwrap_or("_"), name)))
     }
 
-    async fn delete_one(&self, kind: &str, namespace: Option<&str>, name: &str) -> Result<(), ConfWriterError> {
+    async fn delete_one_if_version(
+        &self,
+        kind: &str,
+        namespace: Option<&str>,
+        name: &str,
+        expected_resource_version: Option<&str>,
+    ) -> Result<(), ConfWriterError> {
         self.ensure_leader()?;
         let key = self.build_key(kind, namespace, name);
-        let deleted = self.client.delete(&key).await.map_err(Self::map_err)?;
+        let deleted = if let Some(expected) = expected_resource_version {
+            let Some((current, mod_revision)) = self.client.get(&key).await.map_err(Self::map_err)? else {
+                return Err(ConfWriterError::NotFound(format!(
+                    "{}/{}/{}",
+                    kind,
+                    namespace.unwrap_or("_"),
+                    name
+                )));
+            };
+            let current = String::from_utf8(current).map_err(|e| ConfWriterError::ParseError {
+                context: "Failed to decode current etcd resource before delete",
+                source: e.into(),
+            })?;
+            ensure_expected_resource_version(&current, Some(expected))?;
+            if self
+                .client
+                .txn_delete_if_mod_revision(&key, mod_revision)
+                .await
+                .map_err(Self::map_err)?
+            {
+                1
+            } else {
+                return cas_conflict(kind, namespace, name, mod_revision);
+            }
+        } else {
+            self.client.delete(&key).await.map_err(Self::map_err)?
+        };
 
         if deleted == 0 {
             return Err(ConfWriterError::NotFound(format!(
@@ -283,6 +327,16 @@ impl CenterApi for EtcdStorage {
         let kvs = self.client.get_prefix(&prefix).await.map_err(Self::map_err)?;
         Ok(self.kvs_to_list_result(kvs))
     }
+}
+
+fn cas_conflict(kind: &str, namespace: Option<&str>, name: &str, mod_revision: i64) -> Result<(), ConfWriterError> {
+    Err(ConfWriterError::Conflict(format!(
+        "{}/{}/{} changed after etcd revision {}; retry the update with the latest resource",
+        kind,
+        namespace.unwrap_or("_"),
+        name,
+        mod_revision
+    )))
 }
 
 #[cfg(test)]
@@ -331,5 +385,66 @@ mod tests {
             .set_one("EdgionRoute", Some("default"), "r1", "content".to_string())
             .await;
         assert!(err.is_err(), "a non-leader must not write to etcd");
+    }
+
+    #[test]
+    fn failed_mod_revision_compare_is_a_retryable_conflict() {
+        let err =
+            cas_conflict("HTTPRoute", Some("default"), "route", 42).expect_err("failed compare must return an error");
+        match err {
+            ConfWriterError::Conflict(message) => {
+                assert!(message.contains("revision 42"));
+                assert!(message.contains("retry"));
+                assert!(message.contains("HTTPRoute/default/route"));
+            }
+            other => panic!("expected conflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_merge_persists_api_generated_resource_version() {
+        let current = r#"
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: data
+  namespace: default
+  resourceVersion: "17"
+  uid: uid-1
+spec:
+  enable: true
+  visibility: Namespace
+  data:
+    type: Misc
+    config: {old: true}
+"#;
+        let requested = r#"
+apiVersion: edgion.io/v1
+kind: EdgionConfigData
+metadata:
+  name: data
+  namespace: default
+  resourceVersion: "18"
+spec:
+  enable: true
+  visibility: Namespace
+  data:
+    type: Misc
+    config: {new: true}
+"#;
+
+        let merged = merge_operator_update_yaml(current, requested).expect("etcd update merge must succeed");
+        let merged: serde_yaml::Value = serde_yaml::from_str(&merged).expect("merged resource must be valid YAML");
+        assert_eq!(merged["metadata"]["resourceVersion"], "18");
+        assert_eq!(merged["metadata"]["uid"], "uid-1");
+        assert_eq!(merged["spec"]["data"]["config"]["new"], true);
+    }
+
+    #[test]
+    fn stale_expected_resource_version_stops_etcd_update_before_txn() {
+        let current = r#"metadata: {resourceVersion: "17"}"#;
+        let error = ensure_expected_resource_version(current, Some("16"))
+            .expect_err("stale etcd update must conflict before its mod-revision transaction");
+        assert!(matches!(error, ConfWriterError::Conflict(_)));
     }
 }

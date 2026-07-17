@@ -5,7 +5,10 @@
 //! restarting the federation client. Default-deny: an empty policy authorizes
 //! nothing. Pure, no I/O.
 
+mod access;
 pub mod lint;
+
+pub use access::{AccessSnapshot, AccessSnapshotError};
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,6 +20,9 @@ use crate::config::{FedAllowRule, FedRbacConfig};
 /// The closed set of verbs the classifier can produce. Safe as a metric label.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verb {
+    /// Authenticated self-introspection. This is an inherent middleware action,
+    /// not an RBAC-configurable verb; `CenterPolicy::permits` always rejects it.
+    AccessSelf,
     Get,
     List,
     ListKeys,
@@ -37,6 +43,7 @@ pub enum Verb {
 impl Verb {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Verb::AccessSelf => "access-self",
             Verb::Get => "get",
             Verb::List => "list",
             Verb::ListKeys => "list-keys",
@@ -58,6 +65,8 @@ impl Verb {
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Verb> {
         Some(match s {
+            // AccessSelf is intentionally absent: operators cannot grant or
+            // revoke authenticated self-introspection through RBAC config.
             "get" => Verb::Get,
             "list" => Verb::List,
             "list-keys" => Verb::ListKeys,
@@ -122,6 +131,9 @@ impl CenterPolicy {
     }
 
     fn permits(&self, verb: Verb, kind: &str) -> bool {
+        if verb == Verb::AccessSelf {
+            return false;
+        }
         let v = verb.as_str();
         self.rules
             .iter()
@@ -297,6 +309,15 @@ impl Authorizer {
     }
 }
 
+impl Role {
+    /// Build the bounded effective-access document from this request's stable
+    /// policy Arc. The endpoint handler must use the Role already injected into
+    /// request extensions rather than reloading Authorizer state.
+    pub fn access_snapshot(&self) -> Result<AccessSnapshot, AccessSnapshotError> {
+        access::snapshot(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,6 +379,15 @@ mod tests {
         assert_eq!(Verb::ConfSyncRotate.as_str(), "conf-sync-rotate");
         assert_eq!(Verb::from_str("conf-sync-rotate"), Some(Verb::ConfSyncRotate));
         assert_eq!(Verb::from_str("nonsense"), None);
+        assert_eq!(Verb::from_str("access-self"), None);
+    }
+
+    #[test]
+    fn access_self_is_never_policy_granted_even_by_wildcards() {
+        let az = Authorizer::new(admin_wildcard_policy());
+        assert!(!az
+            .authorize(&az.center_role(), Verb::AccessSelf, "NonResource")
+            .allowed());
     }
 
     #[test]
@@ -403,7 +433,8 @@ mod tests {
     #[test]
     fn center_role_snapshots_policy() {
         let az = Authorizer::new(CenterPolicy::deny_all());
-        assert!(!az.authorize(&az.center_role(), Verb::Get, "EdgionConfigData").allowed());
+        let old_role = az.center_role();
+        assert!(!az.authorize(&old_role, Verb::Get, "EdgionConfigData").allowed());
         az.swap_policy(CenterPolicy::from_config(&FedRbacConfig {
             allow: vec![FedAllowRule {
                 verbs: vec!["get".into()],
@@ -411,6 +442,10 @@ mod tests {
             }],
         }));
         assert!(az.authorize(&az.center_role(), Verb::Get, "EdgionConfigData").allowed());
+        let old_snapshot = old_role.access_snapshot().unwrap();
+        let new_snapshot = az.center_role().access_snapshot().unwrap();
+        assert_ne!(old_snapshot.revision, new_snapshot.revision);
+        assert!(old_snapshot.resources.iter().all(|resource| resource.verbs.is_empty()));
     }
 
     // --- Local admin token (Istio-style) ---

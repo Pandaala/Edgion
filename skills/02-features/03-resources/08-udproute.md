@@ -18,6 +18,8 @@ kind: UDPRoute
 metadata:
   name: my-udp-route
   namespace: default
+  annotations:
+    edgion.io/edgion-stream-plugins: "default/my-stream-plugins"
 spec:
   parentRefs:
     - name: my-gateway
@@ -59,3 +61,6 @@ spec:
 - **No match conditions**: UDP routes forward by port only.
 - **Per-listener isolation**: each Listener (indexed by `ListenerKey`) routes independently.
 - **No connection state**: UDP is connectionless; each datagram is routed independently.
+- **StreamPlugins**: `edgion.io/edgion-stream-plugins` enables the Stage-1
+  connection filter (the IP-based pre-routing stage). UDP has no TLS plugin
+  stage and does not use TCP keepalive, Proxy Protocol, or connect retries.

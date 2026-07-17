@@ -41,6 +41,26 @@ impl AdminState {
         self.conf_mgr.runtime()
     }
 
+    /// Return a complete processed runtime snapshot for effective-state APIs.
+    /// Raw storage is intentionally not used because it lacks Controller-derived
+    /// fields and internal reference authorization results.
+    ///
+    /// The snapshot is **unredacted** and may contain controller-resolved
+    /// credentials — project the specific non-secret fields you need out of it
+    /// and never return it to a client as-is. See `ProcessorObj::list_cached_json`
+    /// for the full secret-boundary rationale.
+    pub fn runtime_list_resources(&self, kind: ResourceKind) -> Result<Vec<serde_json::Value>, StatusCode> {
+        let runtime = self.runtime();
+        let processor = runtime
+            .processor_registry
+            .get(kind.as_str())
+            .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+        if !processor.is_ready() {
+            return Err(StatusCode::SERVICE_UNAVAILABLE);
+        }
+        Ok(processor.list_cached_json())
+    }
+
     pub fn is_ready(&self) -> bool {
         self.conf_mgr.is_ready()
     }

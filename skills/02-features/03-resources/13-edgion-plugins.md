@@ -1,6 +1,6 @@
 ---
 name: http-plugin-catalog
-description: Full EdgionPlugins CRD schema and catalog of 35 HTTP plugins.
+description: Full EdgionPlugins CRD schema and catalog of 39 HTTP plugins.
 ---
 
 # EdgionPlugins — HTTP Plugins
@@ -18,7 +18,7 @@ metadata:
   name: my-plugins
   namespace: default
 spec:
-  plugins:
+  requestPlugins:
     - type: RateLimit           # Plugin type
       config:                   # Plugin configuration (varies by type)
         rate: 100
@@ -53,6 +53,7 @@ spec:
 | `Csrf` | CSRF protection |
 | `IpRestriction` | IP allow/deny list (CIDR supported). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with the valid entries. Bad entries surface as a `PartiallyInvalid` status condition (reason `RuleInvalid`); `Accepted` stays `True`. A skipped inline deny entry also increments `edgion_ip_deny_entries_skipped_total{scope="http"}`. |
 | `RequestRestriction` | Request restrictions (header/body rules) |
+| `GlobalAccessControl` | L7 allow-list with IP/CIDR and composite request match groups |
 
 ### Traffic Control
 
@@ -61,6 +62,8 @@ spec:
 | `RateLimit` | Local rate limiting (CMS algorithm) |
 | `RateLimitRedis` | Distributed rate limiting (Redis backend) |
 | `BandwidthLimit` | Bandwidth limiting |
+| `FaultInjection` | Probabilistic delay and abort for controlled fault testing |
+| `Canary` | Route all traffic to one named backend, switchable by Selector ConfigData |
 
 ### Request/Response Modification
 
@@ -77,6 +80,7 @@ spec:
 | `CtxSet` | Set context variables |
 | `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation + immediate-response short-circuit. MVP is header-only (no body); peer of `ForwardAuth`. Runs in the `RequestFilter` and async `UpstreamResponse` stages. |
 | `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No request-body hooks, no body rewrite, no gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a content-addressed disk cache). Runs in the `RequestFilter`, sync `UpstreamResponseFilter`, and `UpstreamResponseBodyFilter` stages. See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
+| `TraceContext` | W3C trace-context propagation and normalization |
 
 ### Routing/Backend
 
@@ -86,7 +90,7 @@ spec:
 | `DynamicInternalUpstream` | Dynamic internal upstream |
 | `DynamicExternalUpstream` | Dynamic external upstream |
 | `AllEndpointStatus` | All-endpoint status query |
-| `RegionRoute` | Multi-region traffic routing. The EdgionPlugins config only holds a `serviceRegionRouteRef`; all routing rules live in EdgionConfigData (ServiceRegionRoute → ClusterRegionRoute), resolved at plugin-build time. See `05-resources/15-edgion-config-data.md`. |
+| `RegionRoute` | Multi-region traffic routing. The complete routing logic and safe default `regions` table live inline in EdgionPlugins; optional `overrideRef` targets a `RegionRouteOverride` EdgionConfigData for hot-swappable failover state. The Controller effective API resolves permitted/enabled overlays, preserves the reference namespace, and exposes `dyeHeaders` plus a stable request-plugin entry index. Center service-usage views derive consumers from HTTPRoute/GRPCRoute ExtensionRefs targeting the containing EdgionPlugins resource, using `resolvedRules` when delegation is present so inherited filters reach the actual Service backends. See `05-resources/15-edgion-config-data.md`. |
 
 > Note: `EdgionPlugin::ExtensionRef` (the nested form) has been removed. Multi-plugin reuse is achieved via an aggregate EdgionPlugins resource or by listing multiple ExtensionRef entries side-by-side in the HTTPRoute filter list. See `docs/en/migrations/<version>-extension-ref.md`; the paired Chinese page is under `docs/zh-CN/migrations/`.
 
@@ -104,10 +108,15 @@ HTTP plugins execute across Pingora's 4 stages:
 
 | Stage | Trigger Time | Typical Plugins |
 |-------|--------------|-----------------|
-| `RequestFilter` | After the request is received and before backend selection | Auth, RateLimit, CORS, IP restriction |
-| `UpstreamResponseFilter` | After upstream response headers are received | ResponseHeaderModifier, `Wasm` (`proxy_on_response_headers`) |
-| `UpstreamResponseBodyFilter` | After upstream response body is received | ResponseRewrite (body modification), `Wasm` (`proxy_on_http_response_body`, read-only) |
-| `UpstreamResponse` | After the upstream response headers arrive (async) | `ExtProc` (response-header processing); logic needing async access to the response |
+| `spec.requestPlugins` (`RequestFilter`) | After the request is received and before backend selection | Auth, RateLimit, CORS, routing plugins, `ExtProc`, `Wasm` |
+| `spec.upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | After upstream response headers are received, synchronous | ResponseHeaderModifier, DSL, `Wasm` |
+| `spec.upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | For each upstream response body chunk | ResponseRewrite, `Wasm` read-only observation |
+| `spec.upstreamResponsePlugins` (`UpstreamResponse`) | After upstream response headers arrive, asynchronous | `ExtProc` only in the current catalog |
+
+Each entry uses the flattened wire shape `enable + type + config`. A plugin may
+only be placed in stages admitted by the exhaustive Rust
+`validate::applicable_stages` table; the same resource may contain entries in
+multiple stage arrays. There is no generic `spec.plugins` field.
 
 ## Secret Dependencies
 

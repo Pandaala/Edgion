@@ -238,7 +238,6 @@ mod tests {
                 security_protect: None,
                 global_plugins_ref: None,
                 preflight_policy: None,
-                enable_reference_grant_validation: false,
                 link_sys: None,
                 tcp_timeout: None,
                 load_balancing: None,

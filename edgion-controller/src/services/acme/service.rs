@@ -77,9 +77,9 @@ enum AcmeCommand {
 /// Called during controller startup (after caches are ready).
 /// Must call `stop_acme_service()` before calling this again (e.g. on re-election).
 ///
-/// On startup, the service performs a full scan of all EdgionAcme resources
-/// to recover renewal timers that were lost during controller restart.
-pub fn start_acme_service(client: Client) {
+/// On startup, the service scans EdgionAcme resources in the configured watch
+/// namespaces to recover renewal timers that were lost during controller restart.
+pub fn start_acme_service(client: Client, watch_namespaces: Vec<String>) {
     let mut guard = ACME_SERVICE.lock();
     if guard.is_some() {
         tracing::warn!(
@@ -118,7 +118,7 @@ pub fn start_acme_service(client: Client) {
             );
             return;
         }
-        scan_all_acme_resources(startup_client).await;
+        scan_all_acme_resources(startup_client, &watch_namespaces).await;
     });
 
     tracing::info!(
@@ -149,23 +149,24 @@ pub fn stop_acme_service() {
     // the channel. The worker loop will observe `recv() => None` and exit.
 }
 
-/// Startup scan: enumerate all EdgionAcme resources in the cluster and
+/// Startup scan: enumerate EdgionAcme resources in the configured namespaces and
 /// trigger a `ResourceChanged` event for each one.
 ///
 /// This ensures that:
 /// - `Ready` certs get their renewal timers re-established
 /// - `Pending`/`Failed` certs get retried
 /// - Nothing is silently forgotten after a controller restart
-async fn scan_all_acme_resources(client: Client) {
+async fn scan_all_acme_resources(client: Client, watch_namespaces: &[String]) {
     use kube::api::ListParams;
 
     tracing::info!(component = "acme_service", "Starting full scan of EdgionAcme resources");
 
-    let api: Api<EdgionAcme> = Api::all(client);
-    match api.list(&ListParams::default()).await {
-        Ok(list) => {
-            let count = list.items.len();
-            for acme in list.items {
+    let result = list_acme_resources(client, watch_namespaces, &ListParams::default()).await;
+
+    match result {
+        Ok(items) => {
+            let count = items.len();
+            for acme in items {
                 let ns = acme.metadata.namespace.as_deref().unwrap_or("default");
                 let name = acme.metadata.name.as_deref().unwrap_or_default();
                 let key = format!("{}/{}", ns, name);
@@ -185,6 +186,27 @@ async fn scan_all_acme_resources(client: Client) {
             );
         }
     }
+}
+
+async fn list_acme_resources(
+    client: Client,
+    watch_namespaces: &[String],
+    params: &kube::api::ListParams,
+) -> std::result::Result<Vec<EdgionAcme>, kube::Error> {
+    if watch_namespaces.is_empty() {
+        return Ok(Api::<EdgionAcme>::all(client).list(params).await?.items);
+    }
+
+    let mut items = Vec::new();
+    for namespace in watch_namespaces {
+        items.extend(
+            Api::<EdgionAcme>::namespaced(client.clone(), namespace)
+                .list(params)
+                .await?
+                .items,
+        );
+    }
+    Ok(items)
 }
 
 /// Clone the current sender from the global handle.
@@ -1212,6 +1234,58 @@ fn parse_resource_key(key: &str) -> (String, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::{Response, StatusCode};
+    use kube::client::Body;
+    use serde_json::json;
+    use std::convert::Infallible;
+    use tower::service_fn;
+
+    fn empty_acme_list() -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "apiVersion": "edgion.io/v1",
+                    "kind": "EdgionAcmeList",
+                    "metadata": {"resourceVersion": "1"},
+                    "items": []
+                }))
+                .expect("response JSON must serialize"),
+            ))
+            .expect("response must build")
+    }
+
+    #[tokio::test]
+    async fn startup_scan_lists_only_configured_namespaces() {
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&paths);
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = Arc::clone(&captured);
+            async move {
+                captured.lock().push(request.uri().path().to_string());
+                Ok::<_, Infallible>(empty_acme_list())
+            }
+        });
+
+        let client = Client::new(service, "default");
+        let items = list_acme_resources(
+            client,
+            &["team-a".into(), "team-b".into()],
+            &kube::api::ListParams::default(),
+        )
+        .await
+        .expect("namespace-scoped lists must succeed");
+
+        assert!(items.is_empty());
+        assert_eq!(
+            *paths.lock(),
+            vec![
+                "/apis/edgion.io/v1/namespaces/team-a/edgionacmes",
+                "/apis/edgion.io/v1/namespaces/team-b/edgionacmes"
+            ]
+        );
+    }
 
     // ================================================================
     // exponential_backoff

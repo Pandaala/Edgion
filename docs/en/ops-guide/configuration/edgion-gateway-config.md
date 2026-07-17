@@ -79,8 +79,6 @@ spec:
     mode: "cors-standard"
     statusCode: 204
 
-  enableReferenceGrantValidation: false
-
   linkSys:
     webhookMaxResponseBytes: 16384   # Hard cap for LinkSys webhook response body (16 KiB)
 ```
@@ -187,12 +185,6 @@ globalPluginsRef:
 |-----------|------|---------|-------------|
 | `mode` | `String` | `cors-standard` | `cors-standard`: intercept OPTIONS requests with `Origin` + `ACRM`; `all-options`: intercept all OPTIONS requests |
 | `statusCode` | `Integer` | `204` | Preflight response status code when no CORS plugin is attached |
-
-### spec.enableReferenceGrantValidation
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `enableReferenceGrantValidation` | `Boolean` | `false` | Enforce ReferenceGrant validation for cross-namespace references |
 
 ### spec.linkSys
 

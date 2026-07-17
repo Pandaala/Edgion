@@ -78,8 +78,6 @@ spec:
   preflightPolicy:
     mode: "cors-standard"
     statusCode: 204
-
-  enableReferenceGrantValidation: false
 ```
 
 ## 配置参数
@@ -180,12 +178,6 @@ globalPluginsRef:
 |------|------|--------|------|
 | `mode` | `String` | `cors-standard` | `cors-standard`：仅拦截带 `Origin` + `ACRM` 的 OPTIONS 请求；`all-options`：拦截所有 OPTIONS 请求 |
 | `statusCode` | `Integer` | `204` | 无 CORS 插件时 preflight 响应的状态码 |
-
-### spec.enableReferenceGrantValidation
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `enableReferenceGrantValidation` | `Boolean` | `false` | 是否启用 ReferenceGrant 跨命名空间引用校验 |
 
 ## 常见配置场景
 

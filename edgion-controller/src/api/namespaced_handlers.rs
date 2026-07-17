@@ -11,7 +11,9 @@ use k8s_openapi::api::discovery::v1::EndpointSlice;
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::common::{map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource};
+use super::common::{
+    expected_resource_version, map_writer_error, parse_kind, parse_resource_and_update_version, validate_resource,
+};
 use super::types::*;
 
 /// Pagination query parameters for list endpoints.
@@ -330,6 +332,7 @@ pub async fn create_namespaced(
 pub async fn update_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns, name)): Path<(String, String, String)>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> Result<Json<ApiResponse<String>>, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
@@ -338,6 +341,9 @@ pub async fn update_namespaced(
     let writer = state.conf_center();
 
     let content = String::from_utf8(body.to_vec()).map_err(|_| StatusCode::BAD_REQUEST)?;
+    // Capture the client's precondition before non-Kubernetes parsing assigns
+    // the new resourceVersion that will be persisted by this update.
+    let expected_resource_version = expected_resource_version(&headers, &content)?;
 
     // The URL name/namespace are the authoritative storage keys, but the body
     // content is what gets persisted. Reject a body whose metadata identity
@@ -364,7 +370,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -373,7 +385,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -382,7 +400,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -391,7 +415,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -400,7 +430,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &route, is_k8s)?;
             let json_content = serde_json::to_string(&route).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -409,7 +445,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &service, is_k8s)?;
             let json_content = serde_json::to_string(&service).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -418,7 +460,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &ep, is_k8s)?;
             let json_content = serde_json::to_string(&ep).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -427,7 +475,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &tls, is_k8s)?;
             let json_content = serde_json::to_string(&tls).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -436,7 +490,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -451,7 +511,13 @@ pub async fn update_namespaced(
             // `skills/04-review/concurrency/failover-read-modify-write-per-key-lock.md`.
             let _resource_guard = super::resource_locks::lock_resource(kind.as_str(), &ns, &name).await;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -460,7 +526,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &linksys, is_k8s)?;
             let json_content = serde_json::to_string(&linksys).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -469,7 +541,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &secret, is_k8s)?;
             let json_content = serde_json::to_string(&secret).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -478,7 +556,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &cm, is_k8s)?;
             let json_content = serde_json::to_string(&cm).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -487,7 +571,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &gateway, is_k8s)?;
             let json_content = serde_json::to_string(&gateway).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -496,7 +586,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &rg, is_k8s)?;
             let json_content = serde_json::to_string(&rg).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -505,7 +601,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &policy, is_k8s)?;
             let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -514,7 +616,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &plugins, is_k8s)?;
             let json_content = serde_json::to_string(&plugins).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -523,7 +631,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &acme, is_k8s)?;
             let json_content = serde_json::to_string(&acme).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -532,7 +646,13 @@ pub async fn update_namespaced(
             validate_resource(state.schema_validator.as_ref(), kind, &policy, is_k8s)?;
             let json_content = serde_json::to_string(&policy).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
             writer
-                .update_one(kind.as_str(), Some(&ns), &name, json_content)
+                .update_one_if_version(
+                    kind.as_str(),
+                    Some(&ns),
+                    &name,
+                    json_content,
+                    expected_resource_version.as_deref(),
+                )
                 .await
                 .map_err(map_writer_error)?;
         }
@@ -556,6 +676,7 @@ pub async fn update_namespaced(
 pub async fn delete_namespaced(
     State(state): State<Arc<AdminState>>,
     Path((kind_str, ns, name)): Path<(String, String, String)>,
+    headers: HeaderMap,
 ) -> Result<StatusCode, StatusCode> {
     let kind = parse_kind(&kind_str).map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -563,8 +684,9 @@ pub async fn delete_namespaced(
     let writer = state.conf_center();
 
     // delete_one returns NotFound if the resource does not exist.
+    let expected_resource_version = expected_resource_version(&headers, "{}")?;
     writer
-        .delete_one(kind.as_str(), Some(&ns), &name)
+        .delete_one_if_version(kind.as_str(), Some(&ns), &name, expected_resource_version.as_deref())
         .await
         .map_err(map_writer_error)?;
 
@@ -647,6 +769,7 @@ mod update_identity_tests {
         let result = update_namespaced(
             State(state),
             Path(("HTTPRoute".to_string(), "default".to_string(), "route-a".to_string())),
+            HeaderMap::new(),
             http_route_body("route-b", "default"),
         )
         .await;
@@ -659,6 +782,7 @@ mod update_identity_tests {
         let result = update_namespaced(
             State(state),
             Path(("HTTPRoute".to_string(), "default".to_string(), "route-a".to_string())),
+            HeaderMap::new(),
             http_route_body("route-a", "other-ns"),
         )
         .await;
@@ -674,10 +798,66 @@ mod update_identity_tests {
         let result = update_namespaced(
             State(state),
             Path(("HTTPRoute".to_string(), "default".to_string(), "route-a".to_string())),
+            HeaderMap::new(),
             http_route_body("route-a", "default"),
         )
         .await;
         assert_eq!(result.err(), Some(StatusCode::NOT_FOUND));
+    }
+
+    #[tokio::test]
+    async fn stale_if_match_returns_conflict_and_keeps_current_resource() {
+        let (state, _tmp) = make_fs_state().await;
+        let current = r#"{"apiVersion":"gateway.networking.k8s.io/v1","kind":"HTTPRoute","metadata":{"name":"route-a","namespace":"default","resourceVersion":"42"},"spec":{}}"#;
+        state
+            .conf_center()
+            .create_one("HTTPRoute", Some("default"), "route-a", current.to_string())
+            .await
+            .expect("seed resource must be created");
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::IF_MATCH, r#""41""#.parse().unwrap());
+
+        let result = update_namespaced(
+            State(Arc::clone(&state)),
+            Path(("HTTPRoute".to_string(), "default".to_string(), "route-a".to_string())),
+            headers,
+            http_route_body("route-a", "default"),
+        )
+        .await;
+        assert_eq!(result.err(), Some(StatusCode::CONFLICT));
+        let stored = state
+            .conf_center()
+            .get_one("HTTPRoute", Some("default"), "route-a")
+            .await
+            .expect("current resource must remain readable");
+        let stored: serde_yaml::Value = serde_yaml::from_str(&stored).unwrap();
+        assert_eq!(stored["metadata"]["resourceVersion"], "42");
+    }
+
+    #[tokio::test]
+    async fn stale_delete_if_match_returns_conflict_and_keeps_current_resource() {
+        let (state, _tmp) = make_fs_state().await;
+        let current = r#"{"apiVersion":"gateway.networking.k8s.io/v1","kind":"HTTPRoute","metadata":{"name":"route-a","namespace":"default","resourceVersion":"42"},"spec":{}}"#;
+        state
+            .conf_center()
+            .create_one("HTTPRoute", Some("default"), "route-a", current.to_string())
+            .await
+            .expect("seed resource must be created");
+        let mut headers = HeaderMap::new();
+        headers.insert(axum::http::header::IF_MATCH, r#""41""#.parse().unwrap());
+
+        let result = delete_namespaced(
+            State(Arc::clone(&state)),
+            Path(("HTTPRoute".to_string(), "default".to_string(), "route-a".to_string())),
+            headers,
+        )
+        .await;
+        assert_eq!(result.err(), Some(StatusCode::CONFLICT));
+        assert!(state
+            .conf_center()
+            .get_one("HTTPRoute", Some("default"), "route-a")
+            .await
+            .is_ok());
     }
 
     #[tokio::test]

@@ -209,6 +209,63 @@ impl EtcdLinkClient {
         Ok(resp.succeeded())
     }
 
+    /// PUT key value only when its current mod_revision equals `expected_revision`.
+    ///
+    /// Returns `false` when another writer updated or deleted the key after the
+    /// caller read it. This is the optimistic-concurrency primitive used by
+    /// configuration storage to avoid overwriting concurrent status/metadata.
+    pub async fn txn_put_if_mod_revision(
+        &self,
+        key: &str,
+        expected_revision: i64,
+        value: impl Into<Vec<u8>>,
+    ) -> Result<bool> {
+        let mut client = self
+            .get_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
+        let full_key = self.full_key(key);
+        let value = value.into();
+
+        let txn = Txn::new()
+            .when(vec![Compare::mod_revision(
+                full_key.clone(),
+                CompareOp::Equal,
+                expected_revision,
+            )])
+            .and_then(vec![TxnOp::put(full_key, value, None)]);
+
+        let resp = client
+            .txn(txn)
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd TXN put_if_mod_revision {}: {:?}", key, e))?;
+        Ok(resp.succeeded())
+    }
+
+    /// DELETE key only when its current mod_revision equals `expected_revision`.
+    ///
+    /// Returns `false` when another writer updated or deleted the key after the
+    /// caller read it.
+    pub async fn txn_delete_if_mod_revision(&self, key: &str, expected_revision: i64) -> Result<bool> {
+        let mut client = self
+            .get_client()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("Etcd [{}] not connected", self.name()))?;
+        let full_key = self.full_key(key);
+        let txn = Txn::new()
+            .when(vec![Compare::mod_revision(
+                full_key.clone(),
+                CompareOp::Equal,
+                expected_revision,
+            )])
+            .and_then(vec![TxnOp::delete(full_key, None)]);
+        let resp = client
+            .txn(txn)
+            .await
+            .map_err(|e| anyhow::anyhow!("Etcd TXN delete_if_mod_revision {}: {:?}", key, e))?;
+        Ok(resp.succeeded())
+    }
+
     /// DELETE with prefix → number of deleted keys
     pub async fn delete_prefix(&self, prefix: &str) -> Result<i64> {
         let mut client = self

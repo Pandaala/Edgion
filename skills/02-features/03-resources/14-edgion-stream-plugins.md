@@ -21,29 +21,27 @@ spec:
   # Stage 1: ConnectionFilter (pre-TLS, only IP information available)
   plugins:
     - enable: true
-      plugin:
-        type: IpRestriction
-        config:
-          allowlist:
-            - "10.0.0.0/8"
-            - "192.168.1.0/24"
-          denylist:
-            - "10.0.0.100"
+      type: IpRestriction
+      config:
+        allowlist:
+          - "10.0.0.0/8"
+          - "192.168.1.0/24"
+        denylist:
+          - "10.0.0.100"
           # allowRefs/denyRefs (optional): reference central IpList EdgionConfigData objects;
           # merged into the same allow/deny pools as inline entries.
           # namespace defaults to this EdgionStreamPlugins resource's namespace if omitted.
-          allowRefs:
-            - name: corp-allowlist   # references an IpList EdgionConfigData named "corp-allowlist"
+        allowRefs:
+          - name: corp-allowlist   # references an IpList EdgionConfigData named "corp-allowlist"
 
   # Stage 2: TlsRoute (post-TLS handshake, SNI/certificate information available)
   tlsRoutePlugins:
     - enable: true
-      plugin:
-        type: IpRestriction
-        config:
-          allowlist:
-            - "172.16.0.0/12"
-          # allowRefs/denyRefs also available here (same semantics as Stage 1)
+      type: IpRestriction
+      config:
+        allowlist:
+          - "172.16.0.0/12"
+        # allowRefs/denyRefs also available here (same semantics as Stage 1)
 ```
 
 ## Two-Stage Model
@@ -86,7 +84,12 @@ On `UDPRoute` the binding runs only the Stage-1 ConnectionFilter (`spec.plugins`
 | Type | Stage | Description |
 |------|-------|-------------|
 | `IpRestriction` | Stage 1 + Stage 2 | IP allow/deny list (CIDR supported); rules may be inline (`allowlist`/`denylist`) or referenced from a central `IpList` EdgionConfigData via `allowRefs`/`denyRefs` (merged into the same pools; a missing/disabled referenced IpList causes allowRef to fail closed). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with valid entries. Bad entries surface as `PartiallyInvalid` status (reason `RuleInvalid`; `Accepted` stays `True`). A skipped inline deny entry increments `edgion_ip_deny_entries_skipped_total{scope="stream_l4"|"tls_route"}`. |
-| `GlobalConnectionIpRestriction` | Stage 1 + Stage 2 | EdgionConfigData-referenced IP restriction. The plugin config only holds `overrideRef` (namespace inherited from the parent EdgionStreamPlugins if omitted); the actual rules live in a `GlobalConnectionIpRestriction` EdgionConfigData. Each profile may also carry `allowRefs`/`denyRefs` referencing central `IpList` EdgionConfigDatas. Per-profile `ProfileRules` inline `allow`/`deny` are also partial-good (same skipping behavior); exception: `Some(vec![])` (a present-but-empty inline list) is still rejected (structural guard). Center-managed and synced across multiple Controllers. |
+| `GlobalConnectionIpRestriction` | Stage 1 only | EdgionConfigData-referenced IP restriction. The plugin config holds `overrideRef`; referenced profiles carry the rule sets. |
+| `ConnectionRateLimit` | Stage 1 only | Limits new connections before TLS/application processing using the current connection-rate configuration. |
+
+Entries are flattened as `enable + type + config`; the older nested
+`plugin: {type, config}` shape is not the current wire contract. Stage 2 admits
+only `IpRestriction` in the current Rust enum.
 
 ## Differences from HTTP Plugins
 
@@ -108,4 +111,3 @@ status:
       status: "True"
       reason: Valid
 ```
-

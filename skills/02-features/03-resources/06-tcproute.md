@@ -20,8 +20,9 @@ metadata:
   namespace: default
   annotations:
     edgion.io/edgion-stream-plugins: "default/my-stream-plugins"  # StreamPlugins binding
-    edgion.io/proxy-protocol: "1"                                  # Proxy Protocol version
-    edgion.io/max-connect-retries: "3"                             # Max connection retries
+    edgion.io/tcp-keepalive-time: "300"                            # Enable upstream keepalive
+    edgion.io/tcp-keepalive-interval: "30"
+    edgion.io/tcp-keepalive-probes: "5"
 spec:
   parentRefs:
     - name: my-gateway
@@ -63,8 +64,11 @@ spec:
 | Annotation | Type | Default | Description |
 |------------|------|---------|-------------|
 | `edgion.io/edgion-stream-plugins` | `ns/name` | — | Bind to an EdgionStreamPlugins resource |
-| `edgion.io/proxy-protocol` | `"1"\|"2"` | — | Send Proxy Protocol upstream |
-| `edgion.io/max-connect-retries` | `u32` | `1` | Max upstream connection retry count |
+| `edgion.io/tcp-keepalive-time` | positive integer seconds | disabled | Enable upstream TCP keepalive and set idle time; clamped to 1–7200 |
+| `edgion.io/tcp-keepalive-interval` | integer seconds | `75` | Probe interval when keepalive is enabled; clamped to 1–75 |
+| `edgion.io/tcp-keepalive-probes` | integer | `9` | Failed probes before closing; clamped to 1–20 |
+
+`edgion.io/proxy-protocol` and `edgion.io/max-connect-retries` are TLSRoute-only runtime annotations; TCPRoute does not read them.
 
 ## Characteristics
 

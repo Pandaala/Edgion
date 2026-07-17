@@ -78,6 +78,39 @@ The following endpoints are served on the **probe listener** (`:12100`, `probe_l
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/server-info` | Get the current `server_id` and ready state. After reload `server_id` changes, which can be used to confirm the reload took effect |
+| GET | `/api/v1/access` | Return the **caller's own** effective access snapshot. Authenticated-only; see below |
+
+#### `GET /api/v1/access` — effective access introspection
+
+Lets an authenticated client (Center's UI, `edgion-cli`) discover what it may
+actually do, instead of probing endpoints and inferring from `403`s. Handler:
+`api/access_handlers.rs`; snapshot builder: `authz/access.rs`.
+
+Response `data` shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "revision": "sha256:...",
+  "resources": [ { "kind": "HTTPRoute", "scope": "namespaced", "verbs": ["get", "list"] } ],
+  "operations": [ { "name": "regionRoute.list", "allowed": true } ]
+}
+```
+
+- **Bounded**: `resources` and `operations` have fixed cardinality drawn from a
+  compile-time catalog. A wildcard policy (`verbs: ["*"]`, `kinds: ["*"]`) is
+  *expanded against that catalog* — it never emits a kind or verb outside it.
+  The catalog is held to `ResourceKind` by an exhaustive-match compile guard in
+  `authz/access.rs`.
+- **`revision`** is a SHA-256 over the canonical `(schemaVersion, resources, operations)`
+  serialization — stable for identical access, and it changes when the policy is
+  hot-reloaded, so a client can cheaply detect that its permissions moved.
+- **Self-only**: it reports the `Role` already attached to *this* request. There
+  is no way to ask about another identity.
+- **Auth**: missing/unknown token → `401` (the route is not in the public
+  skip-set). It carries the inherent `access-self` verb, which no RBAC rule can
+  grant or revoke — see
+  [11-authentication-authorization.md](11-authentication-authorization.md).
 
 ### Reload
 
@@ -103,6 +136,27 @@ The `{kind}` path parameter is the resource type name (e.g., `HTTPRoute`, `Gatew
 In non-K8s mode, create and update operations:
 1. Run JSON Schema validation via `SchemaValidator` (skipped in K8s mode, which is handled by the API Server)
 2. Automatically call `next_resource_version()` to assign an incrementing `resourceVersion`
+
+Update **and delete** endpoints support optimistic concurrency through a strong
+`If-Match: "<resourceVersion>"` header. For updates the request body's
+`metadata.resourceVersion` is used as a compatibility fallback when the header
+is absent (`DELETE` has no body, so the header is its only form). A mismatch
+returns `409 Conflict`; a missing precondition preserves unconditional
+behavior for older clients, and `If-Match: *` means "must exist" and is
+likewise unconditional. Weak (`W/"..."`) and multi-value ETags are rejected
+with `400`. File-system comparison runs inside the per-resource lock, etcd
+combines the comparison with its mod-revision transaction, and Kubernetes
+compares the fetched object before a replace that retains the fetched native
+resourceVersion.
+
+In non-K8s mode every persisted write must carry a **freshly allocated**
+`resourceVersion` (`next_resource_version()`), because those backends store the
+request's value verbatim. Writing a resource back at the version it was read at
+would freeze the version across a mutation, and a client still holding that
+version could then satisfy an `If-Match` precondition and silently overwrite
+the change. This applies to *every* server-side read-modify-write path, not
+just `PUT` — including the RegionRoute failover endpoint. K8s mode assigns the
+version server-side and must not be touched.
 
 Successful `POST` creates respond with **`201 Created`** and a `Location` header pointing at the new resource. `PUT` updates continue to use `200 OK` with the `ApiResponse::success(...)` body. Successful `DELETE` returns **`204 No Content`** with an empty body. Failed creates still surface as the mapped HTTP error (see "Error Mapping" below) and carry no `Location` header.
 

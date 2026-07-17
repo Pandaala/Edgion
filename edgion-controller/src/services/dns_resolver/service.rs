@@ -50,7 +50,7 @@ static DNS_RESOLVER: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
 /// Start the control-plane DNS resolver loop. Idempotent: a warning + no-op if
 /// already running (call [`stop_dns_resolver_service`] first on re-election).
-pub fn start_dns_resolver_service(client: Client) {
+pub fn start_dns_resolver_service(client: Client, watch_namespaces: Vec<String>) {
     let mut guard = DNS_RESOLVER.lock();
     if guard.is_some() {
         tracing::warn!(
@@ -59,7 +59,7 @@ pub fn start_dns_resolver_service(client: Client) {
         );
         return;
     }
-    let handle = tokio::spawn(async move { run(client).await });
+    let handle = tokio::spawn(async move { run(client, watch_namespaces).await });
     *guard = Some(handle);
     tracing::info!(component = "dns_resolver_service", "DNS resolver service started");
 }
@@ -73,7 +73,7 @@ pub fn stop_dns_resolver_service() {
 }
 
 /// The loop body. Ticks on `refresh_interval` and reconciles every tick.
-async fn run(client: Client) {
+async fn run(client: Client, watch_namespaces: Vec<String>) {
     let config = dns_resolver_config();
     let period = parse_refresh_interval(&config.refresh_interval);
     tracing::info!(
@@ -97,7 +97,7 @@ async fn run(client: Client) {
         // Re-read config each tick so a hot reload of `enabled` / default resolver
         // takes effect without restarting the service.
         let config = dns_resolver_config();
-        if let Err(e) = reconcile_once(&client, &config, &mut last_applied).await {
+        if let Err(e) = reconcile_once(&client, &watch_namespaces, &config, &mut last_applied).await {
             tracing::warn!(
                 component = "dns_resolver_service",
                 error = %format!("{e:#}"),
@@ -123,22 +123,18 @@ async fn run(client: Client) {
 /// (the input fingerprint would still match). Listing first heals it in-tick.
 async fn reconcile_once(
     client: &Client,
+    watch_namespaces: &[String],
     config: &DnsResolverConfig,
     last_applied: &mut HashMap<String, String>,
 ) -> Result<()> {
-    let slices_api: Api<EndpointSlice> = Api::all(client.clone());
-    let owned = slices_api
-        .list(&ListParams::default().labels(&managed_by_selector()))
-        .await?;
-    let observed: HashSet<String> = owned.items.iter().filter_map(owned_slice_service_key).collect();
-
-    let services: Api<Service> = Api::all(client.clone());
-    let list = services.list(&ListParams::default()).await?;
+    let owned = list_owned_slices(client, watch_namespaces).await?;
+    let observed: HashSet<String> = owned.iter().filter_map(owned_slice_service_key).collect();
+    let services = list_services(client, watch_namespaces).await?;
 
     let default_candidate = controller_default_candidate(config);
     let mut desired: HashSet<String> = HashSet::new();
 
-    for svc in list.items {
+    for svc in services {
         let namespace = svc.metadata.namespace.clone().unwrap_or_else(|| "default".to_string());
         let Some(name) = svc.metadata.name.clone() else {
             continue;
@@ -178,8 +174,44 @@ async fn reconcile_once(
         }
     }
 
-    gc_orphaned_slices(client, &owned.items, &desired, last_applied).await;
+    gc_orphaned_slices(client, &owned, &desired, last_applied).await;
     Ok(())
+}
+
+async fn list_owned_slices(client: &Client, watch_namespaces: &[String]) -> Result<Vec<EndpointSlice>> {
+    let params = ListParams::default().labels(&managed_by_selector());
+    if watch_namespaces.is_empty() {
+        return Ok(Api::<EndpointSlice>::all(client.clone()).list(&params).await?.items);
+    }
+
+    let mut items = Vec::new();
+    for namespace in watch_namespaces {
+        items.extend(
+            Api::<EndpointSlice>::namespaced(client.clone(), namespace)
+                .list(&params)
+                .await?
+                .items,
+        );
+    }
+    Ok(items)
+}
+
+async fn list_services(client: &Client, watch_namespaces: &[String]) -> Result<Vec<Service>> {
+    let params = ListParams::default();
+    if watch_namespaces.is_empty() {
+        return Ok(Api::<Service>::all(client.clone()).list(&params).await?.items);
+    }
+
+    let mut items = Vec::new();
+    for namespace in watch_namespaces {
+        items.extend(
+            Api::<Service>::namespaced(client.clone(), namespace)
+                .list(&params)
+                .await?
+                .items,
+        );
+    }
+    Ok(items)
 }
 
 /// Resolve one ExternalName Service and apply its EndpointSlice(s).
@@ -498,6 +530,67 @@ pub(crate) fn parse_duration_str(value: &str) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::{Response, StatusCode};
+    use kube::client::Body;
+    use serde_json::json;
+    use std::convert::Infallible;
+    use std::sync::Arc;
+    use tower::service_fn;
+
+    fn empty_kubernetes_list(api_version: &str, kind: &str) -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::to_vec(&json!({
+                    "apiVersion": api_version,
+                    "kind": kind,
+                    "metadata": {"resourceVersion": "1"},
+                    "items": []
+                }))
+                .expect("response JSON must serialize"),
+            ))
+            .expect("response must build")
+    }
+
+    #[tokio::test]
+    async fn reconcile_lists_only_configured_namespaces() {
+        let paths = Arc::new(Mutex::new(Vec::new()));
+        let captured = Arc::clone(&paths);
+        let service = service_fn(move |request: http::Request<Body>| {
+            let captured = Arc::clone(&captured);
+            async move {
+                let path = request.uri().path().to_string();
+                captured.lock().push(path.clone());
+                let response = if path.contains("endpointslices") {
+                    empty_kubernetes_list("discovery.k8s.io/v1", "EndpointSliceList")
+                } else {
+                    empty_kubernetes_list("v1", "ServiceList")
+                };
+                Ok::<_, Infallible>(response)
+            }
+        });
+
+        let client = Client::new(service, "default");
+        reconcile_once(
+            &client,
+            &["team-a".into(), "team-b".into()],
+            &DnsResolverConfig::default(),
+            &mut HashMap::new(),
+        )
+        .await
+        .expect("namespace-scoped reconcile must succeed");
+
+        assert_eq!(
+            *paths.lock(),
+            vec![
+                "/apis/discovery.k8s.io/v1/namespaces/team-a/endpointslices",
+                "/apis/discovery.k8s.io/v1/namespaces/team-b/endpointslices",
+                "/api/v1/namespaces/team-a/services",
+                "/api/v1/namespaces/team-b/services"
+            ]
+        );
+    }
 
     #[test]
     fn parse_refresh_interval_units() {

@@ -121,7 +121,7 @@ impl KubernetesCenter {
             "Creating KubernetesCenter"
         );
 
-        let writer = KubernetesStorage::new().await?;
+        let writer = KubernetesStorage::new(config.watch_namespaces.clone()).await?;
 
         Ok(Self {
             config,
@@ -494,6 +494,7 @@ impl KubernetesCenter {
             no_sync_kinds,
             event_tx.clone(),
             Some(client.clone()), // start ACME when ready
+            self.config.watch_namespaces.clone(),
         );
 
         // 6. Spawn leadership-loss watcher (leader-only: only fires LeadershipLost)
@@ -600,6 +601,7 @@ impl KubernetesCenter {
         no_sync_kinds: Vec<String>,
         tx: mpsc::Sender<LifecycleEvent>,
         acme_client: Option<Client>,
+        watch_namespaces: Vec<String>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             const CACHE_READY_TIMEOUT_SECS: u64 = 30;
@@ -644,7 +646,7 @@ impl KubernetesCenter {
                     .await;
 
                 if let Some(client) = acme_client {
-                    Self::start_leader_jobs(&client);
+                    Self::start_leader_jobs(&client, &watch_namespaces);
                 }
 
                 let _ = tx.send(LifecycleEvent::CachesReady).await;
@@ -852,6 +854,7 @@ impl KubernetesCenter {
             no_sync_kinds,
             event_tx.clone(),
             None, // ACME starts via start_leader_services
+            self.config.watch_namespaces.clone(),
         );
 
         // 6. Spawn leadership watcher — bidirectional (Acquired + Lost)
@@ -900,10 +903,10 @@ impl KubernetesCenter {
     /// module-global `LEADER` flag (`conf_sync_ca/rotation.rs`) that gates the Admin
     /// API's manual-rotation endpoint (`decide_trigger` / `trigger_manual_rotation`). Do
     /// not reorder or conditionally skip it without accounting for that.
-    fn start_leader_jobs(client: &Client) {
-        crate::services::acme::start_acme_service(client.clone());
+    fn start_leader_jobs(client: &Client, watch_namespaces: &[String]) {
+        crate::services::acme::start_acme_service(client.clone(), watch_namespaces.to_vec());
         crate::services::conf_sync_ca::rotation::start_conf_sync_rotation(client.clone());
-        crate::services::dns_resolver::start_dns_resolver_service(client.clone());
+        crate::services::dns_resolver::start_dns_resolver_service(client.clone(), watch_namespaces.to_vec());
     }
 
     /// Stop counterpart of [`Self::start_leader_jobs`]. All stops are no-op-if-absent.
@@ -924,7 +927,7 @@ impl KubernetesCenter {
     /// reconciled from scratch as leader anyway.
     async fn start_leader_services(&self, client: &Client) {
         tracing::info!(component = "kubernetes_center", "Starting leader-only services");
-        Self::start_leader_jobs(client);
+        Self::start_leader_jobs(client, &self.config.watch_namespaces);
         self.runtime.processor_registry.requeue_all().await;
     }
 
@@ -955,7 +958,8 @@ impl CenterLifeCycle for KubernetesCenter {
         self.set_shutdown_handle(shutdown_handle.clone());
 
         // Inject conf_writer into runtime so handlers can auto-create resources (e.g. EdgionConfigData).
-        let writer_arc: Arc<dyn CenterApi + Send + Sync> = Arc::new(KubernetesStorage::new().await?);
+        let writer_arc: Arc<dyn CenterApi + Send + Sync> =
+            Arc::new(KubernetesStorage::new(self.config.watch_namespaces.clone()).await?);
         self.runtime.set_conf_writer(writer_arc);
 
         let client = Client::try_default().await?;

@@ -4,8 +4,8 @@
 //! API versions for ReferenceGrant, TLSRoute, and BackendTLSPolicy.
 
 use anyhow::Result;
-use kube::api::Api;
-use kube::core::{ApiResource, DynamicObject, GroupVersionKind};
+use kube::core::GroupVersionKind;
+use kube::error::DiscoveryError;
 use kube::Client;
 use std::collections::HashSet;
 
@@ -14,6 +14,31 @@ use std::collections::HashSet;
 pub enum ReferenceGrantVersion {
     V1,
     V1Beta1,
+}
+
+fn is_api_unavailable(error: &kube::Error) -> bool {
+    matches!(error, kube::Error::Api(response) if response.code == 404)
+        || matches!(
+            error,
+            kube::Error::Discovery(
+                DiscoveryError::MissingKind(_)
+                    | DiscoveryError::MissingApiGroup(_)
+                    | DiscoveryError::MissingResource(_)
+                    | DiscoveryError::EmptyApiGroup(_)
+            )
+        )
+}
+
+/// Check whether a GVK is served through Kubernetes API discovery.
+///
+/// Discovery avoids listing namespaced objects at cluster scope, so startup
+/// remains compatible with controllers restricted to explicit namespaces.
+async fn is_kind_served(client: &Client, gvk: &GroupVersionKind) -> Result<bool, kube::Error> {
+    match kube::discovery::pinned_kind(client, gvk).await {
+        Ok(_) => Ok(true),
+        Err(error) if is_api_unavailable(&error) => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 /// The API version detected for BackendTLSPolicy.
@@ -28,34 +53,52 @@ pub enum BackendTLSPolicyVersion {
 /// Tries v1 first (GA since Gateway API v1.1.0). Falls back to v1beta1 for
 /// older clusters. Returns `None` if neither version is available.
 pub async fn detect_reference_grant_version(client: &Client) -> Option<ReferenceGrantVersion> {
-    // Try v1 first
-    let gvk_v1 = GroupVersionKind::gvk("gateway.networking.k8s.io", "v1", "ReferenceGrant");
-    let api_resource_v1 = ApiResource::from_gvk(&gvk_v1);
-    let api_v1: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource_v1);
-
-    if api_v1.list(&kube::api::ListParams::default().limit(1)).await.is_ok() {
-        tracing::info!(component = "k8s_controller", "ReferenceGrant v1 API detected");
-        return Some(ReferenceGrantVersion::V1);
+    match probe_reference_grant_version(client).await {
+        Ok(version) => version,
+        Err(error) => {
+            tracing::warn!(
+                component = "k8s_controller",
+                error = %error,
+                "Failed to detect ReferenceGrant API version"
+            );
+            None
+        }
     }
+}
 
-    // Fall back to v1beta1
-    let gvk_beta = GroupVersionKind::gvk("gateway.networking.k8s.io", "v1beta1", "ReferenceGrant");
-    let api_resource_beta = ApiResource::from_gvk(&gvk_beta);
-    let api_beta: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource_beta);
-
-    if api_beta.list(&kube::api::ListParams::default().limit(1)).await.is_ok() {
-        tracing::info!(
-            component = "k8s_controller",
-            "ReferenceGrant v1beta1 API detected (v1 not available)"
-        );
-        return Some(ReferenceGrantVersion::V1Beta1);
+/// Probe served ReferenceGrant versions without collapsing authorization or
+/// transport failures into "CRD absent".
+pub async fn probe_reference_grant_version(client: &Client) -> Result<Option<ReferenceGrantVersion>> {
+    for (version, detected) in [
+        ("v1", ReferenceGrantVersion::V1),
+        ("v1beta1", ReferenceGrantVersion::V1Beta1),
+    ] {
+        let gvk = GroupVersionKind::gvk("gateway.networking.k8s.io", version, "ReferenceGrant");
+        match is_kind_served(client, &gvk).await {
+            Ok(true) => {
+                tracing::info!(
+                    component = "k8s_controller",
+                    version = version,
+                    "ReferenceGrant API detected"
+                );
+                return Ok(Some(detected));
+            }
+            Ok(false) => continue,
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "Failed to probe ReferenceGrant API version {}: {}. Check RBAC permissions and network connectivity.",
+                    version,
+                    error
+                ));
+            }
+        }
     }
 
     tracing::warn!(
         component = "k8s_controller",
         "Neither ReferenceGrant v1 nor v1beta1 available"
     );
-    None
+    Ok(None)
 }
 
 /// Detect which BackendTLSPolicy API version the cluster supports.
@@ -87,11 +130,8 @@ pub async fn probe_backend_tls_policy_version(client: &Client) -> Result<Option<
         ("v1alpha3", BackendTLSPolicyVersion::V1Alpha3),
     ] {
         let gvk = GroupVersionKind::gvk("gateway.networking.k8s.io", version, "BackendTLSPolicy");
-        let api_resource = ApiResource::from_gvk(&gvk);
-        let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
-
-        match api.list(&kube::api::ListParams::default().limit(1)).await {
-            Ok(_) => {
+        match is_kind_served(client, &gvk).await {
+            Ok(true) => {
                 tracing::info!(
                     component = "k8s_controller",
                     version = version,
@@ -99,15 +139,8 @@ pub async fn probe_backend_tls_policy_version(client: &Client) -> Result<Option<
                 );
                 return Ok(Some(detected));
             }
+            Ok(false) => continue,
             Err(e) => {
-                let err_str = e.to_string();
-                if err_str.contains("404")
-                    || err_str.contains("not found")
-                    || err_str.contains("the server could not find the requested resource")
-                {
-                    continue;
-                }
-
                 return Err(anyhow::anyhow!(
                     "Failed to probe BackendTLSPolicy API version {}: {}. \
                      Check RBAC permissions and network connectivity.",
@@ -158,23 +191,13 @@ pub async fn detect_tls_route_version(client: &Client) -> Option<TLSRouteVersion
 pub async fn probe_tls_route_version(client: &Client) -> Result<Option<TLSRouteVersion>> {
     for (version, detected) in [("v1", TLSRouteVersion::V1), ("v1alpha3", TLSRouteVersion::V1Alpha3)] {
         let gvk = GroupVersionKind::gvk("gateway.networking.k8s.io", version, "TLSRoute");
-        let api_resource = ApiResource::from_gvk(&gvk);
-        let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
-
-        match api.list(&kube::api::ListParams::default().limit(1)).await {
-            Ok(_) => {
+        match is_kind_served(client, &gvk).await {
+            Ok(true) => {
                 tracing::info!(component = "k8s_controller", version = version, "TLSRoute API detected");
                 return Ok(Some(detected));
             }
+            Ok(false) => continue,
             Err(e) => {
-                let err_str = e.to_string();
-                if err_str.contains("404")
-                    || err_str.contains("not found")
-                    || err_str.contains("the server could not find the requested resource")
-                {
-                    continue;
-                }
-
                 return Err(anyhow::anyhow!(
                     "Failed to probe TLSRoute API version {}: {}. \
                      Check RBAC permissions and network connectivity.",
@@ -290,8 +313,8 @@ pub fn validate_no_watch_kinds(no_watch_kinds: &[String]) {
 
 /// Preflight check: verify that all required Gateway API CRDs are installed.
 ///
-/// For each Gateway API resource not in `no_watch_kinds`, attempts a list
-/// with `limit=1`. A 404 means the CRD is missing. All missing CRDs are
+/// For each Gateway API resource not in `no_watch_kinds`, queries API
+/// discovery. An unavailable GVK means the CRD is missing. All missing CRDs are
 /// collected and reported in a single error with install instructions.
 pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &HashSet<String>) -> Result<()> {
     tracing::info!(
@@ -346,6 +369,31 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
             continue;
         }
 
+        if res.kind == "ReferenceGrant" {
+            match probe_reference_grant_version(client).await? {
+                Some(version) => {
+                    tracing::debug!(
+                        component = "k8s_controller",
+                        kind = res.kind,
+                        group = res.group,
+                        version = ?version,
+                        "CRD available"
+                    );
+                }
+                None => {
+                    tracing::warn!(
+                        component = "k8s_controller",
+                        kind = res.kind,
+                        group = res.group,
+                        versions = "v1,v1beta1",
+                        "CRD not found"
+                    );
+                    missing.push(res);
+                }
+            }
+            continue;
+        }
+
         if res.kind == "TLSRoute" {
             match probe_tls_route_version(client).await? {
                 Some(TLSRouteVersion::V1) => {
@@ -381,11 +429,8 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
         }
 
         let gvk = GroupVersionKind::gvk(res.group, res.version, res.kind);
-        let api_resource = ApiResource::from_gvk(&gvk);
-        let api: Api<DynamicObject> = Api::all_with(client.clone(), &api_resource);
-
-        match api.list(&kube::api::ListParams::default().limit(1)).await {
-            Ok(_) => {
+        match is_kind_served(client, &gvk).await {
+            Ok(true) => {
                 tracing::debug!(
                     component = "k8s_controller",
                     kind = res.kind,
@@ -394,31 +439,26 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
                     "CRD available"
                 );
             }
+            Ok(false) => {
+                tracing::warn!(
+                    component = "k8s_controller",
+                    kind = res.kind,
+                    group = res.group,
+                    version = res.version,
+                    "CRD not found"
+                );
+                missing.push(res);
+            }
             Err(e) => {
-                let err_str = e.to_string();
-                if err_str.contains("404")
-                    || err_str.contains("not found")
-                    || err_str.contains("the server could not find the requested resource")
-                {
-                    tracing::warn!(
-                        component = "k8s_controller",
-                        kind = res.kind,
-                        group = res.group,
-                        version = res.version,
-                        "CRD not found"
-                    );
-                    missing.push(res);
-                } else {
-                    // Non-404 errors (permission, network) — fail immediately with distinct message
-                    return Err(anyhow::anyhow!(
-                        "Failed to probe Gateway API CRD {} ({}/{}): {}. \
-                         Check RBAC permissions and network connectivity.",
-                        res.kind,
-                        res.group,
-                        res.version,
-                        e
-                    ));
-                }
+                // Authorization and transport failures remain distinct from an absent CRD.
+                return Err(anyhow::anyhow!(
+                    "Failed to probe Gateway API CRD {} ({}/{}): {}. \
+                     Check RBAC permissions and network connectivity.",
+                    res.kind,
+                    res.group,
+                    res.version,
+                    e
+                ));
             }
         }
     }
@@ -433,6 +473,8 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
         .map(|r| {
             if r.kind == "BackendTLSPolicy" || r.kind == "TLSRoute" {
                 format!("{} ({}/v1 or v1alpha3)", r.kind, r.group)
+            } else if r.kind == "ReferenceGrant" {
+                format!("{} ({}/v1 or v1beta1)", r.kind, r.group)
             } else {
                 format!("{} ({}/{})", r.kind, r.group, r.version)
             }
@@ -451,4 +493,39 @@ pub async fn preflight_check_gateway_api_crds(client: &Client, no_watch_kinds: &
         missing_list.join(", "),
         skip_hint,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unavailable_discovery_results_are_classified_as_absent() {
+        for error in [
+            DiscoveryError::MissingKind("Gateway".into()),
+            DiscoveryError::MissingApiGroup("gateway.networking.k8s.io".into()),
+            DiscoveryError::MissingResource("gateways".into()),
+            DiscoveryError::EmptyApiGroup("gateway.networking.k8s.io/v1".into()),
+        ] {
+            assert!(is_api_unavailable(&kube::Error::Discovery(error)));
+        }
+    }
+
+    #[test]
+    fn invalid_discovery_configuration_is_not_classified_as_absent() {
+        let error = kube::Error::Discovery(DiscoveryError::InvalidGroupVersion("invalid".into()));
+        assert!(!is_api_unavailable(&error));
+    }
+
+    #[test]
+    fn only_api_not_found_is_classified_as_absent() {
+        let response = |code| kube::error::ErrorResponse {
+            status: "Failure".into(),
+            message: "test".into(),
+            reason: "test".into(),
+            code,
+        };
+        assert!(is_api_unavailable(&kube::Error::Api(response(404))));
+        assert!(!is_api_unavailable(&kube::Error::Api(response(403))));
+    }
 }

@@ -1,6 +1,7 @@
 // pub(crate): also used by the fed_client watch check.
 pub(crate) mod authz_classifier;
 // pub(crate): authz_layer and inject_center_identity are used at the federation spawn site.
+mod access_handlers;
 pub(crate) mod authz_middleware;
 pub(crate) mod cli_token_middleware;
 mod cluster_handlers;
@@ -524,6 +525,7 @@ pub fn create_admin_router(
         )
         .merge(write_routes)
         // Special operations
+        .route("/api/v1/access", get(access_handlers::get_access))
         .route("/api/v1/server-info", get(get_server_info))
         .route("/api/v1/reload", post(reload_all_resources))
         // Effective resolved views for Center dashboard polling.

@@ -111,9 +111,6 @@ spec:
     mode: "cors-standard"                   # "cors-standard" | "all-options"
     statusCode: 204                         # uint16, response status when no CORS plugin is present
 
-  # ─── ReferenceGrant validation ───
-  enableReferenceGrantValidation: false     # bool
-
   # ─── LinkSys global configuration ───
   linkSys:
     webhookMaxResponseBytes: 16384          # usize, hard upper bound for webhook response body (default 16 KiB)
