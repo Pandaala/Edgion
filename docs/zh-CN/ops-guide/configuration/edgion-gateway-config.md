@@ -202,7 +202,9 @@ accessLogExtern:
 | `unmaskedKeys.cookie` | `[]String` | `[]` | 明文记录的 cookie 名（大小写敏感） |
 | `unmaskedKeys.ctx` | `[]String` | `[]` | 明文记录的 ctx 变量名（大小写敏感） |
 
-白名单按来源类型分开维护，而非一张扁平列表——名为 `user-agent` 的请求头是无害的，但同名的 cookie 是完全不同的对象。`query`/`cookie`/`ctx` 默认为空，因为它们的 key 名称完全由业务决定，不存在放之四海皆安全的默认名。未命中白名单的字段仍会输出，只是被脱敏，而非直接丢弃。`routeLabel`/`routeAnnotation` 来源永远不脱敏，完全绕过该白名单。凭证类请求头、claim/payload 类 ctx key 等硬黑名单在 `EdgionPlugins` 准入阶段就被拒绝，不受此白名单配置影响。
+白名单按来源类型分开维护，而非一张扁平列表——名为 `user-agent` 的请求头是无害的，但同名的 cookie 是完全不同的对象。`query`/`cookie`/`ctx` 默认为空，因为它们的 key 名称完全由业务决定，不存在放之四海皆安全的默认名。未命中白名单的字段仍会输出，只是被脱敏，而非直接丢弃。`routeLabel`/`routeAnnotation` 来源永远不脱敏，完全绕过该白名单。凭证类请求头、claim/payload 类 ctx key 等硬黑名单无论此白名单如何配置都无法被命名。其执行分两步：在 `EdgionPlugins` 准入阶段，声明了被拉黑 key 的字段只会被**上报**到该资源的 `Accepted=False` status condition 上（本仓库的准入是宽松的——上报并不会把资源挡在集群之外，它仍会进入 controller 缓存并通过 conf_sync 下发给 gateway）；真正的强制生效发生在 **gateway 加载配置时**，由 `compile_plugins` 的字段 `retain()` 完成——它会在 spec 被存入之前，丢弃每个校验错误不为空的已声明字段。扩大黑名单需要改代码，而不是改 CR。
+
+**某个 `unmaskedKeys` 列表缺省，保留的是该列表的默认值，而不是清空它。** `UnmaskedKeys` 会为每个缺省的列表分别填充其自身的默认值，因此 `unmaskedKeys: {ctx: [tenant_id]}` 并不代表「只有 `tenant_id` 明文」——它同时保留了上面 `header` 和 `respHeader` 的默认列表。若只想明文 `tenant_id` 并去掉 header 默认值，需要显式列出每个类别，例如 `header: []`。
 
 **生效范围实际是按监听器而非按 Gateway**：当两个不同 GatewayClass 的 Gateway 共享同一个监听地址/端口时，只有第一个 Gateway 的 `EdgionGatewayConfig`（包括这份白名单）会绑定到该监听器。
 

@@ -1485,19 +1485,42 @@ mod route_meta_tests {
 
     #[test]
     fn route_meta_is_not_serialized_into_the_log_entry() {
-        // The maps exist to answer `from: routeLabel` lookups. They must never
-        // leak into `match_info` wholesale — only declared keys reach `ext`.
+        // The maps exist to answer `from: routeLabel` / `from: routeAnnotation`
+        // lookups. They must never leak into `match_info` wholesale — only
+        // declared keys reach `ext`. Populate both maps via `with_route_meta`
+        // with distinctive values so the assertion actually exercises
+        // `#[serde(skip)]` on both `labels_meta` and `annotations_meta`
+        // (a prior version of this test left both maps `None` via `MatchInfo::new`
+        // alone, which caught removing `#[serde(skip)]` from `annotations_meta` —
+        // that field's name contains "annotations" — but not from `labels_meta`,
+        // since `"labels_meta":null` doesn't contain "annotations").
         // `HTTPRouteMatch` has no `Default` impl, so build it explicitly with
         // every field empty/None (all optional matchers).
+        use std::collections::BTreeMap;
+
         let match_item = HTTPRouteMatch {
             path: None,
             headers: None,
             query_params: None,
             method: None,
         };
-        let info = MatchInfo::new("default".to_string(), "r".to_string(), 0, 0, match_item, 0);
+        let labels = Arc::new(BTreeMap::from([(
+            "canary-label-marker".to_string(),
+            "canary-label-value".to_string(),
+        )]));
+        let annotations = Arc::new(BTreeMap::from([(
+            "canary-annotation-marker".to_string(),
+            "canary-annotation-value".to_string(),
+        )]));
+        let info = MatchInfo::new("default".to_string(), "r".to_string(), 0, 0, match_item, 0)
+            .with_route_meta(Some(labels), Some(annotations));
         let json = serde_json::to_string(&info).unwrap();
-        assert!(!json.contains("annotations"), "got: {json}");
+        assert!(!json.contains("labels_meta"), "got: {json}");
+        assert!(!json.contains("annotations_meta"), "got: {json}");
+        assert!(!json.contains("canary-label-marker"), "got: {json}");
+        assert!(!json.contains("canary-label-value"), "got: {json}");
+        assert!(!json.contains("canary-annotation-marker"), "got: {json}");
+        assert!(!json.contains("canary-annotation-value"), "got: {json}");
     }
 }
 

@@ -321,6 +321,8 @@ Behavior (using `client_addr=192.168.1.10`):
 
 **There is no configuration that gives readable `path` + masked `AccessLogExtern` cookie.** `off` makes the whitelist inert (every `ext` field clear); `wrap` writes the raw value into the local log file/stdout (tagged for a downstream ES/ClickHouse pipeline to drop, but present locally). Pick one of the two trade-offs deliberately — this is a design choice, not a gap.
 
+**The repo's own `config/edgion-gateway.yaml` — the file this page documents as the default path — ships `mode: off`, not the `replace` default described above.** That file is the local-dev and integration-harness config; the integration suites assert on `path` and on plugin-log values written through `sensitive(...)`, which need real, unmasked values. A config file with no `access_log_sensitive` section at all gets the `replace` default; running the binary against the repo's shipped file does not, because that file's `access_log_sensitive.mode` is set explicitly. The release image bakes no config (`cicd/docker/Dockerfile.runtime`), so a Kubernetes deployment is unaffected by this file.
+
 ## Common Scenarios
 
 ### Connecting to a Remote Controller

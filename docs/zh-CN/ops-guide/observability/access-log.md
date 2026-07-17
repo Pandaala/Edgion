@@ -162,7 +162,7 @@ Authorization: Bearer <admin-token>
   },
   "match_info": { },
   "backend_context": { },
-  "plugin_logs": [ ],
+  "stage_logs": [ ],
   "info": [ ],
   "errors": [ ]
 }
@@ -180,7 +180,7 @@ Authorization: Bearer <admin-token>
 | `request_info` | Object | 请求作用域字段——见下方[请求字段](#请求字段) |
 | `match_info` | Object | 匹配的路由标识（无路由匹配时省略） |
 | `backend_context` | Object | 后端标识和上游时序（无后端时省略/`null`） |
-| `plugin_logs` | Array\<Object\> | 按阶段分组的每插件执行日志（为空时省略） |
+| `stage_logs` | Array\<Object\> | 按阶段分组的每插件执行日志（为空时省略） |
 | `info` | Array\<String\> | 网关内部信息事件（为空时省略） |
 | `errors` | Array\<String\> | 处理过程中捕获的错误原因（为空时省略） |
 | `ext` | Object | 来自 [`AccessLogExtern`](#扩展日志accesslogextern) 的操作员声明字段（未采集到任何字段时省略） |
@@ -241,12 +241,12 @@ Authorization: Bearer <admin-token>
 
 无后端使用时（路由未匹配，或请求被插件短路），`backend_context` 为 `null` 或省略。
 
-### `plugin_logs` 字段
+### `stage_logs` 字段
 
-`plugin_logs` 是阶段组的数组；每个组包含一个执行阶段的每插件日志。
+`stage_logs` 是阶段组的数组；每个组包含一个执行阶段的每插件日志。
 
 ```json
-"plugin_logs": [
+"stage_logs": [
   {
     "stage": "request_filters",
     "logs": [
@@ -362,7 +362,7 @@ spec:
 
 白名单**未命中仍会输出该字段**——是脱敏而非丢弃——因此操作员看到的是 `"ext":{"session":"***"}`，能明确知道该值已解析出来只是未加入白名单，而不是面对一个缺失的字段去猜测：究竟是来源没有值、字段名写错了，还是一个被禁止的名称已在 `Accepted=False` 中上报、并在网关加载该资源时被丢弃了。
 
-脱敏渲染遵循与内置敏感字段相同的全局开关 `access_log_sensitive.mode`（见[网关配置 → access_log_sensitive](../configuration/gateway-config.md#access_log_sensitive)）。**从本版本起 `access_log_sensitive.mode` 默认值为 `replace`**，因此 `ext` 字段与 `path`、`client-addr`、`remote-addr`、`x-forwarded-for`、`sni`、`request_uri` 一样，只要未加入白名单就会开箱即渲染为 `***`，无需任何额外配置。
+脱敏渲染遵循与内置敏感字段相同的全局开关 `access_log_sensitive.mode`（见[网关配置 → access_log_sensitive](../configuration/gateway-config.md#access_log_sensitive)）。**从本版本起 `access_log_sensitive.mode` 默认值为 `replace`**，因此开箱即可、无需任何额外配置：`ext` 字段只要未加入白名单就会渲染为 `***`；而 `path`、`client-addr`、`remote-addr`、`x-forwarded-for`、`sni`、`request_uri` 这六个内置字段则是**无条件**渲染为 `***`——白名单对这六个内置字段不生效，它们始终经由 `masked::serialize` 脱敏，与 `unmaskedKeys` 无关。
 
 **不存在既保留 `path` 可读、又对 `ext` 中的 cookie 脱敏的配置。** `mode: off` 会让白名单失效（一切都渲染为明文，包括 `ext`）；`mode: wrap` 会把原始值写进网关自己的本地日志文件/stdout，用 `<E>value</E>` 标记以便下游管道在入库前剥离——但原始值仍留在本地磁盘上。如果需要可读的 path，请在这两种权衡中明确二选一；不存在第三种既保留内置字段明文又能脱敏 `ext` 的配置。
 
@@ -568,7 +568,7 @@ cat logs/edgion_access.log | jq 'select(.request_info.status >= 400 and .request
 cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
 
 # 耗时超过 100 微秒的插件执行
-cat logs/edgion_access.log | jq '.plugin_logs[]?.logs[]? | select(.time_cost > 100)'
+cat logs/edgion_access.log | jq '.stage_logs[]?.logs[]? | select(.time_cost > 100)'
 
 # 端到端追踪一个请求
 cat logs/edgion_access.log | jq 'select(.request_info["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
@@ -579,7 +579,7 @@ cat logs/edgion_access.log | jq 'select(.request_info["x-trace-id"] == "eff524a7
 - `ht`（首字节时间）：后端首字节时间；值高说明后端延迟高。
 - `ct`（连接时间）：值高说明网络或连接池问题。
 - `et`（总耗时）：每次尝试的总时间，含重试。
-- `plugin_logs[].time_cost`：插件开销（微秒）。
+- `stage_logs[].time_cost`：插件开销（微秒）。
 - `log_full: true`：插件日志缓冲区溢出。
 
 ## 常见问题
@@ -598,7 +598,7 @@ cat logs/edgion_access.log | jq 'select(.request_info["x-trace-id"] == "eff524a7
 
 ### Q4：请求被插件拒绝了——看哪里？
 
-**A**：查看 `plugin_logs`。拒绝插件的 `log` 数组通常包含原因（例如 BasicAuth 的 `Auth failed` 或 Cors 的 `Origin rejected`）。当插件短路请求时，`backend_context` 通常为 `null`。
+**A**：查看 `stage_logs`。拒绝插件的 `log` 数组通常包含原因（例如 BasicAuth 的 `Auth failed` 或 Cors 的 `Origin rejected`）。当插件短路请求时，`backend_context` 通常为 `null`。
 
 ### Q5：如何获取某个路由的更详细插件诊断？
 

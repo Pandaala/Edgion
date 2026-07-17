@@ -148,9 +148,18 @@ access_log:
       #   brokers: [localhost:9092]
       #   topic: edgion-access
 
-# Integration tests assert on `path` and on plugin-log values written through
-# `sensitive(...)`. The shipped default is `replace`; the harness opts out so
-# those assertions keep reading real values.
+# This repo-local config file deliberately runs with masking OFF: it is the
+# local-dev and integration-harness config (`docs/en/ops-guide/configuration/
+# gateway-config.md` names this file as the default path, and the zh-CN
+# getting-started guide points new operators at it), and the integration
+# suites assert on `path` and on plugin-log values written through
+# `sensitive(...)` — those assertions need real, unmasked values.
+#
+# This is NOT the production default. When `access_log_sensitive` is absent
+# from a config file, the shipped/production default is `replace`. The
+# release image bakes no config (cicd/docker/Dockerfile.runtime), so a
+# Kubernetes deployment is unaffected by this file and gets the `replace`
+# default unless it supplies its own `access_log_sensitive` section.
 access_log_sensitive:
   mode: off
 

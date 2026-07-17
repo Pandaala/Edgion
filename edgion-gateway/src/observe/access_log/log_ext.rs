@@ -316,7 +316,17 @@ mod tests {
 
     #[test]
     fn sensitive_value_renders_per_mode() {
-        let cases = [(0u8, r#"{"session":"abc"}"#), (1, r#"{"session":"***"}"#)];
+        // Mode 2 (wrap) is the only branch where `apply_sensitive` can panic
+        // (`try_borrow_mut().expect(...)` in edgion-resources/src/sensitive.rs):
+        // `LogExt::serialize` is the only caller that runs a two-step serde op
+        // (`serialize_entry` = key + value) inside the sensitive-value closure,
+        // exactly the reentrancy shape the doc comment on `Serialize for LogExt`
+        // warns about. Exercise it here so that shape stays covered.
+        let cases = [
+            (0u8, r#"{"session":"abc"}"#),
+            (1, r#"{"session":"***"}"#),
+            (2, r#"{"session":"<E>abc</E>"}"#),
+        ];
         for (mode, expected) in cases {
             let _g = set_mode(mode);
             let mut ext = LogExt::default();

@@ -275,7 +275,9 @@ Gateway 采用**三端口模型**：
 
 **默认切换为 `replace` 的原因。** 由于 `ext` 渲染复用同一个开关，`mode=replace` 默认值是让 `AccessLogExtern` "默认脱敏" 成立的唯一因素。**不存在既保留可读 `path`、又对 `ext` 中的 cookie 脱敏的配置**：`off` 会让白名单失效（一切都明文，包括 `ext`）；`wrap` 会把原始值写进网关本地日志文件/stdout（用 `<E>...</E>` 标记以便下游 ES/ClickHouse 管道剥离，但网关自己的本地文件已经是明文）。这是刻意的单开关设计，不是疏漏——需要可读 path 时请在这两种权衡里二选一。同时注意 `access_log_options.include_raw_uri` 的交互：`replace` 默认下 `request_uri` 本身也会渲染为 `***`，仅开启该开关不再能得到可读的原始视图。
 
-**注意**：Wrap 模式自定义前后缀时，建议总长度（`wrap_prefix.len() + wrap_suffix.len()`）不超过 36 字节，否则会压缩 plugin log 单条目可写长度。集成测试基线在配置中显式设置 `access_log_sensitive.mode: off`，以便断言 `path` / `stage_logs` 内容保持可读；生产环境默认 `replace`。
+**注意**：Wrap 模式自定义前后缀时，建议总长度（`wrap_prefix.len() + wrap_suffix.len()`）不超过 36 字节，否则会压缩 plugin log 单条目可写长度。
+
+**仓库自带的 `config/edgion-gateway.yaml`（本文档开头所说的默认路径文件）本身就显式写了 `access_log_sensitive.mode: off`，而不是走上面说的 `replace` 默认值。** 这个文件是本地开发 / 集成测试 harness 专用配置——集成测试断言 `path` 以及经 `sensitive(...)` 标注写入的 plugin log 值，需要读到未脱敏的真实值。只有当配置文件里完全不写 `access_log_sensitive` 段时，才会落到 `replace` 默认值；直接拿仓库自带的这份文件启动进程，走的是文件里显式写死的 `off`，不是默认值。发布镜像不打包任何配置文件（`cicd/docker/Dockerfile.runtime`），因此 Kubernetes 部署不受这份仓库文件影响，会拿到 `replace` 默认值（除非自己的部署配置也显式写了 `access_log_sensitive` 段）。
 
 ## 常见配置场景
 

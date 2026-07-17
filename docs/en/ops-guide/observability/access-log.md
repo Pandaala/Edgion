@@ -162,7 +162,7 @@ The log is always JSON, one entry per line. Optional fields are omitted entirely
   },
   "match_info": { },
   "backend_context": { },
-  "plugin_logs": [ ],
+  "stage_logs": [ ],
   "info": [ ],
   "errors": [ ]
 }
@@ -180,7 +180,7 @@ Request-scoped fields (`client-addr`, `host`, `path`, `status`, etc.) nest one l
 | `request_info` | Object | Request-scoped fields — see [Request fields](#request-fields) below |
 | `match_info` | Object | Matched route identity (omitted when no route matched) |
 | `backend_context` | Object | Backend identity and upstream timing (omitted/`null` when no backend was used) |
-| `plugin_logs` | Array\<Object\> | Per-plugin execution logs grouped by stage (omitted when empty) |
+| `stage_logs` | Array\<Object\> | Per-plugin execution logs grouped by stage (omitted when empty) |
 | `info` | Array\<String\> | Gateway-internal informational events (omitted when empty) |
 | `errors` | Array\<String\> | Error reasons captured during processing (omitted when empty) |
 | `ext` | Object | Operator-declared fields from [`AccessLogExtern`](#extending-the-log-accesslogextern) (omitted when nothing was collected) |
@@ -241,12 +241,12 @@ When no route matches, the entire `match_info` object is omitted.
 
 When no backend was used (route not matched, or the request was short-circuited by a plugin), `backend_context` is `null` or omitted.
 
-### `plugin_logs` fields
+### `stage_logs` fields
 
-`plugin_logs` is an array of stage groups; each group holds the per-plugin logs for one execution stage.
+`stage_logs` is an array of stage groups; each group holds the per-plugin logs for one execution stage.
 
 ```json
-"plugin_logs": [
+"stage_logs": [
   {
     "stage": "request_filters",
     "logs": [
@@ -409,9 +409,11 @@ Masked rendering follows the same global `access_log_sensitive.mode` switch
 as the log's built-in sensitive fields (see [gateway configuration →
 access_log_sensitive](../configuration/gateway-config.md#access_log_sensitive)).
 **As of this release `access_log_sensitive.mode` defaults to `replace`**, so
-`ext` fields — along with `path`, `client-addr`, `remote-addr`,
-`x-forwarded-for`, `sni`, and `request_uri` — render `***` unless whitelisted,
-out of the box, with no configuration required.
+out of the box, with no configuration required: `ext` fields render `***`
+unless whitelisted, and `path`, `client-addr`, `remote-addr`,
+`x-forwarded-for`, `sni`, and `request_uri` render `***` unconditionally —
+the whitelist has no effect on these six built-in fields; they are masked
+by `masked::serialize` regardless of `unmaskedKeys`.
 
 **There is no configuration that gives readable `path` alongside a masked
 `ext` cookie.** `mode: off` makes the whitelist inert (everything renders
@@ -656,7 +658,7 @@ cat logs/edgion_access.log | jq 'select(.request_info.status >= 400 and .request
 cat logs/edgion_access.log | jq -r '[.request_info.path, .backend_context.upstreams[0].ht] | @tsv' | sort -k2 -n
 
 # Plugin executions over 100 microseconds
-cat logs/edgion_access.log | jq '.plugin_logs[]?.logs[]? | select(.time_cost > 100)'
+cat logs/edgion_access.log | jq '.stage_logs[]?.logs[]? | select(.time_cost > 100)'
 
 # Trace one request end to end
 cat logs/edgion_access.log | jq 'select(.request_info["x-trace-id"] == "eff524a7-10a4-483c-a534-3c50b1199aa0")'
@@ -667,7 +669,7 @@ Key fields to watch:
 - `ht` (header time): backend time-to-first-byte; high values point to backend latency.
 - `ct` (connect time): high values point to network or connection-pool issues.
 - `et` (elapsed): total per-attempt time, including retries.
-- `plugin_logs[].time_cost`: plugin overhead in microseconds.
+- `stage_logs[].time_cost`: plugin overhead in microseconds.
 - `log_full: true`: a plugin's log buffer overflowed.
 
 ## FAQ
@@ -686,7 +688,7 @@ Key fields to watch:
 
 ### Q4: A request was rejected by a plugin — where do I look?
 
-**A**: Check `plugin_logs`. The rejecting plugin's `log` array typically carries the reason (for example `Auth failed` for BasicAuth or `Origin rejected` for Cors). When a plugin short-circuits the request, `backend_context` is usually `null`.
+**A**: Check `stage_logs`. The rejecting plugin's `log` array typically carries the reason (for example `Auth failed` for BasicAuth or `Origin rejected` for Cors). When a plugin short-circuits the request, `backend_context` is usually `null`.
 
 ### Q5: How do I get more detailed plugin diagnostics for one route?
 

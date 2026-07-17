@@ -217,8 +217,21 @@ default empty because their key names are entirely business-defined; there is
 no name that is safe by default across every cluster. A miss still emits the
 field, masked, rather than dropping it. `routeLabel`/`routeAnnotation` sources
 are never masked and bypass this whitelist entirely. A hard blocklist (credential
-headers, claim/payload ctx keys) is rejected at `EdgionPlugins` admission and
-is not configurable through this whitelist.
+headers, claim/payload ctx keys) cannot be named regardless of this whitelist.
+Enforcement is two-part: a declaration naming a blocked key is **reported** on
+the resource's `Accepted=False` status condition at `EdgionPlugins` ingest
+(admission is lenient — the resource still lands in the cache conf_sync
+serves to the gateway), and then actually **dropped at gateway load** by
+`compile_plugins`'s field `retain()`, which discards any declared field whose
+validation error is set before the spec is stored. Widening the blocklist
+requires a code change, not a CR edit.
+
+**Omitting a `unmaskedKeys` list keeps that list's default, it does not empty
+it.** `UnmaskedKeys` fills each missing list from its own default, so
+`unmaskedKeys: {ctx: [tenant_id]}` does not mean "only `tenant_id` is
+unmasked" — it also keeps the default `header` and `respHeader` lists shown
+above. To unmask only `tenant_id` and drop the header defaults, list every
+category explicitly, e.g. `header: []`.
 
 **Effective scope is per-listener, not per-Gateway**: when two Gateways of
 different GatewayClasses share the same bind address/port, only the first

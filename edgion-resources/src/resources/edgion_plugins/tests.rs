@@ -188,7 +188,7 @@ accessLogExtern:
 
 #[test]
 fn access_log_extern_duplicate_key_is_reported_at_ingest() {
-    // Silent last-wins on YAML order would be undebuggable; reject instead.
+    // Silent last-wins on YAML order would be undebuggable; report instead.
     let yaml = r#"
 accessLogExtern:
   - key: tenant

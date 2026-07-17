@@ -296,6 +296,16 @@ someone else's full URL, often carrying a session id in its query, and
 business-defined; there is no name that is universally safe across clusters
 (`page` looks harmless until the next tenant uses it for something else).
 
+**Omitting a list keeps that list's default, it does not empty it.**
+`UnmaskedKeys` is `#[serde(default)]` at the container level, so each
+*missing* list is independently filled from `UnmaskedKeys::default()` —
+which is non-empty for `header`/`respHeader`. So
+`accessLogExtern: {unmaskedKeys: {ctx: [tenant_id]}}` — the natural way to
+write "only `tenant_id` is unmasked" — also keeps the default 6 request
+headers and 5 response headers unmasked. To unmask only `tenant_id`, list
+every category explicitly and write `header: []` (and `respHeader: []`) to
+drop the header defaults.
+
 **A whitelist hit bypasses masking; a miss does not drop the field** — it
 still emits the key, rendered per `access_log_sensitive.mode` (see
 [`01-gateway-config.md`](01-gateway-config.md#access_log_sensitive)). Category
@@ -305,9 +315,16 @@ request data.
 
 **Hard blocklist is separate from this whitelist and is not configurable
 here.** Names like `authorization`, `set-cookie`, `x-api-key` (`header`), and
-`jwt_claims`/`oidc_claims`/`jwe_payload` (`ctx`) are rejected at `EdgionPlugins`
-ingest regardless of this whitelist — widening them requires a code change,
-not a CR edit.
+`jwt_claims`/`oidc_claims`/`jwe_payload` (`ctx`) cannot be named regardless of
+this whitelist — widening them requires a code change, not a CR edit.
+Enforcement is two-part: a declaration naming a blocked key is **reported**
+on the resource's `Accepted=False` status condition at `EdgionPlugins`
+ingest (admission is lenient — the resource still lands in the cache
+conf_sync serves to the gateway), and then actually **dropped at gateway
+load** by `compile_plugins`'s `retain()`
+(`edgion-gateway/src/plugins/http/plugin_store.rs`), which discards any
+declared field whose `validation_error()` is `Some` before the spec is
+stored. The drop, not the report, is what keeps the key out of the log.
 
 **Scope caveat.** `bound_listeners` dedup (`runtime/server/base.rs`) skips a
 listener already bound at the same addr/protocol, so when two Gateways of
