@@ -63,7 +63,37 @@ async fn coalesced_recreate_requeues_dropped_parent_gateway() {
 
     // Generation 1: route attached to gw-a.
     handler.on_change(&route_with_parent("gw-a"), &ctx).await;
-    // Drain the requeues generation 1 produced (gw-a itself is requeued).
+
+    // Deterministic barrier: gen-1 requeues gw-a itself (with the 100ms
+    // cross-resource delay). We MUST consume that requeue before generation 2,
+    // otherwise a gen-1 gw-a item lingering in the queue could satisfy the
+    // generation-2 assertion even if the dropped-parent logic were reverted — a
+    // false PASS masking a regression. A fixed quiet-window drain cannot prove
+    // the delayed requeue landed; instead, block until gw-a is dequeued at least
+    // once (proof gen-1's requeue promoted and was consumed), then drain any
+    // residue to quiet. dequeue removes the key from the queue and clears its
+    // `scheduled` entry at promotion, so gen-2's gw-a requeue is a fresh
+    // schedule, never coalesced with gen-1's.
+    let gen1_deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut gen1_saw_gw_a = false;
+    while std::time::Instant::now() < gen1_deadline && !gen1_saw_gw_a {
+        if let Ok(Some(item)) = tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            gw_processor.workqueue().dequeue(),
+        )
+        .await
+        {
+            if item.key == "default/gw-a" {
+                gen1_saw_gw_a = true;
+            }
+            gw_processor.workqueue().done(&item.key);
+        }
+    }
+    assert!(
+        gen1_saw_gw_a,
+        "test precondition failed: generation 1 never requeued gw-a"
+    );
+    // Drain any residue to quiet so the queue is empty before generation 2.
     while tokio::time::timeout(
         std::time::Duration::from_millis(500),
         gw_processor.workqueue().dequeue(),

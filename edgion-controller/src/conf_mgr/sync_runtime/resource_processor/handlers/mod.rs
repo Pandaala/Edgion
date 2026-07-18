@@ -57,7 +57,7 @@ pub use tcp_route::TcpRouteHandler;
 pub use tls_route::{TlsRouteAlpha3Handler, TlsRouteHandler};
 pub use udp_route::UdpRouteHandler;
 
-use crate::conf_mgr::sync_runtime::resource_processor::HandlerContext;
+use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ResourceRef, SecretRefManager};
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::resources::common::ParentReference;
 use edgion_resources::ResourceKind;
@@ -129,6 +129,26 @@ pub(crate) fn remove_from_gateway_route_index(
     runtime.gateway_route_index.remove_route(route_kind, &route_key);
 }
 
+/// Collect BackendTLSPolicy refs registered against a backend Service, matching
+/// both the bare `"ns/svc"` target key and any section-scoped
+/// `"ns/svc::sectionName"` key.
+///
+/// BTP target registrations may carry a `::sectionName` suffix
+/// (`make_target_conflict_key`), which a plain `get_refs("ns/svc")` exact lookup
+/// would miss. Reduce every registered target key to its base form before
+/// matching — the same reduction the EBTP requeue block in
+/// `backend_tls_policy.rs` uses.
+fn btp_refs_for_service(target_manager: &SecretRefManager, service_key: &str) -> Vec<ResourceRef> {
+    let mut refs = Vec::new();
+    for target_key in target_manager.all_source_keys() {
+        let base = target_key.split("::").next().unwrap_or(&target_key);
+        if base == service_key {
+            refs.extend(target_manager.get_refs(&target_key));
+        }
+    }
+    refs
+}
+
 /// Requeue BackendTLSPolicies bound to backend Services of this route.
 ///
 /// When a route changes, any BTP targeting its backend Services needs to
@@ -141,8 +161,6 @@ pub(crate) async fn requeue_backend_tls_policies_for_route(
     route_name: &str,
     ctx: &HandlerContext,
 ) {
-    use crate::conf_mgr::sync_runtime::resource_processor::ResourceRef;
-
     let route_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
     let service_keys = ctx.runtime().service_ref_mgr.get_dependencies(&route_ref.key());
 
@@ -152,7 +170,7 @@ pub(crate) async fn requeue_backend_tls_policies_for_route(
 
     let target_manager = ctx.runtime().backend_tls_policy.target_mgr();
     for service_key in &service_keys {
-        let btps = target_manager.get_refs(service_key);
+        let btps = btp_refs_for_service(target_manager, service_key);
         for btp_ref in btps {
             tracing::debug!(
                 route = %route_ref.resource_key(),
@@ -178,7 +196,7 @@ pub(crate) async fn requeue_backend_tls_policies_for_services(dropped_service_ke
     }
     let target_manager = ctx.runtime().backend_tls_policy.target_mgr();
     for service_key in dropped_service_keys {
-        for btp_ref in target_manager.get_refs(service_key) {
+        for btp_ref in btp_refs_for_service(target_manager, service_key) {
             tracing::debug!(
                 btp = %btp_ref.resource_key(),
                 service = %service_key,
@@ -186,5 +204,60 @@ pub(crate) async fn requeue_backend_tls_policies_for_services(dropped_service_ke
             );
             ctx.requeue(btp_ref.kind_str(), btp_ref.resource_key()).await;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conf_mgr::sync_runtime::resource_processor::{make_target_conflict_key, BidirectionalRefManager};
+
+    fn btp_ref(ns: &str, name: &str) -> ResourceRef {
+        ResourceRef::new(ResourceKind::BackendTLSPolicy, Some(ns.to_string()), name.to_string())
+    }
+
+    /// `btp_refs_for_service` must match both the bare `"ns/svc"` registration and
+    /// any section-scoped `"ns/svc::section"` registration for the same Service.
+    #[test]
+    fn btp_refs_for_service_matches_bare_and_section_keys() {
+        let mgr: SecretRefManager = BidirectionalRefManager::with_component("test");
+
+        let bare = btp_ref("ns", "btp-bare");
+        let sec80 = btp_ref("ns", "btp-80");
+        let sec443 = btp_ref("ns", "btp-443");
+
+        mgr.add_ref(make_target_conflict_key("ns", "svc", None), bare.clone());
+        mgr.add_ref(make_target_conflict_key("ns", "svc", Some("port-80")), sec80.clone());
+        mgr.add_ref(make_target_conflict_key("ns", "svc", Some("port-443")), sec443.clone());
+        // A different Service that shares the "svc" name prefix must NOT match —
+        // neither its bare key nor a section-scoped key may over-match "ns/svc".
+        mgr.add_ref(
+            make_target_conflict_key("ns", "svc-other", None),
+            btp_ref("ns", "btp-other"),
+        );
+        mgr.add_ref(
+            make_target_conflict_key("ns", "svc-other", Some("s")),
+            btp_ref("ns", "btp-other-sec"),
+        );
+
+        let mut got: Vec<String> = btp_refs_for_service(&mgr, "ns/svc")
+            .iter()
+            .map(|r| r.resource_key())
+            .collect();
+        got.sort();
+
+        assert_eq!(got, vec!["ns/btp-443", "ns/btp-80", "ns/btp-bare"]);
+    }
+
+    /// A Service with no BTP targets yields no refs.
+    #[test]
+    fn btp_refs_for_service_no_match_is_empty() {
+        let mgr: SecretRefManager = BidirectionalRefManager::with_component("test");
+        mgr.add_ref(
+            make_target_conflict_key("ns", "svc", Some("port-80")),
+            btp_ref("ns", "btp-80"),
+        );
+
+        assert!(btp_refs_for_service(&mgr, "ns/nomatch").is_empty());
     }
 }
