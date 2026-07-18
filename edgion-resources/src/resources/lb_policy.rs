@@ -28,6 +28,8 @@ pub enum ConsistentHashOn {
     Cookie(String),
     /// Hash based on query argument
     Arg(String),
+    /// Hash based on the (RealIp-normalized) client source IP. No value name.
+    SourceIp,
 }
 
 /// Parsed LB policy

@@ -136,7 +136,10 @@ pub fn get_backends_for_service_key(service_key: &str) -> Arc<Vec<Arc<EdgionBack
 }
 
 /// Extract hash key from request based on LB policy configuration.
-pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>) -> Vec<u8> {
+///
+/// `client_ip` is the RealIp-normalized client source IP (`ctx.request_info.remote_addr`),
+/// used only by the `SourceIp` mode; the other modes read from the request headers/URI.
+pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPolicy>, client_ip: &str) -> Vec<u8> {
     let Some(ParsedLBPolicy::ConsistentHash(hash_on)) = lb_policy else {
         return Vec::new();
     };
@@ -184,6 +187,10 @@ pub(crate) fn extract_hash_key(session: &Session, lb_policy: &Option<ParsedLBPol
                 })
             })
             .unwrap_or_default(),
+        // SourceIp hashes on the normalized client IP; an empty IP yields an
+        // empty key, driving the internal RR fallback like the other modes when
+        // their value is missing.
+        ConsistentHashOn::SourceIp => client_ip.as_bytes().to_vec(),
     }
 }
 
@@ -220,6 +227,7 @@ fn pick(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
+    client_ip: &str,
     not_found: NotFoundMap,
 ) -> Result<Arc<EdgionBackend>, EdgionStatus> {
     let cell = compiled_selector::get_or_create_cell(service_key);
@@ -233,7 +241,7 @@ fn pick(
     // Build the hash key only for ConsistentHash; an empty key triggers the
     // internal RR fallback inside `CompiledSelector::ConsistentHash::select`.
     let (hash_key, hash_key_used) = if matches!(kind, PolicyKind::ConsistentHash) {
-        let key = extract_hash_key(session, lb_policy);
+        let key = extract_hash_key(session, lb_policy, client_ip);
         let used = !key.is_empty();
         (Some(key), used)
     } else {
@@ -255,11 +263,13 @@ pub(crate) fn select_from_endpoint_slice(
     service_key: &str,
     lb_policy: &Option<ParsedLBPolicy>,
     session: &Session,
+    client_ip: &str,
 ) -> Result<Arc<EdgionBackend>, EdgionStatus> {
     pick(
         service_key,
         lb_policy,
         session,
+        client_ip,
         NotFoundMap {
             empty: EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault,
             rr: EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin,

@@ -1,0 +1,26 @@
+# ConsistentHash (SourceIp) + EndpointSlice. No per-request key header; the
+# gateway hashes on the client source IP.
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: lb-ch-sourceip
+  namespace: edgion-default
+spec:
+  parentRefs:
+    - name: lb-ch-gateway
+      namespace: edgion-test
+  hostnames:
+    - "lb-ch-sourceip.example.com"
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /test
+      retry:
+        attempts: 0
+      timeouts:
+        request: 2s
+        backendRequest: 1s
+      backendRefs:
+        - name: lb-ch-sourceip-service
+          port: 8080

@@ -42,7 +42,7 @@ spec:
   loadBalancer:               # optional; absent = RoundRobin, no panic override
     type: LeastConn           # RoundRobin | LeastConn | Ewma | ConsistentHash
     consistentHash:            # required iff type == ConsistentHash
-      hashOn: header           # header | cookie | queryParam
+      hashOn: header           # header | cookie | queryParam | sourceIp
       key: x-user-id
     panicThreshold: 30         # 0-100; overrides the global
                                 # EdgionGatewayConfig.spec.loadBalancing.panicThreshold
@@ -99,12 +99,14 @@ provides the whole section — there is no per-field merge across policies.
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `type` | Enum | Yes (if section present) | `RoundRobin` \| `LeastConn` \| `Ewma` \| `ConsistentHash`. `RoundRobin` is the engine default and needs no explicit `consistentHash`. |
-| `consistentHash` | Object | Only when `type: ConsistentHash` | `hashOn` (`header` \| `cookie` \| `queryParam`) + `key` (header/cookie/query-param name). Rejected (Accepted=False) when present with any other `type`, or absent when `type: ConsistentHash`. |
+| `consistentHash` | Object | Only when `type: ConsistentHash` | `hashOn` (`header` \| `cookie` \| `queryParam` \| `sourceIp`) + `key` (header/cookie/query-param name; **omit for `sourceIp`**). For `sourceIp` a present `key` is rejected (Accepted=False); for the other three an absent/empty `key` is rejected. The whole section is rejected when present with any other `type`, or absent when `type: ConsistentHash`. |
 | `panicThreshold` | `u8` | No | `0`-`100`. Overrides `EdgionGatewayConfig.spec.loadBalancing.panicThreshold` for the target Service(s). Values > 100 are rejected. |
 
 `consistentHash.hashOn` maps onto the gateway's `ConsistentHashOn` runtime enum
 (`edgion-resources/src/resources/lb_policy.rs`): `header` → `Header`, `cookie`
-→ `Cookie`, `queryParam` → `Arg`. The field is deliberately **not** named `on`
+→ `Cookie`, `queryParam` → `Arg`, `sourceIp` → `SourceIp` (a no-argument variant
+that hashes on the RealIp-normalized client source IP). The field is deliberately
+**not** named `on`
 — an unquoted `on` is a YAML 1.1 boolean, and `sigs.k8s.io/yaml` (kubectl's
 converter) would turn the key into `"true"`, breaking structural validation.
 

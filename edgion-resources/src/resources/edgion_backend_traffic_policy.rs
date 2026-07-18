@@ -83,8 +83,10 @@ pub enum LoadBalancerType {
 #[serde(rename_all = "camelCase")]
 pub struct ConsistentHashConfig {
     pub hash_on: HashOn,
-    /// Header name / cookie name / query parameter name to hash on.
-    pub key: String,
+    /// Header name / cookie name / query parameter name to hash on. Absent for
+    /// `SourceIp`, which needs no value name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
@@ -93,6 +95,7 @@ pub enum HashOn {
     Header,
     Cookie,
     QueryParam,
+    SourceIp,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
@@ -124,9 +127,20 @@ impl EdgionBackendTrafficPolicySpec {
                 (LoadBalancerType::ConsistentHash, None) => {
                     errors.push("loadBalancer.consistentHash is required when type is ConsistentHash".to_string());
                 }
-                (LoadBalancerType::ConsistentHash, Some(ch)) if ch.key.is_empty() => {
-                    errors.push("loadBalancer.consistentHash.key must not be empty".to_string());
-                }
+                (LoadBalancerType::ConsistentHash, Some(ch)) => match ch.hash_on {
+                    HashOn::SourceIp => {
+                        if ch.key.is_some() {
+                            errors.push(
+                                "loadBalancer.consistentHash.key must be absent when hashOn is sourceIp".to_string(),
+                            );
+                        }
+                    }
+                    HashOn::Header | HashOn::Cookie | HashOn::QueryParam => {
+                        if ch.key.as_deref().unwrap_or_default().is_empty() {
+                            errors.push("loadBalancer.consistentHash.key must not be empty".to_string());
+                        }
+                    }
+                },
                 (t, Some(_)) if *t != LoadBalancerType::ConsistentHash => {
                     errors.push("loadBalancer.consistentHash is only valid when type is ConsistentHash".to_string());
                 }
@@ -165,9 +179,10 @@ impl LoadBalancerConfig {
             LoadBalancerType::ConsistentHash => {
                 let ch = self.consistent_hash.as_ref()?;
                 let on = match ch.hash_on {
-                    HashOn::Header => ConsistentHashOn::Header(ch.key.clone()),
-                    HashOn::Cookie => ConsistentHashOn::Cookie(ch.key.clone()),
-                    HashOn::QueryParam => ConsistentHashOn::Arg(ch.key.clone()),
+                    HashOn::Header => ConsistentHashOn::Header(ch.key.clone().unwrap_or_default()),
+                    HashOn::Cookie => ConsistentHashOn::Cookie(ch.key.clone().unwrap_or_default()),
+                    HashOn::QueryParam => ConsistentHashOn::Arg(ch.key.clone().unwrap_or_default()),
+                    HashOn::SourceIp => ConsistentHashOn::SourceIp,
                 };
                 Some(ParsedLBPolicy::ConsistentHash(on))
             }
@@ -215,7 +230,7 @@ outlierDetection:
         assert_eq!(lb.r#type, LoadBalancerType::ConsistentHash);
         let ch = lb.consistent_hash.as_ref().expect("ch");
         assert_eq!(ch.hash_on, HashOn::Header);
-        assert_eq!(ch.key, "x-user-id");
+        assert_eq!(ch.key.as_deref(), Some("x-user-id"));
         assert_eq!(lb.panic_threshold, Some(30));
         assert!(spec.get_validation_errors().is_empty());
     }
@@ -236,7 +251,7 @@ outlierDetection:
         assert_eq!(mk(LoadBalancerType::Ewma, None).to_parsed(), Some(ParsedLBPolicy::Ewma));
         let ch = ConsistentHashConfig {
             hash_on: HashOn::QueryParam,
-            key: "uid".into(),
+            key: Some("uid".into()),
         };
         assert_eq!(
             mk(LoadBalancerType::ConsistentHash, Some(ch)).to_parsed(),
@@ -245,7 +260,7 @@ outlierDetection:
         // Header hashOn maps to ConsistentHashOn::Header.
         let ch_header = ConsistentHashConfig {
             hash_on: HashOn::Header,
-            key: "x-user-id".into(),
+            key: Some("x-user-id".into()),
         };
         assert_eq!(
             mk(LoadBalancerType::ConsistentHash, Some(ch_header)).to_parsed(),
@@ -256,13 +271,53 @@ outlierDetection:
         // Cookie hashOn maps to ConsistentHashOn::Cookie.
         let ch_cookie = ConsistentHashConfig {
             hash_on: HashOn::Cookie,
-            key: "session-id".into(),
+            key: Some("session-id".into()),
         };
         assert_eq!(
             mk(LoadBalancerType::ConsistentHash, Some(ch_cookie)).to_parsed(),
             Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::Cookie(
                 "session-id".into()
             )))
+        );
+        // SourceIp hashOn maps to the no-argument ConsistentHashOn::SourceIp.
+        let ch_source_ip = ConsistentHashConfig {
+            hash_on: HashOn::SourceIp,
+            key: None,
+        };
+        assert_eq!(
+            mk(LoadBalancerType::ConsistentHash, Some(ch_source_ip)).to_parsed(),
+            Some(ParsedLBPolicy::ConsistentHash(ConsistentHashOn::SourceIp))
+        );
+    }
+
+    #[test]
+    fn source_ip_hash_accepts_absent_key() {
+        let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+            "targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: ConsistentHash\n  consistentHash:\n    hashOn: sourceIp",
+        )
+        .unwrap();
+        assert!(
+            spec.get_validation_errors().is_empty(),
+            "sourceIp with no key must be accepted: {:?}",
+            spec.get_validation_errors()
+        );
+        // And it deserializes to the keyless config.
+        let ch = spec.load_balancer.unwrap().consistent_hash.unwrap();
+        assert_eq!(ch.hash_on, HashOn::SourceIp);
+        assert_eq!(ch.key, None);
+    }
+
+    #[test]
+    fn source_ip_hash_rejects_present_key() {
+        let spec: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+            "targetRefs:\n  - kind: Service\n    name: x\nloadBalancer:\n  type: ConsistentHash\n  consistentHash:\n    hashOn: sourceIp\n    key: x-user-id",
+        )
+        .unwrap();
+        assert!(
+            spec.get_validation_errors()
+                .iter()
+                .any(|e| e.contains("key must be absent when hashOn is sourceIp")),
+            "sourceIp with a key must be rejected"
         );
     }
 

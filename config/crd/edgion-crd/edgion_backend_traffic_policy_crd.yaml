@@ -51,14 +51,13 @@ spec:
                       description: "Required iff type == ConsistentHash"
                       required:
                         - hashOn
-                        - key
                       properties:
                         hashOn:
                           type: string
-                          enum: ["header", "cookie", "queryParam"]
+                          enum: ["header", "cookie", "queryParam", "sourceIp"]
                         key:
                           type: string
-                          description: "Header name / cookie name / query parameter name to hash on"
+                          description: "Header/cookie/query-param name to hash on. Omit for sourceIp (conditional validation runs at controller ingest)."
                     panicThreshold:
                       type: integer
                       description: "Percent 0-100. Overrides the global EdgionGatewayConfig.spec.loadBalancing.panicThreshold for the target"
