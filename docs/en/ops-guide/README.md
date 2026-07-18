@@ -44,6 +44,10 @@ This section is intended for operators, covering Gateway deployment, configurati
 - [Gateway Configuration](./configuration/gateway-config.md): Gateway YAML process configuration parameters.
 - [EdgionGatewayConfig](./configuration/edgion-gateway-config.md): GatewayClass-level runtime configuration (timeouts, real IP, global plugins, etc.).
 
+### Plugin Policy
+
+- [Plugin Policy (Allowlist / Denylist)](./plugin-policy.md): Controller-side plugin allowlist/denylist — restrict which plugin types the Gateway may execute, with block/bypass actions, status reporting, and mandatory upgrade-order warnings.
+
 ### Federation
 
 - [Federation RBAC](./federation-rbac.md): Authorize Center operations on the Controller — built-in default, examples, and security notes. Also covers [CLI Token RBAC](./federation-rbac.md#cli-token-rbac) (static Bearer tokens for CI/automation).

@@ -135,3 +135,14 @@ The following plugin types read Secret data from `ControllerRuntime.secret_store
 | `Wasm` | `source.oci.pullSecretRef`: `kubernetes.io/dockerconfigjson` registry credentials, resolved into `resolved_pull_secret` (redacted in admin output); unresolved ⇒ plugin load failure |
 
 Secret changes automatically trigger reprocessing of EdgionPlugins via SecretRefManager.
+
+## Controller Plugin Policy (Allowlist / Denylist)
+
+An operator can restrict which `http/<Type>` plugin types the Gateway is
+allowed to instantiate via the Controller's optional
+`validation.plugin_policy` config section (absent by default = allow all).
+A restricted entry is stamped, not force-disabled, and is reported via a
+`PluginPolicyRestricted` status condition. See
+[validation.plugin_policy](../02-config/00-controller-config.md#validationplugin_policy)
+for the config schema and `docs/en/ops-guide/plugin-policy.md` for the
+operator guide.

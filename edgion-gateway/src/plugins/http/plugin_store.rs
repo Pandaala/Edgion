@@ -121,6 +121,9 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
     // with the misconfigured plugin absent from the chain.
     runtime.seal_fail_closed();
 
+    // Plugin policy enforcement gates (block ahead of fail-closed reject).
+    runtime.seal_plugin_policy();
+
     Arc::new(CompiledPlugins {
         spec: Arc::new(spec),
         plugin_runtime: Arc::new(runtime),

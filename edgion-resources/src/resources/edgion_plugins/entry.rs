@@ -152,6 +152,14 @@ pub struct RequestFilterEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
+    /// Set by the controller when the plugin policy matches this entry.
+    /// Never operator-facing: skipped in the CRD schema, carried to the
+    /// data plane via conf_sync. The controller clears and re-stamps it on
+    /// every preparse, so a hand-written value can never survive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -164,6 +172,7 @@ impl RequestFilterEntry {
             enable: true,
             conditions: None,
             alias: None,
+            policy_action: None,
             plugin,
         }
     }
@@ -174,6 +183,7 @@ impl RequestFilterEntry {
             enable,
             conditions: None,
             alias: None,
+            policy_action: None,
             plugin,
         }
     }
@@ -219,6 +229,14 @@ pub struct UpstreamResponseFilterEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
+    /// Set by the controller when the plugin policy matches this entry.
+    /// Never operator-facing: skipped in the CRD schema, carried to the
+    /// data plane via conf_sync. The controller clears and re-stamps it on
+    /// every preparse, so a hand-written value can never survive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -231,6 +249,7 @@ impl UpstreamResponseFilterEntry {
             enable: true,
             conditions: None,
             alias: None,
+            policy_action: None,
             plugin,
         }
     }
@@ -241,6 +260,7 @@ impl UpstreamResponseFilterEntry {
             enable,
             conditions: None,
             alias: None,
+            policy_action: None,
             plugin,
         }
     }
@@ -286,6 +306,14 @@ pub struct UpstreamResponseBodyFilterEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
+    /// Set by the controller when the plugin policy matches this entry.
+    /// Never operator-facing: skipped in the CRD schema, carried to the
+    /// data plane via conf_sync. The controller clears and re-stamps it on
+    /// every preparse, so a hand-written value can never survive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -298,6 +326,7 @@ impl UpstreamResponseBodyFilterEntry {
             enable: true,
             conditions: None,
             alias: None,
+            policy_action: None,
             plugin,
         }
     }
@@ -308,6 +337,7 @@ impl UpstreamResponseBodyFilterEntry {
             enable,
             conditions: None,
             alias: None,
+            policy_action: None,
             plugin,
         }
     }
@@ -353,6 +383,14 @@ pub struct UpstreamResponseEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
 
+    /// Set by the controller when the plugin policy matches this entry.
+    /// Never operator-facing: skipped in the CRD schema, carried to the
+    /// data plane via conf_sync. The controller clears and re-stamps it on
+    /// every preparse, so a hand-written value can never survive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -365,6 +403,7 @@ impl UpstreamResponseEntry {
             enable: true,
             conditions: None,
             alias: None,
+            policy_action: None,
             plugin,
         }
     }
@@ -375,6 +414,7 @@ impl UpstreamResponseEntry {
             enable,
             conditions: None,
             alias: None,
+            policy_action: None,
             plugin,
         }
     }

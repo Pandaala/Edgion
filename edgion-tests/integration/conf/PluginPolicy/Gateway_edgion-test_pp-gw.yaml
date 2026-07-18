@@ -1,0 +1,25 @@
+# Gateway for the controller plugin-policy standalone integration test.
+# One HTTP listener (drives the http/Mock block/bypass scenarios) and one TCP
+# listener (drives the stream/IpRestriction connection-stage block scenario).
+# Ports live in the 583xx range reserved by test_plugin_policy.sh so they never
+# collide with the shared 12xxx integration stack.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: pp-gw
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 58330
+      allowedRoutes:
+        namespaces:
+          from: All
+    - name: tcp
+      protocol: TCP
+      port: 58331
+      allowedRoutes:
+        namespaces:
+          from: All

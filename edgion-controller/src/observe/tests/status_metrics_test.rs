@@ -26,6 +26,24 @@ mod classify_tests {
         let cs = vec![c("SomethingElse", "False"), c("Accepted", "True")];
         assert!(classify(&cs).is_none());
     }
+
+    #[test]
+    fn plugin_policy_restricted_true_is_err_level() {
+        let conds = vec![Condition {
+            type_: "PluginPolicyRestricted".to_string(),
+            status: "True".to_string(),
+        }];
+        let (err, warn) = classify(&conds).expect("must classify");
+        assert_eq!(err.len(), 1);
+        assert_eq!(err[0].type_, "PluginPolicyRestricted");
+        assert!(warn.is_empty());
+        // False (or absent) is clean:
+        let conds = vec![Condition {
+            type_: "PluginPolicyRestricted".to_string(),
+            status: "False".to_string(),
+        }];
+        assert!(classify(&conds).is_none());
+    }
 }
 
 mod scan_conditions_tests {

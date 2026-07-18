@@ -10,6 +10,10 @@ use std::sync::OnceLock;
 /// controller runtime and the shared config loader below.
 pub mod conf_center;
 
+/// Plugin policy configuration: schema, fail-fast startup validation, and the
+/// compiled lookup used by the preparse stamping handlers.
+pub mod plugin_policy;
+
 /// Global controller configuration for runtime access
 static CONTROLLER_CONFIG: OnceLock<EdgionControllerConfig> = OnceLock::new();
 
@@ -318,12 +322,19 @@ pub struct ValidationConfig {
     #[arg(skip)]
     #[serde(default = "default_reference_grant_validation")]
     pub enable_reference_grant_validation: bool,
+
+    /// Optional plugin allowlist/denylist. Absent = allow all plugins.
+    /// Config-file only (no CLI flag). Changes require a controller restart.
+    #[arg(skip)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_policy: Option<plugin_policy::PluginPolicyConfig>,
 }
 
 impl Default for ValidationConfig {
     fn default() -> Self {
         Self {
             enable_reference_grant_validation: default_reference_grant_validation(),
+            plugin_policy: None,
         }
     }
 }

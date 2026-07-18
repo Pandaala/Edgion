@@ -111,3 +111,16 @@ status:
       status: "True"
       reason: Valid
 ```
+
+## Controller Plugin Policy (Allowlist / Denylist)
+
+An operator can restrict which `stream/<Type>` (connection stage) and
+`tls-route/<Type>` (TLS-route stage) plugin types the Gateway is allowed
+to instantiate via the Controller's optional `validation.plugin_policy`
+config section (absent by default = allow all). A restricted entry is
+stamped, not force-disabled, and is reported via a `PluginPolicyRestricted`
+status condition; on the data plane a Block closes the connection (the
+configured status is ignored) and a Bypass skips the plugin. See
+[validation.plugin_policy](../02-config/00-controller-config.md#validationplugin_policy)
+for the config schema and `docs/en/ops-guide/plugin-policy.md` for the
+operator guide.

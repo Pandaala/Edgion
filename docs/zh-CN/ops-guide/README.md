@@ -43,6 +43,10 @@
 - [Gateway 配置](./configuration/gateway-config.md)：Gateway YAML 进程配置参数。
 - [EdgionGatewayConfig](./configuration/edgion-gateway-config.md)：GatewayClass 级运行时配置（超时、真实 IP、全局插件等）。
 
+### 插件策略
+
+- [插件策略（允许清单 / 拒绝清单）](./plugin-policy.md)：Controller 侧插件允许清单/拒绝清单——限制 Gateway 可执行的插件类型，支持 block/bypass 动作、状态上报，以及启用前必读的升级顺序警告。
+
 ### 联邦
 
 - [联邦 RBAC](./federation-rbac.md)：授权 Center 对 Controller 进行操作——内置默认策略、示例与安全说明。同时涵盖 [CLI Token RBAC](./federation-rbac.md#cli-token-rbac)（用于 CI/自动化的静态 Bearer Token）。

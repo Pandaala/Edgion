@@ -98,6 +98,12 @@ pub struct PluginRuntime {
     /// prepend a single request-stage `RejectFilter`, so the whole route fails
     /// closed with 500 instead of silently dropping the misconfigured plugin.
     invalid_plugins: Vec<&'static str>,
+    /// Qualified names + status of Block-stamped entries, in spec order across
+    /// all four stages (builders run request → urf → urbf → ur). The first
+    /// element's status is the one the gate returns.
+    policy_blocks: Vec<(String, u16)>,
+    /// Qualified names of Bypass-stamped entries.
+    policy_bypassed: Vec<String>,
 }
 
 /// Result of attempting to build a stage-specific filter from an EdgionPlugin.
@@ -159,6 +165,8 @@ impl PluginRuntime {
             ext_ref_keys: Vec::new(),
             cors_config: None,
             invalid_plugins: Vec::new(),
+            policy_blocks: Vec::new(),
+            policy_bypassed: Vec::new(),
         }
     }
 
@@ -179,6 +187,21 @@ impl PluginRuntime {
         }
         let reject = RejectFilter::new(std::mem::take(&mut self.invalid_plugins));
         self.request_plugins.insert(0, Box::new(reject));
+    }
+
+    /// Prepend policy enforcement filters. MUST be called AFTER
+    /// `seal_fail_closed` so the block gate lands ahead of the fail-closed
+    /// RejectFilter (policy status code wins; spec §5 precedence).
+    pub fn seal_plugin_policy(&mut self) {
+        if !self.policy_bypassed.is_empty() {
+            let note = super::policy_filter::PolicyBypassNote::new(std::mem::take(&mut self.policy_bypassed));
+            self.request_plugins.insert(0, Box::new(note));
+        }
+        if let Some((plugin, status)) = self.policy_blocks.first().cloned() {
+            self.policy_blocks.clear();
+            let gate = super::policy_filter::PolicyBlockFilter::new(plugin, status);
+            self.request_plugins.insert(0, Box::new(gate));
+        }
     }
 
     /// Static list of (namespace, name) for every ExtensionRef in this runtime,
@@ -353,6 +376,22 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // Plugin policy: a stamped entry is never instantiated and is
+                // deliberately NOT recorded in invalid_plugins (that would turn
+                // Bypass into a fail-closed 500 via seal_fail_closed).
+                if let Some(action) = &entry.policy_action {
+                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
+                    match action {
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
+                            self.policy_blocks.push((qualified, *status));
+                        }
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
+                            self.policy_bypassed.push(qualified);
+                        }
+                    }
+                    continue;
+                }
+
                 // Reject plugins whose config fails validation: record the name,
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
@@ -451,6 +490,22 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // Plugin policy: a stamped entry is never instantiated and is
+                // deliberately NOT recorded in invalid_plugins (that would turn
+                // Bypass into a fail-closed 500 via seal_fail_closed).
+                if let Some(action) = &entry.policy_action {
+                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
+                    match action {
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
+                            self.policy_blocks.push((qualified, *status));
+                        }
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
+                            self.policy_bypassed.push(qualified);
+                        }
+                    }
+                    continue;
+                }
+
                 // Reject plugins whose config fails validation: record the name,
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
@@ -531,6 +586,22 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // Plugin policy: a stamped entry is never instantiated and is
+                // deliberately NOT recorded in invalid_plugins (that would turn
+                // Bypass into a fail-closed 500 via seal_fail_closed).
+                if let Some(action) = &entry.policy_action {
+                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
+                    match action {
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
+                            self.policy_blocks.push((qualified, *status));
+                        }
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
+                            self.policy_bypassed.push(qualified);
+                        }
+                    }
+                    continue;
+                }
+
                 // Reject plugins whose config fails validation: record the name,
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
@@ -609,6 +680,22 @@ impl PluginRuntime {
 
         for (index, entry) in entries.iter().enumerate() {
             if entry.is_enabled() {
+                // Plugin policy: a stamped entry is never instantiated and is
+                // deliberately NOT recorded in invalid_plugins (that would turn
+                // Bypass into a fail-closed 500 via seal_fail_closed).
+                if let Some(action) = &entry.policy_action {
+                    let qualified = format!("http/{}", Self::get_plugin_name(&entry.plugin));
+                    match action {
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Block { status } => {
+                            self.policy_blocks.push((qualified, *status));
+                        }
+                        edgion_resources::resources::plugin_policy::PluginPolicyAction::Bypass => {
+                            self.policy_bypassed.push(qualified);
+                        }
+                    }
+                    continue;
+                }
+
                 // Reject plugins whose config fails validation: record the name,
                 // surface the error, and skip construction so an invalid config
                 // can never run in the request path. `seal_fail_closed` later
@@ -1355,6 +1442,63 @@ mod tests {
             1,
             "no RejectFilter when every plugin config is valid"
         );
+    }
+
+    #[test]
+    fn policy_stamped_entries_are_not_instantiated_and_not_invalid() {
+        use edgion_resources::resources::edgion_plugins::{CorsConfig, MockConfig};
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+        let mut blocked = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        blocked.policy_action = Some(PluginPolicyAction::Block { status: 451 });
+        let mut bypassed = RequestFilterEntry::new(EdgionPlugin::Cors(CorsConfig::default()));
+        bypassed.policy_action = Some(PluginPolicyAction::Bypass);
+        let normal = RequestFilterEntry::new(EdgionPlugin::Mock(MockConfig::default()));
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[blocked, bypassed, normal], "default");
+        assert!(errors.is_empty(), "policy stamps are not validation errors: {errors:?}");
+
+        // Only the normal plugin was instantiated.
+        assert_eq!(runtime.request_plugins.len(), 1);
+        // Stamped entries never enter invalid_plugins (Bypass must not 500).
+        assert!(runtime.invalid_plugins.is_empty());
+
+        runtime.seal_fail_closed();
+        runtime.seal_plugin_policy();
+        // Block gate + bypass note prepended; block gate is FIRST.
+        assert_eq!(runtime.request_plugins.len(), 3);
+        assert_eq!(runtime.request_plugins[0].name(), "PluginPolicyBlock");
+        assert_eq!(runtime.request_plugins[1].name(), "PluginPolicyBypass");
+    }
+
+    #[test]
+    fn policy_block_gate_precedes_fail_closed_reject() {
+        // A chain with BOTH an invalid plugin and a policy block: policy wins.
+        use edgion_resources::resources::plugin_policy::PluginPolicyAction;
+
+        let mut blocked = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        blocked.policy_action = Some(PluginPolicyAction::Block { status: 451 });
+        let mut invalid_alias = RequestFilterEntry::new(EdgionPlugin::KeyAuth(KeyAuthConfig::default()));
+        invalid_alias.alias = Some("bad alias with spaces".to_string());
+
+        let mut runtime = PluginRuntime::new();
+        let _ = runtime.add_from_request_filters(&[blocked, invalid_alias], "default");
+        runtime.seal_fail_closed();
+        runtime.seal_plugin_policy();
+        assert_eq!(runtime.request_plugins[0].name(), "PluginPolicyBlock");
+    }
+
+    #[test]
+    fn no_stamps_means_no_policy_filters() {
+        use edgion_resources::resources::edgion_plugins::MockConfig;
+
+        let normal = RequestFilterEntry::new(EdgionPlugin::Mock(MockConfig::default()));
+        let mut runtime = PluginRuntime::new();
+        let _ = runtime.add_from_request_filters(&[normal], "default");
+        runtime.seal_fail_closed();
+        runtime.seal_plugin_policy();
+        assert_eq!(runtime.request_plugins.len(), 1); // just Mock, zero overhead
     }
 
     #[test]

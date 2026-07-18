@@ -7,6 +7,7 @@ pub mod edgion_config_data;
 pub mod gateway_api_filters;
 pub mod log;
 mod plugin_runtime;
+pub mod policy_filter;
 mod reject_filter;
 pub mod session_adapter;
 pub mod traits;

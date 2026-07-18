@@ -189,6 +189,7 @@ mod tests {
         };
         esp.spec.plugins = Some(vec![StreamPluginEntry {
             enable: true,
+            policy_action: None,
             plugin: EdgionStreamPlugin::GlobalConnectionIpRestriction(gir),
         }]);
         esp

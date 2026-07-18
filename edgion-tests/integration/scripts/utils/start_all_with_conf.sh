@@ -667,8 +667,14 @@ get_suites_to_load() {
                 local resource_name=$(basename "$resource_dir")
                 
                 # Skip base directory, Services directory (ACME tests have their own script),
-                # and conf-sync-leak-test (standalone stress test, port conflicts with normal suites)
-                if [ "$resource_name" = "base" ] || [ "$resource_name" = "Services" ] || [ "$resource_name" = "conf-sync-leak-test" ]; then
+                # conf-sync-leak-test (standalone stress test, port conflicts with normal suites),
+                # and PluginPolicy (standalone test_plugin_policy.sh boots its own stack and loads
+                # its own conf; its fixtures include a `public-gateway` GatewayClass WITHOUT a
+                # parametersRef that would otherwise overwrite base/GatewayClass.yaml in the shared
+                # controller, stripping the EdgionGatewayConfig — silently breaking every
+                # GatewayConfig-driven suite: RealIP/XFF, Security XFF-length, TLS fallback_sni,
+                # TCP idle timeout, GlobalConnectionIpRestriction).
+                if [ "$resource_name" = "base" ] || [ "$resource_name" = "Services" ] || [ "$resource_name" = "conf-sync-leak-test" ] || [ "$resource_name" = "PluginPolicy" ]; then
                     continue
                 fi
                 

@@ -28,6 +28,10 @@ pub mod condition_types {
     pub const PARTIALLY_INVALID: &str = "PartiallyInvalid";
     /// Listener configuration has been sent to the data plane (listener-level)
     pub const PROGRAMMED: &str = "Programmed";
+    /// One or more plugin entries are restricted by the controller plugin
+    /// policy (Edgion-specific, not a Gateway API condition). True = hits
+    /// exist; the condition is removed entirely when there are no hits.
+    pub const PLUGIN_POLICY_RESTRICTED: &str = "PluginPolicyRestricted";
 }
 
 /// Standard Gateway API condition reasons
@@ -127,6 +131,9 @@ pub mod condition_reasons {
     // PartiallyInvalid reasons
     pub const RULE_INVALID: &str = "RuleInvalid";
     pub const ALL_RULES_VALID: &str = "AllRulesValid";
+
+    /// Reason for PluginPolicyRestricted=True.
+    pub const RESTRICTED_BY_POLICY: &str = "RestrictedByPolicy";
 }
 
 // ============================================================================

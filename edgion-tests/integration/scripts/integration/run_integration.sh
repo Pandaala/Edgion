@@ -1691,6 +1691,27 @@ main() {
         log_success "FIPS TLS policy passed"
     fi
 
+    # Step 1.9: Controller plugin policy (allowlist/denylist) end-to-end
+    # (standalone, boots its own minimal test_server + file_system Controller +
+    # Gateway on isolated 583xx ports and restarts ONLY the Controller between
+    # phases). Only runs in the default full sweep (no -r / -i targeting).
+    # Isolated on purpose: the policy lives in the Controller config
+    # (validation.plugin_policy) and is compiled once at startup, so exercising
+    # block / bypass / relaxation requires Controller restarts that must not
+    # disturb the main sweep's single shared Gateway. Verifies denylist block
+    # (HTTP 451 + stream connection closed), denylist bypass (upstream
+    # reached), status conditions (PluginPolicyRestricted + Accepted), and
+    # relaxation (policy removed -> condition cleared, plugin runs again, plus
+    # a stream positive control proving the earlier close was policy-driven).
+    if [ -z "$G_RESOURCE" ]; then
+        log_section "Controller plugin policy"
+        if ! "${SCRIPT_DIR}/test_plugin_policy.sh"; then
+            log_error "FAIL: Controller plugin policy"
+            exit 1
+        fi
+        log_success "Controller plugin policy passed"
+    fi
+
     # Admin token for the main suite (token-only model).
     #
     # The Controller authenticates the Admin API with a single pre-shared bearer

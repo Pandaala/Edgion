@@ -26,7 +26,7 @@ use std::sync::{Arc, OnceLock};
 use crate::conf_mgr::sync_runtime::resource_processor::raw_store::RawStore;
 
 pub(crate) const METRIC_NAME: &str = "edgion_controller_resource_abnormal";
-pub(crate) const METRIC_HELP: &str = "Resource currently has at least one False status condition. The `err` label is a JSON array of err-level condition triggers (Accepted/ResolvedRefs/Programmed:False, Conflicted/ListenersNotValid:True). The `warn` label is a JSON array of warn-level condition triggers (Ready:False, PartiallyInvalid:True). Empty string means no condition at that severity.";
+pub(crate) const METRIC_HELP: &str = "Resource currently has at least one False status condition. The `err` label is a JSON array of err-level condition triggers (Accepted/ResolvedRefs/Programmed:False, Conflicted/ListenersNotValid/PluginPolicyRestricted:True). The `warn` label is a JSON array of warn-level condition triggers (Ready:False, PartiallyInvalid:True). Empty string means no condition at that severity.";
 
 /// Runtime-configurable safety ceiling: if a snapshot would exceed this,
 /// it is truncated and a single `tracing::error!` is emitted. Default 1000,
@@ -108,8 +108,8 @@ pub(crate) struct Condition {
 ///
 /// Err triggers:
 /// - `Accepted:False`, `ResolvedRefs:False`, `Programmed:False`
-/// - `Conflicted:True`, `ListenersNotValid:True` (inverse semantics —
-///   True is bad for these two)
+/// - `Conflicted:True`, `ListenersNotValid:True`, `PluginPolicyRestricted:True`
+///   (inverse semantics — True is bad for these three)
 ///
 /// Warn triggers:
 /// - `Ready:False`
@@ -123,7 +123,8 @@ pub(crate) fn classify(conditions: &[Condition]) -> Option<(Vec<ConditionRef>, V
             | ("ResolvedRefs", "False")
             | ("Programmed", "False")
             | ("Conflicted", "True")
-            | ("ListenersNotValid", "True") => err_list.push(ConditionRef {
+            | ("ListenersNotValid", "True")
+            | ("PluginPolicyRestricted", "True") => err_list.push(ConditionRef {
                 type_: c.type_.clone(),
                 status: c.status.clone(),
             }),

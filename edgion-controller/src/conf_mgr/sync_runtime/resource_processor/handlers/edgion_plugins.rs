@@ -239,6 +239,13 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         // residual gateway-only DSL failure is VM init, for which the data
         // plane still fails closed at runtime. See
         // `edgion_resources::resources::edgion_plugins::validate`.
+        //
+        // Plugin policy: clear any inbound policy_action and re-stamp from the
+        // compiled policy. Runs before validation; hits surface via the
+        // PluginPolicyRestricted condition in update_status, NOT as
+        // validation errors (Accepted keeps meaning "valid and synced").
+        let _ = super::super::plugin_policy_stamp::stamp_http_entries(ep);
+
         let mut errors = ep.validate_plugins();
         // Phase 1 guard: reject outbound TLS subjectAltNames/hostname on plugins
         // where SAN pinning enforcement is not yet implemented.
@@ -405,12 +412,17 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
             partially_invalid_condition(Some(msg), generation)
         };
 
+        // Computed before the mutable `status` borrow below (collect_policy_hits_http
+        // needs a shared borrow of `ep`, which would otherwise overlap it).
+        let policy_hits = super::super::plugin_policy_stamp::collect_policy_hits_http(ep);
+
         let status = ep
             .status
             .get_or_insert_with(|| EdgionPluginsStatus { conditions: vec![] });
         update_condition(&mut status.conditions, accepted);
         update_condition(&mut status.conditions, resolved_refs);
         update_condition(&mut status.conditions, partially_invalid);
+        super::super::plugin_policy_stamp::apply_policy_condition(&mut status.conditions, &policy_hits, generation);
     }
 }
 
@@ -2920,5 +2932,41 @@ mod tests {
             "CA-only validation must not be rejected by the SAN guard; got: {:?}",
             errors
         );
+    }
+
+    // ── PluginPolicyRestricted condition removal (Task 3) ───────────────────
+
+    #[test]
+    fn update_status_removes_stale_policy_condition_when_no_hits() {
+        // Simulates the K8s watch echo: object arrives with a live
+        // PluginPolicyRestricted condition but the (absent) policy stamps
+        // nothing. update_status must remove the stale condition.
+        use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
+            condition_reasons, condition_true, condition_types,
+        };
+        use edgion_resources::resources::edgion_plugins::EdgionPluginsStatus;
+
+        let (ctx, _runtime) = make_ctx_with_secrets(HashMap::new());
+
+        let mut ep = EdgionPlugins::new("policy-restricted-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some("default".to_string());
+        ep.status = Some(EdgionPluginsStatus {
+            conditions: vec![condition_true(
+                condition_types::PLUGIN_POLICY_RESTRICTED,
+                condition_reasons::RESTRICTED_BY_POLICY,
+                "stale",
+                Some(1),
+            )],
+        });
+
+        let handler = EdgionPluginsHandler;
+        handler.update_status(&mut ep, &ctx, &[]);
+
+        assert!(ep
+            .status
+            .unwrap()
+            .conditions
+            .iter()
+            .all(|c| c.type_ != condition_types::PLUGIN_POLICY_RESTRICTED));
     }
 }

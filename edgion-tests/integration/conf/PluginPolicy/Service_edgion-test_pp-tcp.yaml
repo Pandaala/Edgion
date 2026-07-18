@@ -1,0 +1,17 @@
+# TCP upstream (local test_server TCP echo on 30010). The connection reaches it
+# only when the stream plugin is NOT policy-blocked; a connection-stage block
+# closes the connection before any bytes flow.
+# NOTE: file-mode conf_center requires ONE resource per file, so the paired
+# EndpointSlice lives in EndpointSlice_edgion-test_pp-tcp.yaml.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pp-tcp
+  namespace: edgion-test
+spec:
+  ports:
+    - name: tcp-30010
+      port: 30010
+      targetPort: 30010
+      protocol: TCP
+  type: ClusterIP
