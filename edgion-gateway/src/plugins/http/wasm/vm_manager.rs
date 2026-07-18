@@ -111,6 +111,14 @@ const MIN_TICK_PERIOD_MS: u64 = 100;
 /// fields). Without it the first plugin to load a source would impose its
 /// configuration and instance pool on every other plugin using that source,
 /// and a configuration-only hot reload would silently no-op.
+///
+/// The `sha256` term keeps the per-resource integrity pin enforced on a cache
+/// hit. SHA-256 verification lives only inside `load_inner`, which a cache hit
+/// short-circuits; if two plugins share one source but pin different digests,
+/// keying on the (normalized) digest lands them on separate entries so each
+/// runs its own verification, rather than the second silently executing the
+/// first's already-loaded bytes. A digest-only hot reload likewise re-keys and
+/// re-verifies. Identical digests still share one entry (no efficiency loss).
 pub fn runtime_cache_key(config: &WasmConfig) -> String {
     let mut key = config.source.cache_key();
     if let Some(path) = &config.source.file {
@@ -125,7 +133,14 @@ pub fn runtime_cache_key(config: &WasmConfig) -> String {
             key = format!("{key};stat={}:{}", md.len(), mtime_nanos);
         }
     }
-    format!("{key};rt={}", wasm_runtime_config_digest(config))
+    // Normalize to lowercase to match the case-insensitive digest comparison in
+    // `load_inner`; absent pin is a distinct (empty) term.
+    let sha = config
+        .sha256
+        .as_deref()
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    format!("{key};rt={};sha={sha}", wasm_runtime_config_digest(config))
 }
 
 /// Digest of the per-plugin runtime fields that `ModuleEntry` copies out of
@@ -1595,6 +1610,42 @@ mod tests {
         assert!(err.contains("sha256"), "got: {err}");
     }
 
+    /// Regression (contract-04): the per-resource `sha256` pin is enforced even
+    /// against a warm cache. Two plugins share one file source but pin different
+    /// digests; the mismatching one must fail rather than receive the first
+    /// plugin's already-loaded (verified) bytes on a cache hit.
+    #[tokio::test]
+    async fn sha256_pin_enforced_on_warm_cache_hit() {
+        let f = write_temp_wasm(MINI_GUEST);
+        let bytes = std::fs::read(f.path()).unwrap();
+        let correct = hex::encode(Sha256::digest(&bytes));
+
+        let mut good = file_config(f.path());
+        good.sha256 = Some(correct.clone());
+
+        // Same file source, contradictory pin.
+        let mut bad = file_config(f.path());
+        bad.sha256 = Some("0".repeat(64));
+
+        let mgr = WasmVmManager::new_for_test();
+        // Warm the cache with the correct pin.
+        mgr.register_plugin(&runtime_cache_key(&good), CalloutGrant::none());
+        load(&mgr, &good).await.expect("correct pin loads");
+
+        // The mismatching config must still fail even though the bytes are warm.
+        let err = load(&mgr, &bad).await.unwrap_err();
+        assert!(err.contains("sha256"), "warm cache must not bypass the pin; got: {err}");
+
+        // Repeating the correct pin (different hex case) shares the warm entry.
+        let mut good2 = file_config(f.path());
+        good2.sha256 = Some(correct.to_ascii_uppercase());
+        assert_eq!(
+            runtime_cache_key(&good2),
+            runtime_cache_key(&good),
+            "identical digest (case-insensitive) must share one entry"
+        );
+    }
+
     #[tokio::test]
     async fn missing_file_is_load_error() {
         let mut config = edgion_resources::plugin_configs::WasmConfig::default();
@@ -1761,6 +1812,44 @@ mod tests {
         let mut some_empty = base.clone();
         some_empty.plugin_config = Some(String::new());
         assert_ne!(runtime_cache_key(&some_empty), k0, "Some(\"\") must differ from None");
+    }
+
+    /// Regression (contract-04): the per-resource `sha256` pin participates in
+    /// the cache key so two plugins sharing one source but pinning different
+    /// digests land on separate entries (each runs its own verification),
+    /// while identical digests still share one entry regardless of hex case.
+    #[test]
+    fn runtime_cache_key_separates_by_sha256_pin() {
+        let base = {
+            let mut c = edgion_resources::plugin_configs::WasmConfig::default();
+            c.source.url = Some("https://artifacts.internal/m.wasm".to_string());
+            c.sha256 = Some("a".repeat(64));
+            c
+        };
+        let k_a = runtime_cache_key(&base);
+
+        // Same source, different digest → different entry (own verification).
+        let mut b = base.clone();
+        b.sha256 = Some("b".repeat(64));
+        assert_ne!(runtime_cache_key(&b), k_a, "different sha256 must not alias one entry");
+
+        // Same digest, different hex case → same entry (compare is case-insensitive).
+        let mut c = base.clone();
+        c.sha256 = Some("A".repeat(64));
+        assert_eq!(
+            runtime_cache_key(&c),
+            k_a,
+            "same digest must share one entry regardless of case"
+        );
+
+        // Absent pin must differ from any present pin.
+        let mut none = base.clone();
+        none.sha256 = None;
+        assert_ne!(
+            runtime_cache_key(&none),
+            k_a,
+            "absent sha256 must differ from a present one"
+        );
     }
 
     /// url fetch: the resolved auth header is sent as `Authorization`.
