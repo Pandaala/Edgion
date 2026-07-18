@@ -25,7 +25,7 @@ use super::namespace::NamespaceWatchMode;
 use super::InitSyncTimer;
 use super::ShutdownSignal;
 use crate::conf_mgr::sync_runtime::resource_processor::{
-    extract_status_value, KubeRawStore, ResourceProcessor, WorkItemResult,
+    extract_status_value, make_resource_key, KubeRawStore, ResourceProcessor, WorkItemResult,
 };
 use anyhow::Result;
 use edgion_resources::ResourceMeta;
@@ -413,7 +413,7 @@ where
                             } else {
                                 // Runtime phase - enqueue key for worker
                                 if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                    self.processor.on_apply(&obj).await;
+                                    self.processor.on_event_key(make_resource_key(&obj)).await;
                                 }
                             }
                         }
@@ -427,7 +427,7 @@ where
                             } else {
                                 // Runtime phase - enqueue key for worker
                                 if passes_namespace_filter(&obj, &self.namespace_filter) {
-                                    self.processor.on_delete(&obj).await;
+                                    self.processor.on_event_key(make_resource_key(&obj)).await;
                                 }
                             }
                         }

@@ -189,8 +189,8 @@ where
                             match parse_resource_content::<K>(&content) {
                                 Ok(obj) => {
                                     let rkey = make_resource_key(&obj);
-                                    self.fs_raw_store.upsert(rkey, Arc::new(obj.clone()));
-                                    self.processor.on_apply(&obj).await;
+                                    self.fs_raw_store.upsert(rkey.clone(), Arc::new(obj.clone()));
+                                    self.processor.on_event_key(rkey).await;
                                 }
                                 Err(e) => {
                                     if let Some(rkey) = extract_key_from_etcd_key(&key) {
@@ -211,9 +211,7 @@ where
                         if init_done {
                             if let Some(rkey) = extract_key_from_etcd_key(&key) {
                                 self.fs_raw_store.remove(&rkey);
-                                if let Some(obj) = self.processor.get(&rkey) {
-                                    self.processor.on_delete(&obj).await;
-                                }
+                                self.processor.on_event_key(rkey).await;
                             }
                         }
                     }
@@ -317,7 +315,13 @@ where
                     // Get the latest object from raw_store (updated by event loop)
                     let store_obj = fs_raw_store.get(&work_item.key).map(|arc_obj| (*arc_obj).clone());
 
-                    let existing_status_json = status_handler.read_status_json(kind, &work_item.key).await;
+                    // Status read only when there is an object to process — in
+                    // etcd mode this is a network RPC; deletes must not pay it.
+                    let existing_status_json = if store_obj.is_some() {
+                        status_handler.read_status_json(kind, &work_item.key).await
+                    } else {
+                        None
+                    };
 
                     let result = processor
                         .process_work_item(

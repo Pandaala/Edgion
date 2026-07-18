@@ -97,19 +97,25 @@ pub(crate) fn remove_from_attached_route_tracker(
 }
 
 /// Update the Gateway → Route index so that Gateway changes can requeue affected routes.
+///
+/// Returns the gateway keys the route no longer references (dropped by this
+/// update) — the caller MUST requeue them via `ctx.requeue("Gateway", key)`,
+/// since a coalesced delete->recreate in the workqueue skips `handler.on_delete`
+/// for the previous generation and would otherwise leave the dropped Gateway's
+/// derived state (e.g. `attachedRoutes`) stale.
 pub(crate) fn update_gateway_route_index(
     route_kind: ResourceKind,
     route_ns: &str,
     route_name: &str,
     parent_refs: Option<&Vec<ParentReference>>,
     runtime: &ControllerRuntime,
-) {
+) -> Vec<String> {
     let route_key = format!("{}/{}", route_ns, route_name);
     let empty_refs = Vec::new();
     let refs = parent_refs.unwrap_or(&empty_refs);
     runtime
         .gateway_route_index
-        .update_route(route_kind, &route_key, refs, route_ns);
+        .update_route(route_kind, &route_key, refs, route_ns)
 }
 
 /// Remove a route from the Gateway → Route index.
@@ -153,6 +159,30 @@ pub(crate) async fn requeue_backend_tls_policies_for_route(
                 btp = %btp_ref.resource_key(),
                 service = %service_key,
                 "Requeuing BackendTLSPolicy due to route change"
+            );
+            ctx.requeue(btp_ref.kind_str(), btp_ref.resource_key()).await;
+        }
+    }
+}
+
+/// Requeue BackendTLSPolicies bound to Services this route no longer references.
+///
+/// Companion to `requeue_backend_tls_policies_for_route`: that helper reads the
+/// route's *current* backend Services (the apply path re-registers them in
+/// `parse` before `on_change` runs), so a Service dropped from backendRefs would
+/// never have its BTPs requeued to re-resolve ancestor Gateways. Feed it the
+/// dropped Service keys returned by `register_service_backend_refs`.
+pub(crate) async fn requeue_backend_tls_policies_for_services(dropped_service_keys: &[String], ctx: &HandlerContext) {
+    if dropped_service_keys.is_empty() {
+        return;
+    }
+    let target_manager = ctx.runtime().backend_tls_policy.target_mgr();
+    for service_key in dropped_service_keys {
+        for btp_ref in target_manager.get_refs(service_key) {
+            tracing::debug!(
+                btp = %btp_ref.resource_key(),
+                service = %service_key,
+                "Requeuing BackendTLSPolicy: route dropped this backend Service"
             );
             ctx.requeue(btp_ref.kind_str(), btp_ref.resource_key()).await;
         }

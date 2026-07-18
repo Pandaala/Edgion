@@ -57,13 +57,17 @@ impl Inner {
         }
     }
 
+    /// Returns the gateway keys this route referenced before the update but no
+    /// longer does — the caller must requeue them so their derived state
+    /// (e.g. `attachedRoutes`) converges even when delete->create coalescing
+    /// in the workqueue skips `handler.on_delete` for the previous generation.
     fn update_route_inner(
         &mut self,
         route_kind: ResourceKind,
         route_key: &str,
         parent_refs: &[ParentReference],
         route_ns: &str,
-    ) {
+    ) -> Vec<String> {
         let entry = RouteEntry {
             kind: route_kind,
             key: route_key.to_string(),
@@ -80,26 +84,31 @@ impl Inner {
             gateway_keys.insert(gw_key);
         }
 
-        // Remove old entries
-        if let Some(old_gw_keys) = self.reverse.remove(&entry) {
-            for old_gw_key in &old_gw_keys {
-                if let Some(routes) = self.forward.get_mut(old_gw_key) {
-                    routes.remove(&entry);
-                    if routes.is_empty() {
-                        self.forward.remove(old_gw_key);
-                    }
+        // Remove old entries, remembering which gateways this route used to
+        // reference so the diff below can report the ones it no longer does.
+        let old_gw_keys = self.reverse.remove(&entry).unwrap_or_default();
+        for old_gw_key in &old_gw_keys {
+            if let Some(routes) = self.forward.get_mut(old_gw_key) {
+                routes.remove(&entry);
+                if routes.is_empty() {
+                    self.forward.remove(old_gw_key);
                 }
             }
         }
 
+        let mut dropped: Vec<String> = old_gw_keys.difference(&gateway_keys).cloned().collect();
+        dropped.sort();
+
         if gateway_keys.is_empty() {
-            return;
+            return dropped;
         }
 
         for gw_key in &gateway_keys {
             self.forward.entry(gw_key.clone()).or_default().insert(entry.clone());
         }
         self.reverse.insert(entry, gateway_keys);
+
+        dropped
     }
 
     fn remove_route_inner(&mut self, route_kind: ResourceKind, route_key: &str) {
@@ -240,16 +249,22 @@ impl GatewayRouteIndex {
     ///
     /// Uses ALL parentRefs (not filtered by Accepted status) because
     /// hostname resolution needs to happen for all referenced Gateways.
+    ///
+    /// Returns the gateway keys the route referenced before this call but no
+    /// longer does (computed atomically under the same write guard as the
+    /// update) — the apply path must requeue them so their derived state
+    /// (e.g. `attachedRoutes`) converges even when delete->create coalescing
+    /// in the workqueue skips `handler.on_delete`.
     pub fn update_route(
         &self,
         route_kind: ResourceKind,
         route_key: &str,
         parent_refs: &[ParentReference],
         route_ns: &str,
-    ) {
+    ) -> Vec<String> {
         self.inner
             .write()
-            .update_route_inner(route_kind, route_key, parent_refs, route_ns);
+            .update_route_inner(route_kind, route_key, parent_refs, route_ns)
     }
 
     /// Remove all entries for a deleted route.
@@ -529,6 +544,37 @@ mod tests {
         assert!(change.hostnames_changed);
         assert!(change.ports_changed);
         assert!(change.routes.is_empty());
+    }
+
+    #[test]
+    fn update_route_returns_dropped_gateways() {
+        let index = GatewayRouteIndex::new();
+
+        let dropped = index.update_route(
+            ResourceKind::HTTPRoute,
+            "default/r1",
+            &[pr("default", "gw-a")],
+            "default",
+        );
+        assert!(dropped.is_empty(), "first registration drops nothing");
+
+        // Re-point the route from gw-a to gw-b: gw-a must be reported dropped.
+        let dropped = index.update_route(
+            ResourceKind::HTTPRoute,
+            "default/r1",
+            &[pr("default", "gw-b")],
+            "default",
+        );
+        assert_eq!(dropped, vec!["default/gw-a".to_string()]);
+
+        // Unchanged refs drop nothing.
+        let dropped = index.update_route(
+            ResourceKind::HTTPRoute,
+            "default/r1",
+            &[pr("default", "gw-b")],
+            "default",
+        );
+        assert!(dropped.is_empty());
     }
 
     #[test]

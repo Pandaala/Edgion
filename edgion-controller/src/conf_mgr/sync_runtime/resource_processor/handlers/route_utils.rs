@@ -409,20 +409,33 @@ pub fn update_tracker_accepted_only(
 ///
 /// Tracks which Services this route depends on, so that when a Service
 /// changes, the route is requeued to re-evaluate its ResolvedRefs status.
+///
+/// Returns the Service keys the route no longer references (dropped by this
+/// update). The caller MUST requeue BackendTLSPolicies bound to those Services
+/// via `requeue_backend_tls_policies_for_services`: a coalesced delete->recreate
+/// skips `on_delete`'s requeue for the previous generation, and even a plain
+/// update that drops a backend Service would otherwise never notify that
+/// Service's BTPs to re-resolve their ancestor Gateways.
 pub fn register_service_backend_refs(
     route_kind: edgion_resources::ResourceKind,
     route_ns: &str,
     route_name: &str,
     backend_refs: &[(Option<&str>, Option<&str>, Option<&str>, &str)], // (group, kind, namespace, name)
     runtime: &ControllerRuntime,
-) {
+) -> Vec<String> {
     use crate::conf_mgr::sync_runtime::resource_processor::ResourceRef;
 
     let resource_ref = ResourceRef::new(route_kind, Some(route_ns.to_string()), route_name.to_string());
 
     let manager = &runtime.service_ref_mgr;
+
+    // Snapshot the Services this route referenced before this reconcile so the
+    // caller can requeue BTPs bound to any Service dropped from backendRefs.
+    let old_service_keys: HashSet<String> = manager.get_dependencies(&resource_ref.key()).into_iter().collect();
+
     manager.clear_resource_refs(&resource_ref);
 
+    let mut new_service_keys = HashSet::new();
     for &(group, kind, namespace, name) in backend_refs {
         let group_str = group.unwrap_or("");
         if !group_str.is_empty() && group_str != "core" {
@@ -434,8 +447,11 @@ pub fn register_service_backend_refs(
         }
         let backend_ns = namespace.unwrap_or(route_ns);
         let service_key = format!("{}/{}", backend_ns, name);
-        manager.add_ref(service_key, resource_ref.clone());
+        manager.add_ref(service_key.clone(), resource_ref.clone());
+        new_service_keys.insert(service_key);
     }
+
+    old_service_keys.difference(&new_service_keys).cloned().collect()
 }
 
 /// Clear Service backend references for a deleted route.

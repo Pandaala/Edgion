@@ -202,6 +202,30 @@ impl BackendTlsPolicyHandler {
             }
         }
 
+        // Requeue EdgionBackendTrafficPolicies bound to a Service this policy no
+        // longer targets. `on_change_policy`'s `requeue_dependent_ebtps` only sees
+        // the CURRENT targetRefs, so an EBTP whose `upstreamAuthority` cross-object
+        // rule conflicted with this policy on a dropped target would keep a stale
+        // Accepted=False — a coalesced delete->recreate skips `on_delete_policy`,
+        // and a plain retarget never notifies the old target's EBTPs otherwise.
+        // The EBTP conflict index is keyed by the bare "ns/name" (section-less),
+        // so reduce both target-key sets to that form before diffing.
+        {
+            let base_key = |k: &str| k.split("::").next().unwrap_or(k).to_string();
+            let new_base: std::collections::HashSet<String> = new_target_keys.iter().map(|k| base_key(k)).collect();
+            let ebtp_target_mgr = ctx.runtime().edgion_backend_traffic_policy.target_mgr();
+            for dropped_base in old_target_keys
+                .iter()
+                .map(|k| base_key(k))
+                .filter(|k| !new_base.contains(k))
+                .collect::<std::collections::HashSet<String>>()
+            {
+                for ebtp_ref in ebtp_target_mgr.get_refs(&dropped_base) {
+                    ctx.requeue(ebtp_ref.kind_str(), ebtp_ref.resource_key()).await;
+                }
+            }
+        }
+
         ctx.secret_ref_manager().clear_resource_refs(&resource_ref);
 
         btp.spec.resolved_ca_certificates = None;
@@ -921,6 +945,87 @@ mod tests {
             old_ts_before_recreate.as_deref(),
             new_ts_after_recreate.as_deref(),
         ));
+    }
+
+    /// Locks the coalescing guarantee for BackendTLSPolicy -> EdgionBackendTrafficPolicy:
+    /// a delete->recreate that retargets the policy to a different Service must
+    /// requeue the EBTPs bound to the DROPPED target Service, even though
+    /// `on_delete_policy` never runs. `on_change_policy`'s `requeue_dependent_ebtps`
+    /// only sees the current targetRefs, so the dropped target's EBTPs rely on the
+    /// return-delta requeue added to `parse_policy`.
+    #[tokio::test]
+    async fn parse_policy_requeues_dropped_target_ebtps_on_retarget() {
+        use crate::conf_mgr::sync_runtime::resource_processor::ResourceProcessor;
+        use edgion_resources::prelude_resources::EdgionBackendTrafficPolicy;
+
+        struct EbtpNoop;
+        #[async_trait::async_trait]
+        impl ProcessorHandler<EdgionBackendTrafficPolicy> for EbtpNoop {}
+
+        let runtime = Arc::new(ControllerRuntime::default());
+
+        // Register an EBTP processor so ctx.requeue("EdgionBackendTrafficPolicy", ...)
+        // has an observable queue.
+        let ebtp_processor = Arc::new(ResourceProcessor::<EdgionBackendTrafficPolicy>::new(
+            "EdgionBackendTrafficPolicy",
+            100,
+            Arc::new(EbtpNoop),
+            runtime.clone(),
+        ));
+        runtime.processor_registry.register(ebtp_processor.clone());
+
+        // An EBTP depends on ns/svc-a (registered in the EBTP conflict/target index,
+        // keyed by the bare "ns/name").
+        let ebtp_ref = ResourceRef::new(
+            ResourceKind::EdgionBackendTrafficPolicy,
+            Some("ns".to_string()),
+            "ebtp-a".to_string(),
+        );
+        runtime
+            .edgion_backend_traffic_policy
+            .target_mgr()
+            .add_ref(make_target_conflict_key("ns", "svc-a", None), ebtp_ref.clone());
+
+        let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
+        let handler = BackendTlsPolicyHandler::default();
+
+        // Generation 1: BTP targets svc-a.
+        let _ = handler
+            .parse_policy(make_btp("ns", "btp1", "svc-a", "2024-01-01T00:00:00+00:00"), &ctx)
+            .await;
+        while tokio::time::timeout(
+            std::time::Duration::from_millis(500),
+            ebtp_processor.workqueue().dequeue(),
+        )
+        .await
+        .is_ok()
+        {}
+
+        // Coalesced delete->recreate: the worker only sees generation 2, now
+        // targeting svc-b (svc-a dropped). on_delete_policy never runs. The EBTP
+        // on the dropped svc-a must still be requeued.
+        let _ = handler
+            .parse_policy(make_btp("ns", "btp1", "svc-b", "2024-02-01T00:00:00+00:00"), &ctx)
+            .await;
+
+        let mut seen = std::collections::HashSet::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while std::time::Instant::now() < deadline && !seen.contains("ns/ebtp-a") {
+            if let Ok(Some(item)) = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                ebtp_processor.workqueue().dequeue(),
+            )
+            .await
+            {
+                seen.insert(item.key.clone());
+                ebtp_processor.workqueue().done(&item.key);
+            }
+        }
+        assert!(
+            seen.contains("ns/ebtp-a"),
+            "EBTP on dropped target svc-a was not requeued; seen: {:?}",
+            seen
+        );
     }
 
     #[test]

@@ -367,16 +367,14 @@ where
         );
     }
 
-    /// Handle Apply event (enqueue for runtime processing)
-    pub async fn on_apply(&self, obj: &K) {
-        let key = make_resource_key(obj);
+    /// Enqueue a watch-event key for the worker (apply and delete alike —
+    /// the worker compares store state vs cache and decides update/delete).
+    ///
+    /// Workqueue discipline: ALL runtime events go through here; nothing
+    /// outside the worker may call `process_resource`/`process_delete`.
+    /// (Init is the sanctioned exception: `on_init_apply` runs pre-worker.)
+    pub async fn on_event_key(&self, key: String) {
         self.workqueue.enqueue(key).await;
-    }
-
-    /// Handle Delete event using the object carried by the watch event.
-    pub async fn on_delete(&self, obj: &K) {
-        let ctx = self.create_context(TriggerChain::default());
-        self.process_delete(obj, &ctx).await;
     }
 
     // ==================== Cache Operations ====================
@@ -983,5 +981,56 @@ mod tests {
 
         let changed = status_has_changed("GatewayClass", &old_status, &new_status);
         assert!(changed, "Status should have changed after update_status");
+    }
+
+    #[tokio::test]
+    async fn on_event_key_enqueues_for_worker() {
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            Arc::new(TestHandler),
+            Arc::new(ControllerRuntime::default()),
+        );
+
+        processor.on_event_key("obj1".to_string()).await;
+
+        let item = tokio::time::timeout(std::time::Duration::from_secs(2), processor.workqueue().dequeue())
+            .await
+            .expect("dequeue timed out")
+            .expect("queue closed");
+        assert_eq!(item.key, "obj1");
+    }
+
+    #[tokio::test]
+    async fn delete_flows_through_worker_arm() {
+        let processor = ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            Arc::new(TestHandler),
+            Arc::new(ControllerRuntime::default()),
+        );
+        // Seed cache with the object, as a prior apply would have.
+        let obj = TestResource {
+            metadata: ObjectMeta {
+                name: Some("obj1".to_string()),
+                ..Default::default()
+            },
+            spec: "v1".to_string(),
+        };
+        processor.save(obj, None);
+        assert!(processor.get("obj1").is_some());
+
+        // Delete event: enqueue the key, then drive the worker path manually.
+        processor.on_event_key("obj1".to_string()).await;
+        let item = tokio::time::timeout(std::time::Duration::from_secs(2), processor.workqueue().dequeue())
+            .await
+            .expect("dequeue timed out")
+            .expect("queue closed");
+        let result = processor
+            .process_work_item(&item.key, None, None, item.trigger_chain.clone())
+            .await;
+
+        assert!(matches!(result, WorkItemResult::Deleted { .. }));
+        assert!(processor.get("obj1").is_none());
     }
 }

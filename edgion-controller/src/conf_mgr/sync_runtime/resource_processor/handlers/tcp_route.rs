@@ -5,7 +5,7 @@
 use super::super::ref_grant::{is_cross_ns_ref_allowed, validate_tcp_route_if_enabled};
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_tls_policies_for_route,
-    requeue_parent_gateways, update_gateway_route_index,
+    requeue_backend_tls_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     set_parent_conditions_full, AcceptedError, HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
@@ -34,8 +34,9 @@ impl TcpRouteHandler {
         )
     }
 
-    /// Register Service backend references for cross-resource requeue
-    fn register_service_refs(route: &TCPRoute, ctx: &HandlerContext) {
+    /// Register Service backend references for cross-resource requeue.
+    /// Returns the Service keys dropped from backendRefs by this update.
+    fn register_service_refs(route: &TCPRoute, ctx: &HandlerContext) -> Vec<String> {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
@@ -61,7 +62,7 @@ impl TcpRouteHandler {
             route_name,
             &backend_refs_list,
             ctx.runtime(),
-        );
+        )
     }
 
     /// Record cross-namespace references from backend_refs
@@ -101,25 +102,15 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
         validate_tcp_route_if_enabled(route)
     }
 
-    fn preparse(&self, route: &mut TCPRoute, _ctx: &HandlerContext) -> Vec<String> {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let route_name = route.metadata.name.as_deref().unwrap_or("");
-        update_gateway_route_index(
-            ResourceKind::TCPRoute,
-            route_ns,
-            route_name,
-            route.spec.parent_refs.as_ref(),
-            _ctx.runtime(),
-        );
-        Vec::new()
-    }
-
     async fn parse(&self, mut route: TCPRoute, _ctx: &HandlerContext) -> ProcessResult<TCPRoute> {
         // Record cross-namespace references for revalidation when ReferenceGrant changes
         Self::record_cross_ns_refs(&route, _ctx);
 
-        // Register Service backend references for cross-resource requeue
-        Self::register_service_refs(&route, _ctx);
+        // Register Service backend references for cross-resource requeue, then
+        // requeue BTPs bound to any Service dropped from backendRefs (the apply
+        // path otherwise only requeues BTPs for the route's current backends).
+        let dropped_service_keys = Self::register_service_refs(&route, _ctx);
+        requeue_backend_tls_policies_for_services(&dropped_service_keys, _ctx).await;
 
         // Mark denied cross-namespace references
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
@@ -192,13 +183,16 @@ impl ProcessorHandler<TCPRoute> for TcpRouteHandler {
 
         // Register in gateway_route_index so Gateway changes trigger requeue
         // (required because parse() calls lookup_gateway() for resolved_listeners)
-        update_gateway_route_index(
+        let dropped_gateways = update_gateway_route_index(
             ResourceKind::TCPRoute,
             route_ns,
             route_name,
             route.spec.parent_refs.as_ref(),
             ctx.runtime(),
         );
+        for gateway_key in dropped_gateways {
+            ctx.requeue("Gateway", gateway_key).await;
+        }
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         requeue_backend_tls_policies_for_route(ResourceKind::TCPRoute, route_ns, route_name, ctx).await;
@@ -320,3 +314,7 @@ fn collect_ref_denied_list(route: &TCPRoute) -> Vec<Option<&RefDenied>> {
     }
     list
 }
+
+#[cfg(test)]
+#[path = "tests/coalesced_recreate_backend_tls_test.rs"]
+mod coalesced_recreate_backend_tls_test;

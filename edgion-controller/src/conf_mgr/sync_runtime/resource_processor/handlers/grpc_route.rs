@@ -10,7 +10,7 @@ use super::super::ref_grant::{is_cross_ns_ref_allowed, validate_grpc_route_if_en
 use super::grpc_route_delegation::{flatten_route, DelegationLookup};
 use super::{
     remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_tls_policies_for_route,
-    requeue_parent_gateways, update_gateway_route_index,
+    requeue_backend_tls_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
@@ -121,7 +121,7 @@ impl GrpcRouteHandler {
         route: &GRPCRoute,
         extra_tuples: &[super::grpc_route_delegation::ServiceBackendTuple],
         ctx: &HandlerContext,
-    ) {
+    ) -> Vec<String> {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
@@ -150,7 +150,7 @@ impl GrpcRouteHandler {
             route_name,
             &backend_refs_list,
             ctx.runtime(),
-        );
+        )
     }
 
     /// Record cross-namespace references from backend_refs.
@@ -200,19 +200,6 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         // Note: backend ref validation (service existence, kind check) is handled by
         // update_status() via ResolvedRefs condition and per-rule invalid_rule_indices.
         errors
-    }
-
-    fn preparse(&self, route: &mut GRPCRoute, _ctx: &HandlerContext) -> Vec<String> {
-        let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
-        let route_name = route.metadata.name.as_deref().unwrap_or("");
-        update_gateway_route_index(
-            ResourceKind::GRPCRoute,
-            route_ns,
-            route_name,
-            route.spec.parent_refs.as_ref(),
-            _ctx.runtime(),
-        );
-        Vec::new()
     }
 
     async fn parse(&self, mut route: GRPCRoute, _ctx: &HandlerContext) -> ProcessResult<GRPCRoute> {
@@ -287,7 +274,12 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         Self::record_cross_ns_refs(&route, &delegation_outcome.cross_ns_target_namespaces, _ctx);
 
         // Register Service backend references for cross-resource requeue
-        Self::register_service_refs(&route, &delegation_outcome.service_backend_tuples, _ctx);
+        // Register Service backend references, then requeue BTPs bound to any
+        // Service dropped from backendRefs (the apply path otherwise only
+        // requeues BTPs for the route's current backends).
+        let dropped_service_keys =
+            Self::register_service_refs(&route, &delegation_outcome.service_backend_tuples, _ctx);
+        requeue_backend_tls_policies_for_services(&dropped_service_keys, _ctx).await;
 
         // Maintain the delegation index (also clears stale edges when the
         // route no longer delegates) and requeue children whose delegation
@@ -384,13 +376,16 @@ impl ProcessorHandler<GRPCRoute> for GrpcRouteHandler {
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
 
-        update_gateway_route_index(
+        let dropped_gateways = update_gateway_route_index(
             ResourceKind::GRPCRoute,
             route_ns,
             route_name,
             route.spec.parent_refs.as_ref(),
             ctx.runtime(),
         );
+        for gateway_key in dropped_gateways {
+            ctx.requeue("Gateway", gateway_key).await;
+        }
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
         requeue_backend_tls_policies_for_route(ResourceKind::GRPCRoute, route_ns, route_name, ctx).await;

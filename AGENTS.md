@@ -153,6 +153,38 @@ Steps 2/3/4/5 may run in parallel. If any step fails, report the error immediate
 - **Written content language**: everything written to disk must be English (code, comments, doc comments, TODO/FIXME, log/error literals, commit messages, `skills/` and `docs/en/` documentation). The only exception is Chinese user-facing documentation under `docs/zh-CN/`.
 - **No smuggling past the English-only lint**: judge by runtime meaning, not source bytes. If a value's decoded form lands on a blocked codepoint, it's smuggling — whether spelled as `\u{...}`, YAML/JSON `\uXXXX`, percent-encoded UTF-8 (`%E4%B8%AD`, `%D1%80`, ...), runtime byte/hex/base64 construction, or `include_bytes!` / external file. Use an English equivalent that exercises the same code path: percent-decoding can be tested with a space (`hello world` ↔ `hello%20world`) or reserved char (`foo&bar` ↔ `foo%26bar`); multi-byte UTF-8 coverage with lint-permitted chars (`é`, `ñ`, `€`, `©`, `π`).
 
+## Workqueue discipline (controller conf_sync)
+
+The controller's per-kind processing model. These are rules, not descriptions —
+code that violates them is wrong even if it "works":
+
+1. Every resource kind has exactly **one** workqueue and **one** worker.
+2. Dequeue processing is **serial** and must not wait.
+3. **Every** runtime event — apply *and* delete — enqueues a key via
+   `ResourceProcessor::on_event_key`. Nothing calls `process_resource`/
+   `process_delete` directly. *Sanctioned exception*: the init phase
+   (`on_init_apply` → `process_resource`) runs pre-worker on a single task,
+   where the serial invariant holds trivially.
+4. Anything needing reprocessing goes through **requeue** (never a direct call,
+   never a second queue).
+5. Handler processing must contain **no API calls, timers, sleeps, or other
+   latency** — one slow item stalls every resource of that kind.
+
+Known outstanding violations (tracked, not condoned):
+
+- Rule 5: status IO inside the worker path (FS file IO; a real API call in
+  K8s mode) → `tasks/todo/worker-path-blocking-status-io.md`
+- Rule 1: one-worker-per-kind is a convention, not a guarantee — a second
+  `InitDone` spawns a second worker (FS/etcd double-Init, and K8s
+  multi-namespace mode passes through post-completion `InitDone`s) →
+  `tasks/todo/initdone-double-spawn-second-worker.md`
+
+Because handlers must tolerate delete→create coalescing (the queue dedups by
+key, so `on_delete` may never run for a recreated key), the apply path must
+fully replace every side effect of the previous generation: registries are
+clear-before-add, and dependents referenced only by the previous generation
+are requeued (see `GatewayRouteIndex::update_route`'s dropped-keys return).
+
 ## CRD schema ↔ struct invariants (periodic inspection)
 
 Resource structs in `edgion-resources/src/resources/` serve two paths: the **K8s CR path** (the hand-written CRD under `config/crd/edgion-crd/` is a *structural* schema, so the API server **prunes** any field the CRD does not declare — a silently-pruned field becomes a no-op with no admission error) and the **controller→gateway conf_sync path** (serde serializes the *full* struct, including controller-resolved values, to the data plane). This creates a standing invariant for every serialized field:
