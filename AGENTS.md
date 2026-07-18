@@ -172,12 +172,23 @@ code that violates them is wrong even if it "works":
 
 Known outstanding violations (tracked, not condoned):
 
-- Rule 5: status IO inside the worker path (FS file IO; a real API call in
-  K8s mode) → `tasks/todo/worker-path-blocking-status-io.md`
 - Rule 1: one-worker-per-kind is a convention, not a guarantee — a second
   `InitDone` spawns a second worker (FS/etcd double-Init, and K8s
   multi-namespace mode passes through post-completion `InitDone`s) →
   `tasks/todo/initdone-double-spawn-second-worker.md`
+
+Deliberate, accepted exception to Rule 5:
+
+- Status IO stays **inline** in the worker (FS file IO; a real API call in K8s
+  mode). Moving it to an async status-writer / coalescing queue is **rejected**:
+  it breaks the queue's ordering / read-your-writes invariant — the worker is the
+  sole serial writer *and* reader of the FS `.status` file it compares against,
+  and a deferred write would leave the persisted status trailing the config
+  conf_sync has already shipped. Head-of-line latency is the accepted price of
+  correctness, and it is self-limited: writes are gated on `status_changed`, so a
+  steady-state relist of unchanged resources does zero writes and the loop is
+  pure CPU. See
+  `skills/04-review/handler-requeue/worker-path-status-io-inline-accepted.md`.
 
 Because handlers must tolerate delete→create coalescing (the queue dedups by
 key, so `on_delete` may never run for a recreated key), the apply path must

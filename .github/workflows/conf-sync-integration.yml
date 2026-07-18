@@ -10,8 +10,7 @@ name: conf-sync integration
 # until it earns the right to gate. Promotion criterion: 10 consecutive green runs
 # on main AND observed max reconnect wait < 45s (half the script's 90s
 # LINK_UP_TIMEOUT). If runs are green but the margin is thin, raise the budget and
-# restart the count -- do not promote on thin margin. Tracked in
-# tasks/todo/conf-sync-ci-promote-to-gating.md.
+# restart the count -- do not promote on thin margin.
 #
 # Only run_controller_reconnect_test.sh runs here. The other five scripts in
 # edgion-tests/integration/scripts/conf-sync/ have not been reviewed and are

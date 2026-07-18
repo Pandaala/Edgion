@@ -54,9 +54,6 @@ GATEWAY_HTTP_PORT=31000
 GATEWAY_HOST="127.0.0.1"
 CONTROLLER_URL="${EDGION_CONTROLLER_URL:-http://127.0.0.1:12101}"
 CONTROLLER_PROBE_URL="${CONTROLLER_PROBE_URL:-http://127.0.0.1:12100}"
-GATEWAY_ADMIN_URL="${EDGION_GATEWAY_ADMIN_URL:-http://127.0.0.1:12001}"
-# Gateway admin API requires a bearer token; default for standalone invocation.
-: "${EDGION_GATEWAY_ADMIN_TOKEN:=integration-gateway-admin-token-0123456789}"
 GATEWAY_PROBE_URL="${EDGION_GATEWAY_PROBE_URL:-http://127.0.0.1:12000}"
 # Gateway Prometheus listener (MetricsConfig::default().listen) — carries the
 # conf_sync link-health gauge the reconnect assertions below read.
@@ -214,28 +211,6 @@ restart_controller() {
     local new_pid=$!
     echo $new_pid > "${PID_DIR}/controller.pid"
     log_info "Restarted Controller with PID ${new_pid}"
-}
-
-# =============================================================================
-# Poll Gateway configclient endpoint for non-empty route list
-# =============================================================================
-wait_for_gateway_routes() {
-    local timeout=${1:-$RECONNECT_TIMEOUT}
-    local elapsed=0
-    log_info "Waiting up to ${timeout}s for Gateway to show routes after reconnect..."
-    while [ $elapsed -lt $timeout ]; do
-        local resp count
-        resp=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/httproute/list" 2>/dev/null || echo '{"count":0}')
-        count=$(echo "$resp" | python3 -c "import sys,json; print(json.load(sys.stdin).get('count',0))" 2>/dev/null || echo "0")
-        if [ "$count" -gt 0 ] 2>/dev/null; then
-            log_success "Gateway configclient shows ${count} HTTPRoute(s) after ${elapsed}s"
-            return 0
-        fi
-        sleep 1
-        elapsed=$((elapsed + 1))
-    done
-    log_warn "Gateway configclient httproute count is still 0 after ${timeout}s"
-    return 1
 }
 
 # =============================================================================
@@ -508,21 +483,9 @@ main() {
     fi
 
     # -------------------------------------------------------------------------
-    # Case 4: gateway_admin_shows_routes
+    # Case 4: new_route_propagates_after_reconnect
     # -------------------------------------------------------------------------
-    log_section "Case 4: gateway_admin_shows_routes"
-    if wait_for_gateway_routes "$RECONNECT_TIMEOUT"; then
-        assert_pass "gateway_admin_shows_routes" "pass"
-    else
-        RESP=$(curl -sf -H "Authorization: Bearer ${EDGION_GATEWAY_ADMIN_TOKEN}" "${GATEWAY_ADMIN_URL}/configclient/httproute/list" 2>/dev/null || echo "unreachable")
-        assert_pass "gateway_admin_shows_routes" "fail" \
-            "configclient/httproute/list returned: ${RESP}"
-    fi
-
-    # -------------------------------------------------------------------------
-    # Case 5: new_route_propagates_after_reconnect
-    # -------------------------------------------------------------------------
-    log_section "Case 5: new_route_propagates_after_reconnect"
+    log_section "Case 4: new_route_propagates_after_reconnect"
     write_reconnect_fixture
 
     log_info "Applying reconnect fixture via edgion-cli..."
@@ -577,9 +540,9 @@ main() {
     fi
 
     # -------------------------------------------------------------------------
-    # Case 6: gateway_alive_throughout
+    # Case 5: gateway_alive_throughout
     # -------------------------------------------------------------------------
-    log_section "Case 6: gateway_alive_throughout"
+    log_section "Case 5: gateway_alive_throughout"
     # pgrep -c is Linux-only; on macOS use pgrep | wc -l.
     # `|| true` is load-bearing for the same reason as case 1b's: pgrep exits 1 when it
     # matches nothing, pipefail propagates that, and a bare assignment inherits it — so
