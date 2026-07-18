@@ -105,9 +105,9 @@ from the target Service key at selection time, via the
 
 `session_persistence.rs` implements Gateway API `SessionPersistence` (cookie- or header-based session affinity):
 
-- **Token derivation**: `generate_session_token(backend_addr)` returns a deterministic 8-char hex CRC32 of the backend `ip:port`. It is a stickiness hint, not a security boundary (no MAC/secret) — see the module doc-comment threat model.
+- **Token derivation**: `generate_session_token(backend_addr)` returns a deterministic 16-char hex token (SHA-256 of the backend `ip:port` truncated to 64 bits). It is a stickiness hint, not a security boundary (no MAC/secret) — see the module doc-comment threat model. `build_sp_affinity_map` reuses this function so map keys and injected tokens can never drift.
 - **Default name**: `edgion-session-affinity` (overridable via the resource's `sessionName`). `get_session_name` / `get_persistence_type` read the config.
-- **Request path** (`pg_upstream_peer.rs`): `extract_session_token` reads the token from the cookie or header; if present and the token maps to a live backend, that backend is selected (with SSRF validation on the upstream-peer fallback path).
+- **Request path** (`pg_upstream_peer.rs` / `grpc/integration.rs`): `sp_extract_token` reads the token from the cookie or header; `sp_resolve_target_rule_scoped` then resolves it **before** weighted backendRef selection, across ALL of the matched rule's backendRefs in declaration order (weight-0 refs included — GEP-1619: weights govern only new sessions). A hit selects that backendRef and pins the endpoint (`sp_target_addr`, with SSRF validation on the upstream-peer fallback path); a full miss falls back to weighted RR and refreshes the token. An `Internal` upstream jump wins over the sticky session for that request without rewriting the session.
 - **Response path** (`pg_upstream_response_filter.rs`): `build_set_cookie_value` emits the `Set-Cookie` for cookie-mode persistence.
 
 ## conf_handler_impl flow

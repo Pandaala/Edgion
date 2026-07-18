@@ -16,7 +16,7 @@ use super::edgion_backend::EdgionBackend;
 
 // ── SP affinity map ───────────────────────────────────────────────────────────
 
-/// Session affinity map: token (CRC32 hex) → endpoint SocketAddr, per service key.
+/// Session affinity map: token (`generate_session_token` hex) → endpoint SocketAddr, per service key.
 /// Built lazily on first session persistence request. Invalidated when backends change.
 /// Cap: max 1024 entries per service to prevent memory explosion.
 static SP_AFFINITY: LazyLock<DashMap<String, Arc<std::collections::HashMap<String, std::net::SocketAddr>>>> =
@@ -39,16 +39,18 @@ fn build_sp_affinity_map(
     for b in backends.iter().take(SP_AFFINITY_MAX_PER_SERVICE) {
         if let SocketAddr::Inet(addr) = b.addr {
             let addr_str = addr.to_string();
-            // Threat model: this CRC32 of `IP:port` (no secret, no MAC) is a
-            // stickiness hint, NOT a security boundary. A client that knows a
-            // backend's `IP:port` can forge the matching token to pin its own
-            // requests to that backend, but the map only ever holds the service's
-            // real backends, so a forged token can only pick an existing backend
-            // (never an arbitrary address) and only affects the forging client's
-            // own traffic. See `session_persistence::generate_session_token` for
-            // the full rationale. Use an HMAC over a secret if affinity is ever
-            // promoted to a routing restriction.
-            let token = format!("{:08x}", crc32fast::hash(addr_str.as_bytes()));
+            // Threat model: this unkeyed hash of `IP:port` (no secret, no MAC)
+            // is a stickiness hint, NOT a security boundary. A client that
+            // knows a backend's `IP:port` can forge the matching token to pin
+            // its own requests to that backend, but the map only ever holds the
+            // service's real backends, so a forged token can only pick an
+            // existing backend (never an arbitrary address) and only affects
+            // the forging client's own traffic. See
+            // `session_persistence::generate_session_token` (the single token
+            // derivation — map keys and response-injected tokens must never
+            // drift) for the full rationale. Use an HMAC over a secret if
+            // affinity is ever promoted to a routing restriction.
+            let token = crate::routes::http::session_persistence::generate_session_token(&addr_str);
             map.insert(token, addr);
         }
     }

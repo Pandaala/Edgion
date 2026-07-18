@@ -215,6 +215,7 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
                     )),
                     plugin_runtime: rule_plugin_runtime.clone(),
                     backend_finder: backend_finder.clone(),
+                    backends: rule_backends.clone(),
                 }));
             } else {
                 for (match_id, match_item) in effective_matches.iter().enumerate() {
@@ -250,6 +251,7 @@ fn parse_route_to_units(resource_key: &str, route: &Arc<GRPCRoute>) -> Vec<Arc<G
                         )),
                         plugin_runtime: rule_plugin_runtime.clone(),
                         backend_finder: backend_finder.clone(),
+                        backends: rule_backends.clone(),
                     }));
                 }
             }

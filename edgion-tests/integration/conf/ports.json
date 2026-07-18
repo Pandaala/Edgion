@@ -297,6 +297,12 @@
     },
     "GRPCRoute/Backend/SessionPersistence": {
       "grpc": 31937
+    },
+    "GRPCRoute/Backend/SessionPersistenceWeighted": {
+      "grpc": 31938
+    },
+    "HTTPRoute/Backend/SessionPersistenceWeighted": {
+      "http": 31939
     }
   }
 }

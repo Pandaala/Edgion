@@ -4,11 +4,43 @@
 
 ## 工作原理
 
-1. **首次请求**：客户端未携带会话标识 → 网关使用正常负载均衡选择后端 → 响应中注入会话标识（Cookie 或 Header）
-2. **后续请求**：客户端携带会话标识 → 网关基于一致性哈希将请求路由到同一后端
+1. **首次请求**：客户端未携带会话标识 → 网关使用正常（加权）负载均衡选择后端 → 响应中注入会话标识（Cookie 或 Header）
+2. **后续请求**：客户端携带会话标识 → 网关在加权选择**之前**，在规则的全部后端范围内解析该标识，将请求精确路由到签发它的那个后端
 3. **后端不可用**：默认 fallback 到其他健康后端并更新会话标识；strict 模式下返回错误
 
-会话标识是后端地址的 CRC32 哈希（如 `a1b2c3d4`），不暴露后端拓扑信息。
+会话标识是后端地址的 SHA-256 截断哈希（16 位小写十六进制，如 `a1b2c3d4e5f60718`），不暴露后端拓扑信息。
+
+## 流量分割（多加权 BackendRef）
+
+依照 Gateway API（GEP-1619），**权重只管理新会话**。会话一旦建立，将在规则的所有
+backendRefs 范围内持续路由到最初的 Service 和端点：
+
+- 会话标识在加权选择之前、按声明顺序在匹配规则的每个 backendRef 内解析，
+  因此 70/30 分流不会让已建立的会话在 Service 之间弹跳。
+- 修改绑定 backendRef 的权重——**包括改为 0**——只要其端点仍在服务，
+  已建立的会话就不会迁移。
+- 删除绑定的端点（或 backendRef）触发正常 fallback：请求由加权选择接管，
+  响应携带刷新后的会话标识。
+- 会话解析的作用域是匹配到的路由规则：两条使用默认会话名、后端集合不相交的
+  规则不会共享会话；引用同一 Service 的规则会解析到同一 pod（与 Envoy
+  Gateway 行为一致）。
+
+```yaml
+rules:
+  - sessionPersistence:
+      type: Cookie
+      sessionName: canary-session
+      absoluteTimeout: "1h"
+      cookieConfig:
+        lifetimeType: Permanent
+    backendRefs:
+      - name: app-v1
+        port: 8080
+        weight: 70        # 新会话约 70%
+      - name: app-v2
+        port: 8080
+        weight: 30        # 新会话约 30%；已建立的 v2 会话固定在 v2
+```
 
 ## 配置
 
@@ -98,9 +130,9 @@ sessionPersistence:
 |------|--------|-----------------|
 | DirectEndpoint | 最高 | 直接指定后端 IP:port，跳过会话保持 |
 | DynamicExternalUpstream | 高 | 外部域名路由，跳过会话保持 |
-| **Session Persistence** | **中** | **基于 cookie/header 的一致性哈希** |
-| DynamicInternalUpstream | 低 | 指定 BackendRef，会话保持仍在其内生效 |
-| 默认 Round-Robin | 最低 | 无会话保持时的默认行为 |
+| DynamicInternalUpstream | 高 | 显式的单请求 BackendRef 覆盖：本次请求优先于粘性会话；会话绑定保持不变（不重写标识），下一个未覆盖的请求正常解析 |
+| **Session Persistence** | **中** | **基于 cookie/header 标识的精确后端亲和** |
+| 加权 Round-Robin | 最低 | 管理无标识的会话（初始分配） |
 
 ## 示例
 
@@ -148,7 +180,7 @@ spec:
 
 ## 限制
 
-- **多实例一致性**：基于一致性哈希算法，多 Gateway 实例间只要后端列表一致，同一 token 会路由到同一后端。后端扩缩容时哈希环变化可能导致少量 session 漂移。
+- **多实例一致性**：会话标识派生是确定性的（后端地址的无密钥哈希），多 Gateway 实例间只要后端列表一致，同一 token 就路由到同一后端，无需服务端会话存储。删除绑定端点会使其会话失效（fallback + 标识刷新），其他端点的会话不受影响。
 - **idleTimeout**：当前版本不支持服务端 idle timeout（纯客户端 Cookie 方案无法实现），预留给后续 Redis 模式。
 - **GRPCRoute**：原生支持，配置方式与 HTTPRoute 相同，并有基于后端身份的集成测试验证。gRPC 特有语义：`strict: true` 时，粘性后端不可用将以 `grpc-status: 14`（UNAVAILABLE）失败关闭，而非 HTTP 503。原生 gRPC 客户端（tonic、grpc-go）需要在应用层自行回传会话 Cookie；浏览器 grpc-web 客户端仅在同站（same-site）且启用凭据（credentials）时自动携带（Cookie 带有 `SameSite=Lax`），跨站 grpc-web 部署建议使用 `type: Header`。会话保持依赖 EndpointSlice 类后端（ClusterIP 类后端会静默绕过，与 HTTPRoute 行为一致）。
 

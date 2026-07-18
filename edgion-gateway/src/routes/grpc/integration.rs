@@ -4,7 +4,7 @@
 //! encapsulating all gRPC-specific logic within the `grpc` module.
 
 use crate::lb::{ERR_INCONSISTENT_WEIGHT, ERR_NO_BACKEND_REFS};
-use crate::routes::http::session_persistence::{sp_extract_token, sp_resolve_target};
+use crate::routes::http::session_persistence::{sp_extract_token, sp_resolve_target_rule_scoped};
 use crate::runtime::store::listener_gateway_info::GatewayInfoIndex;
 use crate::EdgionHttpContext;
 use edgion_resources::err::EdError;
@@ -62,14 +62,14 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     }
 
     let grpc_route_unit = match ctx.grpc_route_unit.as_ref() {
-        Some(unit) => unit,
+        // Arc-clone so the unit is independent of `ctx` — the SP resolution
+        // below takes `&mut ctx` while iterating the unit's backends.
+        Some(unit) => unit.clone(),
         None => return Ok(None), // No gRPC route
     };
 
     // Session Persistence step 1 of 2: extract token + set initial state
-    // (mirrors select_http_backend). Step 2 (affinity lookup) runs below after
-    // backend_ref is selected, since the affinity map is keyed by
-    // `{namespace}/{backend_ref.name}`. The `selected_grpc_backend.is_some()`
+    // (mirrors select_http_backend). The `selected_grpc_backend.is_some()`
     // early return above guarantees this never re-runs on a retry attempt.
     let sp_token = sp_extract_token(
         session,
@@ -77,14 +77,46 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         grpc_route_unit.rule.session_persistence.as_ref(),
     );
 
-    let mut backend_ref = grpc_route_unit
-        .backend_finder
-        .select()
-        .map_err(|err_code| match err_code {
-            ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
-            ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
-            _ => EdError::BackendNotFound(),
-        })?;
+    // Session Persistence step 2 of 2: resolve the token BEFORE weighted
+    // backendRef selection, across ALL of the rule's backendRefs (GEP-1619:
+    // weights govern only new sessions; an established session keeps routing
+    // to its original Service/endpoint even at weight 0). Mirrors
+    // select_http_backend; gRPC has no InternalJump, so no jump precedence arm.
+    let sp_idx = sp_resolve_target_rule_scoped(
+        ctx,
+        grpc_route_unit
+            .backends
+            .iter()
+            .map(|b| (b.schema.name.as_str(), b.schema.namespace.as_deref())),
+        &grpc_route_unit.matched_info.rsc.ns,
+        sp_token.as_deref(),
+    );
+    let sticky_backend = sp_idx.and_then(|idx| {
+        let cb = &grpc_route_unit.backends[idx];
+        if cb.schema.ref_denied.is_none() {
+            Some(cb.clone())
+        } else {
+            // The sticky backendRef's cross-namespace reference is now denied:
+            // treat as a miss — drop the sticky target, refresh the token, and
+            // fall back to weighted selection below.
+            ctx.sp_target_addr = None;
+            ctx.sp_sticky_addr = None;
+            ctx.sp_state = crate::SessionPersistenceState::InjectNew;
+            None
+        }
+    });
+
+    let mut backend_ref = match sticky_backend {
+        Some(b) => b,
+        None => grpc_route_unit
+            .backend_finder
+            .select()
+            .map_err(|err_code| match err_code {
+                ERR_NO_BACKEND_REFS => EdError::BackendNotFound(),
+                ERR_INCONSISTENT_WEIGHT => EdError::InconsistentWeight(),
+                _ => EdError::BackendNotFound(),
+            })?,
+    };
 
     if let Some(ref denied) = backend_ref.ref_denied {
         return Err(EdError::RefDenied {
@@ -107,10 +139,6 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
     backend_ref.schema.backend_tls_policy =
         crate::backends::query_backend_tls_policy_for_service(service_name, service_namespace, backend_ref.port);
 
-    // Pre-extract route namespace before mutable ctx borrows (borrow checker),
-    // mirroring select_http_backend.
-    let route_ns = grpc_route_unit.matched_info.rsc.ns.clone();
-
     // Run backend-level request plugins.
     // TODO: evaluate whether backend plugins should run before route-level plugins
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
@@ -121,16 +149,6 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         }
         return Err(EdError::PluginTerminated());
     }
-
-    // Session Persistence step 2 of 2: resolve token to a sticky target via the
-    // affinity map. Step 1 ran above before backend_ref selection.
-    sp_resolve_target(
-        ctx,
-        &backend_ref.name,
-        backend_ref.namespace.as_deref(),
-        &route_ns,
-        sp_token.as_deref(),
-    );
 
     // Backend context is initialized in upstream_peer_grpc by init_backend_context_if_needed
     ctx.selected_grpc_backend = Some(backend_ref);

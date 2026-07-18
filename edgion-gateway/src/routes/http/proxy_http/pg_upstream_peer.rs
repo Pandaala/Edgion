@@ -448,7 +448,9 @@ pub async fn select_http_backend(
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<()> {
     let route_unit = match ctx.route_unit.as_ref() {
-        Some(unit) => unit,
+        // Arc-clone so the unit is independent of `ctx` — the SP resolution
+        // below takes `&mut ctx` while iterating the unit's backends.
+        Some(unit) => unit.clone(),
         None => {
             ctx.add_error(EdgionStatus::UpstreamNotRouteMatched);
             end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
@@ -456,21 +458,60 @@ pub async fn select_http_backend(
         }
     };
 
-    // Session Persistence step 1 of 2: extract token + set initial state. Step 2
-    // (affinity lookup) runs below after backend_ref is selected, since the affinity
-    // map is keyed by `{namespace}/{backend_ref.name}`.
+    // Session Persistence step 1 of 2: extract token + set initial state.
     let sp_token =
         session_persistence::sp_extract_token(session, &mut ctx.sp_state, route_unit.rule.session_persistence.as_ref());
 
-    // Pick backend_ref: InternalJump (plugin-injected) tries by name first and falls back to
-    // weighted round-robin on miss; without InternalJump, plain weighted round-robin.
-    let mut backend_ref = match pick_backend_ref(route_unit, &route_unit.matched_info.rsc.ns, ctx.jump.as_ref()) {
-        Ok(b) => b,
-        Err(e) => {
-            ctx.add_error(backend_select_status(&e));
-            end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
-            return Err(PingoraError::new(ErrorType::InternalError));
+    // Session Persistence step 2 of 2: resolve the token BEFORE weighted
+    // backendRef selection, across ALL of the rule's backendRefs (GEP-1619:
+    // weights govern only new sessions; an established session keeps routing
+    // to its original Service/endpoint even at weight 0).
+    //
+    // DynamicInternalUpstream precedence: an Internal jump is an explicit
+    // per-request override — it wins over the sticky session, and the session
+    // binding is left untouched (no resolution, state stays `Inactive`, no
+    // cookie rewrite; the next non-jump request resolves normally).
+    let sp_idx = if matches!(ctx.jump.as_ref(), Some(UpstreamJumpTarget::Internal(_))) {
+        None
+    } else {
+        session_persistence::sp_resolve_target_rule_scoped(
+            ctx,
+            route_unit
+                .backends
+                .iter()
+                .map(|b| (b.schema.name.as_str(), b.schema.namespace.as_deref())),
+            &route_unit.matched_info.rsc.ns,
+            sp_token.as_deref(),
+        )
+    };
+    let sticky_backend = sp_idx.and_then(|idx| {
+        let cb = &route_unit.backends[idx];
+        if cb.schema.ref_denied.is_none() {
+            Some(cb.clone())
+        } else {
+            // The sticky backendRef's cross-namespace reference is now denied:
+            // treat as a miss — drop the sticky target, refresh the token, and
+            // fall back to weighted selection below.
+            ctx.sp_target_addr = None;
+            ctx.sp_sticky_addr = None;
+            ctx.sp_state = SessionPersistenceState::InjectNew;
+            None
         }
+    });
+
+    // Pick backend_ref: sticky session hit wins outright; otherwise InternalJump
+    // (plugin-injected) tries by name first and falls back to weighted
+    // round-robin on miss; without InternalJump, plain weighted round-robin.
+    let mut backend_ref = match sticky_backend {
+        Some(b) => b,
+        None => match pick_backend_ref(&route_unit, &route_unit.matched_info.rsc.ns, ctx.jump.as_ref()) {
+            Ok(b) => b,
+            Err(e) => {
+                ctx.add_error(backend_select_status(&e));
+                end_response_500(session, ctx, &edgion_http.server_header_opts).await?;
+                return Err(PingoraError::new(ErrorType::InternalError));
+            }
+        },
     };
 
     // Query BackendTLSPolicy using route namespace for proper namespace inheritance.
@@ -490,24 +531,11 @@ pub async fn select_http_backend(
         service_port,
     );
 
-    // Pre-extract route namespace before mutable ctx borrows (borrow checker)
-    let route_ns = route_unit.matched_info.rsc.ns.clone();
-
     backend_ref.plugin_runtime.run_request_plugins(session, ctx).await;
     if ctx.plugin_running_result == PluginRunningResult::ErrTerminateRequest {
         let _ = terminate_with_fallback(session, ctx, &edgion_http.server_header_opts).await;
         return Err(PingoraError::new(ErrorType::InternalError));
     }
-
-    // Session Persistence step 2 of 2: resolve token to a sticky target via the
-    // affinity map. Step 1 ran above before backend_ref selection.
-    session_persistence::sp_resolve_target(
-        ctx,
-        &backend_ref.name,
-        backend_ref.namespace.as_deref(),
-        &route_ns,
-        sp_token.as_deref(),
-    );
 
     ctx.selected_backend = Some(backend_ref);
     Ok(())

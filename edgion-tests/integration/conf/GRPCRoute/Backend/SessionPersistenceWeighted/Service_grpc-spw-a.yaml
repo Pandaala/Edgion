@@ -1,0 +1,13 @@
+# NO targetPort on purpose: resolve_target_port_key would otherwise rewrite
+# every selected endpoint to the Service targetPort, collapsing backend
+# identity (see GRPCRoute/Backend/SessionPersistence Service comment).
+apiVersion: v1
+kind: Service
+metadata:
+  name: grpc-spw-a
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 8080
+      protocol: TCP
+  type: ClusterIP

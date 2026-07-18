@@ -100,7 +100,6 @@ console.workspace = true
 # Crypto / encoding helpers used by the plugin suites
 base64.workspace = true
 hex.workspace = true
-crc32fast.workspace = true
 jsonwebtoken.workspace = true
 hmac.workspace = true
 aes-gcm.workspace = true

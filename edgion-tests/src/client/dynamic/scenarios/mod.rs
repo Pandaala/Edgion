@@ -14,4 +14,5 @@ pub mod observed_gen_high_freq;
 pub mod rate_limit_dynamic;
 pub mod route_delegation_dynamic;
 pub mod sp_backend_change;
+pub mod sp_weighted;
 pub mod tcp_esp_reload;

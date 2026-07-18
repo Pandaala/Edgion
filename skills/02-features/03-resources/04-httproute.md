@@ -291,11 +291,11 @@ sessionPersistence:
 
 ### Runtime Behavior
 
-- **Token generation**: CRC32 hash of the backend's `ip:port` (8-character hex), does not expose the backend topology.
+- **Token generation**: truncated SHA-256 hash of the backend's `ip:port` (16-character hex, 64-bit identity), does not expose the backend topology.
 - **Cookie mode**: the first response injects `Set-Cookie: <name>=<token>; Path=/; HttpOnly; SameSite=Lax` (Permanent adds `Max-Age`).
 - **Header mode**: the first response injects `<name>: <token>`; the client must include it in subsequent requests.
-- **Backend selection**: the token is used as a consistent-hashing key, ensuring the same token is routed to the same backend.
-- **Fallback** (default): when the bound backend is unavailable, fall back to normal load balancing and update the token.
+- **Backend selection**: the token is resolved to its exact backend BEFORE weighted backendRef selection, across ALL of the matched rule's backendRefs in declaration order (GEP-1619: weights govern only sessions without a token; a bound backendRef whose weight drops to 0 keeps its established sessions). Resolution is scoped to the matched rule, so default-named sessions on rules with disjoint backends never leak across rules.
+- **Fallback** (default): when the bound backend is unavailable, fall back to normal (weighted) load balancing and update the token.
 - **Strict mode**: when `strict: true`, do not fall back; return 503.
 
 ### Priority with Plugins

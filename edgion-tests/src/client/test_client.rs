@@ -241,6 +241,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "HTTPRoute/Backend/PartiallyInvalid" => "HTTPRoute/Backend/PartiallyInvalid",
         "HTTPRoute/Backend/SessionPersistence" => "HTTPRoute/Backend/SessionPersistence",
         "HTTPRoute/Backend/SessionPersistenceBackendChange" => "HTTPRoute/Backend/SessionPersistenceBackendChange",
+        "HTTPRoute/Backend/SessionPersistenceWeighted" => "HTTPRoute/Backend/SessionPersistenceWeighted",
         "HTTPRoute/Backend/H2BackendMtlsPersistence" => "HTTPRoute/Backend/H2BackendMtlsPersistence",
         "HTTPRoute/Filters/FilterConflict" => "HTTPRoute/Filters/FilterConflict",
         "HTTPRoute/Filters/PercentMirror" => "HTTPRoute/Filters/PercentMirror",
@@ -262,6 +263,7 @@ fn suite_to_port_key(suite: &str) -> &str {
         "GRPCRoute/UnmatchedRoute" => "GRPCRoute/UnmatchedRoute",
         "GRPCRoute/RateLimit" => "GRPCRoute/RateLimit",
         "GRPCRoute/Backend/SessionPersistence" => "GRPCRoute/Backend/SessionPersistence",
+        "GRPCRoute/Backend/SessionPersistenceWeighted" => "GRPCRoute/Backend/SessionPersistenceWeighted",
         // TCPRoute
         "TCPRoute/Basic" | "TCPRoute" => "TCPRoute/Basic",
         "TCPRoute/IdleTimeout" => "TCPRoute/Basic",
@@ -572,6 +574,28 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 }
             }
         }
+        "HTTPRoute/Backend/SessionPersistenceWeighted" => {
+            if !gateway {
+                eprintln!("Error: SessionPersistenceWeighted tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::SpWeightedInitialTestSuite));
+                }
+                Some("zero_weight") => {
+                    runner.add_suite(Box::new(suites::SpWeightedZeroWeightTestSuite));
+                }
+                Some("final") => {
+                    runner.add_suite(Box::new(suites::SpWeightedFinalTestSuite));
+                }
+                _ => {
+                    runner.add_suite(Box::new(suites::SpWeightedInitialTestSuite));
+                    runner.add_suite(Box::new(suites::SpWeightedZeroWeightTestSuite));
+                    runner.add_suite(Box::new(suites::SpWeightedFinalTestSuite));
+                }
+            }
+        }
         "HTTPRoute/Backend/H2BackendMtlsPersistence" => {
             if !gateway {
                 eprintln!("Error: H2BackendMtlsPersistence tests require --gateway flag");
@@ -728,6 +752,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::GrpcSessionPersistenceTestSuite));
+        }
+        "GRPCRoute/Backend/SessionPersistenceWeighted" => {
+            if !gateway {
+                eprintln!("Error: GRPCRoute/Backend/SessionPersistenceWeighted tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::GrpcSpWeightedTestSuite));
         }
         "GRPCRoute/TLS" => {
             if !gateway {

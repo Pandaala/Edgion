@@ -269,6 +269,11 @@ pub struct GrpcRouteRuleUnit {
     /// Per-rule WRR selector over compiled backends (one per rule; gRPC has no
     /// hostname fan-out so there is no per-hostname duplication).
     pub backend_finder: Arc<BackendSelector<CompiledGrpcBackend>>,
+    /// Per-rule compiled backends in declaration order — the FULL list,
+    /// including weight-0 refs the WRR selector filters out. Session
+    /// persistence resolves an established session across this list before
+    /// weighted selection (GEP-1619: weights govern only new sessions).
+    pub backends: Arc<Vec<CompiledGrpcBackend>>,
 }
 
 impl GrpcRouteRuleUnit {

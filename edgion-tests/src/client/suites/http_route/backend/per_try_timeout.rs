@@ -10,12 +10,16 @@ use async_trait::async_trait;
 use std::time::{Duration, Instant};
 
 /// Local mirror of the gateway's `generate_session_token`
-/// (`edgion-gateway/src/routes/http/session_persistence.rs`): the 8-hex-char
-/// lowercase CRC32 of `"ip:port"`. Duplicated here because `edgion-tests` does
-/// NOT depend on `edgion-gateway` (it sidesteps the boringssl/rustls feature
-/// dance). Keep in sync if the gateway ever changes the token formula.
+/// (`edgion-gateway/src/routes/http/session_persistence.rs`): the 16-hex-char
+/// lowercase SHA-256-truncated-to-64-bit hash of `"ip:port"`. Duplicated here
+/// because `edgion-tests` does NOT depend on `edgion-gateway` (it sidesteps
+/// the boringssl/rustls feature dance). Keep in sync if the gateway ever
+/// changes the token formula.
 fn sp_token(ip: &str, port: u64) -> String {
-    format!("{:08x}", crc32fast::hash(format!("{}:{}", ip, port).as_bytes()))
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(format!("{}:{}", ip, port).as_bytes());
+    let prefix: [u8; 8] = digest[..8].try_into().expect("SHA-256 digest is 32 bytes");
+    format!("{:016x}", u64::from_be_bytes(prefix))
 }
 
 fn is_k8s_mode() -> bool {

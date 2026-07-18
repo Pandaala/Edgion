@@ -24,15 +24,16 @@ pub use http_route::{
     LBEwmaRetryOnStatusTestSuite, LBEwmaTestSuite, LBLeastConnRetryOnStatusTestSuite, LBLeastConnTestSuite,
     LBRoundRobinTestSuite, MultiPortTestSuite, PanicThresholdTestSuite, PartiallyInvalidTestSuite,
     PerTryTimeoutTestSuite, PercentMirrorTestSuite, RetryOnStatusTestSuite, SessionPersistenceTestSuite,
-    SpChangeFinalTestSuite, SpChangeInitialTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
+    SpChangeFinalTestSuite, SpChangeInitialTestSuite, SpWeightedFinalTestSuite, SpWeightedInitialTestSuite,
+    SpWeightedZeroWeightTestSuite, TimeoutTestSuite, WebSocketTestSuite, WeightedBackendTestSuite,
 };
 
 pub use edgion_backend_traffic_policy::{EdgionBackendTrafficPolicyTestSuite, UpstreamAuthorityTestSuite};
 
 pub use grpc_route::{
     GrpcDelegationDynamicInitialTestSuite, GrpcDelegationDynamicUpdateTestSuite, GrpcDelegationTestSuite,
-    GrpcMatchTestSuite, GrpcRateLimitTestSuite, GrpcSessionPersistenceTestSuite, GrpcTestSuite,
-    GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite,
+    GrpcMatchTestSuite, GrpcRateLimitTestSuite, GrpcSessionPersistenceTestSuite, GrpcSpWeightedTestSuite,
+    GrpcTestSuite, GrpcUnmatchedRouteTestSuite, GrpcWebTestSuite,
 };
 
 pub use tcp_route::{

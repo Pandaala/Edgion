@@ -5,6 +5,7 @@
 
 use edgion_resources::resources::http_route::{CookieLifetimeType, SessionPersistence, SessionPersistenceType};
 use pingora_proxy::Session;
+use sha2::{Digest, Sha256};
 
 use crate::{EdgionHttpContext, SessionPersistenceState};
 
@@ -13,23 +14,29 @@ const DEFAULT_SESSION_NAME: &str = "edgion-session-affinity";
 
 /// Generate a session token from a backend address (ip:port).
 ///
-/// Returns a deterministic 8-character lowercase hex string (CRC32 hash).
+/// Returns a deterministic 16-character lowercase hex string (SHA-256
+/// truncated to 64 bits). 64 bits keeps the accidental-collision probability
+/// negligible now that a token is resolved across ALL of a rule's backendRefs
+/// (a 32-bit CRC was deemed too narrow for a cross-Service identity); a
+/// one-way hash (rather than an Envoy-style decodable `base64(ip:port)`) is
+/// deliberate so backend pod addresses are never exposed to clients.
 ///
 /// Threat model: this token is a stickiness/performance hint, NOT a security
-/// boundary. It is a plain CRC32 of `IP:port` with no per-process secret and no
-/// MAC, so a client that knows a backend's `IP:port` can pre-compute the token
-/// and forge a cookie/header to pin its OWN requests to a chosen backend. This
-/// is self-affecting only: the token identifies a backend (not a user session),
-/// the affinity map is built solely from the service's real backends so a forged
-/// token can only select an existing backend (never inject an arbitrary address),
-/// and the resolved sticky target still passes SSRF validation on the upstream-peer
-/// path (`get_peer_with_sp_fallback` / `try_get_peer`). Do NOT repurpose session
-/// affinity as access
-/// control; if routing restrictions are ever required (e.g. tenant isolation by
-/// pod), replace CRC32 with an HMAC over a per-process/service secret.
+/// boundary. It is an unkeyed hash of `IP:port` with no per-process secret and
+/// no MAC, so a client that knows a backend's `IP:port` can pre-compute the
+/// token and forge a cookie/header to pin its OWN requests to a chosen backend.
+/// This is self-affecting only: the token identifies a backend (not a user
+/// session), the affinity map is built solely from the service's real backends
+/// so a forged token can only select an existing backend (never inject an
+/// arbitrary address), and the resolved sticky target still passes SSRF
+/// validation on the upstream-peer path (`get_peer_with_sp_fallback` /
+/// `try_get_peer`). Do NOT repurpose session affinity as access control; if
+/// routing restrictions are ever required (e.g. tenant isolation by pod),
+/// replace the unkeyed hash with an HMAC over a per-process/service secret.
 pub fn generate_session_token(backend_addr: &str) -> String {
-    let hash = crc32fast::hash(backend_addr.as_bytes());
-    format!("{:08x}", hash)
+    let digest = Sha256::digest(backend_addr.as_bytes());
+    let prefix: [u8; 8] = digest[..8].try_into().expect("SHA-256 digest is 32 bytes");
+    format!("{:016x}", u64::from_be_bytes(prefix))
 }
 
 /// Get the session name from a `SessionPersistence` config, falling back to the default.
@@ -107,36 +114,75 @@ pub(crate) fn sp_extract_token(
     token
 }
 
-/// Session Persistence step 2 of 2: resolve a token to a sticky upstream
-/// address via the per-service affinity map. Protocol-neutral: keyed by
-/// `{namespace}/{name}` of the selected backend ref, which both HTTP and gRPC
-/// backend refs provide.
+/// Session Persistence step 2 of 2: resolve a token to a sticky
+/// (backendRef, endpoint) pair across ALL of the matched rule's backendRefs,
+/// BEFORE weighted backendRef selection. Protocol-neutral: callers pass the
+/// rule's backendRef `(name, namespace)` pairs in declaration order, which
+/// both HTTP and gRPC compiled backends provide.
 ///
-/// - Token absent → no-op (first request: state was already set to `InjectNew` in step 1).
-/// - Token hits in map → set `sp_target_addr` so `try_get_peer` routes directly to it.
-/// - Token misses (stale/unknown) → flip state to `InjectNew` so the response refreshes it.
-#[inline]
-pub(crate) fn sp_resolve_target(
+/// GEP-1619: weights govern only sessions without a token; an established
+/// session MUST keep routing to its original Service and endpoint even when
+/// that backendRef's weight has since changed (including to zero). Callers
+/// therefore iterate the rule's FULL backendRef list (weight-0 refs included,
+/// unlike the WRR selector which filters them out).
+///
+/// Rule scoping is structural: the walk only visits the matched rule's own
+/// backendRefs, so two rules sharing the default session name cannot adopt
+/// each other's sessions unless they reference the same Service — in which
+/// case both resolve to the same pod, matching Envoy Gateway semantics.
+///
+/// - Token absent → `None`, state untouched (step 1 already set `InjectNew`).
+/// - Token hits some backendRef's Service affinity map → set `sp_target_addr`
+///   so `try_get_peer` routes directly to it; return that backendRef's index
+///   so the caller selects the SAME backendRef (TLS policy + backend plugins
+///   must follow the sticky Service, not a fresh WRR pick).
+/// - Token misses every backendRef (endpoint or backendRef gone) → flip state
+///   to `InjectNew` so the caller falls back to weighted selection and the
+///   response refreshes the token.
+pub(crate) fn sp_resolve_target_rule_scoped<'a>(
     ctx: &mut EdgionHttpContext,
-    backend_name: &str,
-    backend_ns: Option<&str>,
+    backends: impl Iterator<Item = (&'a str, Option<&'a str>)>,
     route_ns: &str,
     token: Option<&str>,
-) {
-    let Some(token) = token else { return };
-
-    let ns = backend_ns.unwrap_or(route_ns);
-    let service_key = format!("{}/{}", ns, backend_name);
-    let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, || {
-        crate::backends::selector::get_backends_for_service_key(&service_key)
-    });
-
-    if let Some(&addr) = affinity_map.get(token) {
-        ctx.sp_target_addr = Some(addr);
-        ctx.sp_sticky_addr = Some(addr);
-    } else {
-        ctx.sp_state = SessionPersistenceState::InjectNew;
+) -> Option<usize> {
+    let token = token?;
+    match sp_lookup_rule_scoped(backends, route_ns, token) {
+        Some((idx, addr)) => {
+            ctx.sp_target_addr = Some(addr);
+            ctx.sp_sticky_addr = Some(addr);
+            Some(idx)
+        }
+        None => {
+            ctx.sp_state = SessionPersistenceState::InjectNew;
+            None
+        }
     }
+}
+
+/// Pure rule-scoped lookup: walk the backendRef `(name, namespace)` pairs in
+/// declaration order and return the first whose Service affinity map contains
+/// `token`, together with the resolved endpoint address.
+///
+/// Declaration order makes the walk deterministic across gateway replicas. If
+/// the same endpoint address is registered under two backendRefs' Services
+/// (two Services selecting the same pods on the same targetPort), the first
+/// declared backendRef wins — the same ambiguity a merged Envoy cluster has.
+fn sp_lookup_rule_scoped<'a>(
+    backends: impl Iterator<Item = (&'a str, Option<&'a str>)>,
+    route_ns: &str,
+    token: &str,
+) -> Option<(usize, std::net::SocketAddr)> {
+    for (idx, (name, ns)) in backends.enumerate() {
+        let ns = ns.unwrap_or(route_ns);
+        let service_key = format!("{}/{}", ns, name);
+        let affinity_map = crate::lb::runtime_state::sp_affinity_get_or_build_key(&service_key, || {
+            crate::backends::selector::get_backends_for_service_key(&service_key)
+        });
+        if let Some(&addr) = affinity_map.get(token) {
+            return Some((idx, addr));
+        }
+    }
+    None
 }
 
 /// Build a Set-Cookie header value for session persistence.
@@ -201,7 +247,11 @@ mod tests {
         let t1 = generate_session_token(addr);
         let t2 = generate_session_token(addr);
         assert_eq!(t1, t2, "token generation must be deterministic");
-        assert_eq!(t1.len(), 8, "token must be 8 hex chars");
+        assert_eq!(t1.len(), 16, "token must be 16 hex chars (64-bit identity)");
+        assert!(
+            t1.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "token must be lowercase hex"
+        );
     }
 
     #[test]
@@ -209,6 +259,56 @@ mod tests {
         let t1 = generate_session_token("10.0.0.1:8080");
         let t2 = generate_session_token("10.0.0.2:8080");
         assert_ne!(t1, t2, "different addresses should produce different tokens");
+    }
+
+    /// Rule-scoped resolution walks backendRefs in declaration order and finds
+    /// the token in a LATER backendRef's Service — the core GEP-1619 fix: a
+    /// session bound to Service B must resolve even though weighted selection
+    /// might have picked Service A.
+    #[test]
+    fn test_sp_lookup_rule_scoped_across_services() {
+        use crate::lb::runtime_state::{remove_service, sp_affinity_get_or_build_key};
+        use crate::lb::EdgionBackend;
+        use pingora_load_balancing::Backend;
+        use std::net::SocketAddr as StdSocketAddr;
+        use std::sync::Arc;
+
+        let make = |addr: StdSocketAddr| {
+            Arc::new(EdgionBackend::new(Backend {
+                addr: pingora_core::protocols::l4::socket::SocketAddr::Inet(addr),
+                weight: 1,
+                ext: Default::default(),
+            }))
+        };
+        let a_addr: StdSocketAddr = "10.1.0.1:8080".parse().unwrap();
+        let b_addr: StdSocketAddr = "10.2.0.1:9090".parse().unwrap();
+        // Unique service names: SP_AFFINITY is a process-global cache.
+        let svc_a = "rule-scope-test/svc-a";
+        let svc_b = "rule-scope-test/svc-b";
+        let a_backends = Arc::new(vec![make(a_addr)]);
+        let b_backends = Arc::new(vec![make(b_addr)]);
+        // Pre-populate the per-service affinity maps (test stand-in for the
+        // lazy build off the live backend store).
+        sp_affinity_get_or_build_key(svc_a, || a_backends.clone());
+        sp_affinity_get_or_build_key(svc_b, || b_backends.clone());
+
+        let refs = [("svc-a", None::<&str>), ("svc-b", None)];
+        let token_b = generate_session_token(&b_addr.to_string());
+        let hit = sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &token_b);
+        assert_eq!(hit, Some((1, b_addr)), "token bound to svc-b must resolve to index 1");
+
+        let token_a = generate_session_token(&a_addr.to_string());
+        let hit = sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &token_a);
+        assert_eq!(hit, Some((0, a_addr)), "token bound to svc-a must resolve to index 0");
+
+        // A token minted for an endpoint outside this rule's backendRefs must
+        // miss (rule scoping / stale-endpoint fallback).
+        let foreign = generate_session_token("10.9.9.9:7070");
+        let miss = sp_lookup_rule_scoped(refs.iter().copied(), "rule-scope-test", &foreign);
+        assert_eq!(miss, None, "foreign token must not resolve within this rule");
+
+        remove_service(svc_a);
+        remove_service(svc_b);
     }
 
     #[test]

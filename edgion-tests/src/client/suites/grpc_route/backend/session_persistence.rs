@@ -268,20 +268,19 @@ impl GrpcSessionPersistenceTestSuite {
                         Err(e) => return TestResult::failed(start.elapsed(), e),
                     };
 
-                    // "ffffffff" is a valid 8-hex-char shape that matches no real backend.
-                    let (served_addr, meta) =
-                        match say_hello(&mut client, Some((HEADER_NAME, "ffffffff".to_string()))).await {
-                            Ok(r) => r,
-                            Err(e) => {
-                                return TestResult::failed(
-                                    start.elapsed(),
-                                    format!("stale-token RPC failed (expected LB fallback): {}", e),
-                                );
-                            }
-                        };
+                    // A valid 16-hex-char token shape that matches no real backend.
+                    let (served_addr, meta) = match say_hello(&mut client, Some((HEADER_NAME, "f".repeat(16)))).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return TestResult::failed(
+                                start.elapsed(),
+                                format!("stale-token RPC failed (expected LB fallback): {}", e),
+                            );
+                        }
+                    };
 
                     let refreshed = match meta.get(HEADER_NAME).and_then(|v| v.to_str().ok()) {
-                        Some(t) if !t.is_empty() && t != "ffffffff" => t.to_string(),
+                        Some(t) if !t.is_empty() && t != "f".repeat(16) => t.to_string(),
                         Some(t) => {
                             return TestResult::failed(start.elapsed(), format!("token not refreshed (still '{}')", t));
                         }
