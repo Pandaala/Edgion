@@ -17,6 +17,9 @@ NC='\033[0m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 UTILS_DIR="${SCRIPT_DIR}/../utils"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+SHELL_COMPAT="${UTILS_DIR}/shell_compat.sh"
+# shellcheck source=../utils/shell_compat.sh
+source "$SHELL_COMPAT"
 
 # Whether to cleanup at end
 DO_CLEANUP=true
@@ -192,23 +195,14 @@ check_docker_environment_ready() {
 REQUIRED_LO_ALIASES=("127.0.0.2" "127.0.0.3" "127.0.0.4")
 
 ensure_loopback_aliases() {
-    if [ "$(uname -s)" != "Darwin" ]; then
+    local missing_output missing=() ip
+    missing_output=$(edgion_missing_loopback_aliases "${REQUIRED_LO_ALIASES[@]}")
+    if [ -z "$missing_output" ]; then
         return 0
     fi
-
-    local missing=()
-    local lo_inet
-    lo_inet=$(ifconfig lo0 2>/dev/null | awk '/inet /{print $2}')
-    for ip in "${REQUIRED_LO_ALIASES[@]}"; do
-        if ! grep -qx "$ip" <<< "$lo_inet"; then
-            missing+=("$ip")
-        fi
-    done
-
-    if [ "${#missing[@]}" -eq 0 ]; then
-        log_success "lo0 aliases present (${REQUIRED_LO_ALIASES[*]})"
-        return 0
-    fi
+    while IFS= read -r ip; do
+        [ -n "$ip" ] && missing+=("$ip")
+    done <<< "$missing_output"
 
     log_error "lo0 is missing required aliases on macOS: ${missing[*]}"
     echo ""
@@ -292,7 +286,7 @@ ensure_nofile_limit() {
 # See skills/05-testing/01-integration-testing.md "Gateway / Controller reuse principle".
 check_single_gateway_process() {
     local pids count
-    pids=$(pgrep -u "$USER" edgion-gateway 2>/dev/null || true)
+    pids=$(edgion_live_pids_by_name edgion-gateway)
     if [ -z "$pids" ]; then
         log_error "No edgion-gateway process found after start. Check start_all_with_conf.sh logs."
         return 1
@@ -331,15 +325,14 @@ report_test() {
     local result=$2
     local duration=$3
     
-    # Pre-increment everywhere: under `set -e`, post-increment on a counter at 0
-    # returns the pre-value (0), which bash treats as failure and aborts the script.
-    # Pre-increment returns the post-value (>=1), so set -e never fires.
-    ((++TOTAL_TESTS))
+    # Arithmetic assignments always return success under `set -e`; standalone
+    # increment commands couple control flow to the expression value.
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
     if [ "$result" = "PASS" ]; then
-        ((++PASSED_TESTS))
+        PASSED_TESTS=$((PASSED_TESTS + 1))
         echo "[PASS] ${name} (${duration}s)" >> "$REPORT_FILE"
     else
-        ((++FAILED_TESTS))
+        FAILED_TESTS=$((FAILED_TESTS + 1))
         echo "[FAIL] ${name} (${duration}s)" >> "$REPORT_FILE"
     fi
 }
@@ -1598,6 +1591,20 @@ main() {
     fi
     log_success "Types-purity check passed"
 
+    # =============================================================================
+    # Pre-flight Check 3: shared shell portability
+    # =============================================================================
+    log_section "Pre-flight Check: Bash Portability"
+    if ! "${PROJECT_ROOT}/cicd/checks/check_bash_set_e_increment.sh"; then
+        log_error "Bash portability check failed -- replace bare arithmetic increments with assignments"
+        exit 1
+    fi
+    if ! "${PROJECT_ROOT}/cicd/checks/tests/shell_compat_test.sh"; then
+        log_error "Shared shell compatibility self-test failed"
+        exit 1
+    fi
+    log_success "Bash portability check passed"
+
     if ! ensure_nofile_limit "$REQUIRED_NOFILE"; then
         log_error "File descriptor limit check failed"
         exit 1
@@ -1966,7 +1973,7 @@ main() {
                 -e "Trigger cycle limit reached, dropping requeue" \
                 -e "Trigger chain depth limit reached, dropping requeue" \
                 "$controller_log" | head -20 || true
-            ((++FAILED_TESTS))
+            FAILED_TESTS=$((FAILED_TESTS + 1))
             test_failed=true
         else
             log_success "Requeue dead loop check passed (no dead loop events in controller log)"
@@ -2033,18 +2040,18 @@ main() {
             elif [ $rc -eq 1 ]; then
                 if [ "$residue_mode" = "fail" ]; then
                     log_error "Cache residue detected (RESIDUE_MODE=fail) — see report above"
-                    ((++FAILED_TESTS))
+                    FAILED_TESTS=$((FAILED_TESTS + 1))
                     test_failed=true
                 else
                     log_warn "Cache residue detected (RESIDUE_MODE=warn — not failing build); see report above"
                 fi
             elif [ $rc -eq 2 ]; then
                 log_error "cache_residue infrastructure error (rc=2)"
-                ((++FAILED_TESTS))
+                FAILED_TESTS=$((FAILED_TESTS + 1))
                 test_failed=true
             else
                 log_error "cache_residue unexpected exit code: $rc"
-                ((++FAILED_TESTS))
+                FAILED_TESTS=$((FAILED_TESTS + 1))
                 test_failed=true
             fi
         fi

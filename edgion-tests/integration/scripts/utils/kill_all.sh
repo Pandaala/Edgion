@@ -73,9 +73,12 @@ main() {
     fi
     
     # Stopallprocess
-    force_kill "edgion-gateway" "edgion-gateway"
-    force_kill "edgion-controller" "edgion-controller"
-    force_kill "test_server" "test_server"
+    # Anchor the match on the built binary path (target/{debug,llvm-cov-target/debug}/<bin>)
+    # so an in-flight `cargo test -p edgion-gateway` / `rustc ... edgion-gateway/src` is not
+    # matched and SIGKILLed. The second arg stays the friendly name for log output.
+    force_kill "debug/edgion-gateway" "edgion-gateway"
+    force_kill "debug/edgion-controller" "edgion-controller"
+    force_kill "debug/test_server" "test_server"
     
     # Waitprocess
     sleep 1

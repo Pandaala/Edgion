@@ -25,6 +25,10 @@
 # call `conf_sync_security_block server|client` and append its output.
 # =============================================================================
 
+SHELL_COMPAT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/shell_compat.sh"
+# shellcheck source=shell_compat.sh
+source "$SHELL_COMPAT"
+
 # Generate (idempotent) the primary+secondary cert sets directly into
 # <target_dir>/certs/grpc/{primary,secondary}/ — the layout the checked-in
 # configs reference relative to the work directory.

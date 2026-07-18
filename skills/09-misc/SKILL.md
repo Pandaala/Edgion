@@ -5,8 +5,9 @@ description: Use for pre-commit/local checks, CI/CD workflows, Docker builds, re
 
 # 09 Miscellaneous
 
-> Edgion build and release workflow. `rust-toolchain.toml` tracks `stable`; CI and
-> release/Docker builds currently select Rust `1.94` explicitly. Default Gateway and
+> Edgion build and release workflow. Rust is pinned to `1.96.1`: `rust-toolchain.toml`
+> (`channel = "1.96.1"`) is the single source of truth, and CI plus release/Docker builds
+> declare the same version so all three agree. Default Gateway and
 > Controller features are `allocator-jemalloc` + `boringssl`.
 > In-repo binaries: `edgion-gateway` (data plane), `edgion-controller` (control plane), and `edgion-cli` (CLI). The federation Center lives in the separate EdgionCenter repository.
 

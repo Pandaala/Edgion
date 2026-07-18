@@ -144,7 +144,7 @@ start_test_server() {
     log_section "Start test_server"
     
     # Cleanupmayprocess
-    pkill -f "test_server" 2>/dev/null && log_info "Stop test_server" || true
+    pkill -f "debug/test_server" 2>/dev/null && log_info "Stop test_server" || true
     sleep 1
     
     # CheckBuild

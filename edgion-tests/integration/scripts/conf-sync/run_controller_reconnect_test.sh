@@ -423,7 +423,7 @@ main() {
     # -------------------------------------------------------------------------
     log_section "Case 2: gateway_serves_after_controller_killed"
     log_info "SIGKILL edgion-controller..."
-    pkill -KILL -f "edgion-controller" 2>/dev/null || true
+    pkill -KILL -f "debug/edgion-controller" 2>/dev/null || true
     sleep 2
 
     # Confirm Controller is truly gone

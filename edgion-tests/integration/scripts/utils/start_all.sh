@@ -85,9 +85,9 @@ kill_all_processes() {
     log_section "Cleanupallprocess"
     
     #  kill allprocess
-    pkill -9 -f "edgion-controller" 2>/dev/null && log_info "alreadyStop edgion-controller" || true
-    pkill -9 -f "edgion-gateway" 2>/dev/null && log_info "alreadyStop edgion-gateway" || true
-    pkill -9 -f "test_server" 2>/dev/null && log_info "alreadyStop test_server" || true
+    pkill -9 -f "debug/edgion-controller" 2>/dev/null && log_info "alreadyStop edgion-controller" || true
+    pkill -9 -f "debug/edgion-gateway" 2>/dev/null && log_info "alreadyStop edgion-gateway" || true
+    pkill -9 -f "debug/test_server" 2>/dev/null && log_info "alreadyStop test_server" || true
     
     # portrelease
     sleep 2

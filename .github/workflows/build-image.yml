@@ -9,7 +9,7 @@ on:
 env:
   IMAGE_REGISTRY: docker.io
   IMAGE_NAMESPACE: pandaala
-  RUST_VERSION: "1.94"
+  RUST_VERSION: "1.96.1"
   CARGO_INCREMENTAL: 0
   CARGO_NET_RETRY: 10
   RUSTUP_MAX_RETRIES: 10
@@ -26,7 +26,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.94"
+          toolchain: "1.96.1"
           install-deps: "false"
           cache-enabled: "true"
           cache-key-prefix: "cargo-registry"
@@ -57,7 +57,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-rust
         with:
-          toolchain: "1.94"
+          toolchain: "1.96.1"
           install-deps: "true"
           cache-enabled: "false"
           cache-key-prefix: "cargo-build"

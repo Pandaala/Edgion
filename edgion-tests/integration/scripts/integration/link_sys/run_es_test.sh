@@ -262,8 +262,8 @@ cleanup() {
             fi
         done
 
-        pkill -f edgion-gateway 2>/dev/null || true
-        pkill -f edgion-controller 2>/dev/null || true
+        pkill -f debug/edgion-gateway 2>/dev/null || true
+        pkill -f debug/edgion-controller 2>/dev/null || true
 
         log_info "Stopping Elasticsearch container..."
         cd "$ES_DIR" && docker compose down --timeout 10 2>/dev/null || true
@@ -281,8 +281,8 @@ trap cleanup EXIT
 # Step 0: Kill lingering processes
 # =============================================================================
 log_section "Cleaning up old processes"
-pkill -9 -f edgion-gateway 2>/dev/null || true
-pkill -9 -f edgion-controller 2>/dev/null || true
+pkill -9 -f debug/edgion-gateway 2>/dev/null || true
+pkill -9 -f debug/edgion-controller 2>/dev/null || true
 sleep 2
 log_success "Old processes cleaned up"
 
@@ -442,23 +442,27 @@ log_success "ES mTLS client cert Secret (default/es-client-cert) loaded"
 
 # Global outboundTls default for the inheritance scenario (es-tls-inherit, P1#5).
 # Override the base EdgionGatewayConfig (same name -> upsert) by appending an
-# outboundTls block while keeping every original field. caSecretRef has no
-# namespace, so the cluster-scoped EGC resolves it in `default` (where
-# es-backend-ca lives). This affects only this standalone run; the shared base
+# outboundTls block while keeping every original field. Cluster-scoped CA
+# references require an explicit namespace, so this points to the generated
+# Secret in `default`. This affects only this standalone run; the shared base
 # file is left untouched. Other ES scenarios set local overrides, so the global
 # default only changes the behavior of the no-local-CA es-tls-inherit client.
-EGC_OVERRIDE_YAML="${CONFIG_DIR}/EdgionGatewayConfig_outbound_tls.yaml"
+# The filesystem config center derives identity from the filename, so this must
+# follow Kind_name.yaml instead of using a descriptive suffix.
+EGC_OVERRIDE_YAML="${CONFIG_DIR}/EdgionGatewayConfig_example-gateway.yaml"
 cp "${CONF_DIR}/base/EdgionGatewayConfig.yaml" "$EGC_OVERRIDE_YAML"
 cat >> "$EGC_OVERRIDE_YAML" <<'EOF'
 
   # Appended by run_es_test.sh for the global outboundTls inheritance scenario.
   outboundTls:
-    caSource: SecretRef
-    caSecretRef:
-      name: es-backend-ca
+    validation:
+      caCertificateRefs:
+        - kind: Secret
+          name: es-backend-ca
+          namespace: default
 EOF
 "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$EGC_OVERRIDE_YAML" 2>&1
-log_success "EdgionGatewayConfig outboundTls global default (caSource: SecretRef) loaded"
+log_success "EdgionGatewayConfig outboundTls global CA reference loaded"
 
 for f in $(ls "${CONF_DIR}/LinkSys/Elasticsearch"/*.yaml | sort); do
     "$EDGION_CLI" --server "$CONTROLLER_URL" apply -f "$f" 2>&1
@@ -619,7 +623,7 @@ assert_ne "es-mtls-noclient never connects (mutual TLS requires a client cert)" 
 
 # ── 3.8 Outbound TLS: global outboundTls inheritance ────────────────────────
 # es-tls-inherit has tls.enabled but NO local CA. It inherits the cluster-wide
-# EdgionGatewayConfig.outboundTls (caSource: SecretRef -> backend CA) and connects
+# EdgionGatewayConfig.outboundTls validation CA reference and connects
 # to the private-cert endpoint. A successful PING proves the global CA default was
 # inherited; es-tls-systemca (local caSource: System) still fails, proving a local
 # override beats the global default.

@@ -201,7 +201,7 @@ wait_port_free() {
 
 restart_controller() {
     log_info "Killing edgion-controller..."
-    pkill -KILL -f "edgion-controller" 2>/dev/null || true
+    pkill -KILL -f "debug/edgion-controller" 2>/dev/null || true
 
     log_info "Waiting for admin port ${CONTROLLER_ADMIN_PORT} to be released..."
     if ! wait_port_free "${CONTROLLER_ADMIN_PORT}"; then

@@ -235,9 +235,9 @@ cleanup() {
                 kill "$(cat "${PID_DIR}/${svc}.pid")" 2>/dev/null || true
             fi
         done
-        pkill -f edgion-gateway 2>/dev/null || true
-        pkill -f edgion-controller 2>/dev/null || true
-        pkill -f test_server 2>/dev/null || true
+        pkill -f debug/edgion-gateway 2>/dev/null || true
+        pkill -f debug/edgion-controller 2>/dev/null || true
+        pkill -f debug/test_server 2>/dev/null || true
         log_info "Stopping Elasticsearch container..."
         cd "$ES_DIR" && docker compose down --timeout 10 2>/dev/null || true
         log_info "Cleanup done"
@@ -254,9 +254,9 @@ trap cleanup EXIT
 # Step 0: Kill lingering processes
 # =============================================================================
 log_section "Cleaning up old processes"
-pkill -9 -f edgion-gateway 2>/dev/null || true
-pkill -9 -f edgion-controller 2>/dev/null || true
-pkill -9 -f test_server 2>/dev/null || true
+pkill -9 -f debug/edgion-gateway 2>/dev/null || true
+pkill -9 -f debug/edgion-controller 2>/dev/null || true
+pkill -9 -f debug/test_server 2>/dev/null || true
 sleep 2
 log_success "Old processes cleaned up"
 

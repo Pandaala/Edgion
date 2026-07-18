@@ -276,8 +276,8 @@ cleanup() {
         done
 
         # Fallback: kill by pattern (same as kill_all.sh)
-        pkill -f edgion-gateway 2>/dev/null || true
-        pkill -f edgion-controller 2>/dev/null || true
+        pkill -f debug/edgion-gateway 2>/dev/null || true
+        pkill -f debug/edgion-controller 2>/dev/null || true
 
         # Stop Etcd
         log_info "Stopping Etcd container..."
@@ -296,8 +296,8 @@ trap cleanup EXIT
 # Step 0: Kill lingering processes
 # =============================================================================
 log_section "Cleaning up old processes"
-pkill -9 -f edgion-gateway 2>/dev/null || true
-pkill -9 -f edgion-controller 2>/dev/null || true
+pkill -9 -f debug/edgion-gateway 2>/dev/null || true
+pkill -9 -f debug/edgion-controller 2>/dev/null || true
 sleep 2
 log_success "Old processes cleaned up"
 
@@ -608,7 +608,10 @@ log_info "─── 7. Lease Operations ───"
 RESP=$(gw_api POST "/api/v1/testing/link-sys/etcd/${ETCD_CLIENT}/lease-grant" \
     -d '{"ttl_seconds":10}')
 assert_json_success "Lease grant succeeds" "$RESP"
-LEASE_ID=$(echo "$RESP" | jq -r '.data.lease_id // 0')
+# jq stores JSON numbers as IEEE-754 doubles on common Linux builds and can
+# round Etcd's 64-bit lease IDs. Python's JSON decoder preserves integer
+# precision, so the ID sent back to Etcd remains byte-for-byte identical.
+LEASE_ID=$(printf '%s' "$RESP" | edgion_json_integer 0 data lease_id)
 assert_ne "Lease ID is non-zero" "0" "$LEASE_ID"
 
 # PUT with lease
@@ -642,7 +645,7 @@ log_info "─── 8. Lease Auto-Expire ───"
 RESP=$(gw_api POST "/api/v1/testing/link-sys/etcd/${ETCD_CLIENT}/lease-grant" \
     -d '{"ttl_seconds":2}')
 assert_json_success "Short lease grant (2s TTL)" "$RESP"
-SHORT_LEASE_ID=$(echo "$RESP" | jq -r '.data.lease_id // 0')
+SHORT_LEASE_ID=$(printf '%s' "$RESP" | edgion_json_integer 0 data lease_id)
 assert_ne "Short lease ID is non-zero" "0" "$SHORT_LEASE_ID"
 
 # PUT with short lease

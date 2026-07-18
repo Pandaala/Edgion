@@ -22,6 +22,10 @@
 # =============================================================================
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../utils/shell_compat.sh
+source "${SCRIPT_DIR}/../utils/shell_compat.sh"
+
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -157,8 +161,10 @@ log_success "Page 3: 5 items, last page"
 
 # --- Uniqueness ---
 log_section "Uniqueness check"
-ALL=$(printf '%s\n%s\n%s\n' "$NAMES1" "$NAMES2" "$NAMES3" | grep -c .)
-UNIQ=$(printf '%s\n%s\n%s\n' "$NAMES1" "$NAMES2" "$NAMES3" | sort -u | grep -c .)
+# grep -c reports status 1 for zero matches even though it prints 0. Preserve
+# that value so the assertion below reports the real failure under set -e.
+ALL=$(printf '%s\n%s\n%s\n' "$NAMES1" "$NAMES2" "$NAMES3" | edgion_count_nonempty_lines)
+UNIQ=$(printf '%s\n%s\n%s\n' "$NAMES1" "$NAMES2" "$NAMES3" | sort -u | edgion_count_nonempty_lines)
 [[ "$ALL" == "25" && "$UNIQ" == "25" ]] \
     || { log_error "Expected 25 unique names, got $UNIQ unique of $ALL total"; exit 1; }
 log_success "25 unique names across all pages"

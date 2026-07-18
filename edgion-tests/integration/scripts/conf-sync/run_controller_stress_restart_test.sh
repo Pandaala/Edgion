@@ -466,7 +466,7 @@ main() {
     # -------------------------------------------------------------------------
     log_section "Case 4: controller_killed_gateway_serves"
     log_info "SIGKILL edgion-controller..."
-    pkill -KILL -f "edgion-controller" 2>/dev/null || true
+    pkill -KILL -f "debug/edgion-controller" 2>/dev/null || true
     sleep 2
 
     if curl -sf "${CONTROLLER_PROBE_URL}/health" > /dev/null 2>&1; then

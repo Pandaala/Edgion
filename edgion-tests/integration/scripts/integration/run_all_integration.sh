@@ -39,6 +39,9 @@ NC='\033[0m'
 # ── Paths ───────────────────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+SHELL_COMPAT="${SCRIPT_DIR}/../utils/shell_compat.sh"
+# shellcheck source=../utils/shell_compat.sh
+source "$SHELL_COMPAT"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 WORK_DIR="${PROJECT_ROOT}/tmp/integration_testing/run_all_${TIMESTAMP}"
 

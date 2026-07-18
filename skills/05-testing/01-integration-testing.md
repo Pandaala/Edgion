@@ -18,19 +18,36 @@ Read this page first to get the main workflow; for specific mappings read these 
 
 `run_integration.sh` performs a preflight check at startup. If the alias is missing it exits and prints the `sudo ifconfig lo0 alias …` command — run it manually once as instructed. The alias is lost after a reboot and must be re-added; for permanent effect use a launchd plist (instructions in the prompt).
 
+## Bash portability: never `((x++))` under `set -e`
+
+In any script with `set -e`, never use bare `((x++))` to bump a counter — use `x=$((x + 1))`. `((expr))` returns exit status **1** when `expr` evaluates to **0**, and `x++` is a *post*-increment that evaluates to the OLD value, so the first increment of a counter initialised to 0 returns 1 and `set -e` silently kills the script — with no error output and a healthy-looking stack. This is bash-version-dependent: bash 3.2 (shipped by macOS) does not enforce `-e` for arithmetic commands, so the bug is invisible on dev Macs and fires immediately on bash 5 (Debian bookworm / GitHub `ubuntu-latest`). Pre-increment `((++x))` happens to work but relies on the same subtlety — prefer the assignment, which has no failure mode. The integration preflight runs `cicd/checks/check_bash_set_e_increment.sh` to enforce this rule; its focused regression test is `cicd/checks/tests/check_bash_set_e_increment_test.sh`.
+
+## Shell portability baseline
+
+Integration scripts must run with both macOS Bash 3.2 and Linux Bash 5. Keep syntax within the Bash 3.2 feature set: indexed arrays are available, but associative arrays, `mapfile`/`readarray`, `declare -g`, `${var@Q}`, and `printf '%(...)T'` are not. Prefer the common BSD/GNU utility subset; when a command differs (`sed -i`, `date`, `readlink`, or `base64` flags), detect the capability and provide both forms instead of branching on an assumed OS name.
+
+Do not depend on ambient interactive variables such as `USER`; query the required fact directly (`id -u`). Preserve data semantics across tool implementations—for example, do not parse a 64-bit JSON identifier through a representation that rounds it. For asynchronous services, poll an observable readiness or state transition with a bounded timeout instead of increasing a fixed `sleep`. Validation should combine `bash -n` for every script, focused static guards, and real execution on both macOS and a Linux Bash 5 container.
+
+Under `set -e`, also audit command substitutions containing pipelines. An assignment inherits the substitution's status, and commands such as `grep -c` return 1 for zero matches even while printing `0`. If zero is valid assertion input, contain the status inside the substitution (for example, `count=$(... | grep -c . || true)`) so the following assertion can emit a useful failure.
+
+Shared cross-platform operations live in `edgion-tests/integration/scripts/utils/shell_compat.sh`. It detects Darwin or Linux once, exports `EDGION_SHELL_PLATFORM`, and routes OS-specific behavior through `edgion_platform_call`; callers must not repeat `uname` branches. Use `edgion_count_nonempty_lines`, `edgion_json_integer`, `edgion_live_pids_by_name`, `edgion_missing_loopback_aliases`, and `edgion_wait_until` instead of reimplementing their edge cases. Prefer an OS-neutral implementation when the command contract is truly common, and add paired `_edgion_<operation>_darwin` / `_edgion_<operation>_linux` adapters when BSD and GNU behavior differs.
+
+The standard `run_all_integration.sh` and `run_integration.sh` entry points source this library and export it through `BASH_ENV`, so every descendant Bash script receives the helpers automatically. A standalone script that must also work when invoked directly should source the library explicitly. Run `cicd/checks/tests/shell_compat_test.sh` after changing the shared behavior.
+
 ## Preflight quality gates
 
-Integration is the project's key control point, so `run_integration.sh` enforces three repo-wide quality gates at the very top of `main()`, in order. **Any failure aborts with `exit 1` before any build or test runs**, and they run on every invocation — including `--no-prepare` (only the build step is gated by prepare, not these gates).
+Integration is the project's key control point, so `run_integration.sh` enforces four repo-wide quality gates at the very top of `main()`, in order. **Any failure aborts with `exit 1` before any build or test runs**, and they run on every invocation — including `--no-prepare` (only the build step is gated by prepare, not these gates).
 
 | Gate | Entry point | Enforces |
 |------|-------------|----------|
 | English-Only Lint | `cicd/checks/check_english_only.sh` | no non-English letter scripts outside `docs/` and `tasks/` |
 | Agent-doc Validation | `python3 cicd/checks/validate_agent_docs.py` | `AGENTS.md` / `skills/` links, frontmatter, indexes, stale `src/` refs |
 | Types Purity | `cicd/checks/check_types_purity.sh` | `edgion-resources` stays a clean leaf crate (no `crate::core::` edges) |
+| Bash Portability | `cicd/checks/check_bash_set_e_increment.sh` + `cicd/checks/tests/shell_compat_test.sh` | no bare arithmetic increment/decrement can trip `set -e`; shared OS adapters work on the current platform and propagate through `BASH_ENV` |
 
 These are a subset of repository quality gates, not a replacement for pre-commit or all
 GitHub workflows. The runner does not run fmt, workspace check/clippy, SSA-force,
-Gateway no-tracing, or every independent CI guard. To reproduce one of these three
+Gateway no-tracing, or every independent CI guard. To reproduce one of these four
 preflights, run its `cicd/checks/*` entry point directly.
 
 ## Quick start

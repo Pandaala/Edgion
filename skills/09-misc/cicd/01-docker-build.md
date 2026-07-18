@@ -65,7 +65,7 @@ Caching meaning:
 
 | Argument | Default | Purpose |
 |----------|---------|---------|
-| `RUST_VERSION` | `1.94` | Rust toolchain version |
+| `RUST_VERSION` | `1.96.1` | Rust toolchain version |
 | `BINARY` | `edgion-gateway` | Name of the bin or example to build |
 | `BUILD_TYPE` | `bin` | `bin` or `example` |
 | `FEATURES` | `default` | Cargo features passed to `cargo build` / `cargo chef cook` |

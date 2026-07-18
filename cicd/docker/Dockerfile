@@ -6,7 +6,7 @@
 #   BINARY: Target binary name (default: edgion-gateway)
 #   BUILD_TYPE: Build type - bin or example (default: bin)
 #   FEATURES: Cargo features (default: default, which includes boringssl)
-#   RUST_VERSION: Rust version (default: 1.94)
+#   RUST_VERSION: Rust version (default: 1.96.1)
 #
 # Usage:
 #   # Build bin targets
@@ -18,7 +18,7 @@
 #   docker build --build-arg BUILD_TYPE=example --build-arg BINARY=test_client -t edgion/edgion-test-client:0.1.0 -f docker/Dockerfile .
 
 # Build arguments
-ARG RUST_VERSION=1.94
+ARG RUST_VERSION=1.96.1
 ARG BINARY=edgion-gateway
 ARG BUILD_TYPE=bin
 ARG FEATURES=default

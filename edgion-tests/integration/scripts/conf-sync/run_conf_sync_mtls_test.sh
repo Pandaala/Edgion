@@ -197,9 +197,9 @@ start_mtls_environment() {
 
     # ── 0. Kill old processes ──
     log_info "Killing old processes..."
-    pkill -9 -f "edgion-controller" 2>/dev/null || true
-    pkill -9 -f "edgion-gateway" 2>/dev/null || true
-    pkill -9 -f "test_server" 2>/dev/null || true
+    pkill -9 -f "debug/edgion-controller" 2>/dev/null || true
+    pkill -9 -f "debug/edgion-gateway" 2>/dev/null || true
+    pkill -9 -f "debug/test_server" 2>/dev/null || true
     sleep 2
 
     # ── 1. Check binaries ──
@@ -497,7 +497,10 @@ EOF
             break
         fi
         sleep 1
-        ((lb_waited++))
+        # Use assignment, not `((lb_waited++))`: post-increment returns exit status 1
+        # when the old value is 0, which `set -e` (line 18) turns into a silent death
+        # on bash 5 (Linux/CI). bash 3.2 (macOS) does not enforce -e here.
+        lb_waited=$((lb_waited + 1))
     done
 
     # Verify mTLS in gateway logs
@@ -613,7 +616,7 @@ test_resource_diff() {
             log_info "resource_diff attempt $attempt failed, retrying in ${delay}s..."
             sleep $delay
         fi
-        ((attempt++))
+        attempt=$((attempt + 1))
     done
     log_error "resource_diff failed after $max_retries attempts"
     tail -15 "${WORK_DIR}/logs/resource_diff_mtls.log" 2>/dev/null || true

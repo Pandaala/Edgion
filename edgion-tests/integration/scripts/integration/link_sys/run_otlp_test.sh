@@ -178,9 +178,9 @@ cleanup() {
             fi
         done
 
-        pkill -f edgion-gateway 2>/dev/null || true
-        pkill -f edgion-controller 2>/dev/null || true
-        pkill -f test_server 2>/dev/null || true
+        pkill -f debug/edgion-gateway 2>/dev/null || true
+        pkill -f debug/edgion-controller 2>/dev/null || true
+        pkill -f debug/test_server 2>/dev/null || true
 
         log_info "Stopping OTel Collector container..."
         cd "$OTEL_DIR" && docker compose down --timeout 10 2>/dev/null || true
@@ -198,9 +198,9 @@ trap cleanup EXIT
 # Step 0: Kill lingering processes
 # =============================================================================
 log_section "Cleaning up old processes"
-pkill -9 -f edgion-gateway 2>/dev/null || true
-pkill -9 -f edgion-controller 2>/dev/null || true
-pkill -9 -f test_server 2>/dev/null || true
+pkill -9 -f debug/edgion-gateway 2>/dev/null || true
+pkill -9 -f debug/edgion-controller 2>/dev/null || true
+pkill -9 -f debug/test_server 2>/dev/null || true
 sleep 1
 log_success "Old processes cleaned up"
 
@@ -346,7 +346,7 @@ fi
 TESTS_TOTAL=$((TESTS_TOTAL + 1))
 OTLP_INIT_FOUND=false
 for i in $(seq 1 15); do
-    if grep -q "Initializing logger with OTLP output" "${LOG_DIR}/gateway.log" 2>/dev/null; then
+    if grep -q "Sender: OTLP output" "${LOG_DIR}/gateway.log" 2>/dev/null; then
         OTLP_INIT_FOUND=true
         break
     fi
@@ -390,10 +390,6 @@ for i in $(seq 1 60); do
     [ "$i" -eq 60 ] && { log_error "OTel Collector failed to start (health endpoint not responding)"; exit 1; }
     sleep 1
 done
-# Give the OTel SDK's tonic channel a moment to establish a gRPC connection now
-# that the collector is fully ready before we send requests and trigger batch export.
-sleep 3
-
 # Wait for LB preload and route sync propagation
 for i in $(seq 1 20); do
     if grep -q "LB preload completed" "${LOG_DIR}/gateway.log" 2>/dev/null; then
@@ -421,9 +417,15 @@ for i in $(seq 1 5); do
         -o /dev/null 2>/dev/null || true
 done
 
-log_info "Waiting up to 20s for batch flush to collector..."
+# Actively generate traffic while waiting. The SDK connection and gateway
+# health probe are asynchronous; relying on a fixed sleep can lose the initial
+# batch on slower hosts, while a recovery log is absent when the link was
+# already healthy before Docker recreated the collector.
+log_info "Waiting up to 45s for an exported record..."
 RECORD_COUNT=0
-for i in $(seq 1 20); do
+for i in $(seq 1 45); do
+    curl -sf "${GATEWAY_PROXY}/health" -H "Host: otlp-gateway.edgion-test.example.com" \
+        -o /dev/null 2>/dev/null || true
     if [ -f "$OTEL_LOG_FILE" ]; then
         # Count actual logRecord objects (each NDJSON line is one batch with >= 1 records).
         RECORD_COUNT=$(jq -rs '[.[].resourceLogs[].scopeLogs[].logRecords[]] | length' \
@@ -508,6 +510,9 @@ count_records() {
 }
 
 # Send 5 more requests to fill the batch queue, then gracefully stop the gateway.
+# Capture the count first because the batch timer may export all five before
+# SIGTERM reaches the process; that is successful delivery, not a flush failure.
+BEFORE_REQUESTS=$(count_records "$OTEL_LOG_FILE")
 for i in $(seq 1 5); do
     curl -sf "${GATEWAY_PROXY}/health" -H "Host: otlp-gateway.edgion-test.example.com" \
         -o /dev/null 2>/dev/null || true
@@ -536,10 +541,12 @@ TESTS_TOTAL=$((TESTS_TOTAL + 1))
 if [ "$AFTER_SHUTDOWN" -gt "$BEFORE_SHUTDOWN" ]; then
     TESTS_PASSED=$((TESTS_PASSED + 1))
     log_success "Shutdown flush delivered additional records (before=${BEFORE_SHUTDOWN}, after=${AFTER_SHUTDOWN})"
+elif [ "$BEFORE_SHUTDOWN" -ge $((BEFORE_REQUESTS + 5)) ]; then
+    TESTS_PASSED=$((TESTS_PASSED + 1))
+    log_success "All 5 pre-shutdown records were already exported by the batch timer"
 else
     TESTS_FAILED=$((TESTS_FAILED + 1))
-    log_warn "Shutdown flush may not have delivered new records (before=${BEFORE_SHUTDOWN}, after=${AFTER_SHUTDOWN})"
-    log_warn "Known limitation: if all 5 post-requests were already flushed by the batch timer, this assertion may be flaky."
+    log_error "Pre-shutdown records were not fully delivered (initial=${BEFORE_REQUESTS}, before=${BEFORE_SHUTDOWN}, after=${AFTER_SHUTDOWN})"
 fi
 
 # ── 5. Known limitation: healthy() stays true when collector is down ────────
