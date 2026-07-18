@@ -268,6 +268,13 @@ trap（或其他故障）的 VM 实例会被**污染**：直接丢弃而不回�
 
 每次钩子调用由 `timeoutMs` 经 wasmtime **epoch 中断**约束：后台 ticker 每 10ms 递增引擎 epoch，deadline 在*每次* guest 调用（header 钩子、callout 回调、body chunk、tick）开始时重新武装。有效粒度约 10-20ms。callout 的网络等待发生在 guest 调用之间，不占 guest 预算。
 
+### 宿主侧资源上限
+
+`timeoutMs` 约束的是执行*时间*，而非宿主*内存*。另有两道上限约束单次钩子能在宿主侧分配的内存，防止有 bug 或恶意的 guest 把进程推向 OOM（OOM 会波及无关的路由与租户——`failOpen` 无法从全进程内存耗尽中恢复）：
+
+- **每阶段 ABI 保留预算**——guest 在单次钩子内通过反复 ABI 调用累积的宿主保留量（排队的 header 操作、`proxy_log` 日志行、`proxy_set_property` 条目）上限为 **32 MiB / 20 万次操作**。超预算后后续 ABI 调用返回错误状态且**不做任何部分变更**；这些累积器在钩子返回时清空。合法的 header/日志/属性用量远低于此。
+- **guest 线性内存上限**——guest 内存增长上限 **128 MiB**（表 10 万项），远高于任何真实 proxy-wasm 工作集。这同时约束了 guest 传给宿主调用的任何单个值的大小。
+
 ## 模块缓存生命周期
 
 编译模块缓存的 key 是来源本身，**外加 `file` 来源的文件 size+mtime**：

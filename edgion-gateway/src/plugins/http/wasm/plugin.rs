@@ -1,7 +1,7 @@
 //! Wasm plugin — executes proxy-wasm guests at the request-header and
 //! response-header phases. See mod.rs docs for scope and limitations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use async_trait::async_trait;
 
@@ -150,10 +150,8 @@ impl WasmPlugin {
 
         let action = match lease.call_on_response_headers(num_headers) {
             Ok(a) => a,
-            Err(e) => {
-                tracing::warn!(error = %e, "wasm guest trap");
-                return self.fail_mode(log, "trap");
-            }
+            // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
+            Err(_) => return self.fail_mode(log, "trap"),
         };
         self.finish_phase(lease, session, log, action, false)
     }
@@ -180,17 +178,15 @@ impl WasmPlugin {
 
         let (ctx_id, action) = match lease.call_on_request_headers_open(num_headers) {
             Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, "wasm guest trap");
-                return self.fail_mode(log, "trap");
-            }
+            // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
+            Err(_) => return self.fail_mode(log, "trap"),
         };
 
         let paused = action != 0;
         let had_callouts = !lease.state().pending_callouts.is_empty();
         if paused && had_callouts {
-            if let Err(e) = self.resolve_callouts(&mut lease, ctx_id, log).await {
-                tracing::warn!(error = %e, "wasm callout resolution failed");
+            if self.resolve_callouts(&mut lease, ctx_id, log).await.is_err() {
+                // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
                 return self.fail_mode(log, "callout");
             }
         } else if !paused && had_callouts {
@@ -296,11 +292,13 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     /// Consequence: a guest written to the standard idiom
     /// (`if !end_of_stream { return Action::Pause }` then read the "whole body")
     /// would silently observe only the LAST chunk — a false negative for a WAF
-    /// or secret scanner. So a Pause is NOT silently dropped: it is counted
-    /// (`edgion_wasm_body_pause_unsupported_total`) and WARNed once per module,
-    /// because it is a reliable signal that the guest is incompatible with this
-    /// host. Honoring it properly needs the request/response body buffering
-    /// infrastructure (see `tasks/wasm-followups/body-buffering-spec-semantics.md`).
+    /// or secret scanner. So a Pause is NOT silently dropped: it is counted via
+    /// the bounded `edgion_wasm_body_pause_unsupported_total` metric, a reliable
+    /// signal that the guest is incompatible with this host. (This is a per-chunk
+    /// data-plane hot path, so it must not tracing — Iron rule 3; the metric is
+    /// the only channel here.) Honoring Pause properly needs the request/response
+    /// body buffering infrastructure (see
+    /// `tasks/wasm-followups/body-buffering-spec-semantics.md`).
     ///
     /// Other constraints of this stage:
     /// - the body cannot be modified and the response cannot be short-circuited
@@ -329,10 +327,9 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
         let chunk_budget_ms = (self.config.timeout_ms / 10).max(10);
         let mut lease = match entry.acquire(chunk_budget_ms) {
             Ok(l) => l,
-            Err(e) => {
-                tracing::debug!(error = %e, "wasm body observation: instance acquire failed");
-                return None;
-            }
+            // Per-chunk hot path: acquire failure is non-fatal (stream continues);
+            // no tracing here (Iron rule 3).
+            Err(_) => return None,
         };
         let state = lease.state_mut();
         // Lean phase begin: body observation needs no header snapshot or
@@ -343,24 +340,16 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
         match lease.call_on_response_body(size, end_of_stream) {
             Ok(action) if action != 0 => {
                 // Pause: the guest expects the spec's cumulative-buffer
-                // semantics, which this host does not implement. Never swallow
-                // this — it means the guest is silently seeing partial data.
+                // semantics, which this host does not implement (the guest then
+                // silently observes only the current chunk). This is a data-plane
+                // per-chunk hot path (Iron rule 3) and the body filter has no
+                // PluginLog channel, so the incompatibility is surfaced only via
+                // the bounded metric — never tracing.
                 record_wasm_body_pause_unsupported(entry.metrics_label());
-                if entry.latch_body_pause_warning() {
-                    tracing::warn!(
-                        module = %entry.metrics_label(),
-                        "wasm guest returned Action::Pause from the response-body hook, but this host \
-                         provides a per-chunk read-only window, not the spec's cumulative buffer. The \
-                         guest will observe only the current chunk, NOT the whole body (a WAF/scanner \
-                         guest would false-negative). Rewrite the guest for per-chunk observation, or \
-                         wait for body-buffering support."
-                    );
-                }
             }
             Ok(_) => {}
-            Err(e) => {
-                tracing::debug!(error = %e, "wasm response-body hook failed (stream continues)");
-            }
+            // Body-hook trap: the stream keeps flowing; no tracing (Iron rule 3).
+            Err(_) => {}
         }
         None
     }
@@ -407,11 +396,29 @@ fn apply_ops(session: &mut dyn PluginSession, ops: Vec<HeaderOp>) {
                 map: MAP_HTTP_RESPONSE_HEADERS,
                 name,
             } => session.remove_response_header(&name),
-            HeaderOp::ReplaceAll { map, pairs } => {
-                for (name, value) in pairs {
+            HeaderOp::ReplaceAll { map, remove, pairs } => {
+                // Whole-map replacement: first drop every name that existed
+                // before the replace so omitted headers (credentials, cookies,
+                // spoofable identity headers) do not survive as an additive set.
+                for name in remove {
                     let _ = match map {
-                        MAP_HTTP_REQUEST_HEADERS => session.set_request_header(&name, &value),
-                        MAP_HTTP_RESPONSE_HEADERS => session.set_response_header(&name, &value),
+                        MAP_HTTP_REQUEST_HEADERS => session.remove_request_header(&name),
+                        MAP_HTTP_RESPONSE_HEADERS => session.remove_response_header(&name),
+                        _ => Ok(()),
+                    };
+                }
+                // Install the new vector: `set` (replace-all) for the first
+                // occurrence of each name, `append` for subsequent duplicates so
+                // repeated values (e.g. multiple Set-Cookie) stay distinct
+                // instead of collapsing to the last one.
+                let mut seen: HashSet<String> = HashSet::new();
+                for (name, value) in pairs {
+                    let first = seen.insert(name.to_ascii_lowercase());
+                    let _ = match (map, first) {
+                        (MAP_HTTP_REQUEST_HEADERS, true) => session.set_request_header(&name, &value),
+                        (MAP_HTTP_REQUEST_HEADERS, false) => session.append_request_header(&name, &value),
+                        (MAP_HTTP_RESPONSE_HEADERS, true) => session.set_response_header(&name, &value),
+                        (MAP_HTTP_RESPONSE_HEADERS, false) => session.append_response_header(&name, &value),
                         _ => Ok(()),
                     };
                 }
@@ -419,9 +426,9 @@ fn apply_ops(session: &mut dyn PluginSession, ops: Vec<HeaderOp>) {
             }
             _ => Ok(()), // unknown map id: ignore
         };
-        if let Err(e) = result {
-            tracing::debug!(error = %e, "wasm header op apply failed");
-        }
+        // Header-apply failure on the request hot path: ignored (best-effort op
+        // drain); no tracing (Iron rule 3).
+        let _ = result;
     }
 }
 
@@ -430,8 +437,18 @@ fn finish_local_response(
     log: &mut PluginLog,
     local: LocalResponse,
 ) -> PluginRunningResult {
+    // The guest header map may repeat a name (e.g. multiple Set-Cookie).
+    // Apply the first occurrence of each name with set semantics (replace any
+    // carried-over value) and every later occurrence with append semantics, so
+    // non-combinable fields like Set-Cookie survive instead of collapsing to
+    // the last value. Set-semantics-for-all would drop every value but the last.
+    let mut seen: HashSet<String> = HashSet::new();
     for (name, value) in &local.headers {
-        let _ = session.set_response_header(name, value);
+        let _ = if seen.insert(name.to_ascii_lowercase()) {
+            session.set_response_header(name, value)
+        } else {
+            session.append_response_header(name, value)
+        };
     }
     log.push_fmt("wasm local {}", la![local.status.to_string().as_str()]);
     let body = (!local.body.is_empty()).then(|| String::from_utf8_lossy(&local.body).into_owned());
@@ -450,17 +467,12 @@ impl RequestFilter for WasmPlugin {
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
         let entry = match global_vm_manager().get_or_load(&self.config, &self.cache_key).await {
             Ok(e) => e,
-            Err(e) => {
-                tracing::warn!(error = %e, "wasm module unavailable");
-                return self.fail_mode(log, "load");
-            }
+            // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
+            Err(_) => return self.fail_mode(log, "load"),
         };
         let lease = match entry.acquire(self.config.timeout_ms) {
             Ok(l) => l,
-            Err(e) => {
-                tracing::warn!(error = %e, "wasm instance acquire failed");
-                return self.fail_mode(log, "acquire");
-            }
+            Err(_) => return self.fail_mode(log, "acquire"),
         };
         self.run_leased_request(lease, session, log).await
     }
@@ -484,10 +496,8 @@ impl UpstreamResponseFilter for WasmPlugin {
         };
         let lease = match entry.acquire(self.config.timeout_ms) {
             Ok(l) => l,
-            Err(e) => {
-                tracing::warn!(error = %e, "wasm instance acquire failed");
-                return self.fail_mode(log, "acquire");
-            }
+            // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
+            Err(_) => return self.fail_mode(log, "acquire"),
         };
         self.run_leased_response(lease, session, log)
     }
@@ -743,6 +753,67 @@ mod tests {
         assert!(matches!(res, PluginRunningResult::ErrResponse { status: 500, .. }));
     }
 
+    /// A WASM guest local response that repeats a header name (two Set-Cookie
+    /// pairs) must not collapse to the last value. Reproduces the request-stage
+    /// session adapter (no real ResponseHeader yet → ops are queued) and drains
+    /// the queue onto a real ResponseHeader, asserting both cookies survive.
+    #[test]
+    fn local_response_preserves_duplicate_set_cookie() {
+        use crate::ctx::PendingHeaderOp;
+        use parking_lot::Mutex;
+        use pingora_http::ResponseHeader;
+        use std::sync::Arc;
+
+        let queue: Arc<Mutex<Vec<PendingHeaderOp>>> = Arc::new(Mutex::new(Vec::new()));
+        let mut session = MockPluginSession::new();
+        let q_set = queue.clone();
+        session.expect_set_response_header().returning(move |name, value| {
+            q_set.lock().push(PendingHeaderOp::Set {
+                name: name.to_string(),
+                value: value.to_string(),
+            });
+            Ok(())
+        });
+        let q_app = queue.clone();
+        session.expect_append_response_header().returning(move |name, value| {
+            q_app.lock().push(PendingHeaderOp::Append {
+                name: name.to_string(),
+                value: value.to_string(),
+            });
+            Ok(())
+        });
+
+        // Mixed case on the repeated name exercises the case-insensitive dedup.
+        let local = LocalResponse {
+            status: 302,
+            body: Vec::new(),
+            headers: vec![
+                ("Set-Cookie".to_string(), "session=abc".to_string()),
+                ("set-cookie".to_string(), "refresh=xyz".to_string()),
+                ("location".to_string(), "/login".to_string()),
+            ],
+        };
+        let mut log = PluginLog::new("Wasm");
+        let res = finish_local_response(&mut session, &mut log, local);
+        assert!(matches!(res, PluginRunningResult::ErrResponse { status: 302, .. }));
+
+        // Drain the queued ops onto a real ResponseHeader (the path a
+        // request-stage local reply actually takes) and assert both survived.
+        let mut resp = ResponseHeader::build(302, None).unwrap();
+        for op in queue.lock().drain(..) {
+            op.apply(&mut resp);
+        }
+        let cookies: Vec<String> = resp
+            .headers
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(cookies, vec!["session=abc".to_string(), "refresh=xyz".to_string()]);
+        // A single-valued header is unaffected by the set-then-append change.
+        assert_eq!(resp.headers.get("location").unwrap().to_str().unwrap(), "/login");
+    }
+
     /// Mock session for the callout guests: carries the callout target in
     /// the `x-callout-url` request header.
     fn callout_mock(target: &str) -> MockPluginSession {
@@ -942,23 +1013,20 @@ mod tests {
 
     /// A guest that Pauses on the body hook expects cumulative buffering, which
     /// this host cannot provide. The stream must keep flowing (never throttle,
-    /// never break), and the incompatibility must be surfaced exactly once per
-    /// module (latched) rather than silently dropped or logged per chunk.
+    /// never break); the incompatibility is surfaced only via the bounded
+    /// `edgion_wasm_body_pause_unsupported_total` metric (no tracing on the
+    /// per-chunk hot path — Iron rule 3).
     #[tokio::test]
-    async fn body_pause_is_surfaced_once_and_never_breaks_the_stream() {
+    async fn body_pause_is_metered_and_never_breaks_the_stream() {
         use crate::plugins::http::wasm::vm_manager::WasmVmManager;
         let f = write_temp_wasm(GUEST_BODY_PAUSE);
         let c = config_for(f.path(), false);
 
-        // Latch semantics are per ModuleEntry: assert exactly-once directly.
+        // The Pausing guest exports a body hook, so the body-filter stage will
+        // lease and run it (rather than skipping header-only guests).
         let mgr = WasmVmManager::new_for_test();
         let entry = mgr.get_or_load(&c, &runtime_cache_key(&c)).await.expect("loads");
         assert!(entry.has_body_hook(), "guest exports proxy_on_response_body");
-        assert!(entry.latch_body_pause_warning(), "first warning must fire");
-        assert!(
-            !entry.latch_body_pause_warning(),
-            "subsequent warnings must be latched off"
-        );
 
         // Plugin path: a Pausing guest must not throttle or break the stream.
         global_vm_manager()
@@ -1356,5 +1424,66 @@ mod tests {
             seen.load(std::sync::atomic::Ordering::Relaxed) >= 200,
             "body hook must have counted both 100-byte chunks into shared data"
         );
+    }
+
+    #[test]
+    fn apply_ops_replace_all_removes_omitted_request_headers() {
+        // ReplaceAll must be a true replacement: a name present before the
+        // replace (authorization) but absent from the new vector must be
+        // removed, not left to leak downstream as an additive set.
+        let ops = vec![HeaderOp::ReplaceAll {
+            map: MAP_HTTP_REQUEST_HEADERS,
+            remove: vec!["authorization".to_string(), "x-keep".to_string()],
+            pairs: vec![("x-keep".to_string(), "new".to_string())],
+        }];
+        let mut session = MockPluginSession::new();
+        session
+            .expect_remove_request_header()
+            .withf(|n| n == "authorization")
+            .times(1)
+            .returning(|_| Ok(()));
+        session
+            .expect_remove_request_header()
+            .withf(|n| n == "x-keep")
+            .times(1)
+            .returning(|_| Ok(()));
+        session
+            .expect_set_request_header()
+            .withf(|n, v| n == "x-keep" && v == "new")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        apply_ops(&mut session, ops);
+    }
+
+    #[test]
+    fn apply_ops_replace_all_preserves_duplicate_response_values() {
+        // Repeated names in the replacement (e.g. multiple Set-Cookie) must
+        // stay distinct: first occurrence set (replace-all), later occurrences
+        // appended, instead of collapsing to the last value.
+        let ops = vec![HeaderOp::ReplaceAll {
+            map: MAP_HTTP_RESPONSE_HEADERS,
+            remove: vec!["set-cookie".to_string()],
+            pairs: vec![
+                ("set-cookie".to_string(), "a=1".to_string()),
+                ("set-cookie".to_string(), "b=2".to_string()),
+            ],
+        }];
+        let mut session = MockPluginSession::new();
+        session
+            .expect_remove_response_header()
+            .withf(|n| n == "set-cookie")
+            .times(1)
+            .returning(|_| Ok(()));
+        session
+            .expect_set_response_header()
+            .withf(|n, v| n == "set-cookie" && v == "a=1")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        session
+            .expect_append_response_header()
+            .withf(|n, v| n == "set-cookie" && v == "b=2")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        apply_ops(&mut session, ops);
     }
 }

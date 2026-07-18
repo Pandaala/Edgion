@@ -28,6 +28,29 @@ pub struct OciDiskCacheConfig {
 
 static CONFIG: RwLock<Option<Arc<OciDiskCacheConfig>>> = RwLock::new(None);
 
+/// Floor for the background purge interval. A zero (or sub-second) interval
+/// would make [`ensure_purge_task`] sleep for `Duration::ZERO` and spin,
+/// resubmitting blocking directory scans with no pacing for the gateway's
+/// lifetime. Operators who configure a smaller value are clamped up to this
+/// minimum, mirroring how `configure_oci_pull` clamps a zero timeout/attempts
+/// to 1.
+const MIN_PURGE_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Clamp a configured purge interval to at least [`MIN_PURGE_INTERVAL`],
+/// warning once (at install time) when the operator value is below the floor.
+fn clamp_purge_interval(requested: Duration) -> Duration {
+    if requested < MIN_PURGE_INTERVAL {
+        tracing::warn!(
+            requested_secs = requested.as_secs(),
+            min_secs = MIN_PURGE_INTERVAL.as_secs(),
+            "wasm oci cache purge interval below minimum; clamping"
+        );
+        MIN_PURGE_INTERVAL
+    } else {
+        requested
+    }
+}
+
 /// Serializes the check-then-write sequence in [`store`] (and the size
 /// backstop in [`purge_once`]): `make_room`'s directory snapshot and the
 /// subsequent write must be atomic with respect to other stores, or
@@ -40,6 +63,10 @@ static STORE_LOCK: Mutex<()> = Mutex::new(());
 /// Install the disk cache config (`None` = disabled). Called once at startup;
 /// tests may reconfigure.
 pub fn configure_oci_disk_cache(cfg: Option<OciDiskCacheConfig>) {
+    let cfg = cfg.map(|mut c| {
+        c.purge_interval = clamp_purge_interval(c.purge_interval);
+        c
+    });
     match &cfg {
         Some(c) => tracing::info!(
             dir = %c.dir.display(),
@@ -226,7 +253,10 @@ fn ensure_purge_task() {
     tokio::spawn(async {
         loop {
             let Some(cfg) = active_config() else { break };
-            tokio::time::sleep(cfg.purge_interval).await;
+            // Defensive floor: `configure_oci_disk_cache` already clamps the
+            // installed interval, but guard here too so a directly-constructed
+            // (test / future caller) `Duration::ZERO` can never busy-loop.
+            tokio::time::sleep(cfg.purge_interval.max(MIN_PURGE_INTERVAL)).await;
             let Some(cfg) = active_config() else { break };
             let _ = tokio::task::spawn_blocking(move || purge_once(&cfg)).await;
         }
@@ -296,6 +326,19 @@ mod tests {
         assert!(!old.exists());
         assert!(fresh.exists());
         assert!(foreign.exists(), "non-cache files must never be touched");
+    }
+
+    #[test]
+    fn purge_interval_below_floor_is_clamped() {
+        // Zero and sub-second intervals (which would spin `ensure_purge_task`)
+        // are lifted to the minimum; a normal interval passes through.
+        assert_eq!(clamp_purge_interval(Duration::ZERO), MIN_PURGE_INTERVAL);
+        assert_eq!(clamp_purge_interval(Duration::from_millis(10)), MIN_PURGE_INTERVAL);
+        assert!(clamp_purge_interval(Duration::ZERO) >= Duration::from_secs(1));
+        assert_eq!(
+            clamp_purge_interval(Duration::from_secs(3600)),
+            Duration::from_secs(3600)
+        );
     }
 
     #[test]

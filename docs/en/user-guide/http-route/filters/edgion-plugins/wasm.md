@@ -272,6 +272,13 @@ A trapped (or otherwise faulted) VM instance is **poisoned**: it is discarded ra
 
 Each hook call is bounded by `timeoutMs` via wasmtime **epoch interruption**: a background ticker increments the engine epoch every 10ms, and the deadline is re-armed at the start of *every* guest call (headers hooks, callout callbacks, body chunks, ticks). Effective granularity is ~10-20ms. Callout network waits happen *between* guest calls and never consume guest budget.
 
+### Host-side resource limits
+
+`timeoutMs` bounds execution *time*, not host *memory*. Two additional limits bound what a single hook can allocate on the host so a buggy or hostile guest cannot drive the process toward OOM (which would affect unrelated routes and tenants — `failOpen` cannot recover from process-wide memory exhaustion):
+
+- **Per-phase ABI retention budget** — the host-retained bytes a guest accumulates through repeated ABI calls in one hook (queued header ops, `proxy_log` lines, `proxy_set_property` entries) are capped at **32 MiB / 200,000 operations**. Past the budget, further ABI calls return an error status and make **no** partial change; the accumulators are cleared when the hook returns. Legitimate header/log/property use is orders of magnitude below this.
+- **Guest linear-memory cap** — guest memory growth is capped at **128 MiB** (and tables at 100,000 entries), well above any real proxy-wasm working set. This also bounds the size of any single value the guest hands to a host call.
+
 ## Module cache lifecycle
 
 The compiled-module cache is keyed by the source **plus, for `file` sources, the file's size+mtime**:

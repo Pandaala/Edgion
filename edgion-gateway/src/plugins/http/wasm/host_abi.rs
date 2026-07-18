@@ -34,6 +34,42 @@ pub const STATUS_UNIMPLEMENTED: i32 = 12;
 /// Bounds guest-driven outbound amplification.
 pub const MAX_CALLOUTS_PER_REQUEST: u32 = 8;
 
+/// Aggregate per-phase budget for host-retained ABI payload bytes.
+///
+/// `read_guest` bounds each individual copy to guest linear-memory size, but
+/// nothing bounds the SUM a guest retains across many host calls in one hook:
+/// a guest can reuse one small buffer and append arbitrarily many owned copies
+/// to `pending_ops` / `log_lines` / `properties` until `begin_phase` clears
+/// them after the hook. Epoch interruption bounds execution TIME, not
+/// allocation. This budget bounds the host-heap peak a single hook can drive.
+/// 32 MiB is far above any legitimate header/log/property working set; only a
+/// pathological accumulation loop trips it.
+pub const MAX_RETAINED_ABI_BYTES: usize = 32 * 1024 * 1024;
+
+/// Aggregate per-phase budget for host-retained ABI operation count. Bounds a
+/// flood of tiny (near-zero-byte) operations whose per-item structural
+/// overhead the byte budget alone under-charges.
+pub const MAX_RETAINED_ABI_OPS: usize = 200_000;
+
+/// Fixed per-operation structural overhead (Vec/String headers, enum
+/// discriminant) charged in addition to payload bytes, so many tiny ops are
+/// accounted at their real heap footprint. Mirrors `shared_data`'s
+/// `ENTRY_OVERHEAD_BYTES`.
+const ABI_OP_OVERHEAD_BYTES: usize = 64;
+
+/// Max guest linear-memory size (bytes) enforced by the Store `ResourceLimiter`
+/// in `WasmVmManager::new_vm`. The pooling allocator's default per-instance
+/// memory cap is effectively the full wasm32 4 GiB, so without this an
+/// `(memory 1)` guest could grow arbitrarily and make each `read_guest`
+/// transient copy that large. 128 MiB is well above any real proxy-wasm guest
+/// working set.
+pub const MAX_GUEST_MEMORY_BYTES: usize = 128 * 1024 * 1024;
+
+/// Max guest table entries enforced by the Store `ResourceLimiter`. Bounds
+/// indirect-call table growth as defense in depth; legitimate proxy-wasm
+/// guests use tiny tables.
+pub const MAX_GUEST_TABLE_ELEMENTS: usize = 100_000;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum WasmPhase {
     #[default]
@@ -46,10 +82,30 @@ pub enum WasmPhase {
 
 #[derive(Debug, Clone)]
 pub enum HeaderOp {
-    Set { map: i32, name: String, value: String },
-    Add { map: i32, name: String, value: String },
-    Remove { map: i32, name: String },
-    ReplaceAll { map: i32, pairs: Vec<(String, String)> },
+    Set {
+        map: i32,
+        name: String,
+        value: String,
+    },
+    Add {
+        map: i32,
+        name: String,
+        value: String,
+    },
+    Remove {
+        map: i32,
+        name: String,
+    },
+    /// Whole-map replacement (`proxy_set_header_map_pairs`). `remove` carries
+    /// the deduplicated set of header names present in the live map *before*
+    /// the replacement, so `apply_ops` can drop every name the guest omitted
+    /// (the replacement must be a true replacement, not an additive set —
+    /// otherwise omitted credentials/identity headers would leak downstream).
+    ReplaceAll {
+        map: i32,
+        remove: Vec<String>,
+        pairs: Vec<(String, String)>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +195,16 @@ pub struct HostState {
     /// Module-wide shared KV (proxy-wasm shared data). Shared by every
     /// pooled VM of the same `ModuleEntry`; process-local by design.
     pub shared_data: Arc<super::shared_data::SharedData>,
+
+    // ---- Per-phase ABI retention budget (see `charge_abi`) ----
+    /// Host-retained ABI payload bytes charged this phase across the
+    /// append-only accumulators (`pending_ops`, `log_lines`, `properties`).
+    /// Reset by `begin_phase`. Bounds the host-heap peak a single hook can
+    /// drive before `begin_phase` clears it.
+    retained_bytes: usize,
+    /// Host-retained ABI operation count charged this phase. Reset by
+    /// `begin_phase`. Complements `retained_bytes` for tiny-op floods.
+    retained_ops: usize,
 }
 
 impl HostState {
@@ -183,6 +249,25 @@ impl HostState {
         // invalid/sentinel value (Envoy issues nonzero tokens).
         self.next_callout_token = 1;
         self.body_chunk.clear();
+        self.retained_bytes = 0;
+        self.retained_ops = 0;
+    }
+
+    /// Charge `payload` bytes plus fixed per-op overhead against the per-phase
+    /// ABI retention budget. Returns `Err(STATUS_INTERNAL_FAILURE)` when either
+    /// the byte or op budget would be exceeded — WITHOUT mutating any counter —
+    /// so the caller rejects before touching the snapshot (no partial
+    /// mutation). Commits the charge and returns `Ok(())` otherwise.
+    fn charge_abi(&mut self, payload: usize) -> Result<(), i32> {
+        let cost = payload.saturating_add(ABI_OP_OVERHEAD_BYTES);
+        let new_bytes = self.retained_bytes.saturating_add(cost);
+        let new_ops = self.retained_ops.saturating_add(1);
+        if new_bytes > MAX_RETAINED_ABI_BYTES || new_ops > MAX_RETAINED_ABI_OPS {
+            return Err(STATUS_INTERNAL_FAILURE);
+        }
+        self.retained_bytes = new_bytes;
+        self.retained_ops = new_ops;
+        Ok(())
     }
 
     /// Enable `proxy_dispatch_http_call` for the current phase (request and
@@ -217,6 +302,23 @@ impl HostState {
             ),
             _ => None,
         }
+    }
+}
+
+/// Store-level guest resource limiter (installed in
+/// `WasmVmManager::new_vm`). Bounds guest linear-memory and table growth as
+/// defense in depth: the pooling allocator's default per-instance memory cap
+/// is effectively the full wasm32 4 GiB, so this is what keeps a `(memory 1)`
+/// guest — and therefore every `read_guest` transient copy sized by that
+/// memory — within a sane bound. It does NOT bound host-side accumulation
+/// across calls; that is `charge_abi`'s job.
+impl wasmtime::ResourceLimiter for HostState {
+    fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
+        Ok(desired <= MAX_GUEST_MEMORY_BYTES)
+    }
+
+    fn table_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
+        Ok(desired <= MAX_GUEST_TABLE_ELEMENTS)
     }
 }
 
@@ -409,21 +511,20 @@ fn host_http_call(
     // (Edgion has no Envoy-style cluster registry for guests to name).
     let origin = match edgion_resources::plugin_configs::normalize_callout_origin(&upstream) {
         Ok(o) => o,
-        Err(e) => {
-            tracing::debug!(error = %e, "wasm callout: malformed upstream origin");
-            return STATUS_BAD_ARGUMENT;
-        }
+        // Data-plane hot path (Iron rule 3), guest-supplied origin (Iron rule 1):
+        // reject via status code only, no tracing.
+        Err(_) => return STATUS_BAD_ARGUMENT,
     };
 
     let state = caller.data_mut();
     if !state.callout_allowlist.iter().any(|a| a == &origin) {
+        // Bounded metric carries the signal; the guest-supplied origin must not
+        // reach tracing on the request path.
         crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "denied");
-        tracing::warn!(%origin, "wasm callout denied: origin not in calloutAllowlist");
         return STATUS_INTERNAL_FAILURE;
     }
     if state.callouts_dispatched >= MAX_CALLOUTS_PER_REQUEST {
         crate::observe::metrics::registry::record_wasm_callout(&state.metrics_label, "over_limit");
-        tracing::warn!("wasm callout rejected: per-request dispatch cap reached");
         return STATUS_INTERNAL_FAILURE;
     }
 
@@ -486,8 +587,15 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
         |mut caller: Caller<'_, HostState>, level: i32, ptr: i32, len: i32| -> i32 {
             match read_guest_string(&mut caller, ptr, len) {
                 Ok(msg) => {
-                    tracing::debug!(target: "wasm_guest", level, %msg, "guest log");
-                    caller.data_mut().log_lines.push((level, msg));
+                    // Data-plane hot path (Iron rule 3) and a guest-controlled
+                    // message (Iron rule 1): never tracing the raw text. The
+                    // line is stored for bounded in-memory diagnostics only and
+                    // reported as a count via PluginLog by `finish_phase`.
+                    let state = caller.data_mut();
+                    if let Err(s) = state.charge_abi(msg.len()) {
+                        return s;
+                    }
+                    state.log_lines.push((level, msg));
                     STATUS_OK
                 }
                 Err(s) => s,
@@ -568,6 +676,11 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Err(s) => return s,
             };
             let state = caller.data_mut();
+            // Charge the retained `pending_ops` op (append-only) before any
+            // mutation, so a rejected op leaves no partial header change.
+            if let Err(s) = state.charge_abi(key.len() + value.len()) {
+                return s;
+            }
             let Some(pairs) = state.map_mut(map) else {
                 return STATUS_BAD_ARGUMENT;
             };
@@ -591,6 +704,11 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Err(s) => return s,
             };
             let state = caller.data_mut();
+            // Append-only in both the snapshot and `pending_ops` (the strongest
+            // amplifier): charge before mutating so a rejected op is atomic.
+            if let Err(s) = state.charge_abi(key.len() + value.len()) {
+                return s;
+            }
             let Some(pairs) = state.map_mut(map) else {
                 return STATUS_BAD_ARGUMENT;
             };
@@ -609,6 +727,10 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Err(s) => return s,
             };
             let state = caller.data_mut();
+            // Charge the retained `pending_ops` Remove op before mutating.
+            if let Err(s) = state.charge_abi(key.len()) {
+                return s;
+            }
             let Some(pairs) = state.map_mut(map) else {
                 return STATUS_BAD_ARGUMENT;
             };
@@ -630,11 +752,36 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 return STATUS_BAD_ARGUMENT;
             };
             let state = caller.data_mut();
+            // Each call appends a whole owned `ReplaceAll` op to `pending_ops`
+            // (append-only) — a strong amplifier. Charge the new payload before
+            // mutating so a rejected op leaves the snapshot untouched.
+            let payload: usize = new_pairs.iter().map(|(k, v)| k.len() + v.len()).sum();
+            if let Err(s) = state.charge_abi(payload) {
+                return s;
+            }
             let Some(pairs) = state.map_mut(map) else {
                 return STATUS_BAD_ARGUMENT;
             };
+            // Capture the names present before the replacement (case-insensitive
+            // dedup) so apply_ops removes every header the guest dropped. One
+            // remove per unique name suffices — the session remove clears all
+            // values for that name. The snapshot only holds str-representable
+            // headers (the session filters non-UTF-8 values out before the
+            // guest ever sees them), so a header the guest cannot observe is
+            // also not captured here — realistic credential/identity headers
+            // are ASCII and are covered.
+            let mut remove: Vec<String> = Vec::new();
+            for (name, _) in pairs.iter() {
+                if !remove.iter().any(|n| n.eq_ignore_ascii_case(name)) {
+                    remove.push(name.clone());
+                }
+            }
             *pairs = new_pairs.clone();
-            state.pending_ops.push(HeaderOp::ReplaceAll { map, pairs: new_pairs });
+            state.pending_ops.push(HeaderOp::ReplaceAll {
+                map,
+                remove,
+                pairs: new_pairs,
+            });
             STATUS_OK
         },
     )?;
@@ -711,6 +858,10 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             } else {
                 500
             };
+            // Replacement state (a single Option), not an accumulator: repeated
+            // calls overwrite rather than grow, so its peak is one body, bounded
+            // by the `ResourceLimiter`-capped guest linear memory. Not charged
+            // against the append-only ABI retention budget.
             caller.data_mut().local_response = Some(LocalResponse { status, body, headers });
             STATUS_OK
         },
@@ -756,7 +907,13 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
                 Ok(v) => v,
                 Err(s) => return s,
             };
-            caller.data_mut().properties.insert(key, value);
+            let state = caller.data_mut();
+            // Distinct guest-generated keys grow `properties` unboundedly.
+            // Charge before inserting so a rejected set does not grow the map.
+            if let Err(s) = state.charge_abi(key.len() + value.len()) {
+                return s;
+            }
+            state.properties.insert(key, value);
             STATUS_OK
         },
     )?;
@@ -1018,5 +1175,128 @@ mod tests {
         let lr = store.data().local_response.as_ref().expect("local response set");
         assert_eq!(lr.status, 403);
         assert_eq!(lr.body, b"denied");
+    }
+
+    /// A single payload larger than the byte budget is rejected, and the
+    /// rejection charges nothing (no partial mutation of the counters).
+    #[test]
+    fn charge_abi_rejects_over_byte_budget_atomically() {
+        let mut s = HostState::default();
+        assert_eq!(s.charge_abi(MAX_RETAINED_ABI_BYTES), Err(STATUS_INTERNAL_FAILURE));
+        assert_eq!(s.retained_bytes, 0);
+        assert_eq!(s.retained_ops, 0);
+        // A payload that fits is charged with the fixed per-op overhead.
+        assert_eq!(s.charge_abi(10), Ok(()));
+        assert_eq!(s.retained_bytes, 10 + ABI_OP_OVERHEAD_BYTES);
+        assert_eq!(s.retained_ops, 1);
+    }
+
+    /// A flood of zero-byte operations is bounded by the op-count budget even
+    /// though the byte budget is nowhere near exhausted.
+    #[test]
+    fn charge_abi_rejects_over_op_budget() {
+        let mut s = HostState::default();
+        for _ in 0..MAX_RETAINED_ABI_OPS {
+            assert_eq!(s.charge_abi(0), Ok(()));
+        }
+        assert_eq!(s.charge_abi(0), Err(STATUS_INTERNAL_FAILURE));
+        assert_eq!(s.retained_ops, MAX_RETAINED_ABI_OPS);
+        assert!(s.retained_bytes < MAX_RETAINED_ABI_BYTES);
+    }
+
+    fn instantiate_guest(wat: &str) -> (Store<HostState>, Instance) {
+        let engine = Engine::default();
+        let module = Module::new(&engine, wat).expect("wat compiles");
+        let mut linker: Linker<HostState> = Linker::new(&engine);
+        add_to_linker(&mut linker).unwrap();
+        let mut store = Store::new(&engine, HostState::default());
+        let instance = linker.instantiate(&mut store, &module).unwrap();
+        (store, instance)
+    }
+
+    /// Adversarial guest: on request headers it loops calling `proxy_log` with a
+    /// fixed 1 MiB buffer until a call returns non-zero, then stops (safety cap
+    /// 5000 iterations). The engine here has NO epoch interruption, so the ONLY
+    /// bound is the per-phase byte budget — this demonstrates the memory budget,
+    /// not an execution-time bound, is what stops the accumulation.
+    const LOG_FLOOD_GUEST: &str = r#"
+    (module
+      (import "env" "proxy_log" (func $log (param i32 i32 i32) (result i32)))
+      (memory (export "memory") 16) ;; 16 pages = 1 MiB
+      (func (export "proxy_on_context_create") (param i32 i32))
+      (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_configure") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32)
+        (local $i i32) (local $rc i32)
+        (block $done
+          (loop $l
+            (local.set $rc (call $log (i32.const 1) (i32.const 0) (i32.const 1048576)))
+            (br_if $done (local.get $rc))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br_if $l (i32.lt_u (local.get $i) (i32.const 5000)))))
+        (i32.const 0))
+    )
+    "#;
+
+    #[test]
+    fn guest_log_flood_stopped_by_byte_budget() {
+        let (mut store, instance) = instantiate_guest(LOG_FLOOD_GUEST);
+        store
+            .data_mut()
+            .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+        let f = instance
+            .get_typed_func::<(i32, i32, i32), i32>(&mut store, "proxy_on_request_headers")
+            .unwrap();
+        f.call(&mut store, (2, 0, 0)).unwrap();
+        let state = store.data();
+        // ~32 successful 1 MiB lines fit under the 32 MiB budget; the flood
+        // stops well before the 5000-iteration safety cap.
+        assert!(state.log_lines.len() >= 30 && state.log_lines.len() <= 34);
+        assert!(state.retained_bytes <= MAX_RETAINED_ABI_BYTES);
+    }
+
+    /// Adversarial guest: loops `proxy_add_header_map_value` with a fixed ~1 MiB
+    /// value until rejected. Asserts the snapshot and `pending_ops` stay in
+    /// lockstep — a rejected op leaves NO partial header mutation.
+    const ADD_HEADER_FLOOD_GUEST: &str = r#"
+    (module
+      (import "env" "proxy_add_header_map_value"
+        (func $add (param i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 16)
+      (data (i32.const 0) "k")
+      (func (export "proxy_on_context_create") (param i32 i32))
+      (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_configure") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32)
+        (local $i i32) (local $rc i32)
+        (block $done
+          (loop $l
+            ;; add(map=0 request, key_ptr=0 key_len=1, val_ptr=8 val_len=1000000)
+            (local.set $rc (call $add (i32.const 0) (i32.const 0) (i32.const 1)
+                                      (i32.const 8) (i32.const 1000000)))
+            (br_if $done (local.get $rc))
+            (local.set $i (i32.add (local.get $i) (i32.const 1)))
+            (br_if $l (i32.lt_u (local.get $i) (i32.const 5000)))))
+        (i32.const 0))
+    )
+    "#;
+
+    #[test]
+    fn guest_add_header_flood_no_partial_mutation() {
+        let (mut store, instance) = instantiate_guest(ADD_HEADER_FLOOD_GUEST);
+        store
+            .data_mut()
+            .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
+        let f = instance
+            .get_typed_func::<(i32, i32, i32), i32>(&mut store, "proxy_on_request_headers")
+            .unwrap();
+        f.call(&mut store, (2, 0, 0)).unwrap();
+        let state = store.data();
+        // Every successful add pushes exactly one snapshot entry AND one
+        // pending_op; a rejected add pushes neither. Lockstep counts prove the
+        // rejected op left no partial mutation.
+        assert!(!state.pending_ops.is_empty());
+        assert_eq!(state.request_headers.len(), state.pending_ops.len());
+        assert!(state.request_headers.len() < 5000); // stopped by budget, not the cap
     }
 }

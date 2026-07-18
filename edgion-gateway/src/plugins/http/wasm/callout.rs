@@ -145,8 +145,9 @@ pub async fn execute_callout(callout: &PendingCallout, timeout_cap_ms: u64, metr
     };
     let url = format!("{}{}", callout.origin, callout.path);
     let Ok(method) = reqwest::Method::from_bytes(callout.method.as_bytes()) else {
+        // Request hot path: bounded metric only. The guest-supplied method /
+        // URL (query may carry credentials) must not reach tracing.
         record_wasm_callout(metrics_label, "error");
-        tracing::debug!(method = %callout.method, "wasm callout: invalid method");
         return failure;
     };
 
@@ -170,9 +171,8 @@ pub async fn execute_callout(callout: &PendingCallout, timeout_cap_ms: u64, metr
 
     let resp = match req.send().await {
         Ok(r) => r,
-        Err(e) => {
+        Err(_) => {
             record_wasm_callout(metrics_label, "error");
-            tracing::debug!(error = %e, %url, "wasm callout failed");
             return failure;
         }
     };
@@ -189,15 +189,13 @@ pub async fn execute_callout(callout: &PendingCallout, timeout_cap_ms: u64, metr
 
     let (body, truncated) = match stream_body_capped(resp, CALLOUT_MAX_RESPONSE_BYTES).await {
         Ok(v) => v,
-        Err(e) => {
+        Err(_) => {
             record_wasm_callout(metrics_label, "error");
-            tracing::debug!(error = %e, %url, "wasm callout body read failed");
             return failure;
         }
     };
     if truncated {
         record_wasm_callout(metrics_label, "error");
-        tracing::warn!(%url, cap = CALLOUT_MAX_RESPONSE_BYTES, "wasm callout response exceeded size cap");
         return failure;
     }
 

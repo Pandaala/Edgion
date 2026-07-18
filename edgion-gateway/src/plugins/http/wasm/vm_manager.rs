@@ -82,6 +82,10 @@ const ROOT_CONTEXT_ID: i32 = 1;
 /// Fixed timeout for `url`-sourced bytecode fetches when the config carries
 /// no `source.fetch.timeoutMs` override.
 const URL_FETCH_TIMEOUT_SECS: u64 = 10;
+/// Cap on a `url`-sourced module body. Mirrors the OCI blob cap so a hostile
+/// or malfunctioning artifact server cannot make the host buffer an arbitrarily
+/// large body (no/false/chunked Content-Length) before the size check fires.
+const MAX_URL_MODULE_BYTES: usize = 64 * 1024 * 1024;
 /// How long a cache entry whose plugin refcount dropped to zero is kept
 /// before eviction. The grace absorbs reload thrash (full_set replaces every
 /// plugin instance, briefly dropping every refcount to zero).
@@ -92,29 +96,65 @@ const SUPPORTED_ABI_EXPORTS: [&str; 2] = ["proxy_abi_version_0_2_0", "proxy_abi_
 const MIN_TICK_PERIOD_MS: u64 = 100;
 
 /// Cache key actually used at runtime: the schema-level `cache_key()` plus,
-/// for `file` sources, the file's current size+mtime. A same-path overwrite
-/// followed by a plugin reload therefore lands on a NEW cache entry (the old
-/// one is refcount-evicted), fixing the "replacing the .wasm on disk does not
-/// take effect" limitation. A stat failure falls back to the plain key — the
-/// subsequent load will fail with a clear read error anyway.
+/// for `file` sources, the file's current size+mtime, plus a digest of the
+/// per-plugin runtime fields (see `wasm_runtime_config_digest`).
+///
+/// The file-stat term makes a same-path overwrite followed by a plugin reload
+/// land on a NEW cache entry (the old one is refcount-evicted), fixing the
+/// "replacing the .wasm on disk does not take effect" limitation. A stat
+/// failure falls back to the plain source key — the subsequent load will fail
+/// with a clear read error anyway.
+///
+/// The runtime-config term prevents two plugins that share one module source
+/// but differ in `instancePoolSize` / `timeoutMs` / `vmConfig` / `pluginConfig`
+/// from aliasing the same cached `ModuleEntry` (which owns exactly those
+/// fields). Without it the first plugin to load a source would impose its
+/// configuration and instance pool on every other plugin using that source,
+/// and a configuration-only hot reload would silently no-op.
 pub fn runtime_cache_key(config: &WasmConfig) -> String {
-    let base = config.source.cache_key();
-    let Some(path) = &config.source.file else {
-        return base;
-    };
-    let resolved = edgion_resources::work_dir().resolve(path);
-    match std::fs::metadata(&resolved) {
-        Ok(md) => {
+    let mut key = config.source.cache_key();
+    if let Some(path) = &config.source.file {
+        let resolved = edgion_resources::work_dir().resolve(path);
+        if let Ok(md) = std::fs::metadata(&resolved) {
             let mtime_nanos = md
                 .modified()
                 .ok()
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
-            format!("{base};stat={}:{}", md.len(), mtime_nanos)
+            key = format!("{key};stat={}:{}", md.len(), mtime_nanos);
         }
-        Err(_) => base,
     }
+    format!("{key};rt={}", wasm_runtime_config_digest(config))
+}
+
+/// Digest of the per-plugin runtime fields that `ModuleEntry` copies out of
+/// the config: `instance_pool_size`, `timeout_ms`, `vmConfig`, `pluginConfig`.
+/// Folded into `runtime_cache_key` so plugins sharing one module source but
+/// differing in any of these do not alias the same cached module entry.
+///
+/// `calloutAllowlist` / `calloutTimeoutMs` are deliberately excluded: they are
+/// merged per-key by `TickCalloutState`, not stored as per-entry config, so
+/// two plugins differing only in callout config should still share the entry.
+///
+/// Each string field is length-prefixed and carries a present/absent marker so
+/// no field-boundary ambiguity can collide two distinct configs (e.g.
+/// `vm="a"`/`plugin="b"` vs `vm="ab"`/`plugin=""`, or `Some("")` vs `None`).
+fn wasm_runtime_config_digest(config: &WasmConfig) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(config.instance_pool_size.to_le_bytes());
+    hasher.update(config.timeout_ms.to_le_bytes());
+    for field in [config.vm_config.as_deref(), config.plugin_config.as_deref()] {
+        match field {
+            Some(s) => {
+                hasher.update([1u8]);
+                hasher.update((s.len() as u64).to_le_bytes());
+                hasher.update(s.as_bytes());
+            }
+            None => hasher.update([0u8]),
+        }
+    }
+    hex::encode(hasher.finalize())
 }
 
 /// Process-wide `WasmVmManager` singleton. All Wasm plugin instances across
@@ -590,7 +630,6 @@ impl WasmVmManager {
             tick_task: Mutex::new(None),
             tick_callouts,
             has_body_hook,
-            body_pause_warned: std::sync::atomic::AtomicBool::new(false),
         });
         // Eagerly warm one instance: validates guest init at load time (an
         // init failure becomes a clear, negative-cached load error instead
@@ -795,11 +834,24 @@ async fn fetch_url_bytes(
             Ok(resp) => {
                 let status = resp.status();
                 if status.is_success() {
-                    return resp
-                        .bytes()
-                        .await
-                        .map(|b| b.to_vec())
-                        .map_err(|e| format!("read wasm body: {e}"));
+                    // Fast-reject an honest oversized Content-Length before
+                    // opening the body stream; the streaming counter below still
+                    // guards absent/false/chunked lengths.
+                    if resp.content_length().is_some_and(|cl| cl > MAX_URL_MODULE_BYTES as u64) {
+                        return Err(format!(
+                            "fetch wasm url '{url}': body exceeds {MAX_URL_MODULE_BYTES} bytes"
+                        ));
+                    }
+                    let (body, truncated) =
+                        crate::plugins::http::common::outbound::call::stream_body_capped(resp, MAX_URL_MODULE_BYTES)
+                            .await
+                            .map_err(|e| format!("read wasm body: {e}"))?;
+                    if truncated {
+                        return Err(format!(
+                            "fetch wasm url '{url}': body exceeds {MAX_URL_MODULE_BYTES} bytes"
+                        ));
+                    }
+                    return Ok(body.to_vec());
                 }
                 last_error = format!("fetch wasm url '{url}': status {status}");
                 if status.is_client_error() {
@@ -840,11 +892,6 @@ pub struct ModuleEntry {
     /// at load; lets the body-filter stage skip the per-chunk lease entirely
     /// for header-only guests.
     has_body_hook: bool,
-    /// Latched once the guest is first seen returning `Action::Pause` from the
-    /// body hook. The incompatibility is a property of the module (a guest
-    /// either uses the standard buffering idiom or it does not), so the WARN is
-    /// emitted once per module rather than once per chunk, which would flood.
-    body_pause_warned: std::sync::atomic::AtomicBool,
 }
 
 impl Drop for ModuleEntry {
@@ -1024,12 +1071,6 @@ impl ModuleEntry {
         &self.metrics_label
     }
 
-    /// Latch the body-Pause warning: returns `true` exactly once per module,
-    /// so the caller emits a single WARN instead of one per body chunk.
-    pub fn latch_body_pause_warning(&self) -> bool {
-        !self.body_pause_warned.swap(true, std::sync::atomic::Ordering::Relaxed)
-    }
-
     #[cfg(test)]
     pub fn shared_data_for_test(&self) -> &SharedData {
         &self.shared_data
@@ -1046,6 +1087,13 @@ impl ModuleEntry {
             ),
         );
         store.set_epoch_deadline(timeout_ms / EPOCH_TICK_MS + 2);
+        // Cap guest linear-memory/table growth (defense in depth). The pooling
+        // allocator's default per-instance memory cap is effectively the full
+        // wasm32 4 GiB; `HostState`'s `ResourceLimiter` impl keeps a guest — and
+        // therefore each `read_guest` transient copy sized by its memory —
+        // within `MAX_GUEST_MEMORY_BYTES`. Must be set before instantiation so
+        // the initial memory allocation is also limited.
+        store.limiter(|state| state as &mut dyn wasmtime::ResourceLimiter);
         let instance = self
             .instance_pre
             .instantiate(&mut store)
@@ -1413,6 +1461,53 @@ mod tests {
         mgr.get_or_load(config, &runtime_cache_key(config)).await
     }
 
+    /// Regression (contract-01): two plugins sharing one module source but
+    /// carrying different `pluginConfig` must NOT alias the same cached
+    /// `ModuleEntry`. Before the fix both computed the source-only key and the
+    /// second received the first's configured entry (cross-route isolation
+    /// failure).
+    #[tokio::test]
+    async fn same_source_distinct_plugin_config_do_not_alias() {
+        let f = write_temp_wasm(MINI_GUEST);
+        let mut cfg_a = file_config(f.path());
+        cfg_a.plugin_config = Some("tenant-a".to_string());
+        let mut cfg_b = file_config(f.path());
+        cfg_b.plugin_config = Some("tenant-b".to_string());
+
+        let mgr = WasmVmManager::new_for_test();
+        let entry_a = load(&mgr, &cfg_a).await.expect("loads a");
+        let entry_b = load(&mgr, &cfg_b).await.expect("loads b");
+
+        assert!(
+            !Arc::ptr_eq(&entry_a, &entry_b),
+            "distinct pluginConfig must not share a cached entry"
+        );
+        assert_eq!(entry_a.plugin_config, b"tenant-a");
+        assert_eq!(entry_b.plugin_config, b"tenant-b");
+    }
+
+    /// Regression (contract-01): reloading a plugin with only `pluginConfig`
+    /// changed lands on a new configured entry, so a configuration-only hot
+    /// reload is not silently a no-op.
+    #[tokio::test]
+    async fn plugin_config_only_reload_lands_new_entry() {
+        let f = write_temp_wasm(MINI_GUEST);
+        let mut cfg = file_config(f.path());
+        cfg.plugin_config = Some("v1".to_string());
+        let mgr = WasmVmManager::new_for_test();
+        let e1 = load(&mgr, &cfg).await.expect("loads v1");
+        let e1b = load(&mgr, &cfg).await.expect("cached v1");
+        assert!(Arc::ptr_eq(&e1, &e1b), "unchanged config shares the entry");
+
+        cfg.plugin_config = Some("v2".to_string());
+        let e2 = load(&mgr, &cfg).await.expect("loads v2");
+        assert!(
+            !Arc::ptr_eq(&e1, &e2),
+            "pluginConfig-only reload must produce a new entry"
+        );
+        assert_eq!(e2.plugin_config, b"v2");
+    }
+
     #[tokio::test]
     async fn load_from_file_and_lease() {
         let f = write_temp_wasm(MINI_GUEST);
@@ -1613,10 +1708,59 @@ mod tests {
         std::fs::write(f.path(), &bytes).unwrap();
         let key_after = runtime_cache_key(&config);
         assert_ne!(key_before, key_after, "same-path overwrite must change the key");
-        // Non-file sources are unaffected by stat.
+        // Non-file sources are unaffected by stat, but the runtime key always
+        // folds in the per-plugin config digest, so it extends (not equals)
+        // the schema source key.
         let mut inline = edgion_resources::plugin_configs::WasmConfig::default();
         inline.source.inline = Some("AAAA".to_string());
-        assert_eq!(runtime_cache_key(&inline), inline.source.cache_key());
+        let inline_key = runtime_cache_key(&inline);
+        assert!(inline_key.starts_with(&inline.source.cache_key()));
+        assert!(!inline_key.contains(";stat="), "inline source has no file stat term");
+        assert!(inline_key.contains(";rt="), "runtime config digest is always present");
+    }
+
+    /// Regression (contract-01): the runtime cache key folds in the per-plugin
+    /// runtime fields that `ModuleEntry` owns (instance pool size, hook
+    /// timeout, `vmConfig`, `pluginConfig`) but NOT the callout fields, which
+    /// are merged per-key by `TickCalloutState`.
+    #[test]
+    fn runtime_cache_key_separates_runtime_config_but_not_callouts() {
+        let base = {
+            let mut c = edgion_resources::plugin_configs::WasmConfig::default();
+            c.source.inline = Some("AAAA".to_string());
+            c
+        };
+        let k0 = runtime_cache_key(&base);
+
+        let mut c = base.clone();
+        c.plugin_config = Some("x".to_string());
+        assert_ne!(runtime_cache_key(&c), k0, "pluginConfig must affect the key");
+
+        let mut c = base.clone();
+        c.vm_config = Some("x".to_string());
+        assert_ne!(runtime_cache_key(&c), k0, "vmConfig must affect the key");
+
+        let mut c = base.clone();
+        c.instance_pool_size += 1;
+        assert_ne!(runtime_cache_key(&c), k0, "instancePoolSize must affect the key");
+
+        let mut c = base.clone();
+        c.timeout_ms += 1;
+        assert_ne!(runtime_cache_key(&c), k0, "timeoutMs must affect the key");
+
+        // Callout config is merged by TickCalloutState, not keyed.
+        let mut c = base.clone();
+        c.callout_timeout_ms += 1;
+        assert_eq!(runtime_cache_key(&c), k0, "calloutTimeoutMs must NOT affect the key");
+
+        let mut c = base.clone();
+        c.callout_allowlist = vec!["https://example.com".to_string()];
+        assert_eq!(runtime_cache_key(&c), k0, "calloutAllowlist must NOT affect the key");
+
+        // Present-vs-absent must not collide (Some("") differs from None).
+        let mut some_empty = base.clone();
+        some_empty.plugin_config = Some(String::new());
+        assert_ne!(runtime_cache_key(&some_empty), k0, "Some(\"\") must differ from None");
     }
 
     /// url fetch: the resolved auth header is sent as `Authorization`.
@@ -1751,6 +1895,35 @@ mod tests {
             1,
             "4xx must not be retried"
         );
+    }
+
+    /// url fetch: a body exceeding the module cap is rejected by the streaming
+    /// counter rather than buffered whole. The helper counts actually-streamed
+    /// bytes, so the same rejection holds for absent/false/chunked
+    /// Content-Length.
+    #[tokio::test]
+    async fn url_fetch_rejects_oversized_body_at_the_cap() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        let big = vec![b'x'; MAX_URL_MODULE_BYTES + 1];
+        Mock::given(method("GET"))
+            .and(path("/m.wasm"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(big))
+            .mount(&server)
+            .await;
+
+        let mut config = edgion_resources::plugin_configs::WasmConfig::default();
+        config.source.url = Some(format!("{}/m.wasm", server.uri()));
+        config.source.fetch = Some(edgion_resources::plugin_configs::WasmFetchSpec {
+            timeout_ms: 30000,
+            ..Default::default()
+        });
+
+        let mgr = WasmVmManager::new_for_test();
+        let err = load(&mgr, &config).await.unwrap_err();
+        assert!(err.contains("body exceeds"), "got: {err}");
     }
 
     /// Shared-data roundtrip through the guest ABI: the request-headers

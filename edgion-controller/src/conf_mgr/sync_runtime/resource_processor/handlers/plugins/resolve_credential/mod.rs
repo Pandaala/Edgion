@@ -42,7 +42,15 @@ pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) use wasm::re
 /// `SecretHandler::parse` normalizes `stringData` into `data` and clears
 /// `stringData`, so Secrets coming from `secret_store` always have
 /// `string_data == None`; only the `data` map needs to be inspected.
-pub(super) fn read_secret_utf8(secret: &k8s_openapi::api::core::v1::Secret, keys: &[&str]) -> Option<String> {
+///
+/// Visible to the whole `handlers` module so `edgion_plugins.rs`'s status
+/// derivation (`resolve_wasm_refs`) can re-run the *exact* same usable-material
+/// check the Wasm resolver used at `parse` time — sharing this one function is
+/// what guarantees status and the resolver never disagree.
+pub(in crate::conf_mgr::sync_runtime::resource_processor::handlers) fn read_secret_utf8(
+    secret: &k8s_openapi::api::core::v1::Secret,
+    keys: &[&str],
+) -> Option<String> {
     let data = secret.data.as_ref()?;
     for key in keys {
         if let Some(bytes) = data.get(*key) {

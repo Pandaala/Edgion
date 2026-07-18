@@ -247,6 +247,8 @@ pub struct GatewayConfig {
     pub wasm_oci_cache_ttl_secs: u64,
 
     /// Seconds between purge sweeps of the OCI disk cache (default 1h).
+    /// Values below 1 second (including `0`) are clamped up to 1 second at
+    /// startup to avoid a busy purge loop; `0` carries no "disable" meaning.
     #[arg(skip)]
     #[serde(default = "default_wasm_oci_cache_purge_interval_secs")]
     pub wasm_oci_cache_purge_interval_secs: u64,
@@ -1280,6 +1282,11 @@ access_log_sensitive:
         assert_eq!(cfg.wasm_oci_cache_ttl_secs, 60);
         assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 30);
         assert_eq!(cfg.wasm_oci_cache_max_bytes, 0);
+        // A zero purge interval parses as-is (no "disable" semantics); the
+        // busy-loop guard is a startup clamp in `configure_oci_disk_cache`,
+        // not a parse-time rejection.
+        let cfg: GatewayConfig = serde_yaml::from_str("wasm_oci_cache_purge_interval_secs: 0\n").unwrap();
+        assert_eq!(cfg.wasm_oci_cache_purge_interval_secs, 0);
         // Pull tuning defaults + YAML override.
         assert_eq!(GatewayConfig::default().wasm_oci_pull_timeout_secs, 60);
         assert_eq!(GatewayConfig::default().wasm_oci_pull_attempts, 3);

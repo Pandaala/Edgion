@@ -217,7 +217,7 @@ behavior and are configured per Gateway process; there is no
 | `outbound_egress_dns_cache_ttl_ms` | `u64` | `5000` | Per-client outbound address memo TTL; env override: `EDGION_OUTBOUND_DNS_CACHE_TTL_MS`. |
 | `wasm_oci_cache_dir` | `String?` | `wasm-oci-cache` | Directory for the Wasm `source.oci` disk cache (manifests + layer blobs, content-addressed). Relative paths resolve against `work_dir`. **An empty string (`""`) disables disk caching.** |
 | `wasm_oci_cache_ttl_secs` | `u64` | `86400` (24h) | Seconds since a cached OCI file was last used before it is eligible for purge. |
-| `wasm_oci_cache_purge_interval_secs` | `u64` | `3600` (1h) | Interval between purge sweeps of the OCI disk cache. |
+| `wasm_oci_cache_purge_interval_secs` | `u64` | `3600` (1h) | Interval between purge sweeps of the OCI disk cache. **Values below 1s (including `0`) are clamped up to 1s at startup** to avoid a busy purge loop; `0` has no "disable" meaning. |
 | `wasm_oci_cache_max_bytes` | `u64` | `536870912` (512MiB) | Total-size budget for the OCI disk cache, enforced on every write with LRU eviction. **`0` removes the cap (uncapped).** |
 | `wasm_oci_pull_timeout_secs` | `u64` | `60` | Per-request timeout for OCI pull requests (manifest, token, and blob alike). Istio-agent `WASM_HTTP_REQUEST_TIMEOUT` parity. |
 | `wasm_oci_pull_attempts` | `u32` | `3` | Total attempts (including the first) for each OCI pull request; transport errors and `5xx` retry, `4xx` never does. Istio-agent `WASM_HTTP_REQUEST_MAX_RETRIES` parity. |

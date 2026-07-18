@@ -378,6 +378,7 @@ impl ProcessorHandler<EdgionPlugins> for EdgionPluginsHandler {
         };
 
         let mut resolved_errors = Self::resolve_secret_refs(ep, ctx);
+        resolved_errors.extend(resolve_wasm_refs(ep, ctx));
         resolved_errors.extend(resolve_override_refs(ep, ctx));
         resolved_errors.extend(resolve_ip_list_refs(ep, ctx));
         resolved_errors.extend(resolve_active_profile_refs(ep, ctx));
@@ -459,6 +460,160 @@ impl EdgionPluginsHandler {
         }
         errors
     }
+}
+
+/// Check every `Wasm` plugin's `source.fetch.authHeaderSecretRef` and
+/// `source.oci.pullSecretRef` against the Secret store, re-running the *exact*
+/// usable-material checks the Wasm resolver used at `parse` time.
+///
+/// The generic `resolve_secret_refs` above only asks "does the Secret object
+/// exist"; a present-but-unusable Secret (missing/empty/non-UTF-8 key, wrong
+/// type) or a cross-namespace ref with no `ReferenceGrant` (the resolver
+/// registers the dependency *before* the grant check, so the Secret still
+/// looks present) would leave the gateway-visible `resolved_*` field unset
+/// while status wrongly reported `ResolvedRefs=True`. The gateway then
+/// fail-closes on load. This resolver closes that gap for the two refs by
+/// mapping each failure to the matching `ResolvedRefsError` variant.
+///
+/// Ordering mirrors the resolver's short-circuit (grant → existence → type →
+/// key). A missing Secret object is intentionally *not* reported here — the
+/// generic `resolve_secret_refs` already surfaces it as `SecretNotFound`, so
+/// deferring avoids a double message on the common not-found path.
+///
+/// Out of scope (tracked as a follow-up): deep dockerconfigjson JSON/credential
+/// validation with the gateway's `select_registry_auth` semantics, and the
+/// `fetch.tls` client-cert / CA refs.
+fn resolve_wasm_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
+    let owner_ns = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
+    let mut errors = Vec::new();
+
+    macro_rules! scan_stage {
+        ($stage:expr) => {
+            if let Some(entries) = &$stage {
+                for entry in entries {
+                    if let EdgionPlugin::Wasm(config) = &entry.plugin {
+                        collect_wasm_ref_errors(config, &owner_ns, ctx, &mut errors);
+                    }
+                }
+            }
+        };
+    }
+
+    scan_stage!(ep.spec.request_plugins);
+    scan_stage!(ep.spec.upstream_response_filter_plugins);
+    scan_stage!(ep.spec.upstream_response_body_filter_plugins);
+    scan_stage!(ep.spec.upstream_response_plugins);
+    errors
+}
+
+/// Classify the fetch-auth and OCI-pull refs of one Wasm plugin, pushing at
+/// most one error per ref.
+fn collect_wasm_ref_errors(
+    config: &edgion_resources::resources::edgion_plugins::plugin_configs::WasmConfig,
+    owner_ns: &str,
+    ctx: &HandlerContext,
+    errors: &mut Vec<ResolvedRefsError>,
+) {
+    if let Some(oci) = &config.source.oci {
+        if let Some(sor) = &oci.pull_secret_ref {
+            if let Some(e) = classify_pull_secret_ref(ctx, owner_ns, sor) {
+                errors.push(e);
+            }
+        }
+    }
+    if let Some(fetch) = &config.source.fetch {
+        if let Some(auth) = &fetch.auth_header_secret_ref {
+            if let Some(e) = classify_auth_header_ref(ctx, owner_ns, auth) {
+                errors.push(e);
+            }
+        }
+    }
+}
+
+/// Return `RefNotPermitted` when `sor` is a cross-namespace reference with no
+/// `ReferenceGrant` permitting it (mirrors `fetch_secret`'s Step-3 check).
+fn wasm_ref_grant_denied(
+    ctx: &HandlerContext,
+    owner_ns: &str,
+    sor: &edgion_resources::resources::common::SecretObjectReference,
+) -> Option<ResolvedRefsError> {
+    if !sor.is_cross_namespace(owner_ns) {
+        return None;
+    }
+    let to_ns = sor.effective_namespace(owner_ns);
+    let allowed = ctx.runtime().ref_grant_store.check_reference_allowed(
+        owner_ns,
+        "edgion.io",
+        "EdgionPlugins",
+        to_ns,
+        "",
+        "Secret",
+        Some(&sor.name),
+    );
+    if allowed {
+        None
+    } else {
+        Some(ResolvedRefsError::RefNotPermitted {
+            from_namespace: owner_ns.to_string(),
+            from_kind: "EdgionPlugins",
+            target_namespace: to_ns.to_string(),
+            target_name: sor.name.clone(),
+        })
+    }
+}
+
+/// Classify a Wasm `authHeaderSecretRef`. `None` = usable (or the Secret object
+/// is absent, deferred to the generic not-found path).
+fn classify_auth_header_ref(
+    ctx: &HandlerContext,
+    owner_ns: &str,
+    auth: &edgion_resources::resources::edgion_plugins::plugin_configs::WasmAuthHeaderSecretRef,
+) -> Option<ResolvedRefsError> {
+    if let Some(e) = wasm_ref_grant_denied(ctx, owner_ns, &auth.secret) {
+        return Some(e);
+    }
+    let ns = auth.secret.effective_namespace(owner_ns);
+    // Absent Secret object → SecretNotFound is emitted by `resolve_secret_refs`.
+    let secret = ctx.runtime().secret_store.get(Some(ns), &auth.secret.name)?;
+    // The configured `key` is operator-defined (not `&'static`), so its usable-
+    // material failure can't ride `MissingKeys(Vec<&'static str>)`; carry the
+    // key name in `DecodeError.detail` instead. `read_secret_utf8` collapses
+    // missing / empty / non-UTF-8 into one outcome — exactly what the resolver
+    // did — so the message enumerates all three.
+    if cred::read_secret_utf8(&secret, &[auth.key.as_str()]).is_none() {
+        return Some(ResolvedRefsError::DecodeError {
+            key: "authHeaderSecretRef",
+            detail: format!("Secret data key '{}' is missing, empty, or not UTF-8", auth.key),
+        });
+    }
+    None
+}
+
+/// Classify a Wasm `oci.pullSecretRef`. `None` = usable (or the Secret object
+/// is absent, deferred to the generic not-found path).
+fn classify_pull_secret_ref(
+    ctx: &HandlerContext,
+    owner_ns: &str,
+    sor: &edgion_resources::resources::common::SecretObjectReference,
+) -> Option<ResolvedRefsError> {
+    if let Some(e) = wasm_ref_grant_denied(ctx, owner_ns, sor) {
+        return Some(e);
+    }
+    let ns = sor.effective_namespace(owner_ns);
+    let secret = ctx.runtime().secret_store.get(Some(ns), &sor.name)?;
+    if secret.type_.as_deref() != Some("kubernetes.io/dockerconfigjson") {
+        return Some(ResolvedRefsError::InvalidSecretType {
+            got: secret.type_.clone().unwrap_or_default(),
+            allowed: &["kubernetes.io/dockerconfigjson"],
+        });
+    }
+    if cred::read_secret_utf8(&secret, &[".dockerconfigjson"]).is_none() {
+        return Some(ResolvedRefsError::DecodeError {
+            key: ".dockerconfigjson",
+            detail: "Secret key .dockerconfigjson is missing, empty, or not UTF-8".to_string(),
+        });
+    }
+    None
 }
 
 /// Check each RegionRoute plugin's `overrideRef` against the EdgionConfigData store.
@@ -1025,6 +1180,187 @@ mod tests {
             .expect("expected resolved ca secrets");
         assert_eq!(resolved.len(), 1);
         assert_eq!(ctx.secret_ref_manager().get_refs("default/header-cert-ca").len(), 1);
+    }
+
+    // ── Wasm fetch/OCI ref status resolution tests (contract-02) ──────────
+
+    use crate::conf_mgr::sync_runtime::resource_processor::status_utils::ResolvedRefsError;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::{
+        WasmAuthHeaderSecretRef, WasmConfig, WasmFetchSpec, WasmOciSpec, WasmSourceSpec,
+    };
+
+    fn build_secret_typed(namespace: &str, name: &str, type_: Option<&str>, data: &[(&str, &[u8])]) -> Secret {
+        let mut bmap = BTreeMap::new();
+        for (k, v) in data {
+            bmap.insert(k.to_string(), ByteString(v.to_vec()));
+        }
+        Secret {
+            metadata: ObjectMeta {
+                name: Some(name.to_string()),
+                namespace: Some(namespace.to_string()),
+                ..Default::default()
+            },
+            data: Some(bmap),
+            type_: type_.map(str::to_string),
+            ..Default::default()
+        }
+    }
+
+    fn wasm_ep_with_fetch_auth(ns: &str, secret_ns: Option<&str>, secret_name: &str, key: &str) -> EdgionPlugins {
+        let mut ep = EdgionPlugins::new("wasm-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some(ns.to_string());
+        let config = WasmConfig {
+            source: WasmSourceSpec {
+                url: Some("https://repo.example.com/mod.wasm".to_string()),
+                fetch: Some(WasmFetchSpec {
+                    auth_header_secret_ref: Some(WasmAuthHeaderSecretRef {
+                        secret: SecretObjectReference {
+                            group: None,
+                            kind: None,
+                            name: secret_name.to_string(),
+                            namespace: secret_ns.map(|s| s.to_string()),
+                        },
+                        key: key.to_string(),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::Wasm(config))]);
+        ep
+    }
+
+    fn wasm_ep_with_oci(ns: &str, secret_ns: Option<&str>, secret_name: &str) -> EdgionPlugins {
+        let mut ep = EdgionPlugins::new("wasm-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some(ns.to_string());
+        let config = WasmConfig {
+            source: WasmSourceSpec {
+                oci: Some(WasmOciSpec {
+                    image: "registry.example.com/wasm/mod:latest".to_string(),
+                    pull_secret_ref: Some(SecretObjectReference {
+                        group: None,
+                        kind: None,
+                        name: secret_name.to_string(),
+                        namespace: secret_ns.map(|s| s.to_string()),
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::Wasm(config))]);
+        ep
+    }
+
+    #[test]
+    fn test_wasm_auth_header_missing_key_reports_decode_error() {
+        // Secret object present, but the configured key is absent → present-but-unusable.
+        let secret = build_secret_typed("default", "wasm-auth", None, &[("other", b"x")]);
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("default/wasm-auth".to_string(), secret)]));
+        let ep = wasm_ep_with_fetch_auth("default", None, "wasm-auth", "authorization");
+
+        let errors = super::resolve_wasm_refs(&ep, &ctx);
+        assert_eq!(errors.len(), 1, "got {errors:?}");
+        match &errors[0] {
+            ResolvedRefsError::DecodeError { key, detail } => {
+                assert_eq!(*key, "authHeaderSecretRef");
+                assert!(detail.contains("authorization"), "detail: {detail}");
+            }
+            other => panic!("expected DecodeError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_wasm_auth_header_usable_reports_no_error() {
+        let secret = build_secret_typed("default", "wasm-auth", None, &[("authorization", b"Bearer tok")]);
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("default/wasm-auth".to_string(), secret)]));
+        let ep = wasm_ep_with_fetch_auth("default", None, "wasm-auth", "authorization");
+
+        assert!(super::resolve_wasm_refs(&ep, &ctx).is_empty());
+    }
+
+    #[test]
+    fn test_wasm_auth_header_missing_secret_defers_to_generic_path() {
+        // Absent Secret object must NOT be double-reported here.
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::new());
+        let ep = wasm_ep_with_fetch_auth("default", None, "wasm-auth", "authorization");
+
+        assert!(super::resolve_wasm_refs(&ep, &ctx).is_empty());
+    }
+
+    #[test]
+    fn test_wasm_pull_secret_wrong_type_reports_invalid_secret_type() {
+        let secret = build_secret_typed("default", "pull", Some("Opaque"), &[(".dockerconfigjson", b"{}")]);
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("default/pull".to_string(), secret)]));
+        let ep = wasm_ep_with_oci("default", None, "pull");
+
+        let errors = super::resolve_wasm_refs(&ep, &ctx);
+        assert_eq!(errors.len(), 1, "got {errors:?}");
+        match &errors[0] {
+            ResolvedRefsError::InvalidSecretType { got, .. } => assert_eq!(got, "Opaque"),
+            other => panic!("expected InvalidSecretType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_wasm_pull_secret_missing_dockerconfig_key_reports_decode_error() {
+        let secret = build_secret_typed(
+            "default",
+            "pull",
+            Some("kubernetes.io/dockerconfigjson"),
+            &[("wrong-key", b"{}")],
+        );
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("default/pull".to_string(), secret)]));
+        let ep = wasm_ep_with_oci("default", None, "pull");
+
+        let errors = super::resolve_wasm_refs(&ep, &ctx);
+        assert_eq!(errors.len(), 1, "got {errors:?}");
+        match &errors[0] {
+            ResolvedRefsError::DecodeError { key, .. } => assert_eq!(*key, ".dockerconfigjson"),
+            other => panic!("expected DecodeError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_wasm_pull_secret_usable_reports_no_error() {
+        let secret = build_secret_typed(
+            "default",
+            "pull",
+            Some("kubernetes.io/dockerconfigjson"),
+            &[(".dockerconfigjson", br#"{"auths":{}}"#)],
+        );
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("default/pull".to_string(), secret)]));
+        let ep = wasm_ep_with_oci("default", None, "pull");
+
+        assert!(super::resolve_wasm_refs(&ep, &ctx).is_empty());
+    }
+
+    #[test]
+    fn test_wasm_cross_ns_grant_missing_reports_ref_not_permitted() {
+        // Target Secret exists and is otherwise usable, but the cross-namespace
+        // reference has no ReferenceGrant → the grant check short-circuits.
+        let secret = build_secret_typed("other-ns", "wasm-auth", None, &[("authorization", b"Bearer tok")]);
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("other-ns/wasm-auth".to_string(), secret)]));
+        let ep = wasm_ep_with_fetch_auth("default", Some("other-ns"), "wasm-auth", "authorization");
+
+        let errors = super::resolve_wasm_refs(&ep, &ctx);
+        assert_eq!(errors.len(), 1, "got {errors:?}");
+        match &errors[0] {
+            ResolvedRefsError::RefNotPermitted {
+                from_namespace,
+                target_namespace,
+                target_name,
+                ..
+            } => {
+                assert_eq!(from_namespace, "default");
+                assert_eq!(target_namespace, "other-ns");
+                assert_eq!(target_name, "wasm-auth");
+            }
+            other => panic!("expected RefNotPermitted, got {other:?}"),
+        }
     }
 
     // ── RegionRoute + overrideRef resolution tests ────────────────────────

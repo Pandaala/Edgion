@@ -34,6 +34,7 @@ use self::manifest::{
     extract_wasm_from_tar_gz, parse_manifest, select_wasm_layer, OciManifest, ParsedManifest, WasmLayer,
     MANIFEST_ACCEPT,
 };
+use crate::plugins::http::common::outbound::call::stream_body_capped;
 
 /// Default per-request timeout for pull requests (manifest, token, blob).
 const DEFAULT_PULL_TIMEOUT_SECS: u64 = 60;
@@ -71,6 +72,9 @@ fn pull_attempts() -> u32 {
 const MAX_MANIFEST_BYTES: usize = 4 * 1024 * 1024;
 /// Cap for layer blobs (wasm modules are single-digit MiB in practice).
 const MAX_BLOB_BYTES: usize = 64 * 1024 * 1024;
+/// Cap for the token-endpoint JSON response. Bearer tokens are small; this
+/// bounds host allocation against a hostile or malfunctioning auth service.
+const MAX_TOKEN_BYTES: usize = 64 * 1024;
 
 /// Result of a successful OCI fetch.
 #[derive(Debug)]
@@ -228,16 +232,27 @@ impl RegistrySession {
                 GetError::Retryable(msg)
             });
         }
-        let bytes = resp
-            .bytes()
-            .await
-            .map_err(|e| GetError::Retryable(format!("read body of {url}: {e}")))?;
-        if bytes.len() > max_bytes {
+        // Reject an honestly-oversized Content-Length before opening the body
+        // stream (fast path, mirrors `outbound_call`). The streaming counter
+        // below is the load-bearing guard for absent/false/chunked lengths.
+        if resp.content_length().is_some_and(|cl| cl > max_bytes as u64) {
             return Err(GetError::Definitive(format!(
                 "GET {url}: body exceeds {max_bytes} bytes"
             )));
         }
-        Ok(bytes.to_vec())
+        // Stream the body with a running cap: peak host allocation is bounded
+        // to `max_bytes` plus one chunk, so a response with no/false/chunked
+        // Content-Length cannot make reqwest buffer an arbitrarily large body
+        // before the size check fires.
+        let (body, truncated) = stream_body_capped(resp, max_bytes)
+            .await
+            .map_err(|e| GetError::Retryable(format!("read body of {url}: {e}")))?;
+        if truncated {
+            return Err(GetError::Definitive(format!(
+                "GET {url}: body exceeds {max_bytes} bytes"
+            )));
+        }
+        Ok(body.to_vec())
     }
 
     async fn send(&self, blob: bool, url: &str, accept: &str) -> Result<reqwest::Response, GetError> {
@@ -279,13 +294,36 @@ impl RegistrySession {
             .map_err(|e| GetError::Retryable(format!("token endpoint: {e}")))?;
         let status = resp.status();
         if !status.is_success() {
-            // A failed token exchange is an auth failure — definitive.
-            return Err(GetError::Definitive(format!("token endpoint: status {status}")));
+            // Classify consistently with registry GET responses: 4xx (bad or
+            // missing credentials) is a definitive auth failure, but a 5xx from
+            // a flaky authorization service is transient and must honor the
+            // configured retry policy. The message deliberately omits the
+            // response body and the token.
+            let msg = format!("token endpoint: status {status}");
+            return Err(if status.is_client_error() {
+                GetError::Definitive(msg)
+            } else {
+                GetError::Retryable(msg)
+            });
         }
-        let parsed: TokenResponse = resp
-            .json()
+        // Bound host allocation on the token body too: fast-reject an honest
+        // oversized Content-Length, then stream with a small cap rather than
+        // `resp.json()` (which would buffer an unbounded body).
+        if resp.content_length().is_some_and(|cl| cl > MAX_TOKEN_BYTES as u64) {
+            return Err(GetError::Definitive(format!(
+                "token endpoint: response exceeds {MAX_TOKEN_BYTES} bytes"
+            )));
+        }
+        let (body, truncated) = stream_body_capped(resp, MAX_TOKEN_BYTES)
             .await
             .map_err(|e| GetError::Retryable(format!("token response: {e}")))?;
+        if truncated {
+            return Err(GetError::Definitive(format!(
+                "token endpoint: response exceeds {MAX_TOKEN_BYTES} bytes"
+            )));
+        }
+        let parsed: TokenResponse =
+            serde_json::from_slice(&body).map_err(|e| GetError::Retryable(format!("token response: {e}")))?;
         parsed
             .token
             .or(parsed.access_token)
@@ -515,6 +553,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn token_endpoint_5xx_retries_and_then_succeeds() {
+        let server = MockServer::start().await;
+        let manifest = image_manifest(WASM, manifest::MEDIA_TYPE_WASM_LAYER);
+        let challenge = format!(r#"Bearer realm="{}/token",service="test-registry""#, server.uri());
+        // Catch-all 401 with the challenge (lower priority).
+        Mock::given(method("GET"))
+            .and(path("/v2/test/wasm/manifests/1.0.0"))
+            .respond_with(ResponseTemplate::new(401).insert_header("www-authenticate", challenge.as_str()))
+            .with_priority(5)
+            .mount(&server)
+            .await;
+        // First token exchange returns 503 (transient); it must be retried.
+        let basic = format!(
+            "Basic {}",
+            base64::engine::general_purpose::STANDARD.encode("alice:s3cret")
+        );
+        Mock::given(method("GET"))
+            .and(path("/token"))
+            .and(query_param("service", "test-registry"))
+            .and(header("authorization", basic.as_str()))
+            .respond_with(ResponseTemplate::new(503))
+            .up_to_n_times(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        // Subsequent token exchange succeeds.
+        Mock::given(method("GET"))
+            .and(path("/token"))
+            .and(query_param("service", "test-registry"))
+            .and(header("authorization", basic.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"token": "test-token"})))
+            .with_priority(5)
+            .mount(&server)
+            .await;
+        // Bearer-authed requests succeed (higher priority than the 401).
+        Mock::given(method("GET"))
+            .and(path("/v2/test/wasm/manifests/1.0.0"))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(manifest.clone()))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/v2/test/wasm/blobs/{}", digest_of(WASM))))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(WASM.to_vec()))
+            .mount(&server)
+            .await;
+
+        let host = server.uri().trim_start_matches("http://").to_string();
+        let auth_b64 = base64::engine::general_purpose::STANDARD.encode("alice:s3cret");
+        let mut spec = spec_for(&server, "test/wasm:1.0.0");
+        spec.resolved_pull_secret = Some(format!(r#"{{"auths":{{"{host}":{{"auth":"{auth_b64}"}}}}}}"#));
+        let fetched = fetch_oci_bytes(&spec).await.unwrap();
+        assert_eq!(fetched.bytes, WASM);
+    }
+
+    #[tokio::test]
+    async fn token_endpoint_403_is_definitive_no_retry() {
+        let server = MockServer::start().await;
+        let challenge = format!(r#"Bearer realm="{}/token",service="test-registry""#, server.uri());
+        Mock::given(method("GET"))
+            .and(path("/v2/test/wasm/manifests/1.0.0"))
+            .respond_with(ResponseTemplate::new(401).insert_header("www-authenticate", challenge.as_str()))
+            .with_priority(5)
+            .mount(&server)
+            .await;
+        // Token endpoint rejects the credentials; a 403 must stop after one attempt.
+        Mock::given(method("GET"))
+            .and(path("/token"))
+            .and(query_param("service", "test-registry"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let host = server.uri().trim_start_matches("http://").to_string();
+        let auth_b64 = base64::engine::general_purpose::STANDARD.encode("alice:s3cret");
+        let mut spec = spec_for(&server, "test/wasm:1.0.0");
+        spec.resolved_pull_secret = Some(format!(r#"{{"auths":{{"{host}":{{"auth":"{auth_b64}"}}}}}}"#));
+        let err = fetch_oci_bytes(&spec).await.unwrap_err();
+        assert!(err.contains("token endpoint: status 403"), "got: {err}");
+    }
+
+    #[tokio::test]
     async fn declared_but_unresolved_pull_secret_fails_closed() {
         let server = MockServer::start().await;
         let mut spec = spec_for(&server, "test/wasm:1.0.0");
@@ -598,5 +721,46 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(recheck, fetched.manifest_digest);
+    }
+
+    /// An oversized manifest body is rejected by the streaming cap. Because the
+    /// helper counts actually-streamed bytes (not `Content-Length`), the same
+    /// rejection holds for an absent, false-small, or chunked Content-Length.
+    #[tokio::test]
+    async fn oversized_manifest_is_rejected_at_the_cap() {
+        let server = MockServer::start().await;
+        let big = vec![b'x'; MAX_MANIFEST_BYTES + 1];
+        Mock::given(method("GET"))
+            .and(path("/v2/test/wasm/manifests/big"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(big))
+            .mount(&server)
+            .await;
+        let err = fetch_oci_bytes(&spec_for(&server, "test/wasm:big")).await.unwrap_err();
+        assert!(err.contains("body exceeds"), "got: {err}");
+    }
+
+    /// An oversized token-endpoint body is rejected by the streaming cap rather
+    /// than buffered whole by `resp.json()`.
+    #[tokio::test]
+    async fn oversized_token_response_is_rejected_at_the_cap() {
+        let server = MockServer::start().await;
+        let challenge = format!(r#"Bearer realm="{}/token",service="test-registry""#, server.uri());
+        Mock::given(method("GET"))
+            .and(path("/v2/test/wasm/manifests/1.0.0"))
+            .respond_with(ResponseTemplate::new(401).insert_header("www-authenticate", challenge.as_str()))
+            .mount(&server)
+            .await;
+        let big = vec![b'x'; MAX_TOKEN_BYTES + 1];
+        Mock::given(method("GET"))
+            .and(path("/token"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(big))
+            .mount(&server)
+            .await;
+        let host = server.uri().trim_start_matches("http://").to_string();
+        let auth_b64 = base64::engine::general_purpose::STANDARD.encode("alice:s3cret");
+        let mut spec = spec_for(&server, "test/wasm:1.0.0");
+        spec.resolved_pull_secret = Some(format!(r#"{{"auths":{{"{host}":{{"auth":"{auth_b64}"}}}}}}"#));
+        let err = fetch_oci_bytes(&spec).await.unwrap_err();
+        assert!(err.contains("response exceeds"), "got: {err}");
     }
 }
