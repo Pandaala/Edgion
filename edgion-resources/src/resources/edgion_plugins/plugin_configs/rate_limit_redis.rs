@@ -105,8 +105,9 @@ pub struct RateLimitPolicy {
     #[schemars(range(min = 1))]
     pub rate: u64,
 
-    /// Time interval (e.g., "1s", "1m", "1h", "1d").
+    /// Time interval (GEP-2257 duration, e.g., "1s", "1m", "1h", "24h").
     /// Uses the same parse_duration() as RateLimit.
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub interval: String,
 
     /// Rate limiting algorithm (default: SlidingWindow).
@@ -226,6 +227,7 @@ pub struct RateLimitRedisConfig {
     /// total latency of a multi-policy check; on elapse the configured
     /// `on_redis_failure` policy applies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub request_timeout: Option<String>,
 
     /// Parsed `request_timeout` (runtime only).

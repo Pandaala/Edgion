@@ -89,10 +89,12 @@ spec:
                           type: string
                           description: "Interval between probes (e.g. \"10s\", \"1m\")"
                           default: "10s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                         timeout:
                           type: string
                           description: "Probe timeout (e.g. \"3s\", \"500ms\")"
                           default: "3s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                         healthyThreshold:
                           type: integer
                           description: "Consecutive successes before marking healthy"

@@ -102,8 +102,9 @@ pub struct DnsResolverConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub servers: Option<Vec<String>>,
 
-    /// Data-plane resolution cache TTL (duration string, default "5s").
+    /// Data-plane resolution cache TTL (GEP-2257 duration, default "5s").
     #[serde(default = "default_dns_cache_ttl")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub cache_ttl: String,
 }
 
@@ -183,23 +184,20 @@ pub struct HttpTimeout {
 pub struct ClientTimeout {
     /// Timeout for reading request from client
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_client_read_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub read_timeout: String,
 
     /// Timeout for writing response to client
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_client_write_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub write_timeout: String,
 
     /// HTTP keepalive timeout
     /// Format: Duration string (e.g., "75s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "75" = "75s")
     #[serde(default = "default_client_keepalive_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub keepalive_timeout: String,
 }
 
@@ -208,9 +206,8 @@ pub struct ClientTimeout {
 pub struct BackendTimeout {
     /// Timeout for connecting to upstream backend
     /// Format: Duration string (e.g., "5s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "5" = "5s")
     #[serde(default = "default_backend_connect_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub default_connect_timeout: String,
 
     /// Default per-attempt backend request timeout — the fallback for the
@@ -219,16 +216,14 @@ pub struct BackendTimeout {
     /// policy present it also acts as the per-try timeout (GEP-1731): an
     /// attempt exceeding it is canceled and retried. `"0s"` disables the bound.
     /// Format: Duration string (e.g., "60s", "1m", "500ms")
-    /// Without unit defaults to seconds (e.g., "60" = "60s")
     #[serde(default = "default_backend_request_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub default_request_timeout: String,
 
     /// Idle timeout for backend connection pool
     /// Format: Duration string (e.g., "300s", "5m", "500ms")
-    /// Without unit defaults to seconds (e.g., "300" = "300s")
     #[serde(default = "default_backend_idle_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub default_idle_timeout: String,
 
     /// **DEPRECATED**: Use top-level `maxRetries` in EdgionGatewayConfigSpec instead.
@@ -249,10 +244,9 @@ pub struct TcpTimeout {
     /// any byte progress in either direction (a completed read OR an advancing
     /// partial write). "0" / "0s" disables it (unbounded — risky). Applies to
     /// plain TCP, TLS-terminated, and TLS-passthrough relays. UDP is not affected.
-    /// Format: duration string (e.g. "1h", "300s", "5m"); a bare number is
-    /// interpreted as seconds. Default "1h".
+    /// Format: GEP-2257 duration string (e.g. "1h", "300s", "5m"). Default "1h".
     #[serde(default = "default_tcp_idle_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub idle_timeout: String,
 
     /// Upper bound for establishing the upstream TCP connection (the TCP
@@ -268,10 +262,9 @@ pub struct TcpTimeout {
     /// separately; TLS-passthrough carries the end-to-end TLS handshake over the
     /// established relay), so this bounds the connect itself, not a TLS
     /// handshake. UDP is not affected.
-    /// Format: duration string (e.g. "10s", "1m", "500ms"); a bare number is
-    /// interpreted as seconds. Default "10s".
+    /// Format: GEP-2257 duration string (e.g. "10s", "1m", "500ms"). Default "10s".
     #[serde(default = "default_tcp_connect_timeout")]
-    #[schemars(pattern(r"^([0-9]+(\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\.[0-9]+)?$"))]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub connect_timeout: String,
 }
 

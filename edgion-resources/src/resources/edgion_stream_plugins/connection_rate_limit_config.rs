@@ -38,7 +38,8 @@ pub struct PerListenerLimit {
     /// Max new connections per interval for this listener port.
     #[schemars(range(min = 1))]
     pub rate: u64,
-    /// Interval duration string (e.g. "1s", "500ms").
+    /// Interval GEP-2257 duration string (e.g. "1s", "500ms").
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub interval: String,
     /// Also enforce a fleet-wide cap in Redis (requires `redisRef`). Default false.
     #[serde(default)]
@@ -59,7 +60,8 @@ pub struct PerSourceIpLimit {
     /// Max new connections per interval per source IP.
     #[schemars(range(min = 1))]
     pub rate: u64,
-    /// Interval duration string (e.g. "1s", "500ms").
+    /// Interval GEP-2257 duration string (e.g. "1s", "500ms").
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub interval: String,
     /// Redis-failure policy. Default Allow (fail-open) to avoid collateral blocking.
     #[serde(default = "default_on_redis_failure_allow")]
@@ -95,6 +97,7 @@ pub struct ConnectionRateLimitConfig {
     /// because the check runs on the pre-TLS accept path — a large value holds
     /// inbound connections during a Redis brownout. See the plugin docs.
     #[serde(default = "default_redis_timeout")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub redis_timeout: String,
 }
 

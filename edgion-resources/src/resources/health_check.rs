@@ -37,12 +37,14 @@ pub struct ActiveHealthCheckConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
 
-    /// Interval between probes (e.g. "10s", "1m").
+    /// Interval between probes (GEP-2257 duration, e.g. "10s", "1m").
     #[serde(default = "default_interval")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub interval: String,
 
-    /// Probe timeout (e.g. "3s", "500ms").
+    /// Probe timeout (GEP-2257 duration, e.g. "3s", "500ms").
     #[serde(default = "default_timeout")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub timeout: String,
 
     /// Consecutive successes before marking healthy.

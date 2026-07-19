@@ -206,9 +206,10 @@ pub struct RateLimitConfig {
 
     /// Time interval for rate calculation (default: "1s")
     ///
-    /// Supports: "1s", "10s", "1m", "5m", etc.
+    /// Supports GEP-2257 durations: "1s", "10s", "1m", "5m", etc.
     /// This determines how often the sliding window rotates.
     #[serde(default = "default_interval")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub interval: String,
 
     /// Rate limiting keys (dimensions)
@@ -607,8 +608,10 @@ mod tests {
         assert_eq!(parse_duration("1s").unwrap(), Duration::from_secs(1));
         assert_eq!(parse_duration("2m").unwrap(), Duration::from_secs(120));
         assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
-        assert_eq!(parse_duration("1d").unwrap(), Duration::from_secs(86400));
-        assert_eq!(parse_duration("1.5s").unwrap(), Duration::from_millis(1500));
+        assert_eq!(parse_duration("1h30m").unwrap(), Duration::from_secs(5400));
+        // Non-GEP-2257 forms (days, decimals) are rejected.
+        assert!(parse_duration("1d").is_err());
+        assert!(parse_duration("1.5s").is_err());
     }
 
     #[test]

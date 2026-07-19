@@ -355,8 +355,9 @@ pub struct GRPCRouteRetry {
 
     /// Backoff specifies the minimum duration a Gateway should wait between
     /// retry attempts and is represented in Gateway API Duration formatting.
-    /// Format: Duration (e.g., "10ms", "1s")
+    /// Format: GEP-2257 Duration (e.g., "10ms", "1s")
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
     pub backoff: Option<String>,
 
     /// Codes specifies the gRPC status codes that a Gateway should

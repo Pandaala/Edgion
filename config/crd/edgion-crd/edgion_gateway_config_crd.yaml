@@ -78,14 +78,17 @@ spec:
                           type: string
                           description: "Timeout for reading request from client (e.g., '60s', '1m')"
                           default: "60s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                         writeTimeout:
                           type: string
                           description: "Timeout for writing response to client"
                           default: "60s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                         keepaliveTimeout:
                           type: string
                           description: "HTTP keepalive timeout"
                           default: "75s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                     backend:
                       type: object
                       description: "Backend-side timeout settings"
@@ -94,14 +97,17 @@ spec:
                           type: string
                           description: "Timeout for connecting to upstream backend"
                           default: "5s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                         defaultRequestTimeout:
                           type: string
                           description: "Total request timeout including retries"
                           default: "60s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                         defaultIdleTimeout:
                           type: string
                           description: "Idle timeout for backend connection pool"
                           default: "300s"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
 
                 # ============================================
                 # Max Retries
@@ -267,12 +273,12 @@ spec:
                       type: string
                       description: "Idle timeout for the established L4 relay (default 1h; '0'/'0s' disables)"
                       default: "1h"
-                      pattern: "^([0-9]+(\\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\\.[0-9]+)?$"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                     connectTimeout:
                       type: string
                       description: "Upper bound for establishing the upstream TCP connection (default 10s; '0'/'0s' disables)"
                       default: "10s"
-                      pattern: "^([0-9]+(\\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\\.[0-9]+)?$"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                 loadBalancing:
                   type: object
                   description: "Gateway-wide load-balancing configuration"
@@ -388,7 +394,7 @@ spec:
                       type: string
                       description: "Data-plane resolution cache TTL (default 5s)"
                       default: "5s"
-                      pattern: "^([0-9]+(\\.[0-9]+)?(milliseconds|millisecond|millis|ms|seconds|second|secs|sec|s|minutes|minute|mins|min|m|hours|hour|hrs|hr|h|days|day|d))+$|^[0-9]+(\\.[0-9]+)?$"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
 
             status:
               type: object

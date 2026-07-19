@@ -529,30 +529,12 @@ fn parse_refresh_interval(value: &str) -> Duration {
     parse_duration_str(value).unwrap_or(DEFAULT_REFRESH).max(MIN_REFRESH)
 }
 
-/// Parse a duration string (`"15s"`, `"500ms"`, `"2m"`, `"1h"`, bare = seconds).
+/// Parse a GEP-2257 duration string (`"15s"`, `"500ms"`, `"2m"`, `"1h30m"`).
+/// Delegates to the canonical [`edgion_resources::duration::parse_duration`], so
+/// every duration field in the workspace shares one grammar.
 /// Shared with `DnsResolverConfig::validate` for load-time rejection.
 pub(crate) fn parse_duration_str(value: &str) -> Option<Duration> {
-    let v = value.trim();
-    let (num, unit) = if let Some(n) = v.strip_suffix("ms") {
-        (n, "ms")
-    } else if let Some(n) = v.strip_suffix('s') {
-        (n, "s")
-    } else if let Some(n) = v.strip_suffix('m') {
-        (n, "m")
-    } else if let Some(n) = v.strip_suffix('h') {
-        (n, "h")
-    } else {
-        (v, "s") // bare number = seconds
-    };
-    let amount: u64 = num.trim().parse().ok()?;
-    let dur = match unit {
-        "ms" => Duration::from_millis(amount),
-        "s" => Duration::from_secs(amount),
-        "m" => Duration::from_secs(amount.checked_mul(60)?),
-        "h" => Duration::from_secs(amount.checked_mul(3600)?),
-        _ => return None,
-    };
-    Some(dur)
+    edgion_resources::duration::parse_duration(value).ok()
 }
 
 #[cfg(test)]
@@ -626,7 +608,9 @@ mod tests {
         assert_eq!(parse_duration_str("500ms"), Some(Duration::from_millis(500)));
         assert_eq!(parse_duration_str("2m"), Some(Duration::from_secs(120)));
         assert_eq!(parse_duration_str("1h"), Some(Duration::from_secs(3600)));
-        assert_eq!(parse_duration_str("30"), Some(Duration::from_secs(30)));
+        assert_eq!(parse_duration_str("1h30m"), Some(Duration::from_secs(5400)));
+        // Bare numbers are no longer valid GEP-2257 durations.
+        assert_eq!(parse_duration_str("30"), None);
         assert_eq!(parse_duration_str("bogus"), None);
     }
 

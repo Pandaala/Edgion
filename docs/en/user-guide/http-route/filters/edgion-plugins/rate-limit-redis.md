@@ -121,7 +121,7 @@ Each entry in the `policies` array contains:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `rate` | Integer | — (required) | Maximum requests (or cost units) allowed per interval. Must be > 0 |
-| `interval` | String | — (required) | Time window, e.g. `"1s"`, `"1m"`, `"1h"`, `"1d"`, or combined like `"1h30m"`. Minimum: 100ms |
+| `interval` | String | — (required) | Time window, e.g. `"1s"`, `"1m"`, `"1h"`, `"24h"`, or combined like `"1h30m"`. Minimum: 100ms |
 | `algorithm` | Enum | `SlidingWindow` | Rate limiting algorithm. See algorithm table below |
 
 #### Algorithm Reference
