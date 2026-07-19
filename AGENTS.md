@@ -207,6 +207,22 @@ Resource structs in `edgion-resources/src/resources/` serve two paths: the **K8s
 
 **Limits to check by inspection (the guard does NOT):** it checks field *presence*, not types/patterns; and it covers only the three structural CRDs. The five tagged-enum CRDs (plugins, stream_plugins, acme, link_sys, edgion_config_data) model their config as `x-kubernetes-preserve-unknown-fields` and are NOT field-guarded — for them the `#[schemars(skip)]` + redact discipline above is the only safeguard. One narrow exception: the EdgionPlugins CRD's per-stage `type` discriminator enums ARE drift-guarded by `edgion-resources/tests/plugin_crd_type_coverage.rs`, which compares the committed stage enums against `schema_for!(EdgionPlugin)` (Direction-1 = a variant absent from every stage enum, i.e. un-appliable; Direction-2 = a dead/duplicate enum entry naming no real variant). Per the lenient-admission policy it does NOT enforce strict per-stage scoping — a plugin valid only at another stage is caught later by the `Accepted=False` status condition, not at admission. The `config` sub-schemas of all five remain unguarded. When adding or renaming a struct field on any resource, re-run the guard and re-check this invariant; audit `serialize`d secret/resolved fields for a missing `#[schemars(skip)]`.
 
+## Cross-cutting unification rules
+
+One canonical implementation per cross-cutting mechanism — violating any line below is a bug.
+Details, verified consumer lists, and exemptions: `skills/01-architecture/00-common/05-unification-points.md`.
+
+1. Outbound HTTP clients are built via `build_outbound_client` (`edgion-common/src/link_sys_core/http_client.rs`); a bare `reqwest::Client::builder()` outside tests is a bug.
+2. Outbound TLS (CA/mTLS/verify) resolves through `resolve_outbound_tls` — including non-reqwest dialers (tonic/ldap3/fred/rskafka).
+3. A new egress path with a config- or request-influenced destination uses `EgressResolver` (or at minimum `classify_ip`) at dial time, disables proxy-env pickup, and denies redirects unless per-hop re-checked.
+4. Operator-configured DNS resolution goes through the shared `ResolverSpec` (`edgion-common/src/dns/`); no second resolver library.
+5. Redis access goes through the LinkSys `RedisLinkClient`; rate-limit Lua logic extends the shared `redis_rate_limiter` core.
+6. Key extraction uses `KeyGet`; IP allow/deny matching uses `ip_radix_tree`; client real IP comes from `real_ip_extractor` — never ad-hoc re-implementations.
+7. Templated config fields use the shared `${type:name}` engine; security-sensitive fields (deadlines, fail-open switches, destinations) use the restricted variable allow-list that rejects client-controlled variables.
+8. Plugins reject requests via `PluginRunningResult::ErrResponse`; `ErrTerminateRequest` only for inherently dynamic responses, written before returning.
+9. Fail-close error bodies never leak internal detail (dependency errors, addresses, traces) — detail goes to the access log / `EdgionStatus`.
+10. No new failure vocabulary: do not add another fail-open/fail-close config shape — convergence is owned by `tasks/todo/failure-policy-unification.md`.
+
 ## Git constraints
 
 - **Do not run `git commit` or `git push` on your own**: After completing code changes, report what changed and wait for the user's explicit instruction before committing.

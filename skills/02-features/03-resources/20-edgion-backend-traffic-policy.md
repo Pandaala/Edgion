@@ -180,7 +180,10 @@ static SNI/Host, which would send the request to the wrong virtual host.
   rejection; the peer is left untouched.
 - **Outbound path**: routed through the existing `allowDegradation` /
   `statusOnError` semantics on `ExternalHttpConnection` — no new failure
-  vocabulary.
+  vocabulary. This principle is now stated globally in the
+  [unification-points registry](../../01-architecture/00-common/05-unification-points.md)
+  (entry 2), and the vocabulary itself is slated for convergence in
+  `tasks/todo/failure-policy-unification.md`.
 
 **The `${ctx:...}` ordering constraint.** On the standard path the template
 renders at peer-build time (`upstream_peer`). A plugin that writes

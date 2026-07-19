@@ -1,0 +1,296 @@
+---
+name: unification-points
+description: Canonical registry of cross-cutting mechanisms that are (or must become) globally unified — outbound dialing, TLS, SSRF guards, DNS, Redis, dye headers, key extraction, IP matching, real IP, templates, durations, error replies. Check here BEFORE implementing any of these in a new plugin or module.
+---
+
+# 05 Unification points registry
+
+Edgion has repeatedly re-invented cross-cutting mechanisms per plugin (the
+five incompatible fail-open/fail-close config shapes found on 2026-07-19 are
+the proof). This registry is the durable defense: one entry per mechanism,
+stating the canonical implementation, the rule new code must follow, and the
+known exemptions with their reasons.
+
+The one-line hard rules live in `AGENTS.md` ("Cross-cutting unification
+rules"), which is loaded every session; this file carries the detail behind
+each rule. Keep the two in sync: a new entry here that is a "violating this
+is a bug" rule also gets a line there.
+
+**Status legend**
+
+- **Unified** — a canon exists; new code MUST use it.
+- **Fragmented** — multiple incompatible shapes exist; do NOT add another
+  variant; the pointed-to task owns the convergence.
+- **Gap** — a known violation of an otherwise-unified mechanism, tracked as a
+  task.
+
+---
+
+## Outbound & egress
+
+### 1. Outbound HTTP client construction — Unified
+
+- **Canon**: `edgion-common/src/link_sys_core/http_client.rs` —
+  `build_outbound_client(OutboundClientConfig)` / `apply_outbound_policy`.
+  Centralizes pool / timeout / redirect / proxy-env / TLS policy; the default
+  redirect policy is `OutboundRedirect::Deny` because a forgotten redirect
+  policy is an SSRF surface. Gateway code reaches it via the re-export
+  `crate::link_sys::http_client`. Convenience layers on top:
+  `build_pooled_outbound_client` and the process-global `get_http_client()`
+  singleton in `edgion-gateway/src/plugins/http/common/http_client.rs`.
+- **Rule**: every outbound `reqwest::Client` MUST be built through the
+  factory. A bare `reqwest::Client::builder()` outside `#[cfg(test)]` code is
+  a bug.
+- **Verified consumers** (2026-07-19): the shared singleton,
+  `ManagedOutboundClient`, both DSL `http.call` clients, wasm guest callouts
+  and OCI pulls, openid_connect (default branch), request_mirror,
+  the elasticsearch link_sys provider, health-check probes,
+  all_endpoint_status.
+- **Exemptions**:
+  - openid_connect SAN-pinning branch
+    (`edgion-gateway/src/plugins/http/openid_connect/plugin.rs`) builds a raw
+    client with `use_preconfigured_tls` because a custom
+    `ServerCertVerifier` cannot be attached through the factory's high-level
+    TLS helpers; it falls back to the shared client on build failure.
+  - Test code.
+- **Gap**: controller ACME DNS-01 provider
+  (`edgion-controller/src/services/acme/dns_provider.rs`) builds a raw
+  client — see `tasks/todo/acme-dns-provider-outbound-factory.md`.
+
+### 2. Outbound request semantics (`ExternalHttpConnection`) — Unified for its class
+
+- **Canon**: schema in
+  `edgion-resources/src/resources/common/external_http.rs` +
+  `edgion-resources/src/resources/common/outbound_request.rs`; runtime in
+  `edgion-gateway/src/plugins/http/common/outbound/client.rs`
+  (`ManagedOutboundClient`) and
+  `edgion-gateway/src/plugins/http/common/outbound/call.rs`.
+- **What it owns**: request templates, retry/backoff, success predicates,
+  timeout templates, header/cookie assembly, failure-status semantics for an
+  operator-configured HTTP dependency.
+- **Consumers**: forward_auth, the LinkSys webhook provider, and the
+  `EdgionBackendTrafficPolicy` upstream-authority outbound path.
+- **Rule**: a new plugin that calls an operator-configured HTTP dependency
+  with any of the above semantics MUST reuse `ExternalHttpConnection` — and
+  MUST NOT invent new failure vocabulary
+  ([20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md)
+  states this for the authority path; this registry makes it global). The
+  vocabulary itself is being reworked — see
+  [Fragmented: failure-policy vocabulary](#fragmented-do-not-extend) below.
+
+### 3. Outbound TLS resolution — Unified
+
+- **Canon**: `edgion-common/src/link_sys_core/outbound_tls.rs`
+  (`resolve_outbound_tls`), applied inside the client factory via
+  `edgion-common/src/link_sys_core/tls.rs`.
+- **Rule**: every outbound TLS configuration (CA bundle, client cert/mTLS,
+  verification toggles) MUST resolve through it — including non-reqwest
+  dialers.
+- **Verified consumers**: the reqwest factory, ext_proc (tonic channel with a
+  custom hyper connector), ldap_auth (ldap3), the redis provider (fred), the
+  kafka provider (rskafka), the etcd link provider, openid_connect token
+  exchange.
+
+### 4. Egress safety (SSRF) — Unified mechanisms, per-path adoption
+
+Three canonical pieces, each with a distinct job:
+
+- **`classify_ip` / `classify_backend_addr`**
+  (`edgion-gateway/src/util/net.rs`) — the single IP-classification entry
+  point for upstream dial addresses (loopback / link-local + metadata /
+  private), IPv4-mapped-IPv6 handled. All three upstream-dial callers
+  (`validate_backend_addr`, `validate_endpoint_backend_addr`,
+  `pg_upstream_peer`) inherit fixes made here.
+- **`EgressResolver`**
+  (`edgion-gateway/src/plugins/http/common/outbound/egress.rs`) — implements
+  `reqwest::dns::Resolve`, classifying the exact addresses reqwest is about
+  to connect to. This closes the DNS-rebinding / TOCTOU window that a
+  config-time-only check leaves open. Gateway-wide defaults installed once at
+  startup by `configure_egress_defaults`.
+- **`AnchorPinnedResolver`**
+  (`edgion-gateway/src/plugins/http/common/outbound/pinned_resolver.rs`) —
+  for the upstream-authority path: never resolves the composed authority in
+  DNS at all; pins every lookup to the anchor Service's ready endpoints.
+
+**Adoption map** (verified 2026-07-19): `EgressResolver` guards
+forward_auth / webhook and wasm guest callouts. Upstream dialing goes through
+`classify_backend_addr`. DSL `http.call` is a documented design tradeoff
+(F-018): IP-literal-only check (`is_ssrf_blocked_ip_literal`) plus a per-hop
+redirect guard, no resolution-time classification — see
+[dsl-engine-security-model.md](../02-gateway/dsl-engine-security-model.md)
+and the decision rules under [skills/04-review/ssrf/](../../04-review/ssrf/)
+(7 files). Service-backendRef targets are defended by RBAC/NetworkPolicy,
+not in-process checks.
+
+- **Rule**: a NEW egress path whose destination is influenced by operator
+  config strings or request data MUST use `EgressResolver` (preferred) or at
+  minimum `classify_ip` at dial time; MUST disable reqwest's proxy-env pickup
+  (`HTTP_PROXY`/`HTTPS_PROXY`); and MUST deny redirects unless there is a
+  documented per-hop re-check. Before flagging or "fixing" an existing path,
+  read the ssrf review skills — several apparent gaps are recorded
+  tradeoffs.
+
+### 5. DNS resolution — Unified core, deliberate partial adoption
+
+- **Canon**: `edgion-common/src/dns/` — `ResolverSpec`
+  (`System` | `StandardDns` via hickory-resolver | `HttpDns` via the LinkSys
+  httpdns config), with `fingerprint()` as the cache-key component. Controller
+  background resolution:
+  `edgion-controller/src/services/dns_resolver/service.rs`; gateway
+  data-plane cache: `edgion-gateway/src/backends/discovery/dns_cache.rs`.
+- **Rule**: any resolution driven by operator resolver configuration MUST go
+  through `ResolverSpec`; do not embed another resolver library or hand-roll
+  lookups.
+- **Deliberate non-adopters** (OS/system resolver via their client library —
+  not gaps): DSL `http.call` (per the F-018 tradeoff above), openid_connect,
+  request_mirror, elasticsearch, health probes, ldap3, the ext_proc tonic
+  channel.
+- **Not DNS at all**: K8s Service backends dial EndpointSlice pod IPs /
+  ClusterIP directly; the upstream-authority outbound path uses
+  `AnchorPinnedResolver`.
+
+### 6. Redis access — Unified
+
+- **Canon**: the LinkSys `RedisLinkClient`
+  (`edgion-gateway/src/link_sys/providers/redis/client.rs`, a fred `Pool`
+  with reconnection/TLS/cluster/sentinel handling), obtained via
+  `get_redis_client` from the LinkSys store. Rate-limit Lua machinery
+  (SCRIPT LOAD / EVALSHA-with-EVAL-fallback + the three algorithms) is shared
+  in `edgion-gateway/src/plugins/common/redis_rate_limiter/mod.rs`.
+- **Consumers**: rate_limit_redis, stream connection_rate_limit, DSL
+  `redis.*` builtins.
+- **Rule**: never create a direct redis connection; new rate-limit algorithms
+  extend the shared core, not a plugin-local copy.
+
+---
+
+## Data-plane request mechanics
+
+### 7. Success-path dye headers — Unified (failure extension pending)
+
+- **Canon**: config
+  `edgion-resources/src/resources/edgion_plugins/plugin_configs/dye_headers.rs`
+  + runtime `edgion-gateway/src/plugins/runtime/dye_headers.rs`
+  (`apply_dye_headers`). Embedded by the five selection plugins (canary,
+  dynamic_internal_upstream, dynamic_external_upstream, direct_endpoint,
+  region_route); applied on the success arm after `set_upstream_jump`.
+- **Rule**: selection tagging MUST use `DyeHeaders`; do not add a
+  plugin-local tagging field.
+- **Pending**: no failure branch dyes today — owned by
+  `tasks/todo/failure-outcome-dye-header.md`.
+
+### 8. Key extraction (`KeyGet`) — Unified
+
+- **Canon**: `edgion-resources/src/common/key_accessor.rs`. Used by 10+
+  plugin configs (key_auth, rate_limit, rate_limit_redis, ctx_set,
+  region_route, direct_endpoint, dynamic_*_upstream, dye_headers,
+  conditions, ...).
+- **Rule**: any "take a key from header/query/cookie/path/..." config MUST
+  reuse `KeyGet` — never a plugin-local source enum.
+
+### 9. IP/CIDR matching — Unified
+
+- **Canon**: `edgion-resources/src/matcher/ip_radix_tree/` (+
+  `edgion-resources/src/matcher/ip_cidr_helpers.rs`).
+- **Consumers**: http/stream ip_restriction, global_connection_ip_restriction,
+  tls_route IP restriction, global_access_control, real-IP trusted-proxy
+  matching, edgion_config_data.
+- **Rule**: IP allow/deny matching MUST use the radix tree; no linear
+  `Vec<IpNet>` scans, no second matcher.
+
+### 10. Client real-IP determination — Unified
+
+- **Canon**: `edgion-gateway/src/util/real_ip_extractor.rs` (the real_ip
+  plugin configures it; `ctx` carries the result).
+- **Rule**: never parse `X-Forwarded-For` / `X-Real-IP` ad hoc; consume the
+  extractor's result.
+
+### 11. Request-variable templates — Unified engine + safety allow-list
+
+- **Canon**: template schema/parse in
+  `edgion-resources/src/resources/common/outbound_request.rs`; rendering in
+  `edgion-gateway/src/plugins/http/common/outbound/request.rs` (the
+  `${type:name}` engine: `ctx` / `header` / `query` / `cookie` / `secretRef`
+  / `clientIp` / ...).
+- **Safety discipline**: security-sensitive fields (anything that steers a
+  deadline, a fail-open decision, or a destination) MUST use a restricted
+  variable allow-list that rejects client-controlled variable types at
+  admission — the worked example is `timeoutMsTemplate` /
+  `allowDegradationTemplate` in
+  [18-link-sys.md](../../02-features/03-resources/18-link-sys.md).
+- **Rule**: a new templated field MUST use the shared engine, and MUST
+  classify itself: full variable set for request-shaping fields, restricted
+  allow-list for security-sensitive ones.
+
+### 12. Duration config fields — Two sanctioned styles, one parser
+
+- **Canon parser**: `edgion-resources/src/duration.rs` (`parse_duration`).
+- **Current state** (deliberate, not a gap): two field styles coexist —
+  string durations (`"5s"`, `"100ms"`) on Gateway-API-shaped surfaces
+  (route timeouts, health_check, rate_limit intervals, gateway config) and
+  integer `*Ms` fields on most plugin configs (ext_proc, wasm,
+  `ExternalHttpConnection.timeoutMs`, ...).
+- **Rule**: string-duration fields MUST parse via `parse_duration` — never a
+  hand-rolled parser. A new field picks ONE of the two existing styles;
+  inventing a third format (float seconds, etc.) is a bug.
+
+### 13. Local error replies — Unified contract
+
+- **Canon**: `PluginRunningResult::ErrResponse`
+  (`edgion-resources/src/filters.rs`). The runtime renders it at a single
+  point, draining the pending response-header queue (dye headers, CORS, ...)
+  and recording `EdgionStatus` in the access log.
+- **Exception**: `ErrTerminateRequest` — only when the response shape is
+  inherently dynamic (e.g. forward_auth forwarding the auth service's full
+  response), and the plugin MUST have written the response before returning.
+  The runtime fail-safe turns a violation into a 502 +
+  `PluginTerminateWithoutResponse` access-log marker.
+- **Rule**: plugins reject via `ErrResponse` by default. Cross-cutting
+  failure machinery (e.g. the pending failure-outcome dye header) hooks the
+  `ErrResponse` render point — an unnecessary `ErrTerminateRequest` opts out
+  of all of it.
+
+### 14. Fail-closed error bodies leak no internal detail — Hard rule
+
+- Any fail-close reject body sent to the client MUST NOT include internal
+  error detail (upstream addresses, dependency error strings, stack traces).
+  Detail goes to the access log / `EdgionStatus`, not the response body.
+  Rationale and worked cases:
+  [fail-closed-error-body-no-internal-detail.md](../../04-review/security/fail-closed-error-body-no-internal-detail.md).
+
+---
+
+## Already canonical elsewhere (cross-links only)
+
+- **Secret redaction + CRD schema hygiene** — `#[schemars(skip)]` /
+  `edgion-resources/src/redact.rs` discipline: see the
+  "CRD schema ↔ struct invariants" section of `AGENTS.md` and
+  [00-schema-transport-contract.md](../05-resources/00-schema-transport-contract.md).
+- **Observability split** — data plane: access log + `EdgionStatus` +
+  restrained metrics; control plane: `tracing` + status conditions. See
+  [skills/03-coding/observability/](../../03-coding/observability/01-metrics.md).
+- **Security review iron rules** —
+  [iron-rules.md](../../04-review/security/iron-rules.md) (review-layer
+  companion to this registry).
+
+---
+
+## Fragmented (do not extend)
+
+- **Failure-policy vocabulary** — five incompatible fail-open/fail-close
+  config shapes exist (`allowDegradation`+`statusOnError` on
+  `ExternalHttpConnection`, ext_proc `failure_mode_allow`, wasm `fail_open`,
+  `OnRedisFailure`, DSL `error_policy`). Do NOT add a sixth. Convergence is
+  owned by `tasks/todo/failure-policy-unification.md` (decided there: auth
+  class is fixed fail-close with no knob).
+- **Failure-outcome dye header** — no failure branch dyes today; owned by
+  `tasks/todo/failure-outcome-dye-header.md`.
+
+## Known gaps & observations (tracked)
+
+- ACME DNS-01 provider bypasses the outbound client factory →
+  `tasks/todo/acme-dns-provider-outbound-factory.md`.
+- JWT/JWK parsing helpers exist twice
+  (`edgion-gateway/src/plugins/http/openid_connect/jwt_common.rs` vs
+  jwt_auth's own) — below the 3+ threshold, recorded as an observation →
+  `tasks/todo/jwt-helper-consolidation.md`.
