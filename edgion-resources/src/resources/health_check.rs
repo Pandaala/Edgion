@@ -35,6 +35,7 @@ pub struct ActiveHealthCheckConfig {
 
     /// Optional health check port override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<u16>,
 
     /// Interval between probes (GEP-2257 duration, e.g. "10s", "1m").

@@ -83,7 +83,7 @@ spec:
                         port:
                           type: integer
                           description: "Optional health check port override"
-                          minimum: 0
+                          minimum: 1
                           maximum: 65535
                         interval:
                           type: string

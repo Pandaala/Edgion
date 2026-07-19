@@ -30,7 +30,8 @@ as an `"idle timeout"` `err_log` entry for TLS proxies.
 **2. Secure-by-default with explicit opt-out**
 
 `resolve_tcp_idle_timeout(spec.tcpTimeout)` returns 1 hour even when no `tcpTimeout`
-section is configured. Only an explicit `idleTimeout: "0"` opts out. Operators who
+section is configured. Only an explicit `idleTimeout: "0s"` (any zero-valued
+GEP-2257 duration; a bare `"0"` is rejected at admission) opts out. Operators who
 legitimately need unbounded connections must consciously disable the timeout.
 
 **3. All three L4 proxy types route through the same helper**

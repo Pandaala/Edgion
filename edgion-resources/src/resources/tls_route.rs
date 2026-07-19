@@ -28,6 +28,10 @@ pub struct TLSRouteSpec {
     /// Hostnames defines a set of SNI names that should match against the SNI attribute
     /// of TLS ClientHello message in TLS handshake
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    ))]
     pub hostnames: Option<Vec<String>>,
 
     /// Rules defines the TLS routing rules
@@ -69,6 +73,7 @@ pub struct TLSBackendRef {
 
     /// Port specifies the destination port number
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 
     /// Weight specifies the proportion of requests forwarded to the backend
@@ -111,6 +116,10 @@ pub struct TLSRouteAlpha3Spec {
     pub parent_refs: Option<Vec<ParentReference>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    ))]
     pub hostnames: Option<Vec<String>>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]

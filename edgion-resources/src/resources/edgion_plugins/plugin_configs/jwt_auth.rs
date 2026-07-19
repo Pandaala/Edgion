@@ -60,8 +60,12 @@ pub enum JwtAlgorithm {
 #[serde(rename_all = "camelCase")]
 pub struct JwtIssuerGroup {
     /// Group name; charset per K8s label-value
-    /// (`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, <=63 chars).
+    /// ([`crate::gwapi_types::GROUP_NAME_PATTERN`], <=63 chars).
     /// Surfaces in PluginLog as `group=<name>`.
+    #[schemars(
+        length(max = crate::gwapi_types::GROUP_NAME_MAX_LEN),
+        pattern(crate::gwapi_types::GROUP_NAME_PATTERN)
+    )]
     pub name: String,
 
     /// Human-readable description (not used by runtime).

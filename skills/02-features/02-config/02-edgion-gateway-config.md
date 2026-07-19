@@ -175,8 +175,8 @@ spec:
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `idleTimeout` | `Duration` | `1h` | Established L4 relay inactivity timeout; `0` disables it. Applies to TCP, TLS termination, and TLS passthrough, not UDP. |
-| `connectTimeout` | `Duration` | `10s` | Upstream TCP connection bound; `0` delegates to the OS bound. |
+| `idleTimeout` | `Duration` | `1h` | Established L4 relay inactivity timeout; `0s` disables it. Applies to TCP, TLS termination, and TLS passthrough, not UDP. |
+| `connectTimeout` | `Duration` | `10s` | Upstream TCP connection bound; `0s` delegates to the OS bound. |
 
 ### spec.loadBalancing
 

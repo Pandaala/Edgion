@@ -111,6 +111,10 @@ fn is_default_verify_depth(depth: &u8) -> bool {
 pub struct EdgionTlsSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_refs: Option<Vec<ParentReference>>,
+    #[schemars(inner(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    ))]
     pub hosts: Vec<String>,
     pub secret_ref: SecretObjectReference,
     /// mTLS client authentication configuration (optional)

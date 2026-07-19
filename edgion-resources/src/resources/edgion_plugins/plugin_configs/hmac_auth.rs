@@ -70,7 +70,11 @@ pub struct HmacCredential {
 #[serde(rename_all = "camelCase")]
 pub struct HmacAuthSecretGroup {
     /// Group name; charset = Kubernetes label-value
-    /// (`^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$`, <=63 chars).
+    /// ([`crate::gwapi_types::GROUP_NAME_PATTERN`], <=63 chars).
+    #[schemars(
+        length(max = crate::gwapi_types::GROUP_NAME_MAX_LEN),
+        pattern(crate::gwapi_types::GROUP_NAME_PATTERN)
+    )]
     pub name: String,
 
     /// Human-readable description (not used by runtime).

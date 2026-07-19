@@ -211,8 +211,12 @@ fn validate_target(target: &str) -> Result<(), String> {
         return Err("grpcService.target host must not be empty".to_string());
     }
     match port.parse::<u16>() {
-        Ok(p) if p >= 1 => Ok(()),
-        _ => Err("grpcService.target port must be a number in 1..=65535".to_string()),
+        Ok(p) if crate::gwapi_types::is_valid_port(p as i64) => Ok(()),
+        _ => Err(format!(
+            "grpcService.target port must be a number in {}..={}",
+            crate::gwapi_types::PORT_MIN,
+            crate::gwapi_types::PORT_MAX
+        )),
     }
 }
 

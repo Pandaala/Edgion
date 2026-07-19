@@ -146,6 +146,10 @@ pub struct BackendTLSPolicyValidation {
     /// 1. Hostname MUST be used as the SNI to connect to the backend
     /// 2. Hostname MUST be used for authentication and MUST match the certificate
     ///    served by the matching backend.
+    #[schemars(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::PRECISE_HOSTNAME_PATTERN)
+    )]
     pub hostname: String,
 
     /// SubjectAltNames contains one or more Subject Alternative Names.
@@ -200,6 +204,10 @@ pub struct SubjectAltName {
     /// Hostname contains Subject Alternative Name specified in DNS name format.
     /// Required when Type is set to Hostname, ignored otherwise.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    )]
     pub hostname: Option<String>,
 
     /// URI contains Subject Alternative Name specified in a full URI format.

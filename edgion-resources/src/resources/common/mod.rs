@@ -82,6 +82,7 @@ pub struct ParentReference {
 
     /// Port is the network port this Route targets
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 }
 

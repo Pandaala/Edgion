@@ -39,6 +39,7 @@ pub struct DirectEndpointConfig {
     ///
     /// If none of the above are available, the plugin returns an error.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<u16>,
 
     /// Behavior when the endpoint value is missing from the request.

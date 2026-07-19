@@ -58,6 +58,7 @@ pub struct UDPBackendRef {
 
     /// Port specifies the destination port number
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 
     /// Weight specifies the proportion of requests forwarded to the backend

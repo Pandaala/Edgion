@@ -65,6 +65,7 @@ pub struct WebhookServiceRef {
     pub namespace: Option<String>,
     /// Destination port. Required for a service target.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 }
 
@@ -209,7 +210,13 @@ fn validate_service_ref(svc: &WebhookServiceRef) -> Result<(), String> {
     }
     match svc.port {
         None => return Err("backendRef port is required".to_string()),
-        Some(port) if port <= 0 => return Err("backendRef port must be > 0".to_string()),
+        Some(port) if !crate::gwapi_types::is_valid_port(port as i64) => {
+            return Err(format!(
+                "backendRef port must be in {}..={}",
+                crate::gwapi_types::PORT_MIN,
+                crate::gwapi_types::PORT_MAX
+            ))
+        }
         Some(_) => {}
     }
     match EdgionService::from_kind(svc.kind.as_ref()) {

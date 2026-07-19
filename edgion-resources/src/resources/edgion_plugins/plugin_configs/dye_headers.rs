@@ -5,6 +5,7 @@
 //! expose their per-request selection decision as HTTP headers. See
 //! `docs/superpowers/specs/2026-07-10-dye-headers-unification-design.md`.
 
+use crate::gwapi_types::is_valid_header_token;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -47,17 +48,6 @@ pub struct DyeHeader {
     pub value: Option<String>,
 }
 
-/// RFC 9110 `token` charset check for header names.
-fn is_valid_token(name: &str) -> bool {
-    !name.is_empty()
-        && name.bytes().all(|b| {
-            matches!(b,
-                b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.'
-                | b'^' | b'_' | b'`' | b'|' | b'~'
-                | b'0'..=b'9' | b'a'..=b'z' | b'A'..=b'Z')
-        })
-}
-
 /// HTTP field-value byte check: no control bytes (CR/LF/NUL/...), tab allowed.
 fn is_valid_field_value(value: &str) -> bool {
     value.bytes().all(|b| b == b'\t' || b >= 0x20 && b != 0x7f)
@@ -70,7 +60,7 @@ impl DyeHeaders {
     pub fn validation_error(&self) -> Option<String> {
         for (direction, entries) in [("request", &self.request), ("response", &self.response)] {
             for entry in entries {
-                if !is_valid_token(&entry.name) {
+                if !is_valid_header_token(&entry.name) {
                     return Some(format!(
                         "dyeHeaders.{}: invalid header name '{}'",
                         direction, entry.name

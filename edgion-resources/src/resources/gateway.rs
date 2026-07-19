@@ -45,9 +45,14 @@ pub struct Listener {
 
     /// Hostname associated with the Listener
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    )]
     pub hostname: Option<String>,
 
     /// Port on which the Listener is listening
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: i32,
 
     /// Protocol of the Listener
@@ -147,6 +152,7 @@ pub struct GatewayFrontendTLSDefault {
 #[serde(rename_all = "camelCase")]
 pub struct GatewayFrontendTLSPerPort {
     /// Port number to override
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: i32,
     /// TLS validation config for this port
     #[serde(default, skip_serializing_if = "Option::is_none")]

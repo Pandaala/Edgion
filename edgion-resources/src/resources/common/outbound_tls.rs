@@ -32,6 +32,10 @@ pub struct OutboundTlsValidation {
     pub well_known_ca_certificates: Option<WellKnownCACertificates>,
     /// Optional SNI override (default: endpoint host) + default SAN to check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::PRECISE_HOSTNAME_PATTERN)
+    )]
     pub hostname: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subject_alt_names: Option<Vec<SubjectAltName>>,

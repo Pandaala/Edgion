@@ -86,6 +86,7 @@ pub struct DomainTarget {
     ///
     /// Default: 443 if tls=true, 80 if tls=false
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<u16>,
 
     /// Whether to use TLS for the connection.

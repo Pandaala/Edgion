@@ -34,7 +34,8 @@ change `TransportConnector::new(None)`. This mirrors the HTTP path
 
 `resolve_tcp_connect_timeout(spec.tcpTimeout)` returns `Some(10s)` even when no
 `tcpTimeout` section is configured (`DEFAULT_TCP_CONNECT`, mirrors the idle
-sibling's `DEFAULT_TCP_IDLE`). Only an explicit `connectTimeout: "0"` opts out
+sibling's `DEFAULT_TCP_IDLE`). Only an explicit `connectTimeout: "0s"` (any
+zero-valued GEP-2257 duration; a bare `"0"` is rejected at admission) opts out
 (falls back to the OS TCP retransmit timeout, ~2m). The 10s default matches the
 Istio L4 `connectTimeout` baseline.
 

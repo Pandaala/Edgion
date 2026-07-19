@@ -257,7 +257,8 @@ pub struct BackendTimeout {
 pub struct TcpTimeout {
     /// Idle timeout for the established L4 relay. The activity clock resets on
     /// any byte progress in either direction (a completed read OR an advancing
-    /// partial write). "0" / "0s" disables it (unbounded — risky). Applies to
+    /// partial write). "0s" (any zero-valued duration) disables it (unbounded —
+    /// risky; a bare "0" is not valid GEP-2257 and is rejected at admission). Applies to
     /// plain TCP, TLS-terminated, and TLS-passthrough relays. UDP is not affected.
     /// Format: GEP-2257 duration string (e.g. "1h", "300s", "5m"). Default "1h".
     #[serde(default = "default_tcp_idle_timeout")]
@@ -271,7 +272,8 @@ pub struct TcpTimeout {
     /// `connectTimeout` baseline. A backend that silently drops SYNs (firewall,
     /// not-yet-ready pod) fails fast instead of stranding the downstream
     /// connection until the OS TCP retransmit timeout (~2m) fires.
-    /// "0" / "0s" disables it (unbounded — relies on the OS bound). Applies to
+    /// "0s" (any zero-valued duration) disables it (unbounded — relies on the OS
+    /// bound; a bare "0" is not valid GEP-2257 and is rejected at admission). Applies to
     /// plain TCP, TLS-terminated, and TLS-passthrough relays — in all three the
     /// upstream connect is plain TCP (TLS-terminated terminates downstream TLS
     /// separately; TLS-passthrough carries the end-to-end TLS handshake over the
@@ -318,7 +320,7 @@ pub const DEFAULT_TCP_IDLE: std::time::Duration = std::time::Duration::from_secs
 /// section.
 ///
 /// - section absent (`None`)                      -> `Some(DEFAULT_TCP_IDLE)` (secure default)
-/// - explicit `"0"` / `"0s"` / any zero duration  -> `None` (operator opt-out, unbounded)
+/// - explicit `"0s"` / any zero-valued duration   -> `None` (operator opt-out, unbounded)
 /// - any other valid duration                     -> `Some(parsed)`
 /// - parse error (schema-validated upstream)       -> `Some(DEFAULT_TCP_IDLE)` (fail-safe, silent)
 ///
@@ -345,7 +347,7 @@ pub const DEFAULT_TCP_CONNECT: std::time::Duration = std::time::Duration::from_s
 /// `BasicPeer.options.connection_timeout` (`None` = no application-level bound).
 ///
 /// - section absent (`None`)                      -> `Some(DEFAULT_TCP_CONNECT)` (secure default)
-/// - explicit `"0"` / `"0s"` / any zero duration  -> `None` (operator opt-out, unbounded)
+/// - explicit `"0s"` / any zero-valued duration   -> `None` (operator opt-out, unbounded)
 /// - any other valid duration                     -> `Some(parsed)`
 /// - parse error (schema-validated upstream)       -> `Some(DEFAULT_TCP_CONNECT)` (fail-safe, silent)
 ///
@@ -792,7 +794,9 @@ mod tcp_timeout_tests {
 
     #[test]
     fn resolve_zero_is_unbounded_optout() {
-        for s in ["0", "0s", "0m", "0.0s"] {
+        // Any zero-valued GEP-2257 duration opts out; a bare "0" is not a
+        // valid duration (see resolve_parse_error_fails_safe_to_default).
+        for s in ["0s", "0m", "0h", "0ms"] {
             let t = TcpTimeout {
                 idle_timeout: s.to_string(),
                 connect_timeout: default_tcp_connect_timeout(),
@@ -803,11 +807,19 @@ mod tcp_timeout_tests {
 
     #[test]
     fn resolve_parse_error_fails_safe_to_default() {
-        let t = TcpTimeout {
-            idle_timeout: "not-a-duration".to_string(),
-            connect_timeout: default_tcp_connect_timeout(),
-        };
-        assert_eq!(resolve_tcp_idle_timeout(Some(&t)), Some(DEFAULT_TCP_IDLE));
+        // "0" (bare number) and "0.0s" (decimal) are NOT valid GEP-2257 and
+        // must NOT opt out — they fail safe to the bounded default.
+        for s in ["not-a-duration", "0", "0.0s"] {
+            let t = TcpTimeout {
+                idle_timeout: s.to_string(),
+                connect_timeout: default_tcp_connect_timeout(),
+            };
+            assert_eq!(
+                resolve_tcp_idle_timeout(Some(&t)),
+                Some(DEFAULT_TCP_IDLE),
+                "{s} should fail safe to default"
+            );
+        }
     }
 
     #[test]
@@ -855,7 +867,9 @@ mod tcp_timeout_tests {
 
     #[test]
     fn resolve_connect_zero_is_unbounded_optout() {
-        for s in ["0", "0s", "0m", "0.0s"] {
+        // Any zero-valued GEP-2257 duration opts out; a bare "0" is not a
+        // valid duration (see resolve_connect_parse_error_fails_safe_to_default).
+        for s in ["0s", "0m", "0h", "0ms"] {
             let t = TcpTimeout {
                 idle_timeout: default_tcp_idle_timeout(),
                 connect_timeout: s.to_string(),
@@ -866,11 +880,19 @@ mod tcp_timeout_tests {
 
     #[test]
     fn resolve_connect_parse_error_fails_safe_to_default() {
-        let t = TcpTimeout {
-            idle_timeout: default_tcp_idle_timeout(),
-            connect_timeout: "not-a-duration".to_string(),
-        };
-        assert_eq!(resolve_tcp_connect_timeout(Some(&t)), Some(DEFAULT_TCP_CONNECT));
+        // "0" (bare number) and "0.0s" (decimal) are NOT valid GEP-2257 and
+        // must NOT opt out — they fail safe to the bounded default.
+        for s in ["not-a-duration", "0", "0.0s"] {
+            let t = TcpTimeout {
+                idle_timeout: default_tcp_idle_timeout(),
+                connect_timeout: s.to_string(),
+            };
+            assert_eq!(
+                resolve_tcp_connect_timeout(Some(&t)),
+                Some(DEFAULT_TCP_CONNECT),
+                "{s} should fail safe to default"
+            );
+        }
     }
 
     #[test]

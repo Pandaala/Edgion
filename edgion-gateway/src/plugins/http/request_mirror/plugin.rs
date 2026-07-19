@@ -116,8 +116,12 @@ impl RequestMirrorPlugin {
             .backend_ref
             .port
             .ok_or_else(|| "backend_ref.port is required for RequestMirror".to_string())?;
-        if port <= 0 {
-            return Err("backend_ref.port must be > 0".to_string());
+        if !edgion_resources::gwapi_types::is_valid_port(port as i64) {
+            return Err(format!(
+                "backend_ref.port must be in {}..={}",
+                edgion_resources::gwapi_types::PORT_MIN,
+                edgion_resources::gwapi_types::PORT_MAX
+            ));
         }
         if self.config.backend_ref.name.is_empty() {
             return Err("backend_ref.name is required for RequestMirror".to_string());

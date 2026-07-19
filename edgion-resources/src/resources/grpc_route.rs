@@ -34,6 +34,10 @@ pub struct GRPCRouteSpec {
 
     /// Hostnames defines a set of hostnames to match against the gRPC Host header
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    ))]
     pub hostnames: Option<Vec<String>>,
 
     /// Controller-resolved effective hostnames (intersection of route hostnames and listener hostnames).
@@ -215,6 +219,10 @@ pub struct GRPCHeaderMatch {
     pub match_type: Option<String>,
 
     /// Name is the name of the gRPC Header
+    #[schemars(
+        length(max = crate::gwapi_types::HEADER_NAME_MAX_LEN),
+        pattern(crate::gwapi_types::HEADER_NAME_PATTERN)
+    )]
     pub name: String,
 
     /// Value is the value of gRPC Header
@@ -233,6 +241,7 @@ pub struct GRPCBackendRef {
 
     /// Port specifies the destination port number
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 
     /// Weight specifies the proportion of requests forwarded to the backend

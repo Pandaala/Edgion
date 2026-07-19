@@ -29,6 +29,10 @@ pub struct HTTPRouteSpec {
 
     /// Hostnames defines the set of hostnames
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(inner(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::HOSTNAME_PATTERN)
+    ))]
     pub hostnames: Option<Vec<String>>,
 
     /// Controller-resolved effective hostnames (intersection of route hostnames and listener hostnames).
@@ -253,6 +257,10 @@ pub struct HTTPHeaderMatch {
     pub match_type: Option<String>,
 
     /// Name is the name of the HTTP Header
+    #[schemars(
+        length(max = crate::gwapi_types::HEADER_NAME_MAX_LEN),
+        pattern(crate::gwapi_types::HEADER_NAME_PATTERN)
+    )]
     pub name: String,
 
     /// Value is the value of HTTP Header
@@ -285,6 +293,7 @@ pub struct HTTPBackendRef {
 
     /// Port specifies the destination port number
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 
     /// Weight specifies the proportion of requests forwarded to the backend
@@ -420,6 +429,10 @@ pub struct HTTPHeaderFilter {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 pub struct HTTPHeader {
     /// Name is the name of the HTTP Header
+    #[schemars(
+        length(max = crate::gwapi_types::HEADER_NAME_MAX_LEN),
+        pattern(crate::gwapi_types::HEADER_NAME_PATTERN)
+    )]
     pub name: String,
     /// Value is the value of HTTP Header
     pub value: String,
@@ -435,6 +448,10 @@ pub struct HTTPRequestRedirectFilter {
 
     /// Hostname is the hostname to be used in the value of the Location header
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::PRECISE_HOSTNAME_PATTERN)
+    )]
     pub hostname: Option<String>,
 
     /// Path defines parameters used to modify the path of the incoming request
@@ -443,6 +460,7 @@ pub struct HTTPRequestRedirectFilter {
 
     /// Port is the port to be used in the value of the Location header
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 
     /// StatusCode is the HTTP status code to be used in response
@@ -456,6 +474,10 @@ pub struct HTTPRequestRedirectFilter {
 pub struct HTTPURLRewriteFilter {
     /// Hostname is the value to be used to replace the Host header value during forwarding
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(
+        length(max = crate::gwapi_types::HOSTNAME_MAX_LEN),
+        pattern(crate::gwapi_types::PRECISE_HOSTNAME_PATTERN)
+    )]
     pub hostname: Option<String>,
 
     /// Path defines a path rewrite
@@ -719,6 +741,7 @@ pub struct BackendObjectReference {
 
     /// Port specifies the destination port number to use for this resource
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = crate::gwapi_types::PORT_MIN, max = crate::gwapi_types::PORT_MAX))]
     pub port: Option<i32>,
 }
 

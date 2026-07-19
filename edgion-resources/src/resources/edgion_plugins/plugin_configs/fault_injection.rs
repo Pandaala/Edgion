@@ -1,3 +1,4 @@
+use crate::gwapi_types::is_valid_header_token;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -97,35 +98,6 @@ fn default_content_type() -> String {
 
 use crate::resources::edgion_plugins::PluginValidation;
 
-/// Validates an HTTP header name against RFC 7230 token rules.
-///
-/// A token is one or more characters from: `A-Za-z0-9!#$%&'*+-.^_`|~`
-fn is_valid_header_name(name: &str) -> bool {
-    !name.is_empty()
-        && name.bytes().all(|b| {
-            matches!(b,
-                b'A'..=b'Z'
-                | b'a'..=b'z'
-                | b'0'..=b'9'
-                | b'!'
-                | b'#'
-                | b'$'
-                | b'%'
-                | b'&'
-                | b'\''
-                | b'*'
-                | b'+'
-                | b'-'
-                | b'.'
-                | b'^'
-                | b'_'
-                | b'`'
-                | b'|'
-                | b'~'
-            )
-        })
-}
-
 /// Validates an HTTP header value: no control chars (\r, \n, \0); must be
 /// ASCII printable, space, or horizontal tab.
 fn is_valid_header_value(value: &str) -> bool {
@@ -197,7 +169,7 @@ impl AbortConfig {
                         h.name
                     ));
                 }
-                if !is_valid_header_name(&h.name) {
+                if !is_valid_header_token(&h.name) {
                     return Err(format!(
                         "invalid abort.headers name '{}': invalid header name token",
                         h.name

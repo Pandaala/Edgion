@@ -147,7 +147,31 @@ fn test_validation_service_port_zero() {
     };
     assert_eq!(
         config.get_validation_error().as_deref(),
-        Some("backendRef port must be > 0")
+        Some("backendRef port must be in 1..=65535")
+    );
+}
+
+#[test]
+fn test_validation_service_port_above_max() {
+    let config = WebhookServiceConfig {
+        conn: ExternalHttpConnection {
+            target: WebhookTarget {
+                service: WebhookServiceRef {
+                    kind: None,
+                    name: Some("my-svc".to_string()),
+                    namespace: None,
+                    port: Some(70000),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(
+        config.get_validation_error().as_deref(),
+        Some("backendRef port must be in 1..=65535")
     );
 }
 
@@ -171,7 +195,7 @@ fn test_validation_service_port_negative() {
     };
     assert_eq!(
         config.get_validation_error().as_deref(),
-        Some("backendRef port must be > 0")
+        Some("backendRef port must be in 1..=65535")
     );
 }
 

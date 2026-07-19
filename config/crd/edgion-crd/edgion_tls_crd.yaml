@@ -46,11 +46,14 @@ spec:
                         type: integer
                         description: "Port of the referent"
                         format: int32
+                        minimum: 1
+                        maximum: 65535
                 hosts:
                   type: array
                   description: "List of hostnames/domains for TLS certificates. Supports wildcard prefix (e.g., *.example.com)"
                   items:
                     type: string
+                    maxLength: 253
                     pattern: '^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$'
                   minItems: 1
                 secretRef:
@@ -150,6 +153,8 @@ spec:
                           port:
                             type: integer
                             format: int32
+                            minimum: 1
+                            maximum: 65535
                       controllerName:
                         type: string
                         description: "Name of the controller managing this route"
