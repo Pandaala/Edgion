@@ -16,9 +16,8 @@ use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
 use edgion_resources::resources::backend_tls_policy::{
     BackendTLSPolicyCACertificateRef, BackendTLSPolicyStatus, BackendTLSPolicyTargetRef, BtpSpecView,
-    PolicyAncestorStatus,
 };
-use edgion_resources::resources::common::{is_core_api_group, ParentReference};
+use edgion_resources::resources::common::{is_core_api_group, ParentReference, PolicyAncestorStatus};
 use edgion_resources::ResourceKind;
 
 /// Decide whether sibling BackendTLSPolicies (those targeting the same
@@ -617,49 +616,11 @@ impl BackendTlsPolicyHandler {
         target_refs: &[BackendTLSPolicyTargetRef],
         ctx: &HandlerContext,
     ) -> Vec<(String, String)> {
-        // Gateway API PolicyAncestorStatus maxItems=16.
-        const MAX_POLICY_ANCESTORS: usize = 16;
-
         let policy_ns = meta.namespace.as_deref().unwrap_or("default");
-        let service_ref_manager = &ctx.runtime().service_ref_mgr;
-        let route_index = &ctx.runtime().gateway_route_index;
-
-        let mut seen = std::collections::HashSet::new();
-
-        for target_ref in target_refs {
-            // Per Gateway API spec, targetRef can only reference resources in the same namespace.
-            let service_key = format!("{}/{}", policy_ns, target_ref.name);
-
-            // Step 1: Service -> Routes
-            let routes = service_ref_manager.get_refs(&service_key);
-
-            for route_ref in &routes {
-                let route_key = route_ref.resource_key();
-
-                // Step 2: Route -> Gateways
-                let gw_keys = route_index.get_gateways_for_route(route_ref.kind, &route_key);
-
-                for gw_key in gw_keys {
-                    seen.insert(gw_key);
-                }
-            }
-        }
-
-        // Sort for stable truncation: same 16 Gateways selected on every reconcile.
-        let mut keys: Vec<String> = seen.into_iter().collect();
-        keys.sort_unstable();
-
-        if keys.len() > MAX_POLICY_ANCESTORS {
-            tracing::warn!(
-                policy = %format!("{}/{}", policy_ns, meta.name.as_deref().unwrap_or("")),
-                total = keys.len(),
-                "BackendTLSPolicy ancestors truncated to {} per Gateway API limit",
-                MAX_POLICY_ANCESTORS,
-            );
-            keys.truncate(MAX_POLICY_ANCESTORS);
-        }
-
-        keys.into_iter()
+        let policy_key = format!("{}/{}", policy_ns, meta.name.as_deref().unwrap_or(""));
+        let names: Vec<&str> = target_refs.iter().map(|tr| tr.name.as_str()).collect();
+        super::resolve_policy_ancestor_gateways(policy_ns, &names, &policy_key, ctx)
+            .into_keys()
             .filter_map(|k| k.split_once('/').map(|(ns, name)| (ns.to_string(), name.to_string())))
             .collect()
     }
@@ -1093,7 +1054,9 @@ mod tests {
             "spec": { "targetRefs": [ { "kind": "Service", "name": service } ] },
         }))
         .expect("valid EdgionBackendTrafficPolicy JSON");
-        let _ = EdgionBackendTrafficPolicyHandler::new().parse(ebtp, ctx).await;
+        let _ = EdgionBackendTrafficPolicyHandler::new("test.edgion.io/controller".to_string())
+            .parse(ebtp, ctx)
+            .await;
     }
 
     /// CRITICAL regression test: applying/changing a BackendTLSPolicy must requeue every
@@ -1116,7 +1079,9 @@ mod tests {
             "EdgionBackendTrafficPolicy",
             128,
             Arc::new(
-                crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendTrafficPolicyHandler::new(),
+                crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendTrafficPolicyHandler::new(
+                    "test.edgion.io/controller".to_string(),
+                ),
             ),
             rt.clone(),
         ));
@@ -1160,7 +1125,9 @@ mod tests {
             "EdgionBackendTrafficPolicy",
             128,
             Arc::new(
-                crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendTrafficPolicyHandler::new(),
+                crate::conf_mgr::sync_runtime::resource_processor::handlers::EdgionBackendTrafficPolicyHandler::new(
+                    "test.edgion.io/controller".to_string(),
+                ),
             ),
             rt.clone(),
         ));

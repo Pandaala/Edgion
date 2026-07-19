@@ -67,13 +67,19 @@ A Controller → Gateway HTTP Pull reverse-query scheme was once evaluated (with
 
 ### 4.1 Simple resources (flat status with conditions)
 
-**Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, BackendTLSPolicy, EdgionBackendTrafficPolicy, EdgionConfigData
+**Pattern:** GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData
 
 These Edgion status structs use
 `edgion_resources::resources::common::Condition` and the shared
 `status_utils::{condition_true, condition_false, update_condition}` helpers.
 Choose a condition type from the resource API contract and reuse the matching
 shared helpers; do not introduce handler-local duplicates based on the old split.
+
+**Not this pattern:** BackendTLSPolicy and EdgionBackendTrafficPolicy report
+GEP-2648 **per-ancestor** status (`status.ancestors[]`, one `PolicyAncestorStatus`
+per ancestor Gateway) instead of a single flat `conditions[]` — see the
+`ancestors_status_equal` row in [§7](#7-status-persistence) and
+[20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md#status-schema).
 
 **GatewayClass special:** GatewayClassStatus also has `supported_features: Option<Vec<String>>`,
 populated in `update_status()` with the full list of supported Gateway API features (matching
@@ -275,9 +281,9 @@ state is unchanged.
 
 | Category | Kinds | Comparator | What it compares |
 |----------|-------|------------|------------------|
-| **Condition-only** | GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionBackendTrafficPolicy, EdgionConfigData | `conditions_only_status_equal` (explicit arms or the condition-only fallback) | `status.conditions[]` |
+| **Condition-only** | GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData | `conditions_only_status_equal` (explicit arms or the condition-only fallback) | `status.conditions[]` |
 | **Per-parent** | HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, UDPRoute, EdgionTls | `parents_status_equal` | `status.parents[]` matched by parentRef identity |
-| **Per-ancestor** | BackendTLSPolicy | `ancestors_status_equal` | `status.ancestors[]` matched by ancestorRef identity |
+| **Per-ancestor** | BackendTLSPolicy, EdgionBackendTrafficPolicy | `ancestors_status_equal` | `status.ancestors[]` matched by ancestorRef identity |
 | **Hybrid** | Gateway | `gateway_status_equal` | `addresses` + gateway-level `conditions` + `listeners[]` (matched by name) |
 | **Hybrid (lifecycle + conditions)** | EdgionAcme | Direct `Value` equality | All fields compared verbatim — conditions and lifecycle fields together |
 | **Unknown** | Future resources | `conditions_only_status_equal` | Safe fallback |

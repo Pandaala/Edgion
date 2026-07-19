@@ -78,7 +78,8 @@ Health check configuration attaches at the Service level only — there is no
 EndpointSlice- or Endpoints-level override tier anymore. If more than one
 `EdgionBackendTrafficPolicy` targets the same Service, the **oldest**
 `creationTimestamp` wins (ties break by resource name); the losing policy's
-status reports `Conflicted=True`. See
+status reports `Accepted=False`/reason `Conflicted` on the affected ancestor
+Gateway(s) in `status.ancestors[]`. See
 [Conflict Resolution](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md#conflict-resolution)
 for the full rule and how the winner is promoted when deleted.
 
@@ -196,8 +197,8 @@ The gateway calls the `Health/Check` RPC and marks the backend as healthy only w
 
 ### Issue 1: Policy is configured but does not seem to take effect
 
-Cause: the `EdgionBackendTrafficPolicy` spec failed validation (`Accepted=False`), or another policy targeting the same Service won oldest-wins arbitration (`Conflicted=True`), or `targetRefs` does not resolve to an existing Service yet (`ResolvedRefs=False`).
-Solution: `kubectl get edgionbackendtrafficpolicy <name> -n <namespace> -o yaml` and check `status.conditions`.
+Cause: the `EdgionBackendTrafficPolicy` spec failed validation (an ancestor's `Accepted=False/Invalid`), or another policy targeting the same Service won oldest-wins arbitration (`Accepted=False/Conflicted`), or `targetRefs` does not resolve to an existing Service yet (`ResolvedRefs=False`).
+Solution: `kubectl get edgionbackendtrafficpolicy <name> -n <namespace> -o yaml` and check `status.ancestors[].conditions` (one entry per ancestor Gateway — see [EdgionBackendTrafficPolicy status schema](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md#status-schema)).
 
 ### Issue 2: Probing too frequently causes increased backend pressure
 
@@ -206,7 +207,7 @@ Solution: Increase `interval`; for production environments, start from `5s~30s`.
 
 ### Issue 3: Two policies target the same Service and only one seems active
 
-Cause: this is expected — whole-section, oldest-wins arbitration; only the oldest `EdgionBackendTrafficPolicy` targeting a Service is in effect for that Service at a time (per concern, atomically). Check `status.conditions[].type: Conflicted` on the losing policy.
+Cause: this is expected — whole-section, oldest-wins arbitration; only the oldest `EdgionBackendTrafficPolicy` targeting a Service is in effect for that Service at a time (per concern, atomically). Check for `status.ancestors[].conditions[].type: Accepted, reason: Conflicted` on the losing policy's affected ancestor(s).
 Solution: consolidate into a single policy per Service, or delete the older one if it should no longer apply (the next-oldest is promoted automatically).
 
 ## Related Documentation

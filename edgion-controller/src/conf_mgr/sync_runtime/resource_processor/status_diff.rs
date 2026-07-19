@@ -38,7 +38,7 @@ pub fn status_semantically_changed(kind: &str, old_json: &str, new_json: &str) -
             !parents_status_equal(&old, &new)
         }
         "Gateway" => !gateway_status_equal(&old, &new),
-        "BackendTLSPolicy" => !ancestors_status_equal(&old, &new),
+        "BackendTLSPolicy" | "EdgionBackendTrafficPolicy" => !ancestors_status_equal(&old, &new),
         "EdgionAcme" => !acme_status_equal(&old, &new),
         // Simple condition-only resources:
         // GatewayClass, EdgionGatewayConfig, LinkSys, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData
@@ -193,7 +193,7 @@ fn parent_entry_equal(old: &Value, new: &Value) -> bool {
 }
 
 // ============================================================================
-// Per-ancestor status (BackendTLSPolicy)
+// Per-ancestor status (BackendTLSPolicy, EdgionBackendTrafficPolicy)
 // ============================================================================
 
 fn ancestors_status_equal(old: &Value, new: &Value) -> bool {
@@ -334,5 +334,25 @@ mod tests {
         let old = acme_status("2026-01-01T00:00:00Z", "True", "Ready");
         let new = acme_status("2026-01-01T00:00:00Z", "True", "Renewing");
         assert!(status_semantically_changed("EdgionAcme", &old, &new));
+    }
+
+    /// `EdgionBackendTrafficPolicy` (GEP-2648 `status.ancestors[]`, like
+    /// `BackendTLSPolicy`) must dispatch through `ancestors_status_equal`: a
+    /// `lastTransitionTime`-only change is not a semantic change, but a
+    /// `status` flip on a condition is.
+    #[test]
+    fn ebtp_uses_ancestors_comparison() {
+        let old = r#"{"ancestors":[{"ancestorRef":{"name":"gw"},"controllerName":"c","conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"m","lastTransitionTime":"2026-01-01T00:00:00Z"}]}]}"#;
+        let new_time_only = old.replace("2026-01-01", "2026-02-02");
+        assert!(
+            !status_semantically_changed("EdgionBackendTrafficPolicy", old, &new_time_only),
+            "lastTransitionTime-only change must not trigger a status write"
+        );
+        let new_flipped = old.replace("\"status\":\"True\"", "\"status\":\"False\"");
+        assert!(status_semantically_changed(
+            "EdgionBackendTrafficPolicy",
+            old,
+            &new_flipped
+        ));
     }
 }

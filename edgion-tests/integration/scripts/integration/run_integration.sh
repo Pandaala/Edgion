@@ -1159,6 +1159,7 @@ run_all_tests() {
                     run_test "Status_RefGrant_TCPRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i RefGrant/TCPRouteCrossNsSvc" || test_failed=true
                     run_test "Status_RefGrant_TLSRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i RefGrant/TLSRouteCrossNsSvc" || test_failed=true
                     run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
+                    run_test "Status_EdgionBackendTrafficPolicy" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i EdgionBackendTrafficPolicy" || test_failed=true
                     run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
                     run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i TLSListenerMode" || test_failed=true
                     run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i TLSRoute" || test_failed=true
@@ -1351,6 +1352,7 @@ run_all_tests() {
         run_test "Status_RefGrant_TCPRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i RefGrant/TCPRouteCrossNsSvc" || test_failed=true
         run_test "Status_RefGrant_TLSRouteCrossNsSvc" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i RefGrant/TLSRouteCrossNsSvc" || test_failed=true
         run_test "Status_BackendTLSPolicy" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i BackendTLSPolicy" || test_failed=true
+        run_test "Status_EdgionBackendTrafficPolicy" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i EdgionBackendTrafficPolicy" || test_failed=true
         run_test "Status_GatewayFrontendValidation" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i GatewayFrontendValidation" || test_failed=true
         run_test "Status_TLSListenerMode" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i TLSListenerMode" || test_failed=true
         run_test "Status_TLSRoute" "${PROJECT_ROOT}/target/debug/test_client -g -r Status -i TLSRoute" || test_failed=true
@@ -1477,7 +1479,7 @@ main() {
             if [ -n "$G_ITEM" ]; then
                 suites="${base_suites},Status/${G_ITEM}"
             else
-                suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy,Status/GatewayFrontendValidation,Status/TLSListenerMode,Status/TLSRoute"
+                suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy,Status/EdgionBackendTrafficPolicy,Status/GatewayFrontendValidation,Status/TLSListenerMode,Status/TLSRoute"
             fi
         elif [ "$G_RESOURCE" = "EdgionBackendTrafficPolicy" ]; then
             # Control-plane suite applies its own policies at runtime; only the

@@ -1,0 +1,17 @@
+# Second of two Gateways used by the GEP-2648 ancestor-status scenario for
+# EdgionBackendTrafficPolicy (Status/EdgionBackendTrafficPolicy). Port from
+# ports.json "Status/EdgionBackendTrafficPolicy".http_gw_b.
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ebtp-anc-gw-b
+  namespace: edgion-test
+spec:
+  gatewayClassName: public-gateway
+  listeners:
+    - name: http
+      protocol: HTTP
+      port: 31941
+      allowedRoutes:
+        namespaces:
+          from: Same

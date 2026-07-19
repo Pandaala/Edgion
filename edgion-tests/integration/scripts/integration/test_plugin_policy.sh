@@ -572,7 +572,21 @@ phase3_relaxation() {
     # proves Phase 1's CLOSED came from the policy gate, not from a broken
     # listener/route/plugin — without this control, any wrong-reason close in
     # Phase 1 (e.g. a dead listener) would have passed silently.
-    local tcp; tcp=$(tcp_probe)
+    #
+    # Poll instead of single-shot: the gateway relists each resource kind on an
+    # INDEPENDENT exponential backoff (2s..32s max + jitter, see
+    # edgion-gateway/src/conf_sync/cache_client/event_dispatch.rs). Across this
+    # test's repeated controller restarts, EdgionStreamPlugins can sit in a 32s
+    # backoff while EdgionPlugins (HTTP) has already relisted — so the Mock
+    # recovery above does NOT imply the stream-plugin store has shed the
+    # phase-1 Block stamp yet. 60x1s comfortably covers the 32s+jitter worst
+    # case, matching the Mock poll loop above.
+    local tcp i
+    for i in $(seq 1 60); do
+        tcp=$(tcp_probe)
+        if [ "$tcp" = "ECHO" ]; then break; fi
+        sleep 1
+    done
     if [ "$tcp" = "ECHO" ]; then
         log_ok "stream connection echoes with no policy (positive control for Phase 1's CLOSED)"
     else

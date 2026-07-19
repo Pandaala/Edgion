@@ -1,0 +1,13 @@
+# Sole policy targeting ebtp-anc-svc-multi -> trivially wins oldest-wins
+# arbitration (no sibling) on BOTH ancestors it reaches (gw-a and gw-b).
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: ebtp-anc-a-win-multi
+  namespace: edgion-test
+spec:
+  targetRefs:
+    - kind: Service
+      name: ebtp-anc-svc-multi
+  loadBalancer:
+    type: LeastConn

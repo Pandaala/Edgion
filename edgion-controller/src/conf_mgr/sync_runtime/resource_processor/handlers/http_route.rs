@@ -8,8 +8,8 @@ use std::sync::Arc;
 use super::super::ref_grant::{is_cross_ns_ref_allowed, validate_http_route_if_enabled};
 use super::route_delegation::{flatten_route, DelegationLookup};
 use super::{
-    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_tls_policies_for_route,
-    requeue_backend_tls_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
+    remove_from_attached_route_tracker, remove_from_gateway_route_index, requeue_backend_policies_for_route,
+    requeue_backend_policies_for_services, requeue_parent_gateways, update_gateway_route_index,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, set_parent_conditions_full, update_condition,
@@ -279,7 +279,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         // path otherwise only requeues BTPs for the route's current backends).
         let dropped_service_keys =
             Self::register_service_refs(&route, &delegation_outcome.service_backend_tuples, _ctx);
-        requeue_backend_tls_policies_for_services(&dropped_service_keys, _ctx).await;
+        requeue_backend_policies_for_services(&dropped_service_keys, _ctx).await;
 
         // Maintain the delegation index (also clears stale edges when the
         // route no longer delegates) and requeue children whose delegation
@@ -405,7 +405,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
         }
 
         requeue_parent_gateways(route.spec.parent_refs.as_ref(), route_ns, ctx).await;
-        requeue_backend_tls_policies_for_route(ResourceKind::HTTPRoute, route_ns, route_name, ctx).await;
+        requeue_backend_policies_for_route(ResourceKind::HTTPRoute, route_ns, route_name, ctx).await;
 
         // This route may be someone's delegation child: requeue the parents so
         // they re-flatten with the new child spec.
@@ -421,7 +421,7 @@ impl ProcessorHandler<HTTPRoute> for HttpRouteHandler {
 
         let route_ns = route.metadata.namespace.as_deref().unwrap_or("default");
         let route_name = route.metadata.name.as_deref().unwrap_or("");
-        requeue_backend_tls_policies_for_route(ResourceKind::HTTPRoute, route_ns, route_name, ctx).await;
+        requeue_backend_policies_for_route(ResourceKind::HTTPRoute, route_ns, route_name, ctx).await;
         super::route_utils::clear_service_backend_refs(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());
 
         remove_from_gateway_route_index(ResourceKind::HTTPRoute, route_ns, route_name, ctx.runtime());

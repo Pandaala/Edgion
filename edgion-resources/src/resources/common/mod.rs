@@ -101,6 +101,24 @@ impl ParentReference {
     }
 }
 
+/// PolicyAncestorStatus describes the status of a policy with respect to an
+/// ancestor resource. Ancestors refer to the Gateway(s) that this policy
+/// is associated with.
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PolicyAncestorStatus {
+    /// AncestorRef corresponds with a ParentRef in the spec that this
+    /// PolicyAncestorStatus struct describes the status of.
+    pub ancestor_ref: ParentReference,
+
+    /// ControllerName is a domain/path string that indicates the name of the
+    /// controller that wrote this status.
+    pub controller_name: String,
+
+    /// Conditions describes the status of the Policy with respect to the given Ancestor.
+    pub conditions: Vec<Condition>,
+}
+
 /// Cross-namespace reference denial info
 ///
 /// Set by Controller when a cross-namespace reference is not permitted

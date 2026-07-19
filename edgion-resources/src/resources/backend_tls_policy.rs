@@ -2,7 +2,7 @@
 //!
 //! BackendTLSPolicy provides a way to configure how a Gateway connects to a backend via TLS.
 
-use super::common::{Condition, ParentReference};
+use super::common::PolicyAncestorStatus;
 use super::gateway::SecretObjectReference;
 use k8s_openapi::api::core::v1::Secret;
 use kube::CustomResource;
@@ -388,26 +388,13 @@ pub struct BackendTLSPolicyStatus {
     /// Ancestors is a list of ancestor resources (usually Gateways) that are
     /// associated with the policy, and the status of the policy with respect to
     /// each ancestor.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"ancestors": []` replaces it. Do not add skip_serializing_if here.
+    #[serde(default)]
     pub ancestors: Vec<PolicyAncestorStatus>,
-}
-
-/// PolicyAncestorStatus describes the status of a policy with respect to an
-/// ancestor resource. Ancestors refer to the Gateway(s) that this policy
-/// is associated with.
-#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct PolicyAncestorStatus {
-    /// AncestorRef corresponds with a ParentRef in the spec that this
-    /// PolicyAncestorStatus struct describes the status of.
-    pub ancestor_ref: ParentReference,
-
-    /// ControllerName is a domain/path string that indicates the name of the
-    /// controller that wrote this status.
-    pub controller_name: String,
-
-    /// Conditions describes the status of the Policy with respect to the given Ancestor.
-    pub conditions: Vec<Condition>,
 }
 
 #[cfg(test)]

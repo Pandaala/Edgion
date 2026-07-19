@@ -74,7 +74,7 @@ spec:
 
 ### 挂载粒度为 Service 级
 
-健康检查配置只能挂载到 Service 级别——不再存在 EndpointSlice / Endpoints 层的覆盖级别。若同一 Service 被多个 `EdgionBackendTrafficPolicy` 定位，**创建时间最早**的策略生效（时间相同按名称排序）；落败的策略状态会报告 `Conflicted=True`。完整规则及“胜出者被删除后自动提升下一个”的行为见
+健康检查配置只能挂载到 Service 级别——不再存在 EndpointSlice / Endpoints 层的覆盖级别。若同一 Service 被多个 `EdgionBackendTrafficPolicy` 定位，**创建时间最早**的策略生效（时间相同按名称排序）；落败的策略会在受影响的 ancestor Gateway 上（`status.ancestors[]`）报告 `Accepted=False`，reason 为 `Conflicted`。完整规则及”胜出者被删除后自动提升下一个”的行为见
 [冲突处理](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md#conflict-resolution)。
 
 ### 运行时最小值（保护下限）
@@ -191,8 +191,8 @@ spec:
 
 ### 问题 1：策略已配置但似乎没生效
 
-原因：`EdgionBackendTrafficPolicy` spec 校验失败（`Accepted=False`）；或另一个策略定位到同一 Service 并赢得了“最早创建者优先”仲裁（本策略 `Conflicted=True`）；或 `targetRefs` 尚未解析到已存在的 Service（`ResolvedRefs=False`）。
-解决方案：执行 `kubectl get edgionbackendtrafficpolicy <name> -n <namespace> -o yaml`，检查 `status.conditions`。
+原因：`EdgionBackendTrafficPolicy` spec 校验失败（某 ancestor 的 `Accepted=False/Invalid`）；或另一个策略定位到同一 Service 并赢得了”最早创建者优先”仲裁（`Accepted=False/Conflicted`）；或 `targetRefs` 尚未解析到已存在的 Service（`ResolvedRefs=False`）。
+解决方案：执行 `kubectl get edgionbackendtrafficpolicy <name> -n <namespace> -o yaml`，检查 `status.ancestors[].conditions`（每个 ancestor Gateway 一条记录）。
 
 ### 问题 2：探测太频繁导致后端压力增大
 
@@ -201,7 +201,7 @@ spec:
 
 ### 问题 3：两个策略定位到同一 Service，只有一个生效
 
-原因：这是预期行为——整段原子生效、最早创建者优先仲裁；同一时刻针对每个关注点，只有最早的 `EdgionBackendTrafficPolicy` 对该 Service 生效。查看落败策略的 `status.conditions[].type: Conflicted`。
+原因：这是预期行为——整段原子生效、最早创建者优先仲裁；同一时刻针对每个关注点，只有最早的 `EdgionBackendTrafficPolicy` 对该 Service 生效。查看落败策略受影响 ancestor 上的 `status.ancestors[].conditions[].type: Accepted, reason: Conflicted`。
 解决方案：合并为单一策略，或删除不应再生效的旧策略（下一个最早的策略会自动被提升）。
 
 ## 相关文档

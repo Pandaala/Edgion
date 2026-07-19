@@ -1,0 +1,28 @@
+# Attached to ebtp-anc-gw-b. Reaches the shared Service (ebtp-anc-svc-multi,
+# for the two-ancestor case) and the gw-b-only Service (ebtp-anc-svc-b-only,
+# for the divergence case).
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: ebtp-anc-route-b
+  namespace: edgion-test
+spec:
+  parentRefs:
+    - name: ebtp-anc-gw-b
+      namespace: edgion-test
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /multi
+      backendRefs:
+        - name: ebtp-anc-svc-multi
+          port: 8080
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /b-only
+      backendRefs:
+        - name: ebtp-anc-svc-b-only
+          port: 8080

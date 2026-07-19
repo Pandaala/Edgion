@@ -173,7 +173,7 @@ rules:
 ## 注意事项
 
 - **作用范围**：策略应用于其 `targetRefs` 命名的每个 Service（须与策略同命名空间）——这是**按目的地**而非按路由的配置。所有把流量发到该 Service 的路由都使用同一个算法。
-- **冲突**：当多个 `EdgionBackendTrafficPolicy` 定位到同一 Service 时，**创建时间最早**的胜出（时间相同按名称排序）；落败者状态报告 `Conflicted=True`。策略之间没有按字段合并或取并集——详见
+- **冲突**：当多个 `EdgionBackendTrafficPolicy` 定位到同一 Service 时，**创建时间最早**的胜出（时间相同按名称排序）；落败者会在受影响的 ancestor Gateway（`status.ancestors[]`）上报告 `Accepted=False`，reason 为 `Conflicted`。策略之间没有按字段合并或取并集——详见
   [冲突处理](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md#conflict-resolution)。
 - **健康检查与异常点检测**：所有算法都会自动过滤掉不健康 / 已逐出的 endpoint（在同一策略的 `healthCheck` / `outlierDetection` 字段中配置）。
 - **权重**：所有算法都遵从 backendRef 上的 `weight` 字段。

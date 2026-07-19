@@ -1,0 +1,11 @@
+# Reachable only from ebtp-anc-route-b -> single ancestor Gateway (gw-b).
+apiVersion: v1
+kind: Service
+metadata:
+  name: ebtp-anc-svc-b-only
+  namespace: edgion-test
+spec:
+  ports:
+    - port: 8080
+      targetPort: 8080
+      protocol: TCP

@@ -1599,6 +1599,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
             }
             runner.add_suite(Box::new(suites::BackendTlsStatusTestSuite));
         }
+        "Status/EdgionBackendTrafficPolicy" => {
+            if !gateway {
+                eprintln!("Error: Status/EdgionBackendTrafficPolicy tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::EbtpAncestorStatusTestSuite));
+        }
         "Status/BackendTLSPolicy/RefFlap" => {
             if !gateway {
                 eprintln!("Error: Status/BackendTLSPolicy/RefFlap tests require --gateway flag");

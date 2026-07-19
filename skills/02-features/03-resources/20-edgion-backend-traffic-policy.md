@@ -74,7 +74,7 @@ spec:
                                                    # the pattern's suffix
     healthCheckHost: "probe.sandbox.internal"     # required iff healthCheck.active is set
 status:
-  conditions: []                # Accepted / ResolvedRefs / Conflicted
+  ancestors: []                 # GEP-2648 per-ancestor (Gateway) status
 ```
 
 All five spec sections (`loadBalancer`, `healthCheck`, `outlierDetection`,
@@ -332,33 +332,83 @@ When multiple `EdgionBackendTrafficPolicy` resources target the same Service,
 Both the Controller (status computation) and the gateway `ConfHandler` (store
 writes) apply the identical rule
 (`edgion_resources::resources::edgion_backend_traffic_policy::precedence_key`).
-The losing policy gets `Conflicted=True`; deleting the winner promotes the
-next-oldest loser on the next reconcile. This is the same pattern
+The losing policy gets `Accepted=False`/reason `Conflicted` (see
+[Status Schema](#status-schema)); deleting the winner promotes the
+next-oldest loser on the next reconcile. This is the same precedence rule
 `BackendTLSPolicy` uses (`handlers/backend_tls_policy.rs`), scoped per target
 Service key instead of per `(Service, sectionName)`.
 
+**Per-ancestor scoping.** Unlike `BackendTLSPolicy`'s single, policy-wide
+conflict flag, `EdgionBackendTrafficPolicy` reports conflict **per ancestor
+Gateway**: a policy that targets multiple Services can win on one Service and
+lose on another, and only the ancestor Gateways reached by the *lost* Service
+report `Accepted=False/Conflicted` — ancestors reached only by Services the
+policy still wins stay `Accepted=True`. For example, a policy targeting
+`svc-a` (unconflicted, routed only through `gw-a`) and `svc-b` (lost to an
+older sibling, routed only through `gw-b`) reports `gw-a`'s ancestor entry as
+`Accepted=True` and `gw-b`'s as `Accepted=False/Conflicted`.
+
 ## Status Schema
+
+`status` follows GEP-2648's `PolicyAncestorStatus` shape: one entry per
+ancestor **Gateway** whose routes reach one of this policy's target Services,
+each keyed by the composite `(ancestorRef, controllerName)` and carrying its
+own `conditions`. This is the same shape `BackendTLSPolicy` uses. The list is
+sorted by gateway key, capped at 16 entries (GEP-2648's `maxItems: 16`), and
+**empty** when no route currently references any target Service — see
+[Behavioral notes](#behavioral-notes) below.
+
+Example: a policy targeting a Service reachable through two Gateways, where a
+sibling policy has won oldest-wins arbitration on `gw-b`:
 
 ```yaml
 status:
-  conditions:
-    - type: Accepted
-      status: "True"
-      reason: Accepted
-    - type: ResolvedRefs
-      status: "True"
-      reason: ResolvedRefs
-    - type: Conflicted
-      status: "False"
-      reason: NoConflicts
+  ancestors:
+    - ancestorRef:
+        group: gateway.networking.k8s.io
+        kind: Gateway
+        namespace: prod
+        name: gw-a
+      controllerName: edgion.io/gateway-controller
+      conditions:
+        - type: Accepted
+          status: "True"
+          reason: Accepted
+          message: Policy accepted
+        - type: ResolvedRefs
+          status: "True"
+          reason: ResolvedRefs
+          message: All target Services resolved
+    - ancestorRef:
+        group: gateway.networking.k8s.io
+        kind: Gateway
+        namespace: prod
+        name: gw-b
+      controllerName: edgion.io/gateway-controller
+      conditions:
+        - type: Accepted
+          status: "False"
+          reason: Conflicted
+          message: "Conflicts with an older policy targeting: prod/payments"
+        - type: ResolvedRefs
+          status: "True"
+          reason: ResolvedRefs
+          message: All target Services resolved
 ```
+
+Each ancestor carries exactly two condition **types** — `Accepted` and
+`ResolvedRefs`. There is no separate `Conflicted` condition type: GEP-2648
+folds conflict into `Accepted=False` with reason `Conflicted`.
 
 ### Accepted condition reasons
 
+Priority when more than one applies: `Invalid` > `Conflicted` > `Accepted`.
+
 | Reason | Meaning |
 |--------|---------|
-| `Accepted` | Spec validation passed. |
-| `Invalid` | `spec.get_validation_errors()` is non-empty (bad `targetRefs`, `consistentHash` mismatch, `panicThreshold` out of range, invalid `healthCheck` / `outlierDetection`). |
+| `Accepted` | Spec validation passed and this policy is not conflicted on this ancestor. |
+| `Invalid` | `spec.get_validation_errors()` (plus any cross-object errors, e.g. an out-of-pattern `upstreamAuthority` BackendTLSPolicy hostname) is non-empty. Takes priority over `Conflicted` — a conflicted-and-invalid policy reports `Invalid` until the validation error is fixed independently. |
+| `Conflicted` | Another policy in the same namespace won oldest-wins arbitration over a target Service that reaches this ancestor (see [Conflict Resolution](#conflict-resolution)). Scoped per ancestor — only the Gateways reached by the *lost* Service report this reason. |
 
 Following the lenient-admission pattern used by `EdgionPlugins`, an
 `Accepted=False` policy still syncs to the gateway — the gateway `ConfHandler`
@@ -367,17 +417,32 @@ invalid policy never reaches the runtime stores.
 
 ### ResolvedRefs condition reasons
 
-| Reason | Meaning |
-|--------|---------|
-| `ResolvedRefs` | All target Services exist in the current Service cache. |
-| `ServiceNotFound` | At least one `targetRefs` Service does not currently exist. The policy still syncs and takes effect the moment the Service appears — a Service create/delete requeues the policy. |
-
-### Conflicted condition reasons
+Evaluated **per ancestor**: only the target Services that reach a given
+ancestor Gateway are considered for that ancestor's `ResolvedRefs`.
 
 | Reason | Meaning |
 |--------|---------|
-| `NoConflicts` | This policy is the current winner (or has sole ownership) for every targeted Service. |
-| `LostOldestWins` | This policy lost the oldest-wins arbitration for at least one target Service. |
+| `ResolvedRefs` | Every target Service reaching this ancestor exists in the current Service cache. |
+| `ServiceNotFound` | At least one target Service reaching this ancestor does not currently exist. The policy still syncs and takes effect the moment the Service appears — a Service create/delete requeues the policy. |
+
+### Behavioral notes
+
+- **Empty `ancestors` when unreferenced.** A policy whose target Services no
+  route currently references has an **empty** `status.ancestors` — no
+  condition of any kind is reported, matching the `BackendTLSPolicy` handler's
+  precedent. There is no ancestor to attach `Accepted`/`ResolvedRefs` to until
+  some route makes the Service (and therefore a Gateway) reachable.
+- **Freshness edges.** `status.ancestors` is recomputed whenever any of these
+  change (this handler is a sink in the requeue DAG — it never itself
+  requeues routes, gateways, or Services):
+  - **Service change** — the `ServiceHandler` requeues every policy
+    registered against that Service key (`service_ref_mgr`).
+  - **Route change** — `requeue_backend_policies_for_route` /
+    `requeue_backend_policies_for_services` (`handlers/mod.rs`) requeue
+    policies bound to the route's backend Services so ancestor Gateways
+    re-resolve.
+  - **Sibling policy change** (another policy targeting the same Service) —
+    `parse`'s `should_requeue_siblings` gate.
 
 ## Examples
 

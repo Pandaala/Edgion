@@ -790,7 +790,7 @@ impl KubernetesController {
             h.push(spawn::<EdgionBackendTrafficPolicy, _>(
                 self,
                 "EdgionBackendTrafficPolicy",
-                EdgionBackendTrafficPolicyHandler::new(),
+                EdgionBackendTrafficPolicyHandler::new(self.controller_name.clone()),
                 &ctx,
             ));
         }

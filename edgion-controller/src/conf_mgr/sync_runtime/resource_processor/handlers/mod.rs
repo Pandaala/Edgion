@@ -61,6 +61,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, Resource
 use crate::conf_mgr::ControllerRuntime;
 use edgion_resources::resources::common::ParentReference;
 use edgion_resources::ResourceKind;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Requeue parent Gateways referenced by route parentRefs.
 pub(crate) async fn requeue_parent_gateways(
@@ -149,13 +150,87 @@ fn btp_refs_for_service(target_manager: &SecretRefManager, service_key: &str) ->
     refs
 }
 
-/// Requeue BackendTLSPolicies bound to backend Services of this route.
+/// EdgionBackendTrafficPolicy refs registered under a Service key.
 ///
-/// When a route changes, any BTP targeting its backend Services needs to
-/// re-resolve its ancestor Gateways (the route may have changed parentRefs).
+/// EBTP `parse` registers every policy (valid or not) in `service_ref_mgr`
+/// under its target Service keys, so this covers invalid policies too —
+/// their per-ancestor `Accepted=False` status must also stay fresh.
+/// Filtering by kind is load-bearing: routes register under the same keys,
+/// and requeuing a route from its own change path would loop forever.
+fn ebtp_refs_for_service(service_ref_mgr: &SecretRefManager, service_key: &str) -> Vec<ResourceRef> {
+    service_ref_mgr
+        .get_refs(service_key)
+        .into_iter()
+        .filter(|r| r.kind == ResourceKind::EdgionBackendTrafficPolicy)
+        .collect()
+}
+
+/// Resolve the ancestor Gateways for a Service-targeting policy, per
+/// GEP-2648: the ancestor of a direct policy is the Gateway the traffic
+/// enters through.
 ///
-/// Chain: Route → ServiceRefManager(reverse: route→services) → BackendTLSPolicyTargetManager(forward: service→BTPs)
-pub(crate) async fn requeue_backend_tls_policies_for_route(
+/// Chain (all in-memory, workqueue Rule 5 safe):
+///   targetRef(Service) -> ServiceRefManager (service -> routes)
+///                      -> GatewayRouteIndex (route -> gateways)
+///
+/// Returns gateway key -> the target Service keys ("ns/svc") whose routes
+/// attach to that gateway, so callers can compute per-ancestor conditions
+/// (e.g. Conflicted only on the ancestors the conflicted Service reaches).
+/// Sorted (BTreeMap) and capped at 16 ancestors per the Gateway API
+/// `maxItems=16` on `status.ancestors`; truncation keeps the smallest keys
+/// so the same 16 are selected on every reconcile.
+///
+/// Non-route refs under a Service key (policies register there too for
+/// Service-change requeue) resolve to zero gateways in the route index and
+/// therefore drop out naturally.
+pub(crate) fn resolve_policy_ancestor_gateways(
+    policy_ns: &str,
+    target_service_names: &[&str],
+    policy_key: &str,
+    ctx: &HandlerContext,
+) -> BTreeMap<String, BTreeSet<String>> {
+    // Gateway API PolicyAncestorStatus maxItems=16.
+    const MAX_POLICY_ANCESTORS: usize = 16;
+
+    let service_ref_manager = &ctx.runtime().service_ref_mgr;
+    let route_index = &ctx.runtime().gateway_route_index;
+
+    let mut map: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for name in target_service_names {
+        // Per Gateway API, targetRef only references same-namespace resources.
+        let service_key = format!("{policy_ns}/{name}");
+        for route_ref in service_ref_manager.get_refs(&service_key) {
+            let gw_keys = route_index.get_gateways_for_route(route_ref.kind, &route_ref.resource_key());
+            for gw_key in gw_keys {
+                map.entry(gw_key).or_default().insert(service_key.clone());
+            }
+        }
+    }
+
+    if map.len() > MAX_POLICY_ANCESTORS {
+        tracing::warn!(
+            policy = %policy_key,
+            total = map.len(),
+            "policy ancestors truncated to {} per Gateway API limit",
+            MAX_POLICY_ANCESTORS,
+        );
+        let overflow: Vec<String> = map.keys().skip(MAX_POLICY_ANCESTORS).cloned().collect();
+        for k in overflow {
+            map.remove(&k);
+        }
+    }
+    map
+}
+
+/// Requeue backend policies (BackendTLSPolicy + EdgionBackendTrafficPolicy)
+/// bound to backend Services of this route.
+///
+/// When a route changes, any backend policy targeting its backend Services
+/// needs to re-resolve its ancestor Gateways (the route may have changed
+/// parentRefs).
+///
+/// Chain: Route → ServiceRefManager(reverse: route→services) → {BackendTLSPolicyTargetManager, service_ref_mgr}(forward: service→policies)
+pub(crate) async fn requeue_backend_policies_for_route(
     route_kind: ResourceKind,
     route_ns: &str,
     route_name: &str,
@@ -180,17 +255,28 @@ pub(crate) async fn requeue_backend_tls_policies_for_route(
             );
             ctx.requeue(btp_ref.kind_str(), btp_ref.resource_key()).await;
         }
+
+        for ebtp_ref in ebtp_refs_for_service(&ctx.runtime().service_ref_mgr, service_key) {
+            tracing::debug!(
+                route = %route_ref.resource_key(),
+                policy = %ebtp_ref.resource_key(),
+                service = %service_key,
+                "Requeuing EdgionBackendTrafficPolicy due to route change"
+            );
+            ctx.requeue(ebtp_ref.kind_str(), ebtp_ref.resource_key()).await;
+        }
     }
 }
 
-/// Requeue BackendTLSPolicies bound to Services this route no longer references.
+/// Requeue backend policies (BackendTLSPolicy + EdgionBackendTrafficPolicy)
+/// bound to Services this route no longer references.
 ///
-/// Companion to `requeue_backend_tls_policies_for_route`: that helper reads the
+/// Companion to `requeue_backend_policies_for_route`: that helper reads the
 /// route's *current* backend Services (the apply path re-registers them in
 /// `parse` before `on_change` runs), so a Service dropped from backendRefs would
-/// never have its BTPs requeued to re-resolve ancestor Gateways. Feed it the
+/// never have its policies requeued to re-resolve ancestor Gateways. Feed it the
 /// dropped Service keys returned by `register_service_backend_refs`.
-pub(crate) async fn requeue_backend_tls_policies_for_services(dropped_service_keys: &[String], ctx: &HandlerContext) {
+pub(crate) async fn requeue_backend_policies_for_services(dropped_service_keys: &[String], ctx: &HandlerContext) {
     if dropped_service_keys.is_empty() {
         return;
     }
@@ -203,6 +289,15 @@ pub(crate) async fn requeue_backend_tls_policies_for_services(dropped_service_ke
                 "Requeuing BackendTLSPolicy: route dropped this backend Service"
             );
             ctx.requeue(btp_ref.kind_str(), btp_ref.resource_key()).await;
+        }
+
+        for ebtp_ref in ebtp_refs_for_service(&ctx.runtime().service_ref_mgr, service_key) {
+            tracing::debug!(
+                policy = %ebtp_ref.resource_key(),
+                service = %service_key,
+                "Requeuing EdgionBackendTrafficPolicy: route dropped this backend Service"
+            );
+            ctx.requeue(ebtp_ref.kind_str(), ebtp_ref.resource_key()).await;
         }
     }
 }
@@ -259,5 +354,91 @@ mod tests {
         );
 
         assert!(btp_refs_for_service(&mgr, "ns/nomatch").is_empty());
+    }
+
+    /// The shared ancestor resolver walks Service -> Routes (service_ref_mgr)
+    /// -> Gateways (gateway_route_index), maps each gateway to the target
+    /// Service keys that reach it, and ignores non-route refs (policies also
+    /// register under Service keys).
+    #[test]
+    fn resolve_policy_ancestor_gateways_maps_gateways_to_services() {
+        use crate::conf_mgr::sync_runtime::workqueue::TriggerChain;
+        use crate::conf_mgr::ControllerRuntime;
+        use edgion_resources::resources::common::ParentReference;
+        use edgion_resources::ResourceKind;
+        use std::sync::Arc;
+
+        let rt = Arc::new(ControllerRuntime::default());
+        let ctx = crate::conf_mgr::sync_runtime::resource_processor::HandlerContext::new(
+            None,
+            None,
+            TriggerChain::default(),
+            5,
+            20,
+            rt.clone(),
+        );
+
+        let gw_parent = |name: &str| ParentReference {
+            group: Some("gateway.networking.k8s.io".to_string()),
+            kind: Some("Gateway".to_string()),
+            namespace: Some("ns".to_string()),
+            name: name.to_string(),
+            section_name: None,
+            port: None,
+        };
+
+        // svc-a reaches gw-a via route-a; svc-b reaches gw-b via route-b.
+        for (svc, route, gw) in [("svc-a", "route-a", "gw-a"), ("svc-b", "route-b", "gw-b")] {
+            rt.service_ref_mgr.add_ref(
+                format!("ns/{svc}"),
+                ResourceRef::new(ResourceKind::HTTPRoute, Some("ns".to_string()), route.to_string()),
+            );
+            rt.gateway_route_index.update_route(
+                ResourceKind::HTTPRoute,
+                &format!("ns/{route}"),
+                &[gw_parent(gw)],
+                "ns",
+            );
+        }
+        // A policy ref registered under the same Service key must be ignored.
+        rt.service_ref_mgr.add_ref(
+            "ns/svc-a".to_string(),
+            ResourceRef::new(
+                ResourceKind::EdgionBackendTrafficPolicy,
+                Some("ns".to_string()),
+                "some-policy".to_string(),
+            ),
+        );
+
+        let map = resolve_policy_ancestor_gateways("ns", &["svc-a", "svc-b"], "ns/p", &ctx);
+        assert_eq!(map.len(), 2);
+        assert!(map["ns/gw-a"].contains("ns/svc-a"));
+        assert!(!map["ns/gw-a"].contains("ns/svc-b"));
+        assert!(map["ns/gw-b"].contains("ns/svc-b"));
+
+        // A target Service nobody routes to contributes no ancestor.
+        let map = resolve_policy_ancestor_gateways("ns", &["svc-unrouted"], "ns/p", &ctx);
+        assert!(map.is_empty());
+    }
+
+    /// `ebtp_refs_for_service` returns only EdgionBackendTrafficPolicy refs
+    /// registered under a Service key. Routes register under the same keys and
+    /// MUST be excluded — requeuing them from a route-change path would make a
+    /// route requeue itself (an infinite route->route loop).
+    #[test]
+    fn ebtp_refs_for_service_filters_out_route_refs() {
+        let mgr = BidirectionalRefManager::with_component("test_service_ref");
+        let policy = ResourceRef::new(
+            ResourceKind::EdgionBackendTrafficPolicy,
+            Some("ns".to_string()),
+            "p1".to_string(),
+        );
+        let route = ResourceRef::new(ResourceKind::HTTPRoute, Some("ns".to_string()), "r1".to_string());
+        mgr.add_ref("ns/svc".to_string(), policy.clone());
+        mgr.add_ref("ns/svc".to_string(), route);
+
+        let refs = ebtp_refs_for_service(&mgr, "ns/svc");
+        assert_eq!(refs, vec![policy]);
+        assert!(ebtp_refs_for_service(&mgr, "ns/other").is_empty());
     }
 }

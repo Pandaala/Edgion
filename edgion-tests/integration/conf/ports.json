@@ -1,5 +1,5 @@
 {
-  "current_max": 31937,
+  "current_max": 31941,
   "suites": {
     "HTTPRoute/Basic": {
       "http": 31000
@@ -303,6 +303,10 @@
     },
     "HTTPRoute/Backend/SessionPersistenceWeighted": {
       "http": 31939
+    },
+    "Status/EdgionBackendTrafficPolicy": {
+      "http_gw_a": 31940,
+      "http_gw_b": 31941
     }
   }
 }

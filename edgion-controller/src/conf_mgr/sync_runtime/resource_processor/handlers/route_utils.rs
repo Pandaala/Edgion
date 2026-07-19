@@ -411,11 +411,12 @@ pub fn update_tracker_accepted_only(
 /// changes, the route is requeued to re-evaluate its ResolvedRefs status.
 ///
 /// Returns the Service keys the route no longer references (dropped by this
-/// update). The caller MUST requeue BackendTLSPolicies bound to those Services
-/// via `requeue_backend_tls_policies_for_services`: a coalesced delete->recreate
+/// update). The caller MUST requeue backend policies (BackendTLSPolicy and
+/// EdgionBackendTrafficPolicy) bound to those Services via
+/// `requeue_backend_policies_for_services`: a coalesced delete->recreate
 /// skips `on_delete`'s requeue for the previous generation, and even a plain
 /// update that drops a backend Service would otherwise never notify that
-/// Service's BTPs to re-resolve their ancestor Gateways.
+/// Service's policies to re-resolve their ancestor Gateways.
 pub fn register_service_backend_refs(
     route_kind: edgion_resources::ResourceKind,
     route_ns: &str,

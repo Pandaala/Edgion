@@ -94,6 +94,7 @@ pub use status::BackendTlsStatusTestSuite;
 pub use status::BtlspFlapInitialTestSuite;
 pub use status::BtlspFlapInvalidTestSuite;
 pub use status::BtlspFlapValidTestSuite;
+pub use status::EbtpAncestorStatusTestSuite;
 pub use status::EdgionConfigDataRefGrantTestSuite;
 pub use status::GatewayFrontendValidationStatusTestSuite;
 pub use status::GcParamsFlapMissingTestSuite;

@@ -173,7 +173,7 @@ rules:
 ## Notes
 
 - **Scope**: a policy applies to every Service named in its `targetRefs` (same namespace as the policy) — this is per-**destination**, not per-route. Every route sending traffic to that Service uses the same algorithm.
-- **Conflicts**: when more than one `EdgionBackendTrafficPolicy` targets the same Service, the **oldest** `creationTimestamp` wins (ties break by name); the loser's status reports `Conflicted=True`. There is no per-field merge or union across policies — see [Conflict Resolution](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md#conflict-resolution).
+- **Conflicts**: when more than one `EdgionBackendTrafficPolicy` targets the same Service, the **oldest** `creationTimestamp` wins (ties break by name); the loser's status reports `Accepted=False`/reason `Conflicted` on the affected ancestor Gateway(s) in `status.ancestors[]`. There is no per-field merge or union across policies — see [Conflict Resolution](https://github.com/Pandaala/Edgion/blob/main/skills/02-features/03-resources/20-edgion-backend-traffic-policy.md#conflict-resolution).
 - **Health checks and outlier detection**: all algorithms filter out unhealthy / ejected endpoints automatically (configured in the same policy's `healthCheck` / `outlierDetection` sections).
 - **Weight**: all algorithms honor the `weight` field on backendRefs.
 

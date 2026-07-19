@@ -3,7 +3,7 @@
 //! Services via targetRefs. Design:
 //! docs/superpowers/specs/2026-07-10-edgion-backend-traffic-policy-design.md
 
-use super::common::Condition;
+use super::common::PolicyAncestorStatus;
 use super::health_check::ServiceHealthCheck;
 use super::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
 use super::outlier_detection::OutlierDetectionConfig;
@@ -98,11 +98,22 @@ pub enum HashOn {
     SourceIp,
 }
 
+/// GEP-2648 per-ancestor policy status. The ancestor of this direct policy
+/// is the Gateway whose routes reach a target Service; the same policy can
+/// be Accepted on one Gateway and Conflicted on another, which a flat
+/// condition list cannot express.
 #[derive(Deserialize, Serialize, Clone, Debug, Default, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgionBackendTrafficPolicyStatus {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub conditions: Option<Vec<Condition>>,
+    /// One entry per ancestor Gateway, stamped with this controller's name.
+    /// Empty when no route references any target Service. Capped at 16.
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"ancestors": []` replaces it. Do not add skip_serializing_if here.
+    #[serde(default)]
+    pub ancestors: Vec<PolicyAncestorStatus>,
 }
 
 impl EdgionBackendTrafficPolicySpec {
@@ -205,6 +216,45 @@ pub fn precedence_key(meta: &ObjectMeta) -> (i64, String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn status_serializes_gep2648_ancestor_shape() {
+        use crate::resources::common::{ParentReference, PolicyAncestorStatus};
+        let status = EdgionBackendTrafficPolicyStatus {
+            ancestors: vec![PolicyAncestorStatus {
+                ancestor_ref: ParentReference {
+                    group: Some("gateway.networking.k8s.io".to_string()),
+                    kind: Some("Gateway".to_string()),
+                    namespace: Some("ns".to_string()),
+                    name: "gw".to_string(),
+                    section_name: None,
+                    port: None,
+                },
+                controller_name: "example.io/controller".to_string(),
+                conditions: vec![],
+            }],
+        };
+        let v = serde_json::to_value(&status).unwrap();
+        assert_eq!(v["ancestors"][0]["ancestorRef"]["name"], "gw");
+        assert_eq!(v["ancestors"][0]["controllerName"], "example.io/controller");
+        // Empty ancestors still serialize an explicit `"ancestors": []`, never
+        // an empty object: K8s status persistence uses JSON Merge Patch, and
+        // merge-patching `{"status": {}}` cannot clear a previously-persisted
+        // non-empty ancestors list — only an explicit empty array replaces it.
+        let empty = serde_json::to_value(EdgionBackendTrafficPolicyStatus::default()).unwrap();
+        assert_eq!(empty, serde_json::json!({"ancestors": []}));
+    }
+
+    #[test]
+    fn backend_tls_policy_status_empty_ancestors_serializes_explicit_array() {
+        use crate::resources::backend_tls_policy::BackendTLSPolicyStatus;
+        // Same merge-patch tombstone concern as EdgionBackendTrafficPolicyStatus
+        // above: an empty ancestors list must serialize as `"ancestors": []`,
+        // not be omitted, or a JSON Merge Patch can never clear a
+        // previously-persisted non-empty list.
+        let empty = serde_json::to_value(BackendTLSPolicyStatus::default()).unwrap();
+        assert_eq!(empty, serde_json::json!({"ancestors": []}));
+    }
 
     fn minimal_spec_yaml() -> &'static str {
         r#"
