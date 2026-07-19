@@ -133,12 +133,21 @@ impl EdgionPlugins {
     pub fn validate_plugins(&self) -> Vec<String> {
         let mut errors = Vec::new();
 
-        // Pass 1: condition regex compilation/validation for EVERY entry
-        // (enabled or not), in stage order — mirrors `compile_plugin_conditions`.
+        // Pass 1: condition regex compilation/validation for ENABLED entries,
+        // in stage order — mirrors `compile_plugin_conditions`. A disabled entry
+        // (`enable: false`) is semantically inert: the gateway never builds or
+        // runs it, so its dormant `conditions` must not be able to flip the
+        // resource to `Accepted=False`. Skipping here keeps the schema layer and
+        // the gateway `compile_plugin_conditions` in lockstep (parity test in
+        // `plugin_store.rs`), and aligns HTTP with the EdgionStreamPlugins rule
+        // that a parked broken config is not a validation error.
         macro_rules! compile_conditions {
             ($entries:expr, $label:literal) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
+                        if !entry.is_enabled() {
+                            continue;
+                        }
                         if let Some(conds) = entry.conditions.as_ref() {
                             collect_condition_errors(conds, $label, i, &mut errors);
                         }
@@ -362,6 +371,78 @@ mod tests {
                 "alias must match [a-zA-Z0-9._-]{1,32} (contains disallowed character)"
             )
             .to_string()]
+        );
+    }
+}
+
+#[cfg(test)]
+mod disabled_condition_tests {
+    use crate::resources::edgion_plugins::EdgionPlugins;
+
+    fn validate(yaml: &str) -> Vec<String> {
+        let plugins: EdgionPlugins = serde_yaml::from_str(yaml).expect("deserialize EdgionPlugins");
+        plugins.validate_plugins()
+    }
+
+    /// A disabled entry whose dormant `conditions` carry a malformed regex must
+    /// not produce any validation error — `enable: false` is semantically inert.
+    #[test]
+    fn disabled_entry_with_malformed_conditions_is_inert() {
+        let errs = validate(
+            r#"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: parked
+  namespace: default
+spec:
+  requestPlugins:
+    - type: RequestHeaderModifier
+      enable: false
+      config: {}
+      conditions:
+        run:
+          - type: keyMatch
+            key:
+              type: header
+              name: X-Test
+            regex: ["("]
+"#,
+        );
+        assert!(
+            errs.is_empty(),
+            "disabled entry must not surface a condition error, got: {errs:?}"
+        );
+    }
+
+    /// Enabling the same malformed entry deterministically surfaces the
+    /// condition regex error — the disabled/enabled boundary is the only switch.
+    #[test]
+    fn enabling_the_same_entry_surfaces_the_condition_error() {
+        let errs = validate(
+            r#"
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: active
+  namespace: default
+spec:
+  requestPlugins:
+    - type: RequestHeaderModifier
+      enable: true
+      config: {}
+      conditions:
+        run:
+          - type: keyMatch
+            key:
+              type: header
+              name: X-Test
+            regex: ["("]
+"#,
+        );
+        assert!(
+            errs.iter().any(|e| e.contains("conditions regex")),
+            "enabled entry must surface the condition regex error, got: {errs:?}"
         );
     }
 }

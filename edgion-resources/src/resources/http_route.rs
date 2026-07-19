@@ -867,6 +867,84 @@ pub enum CookieLifetimeType {
     Session,
 }
 
+/// Parse a Gateway API GEP-2257 duration (`^([0-9]{1,5}(h|m|s|ms)){1,4}$`) into
+/// whole seconds, rounding UP to the nearest second with a floor of 1s so a
+/// positive timeout never rounds to 0. Returns `None` for any string outside
+/// GEP-2257 (bare integers, decimals, days, long unit names, >5-digit segments,
+/// or >4 segments). Segments may be unordered and units may repeat; values
+/// accumulate.
+pub fn parse_gep2257_duration_secs(s: &str) -> Option<u64> {
+    if s.is_empty() {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    let mut total_ms: u64 = 0;
+    let mut segments = 0u32;
+    while i < bytes.len() {
+        // Digits: 1..=5 of them.
+        let digit_start = i;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+        let digit_len = i - digit_start;
+        if digit_len == 0 || digit_len > 5 {
+            return None;
+        }
+        let value: u64 = s[digit_start..i].parse().ok()?;
+        // Unit: match `ms` before `m`.
+        let unit_ms: u64 = if s[i..].starts_with("ms") {
+            i += 2;
+            1
+        } else if s[i..].starts_with('h') {
+            i += 1;
+            3_600_000
+        } else if s[i..].starts_with('m') {
+            i += 1;
+            60_000
+        } else if s[i..].starts_with('s') {
+            i += 1;
+            1_000
+        } else {
+            return None;
+        };
+        total_ms = total_ms.checked_add(value.checked_mul(unit_ms)?)?;
+        segments += 1;
+        if segments > 4 {
+            return None;
+        }
+    }
+    // ceil to seconds, floor 1.
+    let secs = total_ms.div_ceil(1_000);
+    Some(secs.max(1))
+}
+
+impl SessionPersistence {
+    /// Validate the fields this gateway enforces at config-load time, mirroring
+    /// the upstream Gateway API CRD's admission rules for the modes (FileSystem/
+    /// Etcd) that have no CRD/CEL admission. Returns `Err(reason)` with an
+    /// operator-readable message; a failing rule is dropped via
+    /// `invalid_rule_indices` (never silently downgraded).
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(t) = self.absolute_timeout.as_deref() {
+            if parse_gep2257_duration_secs(t).is_none() {
+                return Err(format!(
+                    "absoluteTimeout '{t}' is not a valid Gateway API duration (GEP-2257: e.g. 1h, 30m, 1h30m, 500ms)"
+                ));
+            }
+        }
+        let is_permanent = self
+            .cookie_config
+            .as_ref()
+            .and_then(|c| c.lifetime_type.as_ref())
+            .is_some_and(|lt| *lt == CookieLifetimeType::Permanent);
+        if is_permanent && self.absolute_timeout.is_none() {
+            return Err("cookieConfig.lifetimeType 'Permanent' requires absoluteTimeout".to_string());
+        }
+        Ok(())
+    }
+}
+
 // ============================================
 // Pre-parsed Route Retry
 // ============================================
@@ -1012,6 +1090,97 @@ mod tests {
             backend_tls_policy: None,
             ref_denied: None,
         }
+    }
+
+    #[test]
+    fn gep2257_basic_units() {
+        assert_eq!(parse_gep2257_duration_secs("1h"), Some(3600));
+        assert_eq!(parse_gep2257_duration_secs("5m"), Some(300));
+        assert_eq!(parse_gep2257_duration_secs("30s"), Some(30));
+        assert_eq!(parse_gep2257_duration_secs("2000ms"), Some(2));
+    }
+
+    #[test]
+    fn gep2257_compound_and_unordered() {
+        assert_eq!(parse_gep2257_duration_secs("1h30m"), Some(5400));
+        assert_eq!(parse_gep2257_duration_secs("30m1h"), Some(5400)); // unordered
+        assert_eq!(parse_gep2257_duration_secs("1s500ms"), Some(2)); // 1500ms -> ceil 2
+        assert_eq!(parse_gep2257_duration_secs("1h1h"), Some(7200)); // duplicate unit
+    }
+
+    #[test]
+    fn gep2257_ceil_min_one_second() {
+        assert_eq!(parse_gep2257_duration_secs("500ms"), Some(1)); // ceil, floor 1
+        assert_eq!(parse_gep2257_duration_secs("1ms"), Some(1));
+        assert_eq!(parse_gep2257_duration_secs("1500ms"), Some(2));
+    }
+
+    #[test]
+    fn gep2257_rejects_non_conforming() {
+        assert_eq!(parse_gep2257_duration_secs(""), None);
+        assert_eq!(parse_gep2257_duration_secs("3600"), None); // bare integer not GEP-2257
+        assert_eq!(parse_gep2257_duration_secs("1.5h"), None); // decimals not GEP-2257
+        assert_eq!(parse_gep2257_duration_secs("1d"), None); // days not GEP-2257
+        assert_eq!(parse_gep2257_duration_secs("1hour"), None); // long name not GEP-2257
+        assert_eq!(parse_gep2257_duration_secs("abc"), None);
+        assert_eq!(parse_gep2257_duration_secs("1h30x"), None); // trailing garbage
+        assert_eq!(parse_gep2257_duration_secs("123456h"), None); // >5 digits per segment
+        assert_eq!(parse_gep2257_duration_secs("1h1h1h1h1h"), None); // >4 segments
+    }
+
+    #[test]
+    fn sp_validate_ok_cases() {
+        let unset = SessionPersistence {
+            session_name: None,
+            absolute_timeout: None,
+            idle_timeout: None,
+            persistence_type: None,
+            cookie_config: None,
+            strict: None,
+        };
+        assert!(unset.validate().is_ok());
+
+        let permanent_ok = SessionPersistence {
+            absolute_timeout: Some("1h".into()),
+            cookie_config: Some(CookieConfig {
+                lifetime_type: Some(CookieLifetimeType::Permanent),
+            }),
+            session_name: None,
+            idle_timeout: None,
+            persistence_type: None,
+            strict: None,
+        };
+        assert!(permanent_ok.validate().is_ok());
+    }
+
+    #[test]
+    fn sp_validate_permanent_requires_absolute_timeout() {
+        let bad = SessionPersistence {
+            absolute_timeout: None,
+            cookie_config: Some(CookieConfig {
+                lifetime_type: Some(CookieLifetimeType::Permanent),
+            }),
+            session_name: None,
+            idle_timeout: None,
+            persistence_type: None,
+            strict: None,
+        };
+        let err = bad.validate().unwrap_err();
+        assert!(err.contains("absoluteTimeout"), "got: {err}");
+    }
+
+    #[test]
+    fn sp_validate_rejects_bad_duration() {
+        let bad = SessionPersistence {
+            absolute_timeout: Some("1d".into()), // not GEP-2257
+            session_name: None,
+            idle_timeout: None,
+            persistence_type: None,
+            cookie_config: None,
+            strict: None,
+        };
+        let err = bad.validate().unwrap_err();
+        assert!(err.contains("absoluteTimeout"), "got: {err}");
     }
 
     #[test]

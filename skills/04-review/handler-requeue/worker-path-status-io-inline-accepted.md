@@ -34,7 +34,7 @@ processed, item N's persisted side effects are already in place. The inline
 status write is exactly the barrier that makes "in order" mean "in order
 *including* durable effects". Moving the write to an async coalescing queue lets
 item N+1 start (and read state) before item N's status is durable — the ordering
-violation the user rejected ("慢写也不能改变按顺序来的原则,不然会有问题").
+violation the user rejected ("a slow write must not break the in-order principle, or problems follow").
 
 **2. FS mode is a genuine read-your-writes loop**
 

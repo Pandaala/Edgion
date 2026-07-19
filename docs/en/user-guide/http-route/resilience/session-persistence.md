@@ -8,7 +8,17 @@ Configure session persistence (Session Affinity) to ensure requests from the sam
 2. **Subsequent requests**: Client carries session token → the gateway resolves it against the rule's backends **before** weighted selection and routes to the exact backend that issued it
 3. **Backend unavailable**: By default, falls back to another healthy backend and updates the session token; in strict mode, returns an error
 
-The session token is a truncated SHA-256 hash of the backend address (16 lowercase hex characters, e.g., `a1b2c3d4e5f60718`), not exposing backend topology.
+The session token is a truncated SHA-256 hash of the backend address (16 lowercase hex characters, e.g., `a1b2c3d4e5f60718`), not exposing backend topology. When `absoluteTimeout` is configured, the token additionally carries an absolute expiry as `<hash>.<expiry_epoch>` (e.g., `a1b2c3d4e5f60718.1752883200`) — see [Absolute Lifetime](#absolute-lifetime).
+
+## Absolute Lifetime
+
+`absoluteTimeout` is a **gateway-enforced** session lifetime, not merely a browser hint. The absolute expiry (`now + absoluteTimeout`, frozen at issuance) is embedded in the token itself, so the gateway enforces it regardless of whether the client honors Cookie attributes.
+
+- **Applies to every mode**: Cookie and Header, and both `Session` and `Permanent` cookies. (`Permanent` cookies also emit a matching `Max-Age`; `Session` cookies and Header tokens have no client-side expiry, so the embedded expiry is the only enforcement.)
+- **Duration format**: Gateway API GEP-2257 (`^([0-9]{1,5}(h|m|s|ms)){1,4}$`) — e.g. `1h`, `30m`, `1h30m`, `500ms`. Values are rounded **up** to whole seconds with a floor of `1s`. Forms outside GEP-2257 (bare integers, decimals like `1.5h`, days like `1d`, long names like `hours`) are rejected.
+- **On expiry**: a replayed token past its expiry is treated exactly like a missing token — normal load balancing selects a backend and a **fresh** token is issued. The prior backend is not re-selected on the strength of the expired token.
+- **Freeze at issuance**: the lifetime is fixed when the token is issued. Changing `absoluteTimeout` affects only tokens issued afterward; live sessions keep their original expiry until refreshed.
+- **`Permanent` requires `absoluteTimeout`** (Gateway API rule). An invalid `sessionPersistence` block (bad duration, or `Permanent` without `absoluteTimeout`) drops that rule: in Kubernetes the route is marked `PartiallyInvalid=True` (admission rejects it outright); in FileSystem/Etcd the rule is dropped at load with an ERROR log. It is never silently downgraded to a never-expiring token.
 
 ## Traffic Splitting (Weighted BackendRefs)
 
@@ -52,7 +62,7 @@ rules:
   - sessionPersistence:
       sessionName: my-session              # Cookie/Header name
       type: Cookie                         # Cookie | Header
-      absoluteTimeout: "1h"                # Absolute timeout (maps to Cookie Max-Age)
+      absoluteTimeout: "1h"                # Gateway-enforced lifetime (GEP-2257); see "Absolute Lifetime"
       cookieConfig:
         lifetimeType: Permanent            # Permanent | Session
     backendRefs:
@@ -66,7 +76,7 @@ rules:
 |-------|------|----------|---------|-------------|
 | sessionName | string | No | `edgion-session-affinity` | Session token name (Cookie name or Header name) |
 | type | string | No | Cookie | Session type: `Cookie` or `Header` |
-| absoluteTimeout | duration | No | — | Absolute timeout (maps to Cookie `Max-Age` in Permanent mode) |
+| absoluteTimeout | duration (GEP-2257) | No | — | Gateway-enforced session lifetime, embedded in the token (also maps to Cookie `Max-Age` in Permanent mode). See [Absolute Lifetime](#absolute-lifetime) |
 | idleTimeout | duration | No | — | Idle timeout (not supported in current version, reserved for Redis mode) |
 | cookieConfig | object | No | — | Cookie-specific configuration |
 | strict | bool | No | false | Edgion extension: strict mode (see below) |
@@ -92,7 +102,7 @@ sessionPersistence:
     lifetimeType: Permanent
 ```
 
-Cookie attributes: `Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`. The `Secure` attribute is added automatically when the request arrives over TLS. `Max-Age` is emitted only for `lifetimeType: Permanent` with an `absoluteTimeout`.
+Cookie attributes: `Path=/; Max-Age=86400; HttpOnly; SameSite=Lax`. The `Secure` attribute is added automatically when the request arrives over TLS. `Max-Age` is emitted only for `lifetimeType: Permanent` with an `absoluteTimeout`, and always matches the token's embedded expiry. Note that even a `Session` cookie (no `Max-Age`) is still expired by the gateway when `absoluteTimeout` is set — see [Absolute Lifetime](#absolute-lifetime).
 
 ### Header
 

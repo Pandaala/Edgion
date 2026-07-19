@@ -281,7 +281,7 @@ pages live under `docs/zh-CN/`.
 ```yaml
 sessionPersistence:
   sessionName: String?               # Session token name (default edgion-session-affinity)
-  absoluteTimeout: Duration?         # Absolute timeout (mapped to Max-Age for Permanent Cookies)
+  absoluteTimeout: Duration?         # Gateway-enforced lifetime (GEP-2257), embedded in the token; also Max-Age for Permanent Cookies
   idleTimeout: Duration?             # Idle timeout (not supported in the current version, reserved for Redis mode)
   type: Cookie | Header              # Persistence type (default Cookie)
   cookieConfig:
@@ -291,8 +291,9 @@ sessionPersistence:
 
 ### Runtime Behavior
 
-- **Token generation**: truncated SHA-256 hash of the backend's `ip:port` (16-character hex, 64-bit identity), does not expose the backend topology.
-- **Cookie mode**: the first response injects `Set-Cookie: <name>=<token>; Path=/; HttpOnly; SameSite=Lax` (Permanent adds `Max-Age`).
+- **Token generation**: truncated SHA-256 hash of the backend's `ip:port` (16-character hex, 64-bit identity), does not expose the backend topology. When `absoluteTimeout` is set, the token is `<hash>.<expiry_epoch>` (absolute expiry frozen at issuance).
+- **Absolute lifetime**: `absoluteTimeout` (GEP-2257 `h|m|s|ms`, 1–4 segments; ceil to seconds, min 1s) is **gateway-enforced via the embedded expiry** in BOTH Cookie and Header modes and for BOTH `Session` and `Permanent` cookies. A replayed token past its expiry is treated like a missing token: normal LB selects a backend and a fresh token is issued. `Permanent` requires `absoluteTimeout`; an invalid `sessionPersistence` block drops that rule (`PartiallyInvalid` in K8s; dropped with an ERROR log in FileSystem/Etcd), never a silent never-expiring token.
+- **Cookie mode**: the first response injects `Set-Cookie: <name>=<token>; Path=/; HttpOnly; SameSite=Lax` (Permanent adds `Max-Age`, matching the embedded expiry).
 - **Header mode**: the first response injects `<name>: <token>`; the client must include it in subsequent requests.
 - **Backend selection**: the token is resolved to its exact backend BEFORE weighted backendRef selection, across ALL of the matched rule's backendRefs in declaration order (GEP-1619: weights govern only sessions without a token; a bound backendRef whose weight drops to 0 keeps its established sessions). Resolution is scoped to the matched rule, so default-named sessions on rules with disjoint backends never leak across rules.
 - **Fallback** (default): when the bound backend is unavailable, fall back to normal (weighted) load balancing and update the token.

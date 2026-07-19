@@ -9,6 +9,14 @@ use sha2::{Digest, Sha256};
 
 use crate::{EdgionHttpContext, SessionPersistenceState};
 
+/// Current Unix time in whole seconds (call edge; pure logic takes `now`).
+pub fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Default session persistence cookie/header name.
 const DEFAULT_SESSION_NAME: &str = "edgion-session-affinity";
 
@@ -103,15 +111,39 @@ pub(crate) fn sp_extract_token(
     session: &Session,
     sp_state: &mut SessionPersistenceState,
     sp: Option<&SessionPersistence>,
+    now: u64,
 ) -> Option<String> {
     let sp = sp?;
-    let token = extract_session_token(session, sp);
-    *sp_state = if token.is_some() {
-        SessionPersistenceState::Inactive
-    } else {
-        SessionPersistenceState::InjectNew
-    };
-    token
+    let raw = extract_session_token(session, sp);
+    sp_apply_extracted_token(raw, sp_state, now)
+}
+
+/// Post-extraction logic shared by `sp_extract_token` and unit tests: given the
+/// raw extracted wire token (if any) and `now`, set the SP state and return the
+/// bare `addrhash` to look up, or `None` when absent/expired.
+///
+/// - Absent → `InjectNew`, `None`.
+/// - Present, expired (`now >= expiry`) → `InjectNew`, `None` (behave like a
+///   missing token so the caller falls back to weighted selection and refreshes).
+/// - Present, live → `Inactive`, `Some(addrhash)` (expiry stripped; the affinity
+///   map is keyed by the bare `addrhash`).
+fn sp_apply_extracted_token(raw: Option<String>, sp_state: &mut SessionPersistenceState, now: u64) -> Option<String> {
+    match raw {
+        None => {
+            *sp_state = SessionPersistenceState::InjectNew;
+            None
+        }
+        Some(token) => {
+            let (hash, expiry) = parse_wire_token(&token);
+            if expiry.is_some_and(|e| now >= e) {
+                *sp_state = SessionPersistenceState::InjectNew;
+                None
+            } else {
+                *sp_state = SessionPersistenceState::Inactive;
+                Some(hash.to_string())
+            }
+        }
+    }
 }
 
 /// Session Persistence step 2 of 2: resolve a token to a sticky
@@ -185,15 +217,36 @@ fn sp_lookup_rule_scoped<'a>(
     None
 }
 
+/// Build the wire token. `<addrhash>` alone when no lifetime is configured;
+/// `<addrhash>.<now+ttl_secs>` (absolute expiry epoch, frozen at issuance) when
+/// it is. `<addrhash>` remains the affinity-map key.
+pub fn build_wire_token(addrhash: &str, now: u64, ttl_secs: Option<u64>) -> String {
+    match ttl_secs {
+        Some(ttl) => format!("{addrhash}.{}", now.saturating_add(ttl)),
+        None => addrhash.to_string(),
+    }
+}
+
+/// Split a wire token into `(addrhash, Option<expiry_epoch>)`. An unparseable
+/// expiry component is treated as "no expiry" so a malformed token never
+/// mis-expires (it will simply miss the affinity map and refresh).
+fn parse_wire_token(token: &str) -> (&str, Option<u64>) {
+    match token.split_once('.') {
+        Some((hash, exp)) => (hash, exp.parse::<u64>().ok()),
+        None => (token, None),
+    }
+}
+
 /// Build a Set-Cookie header value for session persistence.
 ///
 /// Format: `name=value; Path=/[; Max-Age=N]; HttpOnly; SameSite=Lax`
-/// Max-Age is only included for Permanent lifetime using absolute_timeout.
-pub fn build_set_cookie_value(sp: &SessionPersistence, token: &str, is_tls: bool) -> String {
+/// `token` is the full wire token (already carrying any expiry). `Max-Age` is
+/// emitted only for a Permanent lifetime and uses the same `ttl_secs` the wire
+/// token's expiry was derived from (single source of truth — no re-parse).
+pub fn build_set_cookie_value(sp: &SessionPersistence, token: &str, is_tls: bool, ttl_secs: Option<u64>) -> String {
     let name = get_session_name(sp);
     let mut cookie = format!("{}={}; Path=/", name, token);
 
-    // Add Max-Age only for Permanent lifetime
     let is_permanent = sp
         .cookie_config
         .as_ref()
@@ -202,10 +255,8 @@ pub fn build_set_cookie_value(sp: &SessionPersistence, token: &str, is_tls: bool
         .unwrap_or(false);
 
     if is_permanent {
-        if let Some(ref timeout) = sp.absolute_timeout {
-            if let Some(seconds) = parse_duration_to_seconds(timeout) {
-                cookie.push_str(&format!("; Max-Age={}", seconds));
-            }
+        if let Some(secs) = ttl_secs {
+            cookie.push_str(&format!("; Max-Age={secs}"));
         }
     }
 
@@ -214,26 +265,6 @@ pub fn build_set_cookie_value(sp: &SessionPersistence, token: &str, is_tls: bool
         cookie.push_str("; Secure");
     }
     cookie
-}
-
-/// Parse a duration string to seconds.
-///
-/// Supports formats: "1h", "30m", "60s", or raw seconds (e.g. "3600").
-pub fn parse_duration_to_seconds(duration: &str) -> Option<u64> {
-    let duration = duration.trim();
-    if duration.is_empty() {
-        return None;
-    }
-
-    if let Some(hours) = duration.strip_suffix('h') {
-        hours.trim().parse::<u64>().ok().map(|h| h * 3600)
-    } else if let Some(minutes) = duration.strip_suffix('m') {
-        minutes.trim().parse::<u64>().ok().map(|m| m * 60)
-    } else if let Some(seconds) = duration.strip_suffix('s') {
-        seconds.trim().parse::<u64>().ok()
-    } else {
-        duration.parse::<u64>().ok()
-    }
 }
 
 #[cfg(test)]
@@ -312,27 +343,49 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_duration_hours() {
-        assert_eq!(parse_duration_to_seconds("1h"), Some(3600));
-        assert_eq!(parse_duration_to_seconds("24h"), Some(86400));
+    fn test_build_wire_token_optional_expiry() {
+        // No ttl -> bare addrhash (unchanged behavior).
+        assert_eq!(build_wire_token("1a2b3c4d5e6f7a8b", 1000, None), "1a2b3c4d5e6f7a8b");
+        // ttl -> addrhash.<now+ttl>
+        assert_eq!(
+            build_wire_token("1a2b3c4d5e6f7a8b", 1000, Some(60)),
+            "1a2b3c4d5e6f7a8b.1060"
+        );
     }
 
     #[test]
-    fn test_parse_duration_minutes() {
-        assert_eq!(parse_duration_to_seconds("30m"), Some(1800));
-        assert_eq!(parse_duration_to_seconds("1m"), Some(60));
+    fn test_parse_wire_token() {
+        assert_eq!(parse_wire_token("abc123"), ("abc123", None));
+        assert_eq!(parse_wire_token("abc123.1060"), ("abc123", Some(1060)));
+        // Unparseable expiry component -> treated as no expiry (never mis-expires).
+        assert_eq!(parse_wire_token("abc123.xyz"), ("abc123", None));
     }
 
     #[test]
-    fn test_parse_duration_seconds() {
-        assert_eq!(parse_duration_to_seconds("60s"), Some(60));
-        assert_eq!(parse_duration_to_seconds("3600"), Some(3600));
-    }
+    fn test_extract_token_expiry() {
+        // Past expiry: now (1000) >= expiry (500) -> expired -> InjectNew, None.
+        let mut st = SessionPersistenceState::Inactive;
+        let got = sp_apply_extracted_token(Some("aaaabbbbccccdddd.500".to_string()), &mut st, 1000);
+        assert_eq!(got, None);
+        assert!(matches!(st, SessionPersistenceState::InjectNew));
 
-    #[test]
-    fn test_parse_duration_invalid() {
-        assert_eq!(parse_duration_to_seconds(""), None);
-        assert_eq!(parse_duration_to_seconds("abc"), None);
+        // Future expiry: live -> Inactive, returns bare addrhash (expiry stripped).
+        let mut st2 = SessionPersistenceState::Inactive;
+        let got2 = sp_apply_extracted_token(Some("aaaabbbbccccdddd.5000".to_string()), &mut st2, 1000);
+        assert_eq!(got2.as_deref(), Some("aaaabbbbccccdddd"));
+        assert!(matches!(st2, SessionPersistenceState::Inactive));
+
+        // No expiry component: live forever -> Inactive, bare hash.
+        let mut st3 = SessionPersistenceState::Inactive;
+        let got3 = sp_apply_extracted_token(Some("aaaabbbbccccdddd".to_string()), &mut st3, 1000);
+        assert_eq!(got3.as_deref(), Some("aaaabbbbccccdddd"));
+        assert!(matches!(st3, SessionPersistenceState::Inactive));
+
+        // Absent token -> InjectNew, None.
+        let mut st4 = SessionPersistenceState::Inactive;
+        let got4 = sp_apply_extracted_token(None, &mut st4, 1000);
+        assert_eq!(got4, None);
+        assert!(matches!(st4, SessionPersistenceState::InjectNew));
     }
 
     #[test]
@@ -399,7 +452,8 @@ mod tests {
             }),
             strict: None,
         };
-        let cookie = build_set_cookie_value(&sp, "abcd1234", false);
+        // Session lifetime: no Max-Age even though a ttl is supplied.
+        let cookie = build_set_cookie_value(&sp, "abcd1234", false, Some(3600));
         assert_eq!(
             cookie,
             "edgion-session-affinity=abcd1234; Path=/; HttpOnly; SameSite=Lax"
@@ -419,7 +473,7 @@ mod tests {
             }),
             strict: None,
         };
-        let cookie = build_set_cookie_value(&sp, "abcd1234", false);
+        let cookie = build_set_cookie_value(&sp, "abcd1234", false, Some(86400));
         assert_eq!(
             cookie,
             "my-sess=abcd1234; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax"
@@ -436,7 +490,7 @@ mod tests {
             cookie_config: None,
             strict: None,
         };
-        let cookie = build_set_cookie_value(&sp, "token123", false);
+        let cookie = build_set_cookie_value(&sp, "token123", false, Some(3600));
         // No cookie_config means not permanent, so no Max-Age
         assert!(!cookie.contains("Max-Age"));
     }
@@ -451,7 +505,7 @@ mod tests {
             cookie_config: None,
             strict: None,
         };
-        let cookie = build_set_cookie_value(&sp, "abcd1234", true);
+        let cookie = build_set_cookie_value(&sp, "abcd1234", true, None);
         assert_eq!(
             cookie,
             "edgion-session-affinity=abcd1234; Path=/; HttpOnly; SameSite=Lax; Secure"

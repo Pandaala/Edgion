@@ -118,6 +118,33 @@ only be placed in stages admitted by the exhaustive Rust
 `validate::applicable_stages` table; the same resource may contain entries in
 multiple stage arrays. There is no generic `spec.plugins` field.
 
+### `enable: false` means bypass, not reject
+
+An entry-level `enable: false` is **semantically inert**: the entry is not
+built, not run, and cannot invalidate the containing resource through its
+dormant inner configuration. Both the Controller schema layer
+(`EdgionPlugins::validate_plugins`) and the Gateway compilation
+(`compile_plugin_conditions` / `add_from_*`) skip disabled entries for config,
+alias, stage, dependency (Secret / LinkSys / EdgionConfigData ref), and
+`conditions` regex/`timeRange` validation. A parked entry that carries a
+malformed condition or invalid config therefore keeps the resource
+`Accepted=True` — it is a no-op, not a validation error. This matches the
+EdgionStreamPlugins rule (`preparse_skips_disabled_plugins`); HTTP and stream
+follow one rule.
+
+This is distinct from an **enabled invalid** entry (`enable: true` + bad
+config): that seals the whole EdgionPlugins resource fail-closed
+(`seal_fail_closed`), so every request referencing it gets HTTP 500. In short:
+disabling an auth/authorization plugin intentionally lets the route continue
+without it (bypass); an invalid *active* plugin must never fail open. The
+distinction is:
+
+| Entry state | Built / run | Inner config + conditions validated | Effect on the resource |
+|-------------|-------------|-------------------------------------|------------------------|
+| enabled and valid | yes | yes | none |
+| disabled (`enable: false`) | no | no | none (stays `Accepted=True`) |
+| enabled and invalid | no | yes | resource fails closed (HTTP 500 per request) |
+
 ## Secret Dependencies
 
 The following plugin types read Secret data from `ControllerRuntime.secret_store` during the Controller-side `parse()` stage:

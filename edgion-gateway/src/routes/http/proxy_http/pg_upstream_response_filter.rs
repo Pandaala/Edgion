@@ -134,7 +134,17 @@ pub fn upstream_response_filter(
                     });
 
                     if let Some(addr) = backend_addr {
-                        let token = session_persistence::generate_session_token(&addr);
+                        let addrhash = session_persistence::generate_session_token(&addr);
+                        // Freeze the absolute expiry at issuance: compute the ttl
+                        // once (GEP-2257) and feed both the wire token and the
+                        // Cookie Max-Age so the browser hint can never desync from
+                        // the gateway-enforced expiry.
+                        let now = session_persistence::now_unix_secs();
+                        let ttl_secs = sp
+                            .absolute_timeout
+                            .as_deref()
+                            .and_then(edgion_resources::resources::http_route::parse_gep2257_duration_secs);
+                        let token = session_persistence::build_wire_token(&addrhash, now, ttl_secs);
 
                         match session_persistence::get_persistence_type(&sp) {
                             SessionPersistenceType::Cookie => {
@@ -149,7 +159,8 @@ pub fn upstream_response_filter(
                                 // Envoy (no cookie carry-over onto a local/error
                                 // reply). Accepted as designed; see
                                 // skills/04-review/architecture/local-reply-drops-sticky-set-cookie.md
-                                let cookie_value = session_persistence::build_set_cookie_value(&sp, &token, is_tls);
+                                let cookie_value =
+                                    session_persistence::build_set_cookie_value(&sp, &token, is_tls, ttl_secs);
                                 let _ = upstream_response.append_header("Set-Cookie", &cookie_value);
                             }
                             SessionPersistenceType::Header => {

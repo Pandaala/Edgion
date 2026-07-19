@@ -790,6 +790,18 @@ pub(crate) fn find_invalid_rule_indices(route: &GRPCRoute, _route_ns: &str) -> V
                 invalid_indices.push(idx);
                 continue;
             }
+            // Invalid sessionPersistence (bad GEP-2257 absoluteTimeout, or
+            // Permanent lifetime without absoluteTimeout). K8s admission already
+            // rejects these; this guards FileSystem/Etcd modes so the rule is
+            // dropped rather than silently emitting a never-expiring token.
+            if rule
+                .session_persistence
+                .as_ref()
+                .is_some_and(|sp| sp.validate().is_err())
+            {
+                invalid_indices.push(idx);
+                continue;
+            }
             if let Some(backend_refs) = &rule.backend_refs {
                 let backend_conflict = backend_refs.iter().any(|br| {
                     has_duplicate_filter_conflict(br.filters.as_ref())
@@ -922,6 +934,22 @@ mod tests {
             }
         ]));
         assert!(super::find_invalid_rule_indices(&route, "default").is_empty());
+    }
+
+    #[test]
+    fn invalid_session_persistence_marks_grpc_rule_invalid() {
+        let route: GRPCRoute = serde_json::from_value(json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "GRPCRoute",
+            "metadata": { "name": "r", "namespace": "default" },
+            "spec": {
+                "rules": [{
+                    "sessionPersistence": { "absoluteTimeout": "1d" }
+                }]
+            }
+        }))
+        .expect("route should deserialize");
+        assert_eq!(super::find_invalid_rule_indices(&route, "default"), vec![0]);
     }
 
     #[test]

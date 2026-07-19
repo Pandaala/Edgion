@@ -140,6 +140,13 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>) {
         ($entries:expr, $label:expr) => {
             if let Some(entries) = &mut $entries {
                 for (i, entry) in entries.iter_mut().enumerate() {
+                    // A disabled entry is never built or run (`add_from_*` skip
+                    // it), so its dormant conditions must not produce a preparse
+                    // error. Skipping keeps this in lockstep with the schema-layer
+                    // `validate_plugins` Pass 1 (enforced by the parity test).
+                    if !entry.is_enabled() {
+                        continue;
+                    }
                     if let Some(conds) = entry.conditions.as_mut() {
                         if let Err(errs) = conds.compile() {
                             for e in errs {
@@ -644,6 +651,23 @@ mod compile_plugins_tests {
             e.alias = Some(alias.to_string());
             e
         }
+        // Disabled entry carrying a malformed regex condition. Both
+        // `compile_plugin_conditions` (runtime) and `validate_plugins` Pass 1
+        // (schema) must skip it, so the error set stays empty on both sides.
+        fn disabled_with_bad_condition() -> RequestFilterEntry {
+            let mut e = RequestFilterEntry::with_enable(rhm(), false);
+            e.conditions = Some(
+                serde_json::from_value(serde_json::json!({
+                    "run": [{
+                        "type": "keyMatch",
+                        "key": { "type": "header", "name": "X-Test" },
+                        "regex": ["("]
+                    }]
+                }))
+                .expect("build malformed conditions"),
+            );
+            e
+        }
         fn mk(
             request: Option<Vec<RequestFilterEntry>>,
             urf: Option<Vec<UpstreamResponseFilterEntry>>,
@@ -702,6 +726,10 @@ mod compile_plugins_tests {
             (
                 "disabled_wrong_stage",
                 mk(Some(vec![RequestFilterEntry::with_enable(respm(), false)]), None),
+            ),
+            (
+                "disabled_bad_condition",
+                mk(Some(vec![disabled_with_bad_condition()]), None),
             ),
             (
                 "mixed_multi_stage",

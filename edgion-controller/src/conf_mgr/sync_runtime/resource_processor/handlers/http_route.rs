@@ -807,6 +807,19 @@ fn invalid_extension_ref_reason(rule: &edgion_resources::resources::http_route::
     None
 }
 
+/// Returns a reason string if a rule's `sessionPersistence` block is invalid
+/// (bad GEP-2257 `absoluteTimeout`, or Permanent lifetime without
+/// `absoluteTimeout`). Kubernetes already rejects these at admission (CRD
+/// pattern + CEL); this guards the FileSystem/Etcd modes that have no admission.
+/// A flagged rule is dropped via `invalid_rule_indices` rather than silently
+/// emitting a never-expiring session token.
+fn invalid_session_persistence_reason(rule: &edgion_resources::resources::http_route::HTTPRouteRule) -> Option<String> {
+    rule.session_persistence
+        .as_ref()
+        .and_then(|sp| sp.validate().err())
+        .map(|e| format!("sessionPersistence: {e}"))
+}
+
 /// Find rules that are invalid, returning `(index, reason)` for each.
 ///
 /// A rule is invalid if:
@@ -835,6 +848,10 @@ pub(crate) fn find_invalid_rule_details(route: &HTTPRoute, _route_ns: &str) -> V
             continue;
         }
         if let Some(reason) = invalid_extension_ref_reason(rule) {
+            details.push((idx, reason));
+            continue;
+        }
+        if let Some(reason) = invalid_session_persistence_reason(rule) {
             details.push((idx, reason));
             continue;
         }
@@ -1146,6 +1163,55 @@ spec:
 "#;
         let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(indices_only(find_invalid_rule_details(&route, "default")), vec![0]);
+    }
+
+    #[test]
+    fn invalid_session_persistence_flags_only_offending_rule() {
+        // rule[0]: Permanent lifetime without absoluteTimeout -> invalid.
+        // rule[1]: valid session persistence. Only rule[0] is flagged.
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  rules:
+    - sessionPersistence:
+        cookieConfig:
+          lifetimeType: Permanent
+    - sessionPersistence:
+        absoluteTimeout: 1h
+        cookieConfig:
+          lifetimeType: Permanent
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(indices_only(details.clone()), vec![0]);
+        assert!(
+            details[0].1.contains("absoluteTimeout"),
+            "expected absoluteTimeout reason; got: {}",
+            details[0].1
+        );
+    }
+
+    #[test]
+    fn invalid_session_persistence_bad_duration_flags_rule() {
+        let yaml = r#"
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: r1
+  namespace: default
+spec:
+  rules:
+    - sessionPersistence:
+        absoluteTimeout: 1d
+"#;
+        let route: HTTPRoute = serde_yaml::from_str(yaml).unwrap();
+        let details = find_invalid_rule_details(&route, "default");
+        assert_eq!(indices_only(details.clone()), vec![0]);
+        assert!(details[0].1.contains("sessionPersistence"), "got: {}", details[0].1);
     }
 
     #[test]

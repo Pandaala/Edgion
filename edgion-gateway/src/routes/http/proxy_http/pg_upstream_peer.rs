@@ -459,8 +459,12 @@ pub async fn select_http_backend(
     };
 
     // Session Persistence step 1 of 2: extract token + set initial state.
-    let sp_token =
-        session_persistence::sp_extract_token(session, &mut ctx.sp_state, route_unit.rule.session_persistence.as_ref());
+    let sp_token = session_persistence::sp_extract_token(
+        session,
+        &mut ctx.sp_state,
+        route_unit.rule.session_persistence.as_ref(),
+        session_persistence::now_unix_secs(),
+    );
 
     // Session Persistence step 2 of 2: resolve the token BEFORE weighted
     // backendRef selection, across ALL of the rule's backendRefs (GEP-1619:

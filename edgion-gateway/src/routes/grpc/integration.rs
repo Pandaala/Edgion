@@ -75,6 +75,7 @@ pub async fn handle_grpc_upstream(session: &mut Session, ctx: &mut EdgionHttpCon
         session,
         &mut ctx.sp_state,
         grpc_route_unit.rule.session_persistence.as_ref(),
+        crate::routes::http::session_persistence::now_unix_secs(),
     );
 
     // Session Persistence step 2 of 2: resolve the token BEFORE weighted
