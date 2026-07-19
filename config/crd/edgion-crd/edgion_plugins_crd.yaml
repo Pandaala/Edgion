@@ -130,6 +130,19 @@ spec:
                             type: array
                             description: "Conditions that must be satisfied to run (AND logic)"
                             items: *conditionSchema
+                      # --- body: define anchor here, reuse in the async response stage ---
+                      body: &bodySchema
+                        type: object
+                        description: "Body requirement for body-aware plugins: force-buffer the body (OpenResty-style) before the plugin runs"
+                        properties:
+                          maxBodySize:
+                            type: string
+                            description: "Per-plugin body-size LIMIT (human size '1k'/'1m'/'64M'). If the body exceeds it, only THIS plugin treats it as too-large (per onReadFailure). It does NOT size the shared buffer (that is set by the gateway-wide maxBodySize); multiple plugins can each set their own with no conflict. Usually left unset."
+                          onReadFailure:
+                            type: string
+                            enum: [failClose, failOpen]
+                            description: "Behavior when the body cannot be read (default failClose → 500, or 413 if oversize; failOpen skips the plugin)"
+                          conditions: *conditionsSchema
                       type:
                         type: string
                         description: "Plugin type"
@@ -263,7 +276,7 @@ spec:
                               type: string
                           validateRequestBody:
                             type: boolean
-                            description: "Validate request body digest (currently rejected at preparse)"
+                            description: "Verify the request body against the signed Digest header (SHA-256). Enforced via the body gate; fail-closes (500) until full-body buffering is implemented."
                           minSecretLength:
                             type: integer
                             minimum: 0
@@ -415,6 +428,7 @@ spec:
                       alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
+                      body: *bodySchema
                       type:
                         type: string
                       config:

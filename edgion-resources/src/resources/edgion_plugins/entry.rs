@@ -1,5 +1,6 @@
 //! Plugin entry types with enable/disable functionality
 
+use super::body_requirement::BodyRequirement;
 use super::conditions::PluginConditions;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -160,6 +161,13 @@ pub struct RequestFilterEntry {
     #[schemars(skip)]
     pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
 
+    /// Optional body requirement. When set (by the operator) or declared
+    /// intrinsically by the plugin, the runtime wraps the plugin in a body gate
+    /// that buffers the request body (OpenResty-style, at the request phase) and
+    /// applies the configured fail-open / fail-close policy on a read failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodyRequirement>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -173,6 +181,7 @@ impl RequestFilterEntry {
             conditions: None,
             alias: None,
             policy_action: None,
+            body: None,
             plugin,
         }
     }
@@ -184,6 +193,7 @@ impl RequestFilterEntry {
             conditions: None,
             alias: None,
             policy_action: None,
+            body: None,
             plugin,
         }
     }
@@ -391,6 +401,13 @@ pub struct UpstreamResponseEntry {
     #[schemars(skip)]
     pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
 
+    /// Optional body requirement. When set (by the operator) or declared
+    /// intrinsically by the plugin, the runtime wraps the plugin in a body gate
+    /// that buffers the response body and applies the configured fail-open /
+    /// fail-close policy on a read failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<BodyRequirement>,
+
     /// The actual plugin configuration
     #[serde(flatten)]
     pub plugin: EdgionPlugin,
@@ -404,6 +421,7 @@ impl UpstreamResponseEntry {
             conditions: None,
             alias: None,
             policy_action: None,
+            body: None,
             plugin,
         }
     }
@@ -415,6 +433,7 @@ impl UpstreamResponseEntry {
             conditions: None,
             alias: None,
             policy_action: None,
+            body: None,
             plugin,
         }
     }

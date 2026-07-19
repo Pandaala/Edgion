@@ -115,6 +115,71 @@ pub enum EdgionPlugin {
 }
 
 impl EdgionPlugin {
+    /// The plugin's intrinsic body requirement, derived from its own config.
+    ///
+    /// This is the single source of truth for "does this plugin consume the
+    /// request/response body (in this configuration)?" — used by both the
+    /// controller validator and the gateway runtime, so they always agree. A
+    /// plugin becomes body-aware by adding an arm here; everything else returns
+    /// `None`, so an operator `body:` on a non-consuming plugin is rejected at
+    /// preparse and never wraps it in a body gate.
+    pub fn body_requirement(&self) -> Option<super::body_requirement::BodyRequirement> {
+        use EdgionPlugin::*;
+        match self {
+            // HMAC consumes the request body only when Digest verification is on.
+            HmacAuth(cfg) if cfg.validate_request_body => Some(super::body_requirement::BodyRequirement::fail_close()),
+            // Exhaustive (no `_`, matching `type_name`/`validation_error`): a new
+            // body-consuming plugin MUST add itself above, or this fails to
+            // compile — it can never silently default to "no body".
+            HmacAuth(_)
+            | RequestHeaderModifier(_)
+            | ResponseHeaderModifier(_)
+            | RequestRedirect(_)
+            | UrlRewrite(_)
+            | RequestMirror(_)
+            | BasicAuth(_)
+            | Cors(_)
+            | Csrf(_)
+            | IpRestriction(_)
+            | JwtAuth(_)
+            | JweDecrypt(_)
+            | HeaderCertAuth(_)
+            | KeyAuth(_)
+            | LdapAuth(_)
+            | Mock(_)
+            | DebugAccessLogToHeader(_)
+            | ProxyRewrite(_)
+            | RequestRestriction(_)
+            | ResponseRewrite(_)
+            | RateLimit(_)
+            | RateLimitRedis(_)
+            | CtxSet(_)
+            | RealIp(_)
+            | FaultInjection(_)
+            | ForwardAuth(_)
+            | OpenidConnect(_)
+            | BandwidthLimit(_)
+            | DirectEndpoint(_)
+            | AllEndpointStatus(_)
+            | DynamicInternalUpstream(_)
+            | DynamicExternalUpstream(_)
+            | Dsl(_)
+            | RegionRoute(_)
+            | TraceContext(_)
+            | ExtProc(_)
+            | GlobalAccessControl(_)
+            | Canary(_)
+            | Wasm(_) => None,
+        }
+    }
+
+    /// Whether this plugin accepts an operator `body:` configuration (i.e. it
+    /// consumes the body in its current config). Equivalent to
+    /// `body_requirement().is_some()`.
+    pub fn accepts_body(&self) -> bool {
+        self.body_requirement().is_some()
+    }
+
     /// Get the plugin type name
     pub fn type_name(&self) -> &'static str {
         match self {

@@ -177,6 +177,39 @@ fn compile_plugin_conditions(ep: &mut EdgionPlugins, errors: &mut Vec<String>) {
         "upstreamResponseBodyFilterPlugins"
     );
     compile_entries!(ep.spec.upstream_response_plugins, "upstreamResponsePlugins");
+
+    // The secondary body gate (`entry.body.conditions`) is a full PluginConditions
+    // too — compile its regexes here (only the two async stages carry `body`), or
+    // a regex/values_set secondary condition would silently evaluate to false at
+    // runtime. Kept in lockstep with `validate.rs` by the drift test.
+    macro_rules! compile_body_entries {
+        ($entries:expr, $label:expr) => {
+            if let Some(entries) = &mut $entries {
+                for (i, entry) in entries.iter_mut().enumerate() {
+                    // A disabled entry is inert (never built/run); its dormant
+                    // body conditions must not flip Accepted=False — same rule the
+                    // enabled check above applies to entry-level conditions.
+                    if !entry.is_enabled() {
+                        continue;
+                    }
+                    if let Some(conds) = entry.body.as_mut().and_then(|b| b.conditions.as_mut()) {
+                        if let Err(errs) = conds.compile() {
+                            for e in errs {
+                                errors.push(format!("{}[{}] body conditions regex: {}", $label, i, e));
+                            }
+                        }
+                        if let Err(errs) = conds.validate() {
+                            for e in errs {
+                                errors.push(format!("{}[{}] body conditions: {}", $label, i, e));
+                            }
+                        }
+                    }
+                }
+            }
+        };
+    }
+    compile_body_entries!(ep.spec.request_plugins, "requestPlugins");
+    compile_body_entries!(ep.spec.upstream_response_plugins, "upstreamResponsePlugins");
 }
 
 /// Type alias for the compiled-plugin map (key: namespace/name)
@@ -668,6 +701,46 @@ mod compile_plugins_tests {
             );
             e
         }
+        fn with_bad_body(mut e: RequestFilterEntry) -> RequestFilterEntry {
+            e.body = Some(edgion_resources::resources::edgion_plugins::BodyRequirement {
+                max_body_size: Some("notasize".to_string()),
+                ..Default::default()
+            });
+            e
+        }
+        // A body-consuming plugin (HMAC with validateRequestBody) whose operator
+        // `body.maxBodySize` is malformed — exercises the maxBodySize validation parity,
+        // distinct from the "plugin does not consume a body" path.
+        fn hmac_body_consumer() -> EdgionPlugin {
+            use edgion_resources::resources::edgion_plugins::HmacAuthConfig;
+            EdgionPlugin::HmacAuth(HmacAuthConfig {
+                validate_request_body: true,
+                anonymous: Some("anon".to_string()),
+                ..Default::default()
+            })
+        }
+        // A bad regex inside the secondary body-gate conditions — exercises the
+        // `body conditions regex` compilation parity (F3).
+        fn with_bad_body_regex(mut e: RequestFilterEntry) -> RequestFilterEntry {
+            use edgion_resources::resources::edgion_plugins::conditions::{
+                Condition, IncludeCondition, PluginConditions,
+            };
+            e.body = Some(edgion_resources::resources::edgion_plugins::BodyRequirement {
+                conditions: Some(PluginConditions {
+                    skip: None,
+                    run: Some(vec![Condition::Include(IncludeCondition {
+                        key: edgion_resources::common::KeyGet::Header { name: "x".to_string() },
+                        values: None,
+                        regex: Some(vec!["[".to_string()]),
+                        values_set: None,
+                        wildcard_patterns: None,
+                        compiled_regex: None,
+                    })]),
+                }),
+                ..Default::default()
+            });
+            e
+        }
         fn mk(
             request: Option<Vec<RequestFilterEntry>>,
             urf: Option<Vec<UpstreamResponseFilterEntry>>,
@@ -703,6 +776,33 @@ mod compile_plugins_tests {
 
         let cases: Vec<(&str, EdgionPlugins)> = vec![
             ("valid_request", mk(Some(vec![RequestFilterEntry::new(rhm())]), None)),
+            (
+                // `body:` on a plugin that does not consume a body → rejected.
+                "body_on_non_consuming_plugin",
+                mk(Some(vec![with_bad_body(RequestFilterEntry::new(rhm()))]), None),
+            ),
+            (
+                // `body.maxBodySize` malformed on a body-consuming plugin → maxBodySize error.
+                "bad_body_max_body_size_on_consumer",
+                mk(
+                    Some(vec![with_bad_body(RequestFilterEntry::new(hmac_body_consumer()))]),
+                    None,
+                ),
+            ),
+            (
+                // Bad regex in the secondary body-gate conditions → compile error.
+                "bad_body_condition_regex",
+                mk(Some(vec![with_bad_body_regex(RequestFilterEntry::new(rhm()))]), None),
+            ),
+            (
+                // Disabled entry with a bad body-condition regex → inert, both
+                // sides skip it (empty error set), same as disabled_with_bad_condition.
+                "disabled_with_bad_body_regex",
+                mk(
+                    Some(vec![with_bad_body_regex(RequestFilterEntry::with_enable(rhm(), false))]),
+                    None,
+                ),
+            ),
             (
                 "valid_urf",
                 mk(None, Some(vec![UpstreamResponseFilterEntry::new(respm())])),

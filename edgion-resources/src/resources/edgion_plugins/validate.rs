@@ -122,6 +122,23 @@ fn collect_condition_errors(conds: &PluginConditions, label: &str, index: usize,
     }
 }
 
+/// Same as [`collect_condition_errors`] but for a plugin's secondary body gate
+/// conditions (`entry.body.conditions`) — mirrors the gateway's
+/// `compile_body_entries` wording (`"... body conditions ..."`).
+fn collect_body_condition_errors(conds: &PluginConditions, label: &str, index: usize, errors: &mut Vec<String>) {
+    let mut conds = conds.clone();
+    if let Err(errs) = conds.compile() {
+        for e in errs {
+            errors.push(format!("{}[{}] body conditions regex: {}", label, index, e));
+        }
+    }
+    if let Err(errs) = conds.validate() {
+        for e in errs {
+            errors.push(format!("{}[{}] body conditions: {}", label, index, e));
+        }
+    }
+}
+
 impl EdgionPlugins {
     /// Collect the preparse validation errors for this resource WITHOUT building
     /// the gateway plugin runtime.
@@ -165,6 +182,27 @@ impl EdgionPlugins {
             "upstreamResponseBodyFilterPlugins"
         );
         compile_conditions!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
+
+        // Secondary body-gate conditions (`entry.body.conditions`) — only the two
+        // async stages carry `body`. Mirrors the gateway `compile_body_entries`.
+        macro_rules! compile_body_conditions {
+            ($entries:expr, $label:literal) => {
+                if let Some(entries) = &$entries {
+                    for (i, entry) in entries.iter().enumerate() {
+                        // Disabled entries are inert — skip, matching the
+                        // entry-conditions pass and the gateway `compile_body_entries`.
+                        if !entry.is_enabled() {
+                            continue;
+                        }
+                        if let Some(conds) = entry.body.as_ref().and_then(|b| b.conditions.as_ref()) {
+                            collect_body_condition_errors(conds, $label, i, &mut errors);
+                        }
+                    }
+                }
+            };
+        }
+        compile_body_conditions!(self.spec.request_plugins, "requestPlugins");
+        compile_body_conditions!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
 
         // Pass 2: per-entry config/alias/stage validation for ENABLED entries,
         // in stage order — mirrors the four `add_from_*` paths (minus runtime
@@ -218,6 +256,38 @@ impl EdgionPlugins {
             "upstream response",
             upstream_response
         );
+
+        // Pass 2b: operator body requirement validation for the two async stages
+        // that carry a `body` field. Mirrors the gateway `add_from_*` paths, which
+        // check `entry.body` only for enabled, config-valid entries (a config
+        // error `continue`s before the body check), with the same
+        // `"...: body: <err>"` messages — kept in lockstep by the drift test.
+        macro_rules! validate_body_entries {
+            ($entries:expr, $label:literal) => {
+                if let Some(entries) = &$entries {
+                    for (i, entry) in entries.iter().enumerate() {
+                        if !entry.is_enabled() || entry.plugin.validation_error().is_some() {
+                            continue;
+                        }
+                        let Some(body) = entry.body.as_ref() else { continue };
+                        let name = entry.plugin.type_name();
+                        // `body:` only applies to plugins that consume the body in
+                        // their current config; reject it elsewhere so it is never
+                        // a silent no-op.
+                        if !entry.plugin.accepts_body() {
+                            errors.push(format!(
+                                "{}[{}] ({}): body: plugin does not consume a body",
+                                $label, i, name
+                            ));
+                        } else if let Some(err) = body.validation_error() {
+                            errors.push(format!("{}[{}] ({}): body: {}", $label, i, name, err));
+                        }
+                    }
+                }
+            };
+        }
+        validate_body_entries!(self.spec.request_plugins, "requestPlugins");
+        validate_body_entries!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
 
         // At most one TraceContext in the request stage — multiple would each
         // overwrite x-trace-id (last-write-wins), which is confusing.
@@ -293,6 +363,54 @@ mod tests {
             source: Some(source.to_string()),
             ..Default::default()
         }))
+    }
+
+    #[test]
+    fn body_on_non_consuming_plugin_is_rejected() {
+        use crate::resources::edgion_plugins::BodyRequirement;
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(header_filter()));
+        entry.body = Some(BodyRequirement::fail_close());
+        let errs = with_request_plugins(vec![entry]).validate_plugins();
+        assert!(
+            errs.iter().any(|e| e.contains("body: plugin does not consume a body")),
+            "expected 'does not consume a body', got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn bad_body_max_size_on_consuming_plugin_is_flagged() {
+        use crate::resources::edgion_plugins::{BodyRequirement, HmacAuthConfig};
+        let cfg = HmacAuthConfig {
+            validate_request_body: true,
+            anonymous: Some("anon".to_string()),
+            ..Default::default()
+        };
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::HmacAuth(cfg));
+        entry.body = Some(BodyRequirement {
+            max_body_size: Some("notasize".to_string()),
+            ..Default::default()
+        });
+        let errs = with_request_plugins(vec![entry]).validate_plugins();
+        assert!(
+            errs.iter().any(|e| e.contains("body: invalid body.maxBodySize")),
+            "expected a maxBodySize error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn valid_body_on_consuming_plugin_has_no_error() {
+        use crate::resources::edgion_plugins::{BodyRequirement, HmacAuthConfig};
+        let cfg = HmacAuthConfig {
+            validate_request_body: true,
+            anonymous: Some("anon".to_string()),
+            ..Default::default()
+        };
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::HmacAuth(cfg));
+        entry.body = Some(BodyRequirement {
+            max_body_size: Some("1m".to_string()),
+            ..Default::default()
+        });
+        assert!(with_request_plugins(vec![entry]).validate_plugins().is_empty());
     }
 
     #[test]

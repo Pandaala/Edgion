@@ -19,6 +19,7 @@ use edgion_resources::resources::{
     RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry, UpstreamResponseFilterEntry,
 };
 
+use super::body_gate::{BodyGatedRequestFilter, BodyGatedUpstreamResponse};
 use super::conditional_filter::{
     ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseBodyFilter,
     ConditionalUpstreamResponseFilter,
@@ -438,11 +439,41 @@ impl PluginRuntime {
                     }
                 };
 
+                // Validate the optional operator body requirement. `body:` only
+                // applies to plugins that consume the body in their current config;
+                // reject it elsewhere so it is never a silent no-op. Non-fatal: the
+                // plugin still runs (ungated), but the error is surfaced.
+                if entry.body.is_some() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    if !entry.plugin.accepts_body() {
+                        errors.push(format!(
+                            "requestPlugins[{}] ({}): body: plugin does not consume a body",
+                            index, plugin_name
+                        ));
+                    } else if let Some(err) = entry.body.as_ref().and_then(|b| b.validation_error()) {
+                        errors.push(format!("requestPlugins[{}] ({}): body: {}", index, plugin_name, err));
+                    }
+                }
+
                 match Self::create_request_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
+                        // Resolve the effective body requirement from the
+                        // operator's `body:` and the plugin's intrinsic
+                        // declaration (the operator may tune size/conditions but
+                        // may not downgrade an intrinsic fail-close). When present,
+                        // wrap the inner filter in a body gate (inside the
+                        // Conditional wrapper, so entry run_if/skip_if runs first).
+                        let body_req = edgion_resources::resources::edgion_plugins::BodyRequirement::resolve(
+                            entry.body.clone(),
+                            entry.plugin.body_requirement(),
+                        );
+                        let gated: Box<dyn RequestFilter> = match body_req {
+                            Some(req) => Box::new(BodyGatedRequestFilter::new(filter, req)),
+                            None => filter,
+                        };
                         // Wrap with ConditionalRequestFilter to support condition evaluation
                         let conditional_filter =
-                            ConditionalRequestFilter::with_alias(filter, entry.conditions.clone(), entry_alias);
+                            ConditionalRequestFilter::with_alias(gated, entry.conditions.clone(), entry_alias);
                         self.add_request_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -616,9 +647,23 @@ impl PluginRuntime {
                     continue;
                 }
 
-                // Validate optional entry-level alias. On failure, surface
-                // the error and drop the alias so an unvalidated value never
-                // reaches the access log.
+                // Validate the optional operator body requirement. `body:` only
+                // applies to plugins that consume the body in their current config;
+                // reject it elsewhere so it is never a silent no-op. Non-fatal.
+                if entry.body.is_some() && !entry.plugin.accepts_body() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponsePlugins[{}] ({}): body: plugin does not consume a body",
+                        index, plugin_name
+                    ));
+                } else if let Some(err) = entry.body.as_ref().and_then(|b| b.validation_error()) {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponsePlugins[{}] ({}): body: {}",
+                        index, plugin_name, err
+                    ));
+                }
+
                 let entry_alias = match entry.validate_alias() {
                     None => entry.alias.clone(),
                     Some(err) => {
@@ -630,9 +675,21 @@ impl PluginRuntime {
 
                 match Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
+                        // Resolve the effective body requirement (operator tunes
+                        // size/conditions but cannot downgrade an intrinsic
+                        // fail-close) and wrap in a response body gate inside the
+                        // Conditional wrapper.
+                        let body_req = edgion_resources::resources::edgion_plugins::BodyRequirement::resolve(
+                            entry.body.clone(),
+                            entry.plugin.body_requirement(),
+                        );
+                        let gated: Box<dyn UpstreamResponse> = match body_req {
+                            Some(req) => Box::new(BodyGatedUpstreamResponse::new(filter, req)),
+                            None => filter,
+                        };
                         // Wrap with ConditionalUpstreamResponse to support condition evaluation
                         let conditional_filter =
-                            ConditionalUpstreamResponse::with_alias(filter, entry.conditions.clone(), entry_alias);
+                            ConditionalUpstreamResponse::with_alias(gated, entry.conditions.clone(), entry_alias);
                         self.add_upstream_response(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -1341,6 +1398,50 @@ fn check_response_stage_terminate(
 mod tests {
     use super::*;
     use edgion_resources::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
+
+    #[tokio::test]
+    async fn add_from_request_filters_wraps_body_consuming_plugin() {
+        // A body-consuming plugin (HMAC with validateRequestBody) must be wrapped
+        // in a body gate by the wiring. Proof: running the built filter force-reads
+        // the body (Unimplemented today) and fail-closes 500 BEFORE HMAC's own
+        // logic. If the gate were NOT wired in, HMAC would instead 401 on the
+        // missing Authorization header (ErrTerminateRequest).
+        use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+        use crate::EdgionHttpContext;
+        use edgion_resources::resources::HmacAuthConfig;
+
+        let cfg = HmacAuthConfig {
+            validate_request_body: true,
+            anonymous: Some("anon".to_string()),
+            ..Default::default()
+        };
+        let mut runtime = PluginRuntime::new();
+        let errors =
+            runtime.add_from_request_filters(&[RequestFilterEntry::new(EdgionPlugin::HmacAuth(cfg))], "default");
+        assert!(errors.is_empty(), "unexpected build errors: {errors:?}");
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        assert_eq!(filter.name(), "HmacAuth", "gate must be transparent to name()");
+
+        let mut session = MockPluginSession::new();
+        session.expect_get_method().return_const("POST".to_string());
+        session.expect_header_value().returning(|_| None);
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::Unimplemented));
+
+        let mut log = PluginLog::new("HmacAuth");
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            },
+            "consuming plugin must be gated (fail-close) before its own auth logic"
+        );
+    }
 
     #[test]
     fn add_from_request_filters_reports_alias_validation_error_and_threads_alias() {

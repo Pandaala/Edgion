@@ -13,6 +13,7 @@ pub fn new_ctx(edgion_http: &EdgionHttpProxy) -> EdgionHttpContext {
         .as_ref()
         .map(|security| security.allow_loopback_upstream)
         .unwrap_or(false);
+    ctx.max_body_size_bytes = edgion_http.edgion_gateway_config.spec.max_body_size_bytes();
     global_metrics().ctx_created();
     ctx
 }

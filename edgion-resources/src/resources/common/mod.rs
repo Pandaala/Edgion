@@ -1,5 +1,6 @@
 //! Common reusable types for Edgion custom resources.
 
+pub mod byte_size;
 pub mod external_http;
 pub mod group_name;
 pub mod log_labels;
@@ -11,6 +12,7 @@ pub mod service_kind;
 pub mod success;
 pub mod tls;
 
+pub use byte_size::parse_byte_size;
 pub use external_http::{
     validate_connection_target, validate_webhook_target, ActiveHealthCheck, ExternalHttpConnection, PassiveBackoff,
     PassiveHealthCheck, ResolvedSecrets, TargetKind, WebhookHealthCheck, WebhookRateLimit, WebhookRetry,

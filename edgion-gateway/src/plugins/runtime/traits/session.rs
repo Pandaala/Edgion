@@ -12,6 +12,44 @@ use pingora_http::ResponseHeader;
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
 pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 
+/// Why a body could not be read.
+///
+/// Pingora streams bodies chunk-by-chunk and does not buffer the full body, so
+/// the buffering runtime (P0 `01-body-processing-runtime.md`) is not yet built;
+/// [`PluginSession::read_request_body`] / `read_response_body` therefore default
+/// to [`BodyReadError::Unimplemented`]. The body gate maps any variant to the
+/// plugin's configured fail-open / fail-close policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BodyReadError {
+    /// Full-body buffering is not implemented on this binary (current default).
+    Unimplemented,
+    /// Buffering was not requested for this request, so no bytes are retained.
+    NotBuffered,
+    /// The body exceeded the configured buffer cap and was not retained.
+    /// The body gate maps this to HTTP 413 (client error), unlike other
+    /// fail-close reasons which map to 500.
+    TooLarge { limit: u64 },
+    /// The body stream ended prematurely / was aborted.
+    Incomplete,
+}
+
+impl std::fmt::Display for BodyReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BodyReadError::Unimplemented => write!(f, "body buffering not implemented"),
+            BodyReadError::NotBuffered => write!(f, "body not buffered"),
+            BodyReadError::TooLarge { limit } => write!(f, "body exceeds buffer cap of {limit} bytes"),
+            BodyReadError::Incomplete => write!(f, "body stream incomplete"),
+        }
+    }
+}
+
+impl std::error::Error for BodyReadError {}
+
+/// Result of reading a buffered body: the bytes (a cheap `Arc`-backed handle, so
+/// cloning is a refcount bump, not a copy), or the reason it is unavailable.
+pub type BodyReadResult = Result<Bytes, BodyReadError>;
+
 /// Which matched route a `matched_route_meta` lookup targets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RouteProto {
@@ -280,4 +318,32 @@ pub trait PluginSession: Send + Sync {
 
     /// Set request mirror state used by request_body_filter tee.
     fn set_mirror_state(&mut self, state: MirrorState);
+
+    // ========== Full-body buffering (OpenResty-style, lazy) ==========
+    //
+    // Single lazy accessor per direction (mirrors `ngx.req.read_body` +
+    // `ngx.req.get_body_data` folded into one call): the first call force-buffers
+    // the body (capped by `max_bytes`) and every call returns the buffered bytes.
+    // Async + `&mut self` because buffering drains the downstream stream and
+    // populates ctx. The returned `Bytes` is an immutable `Arc`-backed handle, so
+    // returning it by value is a refcount bump, not a copy — no borrow of the
+    // session is held, which keeps the method mockable and easy to compose.
+    //
+    // Both default to `Err(BodyReadError::Unimplemented)`: Pingora does not buffer
+    // bodies yet. The real `PingoraSessionAdapter` overrides land with the P0
+    // buffering runtime.
+
+    /// Read the full request body, buffering it on first call so it is available
+    /// during the request phase, before the request is proxied upstream.
+    /// `max_bytes` caps the buffer on the first (buffering) call (`None` = gateway
+    /// default cap); later calls return the already-buffered bytes.
+    async fn read_request_body(&mut self, _max_bytes: Option<u64>) -> BodyReadResult {
+        Err(BodyReadError::Unimplemented)
+    }
+
+    /// Read the full upstream response body, buffering it on first call.
+    /// `max_bytes` caps the buffer on the first (buffering) call.
+    async fn read_response_body(&mut self, _max_bytes: Option<u64>) -> BodyReadResult {
+        Err(BodyReadError::Unimplemented)
+    }
 }

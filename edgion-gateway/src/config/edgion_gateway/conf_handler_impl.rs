@@ -236,6 +236,7 @@ mod tests {
                 max_retries: 3,
                 real_ip: None,
                 security_protect: None,
+                max_body_size: "32MiB".to_string(),
                 global_plugins_ref: None,
                 access_log_extern: None,
                 preflight_policy: None,

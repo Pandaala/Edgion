@@ -51,6 +51,10 @@ impl ProcessorHandler<EdgionGatewayConfig> for EdgionGatewayConfigHandler {
         // dnsResolver `linkSysRef` and `servers` are mutually exclusive (the
         // structural CRD cannot express `oneOf`, so it is enforced here).
         errors.extend(egc.spec.validate_dns_resolver());
+        // The gateway-wide maxBodySize must parse to a positive size.
+        if let Some(err) = egc.spec.validate_max_body_size() {
+            errors.push(err);
+        }
         errors
     }
 
@@ -309,6 +313,24 @@ mod tests {
                 .any(|e| e.contains("SAN pinning") || e.contains("subjectAltNames")),
             "error must mention SAN pinning; got: {:?}",
             errors
+        );
+    }
+
+    /// A malformed `spec.maxBodySize` must surface as a preparse error
+    /// (Accepted=False) via the handler.
+    #[tokio::test]
+    async fn egc_bad_max_body_size_rejected() {
+        let ctx = make_ctx_with_secrets(HashMap::new());
+        let spec = EdgionGatewayConfigSpec {
+            max_body_size: "garbage".to_string(),
+            ..Default::default()
+        };
+        let mut egc = EdgionGatewayConfig::new("cluster-egc-mbs", spec);
+
+        let errors = EdgionGatewayConfigHandler::new().preparse(&mut egc, &ctx);
+        assert!(
+            errors.iter().any(|e| e.contains("maxBodySize")),
+            "expected a maxBodySize preparse error; got: {errors:?}"
         );
     }
 

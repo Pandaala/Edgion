@@ -956,6 +956,12 @@ pub struct EdgionHttpContext {
     /// Link-local / metadata ranges are never allowed by this switch.
     pub allow_loopback_upstream: bool,
 
+    /// Gateway-wide maximum body size in bytes: the shared per-request body
+    /// buffer size and the global body-size limit. Populated in `new_ctx` from
+    /// `EdgionGatewayConfig.spec.maxBodySize`. A per-plugin `body.maxBodySize`
+    /// can only tighten this further, never enlarge it.
+    pub max_body_size_bytes: u64,
+
     /// Snapshot of resolved global plugin runtimes for this request, taken at
     /// `request_filter` entry. Each entry is one EdgionPlugins resource;
     /// per-stage bucketing is handled by `PluginRuntime`'s internal stage Vecs.
@@ -1088,6 +1094,8 @@ impl EdgionHttpContext {
             sp_sticky_addr: None,
             sp_sticky_consumed: false,
             allow_loopback_upstream: false,
+            max_body_size_bytes:
+                edgion_resources::resources::edgion_plugins::body_requirement::DEFAULT_MAX_BODY_SIZE_BYTES,
             resolved_global_plugins: None,
             resolved_gateway_plugins: None,
             resolved_route_ext_refs: None,

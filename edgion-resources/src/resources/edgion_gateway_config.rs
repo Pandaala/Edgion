@@ -43,6 +43,13 @@ pub struct EdgionGatewayConfigSpec {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub security_protect: Option<SecurityProtectConfig>,
 
+    /// Gateway-wide maximum HTTP body size buffered for body-aware plugins
+    /// (human size, e.g. "32MiB"). This is the shared per-request buffer size and
+    /// the global body-size limit; a per-plugin `body.maxBodySize` can only
+    /// tighten it further, never enlarge it.
+    #[serde(default = "default_max_body_size")]
+    pub max_body_size: String,
+
     /// Global plugins references that apply to all routes using this GatewayClass
     /// These plugins are executed before route-level plugins
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -110,6 +117,14 @@ pub struct DnsResolverConfig {
 
 fn default_dns_cache_ttl() -> String {
     "5s".to_string()
+}
+
+// ============================================
+// Body Size Configuration
+// ============================================
+
+fn default_max_body_size() -> String {
+    "32MiB".to_string()
 }
 
 // ============================================
@@ -385,6 +400,7 @@ impl Default for EdgionGatewayConfigSpec {
             max_retries: default_max_retries(),
             real_ip: None,
             security_protect: None,
+            max_body_size: default_max_body_size(),
             global_plugins_ref: None,
             access_log_extern: None,
             preflight_policy: None,
@@ -662,6 +678,28 @@ impl UnmaskedKeys {
 }
 
 impl EdgionGatewayConfigSpec {
+    /// Resolved gateway-wide max body size in bytes. Falls back to the built-in
+    /// default if `maxBodySize` is unparseable or zero (a `"0"` cap would reject
+    /// every body under lenient admission; `validate_max_body_size` flags it but
+    /// the resource is still synced).
+    pub fn max_body_size_bytes(&self) -> u64 {
+        crate::resources::common::parse_byte_size(&self.max_body_size)
+            .filter(|v| *v > 0)
+            .unwrap_or(crate::resources::edgion_plugins::body_requirement::DEFAULT_MAX_BODY_SIZE_BYTES)
+    }
+
+    /// Validation error for `spec.maxBodySize`, or `None` if it parses to a
+    /// positive size.
+    pub fn validate_max_body_size(&self) -> Option<String> {
+        match crate::resources::common::parse_byte_size(&self.max_body_size) {
+            Some(v) if v > 0 => None,
+            _ => Some(format!(
+                "maxBodySize '{}' is invalid (expected e.g. '32MiB')",
+                self.max_body_size
+            )),
+        }
+    }
+
     /// Validate `spec.dnsResolver` at ingest. Returns error strings suitable for
     /// an `Accepted=False/reason=Invalid` condition (empty = OK).
     ///
@@ -855,6 +893,38 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(s.outbound_tls.unwrap().verify, false);
+    }
+
+    #[test]
+    fn max_body_size_default_and_parsing() {
+        // Default when unset.
+        let s: EdgionGatewayConfigSpec = serde_json::from_str("{}").unwrap();
+        assert_eq!(s.max_body_size, "32MiB");
+        assert_eq!(s.max_body_size_bytes(), 32 * 1024 * 1024);
+        assert!(s.validate_max_body_size().is_none());
+
+        // Human size parses + round-trips through the spec.
+        let s: EdgionGatewayConfigSpec = serde_json::from_value(serde_json::json!({
+            "maxBodySize": "128m"
+        }))
+        .unwrap();
+        assert_eq!(s.max_body_size_bytes(), 128 * 1024 * 1024);
+        assert!(s.validate_max_body_size().is_none());
+    }
+
+    #[test]
+    fn max_body_size_unparseable_or_zero_falls_back_to_builtin() {
+        for bad in ["garbage", "0", "0KiB"] {
+            let s = EdgionGatewayConfigSpec {
+                max_body_size: bad.to_string(),
+                ..Default::default()
+            };
+            // Accessor falls back to the built-in default (never a 0 cap that
+            // would 413 every body)...
+            assert_eq!(s.max_body_size_bytes(), 32 * 1024 * 1024, "for {bad:?}");
+            // ...but validation surfaces the error for operator feedback.
+            assert!(s.validate_max_body_size().is_some(), "validation for {bad:?}");
+        }
     }
 
     #[test]

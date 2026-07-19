@@ -14,7 +14,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
-use sha2::{Sha256, Sha384, Sha512};
+use sha2::{Digest, Sha256, Sha384, Sha512};
 
 use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
 use crate::plugins::runtime::log::{la, sensitive};
@@ -298,6 +298,38 @@ impl HmacAuth {
         }
     }
 
+    /// Verify that the buffered request body matches the signed `Digest` header
+    /// (`Digest: SHA-256=<base64(sha256(body))>`, Kong `validate_request_body`
+    /// semantics). Returns the denial reason on mismatch/absence.
+    ///
+    /// Requires the request body to have been buffered (the body gate ensures
+    /// this before the plugin runs). Only SHA-256 is accepted.
+    async fn verify_body_digest(session: &mut dyn PluginSession) -> Result<(), &'static str> {
+        let body = session
+            .read_request_body(None)
+            .await
+            .map_err(|_| "request body unavailable")?;
+        let digest_header = session.header_value("digest").ok_or("Missing Digest header")?;
+        Self::check_body_digest(&body, &digest_header)
+    }
+
+    /// Pure `Digest` header check: `SHA-256=<base64(sha256(body))>`.
+    fn check_body_digest(body: &[u8], digest_header: &str) -> Result<(), &'static str> {
+        // Split on the FIRST '=' so base64 padding stays with the value.
+        let (algo, expected) = digest_header.split_once('=').ok_or("Malformed Digest header")?;
+        if !algo.trim().eq_ignore_ascii_case("SHA-256") {
+            return Err("Unsupported Digest algorithm");
+        }
+
+        let mut hasher = Sha256::new();
+        hasher.update(body);
+        let computed = STANDARD.encode(hasher.finalize());
+        if computed != expected.trim() {
+            return Err("Body digest mismatch");
+        }
+        Ok(())
+    }
+
     fn signed_date_header<'a>(&self, signed_headers: &'a [String]) -> Option<&'a str> {
         if let Some(name) = signed_headers.iter().find(|h| h.as_str() == "x-date") {
             return Some(name.as_str());
@@ -355,22 +387,12 @@ impl RequestFilter for HmacAuth {
         &self.name
     }
 
-    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
-        if self.config.validate_request_body {
-            plugin_log.push_err("body not supported");
-            apply_auth_failure_delay(self.config.auth_failure_delay_ms).await;
-            let _ = send_gateway_auth_error_response(
-                session,
-                500,
-                "hmac",
-                &self.config.realm,
-                None,
-                "validateRequestBody is not supported yet",
-            )
-            .await;
-            return PluginRunningResult::ErrTerminateRequest;
-        }
+    // Body requirement is declared on `EdgionPlugin::body_requirement` (schema
+    // layer) so the controller and gateway agree: HMAC consumes the request body
+    // exactly when `validateRequestBody` is set, and the runtime then buffers it
+    // (fail-close) before this plugin runs.
 
+    async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         let auth_header = match self.extract_auth_header(session) {
             Some(value) => value,
             None => {
@@ -477,6 +499,28 @@ impl RequestFilter for HmacAuth {
                 .await;
         }
 
+        // Body integrity. The signature authenticates the `Digest` header only if
+        // `digest` is in the signed-headers list — otherwise an attacker could
+        // swap the body, recompute `Digest`, and keep the original signature. So
+        // require `digest` to be signed BEFORE trusting it against the body.
+        // (Kong's hmac-auth enforces the same.)
+        if self.config.validate_request_body {
+            if !params.headers.iter().any(|h| h == "digest") {
+                return self
+                    .reject(
+                        session,
+                        plugin_log,
+                        401,
+                        "Missing required signed header: digest",
+                        "Deny digest not signed",
+                    )
+                    .await;
+            }
+            if let Err(message) = Self::verify_body_digest(session).await {
+                return self.reject(session, plugin_log, 401, message, "Deny body digest").await;
+            }
+        }
+
         self.set_upstream_headers(session, credential);
         self.hide_credentials(session);
 
@@ -527,6 +571,55 @@ mod tests {
 
         let signing = HmacAuth::build_signing_string(&session, &[String::from("@request-target")]).unwrap();
         assert_eq!(signing, "@request-target: get /v1/items?page=1");
+    }
+
+    #[test]
+    fn test_check_body_digest_matches() {
+        let body = b"{\"hello\":\"world\"}";
+        let mut hasher = Sha256::new();
+        hasher.update(body);
+        let digest = format!("SHA-256={}", STANDARD.encode(hasher.finalize()));
+        assert!(HmacAuth::check_body_digest(body, &digest).is_ok());
+    }
+
+    #[test]
+    fn test_check_body_digest_mismatch() {
+        let body = b"tampered";
+        // Digest computed over different bytes.
+        let mut hasher = Sha256::new();
+        hasher.update(b"original");
+        let digest = format!("SHA-256={}", STANDARD.encode(hasher.finalize()));
+        assert_eq!(HmacAuth::check_body_digest(body, &digest), Err("Body digest mismatch"));
+    }
+
+    #[test]
+    fn test_check_body_digest_bad_algorithm_and_format() {
+        assert_eq!(
+            HmacAuth::check_body_digest(b"x", "MD5=abc"),
+            Err("Unsupported Digest algorithm")
+        );
+        assert_eq!(
+            HmacAuth::check_body_digest(b"x", "no-equals-sign"),
+            Err("Malformed Digest header")
+        );
+    }
+
+    #[test]
+    fn test_body_requirement_declared_only_when_validate_body() {
+        use edgion_resources::resources::edgion_plugins::EdgionPlugin;
+        let base = HmacAuthConfig {
+            resolved_credentials: Some(HashMap::new()),
+            ..Default::default()
+        };
+        assert!(EdgionPlugin::HmacAuth(base.clone()).body_requirement().is_none());
+        assert!(!EdgionPlugin::HmacAuth(base.clone()).accepts_body());
+
+        let with_body = HmacAuthConfig {
+            validate_request_body: true,
+            ..base
+        };
+        assert!(EdgionPlugin::HmacAuth(with_body.clone()).body_requirement().is_some());
+        assert!(EdgionPlugin::HmacAuth(with_body).accepts_body());
     }
 
     #[test]
@@ -606,4 +699,119 @@ mod tests {
 
     // The "group=" tag in the OK log path is enforced by code review, not by a
     // unit test: driving all failure branches here would be pure tautology.
+
+    // ===== validate_request_body (body-digest) end-to-end =====
+
+    /// Build a mock session carrying a VALID HMAC signature over `signed_headers`
+    /// for user "alice", plus the given `digest` header and buffered `body`.
+    /// `signed_headers` are the lowercased names (e.g. `["@request-target","date","digest"]`).
+    fn signed_session(signed_headers: &[&str], digest: Option<&str>, body: &'static [u8]) -> MockPluginSession {
+        let secret = b"alice-super-secret-key".to_vec();
+        let date = rfc2822_now();
+        let path = "/v1/items";
+        let method = "post";
+
+        // Reconstruct the exact signing string build_signing_string would produce.
+        let digest_val = digest.map(|d| d.to_string());
+        let mut lines = Vec::new();
+        for h in signed_headers {
+            match *h {
+                "@request-target" => lines.push(format!("@request-target: {method} {path}")),
+                "date" => lines.push(format!("date: {date}")),
+                "digest" => lines.push(format!("digest: {}", digest_val.clone().unwrap_or_default())),
+                other => panic!("unhandled signed header in test: {other}"),
+            }
+        }
+        let signing = lines.join("\n");
+        let sig = HmacAuth::compute_hmac(HmacAlgorithm::HmacSha256, &secret, &signing).unwrap();
+        let sig_b64 = STANDARD.encode(sig);
+        let headers_str = signed_headers.join(" ");
+        let auth = format!(
+            r#"hmac username="alice", algorithm="hmac-sha256", headers="{headers_str}", signature="{sig_b64}""#
+        );
+
+        let mut session = MockPluginSession::new();
+        let date_c = date.clone();
+        session.expect_header_value().returning(move |name| match name {
+            "authorization" => Some(auth.clone()),
+            "proxy-authorization" => None,
+            "date" => Some(date_c.clone()),
+            "digest" => digest_val.clone(),
+            _ => None,
+        });
+        session.expect_get_path().return_const(path.to_string());
+        session.expect_get_query().returning(|| None);
+        session.expect_get_method().return_const("POST".to_string());
+        session
+            .expect_read_request_body()
+            .returning(move |_| Ok(bytes::Bytes::from_static(body)));
+        session.expect_set_request_header().returning(|_, _| Ok(()));
+        session.expect_remove_request_header().returning(|_| Ok(()));
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+        session
+    }
+
+    fn plugin_validate_body() -> HmacAuth {
+        let mut config = HmacAuthConfig {
+            clock_skew: 600,
+            validate_request_body: true,
+            ..Default::default()
+        };
+        let mut credentials = HashMap::new();
+        credentials.insert(
+            "alice".to_string(),
+            HmacCredential {
+                secret: b"alice-super-secret-key".to_vec(),
+                headers: HashMap::new(),
+                group: "default".to_string(),
+            },
+        );
+        config.resolved_credentials = Some(credentials);
+        HmacAuth::new(&config)
+    }
+
+    fn body_digest(body: &[u8]) -> String {
+        let mut h = Sha256::new();
+        h.update(body);
+        format!("SHA-256={}", STANDARD.encode(h.finalize()))
+    }
+
+    #[tokio::test]
+    async fn validate_body_rejects_when_digest_not_signed() {
+        // F1: digest is NOT in the signed-headers list → must reject even though
+        // the signature itself is valid and a (spoofable) Digest header is present.
+        let body = b"{\"a\":1}";
+        let plugin = plugin_validate_body();
+        let mut session = signed_session(&["@request-target", "date"], Some(&body_digest(body)), body);
+        let mut log = PluginLog::new("HmacAuth");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.contains("Deny digest not signed"));
+    }
+
+    #[tokio::test]
+    async fn validate_body_accepts_matching_signed_digest() {
+        let body = b"{\"a\":1}";
+        let plugin = plugin_validate_body();
+        let mut session = signed_session(&["@request-target", "date", "digest"], Some(&body_digest(body)), body);
+        let mut log = PluginLog::new("HmacAuth");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn validate_body_rejects_tampered_body() {
+        // Digest is signed and present, but the actual body doesn't match it.
+        let real_body = b"{\"a\":1}";
+        let plugin = plugin_validate_body();
+        // Sign a digest computed over DIFFERENT bytes than the buffered body.
+        let signed_digest = body_digest(b"{\"a\":2}");
+        let mut session = signed_session(&["@request-target", "date", "digest"], Some(&signed_digest), real_body);
+        let mut log = PluginLog::new("HmacAuth");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+        assert!(log.contains("Deny body digest"));
+    }
 }

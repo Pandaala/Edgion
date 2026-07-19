@@ -8,6 +8,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 // Submodules
+pub mod body_requirement;
 pub mod conditions;
 pub mod custom_plugins;
 pub mod edgion_plugin;
@@ -23,6 +24,7 @@ mod tests;
 
 // Re-exports
 pub use access_decision::AccessDecision;
+pub use body_requirement::{BodyReadFailureMode, BodyRequirement};
 pub use edgion_plugin::EdgionPlugin;
 pub use entry::{
     PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,

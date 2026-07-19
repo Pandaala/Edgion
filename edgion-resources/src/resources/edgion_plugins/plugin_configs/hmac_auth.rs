@@ -108,7 +108,10 @@ pub struct HmacAuthConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enforce_headers: Option<Vec<String>>,
 
-    /// Validate request body digest. Currently unsupported (returns a validation error if enabled).
+    /// Verify the request body against the signed `Digest` header
+    /// (`Digest: SHA-256=<base64(sha256(body))>`). When enabled, the runtime
+    /// wraps the plugin in a body gate that buffers the request body; while
+    /// full-body buffering is not yet implemented the gate fail-closes (500).
     #[serde(default)]
     pub validate_request_body: bool,
 
@@ -267,9 +270,10 @@ impl HmacAuthConfig {
             }
         }
 
-        if self.validate_request_body {
-            return Some("validateRequestBody is not supported yet (requires request body cache support)".to_string());
-        }
+        // `validateRequestBody` is accepted here: the runtime wraps the plugin
+        // in a body gate that buffers the request body and fail-closes (500) when
+        // buffering is unavailable. See `edgion-gateway/src/plugins/http/hmac_auth`
+        // and `docs/superpowers/specs/2026-07-18-plugin-body-read-scaffolding.md`.
 
         let has_secret_groups = self.secret_groups.as_ref().is_some_and(|v| !v.is_empty());
         let has_resolved = self
@@ -330,14 +334,16 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_validation_error_validate_body_unsupported() {
+    fn test_validate_request_body_is_accepted() {
+        // validateRequestBody is now a supported config: it is enforced at
+        // runtime via the body gate, not rejected at config validation. With a
+        // valid credential source it must produce no validation error.
         let config = HmacAuthConfig {
             validate_request_body: true,
+            anonymous: Some("anon".to_string()),
             ..Default::default()
         };
-        let err = config.detect_validation_error();
-        assert!(err.is_some());
-        assert!(err.unwrap().contains("validateRequestBody is not supported yet"));
+        assert!(config.detect_validation_error().is_none());
     }
 
     #[test]

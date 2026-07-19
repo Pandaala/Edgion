@@ -1,5 +1,6 @@
 //! Plugin runtime - manages filter execution
 
+pub mod body_gate;
 pub mod conditional_filter;
 pub mod conditions;
 pub mod dye_headers;
@@ -12,6 +13,7 @@ mod reject_filter;
 pub mod session_adapter;
 pub mod traits;
 
+pub use body_gate::{BodyGatedRequestFilter, BodyGatedUpstreamResponse};
 pub use conditional_filter::{
     ConditionalRequestFilter, ConditionalUpstreamResponse, ConditionalUpstreamResponseBodyFilter,
     ConditionalUpstreamResponseFilter,

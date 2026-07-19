@@ -190,6 +190,11 @@ spec:
                       description: "Reject HTTP/1.1 requests with more than one Host header (default true)"
                       default: true
 
+                maxBodySize:
+                  type: string
+                  description: "Gateway-wide maximum HTTP body size buffered for body-aware plugins (human size, e.g. '32MiB'). The shared per-request buffer size and global body-size limit; a per-plugin body.maxBodySize can only tighten it, never enlarge it. Default 32MiB."
+                  default: "32MiB"
+
                 # ============================================
                 # Global Plugins Reference
                 # ============================================
