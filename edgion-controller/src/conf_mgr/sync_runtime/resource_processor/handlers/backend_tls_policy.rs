@@ -474,11 +474,26 @@ impl BackendTlsPolicyHandler {
             })
             .collect();
 
-        // Rebuild ancestors list
-        status.ancestors.clear();
+        // Rebuild ancestors list, carrying each surviving ancestor's prior
+        // conditions forward so update_condition can keep lastTransitionTime
+        // stable when the status does not actually flip.
+        let old_ancestors = std::mem::take(&mut status.ancestors);
 
         for gw_ref in &gateway_refs {
-            let mut conditions = Vec::new();
+            // Match on controller_name + kind as well: in K8s mode the watched
+            // status.ancestors may hold entries from other controllers (or
+            // GAMMA Service ancestors sharing ns/name) whose conditions must
+            // not be adopted.
+            let mut conditions = old_ancestors
+                .iter()
+                .find(|a| {
+                    a.controller_name == self.controller_name
+                        && a.ancestor_ref.kind == gw_ref.kind
+                        && a.ancestor_ref.namespace == gw_ref.namespace
+                        && a.ancestor_ref.name == gw_ref.name
+                })
+                .map(|a| a.conditions.clone())
+                .unwrap_or_default();
 
             // Accepted condition — priority: Invalid > NoValidCACertificate > Conflicted > Accepted
             if !validation_errors.is_empty() {

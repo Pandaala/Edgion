@@ -40,6 +40,14 @@ pub fn phase1_kinds() -> Vec<&'static str> {
 // Shared status types (used by both FileSystem and Etcd backends)
 // ============================================================================
 
+/// Condition type used exclusively by [`ErrorStatus`] (parse-failure fallback).
+///
+/// No resource handler manages a condition of this type; its presence in a
+/// persisted status marks the status as an ErrorStatus sidecar (see
+/// `seed_existing_status`, which must not seed it back into a recovered
+/// resource).
+pub const ERROR_STATUS_CONDITION_TYPE: &str = "Ready";
+
 /// Simple error status structure (for parse errors, etc.)
 ///
 /// Used when the resource can't be fully parsed and we can't extract native status.
@@ -56,7 +64,7 @@ impl ErrorStatus {
     pub fn error(reason: &str, message: &str) -> Self {
         Self {
             conditions: vec![Condition {
-                type_: "Ready".to_string(),
+                type_: ERROR_STATUS_CONDITION_TYPE.to_string(),
                 status: "False".to_string(),
                 reason: reason.to_string(),
                 message: message.to_string(),
@@ -64,6 +72,42 @@ impl ErrorStatus {
                 observed_generation: None,
             }],
         }
+    }
+
+    /// Build the error status to persist, compared against the previously
+    /// persisted status JSON (if any).
+    ///
+    /// Returns `None` when the stored status already carries a semantically
+    /// identical error condition (same type/status/reason/message) — the
+    /// caller must skip the write so the stored `lastTransitionTime` stays
+    /// stable across re-scans of the same broken resource. When the condition
+    /// differs but its `status` did not flip, the stored `lastTransitionTime`
+    /// is carried over (transition-only LTT contract).
+    pub fn error_for_persist(reason: &str, message: &str, existing_json: Option<&str>) -> Option<Self> {
+        let mut status = Self::error(reason, message);
+        let Some(existing) = existing_json.and_then(|j| serde_json::from_str::<serde_json::Value>(j).ok()) else {
+            return Some(status);
+        };
+        let new_cond = &mut status.conditions[0];
+        let old_cond = existing.get("conditions").and_then(|c| c.as_array()).and_then(|arr| {
+            arr.iter()
+                .find(|c| c.get("type").and_then(|t| t.as_str()) == Some(&new_cond.type_))
+        });
+        let Some(old_cond) = old_cond else {
+            return Some(status);
+        };
+        let field = |name: &str| old_cond.get(name).and_then(|v| v.as_str()).unwrap_or("");
+        if field("status") == new_cond.status {
+            // No transition: keep the stored lastTransitionTime.
+            let old_ltt = field("lastTransitionTime");
+            if !old_ltt.is_empty() {
+                new_cond.last_transition_time = old_ltt.to_string();
+            }
+            if field("reason") == new_cond.reason && field("message") == new_cond.message {
+                return None;
+            }
+        }
+        Some(status)
     }
 }
 
@@ -261,6 +305,44 @@ pub(crate) fn ensure_expected_resource_version_value(
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod error_status_tests {
+    use super::*;
+
+    fn stored(status: &str, reason: &str, message: &str, ltt: &str) -> String {
+        format!(
+            r#"{{"conditions":[{{"type":"Ready","status":"{status}","reason":"{reason}","message":"{message}","lastTransitionTime":"{ltt}"}}]}}"#
+        )
+    }
+
+    #[test]
+    fn identical_error_skips_write() {
+        let existing = stored("False", "ParseError", "bad yaml", "2026-01-01T00:00:00Z");
+        assert!(
+            ErrorStatus::error_for_persist("ParseError", "bad yaml", Some(&existing)).is_none(),
+            "re-scanning the same broken resource must not rewrite its status"
+        );
+    }
+
+    #[test]
+    fn changed_message_writes_but_preserves_ltt() {
+        let existing = stored("False", "ParseError", "bad yaml at line 1", "2026-01-01T00:00:00Z");
+        let status = ErrorStatus::error_for_persist("ParseError", "bad yaml at line 9", Some(&existing))
+            .expect("a different message must be persisted");
+        assert_eq!(
+            status.conditions[0].last_transition_time, "2026-01-01T00:00:00Z",
+            "status did not flip, so lastTransitionTime must be carried over"
+        );
+    }
+
+    #[test]
+    fn no_prior_status_writes_fresh() {
+        let status = ErrorStatus::error_for_persist("ParseError", "bad yaml", None).expect("first error must persist");
+        assert_eq!(status.conditions[0].status, "False");
+        assert!(!status.conditions[0].last_transition_time.is_empty());
+    }
 }
 
 #[cfg(test)]

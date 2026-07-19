@@ -108,6 +108,49 @@ fn status_has_changed(kind: &str, old: &StatusExtractResult, new: &StatusExtract
     }
 }
 
+/// Seed previously persisted status (FileSystem/Etcd `.status` sidecar) back
+/// into the object before `update_status` runs.
+///
+/// Spec files carry no status, so without this every reconcile enters
+/// `update_status` with empty conditions and `update_condition` can never
+/// preserve `lastTransitionTime` — the transition-only LTT contract requires
+/// the prior conditions to be present in the object (K8s mode gets this for
+/// free from the watch object). Best-effort: on any roundtrip failure the
+/// object is left unchanged (same as the pre-seed behavior).
+fn seed_existing_status<T: Serialize + DeserializeOwned>(obj: &mut T, status_json: &str) {
+    let status = match serde_json::from_str::<serde_json::Value>(status_json) {
+        Ok(v) if !v.is_null() => v,
+        _ => return,
+    };
+    // Never seed an ErrorStatus sidecar (parse-failure fallback): no handler
+    // manages its condition type, so once seeded it would survive every
+    // upsert-only update_status as a permanent ghost. Skipping the seed lets
+    // the recovery pass rebuild a clean status that replaces the sidecar.
+    let is_error_status_sidecar = status.get("conditions").and_then(|c| c.as_array()).is_some_and(|arr| {
+        arr.iter().any(|c| {
+            c.get("type").and_then(|t| t.as_str())
+                == Some(crate::conf_mgr::conf_center::common::ERROR_STATUS_CONDITION_TYPE)
+        })
+    });
+    if is_error_status_sidecar {
+        return;
+    }
+    let mut obj_value = match serde_json::to_value(&*obj) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let Some(map) = obj_value.as_object_mut() else {
+        return;
+    };
+    map.insert("status".to_string(), status);
+    match serde_json::from_value::<T>(obj_value) {
+        Ok(seeded) => *obj = seeded,
+        Err(e) => {
+            tracing::debug!(error = %e, "Existing status not seedable into object; conditions start fresh");
+        }
+    }
+}
+
 /// Extract status field from a resource as serde_json::Value
 ///
 /// Returns the status as a JSON Value, or None if not present.
@@ -537,6 +580,18 @@ where
         ctx.clean_metadata(&mut obj);
         self.handler.clean_metadata(&mut obj, ctx);
 
+        // 3.5. Seed previously persisted status (FileSystem/Etcd `.status`
+        // sidecar) into the object, so update_condition later sees the prior
+        // conditions and preserves lastTransitionTime across reconciles.
+        // This MUST run before preparse/parse: the seed is a serde roundtrip
+        // that resets `#[serde(skip)]` fields, and parse populates
+        // in-memory-only fields (e.g. route delegation_issues) that
+        // update_status consumes. Here the object is fresh from YAML, so the
+        // roundtrip is lossless.
+        if let Some(json) = existing_status_json.as_deref() {
+            seed_existing_status(&mut obj, json);
+        }
+
         // 4. Validate (log warnings but continue)
         let mut all_errors = self.handler.validate(&obj, ctx);
         for error in &all_errors {
@@ -554,7 +609,8 @@ where
         match self.handler.parse(obj, ctx).await {
             ProcessResult::Continue(mut parsed_obj) => {
                 // 7. Determine old status for comparison
-                // - If existing_status_json provided (FileSystem mode): use it
+                // - If existing_status_json provided (FileSystem/Etcd mode): use it
+                //   (already seeded into the object at step 3.5)
                 // - Otherwise: extract from object (K8s mode - status is already in obj)
                 let old_status = match existing_status_json {
                     Some(json) => StatusExtractResult::Present(json),
@@ -981,6 +1037,87 @@ mod tests {
 
         let changed = status_has_changed("GatewayClass", &old_status, &new_status);
         assert!(changed, "Status should have changed after update_status");
+    }
+
+    #[test]
+    fn seed_existing_status_enables_ltt_preservation() {
+        use edgion_resources::prelude_resources::GatewayClass;
+
+        // FS/Etcd mode: the spec file carries no status.
+        let mut gc = GatewayClass {
+            metadata: ObjectMeta {
+                name: Some("test-gc".to_string()),
+                generation: Some(2),
+                ..Default::default()
+            },
+            spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
+                controller_name: "example.com/controller".to_string(),
+                description: None,
+                parameters_ref: None,
+            },
+            status: None,
+        };
+
+        let sidecar = r#"{"conditions":[{"type":"Accepted","status":"True","reason":"Accepted","message":"Resource accepted","lastTransitionTime":"2026-01-01T00:00:00Z","observedGeneration":1}]}"#;
+        seed_existing_status(&mut gc, sidecar);
+
+        let status = gc.status.as_mut().expect("status seeded from sidecar");
+        assert_eq!(status.conditions.len(), 1);
+
+        // A reconcile that does not flip the condition keeps the stored LTT
+        // (while observedGeneration still advances).
+        crate::conf_mgr::sync_runtime::resource_processor::update_condition(
+            &mut status.conditions,
+            crate::conf_mgr::sync_runtime::resource_processor::accepted_condition(gc.metadata.generation),
+        );
+        assert_eq!(status.conditions[0].last_transition_time, "2026-01-01T00:00:00Z");
+        assert_eq!(status.conditions[0].observed_generation, Some(2));
+    }
+
+    #[test]
+    fn seed_existing_status_skips_error_status_sidecar() {
+        use edgion_resources::prelude_resources::GatewayClass;
+
+        let mut gc = GatewayClass {
+            metadata: ObjectMeta {
+                name: Some("test-gc".to_string()),
+                ..Default::default()
+            },
+            spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
+                controller_name: "example.com/controller".to_string(),
+                description: None,
+                parameters_ref: None,
+            },
+            status: None,
+        };
+
+        // A resource that was briefly unparseable has an ErrorStatus sidecar;
+        // on recovery it must NOT be seeded, or its unmanaged condition type
+        // would ghost through every subsequent upsert-only update_status.
+        let sidecar = r#"{"conditions":[{"type":"Ready","status":"False","reason":"ParseError","message":"bad yaml","lastTransitionTime":"2026-01-01T00:00:00Z"}]}"#;
+        seed_existing_status(&mut gc, sidecar);
+        assert!(gc.status.is_none(), "ErrorStatus sidecar must not be seeded");
+    }
+
+    #[test]
+    fn seed_existing_status_ignores_unparseable_json() {
+        use edgion_resources::prelude_resources::GatewayClass;
+
+        let mut gc = GatewayClass {
+            metadata: ObjectMeta {
+                name: Some("test-gc".to_string()),
+                ..Default::default()
+            },
+            spec: edgion_resources::resources::gateway_class::GatewayClassSpec {
+                controller_name: "example.com/controller".to_string(),
+                description: None,
+                parameters_ref: None,
+            },
+            status: None,
+        };
+
+        seed_existing_status(&mut gc, "not-json{{");
+        assert!(gc.status.is_none(), "object must be left unchanged on parse failure");
     }
 
     #[tokio::test]

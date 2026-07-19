@@ -156,8 +156,19 @@ impl FileSystemStatusHandler {
     /// Write error status (for parse errors, etc.)
     ///
     /// This writes a simplified error status when the resource can't be fully parsed.
+    /// The write is skipped when the stored status already carries the same error,
+    /// so re-scans of a persistently-broken resource don't churn the status file.
     pub async fn write_error_status(&self, kind: &str, key: &str, reason: &str, message: &str) -> std::io::Result<()> {
-        let status = ErrorStatus::error(reason, message);
+        let existing = self.read_status_json(kind, key).await;
+        let Some(status) = ErrorStatus::error_for_persist(reason, message, existing.as_deref()) else {
+            tracing::trace!(
+                component = "fs_status",
+                kind = kind,
+                key = key,
+                "Error status unchanged; skipping write"
+            );
+            return Ok(());
+        };
         self.write_native_status(kind, key, &status).await
     }
 
