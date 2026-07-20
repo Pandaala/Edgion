@@ -1558,6 +1558,7 @@ dependencies = [
  "base64",
  "chrono",
  "clap",
+ "dashmap",
  "edgion-resources",
  "etcd-client",
  "hickory-resolver",

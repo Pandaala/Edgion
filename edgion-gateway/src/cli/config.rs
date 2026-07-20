@@ -604,6 +604,12 @@ pub struct MetricsConfig {
     pub request_duration: RequestDurationConfig,
     /// `edgion_backend_requests_total` per-label toggles
     pub backend_requests: BackendRequestsConfig,
+    /// Max distinct series before the runtime cardinality guard acts (0 = off).
+    #[serde(default = "default_cardinality_cap")]
+    pub cardinality_cap: usize,
+    /// Guard behavior on breach: enforce (drop new series) | observe (flag only).
+    #[serde(default)]
+    pub cardinality_mode: edgion_common::observe::cardinality_guard::CardinalityMode,
 }
 
 impl Default for MetricsConfig {
@@ -612,8 +618,14 @@ impl Default for MetricsConfig {
             listen: "0.0.0.0:12090".to_string(),
             request_duration: RequestDurationConfig::default(),
             backend_requests: BackendRequestsConfig::default(),
+            cardinality_cap: default_cardinality_cap(),
+            cardinality_mode: Default::default(),
         }
     }
+}
+
+fn default_cardinality_cap() -> usize {
+    10_000
 }
 
 /// Request duration histogram configuration (`metrics.request_duration` in YAML)

@@ -526,6 +526,8 @@ impl EdgionControllerCli {
                 service: "edgion-controller",
                 idle_timeout_secs: 0,
                 histogram_buckets: &[],
+                cardinality_cap: config.metrics.cardinality_cap,
+                cardinality_mode: config.metrics.cardinality_mode,
             },
         ) {
             tracing::error!(

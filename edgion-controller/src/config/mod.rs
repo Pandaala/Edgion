@@ -344,10 +344,30 @@ fn default_reference_grant_validation() -> bool {
 }
 
 /// Top-level metrics configuration section.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MetricsConfig {
     pub resource_abnormal: ResourceAbnormalMetricsConfig,
+    /// Max distinct series before the runtime cardinality guard acts (0 = off).
+    #[serde(default = "default_cardinality_cap")]
+    pub cardinality_cap: usize,
+    /// Guard behavior on breach: enforce (drop new series) | observe (flag only).
+    #[serde(default)]
+    pub cardinality_mode: edgion_common::observe::cardinality_guard::CardinalityMode,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            resource_abnormal: ResourceAbnormalMetricsConfig::default(),
+            cardinality_cap: default_cardinality_cap(),
+            cardinality_mode: Default::default(),
+        }
+    }
+}
+
+fn default_cardinality_cap() -> usize {
+    10_000
 }
 
 /// Configuration for the resource-abnormal gauge

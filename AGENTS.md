@@ -135,10 +135,13 @@ When the user says "run check", "check the code", "format the code", "run CI", "
    forced `PatchParams`; an unforced apply 409-Conflicts forever once any other field manager owns
    the object (a POST-created object, a `kubectl edit`, a Secret predating the controller). See the
    script's header for the full rationale and the allowlist rules.
+6. **Metrics inventory guard**: `python3 cicd/checks/check_metrics_inventory.py` —
+   the inventory doc must list every emitted metric (both directions) and no emit
+   site may use a high-cardinality label off the allowlist.
 
 > `--workspace` is intentional: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip it. `--workspace` brings it back into the fast check/clippy signal (matching what `cargo test --all` already compiles).
 
-Steps 2/3/4/5 may run in parallel. If any step fails, report the error immediately and try to fix it; after fixing, re-run that step. Once all pass, summarize the result.
+Steps 2/3/4/5/6 may run in parallel. If any step fails, report the error immediately and try to fix it; after fixing, re-run that step. Once all pass, summarize the result.
 
 > `cargo test --all` takes a long time and is not part of the quick check by default. Run it only when the user explicitly asks.
 

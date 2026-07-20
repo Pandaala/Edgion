@@ -61,17 +61,11 @@ scrape_configs:
 
 ## Gateway metrics
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `edgion_backend_requests_total` | Counter | configurable (see below) | The only per-request counter. Gateway-level totals and failures are derived from this via `sum(...)` and the `status` label |
-| `edgion_ctx_active` | Gauge | none | Active in-flight request contexts |
-| `edgion_gateway_request_duration_ms` | Histogram | none | End-to-end request latency (the only histogram on the data plane). **Disabled by default** |
-| `edgion_mirror_requests_total` | Counter | `status` | Request-mirror outcomes. `status` ∈ `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout` |
-| `edgion_rr_selector_truncated_total` | Counter | none | RoundRobin selector truncation events (backend count exceeded `u16::MAX`); used to alert on configuration anomalies |
-| `edgion_lb_panic_mode` | Gauge | `service` | `1` when load-balancer panic mode is engaged for the named service (healthy fraction below the configured threshold), `0` when normal. `service` format: `namespace/name`. |
-| `edgion_link_sys_es_bulk_channel_full_total` | Counter | none | Elasticsearch producer→bulk-loop channel was full at submit time; a sustained-backpressure signal on the log-shipping path |
-| `edgion_outbound_template_fallback_total` | Counter | `field` (`timeout_ms` \| `allow_degradation`) | A webhook / ForwardAuth `timeoutMsTemplate` or `allowDegradationTemplate` render failed to parse and fell back to the static field. See [Connectors → Templates](../infrastructure/connectors.md#templates) |
-| `edgion_outbound_success_predicate_fail_total` | Counter | none | A webhook / ForwardAuth response's status was accepted but a `success.body` predicate classified it as a failure (the "200 OK but error in the body" case). See [Connectors → Success](../infrastructure/connectors.md#success) |
+> The full per-metric catalog (name, type, labels, self/business category,
+> description, alert hint) is maintained in the authoritative
+> [Metrics Inventory](./metrics-inventory.md), kept in sync with the code by the
+> `check_metrics_inventory.py` CI guard. This page keeps the scrape configuration,
+> cardinality guidance, and common scenarios.
 
 ### `edgion_backend_requests_total` labels
 
@@ -117,20 +111,11 @@ Like `backend_requests`, the histogram's labels are individually toggleable (gat
 
 The Controller exposes control-plane metrics under the `edgion_controller_*` prefix on its dedicated metrics listener (`:12190`), separate from the admin port (`:12101`).
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `edgion_controller_active` | Gauge | none | Number of active resource controllers |
-| `edgion_controller_leader` | Gauge | none | Leader election status (1 = leader, 0 = standby) |
-| `edgion_controller_resources_watched` | Gauge | `kind` | Resources currently watched, per kind |
-| `edgion_controller_init_sync_duration_seconds_last` | Gauge | `kind` | Duration of the last initial sync, per kind |
-| `edgion_controller_reload_total` | Counter | none | Total reload operations triggered |
-| `edgion_controller_reload_duration_seconds_last` | Gauge | none | Duration of the last reload |
-| `edgion_controller_reload_client_notifications_total` | Counter | none | Client notifications sent for reloads |
-| `edgion_controller_status_writes_total` | Counter | `kind`, `backend`, `result` | Status writes (`backend` ∈ kubernetes/filesystem, `result` ∈ success/error) |
-| `edgion_controller_status_writes_skipped_total` | Counter | `kind` | Status writes skipped because a semantic diff found no change |
-| `edgion_controller_unexpected_apply_during_init_total` | Counter | `kind` | Apply events received during init (should stay 0; non-zero indicates watcher-stream ordering anomalies) |
-| `edgion_controller_resource_abnormal` | Gauge | `kind`, `namespace`, `name`, `err`, `warn` | One series per resource that has at least one failing status condition. `err` / `warn` are JSON arrays of the triggering conditions; empty string means none at that severity |
-| `edgion_controller_leader_job_alive` | Gauge | `leader_job` (`acme` \| `conf_sync_rotation` \| `dns_resolver`) | Leader-job worker liveness: `1` = running, `0` = stopped or dead. The label is deliberately `leader_job`, not `job` — Prometheus reserves `job` as a target label and would rename an exported one to `exported_job` under default `honor_labels: false`, breaking any alert written against the documented name |
+> The full per-metric catalog (name, type, labels, self/business category,
+> description, alert hint) is maintained in the authoritative
+> [Metrics Inventory](./metrics-inventory.md), kept in sync with the code by the
+> `check_metrics_inventory.py` CI guard. This page keeps the scrape configuration,
+> cardinality guidance, and common scenarios.
 
 The `edgion_controller_resource_abnormal` snapshot is rebuilt on a timer and capped (default 1000 entries) to bound cardinality. Use it to alert on resources stuck in a bad state, e.g. `edgion_controller_resource_abnormal{err!=""}`.
 
@@ -165,20 +150,15 @@ for the full lifecycle-recovery design.
 
 Federation baseline metrics are exposed under the `edgion_fed_*` prefix. All label value domains are fixed enums.
 
-| Metric | Type | Labels | Process |
-|--------|------|--------|---------|
-| `edgion_fed_connections_active` | Gauge | `role` (center/controller) | Both |
-| `edgion_fed_connection_events_total` | Counter | `role`, `event` (connected/disconnected/reload) | Both |
-| `edgion_fed_connection_duration_seconds_last` | Gauge | `role` | Both |
-| `edgion_fed_watch_events_total` | Counter | `kind`, `direction` (sent/recv) | Both |
-| `edgion_fed_watch_list_total` | Counter | `kind`, `result` | Center |
-| `edgion_fed_watch_errors_total` | Counter | `kind`, `reason` | Center |
-| `edgion_fed_mark_offline_total` | Counter | `reason` | Center |
-| `edgion_fed_peer_identity_check_total` | Counter | `result` | Center |
-| `edgion_fed_aggregator_controllers` | Gauge | `cluster` | Center |
-| `edgion_fed_aggregator_keys_total` | Gauge | `kind` | Center |
-| `edgion_fed_fanout_total` | Counter | `op`, `result` | Center |
-| `edgion_fed_ready_gate_wait_seconds_last` | Gauge | none | Controller |
+> The full per-metric catalog (name, type, labels, self/business category,
+> description, alert hint) is maintained in the authoritative
+> [Metrics Inventory](./metrics-inventory.md), kept in sync with the code by the
+> `check_metrics_inventory.py` CI guard. This page keeps the scrape configuration,
+> cardinality guidance, and common scenarios. Note: the inventory covers only the
+> `edgion_fed_*` metrics emitted from this repository (Controller-side); the
+> federation Center process now lives in the separate EdgionCenter repository and
+> its Center-only metrics (`edgion_fed_watch_list_total`, `edgion_fed_aggregator_*`,
+> etc.) are out of scope here.
 
 ## System error state
 
@@ -324,6 +304,7 @@ If you run into problems:
 
 ## Related documents
 
+- [Metrics Inventory](./metrics-inventory.md) — the authoritative per-metric catalog
 - [Access Log](./access-log.md)
 - [Gateway Configuration](../gateway/README.md)
 - [edgion-cli](../edgion-cli.md)

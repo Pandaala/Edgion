@@ -67,6 +67,7 @@ etcd-client.workspace = true
 metrics.workspace = true
 metrics-exporter-prometheus.workspace = true
 metrics-util.workspace = true
+dashmap.workspace = true
 
 # CLI / logging
 clap.workspace = true
