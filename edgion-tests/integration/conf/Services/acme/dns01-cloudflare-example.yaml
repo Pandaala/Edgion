@@ -39,8 +39,7 @@ spec:
     credentialRef:
       name: cloudflare-api-token
       namespace: default
-    propagationTimeout: 120s    # how long to wait for DNS propagation
-    propagationCheckInterval: 5s # interval between DNS checks
+    propagationTimeout: 120s    # fixed wait for DNS propagation
 
   storage:
     secretName: wildcard-tls-cert

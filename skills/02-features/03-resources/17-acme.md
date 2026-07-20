@@ -38,7 +38,6 @@ spec:
     #   name: cloudflare-api-token
     #   namespace: default
     # propagationTimeout: 120s
-    # propagationCheckInterval: 5s
 
   renewal:
     renewBefore: 720h                                          # Renew this far before expiration (720h = 30 days)
@@ -97,8 +96,7 @@ spec:
 |-------|------|---------|-------------|
 | `provider` | `String` | — | DNS provider: `cloudflare` / `alidns` |
 | `credentialRef` | `SecretObjectReference` | — | API credentials Secret |
-| `propagationTimeout` | `String` | `"120s"` | DNS propagation timeout (GEP-2257 duration) |
-| `propagationCheckInterval` | `String` | `"5s"` | Propagation check interval (GEP-2257 duration) |
+| `propagationTimeout` | `String` | `"120s"` | Fixed DNS propagation wait before validation is requested (GEP-2257 duration) |
 
 ### renewal — Renewal Configuration
 

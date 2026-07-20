@@ -24,7 +24,7 @@ EdgionAcme is Edgion's custom-extension resource that implements automatic certi
 
 `EdgionAcmeStatus` is the controller's observation channel: in addition to lifecycle fields (`phase`, `certificateSerial`, `certificateNotAfter`, `lastRenewalTime`, `lastFailureReason`, etc.), there is `activeChallenges` — the list of HTTP-01 challenge tokens, written by `AcmeService` via the dedicated fieldManager `edgion-acme-challenges` through the `/status` subresource SSA. The Gateway reads via the `EdgionAcme.active_challenges()` helper (pointing at `status.activeChallenges`) to serve `/.well-known/acme-challenge/<token>`.
 
-`AcmeChallenge` is an internally-tagged enum with `#[serde(tag = "type")]`: `type: http-01` carries `gatewayRef`; `type: dns-01` carries `provider` / `credentialRef` / `propagationTimeout` / `propagationCheckInterval`. The two field groups are mutually exclusive at the type level — there is no illegal "type=http-01 but with dns01 fields" state.
+`AcmeChallenge` is an internally-tagged enum with `#[serde(tag = "type")]`: `type: http-01` carries `gatewayRef`; `type: dns-01` carries `provider` / `credentialRef` / `propagationTimeout`. The two field groups are mutually exclusive at the type level — there is no illegal "type=http-01 but with dns01 fields" state.
 
 ### validate
 

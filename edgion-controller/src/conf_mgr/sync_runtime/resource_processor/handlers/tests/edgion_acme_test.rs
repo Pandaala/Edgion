@@ -98,6 +98,11 @@ struct AcmeParseScenario {
 }
 
 async fn run_acme_parse_scenario(scenario: AcmeParseScenario) {
+    // `parse` reaches `notify_resource_changed` -> `get_sender()`, which reads the
+    // process-global `ACME_SERVICE`. Serialize against the ACME service tests that
+    // install a handle into that global (see `ACME_TEST_MUTEX`).
+    let _acme_guard = crate::services::acme::service::ACME_TEST_MUTEX.lock().await;
+
     let secrets: HashMap<String, Secret> = scenario.secrets.into_iter().collect();
     let (ctx, _runtime) = make_ctx(secrets);
     let handler = EdgionAcmeHandler::new();
@@ -369,6 +374,10 @@ async fn test_acme_dns_resolve_scenarios() {
 
 #[tokio::test]
 async fn test_on_delete_clears_refs() {
+    // `parse` below reaches `notify_resource_changed` -> `get_sender()`; serialize
+    // against the ACME service tests that install a handle (see `ACME_TEST_MUTEX`).
+    let _acme_guard = crate::services::acme::service::ACME_TEST_MUTEX.lock().await;
+
     let (key, secret) = make_secret("default", "acme-account", &[("accountCredentials", br#"{"ok":true}"#)]);
     let (ctx, _runtime) = make_ctx(HashMap::from([(key, secret)]));
     let handler = EdgionAcmeHandler::new();
@@ -409,13 +418,10 @@ async fn test_validate_rejects_invalid_gep2257_durations() {
     acme.spec.renewal.check_interval = "86400".to_string();
     acme.spec.renewal.fail_backoff = "bogus".to_string();
     if let AcmeChallenge::Dns01 {
-        propagation_timeout,
-        propagation_check_interval,
-        ..
+        propagation_timeout, ..
     } = &mut acme.spec.challenge
     {
         *propagation_timeout = "120".to_string();
-        *propagation_check_interval = "".to_string();
     }
     let errors = handler.validate(&acme, &ctx);
     for field in [
@@ -423,7 +429,6 @@ async fn test_validate_rejects_invalid_gep2257_durations() {
         "renewal.checkInterval",
         "renewal.failBackoff",
         "challenge.propagationTimeout",
-        "challenge.propagationCheckInterval",
     ] {
         assert!(
             errors.iter().any(|e| e.contains(field)),
@@ -467,7 +472,6 @@ fn make_acme_dns01(
                     namespace: dns_secret_ns.map(|s| s.to_string()),
                 },
                 propagation_timeout: "120s".to_string(),
-                propagation_check_interval: "5s".to_string(),
             },
             renewal: Default::default(),
             external_account_binding: None,

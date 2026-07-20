@@ -106,8 +106,7 @@ The Controller publishes the token in `status.activeChallenges`; the Gateway rea
 |-----------|------|---------|-------------|
 | `provider` | String | **Required** | DNS provider. Allowed values: `cloudflare` \| `alidns` |
 | `credentialRef` | Object | **Required** | Secret holding the provider's API credentials |
-| `propagationTimeout` | Duration | `120s` | Max time to wait for the TXT record to propagate (GEP-2257 duration) |
-| `propagationCheckInterval` | Duration | `5s` | Interval between propagation checks (GEP-2257 duration) |
+| `propagationTimeout` | Duration | `120s` | Fixed wait for the TXT records to propagate before validation is requested (GEP-2257 duration) |
 
 The Controller creates a `_acme-challenge.<domain>` TXT record via the provider API, waits for propagation, asks ACME to validate, then deletes the record. Provider credential Secret keys:
 

@@ -62,20 +62,11 @@ pub enum AcmeChallenge {
         #[serde(default = "default_propagation_timeout")]
         #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
         propagation_timeout: String,
-
-        /// DNS propagation check interval (GEP-2257 duration, default: "5s")
-        #[serde(default = "default_propagation_check_interval")]
-        #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
-        propagation_check_interval: String,
     },
 }
 
 fn default_propagation_timeout() -> String {
     "120s".to_string()
-}
-
-fn default_propagation_check_interval() -> String {
-    "5s".to_string()
 }
 
 // ============================================================================

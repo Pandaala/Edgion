@@ -106,8 +106,7 @@ Controller 将 token 发布到 `status.activeChallenges`；Gateway 读取后仅�
 |------|------|--------|------|
 | `provider` | String | **必填** | DNS 提供商。可选值：`cloudflare` \| `alidns` |
 | `credentialRef` | Object | **必填** | 持有提供商 API 凭据的 Secret 引用 |
-| `propagationTimeout` | Duration | `120s` | 等待 TXT 记录传播的最长时间（GEP-2257 时长） |
-| `propagationCheckInterval` | Duration | `5s` | 传播检查间隔（GEP-2257 时长） |
+| `propagationTimeout` | Duration | `120s` | 等待 TXT 记录传播的固定时长，等待结束后才发起 ACME 校验（GEP-2257 时长） |
 
 Controller 通过提供商 API 创建 `_acme-challenge.<domain>` TXT 记录，等待传播后请求 ACME 验证，验证后删除记录。提供商凭据 Secret 键：
 
@@ -439,8 +438,7 @@ ACME 服务会访问 `http://<domain>/.well-known/acme-challenge/<token>`。Cont
 |------|------|------|--------|------|
 | `provider` | String | **是** | - | 支持：`cloudflare`、`alidns`；测试环境可用 `pebble`（配合 Pebble + challtestsrv）。 |
 | `credentialRef` | object | **是** | - | 存 DNS API 凭据的 Secret 引用。 |
-| `propagationTimeout` | Duration | 否 | `120s` | 等待 DNS 传播的最长时间（GEP-2257 时长）。 |
-| `propagationCheckInterval` | Duration | 否 | `5s` | 传播检查间隔（GEP-2257 时长）。 |
+| `propagationTimeout` | Duration | 否 | `120s` | 等待 DNS 传播的固定时长，等待结束后才发起 ACME 校验（GEP-2257 时长）。 |
 
 Controller 根据 ACME 返回的 TXT 值，调用 DNS 提供方 API 创建 `_acme-challenge.<domain>` 的 TXT 记录，等待传播后再通知 ACME 校验；通过后删除 TXT。通配符域名必须使用 DNS-01。
 

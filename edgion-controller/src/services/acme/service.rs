@@ -57,6 +57,19 @@ static ACME_SERVICE: Mutex<Option<AcmeServiceHandle>> = Mutex::new(None);
 /// first running generation is 1, so a value of 0 never identifies a live timer.
 static ACME_GENERATION: AtomicU64 = AtomicU64::new(0);
 
+/// Test-only serialization lock for the process-global `ACME_SERVICE`.
+///
+/// `test_timer_generation_isolation` installs a real handle into `ACME_SERVICE`
+/// and asserts nothing else enqueues into its receiver within a time window.
+/// Any concurrently running test that drives `EdgionAcmeHandler::parse` reaches
+/// `notify_resource_changed` -> `get_sender()`, which clones whatever handle is
+/// currently installed and sends into it — landing a stray message in the
+/// isolation test's receiver and tripping its assertion. Every test that touches
+/// the global (installs a handle, or reads it via the notify path) must hold this
+/// lock so they run serially. Held across `.await`, hence `tokio::sync::Mutex`.
+#[cfg(test)]
+pub(crate) static ACME_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 /// Handle to send commands to the ACME service
 struct AcmeServiceHandle {
     tx: mpsc::Sender<AcmeCommand>,
@@ -839,7 +852,8 @@ async fn execute_dns01_flow(
     }
 
     // Phase 3: Wait for DNS propagation before notifying ACME server.
-    // Use `propagation_timeout` (default "120s") as the wait duration, NOT `propagation_check_interval`.
+    // A single fixed wait of `propagation_timeout` (default "120s") — there is no
+    // propagation polling yet, so the "timeout" is spent in full on every issuance.
     // DNS TXT records can take time to propagate globally; waiting too briefly causes validation failure.
     let wait = spec_duration_or(propagation_timeout, "propagationTimeout", Duration::from_secs(120))
         .max(Duration::from_secs(10));
@@ -1390,6 +1404,12 @@ mod tests {
     /// let the cases race against each other.
     #[tokio::test]
     async fn test_timer_generation_isolation() {
+        // Serialize against any other test that touches the global `ACME_SERVICE`
+        // (e.g. the handler tests whose `parse` reaches `notify_resource_changed`
+        // -> `get_sender()`), so a concurrent notify cannot clone the handle we
+        // install below and enqueue a stray message into our receiver.
+        let _guard = ACME_TEST_MUTEX.lock().await;
+
         // --- Generation 1 starts ---
         let (tx1, _rx1) = mpsc::channel::<AcmeCommand>(8);
         let gen1 = ACME_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
