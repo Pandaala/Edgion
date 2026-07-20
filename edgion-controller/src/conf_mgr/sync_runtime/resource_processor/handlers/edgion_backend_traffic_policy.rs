@@ -377,7 +377,12 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
             .collect();
 
         let status = p.status.get_or_insert_with(EdgionBackendTrafficPolicyStatus::default);
-        status.ancestors.clear();
+
+        // Rebuild the ancestors list, carrying each surviving ancestor's prior
+        // conditions forward so update_condition can keep lastTransitionTime
+        // stable when the status does not actually flip (mirrors the
+        // BackendTLSPolicy handler post-ffe29c28).
+        let old_ancestors = std::mem::take(&mut status.ancestors);
 
         for (gw_key, services) in &ancestors_map {
             let Some((gw_ns, gw_name)) = gw_key.split_once('/') else {
@@ -394,7 +399,21 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
                 .map(String::as_str)
                 .collect();
 
-            let mut conditions = Vec::new();
+            // Match on controller_name + kind as well: in K8s mode the watched
+            // status.ancestors may hold entries from other controllers (or
+            // GAMMA Service ancestors sharing ns/name) whose conditions must
+            // not be adopted. EBTP always stamps kind: Some("Gateway"),
+            // namespace: Some(gw_ns).
+            let mut conditions = old_ancestors
+                .iter()
+                .find(|a| {
+                    a.controller_name == self.controller_name
+                        && a.ancestor_ref.kind.as_deref() == Some("Gateway")
+                        && a.ancestor_ref.namespace.as_deref() == Some(gw_ns)
+                        && a.ancestor_ref.name == gw_name
+                })
+                .map(|a| a.conditions.clone())
+                .unwrap_or_default();
 
             // Accepted — priority: Invalid > Conflicted > Accepted (mirrors
             // the BackendTLSPolicy handler; GEP-2648 reports conflict as an
@@ -598,6 +617,70 @@ mod tests {
         check(b, false); // oldest wins
         check(a, true); // loser
         check(c, true); // loser
+    }
+
+    /// Carry-forward: re-running `update_status` on an unchanged world must keep
+    /// each surviving ancestor's condition `lastTransitionTime` stable, and a
+    /// state flip must move only the condition that actually flipped. Uses a
+    /// sentinel timestamp because `now_rfc3339` is second-granularity, so two
+    /// fast consecutive runs would otherwise collide and mask a lost carry-forward.
+    #[tokio::test]
+    async fn condition_last_transition_time_carried_forward() {
+        const SENTINEL: &str = "1970-01-01T00:00:00Z";
+
+        let (ctx, rt) = make_ctx();
+        let handler = make_handler();
+        wire_service_to_gateway(&rt, "ns", "payments", "r1", "gw-1");
+
+        // `p` alone is the winner (Accepted=True, ResolvedRefs=True).
+        let p = make_policy("p", "payments", "2026-06-01T00:00:00Z");
+        let _ = handler.parse(p.clone(), &ctx).await;
+
+        let mut p = p;
+        handler.update_status(&mut p, &ctx, &[]);
+        // Stamp every condition with a sentinel so a lost carry-forward (fresh
+        // `now_rfc3339`) is visibly distinguishable from a preserved timestamp.
+        for a in &mut p.status.as_mut().unwrap().ancestors {
+            for c in &mut a.conditions {
+                c.last_transition_time = SENTINEL.to_string();
+            }
+        }
+
+        // Unchanged world: both conditions keep the sentinel (carry-forward +
+        // no status flip). A `Vec::new()`-per-ancestor rebuild would drop the
+        // sentinel and restamp with the current time.
+        handler.update_status(&mut p, &ctx, &[]);
+        assert_eq!(
+            ancestor_condition(&p, "gw-1", condition_types::ACCEPTED).last_transition_time,
+            SENTINEL,
+            "unchanged Accepted must keep its lastTransitionTime"
+        );
+        assert_eq!(
+            ancestor_condition(&p, "gw-1", condition_types::RESOLVED_REFS).last_transition_time,
+            SENTINEL,
+            "unchanged ResolvedRefs must keep its lastTransitionTime"
+        );
+
+        // Introduce an older valid policy targeting the same Service: `p` now
+        // loses arbitration, so its Accepted condition flips True -> False.
+        let older = make_policy("older", "payments", "2026-01-01T00:00:00Z");
+        let _ = handler.parse(older, &ctx).await;
+
+        handler.update_status(&mut p, &ctx, &[]);
+        assert_ne!(
+            ancestor_condition(&p, "gw-1", condition_types::ACCEPTED).last_transition_time,
+            SENTINEL,
+            "flipped Accepted must get a fresh lastTransitionTime"
+        );
+        assert_eq!(
+            ancestor_condition(&p, "gw-1", condition_types::ACCEPTED).reason,
+            condition_reasons::POLICY_CONFLICTED
+        );
+        assert_eq!(
+            ancestor_condition(&p, "gw-1", condition_types::RESOLVED_REFS).last_transition_time,
+            SENTINEL,
+            "non-flipped ResolvedRefs must still keep its lastTransitionTime"
+        );
     }
 
     /// Build an INVALID policy (ConsistentHash without a `consistentHash` section)
