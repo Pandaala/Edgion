@@ -58,6 +58,23 @@ layer has no plugin chain to attach a declaration to.
   annotation because the standard Gateway API `HTTPRouteRetry` CRD is structural and prunes
   unknown fields. See the [metadata reference](references/annotations-metadata.md) for details.
 
+- `edgion.io/mirror-*` (HTTPRoute) — RequestMirror tuning knobs, applied to every
+  `RequestMirror` filter under the route. Same rationale as `retry-non-idempotent`: the
+  vendored Gateway API CRD prunes non-standard `requestMirror` fields in K8s mode, so
+  tuning lives in annotations (the `HTTPRequestMirrorFilter` struct keeps only the
+  standard `backendRef`/`fraction`/`percent`). The EdgionPlugins `RequestMirror` plugin
+  embeds the same knobs inline instead (its CRD preserves unknown fields). Invalid
+  values log INFO and fall back to the default.
+
+  | Annotation | Default | Meaning |
+  |------------|---------|---------|
+  | `edgion.io/mirror-connect-timeout-ms` | `1000` | Mirror connect timeout (ms) |
+  | `edgion.io/mirror-write-timeout-ms` | `1000` | Mirror write timeout (ms) |
+  | `edgion.io/mirror-max-buffered-chunks` | `5` | Max buffered body chunks |
+  | `edgion.io/mirror-log` | `true` | Emit a dedicated mirror log line |
+  | `edgion.io/mirror-max-concurrent` | `1024` | Max concurrent mirror tasks per process |
+  | `edgion.io/mirror-channel-full-timeout-ms` | `0` | Wait for channel space (ms); >1000 clamped |
+
 ### TCPRoute / TLSRoute / UDPRoute
 
 | Annotation | Value | Description |

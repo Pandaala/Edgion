@@ -46,7 +46,7 @@ spec:
 | `fraction` | Object | none (100%) | Mirror traffic fraction (Gateway API style) |
 | `fraction.numerator` | Integer | **Required** (within `fraction`) | Numerator |
 | `fraction.denominator` | Integer | `100` | Denominator |
-| `percentage` | Integer | none (100%) | Percentage of requests to mirror (0–100). Gateway API v1.5 field, also accepted as `percent` |
+| `percent` | Integer | none (100%) | Percentage of requests to mirror (0–100). Gateway API v1.5 field name |
 | `connectTimeoutMs` | Integer | `1000` | Connection timeout (ms) |
 | `writeTimeoutMs` | Integer | `1000` | Write timeout (ms) |
 | `maxBufferedChunks` | Integer | `5` | Maximum body chunks buffered when the mirror is slower than the client |
@@ -89,7 +89,7 @@ requestPlugins:
 
 ### Scenario 3: Percentage-Based Sampling
 
-`percentage` is an alternative to `fraction` (Gateway API v1.5 style). Mirror 5% of traffic:
+`percent` is an alternative to `fraction` (Gateway API v1.5 style). Mirror 5% of traffic:
 
 ```yaml
 requestPlugins:
@@ -99,7 +99,7 @@ requestPlugins:
         name: analytics-service
         port: 8080
       # Equivalent to fraction: { numerator: 5, denominator: 100 }
-      percentage: 5
+      percent: 5
 ```
 
 ### Scenario 4: Concurrency Limiting
@@ -130,9 +130,9 @@ requestPlugins:
 
 ## FAQ
 
-### Q1: What is the difference between `fraction` and `percentage`?
+### Q1: What is the difference between `fraction` and `percent`?
 
-**A**: They are two ways to express the same sampling ratio. `fraction` uses `numerator` / `denominator` (Gateway API classic style); `percentage` is an integer 0–100 (Gateway API v1.5 style, also accepted under the field name `percent`). Use whichever is more convenient — set only one.
+**A**: They are two ways to express the same sampling ratio. `fraction` uses `numerator` / `denominator` (Gateway API classic style); `percent` is an integer 0–100 (Gateway API v1.5 style). Use whichever is more convenient — set only one.
 
 ### Q2: Can a slow mirror backend slow down my real traffic?
 

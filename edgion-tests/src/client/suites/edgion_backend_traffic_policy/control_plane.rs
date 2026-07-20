@@ -324,7 +324,7 @@ impl EdgionBackendTrafficPolicyTestSuite {
                     let svc = "ebtp-full-svc";
                     cleanup_policies(&ctx, &[name]).await;
 
-                    let body = "  loadBalancer:\n    type: LeastConn\n    panicThreshold: 40\n  healthCheck:\n    active:\n      type: http\n      path: /health\n      interval: 1s\n      expectedStatuses:\n        - 200\n  outlierDetection:\n    consecutiveErrors: 3\n    ejectionSeconds: 3\n";
+                    let body = "  loadBalancer:\n    type: LeastConn\n    panicThreshold: 40\n  healthCheck:\n    active:\n      type: http\n      path: /health\n      interval: 1s\n      expectedStatuses:\n        - 200\n  outlierDetection:\n    consecutiveErrors: 3\n    ejectionTime: 3s\n";
                     if let Err(e) = ctx.apply_yaml(&lb_policy_yaml(name, svc, body)).await {
                         return TestResult::failed(start.elapsed(), format!("apply failed: {}", e));
                     }

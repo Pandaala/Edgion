@@ -65,6 +65,12 @@ has been removed.
 |-----|-------|---------|--------|
 | `edgion.io/hostname-resolution` | controller-generated string | system-managed | Diagnostic annotation describing effective hostname resolution. The controller writes it during parse. Do not hand-author it. |
 | `edgion.io/retry-non-idempotent` | `"true"` / `"false"` | `false` (safe) | Opt-in to retrying non-idempotent methods on the reused-connection retry path. Applies to all rules under this HTTPRoute/GRPCRoute. |
+| `edgion.io/mirror-connect-timeout-ms` | integer string | `1000` | RequestMirror connect timeout (ms). Applies to all RequestMirror filters under this HTTPRoute. |
+| `edgion.io/mirror-write-timeout-ms` | integer string | `1000` | RequestMirror write timeout (ms). |
+| `edgion.io/mirror-max-buffered-chunks` | integer string | `5` | Max body chunks buffered for the mirror (`0` is treated as `5`). |
+| `edgion.io/mirror-log` | `"true"` / `"false"` | `true` | Whether the mirror emits a dedicated mirror-log line. |
+| `edgion.io/mirror-max-concurrent` | integer string | `1024` | Max concurrent mirror tasks per gateway process (`0` is treated as `1024`). |
+| `edgion.io/mirror-channel-full-timeout-ms` | integer string | `0` | Max ms to wait for mirror channel space before abandoning the mirror; values above `1000` are clamped. |
 
 Notes:
 
@@ -81,6 +87,28 @@ Notes:
 - **Scope**: only the reused-connection retry path (`error_while_proxy` Case 2). The connect-failure path (`fail_to_connect`) never wrote request bytes upstream and is always retried regardless of method. The status-code retry (`retry.codes`) and per-try-timeout paths are explicitly operator-configured and are unaffected by this guard.
 - **Why an annotation, not a CRD field**: the standard Gateway API `HTTPRouteRetry` CRD is a structural schema that prunes unknown fields, so a new `spec.rules[*].retry` field would be silently dropped by the API server.
 - **Idempotency definition**: uses `http::Method::is_idempotent()` (RFC 9110), matching nginx's default `proxy_next_upstream` exclusion of non-idempotent methods.
+
+### `edgion.io/mirror-*` (RequestMirror tuning)
+
+- **Granularity**: HTTPRoute (applied to every `RequestMirror` filter under the route,
+  both rule-level and backendRef-level filters). Under delegation, the parent route's
+  annotations apply to the flattened `resolved_rules`; a child route's own mirror-*
+  annotations are not carried over (same semantics as `forward-raw-path` /
+  `retry-non-idempotent`).
+- **Why annotations, not filter fields**: Edgion installs the unmodified vendored
+  Gateway API CRD, a structural schema — in K8s conf-center mode the API server
+  silently prunes any `requestMirror` field the schema does not declare (no admission
+  error). The `HTTPRequestMirrorFilter` struct therefore keeps only the standard
+  `backendRef` / `fraction` / `percent` fields; do NOT add extension fields to it.
+- **Parsing time**: HTTPRoute load (`http_route_preparse.rs`,
+  `parse_mirror_tuning_annotations`).
+- **Storage**: `HTTPRouteRule.parsed_mirror_tuning: Option<MirrorTuning>` (copied to
+  every rule, `None` when no mirror annotation is present → defaults apply).
+- **Invalid value handling**: tracing INFO log + fall back to that field's default;
+  the route is not rejected and the other keys still apply.
+- **EdgionPlugins path**: the `RequestMirror` plugin variant embeds the same knobs
+  inline (`RequestMirrorPluginConfig`, flattened standard + tuning fields) because the
+  EdgionPlugins CRD preserves unknown fields — no pruning, no annotations needed.
 
 ### `edgion.io/forward-raw-path`
 

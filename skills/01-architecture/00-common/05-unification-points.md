@@ -45,7 +45,9 @@ is a bug" rule also gets a line there.
   `ManagedOutboundClient`, both DSL `http.call` clients, wasm guest callouts
   and OCI pulls, openid_connect (default branch), request_mirror,
   the elasticsearch link_sys provider, health-check probes,
-  all_endpoint_status.
+  all_endpoint_status, the controller ACME DNS-01 providers
+  (`edgion-controller/src/services/acme/dns_provider.rs`, factory-default
+  `Deny` redirects kept deliberately).
 - **Exemptions**:
   - openid_connect SAN-pinning branch
     (`edgion-gateway/src/plugins/http/openid_connect/plugin.rs`) builds a raw
@@ -53,9 +55,6 @@ is a bug" rule also gets a line there.
     `ServerCertVerifier` cannot be attached through the factory's high-level
     TLS helpers; it falls back to the shared client on build failure.
   - Test code.
-- **Gap**: controller ACME DNS-01 provider
-  (`edgion-controller/src/services/acme/dns_provider.rs`) builds a raw
-  client — see `tasks/todo/acme-dns-provider-outbound-factory.md`.
 
 ### 2. Outbound request semantics (`ExternalHttpConnection`) — Unified for its class
 
@@ -288,9 +287,16 @@ not in-process checks.
 
 ## Known gaps & observations (tracked)
 
-- ACME DNS-01 provider bypasses the outbound client factory →
-  `tasks/todo/acme-dns-provider-outbound-factory.md`.
+> Extraction threshold: a mechanism duplicated 2× is recorded here as an
+> observation; 3+ implementations qualify it for extraction as a unification
+> point above.
+
 - JWT/JWK parsing helpers exist twice
   (`edgion-gateway/src/plugins/http/openid_connect/jwt_common.rs` vs
-  jwt_auth's own) — below the 3+ threshold, recorded as an observation →
-  `tasks/todo/jwt-helper-consolidation.md`.
+  jwt_auth's own) — **decided 2026-07-19: deliberate split, do not extract.**
+  The two plugins implement different validation models (JWKS
+  discovery/rotation + allowed-alg policy vs static iss-routed groups with
+  one-alg-per-group confusion defense); the only textual overlap is two
+  `ErrorKind` matches with different output types and log vocabularies.
+  Rationale and re-evaluation triggers:
+  `skills/04-review/jwt-auth/jwt-oidc-helper-split-deliberate.md`.

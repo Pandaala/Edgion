@@ -28,7 +28,7 @@ spec:
       name: my-backend
   outlierDetection:
     consecutiveErrors: 5
-    ejectionSeconds: 30
+    ejectionTime: 30s
     maxEjectionPercent: 50
 ---
 apiVersion: v1
@@ -51,11 +51,11 @@ spec:
 | `consecutiveErrors` | Integer | `5` | Consecutive application-5xx failures (any ≥500 that is NOT 502/503/504) before ejection. Minimum `1`. |
 | `consecutiveGatewayErrors` | Integer | defaults to `consecutiveErrors` | Consecutive upstream-origin gateway failures (backend returned 502/503/504) before ejection. |
 | `consecutiveLocalOriginFailures` | Integer | defaults to the resolved `consecutiveGatewayErrors` | Consecutive local-origin failures (connect/TLS-handshake/transport-reset/proxy errors) before ejection. |
-| `ejectionSeconds` | Integer | `30` | Base ejection duration in seconds (multiplied by the endpoint's ejection count for backoff). Minimum `1`. |
-| `maxEjectionSeconds` | Integer | `max(300, ejectionSeconds)` | Upper bound on the backoff-scaled ejection duration. |
+| `ejectionTime` | Duration | `30s` | Base ejection duration (GEP-2257 duration, multiplied by the endpoint's ejection count for backoff). Minimum `1s`. |
+| `maxEjectionTime` | Duration | `max("5m", ejectionTime)` | Upper bound on the backoff-scaled ejection duration. |
 | `maxEjectionPercent` | Integer | `50` | Maximum percent of a Service's endpoints that may be ejected at once. `0` means no limit; values above `100` are rejected. |
 
-A spec that fails validation (for example `consecutiveErrors: 0`, `ejectionSeconds: 0`, or `maxEjectionPercent: 150`) makes the whole `EdgionBackendTrafficPolicy` `Accepted=False`; following the lenient-admission pattern the resource still syncs, and the gateway skips the invalid spec, leaving outlier detection disabled for the target Service(s).
+A spec that fails validation (for example `consecutiveErrors: 0`, `ejectionTime: 500ms` (sub-second durations are rejected), or `maxEjectionPercent: 150`) makes the whole `EdgionBackendTrafficPolicy` `Accepted=False`; following the lenient-admission pattern the resource still syncs, and the gateway skips the invalid spec, leaving outlier detection disabled for the target Service(s).
 
 The three failure counters are independent — this mirrors Envoy's `splitExternalLocalOriginErrors` so a backend doing graceful 503 overload-shedding is not ejected on the same threshold as a dead port. Limitation: app-origin 502/503/504 are counted as gateway failures (the gateway only sees the status code) — raise `consecutiveGatewayErrors` if your application emits them directly. No-op for UDPRoute.
 
@@ -75,11 +75,11 @@ The three failure counters are independent — this mirrors Envoy's `splitExtern
 |------|------------|-----------|
 | React faster to a failing endpoint | Lower `consecutiveErrors` (e.g. `3`) | More sensitive to transient blips; an endpoint may be ejected on a brief spike |
 | Tolerate occasional errors | Raise `consecutiveErrors` (e.g. `10`) | Slower to remove a genuinely failing endpoint |
-| Give a recovering endpoint more time | Raise `ejectionSeconds` (e.g. `60`) | Longer reduced capacity while the endpoint is parked |
-| Probe recovery quickly | Lower `ejectionSeconds` (e.g. `10`) | An endpoint that is still broken re-enters the pool sooner and may be re-ejected |
+| Give a recovering endpoint more time | Raise `ejectionTime` (e.g. `60s`) | Longer reduced capacity while the endpoint is parked |
+| Probe recovery quickly | Lower `ejectionTime` (e.g. `10s`) | An endpoint that is still broken re-enters the pool sooner and may be re-ejected |
 | Protect capacity on small pools | Lower `maxEjectionPercent` | A failing endpoint may stay in rotation if the cap is already reached |
 
-Recommended starting point for most production Services: `consecutiveErrors: 5`, `ejectionSeconds: 30`, `maxEjectionPercent: 50` (the defaults). Tune from there using the metrics below.
+Recommended starting point for most production Services: `consecutiveErrors: 5`, `ejectionTime: 30s`, `maxEjectionPercent: 50` (the defaults). Tune from there using the metrics below.
 
 ⚠️ **On very small pools** (1–2 endpoints), a low `maxEjectionPercent` can prevent ejection entirely — the cap is reached before a single endpoint is removed. Pair outlier detection with active health checks so unhealthy endpoints are still skipped during selection.
 

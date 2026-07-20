@@ -38,8 +38,8 @@ spec:
 
   # Certificate renewal settings
   renewal:
-    renewBeforeDays: 30     # Start renewal 30 days before expiry
-    checkInterval: 86400    # Check every 24 hours
+    renewBefore: 720h       # Start renewal 30 days before expiry
+    checkInterval: 24h      # Check every 24 hours
 
   # Where to store the issued certificate
   storage:

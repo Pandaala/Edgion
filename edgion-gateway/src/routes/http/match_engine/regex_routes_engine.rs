@@ -163,6 +163,7 @@ mod tests {
             parsed_retry: None,
             parsed_forward_raw_path: None,
             parsed_allow_non_idempotent_retry: None,
+            parsed_mirror_tuning: None,
         });
 
         let regex = Regex::new(regex_pattern).unwrap_or_else(|_| panic!("Invalid regex pattern: {}", regex_pattern));

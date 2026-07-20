@@ -80,19 +80,13 @@ spec:
               replacePrefixMatch: /v2
 
         - type: RequestMirror
-          requestMirror:
-            backendRef:
-              name: mirror-service
-              port: 8080
+          requestMirror:                           # Standard fields only: backendRef / fraction / percent.
+            backendRef:                            # Tuning knobs use edgion.io/mirror-* route annotations
+              name: mirror-service                 # (the vendored Gateway API CRD prunes non-standard
+              port: 8080                           # filter fields in K8s mode).
             fraction:
               numerator: 10
               denominator: 100                     # Mirror 10%
-            connectTimeoutMs: 1000                 # Connect timeout (ms)
-            writeTimeoutMs: 1000                   # Write timeout (ms)
-            maxBufferedChunks: 5                   # Max buffered body chunks
-            mirrorLog: true                        # Whether mirror keeps a separate access log
-            maxConcurrent: 1024                    # Max concurrent mirror tasks
-            channelFullTimeoutMs: 0                # Wait when channel is full (ms)
 
         - type: ExtensionRef                       # Reference an EdgionPlugins resource
           extensionRef:

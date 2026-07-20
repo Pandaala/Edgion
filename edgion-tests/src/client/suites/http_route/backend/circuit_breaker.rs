@@ -154,7 +154,7 @@ impl CircuitBreakerTestSuite {
     fn test_recovery_after_cooldown() -> TestCase {
         TestCase::new(
             "recovery_after_cooldown",
-            "Ejected backend recovers after ejectionSeconds",
+            "Ejected backend recovers after ejectionTime",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = std::time::Instant::now();
@@ -168,7 +168,7 @@ impl CircuitBreakerTestSuite {
 
                     // Wait for the backend to be available before starting the ejection setup.
                     // The previous test (consecutive_failures_eject) may have ejected the backend
-                    // for ejectionSeconds=3; if we proceed while it is still ejected, the gateway
+                    // for ejectionTime=3s; if we proceed while it is still ejected, the gateway
                     // returns 503 without forwarding, so the test-server counter never advances and
                     // the subsequent "recovery" requests all get 502s (attempt <= fail_count).
                     // Poll with fail_count=0 (always 200) until the backend is reachable.
@@ -209,9 +209,9 @@ impl CircuitBreakerTestSuite {
 
                     // Wait for ejection cooldown, then poll for recovery. The ejection
                     // window grows with the endpoint's ejection count (backoff:
-                    // ejectionSeconds * num_ejections, capped at maxEjectionSeconds).
+                    // ejectionTime * num_ejections, capped at maxEjectionTime).
                     // An earlier case in this suite already ejected this same backend
-                    // once, so its second ejection here lasts ~6s (ejectionSeconds=3 * 2)
+                    // once, so its second ejection here lasts ~6s (ejectionTime=3s * 2)
                     // rather than 3s — a fixed short wait is not enough. Sleep past the
                     // base window, then poll generously until the backend serves again
                     // (breaks early on the first 200).

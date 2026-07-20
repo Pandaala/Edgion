@@ -9,11 +9,10 @@ use super::plugin_configs::{
     DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig, ForwardAuthConfig, GlobalAccessControlConfig,
     HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
     LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
-    RealIpConfig, RegionRouteConfig, RequestRestrictionConfig, ResponseRewriteConfig, TraceContextConfig, WasmConfig,
+    RealIpConfig, RegionRouteConfig, RequestMirrorPluginConfig, RequestRestrictionConfig, ResponseRewriteConfig,
+    TraceContextConfig, WasmConfig,
 };
-use crate::resources::http_route::{
-    HTTPHeaderFilter, HTTPRequestMirrorFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter,
-};
+use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
 
 /// Plugin enum for all supported plugin types
 ///
@@ -35,7 +34,7 @@ pub enum EdgionPlugin {
     /// URL rewrite filter
     UrlRewrite(HTTPURLRewriteFilter),
     /// Request mirror filter
-    RequestMirror(HTTPRequestMirrorFilter),
+    RequestMirror(RequestMirrorPluginConfig),
 
     // ========== Custom Edgion plugins ==========
     /// Basic Authentication filter

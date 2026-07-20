@@ -144,18 +144,18 @@ spec:
                         proxy errors) before ejection. Defaults to consecutiveGatewayErrors when
                         unset (sibling-dependent default resolved by the gateway, not declared here).
                       minimum: 0
-                    ejectionSeconds:
-                      type: integer
-                      description: "Base ejection duration in seconds (multiplied by the endpoint's ejection count)"
-                      minimum: 0
-                      default: 30
-                    maxEjectionSeconds:
-                      type: integer
+                    ejectionTime:
+                      type: string
+                      description: "Base ejection duration (GEP-2257 duration, multiplied by the endpoint's ejection count)"
+                      default: "30s"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
+                    maxEjectionTime:
+                      type: string
                       description: |
-                        Upper bound on the backoff-scaled ejection duration in seconds.
-                        Defaults to max(300, ejectionSeconds) when unset (sibling-dependent
+                        Upper bound on the backoff-scaled ejection duration (GEP-2257 duration).
+                        Defaults to max("5m", ejectionTime) when unset (sibling-dependent
                         default resolved by the gateway, not declared here).
-                      minimum: 0
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                     maxEjectionPercent:
                       type: integer
                       description: "Max percent of a service's endpoints that may be ejected at once (0 disables the cap)"

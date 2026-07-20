@@ -298,8 +298,8 @@ mod tests {
             consecutive_errors: 3,
             consecutive_gateway_errors: None,
             consecutive_local_origin_failures: None,
-            ejection_seconds: 30,
-            max_ejection_seconds: None,
+            ejection_time: "30s".to_string(),
+            max_ejection_time: None,
             max_ejection_percent: 50,
         });
         Arc::new(EdgionBackendTrafficPolicy {

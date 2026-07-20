@@ -106,8 +106,8 @@ The Controller publishes the token in `status.activeChallenges`; the Gateway rea
 |-----------|------|---------|-------------|
 | `provider` | String | **Required** | DNS provider. Allowed values: `cloudflare` \| `alidns` |
 | `credentialRef` | Object | **Required** | Secret holding the provider's API credentials |
-| `propagationTimeout` | Integer | `120` | Max seconds to wait for the TXT record to propagate |
-| `propagationCheckInterval` | Integer | `5` | Seconds between propagation checks |
+| `propagationTimeout` | Duration | `120s` | Max time to wait for the TXT record to propagate (GEP-2257 duration) |
+| `propagationCheckInterval` | Duration | `5s` | Interval between propagation checks (GEP-2257 duration) |
 
 The Controller creates a `_acme-challenge.<domain>` TXT record via the provider API, waits for propagation, asks ACME to validate, then deletes the record. Provider credential Secret keys:
 
@@ -118,9 +118,9 @@ The Controller creates a `_acme-challenge.<domain>` TXT record via the provider 
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `renewal.renewBeforeDays` | Integer | `30` | Renew this many days before expiry |
-| `renewal.checkInterval` | Integer | `86400` | Seconds between renewal checks (default 24h) |
-| `renewal.failBackoff` | Integer | `300` | Base seconds for the retry delay after a failure. Each consecutive failure multiplies the delay by 4 (`failBackoff * 4^attempt`, e.g. 300, 1200, 4800, 19200, 76800). After 5 consecutive failures the resource stays `Failed` and stops retrying until you edit the CRD or [manually trigger](#manual-trigger) it (which resets the counter); a success also resets it |
+| `renewal.renewBefore` | Duration | `720h` | Renew this far before expiry (720h = 30 days) |
+| `renewal.checkInterval` | Duration | `24h` | Interval between renewal checks |
+| `renewal.failBackoff` | Duration | `5m` | Base retry delay after a failure. Each consecutive failure multiplies the delay by 4 (`failBackoff * 4^attempt`, e.g. 5m, 20m, 80m, ~5.3h, ~21.3h). After 5 consecutive failures the resource stays `Failed` and stops retrying until you edit the CRD or [manually trigger](#manual-trigger) it (which resets the counter); a success also resets it |
 
 ### External Account Binding
 
@@ -190,10 +190,10 @@ spec:
     credentialRef:
       name: cloudflare-api-token
       namespace: production
-    propagationTimeout: 180
+    propagationTimeout: 180s
   renewal:
-    renewBeforeDays: 14
-    checkInterval: 43200
+    renewBefore: 336h
+    checkInterval: 12h
   storage:
     secretName: wildcard-example-com-tls
   autoEdgionTls:

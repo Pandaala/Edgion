@@ -28,7 +28,7 @@ spec:
       name: my-backend
   outlierDetection:
     consecutiveErrors: 5
-    ejectionSeconds: 30
+    ejectionTime: 30s
     maxEjectionPercent: 50
 ---
 apiVersion: v1
@@ -51,11 +51,11 @@ spec:
 | `consecutiveErrors` | Integer | `5` | 连续应用层 5xx 失败（任意 ≥500 且非 502/503/504）多少次后逐出，最小值 `1` |
 | `consecutiveGatewayErrors` | Integer | 默认取 `consecutiveErrors` | 连续上游网关失败（后端返回 502/503/504）多少次后逐出 |
 | `consecutiveLocalOriginFailures` | Integer | 默认取解析后的 `consecutiveGatewayErrors` | 连续本地源失败（连接/TLS 握手/连接重置/代理错误）多少次后逐出 |
-| `ejectionSeconds` | Integer | `30` | 逐出基础冷却时间（秒），会按端点被逐出次数做退避放大。最小值 `1` |
-| `maxEjectionSeconds` | Integer | `max(300, ejectionSeconds)` | 退避放大后的逐出时长上限 |
+| `ejectionTime` | Duration | `30s` | 逐出基础冷却时间（GEP-2257 时长），会按端点被逐出次数做退避放大。最小值 `1s` |
+| `maxEjectionTime` | Duration | `max("5m", ejectionTime)` | 退避放大后的逐出时长上限 |
 | `maxEjectionPercent` | Integer | `50` | 最大逐出比例。`0` 表示不限制；超过 `100` 会被拒绝 |
 
-校验失败的 spec（例如 `consecutiveErrors: 0`、`ejectionSeconds: 0` 或 `maxEjectionPercent: 150`）会使整个 `EdgionBackendTrafficPolicy` 变为 `Accepted=False`；按照宽松准入策略，资源仍会同步，网关侧会跳过该无效 spec，对目标 Service 保持异常点检测禁用。
+校验失败的 spec（例如 `consecutiveErrors: 0`、`ejectionTime: 500ms`（亚秒级时长会被拒绝）或 `maxEjectionPercent: 150`）会使整个 `EdgionBackendTrafficPolicy` 变为 `Accepted=False`；按照宽松准入策略，资源仍会同步，网关侧会跳过该无效 spec，对目标 Service 保持异常点检测禁用。
 
 三个失败计数器相互独立——这与 Envoy 的 `splitExternalLocalOriginErrors` 思路一致，使得正在优雅 503 限流的后端不会与端口彻底不可达的后端使用同一阈值被逐出。限制：应用层返回的 502/503/504 会被计入网关失败（网关只能看到状态码）——如果你的应用会直接返回这些状态码，请相应提高 `consecutiveGatewayErrors`。对 UDPRoute 无效。
 
@@ -75,11 +75,11 @@ spec:
 |------|----------|------|
 | 更快响应故障端点 | 降低 `consecutiveErrors`（如 `3`） | 对瞬时抖动更敏感；短暂高峰也可能触发逐出 |
 | 容忍偶发错误 | 提高 `consecutiveErrors`（如 `10`） | 移除真正故障端点的速度更慢 |
-| 给恢复中的端点更多时间 | 提高 `ejectionSeconds`（如 `60`） | 逐出期间容量降低时间更长 |
-| 快速探测恢复 | 降低 `ejectionSeconds`（如 `10`） | 仍有问题的端点会更早重新进入选择池，可能再次被逐出 |
+| 给恢复中的端点更多时间 | 提高 `ejectionTime`（如 `60s`） | 逐出期间容量降低时间更长 |
+| 快速探测恢复 | 降低 `ejectionTime`（如 `10s`） | 仍有问题的端点会更早重新进入选择池，可能再次被逐出 |
 | 保护小规模端点池的容量 | 降低 `maxEjectionPercent` | 若已达到上限，故障端点可能仍留在轮询中 |
 
-大多数生产 Service 的推荐起点：`consecutiveErrors: 5`、`ejectionSeconds: 30`、`maxEjectionPercent: 50`（即默认值）。结合下方指标进行调优。
+大多数生产 Service 的推荐起点：`consecutiveErrors: 5`、`ejectionTime: 30s`、`maxEjectionPercent: 50`（即默认值）。结合下方指标进行调优。
 
 ⚠️ **在极小规模的端点池中**（1~2 个端点），较低的 `maxEjectionPercent` 可能完全阻止逐出——在移除单个端点之前就已达到上限。建议同时配合主动健康检查，确保不健康端点在选择时仍被跳过。
 

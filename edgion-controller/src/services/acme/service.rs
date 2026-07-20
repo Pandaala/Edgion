@@ -38,6 +38,7 @@ use super::secret_io::{
     account_credentials_from_json, create_account_secret, extract_account_json_string,
     patch_account_key_into_existing_secret,
 };
+use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::edgion_acme::{
     AcmeCertPhase, AcmeChallenge, ActiveHttpChallenge, EdgionAcme, EdgionAcmeStatus,
@@ -321,6 +322,23 @@ fn exponential_backoff(base_secs: u64, attempt: u32) -> Duration {
     Duration::from_secs(backoff)
 }
 
+/// Parse a GEP-2257 duration field from the CR spec, falling back to the
+/// documented default when the string is invalid. Handler validation rejects
+/// invalid durations at admission; this guards the lenient-admission path
+/// where an unvalidated CR can still reach the service.
+fn spec_duration_or(value: &str, field: &'static str, default: Duration) -> Duration {
+    parse_duration(value).unwrap_or_else(|e| {
+        tracing::warn!(
+            component = "acme_service",
+            field = field,
+            value = %value,
+            error = %e,
+            "Invalid GEP-2257 duration in EdgionAcme spec; using default"
+        );
+        default
+    })
+}
+
 // ============================================================================
 // ACME Service Worker
 // ============================================================================
@@ -408,8 +426,12 @@ impl AcmeServiceWorker {
             AcmeCertPhase::Ready => {
                 if !self.needs_renewal(&acme) {
                     // Not time to renew yet — schedule next check
-                    let check_interval = acme.spec.renewal.check_interval;
-                    schedule_renewal_check(self.generation, key.to_string(), Duration::from_secs(check_interval));
+                    let check_interval = spec_duration_or(
+                        &acme.spec.renewal.check_interval,
+                        "checkInterval",
+                        Duration::from_secs(86400),
+                    );
+                    schedule_renewal_check(self.generation, key.to_string(), check_interval);
                     return;
                 }
                 // Fall through to start renewal
@@ -457,7 +479,8 @@ impl AcmeServiceWorker {
         let retry_tracker = self.retry_tracker.clone();
         let key_owned = key.to_string();
         let is_renewal = *phase == AcmeCertPhase::Ready;
-        let fail_backoff_base = acme.spec.renewal.fail_backoff;
+        let fail_backoff_base =
+            spec_duration_or(&acme.spec.renewal.fail_backoff, "failBackoff", Duration::from_secs(300)).as_secs();
         let generation = self.generation;
 
         tokio::spawn(async move {
@@ -553,7 +576,12 @@ impl AcmeServiceWorker {
             Err(_) => return true, // Can't parse expiry
         };
 
-        let renew_before = chrono::Duration::days(acme.spec.renewal.renew_before_days as i64);
+        let renew_before = chrono::Duration::from_std(spec_duration_or(
+            &acme.spec.renewal.renew_before,
+            "renewBefore",
+            Duration::from_secs(720 * 3600),
+        ))
+        .unwrap_or_else(|_| chrono::Duration::days(30));
         let renew_at = expiry - renew_before;
 
         chrono::Utc::now() >= renew_at
@@ -617,12 +645,12 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
     .await?;
 
     // 8. Schedule renewal check
-    let check_interval = acme.spec.renewal.check_interval;
-    schedule_renewal_check(
-        generation,
-        format!("{}/{}", namespace, name),
-        Duration::from_secs(check_interval),
+    let check_interval = spec_duration_or(
+        &acme.spec.renewal.check_interval,
+        "checkInterval",
+        Duration::from_secs(86400),
     );
+    schedule_renewal_check(generation, format!("{}/{}", namespace, name), check_interval);
 
     tracing::info!(
         component = "acme_service",
@@ -811,16 +839,17 @@ async fn execute_dns01_flow(
     }
 
     // Phase 3: Wait for DNS propagation before notifying ACME server.
-    // Use `propagation_timeout` (default 120s) as the wait duration, NOT `propagation_check_interval`.
+    // Use `propagation_timeout` (default "120s") as the wait duration, NOT `propagation_check_interval`.
     // DNS TXT records can take time to propagate globally; waiting too briefly causes validation failure.
-    let wait_secs = (*propagation_timeout).max(10);
+    let wait = spec_duration_or(propagation_timeout, "propagationTimeout", Duration::from_secs(120))
+        .max(Duration::from_secs(10));
     tracing::info!(
         component = "acme_service",
         name = %name,
-        wait_secs = wait_secs,
+        wait_secs = wait.as_secs(),
         "Waiting for DNS propagation before activating challenges"
     );
-    tokio::time::sleep(Duration::from_secs(wait_secs)).await;
+    tokio::time::sleep(wait).await;
 
     // Phase 4: NOW tell the ACME server to start validation
     // (DNS records have been created and had time to propagate)

@@ -18,16 +18,13 @@ filters:
         denominator: 100
 ```
 
+过滤器只接受标准 Gateway API 字段：
+
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `backendRef` | Object | **必填** | 镜像流量的目标后端：`{name, port}` |
 | `fraction` | Object | 全量镜像 | 镜像请求的比例：`{numerator, denominator}` |
-| `connectTimeoutMs` | Integer | `1000` | 镜像请求的连接超时（毫秒） |
-| `writeTimeoutMs` | Integer | `1000` | 镜像请求的写入超时（毫秒） |
-| `maxBufferedChunks` | Integer | `5` | 镜像时缓冲的最大请求体 chunk 数量 |
-| `mirrorLog` | Boolean | `true` | 镜像是否生成独立的 access log 条目 |
-| `maxConcurrent` | Integer | `1024` | 每个网关进程允许同时飞行的最大镜像任务数 |
-| `channelFullTimeoutMs` | Integer | `0` | 镜像通道满时等待队列空间的时长（毫秒）；`0` 表示立即放弃该次镜像 |
+| `percent` | Integer | 无 | 镜像请求的百分比（0-100）；与 `fraction` 二选一 |
 
 ### `fraction` 子字段
 
@@ -35,6 +32,24 @@ filters:
 |------|------|--------|------|
 | `fraction.numerator` | Integer | 无 | 镜像比例的分子 |
 | `fraction.denominator` | Integer | `100` | 镜像比例的分母 |
+
+### 调优注解
+
+镜像调优参数通过 HTTPRoute 的 `metadata.annotations` 中的 `edgion.io/mirror-*`
+注解设置，而不是过滤器字段。Gateway API CRD 是结构化 schema，`requestMirror`
+内的任何非标准字段都会被 Kubernetes API server 静默剪除；注解则不受影响。
+每个注解作用于该路由下的所有 `RequestMirror` 过滤器。
+
+| 注解 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `edgion.io/mirror-connect-timeout-ms` | Integer | `1000` | 镜像请求的连接超时（毫秒） |
+| `edgion.io/mirror-write-timeout-ms` | Integer | `1000` | 镜像请求的写入超时（毫秒） |
+| `edgion.io/mirror-max-buffered-chunks` | Integer | `5` | 镜像时缓冲的最大请求体 chunk 数量 |
+| `edgion.io/mirror-log` | Boolean | `true` | 镜像是否生成独立的 access log 条目 |
+| `edgion.io/mirror-max-concurrent` | Integer | `1024` | 每个网关进程允许同时飞行的最大镜像任务数 |
+| `edgion.io/mirror-channel-full-timeout-ms` | Integer | `0` | 镜像通道满时等待队列空间的时长（毫秒）；`0` 表示立即放弃该次镜像（超过 `1000` 的值会被钳制） |
+
+注解值无效时会记录日志，该字段回退到默认值。
 
 ## 示例
 
@@ -77,6 +92,11 @@ kind: HTTPRoute
 metadata:
   name: sampled-shadow-route
   namespace: production
+  annotations:
+    edgion.io/mirror-connect-timeout-ms: "1000"
+    edgion.io/mirror-write-timeout-ms: "1000"
+    edgion.io/mirror-max-buffered-chunks: "5"
+    edgion.io/mirror-max-concurrent: "1024"
 spec:
   parentRefs:
     - name: main-gateway
@@ -95,10 +115,6 @@ spec:
             fraction:
               numerator: 10
               denominator: 100
-            connectTimeoutMs: 1000
-            writeTimeoutMs: 1000
-            maxBufferedChunks: 5
-            maxConcurrent: 1024
       backendRefs:
         - name: api-service
           port: 8080
@@ -107,8 +123,8 @@ spec:
 ## 注意事项
 
 - 镜像是非阻塞的：客户端始终收到主后端的响应，镜像响应被丢弃。
-- 若镜像队列已满且 `channelFullTimeoutMs` 超时，该请求的镜像将被丢弃，而不会延迟原始请求。
-- 这是标准 Gateway API 镜像，目标是一个 `backendRef`。如需更丰富的镜像选项——例如镜像到外部目标或超出 `backendRef` 范围的精细控制——请参阅 [Edgion RequestMirror 插件](../edgion-plugins/request-mirror.md)。
+- 若镜像队列已满且 `edgion.io/mirror-channel-full-timeout-ms` 超时，该请求的镜像将被丢弃，而不会延迟原始请求。
+- 这是标准 Gateway API 镜像，目标是一个 `backendRef`。如需更丰富的镜像选项——例如内联调优字段或超出 `backendRef` 范围的精细控制——请参阅 [Edgion RequestMirror 插件](../edgion-plugins/request-mirror.md)，其配置直接内嵌调优参数（该 CRD 不受结构化 schema 剪除影响）。
 
 ## 相关文档
 

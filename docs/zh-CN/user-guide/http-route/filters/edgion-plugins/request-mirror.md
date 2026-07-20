@@ -44,6 +44,7 @@ spec:
 | `fraction` | Object | ❌ | 无 (100%) | 镜像流量比例 |
 | `fraction.numerator` | Integer | ✅ | 无 | 分子 |
 | `fraction.denominator` | Integer | ✅ | 无 | 分母 |
+| `percent` | Integer | ❌ | 无 (100%) | 镜像请求百分比（0-100），Gateway API v1.5 字段名，与 `fraction` 二选一 |
 | `connectTimeoutMs` | Integer | ❌ | `1000` | 连接超时毫秒 |
 | `writeTimeoutMs` | Integer | ❌ | `1000` | 写入超时毫秒 |
 | `maxBufferedChunks` | Integer | ❌ | `5` | 最大缓冲 chunk 数 |

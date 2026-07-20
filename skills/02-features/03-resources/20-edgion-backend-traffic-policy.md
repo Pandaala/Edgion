@@ -64,8 +64,8 @@ spec:
     consecutiveErrors: 5
     consecutiveGatewayErrors: 5
     consecutiveLocalOriginFailures: 5
-    ejectionSeconds: 30
-    maxEjectionSeconds: 300
+    ejectionTime: 30s
+    maxEjectionTime: 5m
     maxEjectionPercent: 50
 
   upstreamAuthority:            # optional; absent = today's static-SNI behavior
@@ -128,8 +128,8 @@ Mirrors the pre-existing circuit-breaker annotation payload — see
 502/503/504, `consecutiveLocalOriginFailures` = connect/TLS/transport
 failures); any one reaching its threshold ejects the endpoint.
 `consecutiveGatewayErrors`, `consecutiveLocalOriginFailures`, and
-`maxEjectionSeconds` are sibling-dependent defaults (`consecutiveErrors`,
-the resolved `consecutiveGatewayErrors`, and `max(300, ejectionSeconds)`
+`maxEjectionTime` are sibling-dependent defaults (`consecutiveErrors`,
+the resolved `consecutiveGatewayErrors`, and `max("5m", ejectionTime)`
 respectively) resolved by `OutlierDetectionConfig::normalize()` in code — the
 CRD YAML deliberately does **not** declare OpenAPI defaults for those three
 fields, since a naive schema default would short-circuit the cross-field
@@ -487,7 +487,7 @@ spec:
       key: session_id
   outlierDetection:
     consecutiveErrors: 5
-    ejectionSeconds: 30
+    ejectionTime: 30s
     maxEjectionPercent: 50
 ```
 

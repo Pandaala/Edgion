@@ -18,36 +18,38 @@ use crate::plugins::http::common::http_client::{
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use crate::{MirrorConfig, MirrorState};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::http_route::HTTPRequestMirrorFilter;
+use edgion_resources::resources::http_route::{HTTPRequestMirrorFilter, MirrorTuning};
 
 use super::mirror_log::{emit_mirror_log, new_entry};
 
 pub struct RequestMirrorPlugin {
     config: HTTPRequestMirrorFilter,
+    tuning: MirrorTuning,
     semaphore: Arc<Semaphore>,
     client: reqwest::Client,
 }
 
 impl RequestMirrorPlugin {
-    pub fn new(config: HTTPRequestMirrorFilter, default_namespace: String) -> Self {
+    pub fn new(config: HTTPRequestMirrorFilter, tuning: MirrorTuning, default_namespace: String) -> Self {
         let mut cfg = config;
-        if cfg.max_buffered_chunks == 0 {
-            cfg.max_buffered_chunks = 5;
+        let mut tuning = tuning;
+        if tuning.max_buffered_chunks == 0 {
+            tuning.max_buffered_chunks = 5;
         }
-        if cfg.max_concurrent == 0 {
-            cfg.max_concurrent = 1024;
+        if tuning.max_concurrent == 0 {
+            tuning.max_concurrent = 1024;
         }
         // Hard cap: channel_full_timeout_ms must not exceed 1000ms.
         // Values above 1s would add unacceptable back-pressure to main request body processing.
-        if cfg.channel_full_timeout_ms > 1000 {
+        if tuning.channel_full_timeout_ms > 1000 {
             tracing::warn!(
-                channel_full_timeout_ms = cfg.channel_full_timeout_ms,
+                channel_full_timeout_ms = tuning.channel_full_timeout_ms,
                 "channel_full_timeout_ms exceeds maximum (1000ms); clamping to 1000ms"
             );
-            cfg.channel_full_timeout_ms = 1000;
+            tuning.channel_full_timeout_ms = 1000;
         }
 
-        let connect_timeout = Duration::from_millis(cfg.connect_timeout_ms.max(1));
+        let connect_timeout = Duration::from_millis(tuning.connect_timeout_ms.max(1));
         let client =
             build_pooled_outbound_client(connect_timeout, None).expect("failed to build RequestMirror reqwest client");
 
@@ -57,8 +59,9 @@ impl RequestMirrorPlugin {
         }
 
         Self {
-            semaphore: Arc::new(Semaphore::new(cfg.max_concurrent)),
+            semaphore: Arc::new(Semaphore::new(tuning.max_concurrent)),
             config: cfg,
+            tuning,
             client,
         }
     }
@@ -82,7 +85,7 @@ impl RequestMirrorPlugin {
                 Some("mirror sampled:skip")
             };
         }
-        if let Some(pct) = self.config.percentage {
+        if let Some(pct) = self.config.percent {
             if pct <= 0 {
                 return Some("mirror disabled");
             }
@@ -102,10 +105,10 @@ impl RequestMirrorPlugin {
 
     fn mirror_config(&self) -> MirrorConfig {
         MirrorConfig {
-            connect_timeout: Duration::from_millis(self.config.connect_timeout_ms.max(1)),
-            write_timeout: Duration::from_millis(self.config.write_timeout_ms.max(1)),
-            max_buffered_chunks: self.config.max_buffered_chunks,
-            mirror_log: self.config.mirror_log,
+            connect_timeout: Duration::from_millis(self.tuning.connect_timeout_ms.max(1)),
+            write_timeout: Duration::from_millis(self.tuning.write_timeout_ms.max(1)),
+            max_buffered_chunks: self.tuning.max_buffered_chunks,
+            mirror_log: self.tuning.mirror_log,
             // max_concurrent omitted: managed by self.semaphore, not needed inside the task.
         }
     }
@@ -232,7 +235,7 @@ impl RequestFilter for RequestMirrorPlugin {
         let channel_full_flag = Arc::new(AtomicBool::new(false));
         let task_channel_full_flag = channel_full_flag.clone();
 
-        let channel_full_timeout_ms = self.config.channel_full_timeout_ms;
+        let channel_full_timeout_ms = self.tuning.channel_full_timeout_ms;
 
         let writer_handle = tokio::spawn(async move {
             let _permit = permit;

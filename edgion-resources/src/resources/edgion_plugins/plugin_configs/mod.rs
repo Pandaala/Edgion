@@ -33,6 +33,7 @@ mod rate_limit_redis;
 mod real_ip;
 mod region_route;
 mod request_match;
+mod request_mirror;
 mod request_restriction;
 mod response_rewrite;
 mod trace_context;
@@ -87,6 +88,7 @@ pub use region_route::{
     HashAlgorithm, HashCalcConfig, RegionDef, RegionRouteConfig, RouteByKeyConfMatchMeta, RouteRule,
 };
 pub use request_match::{OnMissing, RestrictionRule, RestrictionSource, SanType};
+pub use request_mirror::RequestMirrorPluginConfig;
 pub use request_restriction::{RequestRestrictionConfig, RestrictionMode, RuleGroup};
 pub use response_rewrite::{HeaderRename, ResponseHeaderActions, ResponseHeaderEntry, ResponseRewriteConfig};
 pub use trace_context::TraceContextConfig;

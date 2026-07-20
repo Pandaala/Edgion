@@ -74,15 +74,21 @@ spec:
                   type: object
                   description: "Certificate renewal configuration"
                   properties:
-                    renewBeforeDays:
-                      type: integer
-                      description: "Days before expiry to trigger renewal (default: 30)"
+                    renewBefore:
+                      type: string
+                      description: "Lead time before expiry to trigger renewal (GEP-2257 duration, default: \"720h\" = 30 days)"
+                      default: "720h"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                     checkInterval:
-                      type: integer
-                      description: "Interval between renewal checks in seconds (default: 86400)"
+                      type: string
+                      description: "Interval between renewal checks (GEP-2257 duration, default: \"24h\")"
+                      default: "24h"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                     failBackoff:
-                      type: integer
-                      description: "Backoff duration in seconds after failed renewal (default: 300)"
+                      type: string
+                      description: "Backoff after a failed renewal attempt (GEP-2257 duration, default: \"5m\")"
+                      default: "5m"
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
                 externalAccountBinding:
                   type: object
                   description: "External Account Binding for ACME providers that require it"

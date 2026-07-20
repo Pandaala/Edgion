@@ -11,5 +11,5 @@ spec:
   outlierDetection:
     consecutiveErrors: 3
     consecutiveGatewayErrors: 3
-    ejectionSeconds: 3
+    ejectionTime: 3s
     maxEjectionPercent: 0

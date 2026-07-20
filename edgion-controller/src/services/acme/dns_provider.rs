@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use edgion_common::link_sys_core::http_client::{build_outbound_client, OutboundClientConfig};
 use futures::StreamExt;
 
 /// Connect timeout for a DNS provider API request (TCP + TLS handshake).
@@ -22,22 +23,27 @@ const DNS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 /// as a misbehaving endpoint and rejected before fully buffering it.
 const MAX_DNS_RESPONSE_BYTES: usize = 256 * 1024;
 
-/// Build a reqwest client for DNS provider API calls with explicit connect and
-/// total request timeouts. Falls back to a default client if the builder fails;
-/// with the static timeout config above that path is practically unreachable.
+/// Build a reqwest client for DNS provider API calls through the shared
+/// outbound factory, with explicit connect and total request timeouts. The
+/// factory's default `Deny` redirect policy is kept deliberately: all supported
+/// provider APIs (Cloudflare, AliDNS, challtestsrv) are direct REST endpoints,
+/// and following redirects would only re-expose credentialed requests. Falls
+/// back to a default client if the builder fails; with the static config above
+/// that path is practically unreachable.
 fn build_dns_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .connect_timeout(DNS_CONNECT_TIMEOUT)
-        .timeout(DNS_REQUEST_TIMEOUT)
-        .build()
-        .unwrap_or_else(|e| {
-            tracing::warn!(
-                component = "acme_dns_provider",
-                error = %e,
-                "Failed to build DNS HTTP client with timeouts; falling back to default client"
-            );
-            reqwest::Client::new()
-        })
+    build_outbound_client(OutboundClientConfig {
+        connect_timeout: Some(DNS_CONNECT_TIMEOUT),
+        total_timeout: Some(DNS_REQUEST_TIMEOUT),
+        ..Default::default()
+    })
+    .unwrap_or_else(|e| {
+        tracing::warn!(
+            component = "acme_dns_provider",
+            error = %e,
+            "Failed to build DNS HTTP client with timeouts; falling back to default client"
+        );
+        reqwest::Client::new()
+    })
 }
 
 /// Read a response body with a hard byte cap, mirroring the gateway's

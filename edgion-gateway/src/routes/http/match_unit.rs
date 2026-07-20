@@ -163,15 +163,20 @@ impl HttpRouteRuleUnit {
     /// (in-memory RateLimit) own per-rule state, so the runtime must NOT be rebuilt
     /// per match-item/hostname.
     pub fn compile_http_rule(rule: &HTTPRouteRule, namespace: &str) -> HttpRuleRuntime {
+        // Route-level `edgion.io/mirror-*` annotation values, pre-parsed onto
+        // the rule; defaults when no mirror annotation is present.
+        let mirror_tuning = rule.parsed_mirror_tuning.clone().unwrap_or_default();
         let plugin_runtime = Arc::new(match &rule.filters {
-            Some(filters) => PluginRuntime::from_httproute_filters_for_rule(filters, namespace),
+            Some(filters) => PluginRuntime::from_httproute_filters_for_rule(filters, namespace, &mirror_tuning),
             None => PluginRuntime::new(),
         });
         let backends: Vec<CompiledBackend> = rule.backend_refs.as_ref().map_or_else(Vec::new, |refs| {
             refs.iter()
                 .map(|br| {
                     let plugin_runtime = Arc::new(match &br.filters {
-                        Some(filters) => PluginRuntime::from_httproute_filters_for_backend(filters, namespace),
+                        Some(filters) => {
+                            PluginRuntime::from_httproute_filters_for_backend(filters, namespace, &mirror_tuning)
+                        }
                         None => PluginRuntime::new(),
                     });
                     CompiledBackend {

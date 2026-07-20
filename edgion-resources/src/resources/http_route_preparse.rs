@@ -2,6 +2,7 @@
 //! The enclosing route fields that hold these values carry `#[serde(skip)]`,
 //! so they never appear in the conf_sync payload.
 
+use super::http_route::MirrorTuning;
 use super::HTTPRoute;
 use crate::path_normalization::normalize_config_path;
 
@@ -79,6 +80,12 @@ impl HTTPRoute {
                 }
             });
 
+        // Parse `edgion.io/mirror-*` tuning annotations into a MirrorTuning,
+        // applied to every RequestMirror filter under this route. These knobs
+        // live in annotations because the vendored Gateway API CRD silently
+        // prunes undeclared filter fields in K8s conf-center mode.
+        let parsed_mirror_tuning = self.parse_mirror_tuning_annotations();
+
         // Both the operator-authored rules and the controller-flattened
         // delegation rules (resolved_rules) need the annotation copies; the
         // gateway compiles whichever is effective (see `effective_rules()`).
@@ -89,8 +96,74 @@ impl HTTPRoute {
             for rule in rules.iter_mut() {
                 rule.parsed_forward_raw_path = parsed_forward_raw_path;
                 rule.parsed_allow_non_idempotent_retry = parsed_allow_non_idempotent_retry;
+                rule.parsed_mirror_tuning = parsed_mirror_tuning.clone();
             }
         }
+    }
+
+    /// Parse the `edgion.io/mirror-*` tuning annotations. Returns `None` when
+    /// no mirror annotation is present (defaults apply). Each invalid value is
+    /// logged at INFO and falls back to that field's default, matching the
+    /// lenient handling of the sibling route annotations.
+    fn parse_mirror_tuning_annotations(&self) -> Option<MirrorTuning> {
+        use crate::constants::annotations::edgion;
+
+        let annotations = self.metadata.annotations.as_ref()?;
+
+        let keys = [
+            edgion::MIRROR_CONNECT_TIMEOUT_MS,
+            edgion::MIRROR_WRITE_TIMEOUT_MS,
+            edgion::MIRROR_CHANNEL_FULL_TIMEOUT_MS,
+            edgion::MIRROR_MAX_BUFFERED_CHUNKS,
+            edgion::MIRROR_LOG,
+            edgion::MIRROR_MAX_CONCURRENT,
+        ];
+        if !keys.iter().any(|k| annotations.contains_key(*k)) {
+            return None;
+        }
+
+        let route_namespace = self.metadata.namespace.as_deref().unwrap_or("default");
+        let route_name = self.metadata.name.as_deref().unwrap_or("");
+
+        // Parse one annotation value; absent or invalid falls back to `default`.
+        macro_rules! parse_or_default {
+            ($key:expr, $default:expr, $ty:ty) => {
+                match annotations.get($key) {
+                    None => $default,
+                    Some(v) => match v.parse::<$ty>() {
+                        Ok(parsed) => parsed,
+                        Err(_) => {
+                            tracing::info!(
+                                route_namespace = %route_namespace,
+                                route_name = %route_name,
+                                annotation = %$key,
+                                value = %v,
+                                "ignored: invalid value, using default"
+                            );
+                            $default
+                        }
+                    },
+                }
+            };
+        }
+
+        let defaults = MirrorTuning::default();
+        Some(MirrorTuning {
+            connect_timeout_ms: parse_or_default!(edgion::MIRROR_CONNECT_TIMEOUT_MS, defaults.connect_timeout_ms, u64),
+            write_timeout_ms: parse_or_default!(edgion::MIRROR_WRITE_TIMEOUT_MS, defaults.write_timeout_ms, u64),
+            channel_full_timeout_ms: parse_or_default!(
+                edgion::MIRROR_CHANNEL_FULL_TIMEOUT_MS,
+                defaults.channel_full_timeout_ms,
+                u64
+            ),
+            max_buffered_chunks: parse_or_default!(
+                edgion::MIRROR_MAX_BUFFERED_CHUNKS,
+                defaults.max_buffered_chunks,
+                usize
+            ),
+            mirror_log: parse_or_default!(edgion::MIRROR_LOG, defaults.mirror_log, bool),
+            max_concurrent: parse_or_default!(edgion::MIRROR_MAX_CONCURRENT, defaults.max_concurrent, usize),
+        })
     }
 
     /// Parse and pre-process timeout configurations for all rules
@@ -543,6 +616,157 @@ mod tests {
         for rule in route.spec.rules.as_ref().unwrap() {
             assert_eq!(rule.parsed_forward_raw_path, None);
         }
+    }
+
+    // =========================================================================
+    // mirror-* tuning annotation parsing tests
+    // =========================================================================
+
+    #[test]
+    fn parses_mirror_tuning_absent_is_none() {
+        let mut route = make_test_http_route();
+        route.metadata.annotations = None;
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert!(rule.parsed_mirror_tuning.is_none());
+        }
+    }
+
+    #[test]
+    fn parses_mirror_tuning_unrelated_annotations_is_none() {
+        // Annotations present but none of the mirror-* keys → None (defaults).
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert("edgion.io/forward-raw-path".to_string(), "true".to_string());
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            assert!(rule.parsed_mirror_tuning.is_none());
+        }
+    }
+
+    #[test]
+    fn parses_mirror_tuning_partial_keys_fill_defaults() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::constants::annotations::edgion::MIRROR_CONNECT_TIMEOUT_MS.to_string(),
+            "500".to_string(),
+        );
+        anns.insert(
+            crate::constants::annotations::edgion::MIRROR_LOG.to_string(),
+            "false".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        for rule in route.spec.rules.as_ref().unwrap() {
+            let tuning = rule.parsed_mirror_tuning.as_ref().expect("tuning should be parsed");
+            assert_eq!(tuning.connect_timeout_ms, 500);
+            assert!(!tuning.mirror_log);
+            // Unset keys fall back to defaults.
+            let defaults = MirrorTuning::default();
+            assert_eq!(tuning.write_timeout_ms, defaults.write_timeout_ms);
+            assert_eq!(tuning.max_buffered_chunks, defaults.max_buffered_chunks);
+            assert_eq!(tuning.max_concurrent, defaults.max_concurrent);
+            assert_eq!(tuning.channel_full_timeout_ms, defaults.channel_full_timeout_ms);
+        }
+    }
+
+    #[test]
+    fn parses_mirror_tuning_all_keys() {
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        let e = |k: &str| k.to_string();
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_CONNECT_TIMEOUT_MS),
+            "200".to_string(),
+        );
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_WRITE_TIMEOUT_MS),
+            "300".to_string(),
+        );
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_CHANNEL_FULL_TIMEOUT_MS),
+            "150".to_string(),
+        );
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_MAX_BUFFERED_CHUNKS),
+            "8".to_string(),
+        );
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_LOG),
+            "false".to_string(),
+        );
+        anns.insert(
+            e(crate::constants::annotations::edgion::MIRROR_MAX_CONCURRENT),
+            "64".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        let tuning = route.spec.rules.as_ref().unwrap()[0]
+            .parsed_mirror_tuning
+            .as_ref()
+            .expect("tuning should be parsed");
+        assert_eq!(tuning.connect_timeout_ms, 200);
+        assert_eq!(tuning.write_timeout_ms, 300);
+        assert_eq!(tuning.channel_full_timeout_ms, 150);
+        assert_eq!(tuning.max_buffered_chunks, 8);
+        assert!(!tuning.mirror_log);
+        assert_eq!(tuning.max_concurrent, 64);
+    }
+
+    #[test]
+    fn parses_mirror_tuning_invalid_value_falls_back_to_default() {
+        // An invalid numeric/bool value is logged and replaced by the field
+        // default; the other valid keys still apply.
+        let mut route = make_test_http_route();
+        let mut anns = std::collections::BTreeMap::new();
+        anns.insert(
+            crate::constants::annotations::edgion::MIRROR_CONNECT_TIMEOUT_MS.to_string(),
+            "not-a-number".to_string(),
+        );
+        anns.insert(
+            crate::constants::annotations::edgion::MIRROR_MAX_CONCURRENT.to_string(),
+            "32".to_string(),
+        );
+        route.metadata.annotations = Some(anns);
+        route.preparse();
+        let tuning = route.spec.rules.as_ref().unwrap()[0]
+            .parsed_mirror_tuning
+            .as_ref()
+            .expect("tuning should be parsed");
+        assert_eq!(tuning.connect_timeout_ms, MirrorTuning::default().connect_timeout_ms);
+        assert_eq!(tuning.max_concurrent, 32);
+    }
+
+    #[test]
+    fn mirror_tuning_reaches_resolved_rules() {
+        // Delegation-flattened rules must receive the same annotation copies.
+        let mut route: HTTPRoute = serde_json::from_value(serde_json::json!({
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "HTTPRoute",
+            "metadata": {
+                "name": "parent", "namespace": "infra",
+                "annotations": {"edgion.io/mirror-max-concurrent": "16"}
+            },
+            "spec": {
+                "rules": [{"matches": [{"path": {"type": "PathPrefix", "value": "/api"}}]}]
+            }
+        }))
+        .unwrap();
+        route.spec.resolved_rules = Some(
+            serde_json::from_value(serde_json::json!([{
+                "matches": [{"path": {"type": "PathPrefix", "value": "/api/child"}}]
+            }]))
+            .unwrap(),
+        );
+        route.preparse();
+        let rule = &route.spec.resolved_rules.as_ref().unwrap()[0];
+        assert_eq!(
+            rule.parsed_mirror_tuning.as_ref().map(|t| t.max_concurrent),
+            Some(16),
+            "annotation copies must reach resolved_rules"
+        );
     }
 
     // =========================================================================

@@ -41,13 +41,13 @@ spec:
     credentialRef:
       name: alidns-credentials
       namespace: default
-    propagationTimeout: 180      # Alibaba DNS may need more time
-    propagationCheckInterval: 10
+    propagationTimeout: 180s     # Alibaba DNS may need more time
+    propagationCheckInterval: 10s
 
   renewal:
-    renewBeforeDays: 14
-    checkInterval: 43200          # Check every 12 hours
-    failBackoff: 600              # Wait 10min after failure
+    renewBefore: 336h
+    checkInterval: 12h            # Check every 12 hours
+    failBackoff: 10m              # Wait 10min after failure
 
   storage:
     secretName: aliyun-wildcard-cert

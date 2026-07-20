@@ -12,6 +12,7 @@ use crate::EdgionHttpContext;
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::filters::PluginRunningResult::ErrTerminateRequest;
 use edgion_resources::resources::edgion_plugins::CorsConfig;
+use edgion_resources::resources::http_route::MirrorTuning;
 use edgion_resources::resources::{
     EdgionPlugin, GRPCRouteFilter, GRPCRouteFilterType, HTTPRouteFilter, HTTPRouteFilterType,
 };
@@ -225,22 +226,38 @@ impl PluginRuntime {
 
     /// Build a runtime for a route rule. Assigns ExtensionRef indices for the
     /// per-request resolve cache and records (ns, name) in `ext_ref_keys`.
-    pub fn from_httproute_filters_for_rule(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+    /// `mirror_tuning` carries the route-level `edgion.io/mirror-*` annotation
+    /// values (pre-parsed onto the rule) applied to every RequestMirror filter.
+    pub fn from_httproute_filters_for_rule(
+        filters: &[HTTPRouteFilter],
+        namespace: &str,
+        mirror_tuning: &MirrorTuning,
+    ) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_httproute_filters_inner(filters, namespace, true);
+        runtime.add_from_httproute_filters_inner(filters, namespace, true, mirror_tuning);
         runtime
     }
 
     /// Build a runtime for a backend reference. ExtensionRef filters retain
     /// `index = None` and fall back to direct global store lookup at exec time
     /// (no per-request resolve cache for backend scope yet).
-    pub fn from_httproute_filters_for_backend(filters: &[HTTPRouteFilter], namespace: &str) -> Self {
+    pub fn from_httproute_filters_for_backend(
+        filters: &[HTTPRouteFilter],
+        namespace: &str,
+        mirror_tuning: &MirrorTuning,
+    ) -> Self {
         let mut runtime = Self::new();
-        runtime.add_from_httproute_filters_inner(filters, namespace, false);
+        runtime.add_from_httproute_filters_inner(filters, namespace, false, mirror_tuning);
         runtime
     }
 
-    fn add_from_httproute_filters_inner(&mut self, filters: &[HTTPRouteFilter], namespace: &str, assign_indices: bool) {
+    fn add_from_httproute_filters_inner(
+        &mut self,
+        filters: &[HTTPRouteFilter],
+        namespace: &str,
+        assign_indices: bool,
+        mirror_tuning: &MirrorTuning,
+    ) {
         for filter in filters {
             match filter.filter_type {
                 HTTPRouteFilterType::RequestHeaderModifier => {
@@ -267,6 +284,7 @@ impl PluginRuntime {
                     if let Some(config) = &filter.request_mirror {
                         self.add_request_filter(Box::new(RequestMirrorPlugin::new(
                             config.clone(),
+                            mirror_tuning.clone(),
                             namespace.to_string(),
                         )));
                     }
@@ -864,7 +882,8 @@ impl PluginRuntime {
             }
             EdgionPlugin::UrlRewrite(config) => CreateResult::Ok(Some(Box::new(URLRewriteFilter::new(config.clone())))),
             EdgionPlugin::RequestMirror(config) => CreateResult::Ok(Some(Box::new(RequestMirrorPlugin::new(
-                config.clone(),
+                config.filter.clone(),
+                config.tuning.clone(),
                 namespace.to_string(),
             )))),
             EdgionPlugin::BasicAuth(config) => CreateResult::Ok(Some(Box::new(BasicAuth::new(config)))),
@@ -1744,7 +1763,7 @@ mod ext_ref_index_tests {
     #[test]
     fn rule_scope_assigns_sequential_indices() {
         let filters = vec![make_ext_ref_filter("p1"), make_ext_ref_filter("p2")];
-        let rt = PluginRuntime::from_httproute_filters_for_rule(&filters, "ns1");
+        let rt = PluginRuntime::from_httproute_filters_for_rule(&filters, "ns1", &MirrorTuning::default());
         let keys = rt.ext_ref_keys();
         assert_eq!(keys.len(), 2);
         assert_eq!(keys[0], ("ns1".to_string(), "p1".to_string()));
@@ -1754,7 +1773,7 @@ mod ext_ref_index_tests {
     #[test]
     fn backend_scope_does_not_collect_keys() {
         let filters = vec![make_ext_ref_filter("p1")];
-        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1");
+        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1", &MirrorTuning::default());
         assert!(rt.ext_ref_keys().is_empty());
     }
 
@@ -1773,7 +1792,7 @@ mod ext_ref_index_tests {
             "LBPolicyConsistentHash",
             "header.x-user-id",
         )];
-        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1");
+        let rt = PluginRuntime::from_httproute_filters_for_backend(&filters, "ns1", &MirrorTuning::default());
         assert_eq!(
             rt.request_plugins_count(),
             1,

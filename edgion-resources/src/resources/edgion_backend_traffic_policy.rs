@@ -169,7 +169,7 @@ impl EdgionBackendTrafficPolicySpec {
             }
         }
         if let Some(od) = &self.outlier_detection {
-            if let Some(err) = od.clone().normalize().validate() {
+            if let Some(err) = od.get_validation_error() {
                 errors.push(format!("outlierDetection: {err}"));
             }
         }

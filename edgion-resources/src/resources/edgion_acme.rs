@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 ///   provider: cloudflare
 ///   credentialRef:
 ///     name: cf-api-token
-///   propagationTimeout: 180
+///   propagationTimeout: 180s
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type")]
@@ -58,22 +58,24 @@ pub enum AcmeChallenge {
         ///   - alidns: "access-key-id", "access-key-secret"
         credential_ref: SecretObjectReference,
 
-        /// DNS propagation timeout in seconds (default: 120)
+        /// DNS propagation timeout (GEP-2257 duration, default: "120s")
         #[serde(default = "default_propagation_timeout")]
-        propagation_timeout: u64,
+        #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+        propagation_timeout: String,
 
-        /// DNS propagation check interval in seconds (default: 5)
+        /// DNS propagation check interval (GEP-2257 duration, default: "5s")
         #[serde(default = "default_propagation_check_interval")]
-        propagation_check_interval: u64,
+        #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+        propagation_check_interval: String,
     },
 }
 
-fn default_propagation_timeout() -> u64 {
-    120
+fn default_propagation_timeout() -> String {
+    "120s".to_string()
 }
 
-fn default_propagation_check_interval() -> u64 {
-    5
+fn default_propagation_check_interval() -> String {
+    "5s".to_string()
 }
 
 // ============================================================================
@@ -100,39 +102,43 @@ pub enum AcmeKeyType {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AcmeRenewalConfig {
-    /// Days before certificate expiry to trigger renewal (default: 30)
-    #[serde(default = "default_renew_before_days")]
-    pub renew_before_days: u32,
+    /// Lead time before certificate expiry to trigger renewal
+    /// (GEP-2257 duration, default: "720h" = 30 days)
+    #[serde(default = "default_renew_before")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub renew_before: String,
 
-    /// Interval between renewal checks in seconds (default: 86400 = 24h)
+    /// Interval between renewal checks (GEP-2257 duration, default: "24h")
     #[serde(default = "default_check_interval")]
-    pub check_interval: u64,
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub check_interval: String,
 
-    /// Backoff duration in seconds after a failed renewal attempt (default: 300 = 5min)
+    /// Backoff after a failed renewal attempt (GEP-2257 duration, default: "5m")
     #[serde(default = "default_fail_backoff")]
-    pub fail_backoff: u64,
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub fail_backoff: String,
 }
 
 impl Default for AcmeRenewalConfig {
     fn default() -> Self {
         Self {
-            renew_before_days: default_renew_before_days(),
+            renew_before: default_renew_before(),
             check_interval: default_check_interval(),
             fail_backoff: default_fail_backoff(),
         }
     }
 }
 
-fn default_renew_before_days() -> u32 {
-    30
+fn default_renew_before() -> String {
+    "720h".to_string()
 }
 
-fn default_check_interval() -> u64 {
-    86400
+fn default_check_interval() -> String {
+    "24h".to_string()
 }
 
-fn default_fail_backoff() -> u64 {
-    300
+fn default_fail_backoff() -> String {
+    "5m".to_string()
 }
 
 // ============================================================================
@@ -458,7 +464,7 @@ spec:
         assert!(acme.is_http01());
         assert!(!acme.has_wildcard_domains());
         assert_eq!(acme.spec.server, "https://acme-v02.api.letsencrypt.org/directory");
-        assert_eq!(acme.spec.renewal.renew_before_days, 30);
+        assert_eq!(acme.spec.renewal.renew_before, "720h");
     }
 
     #[test]
@@ -483,10 +489,10 @@ spec:
     credentialRef:
       name: cf-api-token
       namespace: default
-    propagationTimeout: 180
+    propagationTimeout: 180s
   renewal:
-    renewBeforeDays: 14
-    checkInterval: 43200
+    renewBefore: 336h
+    checkInterval: 12h
   storage:
     secretName: wildcard-cert
     secretNamespace: cert-store
@@ -499,8 +505,8 @@ spec:
         assert!(acme.is_dns01());
         assert!(acme.has_wildcard_domains());
         assert_eq!(acme.spec.key_type, AcmeKeyType::EcdsaP384);
-        assert_eq!(acme.spec.renewal.renew_before_days, 14);
-        assert_eq!(acme.spec.renewal.check_interval, 43200);
+        assert_eq!(acme.spec.renewal.renew_before, "336h");
+        assert_eq!(acme.spec.renewal.check_interval, "12h");
 
         match &acme.spec.challenge {
             AcmeChallenge::Dns01 {
@@ -509,7 +515,7 @@ spec:
                 ..
             } => {
                 assert_eq!(provider, "cloudflare");
-                assert_eq!(*propagation_timeout, 180);
+                assert_eq!(propagation_timeout, "180s");
             }
             other => panic!("expected Dns01 variant, got {:?}", other),
         }
@@ -576,9 +582,9 @@ spec:
         let acme: EdgionAcme = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(acme.spec.server, "https://acme-v02.api.letsencrypt.org/directory");
         assert_eq!(acme.spec.key_type, AcmeKeyType::EcdsaP256);
-        assert_eq!(acme.spec.renewal.renew_before_days, 30);
-        assert_eq!(acme.spec.renewal.check_interval, 86400);
-        assert_eq!(acme.spec.renewal.fail_backoff, 300);
+        assert_eq!(acme.spec.renewal.renew_before, "720h");
+        assert_eq!(acme.spec.renewal.check_interval, "24h");
+        assert_eq!(acme.spec.renewal.fail_backoff, "5m");
         assert!(acme.spec.auto_edgion_tls.enabled);
         assert!(acme.status.is_none());
         assert!(acme.spec.external_account_binding.is_none());

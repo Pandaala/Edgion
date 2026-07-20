@@ -106,8 +106,8 @@ Controller 将 token 发布到 `status.activeChallenges`；Gateway 读取后仅�
 |------|------|--------|------|
 | `provider` | String | **必填** | DNS 提供商。可选值：`cloudflare` \| `alidns` |
 | `credentialRef` | Object | **必填** | 持有提供商 API 凭据的 Secret 引用 |
-| `propagationTimeout` | Integer | `120` | 等待 TXT 记录传播的最长时间（秒） |
-| `propagationCheckInterval` | Integer | `5` | 传播检查间隔（秒） |
+| `propagationTimeout` | Duration | `120s` | 等待 TXT 记录传播的最长时间（GEP-2257 时长） |
+| `propagationCheckInterval` | Duration | `5s` | 传播检查间隔（GEP-2257 时长） |
 
 Controller 通过提供商 API 创建 `_acme-challenge.<domain>` TXT 记录，等待传播后请求 ACME 验证，验证后删除记录。提供商凭据 Secret 键：
 
@@ -118,9 +118,9 @@ Controller 通过提供商 API 创建 `_acme-challenge.<domain>` TXT 记录，�
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `renewal.renewBeforeDays` | Integer | `30` | 在证书到期前多少天开始续期 |
-| `renewal.checkInterval` | Integer | `86400` | 续期检查间隔（秒，默认 24h） |
-| `renewal.failBackoff` | Integer | `300` | 失败后重试延迟的基数（秒）；每次连续失败乘以 4（`failBackoff * 4^attempt`，如 300、1200、4800、19200、76800）。5 次连续失败后资源保持 `Failed` 状态，停止重试，直到编辑 CRD 或[手动触发](#手动触发)（重置计数器）；成功也会重置计数器 |
+| `renewal.renewBefore` | Duration | `720h` | 在证书到期前多久开始续期（720h = 30 天） |
+| `renewal.checkInterval` | Duration | `24h` | 续期检查间隔 |
+| `renewal.failBackoff` | Duration | `5m` | 失败后重试延迟的基数；每次连续失败乘以 4（`failBackoff * 4^attempt`，如 5m、20m、80m、约 5.3h、约 21.3h）。5 次连续失败后资源保持 `Failed` 状态，停止重试，直到编辑 CRD 或[手动触发](#手动触发)（重置计数器）；成功也会重置计数器 |
 
 ### 外部账号绑定
 
@@ -190,10 +190,10 @@ spec:
     credentialRef:
       name: cloudflare-api-token
       namespace: production
-    propagationTimeout: 180
+    propagationTimeout: 180s
   renewal:
-    renewBeforeDays: 14
-    checkInterval: 43200
+    renewBefore: 336h
+    checkInterval: 12h
   storage:
     secretName: wildcard-example-com-tls
   autoEdgionTls:
@@ -439,8 +439,8 @@ ACME 服务会访问 `http://<domain>/.well-known/acme-challenge/<token>`。Cont
 |------|------|------|--------|------|
 | `provider` | String | **是** | - | 支持：`cloudflare`、`alidns`；测试环境可用 `pebble`（配合 Pebble + challtestsrv）。 |
 | `credentialRef` | object | **是** | - | 存 DNS API 凭据的 Secret 引用。 |
-| `propagationTimeout` | int | 否 | 120 | 等待 DNS 传播的最长时间（秒）。 |
-| `propagationCheckInterval` | int | 否 | 5 | 传播检查间隔（秒）。 |
+| `propagationTimeout` | Duration | 否 | `120s` | 等待 DNS 传播的最长时间（GEP-2257 时长）。 |
+| `propagationCheckInterval` | Duration | 否 | `5s` | 传播检查间隔（GEP-2257 时长）。 |
 
 Controller 根据 ACME 返回的 TXT 值，调用 DNS 提供方 API 创建 `_acme-challenge.<domain>` 的 TXT 记录，等待传播后再通知 ACME 校验；通过后删除 TXT。通配符域名必须使用 DNS-01。
 
@@ -452,9 +452,9 @@ Controller 根据 ACME 返回的 TXT 值，调用 DNS 提供方 API 创建 `_acm
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `renewBeforeDays` | int | 30 | 在证书到期前多少天开始续期。 |
-| `checkInterval` | int | 86400 | 定期检查续期需求的间隔（秒），例如 24 小时。 |
-| `failBackoff` | int | 300 | 失败后首次重试的延迟基数（秒）；实际采用指数退避（300、1200、4800…），最多重试 5 次。 |
+| `renewBefore` | Duration | `720h` | 在证书到期前多久开始续期（720h = 30 天）。 |
+| `checkInterval` | Duration | `24h` | 定期检查续期需求的间隔。 |
+| `failBackoff` | Duration | `5m` | 失败后首次重试的延迟基数；实际采用指数退避（5m、20m、80m…），最多重试 5 次。 |
 
 ### 证书存储：storage
 

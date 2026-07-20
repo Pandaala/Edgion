@@ -44,6 +44,33 @@ pub mod edgion {
     /// new spec field.
     pub const RETRY_NON_IDEMPOTENT: &str = "edgion.io/retry-non-idempotent";
 
+    /// RequestMirror tuning annotations on HTTPRoute.metadata.annotations,
+    /// applied to every RequestMirror filter under the route. These knobs live
+    /// in annotations rather than on `HTTPRequestMirrorFilter` because the
+    /// vendored Gateway API CRD is a structural schema that silently prunes
+    /// undeclared filter fields in K8s conf-center mode. Invalid values are
+    /// logged at INFO and fall back to the field default.
+    ///
+    /// Connection timeout for the mirror backend, in milliseconds
+    /// (default: 1000).
+    pub const MIRROR_CONNECT_TIMEOUT_MS: &str = "edgion.io/mirror-connect-timeout-ms";
+    /// Write/send timeout for the mirror backend, in milliseconds
+    /// (default: 1000).
+    pub const MIRROR_WRITE_TIMEOUT_MS: &str = "edgion.io/mirror-write-timeout-ms";
+    /// Max milliseconds to wait for channel space when the mirror body channel
+    /// is full before abandoning the mirror (default: 0 = abandon immediately;
+    /// the gateway clamps values above 1000).
+    pub const MIRROR_CHANNEL_FULL_TIMEOUT_MS: &str = "edgion.io/mirror-channel-full-timeout-ms";
+    /// Max number of body chunks buffered for the mirror when it is slower
+    /// than the main request (default: 5; 0 is treated as 5 by the gateway).
+    pub const MIRROR_MAX_BUFFERED_CHUNKS: &str = "edgion.io/mirror-max-buffered-chunks";
+    /// Whether the mirror emits a dedicated mirror-log line: "true" / "false"
+    /// (default: true).
+    pub const MIRROR_LOG: &str = "edgion.io/mirror-log";
+    /// Max concurrent mirror tasks per gateway process (default: 1024;
+    /// 0 is treated as 1024 by the gateway).
+    pub const MIRROR_MAX_CONCURRENT: &str = "edgion.io/mirror-max-concurrent";
+
     /// Idle seconds before the first TCP keepalive probe on L4 upstream
     /// connections. Presence of this annotation (parsed to a positive integer)
     /// is the enablement trigger for upstream keepalive; absent = disabled.

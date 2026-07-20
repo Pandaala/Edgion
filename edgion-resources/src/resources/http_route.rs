@@ -161,6 +161,18 @@ pub struct HTTPRouteRule {
     #[serde(skip)]
     #[schemars(skip)]
     pub parsed_allow_non_idempotent_retry: Option<bool>,
+
+    /// Pre-parsed `edgion.io/mirror-*` tuning annotations from parent
+    /// HTTPRoute.metadata, applied to every RequestMirror filter under this
+    /// route. `None` — no mirror annotation present (defaults apply).
+    ///
+    /// Lives in annotations (not on `HTTPRequestMirrorFilter`) because the
+    /// vendored Gateway API CRD silently prunes undeclared filter fields in
+    /// K8s conf-center mode. Parsed in `http_route_preparse.rs` at load time
+    /// and copied to every rule under that route.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub parsed_mirror_tuning: Option<MirrorTuning>,
 }
 
 impl Clone for HTTPRouteRule {
@@ -177,6 +189,7 @@ impl Clone for HTTPRouteRule {
             parsed_retry: self.parsed_retry.clone(),
             parsed_forward_raw_path: self.parsed_forward_raw_path,
             parsed_allow_non_idempotent_retry: self.parsed_allow_non_idempotent_retry,
+            parsed_mirror_tuning: self.parsed_mirror_tuning.clone(),
         }
     }
 }
@@ -511,7 +524,15 @@ pub enum HTTPPathModifierType {
     ReplacePrefixMatch,
 }
 
-/// HTTPRequestMirrorFilter defines configuration for the RequestMirror filter
+/// HTTPRequestMirrorFilter defines configuration for the RequestMirror filter.
+///
+/// Contains ONLY the fields declared by the vendored Gateway API standard CRD
+/// (`backendRef`, `fraction`, `percent`). Do NOT add Edgion extension fields
+/// here: the vendored CRD is a structural schema, so in K8s conf-center mode
+/// the API server silently prunes any undeclared field — the extension becomes
+/// a no-op with no admission error. Mirror tuning knobs live in
+/// [`MirrorTuning`], carried via `edgion.io/mirror-*` route annotations
+/// (HTTPRoute path) or inline plugin config (EdgionPlugins path).
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRequestMirrorFilter {
@@ -523,11 +544,24 @@ pub struct HTTPRequestMirrorFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fraction: Option<Fraction>,
 
-    /// Percentage of requests to mirror (0-100). Gateway API v1.5 feature.
-    /// Accepts both "percent" (Gateway API spec field name) and "percentage" (internal alias).
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "percent")]
-    pub percentage: Option<i32>,
+    /// Percent of requests to mirror (0-100). Gateway API v1.5 field name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub percent: Option<i32>,
+}
 
+/// Edgion-specific tuning knobs for the RequestMirror filter.
+///
+/// Kept out of [`HTTPRequestMirrorFilter`] because the vendored Gateway API
+/// CRD would silently prune these fields in K8s conf-center mode (structural
+/// schema). Sources:
+/// - HTTPRoute path: `edgion.io/mirror-*` annotations, pre-parsed in
+///   `http_route_preparse.rs` and copied onto every rule
+///   (`HTTPRouteRule.parsed_mirror_tuning`).
+/// - EdgionPlugins path: inline fields of the `RequestMirror` plugin config
+///   (that CRD preserves unknown fields, so no pruning applies).
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MirrorTuning {
     /// Connection timeout for mirror backend in milliseconds.
     #[serde(default = "default_mirror_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
@@ -560,6 +594,19 @@ pub struct HTTPRequestMirrorFilter {
     /// without immediately discarding valuable traffic.
     #[serde(default)]
     pub channel_full_timeout_ms: u64,
+}
+
+impl Default for MirrorTuning {
+    fn default() -> Self {
+        Self {
+            connect_timeout_ms: default_mirror_connect_timeout_ms(),
+            write_timeout_ms: default_mirror_write_timeout_ms(),
+            max_buffered_chunks: default_mirror_max_buffered_chunks(),
+            mirror_log: default_mirror_log_enabled(),
+            max_concurrent: default_mirror_max_concurrent(),
+            channel_full_timeout_ms: 0,
+        }
+    }
 }
 
 fn default_mirror_connect_timeout_ms() -> u64 {
