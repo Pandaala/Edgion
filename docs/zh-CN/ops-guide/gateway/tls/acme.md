@@ -106,9 +106,10 @@ Controller 将 token 发布到 `status.activeChallenges`；Gateway 读取后仅�
 |------|------|--------|------|
 | `provider` | String | **必填** | DNS 提供商。可选值：`cloudflare` \| `alidns` |
 | `credentialRef` | Object | **必填** | 持有提供商 API 凭据的 Secret 引用 |
-| `propagationTimeout` | Duration | `120s` | 等待 TXT 记录传播的固定时长，等待结束后才发起 ACME 校验（GEP-2257 时长） |
+| `propagationTimeout` | Duration | `120s` | DNS 传播等待的时间上限（GEP-2257 时长）。Controller 轮询该 zone 的权威 DNS 服务器，全部 TXT 记录可见后立即发起校验；到期仍确认缺失则进入 `failBackoff` 重试路径 |
+| `propagationCheckInterval` | Duration | `5s` | 传播检查的轮询间隔（GEP-2257 时长） |
 
-Controller 通过提供商 API 创建 `_acme-challenge.<domain>` TXT 记录，等待传播后请求 ACME 验证，验证后删除记录。提供商凭据 Secret 键：
+Controller 通过提供商 API 创建 `_acme-challenge.<domain>` TXT 记录，然后轮询该 zone 的权威 DNS 服务器直到记录可见（递归解析器只用于发现权威服务器，避免负缓存造成的假阴性），随后请求 ACME 验证，验证后删除记录。若权威服务器完全不可达（例如出方向 DNS 被防火墙拦截），Controller 会等满 `propagationTimeout` 并记录告警后乐观放行——等价于旧版固定等待行为。超时在轮询轮次之间判定，一轮挂起的 DNS 查询可能略微超出该上限。提供商凭据 Secret 键：
 
 - **Cloudflare**——`api-token`（需要 Zone.DNS:Edit 权限）
 - **阿里云 DNS（alidns）**——`access-key-id` 和 `access-key-secret`
@@ -339,7 +340,7 @@ curl -X POST "http://<controller-admin>:12101/api/v1/services/acme/<namespace>/<
 ### 常见问题
 
 1. **HTTP-01 失败**——确认域名已解析到 Gateway 且其 HTTP 端口（通常 80）可从公网访问。Gateway 必须通过 List-Watch 接收到已发布的 token 并响应 `/.well-known/acme-challenge/<token>`。
-2. **DNS-01 超时**——增大 `propagationTimeout`；确认 `credentialRef` Secret 键正确且提供商 API 可访问。
+2. **DNS-01 超时**——增大 `propagationTimeout`（设置宽松值没有代价：记录可见后轮询立即结束）；确认 `credentialRef` Secret 键正确且提供商 API 可访问。"propagation not confirmed" 失败表示到期时权威 DNS 服务器仍未提供 TXT 记录。
 3. **长期处于 `Failed`**——查看 `status.lastFailureReason`，修复原因后使用[手动触发](#手动触发)重新发起并重置重试计数器。
 4. **通配符请求被拒绝**——通配符必须使用 `challenge.type: dns-01`，HTTP-01 无法验证通配符。
 5. **被 ACME 服务器限速**——测试时切换到 staging 目录；Let's Encrypt 生产环境有严格的每域名限制。
@@ -438,9 +439,10 @@ ACME 服务会访问 `http://<domain>/.well-known/acme-challenge/<token>`。Cont
 |------|------|------|--------|------|
 | `provider` | String | **是** | - | 支持：`cloudflare`、`alidns`；测试环境可用 `pebble`（配合 Pebble + challtestsrv）。 |
 | `credentialRef` | object | **是** | - | 存 DNS API 凭据的 Secret 引用。 |
-| `propagationTimeout` | Duration | 否 | `120s` | 等待 DNS 传播的固定时长，等待结束后才发起 ACME 校验（GEP-2257 时长）。 |
+| `propagationTimeout` | Duration | 否 | `120s` | DNS 传播等待的时间上限（GEP-2257 时长），记录可见后立即发起校验。 |
+| `propagationCheckInterval` | Duration | 否 | `5s` | 传播检查的轮询间隔（GEP-2257 时长）。 |
 
-Controller 根据 ACME 返回的 TXT 值，调用 DNS 提供方 API 创建 `_acme-challenge.<domain>` 的 TXT 记录，等待传播后再通知 ACME 校验；通过后删除 TXT。通配符域名必须使用 DNS-01。
+Controller 根据 ACME 返回的 TXT 值，调用 DNS 提供方 API 创建 `_acme-challenge.<domain>` 的 TXT 记录，轮询权威 DNS 服务器确认记录可见后再通知 ACME 校验；通过后删除 TXT。通配符域名必须使用 DNS-01。
 
 **Cloudflare**：Secret 中需提供 `api-token`（具备 Zone.DNS:Edit 权限）。
 

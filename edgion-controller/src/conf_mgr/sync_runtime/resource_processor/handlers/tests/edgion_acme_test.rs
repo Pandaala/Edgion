@@ -418,10 +418,13 @@ async fn test_validate_rejects_invalid_gep2257_durations() {
     acme.spec.renewal.check_interval = "86400".to_string();
     acme.spec.renewal.fail_backoff = "bogus".to_string();
     if let AcmeChallenge::Dns01 {
-        propagation_timeout, ..
+        propagation_timeout,
+        propagation_check_interval,
+        ..
     } = &mut acme.spec.challenge
     {
         *propagation_timeout = "120".to_string();
+        *propagation_check_interval = "5".to_string();
     }
     let errors = handler.validate(&acme, &ctx);
     for field in [
@@ -429,6 +432,7 @@ async fn test_validate_rejects_invalid_gep2257_durations() {
         "renewal.checkInterval",
         "renewal.failBackoff",
         "challenge.propagationTimeout",
+        "challenge.propagationCheckInterval",
     ] {
         assert!(
             errors.iter().any(|e| e.contains(field)),
@@ -472,6 +476,7 @@ fn make_acme_dns01(
                     namespace: dns_secret_ns.map(|s| s.to_string()),
                 },
                 propagation_timeout: "120s".to_string(),
+                propagation_check_interval: "5s".to_string(),
             },
             renewal: Default::default(),
             external_account_binding: None,

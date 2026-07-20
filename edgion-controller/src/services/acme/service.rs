@@ -33,7 +33,8 @@ use tokio::sync::mpsc;
 use zeroize::Zeroizing;
 
 use super::acme_client::{AcmeCertificateResult, AcmeClient};
-use super::dns_provider::create_dns_provider;
+use super::dns_provider::{create_dns_provider, DnsProvider};
+use super::propagation;
 use super::secret_io::{
     account_credentials_from_json, create_account_secret, extract_account_json_string,
     patch_account_key_into_existing_secret,
@@ -804,6 +805,7 @@ async fn execute_dns01_flow(
         provider,
         credential_ref,
         propagation_timeout,
+        propagation_check_interval,
         ..
     } = &acme.spec.challenge
     else {
@@ -852,18 +854,66 @@ async fn execute_dns01_flow(
     }
 
     // Phase 3: Wait for DNS propagation before notifying ACME server.
-    // A single fixed wait of `propagation_timeout` (default "120s") — there is no
-    // propagation polling yet, so the "timeout" is spent in full on every issuance.
-    // DNS TXT records can take time to propagate globally; waiting too briefly causes validation failure.
-    let wait = spec_duration_or(propagation_timeout, "propagationTimeout", Duration::from_secs(120))
+    // Poll the zone's authoritative nameservers for the challenge TXT records
+    // and activate as soon as every record is visible; `propagation_timeout`
+    // is a true upper bound. On expiry with a record definitively observed
+    // missing, fail into the retry/backoff path (activating anyway would burn
+    // an ACME validation attempt); if the check never completed at all (e.g.
+    // firewalled DNS egress), degrade to the legacy fixed wait: WARN and
+    // proceed optimistically.
+    let timeout = spec_duration_or(propagation_timeout, "propagationTimeout", Duration::from_secs(120))
         .max(Duration::from_secs(10));
+    let interval = spec_duration_or(
+        propagation_check_interval,
+        "propagationCheckInterval",
+        Duration::from_secs(5),
+    )
+    .max(Duration::from_secs(1));
     tracing::info!(
         component = "acme_service",
         name = %name,
-        wait_secs = wait.as_secs(),
-        "Waiting for DNS propagation before activating challenges"
+        timeout_secs = timeout.as_secs(),
+        interval_secs = interval.as_secs(),
+        "Polling DNS propagation before activating challenges"
     );
-    tokio::time::sleep(wait).await;
+    let txt_records: Vec<(String, String)> = created_records
+        .iter()
+        .map(|(domain, digest)| (propagation::challenge_txt_fqdn(domain), digest.clone()))
+        .collect();
+    let poll_start = std::time::Instant::now();
+    let outcome = propagation::poll_propagation(&txt_records, interval, timeout, |fqdn, expected| async move {
+        edgion_common::dns::txt_probe::check_txt_propagation(&fqdn, &expected, propagation::CHECK_ROUND_BUDGET).await
+    })
+    .await;
+    match outcome {
+        propagation::PropagationOutcome::Propagated => {
+            tracing::info!(
+                component = "acme_service",
+                name = %name,
+                elapsed_secs = poll_start.elapsed().as_secs(),
+                "DNS propagation confirmed on authoritative nameservers"
+            );
+        }
+        propagation::PropagationOutcome::TimedOutConfirmedMissing => {
+            cleanup_txt_records(dns_provider.as_ref(), &created_records).await;
+            anyhow::bail!(
+                "DNS propagation not confirmed within propagationTimeout ({}s): \
+                 at least one challenge TXT record was observed missing on the \
+                 zone's authoritative nameservers and never confirmed present",
+                timeout.as_secs()
+            );
+        }
+        propagation::PropagationOutcome::TimedOutUnverified => {
+            tracing::warn!(
+                component = "acme_service",
+                name = %name,
+                timeout_secs = timeout.as_secs(),
+                "DNS propagation could not be verified (authoritative nameservers \
+                 unreachable from this controller); proceeding optimistically after \
+                 the full propagationTimeout"
+            );
+        }
+    }
 
     // Phase 4: NOW tell the ACME server to start validation
     // (DNS records have been created and had time to propagate)
@@ -883,11 +933,17 @@ async fn execute_dns01_flow(
         .complete_dns01_order(order_ctx, &acme.spec.domains, &acme.spec.key_type)
         .await;
 
-    // Phase 6: Clean up DNS records (even if order failed). Cleanup is
-    // best-effort and non-fatal, but still bounded by the same controller-level
-    // timeout so a hung removal call cannot keep this task alive after the order
-    // has otherwise finished.
-    for (domain, value) in &created_records {
+    // Phase 6: Clean up DNS records (even if order failed).
+    cleanup_txt_records(dns_provider.as_ref(), &created_records).await;
+
+    cert_result.context("Failed to complete DNS-01 ACME order")
+}
+
+/// Best-effort, non-fatal removal of challenge TXT records. Each removal is
+/// bounded by the controller-level timeout so a hung provider call cannot
+/// keep the ACME flow task alive after the order has otherwise finished.
+async fn cleanup_txt_records(dns_provider: &dyn DnsProvider, created_records: &[(String, String)]) {
+    for (domain, value) in created_records {
         match tokio::time::timeout(DNS_OP_TIMEOUT, dns_provider.remove_txt_record(domain, value)).await {
             Ok(Ok(())) => {}
             Ok(Err(e)) => {
@@ -908,8 +964,6 @@ async fn execute_dns01_flow(
             }
         }
     }
-
-    cert_result.context("Failed to complete DNS-01 ACME order")
 }
 
 /// Fetch DNS credentials from the K8s Secret referenced by the EdgionAcme spec.

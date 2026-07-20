@@ -8,6 +8,7 @@ pub mod httpdns;
 pub mod resolver_select;
 pub mod standard;
 pub mod system;
+pub mod txt_probe;
 
 use std::net::IpAddr;
 

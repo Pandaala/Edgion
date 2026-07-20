@@ -106,9 +106,10 @@ The Controller publishes the token in `status.activeChallenges`; the Gateway rea
 |-----------|------|---------|-------------|
 | `provider` | String | **Required** | DNS provider. Allowed values: `cloudflare` \| `alidns` |
 | `credentialRef` | Object | **Required** | Secret holding the provider's API credentials |
-| `propagationTimeout` | Duration | `120s` | Fixed wait for the TXT records to propagate before validation is requested (GEP-2257 duration) |
+| `propagationTimeout` | Duration | `120s` | Upper bound on the DNS propagation wait (GEP-2257 duration). The Controller polls the zone's authoritative nameservers and requests validation as soon as all TXT records are visible; if the deadline expires with a record still confirmed missing, the flow fails into the `failBackoff` retry path |
+| `propagationCheckInterval` | Duration | `5s` | Poll cadence for the propagation check (GEP-2257 duration) |
 
-The Controller creates a `_acme-challenge.<domain>` TXT record via the provider API, waits for propagation, asks ACME to validate, then deletes the record. Provider credential Secret keys:
+The Controller creates a `_acme-challenge.<domain>` TXT record via the provider API, polls the zone's authoritative nameservers until the record is visible (recursive resolution is used only to discover the authoritative servers, avoiding negative-cache false negatives), asks ACME to validate, then deletes the record. If the authoritative nameservers cannot be reached at all (e.g. outbound DNS is firewalled), the Controller waits out the full `propagationTimeout`, logs a warning, and proceeds optimistically — equivalent to the previous fixed-wait behavior. The deadline is evaluated between poll rounds, so a round of hanging DNS queries may run slightly past it. Provider credential Secret keys:
 
 - **Cloudflare** — `api-token` (with Zone.DNS:Edit permission)
 - **Alibaba Cloud DNS (`alidns`)** — `access-key-id` and `access-key-secret`
@@ -339,7 +340,7 @@ If the ACME service is not running on the contacted replica (for example one tha
 ### Common issues
 
 1. **HTTP-01 fails** — confirm the domain resolves to the Gateway and its HTTP port (typically 80) is reachable from the internet. The Gateway must receive the published token via List-Watch and answer `/.well-known/acme-challenge/<token>`.
-2. **DNS-01 times out** — increase `propagationTimeout`; verify the `credentialRef` Secret keys are correct and the provider API is reachable.
+2. **DNS-01 times out** — increase `propagationTimeout` (a generous value is cheap: the poll loop exits as soon as the records are visible); verify the `credentialRef` Secret keys are correct and the provider API is reachable. A "propagation not confirmed" failure means the zone's authoritative nameservers still did not serve the TXT record at the deadline.
 3. **Stuck in `Failed`** — read `status.lastFailureReason`, fix the cause, then use [Manual trigger](#manual-trigger) to re-run and reset the retry counter.
 4. **Wildcard request rejected** — wildcards require `challenge.type: dns-01`; HTTP-01 cannot validate them.
 5. **Rate-limited by the ACME server** — switch to the staging directory while testing; production Let's Encrypt enforces strict per-domain limits.

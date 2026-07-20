@@ -58,15 +58,30 @@ pub enum AcmeChallenge {
         ///   - alidns: "access-key-id", "access-key-secret"
         credential_ref: SecretObjectReference,
 
-        /// DNS propagation timeout (GEP-2257 duration, default: "120s")
+        /// Upper bound on the DNS propagation wait (GEP-2257 duration,
+        /// default: "120s"). The controller polls the zone's authoritative
+        /// nameservers for the challenge TXT records and activates the ACME
+        /// challenges as soon as all records are visible; this timeout caps
+        /// the poll loop (evaluated between check rounds — an in-flight
+        /// round may run slightly past it), it is not a fixed wait.
         #[serde(default = "default_propagation_timeout")]
         #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
         propagation_timeout: String,
+
+        /// Poll cadence for the DNS propagation check (GEP-2257 duration,
+        /// default: "5s").
+        #[serde(default = "default_propagation_check_interval")]
+        #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+        propagation_check_interval: String,
     },
 }
 
 fn default_propagation_timeout() -> String {
     "120s".to_string()
+}
+
+fn default_propagation_check_interval() -> String {
+    "5s".to_string()
 }
 
 // ============================================================================

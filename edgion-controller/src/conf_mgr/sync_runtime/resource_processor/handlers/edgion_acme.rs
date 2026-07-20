@@ -102,6 +102,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
         if let AcmeChallenge::Dns01 {
             provider,
             propagation_timeout,
+            propagation_check_interval,
             ..
         } = &acme.spec.challenge
         {
@@ -115,6 +116,7 @@ impl ProcessorHandler<EdgionAcme> for EdgionAcmeHandler {
                 }
             }
             duration_fields.push(("challenge.propagationTimeout", propagation_timeout));
+            duration_fields.push(("challenge.propagationCheckInterval", propagation_check_interval));
         }
 
         for (field, value) in duration_fields {

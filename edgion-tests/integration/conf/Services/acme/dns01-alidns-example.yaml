@@ -41,7 +41,8 @@ spec:
     credentialRef:
       name: alidns-credentials
       namespace: default
-    propagationTimeout: 180s     # Alibaba DNS may need more time
+    propagationTimeout: 180s     # upper bound — Alibaba DNS may need more time; polling exits early
+    propagationCheckInterval: 5s # authoritative-NS poll cadence
 
   renewal:
     renewBefore: 336h
