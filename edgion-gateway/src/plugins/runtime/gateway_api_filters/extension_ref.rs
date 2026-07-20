@@ -181,6 +181,13 @@ impl ExtensionRefFilter {
         match stage {
             PluginRunningStage::UpstreamResponseFilter => {
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
+                    // Install this inner filter's dye plan before invocation,
+                    // mirroring `PluginRuntime::run_upstream_response_plugins_sync`
+                    // — an ExtensionRef bundle iterates its nested runtime's
+                    // filters directly rather than through that loop, so this
+                    // call site must do it itself or the bundle's dye rules
+                    // never render (response-stage: no strip).
+                    session.install_dye_plan(plugin.dye_plan().cloned());
                     let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
@@ -235,6 +242,15 @@ impl ExtensionRefFilter {
         match stage {
             PluginRunningStage::Request => {
                 for plugin in plugin_runtime.request_plugins_iter() {
+                    // Install this inner filter's dye plan + run the
+                    // request-direction anti-spoof strip before invocation,
+                    // mirroring `PluginRuntime::run_request_plugins` — an
+                    // ExtensionRef bundle iterates its nested runtime's
+                    // filters directly rather than through that loop, so this
+                    // call site must do it itself or the bundle's dye rules
+                    // (and the strip) never run.
+                    session.install_dye_plan(plugin.dye_plan().cloned());
+                    session.strip_request_dye_once();
                     let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
                     let result = plugin.run_request(session, &mut inner_log).await;
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
@@ -247,6 +263,10 @@ impl ExtensionRefFilter {
             }
             PluginRunningStage::UpstreamResponse => {
                 for plugin in plugin_runtime.upstream_response_async_plugins_iter() {
+                    // See the Request arm above: mirrors
+                    // `PluginRuntime::run_upstream_response_plugins_async`
+                    // (response-stage: no strip).
+                    session.install_dye_plan(plugin.dye_plan().cloned());
                     let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
                     let result = plugin.run_upstream_response(session, &mut inner_log).await;
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
@@ -259,6 +279,10 @@ impl ExtensionRefFilter {
             }
             PluginRunningStage::UpstreamResponseFilter => {
                 for plugin in plugin_runtime.upstream_response_plugins_iter() {
+                    // See the Request arm above: mirrors
+                    // `PluginRuntime::run_upstream_response_plugins_sync`
+                    // (response-stage: no strip).
+                    session.install_dye_plan(plugin.dye_plan().cloned());
                     let mut inner_log = PluginLog::with_alias(plugin.name(), plugin.alias());
                     let result = plugin.run_upstream_response_filter(session, &mut inner_log);
                     session.push_to_edgion_plugins_log(&log_token, inner_log);
@@ -286,6 +310,10 @@ impl ExtensionRefFilter {
 
         let mut max_delay: Option<std::time::Duration> = None;
         for plugin in plugin_runtime.upstream_response_body_plugins_iter() {
+            // See `run_extension_async`'s Request arm: mirrors
+            // `PluginRuntime::run_upstream_response_body_plugins` (response-stage:
+            // no strip; no PluginLog here either, matching that loop).
+            session.install_dye_plan(plugin.dye_plan().cloned());
             if let Some(d) = plugin.run_upstream_response_body_filter(body, end_of_stream, session) {
                 max_delay = Some(match max_delay {
                     Some(current) => current.max(d),

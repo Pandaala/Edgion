@@ -1,0 +1,32 @@
+# Fail-open dye: RateLimitRedis is Redis-unreachable + onRedisFailure: Allow,
+# so the request proceeds to a normal 200 upstream response, which must
+# carry the appended `fail-open` outcome header (queued during the request
+# stage, applied when the response headers are built).
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: rlr-dye-fail-open
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: RateLimitRedis
+      dye:
+        response:
+          - name: X-Edgion-Outcome
+            on: [fail-open]
+      config:
+        redisRef: "default/redis-not-found"
+        policies:
+          - rate: 3
+            interval: "10s"
+            algorithm: SlidingWindow
+        key:
+          - type: header
+            name: "X-Rate-Key"
+        onMissingKey: Allow
+        onRedisFailure: Allow
+        rejectStatus: 429
+        rejectMessage: "Redis unavailable (dye fail-open)"
+        showLimitHeaders: true
+        keyPrefix: "edgion:it:rlr:dye-fail-open:"

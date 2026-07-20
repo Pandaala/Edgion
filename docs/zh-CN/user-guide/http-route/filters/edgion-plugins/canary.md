@@ -27,6 +27,9 @@ spec:
   requestPlugins:
     - enable: true
       type: Canary
+      dye:
+        request:
+          - name: X-Canary-Active
       config:
         enable: true
         activeProfile: stable
@@ -36,9 +39,6 @@ spec:
           canary:
             name: canary-app-v2
         onInvalid: reject
-        dyeHeaders:
-          request:
-            - name: X-Canary-Active
 ```
 
 ```yaml
@@ -81,7 +81,12 @@ spec:
 | `profiles[].namespace` | String | 无 | 目标 `backendRef` 的可选命名空间。不设置时仅按名称匹配；设置时名称和命名空间都需匹配。 |
 | `activeProfileRef` | EdgionConfigDataRef | 无 | 可选引用，指向一个 `Selector` 类型的 `EdgionConfigData`，在运行时提供当前生效的 profile 名。 |
 | `onInvalid` | Enum | `Reject` | 解析出的 profile 对应的 `backendRef` 不在路由的 `backendRefs` 中时（profile 过期/配置错误）的行为。允许值：`Reject`（403）/ `Fallback`（回落到路由自身基于权重的 `backendRefs` 选择）。 |
-| `dyeHeaders` | Object | 无 | 成功解析出 profile 后应用的流量染色（traffic-tagging）请求头/响应头。`request`/`response` 为 `{name, value}` 条目列表；不设置 `value` 时携带已解析的 profile 名。详见下方[染色请求头](#染色请求头)。 |
+
+`dye` 是**条目级（entry-level）**字段——与 `type`/`config`/`enable` 同级，不属于 `config` 的成员：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（`on: [success, fallback, reject]`）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带已解析的 profile 名。完整参考见 [染色（Dye）](./dye.md)，Canary 特有的部分见下方[染色请求头](#染色请求头)。 |
 
 ### EdgionConfigDataRef（用于 `activeProfileRef`）
 
@@ -140,6 +145,9 @@ spec:
   requestPlugins:
     - enable: true
       type: Canary
+      dye:
+        request:
+          - name: X-Canary-Active
       config:
         enable: true
         activeProfile: stable
@@ -152,9 +160,6 @@ spec:
           name: canary-selector
           namespace: default
         onInvalid: reject
-        dyeHeaders:
-          request:
-            - name: X-Canary-Active
 ```
 
 把 `canary-selector.spec.data.config.active` 从 `stable` 改为 `canary`，会热切换所有引用它的网关——不需要修改 `EdgionPlugins`，不需要修改路由，也不需要重启。
@@ -182,11 +187,21 @@ requestPlugins:
 
 ### 染色请求头
 
-`dyeHeaders` 默认关闭：不配置时，Canary 不设置任何请求头，也不做任何剥离。配置后，会在成功解析出 profile 的请求上附加运维自定义的 HTTP 头，方便后端（或观测系统）识别本次请求由哪个 profile 处理：
+完整参考见 [染色（Dye）](./dye.md)：`on` 结果词表、两种 `value` 来源、模板引擎、防伪造剥离（即使插件被 `enable: false` 关闭或被 conditions 跳过也会执行）、请求头名校验，以及安全指引。本节只覆盖 Canary 特有的部分。
+
+`dye` 默认关闭：不配置时，Canary 不设置任何请求头，也不做任何剥离。配置后，会附加运维自定义的 HTTP 头，方便后端（或观测系统）识别本次请求由哪个 profile 处理，或走了哪条 fallback/reject 路径：
 
 ```yaml
 requestPlugins:
   - type: Canary
+    dye:
+      request:
+        - name: X-Canary-Active      # 不设置 value => 已解析的 profile 名（默认 on: [success]）
+      response:
+        - name: X-Served-By
+          value: edge-cluster-1      # 显式静态值
+        - name: X-Edgion-Outcome
+          on: [fallback, reject]     # 不设置 value => canary:fallback:on-invalid / canary:reject:on-invalid
     config:
       enable: true
       activeProfile: stable
@@ -195,23 +210,14 @@ requestPlugins:
           name: app-v1
         canary:
           name: app-v2
-      dyeHeaders:
-        request:
-          - name: X-Canary-Active      # 不设置 value => 使用已解析的 profile 名
-        response:
-          - name: X-Served-By
-            value: edge-cluster-1      # 显式静态值
 ```
 
 ```bash
 curl -H "Host: canary-test.example.com" http://<gateway>/  # 上游会看到 X-Canary-Active: stable
 ```
 
-- `request` 条目设置在转发给上游的请求上；`response` 条目设置在返回给客户端的响应上。
-- 配置中不设置 `value` 时携带**已解析的 profile 名**（如 `stable`、`canary`）；设置了静态 `value` 则原样发送。
-- 只有在成功解析出 profile 并通过 `backendRef` 归属校验后才会染色——`enable: false`、无路由、`onInvalid: reject` 等路径都不会染色。
-- **防伪造**：客户端携带的、与配置的**请求方向**染色头同名的请求头，会在插件运行前被剥离——无论最终走的是选中、fallback 还是拒绝路径——因此客户端永远无法伪造后端所信任的标记。
-- 请求头名称在准入阶段就会被校验：与消息帧或路由机制冲突的名称（`Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`TE`、`Upgrade`、`Trailer`）会被拒绝。
+- `success` 上不设置 `value` 时携带**已解析的 profile 名**（如 `stable`、`canary`）。
+- Canary 支持 `success`、`fallback`、`reject` 三种染色能力——`fallback`/`reject` 规则会给 `onInvalid: fallback` / `onInvalid: reject` 路径染色（这是该插件仅有的失败类分支）；`enable: false` 和无路由都不是"结果"，因此不会染色。
 
 ## 行为细节
 
@@ -232,7 +238,7 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # 上游会看到 X-C
   > 按项目约定,这些信号只走 access log 而不做 Prometheus 计数器——需要"按原因分类的金丝雀切换失败率"仪表盘时,在查询期由 Elasticsearch / ClickHouse / Loki 聚合出来即可。
 - **backendRef 归属校验**：解析出 profile 名（无论来自基础配置还是 selector）之后，插件会校验该 profile 的目标 `backendRef`（`name` + 可选 `namespace`）确实出现在路由当前的 `backendRefs` 中。这个校验在**每个请求**上都针对路由的当前状态执行，因此从路由中移除某个后端会使指向它的任何 profile 失效——由 `onInvalid` 决定后续行为。
 - **`onInvalid` 行为**：见上方"使用场景"一节。
-- **`dyeHeaders`**：默认关闭；配置后只在成功完成上游跳转时才会应用配置的请求/响应头（插件被禁用、无路由、或被拒绝时不会应用）。详见上方[染色请求头](#染色请求头)。
+- **`dye`**：默认关闭；配置后只在成功完成上游跳转时才会应用配置的请求/响应头（插件被禁用、无路由、或被拒绝时不会应用）。详见上方[染色请求头](#染色请求头)。
 - **无路由 / 无 backendRefs**：如果请求没有路由单元，或路由规则没有 `backendRefs`，插件直接放行（`GoodNext`），不做任何动作——实践中不应出现此情况，因为 `Canary` 只有挂在带后端的路由上才有意义。
 
 ## 常见问题
@@ -251,7 +257,7 @@ curl -H "Host: canary-test.example.com" http://<gateway>/  # 上游会看到 X-C
 
 ### Q4：可以给每个 profile 附加不同的业务自定义请求头（而不只是携带已解析 profile 名的固定头）吗？
 
-**A**：`dyeHeaders` 支持任意运维自定义的请求头名和方向，值可以是静态字符串，也可以不设置（携带已解析的 profile 名）——这已经覆盖了常见业务场景（`X-Release-Track: <当前生效 profile>`）。按 profile 配置不同的 `{name, value}` 覆盖列表目前是刻意的非目标（non-goal）：常见业务场景已被"不设置 value 即用已解析值"覆盖，若未来出现具体需求可以再补充。完整设计参见 [`docs/superpowers/specs/2026-07-10-dye-headers-unification-design.md`](../../../../../../docs/superpowers/specs/2026-07-10-dye-headers-unification-design.md)。
+**A**：`dye` 支持任意运维自定义的请求头名和方向，值可以是基于共享 `${type:name}` 引擎的模板（不允许 `secretRef`），也可以不设置（携带插件记录的值）——这已经覆盖了常见业务场景（`X-Release-Track: <当前生效 profile>`），模板形式也覆盖了大多数自定义业务头场景。按 profile 配置不同的 `{name, value}` 覆盖列表目前仍是刻意的非目标（non-goal）：常见业务场景已被"不设置 value 即用已解析值"以及模板覆盖，若未来出现具体需求可以再补充。完整参考见 [染色（Dye）](./dye.md)，完整设计参见设计文档 [`2026-07-20-entry-level-dye-suite-design.md`](../../../../../../docs/superpowers/specs/2026-07-20-entry-level-dye-suite-design.md)。
 
 ## 相关文档
 

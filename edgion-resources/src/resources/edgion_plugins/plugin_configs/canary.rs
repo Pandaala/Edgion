@@ -6,15 +6,12 @@
 //! full-cutover / blue-green counterpart to `backendRefs[].weight`'s
 //! percentage-based split. See
 //! `docs/superpowers/specs/2026-07-07-canary-plugin-design.md` for the full
-//! design rationale, and
-//! `docs/superpowers/specs/2026-07-10-dye-headers-unification-design.md` for
-//! the shared `dyeHeaders` traffic-tagging config.
+//! design rationale.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::dye_headers::DyeHeaders;
 use super::dynamic_internal_upstream::{DynUpstreamOnInvalid, DynUpstreamTarget};
 use crate::resources::edgion_config_data::EdgionConfigDataRef;
 use crate::resources::edgion_plugins::PluginValidation;
@@ -48,11 +45,6 @@ pub struct CanaryConfig {
     ///   selection.
     #[serde(default)]
     pub on_invalid: DynUpstreamOnInvalid,
-
-    /// Optional traffic-tagging headers applied after a successful upstream
-    /// jump; entries with `value` omitted carry the resolved profile name.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dye_headers: Option<DyeHeaders>,
 }
 
 impl CanaryConfig {
@@ -67,9 +59,6 @@ impl CanaryConfig {
                 "canary: activeProfile '{}' not found in profiles",
                 self.active_profile
             ));
-        }
-        if let Some(err) = self.dye_headers.as_ref().and_then(|d| d.validation_error()) {
-            return Some(err);
         }
         None
     }
@@ -112,7 +101,6 @@ mod tests {
             ]),
             active_profile_ref: None,
             on_invalid: DynUpstreamOnInvalid::default(),
-            dye_headers: None,
         }
     }
 
@@ -162,20 +150,5 @@ mod tests {
         let mut cfg = valid_config();
         cfg.profiles.clear();
         assert_eq!(PluginValidation::validation_error(&cfg), cfg.check_fields());
-    }
-
-    #[test]
-    fn invalid_dye_headers_are_rejected() {
-        use super::super::dye_headers::{DyeHeader, DyeHeaders};
-        let mut cfg = valid_config();
-        cfg.dye_headers = Some(DyeHeaders {
-            request: vec![DyeHeader {
-                name: "Host".to_string(),
-                value: None,
-            }],
-            response: vec![],
-        });
-        let err = cfg.check_fields().unwrap();
-        assert!(err.contains("not allowed"), "got: {}", err);
     }
 }

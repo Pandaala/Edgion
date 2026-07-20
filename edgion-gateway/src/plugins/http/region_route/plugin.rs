@@ -22,10 +22,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::observe::metrics::record_region_route_overlay_event;
-use crate::plugins::runtime::dye_headers::{apply_dye_headers, strip_request_dye_headers};
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_config_data::{
@@ -105,7 +104,7 @@ impl RegionRoute {
     ///    emit `overlay_invalid` and return base.
     ///
     /// All non-`Applied` paths emit a Prometheus counter; no `tracing::warn!/error!`.
-    fn compute_effective_regions(&self, log: &mut PluginLog) -> Vec<RegionDef> {
+    fn compute_effective_regions(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> Vec<RegionDef> {
         let Some(ref key) = self.override_key else {
             // No overlay configured — base regions used as-is.
             return self.base.regions.clone();
@@ -119,6 +118,7 @@ impl RegionRoute {
         if raw_ed.as_ref().map(|ed| !ed.spec.enable).unwrap_or(false) {
             log.push_fmt("overlay_disabled (key={}), using base", la![sensitive(key)]);
             record_region_route_overlay_event("overlay_disabled");
+            session.record_outcome(DyeOutcome::Fallback, "overlay-fail-to-base");
             return self.base.regions.clone();
         }
 
@@ -140,10 +140,12 @@ impl RegionRoute {
             OverlaySignal::Absent => {
                 log.push_fmt("overlay_missing (key={}), using base", la![sensitive(key)]);
                 record_region_route_overlay_event("overlay_missing");
+                session.record_outcome(DyeOutcome::Fallback, "overlay-fail-to-base");
             }
             OverlaySignal::TypeMismatch => {
                 log.push_fmt("overlay_type_mismatch (key={}), using base", la![sensitive(key)]);
                 record_region_route_overlay_event("overlay_type_mismatch");
+                session.record_outcome(DyeOutcome::Fallback, "overlay-fail-to-base");
             }
             OverlaySignal::Applied => {
                 // H2 — Validate the merged effective region table. Guards against malformed
@@ -152,6 +154,7 @@ impl RegionRoute {
                 if validate_regions(&effective).is_err() {
                     log.push_fmt("overlay_invalid (key={}), using base", la![sensitive(key)]);
                     record_region_route_overlay_event("overlay_invalid");
+                    session.record_outcome(DyeOutcome::Fallback, "overlay-fail-to-base");
                     return self.base.regions.clone();
                 }
             }
@@ -240,12 +243,9 @@ impl RegionRoute {
         log: &mut PluginLog,
     ) -> PluginRunningResult {
         // Pass through when the target region is this gateway's own region.
-        // The request WAS routed to a region, so it is dyed like a jump.
         if !self.base.my_region.is_empty() && self.base.my_region == region.name {
             log.push("local_region, pass");
-            if let Some(dye) = &self.base.dye_headers {
-                apply_dye_headers(session, dye, &region.name, log);
-            }
+            session.record_outcome(DyeOutcome::Success, &region.name);
             return PluginRunningResult::GoodNext;
         }
 
@@ -274,9 +274,7 @@ impl RegionRoute {
             preserve_raw_path: true,
         })) {
             SetJumpOutcome::Set => {
-                if let Some(dye) = &self.base.dye_headers {
-                    apply_dye_headers(session, dye, &region.name, log);
-                }
+                session.record_outcome(DyeOutcome::Success, &region.name);
             }
             SetJumpOutcome::Rejected => {
                 log.push_err("jump_rejected");
@@ -386,14 +384,8 @@ impl RequestFilter for RegionRoute {
             return PluginRunningResult::GoodNext;
         }
 
-        // Anti-spoofing: a client-sent header with a configured dye name must
-        // never pass through on any path (miss/failover/reject included).
-        if let Some(dye) = &self.base.dye_headers {
-            strip_request_dye_headers(session, dye);
-        }
-
         // Resolve the effective region table: base + optional overlay (fail-to-base on error).
-        let effective_regions = self.compute_effective_regions(log);
+        let effective_regions = self.compute_effective_regions(session, log);
 
         if effective_regions.is_empty() {
             log.push("no_regions, pass");
@@ -512,6 +504,7 @@ impl RequestFilter for RegionRoute {
 mod tests {
     use super::*;
     use crate::plugins::runtime::log::PluginLog;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
     use edgion_resources::resources::edgion_plugins::{RegionDef, RegionRouteConfig};
 
     fn make_region(name: &str, low: u16, high: u16, endpoint: &str) -> RegionDef {
@@ -550,8 +543,11 @@ mod tests {
             override_key: None,
         };
 
+        // No overlay configured — the function returns before touching `session`,
+        // so a mock with zero expectations correctly panics if that assumption breaks.
+        let mut session = MockPluginSession::new();
         let mut log = PluginLog::new("RegionRoute");
-        let regions = plugin.compute_effective_regions(&mut log);
+        let regions = plugin.compute_effective_regions(&mut session, &mut log);
         assert_eq!(regions.len(), 2);
         assert_eq!(regions[0].name, "us-east");
         assert_eq!(regions[1].name, "us-west");
@@ -572,8 +568,15 @@ mod tests {
             override_key: Some("unit-test-ns/rr-override-absent-key".to_string()),
         };
 
+        let mut session = MockPluginSession::new();
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Fallback && v == "overlay-fail-to-base")
+            .times(1)
+            .return_const(());
+
         let mut log = PluginLog::new("RegionRoute");
-        let regions = plugin.compute_effective_regions(&mut log);
+        let regions = plugin.compute_effective_regions(&mut session, &mut log);
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0].name, "eu-west");
     }
@@ -700,8 +703,15 @@ mod tests {
             override_key: Some(test_key.to_string()),
         };
 
+        let mut session = MockPluginSession::new();
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Fallback && v == "overlay-fail-to-base")
+            .times(1)
+            .return_const(());
+
         let mut log = PluginLog::new("RegionRoute");
-        let regions = plugin.compute_effective_regions(&mut log);
+        let regions = plugin.compute_effective_regions(&mut session, &mut log);
 
         assert_eq!(regions.len(), 1, "base has exactly 1 region");
         assert_eq!(
@@ -753,13 +763,114 @@ mod tests {
             override_key: Some(test_key.to_string()),
         };
 
+        let mut session = MockPluginSession::new();
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Fallback && v == "overlay-fail-to-base")
+            .times(1)
+            .return_const(());
+
         let mut log = PluginLog::new("RegionRoute");
-        let regions = plugin.compute_effective_regions(&mut log);
+        let regions = plugin.compute_effective_regions(&mut session, &mut log);
 
         assert_eq!(regions.len(), 1, "base has exactly 1 region");
         assert_eq!(
             regions[0].name, "valid-base",
             "invalid overlay: must fall back to base regions"
         );
+    }
+
+    /// `route_to` on a successful cross-region jump (`SetJumpOutcome::Set`) must
+    /// record a `Success` dye outcome with the target region's name — the value
+    /// the deleted `apply_dye_headers` call used to pass.
+    #[tokio::test]
+    async fn route_to_records_success_outcome_with_region_name() {
+        let config = RegionRouteConfig {
+            // Distinct from the target region so the local-passthrough branch
+            // (which does not call set_upstream_jump) is not taken.
+            my_region: "local".to_string(),
+            ..Default::default()
+        };
+        let plugin = RegionRoute {
+            name: "RegionRoute".to_string(),
+            base: Arc::new(config),
+            override_key: None,
+        };
+        let region = make_region("us-east", 0, 999, "10.0.0.5:9090");
+
+        let mut session = MockPluginSession::new();
+        session.expect_header_value().returning(|_| None);
+        session.expect_set_upstream_jump().return_const(SetJumpOutcome::Set);
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Success && v == "us-east")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("RegionRoute");
+        let result = plugin.route_to(&mut session, &region, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    /// `route_to` on a local-region pass-through (my_region matches the target,
+    /// no jump is set) must still record a `Success` dye outcome with the target
+    /// region's name — the value the deleted `apply_dye_headers` call used to pass
+    /// at this same branch (old comment: "The request WAS routed to a region, so
+    /// it is dyed like a jump.").
+    #[tokio::test]
+    async fn route_to_local_region_pass_records_success_outcome_with_region_name() {
+        let config = RegionRouteConfig {
+            // Same as the target region so the local-passthrough branch is taken
+            // (no set_upstream_jump call).
+            my_region: "us-east".to_string(),
+            ..Default::default()
+        };
+        let plugin = RegionRoute {
+            name: "RegionRoute".to_string(),
+            base: Arc::new(config),
+            override_key: None,
+        };
+        let region = make_region("us-east", 0, 999, "10.0.0.5:9090");
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Success && v == "us-east")
+            .times(1)
+            .return_const(());
+        // No `expect_header_value()` / `expect_set_upstream_jump()`: the local
+        // pass-through branch returns before either is reached.
+
+        let mut log = PluginLog::new("RegionRoute");
+        let result = plugin.route_to(&mut session, &region, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    /// A jump rejected by an earlier plugin (`SetJumpOutcome::Rejected`) must NOT
+    /// record any dye outcome — region_route's capability table excludes Reject
+    /// for this plugin (pre-existing silent-GoodNext behavior, out of scope here).
+    #[tokio::test]
+    async fn route_to_rejected_jump_records_no_outcome() {
+        let config = RegionRouteConfig {
+            my_region: "local".to_string(),
+            ..Default::default()
+        };
+        let plugin = RegionRoute {
+            name: "RegionRoute".to_string(),
+            base: Arc::new(config),
+            override_key: None,
+        };
+        let region = make_region("us-east", 0, 999, "10.0.0.5:9090");
+
+        let mut session = MockPluginSession::new();
+        session.expect_header_value().returning(|_| None);
+        session
+            .expect_set_upstream_jump()
+            .return_const(SetJumpOutcome::Rejected);
+        // No `expect_record_outcome()` at all: any call panics the mock.
+
+        let mut log = PluginLog::new("RegionRoute");
+        let result = plugin.route_to(&mut session, &region, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 }

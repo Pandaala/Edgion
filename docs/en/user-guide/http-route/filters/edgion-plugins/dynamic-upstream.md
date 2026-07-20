@@ -45,7 +45,12 @@ spec:
 | `onMissing` | Enum | `Fallback` | Behavior when the routing key is missing. Allowed values: `Fallback` / `Reject` (400) |
 | `onNoMatch` | Enum | `Fallback` | Behavior when no rule matches (rules mode only). Allowed values: `Fallback` / `Reject` (400) |
 | `onInvalid` | Enum | `Reject` | Behavior when the resolved backendRef is not in the route. Allowed values: `Reject` (403) / `Fallback` |
-| `dyeHeaders` | Object | none | Traffic-tagging headers applied after a successful jump to the resolved backend. `request`/`response` entry lists of `{name, value}`; an omitted `value` carries the resolved target's `[ns/]name`. See [Dye Headers](#dye-headers) below. |
+
+`dye` is an **entry-level** field — a sibling of `type`/`config`/`enable`, not a member of `config`:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `dye` | Object | none | Traffic-tagging headers keyed on outcome (`on: [success, fallback, reject]`). `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the resolved target's `[ns/]name` on `success`. See [Dye](./dye.md) for the full reference, and [Dye Headers](#dye-headers) below for the plugin-specific summary. |
 
 ### Usage Scenarios
 
@@ -56,14 +61,14 @@ Header value is used directly as the target Service name:
 ```yaml
 requestPlugins:
   - type: DynamicInternalUpstream
+    dye:
+      request:
+        - name: X-Dynamic-Internal-Upstream
     config:
       from:
         type: header
         name: X-Backend-Target
       onMissing: fallback
-      dyeHeaders:
-        request:
-          - name: X-Dynamic-Internal-Upstream
 ```
 
 ```bash
@@ -181,7 +186,12 @@ spec:
 | `domainMap` | Object | **Required** | Domain mapping whitelist (must be non-empty) |
 | `onMissing` | Enum | `Skip` | Behavior when the routing key is missing. Allowed values: `Skip` / `Reject` (400) |
 | `onNoMatch` | Enum | `Skip` | Behavior when the key matches no `domainMap` entry. Allowed values: `Skip` / `Reject` (400) |
-| `dyeHeaders` | Object | none | Traffic-tagging headers applied after a successful jump to the resolved domain. `request`/`response` entry lists of `{name, value}`; an omitted `value` carries the resolved target's `domain:port`. See [Dye Headers](#dye-headers) below. |
+
+`dye` is an **entry-level** field — a sibling of `type`/`config`/`enable`, not a member of `config`:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `dye` | Object | none | Traffic-tagging headers keyed on outcome (`on: [success, fallback, reject]`). `request`/`response` entry lists of `{name, on, value, conditions}`; an omitted `value` carries the resolved target's `domain:port` on `success`. See [Dye](./dye.md) for the full reference, and [Dye Headers](#dye-headers) below for the plugin-specific summary. |
 
 ### DomainTarget Sub-fields
 
@@ -200,6 +210,9 @@ spec:
 ```yaml
 requestPlugins:
   - type: DynamicExternalUpstream
+    dye:
+      request:
+        - name: X-Dynamic-External-Upstream
     config:
       from:
         type: header
@@ -223,9 +236,6 @@ requestPlugins:
           port: 443
           tls: true
       onMissing: skip
-      dyeHeaders:
-        request:
-          - name: X-Dynamic-External-Upstream
 ```
 
 #### Third-Party API Proxy (Override Host + SNI)
@@ -261,36 +271,37 @@ requestPlugins:
 
 ## Dye Headers
 
-`dyeHeaders` is default-off: when omitted, neither plugin sets any header or strips anything. When configured, it tags a successfully-resolved request with operator-chosen HTTP headers:
+See [Dye](./dye.md) for the full reference: the `on` outcome vocabulary, the two `value` provenances, the template engine, the anti-spoof strip (runs even for `enable: false` and condition-skipped entries), header-name validation, and security guidance. This section covers only what is specific to these two plugins.
+
+`dye` is default-off: when omitted, neither plugin sets any header or strips anything. When configured, it tags the request/response with operator-chosen HTTP headers:
 
 ```yaml
 requestPlugins:
   - type: DynamicInternalUpstream
+    dye:
+      request:
+        - name: X-Release-Track      # value omitted => resolved target "[ns/]name" (on: [success] by default)
+      response:
+        - name: X-Served-By
+          value: edge-cluster-1      # explicit static value
+        - name: X-Edgion-Outcome
+          on: [fallback, reject]     # value omitted => dynamic_internal_upstream:fallback:on-missing, etc.
     config:
       from:
         type: header
         name: X-Backend-Target
-      dyeHeaders:
-        request:
-          - name: X-Release-Track      # value omitted => resolved target "[ns/]name"
-        response:
-          - name: X-Served-By
-            value: edge-cluster-1      # explicit static value
 ```
 
-- `request` entries are set on the request forwarded to the upstream; `response` entries are set on the response returned to the client.
-- An omitted `value` carries the resolved selection: **`DynamicInternalUpstream`** uses the target backendRef's `[ns/]name`; **`DynamicExternalUpstream`** uses the target's `domain:port`. A static `value` is sent as-is.
-- Dyeing happens only after a successful jump to the resolved target — the `onMissing`/`onNoMatch: skip|fallback` and `onInvalid: reject` paths never dye.
-- **Anti-spoofing**: any client-supplied request header matching a configured **request**-direction dye name is stripped before the plugin runs, on every path — jumped, skipped/fallback, or rejected — so a client can never forge the tag the backend trusts.
-- Header names go through validation at admission: framing-sensitive names (`Host`, `Content-Length`, `Transfer-Encoding`, `Connection`, `TE`, `Upgrade`, `Trailer`) are rejected, and so is a request-direction dye name equal to the plugin's own `from` header (the anti-spoof strip would remove the routing key before extraction).
-- Protocol gating follows the plugins' existing gRPC skip: neither plugin dyes gRPC traffic, since both early-return on a gRPC-matched route before reaching the dye call site.
+- An omitted `value` on `success` carries the resolved selection: **`DynamicInternalUpstream`** uses the target backendRef's `[ns/]name`; **`DynamicExternalUpstream`** uses the target's `domain:port`.
+- Both plugins declare `success`, `fallback`, and `reject` dye capabilities — `fallback`/`reject` rules also dye the `onMissing`/`onNoMatch` branches (whichever of `fallback`/`skip` or `reject` each is configured to take), and, for `DynamicInternalUpstream` only, the `onInvalid` branch (DynamicExternalUpstream has no `onInvalid`, since `domainMap` membership is inherent to matching). A plain `success` rule (the default `on`) never fires on those paths.
+- Protocol gating follows the plugins' existing gRPC skip: neither plugin *dyes* gRPC traffic, since both early-return on a gRPC-matched route before reaching the point where they would record an outcome. The **strip** still runs on gRPC traffic — it is runtime-owned and unconditional (see [Dye](./dye.md)), so a client cannot use a gRPC request to smuggle a spoofed dye header past a route that also serves HTTP.
 
 ## Behavior Details
 
 - **DynamicInternalUpstream**: The selected target must exist in the current route's `backendRefs`; otherwise it is treated as invalid
 - **DynamicExternalUpstream**: Can only route to domains in the `domainMap` whitelist, preventing SSRF
 - In `Skip` / `Fallback` mode, unmatched requests use normal routing logic
-- See [Dye Headers](#dye-headers) above for the `dyeHeaders` behavior shared by both sub-plugins
+- See [Dye Headers](#dye-headers) above for the `dye` behavior shared by both sub-plugins
 
 ---
 
@@ -302,7 +313,7 @@ requestPlugins:
 
 ### Q2: Why does my DynamicExternalUpstream request go to the normal backend instead of the external domain?
 
-**A**: The default `onMissing` and `onNoMatch` are both `Skip`, which proceeds with normal backend selection rather than rejecting. If the routing key is missing or matches no `domainMap` entry, the request silently uses the route's `backendRefs`. Set both to `Reject` to fail closed, or configure `dyeHeaders` to confirm whether a jump occurred.
+**A**: The default `onMissing` and `onNoMatch` are both `Skip`, which proceeds with normal backend selection rather than rejecting. If the routing key is missing or matches no `domainMap` entry, the request silently uses the route's `backendRefs`. Set both to `Reject` to fail closed, or configure `dye` to confirm whether a jump occurred.
 
 ### Q3: Can DynamicExternalUpstream reach any domain?
 

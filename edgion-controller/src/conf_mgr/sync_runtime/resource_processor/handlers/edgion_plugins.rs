@@ -1646,7 +1646,6 @@ mod tests {
                 ..Default::default()
             }),
             on_invalid: Default::default(),
-            dye_headers: None,
         }))]);
 
         let handler = EdgionPluginsHandler::new();
@@ -1684,7 +1683,6 @@ mod tests {
                 ..Default::default()
             }),
             on_invalid: Default::default(),
-            dye_headers: None,
         }))]);
 
         let handler = EdgionPluginsHandler::new();
@@ -1748,7 +1746,6 @@ mod tests {
                 ..Default::default()
             }),
             on_invalid: Default::default(),
-            dye_headers: None,
         }))]);
 
         let handler = EdgionPluginsHandler::new();
@@ -1825,7 +1822,6 @@ mod tests {
                 ..Default::default()
             }),
             on_invalid: Default::default(),
-            dye_headers: None,
         };
 
         let mut ep = EdgionPlugins::new("canary-ep", EdgionPluginsSpec::default());

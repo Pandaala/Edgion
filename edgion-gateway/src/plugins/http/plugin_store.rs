@@ -115,6 +115,48 @@ pub fn compile_plugins(ep: &EdgionPlugins) -> Arc<CompiledPlugins> {
         errors.extend(runtime.add_from_upstream_responses(response_plugins, &namespace));
     }
 
+    // Resource-level dye "set clobber" check: a failure rule's response
+    // header must not equal (case-insensitively) any success rule's response
+    // header across ANY entry in this resource — success renders with Set
+    // semantics and would silently wipe an appended failure value queued
+    // earlier by a different entry. Runs once over all four stage arrays
+    // chained, mirroring the schema-layer `EdgionPlugins::validate_plugins`
+    // check (only enabled entries participate, matching `add_from_*` above).
+    let all_dye_suites = spec
+        .spec
+        .request_plugins
+        .iter()
+        .flatten()
+        .filter(|e| e.is_enabled())
+        .map(|e| e.dye.as_ref())
+        .chain(
+            spec.spec
+                .upstream_response_filter_plugins
+                .iter()
+                .flatten()
+                .filter(|e| e.is_enabled())
+                .map(|e| e.dye.as_ref()),
+        )
+        .chain(
+            spec.spec
+                .upstream_response_body_filter_plugins
+                .iter()
+                .flatten()
+                .filter(|e| e.is_enabled())
+                .map(|e| e.dye.as_ref()),
+        )
+        .chain(
+            spec.spec
+                .upstream_response_plugins
+                .iter()
+                .flatten()
+                .filter(|e| e.is_enabled())
+                .map(|e| e.dye.as_ref()),
+        );
+    if let Some(err) = edgion_resources::resources::edgion_plugins::dye_set_clobber_error(all_dye_suites) {
+        errors.push(err);
+    }
+
     // Fail closed: if any plugin (any stage) had an invalid config, prepend a
     // request-stage RejectFilter so every request through this EdgionPlugins is
     // rejected with 500 before reaching upstream, rather than silently running

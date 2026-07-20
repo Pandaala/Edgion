@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::dye_headers::DyeHeaders;
 use crate::common::KeyGet;
 use crate::resources::edgion_plugins::PluginValidation;
 
@@ -59,12 +58,6 @@ pub struct DynamicExternalUpstreamConfig {
     /// - `reject`: return 400 Bad Request
     #[serde(default)]
     pub on_no_match: ExtUpstreamOnNoMatch,
-
-    /// Optional traffic-tagging headers applied after a successful upstream
-    /// jump; entries with `value` omitted carry the resolved target as
-    /// `domain:port`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub dye_headers: Option<DyeHeaders>,
 
     // === Compiled regex cache ===
     #[serde(skip)]
@@ -186,7 +179,6 @@ impl Default for DynamicExternalUpstreamConfig {
             domain_map: HashMap::new(),
             on_missing: ExtUpstreamOnMissing::default(),
             on_no_match: ExtUpstreamOnNoMatch::default(),
-            dye_headers: None,
             compiled_regex: None,
         }
     }
@@ -226,19 +218,6 @@ impl DynamicExternalUpstreamConfig {
                     "domainMap['{}']: domain contains invalid character {:?}",
                     key, c
                 ));
-            }
-        }
-
-        if let Some(dye) = &self.dye_headers {
-            if let Some(err) = dye.validation_error() {
-                return Some(err);
-            }
-            let mut key_headers: Vec<&str> = Vec::new();
-            if let KeyGet::Header { name } = &self.from {
-                key_headers.push(name);
-            }
-            if let Some(err) = dye.key_collision_error(&key_headers) {
-                return Some(err);
             }
         }
 
@@ -369,57 +348,5 @@ mod validation_trait_tests {
             result,
             Some("domainMap['bad']: domain contains invalid character ' '".to_string())
         );
-    }
-
-    #[test]
-    fn invalid_dye_headers_are_rejected() {
-        use super::super::dye_headers::{DyeHeader, DyeHeaders};
-        let mut config = DynamicExternalUpstreamConfig::default();
-        config.domain_map.insert(
-            "us".to_string(),
-            DomainTarget {
-                domain: "api-us.example.com".to_string(),
-                port: None,
-                tls: true,
-                override_host: None,
-                sni: None,
-            },
-        );
-        config.dye_headers = Some(DyeHeaders {
-            request: vec![DyeHeader {
-                name: "Transfer-Encoding".to_string(),
-                value: Some("chunked".to_string()),
-            }],
-            response: vec![],
-        });
-        let err = PluginValidation::validation_error(&config).unwrap();
-        assert!(err.contains("dyeHeaders"), "got: {}", err);
-    }
-
-    #[test]
-    fn dye_name_colliding_with_from_header_is_rejected() {
-        use super::super::dye_headers::{DyeHeader, DyeHeaders};
-        let mut config = DynamicExternalUpstreamConfig::default();
-        config.domain_map.insert(
-            "us".to_string(),
-            DomainTarget {
-                domain: "api-us.example.com".to_string(),
-                port: None,
-                tls: true,
-                override_host: None,
-                sni: None,
-            },
-        );
-        // Default `from` is `Header { name: "X-Target-Region" }`; the strip
-        // would remove the routing key before extraction.
-        config.dye_headers = Some(DyeHeaders {
-            request: vec![DyeHeader {
-                name: "x-target-region".to_string(),
-                value: None,
-            }],
-            response: vec![],
-        });
-        let err = PluginValidation::validation_error(&config).unwrap();
-        assert!(err.contains("collides"), "got: {}", err);
     }
 }

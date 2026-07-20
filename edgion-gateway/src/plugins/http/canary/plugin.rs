@@ -10,9 +10,8 @@
 
 use async_trait::async_trait;
 
-use crate::plugins::runtime::dye_headers::{apply_dye_headers, strip_request_dye_headers};
 use crate::plugins::runtime::edgion_config_data::get_global_edgion_config_data_store;
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::{InternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_config_data::{ConfigEntry, EdgionConfigDataRef};
@@ -115,12 +114,6 @@ impl RequestFilter for Canary {
             return PluginRunningResult::GoodNext;
         }
 
-        // Anti-spoofing: a client-sent header with a configured dye name must
-        // never pass through on any path (fallback/reject included).
-        if let Some(dye) = &self.config.dye_headers {
-            strip_request_dye_headers(session, dye);
-        }
-
         let profile_name = self.resolve_active_profile_name(log);
         let Some(target) = self.config.profiles.get(&profile_name) else {
             // Unreachable post-validation: resolve_active_profile_name only
@@ -164,11 +157,17 @@ impl RequestFilter for Canary {
         if !found {
             log.push_err("backend ref not found");
             return match self.config.on_invalid {
-                DynUpstreamOnInvalid::Reject => PluginRunningResult::ErrResponse {
-                    status: 403,
-                    body: Some("Target backend not allowed".to_string()),
-                },
-                DynUpstreamOnInvalid::Fallback => PluginRunningResult::GoodNext,
+                DynUpstreamOnInvalid::Reject => {
+                    session.record_outcome(DyeOutcome::Reject, "on-invalid");
+                    PluginRunningResult::ErrResponse {
+                        status: 403,
+                        body: Some("Target backend not allowed".to_string()),
+                    }
+                }
+                DynUpstreamOnInvalid::Fallback => {
+                    session.record_outcome(DyeOutcome::Fallback, "on-invalid");
+                    PluginRunningResult::GoodNext
+                }
             };
         }
 
@@ -178,16 +177,13 @@ impl RequestFilter for Canary {
         };
         match session.set_upstream_jump(UpstreamJumpTarget::Internal(info)) {
             SetJumpOutcome::Set => {
+                session.record_outcome(DyeOutcome::Success, &profile_name);
                 log.push("upstream selected");
             }
             SetJumpOutcome::Rejected => {
                 log.push("jump locked, rejected");
                 return PluginRunningResult::GoodNext;
             }
-        }
-
-        if let Some(dye) = &self.config.dye_headers {
-            apply_dye_headers(session, dye, &profile_name, log);
         }
 
         PluginRunningResult::GoodNext
@@ -197,10 +193,14 @@ impl RequestFilter for Canary {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::routes::http::match_unit::{HttpRouteRuleUnit, MatchSpecificity};
+    use crate::{EdgionHttpContext, MatchInfo, Rsc};
     use edgion_resources::resources::edgion_config_data::{
         ConfigEntry, EdgionConfigData, EdgionConfigDataSpec, Selector,
     };
     use edgion_resources::resources::edgion_plugins::plugin_configs::DynUpstreamTarget;
+    use edgion_resources::{HTTPBackendRef, HTTPRouteMatch, HTTPRouteRule};
     use std::collections::HashMap;
     use std::sync::Arc;
 
@@ -209,6 +209,89 @@ mod tests {
             name: name.to_string(),
             namespace: None,
         }
+    }
+
+    /// Minimal `HTTPBackendRef` for route-unit fixtures (only `name` matters to
+    /// the plugins under test — the rest are the schema's non-operator defaults).
+    fn test_backend_ref(name: &str) -> HTTPBackendRef {
+        HTTPBackendRef {
+            name: name.to_string(),
+            namespace: None,
+            port: None,
+            weight: None,
+            group: None,
+            kind: None,
+            filters: None,
+            backend_tls_policy: None,
+            ref_denied: None,
+        }
+    }
+
+    /// Minimal `HttpRouteRuleUnit` fixture carrying only what the selection
+    /// plugins under test read: `rule.backend_refs` and `matched_info.rsc.ns`.
+    /// The compiled-runtime fields (`plugin_runtime`, `backends`,
+    /// `backend_finder`, `metric_handles`) are never touched by these plugins'
+    /// `run_request`, so empty/stub values are sufficient here.
+    fn test_route_unit(backend_refs: Vec<HTTPBackendRef>) -> HttpRouteRuleUnit {
+        HttpRouteRuleUnit {
+            resource_key: "test-ns/test-route".to_string(),
+            matched_info: MatchInfo {
+                rsc: Rsc::new("HTTPRoute", "test-ns", "test-route"),
+                rule_id: 0,
+                match_id: 0,
+                sv: 0,
+                m: HTTPRouteMatch {
+                    path: None,
+                    headers: None,
+                    query_params: None,
+                    method: None,
+                },
+                labels_meta: None,
+                annotations_meta: None,
+            },
+            rule: Arc::new(HTTPRouteRule {
+                name: None,
+                matches: None,
+                filters: None,
+                backend_refs: Some(backend_refs),
+                timeouts: None,
+                retry: None,
+                session_persistence: None,
+                parsed_timeouts: None,
+                parsed_retry: None,
+                parsed_forward_raw_path: None,
+                parsed_allow_non_idempotent_retry: None,
+                parsed_mirror_tuning: None,
+            }),
+            route: None,
+            path_regex: None,
+            parent_refs: None,
+            compiled_header_regexes: vec![],
+            compiled_query_regexes: vec![],
+            has_query_matchers: false,
+            specificity: MatchSpecificity {
+                has_method: false,
+                header_count: 0,
+                query_count: 0,
+                creation_ts_ms: 0,
+                route_key: "test-ns/test-route".to_string(),
+                rule_index: 0,
+                match_index: 0,
+            },
+            metric_handles: Arc::new(crate::observe::metrics::route_handles::RouteMetricHandles::empty()),
+            plugin_runtime: Arc::new(crate::plugins::PluginRuntime::new()),
+            backends: Arc::new(vec![]),
+            backend_finder: Arc::new(crate::lb::BackendSelector::new()),
+        }
+    }
+
+    /// Build an `EdgionHttpContext` with `route_unit` set to a fixture carrying
+    /// `backend_refs`, for tests that exercise `run_request`'s backend-ref
+    /// pre-validation (canary / DIU / direct_endpoint all share this shape).
+    fn ctx_with_backend_refs(backend_refs: Vec<HTTPBackendRef>) -> EdgionHttpContext {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.route_unit = Some(Arc::new(test_route_unit(backend_refs)));
+        ctx
     }
 
     fn base_config() -> CanaryConfig {
@@ -221,7 +304,6 @@ mod tests {
             ]),
             active_profile_ref: None,
             on_invalid: DynUpstreamOnInvalid::default(),
-            dye_headers: None,
         }
     }
 
@@ -435,5 +517,89 @@ mod tests {
             resolve_active_profile_ref_key(&allowed_ref, "unit-test-ns"),
             Some("other-ns/canary-selector-allowed".to_string())
         );
+    }
+
+    // ── record_outcome wiring ────────────────────────────────────────────────
+
+    /// A successful selection (resolved profile's backend found in the route's
+    /// backend_refs, `SetJumpOutcome::Set`) must record `Success` with the
+    /// resolved profile name — the value the deleted `apply_dye_headers` call
+    /// used to pass.
+    #[tokio::test]
+    async fn canary_records_success_outcome_with_profile_name() {
+        let plugin = canary_with_key(base_config(), None);
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_ctx()
+            .return_const(ctx_with_backend_refs(vec![test_backend_ref("app-v1")]));
+        session.expect_set_upstream_jump().return_const(SetJumpOutcome::Set);
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Success && v == "stable")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("Canary");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    /// `on_invalid: Reject` (default) on an unresolvable backend ref must record
+    /// `Reject` with cause `on-invalid` and return the 403 local reply.
+    #[tokio::test]
+    async fn canary_records_reject_outcome_on_invalid_backend() {
+        let config = CanaryConfig {
+            on_invalid: DynUpstreamOnInvalid::Reject,
+            ..base_config()
+        };
+        let plugin = canary_with_key(config, None);
+
+        let mut session = MockPluginSession::new();
+        // Route's only backend_ref is "other-svc" — never matches the resolved
+        // "app-v1" target, so the `!found` branch fires.
+        session
+            .expect_ctx()
+            .return_const(ctx_with_backend_refs(vec![test_backend_ref("other-svc")]));
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Reject && v == "on-invalid")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("Canary");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: Some("Target backend not allowed".to_string()),
+            }
+        );
+    }
+
+    /// `on_invalid: Fallback` on an unresolvable backend ref must record
+    /// `Fallback` with cause `on-invalid` and pass the request through unchanged.
+    #[tokio::test]
+    async fn canary_records_fallback_outcome_on_invalid_backend() {
+        let config = CanaryConfig {
+            on_invalid: DynUpstreamOnInvalid::Fallback,
+            ..base_config()
+        };
+        let plugin = canary_with_key(config, None);
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_ctx()
+            .return_const(ctx_with_backend_refs(vec![test_backend_ref("other-svc")]));
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Fallback && v == "on-invalid")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("Canary");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 }

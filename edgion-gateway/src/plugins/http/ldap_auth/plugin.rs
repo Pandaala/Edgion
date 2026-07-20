@@ -18,7 +18,7 @@ use crate::plugins::http::common::auth_common::{
     apply_auth_failure_delay, send_gateway_auth_error_response, send_gateway_plain_error_response,
 };
 use crate::plugins::runtime::log::{la, sensitive};
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::tls::validation::outbound_san_mismatch_reason;
 use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa};
 use edgion_resources::filters::PluginRunningResult;
@@ -414,6 +414,13 @@ impl LdapAuth {
     }
 
     async fn service_unavailable(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
+        // Record BEFORE `send_gateway_plain_error_response`'s self-write
+        // (`write_response_header`) so the queued dye header op is drained
+        // by that write. This is the single choke point for every
+        // LDAP-unreachable fail-close branch (connection failed, TLS SAN
+        // mismatch, timeout, bind failure) — credential rejection
+        // (`unauthorized`) never routes through here.
+        session.record_outcome(DyeOutcome::FailClose, "ldap-unreachable");
         let _ = send_gateway_plain_error_response(
             session,
             503,
@@ -896,5 +903,58 @@ mod tests {
             map_ldap_connect_error(&ldap_err),
             LdapAuthError::ConnectionFailed
         ));
+    }
+
+    // ── Task 9: dye-suite record_outcome wiring ─────────────────────────────
+
+    /// `service_unavailable` is the single choke point for every
+    /// LDAP-unreachable fail-close branch (connection failed, TLS SAN
+    /// mismatch, timeout, bind failure). It must record `FailClose` with
+    /// cause `ldap-unreachable` BEFORE its self-write
+    /// (`send_gateway_plain_error_response`'s `write_response_header`) —
+    /// enforced via a mockall `Sequence`.
+    #[tokio::test]
+    async fn service_unavailable_records_fail_close_before_response_write() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use mockall::Sequence;
+
+        let auth = ldap_auth_default();
+        let mut session = MockPluginSession::new();
+
+        let mut seq = Sequence::new();
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "ldap-unreachable")
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_const(());
+        session
+            .expect_write_response_header()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+
+        let result = auth.service_unavailable(&mut session).await;
+        assert!(matches!(result, PluginRunningResult::ErrTerminateRequest));
+    }
+
+    /// Credential rejection (`unauthorized`, used for missing/invalid/wrong
+    /// credentials) is an auth decision, not a dependency failure — it must
+    /// NOT call `record_outcome`. No `expect_record_outcome` is installed, so
+    /// any call panics the mock.
+    #[tokio::test]
+    async fn unauthorized_does_not_record_outcome() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+
+        let auth = ldap_auth_default();
+        let mut session = MockPluginSession::new();
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+
+        let result = auth.unauthorized(&mut session).await;
+        assert!(matches!(result, PluginRunningResult::ErrTerminateRequest));
     }
 }

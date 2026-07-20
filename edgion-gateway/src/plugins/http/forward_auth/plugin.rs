@@ -67,7 +67,7 @@ use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
 use crate::plugins::http::common::outbound::call::outbound_call;
 use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
 use crate::plugins::runtime::log::la;
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::common::success::SuccessOutcome;
 use edgion_resources::resources::edgion_plugins::{ForwardAuthConfig, ForwardAuthDecision};
@@ -210,6 +210,10 @@ impl RequestFilter for ForwardAuth {
                     return PluginRunningResult::GoodNext;
                 }
                 plugin_log.push_fmt("upstream unreachable {}", la![e.to_string().as_str()]);
+                // Record BEFORE `send_error_response`'s self-write
+                // (`write_response_header`) so the queued dye header op is
+                // drained by that write.
+                session.record_outcome(DyeOutcome::FailClose, "auth-server-unreachable");
                 return self
                     .send_error_response(
                         session,
@@ -542,6 +546,95 @@ mod tests {
         assert!(
             log.contains("degraded"),
             "expected plugin log to mention degraded; got: {log:?}"
+        );
+    }
+
+    /// Task 9: when the auth service is unreachable and degradation is NOT
+    /// allowed, the fail-close path records `DyeOutcome::FailClose` with
+    /// cause `auth-server-unreachable` BEFORE `send_error_response`'s
+    /// self-write (`write_response_header`) — enforced here via a mockall
+    /// `Sequence` so an ordering regression fails the test, not just a
+    /// missing-call assertion.
+    #[tokio::test]
+    async fn transport_fail_records_fail_close_before_response_write() {
+        use mockall::Sequence;
+        use std::sync::atomic::Ordering;
+
+        let fa = {
+            let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
+            client.health.healthy.store(false, Ordering::Relaxed);
+            client.allow_degradation = false;
+
+            ForwardAuth {
+                name: "ForwardAuth".to_string(),
+                client: Arc::new(client),
+                status_on_error: 503,
+                decision: ForwardAuthDecision::default(),
+            }
+        };
+
+        let mut session = make_session();
+        session
+            .expect_add_error()
+            .withf(|status| matches!(status, edgion_resources::EdgionStatus::ForwardAuthServiceUnreachable))
+            .times(1)
+            .returning(|_| ());
+
+        let mut seq = Sequence::new();
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "auth-server-unreachable")
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_const(());
+        session
+            .expect_write_response_header()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+
+        let mut log = PluginLog::new("ForwardAuth");
+        let result = fa.run_request(&mut session, &mut log).await;
+        assert!(
+            matches!(result, PluginRunningResult::ErrTerminateRequest),
+            "expected ErrTerminateRequest on non-degraded transport failure, got {result:?}"
+        );
+    }
+
+    /// Task 9: an ordinary auth-server DENY (401/403) is an upstream
+    /// decision, not a dependency failure — `record_outcome` must NOT be
+    /// called. No `expect_record_outcome` is installed, so any call panics
+    /// the mock; this pins the negative case explicitly rather than relying
+    /// on the pre-existing deny tests' silence.
+    #[tokio::test]
+    async fn auth_deny_does_not_record_outcome() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/check"))
+            .respond_with(ResponseTemplate::new(403).set_body_bytes(b"no".to_vec()))
+            .mount(&server)
+            .await;
+
+        let fa = make_forward_auth(&localhost_uri(&server.uri()), ForwardAuthDecision::default());
+
+        let mut session = make_session();
+        session
+            .expect_write_response_header()
+            .withf(|resp, _| resp.status.as_u16() == 403)
+            .returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
+
+        let mut log = PluginLog::new("ForwardAuth");
+        let result = fa.run_request(&mut session, &mut log).await;
+        assert!(
+            matches!(result, PluginRunningResult::ErrTerminateRequest),
+            "expected ErrTerminateRequest on auth deny, got {result:?}"
         );
     }
 }

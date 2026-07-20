@@ -283,14 +283,14 @@ impl OpenidConnect {
                     return PluginRunningResult::ErrTerminateRequest;
                 }
             };
-            if let Err(err) = self.validate_id_token_nonce(id_token, expected_nonce).await {
+            if let Err(err) = self.validate_id_token_nonce(session, id_token, expected_nonce).await {
                 plugin_log.push_err(err.log_tag());
                 self.send_oidc_error(session, &err).await;
                 return PluginRunningResult::ErrTerminateRequest;
             }
         }
 
-        let _claims = match self.verify_token(&token_response.access_token).await {
+        let _claims = match self.verify_token(session, &token_response.access_token).await {
             Ok(v) => v,
             Err(err) => {
                 plugin_log.push_err(err.log_tag());

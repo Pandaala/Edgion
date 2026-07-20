@@ -1,0 +1,24 @@
+# Strip hardening: Canary's own kill switch (config.enable: false) causes
+# run_request to return GoodNext before ever reaching the dye-recording
+# code paths (see plugin.rs "Kill switch." early return) -- but the
+# runtime-owned anti-spoof strip runs BEFORE the plugin's kill switch is
+# even checked, so a client-supplied X-Canary-Active must still be removed.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-kill-switch-strip
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        request:
+          - name: X-Canary-Active
+      config:
+        enable: false
+        activeProfile: stable
+        profiles:
+          stable:
+            name: canary-app-v1
+        onInvalid: reject

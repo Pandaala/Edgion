@@ -13,7 +13,7 @@ use super::vm_manager::{global_vm_manager, runtime_cache_key, CalloutGrant, VmLe
 use crate::observe::metrics::registry::{record_wasm_body_pause_unsupported, record_wasm_fail_mode};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{
-    PluginLog, PluginSession, RequestFilter, UpstreamResponseBodyFilter, UpstreamResponseFilter,
+    DyeOutcome, PluginLog, PluginSession, RequestFilter, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::plugin_configs::WasmConfig;
@@ -97,14 +97,26 @@ impl WasmPlugin {
         Some(Box::new(Self::build(config)))
     }
 
-    fn fail_mode(&self, log: &mut PluginLog, reason: &str) -> PluginRunningResult {
+    /// Single choke point for every Wasm fail-open/fail-close decision
+    /// (VM trap, callout failure, no-resume, module-load failure, pool-
+    /// acquire failure). Also the single choke point for the dye suite's
+    /// dependency-failure recording: `record_outcome` is called here, before
+    /// returning `PluginRunningResult`, so it is always ordered before the
+    /// runtime's own response write. `reason` is not further sub-classified
+    /// (e.g. VM trap vs. epoch-deadline trap are not distinguished at this
+    /// call site), so the kebab-cased `reason` itself is the most accurate
+    /// cause available.
+    fn fail_mode(&self, session: &mut dyn PluginSession, log: &mut PluginLog, reason: &str) -> PluginRunningResult {
+        let cause = reason.replace(' ', "-");
         if self.config.fail_open {
             record_wasm_fail_mode(&self.metrics_label, reason, "open");
             log.push_fmt("wasm {}:fail-open", la![reason]);
+            session.record_outcome(DyeOutcome::FailOpen, &cause);
             PluginRunningResult::GoodNext
         } else {
             record_wasm_fail_mode(&self.metrics_label, reason, "close");
             log.push_fmt("wasm {}:fail-close", la![reason]);
+            session.record_outcome(DyeOutcome::FailClose, &cause);
             PluginRunningResult::ErrResponse {
                 status: 500,
                 body: Some("wasm plugin error".to_string()),
@@ -151,7 +163,7 @@ impl WasmPlugin {
         let action = match lease.call_on_response_headers(num_headers) {
             Ok(a) => a,
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
-            Err(_) => return self.fail_mode(log, "trap"),
+            Err(_) => return self.fail_mode(session, log, "trap"),
         };
         self.finish_phase(lease, session, log, action, false)
     }
@@ -179,7 +191,7 @@ impl WasmPlugin {
         let (ctx_id, action) = match lease.call_on_request_headers_open(num_headers) {
             Ok(v) => v,
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
-            Err(_) => return self.fail_mode(log, "trap"),
+            Err(_) => return self.fail_mode(session, log, "trap"),
         };
 
         let paused = action != 0;
@@ -187,7 +199,7 @@ impl WasmPlugin {
         if paused && had_callouts {
             if self.resolve_callouts(&mut lease, ctx_id, log).await.is_err() {
                 // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
-                return self.fail_mode(log, "callout");
+                return self.fail_mode(session, log, "callout");
             }
         } else if !paused && had_callouts {
             // Fire-and-forget dispatch without Pause is not supported: the
@@ -200,7 +212,7 @@ impl WasmPlugin {
         }
 
         if lease.close_context(ctx_id).is_err() {
-            return self.fail_mode(log, "trap");
+            return self.fail_mode(session, log, "trap");
         }
 
         // A paused guest that neither continued nor answered locally after
@@ -209,7 +221,7 @@ impl WasmPlugin {
         let state = lease.state();
         if paused && had_callouts && !state.continue_requested && state.local_response.is_none() {
             drop(lease);
-            return self.fail_mode(log, "no-resume");
+            return self.fail_mode(session, log, "no-resume");
         }
         self.finish_phase(lease, session, log, action, had_callouts)
     }
@@ -468,11 +480,11 @@ impl RequestFilter for WasmPlugin {
         let entry = match global_vm_manager().get_or_load(&self.config, &self.cache_key).await {
             Ok(e) => e,
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
-            Err(_) => return self.fail_mode(log, "load"),
+            Err(_) => return self.fail_mode(session, log, "load"),
         };
         let lease = match entry.acquire(self.config.timeout_ms) {
             Ok(l) => l,
-            Err(_) => return self.fail_mode(log, "acquire"),
+            Err(_) => return self.fail_mode(session, log, "acquire"),
         };
         self.run_leased_request(lease, session, log).await
     }
@@ -492,12 +504,12 @@ impl UpstreamResponseFilter for WasmPlugin {
         // on miss kick a background load and apply the fail mode this time.
         let Some(entry) = global_vm_manager().try_get(&self.cache_key) else {
             global_vm_manager().spawn_preload(&self.config, self.cache_key.clone());
-            return self.fail_mode(log, "not loaded");
+            return self.fail_mode(session, log, "not loaded");
         };
         let lease = match entry.acquire(self.config.timeout_ms) {
             Ok(l) => l,
             // Hot path: `fail_mode` records the metric and PluginLog entry; no tracing.
-            Err(_) => return self.fail_mode(log, "acquire"),
+            Err(_) => return self.fail_mode(session, log, "acquire"),
         };
         self.run_leased_response(lease, session, log)
     }
@@ -715,6 +727,13 @@ mod tests {
         let f = write_temp_wasm(GUEST_TRAP);
         let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).unwrap();
         let mut session = base_mock();
+        // Task 9: the VM-trap fail-close arm records `FailClose` with the
+        // kebab-cased reason ("trap") as cause.
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "trap")
+            .times(1)
+            .return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert!(matches!(res, PluginRunningResult::ErrResponse { status: 500, .. }));
@@ -725,6 +744,12 @@ mod tests {
         let f = write_temp_wasm(GUEST_TRAP);
         let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).unwrap();
         let mut session = base_mock();
+        // Task 9: the VM-trap fail-open arm records `FailOpen` with the same cause.
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "trap")
+            .times(1)
+            .return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext);
@@ -736,6 +761,7 @@ mod tests {
         let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).unwrap();
         for _ in 0..3 {
             let mut session = base_mock();
+            session.expect_record_outcome().return_const(());
             let mut log = PluginLog::new("Wasm");
             let _ = plugin.run_request(&mut session, &mut log).await;
         }
@@ -748,6 +774,13 @@ mod tests {
         c.source.file = Some("/nonexistent/missing.wasm".to_string());
         let plugin = WasmPlugin::create_request(&c).unwrap();
         let mut session = base_mock();
+        // Task 9: the module-load-failure fail-close arm records `FailClose`
+        // with cause "load".
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "load")
+            .times(1)
+            .return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert!(matches!(res, PluginRunningResult::ErrResponse { status: 500, .. }));
@@ -918,6 +951,18 @@ mod tests {
             let config = callout_config(f.path(), vec![server.uri()], fail_open);
             let plugin = WasmPlugin::create_request(&config).unwrap();
             let mut session = callout_mock(&server.uri());
+            // Task 9: the no-resume fail-mode fallback records the matching
+            // outcome with cause "no-resume".
+            let expected_outcome = if fail_open {
+                DyeOutcome::FailOpen
+            } else {
+                DyeOutcome::FailClose
+            };
+            session
+                .expect_record_outcome()
+                .withf(move |outcome, value| *outcome == expected_outcome && value == "no-resume")
+                .times(1)
+                .return_const(());
             let mut log = PluginLog::new("Wasm");
             let res = plugin.run_request(&mut session, &mut log).await;
             if expect_500 {

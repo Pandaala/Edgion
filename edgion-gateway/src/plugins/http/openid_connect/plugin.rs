@@ -33,7 +33,7 @@ use crate::plugins::http::common::auth_common::{
 };
 use crate::plugins::http::common::http_client::get_http_client_arc;
 use crate::plugins::runtime::log::la;
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::tls::validation::OutboundSanVerifier;
 use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa, ResolvedOutboundTls};
 use edgion_resources::filters::PluginRunningResult;

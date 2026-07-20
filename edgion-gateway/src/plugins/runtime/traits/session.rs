@@ -1,13 +1,16 @@
 //! PluginSession trait - shared across all filter stages
 
 use crate::ctx::ClientCertInfo;
+use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 use crate::plugins::runtime::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use crate::{EdgionHttpContext, MirrorState, SetJumpOutcome, UpstreamJumpTarget};
 use async_trait::async_trait;
 use bytes::Bytes;
 use edgion_resources::common::{KeyGet, KeySet};
+pub use edgion_resources::resources::edgion_plugins::DyeOutcome;
 use edgion_resources::EdgionStatus;
 use pingora_http::ResponseHeader;
+use std::sync::Arc;
 
 pub type PluginSessionError = Box<dyn std::error::Error + Send + Sync>;
 pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
@@ -345,5 +348,33 @@ pub trait PluginSession: Send + Sync {
     /// `max_bytes` caps the buffer on the first (buffering) call.
     async fn read_response_body(&mut self, _max_bytes: Option<u64>) -> BodyReadResult {
         Err(BodyReadError::Unimplemented)
+    }
+
+    // ========== Entry-level dye suite (traffic tagging) ==========
+
+    /// Install the dye plan of the plugin entry about to be invoked. Every
+    /// call site that invokes a plugin's stage method MUST call this
+    /// immediately before that invocation (mirroring the four
+    /// `PluginRuntime::run_*_plugins` stage loops) — including indirect
+    /// invocation through an `ExtensionRef` bundle, which iterates a nested
+    /// `PluginRuntime`'s filters one by one rather than going through those
+    /// loops. Default no-op for sessions that don't participate in dye
+    /// rendering (e.g. `MockPluginSession`, tests).
+    fn install_dye_plan(&mut self, _plan: Option<Arc<CompiledDyePlan>>) {}
+
+    /// Once-per-name anti-spoof strip: remove the client-supplied value of
+    /// each request-direction rule name the currently-installed plan
+    /// declares, the first time any entry in the request declares that name.
+    /// Called immediately after `install_dye_plan`, before the plugin's kill
+    /// switch / gating / conditions — request-stage call sites only. Default
+    /// no-op.
+    fn strip_request_dye_once(&mut self) {}
+
+    /// Record a plugin outcome for entry-level dye rendering. Success passes
+    /// the resolved selection value; failures pass the cause (lowercase
+    /// kebab, plugin-authored). No-op unless the current entry configured a
+    /// matching dye rule. Call BEFORE writing any self-authored response.
+    fn record_outcome(&mut self, outcome: DyeOutcome, value: &str) {
+        let _ = (outcome, value);
     }
 }

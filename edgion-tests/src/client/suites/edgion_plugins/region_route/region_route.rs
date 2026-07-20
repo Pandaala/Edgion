@@ -804,7 +804,7 @@ impl RegionRouteTestSuite {
     fn myregion_local_pass_sets_dye_header() -> TestCase {
         TestCase::new(
             "myregion_local_pass_sets_dye_header",
-            "Local-region pass-through: dyeHeaders X-Region carries 'virginia'",
+            "Local-region pass-through: dye X-Region carries 'virginia'",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

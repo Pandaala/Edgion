@@ -2,6 +2,10 @@
 # HTTPRoute's backendRefs (07_HTTPRoute_default_canary-invalid-fallback-test.yaml
 # only lists canary-app-v1). onInvalid: fallback => fall through to the
 # route's own backendRefs selection instead of taking the route down.
+#
+# The response rule below makes the fallback branch directly observable:
+# it renders `canary:fallback:on-invalid` on the response (the design
+# spec's motivating example for the failure-dye vocabulary).
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -11,6 +15,12 @@ spec:
   requestPlugins:
     - enable: true
       type: Canary
+      dye:
+        request:
+          - name: X-Canary-Active
+        response:
+          - name: X-Canary-Outcome
+            on: [fallback]
       config:
         enable: true
         activeProfile: canary
@@ -20,6 +30,3 @@ spec:
           canary:
             name: canary-app-v2
         onInvalid: fallback
-        dyeHeaders:
-          request:
-            - name: X-Canary-Active

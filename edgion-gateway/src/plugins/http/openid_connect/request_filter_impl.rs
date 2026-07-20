@@ -110,7 +110,7 @@ impl RequestFilter for OpenidConnect {
                     if token.is_empty() {
                         plugin_log.push_err("session no token");
                     } else {
-                        match self.verify_token(&token).await {
+                        match self.verify_token(session, &token).await {
                             Ok(claims) => {
                                 let userinfo_json = self.fetch_userinfo_json(&token).await;
                                 self.apply_upstream_headers(
@@ -133,7 +133,7 @@ impl RequestFilter for OpenidConnect {
                                         .try_refresh_session_token_singleflight(&refresh_lock_key, &mut session_cookie)
                                         .await
                                     {
-                                        Ok(new_token) => match self.verify_token(&new_token).await {
+                                        Ok(new_token) => match self.verify_token(session, &new_token).await {
                                             Ok(claims) => {
                                                 self.maybe_set_session_cookie_header(session, &session_cookie).await;
                                                 let userinfo_json = self.fetch_userinfo_json(&new_token).await;
@@ -153,7 +153,7 @@ impl RequestFilter for OpenidConnect {
                                         },
                                         Err(refresh_err) => {
                                             if Self::is_refresh_wait_timeout(&refresh_err) {
-                                                match self.verify_jwt_token_allow_expired(&token).await {
+                                                match self.verify_jwt_token_allow_expired(session, &token).await {
                                                     Ok(claims) if self.is_expired_within_leeway(&claims) => {
                                                         let userinfo_json = self.fetch_userinfo_json(&token).await;
                                                         self.apply_upstream_headers(
@@ -236,7 +236,7 @@ impl RequestFilter for OpenidConnect {
         }
 
         let token = token.unwrap_or_default();
-        match self.verify_token(&token).await {
+        match self.verify_token(session, &token).await {
             Ok(claims) => {
                 let userinfo_json = self.fetch_userinfo_json(&token).await;
                 self.apply_upstream_headers(session, &token, None, userinfo_json.as_deref(), &claims);

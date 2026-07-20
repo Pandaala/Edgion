@@ -18,6 +18,9 @@ metadata:
 spec:
   requestPlugins:
     - type: RegionRoute
+      dye:
+        request:
+          - name: X-Region
       config:
         myRegion: virginia
         keyGet:
@@ -43,6 +46,3 @@ spec:
             backendEndpoint: "127.0.0.1:30003"
             tls: false
             failoverTo: ohio
-        dyeHeaders:
-          request:
-            - name: X-Region

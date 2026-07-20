@@ -7,6 +7,10 @@ spec:
   requestPlugins:
     - enable: true
       type: Canary
+      dye:
+        request:
+          - name: X-Canary-Active
+          - name: X-Release-Track
       config:
         enable: true
         activeProfile: stable
@@ -19,7 +23,3 @@ spec:
           name: canary-hotswap-selector
           namespace: default
         onInvalid: reject
-        dyeHeaders:
-          request:
-            - name: X-Canary-Active
-            - name: X-Release-Track

@@ -9,6 +9,9 @@ metadata:
 spec:
   requestPlugins:
     - type: DynamicExternalUpstream
+      dye:
+        request:
+          - name: X-Dynamic-External-Upstream
       config:
         from:
           type: header
@@ -24,6 +27,3 @@ spec:
             tls: false
         onMissing: reject
         onNoMatch: reject
-        dyeHeaders:
-          request:
-            - name: X-Dynamic-External-Upstream

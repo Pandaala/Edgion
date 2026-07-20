@@ -1,17 +1,22 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use http::Uri;
-use pingora_http::ResponseHeader;
+use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::Session;
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use super::conditions::{EvaluationResult, PluginConditionsExt};
+use super::dye_plan::{CompiledDyePlan, CompiledDyeRule};
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
 use super::traits::session::RouteProto;
-use super::traits::{PluginSession, PluginSessionError, PluginSessionResult};
+use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
+use crate::link_sys::template::evaluate_template;
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
 use crate::{EdgionHttpContext, MirrorState, PendingHeaderOp, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::common::{KeyGet, KeySet, WebhookExtract};
 use edgion_resources::filters::PluginRunningResult;
+use edgion_resources::resources::edgion_plugins::sanitize_field_value;
 use edgion_resources::EdgionStatus;
 
 /// Resolve a `${matchedHttpRoute:<selector>}` / `${matchedGrpcRoute:<selector>}`
@@ -53,6 +58,30 @@ pub fn cookie_value(headers: &http::HeaderMap, name: &str) -> Option<String> {
             }
         })
     })
+}
+
+/// Pure core of the once-per-name request-direction anti-spoof strip.
+///
+/// For each request-direction rule in `plan`, removes the client-supplied
+/// header the first time any entry declares that name (recorded into
+/// `handled`, matched case-insensitively) and never strips it again — a
+/// value written between two installs by an earlier entry (a gateway-
+/// rendered dye value) is left intact for the next entry to see. Free
+/// function over a plain `RequestHeader` + the handled-names list — no
+/// `PingoraSessionAdapter` / `Session` needed — so it is unit-testable
+/// without standing up a full pingora session.
+pub(crate) fn strip_request_dye_once_core(
+    req_header: &mut RequestHeader,
+    plan: &CompiledDyePlan,
+    handled: &mut Vec<String>,
+) {
+    for rule in &plan.request {
+        let already_handled = handled.iter().any(|n| n.eq_ignore_ascii_case(&rule.name));
+        if !already_handled {
+            req_header.remove_header(&rule.name);
+            handled.push(rule.name.clone());
+        }
+    }
 }
 
 pub struct PingoraSessionAdapter<'a> {
@@ -182,6 +211,22 @@ impl<'a> PingoraSessionAdapter<'a> {
     #[inline]
     pub fn drain_pending_response_header_ops(&mut self, response_header: &mut ResponseHeader) {
         self.ctx.drain_pending_response_header_ops(response_header);
+    }
+
+    /// Resolve one dye rule's rendered value: an operator template wins over
+    /// the recorded value; a `Success` recorded value is sanitized verbatim
+    /// (no provenance prefix — that's the "selection value" contract); every
+    /// other outcome is prefixed `<type_prefix>:<outcome>:<cause>` so a reader
+    /// can tell a gateway-recorded failure from an operator-authored value at
+    /// a glance. Renders BEFORE any mutation of `self` so the immutable
+    /// `evaluate_template` borrow never overlaps the later `&mut self` header
+    /// write.
+    fn dye_rule_value(&mut self, rule: &CompiledDyeRule, prefix: &str, outcome: DyeOutcome, raw: &str) -> String {
+        match &rule.value {
+            Some(tpl) => sanitize_field_value(&evaluate_template(tpl, self)),
+            None if outcome == DyeOutcome::Success => sanitize_field_value(raw),
+            None => format!("{}:{}:{}", prefix, outcome.as_str(), sanitize_field_value(raw)),
+        }
     }
 
     /// Send a gRPC error response with user-specified grpc-status and grpc-message using
@@ -416,6 +461,35 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         if self.ctx.request_info.is_grpc_request && http_status != 200 {
             self.grpc_response_terminated = true;
             return Self::send_grpc_trailers_only(self.inner, self.ctx, http_status).await;
+        }
+        let mut resp = resp;
+        if !self.ctx.pending_response_header_ops.is_empty() {
+            // Unify: queued response-header ops (dye/record_outcome from
+            // fail-close plugins that self-write their response via this
+            // method) must land on the first response header that leaves the
+            // gateway, whoever writes it -- matching the drain already done
+            // by build_response_local_reply / send_grpc_error_direct /
+            // send_grpc_trailers_only.
+            //
+            // Framing protection: unlike those sibling drain sites, callers
+            // of this method write the body SEPARATELY afterwards (e.g.
+            // rate_limit_redis, auth_common's header-then-body sequence), so
+            // this drain cannot recompute content-length from a body it
+            // can't see. A queued Set/Remove on content-length or
+            // transfer-encoding would desync the wire from the
+            // already-decided body, so the caller's original framing always
+            // wins: capture it before draining, then restore it after.
+            let orig_cl = resp.headers.get(http::header::CONTENT_LENGTH).cloned();
+            let orig_te = resp.headers.get(http::header::TRANSFER_ENCODING).cloned();
+            self.ctx.drain_pending_response_header_ops(&mut resp);
+            let _ = resp.remove_header(&http::header::CONTENT_LENGTH);
+            if let Some(cl) = orig_cl {
+                let _ = resp.insert_header(http::header::CONTENT_LENGTH, cl);
+            }
+            let _ = resp.remove_header(&http::header::TRANSFER_ENCODING);
+            if let Some(te) = orig_te {
+                let _ = resp.insert_header(http::header::TRANSFER_ENCODING, te);
+            }
         }
         let result = self
             .inner
@@ -768,6 +842,77 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn set_mirror_state(&mut self, state: MirrorState) {
         self.ctx.mirror_state = Some(state);
     }
+
+    /// Install the dye plan of the plugin entry about to be invoked.
+    /// Called by every stage loop before each invocation (including an
+    /// `ExtensionRef` bundle's own inner iteration — see
+    /// `gateway_api_filters::extension_ref`); overwritten per invocation.
+    /// `Arc` so `record_outcome` can lift the plan back out of `ctx` before
+    /// iterating its rules while mutating `ctx`.
+    #[inline]
+    fn install_dye_plan(&mut self, plan: Option<Arc<CompiledDyePlan>>) {
+        self.ctx.current_dye_plan = plan;
+    }
+
+    /// Once-per-name anti-spoof strip: remove the client-supplied value of
+    /// each request-direction rule name the first time an entry declares it;
+    /// never re-strip (a prior entry's rendered value is gateway-authored).
+    /// Runs before the plugin's kill switch / gating / conditions. No-op
+    /// when no plan is installed. Core logic lives in the free function
+    /// `strip_request_dye_once_core` so it is unit-testable without a full
+    /// `Session`.
+    fn strip_request_dye_once(&mut self) {
+        let Some(plan) = self.ctx.current_dye_plan.clone() else {
+            return;
+        };
+        let mut handled = std::mem::take(&mut self.ctx.dye_handled_request_names);
+        strip_request_dye_once_core(self.inner.req_header_mut(), &plan, &mut handled);
+        self.ctx.dye_handled_request_names = handled;
+    }
+
+    fn record_outcome(&mut self, outcome: DyeOutcome, value: &str) {
+        let Some(plan) = self.ctx.current_dye_plan.clone() else {
+            return;
+        };
+        // Two explicit loops (request then response) rather than a chained
+        // iterator with a `ptr::eq` direction check: same behavior, no
+        // borrow-checker fight between the immutable rule reference and the
+        // `&mut self` header write below.
+        for rule in &plan.request {
+            if !rule.on.contains(&outcome) {
+                continue;
+            }
+            if let Some(conds) = &rule.conditions {
+                if conds.should_evaluate() && conds.evaluate_sync(self) == EvaluationResult::Skip {
+                    continue;
+                }
+            }
+            let v = self.dye_rule_value(rule, plan.type_prefix, outcome, value);
+            let _ = self.set_request_header(&rule.name, &v);
+        }
+        for rule in &plan.response {
+            if !rule.on.contains(&outcome) {
+                continue;
+            }
+            if let Some(conds) = &rule.conditions {
+                if conds.should_evaluate() && conds.evaluate_sync(self) == EvaluationResult::Skip {
+                    continue;
+                }
+            }
+            let v = self.dye_rule_value(rule, plan.type_prefix, outcome, value);
+            if outcome == DyeOutcome::Success {
+                // Set semantics — dual-mode via the existing adapter logic:
+                // bound response header (response stages) writes directly;
+                // otherwise queued. Going through `set_response_header`
+                // instead of pushing onto `pending_response_header_ops`
+                // directly is load-bearing (D-1 fix): a response-stage
+                // record must land in the bound header, not the queue.
+                let _ = self.set_response_header(&rule.name, &v);
+            } else {
+                let _ = self.append_response_header(&rule.name, &v);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -883,6 +1028,104 @@ mod local_reply_tests {
         assert_eq!(reply.headers.get("x-foo").unwrap().to_str().unwrap(), "bar");
         // The builder's destructive drain consumed the queue.
         assert!(ctx.pending_response_header_ops.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod dye_strip_tests {
+    use super::*;
+    use crate::plugins::runtime::dye_plan::CompiledDyePlan;
+    use crate::EdgionHttpContext;
+    use edgion_resources::resources::edgion_plugins::DyeSuite;
+
+    fn plan_declaring(name: &str) -> Arc<CompiledDyePlan> {
+        let suite: DyeSuite = serde_yaml::from_str(&format!("request:\n  - name: {name}\n")).unwrap();
+        CompiledDyePlan::compile(&suite, "canary").unwrap()
+    }
+
+    /// `PingoraSessionAdapter::strip_request_dye_once` needs a real `Session`,
+    /// which nothing in this codebase constructs in a unit test (see
+    /// `PingoraSessionAdapter::new`'s only test-adjacent caller,
+    /// `preflight_handler.rs`, which has the same "TODO: need a proper
+    /// Session" gap). Drive the exact same ctx + header sequence the adapter
+    /// method runs through the pure `strip_request_dye_once_core` instead —
+    /// this is the adapter method's body verbatim, minus the `Session` wrapper.
+    fn strip_once(ctx: &mut EdgionHttpContext, req: &mut RequestHeader) {
+        let Some(plan) = ctx.current_dye_plan.clone() else {
+            return;
+        };
+        let mut handled = std::mem::take(&mut ctx.dye_handled_request_names);
+        strip_request_dye_once_core(req, &plan, &mut handled);
+        ctx.dye_handled_request_names = handled;
+    }
+
+    #[test]
+    fn strip_request_dye_once_is_once_per_name() {
+        let mut ctx = EdgionHttpContext::default();
+        let mut req = RequestHeader::build("GET", b"/", None).unwrap();
+        req.insert_header("X-T", "client-forged").unwrap();
+
+        // Entry A declares X-T: strip removes the client-supplied value and
+        // marks the name handled.
+        ctx.current_dye_plan = Some(plan_declaring("X-T"));
+        strip_once(&mut ctx, &mut req);
+        assert!(req.headers.get("X-T").is_none());
+        assert_eq!(ctx.dye_handled_request_names, vec!["X-T".to_string()]);
+
+        // Simulate entry A's own plugin rendering its dye value onto the
+        // request between the two installs.
+        req.insert_header("X-T", "gateway-rendered").unwrap();
+
+        // Entry B also declares X-T: no second strip — the gateway-rendered
+        // value from entry A survives, and the handled list is not duplicated.
+        ctx.current_dye_plan = Some(plan_declaring("X-T"));
+        strip_once(&mut ctx, &mut req);
+        assert_eq!(req.headers.get("X-T").unwrap().to_str().unwrap(), "gateway-rendered");
+        assert_eq!(ctx.dye_handled_request_names, vec!["X-T".to_string()]);
+    }
+
+    #[test]
+    fn strip_request_dye_once_matches_names_case_insensitively() {
+        let mut ctx = EdgionHttpContext::default();
+        let mut req = RequestHeader::build("GET", b"/", None).unwrap();
+        req.insert_header("x-t", "client-forged").unwrap();
+
+        ctx.current_dye_plan = Some(plan_declaring("X-T"));
+        strip_once(&mut ctx, &mut req);
+        assert!(req.headers.get("x-t").is_none());
+
+        req.insert_header("X-T", "gateway-rendered").unwrap();
+        // A later entry declaring a differently-cased spelling of the same
+        // name still matches the already-handled record.
+        ctx.current_dye_plan = Some(plan_declaring("x-t"));
+        strip_once(&mut ctx, &mut req);
+        assert_eq!(req.headers.get("X-T").unwrap().to_str().unwrap(), "gateway-rendered");
+    }
+
+    #[test]
+    fn strip_request_dye_once_noop_without_installed_plan() {
+        let mut ctx = EdgionHttpContext::default();
+        let mut req = RequestHeader::build("GET", b"/", None).unwrap();
+        req.insert_header("X-T", "client-forged").unwrap();
+
+        // No plan installed (ctx.current_dye_plan is None): nothing stripped.
+        strip_once(&mut ctx, &mut req);
+        assert_eq!(req.headers.get("X-T").unwrap().to_str().unwrap(), "client-forged");
+        assert!(ctx.dye_handled_request_names.is_empty());
+    }
+
+    #[test]
+    fn strip_request_dye_once_ignores_response_direction_rules() {
+        let mut ctx = EdgionHttpContext::default();
+        let mut req = RequestHeader::build("GET", b"/", None).unwrap();
+        req.insert_header("X-O", "client-forged").unwrap();
+
+        let suite: DyeSuite = serde_yaml::from_str("response:\n  - name: X-O\n").unwrap();
+        ctx.current_dye_plan = Some(CompiledDyePlan::compile(&suite, "canary").unwrap());
+        strip_once(&mut ctx, &mut req);
+        // Response-direction rules never drive the request-side strip.
+        assert_eq!(req.headers.get("X-O").unwrap().to_str().unwrap(), "client-forged");
+        assert!(ctx.dye_handled_request_names.is_empty());
     }
 }
 
@@ -1016,5 +1259,284 @@ mod tests {
         let params = PingoraSessionAdapter::parse_path_params(pattern, actual);
 
         assert_eq!(params.get("query"), Some(&"hello%20world".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod record_outcome_tests {
+    use super::*;
+    use edgion_resources::resources::edgion_plugins::{DyeOutcome, DyeSuite};
+    use tokio::io::AsyncWriteExt;
+
+    /// Build a minimal real `pingora_proxy::Session` for adapter-level tests.
+    ///
+    /// `record_outcome`'s real implementation lives on `PingoraSessionAdapter`
+    /// (not a generic `&dyn PluginSession` free function), and constructing
+    /// the adapter needs a live `&mut Session` field even for a test that
+    /// never touches the downstream request. Nothing else in this codebase
+    /// builds one (see `dye_strip_tests`'s comment above, which sidesteps the
+    /// same gap by testing a pure core function instead) — but pingora's own
+    /// `Session::new_h1` doc comment says it "is mostly used for testing and
+    /// mocking", and `tokio::io::DuplexStream` implements pingora's `IO`
+    /// trait for exactly this purpose
+    /// (`pingora_core::protocols::ext_io_impl`). A `Session` needs a request
+    /// already read off the wire before any other method is callable, so
+    /// this writes a minimal literal request into one end of a duplex pair
+    /// and reads it back off the other end.
+    async fn test_session() -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"GET /dye-test HTTP/1.1\r\nHost: test\r\n\r\n")
+            .await
+            .expect("write minimal request into duplex pair");
+        drop(client); // header bytes are already buffered; no further writes needed
+        session
+            .read_request()
+            .await
+            .expect("read_request should succeed")
+            .then_some(())
+            .expect("client must not have closed before sending the request");
+        session
+    }
+
+    /// Like `test_session`, but keeps the client half of the duplex pair
+    /// alive and returns it to the caller. `write_response_header` tests
+    /// (Task 10) actually write bytes back over the wire; dropping the
+    /// client half (as `test_session` does once the request is buffered)
+    /// closes the reader on the other end of the duplex, so the response
+    /// write fails with `BrokenPipe`. The returned client is unused beyond
+    /// keeping the pipe open -- callers just need to hold it until the
+    /// session is done writing.
+    async fn test_session_with_client() -> (Session, tokio::io::DuplexStream) {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(b"GET /dye-test HTTP/1.1\r\nHost: test\r\n\r\n")
+            .await
+            .expect("write minimal request into duplex pair");
+        session
+            .read_request()
+            .await
+            .expect("read_request should succeed")
+            .then_some(())
+            .expect("client must not have closed before sending the request");
+        (session, client)
+    }
+
+    fn compile_plan(yaml: &str, type_prefix: &'static str) -> Arc<CompiledDyePlan> {
+        let suite: DyeSuite = serde_yaml::from_str(yaml).unwrap();
+        CompiledDyePlan::compile(&suite, type_prefix).unwrap()
+    }
+
+    fn pending_ops(ctx: &EdgionHttpContext) -> &[PendingHeaderOp] {
+        &ctx.pending_response_header_ops
+    }
+
+    /// `PendingHeaderOp` has no `PartialEq` (nothing else in the codebase
+    /// needed one), so assert on the single queued op's shape by matching
+    /// instead of deriving one just for this test module.
+    fn assert_single_append(ctx: &EdgionHttpContext, expect_name: &str, expect_value: &str) {
+        match pending_ops(ctx) {
+            [PendingHeaderOp::Append { name, value }] => {
+                assert_eq!(name, expect_name);
+                assert_eq!(value, expect_value);
+            }
+            other => panic!("expected exactly one Append op, got {other:?}"),
+        }
+    }
+
+    fn assert_single_set(ctx: &EdgionHttpContext, expect_name: &str, expect_value: &str) {
+        match pending_ops(ctx) {
+            [PendingHeaderOp::Set { name, value }] => {
+                assert_eq!(name, expect_name);
+                assert_eq!(value, expect_value);
+            }
+            other => panic!("expected exactly one Set op, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn record_outcome_failure_appends_prefixed_value_to_queue() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.current_dye_plan = Some(compile_plan(
+            "response:\n  - name: X-O\n    on: [fail-open]\n",
+            "rate_limit_redis",
+        ));
+
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter.record_outcome(DyeOutcome::FailOpen, "redis-unreachable");
+
+        assert_single_append(&ctx, "X-O", "rate_limit_redis:fail-open:redis-unreachable");
+    }
+
+    #[tokio::test]
+    async fn record_outcome_success_sets_recorded_value_verbatim() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        // Omitted `on` defaults to [Success]; omitted `value` renders the
+        // recorded value (no operator template, no provenance prefix).
+        ctx.current_dye_plan = Some(compile_plan("response:\n  - name: X-O\n", "canary"));
+
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter.record_outcome(DyeOutcome::Success, "app-v1");
+
+        assert_single_set(&ctx, "X-O", "app-v1");
+    }
+
+    #[tokio::test]
+    async fn record_outcome_no_plan_is_noop() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        // No plan installed at all.
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter.record_outcome(DyeOutcome::FailOpen, "cause");
+        assert!(pending_ops(&ctx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn record_outcome_no_matching_rule_is_noop() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        // Plan installed, but the only rule declares `on: [success]` while
+        // the recorded outcome is a failure -- no rule matches.
+        ctx.current_dye_plan = Some(compile_plan("response:\n  - name: X-O\n", "canary"));
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        adapter.record_outcome(DyeOutcome::FailOpen, "cause");
+        assert!(pending_ops(&ctx).is_empty());
+    }
+
+    #[tokio::test]
+    async fn record_outcome_template_value_renders_and_sanitizes() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.current_dye_plan = Some(compile_plan(
+            "response:\n  - name: X-O\n    on: [fail-open]\n    value: 'v ${ctx:id}'\n",
+            "canary",
+        ));
+
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        // Control bytes on a rendered value can only arrive through a
+        // non-header-validated source (an `http::HeaderValue` rejects raw
+        // CR/LF outright, so a wire-level request header can never carry
+        // them) -- a ctx var set by an earlier plugin (webhook response, JWT
+        // claim, ...) is the realistic vector `sanitize_field_value` guards.
+        adapter.set_ctx_var("id", "abc\r\ninjected").unwrap();
+        adapter.record_outcome(DyeOutcome::FailOpen, "unused");
+
+        assert_single_append(&ctx, "X-O", "v abcinjected");
+    }
+
+    #[tokio::test]
+    async fn record_outcome_bound_response_header_writes_directly() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.current_dye_plan = Some(compile_plan(
+            "response:\n  - name: X-O\n    on: [fail-open]\n",
+            "canary",
+        ));
+        let mut response_header = ResponseHeader::build(200, None).unwrap();
+
+        let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+        adapter.record_outcome(DyeOutcome::FailOpen, "cause");
+
+        // D-1 regression pin: a response-stage record must land directly in
+        // the bound header via the adapter's existing dual-mode
+        // set_response_header/append_response_header, never bypass it by
+        // pushing straight onto `pending_response_header_ops`.
+        assert_eq!(
+            response_header.headers.get("X-O").unwrap().to_str().unwrap(),
+            "canary:fail-open:cause"
+        );
+        assert!(pending_ops(&ctx).is_empty());
+    }
+
+    /// Task 10 (write_response_header drain amendment): a plugin that
+    /// self-writes its response via `write_response_header` (the
+    /// ErrTerminateRequest fail-close path -- rate_limit_redis,
+    /// forward_auth, ldap_auth) must still carry any queued dye/header ops,
+    /// same as the runtime's own local-reply / gRPC error builders. But
+    /// unlike those builders, the caller here writes the body SEPARATELY
+    /// afterwards, so a queued framing op (Set content-length here) must
+    /// NOT win over the caller's own framing -- the caller's
+    /// content-length/transfer-encoding must be restored after the drain.
+    #[tokio::test]
+    async fn self_written_response_drains_queue_with_framing_protected() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.pending_response_header_ops.push(PendingHeaderOp::Append {
+            name: "X-O".to_string(),
+            value: "v1".to_string(),
+        });
+        // Hostile framing op: without protection this would clobber the
+        // caller's real content-length and desync the wire from the body
+        // the caller is about to write in a separate call.
+        ctx.pending_response_header_ops.push(PendingHeaderOp::Set {
+            name: "content-length".to_string(),
+            value: "999".to_string(),
+        });
+
+        let mut resp = ResponseHeader::build(200, None).unwrap();
+        resp.insert_header("content-length", "5").unwrap();
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter
+                .write_response_header(Box::new(resp), false)
+                .await
+                .expect("write_response_header should succeed");
+        }
+
+        let written = session
+            .response_written()
+            .expect("header must have been written to the session");
+        assert_eq!(written.headers.get("X-O").unwrap().to_str().unwrap(), "v1");
+        assert_eq!(
+            written.headers.get("content-length").unwrap().to_str().unwrap(),
+            "5",
+            "caller's original content-length must survive a queued hostile Set"
+        );
+        assert!(
+            written.headers.get("transfer-encoding").is_none(),
+            "no transfer-encoding should be introduced by the drain"
+        );
+        assert!(pending_ops(&ctx).is_empty());
+    }
+
+    /// Task 10 regression pin: the gRPC reroute inside `write_response_header`
+    /// (status != 200 on a gRPC route) already drained queued ops via
+    /// `send_grpc_trailers_only` before this task -- confirm that path is
+    /// untouched by the plain-HTTP-arm framing-protection amendment.
+    #[tokio::test]
+    async fn grpc_reroute_still_drains_via_trailers_path() {
+        let (mut session, _client) = test_session_with_client().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.is_grpc_request = true;
+        ctx.pending_response_header_ops.push(PendingHeaderOp::Append {
+            name: "X-O".to_string(),
+            value: "v1".to_string(),
+        });
+
+        let resp = ResponseHeader::build(404, None).unwrap();
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter
+                .write_response_header(Box::new(resp), false)
+                .await
+                .expect("write_response_header should succeed");
+        }
+
+        let written = session
+            .response_written()
+            .expect("trailers-only header must have been written");
+        assert_eq!(written.headers.get("X-O").unwrap().to_str().unwrap(), "v1");
+        assert!(written.headers.get("grpc-status").is_some());
+        assert_eq!(ctx.request_info.status, Some(200));
+        assert!(ctx.request_info.grpc_status.is_some());
+        assert!(pending_ops(&ctx).is_empty());
     }
 }

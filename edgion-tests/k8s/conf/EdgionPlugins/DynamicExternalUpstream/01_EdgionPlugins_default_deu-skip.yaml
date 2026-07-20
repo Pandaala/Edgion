@@ -10,6 +10,9 @@ metadata:
 spec:
   requestPlugins:
     - type: DynamicExternalUpstream
+      dye:
+        request:
+          - name: X-Dynamic-External-Upstream
       config:
         from:
           type: header
@@ -32,6 +35,3 @@ spec:
             overrideHost: localhost
         onMissing: skip
         onNoMatch: skip
-        dyeHeaders:
-          request:
-            - name: X-Dynamic-External-Upstream

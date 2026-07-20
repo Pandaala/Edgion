@@ -95,7 +95,7 @@ impl CanaryHotSwapFinalTestSuite {
         )
     }
 
-    /// After the hot swap, the updated dyeHeaders (new X-Release-Track entry)
+    /// After the hot swap, the updated dye (new X-Release-Track entry)
     /// must be live and carry the flipped profile name.
     ///
     /// Uses /echo rather than /canary/api for the same reason as the static
@@ -106,7 +106,7 @@ impl CanaryHotSwapFinalTestSuite {
     fn hotswap_final_dye_header() -> TestCase {
         TestCase::new(
             "hotswap_final_dye_header",
-            "Final: hot-reloaded dyeHeaders adds X-Release-Track carrying 'canary'",
+            "Final: hot-reloaded dye adds X-Release-Track carrying 'canary'",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();

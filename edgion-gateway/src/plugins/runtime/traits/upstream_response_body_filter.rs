@@ -4,9 +4,11 @@
 //! Plugins can inspect the chunk and return an optional Duration to throttle
 //! the downstream transmission rate (bandwidth limiting).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::session::PluginSession;
+use crate::plugins::runtime::dye_plan::CompiledDyePlan;
 
 /// UpstreamResponseBodyFilter trait for upstream response body stage plugins
 /// Runs during upstream_response_body_filter hook (sync - no async allowed)
@@ -39,6 +41,16 @@ pub trait UpstreamResponseBodyFilter: Send + Sync {
     /// surface the value supplied via the EdgionPlugins entry's `alias`
     /// field. Plain plugin impls do not need to implement this.
     fn alias(&self) -> Option<&str> {
+        None
+    }
+
+    /// Optional entry-level compiled dye plan.
+    ///
+    /// Default returns `None`; the conditional wrappers in
+    /// `conditional_filter.rs` are the only impls that override this to
+    /// surface the plan compiled from the EdgionPlugins entry's `dye` field.
+    /// Plain plugin impls do not need to implement this.
+    fn dye_plan(&self) -> Option<&Arc<CompiledDyePlan>> {
         None
     }
 

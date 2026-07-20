@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub mod body_requirement;
 pub mod conditions;
 pub mod custom_plugins;
+pub mod dye;
 pub mod edgion_plugin;
 pub mod entry;
 
@@ -25,9 +26,10 @@ mod tests;
 // Re-exports
 pub use access_decision::AccessDecision;
 pub use body_requirement::{BodyReadFailureMode, BodyRequirement};
+pub use dye::{sanitize_field_value, DyeOutcome, DyeRule, DyeSuite, DENIED_DYE_HEADER_NAMES};
 pub use edgion_plugin::EdgionPlugin;
 pub use entry::{
-    PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
+    dye_set_clobber_error, PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
     UpstreamResponseFilterEntry,
 };
 pub use plugin_configs::{

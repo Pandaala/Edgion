@@ -91,6 +91,7 @@ const enSidebar = [
                   { text: 'Ctx Setter', link: '/en/user-guide/http-route/filters/edgion-plugins/ctx-setter' },
                   { text: 'Real IP', link: '/en/user-guide/http-route/filters/edgion-plugins/real-ip' },
                   { text: 'Region Route', link: '/en/user-guide/http-route/filters/edgion-plugins/region-route' },
+                  { text: 'Dye', link: '/en/user-guide/http-route/filters/edgion-plugins/dye' },
                 ],
               },
               {
@@ -338,6 +339,7 @@ const zhSidebar = [
                   { text: 'Ctx Setter', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/ctx-setter' },
                   { text: 'Real IP', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/real-ip' },
                   { text: '区域路由', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/region-route' },
+                  { text: '染色', link: '/zh-CN/user-guide/http-route/filters/edgion-plugins/dye' },
                 ],
               },
               {

@@ -3,6 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use super::dye::DyeOutcome;
 use super::plugin_configs::{
     AllEndpointStatusConfig, BandwidthLimitConfig, BasicAuthConfig, CanaryConfig, CorsConfig, CsrfConfig, CtxSetConfig,
     DebugAccessLogToHeaderConfig, DirectEndpointConfig, DslConfig, DynamicExternalUpstreamConfig,
@@ -13,6 +14,11 @@ use super::plugin_configs::{
     TraceContextConfig, WasmConfig,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
+
+const DYE_SELECTION: &[DyeOutcome] = &[DyeOutcome::Success, DyeOutcome::Fallback, DyeOutcome::Reject];
+const DYE_SELECTION_FALLBACK_ONLY: &[DyeOutcome] = &[DyeOutcome::Success, DyeOutcome::Fallback];
+const DYE_FAIL_BOTH: &[DyeOutcome] = &[DyeOutcome::FailOpen, DyeOutcome::FailClose];
+const DYE_FAIL_CLOSE_ONLY: &[DyeOutcome] = &[DyeOutcome::FailClose];
 
 /// Plugin enum for all supported plugin types
 ///
@@ -224,6 +230,99 @@ impl EdgionPlugin {
         }
     }
 
+    /// Outcomes this plugin type records (`record_outcome` call sites exist).
+    /// The dye capability table: configuring an outcome not listed here is an
+    /// admission error (no silent no-op — the `body:` precedent). Grows as
+    /// wiring grows.
+    pub fn dye_capabilities(&self) -> &'static [DyeOutcome] {
+        match self {
+            // Selection plugins: success + fallback/reject branches.
+            EdgionPlugin::Canary(_)
+            | EdgionPlugin::DynamicInternalUpstream(_)
+            | EdgionPlugin::DynamicExternalUpstream(_)
+            | EdgionPlugin::DirectEndpoint(_) => DYE_SELECTION,
+            // region_route: no reject capability until the Rejected-silent-GoodNext
+            // pre-existing bug is fixed (see spec, wiring notes).
+            EdgionPlugin::RegionRoute(_) => DYE_SELECTION_FALLBACK_ONLY,
+            // Dependency-failure plugins.
+            EdgionPlugin::RateLimitRedis(_)
+            | EdgionPlugin::ExtProc(_)
+            | EdgionPlugin::Wasm(_)
+            | EdgionPlugin::Dsl(_)
+            | EdgionPlugin::OpenidConnect(_) => DYE_FAIL_BOTH,
+            // forward_auth/ldap_auth: fail-close only until the
+            // failure-policy-unification sibling task lands fail-open.
+            EdgionPlugin::ForwardAuth(_) | EdgionPlugin::LdapAuth(_) => DYE_FAIL_CLOSE_ONLY,
+            _ => &[],
+        }
+    }
+
+    /// Stable snake_case value prefix, derived from `type_name()` once here so
+    /// the wire contract cannot drift from the type list.
+    pub fn dye_type_prefix(&self) -> &'static str {
+        match self {
+            EdgionPlugin::Canary(_) => "canary",
+            EdgionPlugin::DynamicInternalUpstream(_) => "dynamic_internal_upstream",
+            EdgionPlugin::DynamicExternalUpstream(_) => "dynamic_external_upstream",
+            EdgionPlugin::DirectEndpoint(_) => "direct_endpoint",
+            EdgionPlugin::RegionRoute(_) => "region_route",
+            EdgionPlugin::RateLimitRedis(_) => "rate_limit_redis",
+            EdgionPlugin::ExtProc(_) => "ext_proc",
+            EdgionPlugin::Wasm(_) => "wasm",
+            EdgionPlugin::Dsl(_) => "dsl",
+            EdgionPlugin::OpenidConnect(_) => "openid_connect",
+            EdgionPlugin::ForwardAuth(_) => "forward_auth",
+            EdgionPlugin::LdapAuth(_) => "ldap_auth",
+            _ => "",
+        }
+    }
+
+    /// Header-typed routing key sources, for the request-direction dye
+    /// collision check (a dye name equal to a key source would strip the
+    /// plugin's own routing input). Mirrors each selection plugin's OLD
+    /// `key_collision_error` call site (see `key_collision_error` usages in
+    /// `plugin_configs/{direct_endpoint,dynamic_external_upstream,
+    /// dynamic_internal_upstream,region_route}.rs` before this method
+    /// centralized the mapping) — this is a move of existing logic, not new
+    /// policy.
+    pub fn key_header_names(&self) -> Vec<String> {
+        fn headers_of<'a>(keys: impl IntoIterator<Item = &'a crate::common::KeyGet>) -> Vec<String> {
+            keys.into_iter()
+                .filter_map(|k| match k {
+                    crate::common::KeyGet::Header { name } => Some(name.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+        match self {
+            // DirectEndpoint / DynamicInternalUpstream / DynamicExternalUpstream:
+            // a single `from: KeyGet` field.
+            EdgionPlugin::DirectEndpoint(c) => headers_of(std::iter::once(&c.from)),
+            EdgionPlugin::DynamicInternalUpstream(c) => headers_of(std::iter::once(&c.from)),
+            EdgionPlugin::DynamicExternalUpstream(c) => headers_of(std::iter::once(&c.from)),
+            // RegionRoute: every header-typed key source it reads — the shared
+            // `key_get`, the hash passthrough `hash_key_get`, and each
+            // `RouteByDirectRegion` rule's `key_from` — mirroring
+            // `RegionRouteConfig::check_fields`.
+            EdgionPlugin::RegionRoute(c) => {
+                let mut names = headers_of(c.key_get.iter());
+                if let Some(kgs) = &c.hash_key_get {
+                    names.extend(headers_of(kgs.iter()));
+                }
+                for rule in &c.route_rules {
+                    if let super::plugin_configs::RouteRule::RouteByDirectRegion { key_from } = rule {
+                        names.extend(headers_of(key_from.iter()));
+                    }
+                }
+                names
+            }
+            // Canary has no key-source configuration (profile selection is
+            // driven by `activeProfile`/`activeProfileRef`, not a request key)
+            // and was never a `key_collision_error` call site.
+            _ => Vec::new(),
+        }
+    }
+
     /// Stateless validation entry point for any plugin variant.
     ///
     /// This is the canonical preparse-time validation accessor. New variants
@@ -357,9 +456,114 @@ mod canary_variant_tests {
             profiles: HashMap::from([("stable".to_string(), target("app-v1"))]),
             active_profile_ref: None,
             on_invalid: Default::default(),
-            dye_headers: None,
         };
         let p = EdgionPlugin::Canary(cfg);
         assert!(p.validation_error().unwrap().contains("activeProfile"));
+    }
+}
+
+#[cfg(test)]
+mod dye_capability_tests {
+    use super::*;
+    use crate::resources::edgion_plugins::dye::DyeOutcome;
+
+    #[test]
+    fn selection_plugins_declare_success() {
+        use crate::resources::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+        use std::collections::HashMap;
+
+        // CanaryConfig has no `Default` impl; construct directly (mirrors the
+        // existing `valid_config()` helper in canary.rs's own tests).
+        let cfg = CanaryConfig {
+            enable: true,
+            active_profile: "stable".to_string(),
+            profiles: HashMap::from([(
+                "stable".to_string(),
+                DynUpstreamTarget {
+                    name: "app-v1".to_string(),
+                    namespace: None,
+                },
+            )]),
+            active_profile_ref: None,
+            on_invalid: Default::default(),
+        };
+        let p = EdgionPlugin::Canary(cfg);
+        assert!(p.dye_capabilities().contains(&DyeOutcome::Success));
+        assert!(p.dye_capabilities().contains(&DyeOutcome::Fallback));
+        assert!(p.dye_capabilities().contains(&DyeOutcome::Reject));
+        assert_eq!(p.dye_type_prefix(), "canary");
+    }
+
+    #[test]
+    fn unwired_plugin_declares_nothing() {
+        use crate::resources::plugin_configs::CorsConfig;
+        let p = EdgionPlugin::Cors(CorsConfig::default());
+        assert!(p.dye_capabilities().is_empty());
+    }
+
+    #[test]
+    fn type_prefix_is_snake_case_of_type_name() {
+        use crate::resources::plugin_configs::RateLimitRedisConfig;
+        let p = EdgionPlugin::RateLimitRedis(RateLimitRedisConfig::default());
+        assert_eq!(p.dye_type_prefix(), "rate_limit_redis");
+        assert!(p.dye_capabilities().contains(&DyeOutcome::FailOpen));
+    }
+
+    #[test]
+    fn key_header_names_mirrors_single_from_field_plugins() {
+        use crate::resources::plugin_configs::{
+            DirectEndpointConfig, DynamicExternalUpstreamConfig, DynamicInternalUpstreamConfig,
+        };
+
+        // `KeyGet` tags are `#[serde(tag = "type", rename_all = "camelCase")]`,
+        // so the `Header` variant renders as lowercase `header`.
+        let direct: DirectEndpointConfig =
+            serde_yaml::from_str("from:\n  type: header\n  name: X-Backend-Target\n").unwrap();
+        assert_eq!(
+            EdgionPlugin::DirectEndpoint(direct).key_header_names(),
+            vec!["X-Backend-Target".to_string()]
+        );
+
+        let dyn_internal: DynamicInternalUpstreamConfig =
+            serde_yaml::from_str("from:\n  type: header\n  name: X-Upstream\n").unwrap();
+        assert_eq!(
+            EdgionPlugin::DynamicInternalUpstream(dyn_internal).key_header_names(),
+            vec!["X-Upstream".to_string()]
+        );
+
+        let dyn_external: DynamicExternalUpstreamConfig =
+            serde_yaml::from_str("from:\n  type: header\n  name: X-External\ndomainMap: {}\n").unwrap();
+        assert_eq!(
+            EdgionPlugin::DynamicExternalUpstream(dyn_external).key_header_names(),
+            vec!["X-External".to_string()]
+        );
+
+        // Non-header key source contributes nothing.
+        let direct_ip: DirectEndpointConfig = serde_yaml::from_str("from:\n  type: clientIp\n").unwrap();
+        assert!(EdgionPlugin::DirectEndpoint(direct_ip).key_header_names().is_empty());
+    }
+
+    #[test]
+    fn key_header_names_collects_all_region_route_sources() {
+        use crate::resources::plugin_configs::RegionRouteConfig;
+
+        let cfg: RegionRouteConfig = serde_yaml::from_str(
+            "myRegion: us\n\
+             keyGet:\n  - type: header\n    name: X-Key\n\
+             hashKeyGet:\n  - type: header\n    name: X-Hash\n\
+             routeRules:\n  - type: RouteByDirectRegion\n    keyFrom:\n      - type: header\n        name: X-Region\n\
+             regions: []\n",
+        )
+        .unwrap();
+        let mut names = EdgionPlugin::RegionRoute(cfg).key_header_names();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["X-Hash".to_string(), "X-Key".to_string(), "X-Region".to_string()]
+        );
+        assert_eq!(
+            EdgionPlugin::RegionRoute(RegionRouteConfig::default()).dye_capabilities(),
+            &[DyeOutcome::Success, DyeOutcome::Fallback]
+        );
     }
 }

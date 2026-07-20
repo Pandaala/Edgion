@@ -27,7 +27,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 
-use crate::plugins::runtime::{PluginLog, PluginSession};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession};
 use edgion_resources::filters::PluginRunningResult;
 
 use super::super::runtime::DslRuntime;
@@ -870,26 +870,43 @@ pub async fn execute_safe(
                 RuntimeError::Internal { .. } => "internal error",
             };
             log.push_err(kind);
-            apply_error_policy(error_policy)
+            apply_error_policy(session, error_policy)
         }
         Err(_panic) => {
             log.push_err("vm panic");
-            apply_error_policy(error_policy)
+            apply_error_policy(session, error_policy)
         }
     }
 }
 
-fn apply_error_policy(policy: &DslErrorPolicy) -> PluginRunningResult {
+/// Single choke point for every DSL error-policy decision (a runtime error
+/// of any `RuntimeError` variant, or a guest panic). Also the single choke
+/// point for the dye suite's dependency-failure recording: `record_outcome`
+/// is called here, before returning `PluginRunningResult`, so it is always
+/// ordered before the runtime's own response write. The specific
+/// `RuntimeError` variant is not distinguished at the dye layer (it is
+/// already captured in the `PluginLog` `kind` tag above), so cause
+/// `script-error` is the single most accurate token for every arm.
+fn apply_error_policy(session: &mut dyn PluginSession, policy: &DslErrorPolicy) -> PluginRunningResult {
     match policy {
-        DslErrorPolicy::Ignore => PluginRunningResult::GoodNext,
-        DslErrorPolicy::Deny => PluginRunningResult::ErrResponse {
-            status: 500,
-            body: Some("DSL execution error".to_string()),
-        },
-        DslErrorPolicy::DenyWith { status, body } => PluginRunningResult::ErrResponse {
-            status: *status,
-            body: body.clone(),
-        },
+        DslErrorPolicy::Ignore => {
+            session.record_outcome(DyeOutcome::FailOpen, "script-error");
+            PluginRunningResult::GoodNext
+        }
+        DslErrorPolicy::Deny => {
+            session.record_outcome(DyeOutcome::FailClose, "script-error");
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: Some("DSL execution error".to_string()),
+            }
+        }
+        DslErrorPolicy::DenyWith { status, body } => {
+            session.record_outcome(DyeOutcome::FailClose, "script-error");
+            PluginRunningResult::ErrResponse {
+                status: *status,
+                body: body.clone(),
+            }
+        }
     }
 }
 

@@ -26,6 +26,7 @@ use std::collections::BTreeSet;
 
 use super::conditions::PluginConditions;
 use super::edgion_plugin::EdgionPlugin;
+use super::entry::dye_set_clobber_error;
 use super::EdgionPlugins;
 use crate::resources::common::log_labels::LOG_LABEL_MAX_COUNT;
 
@@ -226,6 +227,12 @@ impl EdgionPlugins {
                         if let Some(err) = entry.validate_alias() {
                             errors.push(format!("{}[{}] ({}): {}", $label, i, name, err));
                         }
+                        // 2b. Optional entry-level dye suite. Same severity as the
+                        //     alias check above: recorded, does not skip the stage
+                        //     check.
+                        if let Some(err) = entry.validate_dye() {
+                            errors.push(format!("{}[{}] ({}): {}", $label, i, name, err));
+                        }
                         // 3. Wrong-stage placement.
                         if !applicable_stages(&entry.plugin).$stage_field {
                             errors.push(format!(
@@ -257,7 +264,49 @@ impl EdgionPlugins {
             upstream_response
         );
 
-        // Pass 2b: operator body requirement validation for the two async stages
+        // Pass 2b: resource-level dye "set clobber" check. A failure rule's
+        // response header must not equal (case-insensitively) any success
+        // rule's response header across ANY entry in this resource — success
+        // renders with Set semantics and would silently wipe an appended
+        // failure value queued earlier by a different entry. Runs once over
+        // all four stage arrays chained (only enabled entries participate,
+        // matching the disabled-entry-is-inert rule used throughout this pass).
+        let all_dye_suites = self
+            .spec
+            .request_plugins
+            .iter()
+            .flatten()
+            .filter(|e| e.is_enabled())
+            .map(|e| e.dye.as_ref())
+            .chain(
+                self.spec
+                    .upstream_response_filter_plugins
+                    .iter()
+                    .flatten()
+                    .filter(|e| e.is_enabled())
+                    .map(|e| e.dye.as_ref()),
+            )
+            .chain(
+                self.spec
+                    .upstream_response_body_filter_plugins
+                    .iter()
+                    .flatten()
+                    .filter(|e| e.is_enabled())
+                    .map(|e| e.dye.as_ref()),
+            )
+            .chain(
+                self.spec
+                    .upstream_response_plugins
+                    .iter()
+                    .flatten()
+                    .filter(|e| e.is_enabled())
+                    .map(|e| e.dye.as_ref()),
+            );
+        if let Some(err) = dye_set_clobber_error(all_dye_suites) {
+            errors.push(err);
+        }
+
+        // Pass 2c: operator body requirement validation for the two async stages
         // that carry a `body` field. Mirrors the gateway `add_from_*` paths, which
         // check `entry.body` only for enabled, config-valid entries (a config
         // error `continue`s before the body check), with the same
@@ -615,6 +664,131 @@ spec:
         assert!(
             !errs.iter().any(|e| e.contains("at most one TraceContext")),
             "unexpected duplicate error: {errs:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dye_validate_tests {
+    use crate::resources::edgion_plugins::dye::{DyeOutcome, DyeRule, DyeSuite};
+    use crate::resources::edgion_plugins::{
+        EdgionPlugin, EdgionPlugins, EdgionPluginsSpec, RequestFilterEntry, UpstreamResponseFilterEntry,
+    };
+
+    fn with_request_plugins(entries: Vec<RequestFilterEntry>) -> EdgionPlugins {
+        EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(entries),
+                ..Default::default()
+            },
+            status: None,
+        }
+    }
+
+    fn header_filter() -> crate::resources::http_route::HTTPHeaderFilter {
+        crate::resources::http_route::HTTPHeaderFilter {
+            set: None,
+            add: None,
+            remove: None,
+        }
+    }
+
+    fn dye_response(name: &str, on: &[DyeOutcome]) -> DyeSuite {
+        DyeSuite {
+            request: vec![],
+            response: vec![DyeRule {
+                name: name.to_string(),
+                on: on.to_vec(),
+                value: None,
+                conditions: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn invalid_dye_is_reported_and_does_not_skip_stage_check() {
+        // RequestHeaderModifier declares no dye capabilities, so a default
+        // `[success]` dye rule is rejected — mirrors the alias parity test
+        // above, with no spurious stage error alongside it.
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(header_filter()));
+        entry.dye = Some(dye_response("X-Dye", &[DyeOutcome::Success]));
+        let ep = with_request_plugins(vec![entry]);
+        let errs = ep.validate_plugins();
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        assert!(errs[0].contains("never records"), "{errs:?}");
+    }
+
+    #[test]
+    fn no_dye_produces_no_error() {
+        let entry = RequestFilterEntry::new(EdgionPlugin::RequestHeaderModifier(header_filter()));
+        let ep = with_request_plugins(vec![entry]);
+        assert!(ep.validate_plugins().is_empty());
+    }
+
+    #[test]
+    fn set_clobber_collision_within_one_array_detected_by_validate_plugins() {
+        // RegionRoute declares Success + Fallback capabilities, keeping the
+        // per-entry capability check out of the way so the resource-level
+        // clobber check is isolated.
+        let mut success_entry = RequestFilterEntry::new(EdgionPlugin::RegionRoute(Default::default()));
+        success_entry.dye = Some(dye_response("X-Dye", &[DyeOutcome::Success]));
+
+        let mut fallback_entry = RequestFilterEntry::new(EdgionPlugin::RegionRoute(Default::default()));
+        fallback_entry.dye = Some(dye_response("x-dye", &[DyeOutcome::Fallback]));
+
+        let ep = with_request_plugins(vec![success_entry, fallback_entry]);
+        let errs = ep.validate_plugins();
+        assert!(
+            errs.iter().any(|e| e.contains("dye: response header")),
+            "expected a set-clobber error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn set_clobber_collision_across_stage_arrays_detected_by_validate_plugins() {
+        // Success rule lives in requestPlugins, the colliding failure rule in
+        // upstreamResponseFilterPlugins — the clobber check runs once per
+        // resource over all four stage arrays chained, not per-array.
+        let mut success_entry = RequestFilterEntry::new(EdgionPlugin::RegionRoute(Default::default()));
+        success_entry.dye = Some(dye_response("X-Dye", &[DyeOutcome::Success]));
+
+        let mut fallback_entry =
+            UpstreamResponseFilterEntry::new(EdgionPlugin::ResponseHeaderModifier(header_filter()));
+        fallback_entry.dye = Some(dye_response("x-dye", &[DyeOutcome::FailOpen]));
+
+        let ep = EdgionPlugins {
+            metadata: Default::default(),
+            spec: EdgionPluginsSpec {
+                request_plugins: Some(vec![success_entry]),
+                upstream_response_filter_plugins: Some(vec![fallback_entry]),
+                ..Default::default()
+            },
+            status: None,
+        };
+        let errs = ep.validate_plugins();
+        assert!(
+            errs.iter().any(|e| e.contains("dye: response header")),
+            "expected a cross-array set-clobber error, got: {errs:?}"
+        );
+    }
+
+    #[test]
+    fn set_clobber_ignores_disabled_entries() {
+        // A disabled entry's dye is dormant — must not trip the resource-level
+        // clobber check, matching the disabled-entry-is-inert rule used
+        // throughout `validate_plugins`.
+        let mut success_entry = RequestFilterEntry::new(EdgionPlugin::RegionRoute(Default::default()));
+        success_entry.dye = Some(dye_response("X-Dye", &[DyeOutcome::Success]));
+
+        let mut fallback_entry = RequestFilterEntry::with_enable(EdgionPlugin::RegionRoute(Default::default()), false);
+        fallback_entry.dye = Some(dye_response("x-dye", &[DyeOutcome::Fallback]));
+
+        let ep = with_request_plugins(vec![success_entry, fallback_entry]);
+        let errs = ep.validate_plugins();
+        assert!(
+            !errs.iter().any(|e| e.contains("dye: response header")),
+            "disabled entry's dye must not trigger a clobber error, got: {errs:?}"
         );
     }
 }

@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use super::client::ExtProcClient;
 use super::mutation;
 use crate::plugins::runtime::log::la;
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter, UpstreamResponse};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter, UpstreamResponse};
 use edgion_common::ext_proc::proto::{
     processing_request, processing_response, HeaderMutation, HttpHeaders, ImmediateResponse, ProcessingRequest,
 };
@@ -66,7 +66,18 @@ impl ExtProc {
     /// `detail` carries an optional sub-tag (e.g. the gRPC status code's static
     /// description for transport failures) so the access-log PluginLog entry
     /// preserves the failure category without resorting to data-plane tracing.
-    fn fail_mode(&self, log: &mut PluginLog, reason: &str, detail: Option<&str>) -> PluginRunningResult {
+    ///
+    /// This is also the single choke point for the dye suite's dependency-
+    /// failure recording: `record_outcome` is called here (before returning
+    /// `PluginRunningResult`, so it is always ordered before the runtime's
+    /// own response write) with `reason` kebab-cased as the cause.
+    fn fail_mode(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        reason: &str,
+        detail: Option<&str>,
+    ) -> PluginRunningResult {
         match detail {
             Some(d) if self.failure_mode_allow => {
                 log.push_fmt("ext_proc {}:{}:fail-open", la![reason, d]);
@@ -81,9 +92,12 @@ impl ExtProc {
                 log.push_fmt("ext_proc {}:fail-close", la![reason]);
             }
         }
+        let cause = reason.replace(' ', "-");
         if self.failure_mode_allow {
+            session.record_outcome(DyeOutcome::FailOpen, &cause);
             PluginRunningResult::GoodNext
         } else {
+            session.record_outcome(DyeOutcome::FailClose, &cause);
             PluginRunningResult::ErrResponse {
                 status: 500,
                 body: Some("ext_proc unavailable".to_string()),
@@ -154,7 +168,7 @@ impl RequestFilter for ExtProc {
         let resp = match self.client.exchange(request).await {
             Ok(resp) => resp,
             Err(status) => {
-                return self.fail_mode(log, "unreachable", Some(status.code().description()));
+                return self.fail_mode(session, log, "unreachable", Some(status.code().description()));
             }
         };
 
@@ -170,7 +184,7 @@ impl RequestFilter for ExtProc {
             // Wrong phase or empty verdict: a malformed answer must honor the
             // configured fail mode, not silently continue (which would defeat
             // fail-close).
-            _ => self.fail_mode(log, "bad verdict", None),
+            _ => self.fail_mode(session, log, "bad verdict", None),
         }
     }
 }
@@ -196,7 +210,7 @@ impl UpstreamResponse for ExtProc {
         let resp = match self.client.exchange(request).await {
             Ok(resp) => resp,
             Err(status) => {
-                return self.fail_mode(log, "unreachable", Some(status.code().description()));
+                return self.fail_mode(session, log, "unreachable", Some(status.code().description()));
             }
         };
 
@@ -209,7 +223,67 @@ impl UpstreamResponse for ExtProc {
                 PluginRunningResult::GoodNext
             }
             Some(processing_response::Response::ImmediateResponse(imm)) => immediate_reply(session, log, imm),
-            _ => self.fail_mode(log, "bad verdict", None),
+            _ => self.fail_mode(session, log, "bad verdict", None),
         }
+    }
+}
+
+// ========== Tests ==========
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_resources::plugin_configs::GrpcServiceConfig;
+
+    /// A structurally valid config (routable authority, never actually
+    /// dialed by these tests — `fail_mode` is exercised directly).
+    fn test_config(failure_mode_allow: bool) -> ExtProcConfig {
+        ExtProcConfig {
+            grpc_service: GrpcServiceConfig {
+                target: "127.0.0.1:1".to_string(),
+                ..ExtProcConfig::default().grpc_service
+            },
+            failure_mode_allow,
+            ..Default::default()
+        }
+    }
+
+    /// `fail_mode` is the single choke point both `run_request` and
+    /// `run_upstream_response` route through on a transport error or a
+    /// malformed/wrong-phase verdict. Fail-open arm: records `FailOpen` with
+    /// the kebab-cased `reason` as cause, then continues (`GoodNext`).
+    #[tokio::test]
+    async fn fail_mode_fail_open_records_outcome() {
+        let ext_proc = ExtProc::build(&test_config(true)).expect("client build must not touch the network");
+        let mut session = MockPluginSession::new();
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "unreachable")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("ExtProc");
+        let result = ext_proc.fail_mode(&mut session, &mut log, "unreachable", Some("deadline exceeded"));
+        assert!(matches!(result, PluginRunningResult::GoodNext));
+    }
+
+    /// Fail-close arm: records `FailClose`, then returns `ErrResponse` (a
+    /// value the runtime writes AFTER this call returns — record_outcome is
+    /// therefore always ordered before that write by construction, since it
+    /// executes before `fail_mode`'s own `return`).
+    #[tokio::test]
+    async fn fail_mode_fail_close_records_outcome() {
+        let ext_proc = ExtProc::build(&test_config(false)).expect("client build must not touch the network");
+        let mut session = MockPluginSession::new();
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "bad-verdict")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("ExtProc");
+        let result = ext_proc.fail_mode(&mut session, &mut log, "bad verdict", None);
+        assert!(matches!(result, PluginRunningResult::ErrResponse { status: 500, .. }));
     }
 }

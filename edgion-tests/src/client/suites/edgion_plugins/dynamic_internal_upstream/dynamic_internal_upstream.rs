@@ -223,7 +223,7 @@ impl DynamicInternalUpstreamTestSuite {
                     // The "canary" rule maps to diu-backend-canary which exists → 200
                     // The "debug" rule maps to diu-backend-debug which exists → 200
                     // So to test on_invalid, we use the direct mode test instead.
-                    // Here just verify the dyeHeaders entry is set correctly.
+                    // Here just verify the dye entry is set correctly.
                     let trace_id = format!("diu-debug-header-{}", uuid::Uuid::new_v4());
                     let url = format!("{}/echo", ctx.edgion_plugins_url());
                     match ctx
@@ -430,11 +430,11 @@ impl DynamicInternalUpstreamTestSuite {
         )
     }
 
-    /// Rules mode: verify dyeHeaders entry (X-Dynamic-Internal-Upstream) is set in upstream request
+    /// Rules mode: verify dye entry (X-Dynamic-Internal-Upstream) is set in upstream request
     fn rules_dye_header_present() -> TestCase {
         TestCase::new(
             "rules_dye_header_present",
-            "Rules mode: dyeHeaders entry X-Dynamic-Internal-Upstream is sent to upstream",
+            "Rules mode: dye entry X-Dynamic-Internal-Upstream is sent to upstream",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -452,17 +452,14 @@ impl DynamicInternalUpstreamTestSuite {
                             if status != 200 {
                                 return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
                             }
-                            // The echo handler returns all headers — check if the dyeHeaders entry was forwarded
+                            // The echo handler returns all headers — check if the dye entry was forwarded
                             let body = resp.text().await.unwrap_or_default();
                             if body.contains("x-dynamic-internal-upstream: diu-backend-canary") {
                                 TestResult::passed(start.elapsed())
                             } else {
                                 TestResult::failed(
                                     start.elapsed(),
-                                    format!(
-                                        "dyeHeaders entry x-dynamic-internal-upstream not found in echo body: {}",
-                                        body
-                                    ),
+                                    format!("dye entry x-dynamic-internal-upstream not found in echo body: {}", body),
                                 )
                             }
                         }

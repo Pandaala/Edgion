@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 
-use crate::plugins::runtime::dye_headers::{apply_dye_headers, strip_request_dye_headers};
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use crate::{ExternalJumpPreset, SetJumpOutcome, UpstreamJumpTarget};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{
@@ -37,20 +36,18 @@ impl RequestFilter for DynamicExternalUpstream {
             return PluginRunningResult::GoodNext;
         }
 
-        if let Some(dye) = &self.config.dye_headers {
-            strip_request_dye_headers(session, dye);
-        }
-
         // 1. Extract raw routing key via KeyGet
         let raw_value = match session.key_get(&self.config.from).await {
             Some(v) if !v.is_empty() => v,
             _ => {
                 return match self.config.on_missing {
                     ExtUpstreamOnMissing::Skip => {
+                        session.record_outcome(DyeOutcome::Fallback, "on-missing");
                         log.push("upstream miss");
                         PluginRunningResult::GoodNext
                     }
                     ExtUpstreamOnMissing::Reject => {
+                        session.record_outcome(DyeOutcome::Reject, "on-missing");
                         log.push_err("no routing key");
                         PluginRunningResult::ErrResponse {
                             status: 400,
@@ -69,10 +66,12 @@ impl RequestFilter for DynamicExternalUpstream {
                     None => {
                         return match self.config.on_missing {
                             ExtUpstreamOnMissing::Skip => {
+                                session.record_outcome(DyeOutcome::Fallback, "on-missing");
                                 log.push("upstream miss");
                                 PluginRunningResult::GoodNext
                             }
                             ExtUpstreamOnMissing::Reject => {
+                                session.record_outcome(DyeOutcome::Reject, "on-missing");
                                 log.push_err("regex extract fail");
                                 PluginRunningResult::ErrResponse {
                                     status: 400,
@@ -95,10 +94,12 @@ impl RequestFilter for DynamicExternalUpstream {
             None => {
                 return match self.config.on_no_match {
                     ExtUpstreamOnNoMatch::Skip => {
+                        session.record_outcome(DyeOutcome::Fallback, "on-no-match");
                         log.push("upstream miss");
                         PluginRunningResult::GoodNext
                     }
                     ExtUpstreamOnNoMatch::Reject => {
+                        session.record_outcome(DyeOutcome::Reject, "on-no-match");
                         log.push_err("no upstream available");
                         PluginRunningResult::ErrResponse {
                             status: 400,
@@ -126,8 +127,10 @@ impl RequestFilter for DynamicExternalUpstream {
             // `forward_normalized_path` / per-route annotation policy decide.
             preserve_raw_path: false,
         };
+        let resolved = format!("{}:{}", target.domain, target.effective_port());
         match session.set_upstream_jump(UpstreamJumpTarget::External(info)) {
             SetJumpOutcome::Set => {
+                session.record_outcome(DyeOutcome::Success, &resolved);
                 log.push("upstream selected");
             }
             SetJumpOutcome::Rejected => {
@@ -136,12 +139,121 @@ impl RequestFilter for DynamicExternalUpstream {
             }
         }
 
-        // 6. Traffic-tagging headers, only after a successful selection.
-        if let Some(dye) = &self.config.dye_headers {
-            let resolved = format!("{}:{}", target.domain, target.effective_port());
-            apply_dye_headers(session, dye, &resolved, log);
-        }
-
         PluginRunningResult::GoodNext
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::plugins::runtime::traits::session::MockPluginSession;
+    use crate::EdgionHttpContext;
+    use edgion_resources::common::KeyGet;
+    use edgion_resources::resources::edgion_plugins::plugin_configs::DomainTarget;
+    use std::collections::HashMap;
+
+    fn base_config() -> DynamicExternalUpstreamConfig {
+        DynamicExternalUpstreamConfig {
+            from: KeyGet::Header {
+                name: "X-Target-Region".to_string(),
+            },
+            extract: None,
+            domain_map: HashMap::from([(
+                "us".to_string(),
+                DomainTarget {
+                    domain: "api-us.example.com".to_string(),
+                    port: Some(8443),
+                    tls: true,
+                    override_host: None,
+                    sni: None,
+                },
+            )]),
+            on_missing: ExtUpstreamOnMissing::default(),
+            on_no_match: ExtUpstreamOnNoMatch::default(),
+            compiled_regex: None,
+        }
+    }
+
+    /// A successful selection (`SetJumpOutcome::Set`) must record `Success`
+    /// with the resolved `"domain:port"` value — the value the deleted
+    /// `apply_dye_headers` call used to pass.
+    #[tokio::test]
+    async fn deu_records_success_outcome_with_domain_port() {
+        let plugin = DynamicExternalUpstream {
+            name: "DynamicExternalUpstream".to_string(),
+            config: base_config(),
+        };
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_key_get().return_const(Some("us".to_string()));
+        session.expect_set_upstream_jump().return_const(SetJumpOutcome::Set);
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Success && v == "api-us.example.com:8443")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("DynamicExternalUpstream");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    /// Missing routing key with `on_missing: Reject` must record `Reject` with
+    /// cause `on-missing` and return the 400 local reply.
+    #[tokio::test]
+    async fn deu_records_reject_outcome_on_missing_key() {
+        let config = DynamicExternalUpstreamConfig {
+            on_missing: ExtUpstreamOnMissing::Reject,
+            ..base_config()
+        };
+        let plugin = DynamicExternalUpstream {
+            name: "DynamicExternalUpstream".to_string(),
+            config,
+        };
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_key_get().return_const(None::<String>);
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Reject && v == "on-missing")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("DynamicExternalUpstream");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 400,
+                body: Some("Missing routing key for external upstream".to_string()),
+            }
+        );
+    }
+
+    /// `on_no_match: Skip` (default) on a routing key with no domain entry must
+    /// record `Fallback` with cause `on-no-match` and pass the request through.
+    #[tokio::test]
+    async fn deu_records_fallback_outcome_on_no_match() {
+        let plugin = DynamicExternalUpstream {
+            name: "DynamicExternalUpstream".to_string(),
+            config: base_config(),
+        };
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_key_get()
+            .return_const(Some("unknown-region".to_string()));
+        session
+            .expect_record_outcome()
+            .withf(|o, v| *o == DyeOutcome::Fallback && v == "on-no-match")
+            .times(1)
+            .return_const(());
+
+        let mut log = PluginLog::new("DynamicExternalUpstream");
+        let result = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 }

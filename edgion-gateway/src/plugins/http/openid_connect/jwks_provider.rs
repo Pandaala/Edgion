@@ -108,6 +108,22 @@ struct JwksState {
     last_refresh_at: Option<Instant>,
 }
 
+/// Result of a JWKS lookup, carrying a staleness signal alongside the set.
+///
+/// `get_jwks` transparently serves a cached set when the upstream fetch fails
+/// (stale-while-revalidate). Without this flag the caller cannot distinguish
+/// that degraded serve from a normal fresh/cached hit, so it cannot record a
+/// `fail-open` dye outcome for it.
+#[derive(Debug, Clone)]
+pub struct JwksLookup {
+    pub set: JwkSet,
+    /// True only when the most recent fetch attempt failed and a previously
+    /// cached set was served in its place. False for every other return path
+    /// (TTL fast-path hit, min-refresh-blocked fast-path hit, or a fresh
+    /// successful fetch) — those are normal cache behavior, not degradation.
+    pub served_stale: bool,
+}
+
 pub struct JwksProvider<D: DiscoveryDoc> {
     config: JwksProviderConfig,
     client: Arc<Client>,
@@ -208,7 +224,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
     ///
     /// `force_refresh=true` skips the TTL fast-path (used on JWT `kid` miss);
     /// `jwks_min_refresh_interval` still gates back-to-back refreshes.
-    pub async fn get_jwks(&self, force_refresh: bool) -> Result<JwkSet, JwksProviderError> {
+    pub async fn get_jwks(&self, force_refresh: bool) -> Result<JwksLookup, JwksProviderError> {
         let now = Instant::now();
         let min_refresh = self.config.jwks_min_refresh_interval;
         let ttl = self.config.jwks_cache_ttl;
@@ -218,10 +234,16 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             let state = self.jwks_state.read().await;
             if let Some(ref set) = state.set {
                 if !force_refresh && state.expires_at.is_some_and(|exp| now < exp) {
-                    return Ok(set.clone());
+                    return Ok(JwksLookup {
+                        set: set.clone(),
+                        served_stale: false,
+                    });
                 }
                 if force_refresh && !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
-                    return Ok(set.clone());
+                    return Ok(JwksLookup {
+                        set: set.clone(),
+                        served_stale: false,
+                    });
                 }
             }
         }
@@ -234,10 +256,16 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             let state = self.jwks_state.read().await;
             if let Some(ref set) = state.set {
                 if !force_refresh && state.expires_at.is_some_and(|exp| now < exp) {
-                    return Ok(set.clone());
+                    return Ok(JwksLookup {
+                        set: set.clone(),
+                        served_stale: false,
+                    });
                 }
                 if force_refresh && !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
-                    return Ok(set.clone());
+                    return Ok(JwksLookup {
+                        set: set.clone(),
+                        served_stale: false,
+                    });
                 }
             } else if !Self::can_refresh(state.last_refresh_at, now, min_refresh) {
                 // No cached set AND blocked by min_refresh: caller should retry later.
@@ -289,7 +317,10 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
                 );
                 state.set = Some(jwks.clone());
                 state.expires_at = Some(now + ttl);
-                Ok(jwks)
+                Ok(JwksLookup {
+                    set: jwks,
+                    served_stale: false,
+                })
             }
             Err(err) => match state.set.clone() {
                 Some(cached) => {
@@ -303,7 +334,10 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
                         error = %err,
                         "JWKS fetch failed, serving stale cache"
                     );
-                    Ok(cached)
+                    Ok(JwksLookup {
+                        set: cached,
+                        served_stale: true,
+                    })
                 }
                 None => Err(JwksProviderError::Other(err)),
             },
@@ -460,18 +494,29 @@ mod tests {
         let p = test_provider(test_config(&idp.addr, 60_000, 100));
         let a = p.get_jwks(false).await.unwrap();
         let b = p.get_jwks(false).await.unwrap();
-        assert_eq!(a.keys.len(), b.keys.len());
+        assert_eq!(a.set.keys.len(), b.set.keys.len());
+        assert!(!a.served_stale, "TTL fast-path hit must not be flagged stale");
+        assert!(!b.served_stale, "TTL fast-path hit must not be flagged stale");
     }
 
+    /// Task 11: `get_jwks` must surface a staleness signal distinguishing a
+    /// transparent stale-cache serve (fetch failed, cached set returned)
+    /// from a normal fresh/cached hit — the caller uses this to record the
+    /// `fail-open:jwks-stale-cache` dye outcome.
     #[tokio::test]
     async fn stale_fallback_returns_cached_on_fetch_error() {
         let idp = spawn_mock_idp().await;
         let p = test_provider(test_config(&idp.addr, 50, 0));
-        let _ = p.get_jwks(false).await.unwrap();
+        let fresh = p.get_jwks(false).await.unwrap();
+        assert!(!fresh.served_stale, "initial fresh fetch must not be flagged stale");
         idp.jwks_should_fail.store(true, Ordering::SeqCst);
         tokio::time::sleep(Duration::from_millis(80)).await;
         let stale = p.get_jwks(false).await.expect("stale fallback should succeed");
-        assert_eq!(stale.keys.len(), 1);
+        assert_eq!(stale.set.keys.len(), 1);
+        assert!(
+            stale.served_stale,
+            "cache served after a failed fetch must be flagged served_stale"
+        );
     }
 
     #[tokio::test]
@@ -494,7 +539,11 @@ mod tests {
         let _ = p.get_jwks(false).await.unwrap();
         idp.jwks_keys_count.store(5, Ordering::SeqCst);
         let still_old = p.get_jwks(true).await.unwrap();
-        assert_eq!(still_old.keys.len(), 1);
+        assert_eq!(still_old.set.keys.len(), 1);
+        assert!(
+            !still_old.served_stale,
+            "min-refresh-blocked fast path is not a fetch failure, must not be flagged stale"
+        );
     }
 
     #[tokio::test]
@@ -674,10 +723,15 @@ mod tests {
         // ttl very short so the 2nd call triggers a refetch.
         let p = build_provider(wm_config(&server.uri(), 30, 0, 2_000));
         let first = p.get_jwks(false).await.expect("initial fetch ok");
-        assert_eq!(first.keys.len(), 1);
+        assert_eq!(first.set.keys.len(), 1);
+        assert!(!first.served_stale);
         tokio::time::sleep(Duration::from_millis(50)).await;
         let second = p.get_jwks(false).await.expect("stale fallback must serve cache on 5xx");
-        assert_eq!(second.keys.len(), 1, "should serve cached set after 5xx");
+        assert_eq!(second.set.keys.len(), 1, "should serve cached set after 5xx");
+        assert!(
+            second.served_stale,
+            "5xx fallback to cache must be flagged served_stale"
+        );
     }
 
     #[tokio::test]
@@ -858,17 +912,21 @@ mod tests {
         // min_refresh=0 so force_refresh is not throttled.
         let p = build_provider(wm_config(&server.uri(), 60_000, 0, 2_000));
         let first = p.get_jwks(false).await.expect("initial fetch ok");
-        assert_eq!(first.keys.len(), 1);
-        let kid_first = first.keys[0].common.key_id.as_deref();
+        assert_eq!(first.set.keys.len(), 1);
+        let kid_first = first.set.keys[0].common.key_id.as_deref();
         assert_eq!(kid_first, Some("k_old"));
 
         let rotated = p.get_jwks(true).await.expect("force refresh fetch ok");
-        assert_eq!(rotated.keys.len(), 1);
-        let kid_rot = rotated.keys[0].common.key_id.as_deref();
+        assert_eq!(rotated.set.keys.len(), 1);
+        let kid_rot = rotated.set.keys[0].common.key_id.as_deref();
         assert_eq!(kid_rot, Some("k_new"), "force_refresh should pick up rotated kid");
         // Old kid no longer present in the returned set.
         assert!(
-            !rotated.keys.iter().any(|k| k.common.key_id.as_deref() == Some("k_old")),
+            !rotated
+                .set
+                .keys
+                .iter()
+                .any(|k| k.common.key_id.as_deref() == Some("k_old")),
             "old kid must be gone after rotation"
         );
     }

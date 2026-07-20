@@ -1,0 +1,28 @@
+# Templated value: the response dye rule's `value` is an operator template
+# (`${header:X-Account-Id}`) rather than the omitted-value recorded-outcome
+# form. Rendered on the `fallback` outcome triggered by 19_HTTPRoute's
+# deliberately-missing canary-app-v2 backendRef, same setup as
+# 06_EdgionPlugins_default_canary-invalid-fallback.yaml.
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: canary-dye-template
+  namespace: default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Canary
+      dye:
+        response:
+          - name: X-Fallback-Reason
+            on: [fallback]
+            value: "fallback for ${header:X-Account-Id}"
+      config:
+        enable: true
+        activeProfile: canary
+        profiles:
+          stable:
+            name: canary-app-v1
+          canary:
+            name: canary-app-v2
+        onInvalid: fallback

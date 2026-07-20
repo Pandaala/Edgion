@@ -118,7 +118,7 @@ pub async fn list_region_routes_effective(State(state): State<Arc<AdminState>>) 
                 "hashCalc": config.get("hashCalc").cloned(),
                 "routeRules": config.get("routeRules").cloned().unwrap_or_else(|| Value::Array(Vec::new())),
                 "routeByKeyConfMatch": config.get("routeByKeyConfMatch").cloned(),
-                "dyeHeaders": config.get("dyeHeaders").cloned(),
+                "dye": entry.get("dye").cloned(),
                 "overrideRef": override_ref,
                 "overrideApplied": override_applied,
                 "serviceUsages": usages,

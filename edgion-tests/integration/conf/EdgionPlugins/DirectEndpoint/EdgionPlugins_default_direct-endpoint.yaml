@@ -6,6 +6,9 @@ metadata:
 spec:
   requestPlugins:
     - type: DirectEndpoint
+      dye:
+        response:
+          - name: X-Direct-Endpoint   # response header, used by the suite for verification
       config:
         from:
           type: header
@@ -13,6 +16,3 @@ spec:
         onMissing: fallback # Allow requests to pass normally if header is missing
         onInvalid: reject   # Reject if IP is not valid or not in backend endpoints
         inheritTls: false
-        dyeHeaders:
-          response:
-            - name: X-Direct-Endpoint   # response header, used by the suite for verification

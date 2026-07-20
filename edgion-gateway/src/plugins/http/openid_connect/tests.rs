@@ -1,5 +1,6 @@
 use super::{DiscoveryDocument, IntrospectionCacheEntry, OidcSessionCookie, OpenidConnect};
 use crate::plugins::runtime::traits::session::MockPluginSession;
+use crate::plugins::runtime::DyeOutcome;
 use crate::plugins::runtime::PluginLog;
 use crate::plugins::runtime::RequestFilter;
 use edgion_resources::filters::PluginRunningResult;
@@ -934,7 +935,11 @@ async fn test_verify_token_auto_falls_back_to_introspection_cache_on_invalid_jwt
     });
     plugin.cache_introspection_claims(token, &claims).await;
 
-    let verified = plugin.verify_token(token).await.expect("verify via fallback");
+    let mut session = MockPluginSession::new();
+    let verified = plugin
+        .verify_token(&mut session, token)
+        .await
+        .expect("verify via fallback");
     assert_eq!(verified, claims);
 }
 
@@ -1320,4 +1325,129 @@ fn oidc_san_pinning_config_fails_with_empty_custom_ca() {
     }];
     let r = build_oidc_rustls_config_with_san(&resolved, san);
     assert!(r.is_err(), "invalid CA PEM should error");
+}
+
+// -----------------------------------------------------------------------
+// Task 11: JWKS staleness -> dye records.
+//
+// `get_or_fetch_jwks` (discovery_jwks.rs) is the sole consumer of the
+// provider's `get_jwks`, which transparently serves a stale cached set on a
+// failed fetch. These tests pin the two outcomes it must record:
+// - stale serve (fetch failed, cache still populated) -> the token is still
+//   validated against the degraded set, so it's a fail-OPEN record:
+//   `jwks-stale-cache`.
+// - no cache at all (fetch failed, nothing to fall back to) -> the caller
+//   cannot validate the token, so it's a fail-CLOSE record:
+//   `jwks-unreachable`.
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_get_or_fetch_jwks_stale_serve_records_fail_open() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let jwks_ok = serde_json::json!({
+        "keys": [{"kty":"oct","kid":"k0","k":"AAAAAA","alg":"HS256"}],
+    });
+    // First fetch succeeds (populates the cache); every fetch after that 503s.
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(jwks_ok))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let mut cfg = base_config();
+    cfg.jwks_min_refresh_interval = 0; // force_refresh must not be throttled
+    let plugin = OpenidConnect::new(&cfg, "default".to_string());
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: server.uri(),
+            jwks_uri: format!("{}/jwks", server.uri()),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
+
+    // Populate the cache. This is a fresh successful fetch, not a stale
+    // serve, so no record_outcome call is expected here (an unexpected call
+    // on a MockPluginSession with no expectation installed panics).
+    let mut populate_session = MockPluginSession::new();
+    plugin
+        .get_or_fetch_jwks(&mut populate_session, false)
+        .await
+        .expect("initial fetch populates cache");
+
+    // force_refresh=true bypasses the TTL fast-path, hits the now-failing
+    // endpoint, and falls back to the cache populated above.
+    let mut stale_session = MockPluginSession::new();
+    stale_session
+        .expect_record_outcome()
+        .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "jwks-stale-cache")
+        .times(1)
+        .return_const(());
+    let lookup = plugin
+        .get_or_fetch_jwks(&mut stale_session, true)
+        .await
+        .expect("stale fallback must still succeed");
+    assert_eq!(
+        lookup.keys.len(),
+        1,
+        "stale cache must still be usable for verification"
+    );
+}
+
+#[tokio::test]
+async fn test_get_or_fetch_jwks_unreachable_no_cache_records_fail_close() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/jwks"))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&server)
+        .await;
+
+    let plugin = OpenidConnect::new(&base_config(), "default".to_string());
+    plugin
+        .jwks_provider
+        .seed_discovery(DiscoveryDocument {
+            issuer: server.uri(),
+            jwks_uri: format!("{}/jwks", server.uri()),
+            authorization_endpoint: None,
+            token_endpoint: None,
+            introspection_endpoint: None,
+            userinfo_endpoint: None,
+            end_session_endpoint: None,
+            revocation_endpoint: None,
+        })
+        .await;
+
+    let mut session = MockPluginSession::new();
+    session
+        .expect_record_outcome()
+        .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "jwks-unreachable")
+        .times(1)
+        .return_const(());
+
+    let err = plugin
+        .get_or_fetch_jwks(&mut session, false)
+        .await
+        .expect_err("no cache + failed fetch must error");
+    assert!(
+        err.to_string().contains("503") || err.to_string().contains("status"),
+        "expected status error, got: {err}"
+    );
 }

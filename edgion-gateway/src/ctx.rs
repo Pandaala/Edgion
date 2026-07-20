@@ -929,6 +929,14 @@ pub struct EdgionHttpContext {
     /// would silently degrade to `Set` at drain time.
     pub pending_response_header_ops: Vec<PendingHeaderOp>,
 
+    /// Dye plan of the plugin entry currently being invoked (installed by the
+    /// stage loops before each invocation, overwritten per invocation).
+    /// Arc so the adapter lifts it out before iterating (render mutates ctx).
+    pub current_dye_plan: Option<Arc<crate::plugins::runtime::CompiledDyePlan>>,
+    /// Request-direction dye names already handled this request (client value
+    /// stripped once; gateway-rendered values are never re-stripped).
+    pub dye_handled_request_names: Vec<String>,
+
     /// Per-request mirror state for RequestMirror plugin.
     pub mirror_state: Option<MirrorState>,
 
@@ -1088,6 +1096,8 @@ impl EdgionHttpContext {
             jump: None,
             uri_finalized: false,
             pending_response_header_ops: Vec::new(),
+            current_dye_plan: None,
+            dye_handled_request_names: Vec::new(),
             mirror_state: None,
             sp_state: SessionPersistenceState::Inactive,
             sp_target_addr: None,

@@ -7,6 +7,9 @@ spec:
   requestPlugins:
     - enable: true
       type: Canary
+      dye:
+        request:
+          - name: X-Canary-Active
       config:
         enable: true
         activeProfile: stable
@@ -19,6 +22,3 @@ spec:
           name: canary-selector
           namespace: default
         onInvalid: reject
-        dyeHeaders:
-          request:
-            - name: X-Canary-Active

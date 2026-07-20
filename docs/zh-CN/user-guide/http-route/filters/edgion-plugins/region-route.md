@@ -66,9 +66,14 @@ spec:
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `serviceRegionRouteRef` | String | 无 | 与 `EdgionPlugins` 资源同命名空间的 `ServiceRegionRoute` EdgionConfigData 名称。所有路由规则均从此引用解析 |
-| `dyeHeaders` | Object | 无 | 成功选中区域后应用的流量染色请求头/响应头。`request`/`response` 为 `{name, value}` 条目列表；不设置 `value` 时携带最终区域名（`failoverTo` 重定向之后的区域）。详见下方[染色请求头](#染色请求头)。 |
 
-插件除共享的 `dyeHeaders` 校验外不进行其他本地字段校验——被引用的 EdgionConfigData 是否存在由 Controller 的 `preparse()`（通过 status conditions 暴露）和 Gateway 在插件构建时检查。
+`dye` 是**条目级（entry-level）**字段——与 `type`/`config`/`enable` 同级，不属于 `config` 的成员：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `dye` | Object | 无 | 按结果分类的流量染色请求头/响应头（`on: [success, fallback]`——RegionRoute 没有 `reject` 能力，见下文）。`request`/`response` 为 `{name, on, value, conditions}` 条目列表；不设置 `value` 时，`success` 上携带最终区域名（`failoverTo` 重定向之后的区域）。完整参考见 [染色（Dye）](./dye.md)，插件特有内容见下方[染色请求头](#染色请求头)。 |
+
+插件除共享的 `dye` 校验外不进行其他本地字段校验——被引用的 EdgionConfigData 是否存在由 Controller 的 `preparse()`（通过 status conditions 暴露）和 Gateway 在插件构建时检查。
 
 ### 路由模型（EdgionConfigData）
 
@@ -131,7 +136,9 @@ EdgionConfigData 定义 `RouteByHashRange`，为各集群配置 `hashRange` 切�
 
 ## 染色请求头
 
-`dyeHeaders` 默认关闭：不配置时插件不设置任何请求头，也不做任何剥离。配置后，会在请求被路由到某个区域时附加运维自定义的 HTTP 头：
+完整参考见 [染色（Dye）](./dye.md)：`on` 结果词表、两种 `value` 来源、模板引擎、防伪造剥离（即使插件被 `enable: false` 关闭或被 conditions 跳过也会执行）、请求头名校验，以及安全指引。本节只覆盖 RegionRoute 特有的部分。
+
+`dye` 默认关闭：不配置时插件不设置任何请求头，也不做任何剥离。配置后，会在请求上（或在 `response` 方向规则的响应上）附加运维自定义的 HTTP 头：
 
 ```yaml
 apiVersion: edgion.io/v1
@@ -142,18 +149,20 @@ metadata:
 spec:
   requestPlugins:
     - type: RegionRoute
+      dye:
+        request:
+          - name: X-Served-Region     # 不设置 value => 最终区域名（默认 on: [success]）
+        response:
+          - name: X-Edgion-Outcome
+            on: [fallback]            # 不设置 value => region_route:fallback:overlay-fail-to-base
       config:
         serviceRegionRouteRef: my-svc-region-route
-        dyeHeaders:
-          request:
-            - name: X-Served-Region     # 不设置 value => 携带最终区域名
 ```
 
 - `request` 条目设置在转发给上游的请求上（对于本地区域直通场景，则设置在继续经过网关自身处理链的请求上）；`response` 条目设置在返回给客户端的响应上。
-- 不设置 `value` 时携带**最终区域名**——即经过 `failoverTo` 重定向之后的区域，而不是最初匹配到的区域。设置了静态 `value` 则原样发送。
-- 只要有规则（`RouteByDirectRegion`、`RouteByKeyConfMatch`，或终止性的 `RouteByHashRange`）实际选中了区域，就会染色，包括**本地区域直通**场景——当解析出的区域正是本网关自身所在区域时，不会发生跨区域跳转，但请求仍然被路由到了一个区域，因此仍会以该区域名染色。当其他插件已经锁定了上游跳转（`Rejected` 结果）时，或没有任何规则匹配时，不会染色。
-- **防伪造**：客户端携带的、与配置的**请求方向**染色头同名的请求头，会在插件求值规则之前被剥离——无论最终是路由成功、本地直通、未匹配，还是跳转被拒(其他插件已锁定上游)——因此客户端永远无法伪造后端所信任的区域标记。
-- 请求头名称在准入阶段就会被校验：与消息帧或路由机制冲突的名称（`Host`、`Content-Length`、`Transfer-Encoding`、`Connection`、`TE`、`Upgrade`、`Trailer`）会被拒绝；请求方向染色头名与插件任一 header 型 key 来源（`keyGet`、`hashKeyGet` 或 `RouteByDirectRegion.keyFrom`）同名时同样会被拒绝——防伪造剥离会在提取之前把路由键删掉。
+- `success` 上不设置 `value` 时携带**最终区域名**——即经过 `failoverTo` 重定向之后的区域，而不是最初匹配到的区域。
+- `success` 染色适用于任何一条规则（`RouteByDirectRegion`、`RouteByKeyConfMatch`，或终止性的 `RouteByHashRange`）实际选中区域的情形，包括**本地区域直通**场景——当解析出的区域正是本网关自身所在区域时，不会发生跨区域跳转，但请求仍然被路由到了一个区域，因此仍会以该区域名染色。
+- RegionRoute 只支持 `success` 和 `fallback` 两种染色能力——**不支持** `reject`：它唯一的失败类分支是 overlay fail-to-base 路径（`RegionRouteOverride` 解析失败后回落到基础路由规则），会以 `fallback`、cause 为 `overlay-fail-to-base` 记录。当其他插件已经锁定了上游跳转，或没有任何规则匹配时，不会染色——这两种情况目前都不是已记录的结果。`reject` 能力将在 `SetJumpOutcome::Rejected` 静默放行这个已知的历史 bug 修复后才会开放（该 bug 单独跟踪，详见设计文档）。
 
 ---
 

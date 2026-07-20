@@ -24,9 +24,12 @@ use crate::link_sys::providers::redis::RedisLinkClient;
 use crate::plugins::common::redis_rate_limiter::{RateLimitResult, RedisRateLimiter};
 use crate::plugins::http::common::{format_duration, resolve_rate_limit_key, RateLimitKey};
 use crate::plugins::runtime::log::la;
-use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
+use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{OnRedisFailure, RateLimitRedisConfig};
+
+#[cfg(test)]
+use edgion_resources::resources::edgion_plugins::{RateLimitAlgorithm, RateLimitPolicy};
 
 // ========== RateLimitRedis Plugin ==========
 
@@ -166,8 +169,16 @@ impl RateLimitRedis {
     /// Apply the configured failure policy when Redis is unavailable or errors.
     async fn apply_redis_failure_policy(&self, session: &mut dyn PluginSession) -> PluginRunningResult {
         match self.config.on_redis_failure {
-            OnRedisFailure::Allow => PluginRunningResult::GoodNext,
-            OnRedisFailure::Deny => self.reject_request(session, Duration::ZERO, None).await,
+            OnRedisFailure::Allow => {
+                session.record_outcome(DyeOutcome::FailOpen, "redis-unreachable");
+                PluginRunningResult::GoodNext
+            }
+            OnRedisFailure::Deny => {
+                // Record BEFORE `reject_request`'s self-write (`write_response_header`)
+                // so the queued dye header op is drained by that write.
+                session.record_outcome(DyeOutcome::FailClose, "redis-unreachable");
+                self.reject_request(session, Duration::ZERO, None).await
+            }
         }
     }
 }
@@ -350,5 +361,116 @@ mod tests {
         let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(plugin_log.contains("cfg load fail"));
+    }
+
+    // ── Task 9: dye-suite record_outcome wiring ─────────────────────────────
+
+    /// A validly-shaped config that is guaranteed to be `client.healthy() ==
+    /// false` / `get_redis_client == None` in the unit-test process (no
+    /// LinkSys runtime is ever registered under these names), so `run_request`
+    /// falls through to `apply_redis_failure_policy` deterministically.
+    fn unreachable_redis_config(redis_ref: &str, on_redis_failure: OnRedisFailure) -> RateLimitRedisConfig {
+        RateLimitRedisConfig {
+            redis_ref: redis_ref.to_string(),
+            policies: vec![RateLimitPolicy {
+                rate: 100,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::default(),
+                interval_duration: None,
+            }],
+            on_redis_failure,
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn redis_unreachable_fail_open_records_outcome() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+
+        let config = unreachable_redis_config("default/rlr-fail-open-test", OnRedisFailure::Allow);
+        let plugin = RateLimitRedis::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        mock_session.expect_key_get().return_const(Some("1.2.3.4".to_string()));
+        mock_session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "redis-unreachable")
+            .times(1)
+            .return_const(());
+
+        let mut plugin_log = PluginLog::new("RateLimitRedis");
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::GoodNext);
+    }
+
+    #[tokio::test]
+    async fn redis_unreachable_fail_close_records_outcome_before_response_write() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use mockall::Sequence;
+
+        let config = unreachable_redis_config("default/rlr-fail-close-test", OnRedisFailure::Deny);
+        let plugin = RateLimitRedis::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        mock_session.expect_key_get().return_const(Some("1.2.3.4".to_string()));
+
+        // Ordering is the whole point of Task 9/10: the dye record must
+        // precede the plugin's own `write_response_header` self-write, or
+        // the queued header op never reaches the response.
+        let mut seq = Sequence::new();
+        mock_session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "redis-unreachable")
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_const(());
+        mock_session
+            .expect_write_response_header()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+
+        let mut plugin_log = PluginLog::new("RateLimitRedis");
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
+    }
+
+    /// A normal rate-limit rejection (Redis reachable, over-limit) is a policy
+    /// decision, not a dependency failure — it must NOT call `record_outcome`.
+    /// Any call panics the mock (no `expect_record_outcome` installed).
+    #[tokio::test]
+    async fn normal_rate_limit_rejection_does_not_record_outcome() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+
+        // redis_ref left invalid on purpose is not usable here (that's the
+        // cfg-load-fail path, also un-recorded but for a different reason);
+        // instead we exercise the `RateLimitKey::Deny` short-circuit, which
+        // never reaches Redis and is unambiguously a policy decision.
+        let config = RateLimitRedisConfig {
+            redis_ref: "default/rlr-deny-key-test".to_string(),
+            policies: vec![RateLimitPolicy {
+                rate: 100,
+                interval: "1s".to_string(),
+                algorithm: RateLimitAlgorithm::default(),
+                interval_duration: None,
+            }],
+            key: vec![edgion_resources::common::KeyGet::Header {
+                name: "x-missing".to_string(),
+            }],
+            on_missing_key: edgion_resources::resources::edgion_plugins::OnMissingKey::Deny,
+            ..Default::default()
+        };
+        let plugin = RateLimitRedis::create(&config);
+
+        let mut mock_session = MockPluginSession::new();
+        mock_session.expect_key_get().return_const(None::<String>);
+        mock_session.expect_write_response_header().returning(|_, _| Ok(()));
+        mock_session.expect_write_response_body().returning(|_, _| Ok(()));
+        // No `expect_record_outcome` — any call panics.
+
+        let mut plugin_log = PluginLog::new("RateLimitRedis");
+        let result = plugin.run_request(&mut mock_session, &mut plugin_log).await;
+        assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
     }
 }

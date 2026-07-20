@@ -182,25 +182,40 @@ not in-process checks.
 
 ## Data-plane request mechanics
 
-### 7. Success-path dye headers — Unified (failure extension pending)
+### 7. Dye suite (traffic tagging) — Unified, entry-level, success + failure
 
-- **Canon**: config
-  `edgion-resources/src/resources/edgion_plugins/plugin_configs/dye_headers.rs`
-  + runtime `edgion-gateway/src/plugins/runtime/dye_headers.rs`
-  (`apply_dye_headers`). Embedded by the five selection plugins (canary,
+- **Canon**: schema `edgion-resources/src/resources/edgion_plugins/dye.rs`
+  (`DyeSuite`/`DyeRule`/`DyeOutcome`); compiled plan
+  `edgion-gateway/src/plugins/runtime/dye_plan.rs`
+  (`CompiledDyePlan`/`CompiledDyeRule`); recording, the runtime-owned
+  anti-spoof strip, and the request/response header write live in
+  `edgion-gateway/src/plugins/runtime/session_adapter.rs`
+  (`record_outcome`, `strip_request_dye_once` /
+  `strip_request_dye_once_core`). `dye` is an entry-level field (sibling of
+  `type`/`config`/`alias`/`conditions`), not nested under `config`.
+- **Participants**: the five selection plugins (canary,
   dynamic_internal_upstream, dynamic_external_upstream, direct_endpoint,
-  region_route); applied on the success arm after `set_upstream_jump`.
-- **Rule**: selection tagging MUST use `DyeHeaders`; do not add a
-  plugin-local tagging field.
-- **Pending**: no failure branch dyes today — owned by
-  `tasks/todo/failure-outcome-dye-header.md`.
+  region_route — success + fallback/reject; region_route has no reject
+  capability yet, pending a separate `SetJumpOutcome::Rejected` bug fix) and
+  the dependency-failure plugins (rate_limit_redis, ext_proc, wasm, dsl,
+  openid_connect — fail-open + fail-close; forward_auth/ldap_auth —
+  fail-close only, pending `tasks/todo/failure-policy-unification.md`). The
+  plugin-type -> capability table is `EdgionPlugin::dye_capabilities`
+  (`edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`).
+- **Rule**: any plugin recording an outcome for traffic tagging MUST use the
+  shared entry-level `dye` suite / `record_outcome`; do not add a
+  plugin-local tagging field or a second dye vocabulary alongside it.
+- **Value provenance**: an omitted `value` renders the plugin-recorded value
+  (verbatim on `success`; `<type_prefix>:<outcome>:<cause>` on a failure
+  outcome); a present `value` is an operator template on the shared
+  `${type:name}` engine (see entry 11) — `secretRef` is rejected at
+  validation since dye values are client-visible.
 
 ### 8. Key extraction (`KeyGet`) — Unified
 
 - **Canon**: `edgion-resources/src/common/key_accessor.rs`. Used by 10+
   plugin configs (key_auth, rate_limit, rate_limit_redis, ctx_set,
-  region_route, direct_endpoint, dynamic_*_upstream, dye_headers,
-  conditions, ...).
+  region_route, direct_endpoint, dynamic_*_upstream, conditions, ...).
 - **Rule**: any "take a key from header/query/cookie/path/..." config MUST
   reuse `KeyGet` — never a plugin-local source enum.
 
@@ -234,9 +249,16 @@ not in-process checks.
   admission — the worked example is `timeoutMsTemplate` /
   `allowDegradationTemplate` in
   [18-link-sys.md](../../02-features/03-resources/18-link-sys.md).
+- **Consumer**: the dye suite's `DyeRule.value`
+  (`edgion-resources/src/resources/edgion_plugins/dye.rs`) — classified as a
+  reflected-output field: the full variable set minus `secretRef` (dye
+  values render straight into a client-visible header, so a secret must
+  never reach it; every other variable type is allowed since the field is
+  already operator-authored content, not a security decision).
 - **Rule**: a new templated field MUST use the shared engine, and MUST
   classify itself: full variable set for request-shaping fields, restricted
-  allow-list for security-sensitive ones.
+  allow-list for security-sensitive ones, full-minus-`secretRef` for
+  reflected-output fields.
 
 ### 12. Duration config fields — Two sanctioned styles, one parser
 
@@ -254,17 +276,22 @@ not in-process checks.
 
 - **Canon**: `PluginRunningResult::ErrResponse`
   (`edgion-resources/src/filters.rs`). The runtime renders it at a single
-  point, draining the pending response-header queue (dye headers, CORS, ...)
+  point, draining the pending response-header queue (dye rules, CORS, ...)
   and recording `EdgionStatus` in the access log.
 - **Exception**: `ErrTerminateRequest` — only when the response shape is
   inherently dynamic (e.g. forward_auth forwarding the auth service's full
-  response), and the plugin MUST have written the response before returning.
-  The runtime fail-safe turns a violation into a 502 +
-  `PluginTerminateWithoutResponse` access-log marker.
+  response, rate_limit_redis's own reject write), and the plugin MUST have
+  written the response before returning. The runtime fail-safe turns a
+  violation into a 502 + `PluginTerminateWithoutResponse` access-log marker.
+  The former `ErrTerminateRequest` opt-out concern (a self-write plugin
+  bypassing the queue drain) is resolved: `PluginSession::write_response_header`
+  itself drains the pending response-header queue before the plugin's own
+  write goes out, so a queued dye rule survives a self-written reply the same
+  way it survives `ErrResponse`.
 - **Rule**: plugins reject via `ErrResponse` by default. Cross-cutting
-  failure machinery (e.g. the pending failure-outcome dye header) hooks the
-  `ErrResponse` render point — an unnecessary `ErrTerminateRequest` opts out
-  of all of it.
+  failure machinery (the dye suite's failure-outcome rules) hooks both the
+  `ErrResponse` render point and the `write_response_header` drain — no
+  termination path can silently drop a queued dye rule.
 
 ### 14. Fail-closed error bodies leak no internal detail — Hard rule
 
@@ -299,8 +326,6 @@ not in-process checks.
   `OnRedisFailure`, DSL `error_policy`). Do NOT add a sixth. Convergence is
   owned by `tasks/todo/failure-policy-unification.md` (decided there: auth
   class is fixed fail-close with no knob).
-- **Failure-outcome dye header** — no failure branch dyes today; owned by
-  `tasks/todo/failure-outcome-dye-header.md`.
 
 ## Known gaps & observations (tracked)
 

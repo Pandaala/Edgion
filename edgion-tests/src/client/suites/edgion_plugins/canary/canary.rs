@@ -2,7 +2,7 @@
 //
 // Covers:
 // - Base-only (no override): full traffic goes to `activeProfile`'s backend (stable, port 30001)
-// - dyeHeaders: request X-Canary-Active carries the resolved profile name (asserted via echo body)
+// - dye: request X-Canary-Active carries the resolved profile name (asserted via echo body)
 // - onInvalid: reject / fallback when the resolved profile's backendRef is not
 //   present in the matching route's backendRefs (misconfigured profile)
 //
@@ -16,6 +16,18 @@
 //   07_HTTPRoute_default_canary-invalid-{reject,fallback}-test.yaml
 //   08_EdgionPlugins_default_canary-dye-local-reply.yaml
 //   09_HTTPRoute_default_canary-dye-local-reply-test.yaml
+//   10_EdgionPlugins_default_rlr-dye-fail-close.yaml
+//   11_HTTPRoute_default_rlr-dye-fail-close-test.yaml
+//   12_EdgionPlugins_default_rlr-dye-fail-open.yaml
+//   13_HTTPRoute_default_rlr-dye-fail-open-test.yaml
+//   14_EdgionPlugins_default_canary-shared-dye-name.yaml
+//   15_HTTPRoute_default_canary-shared-dye-name-test.yaml
+//   16_EdgionPlugins_default_canary-dye-conditions.yaml
+//   17_HTTPRoute_default_canary-dye-conditions-test.yaml
+//   18_EdgionPlugins_default_canary-dye-template.yaml
+//   19_HTTPRoute_default_canary-dye-template-test.yaml
+//   20_EdgionPlugins_default_canary-kill-switch-strip.yaml
+//   21_HTTPRoute_default_canary-kill-switch-strip-test.yaml
 
 use crate::framework::{TestCase, TestContext, TestResult, TestSuite};
 use std::time::Instant;
@@ -26,6 +38,12 @@ const CANARY_HOST: &str = "canary-test.example.com";
 const INVALID_REJECT_HOST: &str = "canary-invalid-reject.example.com";
 const INVALID_FALLBACK_HOST: &str = "canary-invalid-fallback.example.com";
 const DYE_LOCAL_REPLY_HOST: &str = "canary-dye-local-reply.example.com";
+const RLR_DYE_FAIL_CLOSE_HOST: &str = "rlr-dye-fail-close.example.com";
+const RLR_DYE_FAIL_OPEN_HOST: &str = "rlr-dye-fail-open.example.com";
+const SHARED_DYE_NAME_HOST: &str = "canary-shared-dye.example.com";
+const DYE_CONDITIONS_HOST: &str = "canary-dye-conditions.example.com";
+const DYE_TEMPLATE_HOST: &str = "canary-dye-template.example.com";
+const KILL_SWITCH_STRIP_HOST: &str = "canary-kill-switch-strip.example.com";
 
 /// Helper: extract the port number from echo response body "Server: 0.0.0.0:PORT"
 fn extract_server_port(body: &str) -> Option<u16> {
@@ -152,7 +170,7 @@ impl CanaryTestSuite {
         )
     }
 
-    /// dyeHeaders: the resolved profile name reaches the upstream as
+    /// dye: the resolved profile name reaches the upstream as
     /// X-Canary-Active (value omitted in config => resolved selection value).
     ///
     /// Uses /echo rather than /canary/api: the test-server route for
@@ -165,7 +183,7 @@ impl CanaryTestSuite {
     fn dye_header_carries_active_profile() -> TestCase {
         TestCase::new(
             "dye_header_carries_active_profile",
-            "dyeHeaders request entry X-Canary-Active carries resolved profile 'stable'",
+            "dye request entry X-Canary-Active carries resolved profile 'stable'",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -279,6 +297,347 @@ impl CanaryTestSuite {
             },
         )
     }
+
+    /// Self-reject dye (ErrTerminateRequest path): RateLimitRedis, unreachable
+    /// Redis, onRedisFailure: Deny. The plugin self-writes its 429 reject
+    /// reply via `write_response_header` + `write_response_body`, and the
+    /// entry-level dye response rule (recorded BEFORE that self-write) must
+    /// survive the drain -- pins Task 10's `write_response_header` drain
+    /// amendment.
+    fn rate_limit_redis_self_reject_dye_fail_close() -> TestCase {
+        TestCase::new(
+            "rate_limit_redis_self_reject_dye_fail_close",
+            "RateLimitRedis fail-close self-reject reply carries the fail-close outcome header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/echo", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", RLR_DYE_FAIL_CLOSE_HOST)
+                        .header("X-Rate-Key", "dye-fail-close-test-key")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status != 429 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 429, got {}", status));
+                            }
+                            match response.headers().get("X-Edgion-Outcome").and_then(|v| v.to_str().ok()) {
+                                Some("rate_limit_redis:fail-close:redis-unreachable") => TestResult::passed(start.elapsed()),
+                                other => TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected X-Edgion-Outcome: rate_limit_redis:fail-close:redis-unreachable, got {:?}",
+                                        other
+                                    ),
+                                ),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Fail-open dye: RateLimitRedis, unreachable Redis, onRedisFailure: Allow.
+    /// The request proceeds to a normal 200 upstream response, which must
+    /// carry the appended fail-open outcome header.
+    fn rate_limit_redis_fail_open_dye_header() -> TestCase {
+        TestCase::new(
+            "rate_limit_redis_fail_open_dye_header",
+            "RateLimitRedis fail-open lets the request through with the fail-open outcome header appended",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/echo", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", RLR_DYE_FAIL_OPEN_HOST)
+                        .header("X-Rate-Key", "dye-fail-open-test-key")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            match response.headers().get("X-Edgion-Outcome").and_then(|v| v.to_str().ok()) {
+                                Some("rate_limit_redis:fail-open:redis-unreachable") => TestResult::passed(start.elapsed()),
+                                other => TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected X-Edgion-Outcome: rate_limit_redis:fail-open:redis-unreachable, got {:?}",
+                                        other
+                                    ),
+                                ),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Shared name (append order): Canary (fallback branch, misconfigured
+    /// profile) and RateLimitRedis (fail-open, unreachable Redis) both
+    /// record to X-Edgion-Outcome. Both must appear, in the entries' list
+    /// (execution) order.
+    fn shared_dye_name_appends_in_execution_order() -> TestCase {
+        TestCase::new(
+            "shared_dye_name_appends_in_execution_order",
+            "Two plugin entries recording to the same header name append two values in execution order",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/echo", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", SHARED_DYE_NAME_HOST)
+                        .header("X-Rate-Key", "shared-dye-test-key")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            let values: Vec<String> = response
+                                .headers()
+                                .get_all("X-Edgion-Outcome")
+                                .iter()
+                                .filter_map(|v| v.to_str().ok().map(|s| s.to_string()))
+                                .collect();
+                            let expected = vec![
+                                "canary:fallback:on-invalid".to_string(),
+                                "rate_limit_redis:fail-open:redis-unreachable".to_string(),
+                            ];
+                            if values == expected {
+                                TestResult::passed(start.elapsed())
+                            } else {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!(
+                                        "Expected X-Edgion-Outcome values {:?} in order, got {:?}",
+                                        expected, values
+                                    ),
+                                )
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Conditions-gated dye: the response rule only renders when the run
+    /// condition (keyExist header X-Debug-Token) is satisfied.
+    fn conditions_gated_dye_present_with_token() -> TestCase {
+        TestCase::new(
+            "conditions_gated_dye_present_with_token",
+            "Debug outcome header renders when X-Debug-Token is present",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/canary/api", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", DYE_CONDITIONS_HOST)
+                        .header("X-Debug-Token", "1")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            match response.headers().get("X-Debug-Outcome").and_then(|v| v.to_str().ok()) {
+                                Some("stable") => TestResult::passed(start.elapsed()),
+                                other => TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected X-Debug-Outcome: stable, got {:?}", other),
+                                ),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Conditions-gated dye, negative case: without X-Debug-Token, the
+    /// condition-skipped rule never renders (conditions gate rendering, not
+    /// the (response-direction, so N/A here) strip).
+    fn conditions_gated_dye_absent_without_token() -> TestCase {
+        TestCase::new(
+            "conditions_gated_dye_absent_without_token",
+            "Debug outcome header is absent when X-Debug-Token is missing",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/canary/api", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", DYE_CONDITIONS_HOST)
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            match response.headers().get("X-Debug-Outcome") {
+                                None => TestResult::passed(start.elapsed()),
+                                Some(v) => TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected X-Debug-Outcome absent, got {:?}", v),
+                                ),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Templated value: the response rule's `value` is an operator template
+    /// (`${header:X-Account-Id}`), rendered on the `fallback` outcome from
+    /// the live request's own header.
+    fn templated_dye_value_renders_live_header() -> TestCase {
+        TestCase::new(
+            "templated_dye_value_renders_live_header",
+            "Templated dye value renders the live X-Account-Id request header",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/canary/api", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", DYE_TEMPLATE_HOST)
+                        .header("X-Account-Id", "acct-42")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            match response
+                                .headers()
+                                .get("X-Fallback-Reason")
+                                .and_then(|v| v.to_str().ok())
+                            {
+                                Some("fallback for acct-42") => TestResult::passed(start.elapsed()),
+                                other => TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected X-Fallback-Reason: 'fallback for acct-42', got {:?}", other),
+                                ),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Strip hardening: Canary's own kill switch (config.enable: false)
+    /// never reaches the dye-recording code paths, but the runtime-owned
+    /// anti-spoof strip runs before that kill switch is even checked, so a
+    /// client-supplied X-Canary-Active must still be removed.
+    fn spoofed_dye_header_stripped_when_kill_switched() -> TestCase {
+        TestCase::new(
+            "spoofed_dye_header_stripped_when_kill_switched",
+            "Client-sent X-Canary-Active is stripped even when the declaring plugin is kill-switched",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/echo", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", KILL_SWITCH_STRIP_HOST)
+                        .header("X-Canary-Active", "spoofed")
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            let body = response.text().await.unwrap_or_default();
+                            if body.contains("x-canary-active") {
+                                TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Spoofed x-canary-active leaked to upstream: {}", body),
+                                )
+                            } else {
+                                TestResult::passed(start.elapsed())
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
+
+    /// Makes the Canary onInvalid=fallback branch directly observable: the
+    /// response rule added to 06_EdgionPlugins_default_canary-invalid-fallback.yaml
+    /// renders `canary:fallback:on-invalid` (spec's motivating example for
+    /// the failure-dye vocabulary).
+    fn fallback_dye_outcome_observable_on_invalid_fallback() -> TestCase {
+        TestCase::new(
+            "fallback_dye_outcome_observable_on_invalid_fallback",
+            "onInvalid=fallback branch renders X-Canary-Outcome: canary:fallback:on-invalid",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("{}/canary/api", ctx.http_url());
+                    match ctx
+                        .http_client
+                        .get(&url)
+                        .header("host", INVALID_FALLBACK_HOST)
+                        .send()
+                        .await
+                    {
+                        Ok(response) => {
+                            let status = response.status().as_u16();
+                            if status != 200 {
+                                return TestResult::failed(start.elapsed(), format!("Expected 200, got {}", status));
+                            }
+                            match response.headers().get("X-Canary-Outcome").and_then(|v| v.to_str().ok()) {
+                                Some("canary:fallback:on-invalid") => TestResult::passed(start.elapsed()),
+                                other => TestResult::failed(
+                                    start.elapsed(),
+                                    format!("Expected X-Canary-Outcome: canary:fallback:on-invalid, got {:?}", other),
+                                ),
+                            }
+                        }
+                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
+                    }
+                })
+            },
+        )
+    }
 }
 
 impl TestSuite for CanaryTestSuite {
@@ -294,6 +653,14 @@ impl TestSuite for CanaryTestSuite {
             Self::dye_header_carries_active_profile(),
             Self::spoofed_dye_header_stripped_on_fallback(),
             Self::response_dye_survives_local_error_reply(),
+            Self::rate_limit_redis_self_reject_dye_fail_close(),
+            Self::rate_limit_redis_fail_open_dye_header(),
+            Self::shared_dye_name_appends_in_execution_order(),
+            Self::conditions_gated_dye_present_with_token(),
+            Self::conditions_gated_dye_absent_without_token(),
+            Self::templated_dye_value_renders_live_header(),
+            Self::spoofed_dye_header_stripped_when_kill_switched(),
+            Self::fallback_dye_outcome_observable_on_invalid_fallback(),
         ]
     }
 }

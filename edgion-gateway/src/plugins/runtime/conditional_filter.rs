@@ -6,8 +6,10 @@
 
 use async_trait::async_trait;
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use super::dye_plan::CompiledDyePlan;
 use super::log::PluginLog;
 use super::traits::{
     PluginSession, RequestFilter, UpstreamResponse, UpstreamResponseBodyFilter, UpstreamResponseFilter,
@@ -25,6 +27,7 @@ pub struct ConditionalRequestFilter {
     inner: Box<dyn RequestFilter>,
     conditions: Option<PluginConditions>,
     alias: Option<String>,
+    dye_plan: Option<Arc<CompiledDyePlan>>,
 }
 
 impl ConditionalRequestFilter {
@@ -34,19 +37,23 @@ impl ConditionalRequestFilter {
             inner,
             conditions,
             alias: None,
+            dye_plan: None,
         }
     }
 
-    /// Create a wrapper that also carries an operator-defined alias.
-    pub fn with_alias(
+    /// Create a wrapper that also carries an operator-defined alias and an
+    /// optional compiled dye plan.
+    pub fn with_alias_and_dye(
         inner: Box<dyn RequestFilter>,
         conditions: Option<PluginConditions>,
         alias: Option<String>,
+        dye_plan: Option<Arc<CompiledDyePlan>>,
     ) -> Self {
         Self {
             inner,
             conditions,
             alias,
+            dye_plan,
         }
     }
 }
@@ -59,6 +66,10 @@ impl RequestFilter for ConditionalRequestFilter {
 
     fn alias(&self) -> Option<&str> {
         self.alias.as_deref()
+    }
+
+    fn dye_plan(&self) -> Option<&Arc<CompiledDyePlan>> {
+        self.dye_plan.as_ref()
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
@@ -82,6 +93,7 @@ pub struct ConditionalUpstreamResponseFilter {
     inner: Box<dyn UpstreamResponseFilter>,
     conditions: Option<PluginConditions>,
     alias: Option<String>,
+    dye_plan: Option<Arc<CompiledDyePlan>>,
 }
 
 impl ConditionalUpstreamResponseFilter {
@@ -91,19 +103,23 @@ impl ConditionalUpstreamResponseFilter {
             inner,
             conditions,
             alias: None,
+            dye_plan: None,
         }
     }
 
-    /// Create a wrapper that also carries an operator-defined alias.
-    pub fn with_alias(
+    /// Create a wrapper that also carries an operator-defined alias and an
+    /// optional compiled dye plan.
+    pub fn with_alias_and_dye(
         inner: Box<dyn UpstreamResponseFilter>,
         conditions: Option<PluginConditions>,
         alias: Option<String>,
+        dye_plan: Option<Arc<CompiledDyePlan>>,
     ) -> Self {
         Self {
             inner,
             conditions,
             alias,
+            dye_plan,
         }
     }
 }
@@ -115,6 +131,10 @@ impl UpstreamResponseFilter for ConditionalUpstreamResponseFilter {
 
     fn alias(&self) -> Option<&str> {
         self.alias.as_deref()
+    }
+
+    fn dye_plan(&self) -> Option<&Arc<CompiledDyePlan>> {
+        self.dye_plan.as_ref()
     }
 
     fn run_upstream_response_filter(
@@ -147,6 +167,7 @@ pub struct ConditionalUpstreamResponseBodyFilter {
     inner: Box<dyn UpstreamResponseBodyFilter>,
     conditions: Option<PluginConditions>,
     alias: Option<String>,
+    dye_plan: Option<Arc<CompiledDyePlan>>,
 }
 
 impl ConditionalUpstreamResponseBodyFilter {
@@ -156,19 +177,23 @@ impl ConditionalUpstreamResponseBodyFilter {
             inner,
             conditions,
             alias: None,
+            dye_plan: None,
         }
     }
 
-    /// Create a wrapper that also carries an operator-defined alias.
-    pub fn with_alias(
+    /// Create a wrapper that also carries an operator-defined alias and an
+    /// optional compiled dye plan.
+    pub fn with_alias_and_dye(
         inner: Box<dyn UpstreamResponseBodyFilter>,
         conditions: Option<PluginConditions>,
         alias: Option<String>,
+        dye_plan: Option<Arc<CompiledDyePlan>>,
     ) -> Self {
         Self {
             inner,
             conditions,
             alias,
+            dye_plan,
         }
     }
 }
@@ -180,6 +205,10 @@ impl UpstreamResponseBodyFilter for ConditionalUpstreamResponseBodyFilter {
 
     fn alias(&self) -> Option<&str> {
         self.alias.as_deref()
+    }
+
+    fn dye_plan(&self) -> Option<&Arc<CompiledDyePlan>> {
+        self.dye_plan.as_ref()
     }
 
     fn run_upstream_response_body_filter(
@@ -207,6 +236,7 @@ pub struct ConditionalUpstreamResponse {
     inner: Box<dyn UpstreamResponse>,
     conditions: Option<PluginConditions>,
     alias: Option<String>,
+    dye_plan: Option<Arc<CompiledDyePlan>>,
 }
 
 impl ConditionalUpstreamResponse {
@@ -216,19 +246,23 @@ impl ConditionalUpstreamResponse {
             inner,
             conditions,
             alias: None,
+            dye_plan: None,
         }
     }
 
-    /// Create a wrapper that also carries an operator-defined alias.
-    pub fn with_alias(
+    /// Create a wrapper that also carries an operator-defined alias and an
+    /// optional compiled dye plan.
+    pub fn with_alias_and_dye(
         inner: Box<dyn UpstreamResponse>,
         conditions: Option<PluginConditions>,
         alias: Option<String>,
+        dye_plan: Option<Arc<CompiledDyePlan>>,
     ) -> Self {
         Self {
             inner,
             conditions,
             alias,
+            dye_plan,
         }
     }
 }
@@ -241,6 +275,10 @@ impl UpstreamResponse for ConditionalUpstreamResponse {
 
     fn alias(&self) -> Option<&str> {
         self.alias.as_deref()
+    }
+
+    fn dye_plan(&self) -> Option<&Arc<CompiledDyePlan>> {
+        self.dye_plan.as_ref()
     }
 
     async fn run_upstream_response(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
@@ -564,12 +602,31 @@ mod tests {
     #[test]
     fn conditional_request_filter_returns_alias_when_set() {
         let inner = MockRequestFilter::new("KeyAuth");
-        let with_alias = ConditionalRequestFilter::with_alias(Box::new(inner), None, Some("auth-internal".to_string()));
+        let with_alias = ConditionalRequestFilter::with_alias_and_dye(
+            Box::new(inner),
+            None,
+            Some("auth-internal".to_string()),
+            None,
+        );
         assert_eq!(with_alias.alias(), Some("auth-internal"));
         assert_eq!(with_alias.name(), "KeyAuth");
+        assert!(with_alias.dye_plan().is_none());
 
         let inner2 = MockRequestFilter::new("KeyAuth");
         let no_alias = ConditionalRequestFilter::new(Box::new(inner2), None);
         assert_eq!(no_alias.alias(), None);
+    }
+
+    #[test]
+    fn conditional_request_filter_carries_dye_plan() {
+        use crate::plugins::runtime::dye_plan::CompiledDyePlan;
+        use edgion_resources::resources::edgion_plugins::DyeSuite;
+
+        let suite: DyeSuite = serde_yaml::from_str("request:\n  - name: X-T\n").unwrap();
+        let plan = CompiledDyePlan::compile(&suite, "canary").unwrap();
+        let inner = MockRequestFilter::new("Canary");
+        let filter = ConditionalRequestFilter::with_alias_and_dye(Box::new(inner), None, None, Some(plan.clone()));
+        assert!(filter.dye_plan().is_some());
+        assert_eq!(filter.dye_plan().unwrap().type_prefix, "canary");
     }
 }

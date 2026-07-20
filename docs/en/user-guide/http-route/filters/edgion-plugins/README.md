@@ -14,6 +14,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [ctx-setter.md](ctx-setter.md) | Context variable extraction |
 | [direct-endpoint.md](direct-endpoint.md) | Direct connection to a specific endpoint |
 | [dsl/README.md](dsl/README.md) | DSL scripting engine |
+| [dye.md](dye.md) | Traffic-tagging headers (entry-level `dye` — outcome vocabulary, value templates, anti-spoof strip) |
 | [dynamic-upstream.md](dynamic-upstream.md) | Dynamic upstream selection |
 | [forward-auth.md](forward-auth.md) | External authentication delegation |
 | [ext-proc.md](ext-proc.md) | External processing over gRPC (Envoy ext_proc compatible) |

@@ -130,6 +130,33 @@ spec:
                             type: array
                             description: "Conditions that must be satisfied to run (AND logic)"
                             items: *conditionSchema
+                      # --- dye: define anchor here, reuse below ---
+                      dye: &dyeSchema
+                        type: object
+                        description: >-
+                          Entry-level dye suite: render traffic-tagging headers
+                          on plugin outcomes (success / fallback / reject /
+                          fail-open / fail-close).
+                        properties:
+                          request:
+                            type: array
+                            items: &dyeRuleSchema
+                              type: object
+                              required: ["name"]
+                              properties:
+                                name:
+                                  type: string
+                                on:
+                                  type: array
+                                  items:
+                                    type: string
+                                    enum: ["success", "fallback", "reject", "fail-open", "fail-close"]
+                                value:
+                                  type: string
+                                conditions: *conditionsSchema
+                          response:
+                            type: array
+                            items: *dyeRuleSchema
                       # --- body: define anchor here, reuse in the async response stage ---
                       body: &bodySchema
                         type: object
@@ -376,6 +403,7 @@ spec:
                       alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
+                      dye: *dyeSchema
                       type:
                         type: string
                         enum:
@@ -403,6 +431,7 @@ spec:
                       alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
+                      dye: *dyeSchema
                       type:
                         type: string
                         enum:
@@ -428,6 +457,7 @@ spec:
                       alias: *aliasSchema
                       conditionEnable: *conditionEnableSchema
                       conditions: *conditionsSchema
+                      dye: *dyeSchema
                       body: *bodySchema
                       type:
                         type: string

@@ -457,6 +457,29 @@ impl PluginRuntime {
                     }
                 };
 
+                // Validate the optional entry-level dye suite. Same severity as
+                // the alias check above: non-fatal, surfaced as a preparse error.
+                // Only compile a runtime plan when the schema-level check passed
+                // (see `compile_entry_dye_plan` doc comment for the severity split).
+                let dye_validation_err = entry.validate_dye();
+                if let Some(err) = &dye_validation_err {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!("requestPlugins[{}] ({}): {}", index, plugin_name, err));
+                }
+                let dye_plan = if dye_validation_err.is_none() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    Self::compile_entry_dye_plan(
+                        entry.dye.as_ref(),
+                        &entry.plugin,
+                        plugin_name,
+                        &format!("requestPlugins[{}] ({})", index, plugin_name),
+                        &mut errors,
+                        &mut self.invalid_plugins,
+                    )
+                } else {
+                    None
+                };
+
                 // Validate the optional operator body requirement. `body:` only
                 // applies to plugins that consume the body in their current config;
                 // reject it elsewhere so it is never a silent no-op. Non-fatal: the
@@ -490,8 +513,12 @@ impl PluginRuntime {
                             None => filter,
                         };
                         // Wrap with ConditionalRequestFilter to support condition evaluation
-                        let conditional_filter =
-                            ConditionalRequestFilter::with_alias(gated, entry.conditions.clone(), entry_alias);
+                        let conditional_filter = ConditionalRequestFilter::with_alias_and_dye(
+                            gated,
+                            entry.conditions.clone(),
+                            entry_alias,
+                            dye_plan,
+                        );
                         self.add_request_filter(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -584,13 +611,40 @@ impl PluginRuntime {
                     }
                 };
 
+                // Validate the optional entry-level dye suite. Same severity as
+                // the alias check above: non-fatal, surfaced as a preparse error.
+                // Only compile a runtime plan when the schema-level check passed
+                // (see `compile_entry_dye_plan` doc comment for the severity split).
+                let dye_validation_err = entry.validate_dye();
+                if let Some(err) = &dye_validation_err {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponseFilterPlugins[{}] ({}): {}",
+                        index, plugin_name, err
+                    ));
+                }
+                let dye_plan = if dye_validation_err.is_none() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    Self::compile_entry_dye_plan(
+                        entry.dye.as_ref(),
+                        &entry.plugin,
+                        plugin_name,
+                        &format!("upstreamResponseFilterPlugins[{}] ({})", index, plugin_name),
+                        &mut errors,
+                        &mut self.invalid_plugins,
+                    )
+                } else {
+                    None
+                };
+
                 match Self::create_upstream_response_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalUpstreamResponseFilter to support condition evaluation
-                        let conditional_filter = ConditionalUpstreamResponseFilter::with_alias(
+                        let conditional_filter = ConditionalUpstreamResponseFilter::with_alias_and_dye(
                             filter,
                             entry.conditions.clone(),
                             entry_alias,
+                            dye_plan,
                         );
                         self.add_upstream_response_filter(Box::new(conditional_filter));
                     }
@@ -691,6 +745,29 @@ impl PluginRuntime {
                     }
                 };
 
+                // Validate the optional entry-level dye suite. Same severity as
+                // the alias check above: non-fatal, surfaced as a preparse error.
+                // Only compile a runtime plan when the schema-level check passed
+                // (see `compile_entry_dye_plan` doc comment for the severity split).
+                let dye_validation_err = entry.validate_dye();
+                if let Some(err) = &dye_validation_err {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!("upstreamResponsePlugins[{}] ({}): {}", index, plugin_name, err));
+                }
+                let dye_plan = if dye_validation_err.is_none() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    Self::compile_entry_dye_plan(
+                        entry.dye.as_ref(),
+                        &entry.plugin,
+                        plugin_name,
+                        &format!("upstreamResponsePlugins[{}] ({})", index, plugin_name),
+                        &mut errors,
+                        &mut self.invalid_plugins,
+                    )
+                } else {
+                    None
+                };
+
                 match Self::create_upstream_response_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Resolve the effective body requirement (operator tunes
@@ -706,8 +783,12 @@ impl PluginRuntime {
                             None => filter,
                         };
                         // Wrap with ConditionalUpstreamResponse to support condition evaluation
-                        let conditional_filter =
-                            ConditionalUpstreamResponse::with_alias(gated, entry.conditions.clone(), entry_alias);
+                        let conditional_filter = ConditionalUpstreamResponse::with_alias_and_dye(
+                            gated,
+                            entry.conditions.clone(),
+                            entry_alias,
+                            dye_plan,
+                        );
                         self.add_upstream_response(Box::new(conditional_filter));
                     }
                     CreateResult::Ok(None) => {
@@ -800,13 +881,40 @@ impl PluginRuntime {
                     }
                 };
 
+                // Validate the optional entry-level dye suite. Same severity as
+                // the alias check above: non-fatal, surfaced as a preparse error.
+                // Only compile a runtime plan when the schema-level check passed
+                // (see `compile_entry_dye_plan` doc comment for the severity split).
+                let dye_validation_err = entry.validate_dye();
+                if let Some(err) = &dye_validation_err {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    errors.push(format!(
+                        "upstreamResponseBodyFilterPlugins[{}] ({}): {}",
+                        index, plugin_name, err
+                    ));
+                }
+                let dye_plan = if dye_validation_err.is_none() {
+                    let plugin_name = Self::get_plugin_name(&entry.plugin);
+                    Self::compile_entry_dye_plan(
+                        entry.dye.as_ref(),
+                        &entry.plugin,
+                        plugin_name,
+                        &format!("upstreamResponseBodyFilterPlugins[{}] ({})", index, plugin_name),
+                        &mut errors,
+                        &mut self.invalid_plugins,
+                    )
+                } else {
+                    None
+                };
+
                 match Self::create_upstream_response_body_filter_from_edgion(&entry.plugin, namespace) {
                     CreateResult::Ok(Some(filter)) => {
                         // Wrap with ConditionalUpstreamResponseBodyFilter to support condition evaluation
-                        let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias(
+                        let conditional_filter = ConditionalUpstreamResponseBodyFilter::with_alias_and_dye(
                             filter,
                             entry.conditions.clone(),
                             entry_alias,
+                            dye_plan,
                         );
                         self.add_upstream_response_body_filter(Box::new(conditional_filter));
                     }
@@ -1101,6 +1209,38 @@ impl PluginRuntime {
         }
     }
 
+    /// Compile an entry's dye suite into a runtime plan.
+    ///
+    /// Only called when `entry.validate_dye()` found no schema-level error
+    /// (the caller checks that first) — the schema check already ran
+    /// `DyeSuite::validation_error`, which compiles every value template and
+    /// guarantees the suite is well-formed. A `CompiledDyePlan::compile`
+    /// failure here therefore means the runtime compiler and the schema
+    /// validator disagree — a bug, not an operator error — so unlike the
+    /// non-fatal schema-level dye error this fails closed
+    /// (`invalid_plugins`), the same as every other "should have run but did
+    /// not" compile error in this file.
+    fn compile_entry_dye_plan(
+        dye: Option<&edgion_resources::resources::edgion_plugins::DyeSuite>,
+        plugin: &EdgionPlugin,
+        plugin_name: &'static str,
+        context: &str,
+        errors: &mut Vec<String>,
+        invalid_plugins: &mut Vec<&'static str>,
+    ) -> Option<Arc<super::dye_plan::CompiledDyePlan>> {
+        let suite = dye?;
+        match super::dye_plan::CompiledDyePlan::compile(suite, plugin.dye_type_prefix()) {
+            Ok(plan) => Some(plan),
+            Err(e) => {
+                errors.push(format!(
+                    "{context}: dye plan compile error (bug, already validated): {e}"
+                ));
+                invalid_plugins.push(plugin_name);
+                None
+            }
+        }
+    }
+
     fn add_request_filter(&mut self, filter: Box<dyn RequestFilter>) {
         self.request_plugins.push(filter);
     }
@@ -1170,6 +1310,14 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.request_plugins {
+            // Install this entry's dye plan before invocation (Task 7's
+            // record_outcome lifts it back out of ctx). Request-direction
+            // anti-spoof strip runs here too, before the plugin's kill
+            // switch / gating / conditions, so a client-forged value of a
+            // name this entry declares can never survive into the plugin.
+            session_adapter.install_dye_plan(filter.dye_plan().cloned());
+            session_adapter.strip_request_dye_once();
+
             let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
             let start = std::time::Instant::now();
 
@@ -1253,6 +1401,12 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_plugins {
+            // Install this entry's dye plan before invocation (Task 7's
+            // record_outcome lifts it back out of ctx). Response-stage
+            // loops do not strip: request-direction rules are meaningless
+            // here (validation forbids them on non-request-stage entries).
+            session_adapter.install_dye_plan(filter.dye_plan().cloned());
+
             let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
             let start = std::time::Instant::now();
 
@@ -1315,6 +1469,12 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::new(s, ctx);
 
         for filter in &self.upstream_response_body_plugins {
+            // Install this entry's dye plan before invocation (Task 7's
+            // record_outcome lifts it back out of ctx). Body filters have no
+            // PluginLog anchor (see the trait's no-per-chunk-logging doc), so
+            // this is the loop-top install rather than the PluginLog line.
+            session_adapter.install_dye_plan(filter.dye_plan().cloned());
+
             if let Some(d) = filter.run_upstream_response_body_filter(body, end_of_stream, &mut session_adapter) {
                 max_delay = Some(match max_delay {
                     Some(current) => current.max(d),
@@ -1341,6 +1501,12 @@ impl PluginRuntime {
         let mut session_adapter = PingoraSessionAdapter::with_response_header(s, ctx, response_header);
 
         for filter in &self.upstream_response_async_plugins {
+            // Install this entry's dye plan before invocation (Task 7's
+            // record_outcome lifts it back out of ctx). Response-stage
+            // loops do not strip: request-direction rules are meaningless
+            // here (validation forbids them on non-request-stage entries).
+            session_adapter.install_dye_plan(filter.dye_plan().cloned());
+
             let mut plugin_log = PluginLog::with_alias(filter.name(), filter.alias());
             let start = std::time::Instant::now();
 
@@ -1491,6 +1657,65 @@ mod tests {
         assert_eq!(first.alias(), None, "bad alias must be dropped (validation refused)");
         let second = iter.next().expect("second wrapper");
         assert_eq!(second.alias(), Some("auth-internal"));
+    }
+
+    /// Minimal valid `CanaryConfig` (all fields operator-required, no `Default`).
+    /// Canary is a request-stage plugin whose `dye_capabilities()` include
+    /// `Success`, so it can carry a request-direction dye rule.
+    fn canary_config_for_dye_test() -> edgion_resources::resources::edgion_plugins::plugin_configs::CanaryConfig {
+        use edgion_resources::resources::edgion_plugins::plugin_configs::{CanaryConfig, DynUpstreamTarget};
+        use std::collections::HashMap;
+        CanaryConfig {
+            enable: true,
+            active_profile: "stable".to_string(),
+            profiles: HashMap::from([(
+                "stable".to_string(),
+                DynUpstreamTarget {
+                    name: "app-v1".to_string(),
+                    namespace: None,
+                },
+            )]),
+            active_profile_ref: None,
+            on_invalid: Default::default(),
+        }
+    }
+
+    #[test]
+    fn add_from_request_filters_compiles_and_threads_dye_plan() {
+        use edgion_resources::resources::edgion_plugins::{DyeRule, DyeSuite};
+
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::Canary(canary_config_for_dye_test()));
+        entry.dye = Some(DyeSuite {
+            request: vec![DyeRule {
+                name: "X-Canary-Profile".to_string(),
+                on: vec![edgion_resources::resources::edgion_plugins::DyeOutcome::Success],
+                value: None,
+                conditions: None,
+            }],
+            response: vec![],
+        });
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default");
+        assert!(errors.is_empty(), "unexpected build errors: {errors:?}");
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        let plan = filter.dye_plan().expect("dye plan threaded through the wrapper");
+        assert_eq!(plan.type_prefix, "canary");
+        assert_eq!(plan.request.len(), 1);
+        assert_eq!(plan.request[0].name, "X-Canary-Profile");
+        assert!(plan.response.is_empty());
+    }
+
+    #[test]
+    fn add_from_request_filters_has_no_dye_plan_when_entry_has_none() {
+        let entry = RequestFilterEntry::new(EdgionPlugin::Canary(canary_config_for_dye_test()));
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default");
+        assert!(errors.is_empty(), "unexpected build errors: {errors:?}");
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        assert!(filter.dye_plan().is_none());
     }
 
     #[test]
@@ -1709,7 +1934,6 @@ mod tests {
             profiles,
             active_profile_ref: None,
             on_invalid: Default::default(),
-            dye_headers: None,
         };
 
         let plugin = EdgionPlugin::Canary(config);

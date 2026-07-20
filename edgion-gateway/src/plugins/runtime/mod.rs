@@ -3,7 +3,7 @@
 pub mod body_gate;
 pub mod conditional_filter;
 pub mod conditions;
-pub mod dye_headers;
+pub mod dye_plan;
 pub mod edgion_config_data;
 pub mod gateway_api_filters;
 pub mod log;
@@ -19,11 +19,12 @@ pub use conditional_filter::{
     ConditionalUpstreamResponseFilter,
 };
 pub use conditions::{Condition, EvaluationResult, PluginConditions};
+pub use dye_plan::{CompiledDyePlan, CompiledDyeRule};
 pub use gateway_api_filters::RequestHeaderModifierFilter;
 pub use log::{EdgionPluginsLog, PluginLog, StageLogs};
 pub use plugin_runtime::PluginRuntime;
 pub use session_adapter::PingoraSessionAdapter;
 pub use traits::{
-    PluginSession, PluginSessionError, PluginSessionResult, RequestFilter, UpstreamResponse,
+    DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult, RequestFilter, UpstreamResponse,
     UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };

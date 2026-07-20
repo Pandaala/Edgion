@@ -14,6 +14,7 @@ Edgion 提供的 HTTP Route 级别插件，通过 `EdgionPlugins` CRD 配置。
 | [ctx-setter.md](ctx-setter.md) | 上下文变量提取 |
 | [direct-endpoint.md](direct-endpoint.md) | 直连指定 Endpoint |
 | [dsl/README.md](dsl/README.md) | DSL 脚本引擎 |
+| [dye.md](dye.md) | 流量标记请求头（条目级 `dye`——结果词表、value 模板、防伪造剥离） |
 | [dynamic-upstream.md](dynamic-upstream.md) | 动态上游选择 |
 | [forward-auth.md](forward-auth.md) | 外部认证委托 |
 | [ext-proc.md](ext-proc.md) | 经 gRPC 的外部处理（兼容 Envoy ext_proc） |

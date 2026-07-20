@@ -59,6 +59,12 @@ pub(super) fn run(source: &str, session: MockPluginSession) -> PluginRunningResu
     let vm = make_vm(source);
     let mut log = PluginLog::new("test");
     let mut s = session;
+    // Task 9: `execute_safe`'s error path now calls `record_outcome` on any
+    // runtime error / panic. None of the many callers of this generic helper
+    // assert on dye behavior, so install a permissive catch-all here; tests
+    // that specifically pin `record_outcome` call `execute_safe` directly
+    // (see `dsl/tests/error_policy.rs`) instead of going through this helper.
+    s.expect_record_outcome().return_const(());
     let rt = DslRuntime::default();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -77,6 +83,8 @@ pub(super) fn run_with_limits(source: &str, session: MockPluginSession, limits: 
     let vm = make_vm_with_limits(source, limits);
     let mut log = PluginLog::new("test");
     let mut s = session;
+    // Task 9: see `run`'s comment above.
+    s.expect_record_outcome().return_const(());
     let rt = DslRuntime::default();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -95,6 +103,8 @@ pub(super) fn run_with_runtime(source: &str, session: MockPluginSession, runtime
     let vm = make_vm(source);
     let mut log = PluginLog::new("test");
     let mut s = session;
+    // Task 9: see `run`'s comment above.
+    s.expect_record_outcome().return_const(());
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -111,6 +121,8 @@ pub(super) fn run_with_runtime(source: &str, session: MockPluginSession, runtime
 /// Synchronous wrapper for execute_safe — for #[test] (non-async) contexts.
 pub(super) fn run_vm_policy(vm: &Vm, mut session: MockPluginSession, policy: &DslErrorPolicy) -> PluginRunningResult {
     let mut log = PluginLog::new("test");
+    // Task 9: see `run`'s comment above.
+    session.expect_record_outcome().return_const(());
     let rt_ctx = DslRuntime::default();
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -132,6 +144,8 @@ pub(super) fn run_vm_policy_log(
     policy: &DslErrorPolicy,
 ) -> (PluginRunningResult, PluginLog) {
     let mut log = PluginLog::new("test");
+    // Task 9: see `run`'s comment above.
+    session.expect_record_outcome().return_const(());
     let rt_ctx = DslRuntime::default();
     let result = tokio::runtime::Builder::new_current_thread()
         .enable_all()
