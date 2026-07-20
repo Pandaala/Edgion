@@ -1,5 +1,13 @@
 # Edgion — AI Agent Project Guide
 
+> ## ⚠️ READ BEFORE WRITING ANY CODE — [`skills/00-design-rules.md`](skills/00-design-rules.md)
+>
+> The **mandatory graded design-rules index** (🔴 MUST / 🟡 SHOULD / 🟢 PREFER): sensitive-data
+> redaction, logging by binary, observability restraint, cross-cutting unification, reuse-first,
+> failure policy, schema/transport invariants, workqueue discipline, time/duration, Rust safety,
+> English-only. It is short and points to the detailed canon. **Scan its 🔴 rows against your
+> diff before every commit.** Nothing below overrides a 🔴 rule there.
+
 ## Project Overview
 
 Edgion is a Kubernetes gateway built on Rust + Pingora, using a Controller–Gateway split architecture with gRPC-based configuration sync.

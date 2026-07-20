@@ -8,6 +8,14 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 > Kubernetes gateway built on Rust + Pingora + Gateway API. Controller–Gateway separation with gRPC config sync.
 > Supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, WebSocket, and includes a plugin system, load balancing, and TLS/mTLS.
 
+## ⚠️ Read before writing code
+
+**[00-design-rules.md](00-design-rules.md)** — the mandatory graded design-rules index (🔴 MUST /
+🟡 SHOULD / 🟢 PREFER) covering redaction, logging-by-binary, observability restraint, cross-cutting
+unification, reuse-first, failure policy, schema/transport, workqueue, time, Rust safety, English-only.
+Short by design; points to the detailed canon in `03-coding/` and `01-architecture/00-common/`. Scan
+its 🔴 rows against your diff before every commit.
+
 ## Navigation rules
 
 1. **Progressive disclosure**: this file → category SKILL.md → specific files. Only load the smallest subtree the current task needs.
@@ -32,6 +40,7 @@ description: Root navigation for the Edgion knowledge base. Read this first, the
 
 | What you want to learn | Direct entry |
 |-----------|---------|
+| **Design rules (read before coding)** — graded MUST/SHOULD/PREFER index of all cross-cutting rules | [00-design-rules.md](00-design-rules.md) |
 | **System architecture** — multi-crate workspace, the three in-repo Controller/Gateway/CLI binaries, internal modules, development guides | [01-architecture/SKILL.md](01-architecture/SKILL.md) |
 | **Binary startup and deployment** — CLI arguments, deployment modes | [02-features/01-binary-and-deployment/](02-features/01-binary-and-deployment/SKILL.md) |
 | **Config Schema** — Controller (YAML) / Gateway (YAML) configuration | [02-features/02-config/](02-features/02-config/SKILL.md) |
