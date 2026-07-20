@@ -1,0 +1,144 @@
+{
+  "title": "Edgion — Self",
+  "uid": "edgion-self",
+  "schemaVersion": 38,
+  "version": 1,
+  "editable": true,
+  "tags": ["edgion"],
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0,
+        "label": "Datasource"
+      }
+    ]
+  },
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Config-sync frozen (per gateway)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "edgion_system_error_state{component=\"conf_sync_client\",reason=\"confsync_disconnected\"}" }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Leader status",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "edgion_controller_leader" }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Leader-job liveness",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "edgion_controller_leader_job_alive" }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Reload duration (s)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "edgion_controller_reload_duration_seconds_last" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Cert expiry countdown (days)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "(edgion_conf_sync_cert_expiry_timestamp_seconds - time()) / 86400" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Wasm modules loaded",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "edgion_wasm_modules_loaded" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Wasm pool size",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "edgion_wasm_pool_size" }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Abnormal resources",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 24 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "edgion_controller_resource_abnormal{err!=\"\"}" }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Self cardinality overview (top-10)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "topk(10, count by (__name__)({__name__=~\"edgion_.*\"}))" }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Cardinality guard active",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "edgion_metrics_cardinality_limit_active" }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Series rejected rate",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 40 },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "rate(edgion_metrics_series_rejected_total[5m])" }
+      ]
+    }
+  ]
+}

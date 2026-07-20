@@ -1,0 +1,41 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: edgion-rules
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: edgion.rules
+      rules:
+        - alert: EdgionConfigSyncFrozen
+          expr: edgion_system_error_state{component="conf_sync_client",reason="confsync_disconnected"} == 1
+          for: 10m
+          labels: {severity: warning}
+          annotations: {summary: "Gateway {{ $labels.instance }} config-sync frozen (serving stale config)"}
+        - alert: EdgionLeaderJobDead
+          expr: edgion_controller_leader_job_alive == 0 and on(instance) edgion_controller_leader == 1
+          for: 2m
+          labels: {severity: critical}
+          annotations: {summary: "Controller leader-job {{ $labels.leader_job }} dead on the leader"}
+        - alert: EdgionCertExpirySoon
+          expr: edgion_conf_sync_cert_expiry_timestamp_seconds - time() < 7 * 86400
+          for: 1h
+          labels: {severity: warning}
+          annotations: {summary: "conf_sync {{ $labels.side }} cert expires in < 7 days"}
+        - alert: EdgionResourceAbnormal
+          expr: edgion_controller_resource_abnormal{err!=""} == 1
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: "Resource {{ $labels.namespace }}/{{ $labels.name }} ({{ $labels.kind }}) abnormal"}
+        - alert: EdgionMetricSeriesHigh
+          expr: count by (__name__)({__name__=~"edgion_.*"}) > 5000
+          for: 15m
+          labels: {severity: warning}
+          annotations: {summary: "Edgion metric {{ $labels.__name__ }} series count high (cardinality)"}
+        - alert: EdgionCardinalityGuardActive
+          expr: edgion_metrics_cardinality_limit_active == 1
+          for: 5m
+          labels: {severity: critical}
+          annotations: {summary: "Cardinality cap breached; new series being dropped (enforce) or flagged (observe)"}
