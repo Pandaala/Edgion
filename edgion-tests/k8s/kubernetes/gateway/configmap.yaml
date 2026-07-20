@@ -14,7 +14,7 @@ data:
 
     gateway:
       # Controller gRPC server address (use K8s service DNS)
-      server_addr: https://edgion-controller-leader.edgion-system.svc.cluster.local:12151
+      server_addrs: [https://edgion-controller-leader.edgion-system.svc.cluster.local:12151]
       # Test-only admin API access for suites that run inside test-client pods.
       # Production defaults remain loopback-only unless explicitly configured.
       admin_listen: "0.0.0.0:12001"

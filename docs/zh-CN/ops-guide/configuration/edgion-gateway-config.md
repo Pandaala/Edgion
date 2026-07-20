@@ -11,7 +11,7 @@ EdgionGatewayConfig 是 Edgion 的 Cluster 作用域 CRD（`edgion.io/v1alpha1`�
 | 典型用途 | 进程连接参数、日志路径、限流精度 | 超时策略、安全防护、全局插件、真实 IP 提取 |
 
 **何时用 Gateway YAML，何时用 EdgionGatewayConfig：**
-- 改 Controller gRPC 地址 → Gateway YAML `gateway.server_addr`
+- 改 Controller gRPC 地址 → Gateway YAML `gateway.server_addrs`
 - 改 Admin / Metrics 端口 → Gateway YAML（进程启动层）
 - 配置 HTTP 超时、真实 IP、全局插件 → EdgionGatewayConfig
 

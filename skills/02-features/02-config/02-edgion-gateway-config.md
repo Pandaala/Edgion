@@ -346,7 +346,7 @@ per-Gateway isolation here.
 
 Do not use `EdgionGatewayConfig` to solve these problems:
 
-- Which Controller the Gateway process connects to: that is `server_addr` in the Gateway YAML.
+- Which Controller the Gateway process connects to: that is `server_addrs` in the Gateway YAML.
 - Gateway Admin / Metrics ports: that is the process startup layer.
 - Path-normalization rejection switches: those are `path_normalization` in Gateway YAML
   and require restart. They are not CRD fields; adding them here would be pruned by the

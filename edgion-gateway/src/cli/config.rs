@@ -164,10 +164,13 @@ pub struct EdgionGatewayConfig {
 /// Gateway configuration
 #[derive(Clone, Serialize, Deserialize, Args)]
 pub struct GatewayConfig {
-    /// Operator gRPC address (e.g., http://127.0.0.1:12151)
+    /// Controller conf_sync gRPC addresses (repeatable). One address is exactly
+    /// the previous single-address behavior; multiple addresses enable etcd-mode
+    /// HA failover — the gateway rotates through the list to find the leader
+    /// (spec §7.1). E.g. `--server-addr 10.0.0.11:12151 --server-addr 10.0.0.12:12151`.
     #[arg(long = "server-addr", value_name = "ADDR")]
     #[serde(default)]
-    pub server_addr: Option<String>,
+    pub server_addrs: Vec<String>,
 
     /// Gateway admin HTTP listen address
     #[arg(long = "admin-listen", value_name = "ADDR")]
@@ -296,7 +299,7 @@ fn default_wasm_oci_pull_attempts() -> u32 {
 impl Default for GatewayConfig {
     fn default() -> Self {
         Self {
-            server_addr: None,
+            server_addrs: Vec::new(),
             admin_listen: None,
             probe_listen: None,
             admin_token: None,
@@ -317,7 +320,7 @@ impl Default for GatewayConfig {
 impl std::fmt::Debug for GatewayConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GatewayConfig")
-            .field("server_addr", &self.server_addr)
+            .field("server_addrs", &self.server_addrs)
             .field("admin_listen", &self.admin_listen)
             .field("probe_listen", &self.probe_listen)
             .field("admin_token", &self.admin_token.as_ref().map(|_| "[redacted]"))
@@ -894,9 +897,10 @@ impl EdgionGatewayConfig {
             base.work_dir = cli.work_dir.clone();
         }
 
-        // Gateway config
-        if cli.gateway.server_addr.is_some() {
-            base.gateway.server_addr = cli.gateway.server_addr.clone();
+        // Gateway config. `server_addrs` is a Vec: an EMPTY CLI vec means the
+        // flag was not passed and must not clobber the file value (spec §7.1).
+        if !cli.gateway.server_addrs.is_empty() {
+            base.gateway.server_addrs = cli.gateway.server_addrs.clone();
         }
         if cli.gateway.admin_listen.is_some() {
             base.gateway.admin_listen = cli.gateway.admin_listen.clone();
@@ -927,9 +931,10 @@ impl EdgionGatewayConfig {
         }
     }
 
-    /// Get server_addr
-    pub fn server_addr(&self) -> Option<String> {
-        self.gateway.server_addr.clone()
+    /// Controller conf_sync addresses. One element == the previous
+    /// single-address behavior; empty == not configured.
+    pub fn server_addrs(&self) -> Vec<String> {
+        self.gateway.server_addrs.clone()
     }
 
     /// Get admin_listen. Test-only: production always calls `admin_listen_or_default`.
@@ -1102,6 +1107,20 @@ mod tests {
         cli.gateway.probe_listen = Some("0.0.0.0:39999".to_string());
         EdgionGatewayConfig::merge(&mut base, &cli);
         assert_eq!(base.gateway.probe_listen.as_deref(), Some("0.0.0.0:39999"));
+    }
+
+    #[test]
+    fn server_addrs_merge_and_default() {
+        let mut base = EdgionGatewayConfig::default();
+        base.gateway.server_addrs = vec!["10.0.0.1:9090".into()];
+        let mut cli = EdgionGatewayConfig::default(); // empty server_addrs
+                                                      // An empty CLI vec must NOT clobber the file value (spec §7.1).
+        EdgionGatewayConfig::merge(&mut base, &cli);
+        assert_eq!(base.server_addrs(), vec!["10.0.0.1:9090".to_string()]);
+        // A non-empty CLI vec overrides.
+        cli.gateway.server_addrs = vec!["10.0.0.2:9090".into(), "10.0.0.3:9090".into()];
+        EdgionGatewayConfig::merge(&mut base, &cli);
+        assert_eq!(base.server_addrs().len(), 2);
     }
 
     #[test]

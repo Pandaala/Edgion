@@ -328,27 +328,32 @@ impl EtcdConfig {
             None
         };
 
-        // Timeout
-        let timeout = if self.connect_timeout_ms.is_some() || self.request_timeout_ms.is_some() {
-            Some(EtcdTimeout {
-                dial: self.connect_timeout_ms,
-                request: self.request_timeout_ms,
-                keep_alive: None,
-            })
-        } else {
-            None
-        };
-
-        // Keep-alive
-        let keep_alive = if self.keep_alive_time_secs.is_some() || self.keep_alive_timeout_secs.is_some() {
-            Some(EtcdKeepAlive {
-                time: self.keep_alive_time_secs,
-                timeout: self.keep_alive_timeout_secs,
-                permit_without_stream: Some(true),
-            })
-        } else {
-            None
-        };
+        // Timeout / keep-alive: conf_center-scoped defaults are injected HERE,
+        // not in the shared `build_connect_options` — that builder also serves
+        // the gateway's operator-configured LinkSys etcd clients, whose behavior
+        // must not change (spec §10.5).
+        //
+        // - dial: always bounded (default 5s) so a dead endpoint cannot hang init.
+        // - h2 keep-alive: ALWAYS ON (default 5s ping / 3s ack). Spec §4.2 fact 2:
+        //   the h2 PING is the only mechanism that kills a blackholed established
+        //   stream — a per-request timeout cannot detect a hung lease keepalive,
+        //   and leader-election safety depends on the blackhole dying. Operator
+        //   values win; a half-configured pair is completed with the default for
+        //   the missing half rather than being silently dropped by the builder's
+        //   both-or-nothing rule.
+        const DEFAULT_CONNECT_TIMEOUT_MS: u64 = 5_000;
+        const DEFAULT_KEEP_ALIVE_TIME_SECS: u64 = 5;
+        const DEFAULT_KEEP_ALIVE_TIMEOUT_SECS: u64 = 3;
+        let timeout = Some(EtcdTimeout {
+            dial: Some(self.connect_timeout_ms.unwrap_or(DEFAULT_CONNECT_TIMEOUT_MS)),
+            request: self.request_timeout_ms,
+            keep_alive: None,
+        });
+        let keep_alive = Some(EtcdKeepAlive {
+            time: Some(self.keep_alive_time_secs.unwrap_or(DEFAULT_KEEP_ALIVE_TIME_SECS)),
+            timeout: Some(self.keep_alive_timeout_secs.unwrap_or(DEFAULT_KEEP_ALIVE_TIMEOUT_SECS)),
+            permit_without_stream: Some(true),
+        });
 
         Ok((
             EtcdClientConfig {
@@ -504,7 +509,16 @@ auth:
         assert_eq!(client_config.endpoints, vec!["http://127.0.0.1:2379"]);
         assert!(client_config.auth.is_none());
         assert!(client_config.tls.is_none());
-        assert!(client_config.timeout.is_none());
+        // Conf_center-scoped defaults are injected at THIS layer (never in the
+        // shared builder — spec §10.5): a minimal config still gets a bounded
+        // dial timeout and always-on h2 keepalive (spec §4.2 fact 2), with no
+        // channel-wide request timeout (it would kill the blocking campaign()).
+        let timeout = client_config.timeout.as_ref().expect("dial default expected");
+        assert_eq!(timeout.dial, Some(5_000));
+        assert!(timeout.request.is_none());
+        let ka = client_config.keep_alive.as_ref().expect("keepalive default expected");
+        assert_eq!((ka.time, ka.timeout), (Some(5), Some(3)));
+        assert_eq!(ka.permit_without_stream, Some(true));
         assert!(matches!(auth_state, CredentialState::NotRequired));
     }
 

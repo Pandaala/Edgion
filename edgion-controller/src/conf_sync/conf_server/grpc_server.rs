@@ -3,6 +3,7 @@
 //! Implements the ConfigSync service using `ConfigSyncServer` and a provider
 //! pattern so the gRPC layer always uses the latest server instance after reload.
 
+use arc_swap::ArcSwap;
 use std::future::Future;
 use std::io;
 use std::pin::Pin;
@@ -189,16 +190,38 @@ pub trait ConfigSyncServerProvider: Send + Sync {
 /// the gRPC server to use the latest instance after reload operations.
 pub struct ConfigSyncGrpcServer {
     provider: Arc<dyn ConfigSyncServerProvider>,
-    shutdown_token: CancellationToken,
+    /// Process-lifetime shutdown token. Scopes the TLS accept loop and is one of
+    /// the two cancellation sources every stream selects on.
+    process_token: CancellationToken,
+    /// Per-leadership-term stream cancellation slot (spec §6.1, S2). Streams
+    /// capture the CURRENT token at stream start; the etcd election installs a
+    /// fresh token at campaign-win and cancels it at demotion, actively closing a
+    /// demoted leader's streams. In Kubernetes/FileSystem mode nothing ever swaps
+    /// the slot, so it holds the process token forever — identical to the
+    /// pre-election behavior.
+    term_token_slot: Arc<ArcSwap<CancellationToken>>,
 }
 
 impl ConfigSyncGrpcServer {
     /// Create a new gRPC server with a dynamic provider
-    pub fn new(provider: Arc<dyn ConfigSyncServerProvider>, shutdown_token: CancellationToken) -> Self {
+    pub fn new(provider: Arc<dyn ConfigSyncServerProvider>, process_token: CancellationToken) -> Self {
+        let term_token_slot = Arc::new(ArcSwap::from_pointee(process_token.clone()));
         Self {
             provider,
-            shutdown_token,
+            process_token,
+            term_token_slot,
         }
+    }
+
+    /// Replace the term-token slot with one owned by the configuration center
+    /// (the etcd election publishes fresh tokens into it). Call before serving.
+    pub fn set_term_token_slot(&mut self, slot: Arc<ArcSwap<CancellationToken>>) {
+        self.term_token_slot = slot;
+    }
+
+    /// The slot streams read their term token from (test + wiring accessor).
+    pub fn term_token_slot(&self) -> Arc<ArcSwap<CancellationToken>> {
+        self.term_token_slot.clone()
     }
 
     /// Get the current ConfigSyncServer, returns error if not available
@@ -302,7 +325,7 @@ impl ConfigSyncGrpcServer {
                     "conf_sync mTLS enabled (hot-reloadable accept loop)"
                 );
                 let (tx, rx) = tokio::sync::mpsc::channel::<Result<TrustScopedStream, std::io::Error>>(64);
-                let accept_shutdown = self.shutdown_token.clone();
+                let accept_shutdown = self.process_token.clone();
                 let handshake_slots = Arc::new(tokio::sync::Semaphore::new(MAX_INFLIGHT_HANDSHAKES));
                 tokio::spawn(async move {
                     loop {
@@ -627,11 +650,21 @@ impl ConfigSync for ConfigSyncGrpcServer {
         // Capture provider and initial server_id for reload detection
         let provider = self.provider.clone();
         let initial_server_id = server.server_id();
-        let shutdown_token = self.shutdown_token.clone();
+        // Spec §6.1: capture the CURRENT term token at stream start (by value —
+        // a later slot swap must not affect this stream), plus the process token.
+        let term_token = self.term_token_slot.load_full();
+        let process_token = self.process_token.clone();
         let shutdown_kind = kind_name.to_string();
         let shutdown_client_id = client_id_log.clone();
 
         tokio::spawn(async move {
+            let shutdown = async move {
+                tokio::select! {
+                    _ = term_token.cancelled() => {}
+                    _ = process_token.cancelled() => {}
+                }
+            };
+            tokio::pin!(shutdown);
             let mut receiver = receiver;
             let mut check_interval = tokio::time::interval(std::time::Duration::from_secs(1));
 
@@ -688,8 +721,9 @@ impl ConfigSync for ConfigSyncGrpcServer {
                         }
                         // If provider returns None, server is reloading, keep waiting
                     }
-                    // Shutdown signal — exit the stream task promptly
-                    _ = shutdown_token.cancelled() => {
+                    // Shutdown signal (process shutdown or leadership-term end) —
+                    // exit the stream task promptly
+                    _ = &mut shutdown => {
                         tracing::info!(
                             component = "grpc_server",
                             kind = %shutdown_kind,
@@ -731,9 +765,20 @@ impl ConfigSync for ConfigSyncGrpcServer {
         // Capture provider and initial server_id for reload detection
         let provider = self.provider.clone();
         let initial_server_id = server_id.clone();
-        let shutdown_token = self.shutdown_token.clone();
+        // Spec §6.1: capture the CURRENT term token at stream start (by value),
+        // plus the process token. A demoted leader cancels its term token, which
+        // actively ends this stream — the gateway's leader signal.
+        let term_token = self.term_token_slot.load_full();
+        let process_token = self.process_token.clone();
 
         tokio::spawn(async move {
+            let shutdown = async move {
+                tokio::select! {
+                    _ = term_token.cancelled() => {}
+                    _ = process_token.cancelled() => {}
+                }
+            };
+            tokio::pin!(shutdown);
             // Helper to get current timestamp in millis
             let now_millis = || -> u64 {
                 std::time::SystemTime::now()
@@ -824,8 +869,9 @@ impl ConfigSync for ConfigSyncGrpcServer {
                         }
                         // If provider returns None the server is mid-reload; keep waiting.
                     }
-                    // Shutdown signal — exit the stream task promptly
-                    _ = shutdown_token.cancelled() => {
+                    // Shutdown signal (process shutdown or leadership-term end) —
+                    // exit the stream task promptly
+                    _ = &mut shutdown => {
                         tracing::info!(
                             component = "grpc_server",
                             client_id = %client_id,
@@ -1044,6 +1090,85 @@ mod tests {
         // The important thing is that the actual clients map is empty.
         // count() always returns at least 1, so we just verify the stream closed cleanly.
         assert_eq!(server.client_registry().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_term_token_swap_cancels_only_captured_term() {
+        // Spec §6.1 (S2): streams capture the CURRENT term token at stream start.
+        // Cancelling term A's token must end only the streams that started under
+        // term A; a stream started after the slot was swapped to term B survives
+        // until B (or the process token) is cancelled.
+        let server = Arc::new(ConfigSyncServer::new());
+        let provider = Arc::new(MockConfigSyncProvider::new(server.clone()));
+        let process_token = CancellationToken::new();
+        let grpc_server = ConfigSyncGrpcServer::new(provider.clone(), process_token.clone());
+        let slot = grpc_server.term_token_slot();
+
+        // Term A begins: the election installs a fresh token.
+        let term_a = CancellationToken::new();
+        slot.store(Arc::new(term_a.clone()));
+
+        let response_a = grpc_server
+            .watch_server_meta(Request::new(WatchServerMetaRequest {
+                client_id: "term-a-client".to_string(),
+                client_name: "term-a-gateway".to_string(),
+            }))
+            .await
+            .unwrap();
+        let mut stream_a = response_a.into_inner();
+        stream_a.next().await.unwrap().unwrap(); // initial event
+
+        // Term B begins: the election swaps in a new token (term A's not yet cancelled,
+        // mirroring the campaign-win-before-demotion-completes ordering).
+        let term_b = CancellationToken::new();
+        slot.store(Arc::new(term_b.clone()));
+
+        let response_b = grpc_server
+            .watch_server_meta(Request::new(WatchServerMetaRequest {
+                client_id: "term-b-client".to_string(),
+                client_name: "term-b-gateway".to_string(),
+            }))
+            .await
+            .unwrap();
+        let mut stream_b = response_b.into_inner();
+        stream_b.next().await.unwrap().unwrap(); // initial event
+
+        // Demotion of term A: only stream_a must end.
+        term_a.cancel();
+        let ended_a = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while stream_a.next().await.is_some() {}
+        })
+        .await;
+        assert!(
+            ended_a.is_ok(),
+            "term-A stream must close when term A's token is cancelled"
+        );
+
+        // stream_b must remain open: drain any events (e.g. count changes from A's
+        // unregister); reaching end-of-stream is the failure.
+        let b_outcome = tokio::time::timeout(std::time::Duration::from_millis(1500), async {
+            loop {
+                if stream_b.next().await.is_none() {
+                    return; // stream ended — bug
+                }
+            }
+        })
+        .await;
+        assert!(
+            b_outcome.is_err(),
+            "term-B stream must stay open after term A's token is cancelled"
+        );
+
+        // Cancelling term B ends the remaining stream.
+        term_b.cancel();
+        let ended_b = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while stream_b.next().await.is_some() {}
+        })
+        .await;
+        assert!(
+            ended_b.is_ok(),
+            "term-B stream must close when term B's token is cancelled"
+        );
     }
 
     /// A minimal mock WatchObj that keeps a sender so we can push events or close the channel.

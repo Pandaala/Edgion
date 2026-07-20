@@ -22,7 +22,7 @@ description: Full schema for the edgion-gateway YAML configuration.
 work_dir: "."
 
 gateway:
-  server_addr: "http://127.0.0.1:12151"   # Required: Controller gRPC address
+  server_addrs: ["http://127.0.0.1:12151"]  # Required: Controller gRPC address
   admin_listen: "127.0.0.1:12001"         # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
   # probe_listen: "0.0.0.0:12000"         # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
   # admin_token: "edg_..."                # Prefer EDGION_GATEWAY_ADMIN_TOKEN from a Secret
@@ -207,7 +207,7 @@ behavior and are configured per Gateway process; there is no
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `server_addr` | `String` | **Required** | Controller gRPC address |
+| `server_addrs` | `String` | **Required** | Controller gRPC address |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback — sensitive endpoints not reachable cluster-wide. Remote access: `kubectl port-forward pod/<name> 12001:12001`. |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Probe listen address. Serves `/health` and `/ready` only. Binds all interfaces so kubelet can probe the pod IP directly. Not included in the gateway Service. |
 | `admin_token` | `String?` | — | Shared Gateway Admin API bearer token. Config-file only; `EDGION_GATEWAY_ADMIN_TOKEN` takes precedence. Keep it in a Secret. No token means Admin business routes fail closed with 503. |
@@ -255,7 +255,7 @@ Each `certs` entry has:
 >
 > **Omitting this section entirely makes the Gateway refuse to start** (non-zero exit) — it is
 > not a plaintext default and it is not backward compatible with pre-2026-07-14 behavior.
-> When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically switched to `https://`.
+> When mTLS is enabled, the URI scheme of `gateway.server_addrs` is automatically switched to `https://`.
 > Generate certificates with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
 **`auto_ca` fail-close (data plane).** When `auto_ca: true` the gateway refuses to run the
@@ -529,7 +529,7 @@ production enablement even when the startup WARN goes unread.
 
 ## Most Common Gateway Configuration Changes in This Project
 
-- Change the Controller gRPC address: change `gateway.server_addr`
+- Change the Controller gRPC address: change `gateway.server_addrs`
 - Change system log noise: change `logging.log_level`
 - Toggle business logs: change `access_log` / `ssl_log` / `tcp_log` / `udp_log`
 - Tune Pingora workers and keepalive: change `server`

@@ -48,6 +48,22 @@ conf_center:
   endpoints: [http://127.0.0.1:2379]
   key_prefix: /edgion
 
+  # Leader election (active-passive HA). ALWAYS ON in etcd mode — there is no
+  # enable/disable switch; on a single node the sole candidate wins instantly.
+  # `grpc_addr` / `admin_addr` are REQUIRED and must be ROUTABLE addresses of
+  # THIS controller instance (loopback / 0.0.0.0 are rejected at startup):
+  # gateways rotate to `grpc_addr` on failover, and a standby's Admin API names
+  # the leader's `admin_addr` in its 409 response. Requires etcd's `v3election`
+  # gRPC service (stock etcd serves it; some proxied deployments disable it —
+  # the controller probes at startup).
+  leader_election:
+    grpc_addr: 10.0.0.11:12151   # REQUIRED: this instance's conf_sync gRPC address
+    admin_addr: 10.0.0.11:12101  # REQUIRED: this instance's admin HTTP address
+    # identity: controller-a     # optional; defaults to hostname (human-facing only)
+    # lease_duration_secs: 15
+    # renew_deadline_secs: 10
+    # retry_period_secs: 2
+
   # Connection timeout (milliseconds)
   # connect_timeout_ms: 5000
 

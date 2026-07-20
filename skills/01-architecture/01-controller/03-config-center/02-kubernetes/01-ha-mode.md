@@ -146,8 +146,8 @@ This is the correct design behavior: it ensures the Gateway is fully consistent 
 
 | HA mode | Gateway configuration | Description |
 |---------|----------------------|-------------|
-| leader-only | `server_addr = "http://edgion-controller-leader.edgion-system.svc:12151"` | Connect only to the leader |
-| all-serve | `server_addr = "http://edgion-controller.edgion-system.svc:12151"` | Any replica |
+| leader-only | `server_addrs = ["http://edgion-controller-leader.edgion-system.svc:12151"]` | Connect only to the leader |
+| all-serve | `server_addrs = ["http://edgion-controller.edgion-system.svc:12151"]` | Any replica |
 
 ## K8s Service Topology
 
@@ -177,19 +177,19 @@ This is the correct design behavior: it ensures the Gateway is fully consistent 
 ### Single replica → HA (leader-only)
 
 1. Deploy `leader-service.yaml` (with the `edgion.io/leader: "true"` selector) and RBAC (Pod patch permissions)
-2. Point Gateway `server_addr` at `edgion-controller-leader`
+2. Point Gateway `server_addrs` at `edgion-controller-leader`
 3. Set `replicas: 2`
 
 ### leader-only → all-serve
 
 1. Change `ha_mode = "all-serve"`
-2. Point Gateway `server_addr` at `edgion-controller` (all-pods Service)
+2. Point Gateway `server_addrs` at `edgion-controller` (all-pods Service)
 3. Rolling restart
 
 ### Rollback all-serve → leader-only
 
 1. Change `ha_mode = "leader-only"`
-2. Point Gateway `server_addr` at `edgion-controller-leader`
+2. Point Gateway `server_addrs` at `edgion-controller-leader`
 3. Rolling restart
 
 ### RBAC Requirements

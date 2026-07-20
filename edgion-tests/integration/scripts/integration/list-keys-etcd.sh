@@ -113,7 +113,12 @@ logging:
 conf_center:
   type: etcd
   endpoints: ["${ETCD_ENDPOINT}"]
-  prefix: "${ETCD_PREFIX}"
+  key_prefix: "${ETCD_PREFIX}"
+  # Required since etcd HA landed: advertised (never dialed) non-loopback
+  # addresses; validation rejects loopback/0.0.0.0.
+  leader_election:
+    grpc_addr: "10.255.255.1:${CONTROLLER_GRPC_PORT}"
+    admin_addr: "10.255.255.1:${CONTROLLER_ADMIN_PORT}"
 
 conf_sync:
   no_sync_kinds: [ReferenceGrant, Secret]

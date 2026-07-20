@@ -20,6 +20,10 @@ pub mod names {
     pub const RESOURCES_WATCHED: &str = "edgion_controller_resources_watched";
     /// Leader election status (1 = leader, 0 = standby)
     pub const LEADER_STATUS: &str = "edgion_controller_leader";
+    /// Total leadership transitions (elected or demoted). A double-leader bug or
+    /// a flapping election is invisible on the boolean gauge and obvious in this
+    /// transition rate (spec §9).
+    pub const LEADER_TRANSITIONS_TOTAL: &str = "edgion_controller_leader_transitions_total";
     /// Total reload operations triggered
     pub const RELOAD_TOTAL: &str = "edgion_controller_reload_total";
     /// Last reload duration in seconds
@@ -72,6 +76,8 @@ pub struct ControllerMetrics {
     active_controllers: Gauge,
     /// Leader status
     leader_status: Gauge,
+    /// Leadership transitions (elected / demoted)
+    leader_transitions: Counter,
 }
 
 impl ControllerMetrics {
@@ -79,6 +85,7 @@ impl ControllerMetrics {
         Self {
             active_controllers: gauge!(names::ACTIVE_CONTROLLERS),
             leader_status: gauge!(names::LEADER_STATUS),
+            leader_transitions: counter!(names::LEADER_TRANSITIONS_TOTAL),
         }
     }
 
@@ -95,6 +102,11 @@ impl ControllerMetrics {
     /// Set leader status (1.0 = leader, 0.0 = standby)
     pub fn set_leader(&self, is_leader: bool) {
         self.leader_status.set(if is_leader { 1.0 } else { 0.0 });
+    }
+
+    /// Record one leadership transition (elected or demoted).
+    pub fn inc_leader_transitions(&self) {
+        self.leader_transitions.increment(1);
     }
 }
 

@@ -137,21 +137,51 @@ where
             let mut backoff_secs = BACKOFF_INIT_SECS;
 
             let mut is_first_iteration = true;
+            // Set when the reload-generation token cancelled the previous cycle
+            // (cert reload or leader rotation). The channel swap is deliberate
+            // and already complete, so the next cycle must relist IMMEDIATELY at
+            // the initial backoff — sleeping at the current backoff (up to 32s)
+            // here is what would stretch a failover's per-kind resync tail past
+            // the acceptance budget (spec §7.2 item 5).
+            let mut generation_reloaded = false;
             loop {
                 // === Backoff before list ===
                 // Skip on first iteration to avoid delaying startup.
                 // Add jitter (0-3s) on retries to spread requests and prevent relist storms.
                 if !is_first_iteration {
-                    let jitter_ms = rand::rng().random_range(0..3000);
-                    let wait_duration =
-                        std::time::Duration::from_secs(backoff_secs) + std::time::Duration::from_millis(jitter_ms);
-                    tracing::info!(
-                        kind = T::kind_name(),
-                        backoff_secs = backoff_secs,
-                        jitter_ms = jitter_ms,
-                        "Waiting before list"
-                    );
-                    tokio::time::sleep(wait_duration).await;
+                    match resync_wait_secs(generation_reloaded, backoff_secs) {
+                        None => {
+                            generation_reloaded = false;
+                            backoff_secs = BACKOFF_INIT_SECS;
+                        }
+                        Some(wait_secs) => {
+                            let jitter_ms = rand::rng().random_range(0..3000);
+                            let wait_duration =
+                                std::time::Duration::from_secs(wait_secs) + std::time::Duration::from_millis(jitter_ms);
+                            tracing::info!(
+                                kind = T::kind_name(),
+                                backoff_secs = wait_secs,
+                                jitter_ms = jitter_ms,
+                                "Waiting before list"
+                            );
+                            // Selected on the CURRENT generation token (review
+                            // finding): a rotation/reload landing mid-backoff must
+                            // not wait out the remaining sleep (up to 32s) before
+                            // relisting on the already-swapped channel. A token
+                            // that is already cancelled resolves immediately.
+                            let sleep_token = crate::conf_sync::conf_client::current_reload_generation();
+                            tokio::select! {
+                                _ = tokio::time::sleep(wait_duration) => {}
+                                _ = sleep_token.cancelled() => {
+                                    tracing::info!(
+                                        kind = T::kind_name(),
+                                        "channel reinstalled during backoff; relisting immediately"
+                                    );
+                                    backoff_secs = BACKOFF_INIT_SECS;
+                                }
+                            }
+                        }
+                    }
                 }
                 is_first_iteration = false;
 
@@ -165,7 +195,7 @@ where
                 // after the clone would let the reload complete during the RPC
                 // round-trip and hand us the new (uncancelled) token for the old
                 // client, leaking a stream on the retired channel. Mirrors the token-
-                // before-handle order in `start_watch_server_meta` (grpc_client.rs).
+                // before-handle order in `run_leader_session` (grpc_client.rs).
                 let gen_token = crate::conf_sync::conf_client::current_reload_generation();
 
                 // Get gRPC conf_client — clone the handle out under a brief write-lock
@@ -188,54 +218,64 @@ where
 
                 // Perform list_and_reset to get latest sync version and server_id
                 // First list doesn't need to validate server_id (pass empty string)
-                let (from_version, current_server_id) =
-                    match Self::list_and_reset(&mut client, "", &cache_data, "watch relist", "").await {
-                        Ok(list_result) => {
-                            // Reset backoff on success
-                            backoff_secs = BACKOFF_INIT_SECS;
+                // Selected on the generation token so an in-flight list against a
+                // dead/rotated-away peer does not burn its full timeout before the
+                // next cycle picks up the new channel (spec §7.2 item 5).
+                let list_outcome = tokio::select! {
+                    _ = gen_token.cancelled() => {
+                        tracing::info!(kind = T::kind_name(), "channel reinstalled during list; relisting on the new channel");
+                        generation_reloaded = true;
+                        continue;
+                    }
+                    r = Self::list_and_reset(&mut client, "", &cache_data, "watch relist", "") => r,
+                };
+                let (from_version, current_server_id) = match list_outcome {
+                    Ok(list_result) => {
+                        // Reset backoff on success
+                        backoff_secs = BACKOFF_INIT_SECS;
 
-                            global_metrics().config_relist();
+                        global_metrics().config_relist();
 
-                            let count = {
-                                let cache = cache_data.read();
-                                cache.len()
-                            };
-                            tracing::info!(
-                                kind = T::kind_name(),
-                                count = count,
-                                sync_version = list_result.sync_version,
-                                server_id = %list_result.server_id,
-                                "List completed, starting watch"
-                            );
+                        let count = {
+                            let cache = cache_data.read();
+                            cache.len()
+                        };
+                        tracing::info!(
+                            kind = T::kind_name(),
+                            count = count,
+                            sync_version = list_result.sync_version,
+                            server_id = %list_result.server_id,
+                            "List completed, starting watch"
+                        );
 
-                            if let Some(client) = crate::conf_sync::get_global_config_client() {
-                                client.set_current_server_id(list_result.server_id.clone());
-                            }
-
-                            // Set ready after first successful list
-                            if !is_ready {
-                                let mut cache = cache_data.write();
-                                cache.set_ready();
-                                is_ready = true;
-                                tracing::info!(kind = T::kind_name(), "Cache is ready");
-                            }
-
-                            (list_result.sync_version, list_result.server_id)
+                        if let Some(client) = crate::conf_sync::get_global_config_client() {
+                            client.set_current_server_id(list_result.server_id.clone());
                         }
-                        Err(e) => {
-                            let error_message = e.message();
-                            if error_message.contains(WATCH_ERR_NOT_READY) {
-                                tracing::warn!(kind = T::kind_name(), error = %e, "Server not ready, will retry");
-                            } else if error_message.contains(WATCH_ERR_SERVER_ID_MISMATCH) {
-                                tracing::warn!(kind = T::kind_name(), error = %e, "Server ID mismatch, will relist");
-                            } else {
-                                tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
-                            }
-                            // Increase backoff on failure
-                            backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
-                            continue;
+
+                        // Set ready after first successful list
+                        if !is_ready {
+                            let mut cache = cache_data.write();
+                            cache.set_ready();
+                            is_ready = true;
+                            tracing::info!(kind = T::kind_name(), "Cache is ready");
                         }
-                    };
+
+                        (list_result.sync_version, list_result.server_id)
+                    }
+                    Err(e) => {
+                        let error_message = e.message();
+                        if error_message.contains(WATCH_ERR_NOT_READY) {
+                            tracing::warn!(kind = T::kind_name(), error = %e, "Server not ready, will retry");
+                        } else if error_message.contains(WATCH_ERR_SERVER_ID_MISMATCH) {
+                            tracing::warn!(kind = T::kind_name(), error = %e, "Server ID mismatch, will relist");
+                        } else {
+                            tracing::error!(kind = T::kind_name(), error = %e, "Failed to perform list, retrying");
+                        }
+                        // Increase backoff on failure
+                        backoff_secs = (backoff_secs * 2).min(BACKOFF_MAX_SECS);
+                        continue;
+                    }
+                };
 
                 // Watch block: perform watch operation, break to return to outer loop for re-list
                 'watch_block: {
@@ -281,7 +321,8 @@ where
                     loop {
                         let watch_msg = tokio::select! {
                             _ = gen_token.cancelled() => {
-                                tracing::info!(kind = T::kind_name(), "client TLS reloaded, breaking watch to reconnect");
+                                tracing::info!(kind = T::kind_name(), "channel reinstalled (TLS reload or rotation), breaking watch to reconnect");
+                                generation_reloaded = true;
                                 break 'watch_block;
                             }
                             msg = stream.message() => msg,
@@ -405,6 +446,19 @@ where
     }
 }
 
+/// Pre-list wait decision (spec §7.2 item 5): `None` = the previous cycle ended
+/// because the reload-generation token was cancelled (cert reload / leader
+/// rotation) — the channel swap is deliberate and complete, so relist
+/// immediately and reset the backoff; `Some(secs)` = a real failure, sleep the
+/// current backoff (plus jitter at the call site).
+fn resync_wait_secs(generation_reloaded: bool, backoff_secs: u64) -> Option<u64> {
+    if generation_reloaded {
+        None
+    } else {
+        Some(backoff_secs)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for the `CacheEventDispatch` impl on `ClientCache`.
@@ -518,5 +572,15 @@ mod tests {
             cached_keys(&cache),
             vec!["ns1/a".to_string(), "ns1/b".to_string(), "ns2/a".to_string()]
         );
+    }
+
+    #[test]
+    fn generation_cancel_relists_immediately_at_initial_backoff() {
+        // Spec §7.2 item 5: a generation-cancel (cert reload / rotation) must
+        // relist immediately (no sleep) — otherwise each kind sleeps at its
+        // current backoff (up to 32s) after a failover, blowing the resync
+        // budget. A real failure keeps sleeping at the current backoff.
+        assert_eq!(super::resync_wait_secs(true, 32), None, "reload: skip the sleep");
+        assert_eq!(super::resync_wait_secs(false, 8), Some(8), "failure: sleep the backoff");
     }
 }

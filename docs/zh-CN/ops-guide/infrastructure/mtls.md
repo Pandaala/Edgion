@@ -293,7 +293,19 @@ conf_sync_security:
       ca: certs/grpc/secondary/ca.crt
 ```
 
-启用 mTLS 后，Gateway 会自动将 `server_addr` 连接从 `http://` 升级为 `https://`。
+启用 mTLS 后，Gateway 会自动将 `server_addrs` 连接从 `http://` 升级为 `https://`。
+
+> **Etcd 模式（HA 多 Controller）：手工签发证书，SAN 覆盖全部地址。**
+> `auto_ca` 仅支持 Kubernetes——它依赖 `kube::Client` 并写入 K8s Secret，在裸机/VM 上启动即失败；
+> etcd 模式必须使用手工签发的 conf_sync 证书。当 `server_addrs` 配置了多个 Controller 时，
+> **服务端证书的 SAN 必须覆盖 Gateway 可能轮转到的每一个 Controller 地址**——Gateway 以当前连接
+> 的地址作为 TLS 校验主机名。使用可重复的 `--server-san` 参数签发：
+> ```bash
+> edgion-cli gen-certs --output file --output-dir certs/grpc \
+>   --server-san 10.0.0.11 --server-san 10.0.0.12
+> ```
+> 只覆盖第一个 Controller 的 SAN 会通过所有单 Controller 测试、**恰好在真实 failover 时失败**
+> （轮转落到第二个地址后 TLS 校验拒绝），因此端到端 failover 集成测试会对此做断言。
 
 > **向后兼容**：旧版单套证书格式仍受支持，无需迁移：
 > ```yaml

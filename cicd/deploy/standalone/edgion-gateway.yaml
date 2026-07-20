@@ -4,7 +4,7 @@ gateway:
   # mTLS by default (see conf_sync_security at the bottom); dial the Controller over https.
   # On a split-host deployment, change 127.0.0.1 to the Controller's reachable host/IP --
   # it must match a --server-san baked into the Controller's server cert.
-  server_addr: "https://127.0.0.1:12151"
+  server_addrs: ["https://127.0.0.1:12151"]
   admin_listen: "127.0.0.1:12001"        # Admin API — loopback-only (sensitive: /configclient, /api/v1/server-info)
   # probe_listen: "0.0.0.0:12000"        # Liveness/readiness probe port (default: 0.0.0.0:12000); serves /health and /ready
 
@@ -68,10 +68,10 @@ udp_log:
 #       --server-san 127.0.0.1 --server-san localhost
 #
 # SPLITTING CONTROLLER AND GATEWAY ONTO DIFFERENT HOSTS? Copy client.crt/client.key/ca.crt
-# from the Controller host to this host, and point `server_addr` above at the Controller's
+# from the Controller host to this host, and point `server_addrs` above at the Controller's
 # reachable host/IP (which must be a --server-san in the Controller's server cert). The
 # mTLS handshake protects the Secrets this channel carries -- no plaintext crosses the
-# network. `server_addr` uses the https:// scheme under mTLS (it is normalized either way).
+# network. `server_addrs` uses the https:// scheme under mTLS (it is normalized either way).
 conf_sync_security:
   tls:
     cert: certs/grpc/primary/client.crt   # Gateway client certificate (PEM)

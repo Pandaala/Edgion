@@ -634,10 +634,10 @@ p1_6() {  # Two-replica split-brain: single root; restart a replica keeps mTLS
 }
 
 p1_7() {  # SAN: gateway hostname verification against the leader Service
-  step "P1.7 gateway server_addr targets the leader Service SAN"
+  step "P1.7 gateway server_addrs targets the leader Service SAN"
   local addr san
   addr="$(kc get configmap edgion-gateway-config -o jsonpath='{.data.edgion-gateway\.yaml}' 2>/dev/null \
-            | grep -E 'server_addr:' | head -1)"
+            | grep -E 'server_addrs:' | head -1)"
   # The controller-server SAN set must include edgion-controller-leader.<ns>.svc...
   local dir; dir="$(mktemp -d "${TMPDIR_WORK}/san.XXXXXX")"
   # The controller server cert is in-memory; assert via config wiring + a live
@@ -647,10 +647,10 @@ p1_7() {  # SAN: gateway hostname verification against the leader Service
     if [[ -n "$(gw_log_grep 'conf_sync mTLS enabled for gRPC client')" ]]; then
       record P1.7 PASS "gateway dials ${NS} leader Service and mTLS handshake succeeds (SAN verified live)"
     else
-      record P1.7 SKIP "server_addr targets leader Service, but no live mTLS log yet to confirm SAN"
+      record P1.7 SKIP "server_addrs targets leader Service, but no live mTLS log yet to confirm SAN"
     fi
   else
-    record P1.7 FAIL "gateway server_addr does not target edgion-controller-leader.${NS}.svc (${addr})"
+    record P1.7 FAIL "gateway server_addrs does not target edgion-controller-leader.${NS}.svc (${addr})"
   fi
 }
 

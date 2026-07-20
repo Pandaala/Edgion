@@ -136,6 +136,47 @@ async fn require_ready_middleware(State(state): State<Arc<AdminState>>, request:
     }
 }
 
+/// Spec §6.2: decide whether a request must be rejected with the not-leader 409.
+///
+/// Pure decision function (unit-testable without axum plumbing):
+/// - `NotApplicable` (Kubernetes / FileSystem) and `Leader` pass everything;
+/// - `Follower` rejects every non-public path with 409 and a body naming the
+///   leader's admin address (`null` while unknown, e.g. mid-election);
+/// - the static public set (`/health`, `/ready`, `/metrics`,
+///   `/api/v1/auth/status`) always passes so probes keep working on a standby.
+fn not_leader_rejection(
+    status: &crate::conf_mgr::conf_center::traits::LeadershipStatus,
+    path: &str,
+) -> Option<(StatusCode, serde_json::Value)> {
+    use crate::conf_mgr::conf_center::traits::LeadershipStatus;
+    match status {
+        LeadershipStatus::NotApplicable | LeadershipStatus::Leader => None,
+        LeadershipStatus::Follower { leader_admin_addr } => {
+            if public_paths::is_static_public(path) {
+                return None;
+            }
+            Some((
+                StatusCode::CONFLICT,
+                serde_json::json!({
+                    "error": "not leader",
+                    "leader": leader_admin_addr,
+                }),
+            ))
+        }
+    }
+}
+
+/// Axum wrapper for [`not_leader_rejection`]. Lives INSIDE `create_admin_router`
+/// so the federation reverse-tunnel router is gated too (spec §6.2) — the
+/// fail-close onion in `serve_admin_api_with_shutdown` deliberately is not.
+async fn leadership_gate_middleware(State(state): State<Arc<AdminState>>, request: Request, next: Next) -> Response {
+    let status = state.conf_mgr.leadership_status();
+    match not_leader_rejection(&status, request.uri().path()) {
+        Some((code, body)) => (code, Json(body)).into_response(),
+        None => next.run(request).await,
+    }
+}
+
 /// Deadman flag: set (sticky) when the control-plane lifecycle task ends for
 /// any reason other than an orderly shutdown — including a lifecycle panic.
 /// `/health` returns 503 while set, so the liveness probe finally has a
@@ -612,10 +653,17 @@ pub fn create_admin_router(
             )
             .route(
                 "/api/v1/admin/wipe-all",
-                post(wipe_handlers::wipe_all).with_state(admin_state),
+                post(wipe_handlers::wipe_all).with_state(admin_state.clone()),
             );
     }
-    router
+    // Spec §6.2: the not-leader 409 gate wraps the WHOLE router (business +
+    // test-mode routes) and lives here — not in `serve_admin_api_with_shutdown`
+    // — so the federation reverse-tunnel router built from this same function is
+    // gated too. `NotApplicable` (K8s / FileSystem) makes it a pass-through.
+    router.layer(axum::middleware::from_fn_with_state(
+        admin_state,
+        leadership_gate_middleware,
+    ))
 }
 
 /// Serve the admin API with graceful shutdown support.
@@ -1220,5 +1268,101 @@ mod rotate_scope_tests {
         let s: RotateBody = serde_json::from_str(r#"{"scope":"ca"}"#).unwrap();
         assert!(matches!(s.scope, ApiRotateScope::Ca));
         assert!(serde_json::from_str::<RotateBody>(r#"{"scope":"root"}"#).is_err());
+    }
+}
+
+#[cfg(test)]
+mod leadership_gate_tests {
+    use super::*;
+    use crate::conf_mgr::conf_center::traits::LeadershipStatus;
+    use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig, SchemaValidator};
+    use tower::ServiceExt;
+
+    #[test]
+    fn follower_rejects_business_paths_with_leader_addr() {
+        let status = LeadershipStatus::Follower {
+            leader_admin_addr: Some("10.0.0.11:8080".to_string()),
+        };
+        for path in [
+            "/api/v1/cluster/EdgionTls",
+            "/api/v1/namespaced/HTTPRoute/default",
+            "/api/v1/reload",
+            "/configserver/HTTPRoute/list",
+        ] {
+            let (code, body) = not_leader_rejection(&status, path).expect("business path must be rejected");
+            assert_eq!(code, StatusCode::CONFLICT, "{path}");
+            assert_eq!(body["error"], "not leader");
+            assert_eq!(body["leader"], "10.0.0.11:8080");
+        }
+    }
+
+    #[test]
+    fn follower_without_known_leader_rejects_with_null_leader() {
+        let status = LeadershipStatus::Follower {
+            leader_admin_addr: None,
+        };
+        let (code, body) = not_leader_rejection(&status, "/api/v1/reload").expect("rejected");
+        assert_eq!(code, StatusCode::CONFLICT);
+        assert!(body["leader"].is_null(), "unknown leader must serialize as null");
+    }
+
+    #[test]
+    fn follower_keeps_public_paths_open() {
+        let status = LeadershipStatus::Follower {
+            leader_admin_addr: Some("10.0.0.11:8080".to_string()),
+        };
+        for path in ["/health", "/ready", "/metrics", "/api/v1/auth/status"] {
+            assert!(
+                not_leader_rejection(&status, path).is_none(),
+                "{path} must stay open on a standby"
+            );
+        }
+    }
+
+    #[test]
+    fn leader_and_not_applicable_pass_everything() {
+        for status in [LeadershipStatus::Leader, LeadershipStatus::NotApplicable] {
+            assert!(not_leader_rejection(&status, "/api/v1/reload").is_none());
+            assert!(not_leader_rejection(&status, "/api/v1/cluster/EdgionTls").is_none());
+        }
+    }
+
+    /// S3/S4 zero-impact guard: a FileSystem-backed ConfMgr (leadership
+    /// `NotApplicable`) must never see a 409 from the gate on the full router.
+    #[tokio::test]
+    async fn gate_is_passthrough_when_not_applicable() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let conf_mgr = Arc::new(
+            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
+                tmp.path().to_path_buf(),
+            )))
+            .await
+            .expect("ConfMgr::create"),
+        );
+        assert_eq!(conf_mgr.leadership_status(), LeadershipStatus::NotApplicable);
+
+        let (tx, _rx) = tokio::sync::watch::channel(crate::config::CenterClientConfig::default());
+        let router = create_admin_router(
+            conf_mgr,
+            Arc::new(SchemaValidator::empty()),
+            None,
+            Arc::new(crate::authz::Authorizer::new(crate::authz::CenterPolicy::deny_all())),
+            tx,
+        );
+
+        let resp = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .uri("/api/v1/server-info")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            resp.status(),
+            StatusCode::CONFLICT,
+            "NotApplicable must disable the not-leader gate"
+        );
     }
 }

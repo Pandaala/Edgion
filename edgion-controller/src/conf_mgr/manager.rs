@@ -143,6 +143,18 @@ impl ConfMgr {
         self.conf_center.is_k8s_mode()
     }
 
+    /// Per-leadership-term conf_sync stream cancellation slot (spec §6.1).
+    /// `Some` only for centers with leader elections (etcd); see `CenterLifeCycle`.
+    pub fn term_token_slot(&self) -> Option<Arc<arc_swap::ArcSwap<tokio_util::sync::CancellationToken>>> {
+        self.conf_center.term_token_slot()
+    }
+
+    /// This center's leadership view (spec §6.2); `NotApplicable` disables the
+    /// Admin API not-leader gate (Kubernetes / FileSystem).
+    pub fn leadership_status(&self) -> super::conf_center::traits::LeadershipStatus {
+        self.conf_center.leadership_status()
+    }
+
     /// Collect a stats snapshot for fed_sync push if anything has changed since
     /// last call. Returns `Some((per_kind, total))` when at least one processor
     /// is dirty (and clears the dirty flags); otherwise `None`.
@@ -198,6 +210,14 @@ impl CenterLifeCycle for ConfMgr {
 
     fn runtime(&self) -> Arc<ControllerRuntime> {
         self.conf_center.runtime()
+    }
+
+    fn term_token_slot(&self) -> Option<Arc<arc_swap::ArcSwap<tokio_util::sync::CancellationToken>>> {
+        self.conf_center.term_token_slot()
+    }
+
+    fn leadership_status(&self) -> super::conf_center::traits::LeadershipStatus {
+        self.conf_center.leadership_status()
     }
 }
 

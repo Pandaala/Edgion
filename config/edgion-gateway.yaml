@@ -6,7 +6,7 @@
 #   1. :
 #      ./edgion-gateway --config-file /usr/local/edgion/config/edgion-gateway.yaml
 #
-#   2.  server_addr:
+#   2.  server_addrs:
 #      ./edgion-gateway --server-addr http://127.0.0.1:12151
 #
 #   3. :
@@ -43,7 +43,7 @@ gateway:
   # Controller conf_sync gRPC address.
   # Scheme: https:// when conf_sync_security carries certs (the default, see the
   # bottom of this file); http:// only under an explicit `skip_tls: true`.
-  server_addr: "https://127.0.0.1:12151"
+  server_addrs: ["https://127.0.0.1:12151"]
 
   # Admin HTTP server listen address (optional).
   # The Gateway Admin API listens on this address; default is 127.0.0.1:12001

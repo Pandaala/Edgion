@@ -293,7 +293,22 @@ conf_sync_security:
       ca: certs/grpc/secondary/ca.crt
 ```
 
-When mTLS is enabled, the Gateway automatically upgrades the `server_addr` connection from `http://` to `https://`.
+When mTLS is enabled, the Gateway automatically upgrades the `server_addrs` connection from `http://` to `https://`.
+
+> **Etcd mode (HA, multiple controllers): manual certs with all-address SANs.**
+> `auto_ca` is Kubernetes-only — it needs a `kube::Client` and provisions K8s Secrets, so on
+> bare-metal/VM it fails at startup; etcd mode always uses manually-issued conf_sync certs.
+> When `server_addrs` lists more than one controller, the **server certificate's SAN set must
+> cover every controller address the gateway may rotate to** — the gateway derives the TLS
+> verification hostname from the address it is currently connected to. Issue the cert with
+> repeatable `--server-san` flags:
+> ```bash
+> edgion-cli gen-certs --output file --output-dir certs/grpc \
+>   --server-san 10.0.0.11 --server-san 10.0.0.12
+> ```
+> A SAN set covering only the first controller **passes every single-controller test and
+> fails exactly during a real failover** (the rotation lands on the second address and TLS
+> verification rejects it), so the end-to-end failover integration test asserts it.
 
 > **Backward compatibility**: The legacy single-cert format is still supported and requires no migration:
 > ```yaml

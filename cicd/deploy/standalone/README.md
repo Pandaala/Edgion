@@ -171,7 +171,7 @@ for the full field reference and failover behavior.
 work_dir: "/usr/local/edgion"
 
 gateway:
-  server_addr: "https://127.0.0.1:12151"  # Controller gRPC address (https under mTLS)
+  server_addrs: ["https://127.0.0.1:12151"]  # Controller gRPC address (https under mTLS)
   admin_listen: "127.0.0.1:12001"         # Admin API (loopback-only; /configclient, /server-info)
   # probe_listen: "0.0.0.0:12000"         # Liveness/readiness (/health, /ready); default 0.0.0.0:12000
 
@@ -224,7 +224,7 @@ The controller uses the `server.*` half, the gateway uses the `client.*` half, a
 same `ca.crt`. The two sides must agree — a mismatch is a handshake failure.
 
 **Split-host deployment.** The `--server-san` values must include whatever host/IP the gateway's
-`server_addr` dials (a cert with only `127.0.0.1`/`localhost` will fail SAN verification from a
+`server_addrs` dials (a cert with only `127.0.0.1`/`localhost` will fail SAN verification from a
 remote gateway). Re-generate with the controller's reachable address, then distribute the client
 half to the gateway host:
 
@@ -239,7 +239,7 @@ edgion-cli gen-certs --output file --output-dir /usr/local/edgion/certs/grpc \
 ```yaml
 # edgion-gateway.yaml
 gateway:
-  server_addr: "https://controller.example.internal:12151"   # must match a --server-san above
+  server_addrs: ["https://controller.example.internal:12151"]  # must match a --server-san above
 conf_sync_security:
   tls:
     cert: certs/grpc/primary/client.crt

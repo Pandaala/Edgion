@@ -62,13 +62,11 @@ pub fn build_connect_options(
     }
 
     // Dial (connection) timeout
-    let mut dial_configured = false;
     if let Some(timeout) = &crd.timeout {
         if let Some(dial_ms) = timeout.dial {
             let dial = dial_ms.min(MAX_DIAL_TIMEOUT_MS);
             options = options.with_connect_timeout(Duration::from_millis(dial));
             has_options = true;
-            dial_configured = true;
         }
         // Per-request timeout
         if let Some(request_ms) = timeout.request {
@@ -79,12 +77,10 @@ pub fn build_connect_options(
     }
 
     // HTTP/2 keep-alive
-    let mut keepalive_configured = false;
     if let Some(ka) = &crd.keep_alive {
         if let (Some(time), Some(timeout)) = (ka.time, ka.timeout) {
             options = options.with_keep_alive(Duration::from_secs(time), Duration::from_secs(timeout));
             has_options = true;
-            keepalive_configured = true;
 
             if ka.permit_without_stream == Some(true) {
                 options = options.with_keep_alive_while_idle(true);
@@ -92,26 +88,16 @@ pub fn build_connect_options(
         }
     }
 
-    // Spec §4.2 fact 2: h2 PING keepalive is the ONLY thing that kills a
-    // blackholed established stream (a per-request timeout does not bound a bidi
-    // stream body, so it cannot detect a hung lease-keepalive). Ensure keepalive
-    // — and the baseline dial timeout — are always present on the conf_center
-    // client unless the operator explicitly configured their own, so a
-    // partially-configured client never silently loses blackhole detection that
-    // leader election depends on. This makes the returned options a superset of
-    // `default_connect_options()`; the `None`/default fallback below is retained
-    // only for a fully-empty config for symmetry.
-    if !dial_configured {
-        options = options.with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS));
-        has_options = true;
-    }
-    if !keepalive_configured {
-        options = options
-            .with_keep_alive(Duration::from_secs(5), Duration::from_secs(3))
-            .with_keep_alive_while_idle(true);
-        has_options = true;
-    }
-
+    // NOTE deliberately NO unconditional defaults here: this builder is shared
+    // by EVERY EtcdLinkClient — the gateway's operator-configured LinkSys etcd
+    // clients included — and injecting h2-keepalive/dial defaults here would
+    // silently change their connection behavior in every mode (a §10.5
+    // zero-K8s-impact violation). The conf_center client, which DOES need
+    // always-on h2 keepalive (spec §4.2 fact 2: h2 PING is the only thing that
+    // kills a blackholed established stream), gets its defaults injected at its
+    // own config-conversion layer: `EtcdConfig::to_client_config` in
+    // edgion-controller fills `timeout.dial` and `keep_alive` before this
+    // builder ever runs.
     Ok(if has_options { Some(options) } else { None })
 }
 
@@ -178,15 +164,13 @@ fn build_tls_options(tls: &TlsConfig) -> Result<TlsOptions> {
 /// Get default connect options with a reasonable dial timeout.
 /// Used when no specific options are configured but we still want a timeout.
 pub fn default_connect_options() -> ConnectOptions {
-    // Spec §4.2: a per-request timeout does NOT bound a hung bidi keepalive
-    // stream; only h2 PING keepalive kills a blackholed established stream.
-    // Default it on for the conf_center client so leader election can detect a
-    // blackhole. Do NOT default a channel-wide request timeout — it would kill
-    // the blocking v3election campaign() RPC.
-    ConnectOptions::new()
-        .with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS))
-        .with_keep_alive(Duration::from_secs(5), Duration::from_secs(3))
-        .with_keep_alive_while_idle(true)
+    // Shared fallback for EVERY fully-unconfigured EtcdLinkClient (LinkSys
+    // included) — dial timeout only, no h2 keepalive, exactly the pre-election
+    // behavior. The conf_center client never reaches this fallback: its
+    // config-conversion layer (`EtcdConfig::to_client_config`) always fills
+    // `timeout.dial` and `keep_alive`, which is where the leader-election
+    // blackhole-detection defaults (spec §4.2 fact 2) live.
+    ConnectOptions::new().with_connect_timeout(Duration::from_millis(DEFAULT_DIAL_TIMEOUT_MS))
 }
 
 /// Default ceiling for live health-probe `status()` calls when the CRD does not
@@ -222,6 +206,21 @@ mod tests {
     /// Shorthand: `NotRequired` state (no auth configured).
     fn no_auth() -> CredentialState<BasicAuthMaterial> {
         CredentialState::NotRequired
+    }
+
+    /// Zero-impact guard (spec §10.5): the SHARED builder must never inject
+    /// defaults of its own. An unconfigured LinkSys etcd client yields `None`
+    /// here and falls back to `default_connect_options()` = dial timeout ONLY —
+    /// no h2 keepalive. The conf_center's always-on keepalive lives in
+    /// `EtcdConfig::to_client_config` (edgion-controller), not here; if this
+    /// test fails, a conf_center default has leaked into every etcd client.
+    #[test]
+    fn unconfigured_client_gets_no_injected_options() {
+        let crd = minimal_config(vec!["http://127.0.0.1:2379".to_string()]);
+        assert!(
+            build_connect_options(&crd, &no_auth()).unwrap().is_none(),
+            "shared builder must not inject defaults for an unconfigured client"
+        );
     }
 
     /// Create a minimal EtcdClientConfig for testing

@@ -37,10 +37,10 @@ impl EdgionGatewayCli {
 
     /// Create ConfigSyncClient
     async fn create_config_sync_client(config: &EdgionGatewayConfig) -> Result<ConfigSyncClient> {
-        let server_addr_opt = config.server_addr();
-        let server_addr = server_addr_opt
-            .as_deref()
-            .ok_or_else(|| anyhow!("server_addr is required, please provide --server-addr or set in config file"))?;
+        let server_addrs = config.server_addrs();
+        if server_addrs.is_empty() {
+            bail!("server_addrs is required: provide --server-addr (repeatable) or set gateway.server_addrs in the config file");
+        }
 
         let security = &config.conf_sync_security;
         security
@@ -88,7 +88,7 @@ impl EdgionGatewayCli {
             loop {
                 attempt += 1;
                 match ConfigSyncClient::new(
-                    server_addr,
+                    server_addrs.clone(),
                     "edgion-gateway".to_string(),
                     Duration::from_secs(10),
                     security,
@@ -117,7 +117,7 @@ impl EdgionGatewayCli {
         }
 
         let sync_client = ConfigSyncClient::new(
-            server_addr,
+            server_addrs,
             "edgion-gateway".to_string(),
             Duration::from_secs(10),
             security,
@@ -522,10 +522,56 @@ impl EdgionGatewayCli {
         init_global_config_client(config_client.clone())
             .map_err(|e| anyhow!("Failed to initialize global config client: {}", e))?;
 
-        // 9. Get server info from Controller (includes supported kinds)
+        // 9. Get server info from Controller (includes supported kinds).
+        // Bootstrap rotation (spec §7.3): with multiple controllers (etcd HA) the
+        // first address may be a follower answering UNAVAILABLE — the previous
+        // single-shot call would crash-loop the gateway. Rotate through the list
+        // within a bounded budget (mirrors the auto_ca retry shape); do NOT loop
+        // forever inside block_on — the supervisor restart supplies "never give
+        // up". A single-address deployment retries the same address, which is a
+        // strict improvement over the previous instant hard-fail.
         let server_info = runtime
-            .block_on(sync_client.get_server_info())
-            .map_err(|e| anyhow!("Failed to get server info from Controller: {}", e))?;
+            .block_on(async {
+                const MAX_ATTEMPTS: u32 = 20;
+                const ATTEMPT_PAUSE: Duration = Duration::from_secs(2);
+                let rotator = sync_client.rotator();
+                let mut tried: Vec<String> = Vec::new();
+                let mut attempt: u32 = 0;
+                loop {
+                    attempt += 1;
+                    let addr = sync_client.current_addr();
+                    match sync_client.get_server_info().await {
+                        Ok(info) => return Ok(info),
+                        Err(e) => {
+                            if !tried.contains(&addr) {
+                                tried.push(addr.clone());
+                            }
+                            if attempt >= MAX_ATTEMPTS {
+                                return Err(anyhow!(
+                                    "Failed to get server info after {attempt} attempts across {tried:?}: {e}"
+                                ));
+                            }
+                            tracing::warn!(
+                                component = "startup",
+                                attempt,
+                                max_attempts = MAX_ATTEMPTS,
+                                addr = %addr,
+                                error = %e,
+                                "bootstrap get_server_info failed; rotating to the next controller"
+                            );
+                            if let Err(re) = sync_client.rotate().await {
+                                tracing::warn!(component = "startup", error = %re, "bootstrap rotation failed");
+                            }
+                            if rotator.completed_full_lap() {
+                                rotator.backoff_after_lap().await;
+                            } else {
+                                tokio::time::sleep(ATTEMPT_PAUSE).await;
+                            }
+                        }
+                    }
+                }
+            })
+            .map_err(|e: anyhow::Error| anyhow!("Failed to get server info from Controller: {}", e))?;
 
         // 10. Initialize integration testing mode from CLI flag (already gated on
         // the env override at the top of this function).
@@ -564,7 +610,7 @@ impl EdgionGatewayCli {
         let sync_client_arc = Arc::new(sync_client);
         let sync_client_for_meta = sync_client_arc.clone();
         runtime.spawn(async move {
-            sync_client_for_meta.start_watch_server_meta().await;
+            sync_client_for_meta.run_leader_session().await;
         });
 
         // 13b. Hot-reload the conf_sync client TLS identity (spec §6 T4): watch the

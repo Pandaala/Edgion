@@ -77,8 +77,8 @@ conf_sync:
 #
 # SPLITTING CONTROLLER AND GATEWAY ONTO DIFFERENT HOSTS? Add the Controller's reachable
 # host to the server cert: re-run gen-certs with an extra `--server-san <host-or-ip>`
-# (the value the Gateway's `server_addr` dials), copy the client.crt/client.key/ca.crt to
-# the Gateway host, and point its `server_addr` at this Controller. No plaintext ever
+# (the value the Gateway's `server_addrs` dials), copy the client.crt/client.key/ca.crt to
+# the Gateway host, and point its `server_addrs` at this Controller. No plaintext ever
 # crosses the network -- the mTLS handshake protects the Secrets this channel carries.
 conf_sync_security:
   tls:

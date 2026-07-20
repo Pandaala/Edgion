@@ -76,13 +76,18 @@ impl EtcdLeaderElection {
                 );
             }
         }
+        // Term-independent leaseless-key sweeper (spec §4.8): a key under the
+        // election prefix with no lease (an out-of-band `etcdctl put`) can never
+        // preempt a live leader, but once it becomes the lowest create_revision
+        // it would strand the election forever. Sweep it periodically.
+        let sweeper = self.spawn_leaseless_sweeper();
         let mut demotions: u32 = 0;
         loop {
             if shutdown.is_shutdown() {
-                return;
+                break;
             }
             match self.one_term(&mut shutdown, &term_token_slot).await {
-                TermOutcome::Shutdown => return,
+                TermOutcome::Shutdown => break,
                 TermOutcome::Demoted => {
                     demotions = demotions.saturating_add(1);
                     // Spec §4.5.2: back off before re-campaigning.
@@ -95,7 +100,7 @@ impl EtcdLeaderElection {
                     );
                     tokio::select! {
                         _ = tokio::time::sleep(backoff) => {}
-                        _ = shutdown.wait() => return,
+                        _ = shutdown.wait() => break,
                     }
                 }
                 TermOutcome::WonAndSurvived => {
@@ -104,6 +109,7 @@ impl EtcdLeaderElection {
                 }
             }
         }
+        sweeper.abort();
     }
 
     async fn one_term(
@@ -117,37 +123,69 @@ impl EtcdLeaderElection {
             None => return TermOutcome::Shutdown,
         };
 
-        // 2. Candidacy: campaign() blocks until won; cancel on shutdown.
-        let lk = match self.campaign(lease, shutdown).await {
+        // 2. Keepalive driver — started BEFORE campaign, because the lease must
+        //    be kept alive continuously IN BOTH ROLES (spec §4.2). campaign()
+        //    can block for arbitrarily long (minutes) while a leader is healthy;
+        //    with the driver started only at win, the 6-15s session lease would
+        //    expire mid-candidacy and the eventual win would carry a dead lease:
+        //    the first post-win establish returns LeaseKeepAliveError and the
+        //    brand-new leader demotes within milliseconds (observed in the e2e
+        //    failover test as a won->demoted->re-won blip 30ms apart).
+        //    `term_token` is created here so the driver has a cancel scope, but
+        //    it is PUBLISHED into the slot only at win (§6.1 ordering).
+        let term_token = CancellationToken::new();
+        let mut tasks: JoinSet<TaskExit> = JoinSet::new();
+        self.spawn_keepalive_driver(&mut tasks, lease, term_token.clone());
+
+        // 3. Candidacy: campaign() blocks until won; cancel on shutdown or on
+        //    candidate lease death (the driver exiting LeaseDead — spec §4.2:
+        //    "a candidate silently re-grants"). While blocked, a candidacy-scoped
+        //    refresher keeps `current_leader` fresh so the Admin API 409 body can
+        //    name the actual leader (spec §4.3/§6.2).
+        let refresher = self.spawn_candidate_leader_refresher();
+        let campaign_result = self.campaign(lease, shutdown, &mut tasks).await;
+        refresher.abort();
+        let lk = match campaign_result {
             CampaignResult::Won(lk) => lk,
             CampaignResult::LeaseDead => {
-                // Re-grant a fresh lease next loop.
+                // Tear down the candidacy tasks and re-grant a fresh lease next loop.
+                term_token.cancel();
+                tasks.abort_all();
+                let _ = timeout(Duration::from_secs(2), async {
+                    while tasks.join_next().await.is_some() {}
+                })
+                .await;
                 let _ = timeout(Duration::from_secs(2), self.client.lease_revoke(lease)).await;
                 return TermOutcome::Demoted;
             }
             CampaignResult::Shutdown => {
+                term_token.cancel();
+                tasks.abort_all();
+                let _ = timeout(Duration::from_secs(2), async {
+                    while tasks.join_next().await.is_some() {}
+                })
+                .await;
                 let _ = timeout(Duration::from_secs(2), self.client.lease_revoke(lease)).await;
                 return TermOutcome::Shutdown;
             }
         };
 
-        // 3. WON. Publish a fresh term token BEFORE anyone can serve as leader
-        //    (spec §6.1), then flip the local flag.
-        let term_token = CancellationToken::new();
+        // 4. WON. Publish the term token BEFORE anyone can serve as leader
+        //    (spec §6.1), then flip the local flag. The keepalive driver has
+        //    been running since step 2 and simply continues into the term.
         term_token_slot.store(Arc::new(term_token.clone()));
         self.state.record_keepalive_now();
         self.state.set_leader(true);
         self.refresh_current_leader().await;
         controller_metrics().set_leader(true);
+        controller_metrics().inc_leader_transitions();
         tracing::info!(
             component = "etcd_election",
             identity = %self.config.resolved_identity(),
             "won leadership"
         );
 
-        // 4. Term tasks: keepalive driver + guard-txn task under one JoinSet/token.
-        let mut tasks: JoinSet<TaskExit> = JoinSet::new();
-        self.spawn_keepalive_driver(&mut tasks, lease, term_token.clone());
+        // 4b. Remaining term task: the guard txn joins the same JoinSet/token.
         self.spawn_guard_task(&mut tasks, lk.clone(), lease, term_token.clone());
 
         // 5. Term supervisor: ONLY timers + joins (never an etcd call).
@@ -157,7 +195,11 @@ impl EtcdLeaderElection {
         //    cancel + abort + bounded join, THEN best-effort resign/revoke LAST.
         self.state.set_leader(false);
         self.state.mark_lease_invalid();
+        // Our own cached identity is now stale; the candidacy refresher of the
+        // next loop iteration repopulates it with the successor.
+        self.state.set_current_leader(None);
         controller_metrics().set_leader(false);
+        controller_metrics().inc_leader_transitions();
         term_token.cancel();
         tasks.abort_all();
         let _ = timeout(Duration::from_secs(2), async {
@@ -199,7 +241,17 @@ impl EtcdLeaderElection {
         }
     }
 
-    async fn campaign(&self, lease: i64, shutdown: &mut ShutdownSignal) -> CampaignResult {
+    /// Campaign for leadership. `tasks` holds the already-running keepalive
+    /// driver: if it exits during candidacy (lease death, a panic, or any other
+    /// non-cancel exit) the blocked `campaign()` is abandoned — its lease-keyed
+    /// key is worthless once the lease dies — and the caller re-grants
+    /// (spec §4.2 "a candidate silently re-grants").
+    async fn campaign(
+        &self,
+        lease: i64,
+        shutdown: &mut ShutdownSignal,
+        tasks: &mut JoinSet<TaskExit>,
+    ) -> CampaignResult {
         let mut sess = match self.client.election_session().await {
             Ok(s) => s,
             // Treat a session-build failure as retryable.
@@ -207,6 +259,15 @@ impl EtcdLeaderElection {
         };
         tokio::select! {
             _ = shutdown.wait() => CampaignResult::Shutdown,
+            // Guard the arm: join_next() on an empty JoinSet is Ready(None)
+            // immediately and would busy-spin the select (spec §4.5.1 cond 4).
+            Some(exit) = tasks.join_next(), if !tasks.is_empty() => match exit {
+                // The driver only exits Cancelled when the term token fires,
+                // which never happens during candidacy — treat it like death.
+                Ok(TaskExit::Cancelled) | Ok(TaskExit::LeaseDead) | Ok(TaskExit::GuardLost) | Err(_) => {
+                    CampaignResult::LeaseDead
+                }
+            },
             r = sess.campaign(&self.election_name, self.value_bytes.clone(), lease) => match r {
                 Ok(lk) => CampaignResult::Won(lk),
                 // Includes lease-not-found; re-grant next loop.
@@ -347,6 +408,98 @@ impl EtcdLeaderElection {
                 }
             }
         }
+    }
+
+    /// Leaseless-key sweeper (spec §4.8). Every `lease_duration`, scan the
+    /// election prefix and delete keys carrying no lease. `v3election` keys are
+    /// always lease-attached (`{name}/{lease_id_hex}`), so `lease == 0` can only
+    /// be an out-of-band write. Discipline: an `Err` from any probe means do NOT
+    /// delete; the delete itself is guarded on the observed `mod_revision` so a
+    /// concurrent legitimate write can never be clobbered.
+    fn spawn_leaseless_sweeper(&self) -> tokio::task::JoinHandle<()> {
+        let client = self.client.clone();
+        let prefix = self.election_name.clone();
+        let period = Duration::from_secs(self.config.lease_duration_secs);
+        let bound = Duration::from_secs(self.config.retry_period_secs);
+        tokio::spawn(async move {
+            let mut tick = interval(period);
+            tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                // Transport trouble anywhere: skip and sweep next period.
+                let Ok(Ok(keys)) = timeout(bound, client.get_prefix(&prefix)).await else {
+                    continue;
+                };
+                for (key, _value, _rev) in keys {
+                    // Err or already gone: do not delete.
+                    let Ok(Ok(Some(kv))) = timeout(bound, client.get_kv(&key)).await else {
+                        continue;
+                    };
+                    if kv.lease != 0 {
+                        continue;
+                    }
+                    if let Ok(Ok(true)) = timeout(bound, client.txn_delete_if_mod_revision(&key, kv.mod_revision)).await
+                    {
+                        tracing::warn!(
+                            component = "etcd_election",
+                            key = %key,
+                            "swept leaseless key under the election prefix (out-of-band write)"
+                        );
+                    }
+                }
+            }
+        })
+    }
+
+    /// Candidacy-scoped `current_leader` refresher (spec §4.3): while `campaign()`
+    /// blocks, poll `leader()` on the `retry_period` cadence so a follower's Admin
+    /// API 409 body names the live leader. Aborted the moment campaign returns;
+    /// every etcd call is explicitly time-bounded (spec §4.1).
+    ///
+    /// The `ElectionSession` is REUSED across ticks — `election_session()` dials a
+    /// brand-new etcd connection, and per-tick dialing would be steady-state
+    /// connection churn on every standby forever (review finding). It is rebuilt
+    /// whenever a tick yields no leader: `leader()` deliberately collapses
+    /// transport failure and genuine vacancy into `None` (etcd reports vacancy as
+    /// an error too, see `ElectionSession::leader`), so "no leader" is also the
+    /// only reliable dead-connection signal. Steady state (leader known) does
+    /// zero dials; a vacancy/outage window degrades to one dial per tick, which
+    /// is bounded by the window itself.
+    fn spawn_candidate_leader_refresher(&self) -> tokio::task::JoinHandle<()> {
+        let client = self.client.clone();
+        let state = self.state.clone();
+        let name = self.election_name.clone();
+        let retry = Duration::from_secs(self.config.retry_period_secs);
+        tokio::spawn(async move {
+            let mut tick = interval(retry);
+            tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+            let mut session: Option<edgion_common::link_sys_core::providers::etcd::ElectionSession> = None;
+            loop {
+                tick.tick().await;
+                if session.is_none() {
+                    session = match timeout(retry, client.election_session()).await {
+                        Ok(Ok(s)) => Some(s),
+                        _ => None, // dial failed/timed out: retry next tick
+                    };
+                }
+                let Some(sess) = session.as_mut() else { continue };
+                match timeout(retry, sess.leader(&name)).await {
+                    Ok(Ok(Some(bytes))) => {
+                        if let Ok(info) = serde_json::from_slice::<LeaderInfo>(&bytes) {
+                            state.set_current_leader(Some(info));
+                        }
+                        // Bad payload: keep the session (the call worked) and the
+                        // previous cached value.
+                    }
+                    // No leader / transport failure / timeout: drop the session so
+                    // the next tick redials (a timed-out call may have left an
+                    // orphaned in-flight request on the connection). Keep the
+                    // previous cached value — an absent leader during churn is
+                    // expected and the 409 body is best-effort.
+                    _ => session = None,
+                }
+            }
+        })
     }
 }
 
@@ -548,6 +701,22 @@ mod tests {
             "exactly one leader expected (a={a_leader}, b={b_leader})"
         );
 
+        // The FOLLOWER must learn the leader's identity while blocked in
+        // campaign (the candidacy refresher, spec §4.3/§6.2): its Admin API 409
+        // body depends on it.
+        let (leader_admin, follower_handle) = if a_leader {
+            ("10.0.0.11:8080", &handle_b)
+        } else {
+            ("10.0.0.12:8080", &handle_a)
+        };
+        assert!(
+            wait_until(Duration::from_secs(5), || {
+                follower_handle.current_leader().map(|l| l.admin_addr) == Some(leader_admin.to_string())
+            })
+            .await,
+            "the follower must surface the live leader's admin_addr via its candidacy refresher"
+        );
+
         // Shut the current leader down; the follower must take over.
         if a_leader {
             sd_a.shutdown();
@@ -695,6 +864,66 @@ mod tests {
         assert_eq!(handle2.current_leader().unwrap().admin_addr, "10.0.0.12:8080");
         sd2.shutdown();
         let _ = task2.await;
+    }
+
+    /// Spec §4.8: a leaseless key under the election prefix (an out-of-band
+    /// `etcdctl put` on a NEW key, not an overwrite of the leader's) cannot
+    /// preempt a live leader, but once it becomes the lowest create_revision it
+    /// would strand the election — the sweeper must delete it. The live leader's
+    /// own (lease-attached) key must survive the sweep.
+    #[tokio::test]
+    #[ignore = "requires a real etcd serving v3election on localhost:2379"]
+    async fn sweeper_removes_leaseless_key_but_not_leader_key() {
+        let prefix = unique_prefix();
+        let client = Arc::new(test_link_client().await);
+        let elect = EtcdLeaderElection::new(
+            client.clone(),
+            &prefix,
+            test_cfg("10.0.0.11:9090", "10.0.0.11:8080", "ctrl-a"),
+        )
+        .unwrap();
+        let handle = elect.handle();
+        let sd = ShutdownHandle::new();
+        let slot = Arc::new(ArcSwap::from_pointee(CancellationToken::new()));
+        let task = {
+            let s = sd.signal();
+            tokio::spawn(async move { elect.run(s, slot).await })
+        };
+        assert!(
+            wait_until(Duration::from_secs(15), || handle.is_leader()).await,
+            "candidate must win leadership first"
+        );
+
+        // Plant a leaseless key under the election prefix, out of band.
+        let stray = format!("{}/leader/stray-manual-key", prefix.trim_end_matches('/'));
+        client
+            .put_string(&stray, "garbage")
+            .await
+            .expect("out-of-band put must succeed");
+
+        // One sweep period is lease_duration (6s here); allow two plus slack.
+        // (`wait_until` takes a sync closure, so poll the async probe directly.)
+        let mut swept = false;
+        for _ in 0..30 {
+            if matches!(client.get_kv(&stray).await, Ok(None)) {
+                swept = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+        assert!(
+            swept,
+            "the sweeper must delete the leaseless stray key within ~2 sweep periods"
+        );
+
+        // The leader must still be leader and its own key intact.
+        assert!(
+            handle.is_leader(),
+            "sweeping the stray must not disturb the live leader"
+        );
+
+        sd.shutdown();
+        let _ = task.await;
     }
 
     // NOTE: `transient_guard_error_does_not_demote` (spec §4.5.1 — a transient

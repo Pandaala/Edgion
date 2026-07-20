@@ -409,6 +409,41 @@ pub trait CenterLifeCycle: Send + Sync {
     fn conf_dir_registry(&self) -> Option<Arc<crate::conf_mgr::conf_center::file_system::PathRegistry>> {
         None
     }
+
+    /// Per-leadership-term conf_sync stream cancellation slot (spec §6.1).
+    ///
+    /// The etcd election installs a fresh token at each campaign win and cancels
+    /// it at demotion, so a demoted leader's conf_sync streams are actively
+    /// closed instead of silently hanging (the gateway keys its leader signal on
+    /// the `watch_server_meta` stream ending). Default `None` = leadership terms
+    /// not applicable (Kubernetes / FileSystem); the gRPC server then scopes
+    /// streams to the process shutdown token exactly as before.
+    fn term_token_slot(&self) -> Option<Arc<arc_swap::ArcSwap<tokio_util::sync::CancellationToken>>> {
+        None
+    }
+
+    /// This center's view of controller leadership (spec §6.2).
+    ///
+    /// Default `NotApplicable` = leadership gating does not apply and the Admin
+    /// API 409 gate is disabled (Kubernetes routes admin traffic to the leader
+    /// via the leader Service; FileSystem is single-node). Only `EtcdCenter`
+    /// overrides this (S3/S4 zero-K8s-impact guard).
+    fn leadership_status(&self) -> LeadershipStatus {
+        LeadershipStatus::NotApplicable
+    }
+}
+
+/// A center's leadership view, consumed by the Admin API not-leader gate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LeadershipStatus {
+    /// This center has no leader election (Kubernetes / FileSystem) — the gate
+    /// is disabled.
+    NotApplicable,
+    /// This process is the current leader — serve normally.
+    Leader,
+    /// This process is a standby. `leader_admin_addr` names the current leader's
+    /// admin endpoint when known (`None` during churn / before first refresh).
+    Follower { leader_admin_addr: Option<String> },
 }
 
 // ============================================================================

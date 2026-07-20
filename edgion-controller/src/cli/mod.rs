@@ -215,7 +215,13 @@ impl EdgionControllerCli {
 
         // Create gRPC server with dynamic provider
         // Note: gRPC server will return UNAVAILABLE until ConfigSyncServer is ready
-        let grpc_server = ConfigSyncGrpcServer::new(provider, grpc_shutdown_token.clone());
+        let mut grpc_server = ConfigSyncGrpcServer::new(provider, grpc_shutdown_token.clone());
+        // Etcd mode: streams additionally scope to the current leadership term, so
+        // a demoted leader actively closes them (spec §6.1). K8s/FS return `None`
+        // and keep the process-token-only behavior (S2 zero-impact guard).
+        if let Some(slot) = conf_mgr.term_token_slot() {
+            grpc_server.set_term_token_slot(slot);
+        }
 
         // conf_sync auto-CA (K8s only): when enabled, the Controller's internal CA
         // ensures the CA Secret, provisions the gateway-client leaf Secret, and mints

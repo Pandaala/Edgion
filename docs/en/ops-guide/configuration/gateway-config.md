@@ -10,7 +10,7 @@ edgion-gateway reads its configuration from a YAML file. The default path is `co
 work_dir: "."
 
 gateway:
-  server_addr: "http://127.0.0.1:12151"  # Required: Controller gRPC address
+  server_addrs: ["http://127.0.0.1:12151"]  # Required: Controller gRPC address
   admin_listen: "127.0.0.1:12001"        # Admin API listen address (default: 127.0.0.1:12001, loopback-only)
   # probe_listen: "0.0.0.0:12000"        # Liveness/readiness probe port (default: 0.0.0.0:12000); binds 0.0.0.0 so kubelet can reach the pod IP
 
@@ -134,7 +134,7 @@ The probe port is intentionally **not** added to the gateway Service; kubelet pr
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `server_addr` | `String` | **Required** | Controller gRPC address, e.g. `http://127.0.0.1:12151` |
+| `server_addrs` | `Array<String>` | **Required** | Controller conf_sync gRPC addresses, e.g. `["http://127.0.0.1:12151"]`. One address is exactly the previous single-address behavior; multiple addresses enable etcd-mode HA — the gateway rotates through the list to find the leader and fails over on `kill`/demotion. `--server-addr` is repeatable on the CLI |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API listen address. Defaults to loopback (`127.0.0.1:12001`) — sensitive endpoints (`/configclient`, `/api/v1/server-info`) are not exposed cluster-wide. Access remotely via `kubectl port-forward pod/<name> 12001:12001`. |
 | `admin_token` | `String` | — | Shared bearer token for the admin API (config-file fallback). Prefer the `EDGION_GATEWAY_ADMIN_TOKEN` env var in Kubernetes. Never serialized out, redacted in logs. See [Gateway admin API authentication](#gateway-admin-api-authentication). |
 | `probe_listen` | `String` | `0.0.0.0:12000` | Liveness/readiness probe listen address. Binds all interfaces so kubelet can reach the pod IP. Serves only `/health` and `/ready`. Not included in the gateway Service. |
@@ -243,7 +243,7 @@ The choice must match the Controller's — a mismatch causes a handshake failure
 | `ca` | `String` | — | CA certificate path used to verify the Controller server certificate |
 | `skip_tls` | `Boolean` | `false` | Explicit plaintext opt-in: `true` skips TLS and connects in plaintext (logs ERROR and raises `edgion_system_error_state{reason="skip_tls"}`) |
 
-When mTLS is enabled, the URI scheme of `gateway.server_addr` is automatically switched to `https://`. Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
+When mTLS is enabled, the URI scheme of `gateway.server_addrs` is automatically switched to `https://`. Certificates can be generated with `edgion-cli gen-certs --output file --output-dir <dir>`.
 
 ### logging
 
@@ -329,7 +329,7 @@ Behavior (using `client_addr=192.168.1.10`):
 
 ```yaml
 gateway:
-  server_addr: "http://10.0.0.5:12151"
+  server_addrs: ["http://10.0.0.5:12151"]
 ```
 
 ### Enabling Daily Log Rotation for Access Logs
@@ -371,7 +371,7 @@ access_log_sensitive:
 
 ```yaml
 gateway:
-  server_addr: "http://10.0.0.5:12151"  # scheme is automatically switched to https://
+  server_addrs: ["http://10.0.0.5:12151"]  # scheme is automatically switched to https://
 
 conf_sync_security:
   tls:

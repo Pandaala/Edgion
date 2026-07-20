@@ -106,7 +106,7 @@ conf_sync_security:
 
 ```yaml
 gateway:
-  server_addr: "http://127.0.0.1:12151"
+  server_addrs: ["http://127.0.0.1:12151"]
 
 logging:
   log_dir: logs

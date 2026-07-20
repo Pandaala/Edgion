@@ -1,12 +1,14 @@
 pub mod cert_watch;
 mod config_client;
 mod grpc_client;
+mod rotation;
 
 use std::sync::{Arc, LazyLock};
 use tokio_util::sync::CancellationToken;
 
 pub use config_client::ConfigClient;
 pub use grpc_client::ConfigSyncClient;
+pub use rotation::EndpointRotator;
 
 /// Process-global "reload generation" token for the conf_sync client TLS.
 ///

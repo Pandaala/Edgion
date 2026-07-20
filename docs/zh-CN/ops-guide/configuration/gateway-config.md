@@ -10,7 +10,7 @@ edgion-gateway 通过 YAML 文件启动，默认路径为 `config/edgion-gateway
 work_dir: "."
 
 gateway:
-  server_addr: "http://127.0.0.1:12151"  # 必填：Controller gRPC 地址
+  server_addrs: ["http://127.0.0.1:12151"]  # 必填：Controller gRPC 地址
   admin_listen: "127.0.0.1:12001"        # Admin API 监听地址（默认：127.0.0.1:12001，仅 loopback）
   # probe_listen: "0.0.0.0:12000"        # 存活/就绪探针端口（默认：0.0.0.0:12000）；绑定 0.0.0.0 以便 kubelet 可通过 Pod IP 访问
 
@@ -133,7 +133,7 @@ Gateway 采用**三端口模型**：
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `server_addr` | `String` | **必填** | Controller gRPC 地址，如 `http://127.0.0.1:12151` |
+| `server_addrs` | `Array<String>` | **必填** | Controller conf_sync gRPC 地址列表，如 `["http://127.0.0.1:12151"]`。单地址与旧版单地址行为完全一致；多地址启用 etcd 模式 HA，Gateway 会在列表中轮转寻找 leader 并在故障时切换。CLI 的 `--server-addr` 可重复传递 |
 | `admin_listen` | `String` | `127.0.0.1:12001` | Admin API 监听地址，默认绑 loopback（`127.0.0.1:12001`）——敏感端点（`/configclient`、`/api/v1/server-info`）不对集群暴露。远程访问请使用 `kubectl port-forward pod/<name> 12001:12001`。 |
 | `probe_listen` | `String` | `0.0.0.0:12000` | 存活/就绪探针监听地址，绑定所有接口以便 kubelet 通过 Pod IP 访问。仅提供 `/health` 和 `/ready`，不加入 gateway Service。 |
 
@@ -190,7 +190,7 @@ Gateway 采用**三端口模型**：
 | `ca` | `String` | — | CA 证书路径，用于验证 Controller 服务端证书 |
 | `skip_tls` | `Boolean` | `false` | 显式明文开关，`true` 时跳过 TLS 以明文连接，会输出 ERROR 日志并置位 `edgion_system_error_state{reason="skip_tls"}` |
 
-启用 mTLS 时，`gateway.server_addr` 的 URI scheme 会自动切换为 `https://`。证书可通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
+启用 mTLS 时，`gateway.server_addrs` 的 URI scheme 会自动切换为 `https://`。证书可通过 `edgion-cli gen-certs --output file --output-dir <dir>` 生成。
 
 ### logging
 
@@ -285,7 +285,7 @@ Gateway 采用**三端口模型**：
 
 ```yaml
 gateway:
-  server_addr: "http://10.0.0.5:12151"
+  server_addrs: ["http://10.0.0.5:12151"]
 ```
 
 ### 开启业务日志按日轮转
@@ -338,7 +338,7 @@ access_log_sensitive:
 
 ```yaml
 gateway:
-  server_addr: "http://10.0.0.5:12151"  # scheme 会自动切换为 https://
+  server_addrs: ["http://10.0.0.5:12151"]  # scheme 会自动切换为 https://
 
 conf_sync_security:
   tls:
