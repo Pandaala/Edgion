@@ -92,6 +92,12 @@ use super::http_route::RouteParentStatus;
 #[serde(rename_all = "camelCase")]
 pub struct TCPRouteStatus {
     /// Parents describe the status of the route with respect to each parent.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"parents": []` replaces it (reachable when all parentRefs are removed
+    /// from a live route). Do not add skip_serializing_if here.
+    #[serde(default)]
     pub parents: Vec<RouteParentStatus>,
 }

@@ -169,7 +169,13 @@ pub struct EdgionTlsSpec {
 #[serde(rename_all = "camelCase")]
 pub struct EdgionTlsStatus {
     /// Parents describe the status of the TLS config with respect to each parent Gateway.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"parents": []` replaces it (reachable when all parentRefs are removed
+    /// from a live EdgionTls). Do not add skip_serializing_if here.
+    #[serde(default)]
     pub parents: Vec<RouteParentStatus>,
 }
 

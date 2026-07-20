@@ -1126,7 +1126,13 @@ impl ParsedRouteTimeouts {
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteStatus {
     /// Parents describe the status of the route with respect to each parent.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ///
+    /// Always serialized, even when empty: K8s status persistence uses JSON
+    /// Merge Patch, and merge-patching an empty status object `{}` cannot
+    /// clear a previously-persisted non-empty list — only an explicit
+    /// `"parents": []` replaces it (reachable when all parentRefs are removed
+    /// from a live route). Do not add skip_serializing_if here.
+    #[serde(default)]
     pub parents: Vec<RouteParentStatus>,
 }
 
@@ -1147,6 +1153,28 @@ pub struct RouteParentStatus {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn route_status_empty_parents_serialize_explicit_array() {
+        // K8s status persistence uses JSON Merge Patch. An empty parents list
+        // must serialize as `"parents": []`, not be omitted, or a merge patch
+        // can never clear a previously-persisted non-empty list (reachable when
+        // all parentRefs are removed from a live route). Covers every
+        // route-family status struct that shares this parents shape.
+        use crate::resources::edgion_tls::EdgionTlsStatus;
+        use crate::resources::grpc_route::GRPCRouteStatus;
+        use crate::resources::tcp_route::TCPRouteStatus;
+        use crate::resources::tls_route::TLSRouteStatus;
+        use crate::resources::udp_route::UDPRouteStatus;
+
+        let expected = serde_json::json!({ "parents": [] });
+        assert_eq!(serde_json::to_value(HTTPRouteStatus::default()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(GRPCRouteStatus::default()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(TCPRouteStatus::default()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(TLSRouteStatus::default()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(UDPRouteStatus::default()).unwrap(), expected);
+        assert_eq!(serde_json::to_value(EdgionTlsStatus::default()).unwrap(), expected);
+    }
 
     fn backend_ref(group: Option<&str>, kind: Option<&str>) -> HTTPBackendRef {
         HTTPBackendRef {
