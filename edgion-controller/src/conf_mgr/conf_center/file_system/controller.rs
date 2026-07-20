@@ -49,6 +49,14 @@ impl LocalControllerBackend for FileSystemControllerBackend {
         self.watcher.subscribe(kind).await
     }
 
+    async fn prime(&self) -> Result<()> {
+        self.watcher.prime().await
+    }
+
+    async fn dispatch_init(&self, kinds: &[&'static str]) -> Result<()> {
+        self.watcher.dispatch_init(kinds).await
+    }
+
     fn launch<K>(
         &self,
         kind: &'static str,
@@ -140,8 +148,9 @@ impl FileSystemController {
             "All ResourceControllers spawned"
         );
 
-        // Run the watcher (this handles init phase + runtime phase)
-        watcher.run(shutdown_signal).await?;
+        // Run the watcher runtime phase. Prime and the two-phase (foundation-first)
+        // init dispatch already happened in spawn_all_controllers.
+        watcher.run_runtime(shutdown_signal).await?;
 
         // Wait for all controllers to finish
         for handle in handles {

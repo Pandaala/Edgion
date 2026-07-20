@@ -255,6 +255,7 @@ where
 
                             // Mark cache ready
                             self.processor.on_init_done();
+                            self.processor.notify_ready();
                             init_done = true;
 
                             // Spawn worker for runtime phase

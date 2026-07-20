@@ -40,6 +40,14 @@ impl LocalControllerBackend for EtcdControllerBackend {
         self.watcher.subscribe(kind).await
     }
 
+    async fn prime(&self) -> Result<()> {
+        self.watcher.prime().await
+    }
+
+    async fn dispatch_init(&self, kinds: &[&'static str]) -> Result<()> {
+        self.watcher.dispatch_init(kinds).await
+    }
+
     fn launch<K>(
         &self,
         kind: &'static str,
@@ -112,8 +120,8 @@ impl EtcdController {
             "All ResourceControllers spawned"
         );
 
-        // Run the watcher (init phase + runtime phase)
-        watcher.run(shutdown_signal).await?;
+        // Run the watcher runtime phase (prime + init already happened in spawn_all_controllers)
+        watcher.run_runtime(shutdown_signal).await?;
 
         // Abort all controllers
         for handle in handles {

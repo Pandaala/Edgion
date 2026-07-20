@@ -160,6 +160,7 @@ where
                         );
 
                         self.processor.on_init_done();
+                        self.processor.notify_ready();
                         init_done = true;
 
                         worker_handle = Some(spawn_worker(

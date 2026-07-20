@@ -410,6 +410,14 @@ where
         );
     }
 
+    /// Wake any `wait_kinds_ready` waiter. Called by the etcd/FS `InitDone`
+    /// handlers after `on_init_done()` so the Phase-1 gate observes readiness
+    /// immediately instead of via the 1 s fallback poll. The K8s handlers
+    /// deliberately do not call this — the constraint is to leave K8s unchanged.
+    pub fn notify_ready(&self) {
+        self.runtime.processor_registry.notify_ready();
+    }
+
     /// Enqueue a watch-event key for the worker (apply and delete alike —
     /// the worker compares store state vs cache and decides update/delete).
     ///
@@ -906,6 +914,61 @@ mod tests {
 
         processor.set_ready();
         assert!(processor.is_ready());
+    }
+
+    /// `notify_ready()` must wake a `wait_kinds_ready` waiter promptly, without
+    /// relying on the ~1s fallback poll inside `wait_kinds_ready`.
+    ///
+    /// The waiter is given a 5s timeout (far longer than the 1s fallback poll)
+    /// so a pass driven by the fallback poll would still take ~1s. We then wrap
+    /// the join in a 500ms timeout: if `notify_ready()` did nothing, the waiter
+    /// would only resolve via the fallback poll (~1s later) and this 500ms
+    /// timeout would fire, failing the test. Only an actual wake from
+    /// `notify_ready()` can resolve the waiter within the 500ms window.
+    #[tokio::test]
+    async fn notify_ready_wakes_wait_kinds_ready_promptly() {
+        use std::time::Duration;
+
+        let handler = Arc::new(TestHandler);
+        let processor = Arc::new(ResourceProcessor::<TestResource>::new(
+            "TestResource",
+            100,
+            handler,
+            Arc::new(ControllerRuntime::default()),
+        ));
+
+        processor.runtime.processor_registry.register(processor.clone());
+
+        let runtime = processor.runtime.clone();
+        let kind = processor.kind;
+
+        // Long timeout: if this waiter resolves quickly, it must be because
+        // notify_ready() woke it, not the 1s fallback poll.
+        let waiter = tokio::spawn(async move {
+            runtime
+                .processor_registry
+                .wait_kinds_ready(&[kind], Duration::from_secs(5))
+                .await
+        });
+
+        // Give the waiter a moment to register its `Notify::notified()` future.
+        // `notify_waiters()` only wakes futures that are already registered, so
+        // notifying before the waiter subscribes would be a silent no-op.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Mirror what `on_init_done()` does: mark the cache ready directly
+        // (bypassing the `ProcessorObj::set_ready()` trait method, which
+        // already calls `notify_ready()` itself), then call `notify_ready()`
+        // separately so this test isolates its effect.
+        WatchObj::set_ready(processor.cache.as_ref());
+        processor.notify_ready();
+
+        let resolved = tokio::time::timeout(Duration::from_millis(500), waiter)
+            .await
+            .expect("waiter did not resolve within 500ms; notify_ready() failed to wake it promptly")
+            .expect("waiter task panicked");
+
+        assert!(resolved, "wait_kinds_ready should report the kind as ready");
     }
 
     #[tokio::test]

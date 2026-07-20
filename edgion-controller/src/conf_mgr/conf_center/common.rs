@@ -17,25 +17,6 @@ use edgion_resources::resources::common::Condition;
 /// Default controller name used by FileSystem and Etcd backends.
 pub const DEFAULT_CONTROLLER_NAME: &str = "edgion.io/gateway-controller";
 
-/// Returns the Phase-1 foundation resource kinds for FileSystem/Etcd backends.
-///
-/// These must be ready before Phase-2 resources start processing, because
-/// Phase-2 resources look up GatewayClass, Gateway, Secret, Service, etc.
-/// during their first `handle()` call.
-///
-/// The K8s backend has its own variant that additionally filters `no_watch_kinds`.
-pub fn phase1_kinds() -> Vec<&'static str> {
-    vec![
-        "GatewayClass",
-        "Gateway",
-        "Secret",
-        "ConfigMap",
-        "ReferenceGrant",
-        "Service",
-        "EndpointSlice",
-    ]
-}
-
 // ============================================================================
 // Shared status types (used by both FileSystem and Etcd backends)
 // ============================================================================

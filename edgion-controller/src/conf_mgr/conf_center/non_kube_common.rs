@@ -387,8 +387,17 @@ pub trait LocalControllerBackend: Send + Sync {
 
     /// Subscribe to events for a resource kind, returning a channel receiver.
     ///
-    /// Must be called before the watcher's `run()` starts sending events.
+    /// Must be called before the watcher's `dispatch_init` starts sending events.
     async fn subscribe(&self, kind: &'static str) -> Self::EventReceiver;
+
+    /// Take one full snapshot of backend state (etcd: single-revision prefix
+    /// list; FS: directory scan + atomic registry swap). Stores only — emits no
+    /// events. Called once before any `dispatch_init`.
+    async fn prime(&self) -> Result<()>;
+
+    /// Dispatch `Init` / `InitApply` / `InitDone` to exactly these
+    /// already-subscribed kinds, from the snapshot captured by `prime`.
+    async fn dispatch_init(&self, kinds: &[&'static str]) -> Result<()>;
 
     /// Construct and spawn the per-kind resource controller.
     ///
@@ -454,13 +463,15 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     runtime: Arc<ControllerRuntime>,
     component: &'static str,
 ) -> Result<Vec<JoinHandle<Result<()>>>> {
-    use crate::conf_mgr::conf_center::common;
-
     let mut handles = Vec::new();
+    // Collects the kind name of every spawned controller, in spawn order.
+    // Sliced at the Phase-1/Phase-2 boundary below (see `phase1_count`).
+    let mut spawned_kinds: Vec<&'static str> = Vec::new();
 
     // Helper macro: reduces the per-resource boilerplate inside this function.
     macro_rules! do_spawn {
         ($K:ty, $handler:expr) => {
+            spawned_kinds.push(stringify!($K));
             handles.push(
                 spawn::<$K, _, B>(
                     stringify!($K),
@@ -474,6 +485,9 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
         };
     }
 
+    // Snapshot backend state once, up front, before any dispatch.
+    backend.prime().await?;
+
     // ==================== Phase 1: Foundation Resources ====================
     tracing::info!(
         component = component,
@@ -486,17 +500,20 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     do_spawn!(EndpointSlice, EndpointSliceHandler::new());
 
     let phase1_count = handles.len();
+    let phase1_kinds: Vec<&'static str> = spawned_kinds[..phase1_count].to_vec();
     tracing::info!(
         component = component,
         count = phase1_count,
-        "Phase 1 foundation controllers spawned, waiting for init completion"
+        "Phase 1 foundation controllers spawned, dispatching init"
     );
 
-    // Wait for Phase 1 resources to complete their init phase
+    // Pump Phase-1 init from the snapshot, then wait for readiness (now real).
+    backend.dispatch_init(&phase1_kinds).await?;
+
     const PHASE1_TIMEOUT: Duration = Duration::from_secs(15);
     let phase1_ready = runtime
         .processor_registry
-        .wait_kinds_ready(&common::phase1_kinds(), PHASE1_TIMEOUT)
+        .wait_kinds_ready(&phase1_kinds, PHASE1_TIMEOUT)
         .await;
 
     if phase1_ready {
@@ -515,6 +532,9 @@ pub async fn spawn_all_controllers<B: LocalControllerBackend>(
     );
 
     for_each_phase2_resource!(do_spawn);
+
+    let phase2_kinds: Vec<&'static str> = spawned_kinds[phase1_count..].to_vec();
+    backend.dispatch_init(&phase2_kinds).await?;
 
     tracing::info!(
         component = component,

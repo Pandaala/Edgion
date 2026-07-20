@@ -76,15 +76,20 @@ start(shutdown_handle)
     ├── 1. Create iteration_shutdown + reload channel + error channel
     ├── 2. FileSystemController.run()
     │   ├── Clean up orphan .status files
-    │   ├── Phase 1: spawn base resource controllers
-    │   │   (GatewayClass, Gateway, Secret, ConfigMap, ReferenceGrant, Service, EndpointSlice)
-    │   ├── wait_kinds_ready(phase1_kinds, 15s)
-    │   ├── Phase 2: spawn dependent resource controllers
-    │   │   (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, EdgionTls,
-    │   │    BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData,
-    │   │    LinkSys, EdgionAcme, EdgionGatewayConfig, EdgionBackendTrafficPolicy)
-    │   └── FileSystemWatcher.run()
-    │       ├── init_phase: recursively scan → resolve key collisions → Init/InitApply/InitDone
+    │   ├── spawn_all_controllers (shared with EtcdController):
+    │   │   ├── FileSystemWatcher.prime(): scan dir once → resolve key collisions →
+    │   │   │   swap PathRegistry → snapshot files-by-kind (NO events emitted)
+    │   │   ├── Phase 1: spawn base resource controllers
+    │   │   │   (GatewayClass, Gateway, Secret, ConfigMap, ReferenceGrant, Service, EndpointSlice)
+    │   │   ├── dispatch_init(phase1_kinds): emit Init/InitApply/InitDone for Phase-1 kinds from the snapshot
+    │   │   ├── wait_kinds_ready(phase1_kinds, 15s)  ← real gate: the init pump has already run,
+    │   │   │   so Phase-1 processors reach ready and Phase 2 only starts after (no more dead 15s wait)
+    │   │   ├── Phase 2: spawn dependent resource controllers
+    │   │   │   (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute, TLSRoute, EdgionTls,
+    │   │   │    BackendTLSPolicy, EdgionPlugins, EdgionStreamPlugins, EdgionConfigData,
+    │   │   │    LinkSys, EdgionAcme, EdgionGatewayConfig, EdgionBackendTrafficPolicy)
+    │   │   └── dispatch_init(phase2_kinds): emit init for Phase-2 kinds from the same snapshot
+    │   └── FileSystemWatcher.run_runtime()
     │       └── runtime_phase: PollWatcher (adaptive interval) → Apply/Delete dispatched directly
     ├── 3. wait_registry_ready(30s)
     ├── 4. Trigger cross-namespace revalidation
@@ -99,13 +104,27 @@ start(shutdown_handle)
 
 ### Init Phase Details
 
-`FileSystemWatcher.init_phase()` performs a synchronous directory scan:
+The init phase is split into a snapshot step (`prime`) and a per-phase dispatch
+step (`dispatch_init`), so `spawn_all_controllers` can pump Phase-1 init and gate
+on Phase-1 readiness **before** spawning Phase 2 (the K8s backend achieves the
+same ordering via its per-kind informers).
+
+`FileSystemWatcher.prime()` performs one synchronous directory scan and stores a
+snapshot — it emits **no** events:
 
 1. WalkDir recursively traverses the configuration directory
 2. Filter `.yaml` / `.yml` files, exclude `.status` files
 3. Read file contents and identify Kind via `ResourceKind::from_content()`
-4. After grouping by kind, for each Kind send `Init` → `InitApply(path, content) * N` → `InitDone` in order
-5. For Kinds that have subscribers but no files, still send `Init` → `InitDone` (so all controllers complete initialization)
+4. Resolve key collisions into a new `PathRegistry` generation and swap it atomically
+5. Store the winning `(path, content)` list grouped by Kind for `dispatch_init`
+
+`FileSystemWatcher.dispatch_init(kinds)` replays the snapshot for exactly the
+requested kinds:
+
+- For each Kind send `Init` → `InitApply(path, content) * N` → `InitDone` in order
+- For a requested Kind with no snapshot entry, still send `Init` → `InitDone` (so all controllers complete initialization and reach ready)
+
+`init_phase()` is retained as a thin `prime()` + `dispatch_init(all subscribed kinds)` wrapper used only by unit tests; production drives the two steps separately from `spawn_all_controllers`.
 
 ### Runtime Phase Details
 
@@ -146,7 +165,7 @@ processing time; do not assume a universal 1.5-second bound for large trees.
 **Known limitations**
 
 - **Delete-then-immediately-recreate within the same 1s window is coalesced into a single Modify**: PollWatcher only sees snapshot diffs; the intermediate deleted state is invisible. If a ConfHandler relies on diff computation between on_delete / on_change (for example, to clean up reverse references), it must instead compare "old vs new value" inside `parse()` rather than relying on on_delete. See the implementations in `reference_grant.rs` and `backend_tls_policy.rs` for the pattern.
-- The watcher only starts after init_phase has finished scanning, so events between the two are lost (this is a known separate issue, to be fixed independently).
+- The runtime PollWatcher establishes its baseline only after `prime()` has scanned, so a file created/changed in the window between the `prime()` scan and the `run_runtime()` baseline is not seen until its next change. This window is now slightly wider — it spans the Phase-1 `dispatch_init` + readiness wait — and remains an **accepted** limitation of the dev/test FS backend. The etcd backend has no equivalent: its watch resumes from the primed revision (`R + 1`) and replays that gap. See `docs/superpowers/specs/2026-07-20-etcd-fs-phase1-ordering-design.md`.
 
 ## Phased Initialization
 
@@ -157,7 +176,7 @@ Like KubernetesCenter, FileSystemCenter uses a two-phase initialization:
 | Phase 1 (base) | GatewayClass, Gateway, Secret, ConfigMap, ReferenceGrant, Service, EndpointSlice | Other resources query these during `parse()` |
 | Phase 2 (dependent) | Remaining kinds in `non_kube_common::spawn_all_controllers`, including routes, policies, extensions, ACME, and LinkSys | Started after Phase 1 completes |
 
-Phase 2 waits on `runtime.processor_registry` for Phase 1 readiness.
+Phase 2 waits on `runtime.processor_registry` for Phase 1 readiness — a **real** gate as of the 2026-07-20 phase-1-ordering fix. Before that fix the init pump (`init_phase`) started only after `spawn_all_controllers` returned, so `wait_kinds_ready` always timed out (a dead 15 s per start / leader promotion) and provided no ordering; `prime` + phased `dispatch_init` now run the pump inline so the wait resolves promptly.
 
 ## LocalRawStore Maintenance
 

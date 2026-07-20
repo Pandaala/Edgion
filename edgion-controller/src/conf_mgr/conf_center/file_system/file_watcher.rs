@@ -20,7 +20,7 @@ use notify::event::{ModifyKind, RenameMode};
 use notify::{Config, Event, EventKind, PollWatcher, RecursiveMode, Watcher};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, RwLock};
 use walkdir::WalkDir;
@@ -55,6 +55,10 @@ pub struct FileSystemWatcher {
     /// Optional override for the PollWatcher poll interval.
     /// When `Some`, skips the file-count heuristic and uses this duration directly.
     poll_interval_override: Option<Duration>,
+
+    /// Scan snapshot captured by `prime`, consumed by `dispatch_init`.
+    /// Maps kind -> winning (path, content) pairs from the last scan.
+    primed: Mutex<Option<HashMap<&'static str, Vec<(PathBuf, String)>>>>,
 }
 
 impl FileSystemWatcher {
@@ -65,12 +69,13 @@ impl FileSystemWatcher {
             registry,
             senders: Arc::new(RwLock::new(HashMap::new())),
             poll_interval_override,
+            primed: Mutex::new(None),
         }
     }
 
     /// Register a kind and get its event receiver
     ///
-    /// Must be called before `run()` for each resource kind that needs events.
+    /// Must be called before `dispatch_init` for each resource kind that needs events.
     pub async fn subscribe(&self, kind: &'static str) -> KindEventReceiver {
         let mut senders = self.senders.write().await;
 
@@ -95,33 +100,10 @@ impl FileSystemWatcher {
         &self.conf_dir
     }
 
-    /// Run the watcher: init phase + runtime phase
-    ///
-    /// This method:
-    /// 1. Init phase: Scans directory, dispatches Init/InitApply/InitDone per kind
-    /// 2. Runtime phase: Watches for changes, dispatches Apply/Delete events
-    pub async fn run(&self, mut shutdown_signal: ShutdownSignal) -> Result<()> {
-        tracing::info!(
-            component = "fs_watcher",
-            conf_dir = %self.conf_dir.display(),
-            "Starting FileSystemWatcher"
-        );
-
-        // Phase 1: Init - scan directory and dispatch events
-        self.init_phase().await?;
-
-        // Phase 2: Runtime - watch for changes
-        self.runtime_phase(&mut shutdown_signal).await?;
-
-        tracing::info!(component = "fs_watcher", "FileSystemWatcher stopped");
-
-        Ok(())
-    }
-
-    /// Init phase: recursively scan the conf dir and dispatch Init/InitApply/InitDone
-    /// events per kind. Files are sorted lexicographically before processing so the
-    /// lex-smallest path always wins any same-key collision.
-    pub async fn init_phase(&self) -> Result<()> {
+    /// Scan the conf dir once: build the next path generation, swap the registry
+    /// atomically, and store the per-kind winning files for `dispatch_init`.
+    /// Emits no events.
+    pub async fn prime(&self) -> Result<()> {
         tracing::info!(
             component = "fs_watcher",
             conf_dir = %self.conf_dir.display(),
@@ -218,54 +200,65 @@ impl FileSystemWatcher {
 
         self.registry.replace_from(&next_registry);
 
-        let senders = self.senders.read().await;
-
-        for (kind, files) in &files_by_kind {
-            if let Some(sender) = senders.get(kind) {
-                let _ = sender.send(FileSystemEvent::Init);
-                for (path, content) in files {
-                    let _ = sender.send(FileSystemEvent::InitApply {
-                        path: path.clone(),
-                        content: content.clone(),
-                    });
-                    tracing::trace!(
-                        component = "fs_watcher",
-                        kind = kind,
-                        path = %path.display(),
-                        "Dispatched InitApply event"
-                    );
-                }
-                let _ = sender.send(FileSystemEvent::InitDone);
-                tracing::debug!(
-                    component = "fs_watcher",
-                    kind = kind,
-                    count = files.len(),
-                    "Completed init for kind"
-                );
-            }
-        }
-
-        for (kind, sender) in senders.iter() {
-            if !files_by_kind.contains_key(kind) {
-                let _ = sender.send(FileSystemEvent::Init);
-                let _ = sender.send(FileSystemEvent::InitDone);
-                tracing::debug!(
-                    component = "fs_watcher",
-                    kind = kind,
-                    "Sent empty init for kind (no files found)"
-                );
-            }
-        }
-
         let total_files: usize = files_by_kind.values().map(|v| v.len()).sum();
         tracing::info!(
             component = "fs_watcher",
             total_files = total_files,
             kinds = files_by_kind.len(),
-            "Init phase complete"
+            "Prime scan complete"
         );
 
+        *self.primed.lock().unwrap() = Some(files_by_kind);
         Ok(())
+    }
+
+    /// Dispatch `Init` -> `InitApply` x N -> `InitDone` for exactly `kinds`,
+    /// drawn from the snapshot captured by `prime`. A kind absent from the
+    /// snapshot still receives an empty `Init` + `InitDone` so its processor
+    /// reaches ready.
+    pub async fn dispatch_init(&self, kinds: &[&'static str]) -> Result<()> {
+        // Clone the needed slice of the snapshot out from under the lock.
+        let per_kind: HashMap<&'static str, Vec<(PathBuf, String)>> = {
+            let guard = self.primed.lock().unwrap();
+            let snap = guard
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("dispatch_init called before prime"))?;
+            kinds
+                .iter()
+                .filter_map(|k| snap.get(*k).map(|v| (*k, v.clone())))
+                .collect()
+        };
+
+        let senders = self.senders.read().await;
+        for kind in kinds {
+            let Some(sender) = senders.get(*kind) else {
+                continue;
+            };
+            let _ = sender.send(FileSystemEvent::Init);
+            if let Some(files) = per_kind.get(kind) {
+                for (path, content) in files {
+                    let _ = sender.send(FileSystemEvent::InitApply {
+                        path: path.clone(),
+                        content: content.clone(),
+                    });
+                }
+            }
+            let _ = sender.send(FileSystemEvent::InitDone);
+        }
+        Ok(())
+    }
+
+    /// One-shot init used by unit tests: prime the scan, then dispatch to every
+    /// currently-subscribed kind. Production uses `prime` + phased `dispatch_init`.
+    pub async fn init_phase(&self) -> Result<()> {
+        self.prime().await?;
+        let kinds: Vec<&'static str> = self.senders.read().await.keys().copied().collect();
+        self.dispatch_init(&kinds).await
+    }
+
+    /// Runtime phase only: watch for changes and dispatch Apply/Delete events.
+    pub async fn run_runtime(&self, mut shutdown_signal: ShutdownSignal) -> Result<()> {
+        self.runtime_phase(&mut shutdown_signal).await
     }
 
     /// Runtime phase: watch for file changes and dispatch Apply/Delete events
@@ -887,6 +880,46 @@ mod tests {
         let conflicts = registry.snapshot_conflicts();
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].losers.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_init_is_phased() {
+        use super::super::event::FileSystemEvent;
+        let dir = tempfile::tempdir().unwrap();
+        // One foundation file (Gateway) and one dependent file (HTTPRoute).
+        std::fs::write(
+            dir.path().join("Gateway_default_gw.yaml"),
+            "apiVersion: gateway.networking.k8s.io/v1\nkind: Gateway\nmetadata:\n  name: gw\n  namespace: default\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("HTTPRoute_default_rt.yaml"),
+            "apiVersion: gateway.networking.k8s.io/v1\nkind: HTTPRoute\nmetadata:\n  name: rt\n  namespace: default\n",
+        )
+        .unwrap();
+
+        let registry = std::sync::Arc::new(PathRegistry::new());
+        let watcher = FileSystemWatcher::new(dir.path().to_path_buf(), registry, None);
+        let mut gw_rx = watcher.subscribe("Gateway").await;
+        let mut rt_rx = watcher.subscribe("HTTPRoute").await;
+
+        watcher.prime().await.unwrap();
+        watcher.dispatch_init(&["Gateway"]).await.unwrap();
+
+        // Gateway got Init -> InitApply -> InitDone.
+        assert!(matches!(gw_rx.recv().await.unwrap(), FileSystemEvent::Init));
+        assert!(matches!(gw_rx.recv().await.unwrap(), FileSystemEvent::InitApply { .. }));
+        assert!(matches!(gw_rx.recv().await.unwrap(), FileSystemEvent::InitDone));
+        // HTTPRoute has NOT been dispatched yet.
+        assert!(
+            rt_rx.try_recv().is_err(),
+            "Phase-2 kind must not receive before its dispatch"
+        );
+
+        watcher.dispatch_init(&["HTTPRoute"]).await.unwrap();
+        assert!(matches!(rt_rx.recv().await.unwrap(), FileSystemEvent::Init));
+        assert!(matches!(rt_rx.recv().await.unwrap(), FileSystemEvent::InitApply { .. }));
+        assert!(matches!(rt_rx.recv().await.unwrap(), FileSystemEvent::InitDone));
     }
 
     #[tokio::test]

@@ -301,13 +301,14 @@ log_success "2 lease-attached keys; lowest create_revision names controller-$([[
 #     2x lease_duration (spec §4.7: the election is bounded by the lease), and
 #     then become READY within the successor-startup budget. The two bounds are
 #     deliberately separate: end-to-end readiness is dominated by application
-#     startup — including a structural 15s Phase-1 wait in etcd mode (the init
-#     event pump starts only after spawn_all_controllers returns, so
-#     wait_kinds_ready(phase1) always times out) plus the registry-ready wait —
-#     and is NOT bounded by the lease TTL.
+#     startup — the Phase-1 init pump now runs inside spawn_all_controllers
+#     before wait_kinds_ready(phase1) is called, so that gate resolves promptly
+#     instead of always timing out; readiness is now dominated by election +
+#     real application startup + the registry-ready wait — and is NOT bounded
+#     by the lease TTL.
 # ---------------------------------------------------------------------------
 ELECTION_DEADLINE=$((LEASE_SECS * 2))
-READY_DEADLINE=45
+READY_DEADLINE=30
 log_section "(d) kill -9 the leader; standby must win within ${ELECTION_DEADLINE}s and be ready within ${READY_DEADLINE}s"
 kill -9 "$LEADER_PID"
 if [[ "$LEADER" == "A" ]]; then A_PID=""; else B_PID=""; fi
