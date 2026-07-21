@@ -4,7 +4,7 @@
 
 ## What is Edgion?
 
-A high-performance API Gateway built on [Pingora](https://github.com/cloudflare/pingora) and [Gateway API](https://gateway-api.sigs.k8s.io/). Designed for both Kubernetes and standalone (bare-metal / VM) environments. A modern Rust-native alternative to Kong, APISIX, Traefik, Envoy, and HAProxy.
+A high-performance API Gateway built on [Pingora](https://github.com/cloudflare/pingora) and [Gateway API](https://gateway-api.sigs.k8s.io/). Designed for both Kubernetes and standalone (bare-metal / VM) environments. It delivers NGINX/Envoy-level raw performance and OpenResty-like high programmability, all while enjoying the compile-time memory safety guaranteed by Rust. It serves as a modern Rust-native alternative to Kong, APISIX, Traefik, Envoy, and HAProxy.
 
 ## Feature Highlights
 

@@ -4,7 +4,7 @@
 
 ## Edgion 是什么？
 
-基于 [Pingora](https://github.com/cloudflare/pingora) 和 [Gateway API](https://gateway-api.sigs.k8s.io/) 构建的高性能 API 网关。同时支持 Kubernetes 和独立部署（裸金属 / 虚拟机）环境。一个现代的 Rust 原生替代方案，对标 Kong、APISIX、Traefik、Envoy 和 HAProxy。
+基于 [Pingora](https://github.com/cloudflare/pingora) 和 [Gateway API](https://gateway-api.sigs.k8s.io/) 构建的高性能 API 网关。同时支持 Kubernetes 和独立部署（裸金属 / 虚拟机）环境。它既有 NGINX/Envoy 级别的极致性能，又有类似 OpenResty 的高可编程性，同时享受 Rust 带来的内存安全。作为一个现代的 Rust 原生替代方案，对标 Kong、APISIX、Traefik、Envoy 和 HAProxy。
 
 ## 功能亮点
 
