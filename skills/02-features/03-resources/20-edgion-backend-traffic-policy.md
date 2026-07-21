@@ -12,8 +12,9 @@ description: Full EdgionBackendTrafficPolicy schema — per-destination load bal
 `EdgionBackendTrafficPolicy` is the single configuration surface for "how the
 gateway connects to a backend Service": load-balancing algorithm (including
 consistent hash and the panic threshold), active health checks, outlier
-detection (passive ejection), and dynamic upstream authority (per-request
-`Host`/SNI on a fixed dial target — see
+detection (passive ejection), a per-backend retry budget (see
+[`retryConstraint`](#retryconstraint)), and dynamic upstream authority
+(per-request `Host`/SNI on a fixed dial target — see
 [`upstreamAuthority`](#upstreamauthority)). It attaches to one or more
 Services in the **same namespace** via `spec.targetRefs`, following the
 Gateway API policy-attachment pattern (the same `DirectSameNs` semantics as
@@ -68,6 +69,14 @@ spec:
     maxEjectionTime: 5m
     maxEjectionPercent: 50
 
+  retryConstraint:             # optional; absent = no retry budget (only maxRetries applies)
+    budget:
+      percent: 20               # 0-100, default 20
+      interval: 10s              # GEP-2257, [1s, 1h], default 10s
+    minRetryRate:
+      count: 10                 # 1..=1_000_000, default 10
+      interval: 1s                # GEP-2257, (0s, 1h], default 1s
+
   upstreamAuthority:            # optional; absent = today's static-SNI behavior
     pattern: "*.sandbox.internal"                # exactly one leading "*." wildcard label
     template: "${ctx:tenant}.sandbox.internal"    # required; literal tail must equal
@@ -77,9 +86,9 @@ status:
   ancestors: []                 # GEP-2648 per-ancestor (Gateway) status
 ```
 
-All five spec sections (`loadBalancer`, `healthCheck`, `outlierDetection`,
-`upstreamAuthority`, and each field within them) are optional; an absent
-section means "default behavior" for that concern (see
+All six spec sections (`loadBalancer`, `healthCheck`, `outlierDetection`,
+`retryConstraint`, `upstreamAuthority`, and each field within them) are
+optional; an absent section means "default behavior" for that concern (see
 [Defaults](#defaults-when-no-policy-applies) below). Sections are **atomic**:
 whichever policy wins for a Service (see [Conflict resolution](#conflict-resolution))
 provides the whole section — there is no per-field merge across policies.
@@ -134,6 +143,87 @@ respectively) resolved by `OutlierDetectionConfig::normalize()` in code — the
 CRD YAML deliberately does **not** declare OpenAPI defaults for those three
 fields, since a naive schema default would short-circuit the cross-field
 resolution.
+
+### retryConstraint
+
+> Design: `docs/superpowers/specs/2026-07-21-retry-budget-retryconstraint-design.md`
+
+A **retry budget**: caps the volume of retries the gateway sends to the
+target Service as a percentage of the overall request volume over a sliding
+window, so a partial backend degradation cannot be amplified into a full
+outage by a retry storm. This is the official (non-vendor) Gateway API
+`BackendTrafficPolicy.spec.retryConstraint` field, faithfully ported. It is
+independent of, and **composes with**, the existing static per-request
+`maxRetries` (route-level `retry.attempts`, falling back to the global
+`EdgionGatewayConfig.spec.max_retries`): a retry must pass both — `maxRetries`
+bounds retries *per request*, `retryConstraint` bounds aggregate retries *per
+backend*.
+
+| Field | Type | Required | Description |
+|-------|------|----------|--------------|
+| `budget.percent` | `u8` | No | Max retries as a percentage of **total attempts** (originals + retries, not originals-only), 0-100. Default `20`. |
+| `budget.interval` | `String` (GEP-2257) | No | Sliding window over which the percentage is computed. Range `[1s, 1h]`. Default `10s`. |
+| `minRetryRate.count` | `u32` | No | A floor: this many retries per `interval` are always allowed, regardless of the percentage budget. Range `1..=1_000_000`. Default `10`. |
+| `minRetryRate.interval` | `String` (GEP-2257) | No | Window for `minRetryRate.count`, independent of `budget.interval`. Range `(0s, 1h]`. Default `1s`. |
+
+`retryConstraint: {}` (the section present with no fields) is valid and
+resolves to the upstream defaults — a 20%/10s budget with a 10/1s floor. The
+`minRetryRate` floor exists so a low-traffic backend, whose percentage cap
+would otherwise round down to ~0, can still retry a trickle of requests; it
+is **always present** (matching upstream, which has no null option) — there
+is no way to configure a bare percentage budget with the floor disabled.
+
+**How the budget is evaluated.** A retry is permitted when it is under
+*either* the percentage ceiling *or* the floor (`within_pct || within_floor`,
+not an additive allowance). The percentage ceiling's denominator is **total
+attempts** — every upstream attempt (the original plus every retry)
+increments it, matching upstream's own worked example where retries are
+explicitly a subset of the request volume, not a separate originals-only
+count. Concurrency makes the check-then-increment across the two windows a
+**soft** cap, not exact: under high concurrency it may over-admit slightly
+(bounded by the number of concurrent deciders). This is an accepted
+approximation for a coarse anti-storm mechanism, not a hot-path-lock
+guarantee.
+
+**Which retries count.** Connect failures, per-try (`backendRequest`)
+timeouts, and retryable status codes count toward the budget. A retry driven
+by passive keepalive-connection reuse (a stale pooled connection reset,
+unrelated to backend health) does **not** count as a retry against the
+budget — but it still counts as an attempt in the denominator, like any
+other attempt.
+
+**On exhaustion.** When the budget refuses a retry, the gateway does not
+retry and returns a deterministic `503` to the client (per upstream:
+"additional retries … MUST return a 503"), stamping
+`EdgionStatus::RetryBudgetExhausted` for access-log attribution. No internal
+detail (dependency errors, addresses) leaks in the response body.
+
+**Observability.** Every denial increments the label-less
+`edgion_gateway_retry_budget_denied_total` counter (no per-Service label —
+avoids unbounded cardinality from Service churn). Which backend was
+throttled is attributed via the per-request access log /
+`EdgionStatus::RetryBudgetExhausted`, both already Service-scoped.
+
+**Example.**
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: payments-retry-budget
+  namespace: production
+spec:
+  targetRefs:
+    - kind: Service
+      name: payments
+  retryConstraint:
+    budget:
+      percent: 20
+      interval: 10s
+    minRetryRate:
+      count: 10
+      interval: 1s
+```
 
 ### upstreamAuthority
 
@@ -307,6 +397,7 @@ spec:
 |---------|-----------------------------------------------|
 | Health check | None — no probe task runs |
 | Outlier detection | None — no ejection tracking |
+| Retry budget (`retryConstraint`) | None — no aggregate cap; only the static per-request `maxRetries` applies |
 | Panic threshold | The global `EdgionGatewayConfig.spec.loadBalancing.panicThreshold` (itself `0` = disabled by default) |
 | LB algorithm | `RoundRobin` |
 

@@ -2,6 +2,7 @@ use super::EdgionHttpProxy;
 use crate::routes::http::session_persistence;
 use crate::{EdgionHttpContext, SessionPersistenceState};
 use edgion_resources::resources::http_route::SessionPersistenceType;
+use edgion_resources::EdgionStatus;
 use pingora_core::protocols::l4::socket::SocketAddr;
 use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
@@ -84,6 +85,25 @@ pub fn upstream_response_filter(
 
                     let buffer_ok = !session.as_ref().retry_buffer_truncated();
                     if ctx.try_cnt <= max_retries && !deadline_exceeded && buffer_ok {
+                        // Retry budget (retryConstraint): composes AFTER the
+                        // maxRetries/deadline/buffer checks above (D3). This is the
+                        // point where a status-code retry is DECIDED, so the budget
+                        // is consulted here. On refusal, `retry_on_status` is left
+                        // false (making pg_error_while_proxy Case 1 a no-op so no
+                        // already-started response is corrupted) and a deterministic
+                        // 503 is raised as a synthetic HTTPStatus error. The
+                        // per-upstream entry keeps the backend's real observed status
+                        // (stamped earlier); the 503 is a request-level outcome.
+                        if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
+                            if !budget.try_retry() {
+                                crate::observe::metrics::record_retry_budget_denied();
+                                ctx.add_error(EdgionStatus::RetryBudgetExhausted);
+                                return Err(pingora_core::Error::explain(
+                                    pingora_core::ErrorType::HTTPStatus(503),
+                                    "retry budget exhausted",
+                                ));
+                            }
+                        }
                         ctx.retry_on_status = true;
                         // Stamp the attempt's per-upstream log entry with an
                         // explicit retry reason so access-log aggregation can

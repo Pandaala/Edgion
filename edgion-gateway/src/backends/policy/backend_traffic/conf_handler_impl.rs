@@ -75,6 +75,7 @@ mod tests {
                     kind: "Service".to_string(),
                     name: svc.to_string(),
                 }],
+                retry_constraint: None,
                 load_balancer: Some(LoadBalancerConfig {
                     r#type: lb_type,
                     consistent_hash: None,

@@ -7,9 +7,11 @@
 
 pub mod authority;
 pub mod conf_handler_impl;
+mod retry_budget;
 pub mod store;
 
 pub use conf_handler_impl::create_backend_traffic_policy_handler;
+pub use retry_budget::RetryBudget;
 pub use store::{get_backend_traffic_policy_store, BackendTrafficPolicyStore};
 
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;

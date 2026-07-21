@@ -13,6 +13,6 @@ pub use registry::{
     record_connection_rate_limit_reject, record_egress_blocked, record_injected_header_skipped,
     record_ip_deny_entries_skipped, record_lb_panic_mode, record_mirror_metric, record_outbound_success_predicate_fail,
     record_outbound_template_fallback, record_region_route_overlay_event, record_request_duration,
-    record_webhook_resolve_error, status_group, GatewayMetrics,
+    record_retry_budget_denied, record_webhook_resolve_error, status_group, GatewayMetrics,
 };
 pub use test_metrics::{TestData, TestType};

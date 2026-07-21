@@ -1,5 +1,6 @@
 use super::EdgionHttpProxy;
 use crate::EdgionHttpContext;
+use edgion_resources::EdgionStatus;
 use pingora_core::prelude::HttpPeer;
 use pingora_core::{Error, ErrorType};
 use pingora_proxy::Session;
@@ -67,6 +68,20 @@ pub fn fail_to_connect(
         .unwrap_or(edgion_http.edgion_gateway_config.spec.max_retries);
 
     if ctx.try_cnt <= max_retries {
+        // Retry budget (retryConstraint): composes AFTER the maxRetries/deadline
+        // checks above (D3) — both gates must pass. On refusal the retry flag is
+        // NOT set; instead the client gets a deterministic 503, delivered by
+        // swapping the error's ErrorType (pg_fail_to_proxy renders the status from
+        // the error, never from ctx.request_info.status). The per-upstream entry
+        // keeps the backend's real observed status (set above); the 503 is a
+        // request-level outcome carried by the error.
+        if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
+            if !budget.try_retry() {
+                crate::observe::metrics::record_retry_budget_denied();
+                ctx.add_error(EdgionStatus::RetryBudgetExhausted);
+                return Error::explain(ErrorType::HTTPStatus(503), "retry budget exhausted");
+            }
+        }
         e.set_retry(true);
     }
 

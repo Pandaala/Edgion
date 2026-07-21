@@ -396,6 +396,7 @@ mod tests {
                         kind: "Service".to_string(),
                         name: svc.to_string(),
                     }],
+                    retry_constraint: None,
                     load_balancer: None,
                     health_check: None,
                     outlier_detection: None,

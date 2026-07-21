@@ -185,6 +185,50 @@ spec:
                       description: >-
                         Static authority for active health probes. Required when healthCheck.active
                         is set. Must match `pattern`.
+                retryConstraint:
+                  type: object
+                  description: "Retry budget: caps retry volume as a percentage of request volume, with a floor rate so low-traffic backends can still retry"
+                  properties:
+                    budget:
+                      type: object
+                      description: "Percentage budget on retry volume"
+                      default:
+                        percent: 20
+                        interval: "10s"
+                      properties:
+                        percent:
+                          type: integer
+                          description: "Max retries as a percentage of total attempts, 0-100"
+                          minimum: 0
+                          maximum: 100
+                          default: 20
+                        interval:
+                          type: string
+                          description: "Sliding window over which the percentage is computed (GEP-2257 duration)"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
+                          default: "10s"
+                    minRetryRate:
+                      type: object
+                      description: >-
+                        Floor so low-traffic backends can still retry when the percentage budget
+                        rounds to ~0. Always present; the operator can tune it via count/interval
+                        but cannot disable it.
+                      default:
+                        count: 10
+                        interval: "1s"
+                      required:
+                        - count
+                        - interval
+                      properties:
+                        count:
+                          type: integer
+                          description: "Retries allowed per interval regardless of the percentage budget"
+                          minimum: 1
+                          maximum: 1000000
+                        interval:
+                          type: string
+                          description: "Window over which count is measured (GEP-2257 duration), independent of budget.interval"
+                          pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
             status:
               type: object
               properties:

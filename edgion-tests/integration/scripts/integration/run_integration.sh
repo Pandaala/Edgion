@@ -1482,9 +1482,16 @@ main() {
                 suites="${base_suites},Status/RefGrant,Status/BackendTLSPolicy,Status/EdgionBackendTrafficPolicy,Status/GatewayFrontendValidation,Status/TLSListenerMode,Status/TLSRoute"
             fi
         elif [ "$G_RESOURCE" = "EdgionBackendTrafficPolicy" ]; then
-            # Control-plane suite applies its own policies at runtime; only the
-            # base namespaces/services need to be preloaded.
-            suites="${base_suites}"
+            if [ -n "$G_ITEM" ]; then
+                # Data-plane item scenarios (UpstreamAuthority, RetryBudget)
+                # ship their own Gateway/Service/HTTPRoute/EBTP fixtures, so the
+                # item's conf subtree must be preloaded.
+                suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
+            else
+                # Control-plane suite applies its own policies at runtime; only the
+                # base namespaces/services need to be preloaded.
+                suites="${base_suites}"
+            fi
         elif [ "$G_RESOURCE" = "LinkSys" ]; then
             # LinkSys/Redis assertions hit /api/v1/testing/link-sys/redis/* on the
             # Gateway admin port (covered by base) AND drive real proxy traffic

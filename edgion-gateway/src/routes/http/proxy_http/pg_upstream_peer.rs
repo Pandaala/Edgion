@@ -1,6 +1,7 @@
 use super::EdgionHttpProxy;
 use crate::backends::policy::backend_traffic::authority::{render_authority, AuthorityError};
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
+use crate::backends::policy::backend_traffic::RetryBudget;
 use crate::backends::EdgionService;
 use crate::backends::{get_peer, try_get_peer};
 use crate::ctx::BackendSource;
@@ -824,6 +825,33 @@ pub fn begin_upstream_attempt(ctx: &mut EdgionHttpContext) {
     if ctx.upstream_start_time.is_none() {
         ctx.upstream_start_time = Some(std::time::Instant::now());
     }
+
+    // Retry-budget denominator (D1a): every upstream attempt to a Service — the
+    // first attempt AND every retry (connect-fail, status-code, per-try timeout,
+    // keepalive reuse) — counts toward the per-backend request volume, so the
+    // percentage cap is `retries <= percent% * total_attempts`. The service key
+    // is read from `backend_context` (set by `init_backend_context_if_needed`,
+    // which always runs before this) rather than the just-pushed upstream entry,
+    // whose `service_key` is not populated until LB peer construction happens
+    // later. Bypass paths (DirectEndpoint / ExternalJump) have no service key and
+    // therefore no budget, so this is a no-op for them.
+    if let Some(budget) = retry_budget_for(ctx) {
+        budget.on_attempt();
+    }
+}
+
+/// Look up the retry budget (if any) installed for the current attempt's target
+/// Service. Reads the service key from `backend_context` — the canonical source
+/// (`apply_upstream_authority` uses the same) — because the per-attempt upstream
+/// entry's `service_key` is not populated until LB peer construction, which runs
+/// after `begin_upstream_attempt`. Bypass paths (DirectEndpoint / ExternalJump)
+/// carry no service key and therefore no budget. Shared by the denominator hook
+/// here and the three retry gates (`pg_fail_to_connect`, `pg_error_while_proxy`
+/// Case 1.5, `pg_upstream_response_filter`).
+#[inline]
+pub(super) fn retry_budget_for(ctx: &EdgionHttpContext) -> Option<std::sync::Arc<RetryBudget>> {
+    let service_key = ctx.backend_context.as_ref()?.service_key.as_deref()?;
+    get_backend_traffic_policy_store().get_retry_budget(service_key)
 }
 
 /// Finish a peer that was constructed directly (i.e. without going through LB / try_get_peer):

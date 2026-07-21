@@ -8,11 +8,12 @@
 //! the request path by `resolve_lb_policy` — plus the upstream-authority map read
 //! on the request path by both data paths via `get_authority`.
 
+use super::retry_budget::RetryBudget;
 use crate::backends::circuit_breaker::get_circuit_breaker_store;
 use crate::backends::health::check::{get_hc_config_store, get_health_check_manager};
 use crate::backends::panic_threshold::get_panic_threshold_store;
 use dashmap::DashMap;
-use edgion_resources::resources::edgion_backend_traffic_policy::precedence_key;
+use edgion_resources::resources::edgion_backend_traffic_policy::{precedence_key, RetryConstraintConfig};
 use edgion_resources::resources::lb_policy::ParsedLBPolicy;
 use edgion_resources::resources::upstream_authority::CompiledUpstreamAuthority;
 use edgion_resources::resources::EdgionBackendTrafficPolicy;
@@ -38,6 +39,13 @@ pub struct BackendTrafficPolicyStore {
     lb_policies: DashMap<String, ParsedLBPolicy>,
     /// Resolved upstream authority per Service key (read on the request path).
     authorities: DashMap<String, Arc<CompiledUpstreamAuthority>>,
+    /// Resolved retry budget per Service key, paired with the source config it
+    /// was built from (read on the request path). Unlike `lb_policies` /
+    /// `authorities`, the budget carries live counters, so it is kept-if-
+    /// unchanged across recomputes rather than blindly rebuilt (D6): the
+    /// resolve path only replaces the `Arc` when the stored config differs
+    /// from the newly resolved one.
+    retry_budgets: DashMap<String, (RetryConstraintConfig, Arc<RetryBudget>)>,
 }
 
 impl Default for BackendTrafficPolicyStore {
@@ -53,6 +61,7 @@ impl BackendTrafficPolicyStore {
             applied: DashMap::new(),
             lb_policies: DashMap::new(),
             authorities: DashMap::new(),
+            retry_budgets: DashMap::new(),
         }
     }
 
@@ -78,6 +87,12 @@ impl BackendTrafficPolicyStore {
     /// a single `DashMap` get + `Arc` clone, no tracing.
     pub fn get_authority(&self, service_key: &str) -> Option<Arc<CompiledUpstreamAuthority>> {
         self.authorities.get(service_key).map(|v| Arc::clone(v.value()))
+    }
+
+    /// Resolved retry budget for a Service key. Request-path read: a single
+    /// `DashMap` get + `Arc` clone, no tracing.
+    pub fn get_retry_budget(&self, service_key: &str) -> Option<Arc<RetryBudget>> {
+        self.retry_budgets.get(service_key).map(|v| Arc::clone(&v.value().1))
     }
 
     /// Admin snapshot of the resolved load-balancer map: Service key -> debug
@@ -167,6 +182,28 @@ impl BackendTrafficPolicyStore {
                         self.lb_policies.remove(service_key);
                     }
                 }
+
+                // Retry budget: unlike `lb_policies`/`authorities` above, this map
+                // carries live counters, so it is kept-if-unchanged (D6) — only a
+                // real config diff (or the config newly appearing) rebuilds the
+                // `Arc`; a byte-identical reapply (full resync, reconnect, an
+                // unrelated field edit on the winning policy) must NOT reset
+                // in-flight accounting.
+                match policy.spec.retry_constraint.as_ref() {
+                    Some(cfg) => {
+                        let unchanged = self.retry_budgets.get(service_key).is_some_and(|e| &e.value().0 == cfg);
+                        if !unchanged {
+                            self.retry_budgets.insert(
+                                service_key.to_string(),
+                                (cfg.clone(), Arc::new(RetryBudget::from_config(cfg))),
+                            );
+                        }
+                    }
+                    None => {
+                        self.retry_budgets.remove(service_key);
+                    }
+                }
+
                 self.applied.insert(service_key.to_string(), policy_key_str.clone());
                 (lb, Some(policy_key_str))
             }
@@ -177,6 +214,7 @@ impl BackendTrafficPolicyStore {
                 pt_store.set_service_threshold(service_key, None);
                 self.lb_policies.remove(service_key);
                 self.authorities.remove(service_key);
+                self.retry_budgets.remove(service_key);
                 self.applied.remove(service_key);
                 (None, None)
             }
@@ -315,6 +353,7 @@ mod tests {
                     kind: "Service".to_string(),
                     name: svc.to_string(),
                 }],
+                retry_constraint: None,
                 load_balancer,
                 health_check,
                 outlier_detection,
@@ -519,6 +558,7 @@ mod tests {
                     kind: "Service".to_string(),
                     name: "svc".to_string(),
                 }],
+                retry_constraint: None,
                 load_balancer: Some(LoadBalancerConfig {
                     r#type: LoadBalancerType::ConsistentHash,
                     consistent_hash: None,
@@ -662,5 +702,78 @@ mod tests {
         store.policies.clear();
         store.reapply_service(key);
         assert!(store.get_authority(key).is_none(), "cleared on removal");
+    }
+
+    // (h) retryConstraint resolves per Service key with keep-if-unchanged
+    // semantics (D6): a redundant reapply with a byte-identical config must
+    // NOT rebuild the budget (live counters preserved), while a real config
+    // diff builds a fresh one, and removing the policy clears the entry.
+    #[test]
+    fn retry_budget_resolves_with_keep_if_unchanged() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::{BudgetDetails, RetryConstraintConfig};
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = BackendTrafficPolicyStore::new();
+        let key = "bt6i/svc";
+
+        let mut p = policy(
+            "bt6i",
+            "p1",
+            "svc",
+            Some(ts("2026-01-01T00:00:00Z")),
+            None,
+            None,
+            false,
+            false,
+        );
+        Arc::get_mut(&mut p).unwrap().spec.retry_constraint = Some(RetryConstraintConfig {
+            budget: BudgetDetails {
+                percent: 20,
+                interval: "10s".to_string(),
+            },
+            min_retry_rate: None,
+        });
+        store.policies.insert("bt6i/p1".to_string(), p);
+
+        store.reapply_service(key);
+        let first = store.get_retry_budget(key).expect("retry budget resolved");
+
+        // Re-run the SAME resolve (simulating a full_set/relist): the config
+        // is byte-identical, so the Arc must be kept, not rebuilt.
+        store.reapply_service(key);
+        let second = store.get_retry_budget(key).expect("retry budget still present");
+        assert!(
+            Arc::ptr_eq(&first, &second),
+            "unchanged config must keep the same Arc (live counters preserved)"
+        );
+
+        // Change the config (different percent) on the same policy => a new
+        // Arc is built.
+        let mut p2 = policy(
+            "bt6i",
+            "p1",
+            "svc",
+            Some(ts("2026-01-01T00:00:00Z")),
+            None,
+            None,
+            false,
+            false,
+        );
+        Arc::get_mut(&mut p2).unwrap().spec.retry_constraint = Some(RetryConstraintConfig {
+            budget: BudgetDetails {
+                percent: 50,
+                interval: "10s".to_string(),
+            },
+            min_retry_rate: None,
+        });
+        store.policies.insert("bt6i/p1".to_string(), p2);
+        store.reapply_service(key);
+        let third = store.get_retry_budget(key).expect("retry budget resolved after change");
+        assert!(!Arc::ptr_eq(&second, &third), "changed config must build a new Arc");
+
+        // Removing the policy clears the budget.
+        store.policies.clear();
+        store.reapply_service(key);
+        assert!(store.get_retry_budget(key).is_none(), "cleared on removal");
     }
 }

@@ -26,7 +26,9 @@
 //                                gateway-reconnect variant).
 
 mod control_plane;
+mod retry_budget;
 mod upstream_authority;
 
 pub use control_plane::EdgionBackendTrafficPolicyTestSuite;
+pub use retry_budget::RetryBudgetTestSuite;
 pub use upstream_authority::UpstreamAuthorityTestSuite;

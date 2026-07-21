@@ -218,6 +218,9 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionBackendTrafficPolicy/upstream_authority" | "EdgionBackendTrafficPolicy/UpstreamAuthority" => {
             "EdgionBackendTrafficPolicy/UpstreamAuthority"
         }
+        // Data-plane suite: per-backend retry budget (retryConstraint). Own
+        // Gateway/HTTPRoute/EBTP fixture and ports.json entry.
+        "EdgionBackendTrafficPolicy/RetryBudget" => "EdgionBackendTrafficPolicy/RetryBudget",
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => "HTTPRoute/Basic",
         "HTTPRoute/Delegation" => "HTTPRoute/Delegation",
@@ -383,6 +386,13 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         // outbound-path degradation, pinning, and health-probe authority.
         "EdgionBackendTrafficPolicy/upstream_authority" | "EdgionBackendTrafficPolicy/UpstreamAuthority" => {
             runner.add_suite(Box::new(suites::UpstreamAuthorityTestSuite));
+        }
+        // Per-backend retry budget (Task 8 of the retry-budget / retryConstraint
+        // feature): floor-permitted trickle at low volume, percentage cap
+        // refusing the majority of retries under load with a deterministic 503,
+        // and the denial counter advancing.
+        "EdgionBackendTrafficPolicy/RetryBudget" => {
+            runner.add_suite(Box::new(suites::RetryBudgetTestSuite));
         }
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => {

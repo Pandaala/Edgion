@@ -126,6 +126,12 @@ pub mod names {
     // 2026-07-17). Labeled by qualified plugin name (bounded by policy size).
     pub const PLUGIN_POLICY_BLOCKED_TOTAL: &str = "edgion_gateway_plugin_policy_blocked_total";
     pub const PLUGIN_POLICY_BYPASSED_TOTAL: &str = "edgion_gateway_plugin_policy_bypassed_total";
+
+    // Retry budget enforcement (`EdgionBackendTrafficPolicy.retryConstraint`,
+    // spec 2026-07-21). No labels (D5): a per-service label would churn
+    // unboundedly on Service creation/deletion. Backend attribution comes
+    // from the per-request access log / `EdgionStatus`, already service-scoped.
+    pub const RETRY_BUDGET_DENIED_TOTAL: &str = "edgion_gateway_retry_budget_denied_total";
 }
 
 /// Global metrics singleton
@@ -778,6 +784,23 @@ pub fn record_plugin_policy_blocked(plugin: &str) {
 /// A request passed through a chain with a Bypass-stamped plugin skipped.
 pub fn record_plugin_policy_bypassed(plugin: &str) {
     counter!(names::PLUGIN_POLICY_BYPASSED_TOTAL, "plugin" => plugin.to_string()).increment(1);
+}
+
+// ============================================================
+// Retry budget enforcement metrics
+// ============================================================
+//
+// Emitted when a retry is refused because the target service's
+// `retryConstraint` budget (percentage ceiling OR minimum-rate floor) is
+// exhausted. Label-less by design (D5): a per-service label would mint an
+// unbounded number of series as Services churn (create/delete), retained
+// server-side for the whole retention window. Which backend was throttled
+// is read from the per-request access log / `EdgionStatus`, both already
+// service-scoped.
+
+/// A retry attempt was refused by a `retryConstraint` budget.
+pub fn record_retry_budget_denied() {
+    counter!(names::RETRY_BUDGET_DENIED_TOTAL).increment(1);
 }
 
 #[cfg(test)]

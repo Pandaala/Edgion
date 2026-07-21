@@ -40,6 +40,74 @@ pub struct EdgionBackendTrafficPolicySpec {
     /// backend declares. Absent = today's behaviour, unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub upstream_authority: Option<UpstreamAuthorityConfig>,
+    /// Retry budget: cap retry volume as a percentage of request volume to the
+    /// target backend over a sliding window. Absent = today's behaviour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_constraint: Option<RetryConstraintConfig>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryConstraintConfig {
+    /// Percentage budget. Defaults to {percent: 20, interval: "10s"} to match
+    /// upstream, so `retryConstraint: {}` is a valid 20%/10s budget.
+    #[serde(default)]
+    pub budget: BudgetDetails,
+    /// Floor so low-traffic backends can still retry when the percentage
+    /// budget rounds to ~0. Defaults to {count: 10, interval: "1s"} to match
+    /// upstream. The floor is ALWAYS present (matching upstream, which has no
+    /// null option); the CRD does NOT declare `nullable`, so the API server
+    /// rejects `minRetryRate: null`. Kept as `Option` only so the resolver can
+    /// represent the (never-serialized-from-a-CR) internal case; operators
+    /// tune it via count/interval, they do not disable it.
+    #[serde(default = "default_min_retry_rate")]
+    pub min_retry_rate: Option<RateThreshold>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetDetails {
+    /// Max retries as a percentage of total attempts, 0-100. Default 20.
+    #[serde(default = "default_budget_percent")]
+    pub percent: u8,
+    /// Sliding window over which the percentage is computed (GEP-2257).
+    /// Constrained to [1s, 1h] (see validation), matching upstream CEL.
+    #[serde(default = "default_budget_interval")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub interval: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RateThreshold {
+    /// Retries allowed per `interval` regardless of the percentage budget.
+    /// 1..=1_000_000 (see validation), matching upstream.
+    pub count: u32,
+    /// Window over which `count` is measured (GEP-2257), independent of
+    /// `budget.interval`. Constrained to (0s, 1h] (see validation).
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub interval: String,
+}
+
+impl Default for BudgetDetails {
+    fn default() -> Self {
+        Self {
+            percent: 20,
+            interval: "10s".into(),
+        }
+    }
+}
+fn default_budget_percent() -> u8 {
+    20
+}
+fn default_budget_interval() -> String {
+    "10s".into()
+}
+fn default_min_retry_rate() -> Option<RateThreshold> {
+    Some(RateThreshold {
+        count: 10,
+        interval: "1s".into(),
+    })
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
@@ -176,6 +244,32 @@ impl EdgionBackendTrafficPolicySpec {
         if let Some(ua) = &self.upstream_authority {
             let has_active_hc = self.health_check.as_ref().map(|h| h.active.is_some()).unwrap_or(false);
             errors.extend(validate_upstream_authority(ua, has_active_hc));
+        }
+        if let Some(rc) = &self.retry_constraint {
+            if rc.budget.percent > 100 {
+                errors.push("retryConstraint.budget.percent must be 0-100".to_string());
+            }
+            match crate::duration::parse_duration(&rc.budget.interval) {
+                Err(e) => errors.push(format!("retryConstraint.budget.interval: {e}")),
+                Ok(d) => {
+                    if d < std::time::Duration::from_secs(1) || d > std::time::Duration::from_secs(3600) {
+                        errors.push("retryConstraint.budget.interval must be in [1s, 1h]".to_string());
+                    }
+                }
+            }
+            if let Some(f) = &rc.min_retry_rate {
+                if !(1..=1_000_000).contains(&f.count) {
+                    errors.push("retryConstraint.minRetryRate.count must be in 1..=1000000".to_string());
+                }
+                match crate::duration::parse_duration(&f.interval) {
+                    Err(e) => errors.push(format!("retryConstraint.minRetryRate.interval: {e}")),
+                    Ok(d) => {
+                        if d.is_zero() || d > std::time::Duration::from_secs(3600) {
+                            errors.push("retryConstraint.minRetryRate.interval must be in (0s, 1h]".to_string());
+                        }
+                    }
+                }
+            }
         }
         errors
     }
@@ -488,6 +582,7 @@ outlierDetection:
             }),
             outlier_detection: None,
             upstream_authority: ua,
+            retry_constraint: None,
         };
 
         // Valid, no health check.
@@ -515,5 +610,42 @@ outlierDetection:
 
         // Absent section => unchanged behaviour, no errors.
         assert!(base(None, true).get_validation_errors().is_empty());
+    }
+
+    #[test]
+    fn retry_constraint_empty_object_uses_upstream_defaults() {
+        let spec: EdgionBackendTrafficPolicySpec =
+            serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: x\nretryConstraint: {}").unwrap();
+        let rc = spec.retry_constraint.as_ref().expect("present");
+        assert_eq!(rc.budget.percent, 20);
+        assert_eq!(rc.budget.interval, "10s");
+        let f = rc.min_retry_rate.as_ref().expect("floor default present");
+        assert_eq!(f.count, 10);
+        assert_eq!(f.interval, "1s");
+        assert!(spec.get_validation_errors().is_empty());
+    }
+
+    #[test]
+    fn retry_constraint_validation_rejects_bad_values() {
+        let bad = |y: &str| -> Vec<String> {
+            serde_yaml::from_str::<EdgionBackendTrafficPolicySpec>(y)
+                .unwrap()
+                .get_validation_errors()
+        };
+        // percent > 100
+        assert!(!bad("targetRefs:\n  - kind: Service\n    name: x\nretryConstraint:\n  budget:\n    percent: 101\n    interval: 10s").is_empty());
+        // budget.interval < 1s
+        assert!(bad("targetRefs:\n  - kind: Service\n    name: x\nretryConstraint:\n  budget:\n    percent: 20\n    interval: 500ms").iter().any(|e| e.contains("budget.interval")));
+        // budget.interval > 1h
+        assert!(bad("targetRefs:\n  - kind: Service\n    name: x\nretryConstraint:\n  budget:\n    percent: 20\n    interval: 2h").iter().any(|e| e.contains("budget.interval")));
+        // minRetryRate.count == 0
+        assert!(bad("targetRefs:\n  - kind: Service\n    name: x\nretryConstraint:\n  budget:\n    interval: 10s\n  minRetryRate:\n    count: 0\n    interval: 1s").iter().any(|e| e.contains("minRetryRate.count")));
+        // minRetryRate.count > 1_000_000
+        assert!(bad("targetRefs:\n  - kind: Service\n    name: x\nretryConstraint:\n  budget:\n    interval: 10s\n  minRetryRate:\n    count: 1000001\n    interval: 1s").iter().any(|e| e.contains("minRetryRate.count")));
+        // unparseable interval
+        assert!(
+            !bad("targetRefs:\n  - kind: Service\n    name: x\nretryConstraint:\n  budget:\n    interval: nope")
+                .is_empty()
+        );
     }
 }

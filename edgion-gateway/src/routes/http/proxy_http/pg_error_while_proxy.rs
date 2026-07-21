@@ -83,6 +83,21 @@ pub fn error_while_proxy(
                         .as_millis() as u64,
                 );
             }
+            // Retry budget (retryConstraint): composes AFTER the maxRetries/
+            // deadline/buffer checks of this Case 1.5 (D3) — both gates must pass.
+            // On refusal the retry flag is NOT set; instead the client gets a
+            // deterministic 503 by swapping the error's ErrorType (pg_fail_to_proxy
+            // renders the status from the error). The per-upstream entry keeps its
+            // real observed 504 timeout status (stamped just above); the 503 is a
+            // request-level outcome carried by the error, and BackendRequestTimeoutRetry
+            // is intentionally NOT added because no retry actually occurs.
+            if let Some(budget) = super::pg_upstream_peer::retry_budget_for(ctx) {
+                if !budget.try_retry() {
+                    crate::observe::metrics::record_retry_budget_denied();
+                    ctx.add_error(EdgionStatus::RetryBudgetExhausted);
+                    return Error::explain(ErrorType::HTTPStatus(503), "retry budget exhausted");
+                }
+            }
             ctx.add_error(EdgionStatus::BackendRequestTimeoutRetry);
             e.set_retry(true);
             return e;

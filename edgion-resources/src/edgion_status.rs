@@ -78,6 +78,9 @@ pub enum EdgionStatus {
     /// EndpointSlice not found for service (EWMA store)
     BackendEndpointSliceNotFoundByEwma = 500_09,
 
+    /// A per-backend retry budget (retryConstraint) refused an additional retry.
+    RetryBudgetExhausted = 503_01,
+
     /// Service not found in service store
     BackendServiceNotFound = 503_02,
 
@@ -247,6 +250,7 @@ mod tests {
             EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin => Some(500),
             EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault => Some(500),
             EdgionStatus::BackendEndpointSliceNotFoundByEwma => Some(500),
+            EdgionStatus::RetryBudgetExhausted => Some(503),
             EdgionStatus::BackendServiceNotFound => Some(503),
             EdgionStatus::BackendClusterIpNotFound => Some(503),
             EdgionStatus::BackendExternalNameNotFound => Some(503),
@@ -315,6 +319,7 @@ mod tests {
             EdgionStatus::BackendEndpointSliceNotFoundByRoundRobin,
             EdgionStatus::BackendEndpointSliceNotFoundByRoundRobinDefault,
             EdgionStatus::BackendEndpointSliceNotFoundByEwma,
+            EdgionStatus::RetryBudgetExhausted,
             EdgionStatus::BackendServiceNotFound,
             EdgionStatus::BackendClusterIpNotFound,
             EdgionStatus::BackendExternalNameNotFound,
