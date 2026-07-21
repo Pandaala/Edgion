@@ -12,6 +12,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::{
     condition_false, condition_reasons, condition_true, condition_types, format_secret_key, update_condition,
     HandlerContext, ProcessResult, ProcessorHandler, ResourceRef,
 };
+use chrono::{DateTime, Utc};
 use edgion_resources::constants::secret_keys::tls::{CA_CERT, CERT, KEY};
 use edgion_resources::prelude_resources::{BackendTLSPolicy, BackendTLSPolicyAlpha3};
 use edgion_resources::resources::backend_tls_policy::{
@@ -41,8 +42,8 @@ use edgion_resources::ResourceKind;
 fn should_requeue_siblings(
     old_target_keys: &[String],
     new_target_keys: &[String],
-    old_timestamp: Option<&str>,
-    new_timestamp: Option<&str>,
+    old_timestamp: Option<DateTime<Utc>>,
+    new_timestamp: Option<DateTime<Utc>>,
 ) -> bool {
     old_target_keys != new_target_keys || old_timestamp != new_timestamp
 }
@@ -175,20 +176,15 @@ impl BackendTlsPolicyHandler {
         new_target_keys.sort();
 
         // Store creation timestamp for conflict precedence sorting.
-        let new_timestamp = btp.metadata.creation_timestamp.as_ref().map(|t| t.0.to_rfc3339());
+        let new_timestamp = btp.metadata.creation_timestamp.as_ref().map(|t| t.0);
         ctx.runtime()
             .backend_tls_policy
-            .set_timestamp(&policy_resource_key, new_timestamp.as_deref());
+            .set_timestamp(&policy_resource_key, new_timestamp);
 
         // Requeue siblings only when a precedence-relevant input changed
         // (target set or creation_timestamp); skip no-op updates to prevent
         // the A→B→A→B ping-pong between conflicting policies.
-        if should_requeue_siblings(
-            &old_target_keys,
-            &new_target_keys,
-            old_timestamp.as_deref(),
-            new_timestamp.as_deref(),
-        ) {
+        if should_requeue_siblings(&old_target_keys, &new_target_keys, old_timestamp, new_timestamp) {
             for sibling in &old_siblings {
                 ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
             }
@@ -747,8 +743,8 @@ mod tests {
         assert!(should_requeue_siblings(
             &["ns/svc-a".to_string()],
             &["ns/svc-b".to_string()],
-            Some("2024-01-01T00:00:00+00:00"),
-            Some("2024-01-01T00:00:00+00:00"),
+            Some(dt("2024-01-01T00:00:00+00:00")),
+            Some(dt("2024-01-01T00:00:00+00:00")),
         ));
     }
 
@@ -760,8 +756,8 @@ mod tests {
         assert!(should_requeue_siblings(
             &targets,
             &targets,
-            Some("2024-01-01T00:00:00+00:00"),
-            Some("2024-06-01T00:00:00+00:00"),
+            Some(dt("2024-01-01T00:00:00+00:00")),
+            Some(dt("2024-06-01T00:00:00+00:00")),
         ));
     }
 
@@ -774,8 +770,8 @@ mod tests {
         assert!(!should_requeue_siblings(
             &targets,
             &targets,
-            Some("2024-01-01T00:00:00+00:00"),
-            Some("2024-01-01T00:00:00+00:00"),
+            Some(dt("2024-01-01T00:00:00+00:00")),
+            Some(dt("2024-01-01T00:00:00+00:00")),
         ));
     }
 
@@ -788,7 +784,7 @@ mod tests {
             &targets,
             &targets,
             None,
-            Some("2024-01-01T00:00:00+00:00"),
+            Some(dt("2024-01-01T00:00:00+00:00")),
         ));
     }
 
@@ -798,6 +794,11 @@ mod tests {
         let runtime = Arc::new(ControllerRuntime::default());
         let ctx = HandlerContext::new(None, None, TriggerChain::default(), 5, 20, runtime.clone());
         (ctx, runtime)
+    }
+
+    /// Parse an RFC3339 literal into the `DateTime<Utc>` the precedence store holds.
+    fn dt(s: &str) -> DateTime<Utc> {
+        s.parse().expect("valid RFC3339")
     }
 
     fn make_btp(ns: &str, name: &str, target_svc: &str, creation_ts: &str) -> BackendTLSPolicy {
@@ -918,8 +919,8 @@ mod tests {
         assert!(should_requeue_siblings(
             &targets,
             &targets,
-            old_ts_before_recreate.as_deref(),
-            new_ts_after_recreate.as_deref(),
+            old_ts_before_recreate,
+            new_ts_after_recreate,
         ));
     }
 

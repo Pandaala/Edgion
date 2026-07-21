@@ -52,6 +52,7 @@ use crate::conf_mgr::sync_runtime::resource_processor::status_utils::{
     condition_false, condition_reasons, condition_true, condition_types, update_condition,
 };
 use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler, ResourceRef};
+use chrono::{DateTime, Utc};
 use edgion_resources::prelude_resources::EdgionBackendTrafficPolicy;
 use edgion_resources::resources::common::{ParentReference, PolicyAncestorStatus};
 use edgion_resources::resources::edgion_backend_traffic_policy::EdgionBackendTrafficPolicyStatus;
@@ -84,8 +85,8 @@ mod ebtp_reasons {
 fn should_requeue_siblings(
     old_target_keys: &[String],
     new_target_keys: &[String],
-    old_timestamp: Option<&str>,
-    new_timestamp: Option<&str>,
+    old_timestamp: Option<DateTime<Utc>>,
+    new_timestamp: Option<DateTime<Utc>>,
 ) -> bool {
     old_target_keys != new_target_keys || old_timestamp != new_timestamp
 }
@@ -281,15 +282,10 @@ impl ProcessorHandler<EdgionBackendTrafficPolicy> for EdgionBackendTrafficPolicy
         }
         new_target_keys.sort();
 
-        let new_timestamp = p.metadata.creation_timestamp.as_ref().map(|t| t.0.to_rfc3339());
-        state.set_timestamp(&policy_resource_key, new_timestamp.as_deref());
+        let new_timestamp = p.metadata.creation_timestamp.as_ref().map(|t| t.0);
+        state.set_timestamp(&policy_resource_key, new_timestamp);
 
-        if should_requeue_siblings(
-            &old_target_keys,
-            &new_target_keys,
-            old_timestamp.as_deref(),
-            new_timestamp.as_deref(),
-        ) {
+        if should_requeue_siblings(&old_target_keys, &new_target_keys, old_timestamp, new_timestamp) {
             for sibling in &old_siblings {
                 ctx.requeue(sibling.kind_str(), sibling.resource_key()).await;
             }

@@ -8,6 +8,7 @@
 //! Uses the same `BidirectionalRefManager` pattern as SecretRefManager
 //! and ServiceRefManager.
 
+use chrono::{DateTime, Utc};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 
@@ -24,7 +25,11 @@ type BackendTLSPolicyTargetManager = SecretRefManager;
 /// instead of living in module-level globals.
 pub struct BackendTLSPolicyState {
     target_mgr: BackendTLSPolicyTargetManager,
-    timestamps: RwLock<HashMap<String, String>>,
+    // Creation timestamps kept as `DateTime<Utc>` (not a formatted RFC3339 String):
+    // precedence sorting in `is_winner` compares instants directly, which is correct
+    // by construction and avoids the fragility of lexicographically comparing strings
+    // whose RFC3339 shape (`Z` vs `+00:00`, sub-second digits) would have to match.
+    timestamps: RwLock<HashMap<String, DateTime<Utc>>>,
 }
 
 impl BackendTLSPolicyState {
@@ -46,11 +51,11 @@ impl BackendTLSPolicyState {
     /// keeps the stored map in sync with the policy's actual metadata (e.g. on
     /// recreate without a creation_timestamp the old value must not linger,
     /// otherwise `is_winner` would compare a stale Some against fresh peers).
-    pub fn set_timestamp(&self, policy_key: &str, timestamp: Option<&str>) {
+    pub fn set_timestamp(&self, policy_key: &str, timestamp: Option<DateTime<Utc>>) {
         let mut map = self.timestamps.write();
         match timestamp {
             Some(ts) => {
-                map.insert(policy_key.to_string(), ts.to_string());
+                map.insert(policy_key.to_string(), ts);
             }
             None => {
                 map.remove(policy_key);
@@ -64,8 +69,8 @@ impl BackendTLSPolicyState {
     }
 
     /// Get the stored creation timestamp for a policy.
-    fn get_timestamp(&self, policy_key: &str) -> Option<String> {
-        self.timestamps.read().get(policy_key).cloned()
+    fn get_timestamp(&self, policy_key: &str) -> Option<DateTime<Utc>> {
+        self.timestamps.read().get(policy_key).copied()
     }
 
     /// Public read of the stored creation timestamp for a policy.
@@ -74,7 +79,7 @@ impl BackendTLSPolicyState {
     /// PollWatcher tick: same name, same target set, but a new
     /// `creation_timestamp` shifts precedence ordering so siblings must be
     /// re-evaluated.
-    pub fn timestamp_of(&self, policy_key: &str) -> Option<String> {
+    pub fn timestamp_of(&self, policy_key: &str) -> Option<DateTime<Utc>> {
         self.get_timestamp(policy_key)
     }
 
@@ -97,11 +102,11 @@ impl BackendTLSPolicyState {
         // and could observe partial writes interleaved with `get_refs`.
         let ts_snapshot = self.timestamps.read().clone();
 
-        let mut entries: Vec<(String, Option<String>)> = refs
+        let mut entries: Vec<(String, Option<DateTime<Utc>>)> = refs
             .iter()
             .map(|r| {
                 let key = r.resource_key();
-                let ts = ts_snapshot.get(&key).cloned();
+                let ts = ts_snapshot.get(&key).copied();
                 (key, ts)
             })
             .collect();
@@ -171,6 +176,11 @@ mod tests {
     use super::*;
     use edgion_resources::ResourceKind;
 
+    /// Parse an RFC3339 literal into the `DateTime<Utc>` the store now holds.
+    fn ts(s: &str) -> DateTime<Utc> {
+        s.parse().expect("valid RFC3339")
+    }
+
     fn make_policy_ref(ns: &str, name: &str) -> ResourceRef {
         ResourceRef::new(ResourceKind::BackendTLSPolicy, Some(ns.to_string()), name.to_string())
     }
@@ -188,8 +198,8 @@ mod tests {
         state.target_mgr().add_ref(target_key.clone(), policy_a.clone());
         state.target_mgr().add_ref(target_key, policy_b.clone());
 
-        state.set_timestamp(&format!("{}/policy-a", ns), Some("2024-01-01T00:00:00Z"));
-        state.set_timestamp(&format!("{}/policy-b", ns), Some("2024-01-02T00:00:00Z"));
+        state.set_timestamp(&format!("{}/policy-a", ns), Some(ts("2024-01-01T00:00:00Z")));
+        state.set_timestamp(&format!("{}/policy-b", ns), Some(ts("2024-01-02T00:00:00Z")));
 
         (policy_a, policy_b)
     }
@@ -242,8 +252,8 @@ mod tests {
         state.target_mgr().add_ref(target_key.clone(), policy_b.clone());
 
         // Same timestamp — alphabetically earlier name wins
-        state.set_timestamp(&format!("{}/alpha", ns), Some("2024-01-01T00:00:00Z"));
-        state.set_timestamp(&format!("{}/beta", ns), Some("2024-01-01T00:00:00Z"));
+        state.set_timestamp(&format!("{}/alpha", ns), Some(ts("2024-01-01T00:00:00Z")));
+        state.set_timestamp(&format!("{}/beta", ns), Some(ts("2024-01-01T00:00:00Z")));
 
         assert!(state.is_winner(&format!("{}/alpha", ns), &target_key));
         assert!(!state.is_winner(&format!("{}/beta", ns), &target_key));
