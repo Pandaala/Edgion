@@ -3,8 +3,8 @@
 # An origin header (X-Trace-Id) with presence: warnIfMissing.
 # Test sends a request WITHOUT X-Trace-Id -> the field is omitted from the
 # outbound request, a PluginLog alert is written, and the request PROCEEDS
-# (webhook still resolves successfully). allowDegradation is irrelevant here:
-# warnIfMissing never escalates to a failure.
+# (webhook still resolves successfully): warnIfMissing never escalates to a
+# failure.
 # Backend via Service + EndpointSlice.
 apiVersion: v1
 kind: Service
@@ -61,7 +61,6 @@ spec:
     timeoutMs: 5000
     success:
       statusCodes: [200]
-    allowDegradation: false
     maxResponseBytes: 4096
 ---
 apiVersion: edgion.io/v1

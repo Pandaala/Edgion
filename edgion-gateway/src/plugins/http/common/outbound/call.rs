@@ -393,9 +393,8 @@ pub async fn outbound_call(
 ///
 /// The lower bound guards against a tiny-but-nonzero render (e.g. "1") pinning
 /// every attempt to an unusably short deadline — a reliable timeout-driven
-/// failure on every call, or, combined with `allowDegradation: true` on
-/// forward_auth, a forced fail-open bypass. Falling back to the static
-/// `timeout` (rather than raising the render to the floor) matches the
+/// failure on every call. Falling back to the static `timeout` (rather than
+/// raising the render to the floor) matches the
 /// existing fallback semantics for a non-numeric/zero/empty render, so callers
 /// only need to reason about one fallback path.
 ///
@@ -654,8 +653,6 @@ mod tests {
             max_response_bytes: 64 * 1024,
             timeout: Duration::from_secs(5),
             timeout_template: None,
-            allow_degradation: false,
-            degradation_template: None,
             retry: None,
             egress_policy: None,
             passive_health_check: None,
@@ -1259,8 +1256,6 @@ mod tests {
             max_response_bytes: 64 * 1024,
             timeout: Duration::from_secs(5),
             timeout_template: None,
-            allow_degradation: false,
-            degradation_template: None,
             retry: None,
             egress_policy: None,
             passive_health_check: None,
@@ -1329,8 +1324,6 @@ mod tests {
             max_response_bytes: 64 * 1024,
             timeout: Duration::from_secs(5),
             timeout_template: None,
-            allow_degradation: false,
-            degradation_template: None,
             retry: None,
             egress_policy: None,
             passive_health_check: None,
@@ -1529,8 +1522,7 @@ mod tests {
     /// CRITICAL 2 regression: a render below `MIN_OUTBOUND_TIMEOUT_MS` (e.g. "1")
     /// must fall back to the static timeout, not be honored as-is. Without a
     /// floor, a tiny-but-nonzero render would pin the deadline low enough that
-    /// the outbound call always times out — a reliable DoS, or (combined with
-    /// `allowDegradation: true` on forward_auth) a forced fail-open bypass.
+    /// the outbound call always times out — a reliable DoS.
     #[test]
     fn resolve_timeout_floor_falls_back_to_static_timeout() {
         use edgion_resources::resources::common::external_http::MIN_OUTBOUND_TIMEOUT_MS;

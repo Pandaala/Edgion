@@ -639,7 +639,7 @@ pub fn record_outbound_success_predicate_fail() {
 }
 
 /// Record a template field that failed to render to a usable value and fell back
-/// to its static default. `field` is one of `"timeout_ms"`, `"allow_degradation"`.
+/// to its static default. `field` is `"timeout_ms"`.
 /// Fixed cardinality — safe as a label. The data plane must not log, so this
 /// counter is the only signal an operator gets for a silently-falling-back template.
 pub fn record_outbound_template_fallback(field: &'static str) {

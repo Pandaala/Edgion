@@ -15,9 +15,8 @@
 //      - Only listed headers are sent to auth service
 //      - upstreamHeaders are correctly copied on success
 //
-//   3. Degradation (auth service unreachable):
-//      - allowDegradation=true  → request passes through to upstream (200)
-//      - allowDegradation=false → gateway returns statusOnError (503)
+//   3. Fail-close (auth service unreachable):
+//      - gateway returns statusOnError (503); upstream is NOT reached
 //
 //   4. deny relays clientHeaders:
 //      - Auth service 401 with WWW-Authenticate → client receives the header
@@ -27,7 +26,7 @@
 //      - Backend echoes X-User-ID (proves end-to-end chain worked)
 //
 // The fake auth server runs on port 30040 (started via test_server --auth-port 30040).
-// Port 30098 is never started; used by fail-open / fail-close configs.
+// Port 30098 is never started; used by the fail-close config.
 //
 // LB smoke test:
 //   - test_backendref_lb_round_robin: EndpointSlice for auth-svc-lb has TWO endpoint
@@ -46,7 +45,6 @@ const BASIC_HOST: &str = "forward-auth-basic.example.com";
 const SELECTIVE_HOST: &str = "forward-auth-selective.example.com";
 const DELAY_HOST: &str = "forward-auth-delay.example.com";
 const HIDE_CREDS_HOST: &str = "forward-auth-hide-creds.example.com";
-const FAIL_OPEN_HOST: &str = "forward-auth-fail-open.example.com";
 const FAIL_CLOSE_HOST: &str = "forward-auth-fail-close.example.com";
 const SECRET_REF_HOST: &str = "forward-auth-secret.example.com";
 const REQUIRED_ORIGIN_HOST: &str = "forward-auth-required.example.com";
@@ -840,60 +838,19 @@ impl ForwardAuthTestSuite {
     }
 
     // ============================================================
-    // Degradation Tests (auth service unreachable)
+    // Fail-close Tests (auth service unreachable)
     // ============================================================
 
-    /// Test: allowDegradation=true — request passes through when auth service is unreachable
-    ///
-    /// Config: forward-auth-fail-open (target port 30098, never started)
-    ///   decision.allowDegradation: true
-    ///
-    /// Expected: gateway skips auth and forwards to upstream → 200 from test-http
-    fn test_fail_open_when_unreachable() -> TestCase {
-        TestCase::new(
-            "fail_open_when_unreachable",
-            "ForwardAuth: request passes through to upstream when auth unreachable + allowDegradation=true",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let url = format!("{}/health", ctx.http_url());
-
-                    let resp = match ctx.http_client.get(&url).header("host", FAIL_OPEN_HOST).send().await {
-                        Ok(r) => r,
-                        Err(e) => return TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
-                    };
-
-                    let status = resp.status().as_u16();
-                    if status == 200 {
-                        TestResult::passed_with_message(
-                            start.elapsed(),
-                            "ForwardAuth: auth unreachable + allowDegradation=true → request forwarded (200)".into(),
-                        )
-                    } else {
-                        TestResult::failed(
-                            start.elapsed(),
-                            format!(
-                                "Expected 200 (degraded mode: auth unreachable, allowDegradation=true), got {}",
-                                status
-                            ),
-                        )
-                    }
-                })
-            },
-        )
-    }
-
-    /// Test: allowDegradation=false + statusOnError=503 — gateway returns 503 when auth service is unreachable
+    /// Test: statusOnError=503 — gateway returns 503 when auth service is unreachable
     ///
     /// Config: forward-auth-fail-close (target port 30098, never started)
-    ///   decision.allowDegradation: false
     ///   decision.statusOnError: 503
     ///
     /// Expected: gateway returns 503 to the client; upstream is NOT reached
     fn test_fail_close_with_status_on_error() -> TestCase {
         TestCase::new(
             "fail_close_with_status_on_error",
-            "ForwardAuth: gateway returns 503 when auth unreachable + allowDegradation=false",
+            "ForwardAuth: gateway returns 503 when auth is unreachable",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -908,15 +865,12 @@ impl ForwardAuthTestSuite {
                     if status == 503 {
                         TestResult::passed_with_message(
                             start.elapsed(),
-                            "ForwardAuth: auth unreachable + allowDegradation=false → 503 returned".into(),
+                            "ForwardAuth: auth unreachable → 503 returned (fail-close)".into(),
                         )
                     } else {
                         TestResult::failed(
                             start.elapsed(),
-                            format!(
-                                "Expected 503 (fail-close: auth unreachable, allowDegradation=false), got {}",
-                                status
-                            ),
+                            format!("Expected 503 (fail-close: auth unreachable), got {}", status),
                         )
                     }
                 })
@@ -1072,7 +1026,6 @@ impl ForwardAuthTestSuite {
     ///
     /// Config: forward-auth-required-origin
     ///   request.headers.origin: [{name: X-Tenant-Id, presence: required}, ...]
-    ///   decision.allowDegradation: false
     ///   decision.statusOnError: 500
     ///
     /// Code path: collect_list_fields returns Err for the missing Required field →
@@ -1111,7 +1064,7 @@ impl ForwardAuthTestSuite {
                         TestResult::failed(
                             start.elapsed(),
                             format!(
-                                "Expected 500 (Required origin missing, allowDegradation=false, statusOnError=500), got {}",
+                                "Expected 500 (Required origin missing, statusOnError=500), got {}",
                                 status
                             ),
                         )
@@ -1537,8 +1490,7 @@ impl TestSuite for ForwardAuthTestSuite {
             // hide_credentials tests
             Self::test_no_hide_credentials_keeps_auth_header(),
             Self::test_hide_credentials_removes_auth_header(),
-            // Degradation tests (auth service unreachable)
-            Self::test_fail_open_when_unreachable(),
+            // Fail-close test (auth service unreachable)
             Self::test_fail_close_with_status_on_error(),
             // deny relays clientHeaders
             Self::test_deny_relays_client_headers(),

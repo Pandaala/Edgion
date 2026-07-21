@@ -1,10 +1,10 @@
 # Scenario 5: presence-required-fail (K8s mode)
 # ---------------------------------------------------------------------------
 # A required origin header (X-Required) with presence: required. The
-# allowDegradation/statusOnError fields below are part of the shared
-# ExternalHttpConnection schema but are NOT honored by the webhook connector
-# (they are only read by forward_auth) -- key_get simply returns None on any
-# failure, including a missing required field; the consuming CtxSet plugin
+# statusOnError field below is part of the shared ExternalHttpConnection
+# schema but is NOT honored by the webhook connector (only forward_auth
+# reads it) -- key_get simply returns None on any failure, including a
+# missing required field; the consuming CtxSet plugin
 # just leaves the target var unset (no 403, no gateway-side status override).
 # Backend via Service (real selector) + auto EndpointSlice.
 apiVersion: v1
@@ -47,7 +47,6 @@ spec:
     timeoutMs: 5000
     success:
       statusCodes: [200]
-    allowDegradation: false
     statusOnError: 403
     maxResponseBytes: 4096
 ---

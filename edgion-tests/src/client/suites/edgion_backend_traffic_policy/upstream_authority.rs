@@ -348,8 +348,9 @@ impl UpstreamAuthorityTestSuite {
                     }
 
                     // Degradation path: an injected label rejects ForwardAuth's
-                    // own outbound_call with AuthorityRejected; allowDegradation
-                    // is false, so the plugin returns statusOnError (503).
+                    // own outbound_call with AuthorityRejected; ForwardAuth is
+                    // unconditionally fail-close, so the plugin returns
+                    // statusOnError (503).
                     let resp = match ctx
                         .http_client
                         .get(&url)

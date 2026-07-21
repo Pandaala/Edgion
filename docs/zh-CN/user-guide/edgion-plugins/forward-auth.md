@@ -4,10 +4,10 @@
 >
 > ForwardAuth 是 `EdgionPlugins` CRD 提供的外部鉴权插件，不属于标准 Gateway API。
 
-> ⚠️ **破坏性变更，且是静默的：`successStatusCodes` → `success.statusCodes`；`allowDegradation`/`statusOnError` 从 `decision:` 移出。**
+> ⚠️ **破坏性变更：`successStatusCodes` → `success.statusCodes`。ForwardAuth 现在总是失败关闭，返回 `statusOnError`。**
 >
 > - `successStatusCodes` 已不再是可识别字段。`ForwardAuthConfig` 的连接层配置块（`ExternalHttpConnection`）通过 `#[serde(flatten)]` 展平且未启用 `deny_unknown_fields`，因此仍设置 `successStatusCodes` 的 YAML 会在准入时被**无错误、无告警地接受**——该字段被静默丢弃，成功判定退化为"任意 2xx"。对 ForwardAuth 而言，这意味着**鉴权服务返回的任何 200 响应都会被视为鉴权成功**，即使运营者原本打算把成功范围限制为更窄的状态码集合或某个 body 条件——这是一个既不报准入错误、也不写日志的 fail-open 鉴权缺口。请将每个 ForwardAuth 配置迁移到嵌套的 `success:` 块（详见下文[字段参考](#连接层字段顶层)）。
-> - `decision.allowDegradation` 与 `decision.statusOnError` 已移到 `config:` 顶层（它们现在是 `ExternalHttpConnection` 上的共享连接层字段，Webhook LinkSys 连接器同样使用）。`decision:` 不再接受这两个键——与上面的 `successStatusCodes` 不同，这**不是**静默丢弃：`ForwardAuthDecision` 现已带有 `#[serde(deny_unknown_fields)]`，因此仍写在 `decision.allowDegradation` / `decision.statusOnError` 里的旧配置现在会**解析失败**——资源在准入阶段被拒绝，并报出具体是哪个未知字段导致的错误，而不再悄悄把 `allowDegradation` 回退到默认值 `false`。请更新每个 YAML 示例：`decision.allowDegradation` → `allowDegradation`，`decision.statusOnError` → `statusOnError`。
+> - `allowDegradation`（fail-open 模式）和 `allowDegradationTemplate`（按请求降级）已被移除。ForwardAuth 现在**总是失败关闭**：当鉴权服务不可达或超时时，网关向客户端返回 `statusOnError`（默认 503）。不再支持 fail-open 行为；如需高可用性，请为鉴权服务配置适当的冗余和故障转移。
 
 ## 概述
 
@@ -25,7 +25,7 @@ ForwardAuth 插件将鉴权逻辑委托给外部服务。对于每个入站请�
 - **Header 转发** — 默认转发全部非 hop-by-hop 请求头（`forwardAll: true`），或按需选择特定子集
 - **双向 Header 传递** — 鉴权成功时将身份信息复制到上游请求；鉴权失败时将错误信息复制到客户端响应
 - **Secret 注入** — 通过 `${secretRef:ns/name:key}` 模板将 Kubernetes Secret 值注入为自定义请求头
-- **优雅降级** — 鉴权服务不可达时，可选择放行（fail-open）或返回自定义错误码（fail-close）
+- **服务不可达时的失败关闭** — 当鉴权服务不可达时，网关向客户端返回 `statusOnError`（默认 503）；若需高可用性，请为鉴权服务配置冗余和故障转移
 - **声明式成功判定** — 不限于 2xx 状态码，可选地通过 `success.body` 要求特定的 JSON body 字段（适用于返回 `200 OK` 但携带错误信息的鉴权服务）
 - **可配置的重试退避** — 指数或固定退避、抖动、可选的 `Retry-After` 感知，以及（针对 ForwardAuth）默认在超时时重试——因为鉴权检查是幂等的
 - **SSRF 防护** — target 为 Kubernetes Service `backendRef`；解析后的 Pod IP 在拨号前经 `validate_endpoint_backend_addr` 校验
@@ -47,9 +47,7 @@ flowchart TD
     H1 -->|否| I["转发给上游"]
     H2 --> I
     F -->|否| J["复制 decision.clientHeaders +\n返回鉴权服务的状态码和 Body"]
-    E -->|否| K{"allowDegradation?"}
-    K -->|"true"| L["跳过鉴权，放行（fail-open）"]
-    K -->|"false"| M["返回 statusOnError（默认 503）"]
+    E -->|否| M["返回 statusOnError（默认 503）"]
 ```
 
 ## 配置说明
@@ -69,8 +67,7 @@ spec:
         timeoutMs: 5000                    # 连接层，默认 5000
         success:
           statusCodes: [200, 204]          # 连接层，默认 任意 2xx
-        allowDegradation: false            # 连接层（已从 decision: 移出，见上方破坏性变更说明）
-        statusOnError:    503              # 连接层（已从 decision: 移出，见上方破坏性变更说明）
+        statusOnError:    503              # 连接层，鉴权服务不可达时返回（默认 503）
         tls: { verify: true }              # 连接层，可选
         request:
           path:   { template: "/verify" }
@@ -98,9 +95,7 @@ spec:
 | `timeoutMs` | integer | `5000` | 请求超时（毫秒）。 |
 | `timeoutMsTemplate` | string | `null` | 渲染单次请求超时的模板，如 `"${ctx:desired_timeout_ms}"`。**只接受 `${ctx:...}`、`${clientIp}` 以及匹配路由变量**——客户端可控的来源（`header`/`query`/`cookie`/`path`/`method`/`uri`）会在准入时被拒绝，因为它会让攻击者把鉴权服务的超时压得足够低，从而强制每次调用都超时。渲染结果非数字、为空或低于下限（< 50 毫秒）时回退到 `timeoutMs`；无论如何，渲染值都会被限幅到 60000 毫秒。在准入时编译并校验。 |
 | `success` | object | `null` | 成功判定条件：`statusCodes`（数组，省略或非空时任意 2xx；显式的空列表会在准入时被拒绝）加上可选的 `body` 断言（`pointer` + **恰好一个** `equals`/`notEquals`/`exists`/`in`，在准入时强制校验），按与运算组合。**取代已移除的 `successStatusCodes`**——参见上方破坏性变更说明，以及 [运维指南 → 连接器 → Success](../../ops-guide/infrastructure/connectors.md#成功判定-success) 中的完整 schema、严格类型规则、指针缺失语义，以及 `body` 设置时 `maxResponseBytes >= 4096` 的要求。 |
-| `allowDegradation` | boolean | `false` | Fail-open：为 `true` 时，鉴权服务不可达或失败时请求照常放行。**从 `decision.allowDegradation` 移入**——见上方破坏性变更说明。 |
-| `statusOnError` | integer | `503` | 鉴权服务失败且 `allowDegradation` 为 `false` 时返回的状态码，范围 200–599。**从 `decision.statusOnError` 移入**——见上方破坏性变更说明。 |
-| `allowDegradationTemplate` | string | `null` | 渲染单次请求降级决策的模板，如 `"${ctx:is_staging}"`。**只接受 `${ctx:...}`、`${clientIp}` 以及匹配路由变量**——客户端可控的来源会在准入时被拒绝，因为这是一个 fail-open 开关，绝不能直接由攻击者可控的 header/query/cookie/path/method/uri 驱动。必须渲染为恰好 `true` 或 `false`（去除首尾空白、大小写不敏感）；否则回退到 `allowDegradation`。在准入时编译并校验。 |
+| `statusOnError` | integer | `503` | 鉴权服务不可达时（连接失败、超时、服务宕机）返回的状态码，范围 200–599。总是失败关闭，不存在 fail-open 模式。 |
 | `tls` | object | `null` | 出向鉴权请求的 TLS 配置。字段：`verify`（默认 `true`；`false` 由运维人员负责）；`validation.caCertificateRefs`（CA 证书引用列表，每项 `{kind, name, namespace}`，Secret 或 ConfigMap，须包含 `ca.crt` 键）；`validation.wellKnownCACertificates: System`（内置 webpki 根证书）；`clientCertificateRef`（含 `tls.crt`/`tls.key` 的 Secret，用于客户端 mTLS）。内联 CA（`caCert`）已移除，请改用含 `ca.crt` 键的 Secret 或 ConfigMap。Phase 1 说明：`validation.hostname` 和 `validation.subjectAltNames`（SAN 固定）已暴露但暂不强制执行，配置后导致 `Accepted=False`。 |
 | `retry` | object | `null` | 重试配置：`maxRetries`、`retryDelayMs`（退避曲线的基础延迟，不是固定间隔）、`backoffPolicy`（`exponential` 默认 \| `fixed`）、`maxDelayMs`（默认 1000，上限 10000）、`jitter`（默认 `true`）、`honorRetryAfter`（默认 `false`）、`retryOnTimeout`（**按消费方决定默认值：ForwardAuth 为 `true`**，因为鉴权检查是幂等的）、`retryOnConnectError`（默认 `true`）、`retryOnStatus`（默认 `[]`）、`retryOnBodyFailure`（默认 `false`）。完整 schema 见[运维指南 → 连接器 → Retry](../../ops-guide/infrastructure/connectors.md#重试)。 |
 | `rateLimit` | object | `null` | 出向调用限速：`rate`（每窗口最大调用次数）+ `windowSec`。 |
@@ -118,7 +113,7 @@ spec:
 
 #### `decision` — 鉴权后行为
 
-`decision` 不再携带 `allowDegradation` / `statusOnError`——它们已移到顶层（见上方破坏性变更说明及连接层字段表）。`decision` 现在只保留以下字段：
+`decision` 包含以下字段：
 
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
@@ -166,17 +161,6 @@ request:
 控制器在配置同步时解析 Secret 引用，并通过 conf_sync 将值下发给网关。该值在管理 API 输出中显示为 `[redacted]`。
 
 Secret 路径格式：`namespace/secretName`（如 `edgion-default/auth-credentials`），键名为 Secret `data` 中的字段名。
-
-### Fail-Open 与 Fail-Close
-
-当鉴权服务不可达（连接拒绝、超时、限速、健康检查失败）时：
-
-| `allowDegradation` | 行为 |
-|---------------------|------|
-| `false`（默认）| 向客户端返回 `statusOnError`（默认 503）—— **fail-close** |
-| `true` | 跳过鉴权，将请求转发给上游 —— **fail-open** |
-
-安全关键的 API 请保持 `allowDegradation: false`。`allowDegradation: true` 仅适用于鉴权不是硬性安全要求的场景（如 A/B 测试或内部分析类 API）。
 
 ### SSRF 防护
 
@@ -278,31 +262,7 @@ spec:
 
 每次鉴权请求都会注入 Kubernetes Secret 值作为 `X-Gateway-Token` 头。创建 Secret 命令：`kubectl create secret generic gateway-token -n production --from-literal=token=<value>`。
 
-### 示例 4：优雅降级
-
-```yaml
-apiVersion: edgion.io/v1
-kind: EdgionPlugins
-metadata:
-  name: forward-auth-degraded
-  namespace: production
-spec:
-  requestPlugins:
-    - type: ForwardAuth
-      config:
-        target:
-          name: auth-service
-          namespace: production
-          port: 8080
-        allowDegradation: true
-        statusOnError: 503
-        decision:
-          upstreamHeaders: [X-User-ID]
-```
-
-鉴权服务不可用（网络错误、超时等）时跳过鉴权直接放行。适用于鉴权不是关键安全路径、优先保证可用性的场景。
-
-### 示例 5：配合 HTTPRoute 使用
+### 示例 4：配合 HTTPRoute 使用
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -342,8 +302,7 @@ spec:
 | 上游 Header 传递 | `decision.upstreamHeaders` | `authResponseHeaders` | `upstream_headers` | `auth_request_set` |
 | 客户端 Header 传递 | `decision.clientHeaders` | 否 | `client_headers` | 有限 |
 | 自定义成功状态码 / body 断言 | `success.statusCodes` / `success.body` | 否（仅 2xx） | 否（仅 2xx） | 否（仅 2xx） |
-| 优雅降级 | `allowDegradation` | 否 | `allow_degradation` | 否 |
-| 自定义错误状态码 | `statusOnError` | 否 | `status_on_error` | 否 |
+| 鉴权服务不可达时的错误状态码 | `statusOnError`（总是失败关闭） | 否 | `status_on_error` | 否 |
 | 隐藏凭证 | `decision.hideCredentials` | 否 | 否 | 否 |
 | 失败延迟 | `decision.authFailureDelayMs` | 否 | 否 | 否 |
 | SSRF 防护 | backendRef + IP 校验 | 否 | 否 | 否 |
@@ -421,10 +380,6 @@ A: 鉴权**失败**时，鉴权服务的响应 Body 原样返回给客户端（�
 ### Q: 多个 ForwardAuth 插件可以串联吗？
 
 A: 可以。在 `requestPlugins` 中列举多个，按顺序依次执行。任意一个返回非成功状态码即终止请求链。
-
-### Q: `allowDegradation: true` 安全吗？
-
-A: 对安全关键的 API 不安全。开启后，网关与鉴权服务之间发生网络分区时，所有请求将无鉴权放行。仅在鉴权不是硬性安全要求时使用（如 A/B 测试基础设施或内部分析类 API）。
 
 ## 相关文档
 

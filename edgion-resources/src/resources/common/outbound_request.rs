@@ -252,7 +252,9 @@ pub enum PresencePolicy {
     /// Absent field is silently omitted (default).
     SkipIfMissing,
 
-    /// Absent field causes the call to fail (respects allowDegradation).
+    /// Absent field causes the call to fail. In forward_auth this surfaces as
+    /// fail-close (`statusOnError`); for the webhook connector `key_get`
+    /// returns `None` and the consuming plugin's fallback decides what happens.
     Required,
 
     /// Absent field triggers PluginLog alert but request continues.

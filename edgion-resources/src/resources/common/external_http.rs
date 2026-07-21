@@ -286,18 +286,6 @@ pub fn validate_connection_target(conn: &ExternalHttpConnection) -> Option<Strin
             return Some(e);
         }
     }
-    if let Some(tpl) = conn.allow_degradation_template.as_ref() {
-        let compiled = match crate::resources::edgion_plugins::plugin_configs::CompiledTemplate::compile(tpl) {
-            Ok(c) => c,
-            Err(e) => return Some(format!("allowDegradationTemplate: {e}")),
-        };
-        if tpl.contains("${secretRef:") {
-            return Some("allowDegradationTemplate must not reference ${secretRef:...}".to_string());
-        }
-        if let Some(e) = reject_client_controlled_vars(&compiled, "allowDegradationTemplate") {
-            return Some(e);
-        }
-    }
     if conn.timeout_ms == 0 || conn.timeout_ms > MAX_OUTBOUND_TIMEOUT_MS {
         return Some(format!("timeoutMs must be between 1 and {MAX_OUTBOUND_TIMEOUT_MS}"));
     }
@@ -308,23 +296,17 @@ pub fn validate_connection_target(conn: &ExternalHttpConnection) -> Option<Strin
 }
 
 /// Reject any template variable that is not on the trusted allow-list for
-/// `timeoutMsTemplate` / `allowDegradationTemplate`.
+/// `timeoutMsTemplate`.
 ///
-/// These two fields drive a per-request timeout deadline and a fail-open
-/// switch (respectively). Both are security-sensitive: a client-controlled
-/// value would let an attacker pin the timeout to something tiny (forcing a
-/// timeout on every call — either a reliable DoS, or, combined with
-/// `allowDegradation`, an authentication bypass) or directly flip the
-/// degradation decision via a request header/query/cookie.
+/// This field drives a per-request timeout deadline and is security-sensitive:
+/// a client-controlled value would let an attacker pin the timeout to something
+/// tiny (forcing a timeout on every call — a reliable DoS).
 ///
 /// ALLOW ONLY `${ctx:...}` (set by a trusted upstream plugin, never the raw
 /// client request), `${clientIp}`, and matched-route metadata
 /// (`${matchedHttpRoute:...}` / `${matchedGrpcRoute:...}`). Everything else —
 /// `header`/`query`/`cookie`/`path`/`uri`/`requestPath`/`requestUri`/`method`/
-/// `secretRef` — is rejected, even though some of those (path, method, uri)
-/// are not literally "attacker-supplied storage" like a header, they are
-/// still chosen by the client on every request and so are not a safe basis
-/// for a fail-open decision.
+/// `secretRef` — is rejected.
 fn reject_client_controlled_vars(
     tpl: &crate::resources::edgion_plugins::plugin_configs::CompiledTemplate,
     field_name: &str,
@@ -350,17 +332,6 @@ fn reject_client_controlled_vars(
     None
 }
 
-/// Parse a rendered boolean template. Accepts ONLY "true"/"false" (trimmed,
-/// case-insensitive). Anything else — "1", "0", "yes", "" — returns None so the
-/// caller falls back to the static field. One spelling, to avoid grammar churn.
-pub fn resolve_bool_template(rendered: &str) -> Option<bool> {
-    match rendered.trim().to_ascii_lowercase().as_str() {
-        "true" => Some(true),
-        "false" => Some(false),
-        _ => None,
-    }
-}
-
 /// Minimum `max_response_bytes` required when `success.body` predicates are set.
 /// The default 1 KB cap is too small to reliably hold the inspected field, and a
 /// truncated body surfaces as `ResponseTooLarge`, not as a failed predicate.
@@ -374,9 +345,7 @@ pub const MAX_OUTBOUND_TIMEOUT_MS: u64 = 60_000;
 /// A render below this floor is treated exactly like a non-numeric/zero/empty
 /// render: it falls back to the static `timeoutMs`. Without a floor, a
 /// tiny-but-nonzero value (e.g. "1") would make the outbound call time out on
-/// (near-)every attempt — a reliable denial of service, or — combined with
-/// `allowDegradation: true` on forward_auth — a forced fail-open
-/// authentication bypass.
+/// (near-)every attempt — a reliable denial of service.
 pub const MIN_OUTBOUND_TIMEOUT_MS: u64 = 50;
 
 // ============================================================
@@ -686,39 +655,14 @@ pub struct ExternalHttpConnection {
     pub success: Option<crate::resources::common::success::SuccessSpec>,
 
     // ---- Failure policy (currently honored by forward_auth only) ----
-    /// Whether to skip/allow the request when the outbound call fails.
-    ///
-    /// Only the forward_auth plugin reads this field:
-    /// - false (default): forward_auth returns `status_on_error` to the client.
-    /// - true: forward_auth is silently skipped (degraded mode) and the
-    ///   request proceeds to upstream.
-    ///
-    /// The webhook connector's `key_get` has no fail-open/fail-closed
-    /// decision to make: on any failure it simply returns `None` (no value),
-    /// and the caller's normal fallback chain continues. This field is
-    /// therefore inert when set on a webhook `ExternalHttpConnection`.
-    #[serde(default)]
-    pub allow_degradation: bool,
-
-    /// HTTP status code to return when the outbound call fails and
-    /// `allow_degradation` is false. Range 200-599.
+    /// HTTP status code to return when the outbound call fails. Range
+    /// 200-599.
     /// Default: 503.
     ///
     /// Only the forward_auth plugin reads this field; it is inert for
-    /// webhook (see `allow_degradation` doc above).
+    /// webhook.
     #[serde(default = "default_status_on_error")]
     pub status_on_error: u16,
-
-    /// Template rendering the per-request degradation decision, e.g.
-    /// "${ctx:is_staging}". Only `${ctx:...}`, `${clientIp}`, and
-    /// matched-route variables are accepted at admission (see
-    /// `reject_client_controlled_vars`) — this is a fail-open switch on
-    /// forward_auth, so it must never be driven by a client-controlled
-    /// header/query/cookie/path/method/uri. Must render to exactly "true" or
-    /// "false" (trimmed, case-insensitive); anything else falls back to
-    /// `allow_degradation`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub allow_degradation_template: Option<String>,
 }
 
 impl Default for ExternalHttpConnection {
@@ -733,9 +677,7 @@ impl Default for ExternalHttpConnection {
             health_check: None,
             max_response_bytes: default_max_response_bytes(),
             success: None,
-            allow_degradation: false,
             status_on_error: default_status_on_error(),
-            allow_degradation_template: None,
         }
     }
 }
@@ -807,17 +749,13 @@ mod failure_policy_tests {
     #[test]
     fn failure_policy_defaults() {
         let c = ExternalHttpConnection::default();
-        assert!(!c.allow_degradation);
         assert_eq!(c.status_on_error, 503);
     }
 
     #[test]
     fn failure_policy_parses_top_level() {
-        let c: ExternalHttpConnection = serde_yaml::from_str(
-            "target:\n  url: https://api.example.com\nallowDegradation: true\nstatusOnError: 502\n",
-        )
-        .unwrap();
-        assert!(c.allow_degradation);
+        let c: ExternalHttpConnection =
+            serde_yaml::from_str("target:\n  url: https://api.example.com\nstatusOnError: 502\n").unwrap();
         assert_eq!(c.status_on_error, 502);
     }
 }
@@ -978,108 +916,6 @@ mod timeout_ms_bound_tests {
         ))
         .unwrap();
         assert!(validate_connection_target(&c).is_none());
-    }
-}
-
-#[cfg(test)]
-mod allow_degradation_template_tests {
-    use super::*;
-
-    #[test]
-    fn resolve_bool_template_accepts_only_strict_true_false() {
-        assert_eq!(resolve_bool_template("true"), Some(true));
-        assert_eq!(resolve_bool_template("FALSE"), Some(false));
-        assert_eq!(resolve_bool_template("  true  "), Some(true));
-        assert_eq!(resolve_bool_template("1"), None); // not accepted
-        assert_eq!(resolve_bool_template("yes"), None);
-        assert_eq!(resolve_bool_template(""), None);
-    }
-
-    #[test]
-    fn default_has_no_allow_degradation_template() {
-        let c = ExternalHttpConnection::default();
-        assert!(c.allow_degradation_template.is_none());
-    }
-
-    #[test]
-    fn valid_template_passes_validation() {
-        let c: ExternalHttpConnection = serde_yaml::from_str(
-            "target:\n  url: https://api.example.com\nallowDegradationTemplate: \"${ctx:is_staging}\"\n",
-        )
-        .unwrap();
-        assert_eq!(c.allow_degradation_template.as_deref(), Some("${ctx:is_staging}"));
-        assert!(validate_connection_target(&c).is_none());
-    }
-
-    #[test]
-    fn malformed_template_is_rejected_at_admission() {
-        let c: ExternalHttpConnection = serde_yaml::from_str(
-            "target:\n  url: https://api.example.com\nallowDegradationTemplate: \"${ctx:is_staging\"\n",
-        )
-        .unwrap();
-        let err = validate_connection_target(&c).expect("malformed template must be rejected");
-        assert!(err.contains("allowDegradationTemplate"), "got: {err}");
-    }
-
-    #[test]
-    fn secret_ref_in_template_is_rejected_at_admission() {
-        // A boolean degradation decision does not legitimately come from a Secret;
-        // ${secretRef:...} is never resolved for allowDegradationTemplate, so it
-        // would silently fall back to the static allowDegradation with no visible
-        // error. Reject it at admission instead.
-        let c: ExternalHttpConnection = serde_yaml::from_str(
-            "target:\n  url: https://api.example.com\nallowDegradationTemplate: \"${secretRef:ns/name:key}\"\n",
-        )
-        .unwrap();
-        let err = validate_connection_target(&c).expect("secretRef in allowDegradationTemplate must be rejected");
-        assert!(err.contains("allowDegradationTemplate"), "got: {err}");
-        assert!(err.contains("secretRef"), "got: {err}");
-    }
-
-    /// CRITICAL 1 regression: `allowDegradationTemplate` is a fail-open switch on
-    /// forward_auth. `${header:X-Degrade}` + an attacker-supplied `X-Degrade: true`
-    /// would force fail-open on auth-service errors — must be rejected at admission.
-    #[test]
-    fn degradation_template_rejects_client_controlled_vars() {
-        for expr in [
-            "${header:X-Degrade}",
-            "${query:degrade}",
-            "${cookie:degrade}",
-            "${method}",
-            "${path}",
-            "${uri}",
-            "${requestPath}",
-            "${requestUri}",
-        ] {
-            let c: ExternalHttpConnection = serde_yaml::from_str(&format!(
-                "target:\n  url: https://api.example.com\nallowDegradationTemplate: \"{expr}\"\n"
-            ))
-            .unwrap();
-            let err = validate_connection_target(&c)
-                .unwrap_or_else(|| panic!("{expr} must be rejected in allowDegradationTemplate"));
-            assert!(err.contains("allowDegradationTemplate"), "got: {err}");
-            assert!(err.contains("client-controlled"), "got: {err}");
-        }
-    }
-
-    /// Trusted variable types must still be accepted for `allowDegradationTemplate`.
-    #[test]
-    fn degradation_template_accepts_trusted_vars() {
-        for expr in [
-            "${ctx:is_staging}",
-            "${clientIp}",
-            "${matchedHttpRoute:name}",
-            "${matchedGrpcRoute:name}",
-        ] {
-            let c: ExternalHttpConnection = serde_yaml::from_str(&format!(
-                "target:\n  url: https://api.example.com\nallowDegradationTemplate: \"{expr}\"\n"
-            ))
-            .unwrap();
-            assert!(
-                validate_connection_target(&c).is_none(),
-                "{expr} should be accepted in allowDegradationTemplate"
-            );
-        }
     }
 }
 

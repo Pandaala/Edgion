@@ -42,7 +42,6 @@ spec:
     timeoutMs: 5000
     success:
       statusCodes: [200]
-    allowDegradation: false
     maxResponseBytes: 4096
 ---
 # Webhook that does NOT allow path override (pathOverride must be ignored).
@@ -68,7 +67,6 @@ spec:
     timeoutMs: 5000
     success:
       statusCodes: [200]
-    allowDegradation: false
     maxResponseBytes: 4096
 ---
 apiVersion: edgion.io/v1

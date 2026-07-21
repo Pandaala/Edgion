@@ -1,7 +1,38 @@
-# ForwardAuth fail-close test: auth server is unreachable, allowDegradation=false, statusOnError=503
-# The target port 30098 (auth-unreachable-svc, declared in file 07) is never started.
-# With allowDegradation=false the gateway must return the configured statusOnError (503)
-# and NOT forward the request to the upstream backend.
+# ForwardAuth fail-close test: auth server is unreachable, statusOnError=503.
+# The target port 30098 (auth-unreachable-svc, declared below) is never started, so
+# every call to the auth service results in a transport-level error. ForwardAuth is
+# unconditionally fail-close: the gateway must return the configured statusOnError
+# (503) and NOT forward the request to the upstream backend.
+apiVersion: v1
+kind: Service
+metadata:
+  name: auth-unreachable-svc
+  namespace: edgion-default
+spec:
+  ports:
+    - name: http
+      port: 30098
+      targetPort: 30098
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: auth-unreachable-svc-slice
+  namespace: edgion-default
+  labels:
+    kubernetes.io/service-name: auth-unreachable-svc
+addressType: IPv4
+ports:
+  - name: http
+    port: 30098
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "127.0.0.1"
+    conditions:
+      ready: true
+---
 apiVersion: edgion.io/v1
 kind: EdgionPlugins
 metadata:
@@ -17,7 +48,6 @@ spec:
           namespace: edgion-default
           port: 30098
         timeoutMs: 2000
-        allowDegradation: false
         statusOnError: 503
         decision:
           upstreamHeaders: []

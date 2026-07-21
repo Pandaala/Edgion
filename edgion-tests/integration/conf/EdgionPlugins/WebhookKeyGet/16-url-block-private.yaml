@@ -21,10 +21,9 @@
 #
 # Both resources need to be invoked through the gateway's request pipeline to
 # actually trigger the webhook call, so each gets its own CtxSet + HTTPRoute
-# like every other scenario in this suite. `allowDegradation`/`statusOnError`
-# are not wired into the CtxSet consumer (documented gap in scenario 5/7 of
-# this suite), so both requests still complete 200 with the ctx var falling
-# back to `default`.
+# like every other scenario in this suite. `statusOnError` is not wired into
+# the CtxSet consumer (documented gap in scenario 5/7 of this suite), so both
+# requests still complete 200 with the ctx var falling back to `default`.
 apiVersion: edgion.io/v1
 kind: LinkSys
 metadata:
@@ -44,7 +43,6 @@ spec:
     timeoutMs: 2000
     success:
       statusCodes: [200]
-    allowDegradation: false
     maxResponseBytes: 4096
 ---
 apiVersion: edgion.io/v1
@@ -117,7 +115,6 @@ spec:
     timeoutMs: 2000
     success:
       statusCodes: [200]
-    allowDegradation: false
     maxResponseBytes: 4096
 ---
 apiVersion: edgion.io/v1

@@ -16,7 +16,7 @@ use crate::resources::common::{ExternalHttpConnection, OutboundRequestSpec, Reso
 /// Decision-phase configuration for the ForwardAuth plugin.
 ///
 /// Controls what happens after the auth service responds: which headers to
-/// propagate upstream or back to the client, degradation behavior, and timing.
+/// propagate upstream or back to the client, and timing.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ForwardAuthDecision {
@@ -91,7 +91,7 @@ fn default_forward_auth_request() -> OutboundRequestSpec {
 ///     - X-User-Role
 /// ```
 ///
-/// ### Selective: forward only specific headers, with degradation
+/// ### Selective: forward only specific headers
 /// ```yaml
 /// target:
 ///   name: auth-service
@@ -99,7 +99,6 @@ fn default_forward_auth_request() -> OutboundRequestSpec {
 /// tls:
 ///   verify: false
 /// timeoutMs: 5000
-/// allowDegradation: true
 /// statusOnError: 503
 /// request:
 ///   headers:
@@ -127,8 +126,7 @@ pub struct ForwardAuthConfig {
     #[serde(default = "default_forward_auth_request")]
     pub request: OutboundRequestSpec,
 
-    /// Decision-phase configuration: header propagation, degradation behavior,
-    /// error status, and timing.
+    /// Decision-phase configuration: header propagation and timing.
     pub decision: ForwardAuthDecision,
 
     /// Controller-resolved `${secretRef:...}` values carried to the gateway
@@ -210,18 +208,18 @@ mod tests {
         assert!(cfg.validation_error().is_some());
     }
 
-    /// statusOnError / allowDegradation now live on the flattened conn, at the top level.
+    /// statusOnError lives on the flattened conn, at the top level.
     #[test]
     fn forward_auth_failure_policy_is_top_level() {
-        let y = "target:\n  name: auth\n  port: 8080\nstatusOnError: 502\nallowDegradation: true\ndecision: {}\n";
+        let y = "target:\n  name: auth\n  port: 8080\nstatusOnError: 502\ndecision: {}\n";
         let cfg: ForwardAuthConfig = serde_yaml::from_str(y).unwrap();
         assert_eq!(cfg.conn.status_on_error, 502);
-        assert!(cfg.conn.allow_degradation);
         assert!(cfg.validation_error().is_none());
     }
 
-    /// A stale `decision.allowDegradation` (the pre-refactor nested location)
-    /// must be rejected at deserialization time, not silently dropped.
+    /// An unknown field under `decision:` must be rejected at deserialization
+    /// time, not silently dropped (`ForwardAuthDecision` denies unknown fields).
+    /// `allowDegradation` is used here as a representative now-removed field.
     #[test]
     fn forward_auth_rejects_stale_decision_allow_degradation() {
         let y = "target:\n  name: auth\n  port: 8080\ndecision:\n  allowDegradation: true\n";
@@ -280,9 +278,9 @@ mod tests {
     }
 
     /// IMPORTANT 3 regression: `timeoutMs: 0` used to be admitted, and
-    /// `tokio::time::timeout(ZERO, ..)` fires instantly on every request — with
-    /// `allowDegradation: true` that is a 100% silent auth bypass. The check now
-    /// lives in the shared `validate_connection_target` (exercised here via
+    /// `tokio::time::timeout(ZERO, ..)` fires instantly on every request,
+    /// making the auth call fail on (near-)every attempt. The check now lives
+    /// in the shared `validate_connection_target` (exercised here via
     /// forward_auth's own validator, not just webhook's).
     #[test]
     fn forward_auth_rejects_zero_timeout_ms() {
@@ -293,8 +291,8 @@ mod tests {
     }
 
     /// IMPORTANT 3 regression: `maxResponseBytes: 0` used to be admitted, and every
-    /// response then trips `ResponseTooLarge` -> Err -> degrade, which is also a
-    /// silent 100% bypass under `allowDegradation: true`.
+    /// response then trips `ResponseTooLarge` -> Err, making the auth call fail
+    /// on (near-)every attempt.
     #[test]
     fn forward_auth_rejects_zero_max_response_bytes() {
         let y = "target:\n  name: auth\n  port: 8080\nmaxResponseBytes: 0\ndecision: {}\n";

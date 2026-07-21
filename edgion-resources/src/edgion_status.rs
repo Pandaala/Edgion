@@ -147,8 +147,8 @@ pub enum EdgionStatus {
     PluginTerminateWithoutResponse = 502_02,
 
     /// ForwardAuth plugin could not reach the configured auth service
-    /// (connection refused, DNS failure, or timeout). Emitted both when the
-    /// plugin rejects the request and when `allow_degradation` lets it pass.
+    /// (connection refused, DNS failure, or timeout). Emitted when the
+    /// plugin rejects the request (auth is always fail-closed).
     ForwardAuthServiceUnreachable = 503_14,
 
     /// End-to-end request timeout already exceeded before peer selection — the

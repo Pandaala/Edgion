@@ -8,7 +8,6 @@ fn test_default_config() {
     assert!(config.request_method.is_none());
     assert_eq!(config.conn.timeout_ms, 5000);
     assert_eq!(config.conn.max_response_bytes, 1024);
-    assert!(!config.conn.allow_degradation);
     assert_eq!(config.conn.status_on_error, 503);
     assert!(config.conn.retry.is_none());
     assert!(config.conn.rate_limit.is_none());
@@ -320,7 +319,6 @@ timeoutMs: 3000
 success:
   statusCodes: [200]
 maxResponseBytes: 2048
-allowDegradation: true
 statusOnError: 503
 retry:
   maxRetries: 1
@@ -350,7 +348,6 @@ healthCheck:
     assert!(config.request_method.is_some());
     assert_eq!(config.conn.timeout_ms, 3000);
     assert_eq!(config.conn.max_response_bytes, 2048);
-    assert!(config.conn.allow_degradation);
     let success = config.conn.success.as_ref().expect("success block must deserialize");
     assert_eq!(success.status_codes, Some(vec![200]));
     // Validate before consuming fields with unwrap()

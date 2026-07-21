@@ -17,7 +17,7 @@
 //! 3. Send to external auth service via the shared outbound engine
 //! 4. If auth service returns 2xx → copy `upstream_headers`, forward to upstream
 //! 5. If auth service returns non-2xx → copy `client_headers` + body to client
-//! 6. If auth service is unreachable → return `status_on_error` or degrade
+//! 6. If auth service is unreachable → return `status_on_error`
 //!
 //! ## Configuration Examples
 //!
@@ -49,7 +49,6 @@
 //!       origin:
 //!         - name: Authorization
 //!         - name: Cookie
-//!   allowDegradation: true
 //!   statusOnError: 503
 //!   decision:
 //!     upstreamHeaders:
@@ -84,13 +83,11 @@ pub struct ForwardAuth {
     /// Wrapped in `Arc` so that when the plugin is replaced on hot-reload, the old
     /// client's `Drop` impl aborts the active-health background task.
     client: Arc<ManagedOutboundClient>,
-    /// HTTP status code to return when the auth service is unreachable and
-    /// the effective degradation decision (see
-    /// [`ManagedOutboundClient::effective_allow_degradation`]) is false.
+    /// HTTP status code to return when the auth service is unreachable.
     /// Sourced from the shared `ExternalHttpConnection.status_on_error` at
     /// construction time.
     status_on_error: u16,
-    /// Decision phase: header propagation, degradation, error status, and timing.
+    /// Decision phase: header propagation, error status, and timing.
     decision: ForwardAuthDecision,
 }
 
@@ -205,10 +202,6 @@ impl RequestFilter for ForwardAuth {
                 // Surface in the access log `errors` for gateway-level visibility; PluginLog
                 // captures the per-request plugin-side detail.
                 session.add_error(edgion_resources::EdgionStatus::ForwardAuthServiceUnreachable);
-                if self.client.effective_allow_degradation(session) {
-                    plugin_log.push_err("upstream unreachable:degraded");
-                    return PluginRunningResult::GoodNext;
-                }
                 plugin_log.push_fmt("upstream unreachable {}", la![e.to_string().as_str()]);
                 // Record BEFORE `send_error_response`'s self-write
                 // (`write_response_header`) so the queued dye header op is
@@ -506,64 +499,19 @@ mod tests {
         );
     }
 
-    /// P0 TDD: when the auth service is unreachable and `allow_degradation` is
-    /// true, the plugin returns `GoodNext` (fail-open / degraded mode).
-    #[tokio::test]
-    async fn transport_fail_degrades_when_allowed() {
-        use std::sync::atomic::Ordering;
-
-        // Use a routable (non-loopback) IP so the SSRF guard passes, but mark the
-        // client unhealthy so `outbound_call` immediately returns `Err(Unhealthy)`
-        // without touching the network.
-        let fa = {
-            let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
-            // Force unhealthy state so `outbound_call` returns Err(Unhealthy) instantly.
-            client.health.healthy.store(false, Ordering::Relaxed);
-            client.allow_degradation = true;
-
-            ForwardAuth {
-                name: "ForwardAuth".to_string(),
-                client: Arc::new(client),
-                status_on_error: 503,
-                decision: ForwardAuthDecision::default(),
-            }
-        };
-
-        let mut session = make_session();
-        // add_error is called to record the unreachable condition in the access log.
-        session
-            .expect_add_error()
-            .withf(|status| matches!(status, edgion_resources::EdgionStatus::ForwardAuthServiceUnreachable))
-            .times(1)
-            .returning(|_| ());
-
-        let mut log = PluginLog::new("ForwardAuth");
-        let result = fa.run_request(&mut session, &mut log).await;
-        assert!(
-            matches!(result, PluginRunningResult::GoodNext),
-            "expected GoodNext on degraded transport failure, got {result:?}"
-        );
-        assert!(
-            log.contains("degraded"),
-            "expected plugin log to mention degraded; got: {log:?}"
-        );
-    }
-
-    /// Task 9: when the auth service is unreachable and degradation is NOT
-    /// allowed, the fail-close path records `DyeOutcome::FailClose` with
-    /// cause `auth-server-unreachable` BEFORE `send_error_response`'s
-    /// self-write (`write_response_header`) — enforced here via a mockall
-    /// `Sequence` so an ordering regression fails the test, not just a
-    /// missing-call assertion.
+    /// Task 9: when the auth service is unreachable, the fail-close path
+    /// records `DyeOutcome::FailClose` with cause `auth-server-unreachable`
+    /// BEFORE `send_error_response`'s self-write (`write_response_header`) —
+    /// enforced here via a mockall `Sequence` so an ordering regression fails
+    /// the test, not just a missing-call assertion.
     #[tokio::test]
     async fn transport_fail_records_fail_close_before_response_write() {
         use mockall::Sequence;
         use std::sync::atomic::Ordering;
 
         let fa = {
-            let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
+            let client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
             client.health.healthy.store(false, Ordering::Relaxed);
-            client.allow_degradation = false;
 
             ForwardAuth {
                 name: "ForwardAuth".to_string(),
@@ -599,7 +547,7 @@ mod tests {
         let result = fa.run_request(&mut session, &mut log).await;
         assert!(
             matches!(result, PluginRunningResult::ErrTerminateRequest),
-            "expected ErrTerminateRequest on non-degraded transport failure, got {result:?}"
+            "expected ErrTerminateRequest on transport failure, got {result:?}"
         );
     }
 

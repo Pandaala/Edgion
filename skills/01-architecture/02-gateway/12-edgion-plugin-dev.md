@@ -455,6 +455,20 @@ In this repo:
 
 This is a general repo-wide convention; stay consistent with existing plugins.
 
+## Failure policy for plugins with a runtime dependency
+
+A plugin that calls a live per-request dependency must declare its failure behavior:
+
+- **Auth purpose → fixed fail-close, no operator knob** (e.g. forward_auth,
+  ldap_auth, openid_connect). Failing open is a security hole — do not add a
+  degrade switch.
+- **Non-auth → provide an explicit fail-open/fail-close knob, default fail-close.**
+- Prefer a two-variant `Open`/`Close` enum over a `bool` for the knob: a `bool`
+  named `failOpen` has polarity ambiguity (`false` = fail-close is a double
+  negative). This is a preference — the existing `OnRedisFailure` enum,
+  `failure_mode_allow: bool`, `fail_open: bool`, and dsl `error_policy` shapes
+  are grandfathered and not being migrated.
+
 ## Validation
 
 All plugin configs must `impl PluginValidation` (trait defined in `edgion-resources/src/resources/edgion_plugins/plugin_validation.rs`):

@@ -178,12 +178,13 @@ static SNI/Host, which would send the request to the wrong virtual host.
 
 - **Standard path**: `502`, with an `EdgionStatus` marking the authority
   rejection; the peer is left untouched.
-- **Outbound path**: routed through the existing `allowDegradation` /
-  `statusOnError` semantics on `ExternalHttpConnection` — no new failure
-  vocabulary. This principle is now stated globally in the
+- **Outbound path**: always fail-close with `statusOnError` (default 503).
+  The failure vocabulary across all outbound paths is now FROZEN to maintain
+  predictability; existing shapes are grandfathered in and new unification is
+  not planned. See the
   [unification-points registry](../../01-architecture/00-common/05-unification-points.md)
-  (entry 2), and the vocabulary itself is slated for convergence in
-  `tasks/todo/failure-policy-unification.md`.
+  (entry 2) and
+  `docs/superpowers/specs/2026-07-20-failure-policy-freeze-design.md`.
 
 **The `${ctx:...}` ordering constraint.** On the standard path the template
 renders at peer-build time (`upstream_peer`). A plugin that writes

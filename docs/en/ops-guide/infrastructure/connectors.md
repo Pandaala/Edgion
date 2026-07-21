@@ -538,8 +538,7 @@ whether `target.url` names a hostname or an IP literal:
   or SaaS reachable only over a private network.
 
 A rejected address surfaces as a connect failure for that call (`key_get` returns `None`, same
-as any other webhook failure — `allowDegradation` / `statusOnError` are not read by the webhook
-connector; see [Degradation and error handling](#degradation-and-error-handling)). Rejections increment the
+as any other webhook failure). Rejections increment the
 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` counter, but only
 on the **hostname** path (`EgressResolver`, which records all three reasons). On the **IP-literal**
 path, only `reason="private"` is ever recorded: the `dial_url` `blockPrivate` check records that
@@ -653,7 +652,7 @@ If you instead want the **current** (possibly rewritten) view of a header, use a
 | `warnIfMissing` | The field is omitted, a PluginLog alert is written, and the request continues. | Fields that *should* be present — you want visibility without failing the call. |
 | `required` | The webhook call is treated as failed: `key_get` returns `None` (no value), same as any other webhook failure. | Fields the backend cannot function without. |
 
-`allowDegradation` / `statusOnError` are declared on this connector's schema (it shares `ExternalHttpConnection` with the ForwardAuth plugin), but the **webhook connector itself does not read them**: on any failure — including a missing `presence: required` field — `key_get` simply returns `None`, and it is the *consuming* plugin's own fallback logic that decides what happens next (e.g. ctx-set leaves the target variable unset and the request continues). Setting these two fields on a webhook `LinkSys` has no effect; they are meaningful only when the same struct is embedded directly in a ForwardAuth plugin config.
+`statusOnError` is declared on this connector's schema (it shares `ExternalHttpConnection` with the ForwardAuth plugin), but the **webhook connector itself does not read it**: on any failure — including a missing `presence: required` field — `key_get` simply returns `None`, and it is the *consuming* plugin's own fallback logic that decides what happens next (e.g. ctx-set leaves the target variable unset and the request continues). Setting this field on a webhook `LinkSys` has no effect; it is meaningful only when the same struct is embedded directly in a ForwardAuth plugin config.
 
 #### Custom field sources
 
@@ -722,16 +721,6 @@ The following combinations are rejected at admission with `Accepted=False`:
 >
 > `successStatusCodes` is different: it is not on this deprecation path at all. It is simply unrecognized by the flattened connection struct and is dropped with **no WARN**. See the warning at the top of this section and [Success](#success) below.
 
-### Degradation and error handling
-
-> ⚠️ **These two fields are inert on the webhook connector.** `allowDegradation` and `statusOnError` exist here only because this connector shares its `ExternalHttpConnection` schema with the ForwardAuth plugin, which does honor them. The webhook connector's own `key_get` has no fail-open/fail-closed decision to make: on any failure it always returns `None` (no value), and the calling plugin's own fallback behavior takes over from there — there is no status code the webhook connector itself returns to a client. Setting `allowDegradation`/`statusOnError` on a webhook `LinkSys` is accepted at admission but has no runtime effect.
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `allowDegradation` | Boolean | `false` | Accepted for schema compatibility with ForwardAuth; not read by the webhook connector. |
-| `allowDegradationTemplate` | String | none | Accepted for schema compatibility with ForwardAuth; not read by the webhook connector. |
-| `statusOnError` | Integer | `503` | Accepted for schema compatibility with ForwardAuth; not read by the webhook connector. |
-
 ### Success
 
 Replaces the old `successStatusCodes` field (removed; pre-release, no alias — see the warning at the top of this section). A response is classified as success only when **both** the status check and the optional body predicates pass:
@@ -784,13 +773,12 @@ When `retry` is omitted, the webhook fails immediately on the first error.
 
 ### Templates
 
-Two connection-level fields can be driven by the same per-request template engine used in `request.*` (see [Template variables](#template-variables)) — but with a **much narrower variable allow-list** than `request.*`. Both are compiled and validated at admission; a malformed template, or one that references a disallowed variable type, is rejected with `Accepted=False`.
+One connection-level field can be driven by the same per-request template engine used in `request.*` (see [Template variables](#template-variables)) — but with a **much narrower variable allow-list** than `request.*`. It is compiled and validated at admission; a malformed template, or one that references a disallowed variable type, is rejected with `Accepted=False`.
 
-> ⚠️ **Only `${ctx:...}`, `${clientIp}`, `${matchedHttpRoute:...}`, and `${matchedGrpcRoute:...}` are accepted in `timeoutMsTemplate` / `allowDegradationTemplate`.** `${header:...}`, `${query:...}`, `${cookie:...}`, `${path}`, `${uri}`, `${requestPath}`, `${requestUri}`, `${method}`, and `${secretRef:...}` are all rejected at admission for these two fields specifically (they remain fully allowed in `request.*`). Both fields are security-sensitive: `timeoutMsTemplate` sets the auth-service call deadline, and `allowDegradationTemplate` is forward_auth's fail-open switch. A client-controlled source would let an attacker pin the deadline to a value so small the call always times out (a reliable denial of service), or — combined with `allowDegradation: true` — force the fail-open path directly via a request header, producing a 100% unauthenticated bypass on demand.
+> ⚠️ **Only `${ctx:...}`, `${clientIp}`, `${matchedHttpRoute:...}`, and `${matchedGrpcRoute:...}` are accepted in `timeoutMsTemplate`.** `${header:...}`, `${query:...}`, `${cookie:...}`, `${path}`, `${uri}`, `${requestPath}`, `${requestUri}`, `${method}`, and `${secretRef:...}` are all rejected at admission for this field specifically (they remain fully allowed in `request.*`). The field is security-sensitive: `timeoutMsTemplate` sets the auth-service call deadline. A client-controlled source would let an attacker pin the deadline to a value so small the call always times out (a reliable denial of service).
 
 ```yaml
 timeoutMsTemplate: "${ctx:desired_timeout_ms}"     # falls back to timeoutMs
-allowDegradationTemplate: "${ctx:is_staging}"      # falls back to allowDegradation
 ```
 
 **Rule: the template wins when it renders to a parseable value; otherwise fall back to the static field.**
@@ -798,9 +786,8 @@ allowDegradationTemplate: "${ctx:is_staging}"      # falls back to allowDegradat
 | Parameter | Renders to | Fallback | Notes |
 |-----------|-----------|----------|-------|
 | `timeoutMsTemplate` | `u64` milliseconds | `timeoutMs` | A non-numeric, empty, or below-floor render falls back. The floor is `MIN_OUTBOUND_TIMEOUT_MS` = 50 ms (a render below that is treated the same as zero/empty). The rendered value is **clamped to 60000 ms (60 s)** on the upper end regardless. |
-| `allowDegradationTemplate` | `true` \| `false` | `allowDegradation` | **Strict grammar**: the trimmed, case-insensitive render must equal exactly `true` or `false`. Anything else — `1`, `0`, `yes`, empty — falls back. No numeric or yes/no aliases. |
 
-Every silent fallback increments `edgion_outbound_template_fallback_total{field="timeout_ms"|"allow_degradation"}` — see [Observability metrics](#observability-metrics) below, since the data plane cannot log the fallback via `tracing`.
+Every silent fallback increments `edgion_outbound_template_fallback_total{field="timeout_ms"}` — see [Observability metrics](#observability-metrics) below, since the data plane cannot log the fallback via `tracing`.
 
 **Total blocking time.** The retry sleep and the outbound call are both inline on the request path, so the worst-case block is `(effective_timeout × max_attempts) + Σ backoffs`, each term bounded independently: `timeoutMsTemplate` by the 60 s clamp (and, on the low end, the 50 ms floor), backoff by `maxDelayMs` and its 10 s hard ceiling, and `maxRetries` itself by its own 10-attempt ceiling (see [Retry](#retry) above).
 
@@ -812,7 +799,7 @@ The webhook connector (and the ForwardAuth plugin, which shares the same `Extern
 
 | Metric | Labels | Fires when |
 |--------|--------|-----------|
-| `edgion_outbound_template_fallback_total` | `field` ∈ `timeout_ms` \| `allow_degradation` | A `timeoutMsTemplate` / `allowDegradationTemplate` render failed to parse (or, for the timeout field, rendered to zero/empty) and the connection fell back to the static field. |
+| `edgion_outbound_template_fallback_total` | `field` ∈ `timeout_ms` | A `timeoutMsTemplate` render failed to parse (or rendered to zero/empty) and the connection fell back to the static field. |
 | `edgion_outbound_success_predicate_fail_total` | none | A response's status was accepted by `success.statusCodes` but a `success.body` predicate classified it as a failure — the "200 OK but error in the body" case. |
 
 See [Metrics](../observability/metrics.md) for the general Prometheus reference (scrape config, cardinality, Gateway metrics listener).
@@ -1190,7 +1177,7 @@ Verify the Service fields under `target` (`name`/`namespace`/`port`/`kind`): the
 Only `Service`, `ServiceClusterIp`, `ServiceEndpointSlice`, and empty are valid. `ExternalName` and `ServiceImport` are rejected — use a proxy Service instead.
 
 **Required-field error / key resolves to nothing.**
-An `origin` field with `presence: required` was missing from the incoming request, which counts as a webhook failure: `key_get` returns `None` and the consuming plugin's own fallback logic decides what happens (e.g. ctx-set leaves the target variable unset). `allowDegradation`/`statusOnError` do **not** apply here — they are inert on the webhook connector (see [Degradation and error handling](#degradation-and-error-handling)). Confirm the client actually sends the header/arg/cookie (mind case: headers are case-insensitive, args and cookies are case-sensitive), or use `presence: warnIfMissing` to merely log instead of failing.
+An `origin` field with `presence: required` was missing from the incoming request, which counts as a webhook failure: `key_get` returns `None` and the consuming plugin's own fallback logic decides what happens (e.g. ctx-set leaves the target variable unset). Confirm the client actually sends the header/arg/cookie (mind case: headers are case-insensitive, args and cookies are case-sensitive), or use `presence: warnIfMissing` to merely log instead of failing.
 
 **Template variable resolves to empty.**
 `${ctx:NAME}` returns empty when the variable was never set. Ensure a ctx-set step sets it before the webhook is called, and check the `${type:name}` spelling. To enforce presence, prefer `presence: required` on an `origin` field over a template.

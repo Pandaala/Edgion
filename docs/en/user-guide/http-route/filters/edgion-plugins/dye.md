@@ -76,7 +76,7 @@ silently never appears:
 | `Canary`, `DynamicInternalUpstream`, `DynamicExternalUpstream`, `DirectEndpoint` | `success`, `fallback`, `reject` |
 | `RegionRoute` | `success`, `fallback` (no `reject` — RegionRoute has no `onMissing`/`onNoMatch`/`onInvalid` reject-shaped config path in v1) |
 | `RateLimitRedis`, `ExtProc`, `Wasm`, `Dsl`, `OpenidConnect` | `fail-open`, `fail-close` |
-| `ForwardAuth`, `LdapAuth` | `fail-close` only (fail-open pending the failure-policy-unification sibling task) |
+| `ForwardAuth`, `LdapAuth` | `fail-close` only (auth class never fails open by policy) |
 | Everything else | none |
 
 The plugin-type → capability mapping is `EdgionPlugin::dye_capabilities`

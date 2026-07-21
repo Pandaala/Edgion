@@ -1,8 +1,9 @@
 # ForwardAuth required-origin test: X-Tenant-Id is a Required origin header.
 # When the incoming request lacks X-Tenant-Id, collect_headers returns Err,
 # build_request propagates it as Err(Connect), and outbound_call returns
-# Err(Connect). With allowDegradation=false the gateway short-circuits with
-# statusOnError (500) instead of forwarding to the upstream backend.
+# Err(Connect). ForwardAuth is unconditionally fail-close, so the gateway
+# short-circuits with statusOnError (500) instead of forwarding to the
+# upstream backend.
 #
 # Reuses the shared auth-svc Service declared in 01_EdgionPlugins_forward-auth-basic.yaml.
 apiVersion: edgion.io/v1
@@ -31,7 +32,6 @@ spec:
                 presence: required
               - name: Authorization
                 presence: skipIfMissing
-        allowDegradation: false
         statusOnError: 500
         decision:
           upstreamHeaders:

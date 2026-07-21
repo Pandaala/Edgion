@@ -55,7 +55,7 @@
 | `Canary`、`DynamicInternalUpstream`、`DynamicExternalUpstream`、`DirectEndpoint` | `success`、`fallback`、`reject` |
 | `RegionRoute` | `success`、`fallback`（无 `reject`——RegionRoute 在 v1 中没有 `onMissing`/`onNoMatch`/`onInvalid` 这类会走到 reject 的配置路径） |
 | `RateLimitRedis`、`ExtProc`、`Wasm`、`Dsl`、`OpenidConnect` | `fail-open`、`fail-close` |
-| `ForwardAuth`、`LdapAuth` | 仅 `fail-close`（`fail-open` 待 failure-policy-unification 姊妹任务落地后开放） |
+| `ForwardAuth`、`LdapAuth` | 仅 `fail-close` 是既定策略（鉴权类插件永不 fail-open） |
 | 其余插件 | 无 |
 
 插件类型到能力的映射实现为 `EdgionPlugin::dye_capabilities`（`edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`）——上表须与其保持一致；若两者出现分歧，以代码为准。

@@ -47,7 +47,6 @@ spec:
       retryOnStatus: [503]
     success:
       statusCodes: [200]
-    allowDegradation: false
     maxResponseBytes: 4096
 ---
 apiVersion: edgion.io/v1

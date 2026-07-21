@@ -21,6 +21,8 @@ is a bug" rule also gets a line there.
 - **Unified** — a canon exists; new code MUST use it.
 - **Fragmented** — multiple incompatible shapes exist; do NOT add another
   variant; the pointed-to task owns the convergence.
+- **Frozen** — multiple shapes exist and are grandfathered; do NOT add another
+  variant, and no convergence is planned.
 - **Gap** — a known violation of an otherwise-unified mechanism, tracked as a
   task.
 
@@ -74,8 +76,8 @@ is a bug" rule also gets a line there.
   MUST NOT invent new failure vocabulary
   ([20-edgion-backend-traffic-policy.md](../../02-features/03-resources/20-edgion-backend-traffic-policy.md)
   states this for the authority path; this registry makes it global). The
-  vocabulary itself is being reworked — see
-  [Fragmented: failure-policy vocabulary](#fragmented-do-not-extend) below.
+  vocabulary is frozen at the existing four shapes — see
+  [Frozen: failure-policy vocabulary](#frozen-no-new-shapes) below.
 
 ### 3. Outbound TLS resolution — Unified
 
@@ -199,7 +201,8 @@ not in-process checks.
   capability yet, pending a separate `SetJumpOutcome::Rejected` bug fix) and
   the dependency-failure plugins (rate_limit_redis, ext_proc, wasm, dsl,
   openid_connect — fail-open + fail-close; forward_auth/ldap_auth —
-  fail-close only, pending `tasks/todo/failure-policy-unification.md`). The
+  fail-close only by policy (auth class never fails open; the degrade switch
+  was removed, see the Frozen failure-policy entry below). The
   plugin-type -> capability table is `EdgionPlugin::dye_capabilities`
   (`edgion-resources/src/resources/edgion_plugins/edgion_plugin.rs`).
 - **Rule**: any plugin recording an outcome for traffic tagging MUST use the
@@ -244,10 +247,9 @@ not in-process checks.
   `${type:name}` engine: `ctx` / `header` / `query` / `cookie` / `secretRef`
   / `clientIp` / ...).
 - **Safety discipline**: security-sensitive fields (anything that steers a
-  deadline, a fail-open decision, or a destination) MUST use a restricted
+  deadline or a destination) MUST use a restricted
   variable allow-list that rejects client-controlled variable types at
-  admission — the worked example is `timeoutMsTemplate` /
-  `allowDegradationTemplate` in
+  admission — the worked example is `timeoutMsTemplate` in
   [18-link-sys.md](../../02-features/03-resources/18-link-sys.md).
 - **Consumer**: the dye suite's `DyeRule.value`
   (`edgion-resources/src/resources/edgion_plugins/dye.rs`) — classified as a
@@ -318,14 +320,13 @@ not in-process checks.
 
 ---
 
-## Fragmented (do not extend)
+## Frozen (no new shapes)
 
-- **Failure-policy vocabulary** — five incompatible fail-open/fail-close
-  config shapes exist (`allowDegradation`+`statusOnError` on
-  `ExternalHttpConnection`, ext_proc `failure_mode_allow`, wasm `fail_open`,
-  `OnRedisFailure`, DSL `error_policy`). Do NOT add a sixth. Convergence is
-  owned by `tasks/todo/failure-policy-unification.md` (decided there: auth
-  class is fixed fail-close with no knob).
+- **Failure-policy vocabulary** — Frozen — the four existing shapes
+  (OnRedisFailure, failure_mode_allow, fail_open, dsl error_policy) are
+  grandfathered. New runtime-dependency plugins follow the auth/non-auth
+  guideline in 12-edgion-plugin-dev.md; the auth class is fixed fail-close
+  (forward_auth's degrade switch was removed 2026-07-20).
 
 ## Known gaps & observations (tracked)
 

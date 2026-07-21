@@ -125,14 +125,6 @@ pub struct ManagedOutboundClient {
     /// When present and it renders to a parseable, non-zero value, it wins over
     /// `timeout` (clamped to `MAX_OUTBOUND_TIMEOUT_MS`); otherwise `timeout` is used.
     pub timeout_template: Option<CompiledTemplate>,
-    /// Static per-request degradation flag from `ExternalHttpConnection.allow_degradation`.
-    /// Used directly when `degradation_template` is absent or fails to render to a
-    /// usable value; see [`ManagedOutboundClient::effective_allow_degradation`].
-    pub allow_degradation: bool,
-    /// Optional compiled template rendering a per-request degradation decision.
-    /// When present and it renders to exactly "true"/"false", it wins over
-    /// `allow_degradation`; otherwise `allow_degradation` is used.
-    pub degradation_template: Option<CompiledTemplate>,
     /// Retry configuration. `None` = no retry.
     pub retry: Option<WebhookRetry>,
     /// Egress policy for URL targets. `None` for Service targets, whose addresses
@@ -298,16 +290,6 @@ impl ManagedOutboundClient {
             .transpose()
             .map_err(|e| format!("failed to compile timeoutMsTemplate for '{}': {}", ref_label, e))?;
 
-        // ── 6c. Compile the degradation template (admission already validated syntax
-        //        via `validate_connection_target`, but from_parts is also reachable
-        //        directly in tests, so compile again defensively) ────────────────────
-        let degradation_template = conn
-            .allow_degradation_template
-            .as_deref()
-            .map(CompiledTemplate::compile)
-            .transpose()
-            .map_err(|e| format!("failed to compile allowDegradationTemplate for '{}': {}", ref_label, e))?;
-
         // ── 7. Health state ────────────────────────────────────────────────
         let health = HealthState::new();
 
@@ -357,8 +339,6 @@ impl ManagedOutboundClient {
             max_response_bytes: conn.max_response_bytes,
             timeout: Duration::from_millis(conn.timeout_ms),
             timeout_template,
-            allow_degradation: conn.allow_degradation,
-            degradation_template,
             retry,
             egress_policy,
             passive_health_check,
@@ -472,25 +452,6 @@ impl ManagedOutboundClient {
     }
 
     // ============================================================
-    // Degradation
-    // ============================================================
-
-    /// Effective degradation flag for this call: the template wins when it renders
-    /// to exactly "true"/"false"; otherwise the static `allow_degradation`.
-    pub fn effective_allow_degradation(&self, session: &dyn crate::plugins::runtime::PluginSession) -> bool {
-        use edgion_resources::resources::common::external_http::resolve_bool_template;
-        if let Some(tpl) = self.degradation_template.as_ref() {
-            if let Ok(rendered) = super::request::evaluate_template(tpl, session, self.resolved_secrets.as_ref()) {
-                if let Some(b) = resolve_bool_template(&rendered) {
-                    return b;
-                }
-            }
-            crate::observe::metrics::record_outbound_template_fallback("allow_degradation");
-        }
-        self.allow_degradation
-    }
-
-    // ============================================================
     // Test-only constructors
     // ============================================================
 
@@ -512,8 +473,6 @@ impl ManagedOutboundClient {
             max_response_bytes: 1024,
             timeout: Duration::from_secs(5),
             timeout_template: None,
-            allow_degradation: false,
-            degradation_template: None,
             retry: None,
             egress_policy: None,
             passive_health_check: None,
@@ -847,8 +806,6 @@ mod tests {
             max_response_bytes: 1024,
             timeout: Duration::from_secs(5),
             timeout_template: None,
-            allow_degradation: false,
-            degradation_template: None,
             retry: None,
             egress_policy: None,
             passive_health_check: None,
@@ -1373,71 +1330,5 @@ mod tests {
 
         ManagedOutboundClient::from_parts(&conn, &request, None, "test/client", false)
             .expect("from_parts must succeed for valid config")
-    }
-
-    // ============================================================
-    // effective_allow_degradation
-    // ============================================================
-
-    fn compile_tpl(s: &str) -> CompiledTemplate {
-        CompiledTemplate::compile(s).unwrap()
-    }
-
-    /// TDD: a `degradation_template` that renders "true" wins over a static
-    /// `allow_degradation: false`.
-    #[test]
-    fn effective_allow_degradation_template_wins_over_static() {
-        use crate::plugins::runtime::traits::session::MockPluginSession;
-
-        let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
-        client.allow_degradation = false;
-        client.degradation_template = Some(compile_tpl("${ctx:is_staging}"));
-
-        let mut session = MockPluginSession::new();
-        session
-            .expect_get_ctx_var()
-            .withf(|n| n == "is_staging")
-            .return_const(Some("true".to_string()));
-
-        assert!(
-            client.effective_allow_degradation(&session),
-            "template rendering \"true\" must win over the static false"
-        );
-    }
-
-    /// TDD: a `degradation_template` that renders a non-strict token ("1") falls
-    /// back to the static `allow_degradation` — this proves the strict grammar
-    /// (only exact "true"/"false" are accepted).
-    #[test]
-    fn effective_allow_degradation_falls_back_on_non_strict_render() {
-        use crate::plugins::runtime::traits::session::MockPluginSession;
-
-        let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
-        client.allow_degradation = false;
-        client.degradation_template = Some(compile_tpl("${ctx:is_staging}"));
-
-        let mut session = MockPluginSession::new();
-        session
-            .expect_get_ctx_var()
-            .withf(|n| n == "is_staging")
-            .return_const(Some("1".to_string()));
-
-        assert!(
-            !client.effective_allow_degradation(&session),
-            "a non-strict render (\"1\") must fall back to the static allow_degradation"
-        );
-    }
-
-    /// No template set: the static `allow_degradation` is used directly.
-    #[test]
-    fn effective_allow_degradation_uses_static_when_no_template() {
-        use crate::plugins::runtime::traits::session::MockPluginSession;
-
-        let mut client = ManagedOutboundClient::test_with_static_target("http://10.0.0.1:8080");
-        client.allow_degradation = true;
-        client.degradation_template = None;
-
-        let session = MockPluginSession::new();
-        assert!(client.effective_allow_degradation(&session));
     }
 }

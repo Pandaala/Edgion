@@ -69,7 +69,7 @@ scrape_configs:
 | `edgion_mirror_requests_total` | Counter | `status` | 请求镜像结果。`status` ∈ `ok` / `channel_full` / `connect_err` / `connect_timeout` / `write_err` / `timeout` |
 | `edgion_rr_selector_truncated_total` | Counter | none | RoundRobin 选择器截断事件（后端数量超过 `u16::MAX`），用于告警配置异常 |
 | `edgion_link_sys_es_bulk_channel_full_total` | Counter | none | 提交时 Elasticsearch 生产者→批量循环通道已满；日志发送路径的持续反压信号 |
-| `edgion_outbound_template_fallback_total` | Counter | `field`（`timeout_ms` \| `allow_degradation`） | webhook / ForwardAuth 的 `timeoutMsTemplate` 或 `allowDegradationTemplate` 渲染失败并回退到静态字段。详见[连接器 → Templates（模板）](../infrastructure/connectors.md#模板-templates) |
+| `edgion_outbound_template_fallback_total` | Counter | `field`（`timeout_ms`） | webhook / ForwardAuth 的 `timeoutMsTemplate` 渲染失败并回退到静态字段。详见[连接器 → Templates（模板）](../infrastructure/connectors.md#模板-templates) |
 | `edgion_outbound_success_predicate_fail_total` | Counter | 无 | webhook / ForwardAuth 响应的状态码已被接受，但 `success.body` 断言将其判定为失败（"200 OK 但 body 里有错误"的情形）。详见[连接器 → Success（成功判定）](../infrastructure/connectors.md#成功判定-success) |
 
 ### `edgion_backend_requests_total` 标签

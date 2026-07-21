@@ -250,8 +250,8 @@ impl EdgionPlugin {
             | EdgionPlugin::Wasm(_)
             | EdgionPlugin::Dsl(_)
             | EdgionPlugin::OpenidConnect(_) => DYE_FAIL_BOTH,
-            // forward_auth/ldap_auth: fail-close only until the
-            // failure-policy-unification sibling task lands fail-open.
+            // forward_auth/ldap_auth: fixed fail-close by policy (auth class never fails
+            // open — the degrade switch was removed, see failure-policy-freeze design).
             EdgionPlugin::ForwardAuth(_) | EdgionPlugin::LdapAuth(_) => DYE_FAIL_CLOSE_ONLY,
             _ => &[],
         }

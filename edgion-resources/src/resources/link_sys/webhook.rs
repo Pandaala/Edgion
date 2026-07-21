@@ -111,7 +111,6 @@ pub enum WebhookAuth {
 ///     timeoutMs: 3000
 ///     success:
 ///       statusCodes: [200]
-///     allowDegradation: true
 ///     statusOnError: 503
 ///     healthCheck:
 ///       active:

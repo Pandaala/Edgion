@@ -1,10 +1,10 @@
 # Scenario 7: presence-required-degrade
 # ---------------------------------------------------------------------------
 # A required origin header (X-Auth) with presence: required. The
-# allowDegradation/statusOnError fields below are part of the shared
-# ExternalHttpConnection schema but are NOT honored by the webhook connector
-# (they are only read by forward_auth) -- key_get simply returns None on any
-# failure, including a missing required field.
+# statusOnError field below is part of the shared ExternalHttpConnection
+# schema but is NOT honored by the webhook connector (only forward_auth
+# reads it) -- key_get simply returns None on any failure, including a
+# missing required field.
 # Test sends a request WITHOUT X-Auth -> the missing required field is
 # treated as a webhook call failure -> key_get returns None -> the consuming
 # CtxSet plugin falls back to its `default` and the request continues (no
@@ -65,7 +65,6 @@ spec:
     timeoutMs: 5000
     success:
       statusCodes: [200]
-    allowDegradation: true
     statusOnError: 503
     maxResponseBytes: 4096
 ---

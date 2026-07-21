@@ -232,7 +232,11 @@ Details, verified consumer lists, and exemptions: `skills/01-architecture/00-com
 7. Templated config fields use the shared `${type:name}` engine; security-sensitive fields (deadlines, fail-open switches, destinations) use the restricted variable allow-list that rejects client-controlled variables.
 8. Plugins reject requests via `PluginRunningResult::ErrResponse`; `ErrTerminateRequest` only for inherently dynamic responses, written before returning.
 9. Fail-close error bodies never leak internal detail (dependency errors, addresses, traces) — detail goes to the access log / `EdgionStatus`.
-10. No new failure vocabulary: do not add another fail-open/fail-close config shape — convergence is owned by `tasks/todo/failure-policy-unification.md`.
+10. Failure policy is frozen, not converging: the four existing fail-open/
+    fail-close shapes are grandfathered; do not add a fifth. New runtime-
+    dependency plugins follow the auth/non-auth rule (auth = fixed fail-close,
+    no knob; non-auth = explicit knob, default close) in
+    skills/01-architecture/02-gateway/12-edgion-plugin-dev.md.
 
 ## Git constraints
 

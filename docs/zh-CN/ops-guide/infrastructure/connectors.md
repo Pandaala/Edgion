@@ -512,7 +512,7 @@ URL 目标按主机名寻址，因此——与通过 Kubernetes EndpointSlice �
 - **`target.blockPrivate: true` 时额外拒绝**：RFC1918 私有网段（`10/8`、`172.16/12`、`192.168/16`）及唯一本地地址（`fd00::/8`），在始终拒绝的类别之外追加。
 - **默认（`blockPrivate` 未设置或为 `false`）**：私有网段被放行，与 Service 目标一贯的行为保持一致——多数 webhook 合法地指向内部制品库，或只能通过私有网络访问的 SaaS。
 
-被拒绝的地址会导致该次调用连接失败（`key_get` 返回 `None`，与其他任何 webhook 失败一样；`allowDegradation` / `statusOnError` 并不会被 webhook 连接器读取，参见[降级与错误处理](#降级与错误处理)）。拒绝会使 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` 计数器递增，但这仅在**主机名**路径上成立（`EgressResolver`，会记录全部三种 reason）。在 **IP 字面量**路径上，只有 `reason="private"` 会被记录：`dial_url` 的 `blockPrivate` 检查会记录该指标，但那条路径上的回环/链路本地拒绝要经过早于该指标就已存在的共享后端守卫（`validate_endpoint_backend_addr`），并不会写入该指标。因此，基于该计数器搭建的看板或告警，对主机名目标能获得完整覆盖，但当 `target.url` 是 IP 字面量时，对回环/链路本地拒绝是"看不见"的。
+被拒绝的地址会导致该次调用连接失败（`key_get` 返回 `None`，与其他任何 webhook 失败一样）。拒绝会使 `edgion_outbound_egress_blocked_total{reason="private"|"loopback"|"link_local"}` 计数器递增，但这仅在**主机名**路径上成立（`EgressResolver`，会记录全部三种 reason）。在 **IP 字面量**路径上，只有 `reason="private"` 会被记录：`dial_url` 的 `blockPrivate` 检查会记录该指标，但那条路径上的回环/链路本地拒绝要经过早于该指标就已存在的共享后端守卫（`validate_endpoint_backend_addr`），并不会写入该指标。因此，基于该计数器搭建的看板或告警，对主机名目标能获得完整覆盖，但当 `target.url` 是 IP 字面量时，对回环/链路本地拒绝是"看不见"的。
 
 **网关本地默认值。** 当 webhook 未显式设置 `target.blockPrivate` 时，生效值来自网关自身的配置：
 
@@ -606,7 +606,7 @@ request:
 | `warnIfMissing` | 省略该字段，写入一条 PluginLog 告警，请求继续。 | *应当*存在的字段——你想要可见性但不想让调用失败。 |
 | `required` | webhook 调用被视为失败：`key_get` 返回 `None`（无值），与其他任何 webhook 失败一样。 | 后端缺之不可的字段。 |
 
-`allowDegradation` / `statusOnError` 存在于该连接器的 schema 中（它与 ForwardAuth 插件共用 `ExternalHttpConnection`），但**webhook 连接器本身并不读取它们**：任何失败——包括某个 `presence: required` 字段缺失——`key_get` 都只是返回 `None`，真正决定后续行为的是*消费方*插件自己的回退逻辑（例如 ctx-set 会让目标变量保持未设置，请求继续往下走）。在 webhook `LinkSys` 上设置这两个字段没有任何效果；它们只在同一个结构体被直接嵌入 ForwardAuth 插件配置时才有意义。
+`statusOnError` 存在于该连接器的 schema 中（它与 ForwardAuth 插件共用 `ExternalHttpConnection`），但**webhook 连接器本身并不读取它**：任何失败——包括某个 `presence: required` 字段缺失——`key_get` 都只是返回 `None`，真正决定后续行为的是*消费方*插件自己的回退逻辑（例如 ctx-set 会让目标变量保持未设置，请求继续往下走）。在 webhook `LinkSys` 上设置此字段没有任何效果；它只在同一个结构体被直接嵌入 ForwardAuth 插件配置时才有意义。
 
 #### 自定义字段来源
 
@@ -675,16 +675,6 @@ custom:
 >
 > `successStatusCodes` 不属于这条弃用路径：它根本不被展平后的连接结构体识别，会被静默丢弃且**不打印 WARN**。详见本节开头的警告以及 [Success（成功判定）](#成功判定-success)。
 
-### 降级与错误处理
-
-> ⚠️ **这两个字段在 webhook 连接器上是惰性的。** `allowDegradation` 和 `statusOnError` 之所以出现在这里，只是因为该连接器与 ForwardAuth 插件共用 `ExternalHttpConnection` schema，而 ForwardAuth 确实会读取它们。webhook 连接器自身的 `key_get` 没有 fail-open/fail-closed 的决策要做：任何失败都只是返回 `None`（无值），真正接管后续行为的是调用方插件自己的 fallback 逻辑——webhook 连接器本身并不会向客户端返回任何状态码。在 webhook `LinkSys` 上设置 `allowDegradation`/`statusOnError` 会被准入接受，但在运行时没有任何效果。
-
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `allowDegradation` | Boolean | `false` | 仅为与 ForwardAuth 保持 schema 兼容而接受；webhook 连接器不读取该字段。 |
-| `allowDegradationTemplate` | String | none | 仅为与 ForwardAuth 保持 schema 兼容而接受；webhook 连接器不读取该字段。 |
-| `statusOnError` | Integer | `503` | 仅为与 ForwardAuth 保持 schema 兼容而接受；webhook 连接器不读取该字段。 |
-
 ### Success（成功判定）
 
 取代旧的 `successStatusCodes` 字段（已移除；预发布阶段，不设别名——详见本节开头的警告）。只有当状态码检查**和**可选的 body 断言**同时**通过时，响应才被判定为成功：
@@ -737,13 +727,12 @@ success:
 
 ### Templates（模板）
 
-有两个连接层字段可以由 `request.*` 所用的同一套单次请求模板引擎驱动（见[模板变量](#模板变量)）——但它们的变量白名单比 `request.*` **窄得多**。两者都会在准入时编译并校验；格式错误的模板，或引用了不允许的变量类型的模板，都会被拒绝并报 `Accepted=False`。
+有一个连接层字段可以由 `request.*` 所用的同一套单次请求模板引擎驱动（见[模板变量](#模板变量)）——但它的变量白名单比 `request.*` **窄得多**。它会在准入时编译并校验；格式错误的模板，或引用了不允许的变量类型的模板，都会被拒绝并报 `Accepted=False`。
 
-> ⚠️ **`timeoutMsTemplate` / `allowDegradationTemplate` 只接受 `${ctx:...}`、`${clientIp}`、`${matchedHttpRoute:...}` 和 `${matchedGrpcRoute:...}`。** `${header:...}`、`${query:...}`、`${cookie:...}`、`${path}`、`${uri}`、`${requestPath}`、`${requestUri}`、`${method}` 以及 `${secretRef:...}` 在这两个字段上都会被专门拒绝（它们在 `request.*` 中仍然完全可用）。这两个字段都是安全敏感的：`timeoutMsTemplate` 设置鉴权服务调用的截止时间，`allowDegradationTemplate` 是 forward_auth 的 fail-open 开关。一个客户端可控的来源会让攻击者把超时压到小到必然超时的值（可靠的拒绝服务），或者——结合 `allowDegradation: true`——通过一个请求头直接强制走 fail-open 路径，随时产生 100% 未鉴权绕过。
+> ⚠️ **`timeoutMsTemplate` 只接受 `${ctx:...}`、`${clientIp}`、`${matchedHttpRoute:...}` 和 `${matchedGrpcRoute:...}`。** `${header:...}`、`${query:...}`、`${cookie:...}`、`${path}`、`${uri}`、`${requestPath}`、`${requestUri}`、`${method}` 以及 `${secretRef:...}` 在这个字段上都会被专门拒绝（它们在 `request.*` 中仍然完全可用）。该字段是安全敏感的：`timeoutMsTemplate` 设置鉴权服务调用的截止时间。一个客户端可控的来源会让攻击者把超时压到小到必然超时的值（可靠的拒绝服务）。
 
 ```yaml
 timeoutMsTemplate: "${ctx:desired_timeout_ms}"     # 回退到 timeoutMs
-allowDegradationTemplate: "${ctx:is_staging}"      # 回退到 allowDegradation
 ```
 
 **规则：模板渲染为可解析的值时优先采用；否则回退到静态字段。**
@@ -751,13 +740,12 @@ allowDegradationTemplate: "${ctx:is_staging}"      # 回退到 allowDegradation
 | 参数 | 渲染为 | 回退目标 | 说明 |
 |------|--------|----------|------|
 | `timeoutMsTemplate` | `u64` 毫秒数 | `timeoutMs` | 渲染结果非数字、为空或低于下限时回退。下限是 `MIN_OUTBOUND_TIMEOUT_MS` = 50 毫秒（低于该值的渲染结果与 0/空一视同仁）。无论如何，渲染值在上限侧都会被**限幅到 60000 毫秒（60 秒）**。 |
-| `allowDegradationTemplate` | `true` \| `false` | `allowDegradation` | **严格语法**：去除首尾空白、大小写不敏感后的渲染结果必须恰好等于 `true` 或 `false`。其他任何值——`1`、`0`、`yes`、空字符串——都会回退。不支持数字或 yes/no 别名。 |
 
-每次静默回退都会使 `edgion_outbound_template_fallback_total{field="timeout_ms"|"allow_degradation"}` 计数器递增——详见下文 [Observability metrics（可观测性指标）](#可观测性指标)，因为数据面无法通过 `tracing` 记录该回退。
+每次静默回退都会使 `edgion_outbound_template_fallback_total{field="timeout_ms"}` 计数器递增——详见下文 [Observability metrics（可观测性指标）](#可观测性指标)，因为数据面无法通过 `tracing` 记录该回退。
 
 **总阻塞时间。** 重试休眠和出站调用都内联在请求路径上，因此最坏情况的阻塞时间是 `(有效超时 × 最大尝试次数) + Σ 退避延迟`，每一项都独立设有上限：`timeoutMsTemplate` 受 60 秒限幅（以及下限的 50 毫秒下限）约束，退避延迟受 `maxDelayMs` 及其 10 秒硬上限约束，`maxRetries` 本身也受其 10 次的上限约束（见上方 [重试](#重试)）。
 
-这两个字段都不能重定向出站连接——本版本没有模板化的 `target.url`——而且有了上面的变量白名单，这两个字段也不能被这次调用所处理的客户端请求中的任何内容驱动。
+该字段不能重定向出站连接——本版本没有模板化的 `target.url`——而且有了上面的变量白名单，它也不能被这次调用所处理的客户端请求中的任何内容驱动。
 
 ### Observability metrics（可观测性指标）
 
@@ -765,7 +753,7 @@ Webhook 连接器（以及共用同一个 `ExternalHttpConnection` 的 ForwardAu
 
 | 指标 | 标签 | 触发条件 |
 |------|------|----------|
-| `edgion_outbound_template_fallback_total` | `field` ∈ `timeout_ms` \| `allow_degradation` | `timeoutMsTemplate` / `allowDegradationTemplate` 渲染结果无法解析（对超时字段而言，渲染为 0 或空也算），连接回退到静态字段。 |
+| `edgion_outbound_template_fallback_total` | `field` ∈ `timeout_ms` | `timeoutMsTemplate` 渲染结果无法解析（或渲染为 0 或空），连接回退到静态字段。 |
 | `edgion_outbound_success_predicate_fail_total` | 无 | 响应状态码已被 `success.statusCodes` 接受，但 `success.body` 断言将其判定为失败——即"200 OK 但 body 里有错误"的情形。 |
 
 关于 Prometheus 的通用参考（抓取配置、基数、Gateway 指标监听端口），见 [Metrics](../observability/metrics.md)。
@@ -1143,7 +1131,7 @@ spec:
 只有 `Service`、`ServiceClusterIp`、`ServiceEndpointSlice` 和留空有效。`ExternalName` 和 `ServiceImport` 被拒绝——请改用代理 Service。
 
 **Required 字段错误 / key 解析结果为空。**
-某个 `presence: required` 的 `origin` 字段在传入请求中缺失，这算作 webhook 失败：`key_get` 返回 `None`，由消费方插件自己的回退逻辑决定接下来发生什么（例如 ctx-set 会让目标变量保持未设置）。`allowDegradation`/`statusOnError` 在这里**不适用**——它们在 webhook 连接器上是惰性的（参见[降级与错误处理](#降级与错误处理)）。请确认客户端确实发送了该 header/arg/cookie（注意大小写：请求头大小写不敏感，arg 和 cookie 大小写敏感），或用 `presence: warnIfMissing` 仅记录而不失败。
+某个 `presence: required` 的 `origin` 字段在传入请求中缺失，这算作 webhook 失败：`key_get` 返回 `None`，由消费方插件自己的回退逻辑决定接下来发生什么（例如 ctx-set 会让目标变量保持未设置）。请确认客户端确实发送了该 header/arg/cookie（注意大小写：请求头大小写不敏感，arg 和 cookie 大小写敏感），或用 `presence: warnIfMissing` 仅记录而不失败。
 
 **模板变量解析为空。**
 `${ctx:NAME}` 在变量从未设置时返回空。确保在 webhook 被调用之前有一个 ctx-set 步骤设置它，并检查 `${type:name}` 拼写。要强制存在性，优先在 `origin` 字段上用 `presence: required` 而非模板。

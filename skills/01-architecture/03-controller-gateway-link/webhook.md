@@ -133,9 +133,9 @@ Webhook templates reuse the ctx-set engine (`CompiledTemplate` in `edgion-resour
 |-------|--------------------------------------------------------------------|
 | `skipIfMissing` (**default**) | field omitted from the outbound request, no log |
 | `warnIfMissing` | field omitted, a PluginLog alert is written, request continues |
-| `required` | the webhook call is treated as **failed** (`statusOnError` / `allowDegradation` apply exactly as for any other webhook error) |
+| `required` | the webhook call is treated as **failed**, and the consuming plugin's fallback logic decides what happens (e.g., ctx-set leaves the target variable unset) |
 
-`presence` and `allowDegradation` are **orthogonal**: `presence: required` decides *whether a missing field counts as a failure*; `allowDegradation` then decides whether that failure aborts the plugin chain (`false`, default → `statusOnError` to client) or silently skips the webhook and continues (`true` → degraded mode, not 5xx).
+Note: webhook connector has no fail-open mode. When a webhook call fails for any reason, `key_get` returns `None`, and it is the consuming plugin's own fallback behavior that takes over — there is no `statusOnError` or automatic bypass.
 
 ## Health state semantics
 
@@ -194,7 +194,7 @@ Integration suite: `edgion-tests/src/client/suites/edgion_plugins/webhook_key_ge
 - **Target resolution** — `kind: Service`/`ServiceEndpointSlice` (call-time EndpointSlice path) and `kind: ServiceClusterIp` (ClusterIP DNS path).
 - **Origin allow-list** — only named `origin` fields forwarded; unnamed inbound headers/args/cookies are dropped.
 - **Custom fields** — `value` (literal), `template` (`${ctx:...}` / `${header:...}`), `secret` (resolved + `prefix`).
-- **Presence policies** — `skipIfMissing` (silent), `warnIfMissing` (alert + continue), `required` (5xx on missing), plus `required` + `allowDegradation: true` (degrade, not 5xx; PluginLog records cause).
+- **Presence policies** — `skipIfMissing` (silent), `warnIfMissing` (alert + continue), `required` (webhook failure; consuming plugin handles fallback).
 - **Path override** — honored only with `path.allowOverride: true`; ignored otherwise.
 - **ctx-set integration** — consumer sets `ctx` vars, webhook template reads `${ctx:...}`.
 - **Template substitution** — literal, single-var, multi-var, frozen-path/method reuse when `path`/`method` omitted.

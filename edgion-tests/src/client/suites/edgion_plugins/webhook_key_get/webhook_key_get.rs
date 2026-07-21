@@ -31,8 +31,8 @@
 //
 // Known gaps surfaced by this suite (documented, not worked around):
 //
-//  1. statusOnError / allowDegradation are NOT wired into the CtxSet consumer — a
-//     failed webhook simply falls back to the var `default` (or leaves it unset).
+//  1. statusOnError is NOT wired into the CtxSet consumer — a failed webhook
+//     simply falls back to the var `default` (or leaves it unset).
 //     So `presence: required` blocks the outbound call (verifiable) but does not
 //     return a 5xx to the client. Scenario 5 asserts the *gating* property (the
 //     webhook was not called) rather than a 403 client status. PASSES.
@@ -403,7 +403,7 @@ impl WebhookKeyGetTestSuite {
     // ==================== 5. presence: required → gates the call ====================
     //
     // Design intent: missing required field → 403 (statusOnError). The gateway does
-    // NOT yet wire statusOnError/allowDegradation into the CtxSet consumer, so this
+    // NOT yet wire statusOnError into the CtxSet consumer, so this
     // case asserts the verifiable property instead: with the required field present
     // the webhook resolves; without it, the webhook is NOT called (the var is never
     // set, because wh5 declares no `default`). See suite report for the 403 gap.
@@ -493,11 +493,11 @@ impl WebhookKeyGetTestSuite {
         )
     }
 
-    // ==================== 7. presence: required + allowDegradation ====================
+    // ==================== 7. presence: required (missing → degrades to default) ====================
     fn test_presence_required_degrade() -> TestCase {
         TestCase::new(
             "presence_required_degrade",
-            "required field missing with allowDegradation → degrade to default, no 5xx",
+            "required field missing → degrade to default, no 5xx",
             |ctx: TestContext| {
                 Box::pin(async move {
                     let start = Instant::now();
@@ -544,8 +544,7 @@ impl WebhookKeyGetTestSuite {
 
                     TestResult::passed_with_message(
                         start.elapsed(),
-                        "required+allowDegradation: missing field degraded to default (200, no 5xx); present field resolved"
-                            .to_string(),
+                        "required field missing: degraded to default (200, no 5xx); present field resolved".to_string(),
                     )
                 })
             },
