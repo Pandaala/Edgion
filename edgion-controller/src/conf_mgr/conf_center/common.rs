@@ -2,7 +2,7 @@
 //!
 //! This module contains types that are used by both FileSystem and Kubernetes modes.
 
-use chrono::Utc;
+use edgion_common::time::now_rfc3339;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -49,7 +49,7 @@ impl ErrorStatus {
                 status: "False".to_string(),
                 reason: reason.to_string(),
                 message: message.to_string(),
-                last_transition_time: Utc::now().to_rfc3339(),
+                last_transition_time: now_rfc3339(),
                 observed_generation: None,
             }],
         }

@@ -8,4 +8,5 @@ pub mod observe;
 pub mod secret;
 pub mod startup;
 pub mod test_mode;
+pub mod time;
 pub mod tls_validation;

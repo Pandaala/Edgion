@@ -27,6 +27,7 @@ use edgion_common::dns::resolver_select::{
     candidate_from_annotations, resolve_effective_spec, LinkSysKey, ResolverCandidate,
 };
 use edgion_common::dns::{resolve, ResolverSpec};
+use edgion_common::time::now_rfc3339;
 use edgion_resources::constants::annotations::edgion::DNS_RESOLUTION_MODE;
 use edgion_resources::constants::labels::k8s::SERVICE_NAME;
 use edgion_resources::resources::link_sys::LinkSys;
@@ -316,7 +317,7 @@ async fn resolve_and_apply(
         return;
     }
 
-    let resolved_at = chrono::Utc::now().to_rfc3339();
+    let resolved_at = now_rfc3339();
     let slices = build_endpoint_slices(name, namespace, owner, &ports, &ips, &resolved_at);
     if slices.is_empty() {
         return;

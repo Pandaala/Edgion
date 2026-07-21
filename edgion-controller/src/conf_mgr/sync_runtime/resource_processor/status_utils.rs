@@ -11,7 +11,7 @@
 //! require data-plane feedback unavailable in our async gRPC architecture.
 //! PartiallyInvalid condition is supported for routes with partially invalid rules.
 
-use chrono::{SecondsFormat, Utc};
+use edgion_common::time::now_rfc3339;
 use edgion_resources::resources::common::Condition;
 
 /// Standard Gateway API condition types
@@ -334,10 +334,9 @@ impl ResolvedRefsError {
 // Condition helpers
 // ============================================================================
 
-/// Get current time in RFC3339 format
-pub fn now_rfc3339() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
-}
+// `now_rfc3339()` (the canonical operator-/K8s-facing timestamp shape) now lives in
+// `edgion_common::time` so control-plane code outside this module can reuse it
+// without inlining a bare `Utc::now().to_rfc3339()`. Imported at the top of the file.
 
 /// Create a condition with True status
 pub fn condition_true(

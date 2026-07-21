@@ -39,6 +39,7 @@ use super::secret_io::{
     account_credentials_from_json, create_account_secret, extract_account_json_string,
     patch_account_key_into_existing_secret,
 };
+use edgion_common::time::now_rfc3339;
 use edgion_resources::duration::parse_duration;
 use edgion_resources::resources::common::SecretObjectReference;
 use edgion_resources::resources::edgion_acme::{
@@ -533,7 +534,7 @@ impl AcmeServiceWorker {
                     let api: Api<EdgionAcme> = Api::namespaced(client, &ns);
                     if let Err(status_err) = update_acme_status(&api, &name, AcmeCertPhase::Failed, |status| {
                         status.last_failure_reason = Some(format!("{:#}", e));
-                        status.last_failure_time = Some(chrono::Utc::now().to_rfc3339());
+                        status.last_failure_time = Some(now_rfc3339());
                     })
                     .await
                     {
@@ -647,7 +648,7 @@ async fn process_acme_resource(client: Client, acme: &EdgionAcme, is_renewal: bo
     update_acme_status(&api, name, AcmeCertPhase::Ready, |status| {
         status.certificate_serial = cert_info.serial.clone();
         status.certificate_not_after = cert_info.not_after.clone();
-        status.last_renewal_time = Some(chrono::Utc::now().to_rfc3339());
+        status.last_renewal_time = Some(now_rfc3339());
         status.last_failure_reason = None;
         status.last_failure_time = None;
         status.secret_name = Some(acme.spec.storage.secret_name.clone());

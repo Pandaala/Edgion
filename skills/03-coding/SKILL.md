@@ -1,6 +1,6 @@
 ---
 name: coding-standards
-description: Coding standards skill for Edgion. Use when reviewing or writing code that touches logging, tracing IDs, log safety, access logs, metrics, structured tracing, or shared project-wide implementation rules.
+description: Coding standards skill for Edgion. Use when reviewing or writing code that touches logging, tracing IDs, log safety, access logs, metrics, structured tracing, time/timestamp/duration formatting, or shared project-wide implementation rules.
 ---
 
 # Coding Standards
@@ -37,6 +37,7 @@ description: Coding standards skill for Edgion. Use when reviewing or writing co
 | File | Topic |
 |------|------|
 | [02-rust-coding-rules.md](02-rust-coding-rules.md) | Rust coding rules: short import paths, unwrap ban, judicious Clone, actionable error messages |
+| [03-time-conventions.md](03-time-conventions.md) | Time conventions: duration (GEP-2257), monotonic `Instant`, RFC3339 `Z`-seconds timestamps (`now_rfc3339`), hot-path epoch-millis logs — which surface uses which shape and why |
 
 ### Observability — [observability/](observability/)
 

@@ -138,14 +138,15 @@ Each entry: **rule** — *consequence if violated* → `deep-dive pointer`.
 
 ## I. Time / duration / units
 
-> Honest status: only the first two rows are documented/enforced canon; the timestamp-shape
-> split below is real de-facto convention recovered from the code, not a lint — treat it as a
-> 🟡 aspiration and don't claim enforcement.
+> Canonized in **`skills/03-coding/03-time-conventions.md`** (which surface → which shape,
+> with the Gateway-API `metav1.Time` rationale). Four orthogonal concerns, four required
+> shapes — not interchangeable. Single-helper discipline, not yet a lint (a grep guard is
+> a candidate if the shape drifts again).
 
 - 🟡 **Operator-facing durations (timeout/interval/ttl) use GEP-2257 strings via the shared `parse_duration()`** (`edgion-resources/src/duration.rs`; accepts `30s`/`5m`/`1h30m`/`500ms`, no bare numbers/decimals). Do NOT hand-roll a parser (RateLimit already had to be migrated back), and do NOT reach for `humantime` — it is not a workspace dependency. **CANON.**
 - 🟢 **Monotonic elapsed time uses `Instant::now().saturating_duration_since(prior)`** — never `.elapsed()` / `.duration_since()`, which panic on non-monotonic clock skew (a panic on the data-plane hot path is a 5xx). **Enforced de-facto (audit closed).**
-- 🟡 **Timestamp shape by surface (de-facto):** operator/K8s-facing timestamps (status `lastTransitionTime`) → RFC3339 UTC *seconds* via `now_rfc3339()` (`.../resource_processor/status_utils.rs`); wire-log / access-log timestamps → epoch millis `chrono::Utc::now().timestamp_millis()` (cheaper on the hot path). Rule of thumb: `chrono` RFC3339 for anything persisted/human/K8s-facing; `std::time::SystemTime` only for internal epoch math that never leaves the process — and never a bare `.unwrap()` on `duration_since(UNIX_EPOCH)`.
-- 🟢 **Known GAP** — one condition-setter (`.../conf_center/common.rs`) stamps `Utc::now().to_rfc3339()` (nanos, `+00:00`) instead of `now_rfc3339()` (secs, `Z`), so the same field has two shapes across paths. Route every `last_transition_time` write through `now_rfc3339()`. (A dedicated `skills/03-coding/03-time-conventions.md` is worth writing to canonize the shape split above.)
+- 🟡 **Operator- / K8s-facing timestamps use `edgion_common::time::now_rfc3339()`** — RFC3339 UTC *seconds*, `Z`-suffixed (`2026-07-21T10:00:00Z`), matching how `metav1.Time` (the type behind Gateway API `Condition.LastTransitionTime`) serializes. One implementation; import it, never inline a bare `Utc::now().to_rfc3339()` (nanos + `+00:00`) for a persisted status field. Applies to status `lastTransitionTime`, ACME `lastRenewalTime`/`lastFailureTime`, the EndpointSlice `resolved_at` annotation. Reformatting an *existing* `metav1.Time` as an internal comparison key is out of scope. **CANON.**
+- 🟢 **Hot-path wire-/access-log timestamps use epoch millis** (`chrono::Utc::now().timestamp_millis()`) — a deliberate, performance-motivated divergence from the RFC3339 status shape; do not "unify" it. `std::time::SystemTime` is for internal epoch math that never leaves the process — and never a bare `.unwrap()` on `duration_since(UNIX_EPOCH)`.
 
 ## J. Rust coding & graceful degradation
 
