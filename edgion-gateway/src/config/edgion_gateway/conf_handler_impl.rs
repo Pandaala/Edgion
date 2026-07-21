@@ -137,6 +137,7 @@ fn recompute_global_config(store: &HashMap<String, EdgionGatewayConfig>) {
         }
         [] => {}
         _ => {
+            crate::observe::metrics::record_config_conflict("outbound_ca");
             tracing::warn!(
                 component = "outbound_tls",
                 "multiple EdgionGatewayConfig declare conflicting outbound CA defaults; falling back to System"

@@ -176,6 +176,8 @@ pub async fn outbound_call(
                         reqwest::header::HeaderValue::from_str(val),
                     ) {
                         req.headers_mut().insert(n, v);
+                    } else {
+                        crate::observe::metrics::record_injected_header_skipped();
                     }
                 }
                 req

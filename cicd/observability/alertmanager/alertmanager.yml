@@ -1,0 +1,41 @@
+# Edgion Alertmanager routing TEMPLATE (bare Alertmanager, NOT Prometheus Operator).
+#
+# Opt-in: copy this into your alertmanager.yml (or merge the `route`/`receivers` blocks)
+# and REPLACE every placeholder receiver below — the commented configs are
+# non-functional placeholders, not working integrations.
+#
+# Routing is by the `severity` label that the Edgion alert rules
+# (cicd/observability/alerts/edgion-rules.yml) set on every alert:
+#   severity=critical -> pager        (PAGE  — wake someone now)
+#   severity=warning  -> ticket       (TICKET — handle in business hours)
+#   severity=info     -> low-priority (log-only/board — never pages)
+#
+# Full per-alert catalog + rationale: docs/en/ops-guide/observability/alerting.md
+route:
+  receiver: low-priority
+  group_by: ['alertname', 'namespace']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - matchers: ['severity="critical"']
+      receiver: pager
+    - matchers: ['severity="warning"']
+      receiver: ticket
+    - matchers: ['severity="info"']
+      receiver: low-priority
+
+receivers:
+  - name: pager
+    # Replace with your paging integration (PagerDuty / Opsgenie / webhook):
+    # pagerduty_configs:
+    #   - routing_key: REPLACE-ME-pagerduty-routing-key
+  - name: ticket
+    # Replace with your ticketing / chat integration:
+    # slack_configs:
+    #   - api_url: REPLACE-ME-slack-webhook-url
+    #     channel: '#edgion-alerts'
+  - name: low-priority
+    # Replace with a low-priority sink (or leave as a no-op receiver to drop):
+    # webhook_configs:
+    #   - url: REPLACE-ME-low-priority-sink

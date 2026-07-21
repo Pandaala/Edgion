@@ -42,6 +42,10 @@ pub mod names {
     pub const CONN_IP_RESTRICTION_EVENTS_TOTAL: &str = "edgion_conn_ip_restriction_events_total";
     // IP restriction: inline deny CIDR entries skipped by partial-good compilation (blacklist hole)
     pub const IP_DENY_ENTRIES_SKIPPED_TOTAL: &str = "edgion_ip_deny_entries_skipped_total";
+    // Config aggregation: a conflict silently fell back to a default (e.g. conflicting outbound CA defaults -> System)
+    pub const CONFIG_CONFLICT_TOTAL: &str = "edgion_config_conflict_total";
+    // Outbound: a caller-injected header was dropped for an invalid name/value (silent no-op)
+    pub const OUTBOUND_INJECTED_HEADER_SKIPPED_TOTAL: &str = "edgion_outbound_injected_header_skipped_total";
     // HTTP plugin: RegionRoute overlay resolution events (overlay_missing / overlay_type_mismatch)
     pub const REGION_ROUTE_OVERLAY_EVENTS_TOTAL: &str = "edgion_region_route_overlay_events_total";
     // Stream plugin: ConnectionRateLimit rejections
@@ -539,6 +543,21 @@ pub fn record_ip_deny_entries_skipped(scope: &'static str) {
     counter!(names::IP_DENY_ENTRIES_SKIPPED_TOTAL, "scope" => scope).increment(1);
 }
 
+/// A config-aggregation conflict silently fell back to a default. `field` is a bounded
+/// constant `&'static str` naming which aggregate conflicted (e.g. "outbound_ca").
+/// Zero-event sentinel: it stays absent until an operator ships genuinely conflicting
+/// configs, at which point the resolved value is order-independent but non-obvious.
+pub fn record_config_conflict(field: &'static str) {
+    counter!(names::CONFIG_CONFLICT_TOTAL, "field" => field).increment(1);
+}
+
+/// A caller-injected outbound header (e.g. X-Forwarded-* from ForwardAuth) was dropped
+/// at request build because its name or value was invalid — the operator's configured
+/// header silently no-ops. Label-free zero-event sentinel.
+pub fn record_injected_header_skipped() {
+    counter!(names::OUTBOUND_INJECTED_HEADER_SKIPPED_TOTAL).increment(1);
+}
+
 /// Record a connection rejected by the ConnectionRateLimit stream plugin.
 ///
 /// `dimension` must be `"listener"` or `"source_ip"`.
@@ -765,6 +784,34 @@ pub fn record_plugin_policy_bypassed(plugin: &str) {
 mod tests {
     use super::*;
     use metrics_exporter_prometheus::PrometheusBuilder;
+
+    #[test]
+    fn config_conflict_counter_increments() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            record_config_conflict("outbound_ca");
+            let rendered = handle.render();
+            assert!(
+                rendered.contains("edgion_config_conflict_total") && rendered.contains("field=\"outbound_ca\""),
+                "config_conflict counter must render with field label, got:\n{rendered}"
+            );
+        });
+    }
+
+    #[test]
+    fn injected_header_skipped_counter_increments() {
+        let recorder = PrometheusBuilder::new().build_recorder();
+        let handle = recorder.handle();
+        metrics::with_local_recorder(&recorder, || {
+            record_injected_header_skipped();
+            let rendered = handle.render();
+            assert!(
+                rendered.contains("edgion_outbound_injected_header_skipped_total"),
+                "injected_header_skipped counter must render, got:\n{rendered}"
+            );
+        });
+    }
 
     /// Verifies the hybrid registration policy:
     /// - Hot per-request handles register in `new()` and appear immediately (with value 0).

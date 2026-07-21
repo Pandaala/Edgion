@@ -86,6 +86,7 @@ mod render_tests {
                 status: "False".into(),
             }],
             warn_conditions: vec![],
+            max_conditions_len: 1,
         }];
         let out = render_snapshot(&entries);
         assert!(out.contains(r#"namespace="n\"s""#));
@@ -161,6 +162,59 @@ mod registration_tests {
         assert!(warn.err_conditions.is_empty());
         assert_eq!(warn.warn_conditions.len(), 1);
         assert_eq!(warn.warn_conditions[0].type_, "Ready");
+    }
+
+    #[test]
+    fn conditions_max_emits_only_for_bloated_resources() {
+        let _guard = super::TEST_MUTEX.lock();
+        set_status_conditions_threshold(20);
+
+        // A clean-but-bloated resource: 25 all-`True` conditions in one array
+        // (the status-write-loop symptom). `classify` ignores it (no triggers),
+        // so only the conditions-max path can catch it.
+        let bloated = Arc::new(FakeRoute {
+            metadata: FakeMeta {
+                namespace: "default".into(),
+                name: "loopy".into(),
+            },
+            status: FakeStatus {
+                conditions: (0..25)
+                    .map(|i| FakeCond {
+                        type_: format!("Accepted{i}"),
+                        status: "True".into(),
+                    })
+                    .collect(),
+            },
+        });
+        let store: Arc<dyn RawStore<FakeRoute>> = Arc::new({
+            let s = LocalRawStore::<FakeRoute>::new();
+            s.upsert("default/loopy".into(), bloated);
+            s.upsert("default/normal".into(), mk("default", "normal", "Accepted", "True"));
+            s
+        });
+
+        let mut buf: Vec<Entry> = Vec::new();
+        render_kind("FakeRoute", store.as_ref(), &mut buf);
+
+        // Only the bloated resource yields an Entry; the normal one is clean and small.
+        assert_eq!(buf.len(), 1);
+        let e = &buf[0];
+        assert_eq!(e.name, "loopy");
+        assert_eq!(e.max_conditions_len, 25);
+        assert!(e.err_conditions.is_empty() && e.warn_conditions.is_empty());
+
+        // It renders as conditions_max (value = length) and NOT as resource_abnormal.
+        let cond = render_conditions_max(&buf);
+        assert!(
+            cond.contains(
+                "edgion_controller_status_conditions_max{kind=\"FakeRoute\",namespace=\"default\",name=\"loopy\"} 25"
+            ),
+            "expected conditions_max series, got:\n{cond}"
+        );
+        assert!(
+            render_snapshot(&buf).is_empty(),
+            "a clean-but-bloated resource must not emit resource_abnormal"
+        );
     }
 }
 

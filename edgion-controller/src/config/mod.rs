@@ -381,6 +381,12 @@ pub struct ResourceAbnormalMetricsConfig {
     /// exceed this value it is truncated and a `tracing::error!` is
     /// emitted. Default 1000; validated range is `[10, 100000]`.
     pub hard_cap: usize,
+    /// Largest single `.status.conditions` array length at which a resource
+    /// is emitted as an `edgion_controller_status_conditions_max` series (the
+    /// status-write-loop / condition-pollution sentinel). Only resources at or
+    /// above this bound produce a series, so healthy fleets emit nothing.
+    /// Default 20; validated range is `[5, 100000]`.
+    pub status_conditions_threshold: usize,
 }
 
 impl Default for ResourceAbnormalMetricsConfig {
@@ -389,6 +395,7 @@ impl Default for ResourceAbnormalMetricsConfig {
             enabled: true,
             tick_secs: 300,
             hard_cap: 1000,
+            status_conditions_threshold: 20,
         }
     }
 }
@@ -503,6 +510,12 @@ impl EdgionControllerConfig {
                 anyhow::bail!(
                     "metrics.resource_abnormal.hard_cap must be in [10, 100000], got {}",
                     cfg.hard_cap
+                );
+            }
+            if cfg.status_conditions_threshold < 5 || cfg.status_conditions_threshold > 100_000 {
+                anyhow::bail!(
+                    "metrics.resource_abnormal.status_conditions_threshold must be in [5, 100000], got {}",
+                    cfg.status_conditions_threshold
                 );
             }
         }
