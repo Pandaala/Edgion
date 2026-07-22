@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-req-body-read
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "req-body-read"
+        source: |
+          // req.body triggers the intrinsic body-read gate (BodyStage::Request).
+          // The P0 body-buffering runtime is not implemented yet, so the read
+          // always fails; under errorPolicy: deny this is fail-close (500).
+          // See api-reference.md#reqbody for the documented current-state note.
+          let b = req.body
+          req.set_header("X-Body-Preview", b)
+        errorPolicy: deny

@@ -23,6 +23,7 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         ("req", "request_uri") => Some(BuiltinId::ReqRequestUri),
         ("req", "content_type") => Some(BuiltinId::ReqContentType),
         ("req", "has_header") => Some(BuiltinId::ReqHasHeader),
+        ("req", "body") => Some(BuiltinId::ReqBody),
 
         // req.* metadata
         ("req", "protocol") => Some(BuiltinId::ReqProtocol),
@@ -53,6 +54,7 @@ pub(super) fn resolve_namespace_method(namespace: &str, method: &str) -> Option<
         // resp.* read (additional)
         ("resp", "header_names") => Some(BuiltinId::RespHeaderNames),
         ("resp", "content_type") => Some(BuiltinId::RespContentType),
+        ("resp", "body") => Some(BuiltinId::RespBody),
 
         // resp.* set status
         ("resp", "set_status") => Some(BuiltinId::RespSetStatus),
@@ -107,7 +109,8 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
         | BuiltinId::ReqGrpcMethod
         | BuiltinId::ReqContentLength
         | BuiltinId::ReqClientCertCn
-        | BuiltinId::ReqClientCertFingerprint => Some(0),
+        | BuiltinId::ReqClientCertFingerprint
+        | BuiltinId::ReqBody => Some(0),
 
         // req.* read — 1-arg
         BuiltinId::ReqHeader
@@ -124,7 +127,9 @@ pub(crate) fn builtin_expected_argc(id: &BuiltinId) -> Option<usize> {
         BuiltinId::ReqSetHeader | BuiltinId::ReqAppendHeader => Some(2),
 
         // resp.* read
-        BuiltinId::RespStatus | BuiltinId::RespHeaderNames | BuiltinId::RespContentType => Some(0),
+        BuiltinId::RespStatus | BuiltinId::RespHeaderNames | BuiltinId::RespContentType | BuiltinId::RespBody => {
+            Some(0)
+        }
         BuiltinId::RespHeader | BuiltinId::RespHasHeader => Some(1),
         // resp.* mutation — 1-arg
         BuiltinId::RespRemoveHeader | BuiltinId::RespSetStatus => Some(1),

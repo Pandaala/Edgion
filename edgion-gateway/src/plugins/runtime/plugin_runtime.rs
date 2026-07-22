@@ -486,7 +486,10 @@ impl PluginRuntime {
                 // plugin still runs (ungated), but the error is surfaced.
                 if entry.body.is_some() {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
-                    if !entry.plugin.accepts_body() {
+                    if !entry
+                        .plugin
+                        .accepts_body(edgion_resources::resources::edgion_plugins::BodyStage::Request)
+                    {
                         errors.push(format!(
                             "requestPlugins[{}] ({}): body: plugin does not consume a body",
                             index, plugin_name
@@ -506,7 +509,9 @@ impl PluginRuntime {
                         // Conditional wrapper, so entry run_if/skip_if runs first).
                         let body_req = edgion_resources::resources::edgion_plugins::BodyRequirement::resolve(
                             entry.body.clone(),
-                            entry.plugin.body_requirement(),
+                            entry
+                                .plugin
+                                .body_requirement(edgion_resources::resources::edgion_plugins::BodyStage::Request),
                         );
                         let gated: Box<dyn RequestFilter> = match body_req {
                             Some(req) => Box::new(BodyGatedRequestFilter::new(filter, req)),
@@ -722,7 +727,11 @@ impl PluginRuntime {
                 // Validate the optional operator body requirement. `body:` only
                 // applies to plugins that consume the body in their current config;
                 // reject it elsewhere so it is never a silent no-op. Non-fatal.
-                if entry.body.is_some() && !entry.plugin.accepts_body() {
+                if entry.body.is_some()
+                    && !entry
+                        .plugin
+                        .accepts_body(edgion_resources::resources::edgion_plugins::BodyStage::Response)
+                {
                     let plugin_name = Self::get_plugin_name(&entry.plugin);
                     errors.push(format!(
                         "upstreamResponsePlugins[{}] ({}): body: plugin does not consume a body",
@@ -776,7 +785,9 @@ impl PluginRuntime {
                         // Conditional wrapper.
                         let body_req = edgion_resources::resources::edgion_plugins::BodyRequirement::resolve(
                             entry.body.clone(),
-                            entry.plugin.body_requirement(),
+                            entry
+                                .plugin
+                                .body_requirement(edgion_resources::resources::edgion_plugins::BodyStage::Response),
                         );
                         let gated: Box<dyn UpstreamResponse> = match body_req {
                             Some(req) => Box::new(BodyGatedUpstreamResponse::new(filter, req)),

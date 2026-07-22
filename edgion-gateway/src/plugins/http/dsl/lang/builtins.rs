@@ -56,6 +56,17 @@ fn checked_value_str(s: String, limit: usize) -> Result<Value, RuntimeError> {
     Ok(Value::Str(s.into()))
 }
 
+/// Decode a buffered proxy body into a DSL string value.
+///
+/// DSL has no byte type, so the body is decoded with `from_utf8_lossy` (invalid
+/// bytes become U+FFFD — never silently truncated). The decoded string obeys the
+/// VM `max_string_len` budget like every other string value; an oversized decoded
+/// body raises `StringTooLong` (handled by the script's `errorPolicy`).
+fn body_bytes_to_value(bytes: &[u8], limit: usize) -> Result<Value, RuntimeError> {
+    let s = String::from_utf8_lossy(bytes).into_owned();
+    checked_value_str(s, limit)
+}
+
 /// Silently truncate `s` to at most `limit` UTF-8 bytes, walking back to the
 /// nearest char boundary so `String::truncate` cannot panic on multi-byte
 /// content. `is_char_boundary(0)` always succeeds, so the loop terminates.
@@ -868,6 +879,11 @@ impl Vm {
             | BuiltinId::RedisHExists => Err(RuntimeError::Internal {
                 message: format!("{:?} must be dispatched via call_builtin_redis, not call_builtin", id),
             }),
+
+            // proxy-body builtins are dispatched asynchronously by the VM before reaching call_builtin
+            BuiltinId::ReqBody | BuiltinId::RespBody => Err(RuntimeError::Internal {
+                message: format!("{:?} must be dispatched via call_builtin_body, not call_builtin", id),
+            }),
         }
     }
 
@@ -1068,6 +1084,38 @@ impl Vm {
         result.insert("headers".to_string(), Value::Map(Box::new(resp_headers)));
 
         Ok(Value::Map(Box::new(result)))
+    }
+}
+
+impl Vm {
+    /// Dispatch the proxy-body builtins (`req.body` / `resp.body`).
+    ///
+    /// The body gate has already buffered the body before this plugin runs, so
+    /// the read is a cheap `Arc`-backed handle. A `BodyReadError` here is
+    /// unexpected (e.g. buffering not yet implemented on this binary) and is
+    /// surfaced as an `ApiError` so `execute_safe` applies the script's
+    /// `errorPolicy` — identical handling to any other runtime error.
+    pub(crate) async fn call_builtin_body(
+        &self,
+        id: BuiltinId,
+        _state: &mut VmState,
+        session: &mut dyn PluginSession,
+        _log: &mut PluginLog,
+    ) -> Result<Value, RuntimeError> {
+        let (function, read) = match id {
+            BuiltinId::ReqBody => ("req.body", session.read_request_body(None).await),
+            BuiltinId::RespBody => ("resp.body", session.read_response_body(None).await),
+            other => {
+                return Err(RuntimeError::Internal {
+                    message: format!("{:?} is not a body builtin", other),
+                })
+            }
+        };
+        let bytes = read.map_err(|e| RuntimeError::ApiError {
+            function: function.to_string(),
+            message: e.to_string(),
+        })?;
+        body_bytes_to_value(&bytes, self.limits.max_string_len)
     }
 }
 
@@ -1417,7 +1465,9 @@ impl Vm {
             | BuiltinId::LogWarn
             | BuiltinId::LogError
             | BuiltinId::LogFmt
-            | BuiltinId::HttpCall => Err(RuntimeError::Internal {
+            | BuiltinId::HttpCall
+            | BuiltinId::ReqBody
+            | BuiltinId::RespBody => Err(RuntimeError::Internal {
                 message: format!("{:?} must not be dispatched via call_builtin_redis", id),
             }),
         }
@@ -1537,5 +1587,79 @@ mod truncate_tests {
         let out = truncate_to_max_string_len(s, 3);
         assert_eq!(out, "aé");
         assert_eq!(out.len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod body_tests {
+    use super::super::validator::{compile_dsl_source, ValidationLimits};
+    use super::super::vm::{execute_safe, DslErrorPolicy, Vm, VmLimits};
+    use super::body_bytes_to_value;
+    use crate::plugins::http::dsl::lang::bytecode::CompiledScript;
+    use crate::plugins::http::dsl::runtime::DslRuntime;
+    use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+    use crate::plugins::runtime::{PluginLog, PluginSession};
+    use edgion_resources::filters::PluginRunningResult;
+
+    use super::RuntimeError;
+    use super::Value;
+
+    #[test]
+    fn body_bytes_to_value_decodes_utf8() {
+        let v = body_bytes_to_value(b"hello", 100).unwrap();
+        assert_eq!(v, Value::Str("hello".into()));
+    }
+
+    #[test]
+    fn body_bytes_to_value_lossy_on_invalid_utf8() {
+        // 0xFF is not valid UTF-8 → U+FFFD, not truncated.
+        let v = body_bytes_to_value(&[0x61, 0xFF, 0x62], 100).unwrap();
+        match v {
+            Value::Str(s) => {
+                assert!(s.starts_with('a') && s.ends_with('b'));
+                assert!(s.contains('\u{FFFD}'));
+            }
+            other => panic!("expected Str, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn body_bytes_to_value_rejects_oversize() {
+        let err = body_bytes_to_value(b"toolong", 3).unwrap_err();
+        assert!(matches!(err, RuntimeError::StringTooLong { .. }));
+    }
+
+    /// Mirrors the manual current-thread-runtime + `block_on(execute_safe(...))`
+    /// harness used throughout `dsl/tests/*` (e.g. `error_policy.rs`) —
+    /// `MockPluginSession` is not `Send`, so these tests use `#[test]`, not
+    /// `#[tokio::test]`.
+    #[test]
+    fn req_body_reads_session_and_failopen_continues() {
+        let b64 = compile_dsl_source("let b = req.body", &ValidationLimits::default()).expect("compile failed");
+        let script = CompiledScript::deserialize_base64(&b64).expect("deserialize failed");
+        let vm = Vm::new(script, VmLimits::default()).expect("vm creation failed");
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::Unimplemented));
+        session.expect_record_outcome().return_const(());
+
+        let mut log = PluginLog::new("test");
+        let rt = DslRuntime::default();
+        let result = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(execute_safe(
+                &vm,
+                &mut session as &mut dyn PluginSession,
+                &mut log,
+                &DslErrorPolicy::Ignore,
+                &rt,
+            ));
+        // Fail-open (Ignore) policy: a body-read error is swallowed and the
+        // request proceeds to the next filter stage.
+        assert_eq!(result, PluginRunningResult::GoodNext);
     }
 }

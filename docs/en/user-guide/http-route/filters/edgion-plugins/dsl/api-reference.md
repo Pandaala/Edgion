@@ -315,6 +315,31 @@ if not req.has_header("X-Request-Id") {
 
 ---
 
+### req.body
+
+**Signature**: `req.body` → `Str`
+
+Returns the buffered proxied request body, decoded with `String::from_utf8_lossy` — any invalid UTF-8 byte becomes the U+FFFD replacement character. The body is never truncated at the first invalid byte; only the length check below can shorten what the script sees, and it does so by raising an error, not by silently cutting the string.
+
+**Return value**: The full decoded request body as a string.
+
+**Constraints**:
+- The decoded string is subject to the VM's `maxStringLen` limit (default 8192 bytes, hard ceiling 1,048,576 bytes), the same cap every other DSL string value obeys. Because `from_utf8_lossy` can expand each invalid byte into a 3-byte U+FFFD, a body near the cap in raw bytes can exceed `maxStringLen` after decoding. A body over the limit raises `StringTooLong`, handled per `errorPolicy` like any other runtime error — it does **not** get a private, larger cap. To read a larger body, raise both `maxStringLen` and the plugin's `body.maxBodySize` together; beyond the 1 MiB string ceiling, `req.body` is the wrong tool — use `ext_proc` or `wasm` instead.
+- The script is only gated to buffer the request body when it references `req.body`; a script that never reads `req.body` is never gated and pays zero buffering cost.
+- Body-read failure is handled per the script's `errorPolicy`: `Ignore` (default) skips the plugin (fail-open); `Deny` / `DenyWith` rejects the request (fail-close). A fail-close script (`Deny`/`DenyWith`) cannot narrow when the body is buffered with the operator's `body.conditions` — the body is required unconditionally, the same security invariant applied to every other fail-close body-aware plugin. A fail-open script (default `Ignore`) can still use `body.conditions` to narrow buffering.
+
+**Note**: The body-buffering runtime is not implemented yet, so today `req.body` always surfaces a body-read error: a `Deny`/`DenyWith` script rejects the request (500), and an `Ignore` script silently skips the plugin. The real proxied body will be returned once the buffering runtime lands, with no script changes required.
+
+**Example**:
+```
+let b = req.body
+if len(b) > 0 {
+  req.set_header("X-Body-Preview", b)
+}
+```
+
+---
+
 ## Request Metadata (req.*)
 
 ### req.protocol
@@ -656,6 +681,28 @@ Reads the `Content-Type` header value of the upstream response. Returns `nil` if
 let ct = resp.content_type
 if ct != nil and regex_find(ct, "text/html") != nil {
   resp.set_header("X-Content-Type-Options", "nosniff")
+}
+```
+
+---
+
+### resp.body
+
+**Signature**: `resp.body` → `Str`
+
+Returns the buffered proxied upstream response body, decoded with `String::from_utf8_lossy` (invalid UTF-8 → U+FFFD, never truncated). Only valid in the response phase (`upstreamResponsePlugins`).
+
+**Return value**: The full decoded response body as a string.
+
+**Constraints**: Same as `req.body` — subject to `maxStringLen` (default 8192 bytes, ceiling 1,048,576 bytes) on the decoded length (align with `body.maxBodySize` for larger bodies; beyond 1 MiB use `ext_proc`/`wasm`); the script is only gated to buffer the response body when it references `resp.body`; body-read failure follows `errorPolicy` (`Ignore` = skip/fail-open, `Deny`/`DenyWith` = fail-close, and a fail-close script cannot narrow with `body.conditions`). See [`req.body`](#reqbody) for the full explanation.
+
+**Note**: Until the body-buffering runtime lands, `resp.body` always surfaces a body-read error (fail-close rejects with 500, fail-open skips the plugin) — the same current-state behavior as `req.body`.
+
+**Example**:
+```
+let b = resp.body
+if regex_find(b, "internal_error") != nil {
+  resp.set_status(502)
 }
 ```
 

@@ -1,5 +1,6 @@
 //! Gateway API standard edgion_plugins and custom Edgion edgion_plugins
 
+use edgion_dsl::bytecode::BuiltinId;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -118,20 +119,56 @@ pub enum EdgionPlugin {
     // ...
 }
 
+/// Which async plugin stage a body requirement is being asked about.
+/// `req.body` needs the request body (request stage); `resp.body` needs the
+/// response body (upstream-response stage) — a plugin can consume one, both, or
+/// neither depending on stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyStage {
+    Request,
+    Response,
+}
+
 impl EdgionPlugin {
-    /// The plugin's intrinsic body requirement, derived from its own config.
+    /// The plugin's intrinsic body requirement, derived from its own config, for
+    /// the given async body stage.
     ///
     /// This is the single source of truth for "does this plugin consume the
-    /// request/response body (in this configuration)?" — used by both the
-    /// controller validator and the gateway runtime, so they always agree. A
-    /// plugin becomes body-aware by adding an arm here; everything else returns
-    /// `None`, so an operator `body:` on a non-consuming plugin is rejected at
-    /// preparse and never wraps it in a body gate.
-    pub fn body_requirement(&self) -> Option<super::body_requirement::BodyRequirement> {
+    /// request/response body at this stage (in this configuration)?" — used by
+    /// both the controller validator and the gateway runtime, so they always
+    /// agree. A plugin becomes body-aware by adding an arm here; everything
+    /// else returns `None`, so an operator `body:` on a non-consuming plugin is
+    /// rejected at preparse and never wraps it in a body gate.
+    pub fn body_requirement(&self, stage: BodyStage) -> Option<super::body_requirement::BodyRequirement> {
+        use super::body_requirement::{BodyReadFailureMode, BodyRequirement};
         use EdgionPlugin::*;
         match self {
-            // HMAC consumes the request body only when Digest verification is on.
-            HmacAuth(cfg) if cfg.validate_request_body => Some(super::body_requirement::BodyRequirement::fail_close()),
+            // HMAC consumes the REQUEST body only, and only when Digest
+            // verification is on. Never at the response stage.
+            HmacAuth(cfg) if cfg.validate_request_body && stage == BodyStage::Request => {
+                Some(BodyRequirement::fail_close())
+            }
+            // DSL consumes a body only when its script references the matching
+            // builtin at this stage. Fail policy is derived from the script's
+            // own errorPolicy (Ignore = fail-open; Deny/DenyWith = fail-close) —
+            // do NOT use fail_close() here (DSL defaults to fail-open).
+            Dsl(cfg) => {
+                let script = cfg.compile_and_validate().ok()?;
+                let wanted = match stage {
+                    BodyStage::Request => BuiltinId::ReqBody,
+                    BodyStage::Response => BuiltinId::RespBody,
+                };
+                if !script.references_builtin(wanted) {
+                    return None;
+                }
+                let mode = match cfg.error_policy {
+                    Some(super::plugin_configs::DslErrorPolicy::Deny)
+                    | Some(super::plugin_configs::DslErrorPolicy::DenyWith { .. }) => BodyReadFailureMode::FailClose,
+                    // None defaults to Ignore (fail-open).
+                    _ => BodyReadFailureMode::FailOpen,
+                };
+                Some(BodyRequirement::with_failure_mode(mode))
+            }
             // Exhaustive (no `_`, matching `type_name`/`validation_error`): a new
             // body-consuming plugin MUST add itself above, or this fails to
             // compile — it can never silently default to "no body".
@@ -167,7 +204,6 @@ impl EdgionPlugin {
             | AllEndpointStatus(_)
             | DynamicInternalUpstream(_)
             | DynamicExternalUpstream(_)
-            | Dsl(_)
             | RegionRoute(_)
             | TraceContext(_)
             | ExtProc(_)
@@ -177,11 +213,11 @@ impl EdgionPlugin {
         }
     }
 
-    /// Whether this plugin accepts an operator `body:` configuration (i.e. it
-    /// consumes the body in its current config). Equivalent to
-    /// `body_requirement().is_some()`.
-    pub fn accepts_body(&self) -> bool {
-        self.body_requirement().is_some()
+    /// Whether this plugin accepts an operator `body:` configuration at the
+    /// given stage (i.e. it consumes the body in its current config at that
+    /// stage). Equivalent to `body_requirement(stage).is_some()`.
+    pub fn accepts_body(&self, stage: BodyStage) -> bool {
+        self.body_requirement(stage).is_some()
     }
 
     /// Get the plugin type name
@@ -563,6 +599,59 @@ mod dye_capability_tests {
         assert_eq!(
             EdgionPlugin::RegionRoute(RegionRouteConfig::default()).dye_capabilities(),
             &[DyeOutcome::Success, DyeOutcome::Fallback]
+        );
+    }
+}
+
+#[cfg(test)]
+mod dsl_body_requirement_tests {
+    use super::*;
+    use crate::resources::edgion_plugins::body_requirement::BodyReadFailureMode;
+    use crate::resources::edgion_plugins::plugin_configs::{DslConfig, DslErrorPolicy};
+
+    fn dsl(source: &str, policy: Option<DslErrorPolicy>) -> EdgionPlugin {
+        EdgionPlugin::Dsl(DslConfig {
+            name: "t".into(),
+            source: Some(source.into()),
+            error_policy: policy,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn dsl_req_body_gated_at_request_stage_only() {
+        let p = dsl("let b = req.body", None);
+        assert!(p.body_requirement(BodyStage::Request).is_some());
+        assert!(p.body_requirement(BodyStage::Response).is_none());
+    }
+
+    #[test]
+    fn dsl_resp_body_gated_at_response_stage_only() {
+        let p = dsl("let b = resp.body", None);
+        assert!(p.body_requirement(BodyStage::Response).is_some());
+        assert!(p.body_requirement(BodyStage::Request).is_none());
+    }
+
+    #[test]
+    fn dsl_header_only_never_gated() {
+        let p = dsl("let h = req.header(\"X\")", None);
+        assert!(p.body_requirement(BodyStage::Request).is_none());
+        assert!(p.body_requirement(BodyStage::Response).is_none());
+    }
+
+    #[test]
+    fn dsl_failure_mode_follows_error_policy() {
+        // default (None ⇒ Ignore) ⇒ fail-open
+        let open = dsl("let b = req.body", None);
+        assert_eq!(
+            open.body_requirement(BodyStage::Request).unwrap().on_read_failure,
+            BodyReadFailureMode::FailOpen
+        );
+        // Deny ⇒ fail-close
+        let close = dsl("let b = req.body", Some(DslErrorPolicy::Deny));
+        assert_eq!(
+            close.body_requirement(BodyStage::Request).unwrap().on_read_failure,
+            BodyReadFailureMode::FailClose
         );
     }
 }

@@ -315,6 +315,31 @@ if not req.has_header("X-Request-Id") {
 
 ---
 
+### req.body
+
+**签名**：`req.body` → `Str`
+
+返回被缓冲的代理请求体，使用 `String::from_utf8_lossy` 解码——任何非法 UTF-8 字节都会变成 U+FFFD 替换字符。请求体不会在第一个非法字节处被截断；下面的长度限制是唯一能缩短脚本可见内容的机制，且它是通过报错而非静默截断来实现的。
+
+**返回值**：完整解码后的请求体字符串。
+
+**约束**：
+- 解码后的字符串同样受 VM 的 `maxStringLen` 限制（默认 8192 字节，硬上限 1,048,576 字节），与其他所有 DSL 字符串值一致。由于 `from_utf8_lossy` 可能将每个非法字节扩展为 3 字节的 U+FFFD，一个原始字节数接近上限的请求体，解码后可能超出 `maxStringLen`。超出限制会抛出 `StringTooLong`，与其他运行时错误一样按 `errorPolicy` 处理——**不会**为其单独放宽一个更大的上限。若需读取更大的请求体，应同时调高 `maxStringLen` 和插件的 `body.maxBodySize`；超过 1 MiB 的字符串上限后，`req.body` 就不是合适的工具了，应改用 `ext_proc` 或 `wasm`。
+- 只有脚本引用了 `req.body` 时才会被门控以缓冲请求体；从不读取 `req.body` 的脚本不会被门控，也不产生任何缓冲开销。
+- 读取请求体失败时按脚本的 `errorPolicy` 处理：`Ignore`（默认）跳过插件（fail-open）；`Deny` / `DenyWith` 拒绝请求（fail-close）。fail-close 脚本（`Deny`/`DenyWith`）无法通过运维方配置的 `body.conditions` 缩小缓冲范围——请求体是无条件必需的，这与其他所有 fail-close 的读体插件遵循同一安全不变量。fail-open 脚本（默认 `Ignore`）仍可使用 `body.conditions` 缩小缓冲范围。
+
+**注意**：请求体缓冲运行时尚未实现，因此目前 `req.body` 总是产生读体错误：`Deny`/`DenyWith` 脚本会拒绝请求（500），`Ignore` 脚本会静默跳过插件。缓冲运行时上线后将返回真实的代理请求体，脚本无需任何改动。
+
+**示例**：
+```
+let b = req.body
+if len(b) > 0 {
+  req.set_header("X-Body-Preview", b)
+}
+```
+
+---
+
 ## 请求元数据（req.*）
 
 ### req.protocol
@@ -656,6 +681,28 @@ for name in names {
 let ct = resp.content_type
 if ct != nil and regex_find(ct, "text/html") != nil {
   resp.set_header("X-Content-Type-Options", "nosniff")
+}
+```
+
+---
+
+### resp.body
+
+**签名**：`resp.body` → `Str`
+
+返回被缓冲的代理上游响应体，使用 `String::from_utf8_lossy` 解码（非法 UTF-8 → U+FFFD，不截断）。仅在响应阶段（`upstreamResponsePlugins`）有效。
+
+**返回值**：完整解码后的响应体字符串。
+
+**约束**：与 `req.body` 相同——同样受 `maxStringLen` 限制（默认 8192 字节，上限 1,048,576 字节，按解码后长度计算；读取更大响应体时应对齐 `body.maxBodySize`；超过 1 MiB 应改用 `ext_proc`/`wasm`）；脚本只有引用了 `resp.body` 才会被门控以缓冲响应体；读体失败按 `errorPolicy` 处理（`Ignore` = 跳过/fail-open，`Deny`/`DenyWith` = 拒绝/fail-close，且 fail-close 脚本无法用 `body.conditions` 缩小范围）。完整说明参见 [`req.body`](#reqbody)。
+
+**注意**：在请求体缓冲运行时上线之前，`resp.body` 总是产生读体错误（fail-close 拒绝并返回 500，fail-open 跳过插件）——与 `req.body` 当前的行为一致。
+
+**示例**：
+```
+let b = resp.body
+if regex_find(b, "internal_error") != nil {
+  resp.set_status(502)
 }
 ```
 

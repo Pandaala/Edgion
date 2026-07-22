@@ -25,7 +25,7 @@
 use std::collections::BTreeSet;
 
 use super::conditions::PluginConditions;
-use super::edgion_plugin::EdgionPlugin;
+use super::edgion_plugin::{BodyStage, EdgionPlugin};
 use super::entry::dye_set_clobber_error;
 use super::EdgionPlugins;
 use crate::resources::common::log_labels::LOG_LABEL_MAX_COUNT;
@@ -312,7 +312,7 @@ impl EdgionPlugins {
         // error `continue`s before the body check), with the same
         // `"...: body: <err>"` messages — kept in lockstep by the drift test.
         macro_rules! validate_body_entries {
-            ($entries:expr, $label:literal) => {
+            ($entries:expr, $label:literal, $stage:expr) => {
                 if let Some(entries) = &$entries {
                     for (i, entry) in entries.iter().enumerate() {
                         if !entry.is_enabled() || entry.plugin.validation_error().is_some() {
@@ -323,7 +323,7 @@ impl EdgionPlugins {
                         // `body:` only applies to plugins that consume the body in
                         // their current config; reject it elsewhere so it is never
                         // a silent no-op.
-                        if !entry.plugin.accepts_body() {
+                        if !entry.plugin.accepts_body($stage) {
                             errors.push(format!(
                                 "{}[{}] ({}): body: plugin does not consume a body",
                                 $label, i, name
@@ -335,8 +335,12 @@ impl EdgionPlugins {
                 }
             };
         }
-        validate_body_entries!(self.spec.request_plugins, "requestPlugins");
-        validate_body_entries!(self.spec.upstream_response_plugins, "upstreamResponsePlugins");
+        validate_body_entries!(self.spec.request_plugins, "requestPlugins", BodyStage::Request);
+        validate_body_entries!(
+            self.spec.upstream_response_plugins,
+            "upstreamResponsePlugins",
+            BodyStage::Response
+        );
 
         // At most one TraceContext in the request stage — multiple would each
         // overwrite x-trace-id (last-write-wins), which is confusing.

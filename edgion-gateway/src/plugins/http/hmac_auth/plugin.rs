@@ -611,15 +611,25 @@ mod tests {
             resolved_credentials: Some(HashMap::new()),
             ..Default::default()
         };
-        assert!(EdgionPlugin::HmacAuth(base.clone()).body_requirement().is_none());
-        assert!(!EdgionPlugin::HmacAuth(base.clone()).accepts_body());
+        use edgion_resources::resources::edgion_plugins::BodyStage;
+        assert!(EdgionPlugin::HmacAuth(base.clone())
+            .body_requirement(BodyStage::Request)
+            .is_none());
+        assert!(!EdgionPlugin::HmacAuth(base.clone()).accepts_body(BodyStage::Request));
 
         let with_body = HmacAuthConfig {
             validate_request_body: true,
             ..base
         };
-        assert!(EdgionPlugin::HmacAuth(with_body.clone()).body_requirement().is_some());
-        assert!(EdgionPlugin::HmacAuth(with_body).accepts_body());
+        // request-only plugin: consumes at the request stage
+        assert!(EdgionPlugin::HmacAuth(with_body.clone())
+            .body_requirement(BodyStage::Request)
+            .is_some());
+        assert!(EdgionPlugin::HmacAuth(with_body.clone())
+            .body_requirement(BodyStage::Response)
+            .is_none());
+        assert!(EdgionPlugin::HmacAuth(with_body.clone()).accepts_body(BodyStage::Request));
+        assert!(!EdgionPlugin::HmacAuth(with_body).accepts_body(BodyStage::Response));
     }
 
     #[test]

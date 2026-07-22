@@ -166,6 +166,12 @@ pub enum BuiltinId {
     // resp.* set status
     RespSetStatus,
 
+    // req/resp proxy body (buffered) — read the body flowing through the proxy.
+    /// `req.body` → str (lossy UTF-8 of the buffered request body)
+    ReqBody,
+    /// `resp.body` → str (lossy UTF-8 of the buffered response body)
+    RespBody,
+
     // ctx.*
     CtxGet,
     CtxSet,
@@ -264,6 +270,14 @@ impl BuiltinId {
                 | BuiltinId::RedisHExists
         )
     }
+
+    /// Returns true for the proxy-body builtins that require async dispatch
+    /// through `PluginSession::read_*_body`. Single authoritative source, used by
+    /// the VM dispatch loop — mirrors [`BuiltinId::is_redis_builtin`].
+    #[inline]
+    pub fn is_body_builtin(self) -> bool {
+        matches!(self, BuiltinId::ReqBody | BuiltinId::RespBody)
+    }
 }
 
 /// Constant pool entry
@@ -356,6 +370,18 @@ impl CompiledScript {
             }
         }
         None
+    }
+
+    /// True if the compiled bytecode calls the given builtin at least once.
+    ///
+    /// Scans `code` for `CallBuiltin(id, _)`. `BuiltinId` appears nowhere else in
+    /// the bytecode, so this is exhaustive (mirrors the `check_redis_link_names`
+    /// scan). Used by `EdgionPlugin::body_requirement` to gate a DSL plugin only
+    /// when its script actually reads a body builtin.
+    pub fn references_builtin(&self, id: BuiltinId) -> bool {
+        self.code
+            .iter()
+            .any(|op| matches!(op, OpCode::CallBuiltin(b, _) if *b == id))
     }
 }
 
@@ -458,5 +484,30 @@ mod tests {
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         let err = CompiledScript::deserialize_base64(&encoded).expect_err("should reject unsupported version");
         assert!(err.contains("unsupported bytecode version"));
+    }
+
+    #[test]
+    fn is_body_builtin_only_true_for_body_ids() {
+        assert!(BuiltinId::ReqBody.is_body_builtin());
+        assert!(BuiltinId::RespBody.is_body_builtin());
+        assert!(!BuiltinId::ReqHeader.is_body_builtin());
+        assert!(!BuiltinId::RedisGet.is_body_builtin());
+    }
+
+    #[test]
+    fn references_builtin_detects_body_use_per_direction() {
+        let limits = crate::validator::ValidationLimits::default();
+        // req.body only
+        let req_only = crate::resolve_script(Some("let b = req.body"), None, &limits).unwrap();
+        assert!(req_only.references_builtin(BuiltinId::ReqBody));
+        assert!(!req_only.references_builtin(BuiltinId::RespBody));
+        // resp.body only
+        let resp_only = crate::resolve_script(Some("let b = resp.body"), None, &limits).unwrap();
+        assert!(resp_only.references_builtin(BuiltinId::RespBody));
+        assert!(!resp_only.references_builtin(BuiltinId::ReqBody));
+        // neither
+        let header_only = crate::resolve_script(Some("let h = req.header(\"X\")"), None, &limits).unwrap();
+        assert!(!header_only.references_builtin(BuiltinId::ReqBody));
+        assert!(!header_only.references_builtin(BuiltinId::RespBody));
     }
 }

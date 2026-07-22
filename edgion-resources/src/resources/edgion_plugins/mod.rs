@@ -27,7 +27,7 @@ mod tests;
 pub use access_decision::AccessDecision;
 pub use body_requirement::{BodyReadFailureMode, BodyRequirement};
 pub use dye::{sanitize_field_value, DyeOutcome, DyeRule, DyeSuite, DENIED_DYE_HEADER_NAMES};
-pub use edgion_plugin::EdgionPlugin;
+pub use edgion_plugin::{BodyStage, EdgionPlugin};
 pub use entry::{
     dye_set_clobber_error, PluginEntry, RequestFilterEntry, UpstreamResponseBodyFilterEntry, UpstreamResponseEntry,
     UpstreamResponseFilterEntry,
