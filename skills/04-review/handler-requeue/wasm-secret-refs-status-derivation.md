@@ -69,26 +69,34 @@ plane was never at risk. No gateway change was made.
   resolver's `read_secret_utf8` collapses all three into one outcome; splitting
   them in status would claim a precision the resolver does not have.
 
-## Re-evaluation Triggers
+## Follow-up Resolution (2026-07-22)
 
-Re-open / extend only if:
-
-- The **deep dockerconfigjson content** case is prioritized: a type-correct UTF-8
-  dockerconfig that passes the controller extractor but fails the gateway's
-  `select_registry_auth` (bad JSON, bad base64, non-`user:password`) still reports
-  `ResolvedRefs=True`. Deliberately deferred — tracked in
-  `tasks/wasm-followups/contract-02-followup-dockerconfig-and-tls-refs.md`.
-- The `fetch.tls.clientCertificateRef` / `caCertificateRefs` refs need the same
-  present-but-unusable / grant-missing status treatment (also deferred in the
-  same follow-up).
+- `fetch.tls.clientCertificateRef` / `caCertificateRefs` grant-missing status:
+  **DONE**. `collect_wasm_ref_errors` now classifies both refs; a shared
+  `wasm_grant_denied` core backs `wasm_ref_grant_denied` (client-cert) and the
+  new `classify_ca_certificate_refs` (each CA ref is a core Secret/ConfigMap;
+  cross-namespace with no grant → `RefNotPermitted`). Grant-denial only, no
+  PEM-content check (the CA/client-cert resolver validates none itself), so
+  status stays faithful to the resolver. Covered by `tests::test_wasm_tls_*`.
+- **Deep dockerconfigjson content** parity with the gateway's
+  `select_registry_auth` (malformed JSON, bad base64 `auth`, non-`user:password`,
+  or a registry host absent from `.auths`): **WON'T FIX** — do NOT re-report the
+  false-healthy `ResolvedRefs=True` for a type-correct dockerconfig as a bug. A
+  `kubectl create secret docker-registry` document is always well-formed, so
+  host-mismatch is the only realistic case; the controller cannot depend on
+  `edgion-gateway` to reuse that parser, so closing it would need a cross-crate
+  extraction not worth the churn. The gateway fail-closes on the pull; status
+  accuracy is the only cost. Rationale lives at the `resolve_wasm_refs` doc
+  comment. Reconsider only if a real cluster shows repeated host-mismatch churn.
 
 ## Reference Cases
 
 - `tasks/review-wasm-issues/contract-02-invalid-wasm-secrets-report-resolved.md` (2026-07-18)
 - Source: `handlers/edgion_plugins.rs` (`resolve_wasm_refs`, `classify_auth_header_ref`,
-  `classify_pull_secret_ref`, `wasm_ref_grant_denied`);
+  `classify_pull_secret_ref`, `classify_ca_certificate_refs`, `wasm_ref_grant_denied`,
+  `wasm_grant_denied`);
   `handlers/plugins/resolve_credential/mod.rs` (`read_secret_utf8` visibility);
   `handlers/plugins/resolve_credential/wasm.rs` (the resolver being mirrored)
-- Tests: `edgion_plugins.rs` `tests::test_wasm_*` (7 cases)
+- Tests: `edgion_plugins.rs` `tests::test_wasm_*` (11 cases)
 - Sibling Wasm findings: [architecture/wasm-module-cache-key-runtime-config.md](../architecture/wasm-module-cache-key-runtime-config.md) (contract-01),
   [cpu-memory/wasm-oci-purge-interval-zero-clamp.md](../cpu-memory/wasm-oci-purge-interval-zero-clamp.md) (contract-03)

@@ -462,8 +462,9 @@ impl EdgionPluginsHandler {
     }
 }
 
-/// Check every `Wasm` plugin's `source.fetch.authHeaderSecretRef` and
-/// `source.oci.pullSecretRef` against the Secret store, re-running the *exact*
+/// Check every `Wasm` plugin's `source.fetch` and `source.oci` refs
+/// (`authHeaderSecretRef`, `pullSecretRef`, and the `fetch.tls` CA /
+/// client-cert refs) against the Secret store, re-running the *exact*
 /// usable-material checks the Wasm resolver used at `parse` time.
 ///
 /// The generic `resolve_secret_refs` above only asks "does the Secret object
@@ -472,17 +473,26 @@ impl EdgionPluginsHandler {
 /// registers the dependency *before* the grant check, so the Secret still
 /// looks present) would leave the gateway-visible `resolved_*` field unset
 /// while status wrongly reported `ResolvedRefs=True`. The gateway then
-/// fail-closes on load. This resolver closes that gap for the two refs by
-/// mapping each failure to the matching `ResolvedRefsError` variant.
+/// fail-closes on load. This resolver closes that gap by mapping each failure
+/// to the matching `ResolvedRefsError` variant.
 ///
 /// Ordering mirrors the resolver's short-circuit (grant → existence → type →
 /// key). A missing Secret object is intentionally *not* reported here — the
 /// generic `resolve_secret_refs` already surfaces it as `SecretNotFound`, so
-/// deferring avoids a double message on the common not-found path.
+/// deferring avoids a double message on the common not-found path. The
+/// `fetch.tls` refs are classified for grant denial only: the CA / client-cert
+/// resolver validates no PEM content itself (present + granted is its whole
+/// usability bar), so status stays faithful to the resolver rather than
+/// stricter than it.
 ///
-/// Out of scope (tracked as a follow-up): deep dockerconfigjson JSON/credential
-/// validation with the gateway's `select_registry_auth` semantics, and the
-/// `fetch.tls` client-cert / CA refs.
+/// Accepted limitation (WON'T FIX): no deep dockerconfigjson JSON/credential
+/// validation matching the gateway's `select_registry_auth` (malformed JSON,
+/// bad base64 `auth`, non-`user:password`, or a registry host absent from
+/// `.auths`). A `kubectl create secret docker-registry` document is always
+/// well-formed, so host-mismatch is the only realistic failure, and the
+/// controller cannot depend on `edgion-gateway` to reuse that parser — not
+/// worth the cross-crate refactor. The gateway fail-closes on such a pull;
+/// status accuracy is the only cost.
 fn resolve_wasm_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRefsError> {
     let owner_ns = ep.metadata.namespace.as_deref().unwrap_or("default").to_string();
     let mut errors = Vec::new();
@@ -506,8 +516,8 @@ fn resolve_wasm_refs(ep: &EdgionPlugins, ctx: &HandlerContext) -> Vec<ResolvedRe
     errors
 }
 
-/// Classify the fetch-auth and OCI-pull refs of one Wasm plugin, pushing at
-/// most one error per ref.
+/// Classify the OCI-pull, fetch-auth, and `fetch.tls` (CA / client-cert) refs
+/// of one Wasm plugin, pushing at most one error per ref.
 fn collect_wasm_ref_errors(
     config: &edgion_resources::resources::edgion_plugins::plugin_configs::WasmConfig,
     owner_ns: &str,
@@ -527,6 +537,18 @@ fn collect_wasm_ref_errors(
                 errors.push(e);
             }
         }
+        if let Some(tls) = &fetch.tls {
+            if let Some(validation) = &tls.outbound.validation {
+                if let Some(refs) = &validation.ca_certificate_refs {
+                    classify_ca_certificate_refs(ctx, owner_ns, refs, errors);
+                }
+            }
+            if let Some(cc) = &tls.outbound.client_certificate_ref {
+                if let Some(e) = wasm_ref_grant_denied(ctx, owner_ns, cc) {
+                    errors.push(e);
+                }
+            }
+        }
     }
 }
 
@@ -540,15 +562,28 @@ fn wasm_ref_grant_denied(
     if !sor.is_cross_namespace(owner_ns) {
         return None;
     }
-    let to_ns = sor.effective_namespace(owner_ns);
+    wasm_grant_denied(ctx, owner_ns, sor.effective_namespace(owner_ns), "Secret", &sor.name)
+}
+
+/// Grant-check core shared by the Wasm ref classifiers: returns
+/// `RefNotPermitted` when a cross-namespace ref into `to_ns` (kind `to_kind`,
+/// core API group) has no matching `ReferenceGrant`. Callers must pass a
+/// `to_ns` already known to differ from `owner_ns`.
+fn wasm_grant_denied(
+    ctx: &HandlerContext,
+    owner_ns: &str,
+    to_ns: &str,
+    to_kind: &str,
+    to_name: &str,
+) -> Option<ResolvedRefsError> {
     let allowed = ctx.runtime().ref_grant_store.check_reference_allowed(
         owner_ns,
         "edgion.io",
         "EdgionPlugins",
         to_ns,
         "",
-        "Secret",
-        Some(&sor.name),
+        to_kind,
+        Some(to_name),
     );
     if allowed {
         None
@@ -557,8 +592,35 @@ fn wasm_ref_grant_denied(
             from_namespace: owner_ns.to_string(),
             from_kind: "EdgionPlugins",
             target_namespace: to_ns.to_string(),
-            target_name: sor.name.clone(),
+            target_name: to_name.to_string(),
         })
+    }
+}
+
+/// Classify the CA-certificate refs of a Wasm `fetch.tls`. Each ref targets a
+/// core Secret or ConfigMap; a cross-namespace ref with no `ReferenceGrant`
+/// yields `RefNotPermitted`, mirroring `resolve_ca_certificate_refs`'s
+/// GrantGated path (which drops such a ref from `resolved_ca_certificates`).
+/// Non-core or unknown-kind refs are skipped, matching the resolver.
+fn classify_ca_certificate_refs(
+    ctx: &HandlerContext,
+    owner_ns: &str,
+    refs: &[edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef],
+    errors: &mut Vec<ResolvedRefsError>,
+) {
+    for ca_ref in refs {
+        if !edgion_resources::resources::common::is_core_api_group(&ca_ref.group)
+            || (ca_ref.kind != "Secret" && ca_ref.kind != "ConfigMap")
+        {
+            continue;
+        }
+        let to_ns = ca_ref.namespace.as_deref().unwrap_or(owner_ns);
+        if to_ns == owner_ns {
+            continue;
+        }
+        if let Some(e) = wasm_grant_denied(ctx, owner_ns, to_ns, &ca_ref.kind, &ca_ref.name) {
+            errors.push(e);
+        }
     }
 }
 
@@ -835,6 +897,7 @@ mod tests {
     use crate::conf_mgr::sync_runtime::resource_processor::{HandlerContext, ProcessResult, ProcessorHandler};
     use crate::conf_mgr::ControllerRuntime;
     use edgion_resources::prelude_resources::EdgionConfigData;
+    use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
     use edgion_resources::resources::edgion_config_data::{
         ConfigEntry, EdgionConfigDataRef, EdgionConfigDataSpec, RegionRouteOverride,
     };
@@ -1361,6 +1424,124 @@ mod tests {
             }
             other => panic!("expected RefNotPermitted, got {other:?}"),
         }
+    }
+
+    fn ca_ref(kind: &str, name: &str, ns: Option<&str>) -> BackendTLSPolicyCACertificateRef {
+        BackendTLSPolicyCACertificateRef {
+            group: String::new(),
+            kind: kind.to_string(),
+            name: name.to_string(),
+            namespace: ns.map(str::to_string),
+        }
+    }
+
+    fn wasm_ep_with_fetch_tls(
+        ns: &str,
+        ca_refs: Vec<BackendTLSPolicyCACertificateRef>,
+        client_cert: Option<SecretObjectReference>,
+    ) -> EdgionPlugins {
+        use edgion_resources::resources::common::{OutboundTlsLocal, OutboundTlsValidation, TlsConfig};
+        let mut ep = EdgionPlugins::new("wasm-ep", EdgionPluginsSpec::default());
+        ep.metadata.namespace = Some(ns.to_string());
+        let tls = TlsConfig {
+            enabled: true,
+            outbound: OutboundTlsLocal {
+                validation: (!ca_refs.is_empty()).then_some(OutboundTlsValidation {
+                    ca_certificate_refs: Some(ca_refs),
+                    ..Default::default()
+                }),
+                client_certificate_ref: client_cert,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let config = WasmConfig {
+            source: WasmSourceSpec {
+                url: Some("https://repo.example.com/mod.wasm".to_string()),
+                fetch: Some(WasmFetchSpec {
+                    tls: Some(tls),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        ep.spec.request_plugins = Some(vec![RequestFilterEntry::new(EdgionPlugin::Wasm(config))]);
+        ep
+    }
+
+    #[test]
+    fn test_wasm_tls_ca_ref_cross_ns_grant_missing_reports_ref_not_permitted() {
+        // Cross-namespace CA Secret ref with no ReferenceGrant: the resolver
+        // leaves it out of resolved_ca_certificates, so status must not stay green.
+        let secret = build_secret_typed("other-ns", "wasm-ca", None, &[("ca.crt", b"pem")]);
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("other-ns/wasm-ca".to_string(), secret)]));
+        let ep = wasm_ep_with_fetch_tls("default", vec![ca_ref("Secret", "wasm-ca", Some("other-ns"))], None);
+
+        let errors = super::resolve_wasm_refs(&ep, &ctx);
+        assert_eq!(errors.len(), 1, "got {errors:?}");
+        match &errors[0] {
+            ResolvedRefsError::RefNotPermitted {
+                target_namespace,
+                target_name,
+                ..
+            } => {
+                assert_eq!(target_namespace, "other-ns");
+                assert_eq!(target_name, "wasm-ca");
+            }
+            other => panic!("expected RefNotPermitted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_wasm_tls_ca_configmap_cross_ns_grant_missing_reports_ref_not_permitted() {
+        // Same gap for a ConfigMap-kind CA ref.
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::new());
+        let ep = wasm_ep_with_fetch_tls(
+            "default",
+            vec![ca_ref("ConfigMap", "wasm-ca-cm", Some("other-ns"))],
+            None,
+        );
+
+        let errors = super::resolve_wasm_refs(&ep, &ctx);
+        assert_eq!(errors.len(), 1, "got {errors:?}");
+        assert!(
+            matches!(&errors[0], ResolvedRefsError::RefNotPermitted { target_name, .. } if target_name == "wasm-ca-cm")
+        );
+    }
+
+    #[test]
+    fn test_wasm_tls_client_cert_cross_ns_grant_missing_reports_ref_not_permitted() {
+        let secret = build_secret_typed("other-ns", "wasm-cc", Some("kubernetes.io/tls"), &[("tls.crt", b"c")]);
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::from([("other-ns/wasm-cc".to_string(), secret)]));
+        let cc = SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "wasm-cc".to_string(),
+            namespace: Some("other-ns".to_string()),
+        };
+        let ep = wasm_ep_with_fetch_tls("default", vec![], Some(cc));
+
+        let errors = super::resolve_wasm_refs(&ep, &ctx);
+        assert_eq!(errors.len(), 1, "got {errors:?}");
+        assert!(
+            matches!(&errors[0], ResolvedRefsError::RefNotPermitted { target_name, .. } if target_name == "wasm-cc")
+        );
+    }
+
+    #[test]
+    fn test_wasm_tls_refs_same_ns_report_no_error() {
+        // Same-namespace CA + client-cert refs are never grant-gated → no status error.
+        let (ctx, _rt) = make_ctx_with_secrets(HashMap::new());
+        let cc = SecretObjectReference {
+            group: None,
+            kind: None,
+            name: "wasm-cc".to_string(),
+            namespace: None,
+        };
+        let ep = wasm_ep_with_fetch_tls("default", vec![ca_ref("Secret", "wasm-ca", None)], Some(cc));
+
+        assert!(super::resolve_wasm_refs(&ep, &ctx).is_empty());
     }
 
     // ── RegionRoute + overrideRef resolution tests ────────────────────────
