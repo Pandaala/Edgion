@@ -1,12 +1,12 @@
-use super::config::CircuitBreakerConfig;
+use super::config::OutlierDetectionResolved;
 use dashmap::DashMap;
 use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
-static CB_STORE: LazyLock<Arc<CircuitBreakerStore>> = LazyLock::new(|| Arc::new(CircuitBreakerStore::new()));
+static OD_STORE: LazyLock<Arc<OutlierDetectionStore>> = LazyLock::new(|| Arc::new(OutlierDetectionStore::new()));
 
-pub fn get_circuit_breaker_store() -> Arc<CircuitBreakerStore> {
-    CB_STORE.clone()
+pub fn get_outlier_detection_store() -> Arc<OutlierDetectionStore> {
+    OD_STORE.clone()
 }
 
 /// Classification of a recorded backend failure.
@@ -69,7 +69,7 @@ struct EndpointState {
 }
 
 struct ServiceCbState {
-    config: CircuitBreakerConfig,
+    config: OutlierDetectionResolved,
     endpoints: DashMap<u64, EndpointState>,
     /// Serializes the percent-check + ejection steps in `record_failure` to prevent
     /// concurrent calls for distinct backends from both passing the max-ejection-percent
@@ -80,7 +80,7 @@ struct ServiceCbState {
 impl ServiceCbState {
     /// Single canonical construction site for a fresh per-service breaker state, so a
     /// future field addition is made in one place rather than at every insert site.
-    fn new(config: CircuitBreakerConfig) -> Arc<Self> {
+    fn new(config: OutlierDetectionResolved) -> Arc<Self> {
         Arc::new(Self {
             config,
             endpoints: DashMap::new(),
@@ -89,18 +89,18 @@ impl ServiceCbState {
     }
 }
 
-pub struct CircuitBreakerStore {
+pub struct OutlierDetectionStore {
     services: DashMap<String, Arc<ServiceCbState>>,
 }
 
-impl CircuitBreakerStore {
+impl OutlierDetectionStore {
     pub fn new() -> Self {
         Self {
             services: DashMap::new(),
         }
     }
 
-    /// Number of services with circuit-breaker state.
+    /// Number of services with outlier-detection state.
     pub fn service_count(&self) -> usize {
         self.services.len()
     }
@@ -110,7 +110,7 @@ impl CircuitBreakerStore {
         self.services.iter().map(|kv| kv.key().clone()).collect()
     }
 
-    pub fn set_service_config(&self, service_key: &str, config: Option<CircuitBreakerConfig>) {
+    pub fn set_service_config(&self, service_key: &str, config: Option<OutlierDetectionResolved>) {
         match config {
             // Use a single DashMap `entry` so the check-and-swap runs under one shard write
             // lock: no window where the key is absent (which would let data-plane readers
@@ -192,7 +192,7 @@ impl CircuitBreakerStore {
 
     /// Backoff-scaled ejection duration: `min(ejection_seconds * num_ejections, max)`.
     #[inline]
-    fn ejection_duration(config: &CircuitBreakerConfig, num_ejections: u32) -> std::time::Duration {
+    fn ejection_duration(config: &OutlierDetectionResolved, num_ejections: u32) -> std::time::Duration {
         let secs = config
             .ejection_seconds
             .saturating_mul(num_ejections as u64)
@@ -366,10 +366,10 @@ impl CircuitBreakerStore {
 mod tests {
     use super::*;
 
-    fn make_config(errors: u32, gateway: u32, seconds: u64, max_secs: u64, max_pct: u32) -> CircuitBreakerConfig {
+    fn make_config(errors: u32, gateway: u32, seconds: u64, max_secs: u64, max_pct: u32) -> OutlierDetectionResolved {
         // Local-origin threshold inherits the gateway threshold, matching the
         // config `normalize` default, so existing tests need no extra argument.
-        CircuitBreakerConfig {
+        OutlierDetectionResolved {
             consecutive_errors: errors,
             consecutive_gateway_errors: gateway,
             consecutive_local_origin_failures: gateway,
@@ -381,8 +381,8 @@ mod tests {
 
     /// Build a config with an explicit local-origin threshold distinct from the
     /// gateway threshold, for the local-origin split tests.
-    fn make_config_lo(gateway: u32, local_origin: u32) -> CircuitBreakerConfig {
-        CircuitBreakerConfig {
+    fn make_config_lo(gateway: u32, local_origin: u32) -> OutlierDetectionResolved {
+        OutlierDetectionResolved {
             consecutive_errors: 100,
             consecutive_gateway_errors: gateway,
             consecutive_local_origin_failures: local_origin,
@@ -394,13 +394,13 @@ mod tests {
 
     #[test]
     fn test_no_config_means_not_ejected() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         assert!(!store.is_ejected("default/svc1", 123));
     }
 
     #[test]
     fn test_record_failure_ejects_after_threshold() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc1", Some(make_config(3, 3, 30, 300, 0)));
 
         for _ in 0..2 {
@@ -414,7 +414,7 @@ mod tests {
 
     #[test]
     fn test_success_resets_failures() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc1", Some(make_config(3, 3, 30, 300, 0)));
 
         store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn test_auto_recovery_after_cooldown() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 1, 1, 300, 0)));
 
         store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
@@ -441,7 +441,7 @@ mod tests {
 
     #[test]
     fn test_max_ejection_percent() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 50)));
 
         store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
@@ -456,7 +456,7 @@ mod tests {
         use std::sync::{Arc, Barrier};
 
         // 4 backends, 50% limit → at most 2 may be ejected regardless of concurrency.
-        let store = Arc::new(CircuitBreakerStore::new());
+        let store = Arc::new(OutlierDetectionStore::new());
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 50)));
 
         let barrier = Arc::new(Barrier::new(4));
@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn test_remove_service_clears_state() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 0)));
         store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
         assert!(store.is_ejected("default/svc1", 111));
@@ -501,7 +501,7 @@ mod tests {
     fn test_record_success_on_ejected_does_not_leak_gauge() {
         // record_success on an ejected entry must fire record_cb_recovery so the
         // CB_EJECTED_ENDPOINTS gauge stays balanced.
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 0)));
 
         store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
@@ -521,7 +521,7 @@ mod tests {
         // count fallback.
         use std::sync::{Arc, Barrier};
 
-        let store = Arc::new(CircuitBreakerStore::new());
+        let store = Arc::new(OutlierDetectionStore::new());
         // 50% cap. Once endpoints.len() reaches 4, max_ejectable = 2.
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 50)));
 
@@ -562,7 +562,7 @@ mod tests {
     fn test_percent_cap_applies_when_total_endpoints_is_zero() {
         // When the selector snapshot is momentarily empty (total_endpoints == 0), the
         // percent guard must still apply using the observed endpoint count as a fallback.
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 50)));
 
         // First failure with total=0 establishes the endpoint and ejects (max(1) of 50% of 1).
@@ -580,7 +580,7 @@ mod tests {
         // The atomic entry() swap must preserve these semantics: a *changed* config
         // rebuilds the service (clearing ejection state), while an *unchanged* config
         // is a no-op that keeps the existing ejection state.
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 0)));
         store.record_failure("default/svc1", 111, 2, FailureClass::Gateway);
         assert!(store.is_ejected("default/svc1", 111));
@@ -600,7 +600,7 @@ mod tests {
         // must never leave the key absent. After the storm, one config must be installed.
         use std::sync::{Arc, Barrier};
 
-        let store = Arc::new(CircuitBreakerStore::new());
+        let store = Arc::new(OutlierDetectionStore::new());
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 0)));
 
         let barrier = Arc::new(Barrier::new(4));
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn test_different_services_isolated() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc1", Some(make_config(1, 1, 30, 300, 0)));
         store.set_service_config("default/svc2", Some(make_config(1, 1, 30, 300, 0)));
 
@@ -636,7 +636,7 @@ mod tests {
 
     #[test]
     fn app_and_gateway_counters_are_independent() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         // app threshold 3, gateway threshold 10.
         store.set_service_config("default/svc", Some(make_config(3, 10, 30, 300, 0)));
 
@@ -649,7 +649,7 @@ mod tests {
 
     #[test]
     fn gateway_counter_does_not_trip_app_threshold() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         // app threshold 3, gateway threshold 10.
         store.set_service_config("default/svc", Some(make_config(3, 10, 30, 300, 0)));
         // 3 gateway failures must NOT eject (gateway threshold is 10).
@@ -661,7 +661,7 @@ mod tests {
 
     #[test]
     fn success_resets_both_counters() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc", Some(make_config(3, 3, 30, 300, 0)));
         store.record_failure("default/svc", 1, 1, FailureClass::Application);
         store.record_failure("default/svc", 1, 1, FailureClass::Gateway);
@@ -674,7 +674,7 @@ mod tests {
 
     #[test]
     fn local_origin_counter_is_independent_of_gateway() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         // gateway threshold 10, local-origin threshold 3.
         store.set_service_config("default/svc", Some(make_config_lo(10, 3)));
 
@@ -688,7 +688,7 @@ mod tests {
 
     #[test]
     fn gateway_failures_do_not_trip_local_origin_threshold() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         // gateway threshold 10, local-origin threshold 2: 2 gateway failures must NOT
         // eject through the (lower) local-origin counter — the buckets are separate.
         store.set_service_config("default/svc", Some(make_config_lo(10, 2)));
@@ -700,7 +700,7 @@ mod tests {
 
     #[test]
     fn success_resets_local_origin_counter() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc", Some(make_config_lo(10, 3)));
         store.record_failure("default/svc", 1, 1, FailureClass::LocalOrigin);
         store.record_failure("default/svc", 1, 1, FailureClass::LocalOrigin);
@@ -720,7 +720,7 @@ mod tests {
 
     #[test]
     fn backoff_doubles_second_ejection_and_persists_num_ejections() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         // base 1s, consecutive 1 so a single failure ejects.
         store.set_service_config("default/svc", Some(make_config(1, 1, 1, 300, 0)));
 
@@ -745,28 +745,28 @@ mod tests {
         // clamped at max_ejection_seconds. base=10s, cap=25s.
         let cfg = make_config(1, 1, 10, 25, 0);
         assert_eq!(
-            CircuitBreakerStore::ejection_duration(&cfg, 1),
+            OutlierDetectionStore::ejection_duration(&cfg, 1),
             std::time::Duration::from_secs(10)
         );
         assert_eq!(
-            CircuitBreakerStore::ejection_duration(&cfg, 2),
+            OutlierDetectionStore::ejection_duration(&cfg, 2),
             std::time::Duration::from_secs(20)
         );
         // 3*10=30 exceeds the 25s cap -> clamped to 25.
         assert_eq!(
-            CircuitBreakerStore::ejection_duration(&cfg, 3),
+            OutlierDetectionStore::ejection_duration(&cfg, 3),
             std::time::Duration::from_secs(25)
         );
         // Far past the cap stays clamped (and does not overflow).
         assert_eq!(
-            CircuitBreakerStore::ejection_duration(&cfg, u32::MAX),
+            OutlierDetectionStore::ejection_duration(&cfg, u32::MAX),
             std::time::Duration::from_secs(25)
         );
     }
 
     #[test]
     fn change_detection_rebuilds_on_gateway_threshold_change() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         store.set_service_config("default/svc", Some(make_config(5, 5, 30, 300, 0)));
         store.record_failure("default/svc", 1, 1, FailureClass::Gateway); // G=1
                                                                           // Changing ONLY the gateway threshold must rebuild (clearing the counter).
@@ -784,7 +784,7 @@ mod tests {
 
         // consecutive 1 so a single failure trips the threshold; percent cap off
         // (0) so the percent guard cannot mask the idempotency check.
-        let store = Arc::new(CircuitBreakerStore::new());
+        let store = Arc::new(OutlierDetectionStore::new());
         store.set_service_config("default/svc", Some(make_config(1, 1, 30, 300, 0)));
 
         let barrier = Arc::new(Barrier::new(4));
@@ -819,7 +819,7 @@ mod stats_tests {
 
     #[test]
     fn empty_store_reports_zero() {
-        let store = CircuitBreakerStore::new();
+        let store = OutlierDetectionStore::new();
         assert_eq!(store.service_count(), 0);
         assert!(store.keys().is_empty());
     }

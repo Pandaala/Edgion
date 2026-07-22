@@ -132,6 +132,12 @@ pub mod names {
     // unboundedly on Service creation/deletion. Backend attribution comes
     // from the per-request access log / `EdgionStatus`, already service-scoped.
     pub const RETRY_BUDGET_DENIED_TOTAL: &str = "edgion_gateway_retry_budget_denied_total";
+    // Circuit-breaker admit-time CONCURRENCY-CAP shed (backends/circuit_breaker/mod.rs
+    // `CbPermit::try_acquire` returning None). This is NOT the outlier-detection
+    // ejection/rejection family above (`CB_EJECTIONS_TOTAL`, `CB_EJECTED_ENDPOINTS`,
+    // `CB_REJECTIONS_TOTAL`) — those trip on backend health; this one trips on a
+    // per-endpoint in-flight-count cap, independent of health. Labelled `service` only.
+    pub const CB_SHED_TOTAL: &str = "edgion_gateway_circuit_breaker_shed_total";
 }
 
 /// Global metrics singleton
@@ -801,6 +807,24 @@ pub fn record_plugin_policy_bypassed(plugin: &str) {
 /// A retry attempt was refused by a `retryConstraint` budget.
 pub fn record_retry_budget_denied() {
     counter!(names::RETRY_BUDGET_DENIED_TOTAL).increment(1);
+}
+
+// ============================================================
+// Circuit breaker concurrency-cap shed metric
+// ============================================================
+//
+// Distinct from the outlier-detection ejection/rejection family further
+// above (`CB_EJECTIONS_TOTAL` / `CB_EJECTED_ENDPOINTS` / `CB_REJECTIONS_TOTAL`,
+// which trip on backend health): this counter fires when
+// `backends::circuit_breaker::CbPermit::try_acquire` finds the chosen
+// endpoint already at its configured in-flight concurrency cap and the
+// request is shed before the upstream connect is attempted.
+
+/// A request was shed by the per-endpoint circuit-breaker concurrency cap.
+/// Labelled by `service` only — never per-endpoint or per-request — to stay
+/// low-cardinality.
+pub fn record_cb_shed(service_key: &str) {
+    counter!(names::CB_SHED_TOTAL, "service" => service_key.to_string()).increment(1);
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
-use crate::backends::circuit_breaker::get_circuit_breaker_store;
 use crate::backends::discovery::get_roundrobin_store;
 use crate::backends::health;
 use crate::backends::health::get_health_status_store;
+use crate::backends::outlier_detection::get_outlier_detection_store;
 use crate::lb::{compiled_selector, EdgionBackend, PolicyKind};
 use edgion_resources::edgion_status::EdgionStatus;
 use edgion_resources::resources::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
@@ -25,9 +25,9 @@ fn hydrate_cell_if_empty(cell: &compiled_selector::ServiceSelectorCell, service_
     cell.hydrate_if_empty(|| get_roundrobin_store().get_backends_for_service(service_key))
 }
 
-/// Side-effect-free health predicate: active health check + circuit-breaker
+/// Side-effect-free health predicate: active health check + outlier-detection
 /// ejection, with NO metric recording. Used by the panic-threshold counting
-/// pass so it does not double-count circuit-breaker rejections.
+/// pass so it does not double-count outlier-detection rejections.
 #[inline]
 pub(crate) fn is_backend_healthy_quiet(
     service_key: &str,
@@ -39,11 +39,11 @@ pub(crate) fn is_backend_healthy_quiet(
     {
         return false;
     }
-    !get_circuit_breaker_store().is_ejected(service_key, health::check::backend_hash(backend))
+    !get_outlier_detection_store().is_ejected(service_key, health::check::backend_hash(backend))
 }
 
 /// Health predicate for the selection walk. Same logic as
-/// [`is_backend_healthy_quiet`] but records a circuit-breaker rejection metric
+/// [`is_backend_healthy_quiet`] but records a outlier-detection rejection metric
 /// when a backend is rejected for being ejected (preserves existing behavior).
 #[inline]
 pub(crate) fn is_backend_healthy(
@@ -57,8 +57,8 @@ pub(crate) fn is_backend_healthy(
     {
         return false;
     }
-    // 2. Circuit breaker filter (records the rejection metric)
-    if get_circuit_breaker_store().is_ejected(service_key, health::check::backend_hash(backend)) {
+    // 2. Outlier detection filter (records the rejection metric)
+    if get_outlier_detection_store().is_ejected(service_key, health::check::backend_hash(backend)) {
         crate::observe::metrics::record_cb_rejection(service_key);
         return false;
     }
@@ -67,14 +67,14 @@ pub(crate) fn is_backend_healthy(
 
 /// Decide whether panic mode should engage for this selection. Gated so the
 /// O(n) survivor count only runs for services that actually have health-check
-/// or circuit-breaker state (otherwise every backend passes and panic can never
+/// or outlier-detection state (otherwise every backend passes and panic can never
 /// trigger). Records the `lb_panic_mode` gauge when it evaluates.
 fn panic_engaged(
     service_key: &str,
     selector: &compiled_selector::CompiledSelector,
     health_store: &health::check::HealthStatusStore,
 ) -> bool {
-    let cb_store = get_circuit_breaker_store();
+    let cb_store = get_outlier_detection_store();
     if !health_store.has_service(service_key) && !cb_store.has_service(service_key) {
         return false;
     }

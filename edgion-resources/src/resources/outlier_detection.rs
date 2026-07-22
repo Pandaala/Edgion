@@ -1,21 +1,20 @@
-//! Outlier-detection (circuit-breaker) configuration.
+//! Outlier-detection configuration.
 //!
 //! `OutlierDetectionConfig` is the deserialize/CRD-spec shape: fields whose
 //! defaults depend on sibling values are `Option` so `normalize` can apply
 //! them; `#[serde(default)]` cannot express cross-field defaults.
-//! `CircuitBreakerConfig` is the fully-resolved shape used by the gateway
+//! `OutlierDetectionResolved` is the fully-resolved shape used by the gateway
 //! data plane, produced by `OutlierDetectionConfig::normalize`.
 
 use crate::duration::parse_duration;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Resolved outlier-detection config for a service. The internal module and
-/// struct retain the `circuit_breaker` name; the user-facing configuration
-/// surface is the `EdgionBackendTrafficPolicy` resource's
+/// Resolved outlier-detection config for a service. The user-facing
+/// configuration surface is the `EdgionBackendTrafficPolicy` resource's
 /// `spec.outlierDetection` section.
 #[derive(Debug, Clone, PartialEq)]
-pub struct CircuitBreakerConfig {
+pub struct OutlierDetectionResolved {
     /// Consecutive application-5xx (any >=500 that is NOT 502/503/504) before ejection.
     pub consecutive_errors: u32,
     /// Consecutive upstream-origin gateway failures (backend returned 502/503/504) before ejection.
@@ -86,7 +85,7 @@ impl OutlierDetectionConfig {
     }
 
     /// Resolve field-dependent defaults and clamp invalid combinations.
-    pub fn normalize(self) -> CircuitBreakerConfig {
+    pub fn normalize(self) -> OutlierDetectionResolved {
         // Gateway threshold inherits the (possibly tuned) consecutive_errors so
         // old single-field configs keep their aggressiveness on the hard-failure path.
         let consecutive_gateway_errors = self.consecutive_gateway_errors.unwrap_or(self.consecutive_errors);
@@ -108,7 +107,7 @@ impl OutlierDetectionConfig {
             .map(|d| d.as_secs())
             .unwrap_or_else(|| ejection_seconds.max(300))
             .max(ejection_seconds);
-        CircuitBreakerConfig {
+        OutlierDetectionResolved {
             consecutive_errors: self.consecutive_errors,
             consecutive_gateway_errors,
             consecutive_local_origin_failures,
@@ -119,7 +118,7 @@ impl OutlierDetectionConfig {
     }
 }
 
-impl Default for CircuitBreakerConfig {
+impl Default for OutlierDetectionResolved {
     fn default() -> Self {
         OutlierDetectionConfig {
             consecutive_errors: default_consecutive_errors(),
@@ -133,7 +132,7 @@ impl Default for CircuitBreakerConfig {
     }
 }
 
-impl CircuitBreakerConfig {
+impl OutlierDetectionResolved {
     pub fn validate(&self) -> Option<String> {
         if self.consecutive_errors == 0 {
             return Some("consecutiveErrors must be >= 1".to_string());
@@ -216,9 +215,9 @@ mod tests {
 
     #[test]
     fn zero_local_origin_failures_rejected() {
-        let config = CircuitBreakerConfig {
+        let config = OutlierDetectionResolved {
             consecutive_local_origin_failures: 0,
-            ..CircuitBreakerConfig::default()
+            ..OutlierDetectionResolved::default()
         };
         assert!(config.validate().is_some());
     }
@@ -261,7 +260,7 @@ mod tests {
 
     #[test]
     fn defaults_all_fields() {
-        let config = CircuitBreakerConfig::default();
+        let config = OutlierDetectionResolved::default();
         assert_eq!(config.consecutive_errors, 5);
         assert_eq!(config.consecutive_gateway_errors, 5);
         assert_eq!(config.consecutive_local_origin_failures, 5);
@@ -273,9 +272,9 @@ mod tests {
 
     #[test]
     fn zero_consecutive_errors_rejected() {
-        let config = CircuitBreakerConfig {
+        let config = OutlierDetectionResolved {
             consecutive_errors: 0,
-            ..CircuitBreakerConfig::default()
+            ..OutlierDetectionResolved::default()
         };
         assert!(config.validate().is_some());
     }

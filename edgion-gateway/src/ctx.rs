@@ -1028,6 +1028,15 @@ pub struct EdgionHttpContext {
     /// Read by error_while_proxy / fail_to_proxy / suppress_error_log to treat
     /// the sentinel abort as an intentional reply, not a proxy failure.
     pub local_reply_written: bool,
+
+    /// Circuit-breaker admission permit for the chosen endpoint, acquired at
+    /// `upstream_peer` (pre-connect) when the target Service carries a
+    /// `circuitBreaker` concurrency cap. Holding it on the ctx ties the permit's
+    /// lifetime to the request: it releases exactly once when the ctx drops at
+    /// request end, covering every terminal path (success, upstream error,
+    /// client disconnect, cancellation). `None` when no cap applies or admission
+    /// was not attempted (bypass paths, no policy).
+    pub cb_permit: Option<crate::backends::circuit_breaker::CbPermit>,
 }
 
 impl Default for EdgionHttpContext {
@@ -1112,6 +1121,7 @@ impl EdgionHttpContext {
             local_reply_body: None,
             local_reply_header: None,
             local_reply_written: false,
+            cb_permit: None,
         }
     }
 

@@ -49,7 +49,7 @@ pub(in crate::backends::discovery) fn cleanup_removed_backends(
             removed_count = removed.len(),
             "Cleaning stale backend runtime state"
         );
-        let cb_store = crate::backends::get_circuit_breaker_store();
+        let cb_store = crate::backends::get_outlier_detection_store();
         for addr in &removed {
             // Look up the live Arc<EdgionBackend> from the pre-replace snapshot
             // to read the in-flight conn_count directly from the atomic.

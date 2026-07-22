@@ -401,6 +401,7 @@ mod tests {
                     health_check: None,
                     outlier_detection: None,
                     upstream_authority: authority,
+                    circuit_breaker: None,
                 },
                 status: None,
             })

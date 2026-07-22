@@ -193,6 +193,52 @@ pub async fn upstream_peer(
         upstream_peer_http(edgion_http, session, ctx).await?
     };
 
+    // Circuit breaker: admit-time per-endpoint concurrency cap. The chosen
+    // endpoint (`lb_edgion_backend`) is now known but Pingora has NOT yet
+    // connected the returned peer — this is the pre-connect admission point, and
+    // the counter increment IS the acquire. If the endpoint is at cap, shed with
+    // a non-retrying 503 that mirrors the established `end_response_503` +
+    // fail-closed-error shed (see `get_peer_with_sp_fallback`): the error is
+    // returned out of `upstream_peer` WITHOUT setting the pingora retry flag, so
+    // there is no shed-induced retry storm to another endpoint. Because the shed
+    // returns before any connect, it reaches none of the outlier-detection
+    // `record_failure` sites — a busy-but-healthy endpoint is never ejected by
+    // its own shed. Bypass paths (DirectEndpoint / ExternalJump) carry no service
+    // key and no `lb_edgion_backend`, so this is a no-op for them.
+    if let Some(service_key) = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.clone()) {
+        if let Some(max) = get_backend_traffic_policy_store().get_circuit_breaker_limit(&service_key) {
+            if let Some(chosen_backend) = ctx.get_current_upstream().and_then(|u| u.lb_edgion_backend.clone()) {
+                // Release any permit this request acquired on a PRIOR attempt
+                // before re-acquiring. On retry, Pingora re-enters upstream_peer
+                // with the same ctx (and its permit) still alive; without this a
+                // retry re-selecting the same endpoint at a full cap would be
+                // wrongly shed by the request's own stale permit, and every
+                // endpoint it tried would stay occupied until request end.
+                ctx.cb_permit = None;
+                match crate::backends::circuit_breaker::CbPermit::try_acquire(chosen_backend, max) {
+                    Some(permit) => {
+                        ctx.cb_permit = Some(permit);
+                    }
+                    None => {
+                        crate::backends::circuit_breaker::inc_shed_total(&service_key);
+                        // 503 body carries no internal detail (helper enforces
+                        // this); for gRPC it commits a trailers-only grpc-status
+                        // 14 frame. The returned error type mirrors the sibling
+                        // shed: HTTPStatus(200) for gRPC (so `fail_to_proxy` does
+                        // not stamp a spurious 500), InternalError for HTTP. Both
+                        // terminate WITHOUT a pingora retry.
+                        end_response_503(session, ctx, &edgion_http.server_header_opts).await?;
+                        return Err(if ctx.is_grpc_route_matched {
+                            PingoraError::new(ErrorType::HTTPStatus(200))
+                        } else {
+                            PingoraError::new(ErrorType::InternalError)
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     apply_upstream_authority(session, ctx, &mut peer)?;
 
     Ok(peer)

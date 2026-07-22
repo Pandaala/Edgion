@@ -394,7 +394,7 @@ struct StoreStatsResponse {
     service_store: SimpleCountStats,
     ep_slice_store: EpSliceStoreStats,
     health_status_store: SimpleCountStats,
-    circuit_breaker_store: SimpleCountStats,
+    outlier_detection_store: SimpleCountStats,
     health_check_config_store: SimpleCountStats,
     gateway_backend_tls_store: SimpleCountStats,
     edgion_config_data_store: SimpleCountStats,
@@ -518,8 +518,8 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         count: hs_g.tracked_service_count(),
     };
 
-    let cb_g = crate::backends::circuit_breaker::store::get_circuit_breaker_store();
-    let circuit_breaker_store = SimpleCountStats {
+    let cb_g = crate::backends::outlier_detection::store::get_outlier_detection_store();
+    let outlier_detection_store = SimpleCountStats {
         count: cb_g.service_count(),
     };
 
@@ -569,7 +569,7 @@ async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiRespons
         service_store,
         ep_slice_store,
         health_status_store,
-        circuit_breaker_store,
+        outlier_detection_store,
         health_check_config_store,
         gateway_backend_tls_store,
         edgion_config_data_store,
@@ -1756,7 +1756,7 @@ mod store_stats_tests {
                 service_index_count: 0,
             },
             health_status_store: SimpleCountStats { count: 0 },
-            circuit_breaker_store: SimpleCountStats { count: 0 },
+            outlier_detection_store: SimpleCountStats { count: 0 },
             health_check_config_store: SimpleCountStats { count: 0 },
             gateway_backend_tls_store: SimpleCountStats { count: 0 },
             edgion_config_data_store: SimpleCountStats { count: 0 },

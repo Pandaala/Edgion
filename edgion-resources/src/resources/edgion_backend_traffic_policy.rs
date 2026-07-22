@@ -3,6 +3,7 @@
 //! Services via targetRefs. Design:
 //! docs/superpowers/specs/2026-07-10-edgion-backend-traffic-policy-design.md
 
+use super::circuit_breaker::CircuitBreakerConfig;
 use super::common::PolicyAncestorStatus;
 use super::health_check::ServiceHealthCheck;
 use super::lb_policy::{ConsistentHashOn, ParsedLBPolicy};
@@ -44,6 +45,10 @@ pub struct EdgionBackendTrafficPolicySpec {
     /// target backend over a sliding window. Absent = today's behaviour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retry_constraint: Option<RetryConstraintConfig>,
+    /// Circuit breaker: per-endpoint hard cap on concurrent in-flight requests.
+    /// Absent = no concurrency cap (today's behaviour).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub circuit_breaker: Option<CircuitBreakerConfig>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
@@ -239,6 +244,11 @@ impl EdgionBackendTrafficPolicySpec {
         if let Some(od) = &self.outlier_detection {
             if let Some(err) = od.get_validation_error() {
                 errors.push(format!("outlierDetection: {err}"));
+            }
+        }
+        if let Some(cb) = &self.circuit_breaker {
+            if let Some(err) = cb.get_validation_error() {
+                errors.push(format!("circuitBreaker: {err}"));
             }
         }
         if let Some(ua) = &self.upstream_authority {
@@ -543,6 +553,18 @@ outlierDetection:
                 .any(|e| e.starts_with("outlierDetection:")),
             "invalid nested outlierDetection must surface with an outlierDetection: prefix"
         );
+        // invalid nested circuitBreaker — the `circuitBreaker: {err}` prefix is exercised
+        let bad_cb: EdgionBackendTrafficPolicySpec = serde_yaml::from_str(
+            "targetRefs:\n  - kind: Service\n    name: x\ncircuitBreaker:\n  maxParallelRequests: 0",
+        )
+        .unwrap();
+        assert!(
+            bad_cb
+                .get_validation_errors()
+                .iter()
+                .any(|e| e.starts_with("circuitBreaker:")),
+            "invalid nested circuitBreaker must surface with a circuitBreaker: prefix"
+        );
     }
 
     #[test]
@@ -583,6 +605,7 @@ outlierDetection:
             outlier_detection: None,
             upstream_authority: ua,
             retry_constraint: None,
+            circuit_breaker: None,
         };
 
         // Valid, no health check.

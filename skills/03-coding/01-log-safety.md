@@ -167,7 +167,7 @@ Includes `certificate_callback` / `handshake_complete_callback`.
 - `routes/grpc/{match_engine,match_unit,integration}.rs` (gRPC matching, reuses HTTP proxy's `request_filter`)
 - `routes/http/session_persistence.rs` (sticky session in `upstream_peer`)
 - `lb/selection/{round_robin,least_conn,ewma,consistent_hash}.rs`, `lb/runtime_state/mod.rs` (per-call backend selection in `upstream_peer`)
-- `backends/mod.rs` peer selection, `backends/validation.rs` SSRF check, `backends/circuit_breaker/store.rs` circuit-breaking decision, `backends/policy/` per-request policy
+- `backends/mod.rs` peer selection, `backends/validation.rs` SSRF check, `backends/outlier_detection/store.rs` circuit-breaking decision, `backends/policy/` per-request policy
 - `cache/**` per-request lookup
 - SNI→cert matching in `tls/store/cert_matcher.rs` (called by `certificate_callback`)
 - `runtime/server/error_response.rs` (response generated when `fail_to_proxy` / `request_filter` reject)
@@ -279,7 +279,7 @@ rg -n 'tracing::' \
   edgion-gateway/src/lb/runtime_state/ \
   edgion-gateway/src/backends/mod.rs \
   edgion-gateway/src/backends/validation.rs \
-  edgion-gateway/src/backends/circuit_breaker/store.rs \
+  edgion-gateway/src/backends/outlier_detection/store.rs \
   edgion-gateway/src/backends/policy/ \
   edgion-gateway/src/cache/ \
   edgion-gateway/src/runtime/server/error_response.rs

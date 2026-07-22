@@ -2,6 +2,7 @@ pub mod circuit_breaker;
 pub mod discovery;
 pub mod gateway_backend_tls_store;
 pub mod health;
+pub mod outlier_detection;
 pub mod panic_threshold;
 pub(crate) mod peer_builder;
 pub mod policy;
@@ -11,13 +12,13 @@ pub mod selector;
 pub mod service_kind;
 pub mod validation;
 
-pub use circuit_breaker::{get_circuit_breaker_store, FailureClass};
 pub use discovery::{
     create_ep_slice_handler, create_service_handler, decide_external_name_path, get_global_dns_cache,
     get_global_service_store, get_roundrobin_store, DnsResolutionMode, EndpointSliceExt, EpSliceStore,
     ExternalNamePath, ServiceStore, DEFAULT_DNS_CACHE_TTL,
 };
 use edgion_resources::resources::BackendTLSPolicy;
+pub use outlier_detection::{get_outlier_detection_store, FailureClass};
 pub use panic_threshold::{
     configure_lb_panic_default, get_lb_panic_default, get_panic_threshold_store, panic_floor, resolve_panic_threshold,
 };

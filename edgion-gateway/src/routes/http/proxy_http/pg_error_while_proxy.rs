@@ -15,7 +15,7 @@ pub fn error_while_proxy(
     client_reused: bool,
 ) -> Box<Error> {
     // filter-04b: the sentinel error from a written local reply is intentional,
-    // not an upstream failure. Skip body-size accounting and circuit-breaker
+    // not an upstream failure. Skip body-size accounting and outlier-detection
     // failure recording, and leave the error non-retryable.
     if ctx.local_reply_written {
         return e.more_context(format!("Peer: {}", peer));
@@ -26,12 +26,12 @@ pub fn error_while_proxy(
     }
     let mut e = e.more_context(format!("Peer: {}", peer));
 
-    // Record circuit breaker failure (for non-status-retry errors only)
+    // Record outlier detection failure (for non-status-retry errors only)
     if !ctx.retry_on_status {
         if let Some(upstream) = ctx.get_current_upstream() {
             if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
                 // Mid-proxy read/write error or transport reset — local-origin failure.
-                crate::backends::get_circuit_breaker_store().record_failure_by_addr(
+                crate::backends::get_outlier_detection_store().record_failure_by_addr(
                     service_key,
                     addr,
                     crate::backends::FailureClass::LocalOrigin,

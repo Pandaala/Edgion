@@ -112,7 +112,6 @@ pub enum EdgionPlugin {
     /// Wasm filter (proxy-wasm ABI guest module executed via wasmtime)
     Wasm(WasmConfig),
     // TODO: Add more custom Edgion plugins here (no `Edgion` prefix on the variant name)
-    // CircuitBreaker(CircuitBreakerConfig),
     // Waf(WafConfig),
     // Cache(CacheConfig),
     // Transform(TransformConfig),

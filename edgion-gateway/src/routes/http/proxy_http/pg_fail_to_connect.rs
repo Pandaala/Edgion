@@ -35,12 +35,12 @@ pub fn fail_to_connect(
         );
     }
 
-    // Record circuit breaker failure
+    // Record outlier detection failure
     if let Some(upstream) = ctx.get_current_upstream() {
         if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
             // Connect failure / connect timeout / TLS-handshake timeout — the data plane
             // never got a usable HTTP response, so this is a local-origin failure.
-            crate::backends::get_circuit_breaker_store().record_failure_by_addr(
+            crate::backends::get_outlier_detection_store().record_failure_by_addr(
                 service_key,
                 addr,
                 crate::backends::FailureClass::LocalOrigin,
@@ -52,7 +52,7 @@ pub fn fail_to_connect(
     // If timeout is exceeded, block all retries and return 504. Both the
     // route-level `request_timeout` and a client-supplied `grpc-timeout`
     // (which can be tighter than the route timeout) abort retries; either
-    // deadline blown means a new LB pick / connection / circuit-breaker
+    // deadline blown means a new LB pick / connection / outlier-detection
     // counter increment would only burn resources the caller has given up on.
     if ctx.request_timeout_exceeded() || ctx.grpc_deadline_exceeded() {
         if let Some(upstream) = ctx.get_current_upstream_mut() {

@@ -20,7 +20,7 @@ pub fn upstream_response_filter(
     // (pingora's h1 client re-reads a response header for 100..=199), so each one
     // runs through this filter. They are interim, not the final response: all
     // response-phase bookkeeping — status/ht recording, retry-on-status,
-    // circuit-breaker success/failure, session-persistence injection, pending
+    // outlier-detection success/failure, session-persistence injection, pending
     // header-op application, and the sync response plugins — must be deferred to
     // the final header task, otherwise the 1xx pollutes status/CB/ht and may even
     // misfire retry-on-status. Forward the 1xx unmodified and let the final header
@@ -200,7 +200,7 @@ pub fn upstream_response_filter(
     // (502/503/504) vs application (other >=500) buckets.
     if let Some(upstream) = ctx.get_current_upstream() {
         if let (Some(service_key), Some(addr)) = (&upstream.service_key, &upstream.lb_backend_addr) {
-            let cb_store = crate::backends::get_circuit_breaker_store();
+            let cb_store = crate::backends::get_outlier_detection_store();
             match crate::backends::FailureClass::from_http_status(status_code) {
                 Some(class) => cb_store.record_failure_by_addr(service_key, addr, class),
                 None => cb_store.record_success_by_addr(service_key, addr),

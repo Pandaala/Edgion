@@ -229,6 +229,21 @@ spec:
                           type: string
                           description: "Window over which count is measured (GEP-2257 duration), independent of budget.interval"
                           pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
+                circuitBreaker:
+                  type: object
+                  description: "Circuit breaker: per-endpoint hard cap on concurrent in-flight requests. Absent = no concurrency cap"
+                  required:
+                    - maxParallelRequests
+                  properties:
+                    maxParallelRequests:
+                      type: integer
+                      format: int32
+                      description: >-
+                        Max concurrent in-flight requests to a single backend ENDPOINT (one pod).
+                        Excess requests are shed with a non-retrying 503 rather than queued. This
+                        is a PER-ENDPOINT cap: a service with N ready endpoints admits up to
+                        N * maxParallelRequests concurrently. Must be >= 1.
+                      minimum: 1
             status:
               type: object
               properties:

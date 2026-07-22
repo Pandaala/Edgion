@@ -3,14 +3,14 @@
 //! Holds the synced policy cache plus the resolved per-service load-balancer and
 //! upstream-authority maps. On every change it recomputes the winning policy per
 //! affected Service key (oldest-wins via `precedence_key`) and pushes the effective
-//! config into the four data-plane stores: active health check, circuit breaker
+//! config into the four data-plane stores: active health check, outlier detection
 //! (outlier detection), panic threshold, and the load-balancer policy map read on
 //! the request path by `resolve_lb_policy` — plus the upstream-authority map read
 //! on the request path by both data paths via `get_authority`.
 
 use super::retry_budget::RetryBudget;
-use crate::backends::circuit_breaker::get_circuit_breaker_store;
 use crate::backends::health::check::{get_hc_config_store, get_health_check_manager};
+use crate::backends::outlier_detection::get_outlier_detection_store;
 use crate::backends::panic_threshold::get_panic_threshold_store;
 use dashmap::DashMap;
 use edgion_resources::resources::edgion_backend_traffic_policy::{precedence_key, RetryConstraintConfig};
@@ -46,6 +46,8 @@ pub struct BackendTrafficPolicyStore {
     /// resolve path only replaces the `Arc` when the stored config differs
     /// from the newly resolved one.
     retry_budgets: DashMap<String, (RetryConstraintConfig, Arc<RetryBudget>)>,
+    /// Per-service circuit-breaker concurrency cap (read on the request path).
+    circuit_breakers: DashMap<String, u32>,
 }
 
 impl Default for BackendTrafficPolicyStore {
@@ -62,6 +64,7 @@ impl BackendTrafficPolicyStore {
             lb_policies: DashMap::new(),
             authorities: DashMap::new(),
             retry_budgets: DashMap::new(),
+            circuit_breakers: DashMap::new(),
         }
     }
 
@@ -93,6 +96,11 @@ impl BackendTrafficPolicyStore {
     /// `DashMap` get + `Arc` clone, no tracing.
     pub fn get_retry_budget(&self, service_key: &str) -> Option<Arc<RetryBudget>> {
         self.retry_budgets.get(service_key).map(|v| Arc::clone(&v.value().1))
+    }
+
+    /// Per-endpoint concurrency cap for this service, if configured.
+    pub fn get_circuit_breaker_limit(&self, service_key: &str) -> Option<u32> {
+        self.circuit_breakers.get(service_key).map(|v| *v.value())
     }
 
     /// Admin snapshot of the resolved load-balancer map: Service key -> debug
@@ -133,7 +141,7 @@ impl BackendTrafficPolicyStore {
 
         let hc_store = get_hc_config_store();
         let hc_manager = get_health_check_manager();
-        let cb_store = get_circuit_breaker_store();
+        let cb_store = get_outlier_detection_store();
         let pt_store = get_panic_threshold_store();
 
         let (new_lb, new_winner) = match winner {
@@ -204,6 +212,16 @@ impl BackendTrafficPolicyStore {
                     }
                 }
 
+                match &policy.spec.circuit_breaker {
+                    Some(cb) => {
+                        self.circuit_breakers
+                            .insert(service_key.to_string(), cb.max_parallel_requests);
+                    }
+                    None => {
+                        self.circuit_breakers.remove(service_key);
+                    }
+                }
+
                 self.applied.insert(service_key.to_string(), policy_key_str.clone());
                 (lb, Some(policy_key_str))
             }
@@ -215,6 +233,7 @@ impl BackendTrafficPolicyStore {
                 self.lb_policies.remove(service_key);
                 self.authorities.remove(service_key);
                 self.retry_budgets.remove(service_key);
+                self.circuit_breakers.remove(service_key);
                 self.applied.remove(service_key);
                 (None, None)
             }
@@ -358,6 +377,7 @@ mod tests {
                 health_check,
                 outlier_detection,
                 upstream_authority: None,
+                circuit_breaker: None,
             },
             status: None,
         })
@@ -391,7 +411,7 @@ mod tests {
         assert_eq!(resolve_panic_threshold(key), 40);
         assert!(get_hc_config_store().resolve(key).is_some(), "HC config present");
         assert!(
-            get_circuit_breaker_store().keys().contains(&key.to_string()),
+            get_outlier_detection_store().keys().contains(&key.to_string()),
             "CB config present"
         );
 
@@ -478,7 +498,7 @@ mod tests {
         );
         assert!(get_hc_config_store().resolve(key).is_none(), "HC config cleared");
         assert!(
-            !get_circuit_breaker_store().keys().contains(&key.to_string()),
+            !get_outlier_detection_store().keys().contains(&key.to_string()),
             "CB config cleared"
         );
     }
@@ -567,6 +587,7 @@ mod tests {
                 health_check: None,
                 outlier_detection: None,
                 upstream_authority: None,
+                circuit_breaker: None,
             },
             status: None,
         });
@@ -616,7 +637,7 @@ mod tests {
         assert_eq!(resolve_panic_threshold(key_a), 40);
         assert!(get_hc_config_store().resolve(key_a).is_some(), "A HC present");
         assert!(
-            get_circuit_breaker_store().keys().contains(&key_a.to_string()),
+            get_outlier_detection_store().keys().contains(&key_a.to_string()),
             "A CB present"
         );
 
@@ -643,7 +664,7 @@ mod tests {
         assert_eq!(resolve_panic_threshold(key_a), 0, "A panic back to global default");
         assert!(get_hc_config_store().resolve(key_a).is_none(), "A HC cleared");
         assert!(
-            !get_circuit_breaker_store().keys().contains(&key_a.to_string()),
+            !get_outlier_detection_store().keys().contains(&key_a.to_string()),
             "A CB cleared"
         );
 
@@ -652,7 +673,7 @@ mod tests {
         assert_eq!(resolve_panic_threshold(key_b), 60);
         assert!(get_hc_config_store().resolve(key_b).is_some(), "B HC present");
         assert!(
-            get_circuit_breaker_store().keys().contains(&key_b.to_string()),
+            get_outlier_detection_store().keys().contains(&key_b.to_string()),
             "B CB present"
         );
 
@@ -662,7 +683,7 @@ mod tests {
         assert_eq!(resolve_panic_threshold(key_b), 0, "B panic back to global default");
         assert!(get_hc_config_store().resolve(key_b).is_none(), "B HC cleared");
         assert!(
-            !get_circuit_breaker_store().keys().contains(&key_b.to_string()),
+            !get_outlier_detection_store().keys().contains(&key_b.to_string()),
             "B CB cleared"
         );
     }
@@ -775,5 +796,39 @@ mod tests {
         store.policies.clear();
         store.reapply_service(key);
         assert!(store.get_retry_budget(key).is_none(), "cleared on removal");
+    }
+
+    // (i) circuitBreaker resolves per Service key and clears when the policy
+    // that set it is removed.
+    #[test]
+    fn circuit_breaker_limit_resolves_and_clears() {
+        use edgion_resources::resources::circuit_breaker::CircuitBreakerConfig;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = BackendTrafficPolicyStore::new();
+        let key = "bt6j/svc";
+
+        let mut p = policy(
+            "bt6j",
+            "p1",
+            "svc",
+            Some(ts("2026-01-01T00:00:00Z")),
+            None,
+            None,
+            false,
+            false,
+        );
+        Arc::get_mut(&mut p).unwrap().spec.circuit_breaker = Some(CircuitBreakerConfig {
+            max_parallel_requests: 5,
+        });
+        store.policies.insert("bt6j/p1".to_string(), p);
+
+        store.reapply_service(key);
+        assert_eq!(store.get_circuit_breaker_limit(key), Some(5));
+
+        // Removing the policy clears the cap.
+        store.policies.clear();
+        store.reapply_service(key);
+        assert_eq!(store.get_circuit_breaker_limit(key), None, "cleared on removal");
     }
 }

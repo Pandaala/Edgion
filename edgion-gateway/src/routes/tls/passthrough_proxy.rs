@@ -312,13 +312,13 @@ impl EdgionTlsPassthroughProxy {
                     }
                     // A successful connect is the L4 "backend reachable" success
                     // signal; it resets the endpoint's outlier-detection counters.
-                    crate::backends::get_circuit_breaker_store().record_success_by_addr(&service_key, &upstream_addr);
+                    crate::backends::get_outlier_detection_store().record_success_by_addr(&service_key, &upstream_addr);
                     upstream = Some((stream, upstream_addr_str));
                     break;
                 }
                 Err(e) => {
                     // TLS passthrough upstream connect failure — local-origin failure.
-                    crate::backends::get_circuit_breaker_store().record_failure_by_addr(
+                    crate::backends::get_outlier_detection_store().record_failure_by_addr(
                         &service_key,
                         &upstream_addr,
                         crate::backends::FailureClass::LocalOrigin,

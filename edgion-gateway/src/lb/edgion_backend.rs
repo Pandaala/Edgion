@@ -21,6 +21,7 @@ pub struct EdgionBackend {
     pub(crate) inner: Backend,
     conn_count: AtomicUsize,
     ewma_us: AtomicU64,
+    cb_inflight: AtomicUsize,
 }
 
 impl EdgionBackend {
@@ -30,6 +31,7 @@ impl EdgionBackend {
             inner,
             conn_count: AtomicUsize::new(0),
             ewma_us: AtomicU64::new(INITIAL_EWMA_US),
+            cb_inflight: AtomicUsize::new(0),
         }
     }
 
@@ -102,6 +104,45 @@ impl EdgionBackend {
     pub fn ewma(&self) -> u64 {
         self.ewma_us.load(Ordering::Relaxed)
     }
+
+    /// Try to reserve one circuit-breaker permit for this endpoint. Atomic
+    /// check-and-increment: succeeds only while the current in-flight count is
+    /// below `max`. This is the admit-time gate — one atomic op both checks the
+    /// cap and reserves the slot, so concurrent admits can never exceed `max`.
+    #[inline]
+    pub fn try_acquire_cb_permit(&self, max: u32) -> bool {
+        self.cb_inflight
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |cur| {
+                if (cur as u64) < max as u64 {
+                    Some(cur + 1)
+                } else {
+                    None
+                }
+            })
+            .is_ok()
+    }
+
+    /// Release one circuit-breaker permit, saturating at zero (CAS loop guards
+    /// against a stray double-release, mirroring `dec_conn`).
+    #[inline]
+    pub fn release_cb_permit(&self) {
+        let mut cur = self.cb_inflight.load(Ordering::Relaxed);
+        while cur > 0 {
+            match self
+                .cb_inflight
+                .compare_exchange_weak(cur, cur - 1, Ordering::AcqRel, Ordering::Relaxed)
+            {
+                Ok(_) => break,
+                Err(actual) => cur = actual,
+            }
+        }
+    }
+
+    /// Current circuit-breaker in-flight count for this endpoint.
+    #[inline]
+    pub fn cb_inflight(&self) -> u64 {
+        self.cb_inflight.load(Ordering::Relaxed) as u64
+    }
 }
 
 impl Deref for EdgionBackend {
@@ -110,5 +151,28 @@ impl Deref for EdgionBackend {
     #[inline]
     fn deref(&self) -> &Backend {
         &self.inner
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cb_permit_hard_caps_at_max() {
+        let b = EdgionBackend::new(Backend::new("127.0.0.1:1").unwrap());
+        assert!(b.try_acquire_cb_permit(2)); // 0 -> 1
+        assert!(b.try_acquire_cb_permit(2)); // 1 -> 2
+        assert!(!b.try_acquire_cb_permit(2)); // at cap, reject
+        assert_eq!(b.cb_inflight(), 2);
+        b.release_cb_permit(); // 2 -> 1
+        assert!(b.try_acquire_cb_permit(2)); // 1 -> 2 again
+    }
+
+    #[test]
+    fn cb_permit_release_saturates_at_zero() {
+        let b = EdgionBackend::new(Backend::new("127.0.0.1:1").unwrap());
+        b.release_cb_permit(); // stays 0, no wraparound
+        assert_eq!(b.cb_inflight(), 0);
     }
 }

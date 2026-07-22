@@ -1103,6 +1103,7 @@ mod tests {
                     load_balancer: None,
                     health_check: None,
                     outlier_detection: None,
+                    circuit_breaker: None,
                     upstream_authority: Some(UpstreamAuthorityConfig {
                         pattern: "*.sandbox.internal".to_string(),
                         template: "${ctx:tenant}.sandbox.internal".to_string(),
@@ -1181,6 +1182,7 @@ mod tests {
                     load_balancer: None,
                     health_check: None,
                     outlier_detection: None,
+                    circuit_breaker: None,
                     upstream_authority: Some(UpstreamAuthorityConfig {
                         pattern: "*.sandbox.internal".to_string(),
                         template: "${ctx:tenant}.sandbox.internal".to_string(),
