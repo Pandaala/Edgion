@@ -54,7 +54,7 @@
 | edgion_wasm_instance_instantiate_total | Counter | gateway | module | self | Fresh Wasm VM instantiation (instance pool miss) | - |
 | edgion_wasm_instance_discard_total | Counter | gateway | module, reason (poisoned/over_capacity) | self | Wasm VM discarded instead of returned to the pool | - |
 | edgion_wasm_pool_size | Gauge | gateway | module | self | Current pooled Wasm instance count for a module | - |
-| edgion_wasm_hook_duration_ms | Histogram | gateway | module, phase (request_headers/response_headers/response_body/http_call_response/tick) | self | Duration of one Wasm guest hook invocation | - |
+| edgion_wasm_hook_duration_ms | Histogram | gateway | module, phase (request_headers/request_body/response_headers/response_body/http_call_response/tick) | self | Duration of one Wasm guest hook invocation | - |
 | edgion_wasm_trap_total | Counter | gateway | module, phase | self | Wasm guest trap (or protocol violation that poisons the lease) | - |
 | edgion_wasm_fail_mode_total | Counter | gateway | module, reason, mode (open/close) | self | Fail-mode decision taken by the Wasm plugin host | - |
 | edgion_wasm_callout_total | Counter | gateway | module, result (ok/error/denied/over_limit/tick_config_conflict) | self | Guest-dispatched HTTP callout outcome | - |

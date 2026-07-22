@@ -8,7 +8,7 @@
 
 proxy-wasm is a portable ABI for writing proxy extensions once and running them on any compliant host (Envoy, this gateway, or others) without recompiling the host itself. Instead of writing a native Rust plugin against Edgion's internal APIs, you compile a small WebAssembly module against the [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) for your language of choice and hand the compiled `.wasm` bytecode to this plugin. The gateway compiles it once, caches the compiled module, and pools initialized instances so per-request execution is cheap.
 
-The implemented ABI is a deliberate subset (see below): header read/write, local responses, **HTTP callouts** (request phase with Pause/resume, and from `on_tick`), **read-only response-body observation**, **shared data**, and **timers** (`on_tick`). Body *modification* and request-body hooks are not implemented.
+The implemented ABI is a deliberate subset (see below): header read/write, local responses, **HTTP callouts** (request phase with Pause/resume, and from `on_tick`), **request-body buffer mode** (whole-body, guest-declared, can deny), **read-only response-body observation** (per-chunk), **shared data**, and **timers** (`on_tick`). Body *modification* (`proxy_set_buffer_bytes`) is not implemented, and response-body buffer mode (whole-body on the response side) does not exist yet.
 
 ## Supported ABI subset
 
@@ -18,9 +18,10 @@ The implemented ABI is a deliberate subset (see below): header read/write, local
 |---|---|---|
 | `proxy_on_context_create` / `proxy_on_vm_start` / `proxy_on_configure` | — (instance init) | Once per pooled instance, before any request is served |
 | `proxy_on_request_headers` | `requestPlugins` (`RequestFilter`) | Request headers received, before the backend is contacted |
+| `proxy_on_request_body` | `requestPlugins` (`RequestFilter`), same entry as headers | Once per request, **after** `proxy_on_request_headers`, only if the guest module exports this hook — see [Request-body buffer mode](#request-body-buffer-mode) |
 | `proxy_on_http_call_response` | — (callout callback) | Once per completed callout: on the paused request context for callouts dispatched from `proxy_on_request_headers`, or on the root context for callouts dispatched from `proxy_on_tick` |
 | `proxy_on_response_headers` | `upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | Upstream response headers received |
-| `proxy_on_response_body` | `upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | Once per upstream body chunk, **read-only** (see [Body observation](#response-body-observation-read-only)) |
+| `proxy_on_response_body` | `upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | Once per upstream body chunk, **read-only** (see [Response-body observation](#response-body-observation-read-only)) |
 | `proxy_on_tick` | — (background) | Periodically, once the guest set a tick period (see [Timers](#shared-data-and-timers)) |
 | `proxy_on_done` / `proxy_on_delete` | — (per-context cleanup) | After each per-request context finishes |
 
@@ -33,17 +34,18 @@ Wasm is **not** available at `upstreamResponsePlugins` (async response stage).
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | Request headers, response headers, and (inside the callout callback) `HttpCallResponseHeaders` — the callout's response headers plus a synthetic `:status` pair |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | Set / add / remove / bulk-replace; applied to the real request/response after the hook returns. Header-map writes to the callout response map are rejected |
 | `proxy_send_local_response` | ✅ | Short-circuits the request with a status, body, and headers. Also valid from inside `proxy_on_http_call_response` (deny after an auth callout) |
-| `proxy_http_call` | ✅ (request + tick phases) | See [HTTP callouts](#http-callouts-pauseresume). In the response/body phases it returns `UNIMPLEMENTED` (12); in the tick phase it requires an unambiguous allowlist (see [Timers](#shared-data-and-timers)) |
+| `proxy_http_call` | ✅ (request-headers + tick phases) | See [HTTP callouts](#http-callouts-pauseresume). In the request-body, response-headers, and response-body phases it returns `UNIMPLEMENTED` (12); in the tick phase it requires an unambiguous allowlist (see [Timers](#shared-data-and-timers)) |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | Resumes a request paused on a callout. `proxy_continue_response` remains an accepted no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | Per-module KV with CAS — see [Shared data](#shared-data-and-timers) |
 | `proxy_set_tick_period_milliseconds` | ✅ | Arms the per-module tick task; `0` stops it. Period floor 100ms |
 | `proxy_get_property` / `proxy_set_property` | ✅ (basic subset) | Readable keys: `request.path`, `request.method`, `request.host`, `source.address`, `plugin_name`, `response.code` (response phase only). `proxy_set_property` writes into the current phase's in-memory property map only |
-| `proxy_get_buffer_bytes` | ✅ | `VmConfiguration`, `PluginConfiguration`, `HttpCallResponseBody` (inside the callout callback), and `HttpResponseBody` (the **current chunk window** in the body hook) |
+| `proxy_get_buffer_bytes` | ✅ | `VmConfiguration`, `PluginConfiguration`, `HttpCallResponseBody` (inside the callout callback), `HttpRequestBody` (the **whole buffered request body** in the request-body hook — see [Request-body buffer mode](#request-body-buffer-mode)), and `HttpResponseBody` (the **current chunk window** in the response-body hook) |
+| `proxy_set_buffer_bytes` | ❌ (stub) | Body rewrite is not implemented. Registered with the linker so a guest that imports it still instantiates, but every call returns `STATUS_UNIMPLEMENTED` (12) rather than trapping |
 | `proxy_log` | ✅ | Forwarded to the gateway's own `tracing::debug!` output (target `wasm_guest`) — **never** written to the access log |
 | `proxy_get_current_time_nanoseconds` | ✅ | Wall-clock time |
 | `proxy_get_configuration` (legacy 0.1) | ✅ | Returns the same bytes as the `PluginConfiguration` buffer |
 | `proxy_set_effective_context` / `proxy_done` | Accepted no-ops | Return `STATUS_OK` without doing anything |
-| Everything else (request-body hooks, gRPC callouts, shared queues, foreign function calls, metrics, …) | ❌ | Not registered with the linker. If a guest module imports one of these and actually calls it, the call **traps** (the request then follows [failure semantics](#failure-semantics)); importing but never calling is harmless |
+| Everything else (gRPC callouts, shared queues, foreign function calls, metrics, …) | ❌ | Not registered with the linker. If a guest module imports one of these and actually calls it, the call **traps** (the request then follows [failure semantics](#failure-semantics)); importing but never calling is harmless |
 
 ### ABI version check
 
@@ -192,24 +194,71 @@ Both integrate external decision services; they differ in direction:
 - **ExtProc** (push): the gateway pushes every request through a resident external processor over gRPC. Choose it when the external service owns the logic and sees all traffic.
 - **Wasm callout** (pull): guest logic lives in the gateway and calls out on demand. Choose it when the plugin decides *if/when* to consult an external service (e.g. cache-then-verify token checks).
 
-## Response-body observation (read-only)
+## Two body modes, chosen statically
 
-Listing a Wasm entry under `upstreamResponseBodyFilterPlugins` invokes `proxy_on_response_body` once per upstream chunk.
+Edgion supports two, deliberately different, wasm body behaviors:
 
-> ### ⚠️ This diverges from the proxy-wasm spec — read before porting a guest
+| | Request-body buffer mode | Response-body observation |
+|---|---|---|
+| Hook | `proxy_on_request_body` | `proxy_on_response_body` |
+| Entry stage | `requestPlugins` (same entry as the headers hook) | `upstreamResponseBodyFilterPlugins` |
+| `body_size` | **Whole body** length | **Current chunk's** length |
+| `proxy_get_buffer_bytes` returns | The **whole buffered body** | Only the **current chunk** |
+| Can deny the request? | ✅ (`proxy_send_local_response`) | ❌ (headers already sent) |
+| Can modify the body? | ❌ (`proxy_set_buffer_bytes` is an `UNIMPLEMENTED` stub) | ❌ |
+| How selected | Static: an operator `body:` block on the entry, **and** the compiled guest module exports `proxy_on_request_body` | Static: whether the guest module exports `proxy_on_response_body` |
+
+**This is a deliberate deviation from the proxy-wasm spec.** The spec models buffering as a *dynamic*, per-chunk decision the guest makes at runtime (`if !end_of_stream { Action::Pause }` tells the host to keep buffering; `Action::Continue` tells it to stream). Envoy implements this by mapping `Pause` onto `StopIterationAndBuffer` and letting its filter manager own the buffer. Edgion cannot do that on either side — the response-body filter is a **synchronous**, immutable-body hand-off (`&Option<Bytes>` in, `Option<Duration>` out; no way to withhold or accumulate a chunk), and the decision of "does this plugin get the whole body" has to be made before any hook runs, once per module load. So Edgion selects the mode **once, statically**, from which hook the guest module exports and which stage the operator wired it at — not from the guest's per-request `Action` return value.
+
+### Request-body buffer mode
+
+Listing a Wasm entry under `requestPlugins`, using a guest module that exports `proxy_on_request_body`, gets the whole-body mode: after `proxy_on_request_headers` runs (and only if it returned `Continue`, i.e. did not already deny or trap), the gateway attempts to buffer the complete request body and, on success, invokes `proxy_on_request_body` exactly **once** with `body_size` = the full body length, `end_of_stream = true`, and `proxy_get_buffer_bytes(HttpRequestBody, 0, body_size)` returning the whole thing. The guest can inspect the full body — for a request-body WAF, secret scanner, or signature check — and deny the request via `proxy_send_local_response` just like from the headers hook.
+
+Notes and current limits:
+
+- **Operator opt-in via `body:`.** Unlike a plugin with an intrinsic body requirement (e.g. `HmacAuth`'s `validateRequestBody`), Wasm has no config field of its own that can express "needs the body" — the guest's exported hooks are only known after the module loads, not from the plugin's own config. Request buffer mode is therefore enabled by adding an operator `body:` block to the `Wasm` request entry (all of `maxBodySize`/`conditions`/`onReadFailure` are optional and default sensibly). The `body:` block's `maxBodySize`, if set, is a **per-plugin limit** on top of the gateway-wide cap below (→ `413` if the body exceeds it), not a buffer-size knob. A `body:` block on a guest module that does not export `proxy_on_request_body` buffers the body for nothing — the hook still never runs (see the last bullet below).
+- **Cap**: the buffer is capped by the gateway-wide `EdgionGatewayConfig.spec.maxBodySize`, not a per-plugin value.
+- **Depends on the shared body-buffering backing (interim gap).** The whole-body read goes through the same internal facade every buffer-mode plugin uses. Until that facade's real accumulation is wired into the request path, the body gate's read always fails with `Unimplemented` — this is **not** the same as the hook being silently skipped. A `body:`-declared Wasm entry resolves the failure per its `onReadFailure` policy, exactly like any other body-gated plugin: the default (`failClose`) rejects the request with `500` before the guest ever runs; `failOpen` skips the plugin (as if disabled) and lets the request proceed. Once the backing lands, a `body:`-declared entry starts actually reaching `proxy_on_request_body` with the real buffered body instead of failing the gate.
+- A `Wasm` entry with **no** `body:` block is unaffected by the above either way: it stays ungated, and the request-body hook is skipped (not invoked) whenever the phase's own read attempt comes back empty — including today, before the backing lands. A guest that does not export `proxy_on_request_body` also pays nothing extra at this stage — the phase is skipped entirely regardless of `body:`.
+
+Minimal shape of a request-body guest:
+
+```rust
+use proxy_wasm::traits::{Context, HttpContext};
+use proxy_wasm::types::Action;
+
+impl HttpContext for BodyScanner {
+    fn on_http_request_headers(&mut self, _n: usize, _eos: bool) -> Action {
+        Action::Continue // let the request through to the body hook
+    }
+
+    // Invoked once, with the WHOLE request body (Edgion buffers it for you —
+    // no need for the classic `if !end_of_stream { Pause }` dance).
+    fn on_http_request_body(&mut self, body_size: usize, _end_of_stream: bool) -> Action {
+        if let Some(body) = self.get_http_request_body(0, body_size) {
+            if body.windows(6).any(|w| w == b"secret") {
+                self.send_http_response(403, vec![], Some(b"request body denied"));
+            }
+        }
+        Action::Continue
+    }
+}
+```
+
+### Response-body observation (read-only)
+
+Listing a Wasm entry under `upstreamResponseBodyFilterPlugins` invokes `proxy_on_response_body` once per upstream chunk. This is the **only** wasm body mode available on the response side today — there is no response-side equivalent of request-buffer mode yet (see [Remaining limitations](#remaining-limitations)).
+
+> ### ⚠️ Per-chunk, not whole-body — read before porting a guest
 >
-> The spec's body contract is **cumulative**: `body_size` is the total bytes the host has buffered so far, `Action::Pause` tells the host to **keep buffering**, and `proxy_get_buffer_bytes` reads the **accumulated buffer**. Envoy implements this by mapping Pause onto `StopIterationAndBuffer` and letting its filter manager own the buffer.
+> `body_size` is the **current chunk's** length, `proxy_get_buffer_bytes(HttpResponseBody, …)` returns **only that chunk**, and the body is never accumulated across chunks.
 >
-> **This gateway implements a per-chunk read-only *window* instead**: `body_size` is the **current chunk's** length, `proxy_get_buffer_bytes(HttpResponseBody, …)` returns **only that chunk**, and the body is never buffered.
->
-> **Consequence:** a guest written to the standard idiom —
+> **Consequence:** a guest written to the dynamic buffering idiom —
 > ```rust
 > if !end_of_stream { return Action::Pause; }       // expects the host to buffer
 > let body = self.get_http_response_body(0, body_size)?;  // expects the WHOLE body
 > ```
-> — would observe **only the last chunk**. For a WAF or secret scanner that is a silent false negative. The host therefore does **not** silently ignore a Pause: it increments `edgion_wasm_body_pause_unsupported_total{module}` and logs a WARN once per module. **Alert on that counter** — it means a deployed guest is seeing partial data.
->
-> Full spec semantics would require request/response body buffering. That is **deliberately not implemented** (it costs memory, breaks streaming uploads, and worsens TTFB; and on this proxy core, request-body *rewrite* additionally conflicts with the upstream `Content-Length` being sent before the body filter runs). **Consequence: off-the-shelf proxy-wasm WAF / body-scanner guests — which all use the Pause-and-buffer idiom — do not work here.** Body observation on this gateway is per-chunk by design; write guests accordingly.
+> — would observe **only the last chunk**. For a WAF or secret scanner that is a silent false negative. The host therefore does **not** silently ignore a `Pause` here: it increments `edgion_wasm_body_pause_unsupported_total{module}` and logs a WARN once per module. **Alert on that counter** — it is a reliable signal that a deployed guest wants whole-body buffering it isn't getting. That buffering exists today on the *request* side (see [Request-body buffer mode](#request-body-buffer-mode) above, once the shared backing lands); on the *response* side it requires a response buffer mode this gateway does not build yet.
 
 Working within the per-chunk model:
 
@@ -217,8 +266,6 @@ Working within the per-chunk model:
 - **Strictly read-only**: the body cannot be modified, and the response cannot be short-circuited from the body phase (headers are already sent). A detection verdict can only be logged (`proxy_log`) or aggregated via shared data.
 - Each chunk runs under a reduced CPU budget (`timeoutMs / 10`, floor 10ms) so a slow guest cannot stall a long stream; a trap in the body hook **never interrupts the stream** (the instance is discarded and streaming continues, regardless of `failOpen`).
 - A guest that does not export `proxy_on_response_body` is a free no-op at this stage.
-
-Request-body observation is **not implemented at all** (no `proxy_on_request_body`) — it requires the same body-buffering infrastructure.
 
 ## Shared data and timers
 
@@ -300,13 +347,13 @@ All metrics carry a `module` label — the human-readable source descriptor (`fi
 | `edgion_wasm_instance_instantiate_total` | counter | | Fresh instantiations (pool misses) |
 | `edgion_wasm_instance_discard_total` | counter | `reason=poisoned\|over_capacity` | Instances dropped instead of pooled |
 | `edgion_wasm_pool_size` | gauge | | Current pooled instances |
-| `edgion_wasm_hook_duration_ms` | histogram | `phase` | Guest hook wall time (`request_headers`, `response_headers`, `response_body`, `http_call_response`, `tick`) |
+| `edgion_wasm_hook_duration_ms` | histogram | `phase` | Guest hook wall time (`request_headers`, `request_body`, `response_headers`, `response_body`, `http_call_response`, `tick`) |
 | `edgion_wasm_trap_total` | counter | `phase` | Traps / protocol violations |
 | `edgion_wasm_fail_mode_total` | counter | `reason`, `mode=open\|close` | Fail-mode decisions |
 | `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit\|tick_config_conflict` | Callout outcomes; `tick_config_conflict` counts ticks where dispatch stayed disabled because plugins sharing the module configure different `calloutAllowlist`s |
 | `edgion_wasm_modules_loaded` | gauge | | Compiled modules currently in the global cache |
 | `edgion_wasm_shared_data_bytes` | gauge | `module` | Current shared-data total per module, keys + values + ~128B/entry overhead (cap 4MiB) |
-| `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **Alert on this.** A guest returned `Action::Pause` from the body hook, i.e. it expects the spec's cumulative-buffer semantics this host does not implement — it is silently observing only the current chunk, not the whole body |
+| `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **Alert on this.** A guest returned `Action::Pause` from the **response-body observation** hook — it wants whole-body buffering, which is not available on the response side (only on the request side, via [Request-body buffer mode](#request-body-buffer-mode)) — and is silently observing only the current chunk instead |
 
 A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_discard_total{reason="poisoned"}` rising together.
 
@@ -321,8 +368,10 @@ A trap storm shows up as `edgion_wasm_trap_total` and `edgion_wasm_instance_disc
 
 ## Remaining limitations
 
-- **No request-body hooks** (`proxy_on_request_body`): needs request-body buffering the gateway doesn't have; a guest that only implements request-body hooks never gets invoked.
-- **Response body is observe-only, and uses per-chunk (not spec cumulative) semantics**: no body rewrite, no short-circuit from the body phase, and `Action::Pause` cannot be honored — a guest written to the standard buffering idiom sees only the current chunk. See the warning in [Response-body observation](#response-body-observation-read-only).
+- **Request-body buffer mode depends on the shared body-buffering backing, not yet wired into the request path**: an entry with a `body:` block is gated, so until the backing lands, its buffered read always fails and the entry resolves per its `onReadFailure` policy (`500` fail-close by default, or a skip on fail-open) — NOT a silent skip. A `Wasm` entry with no `body:` block is unaffected: it stays ungated and the hook is simply never driven, exactly as if the guest had no request-body hook. See [Request-body buffer mode](#request-body-buffer-mode).
+- **No response-body buffer mode**: response body observation is per-chunk and read-only — no body rewrite, no short-circuit from the body phase, and `Action::Pause` cannot be honored — a guest written to the standard whole-body buffering idiom sees only the current chunk. See the warning in [Response-body observation](#response-body-observation-read-only).
+- **No body rewrite anywhere** (`proxy_set_buffer_bytes`): registered as a stub that always returns `STATUS_UNIMPLEMENTED`, on both the request and response sides.
+- **Static mode selection, not dynamic Pause/Continue**: unlike Envoy, the body mode a plugin gets is fixed at module-load time by which hooks the compiled guest exports, not chosen per-request by the guest's `Action` return value. See [Two body modes, chosen statically](#two-body-modes-chosen-statically).
 - **No gRPC callouts** (`proxy_dispatch_grpc_call`): calling it traps.
 - **No callouts from the response/body phases** (sync stages), and request-phase dispatch without `Pause` is dropped. Tick-phase callouts additionally require the module's plugins to agree on one `calloutAllowlist` (see [Timers](#shared-data-and-timers)).
 - **No shared queues, foreign functions, or guest-defined metrics**: calling them traps.
@@ -391,7 +440,7 @@ impl Context for AuthPlugin {
 }
 ```
 
-See `edgion-tests/wasm/README.md` for the full contract the reference guest implements and for how to rebuild the committed artifact after editing the guest source.
+See `edgion-tests/wasm/README.md` for the full contract the reference guest implements and for how to rebuild the committed artifact after editing the guest source. The reference guest exercises response-body observation (`on_http_response_body`) but does not yet exercise request-body buffer mode; see the standalone snippet under [Request-body buffer mode](#request-body-buffer-mode) for that idiom.
 
 ## FAQ
 
@@ -401,7 +450,11 @@ See `edgion-tests/wasm/README.md` for the full contract the reference guest impl
 
 ### Q: My callout is never executed?
 
-Check, in order: (1) the target origin is listed in `calloutAllowlist` — empty list disables callouts entirely; (2) for request-phase dispatch, the guest returns `Action::Pause` — dispatch followed by `Continue` is dropped (`callouts-dropped=N` in the access log); (3) the dispatch happens in the request or tick phase — response/body phases return `UNIMPLEMENTED`; (4) for tick-phase dispatch, no allowlist conflict — check `edgion_wasm_callout_total{result="tick_config_conflict"}` and the WARN log when several plugins share the module with different `calloutAllowlist`s.
+Check, in order: (1) the target origin is listed in `calloutAllowlist` — empty list disables callouts entirely; (2) for request-headers-phase dispatch, the guest returns `Action::Pause` — dispatch followed by `Continue` is dropped (`callouts-dropped=N` in the access log); (3) the dispatch happens in the request-headers or tick phase — request-body, response-headers, and response-body phases return `UNIMPLEMENTED`; (4) for tick-phase dispatch, no allowlist conflict — check `edgion_wasm_callout_total{result="tick_config_conflict"}` and the WARN log when several plugins share the module with different `calloutAllowlist`s.
+
+### Q: My `proxy_on_request_body` hook never runs?
+
+Two things have to be true: (1) the compiled guest module must actually export `proxy_on_request_body` (probed once at load) — an SDK-level `on_http_request_body` override that never gets registered because the context type doesn't implement it won't count; (2) [request-body buffer mode](#request-body-buffer-mode) depends on the shared body-buffering facade, which is not wired into the request path yet — until it lands, the hook is skipped and the request proceeds normally even for a correctly-exporting module. This is a known transitional gap, not a configuration mistake.
 
 ### Q: My guest module isn't taking effect on the response phase?
 

@@ -17,6 +17,10 @@ pub const MAP_HTTP_REQUEST_HEADERS: i32 = 0;
 pub const MAP_HTTP_RESPONSE_HEADERS: i32 = 2;
 pub const MAP_HTTP_CALL_RESPONSE_HEADERS: i32 = 6;
 
+/// proxy-wasm `BufferType::HttpRequestBody`. Numerically 0 like
+/// `MAP_HTTP_REQUEST_HEADERS`, but a distinct enum (buffer-type vs map-id),
+/// so there is no collision.
+pub const BUF_HTTP_REQUEST_BODY: i32 = 0;
 pub const BUF_HTTP_RESPONSE_BODY: i32 = 1;
 pub const BUF_HTTP_CALL_RESPONSE_BODY: i32 = 4;
 pub const BUF_VM_CONFIGURATION: i32 = 6;
@@ -76,6 +80,9 @@ pub enum WasmPhase {
     RequestHeaders,
     ResponseHeaders,
     ResponseBody,
+    /// Request-body buffer-mode hook: the full request body has been buffered
+    /// by the body gate and is driven to the guest once with end_of_stream.
+    RequestBody,
     /// Background `proxy_on_tick` invocation (no request in scope).
     Tick,
 }
@@ -187,6 +194,11 @@ pub struct HostState {
     /// `get_buffer_bytes(HttpResponseBody)`. Never buffers across chunks.
     pub body_chunk: Vec<u8>,
 
+    /// Full request body staged for buffer mode, exposed via
+    /// `get_buffer_bytes(HttpRequestBody)`. Populated once from the body gate's
+    /// buffered bytes; never a per-chunk window.
+    pub request_body: Vec<u8>,
+
     /// Guest-requested tick period in ms (0 = no tick). Module-lifetime
     /// state (typically set during `on_configure`), NOT reset per phase;
     /// the module tick task reads it after instance init.
@@ -249,6 +261,7 @@ impl HostState {
         // invalid/sentinel value (Envoy issues nonzero tokens).
         self.next_callout_token = 1;
         self.body_chunk.clear();
+        self.request_body.clear();
         self.retained_bytes = 0;
         self.retained_ops = 0;
     }
@@ -378,6 +391,24 @@ pub fn decode_map(bytes: &[u8]) -> Option<Vec<(String, String)>> {
         pairs.push((key, val));
     }
     Some(pairs)
+}
+
+/// Resolve a proxy-wasm buffer-type id to the host bytes it exposes.
+/// `None` = unknown buffer type (caller returns `STATUS_NOT_FOUND`).
+fn select_buffer(state: &HostState, buf_type: i32) -> Option<Vec<u8>> {
+    match buf_type {
+        BUF_VM_CONFIGURATION => Some(state.vm_config.clone()),
+        BUF_PLUGIN_CONFIGURATION => Some(state.plugin_config.clone()),
+        BUF_HTTP_CALL_RESPONSE_BODY => {
+            Some(state.callout_response.as_ref().map(|r| r.body.clone()).unwrap_or_default())
+        }
+        // Buffer mode: the full request body staged by the body gate.
+        BUF_HTTP_REQUEST_BODY => Some(state.request_body.clone()),
+        // Read-only chunk window (body observation): the CURRENT chunk only,
+        // never an accumulated body.
+        BUF_HTTP_RESPONSE_BODY => Some(state.body_chunk.clone()),
+        _ => None,
+    }
 }
 
 /// Sub-slice of `data` starting at `start` (guest-controlled, so it may
@@ -796,19 +827,8 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
          ret_ptr: i32,
          ret_size: i32|
          -> i32 {
-            let data = match buf_type {
-                BUF_VM_CONFIGURATION => caller.data().vm_config.clone(),
-                BUF_PLUGIN_CONFIGURATION => caller.data().plugin_config.clone(),
-                BUF_HTTP_CALL_RESPONSE_BODY => caller
-                    .data()
-                    .callout_response
-                    .as_ref()
-                    .map(|r| r.body.clone())
-                    .unwrap_or_default(),
-                // Read-only chunk window (body observation): the CURRENT
-                // chunk only, never an accumulated body.
-                BUF_HTTP_RESPONSE_BODY => caller.data().body_chunk.clone(),
-                _ => return STATUS_NOT_FOUND,
+            let Some(data) = select_buffer(caller.data(), buf_type) else {
+                return STATUS_NOT_FOUND;
             };
             // proxy-wasm treats start/max_size as unsigned; the Rust SDK's
             // get_plugin_configuration passes usize::MAX (wasm32: u32::MAX,
@@ -820,6 +840,18 @@ pub fn add_to_linker(linker: &mut Linker<HostState>) -> anyhow::Result<()> {
             }
             let slice = slice_buffer(&data, start, max_size as u32 as usize);
             write_to_guest(&mut caller, &slice, ret_ptr, ret_size)
+        },
+    )?;
+
+    // Body rewrite is not supported (request-body length change would desync an
+    // already-sent Content-Length). Register a truthful stub so a guest that
+    // imports it still instantiates and a call returns a defined status
+    // instead of trapping.
+    linker.func_wrap(
+        "env",
+        "proxy_set_buffer_bytes",
+        |_caller: Caller<'_, HostState>, _buf: i32, _start: i32, _size: i32, _ptr: i32, _len: i32| -> i32 {
+            STATUS_UNIMPLEMENTED
         },
     )?;
 
@@ -1204,6 +1236,29 @@ mod tests {
         assert!(s.retained_bytes < MAX_RETAINED_ABI_BYTES);
     }
 
+    /// `begin_phase` must clear the staged request body between phases so a
+    /// stale buffer-mode body never leaks into a later phase's `HostState`.
+    #[test]
+    fn begin_phase_clears_request_body() {
+        let mut state = HostState::default();
+        state.request_body = vec![1, 2, 3];
+        state.begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
+        assert!(state.request_body.is_empty());
+        assert_eq!(state.phase, WasmPhase::RequestBody);
+    }
+
+    /// `select_buffer` resolves `BUF_HTTP_REQUEST_BODY` to the staged full
+    /// request body, keeps the existing response-body chunk-window behavior,
+    /// and returns `None` for an unknown buffer-type id.
+    #[test]
+    fn buffer_select_returns_request_body() {
+        let mut state = HostState::default();
+        state.request_body = b"POST-BODY".to_vec();
+        assert_eq!(select_buffer(&state, BUF_HTTP_REQUEST_BODY), Some(b"POST-BODY".to_vec()));
+        assert_eq!(select_buffer(&state, BUF_HTTP_RESPONSE_BODY), Some(Vec::new()));
+        assert_eq!(select_buffer(&state, 999), None);
+    }
+
     fn instantiate_guest(wat: &str) -> (Store<HostState>, Instance) {
         let engine = Engine::default();
         let module = Module::new(&engine, wat).expect("wat compiles");
@@ -1298,5 +1353,30 @@ mod tests {
         assert!(!state.pending_ops.is_empty());
         assert_eq!(state.request_headers.len(), state.pending_ops.len());
         assert!(state.request_headers.len() < 5000); // stopped by budget, not the cap
+    }
+
+    /// `proxy_set_buffer_bytes` is not supported (body rewrite would desync an
+    /// already-sent Content-Length): the import must be registered so a guest
+    /// that links it still instantiates, and a call must return
+    /// `STATUS_UNIMPLEMENTED` rather than trapping.
+    const SET_BUFFER_BYTES_GUEST: &str = r#"
+    (module
+      (import "env" "proxy_set_buffer_bytes"
+        (func $set (param i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (func (export "proxy_on_context_create") (param i32 i32))
+      (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "proxy_on_configure") (param i32 i32) (result i32) (i32.const 1))
+      (func (export "call") (result i32)
+        (call $set (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 0)))
+    )
+    "#;
+
+    #[test]
+    fn set_buffer_bytes_returns_unimplemented() {
+        let (mut store, instance) = instantiate_guest(SET_BUFFER_BYTES_GUEST);
+        let f = instance.get_typed_func::<(), i32>(&mut store, "call").unwrap();
+        let status = f.call(&mut store, ()).unwrap();
+        assert_eq!(status, STATUS_UNIMPLEMENTED);
     }
 }

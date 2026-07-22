@@ -8,7 +8,7 @@
 
 proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可运行在任意兼容 host（Envoy、本网关或其他实现）上，无需重新编译 host 本身。你不需要针对 Edgion 内部 API 编写原生 Rust 插件，而是用你偏好语言的 [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) 编译出一个体积较小的 WebAssembly 模块，把编译产物 `.wasm` 字节码交给本插件。网关只编译一次、缓存编译结果，并对初始化好的实例做池化，因此单次请求的执行成本很低。
 
-实现的 ABI 是一个刻意收敛的子集（见下文）：header 读写、本地响应、**HTTP callout**（请求阶段 Pause/恢复，以及 `on_tick` 内发起）、**响应 body 只读观测**、**shared data** 与**定时器**（`on_tick`）。body *改写*与请求 body 钩子未实现。
+实现的 ABI 是一个刻意收敛的子集（见下文）：header 读写、本地响应、**HTTP callout**（请求阶段 Pause/恢复，以及 `on_tick` 内发起）、**请求 body 整体缓冲模式**（完整 body、由 guest 声明、可拒绝请求）、**响应 body 只读观测**（按 chunk）、**shared data** 与**定时器**（`on_tick`）。body *改写*（`proxy_set_buffer_bytes`）未实现，响应侧的整体缓冲模式（响应 body 的"完整 body"模式）也尚不存在。
 
 ## 支持的 ABI 子集
 
@@ -18,9 +18,10 @@ proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可�
 |---|---|---|
 | `proxy_on_context_create` / `proxy_on_vm_start` / `proxy_on_configure` | —（实例初始化） | 每个池化实例在服务任何请求之前执行一次 |
 | `proxy_on_request_headers` | `requestPlugins`（`RequestFilter`） | 请求 header 到达、访问后端之前 |
+| `proxy_on_request_body` | `requestPlugins`（`RequestFilter`），与 header 钩子同一条目 | `proxy_on_request_headers` **之后**每请求一次，仅当 guest 模块导出该钩子——见[请求 body 整体缓冲模式](#请求-body-整体缓冲模式) |
 | `proxy_on_http_call_response` | —（callout 回调） | 每个完成的 callout 回调一次：请求阶段发起的在挂起的请求上下文上，`proxy_on_tick` 发起的在 root context 上 |
 | `proxy_on_response_headers` | `upstreamResponseFilterPlugins`（`UpstreamResponseFilter`） | 上游响应 header 到达 |
-| `proxy_on_response_body` | `upstreamResponseBodyFilterPlugins`（`UpstreamResponseBodyFilter`） | 每个上游 body chunk 一次，**只读**（见 [body 观测](#响应-body-观测只读)） |
+| `proxy_on_response_body` | `upstreamResponseBodyFilterPlugins`（`UpstreamResponseBodyFilter`） | 每个上游 body chunk 一次，**只读**（见[响应 body 观测](#响应-body-观测只读)） |
 | `proxy_on_tick` | —（后台） | guest 设定 tick 周期后周期性触发（见[定时器](#shared-data-与定时器)） |
 | `proxy_on_done` / `proxy_on_delete` | —（上下文清理） | 每个请求级上下文结束之后 |
 
@@ -33,17 +34,18 @@ Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
 | `proxy_get_header_map_pairs` / `proxy_get_header_map_value` | ✅ | 请求头、响应头，以及（callout 回调内）`HttpCallResponseHeaders`——callout 响应头外加合成的 `:status` |
 | `proxy_replace_header_map_value` / `proxy_add_header_map_value` / `proxy_remove_header_map_value` / `proxy_set_header_map_pairs` | ✅ | 设置/追加/删除/整体替换；钩子返回后应用到真实请求/响应。对 callout 响应 map 的写入被拒绝 |
 | `proxy_send_local_response` | ✅ | 以指定状态码/响应体/头短路请求。也可在 `proxy_on_http_call_response` 内调用（鉴权 callout 后拒绝） |
-| `proxy_http_call` | ✅（请求 + tick 阶段） | 见 [HTTP callout](#http-calloutpause恢复)。响应/body 阶段返回 `UNIMPLEMENTED`（12）；tick 阶段要求 allowlist 无歧义（见[定时器](#shared-data-与定时器)） |
+| `proxy_http_call` | ✅（请求头 + tick 阶段） | 见 [HTTP callout](#http-calloutpause恢复)。请求 body、响应头、响应 body 阶段均返回 `UNIMPLEMENTED`（12）；tick 阶段要求 allowlist 无歧义（见[定时器](#shared-data-与定时器)） |
 | `proxy_continue_request` / `proxy_continue_stream(Request)` | ✅ | 恢复因 callout 挂起的请求。`proxy_continue_response` 仍是接受型 no-op |
 | `proxy_get_shared_data` / `proxy_set_shared_data` | ✅ | 模块级 KV + CAS——见 [shared data](#shared-data-与定时器) |
 | `proxy_set_tick_period_milliseconds` | ✅ | 启动模块级 tick 任务；`0` 停止。周期下限 100ms |
 | `proxy_get_property` / `proxy_set_property` | ✅（基础子集） | 可读键：`request.path`、`request.method`、`request.host`、`source.address`、`plugin_name`、`response.code`（仅响应阶段）。`proxy_set_property` 仅写入当前阶段的内存属性表 |
-| `proxy_get_buffer_bytes` | ✅ | `VmConfiguration`、`PluginConfiguration`、`HttpCallResponseBody`（callout 回调内）、`HttpResponseBody`（body 钩子内的**当前 chunk 窗口**） |
+| `proxy_get_buffer_bytes` | ✅ | `VmConfiguration`、`PluginConfiguration`、`HttpCallResponseBody`（callout 回调内）、`HttpRequestBody`（请求 body 钩子内的**完整缓冲 body**——见[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)）、`HttpResponseBody`（响应 body 钩子内的**当前 chunk 窗口**） |
+| `proxy_set_buffer_bytes` | ❌（桩实现） | body 改写未实现。已注册进 linker，guest 导入它仍能正常实例化，但每次调用都返回 `STATUS_UNIMPLEMENTED`（12）而不是 trap |
 | `proxy_log` | ✅ | 转发到网关自身的 `tracing::debug!` 输出（target `wasm_guest`），**绝不**写入访问日志 |
 | `proxy_get_current_time_nanoseconds` | ✅ | 系统时钟 |
 | `proxy_get_configuration`（0.1 遗留） | ✅ | 返回与 `PluginConfiguration` buffer 相同的字节 |
 | `proxy_set_effective_context` / `proxy_done` | 接受型 no-op | 返回 `STATUS_OK`，不做任何事 |
-| 其余全部（请求 body 钩子、gRPC callout、shared queue、foreign function、metrics 等） | ❌ | 未注册进 linker。guest 导入且真正调用会 **trap**（随后按[失败语义](#失败语义)处理）；只导入不调用无害 |
+| 其余全部（gRPC callout、shared queue、foreign function、metrics 等） | ❌ | 未注册进 linker。guest 导入且真正调用会 **trap**（随后按[失败语义](#失败语义)处理）；只导入不调用无害 |
 
 ### ABI 版本检查
 
@@ -188,24 +190,71 @@ requestPlugins:
 - **ExtProc**（推模式）：网关把每个请求各阶段推给常驻外部处理器（gRPC）。外部服务拥有逻辑、需要看到全部流量时选它。
 - **Wasm callout**（拉模式）：guest 逻辑内嵌网关，按需外呼。插件自己决定*是否/何时*咨询外部服务时（如先查缓存、未命中再校验 token）选它。
 
-## 响应 body 观测（只读）
+## 两种 body 模式，静态选择
 
-把 Wasm 条目列在 `upstreamResponseBodyFilterPlugins` 下，`proxy_on_response_body` 会对每个上游 chunk 触发一次。
+Edgion 支持两种、有意区分开的 wasm body 行为：
 
-> ### ⚠️ 这里偏离 proxy-wasm spec——移植 guest 前必读
+| | 请求 body 整体缓冲模式 | 响应 body 观测 |
+|---|---|---|
+| 钩子 | `proxy_on_request_body` | `proxy_on_response_body` |
+| 所在条目阶段 | `requestPlugins`（与 header 钩子同一条目） | `upstreamResponseBodyFilterPlugins` |
+| `body_size` | **完整 body** 长度 | **当前 chunk** 长度 |
+| `proxy_get_buffer_bytes` 返回 | **完整缓冲 body** | 仅**当前 chunk** |
+| 能否拒绝请求 | ✅（`proxy_send_local_response`） | ❌（响应头已发出） |
+| 能否改写 body | ❌（`proxy_set_buffer_bytes` 是返回 `UNIMPLEMENTED` 的桩实现） | ❌ |
+| 如何选择 | 静态：条目上有运营者 `body:` 块，**且**编译出的 guest 模块导出了 `proxy_on_request_body` | 静态：guest 模块是否导出 `proxy_on_response_body` |
+
+**这是对 proxy-wasm spec 的有意偏离。** spec 把缓冲建模为 guest 在运行时逐 chunk 做的*动态*决策（`if !end_of_stream { Action::Pause }` 告诉宿主继续缓冲；`Action::Continue` 告诉宿主继续流式转发）。Envoy 的实现方式是把 `Pause` 映射成 `StopIterationAndBuffer`，由它的 filter manager 持有缓冲区。Edgion 在两侧都做不到这一点——响应 body filter 是**同步**、body 不可变的直接传递（入参 `&Option<Bytes>`，返回 `Option<Duration>`；无法扣留或累积某个 chunk），而且"这个插件是否拿到完整 body"必须在任何钩子运行之前、模块加载时就决定一次。所以 Edgion 只在**一次、静态**地选择模式：依据编译出的 guest 模块导出了哪个钩子、以及运营者把它挂在哪个阶段——而不是依据 guest 每次请求返回的 `Action` 值。
+
+### 请求 body 整体缓冲模式
+
+把 Wasm 条目列在 `requestPlugins` 下、且使用的 guest 模块导出了 `proxy_on_request_body`，就会进入整体缓冲模式：`proxy_on_request_headers` 运行之后（且仅当它返回 `Continue`，即没有已经拒绝或 trap），网关会尝试缓冲完整的请求 body，成功后调用 `proxy_on_request_body` **恰好一次**：`body_size` 为完整 body 的长度、`end_of_stream = true`，`proxy_get_buffer_bytes(HttpRequestBody, 0, body_size)` 返回完整内容。guest 可以检视完整 body——用于请求体 WAF、敏感信息扫描或签名校验——并像在 header 钩子里一样通过 `proxy_send_local_response` 拒绝请求。
+
+需要注意的现状与限制：
+
+- **通过 `body:` 由运营者主动开启。** 不同于自身声明了 body 需求的插件（如 `HmacAuth` 的 `validateRequestBody`），Wasm 没有能表达"需要 body"的自有配置字段——guest 导出了哪些钩子只有模块加载之后才知道，不是插件配置本身能决定的。因此请求整体缓冲模式需要运营者在 `Wasm` 请求条目上显式加一个 `body:` 块来开启（`maxBodySize`/`conditions`/`onReadFailure` 都是可选的，均有合理默认值）。`body:` 块里的 `maxBodySize`（如果设置）是叠加在下面网关级上限之上的**单插件限制**（超过则返回 `413`），不是缓冲区大小本身。如果 guest 模块并未导出 `proxy_on_request_body`，加了 `body:` 也只是白白缓冲一份 body——钩子仍然不会被调用（见下面最后一条）。
+- **上限**：缓冲受网关级 `EdgionGatewayConfig.spec.maxBodySize` 约束，不是某个插件专属的值。
+- **依赖共享的 body 缓冲基建（过渡性缺口）。** 整体 body 读取走的是所有整体缓冲模式插件共用的内部 facade。在该 facade 的真实累积实现接入请求路径之前，body 网关的读取会固定失败并返回 `Unimplemented`——这**不等同于**钩子被静默跳过。带 `body:` 声明的 Wasm 条目会像其他被 body 网关接管的插件一样，按其 `onReadFailure` 策略处理这次失败：默认（`failClose`）在 guest 运行之前就以 `500` 拒绝请求；`failOpen` 则跳过该插件（如同未启用）并放行请求。等基建接入后，带 `body:` 声明的条目才会真正走到 `proxy_on_request_body` 并拿到真实缓冲的 body，而不是在网关处失败。
+- **没有** `body:` 块的 `Wasm` 条目不受上述影响：它始终不受网关接管，只要该阶段自身的读取尝试拿不到内容，请求 body 钩子就会被跳过（不会被调用）——包括基建落地之前的今天。未导出 `proxy_on_request_body` 的 guest 在该阶段同样不会有任何额外开销：无论是否设置了 `body:`，该阶段都会被完全跳过。
+
+请求 body guest 的最小形态：
+
+```rust
+use proxy_wasm::traits::{Context, HttpContext};
+use proxy_wasm::types::Action;
+
+impl HttpContext for BodyScanner {
+    fn on_http_request_headers(&mut self, _n: usize, _eos: bool) -> Action {
+        Action::Continue // 放行到 body 钩子
+    }
+
+    // 只会被调用一次，拿到的是完整请求 body（Edgion 已经帮你缓冲好了——
+    // 不需要经典的 `if !end_of_stream { Pause }` 那套动作）。
+    fn on_http_request_body(&mut self, body_size: usize, _end_of_stream: bool) -> Action {
+        if let Some(body) = self.get_http_request_body(0, body_size) {
+            if body.windows(6).any(|w| w == b"secret") {
+                self.send_http_response(403, vec![], Some(b"request body denied"));
+            }
+        }
+        Action::Continue
+    }
+}
+```
+
+### 响应 body 观测（只读）
+
+把 Wasm 条目列在 `upstreamResponseBodyFilterPlugins` 下，`proxy_on_response_body` 会对每个上游 chunk 触发一次。这是目前响应侧**唯一**可用的 wasm body 模式——响应侧还没有对应请求侧整体缓冲模式的能力（见[剩余限制](#剩余限制)）。
+
+> ### ⚠️ 按 chunk 而非整体——移植 guest 前必读
 >
-> spec 的 body 契约是**累积式**的：`body_size` 是**宿主到目前为止已缓冲的总字节数**，`Action::Pause` 让宿主**继续缓冲**，`proxy_get_buffer_bytes` 读的是**累积缓冲区**。Envoy 的实现方式是把 Pause 映射成 `StopIterationAndBuffer`，由它的 filter manager 持有缓冲区。
+> `body_size` 是**当前 chunk** 的长度，`proxy_get_buffer_bytes(HttpResponseBody, …)` **只返回该 chunk**，body 从不跨 chunk 累积。
 >
-> **本网关实现的是每 chunk 的只读*窗口***：`body_size` 是**当前 chunk** 的长度，`proxy_get_buffer_bytes(HttpResponseBody, …)` **只返回该 chunk**，body 从不被缓冲。
->
-> **后果**：一个按标准范式写的 guest——
+> **后果**：一个按动态缓冲范式写的 guest——
 > ```rust
 > if !end_of_stream { return Action::Pause; }             // 期望宿主缓冲
 > let body = self.get_http_response_body(0, body_size)?;  // 以为拿到完整 body
 > ```
-> ——**只会看到最后一个 chunk**。对 WAF 或敏感数据扫描器来说这是**静默漏检**。因此宿主**不会**静默忽略 Pause：它会递增 `edgion_wasm_body_pause_unsupported_total{module}` 并按模块告警一次。**请对该指标配告警**——它意味着线上某个 guest 正在看不完整的数据。
->
-> 完整 spec 语义需要请求/响应 body 缓冲基建，这是**有意不实现**的（代价是内存、破坏流式上传、TTFB 变差；而且在本代理内核上，请求 body 的*改写*还额外撞上"上游 Content-Length 早于 body filter 发出"的顺序问题）。**后果：现成的 proxy-wasm WAF / body 扫描类 guest——它们清一色用 Pause 攒 body 的范式——在这里跑不了。** 本网关的 body 观测按设计就是每 chunk 的，请照此编写 guest。
+> ——**只会看到最后一个 chunk**。对 WAF 或敏感数据扫描器来说这是**静默漏检**。因此宿主在这里**不会**静默忽略 `Pause`：它会递增 `edgion_wasm_body_pause_unsupported_total{module}` 并按模块告警一次。**请对该指标配告警**——它是一个可靠信号，说明线上某个 guest 想要它没拿到的整体 body 缓冲。这种缓冲能力今天已经存在于*请求*侧（见上文[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)，前提是共享基建就绪）；*响应*侧则需要一个本网关尚未构建的整体缓冲模式。
 
 在每 chunk 模型下正确的用法：
 
@@ -213,8 +262,6 @@ requestPlugins:
 - **严格只读**：不能改写 body，也不能在 body 阶段短路响应（响应头已发出）。检测结论只能记日志（`proxy_log`）或写入 shared data。
 - 每个 chunk 在缩减的 CPU 预算（`timeoutMs / 10`，下限 10ms）下执行，慢 guest 拖不垮长流；body 钩子 trap **绝不断流**（实例被丢弃，流继续，与 `failOpen` 无关）。
 - 未导出 `proxy_on_response_body` 的 guest 在此阶段是零成本 no-op。
-
-请求 body 观测**完全未实现**（没有 `proxy_on_request_body`）——它依赖同一套 body 缓冲基建。
 
 ## Shared data 与定时器
 
@@ -296,13 +343,13 @@ trap（或其他故障）的 VM 实例会被**污染**：直接丢弃而不回�
 | `edgion_wasm_instance_instantiate_total` | counter | | 新实例化（池 miss） |
 | `edgion_wasm_instance_discard_total` | counter | `reason=poisoned\|over_capacity` | 未回池而被丢弃的实例 |
 | `edgion_wasm_pool_size` | gauge | | 当前池内实例数 |
-| `edgion_wasm_hook_duration_ms` | histogram | `phase` | guest 钩子耗时（`request_headers`、`response_headers`、`response_body`、`http_call_response`、`tick`） |
+| `edgion_wasm_hook_duration_ms` | histogram | `phase` | guest 钩子耗时（`request_headers`、`request_body`、`response_headers`、`response_body`、`http_call_response`、`tick`） |
 | `edgion_wasm_trap_total` | counter | `phase` | trap / 协议违规 |
 | `edgion_wasm_fail_mode_total` | counter | `reason`、`mode=open\|close` | fail-mode 决策 |
 | `edgion_wasm_callout_total` | counter | `result=ok\|error\|denied\|over_limit\|tick_config_conflict` | callout 结果；`tick_config_conflict` 统计因共享模块的插件配置了不同 `calloutAllowlist` 而保持禁用 dispatch 的 tick 次数 |
 | `edgion_wasm_modules_loaded` | gauge | | 全局缓存中当前的编译模块数 |
 | `edgion_wasm_shared_data_bytes` | gauge | `module` | 每个模块当前 shared-data 总量，key + value + 每条目约 128B 开销（上限 4MiB） |
-| `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **建议配告警。** guest 在 body 钩子返回了 `Action::Pause`，即它期望 spec 的累积缓冲语义（本 host 未实现）——它正在静默地只看到当前 chunk，而非完整 body |
+| `edgion_wasm_body_pause_unsupported_total` | counter | `module` | **建议配告警。** guest 在**响应 body 观测**钩子里返回了 `Action::Pause`——它想要整体 body 缓冲，而响应侧目前不提供该能力（只有请求侧的[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)提供）——因此它正在静默地只看到当前 chunk |
 
 trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_total{reason="poisoned"}` 同步上涨。
 
@@ -317,8 +364,10 @@ trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_
 
 ## 剩余限制
 
-- **无请求 body 钩子**（`proxy_on_request_body`）：依赖网关尚无的请求 body 缓冲；只实现请求 body 钩子的 guest 永远不会被调用。
-- **响应 body 仅可观测，且是每 chunk 语义（非 spec 的累积语义）**：不能改写 body，不能在 body 阶段短路，`Action::Pause` 无法兑现——按标准缓冲范式写的 guest 只会看到当前 chunk。见[响应 body 观测](#响应-body-观测只读)一节的警告。
+- **请求 body 整体缓冲模式依赖共享的 body 缓冲基建，尚未接入请求路径**：带 `body:` 块的条目会被 body 网关接管，所以在基建落地之前，其缓冲读取固定失败，条目按自身 `onReadFailure` 策略解决（默认 `failClose` 返回 `500`，`failOpen` 则跳过该插件）——而不是静默跳过。没有 `body:` 块的 `Wasm` 条目不受影响：它保持不被接管，钩子只是照常不会被驱动，就像 guest 根本没有该钩子一样。见[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)。
+- **响应侧没有整体缓冲模式**：响应 body 观测仅按 chunk、只读——不能改写 body，不能在 body 阶段短路，`Action::Pause` 无法兑现——按标准整体缓冲范式写的 guest 只会看到当前 chunk。见[响应 body 观测](#响应-body-观测只读)一节的警告。
+- **任何方向都不支持 body 改写**（`proxy_set_buffer_bytes`）：请求侧和响应侧都注册为固定返回 `STATUS_UNIMPLEMENTED` 的桩实现。
+- **静态选模式，非动态 Pause/Continue**：不同于 Envoy，插件拿到哪种 body 模式在模块加载时就由编译出的 guest 导出了哪些钩子决定，而不是由 guest 每次请求返回的 `Action` 决定。见[两种 body 模式，静态选择](#两种-body-模式静态选择)。
 - **无 gRPC callout**（`proxy_dispatch_grpc_call`）：调用即 trap。
 - **响应/body 阶段不能 callout**（同步阶段），且请求阶段 dispatch 后不 Pause 会被丢弃。tick 阶段的 callout 还额外要求共享模块的插件对 `calloutAllowlist` 达成一致（见[定时器](#shared-data-与定时器)）。
 - **无 shared queue、foreign function、guest 自定义 metrics**：调用即 trap。
@@ -387,7 +436,7 @@ impl Context for AuthPlugin {
 }
 ```
 
-参考 guest 实现的完整契约（含 panic、本地响应测试路径）与产物重建方法见 `edgion-tests/wasm/README.md`。
+参考 guest 实现的完整契约（含 panic、本地响应测试路径）与产物重建方法见 `edgion-tests/wasm/README.md`。参考 guest 演练了响应 body 观测（`on_http_response_body`），但尚未演练请求 body 整体缓冲模式；该范式见上文[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)的独立代码片段。
 
 ## FAQ
 
@@ -397,7 +446,11 @@ impl Context for AuthPlugin {
 
 ### Q：我的 callout 从未被执行？
 
-依次检查：（1）目标 origin 是否列在 `calloutAllowlist`——空列表完全禁用 callout；（2）请求阶段 dispatch 后 guest 是否返回了 `Action::Pause`——dispatch 后 `Continue` 会被丢弃（访问日志出现 `callouts-dropped=N`）；（3）dispatch 是否发生在请求或 tick 阶段——响应/body 阶段返回 `UNIMPLEMENTED`；（4）tick 阶段 dispatch 还要求无 allowlist 冲突——多个插件以不同 `calloutAllowlist` 共享同一模块时，查看 `edgion_wasm_callout_total{result="tick_config_conflict"}` 与 WARN 日志。
+依次检查：（1）目标 origin 是否列在 `calloutAllowlist`——空列表完全禁用 callout；（2）请求头阶段 dispatch 后 guest 是否返回了 `Action::Pause`——dispatch 后 `Continue` 会被丢弃（访问日志出现 `callouts-dropped=N`）；（3）dispatch 是否发生在请求头或 tick 阶段——请求 body、响应头、响应 body 阶段均返回 `UNIMPLEMENTED`；（4）tick 阶段 dispatch 还要求无 allowlist 冲突——多个插件以不同 `calloutAllowlist` 共享同一模块时，查看 `edgion_wasm_callout_total{result="tick_config_conflict"}` 与 WARN 日志。
+
+### Q：我的 `proxy_on_request_body` 钩子从未运行？
+
+需要同时满足两点：（1）编译出的 guest 模块必须真的导出 `proxy_on_request_body`（加载时探测一次）——SDK 层面重写了 `on_http_request_body` 但因为 context 类型没有实现它而没有被注册进导出表，不算数；（2）[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)依赖共享的 body 缓冲 facade，目前尚未接入请求路径——在它就绪之前，即便模块正确导出了钩子，该钩子也会被跳过，请求照常继续。这是已知的过渡性缺口，不是配置错误。
 
 ### Q：guest 模块在响应阶段不生效？
 

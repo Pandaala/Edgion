@@ -1,4 +1,5 @@
-//! Wasm plugin — executes proxy-wasm guests at the request-header and
+//! Wasm plugin — executes proxy-wasm guests at the request-header,
+//! request-body (buffer mode, gated by an operator `body:` block), and
 //! response-header phases. See mod.rs docs for scope and limitations.
 
 use std::collections::{HashMap, HashSet};
@@ -9,7 +10,7 @@ use std::sync::Arc;
 
 use super::callout::resolve_callouts_on;
 use super::host_abi::{HeaderOp, LocalResponse, WasmPhase, MAP_HTTP_REQUEST_HEADERS, MAP_HTTP_RESPONSE_HEADERS};
-use super::vm_manager::{global_vm_manager, runtime_cache_key, CalloutGrant, VmLease};
+use super::vm_manager::{global_vm_manager, runtime_cache_key, CalloutGrant, ModuleEntry, VmLease};
 use crate::observe::metrics::registry::{record_wasm_body_pause_unsupported, record_wasm_fail_mode};
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{
@@ -174,6 +175,7 @@ impl WasmPlugin {
     /// short-circuit (send_local_response).
     async fn run_leased_request(
         &self,
+        entry: Arc<ModuleEntry>,
         mut lease: VmLease,
         session: &mut dyn PluginSession,
         log: &mut PluginLog,
@@ -223,7 +225,58 @@ impl WasmPlugin {
             drop(lease);
             return self.fail_mode(session, log, "no-resume");
         }
-        self.finish_phase(lease, session, log, action, had_callouts)
+        // The headers-phase result is produced exactly as before (the lease is
+        // returned to the pool inside `finish_phase`). Only a clean GoodNext
+        // continues into the request-body phase; any deny / local response /
+        // fail-mode short-circuits and never buffers the body.
+        let headers_result = self.finish_phase(lease, session, log, action, had_callouts);
+        if !matches!(headers_result, PluginRunningResult::GoodNext) {
+            return headers_result;
+        }
+        self.run_request_body_phase(&entry, session, log).await
+    }
+
+    /// Buffer-mode request-body drive. Runs only when the guest exports
+    /// `proxy_on_request_body` and the body gate has buffered the body (the
+    /// `read_request_body` await returns `Ok`). Ungated plugins / a stubbed
+    /// facade return `Err`, and the body hook is skipped (there is no request
+    /// streaming path in this cut). A fresh lease is re-acquired from `entry`
+    /// (the same already-loaded `ModuleEntry` the headers phase used, passed in
+    /// so no racy `try_get` re-lookup is needed): the headers phase already
+    /// returned its lease to the pool via `finish_phase`. A guest deny (local
+    /// response) is drained the same way as the other phases.
+    async fn run_request_body_phase(
+        &self,
+        entry: &Arc<ModuleEntry>,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+    ) -> PluginRunningResult {
+        if !entry.has_request_body_hook() {
+            return PluginRunningResult::GoodNext;
+        }
+        let cap = session.ctx().max_body_size_bytes;
+        let body = match session.read_request_body(Some(cap)).await {
+            Ok(b) => b,
+            // Ungated / no backing: no body to hand the guest. The gate (when
+            // present) has already enforced its fail policy before calling us.
+            Err(_) => return PluginRunningResult::GoodNext,
+        };
+        let mut lease = match entry.acquire(self.config.timeout_ms) {
+            Ok(l) => l,
+            Err(_) => return self.fail_mode(session, log, "acquire"),
+        };
+        let size = body.len() as i32;
+        let request_headers = session.request_headers();
+        let props = self.properties(session, WasmPhase::RequestBody);
+        lease
+            .state_mut()
+            .begin_phase(WasmPhase::RequestBody, request_headers, Vec::new(), props);
+        lease.state_mut().request_body = body.to_vec();
+        let action = match lease.call_on_request_body(size, true) {
+            Ok(a) => a,
+            Err(_) => return self.fail_mode(session, log, "trap"),
+        };
+        self.finish_phase(lease, session, log, action, false)
     }
 
     /// Execute queued callouts and deliver each result to the paused guest
@@ -287,30 +340,80 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     /// Read-only per-chunk observation of the response body via
     /// `proxy_on_response_body` + `get_buffer_bytes(HttpResponseBody)`.
     ///
-    /// ## DIVERGENCE FROM THE proxy-wasm SPEC — read before changing
+    /// ## TWO-MODE MODEL — read before changing
     ///
-    /// The spec's body-hook contract is *cumulative*: `body_size` is the total
-    /// buffered bytes available so far, `Action::Pause` tells the host to keep
-    /// buffering, and `get_buffer_bytes` reads the accumulated buffer. Envoy
-    /// implements this by mapping Pause onto `StopIterationAndBuffer`, letting
-    /// its filter manager own the buffer.
+    /// Edgion selects the wasm body mode **statically**, per plugin instance,
+    /// instead of letting the guest choose dynamically via
+    /// `Action::Pause`/`Continue` the way Envoy does:
     ///
-    /// This host implements a *per-chunk window* instead: `body_size` is the
-    /// CURRENT chunk's length and `get_buffer_bytes(HttpResponseBody)` returns
-    /// only that chunk. It cannot buffer — the `UpstreamResponseBodyFilter`
-    /// trait hands us `&Option<Bytes>` (immutable) and returns `Option<Duration>`,
-    /// so there is no way to withhold a chunk or accumulate one.
+    /// - **Request buffer mode** (see `run_request_body_phase` above —
+    ///   a different method on this same type, invoked from the `RequestFilter`
+    ///   impl's `run_request`). Selection requires BOTH an operator `body:`
+    ///   block on the Wasm entry AND the compiled guest module exporting
+    ///   `proxy_on_request_body` (probed once at load via
+    ///   `ModuleEntry::has_request_body_hook()`). `Wasm` has no INTRINSIC
+    ///   `body_requirement()` — `EdgionPlugin::body_requirement()` returns
+    ///   `None` for every `Wasm` config, because the guest's hooks are only
+    ///   known after module load, not from the plugin's own config — but it
+    ///   DOES `accepts_body()`, so `body:` on a Wasm entry IS accepted at
+    ///   preparse (unlike a plugin with no `body_requirement()` and no
+    ///   `accepts_body()`, which would be rejected). `resolve_body_requirement`
+    ///   (`plugin_runtime.rs`) treats that operator `body:` as the SOLE source
+    ///   of truth for Wasm and passes it through as-is, which wraps this
+    ///   plugin's `RequestFilter` in a `BodyGatedRequestFilter`. The gate
+    ///   buffers the body (capped by the gateway-wide `maxBodySize`) BEFORE
+    ///   the inner Wasm filter runs; `run_request_body_phase` then re-awaits
+    ///   the same shared facade (`PluginSession::read_request_body`), which
+    ///   must return the already-buffered bytes rather than re-reading the
+    ///   stream. On success, wasm drives `proxy_on_request_body` **once** with
+    ///   the full body (`body_size` = full length, `end_of_stream = true`,
+    ///   `get_buffer_bytes(HttpRequestBody)` returns the whole thing), and the
+    ///   guest can deny via `proxy_send_local_response` — this is the only body
+    ///   path that can deny the request. Without an operator `body:` block the
+    ///   gate is never installed and `run_request_body_phase` still calls
+    ///   `read_request_body` ungated (see that method's doc for why); it only
+    ///   takes effect once the facade's real accumulation backing lands: today
+    ///   `read_request_body` has no backing on the real `PingoraSessionAdapter`
+    ///   (the trait's default always returns `Err(BodyReadError::Unimplemented)`),
+    ///   so the call errs and the body hook is silently skipped (`GoodNext`) —
+    ///   a guest that exports a request-body hook is effectively a no-op on
+    ///   the body until then, regardless of `failOpen` (and, even with the
+    ///   backing landed, regardless of whether `body:` was set — an ungated
+    ///   read must fail rather than auto-buffer; see the facade contract in
+    ///   `docs/superpowers/specs/2026-07-22-wasm-body-wiring-design.md`).
+    /// - **Response streaming observation** (this method, unchanged). `body_size`
+    ///   is the CURRENT chunk's length and `get_buffer_bytes(HttpResponseBody)`
+    ///   returns only that chunk. It cannot buffer — the `UpstreamResponseBodyFilter`
+    ///   trait hands us `&Option<Bytes>` (immutable) and returns `Option<Duration>`,
+    ///   so there is no way to withhold a chunk or accumulate one, no way to deny,
+    ///   and no way to see the whole body (headers are already sent by the time a
+    ///   response body guest runs).
     ///
-    /// Consequence: a guest written to the standard idiom
+    /// The mode a plugin gets is decided statically — by the operator `body:`
+    /// block (request side only) combined with which hooks the compiled guest
+    /// module exports, and by its placement in the operator's plugin array
+    /// (request stage vs. response body stage) — not by a per-chunk
+    /// `Continue`/`Pause` decision from the guest at runtime; this is a deliberate deviation from the
+    /// proxy-wasm spec, which models buffering as dynamic (Envoy maps `Pause`
+    /// onto `StopIterationAndBuffer` and lets its filter manager own the
+    /// buffer).
+    ///
+    /// Consequence for THIS method: a guest written to the standard dynamic idiom
     /// (`if !end_of_stream { return Action::Pause }` then read the "whole body")
-    /// would silently observe only the LAST chunk — a false negative for a WAF
-    /// or secret scanner. So a Pause is NOT silently dropped: it is counted via
-    /// the bounded `edgion_wasm_body_pause_unsupported_total` metric, a reliable
-    /// signal that the guest is incompatible with this host. (This is a per-chunk
-    /// data-plane hot path, so it must not tracing — Iron rule 3; the metric is
-    /// the only channel here.) Honoring Pause properly needs the request/response
-    /// body buffering infrastructure (see
-    /// `tasks/wasm-followups/body-buffering-spec-semantics.md`).
+    /// would silently observe only the LAST chunk if run here — a false negative
+    /// for a WAF or secret scanner. So a Pause on the response path is NOT
+    /// silently dropped: it is counted via the bounded
+    /// `edgion_wasm_body_pause_unsupported_total` metric, a reliable signal that
+    /// the guest wants buffering it isn't getting. That buffering is available
+    /// today on the *request* side for a guest exporting `proxy_on_request_body`
+    /// (see above, once the shared facade is backed); on the *response* side it
+    /// requires a response buffer mode this host does not yet
+    /// build (the response-header-phase plugin would need to be registered on a
+    /// gated async trait so the whole response body can be staged before the
+    /// per-chunk stream starts — future work, see
+    /// `tasks/wasm-followups/body-buffering-spec-semantics.md`). (This is a
+    /// per-chunk data-plane hot path, so it must not trace — Iron rule 3; the
+    /// metric is the only channel here.)
     ///
     /// Other constraints of this stage:
     /// - the body cannot be modified and the response cannot be short-circuited
@@ -486,7 +589,7 @@ impl RequestFilter for WasmPlugin {
             Ok(l) => l,
             Err(_) => return self.fail_mode(session, log, "acquire"),
         };
-        self.run_leased_request(lease, session, log).await
+        self.run_leased_request(entry, lease, session, log).await
     }
 }
 
@@ -704,6 +807,14 @@ mod tests {
         s.expect_get_method().return_const("GET".to_string());
         s.expect_header_value().returning(|_| None);
         s.expect_remote_addr().return_const("1.2.3.4".to_string());
+        // Default request-body-phase stubs: a WAT guest without a
+        // `proxy_on_request_body` export never reaches these, but the real
+        // proxy-wasm SDK guest does. Ungated (no `body:`) → `read_request_body`
+        // returns `Unimplemented` → the body hook is skipped (GoodNext). Tests
+        // that need an actual buffered body use `body_mock` instead.
+        s.expect_ctx().return_const(crate::EdgionHttpContext::new());
+        s.expect_read_request_body()
+            .returning(|_| Err(crate::plugins::runtime::traits::session::BodyReadError::Unimplemented));
         s
     }
 
@@ -1243,6 +1354,14 @@ mod tests {
         s.expect_remote_addr().return_const("1.2.3.4".to_string());
         // A guest deny path (send_http_response) applies local-response headers.
         s.expect_set_response_header().returning(|_, _| Ok(()));
+        // The proxy-wasm Rust SDK exports `proxy_on_request_body` on every
+        // guest, so the request-body phase now runs for the reference module.
+        // These tests exercise the UNGATED plugin (no `body:` requirement),
+        // where `read_request_body` returns `Unimplemented` and the body hook
+        // is skipped — mirror that so the body phase is a no-op GoodNext here.
+        s.expect_ctx().return_const(crate::EdgionHttpContext::new());
+        s.expect_read_request_body()
+            .returning(|_| Err(crate::plugins::runtime::traits::session::BodyReadError::Unimplemented));
         s
     }
 
@@ -1468,6 +1587,172 @@ mod tests {
         assert!(
             seen.load(std::sync::atomic::Ordering::Relaxed) >= 200,
             "body hook must have counted both 100-byte chunks into shared data"
+        );
+    }
+
+    /// Request-body buffer-mode guest: `proxy_on_request_body` sends a 403
+    /// local response when the buffered body is non-empty (a WAF/scanner deny),
+    /// otherwise continues. Also exports a no-op `proxy_on_request_headers` so
+    /// the request-headers phase runs to GoodNext and the body phase is reached.
+    const GUEST_REQUEST_BODY_DENY: &str = r#"
+    (module
+      (import "env" "proxy_send_local_response"
+        (func $deny (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) (i32.const 0))
+      (func (export "proxy_on_request_body") (param i32 i32 i32) (result i32)
+        (if (i32.gt_s (local.get 1) (i32.const 0))
+          (then (drop (call $deny (i32.const 403) (i32.const 0) (i32.const 0)
+                                  (i32.const 0) (i32.const 0) (i32.const 0)
+                                  (i32.const 0) (i32.const 0)))))
+        (i32.const 0)))
+    "#;
+
+    /// Request-phase mock with a ctx (for the body-size cap resolution) and a
+    /// single scripted `read_request_body` outcome. Built standalone rather
+    /// than on `base_mock` so this is the only `read_request_body` expectation
+    /// (mockall matches FIFO; `base_mock`'s unlimited stub would otherwise win).
+    fn body_mock(read: crate::plugins::runtime::traits::session::BodyReadResult) -> MockPluginSession {
+        let mut s = MockPluginSession::new();
+        s.expect_request_headers()
+            .returning(|| vec![("host".to_string(), "t.example.com".to_string())]);
+        s.expect_get_path().return_const("/x".to_string());
+        s.expect_get_method().return_const("GET".to_string());
+        s.expect_header_value().returning(|_| None);
+        s.expect_remote_addr().return_const("1.2.3.4".to_string());
+        s.expect_ctx().return_const(crate::EdgionHttpContext::new());
+        s.expect_read_request_body().return_once(move |_| read);
+        s
+    }
+
+    /// A guest with a request-body hook that denies on a non-empty buffered
+    /// body must short-circuit with the guest's local response (403) once the
+    /// body gate has buffered the body (`read_request_body` -> Ok).
+    #[tokio::test]
+    async fn request_body_guest_receives_full_body_and_can_deny() {
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+        let mut session = body_mock(Ok(bytes::Bytes::from_static(b"scan-me")));
+        let mut log = PluginLog::new("Wasm");
+        let res = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(res, PluginRunningResult::ErrResponse { status: 403, body: None });
+    }
+
+    /// When `read_request_body` returns `Unimplemented` (ungated plugin / no
+    /// buffering backing), the body hook is not driven, so the deny guest never
+    /// runs its body path and the request continues (GoodNext).
+    #[tokio::test]
+    async fn request_body_skipped_when_read_unimplemented() {
+        use crate::plugins::runtime::traits::session::BodyReadError;
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+        let mut session = body_mock(Err(BodyReadError::Unimplemented));
+        let mut log = PluginLog::new("Wasm");
+        let res = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(res, PluginRunningResult::GoodNext);
+    }
+
+    /// Request-body buffer-mode guest that reads the `host` request header
+    /// (via `proxy_get_header_map_value` against `MAP_HTTP_REQUEST_HEADERS`)
+    /// from inside `proxy_on_request_body`, and denies with 403 only when
+    /// BOTH the header lookup succeeds (`STATUS_OK` == 0) AND the buffered
+    /// body is non-empty. This proves the body phase snapshot carries the
+    /// real request headers (regression guest for the "empty headers in
+    /// request-body phase" bug — before the fix, `get_hdr` would return
+    /// `STATUS_NOT_FOUND` and the guest would never deny even with a body).
+    const GUEST_REQUEST_BODY_READS_HEADER: &str = r#"
+    (module
+      (import "env" "proxy_get_header_map_value"
+        (func $get_hdr (param i32 i32 i32 i32 i32) (result i32)))
+      (import "env" "proxy_send_local_response"
+        (func $deny (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+      (memory (export "memory") 1)
+      (global $heap (mut i32) (i32.const 8192))
+      (data (i32.const 0) "host")
+      (func (export "proxy_on_memory_allocate") (param i32) (result i32)
+        (local $p i32)
+        global.get $heap
+        local.set $p
+        global.get $heap
+        local.get 0
+        i32.add
+        global.set $heap
+        local.get $p)
+      (func (export "proxy_on_request_headers") (param i32 i32 i32) (result i32) (i32.const 0))
+      (func (export "proxy_on_request_body") (param i32 i32 i32) (result i32)
+        (if (i32.and
+              (i32.eqz (call $get_hdr (i32.const 0) (i32.const 0) (i32.const 4)
+                                      (i32.const 256) (i32.const 260)))
+              (i32.gt_s (local.get 1) (i32.const 0)))
+          (then (drop (call $deny (i32.const 403) (i32.const 0) (i32.const 0)
+                                  (i32.const 0) (i32.const 0) (i32.const 0)
+                                  (i32.const 0) (i32.const 0)))))
+        (i32.const 0)))
+    "#;
+
+    /// Regression for the request-body phase snapshotting empty request
+    /// headers: a guest that reads the `host` header AND the body inside
+    /// `proxy_on_request_body` must see both — the header lookup succeeds and
+    /// the buffered body is non-empty, so the guest denies with 403. Before
+    /// the fix, `begin_phase(WasmPhase::RequestBody, ...)` was seeded with an
+    /// empty header vector, so `proxy_get_header_map_value` would return
+    /// `STATUS_NOT_FOUND` and this guest would never deny.
+    #[tokio::test]
+    async fn request_body_guest_can_read_request_header_and_body() {
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_READS_HEADER);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+        let mut session = body_mock(Ok(bytes::Bytes::from_static(b"scan-me")));
+        let mut log = PluginLog::new("Wasm");
+        let res = plugin.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            res,
+            PluginRunningResult::ErrResponse { status: 403, body: None },
+            "guest must see the request header AND the body in the body phase"
+        );
+    }
+
+    /// `BodyGatedRequestFilter` (the operator `body:` gate) buffers the
+    /// request body once to enforce its own read-failure/size policy, then
+    /// hands off to the wrapped `WasmPlugin`, whose own request-body phase
+    /// re-reads the SAME session via `read_request_body` a second time (see
+    /// `run_request_body_phase`). `PluginSession::read_request_body` must be
+    /// idempotent (cached bytes served on every call), so this mock uses
+    /// `.returning(...)` rather than `.return_once(...)` to prove both the
+    /// gate and the inner Wasm body phase can call it and both see the body.
+    #[tokio::test]
+    async fn body_gate_and_wasm_body_phase_both_read_request_body() {
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+        let gate = crate::plugins::runtime::BodyGatedRequestFilter::new(
+            plugin,
+            edgion_resources::resources::edgion_plugins::BodyRequirement::fail_close(),
+        );
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_request_headers()
+            .returning(|| vec![("host".to_string(), "t.example.com".to_string())]);
+        session.expect_get_path().return_const("/x".to_string());
+        session.expect_get_method().return_const("GET".to_string());
+        session.expect_header_value().returning(|_| None);
+        session.expect_remote_addr().return_const("1.2.3.4".to_string());
+        session.expect_ctx().return_const(crate::EdgionHttpContext::new());
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let calls2 = calls.clone();
+        session.expect_read_request_body().returning(move |_| {
+            calls2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(bytes::Bytes::from_static(b"scan-me"))
+        });
+
+        let mut log = PluginLog::new("Wasm");
+        let res = gate.run_request(&mut session, &mut log).await;
+        // The guest hook (GUEST_REQUEST_BODY_DENY) receives the buffered body
+        // in `proxy_on_request_body` and denies on the non-empty body.
+        assert_eq!(res, PluginRunningResult::ErrResponse { status: 403, body: None });
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "the gate and the wasm body phase must both read the request body"
         );
     }
 

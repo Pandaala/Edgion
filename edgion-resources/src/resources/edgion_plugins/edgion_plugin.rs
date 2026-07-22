@@ -215,9 +215,16 @@ impl EdgionPlugin {
 
     /// Whether this plugin accepts an operator `body:` configuration at the
     /// given stage (i.e. it consumes the body in its current config at that
-    /// stage). Equivalent to `body_requirement(stage).is_some()`.
+    /// stage). Equivalent to `body_requirement(stage).is_some()`, with one
+    /// exception: `Wasm` opts into request buffer mode via an operator `body:`
+    /// block on the plugin entry; its intrinsic `body_requirement()` is (and
+    /// must stay) `None` because the guest's exported hooks are only known after
+    /// module load, not from the plugin's own config. So `Wasm` accepts a
+    /// `body:` block at the request stage only (it has no response buffer mode).
+    /// Every other plugin gates solely on its intrinsic declaration.
     pub fn accepts_body(&self, stage: BodyStage) -> bool {
-        self.body_requirement(stage).is_some()
+        (matches!(self, EdgionPlugin::Wasm(_)) && stage == BodyStage::Request)
+            || self.body_requirement(stage).is_some()
     }
 
     /// Get the plugin type name
@@ -652,6 +659,38 @@ mod dsl_body_requirement_tests {
         assert_eq!(
             close.body_requirement(BodyStage::Request).unwrap().on_read_failure,
             BodyReadFailureMode::FailClose
+        );
+    }
+}
+
+#[cfg(test)]
+mod wasm_body_gate_tests {
+    use super::*;
+    use crate::resources::edgion_plugins::plugin_configs::WasmConfig;
+
+    /// Wasm has no intrinsic `body_requirement()` (the guest's hooks are only
+    /// known after module load), but it MUST still accept an operator `body:`
+    /// block at the request stage so the gateway's body gate can wrap it —
+    /// otherwise a `body:` entry on a Wasm request plugin is rejected at
+    /// admission and the request-buffer-mode feature is unreachable.
+    /// `body_requirement()` itself stays `None` for Wasm (it is config-only, no
+    /// operator input); the opt-in is expressed solely through `accepts_body()`.
+    /// Wasm has no response buffer mode, so it must NOT accept a body: block at
+    /// the response stage.
+    #[test]
+    fn wasm_accepts_operator_body_requirement() {
+        let p = EdgionPlugin::Wasm(WasmConfig::default());
+        assert!(
+            p.body_requirement(BodyStage::Request).is_none(),
+            "Wasm has no intrinsic body requirement (config-only signal)"
+        );
+        assert!(
+            p.accepts_body(BodyStage::Request),
+            "Wasm must accept an operator body: block at the request stage despite having no intrinsic requirement"
+        );
+        assert!(
+            !p.accepts_body(BodyStage::Response),
+            "Wasm has no response buffer mode, so it must not accept a body: block at the response stage"
         );
     }
 }

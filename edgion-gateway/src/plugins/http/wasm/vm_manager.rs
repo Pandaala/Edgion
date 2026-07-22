@@ -622,6 +622,7 @@ impl WasmVmManager {
         // `has_body_hook`); export lookup on every chunk would otherwise
         // contend the pool mutex for no benefit on large streamed responses.
         let has_body_hook = module.exports().any(|e| e.name() == "proxy_on_response_body");
+        let has_request_body_hook = module.exports().any(|e| e.name() == "proxy_on_request_body");
         let mut linker: Linker<HostState> = Linker::new(&engine);
         host_abi::add_to_linker(&mut linker).map_err(|e| format!("linker setup: {e}"))?;
         // Must run AFTER add_to_linker: only imports outside the supported
@@ -645,6 +646,7 @@ impl WasmVmManager {
             tick_task: Mutex::new(None),
             tick_callouts,
             has_body_hook,
+            has_request_body_hook,
         });
         // Eagerly warm one instance: validates guest init at load time (an
         // init failure becomes a clear, negative-cached load error instead
@@ -907,6 +909,10 @@ pub struct ModuleEntry {
     /// at load; lets the body-filter stage skip the per-chunk lease entirely
     /// for header-only guests.
     has_body_hook: bool,
+    /// Whether the guest exports `proxy_on_request_body`. Computed once at
+    /// load; lets the request-body-filter stage skip the per-chunk lease
+    /// entirely for header-only guests.
+    has_request_body_hook: bool,
 }
 
 impl Drop for ModuleEntry {
@@ -1081,6 +1087,17 @@ impl ModuleEntry {
         self.has_body_hook
     }
 
+    /// Whether the guest exports `proxy_on_request_body`. The request-body
+    /// phase checks this after the cheap `try_get` lookup and returns early
+    /// for header-only guests, skipping the pool-lease acquisition and body
+    /// buffering entirely — unlike the response-body filter, this phase
+    /// drives the hook exactly once with the whole buffered body (buffer
+    /// mode, no per-chunk streaming), so there is no per-chunk lease to
+    /// avoid here.
+    pub fn has_request_body_hook(&self) -> bool {
+        self.has_request_body_hook
+    }
+
     /// Human-readable module descriptor (metrics label).
     pub fn metrics_label(&self) -> &str {
         &self.metrics_label
@@ -1221,6 +1238,31 @@ impl VmLease {
         let (ctx_id, action) = self.open_and_call_with(
             "proxy_on_response_body",
             "response_body",
+            body_size,
+            end_of_stream as i32,
+        )?;
+        self.close_context(ctx_id)?;
+        Ok(action)
+    }
+
+    /// Drive `proxy_on_request_body` once in buffer mode. The full request
+    /// body must already be staged in `HostState::request_body` (exposed to
+    /// the guest via `get_buffer_bytes(HttpRequestBody)`). A guest without
+    /// the hook is a no-op (`Ok(0)`), checked before any context is opened.
+    pub fn call_on_request_body(&mut self, body_size: i32, end_of_stream: bool) -> Result<i32, String> {
+        {
+            let vm = self.vm.as_mut().expect("lease taken");
+            if vm
+                .instance
+                .get_typed_func::<(i32, i32, i32), i32>(&mut vm.store, "proxy_on_request_body")
+                .is_err()
+            {
+                return Ok(0);
+            }
+        }
+        let (ctx_id, action) = self.open_and_call_with(
+            "proxy_on_request_body",
+            "request_body",
             body_size,
             end_of_stream as i32,
         )?;
@@ -1534,6 +1576,35 @@ mod tests {
             .state_mut()
             .begin_phase(WasmPhase::RequestHeaders, vec![], vec![], HashMap::new());
         let action = lease.call_on_request_headers(0).expect("call ok");
+        assert_eq!(action, 0);
+    }
+
+    #[tokio::test]
+    async fn request_body_hook_probe_and_call() {
+        // Guest exports proxy_on_request_body returning Action::Continue (0).
+        const REQUEST_BODY_GUEST: &str = r#"
+        (module
+          (memory (export "memory") 1)
+          (global $heap (mut i32) (i32.const 1024))
+          (func (export "proxy_on_memory_allocate") (param i32) (result i32)
+            global.get $heap)
+          (func (export "proxy_on_context_create") (param i32 i32))
+          (func (export "proxy_on_vm_start") (param i32 i32) (result i32) (i32.const 1))
+          (func (export "proxy_on_configure") (param i32 i32) (result i32) (i32.const 1))
+          (func (export "proxy_on_request_body") (param i32 i32 i32) (result i32) (i32.const 0))
+          (func (export "proxy_on_done") (param i32) (result i32) (i32.const 1))
+          (func (export "proxy_on_delete") (param i32))
+        )
+        "#;
+        let f = write_temp_wasm(REQUEST_BODY_GUEST);
+        let mgr = WasmVmManager::new_for_test();
+        let entry = load(&mgr, &file_config(f.path())).await.expect("loads");
+        assert!(entry.has_request_body_hook());
+        let mut lease = entry.acquire(1000).expect("lease");
+        lease
+            .state_mut()
+            .begin_phase(WasmPhase::RequestBody, vec![], vec![], HashMap::new());
+        let action = lease.call_on_request_body(3, true).expect("call ok");
         assert_eq!(action, 0);
     }
 

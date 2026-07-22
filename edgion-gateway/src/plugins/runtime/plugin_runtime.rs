@@ -507,11 +507,10 @@ impl PluginRuntime {
                         // may not downgrade an intrinsic fail-close). When present,
                         // wrap the inner filter in a body gate (inside the
                         // Conditional wrapper, so entry run_if/skip_if runs first).
-                        let body_req = edgion_resources::resources::edgion_plugins::BodyRequirement::resolve(
+                        let body_req = Self::resolve_body_requirement(
+                            &entry.plugin,
                             entry.body.clone(),
-                            entry
-                                .plugin
-                                .body_requirement(edgion_resources::resources::edgion_plugins::BodyStage::Request),
+                            edgion_resources::resources::edgion_plugins::BodyStage::Request,
                         );
                         let gated: Box<dyn RequestFilter> = match body_req {
                             Some(req) => Box::new(BodyGatedRequestFilter::new(filter, req)),
@@ -783,11 +782,10 @@ impl PluginRuntime {
                         // size/conditions but cannot downgrade an intrinsic
                         // fail-close) and wrap in a response body gate inside the
                         // Conditional wrapper.
-                        let body_req = edgion_resources::resources::edgion_plugins::BodyRequirement::resolve(
+                        let body_req = Self::resolve_body_requirement(
+                            &entry.plugin,
                             entry.body.clone(),
-                            entry
-                                .plugin
-                                .body_requirement(edgion_resources::resources::edgion_plugins::BodyStage::Response),
+                            edgion_resources::resources::edgion_plugins::BodyStage::Response,
                         );
                         let gated: Box<dyn UpstreamResponse> = match body_req {
                             Some(req) => Box::new(BodyGatedUpstreamResponse::new(filter, req)),
@@ -981,6 +979,39 @@ impl PluginRuntime {
             }
         }
         None
+    }
+
+    /// Resolve the effective body requirement for a plugin entry, shared by
+    /// the request and response wiring.
+    ///
+    /// For a plugin with an intrinsic declaration (`plugin.body_requirement()`
+    /// is `Some`), this defers to [`BodyRequirement::resolve`] unchanged: the
+    /// operator may tune `maxBodySize`/`conditions`, but a stricter intrinsic
+    /// fail-close always wins.
+    ///
+    /// `Wasm` is the one plugin that `accepts_body()` without an intrinsic
+    /// declaration (its guest hooks are only known after module load, so
+    /// nothing in its own config can express "needs body"). For such a
+    /// plugin, `BodyRequirement::resolve` would always return `None` — its
+    /// `intr = intrinsic?` short-circuit requires an intrinsic value to
+    /// exist, so passing `None` as intrinsic can never produce a gate no
+    /// matter what the operator sets. Since the operator's `body:` is the
+    /// SOLE source of truth here (there is nothing to "tune" against), it is
+    /// used as-is: no forced fail-close floor, no dropped conditions — those
+    /// merge rules exist to protect an intrinsic declaration this plugin does
+    /// not have.
+    fn resolve_body_requirement(
+        plugin: &EdgionPlugin,
+        operator: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
+        stage: edgion_resources::resources::edgion_plugins::BodyStage,
+    ) -> Option<edgion_resources::resources::edgion_plugins::BodyRequirement> {
+        match plugin.body_requirement(stage) {
+            Some(intrinsic) => {
+                edgion_resources::resources::edgion_plugins::BodyRequirement::resolve(operator, Some(intrinsic))
+            }
+            None if plugin.accepts_body(stage) => operator,
+            None => None,
+        }
     }
 
     /// Create a RequestFilter instance from EdgionPlugin enum
@@ -1636,6 +1667,57 @@ mod tests {
                 body: None
             },
             "consuming plugin must be gated (fail-close) before its own auth logic"
+        );
+    }
+
+    #[tokio::test]
+    async fn add_from_request_filters_wraps_wasm_with_operator_body() {
+        // Wasm has no INTRINSIC body_requirement() (the guest's hooks are only
+        // known after module load), so it opts into request buffer mode purely
+        // through an operator `body:` block on the entry. Proof, mirroring the
+        // HMAC case above: with `body:` set, the built filter must force-read
+        // the body (Unimplemented today) and fail-close 500 BEFORE ever
+        // reaching WasmPlugin's own logic (which would otherwise try to load
+        // the module and fail differently). If the gate were not wired for
+        // Wasm, `read_request_body` would never be called by the gate at all
+        // and this assertion would not observe a 500 from the gate.
+        use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
+        use crate::EdgionHttpContext;
+        use edgion_resources::resources::edgion_plugins::plugin_configs::WasmConfig;
+        use edgion_resources::resources::edgion_plugins::BodyRequirement;
+
+        let mut cfg = WasmConfig::default();
+        cfg.source.file = Some("plugin.wasm".to_string());
+        let mut entry = RequestFilterEntry::new(EdgionPlugin::Wasm(cfg));
+        entry.body = Some(BodyRequirement::fail_close());
+
+        let mut runtime = PluginRuntime::new();
+        let errors = runtime.add_from_request_filters(&[entry], "default");
+        assert!(
+            errors.is_empty(),
+            "operator body: on a Wasm entry must be accepted at admission, got: {errors:?}"
+        );
+
+        let filter = runtime.request_plugins_iter().next().expect("one wrapped filter");
+        assert_eq!(filter.name(), "Wasm", "gate must be transparent to name()");
+
+        let mut session = MockPluginSession::new();
+        session.expect_get_method().return_const("POST".to_string());
+        session.expect_header_value().returning(|_| None);
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::Unimplemented));
+
+        let mut log = PluginLog::new("Wasm");
+        let result = filter.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            },
+            "operator body: on Wasm must actually wrap the plugin in the body gate"
         );
     }
 
