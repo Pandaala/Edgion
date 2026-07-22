@@ -1483,9 +1483,9 @@ main() {
             fi
         elif [ "$G_RESOURCE" = "EdgionBackendTrafficPolicy" ]; then
             if [ -n "$G_ITEM" ]; then
-                # Data-plane item scenarios (UpstreamAuthority, RetryBudget)
-                # ship their own Gateway/Service/HTTPRoute/EBTP fixtures, so the
-                # item's conf subtree must be preloaded.
+                # Data-plane item scenarios (UpstreamAuthority, RetryBudget,
+                # ConnectTimeout) ship their own Gateway/Service/HTTPRoute/EBTP
+                # fixtures, so the item's conf subtree must be preloaded.
                 suites="${base_suites},${G_RESOURCE}/${G_ITEM}"
             else
                 # Control-plane suite applies its own policies at runtime; only the

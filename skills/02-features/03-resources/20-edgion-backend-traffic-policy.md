@@ -82,6 +82,9 @@ spec:
     template: "${ctx:tenant}.sandbox.internal"    # required; literal tail must equal
                                                    # the pattern's suffix
     healthCheckHost: "probe.sandbox.internal"     # required iff healthCheck.active is set
+
+  connection:                  # optional; absent = use the global defaultConnectTimeout
+    connectTimeout: 300ms       # GEP-2257, (0s, 1h]. HTTP upstream only — see below.
 status:
   ancestors: []                 # GEP-2648 per-ancestor (Gateway) status
 ```
@@ -391,6 +394,52 @@ spec:
           port: 443
 ```
 
+### connection
+
+> Design: `docs/superpowers/specs/2026-07-22-per-backend-connect-timeout-design.md`
+
+A per-backend override of the gateway->backend **connection-establishment**
+deadline, for the targeted Services' **HTTP upstream** connections only.
+
+| Field | Type | Required | Description |
+|-------|------|----------|--------------|
+| `connectTimeout` | `String` (GEP-2257) | No | Overrides `EdgionGatewayConfig.spec.httpTimeout.backend.defaultConnectTimeout` for the targeted Services. Range `(0s, 1h]`. Absent = use the global default. |
+
+`connection: {}` (the section present with no fields) is valid and is a
+no-op — identical to the section being absent.
+
+**Stream note.** This field is ignored by TCPRoute/TLSRoute backends: the
+stream (TCP/TLS) connect deadline is a separate global,
+`EdgionGatewayConfig.spec.tcpTimeout.connectTimeout`, resolved independently
+via `resolve_tcp_connect_timeout`. There is no per-backend override for the
+stream path yet.
+
+**Migration note.** The connection-establishment deadline is resolved
+independently of the route-level `backendRequest` / global
+`defaultRequestTimeout` (they bound only read/write I/O). Before this field
+existed, a route whose effective `backendRequest` was *shorter* than the
+global `defaultConnectTimeout` (default `5s`) incidentally also bounded
+connection establishment to that shorter value. A route in that situation
+that sets no `connection.connectTimeout` now gets the full `5s` connect
+deadline instead — a *looser*, slower-to-fail connect bound than before. Set
+`connection.connectTimeout` explicitly to restore a tight connect bound.
+
+**Example.**
+
+```yaml
+apiVersion: edgion.io/v1
+kind: EdgionBackendTrafficPolicy
+metadata:
+  name: payments-connect-timeout
+  namespace: production
+spec:
+  targetRefs:
+    - kind: Service
+      name: payments
+  connection:
+    connectTimeout: 500ms
+```
+
 ## Defaults When No Policy Applies
 
 | Concern | Default (no policy, or no matching section) |
@@ -398,6 +447,7 @@ spec:
 | Health check | None — no probe task runs |
 | Outlier detection | None — no ejection tracking |
 | Retry budget (`retryConstraint`) | None — no aggregate cap; only the static per-request `maxRetries` applies |
+| Connect timeout (`connection.connectTimeout`) | None — the global `EdgionGatewayConfig.spec.httpTimeout.backend.defaultConnectTimeout` applies |
 | Panic threshold | The global `EdgionGatewayConfig.spec.loadBalancing.panicThreshold` (itself `0` = disabled by default) |
 | LB algorithm | `RoundRobin` |
 

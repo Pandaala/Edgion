@@ -29,7 +29,7 @@ pub use http_route::{
 };
 
 pub use edgion_backend_traffic_policy::{
-    EdgionBackendTrafficPolicyTestSuite, RetryBudgetTestSuite, UpstreamAuthorityTestSuite,
+    ConnectTimeoutTestSuite, EdgionBackendTrafficPolicyTestSuite, RetryBudgetTestSuite, UpstreamAuthorityTestSuite,
 };
 
 pub use grpc_route::{

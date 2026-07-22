@@ -49,6 +49,10 @@ pub struct EdgionBackendTrafficPolicySpec {
     /// Absent = no concurrency cap (today's behaviour).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub circuit_breaker: Option<CircuitBreakerConfig>,
+    /// Per-backend connection tuning override. Currently only connectTimeout.
+    /// Absent = use the global defaults. HTTP upstream only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connection: Option<ConnectionOverride>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq)]
@@ -113,6 +117,20 @@ fn default_min_retry_rate() -> Option<RateThreshold> {
         count: 10,
         interval: "1s".into(),
     })
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionOverride {
+    /// Per-backend gateway->backend connection-establishment deadline (GEP-2257).
+    /// Overrides EdgionGatewayConfig.spec.httpTimeout.backend.defaultConnectTimeout
+    /// for the targeted Services. Absent = use the global default. HTTP upstream
+    /// connections only:
+    /// stream (TCPRoute/TLSRoute) backends use tcpTimeout.connectTimeout and
+    /// ignore this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(pattern(crate::duration::GEP2257_PATTERN))]
+    pub connect_timeout: Option<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema, PartialEq, Eq)]
@@ -276,6 +294,18 @@ impl EdgionBackendTrafficPolicySpec {
                     Ok(d) => {
                         if d.is_zero() || d > std::time::Duration::from_secs(3600) {
                             errors.push("retryConstraint.minRetryRate.interval must be in (0s, 1h]".to_string());
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(conn) = &self.connection {
+            if let Some(ct) = &conn.connect_timeout {
+                match crate::duration::parse_duration(ct) {
+                    Err(e) => errors.push(format!("connection.connectTimeout: {e}")),
+                    Ok(d) => {
+                        if d.is_zero() || d > std::time::Duration::from_secs(3600) {
+                            errors.push("connection.connectTimeout must be in (0s, 1h]".to_string());
                         }
                     }
                 }
@@ -606,6 +636,7 @@ outlierDetection:
             upstream_authority: ua,
             retry_constraint: None,
             circuit_breaker: None,
+            connection: None,
         };
 
         // Valid, no health check.
@@ -670,5 +701,46 @@ outlierDetection:
             !bad("targetRefs:\n  - kind: Service\n    name: x\nretryConstraint:\n  budget:\n    interval: nope")
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn connection_connect_timeout_deserializes_and_validates() {
+        let spec: EdgionBackendTrafficPolicySpec =
+            serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: x\nconnection:\n  connectTimeout: 250ms")
+                .unwrap();
+        assert_eq!(
+            spec.connection.as_ref().unwrap().connect_timeout.as_deref(),
+            Some("250ms")
+        );
+        assert!(spec.get_validation_errors().is_empty());
+
+        // Empty connection object is valid (no override).
+        let empty: EdgionBackendTrafficPolicySpec =
+            serde_yaml::from_str("targetRefs:\n  - kind: Service\n    name: x\nconnection: {}").unwrap();
+        assert!(empty.connection.as_ref().unwrap().connect_timeout.is_none());
+        assert!(empty.get_validation_errors().is_empty());
+    }
+
+    #[test]
+    fn connection_connect_timeout_validation_rejects_bad_values() {
+        let bad = |y: &str| -> Vec<String> {
+            serde_yaml::from_str::<EdgionBackendTrafficPolicySpec>(y)
+                .unwrap()
+                .get_validation_errors()
+        };
+        // 0s rejected
+        assert!(
+            bad("targetRefs:\n  - kind: Service\n    name: x\nconnection:\n  connectTimeout: 0s")
+                .iter()
+                .any(|e| e.contains("connection.connectTimeout"))
+        );
+        // > 1h rejected
+        assert!(
+            bad("targetRefs:\n  - kind: Service\n    name: x\nconnection:\n  connectTimeout: 2h")
+                .iter()
+                .any(|e| e.contains("connection.connectTimeout"))
+        );
+        // unparseable rejected
+        assert!(!bad("targetRefs:\n  - kind: Service\n    name: x\nconnection:\n  connectTimeout: nope").is_empty());
     }
 }

@@ -402,6 +402,7 @@ mod tests {
                     outlier_detection: None,
                     upstream_authority: authority,
                     circuit_breaker: None,
+                    connection: None,
                 },
                 status: None,
             })

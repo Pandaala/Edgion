@@ -48,6 +48,8 @@ pub struct BackendTrafficPolicyStore {
     retry_budgets: DashMap<String, (RetryConstraintConfig, Arc<RetryBudget>)>,
     /// Per-service circuit-breaker concurrency cap (read on the request path).
     circuit_breakers: DashMap<String, u32>,
+    /// Per-service resolved HTTP upstream connect deadline (read on the request path).
+    connect_timeouts: DashMap<String, std::time::Duration>,
 }
 
 impl Default for BackendTrafficPolicyStore {
@@ -65,6 +67,7 @@ impl BackendTrafficPolicyStore {
             authorities: DashMap::new(),
             retry_budgets: DashMap::new(),
             circuit_breakers: DashMap::new(),
+            connect_timeouts: DashMap::new(),
         }
     }
 
@@ -101,6 +104,11 @@ impl BackendTrafficPolicyStore {
     /// Per-endpoint concurrency cap for this service, if configured.
     pub fn get_circuit_breaker_limit(&self, service_key: &str) -> Option<u32> {
         self.circuit_breakers.get(service_key).map(|v| *v.value())
+    }
+
+    /// Resolved HTTP upstream connect deadline for this service, if overridden.
+    pub fn get_connect_timeout(&self, service_key: &str) -> Option<std::time::Duration> {
+        self.connect_timeouts.get(service_key).map(|v| *v.value())
     }
 
     /// Admin snapshot of the resolved load-balancer map: Service key -> debug
@@ -222,6 +230,25 @@ impl BackendTrafficPolicyStore {
                     }
                 }
 
+                match policy
+                    .spec
+                    .connection
+                    .as_ref()
+                    .and_then(|c| c.connect_timeout.as_deref())
+                {
+                    Some(s) => match edgion_resources::duration::parse_duration(s) {
+                        Ok(d) => {
+                            self.connect_timeouts.insert(service_key.to_string(), d);
+                        }
+                        Err(_) => {
+                            self.connect_timeouts.remove(service_key);
+                        }
+                    },
+                    None => {
+                        self.connect_timeouts.remove(service_key);
+                    }
+                }
+
                 self.applied.insert(service_key.to_string(), policy_key_str.clone());
                 (lb, Some(policy_key_str))
             }
@@ -234,6 +261,7 @@ impl BackendTrafficPolicyStore {
                 self.authorities.remove(service_key);
                 self.retry_budgets.remove(service_key);
                 self.circuit_breakers.remove(service_key);
+                self.connect_timeouts.remove(service_key);
                 self.applied.remove(service_key);
                 (None, None)
             }
@@ -378,6 +406,7 @@ mod tests {
                 outlier_detection,
                 upstream_authority: None,
                 circuit_breaker: None,
+                connection: None,
             },
             status: None,
         })
@@ -588,6 +617,7 @@ mod tests {
                 outlier_detection: None,
                 upstream_authority: None,
                 circuit_breaker: None,
+                connection: None,
             },
             status: None,
         });
@@ -830,5 +860,41 @@ mod tests {
         store.policies.clear();
         store.reapply_service(key);
         assert_eq!(store.get_circuit_breaker_limit(key), None, "cleared on removal");
+    }
+
+    // (j) connection.connectTimeout resolves per Service key and clears on removal.
+    #[test]
+    fn connect_timeout_resolves_and_clears() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::ConnectionOverride;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = BackendTrafficPolicyStore::new();
+        let key = "bt6k/svc";
+
+        let mut p = policy(
+            "bt6k",
+            "p1",
+            "svc",
+            Some(ts("2026-01-01T00:00:00Z")),
+            None,
+            None,
+            false,
+            false,
+        );
+        Arc::get_mut(&mut p).unwrap().spec.connection = Some(ConnectionOverride {
+            connect_timeout: Some("250ms".to_string()),
+        });
+        store.policies.insert("bt6k/p1".to_string(), p);
+
+        store.reapply_service(key);
+        assert_eq!(
+            store.get_connect_timeout(key),
+            Some(std::time::Duration::from_millis(250))
+        );
+
+        // Removing the policy clears the override.
+        store.policies.clear();
+        store.reapply_service(key);
+        assert_eq!(store.get_connect_timeout(key), None, "cleared on removal");
     }
 }

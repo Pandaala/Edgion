@@ -310,6 +310,9 @@
     },
     "EdgionBackendTrafficPolicy/RetryBudget": {
       "http": 31942
+    },
+    "EdgionBackendTrafficPolicy/ConnectTimeout": {
+      "http": 31943
     }
   }
 }

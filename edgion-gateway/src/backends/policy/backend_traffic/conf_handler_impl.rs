@@ -87,6 +87,7 @@ mod tests {
                 outlier_detection: None,
                 upstream_authority: None,
                 circuit_breaker: None,
+                connection: None,
             },
             status: None,
         })

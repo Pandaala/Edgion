@@ -244,6 +244,21 @@ spec:
                         is a PER-ENDPOINT cap: a service with N ready endpoints admits up to
                         N * maxParallelRequests concurrently. Must be >= 1.
                       minimum: 1
+                connection:
+                  type: object
+                  description: >-
+                    Per-backend connection tuning override. HTTP upstream connections only:
+                    stream (TCPRoute/TLSRoute) backends use tcpTimeout.connectTimeout and
+                    ignore this block.
+                  properties:
+                    connectTimeout:
+                      type: string
+                      description: >-
+                        Per-backend gateway->backend connection-establishment deadline
+                        (GEP-2257 duration), overriding
+                        EdgionGatewayConfig.spec.httpTimeout.backend.defaultConnectTimeout
+                        for the targeted Services. Must be in (0s, 1h].
+                      pattern: "^([0-9]{1,5}(h|m|s|ms)){1,4}$"
             status:
               type: object
               properties:

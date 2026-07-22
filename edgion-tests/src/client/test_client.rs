@@ -221,6 +221,9 @@ fn suite_to_port_key(suite: &str) -> &str {
         // Data-plane suite: per-backend retry budget (retryConstraint). Own
         // Gateway/HTTPRoute/EBTP fixture and ports.json entry.
         "EdgionBackendTrafficPolicy/RetryBudget" => "EdgionBackendTrafficPolicy/RetryBudget",
+        // Data-plane suite: per-backend connect-timeout override. Own
+        // Gateway/HTTPRoute/EBTP fixture and ports.json entry.
+        "EdgionBackendTrafficPolicy/ConnectTimeout" => "EdgionBackendTrafficPolicy/ConnectTimeout",
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => "HTTPRoute/Basic",
         "HTTPRoute/Delegation" => "HTTPRoute/Delegation",
@@ -393,6 +396,12 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
         // and the denial counter advancing.
         "EdgionBackendTrafficPolicy/RetryBudget" => {
             runner.add_suite(Box::new(suites::RetryBudgetTestSuite));
+        }
+        // Per-backend connect-timeout override: a blackholed backend with the
+        // BTP `connection.connectTimeout` override fails fast, while a sibling
+        // backend with no override keeps the global default and still works.
+        "EdgionBackendTrafficPolicy/ConnectTimeout" => {
+            runner.add_suite(Box::new(suites::ConnectTimeoutTestSuite));
         }
         // HTTPRoute
         "HTTPRoute/Basic" | "HTTPRoute" => {

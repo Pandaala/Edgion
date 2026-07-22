@@ -25,10 +25,12 @@
 //                                the policy intact; see note in that case about the
 //                                gateway-reconnect variant).
 
+mod connect_timeout;
 mod control_plane;
 mod retry_budget;
 mod upstream_authority;
 
+pub use connect_timeout::ConnectTimeoutTestSuite;
 pub use control_plane::EdgionBackendTrafficPolicyTestSuite;
 pub use retry_budget::RetryBudgetTestSuite;
 pub use upstream_authority::UpstreamAuthorityTestSuite;

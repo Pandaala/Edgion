@@ -786,6 +786,29 @@ fn effective_backend_bound(
     .filter(|d| !d.is_zero())
 }
 
+/// Resolve the gateway->backend connection-ESTABLISHMENT deadline, independent
+/// of the request/read/write timeouts. Precedence: per-backend
+/// `EdgionBackendTrafficPolicy.spec.connection.connectTimeout` (looked up via
+/// `service_key`) else the global `defaultConnectTimeout`. `service_key` is
+/// `None` only for paths with no resolvable Service (e.g. an ExternalJump),
+/// which always fall back to the global default.
+///
+/// Returns `None` when the resolved deadline is zero. A global
+/// `defaultConnectTimeout: "0s"` parses to `Duration::ZERO`, which Pingora would
+/// treat as an instant connect deadline (every connect fails). Matching the
+/// sibling peer-timeout guards (`effective_backend_bound`, `request_remaining`,
+/// `grpc_remaining` all filter out zero), a zero deadline means "no connect
+/// bound" — the caller leaves `connection_timeout` unset — not an instant
+/// failure. The BTP override can never be zero (struct validation rejects it),
+/// so this only guards a degenerate global config.
+#[inline]
+fn resolve_connect_deadline(service_key: Option<&str>, global: std::time::Duration) -> Option<std::time::Duration> {
+    let d = service_key
+        .and_then(|k| get_backend_traffic_policy_store().get_connect_timeout(k))
+        .unwrap_or(global);
+    (!d.is_zero()).then_some(d)
+}
+
 /// Configure peer timeouts from global and route-level configs (inline for performance)
 #[inline]
 pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<HttpPeer>, ctx: &mut EdgionHttpContext) {
@@ -803,12 +826,18 @@ pub fn configure_peer_timeouts(edgion_http: &EdgionHttpProxy, peer: &mut Box<Htt
     let route_backend_timeout = route_timeouts.map(|rt| &rt.backend_request_timeout);
     let effective_backend_timeout = effective_backend_bound(route_backend_timeout, backend_timeout.request_timeout);
 
-    // connection_timeout: use route backendRequest timeout, or fall back to global default.
-    // "0s" on backendRequest disables I/O timeouts, not connection establishment — always set a floor.
-    // Intentionally NOT bounded by request_timeout: connection establishment is infrastructure
-    // overhead; bounding it would cause spurious 504s when request_timeout is tight.
-    let effective_connection_timeout = effective_backend_timeout.unwrap_or(backend_timeout.connect_timeout);
-    peer.options.connection_timeout = Some(effective_connection_timeout);
+    // connection_timeout is the connection-ESTABLISHMENT deadline, resolved
+    // independently of the request/read/write timeouts (which are folded below).
+    // Precedence: per-backend BTP connection.connectTimeout > global defaultConnectTimeout.
+    // Intentionally NOT derived from backendRequest/request_timeout: connection
+    // establishment is infrastructure overhead, and conflating the two would let a
+    // tight per-try request bound cause spurious connect-time 504s. A zero resolved
+    // deadline (degenerate `defaultConnectTimeout: "0s"`) yields None => left unset,
+    // never an instant-fail connect (see resolve_connect_deadline).
+    let service_key = ctx.backend_context.as_ref().and_then(|bc| bc.service_key.as_deref());
+    if let Some(connect_deadline) = resolve_connect_deadline(service_key, backend_timeout.connect_timeout) {
+        peer.options.connection_timeout = Some(connect_deadline);
+    }
 
     // Apply request_timeout as a ceiling on read/write timeout.
     // Gateway API spec: request_timeout is end-to-end; remaining time = timeout - elapsed.
@@ -1630,6 +1659,87 @@ mod tests {
             effective_backend_bound(Some(&RouteTimeout::Unset), Duration::ZERO),
             None
         );
+    }
+
+    // ─── resolve_connect_deadline: per-backend BTP override, else global ───
+
+    use super::resolve_connect_deadline;
+    use crate::backends::policy::backend_traffic::store::{get_backend_traffic_policy_store, GLOBAL_STORE_TEST_LOCK};
+
+    #[test]
+    fn configure_peer_timeouts_uses_btp_connect_override() {
+        use edgion_resources::resources::edgion_backend_traffic_policy::{
+            ConnectionOverride, EdgionBackendTrafficPolicySpec, PolicyTargetRef,
+        };
+        use edgion_resources::resources::EdgionBackendTrafficPolicy;
+        use k8s_openapi::apimachinery::pkg::apis::meta::v1::{ObjectMeta, Time};
+        use std::sync::Arc;
+
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        let key = "default/svc";
+
+        let policy = Arc::new(EdgionBackendTrafficPolicy {
+            metadata: ObjectMeta {
+                name: Some("p1".to_string()),
+                namespace: Some("default".to_string()),
+                creation_timestamp: Some(Time("2026-01-01T00:00:00Z".parse().expect("rfc3339"))),
+                ..Default::default()
+            },
+            spec: EdgionBackendTrafficPolicySpec {
+                target_refs: vec![PolicyTargetRef {
+                    group: String::new(),
+                    kind: "Service".to_string(),
+                    name: "svc".to_string(),
+                }],
+                load_balancer: None,
+                health_check: None,
+                outlier_detection: None,
+                upstream_authority: None,
+                retry_constraint: None,
+                circuit_breaker: None,
+                connection: Some(ConnectionOverride {
+                    connect_timeout: Some("123ms".to_string()),
+                }),
+            },
+            status: None,
+        });
+        let mut add = std::collections::HashMap::new();
+        add.insert("default/p1".to_string(), policy);
+        store.partial_update_policies(add, std::collections::HashMap::new(), std::collections::HashSet::new());
+
+        assert_eq!(
+            resolve_connect_deadline(Some(key), Duration::from_secs(5)),
+            Some(Duration::from_millis(123))
+        );
+
+        // Cleanup shared global store.
+        store.partial_update_policies(
+            std::collections::HashMap::new(),
+            std::collections::HashMap::new(),
+            std::collections::HashSet::from(["default/p1".to_string()]),
+        );
+    }
+
+    #[test]
+    fn resolve_connect_deadline_no_override_falls_back_to_global() {
+        let _guard = GLOBAL_STORE_TEST_LOCK.lock();
+        let store = get_backend_traffic_policy_store();
+        let key = "default/no-such-svc";
+        store.reapply_service(key);
+
+        assert_eq!(
+            resolve_connect_deadline(Some(key), Duration::from_secs(5)),
+            Some(Duration::from_secs(5))
+        );
+        // No service key (ExternalJump) also falls back to global.
+        assert_eq!(
+            resolve_connect_deadline(None, Duration::from_secs(5)),
+            Some(Duration::from_secs(5))
+        );
+        // Degenerate zero global => None (no connect bound), never an instant-fail.
+        assert_eq!(resolve_connect_deadline(Some(key), Duration::ZERO), None);
+        assert_eq!(resolve_connect_deadline(None, Duration::ZERO), None);
     }
 
     // ─── route-06: retry backoff minimum-wait conformance (GEP-1731) ───
