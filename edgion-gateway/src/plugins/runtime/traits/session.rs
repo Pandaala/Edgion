@@ -20,13 +20,18 @@ pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 /// Pingora streams bodies chunk-by-chunk and does not buffer the full body, so
 /// the buffering runtime (P0 `01-body-processing-runtime.md`) is not yet built;
 /// [`PluginSession::read_request_body`] / `read_response_body` therefore default
-/// to [`BodyReadError::Unimplemented`]. The body gate maps any variant to the
-/// plugin's configured fail-open / fail-close policy.
+/// to [`BodyReadError::Unimplemented`]. The body gate maps every variant
+/// except [`BodyReadError::NotBuffered`] to the plugin's configured
+/// fail-open / fail-close policy; `NotBuffered` bypasses that policy and is
+/// always fail-close (see its own doc below).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyReadError {
     /// Full-body buffering is not implemented on this binary (current default).
     Unimplemented,
-    /// Buffering was not requested for this request, so no bytes are retained.
+    /// The gateway **declined to buffer** this body (protocol or stage
+    /// refusal — see the body-gate admission model). This is NOT evidence that
+    /// the request had no body, and it is never softened by
+    /// `BodyRequirement::on_read_failure`.
     NotBuffered,
     /// The body exceeded the configured buffer cap and was not retained.
     /// The body gate maps this to HTTP 413 (client error), unlike other
@@ -34,6 +39,10 @@ pub enum BodyReadError {
     TooLarge { limit: u64 },
     /// The body stream ended prematurely / was aborted.
     Incomplete,
+    /// The buffering read exceeded its time bound. Distinct from `Incomplete`
+    /// (an aborted stream): a deadline expiry is a client error and maps to
+    /// HTTP 408, not 500. Only produced once the P0 buffering runtime exists.
+    Timeout,
 }
 
 impl std::fmt::Display for BodyReadError {
@@ -43,6 +52,7 @@ impl std::fmt::Display for BodyReadError {
             BodyReadError::NotBuffered => write!(f, "body not buffered"),
             BodyReadError::TooLarge { limit } => write!(f, "body exceeds buffer cap of {limit} bytes"),
             BodyReadError::Incomplete => write!(f, "body stream incomplete"),
+            BodyReadError::Timeout => write!(f, "body read timed out"),
         }
     }
 }
@@ -229,6 +239,14 @@ pub trait PluginSession: Send + Sync {
         "http".to_string()
     }
 
+    /// Whether the client declared a request body, read from the pre-plugin
+    /// snapshot (`ctx.request_info.body_declared`). `None` means the snapshot
+    /// never ran. Consumers needing "does this request have a body" must use
+    /// this rather than re-deriving it from headers, which plugins can mutate.
+    fn declares_body(&self) -> Option<bool> {
+        None
+    }
+
     /// Get the gRPC service name parsed from the request path.
     /// Returns None for non-gRPC requests.
     fn grpc_service(&self) -> Option<String> {
@@ -333,8 +351,10 @@ pub trait PluginSession: Send + Sync {
     // session is held, which keeps the method mockable and easy to compose.
     //
     // Both default to `Err(BodyReadError::Unimplemented)`: Pingora does not buffer
-    // bodies yet. The real `PingoraSessionAdapter` overrides land with the P0
-    // buffering runtime.
+    // bodies yet. The real `PingoraSessionAdapter` overrides already decide
+    // `Unimplemented` vs. a stage/protocol `NotBuffered` refusal (the
+    // admission predicates); only the actual byte-buffering is still
+    // pending, landing with the P0 buffering runtime.
 
     /// Read the full request body, buffering it on first call so it is available
     /// during the request phase, before the request is proxied upstream.

@@ -21,6 +21,14 @@ use pingora_proxy::Session;
 /// hook (TLS handshake, connection establishment). In that race we still
 /// insert `grpc-timeout: 1n` so the upstream sees "give up immediately"
 /// rather than the stale original client value.
+///
+/// This hook also owns the exit point for `ctx.request_info.in_request_body_stage`
+/// (see that field's doc for the full lifecycle): it runs only after a
+/// successful upstream connect, which is guaranteed to be after both
+/// backendRef-scoped request-plugin call sites (`pg_upstream_peer.rs`'s HTTP
+/// path and `routes/grpc/integration.rs`'s gRPC path) have already executed,
+/// and it runs right before Pingora starts pumping the downstream body
+/// upstream.
 #[inline]
 pub async fn upstream_request_filter(
     _edgion_http: &EdgionHttpProxy,
@@ -38,6 +46,13 @@ pub async fn upstream_request_filter(
     }
 
     apply_upstream_authority(upstream_request, ctx);
+
+    // Body proxying is about to begin: both backendRef-scoped request-plugin
+    // call sites have already run by this point (a prerequisite for reaching
+    // a successful connect and this hook), so `read_request_body` must be
+    // refused from here on. This is the single exit point paired with
+    // `snapshot_body_declared`'s entry write.
+    ctx.request_info.in_request_body_stage = false;
 
     Ok(())
 }

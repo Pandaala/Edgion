@@ -27,9 +27,8 @@ format is always 2 fields).
 - `Deny bad signature`
 - `Allow anonymous` (anonymous has no group attribution)
 
-Internal error codes (`body not supported`, `no creds configured`) are already
-non-Deny `push_err` calls and are unrelated to group attribution — do not add
-`group=` to them.
+Internal error codes (`no creds configured`) are already non-Deny `push_err`
+calls and are unrelated to group attribution — do not add `group=` to them.
 
 ## Implementation
 

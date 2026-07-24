@@ -13,11 +13,13 @@ use super::host_abi::{HeaderOp, LocalResponse, WasmPhase, MAP_HTTP_REQUEST_HEADE
 use super::vm_manager::{global_vm_manager, runtime_cache_key, CalloutGrant, ModuleEntry, VmLease};
 use crate::observe::metrics::registry::{record_wasm_body_pause_unsupported, record_wasm_fail_mode};
 use crate::plugins::runtime::log::la;
+use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{
     DyeOutcome, PluginLog, PluginSession, RequestFilter, UpstreamResponseBodyFilter, UpstreamResponseFilter,
 };
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::plugin_configs::WasmConfig;
+use edgion_resources::EdgionStatus;
 
 const PLUGIN_NAME: &str = "Wasm";
 
@@ -238,11 +240,15 @@ impl WasmPlugin {
 
     /// Buffer-mode request-body drive. Runs only when the guest exports
     /// `proxy_on_request_body` and the body gate has buffered the body (the
-    /// `read_request_body` await returns `Ok`). Ungated plugins / a stubbed
-    /// facade return `Err`, and the body hook is skipped (there is no request
-    /// streaming path in this cut). A fresh lease is re-acquired from `entry`
-    /// (the same already-loaded `ModuleEntry` the headers phase used, passed in
-    /// so no racy `try_get` re-lookup is needed): the headers phase already
+    /// `read_request_body` await returns `Ok`). A stubbed facade (no real
+    /// buffering runtime yet) returns `Err(Unimplemented)`, which now routes
+    /// through `fail_mode` like any other body-read failure -- it is no
+    /// longer a silent skip. A `NotBuffered` refusal is distinct: it fails
+    /// closed unconditionally regardless of `failOpen`, since the guest's
+    /// body hook would otherwise inspect nothing (see the read match below).
+    /// A fresh lease is re-acquired from `entry` (the same
+    /// already-loaded `ModuleEntry` the headers phase used, passed in so no
+    /// racy `try_get` re-lookup is needed): the headers phase already
     /// returned its lease to the pool via `finish_phase`. A guest deny (local
     /// response) is drained the same way as the other phases.
     async fn run_request_body_phase(
@@ -257,9 +263,34 @@ impl WasmPlugin {
         let cap = session.ctx().max_body_size_bytes;
         let body = match session.read_request_body(Some(cap)).await {
             Ok(b) => b,
-            // Ungated / no backing: no body to hand the guest. The gate (when
-            // present) has already enforced its fail policy before calling us.
-            Err(_) => return PluginRunningResult::GoodNext,
+            // A refusal is unconditionally fail-close (design R5): the guest's
+            // body hook would inspect nothing, and `failOpen` governs wasm
+            // runtime failures, not admission. The precise reason is already on
+            // ctx as an `EdgionStatus`, recorded by the read adapter.
+            Err(BodyReadError::NotBuffered) => {
+                log.push_err("wasm body-refused");
+                return PluginRunningResult::ErrResponse {
+                    status: 500,
+                    body: Some("body unavailable".to_string()),
+                };
+            }
+            // Genuine read failures keep the configured policy, but must still
+            // be alertable: `fail_mode` only writes a `PluginLog` line (nested
+            // per-plugin array), while the access log's structured `errors`
+            // array is populated solely by `ctx.add_error`. Mirror the
+            // `body_gate.rs::body_read_failure_result` mapping so both paths
+            // agree.
+            Err(err) => {
+                session.add_error(match err {
+                    BodyReadError::TooLarge { .. } => EdgionStatus::BodyReadTooLarge,
+                    BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
+                    BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
+                    BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
+                    // Handled above; unreachable here.
+                    BodyReadError::NotBuffered => EdgionStatus::BodyRefusedStage,
+                });
+                return self.fail_mode(session, log, "body read");
+            }
         };
         let mut lease = match entry.acquire(self.config.timeout_ms) {
             Ok(l) => l,
@@ -371,16 +402,20 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     ///   guest can deny via `proxy_send_local_response` — this is the only body
     ///   path that can deny the request. Without an operator `body:` block the
     ///   gate is never installed and `run_request_body_phase` still calls
-    ///   `read_request_body` ungated (see that method's doc for why); it only
-    ///   takes effect once the facade's real accumulation backing lands: today
-    ///   `read_request_body` has no backing on the real `PingoraSessionAdapter`
-    ///   (the trait's default always returns `Err(BodyReadError::Unimplemented)`),
-    ///   so the call errs and the body hook is silently skipped (`GoodNext`) —
-    ///   a guest that exports a request-body hook is effectively a no-op on
-    ///   the body until then, regardless of `failOpen` (and, even with the
-    ///   backing landed, regardless of whether `body:` was set — an ungated
-    ///   read must fail rather than auto-buffer; see the facade contract in
-    ///   `docs/superpowers/specs/2026-07-22-wasm-body-wiring-design.md`).
+    ///   `read_request_body` ungated (see that method's doc for why). A
+    ///   `NotBuffered` refusal (the gate was never installed / the request is
+    ///   past the request-body stage) is always fail-close, unconditionally —
+    ///   `failOpen` governs wasm *runtime* failures, not admission. A genuine
+    ///   read failure — including `Unimplemented`, which is what every read
+    ///   returns today because the real `PingoraSessionAdapter` has no
+    ///   accumulation backing yet (`RequestAdmission::Buffer` errs before
+    ///   buffering anything) — goes through `fail_mode`, so it honors
+    ///   `failOpen`, whose default is fail-close (`fail_open` defaults to
+    ///   `false`). Either way the failure is recorded via `ctx.add_error` so it
+    ///   is alertable in the access log, not just logged to `PluginLog`. Once
+    ///   the buffering runtime lands, an ungated read must still fail rather
+    ///   than auto-buffer — see the facade contract in
+    ///   `docs/superpowers/specs/2026-07-22-wasm-body-wiring-design.md`.
     /// - **Response streaming observation** (this method, unchanged). `body_size`
     ///   is the CURRENT chunk's length and `get_buffer_bytes(HttpResponseBody)`
     ///   returns only that chunk. It cannot buffer — the `UpstreamResponseBodyFilter`
@@ -810,7 +845,9 @@ mod tests {
         // Default request-body-phase stubs: a WAT guest without a
         // `proxy_on_request_body` export never reaches these, but the real
         // proxy-wasm SDK guest does. Ungated (no `body:`) → `read_request_body`
-        // returns `Unimplemented` → the body hook is skipped (GoodNext). Tests
+        // returns `Unimplemented`, which now routes through `fail_mode` (Task
+        // 7) rather than being skipped -- most callers of `base_mock` never
+        // hit this arm at all since their WAT guests lack the export. Tests
         // that need an actual buffered body use `body_mock` instead.
         s.expect_ctx().return_const(crate::EdgionHttpContext::new());
         s.expect_read_request_body()
@@ -1255,6 +1292,11 @@ mod tests {
         }
         let mut c = WasmConfig::default();
         c.source.file = Some(path.to_string());
+        // This test is about the header phase, not body-read policy; the SDK
+        // guest also exports `proxy_on_request_body`, and `base_mock`'s
+        // `Unimplemented` stub now runs through `fail_mode` (Task 7), so
+        // `fail_open` must be set to keep that phase a no-op here.
+        c.fail_open = true;
         let plugin = WasmPlugin::create_request(&c).unwrap();
         let mut session = base_mock();
         session
@@ -1262,6 +1304,11 @@ mod tests {
             .withf(|k, v| k == "x-wasm-added" && v == "yes")
             .times(1)
             .returning(|_, _| Ok(()));
+        session.expect_record_outcome().return_const(());
+        // The SDK guest's request-body hook runs `read_request_body` ->
+        // `Unimplemented` -> `fail_mode` (Task 7), which now also records the
+        // matching `EdgionStatus` (R17) before `fail_open` softens the result.
+        session.expect_add_error().return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext);
@@ -1357,8 +1404,10 @@ mod tests {
         // The proxy-wasm Rust SDK exports `proxy_on_request_body` on every
         // guest, so the request-body phase now runs for the reference module.
         // These tests exercise the UNGATED plugin (no `body:` requirement),
-        // where `read_request_body` returns `Unimplemented` and the body hook
-        // is skipped — mirror that so the body phase is a no-op GoodNext here.
+        // where `read_request_body` returns `Unimplemented`, which now routes
+        // through `fail_mode` (Task 7) rather than being skipped. Every test
+        // function here that actually reaches this arm sets `c.fail_open =
+        // true` (with its own comment) so the phase stays a no-op GoodNext.
         s.expect_ctx().return_const(crate::EdgionHttpContext::new());
         s.expect_read_request_body()
             .returning(|_| Err(crate::plugins::runtime::traits::session::BodyReadError::Unimplemented));
@@ -1385,6 +1434,10 @@ mod tests {
         let mut c = WasmConfig::default();
         c.source.file = Some(f.path().to_string_lossy().into_owned());
         c.callout_allowlist = vec![server.uri()];
+        // Not testing body-read policy here; the SDK guest also exports
+        // `proxy_on_request_body`, whose `Unimplemented` stub now runs through
+        // `fail_mode` (Task 7), so `fail_open` keeps that phase a no-op.
+        c.fail_open = true;
 
         let plugin = WasmPlugin::create_request(&c).unwrap();
         let mut session = ref_mock(vec![
@@ -1397,6 +1450,9 @@ mod tests {
             .withf(|k, v| k == "x-wasm-added" && v == "yes")
             .times(1)
             .returning(|_, _| Ok(()));
+        session.expect_record_outcome().return_const(());
+        // See `reference_guest_module_loads_and_runs` for why this fires (R17).
+        session.expect_add_error().return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext, "authorized callout must resume");
@@ -1444,6 +1500,10 @@ mod tests {
         let Some(f) = ref_artifact_temp() else { return };
         let mut c = WasmConfig::default();
         c.source.file = Some(f.path().to_string_lossy().into_owned());
+        // Not testing body-read policy here; the SDK guest also exports
+        // `proxy_on_request_body`, whose `Unimplemented` stub now runs through
+        // `fail_mode` (Task 7), so `fail_open` keeps that phase a no-op.
+        c.fail_open = true;
 
         // Load warms one instance, which runs on_configure (sets the 1s tick)
         // and arms the module tick task.
@@ -1467,6 +1527,9 @@ mod tests {
                 true
             })
             .returning(|_, _| Ok(()));
+        session.expect_record_outcome().return_const(());
+        // See `reference_guest_module_loads_and_runs` for why this fires (R17).
+        session.expect_add_error().return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext);
@@ -1499,6 +1562,10 @@ mod tests {
         c.source.file = Some(f.path().to_string_lossy().into_owned());
         c.plugin_config = Some(server.uri());
         c.callout_allowlist = vec![server.uri()];
+        // Not testing body-read policy here; the SDK guest also exports
+        // `proxy_on_request_body`, whose `Unimplemented` stub now runs through
+        // `fail_mode` (Task 7), so `fail_open` keeps that phase a no-op.
+        c.fail_open = true;
 
         // Building the plugin registers its callout grant and preloads the
         // module; the eager warm instance runs on_configure (1s tick).
@@ -1525,6 +1592,9 @@ mod tests {
                     true
                 })
                 .returning(|_, _| Ok(()));
+            session.expect_record_outcome().return_const(());
+            // See `reference_guest_module_loads_and_runs` for why this fires (R17).
+            session.expect_add_error().return_const(());
             let mut log = PluginLog::new("Wasm");
             res = Some(plugin.run_request(&mut session, &mut log).await);
             if seen.load(std::sync::atomic::Ordering::Relaxed) >= 1 {
@@ -1551,6 +1621,12 @@ mod tests {
         let Some(f) = ref_artifact_temp() else { return };
         let mut c = WasmConfig::default();
         c.source.file = Some(f.path().to_string_lossy().into_owned());
+        // Not testing request body-read policy here; the SDK guest also
+        // exports `proxy_on_request_body`, whose `Unimplemented` stub now runs
+        // through `fail_mode` (Task 7), so `fail_open` keeps that phase a
+        // no-op for the request below (this test's own body path goes through
+        // the response body filter, not `read_request_body`).
+        c.fail_open = true;
         global_vm_manager()
             .get_or_load(&c, &runtime_cache_key(&c))
             .await
@@ -1581,6 +1657,9 @@ mod tests {
                 true
             })
             .returning(|_, _| Ok(()));
+        session.expect_record_outcome().return_const(());
+        // See `reference_guest_module_loads_and_runs` for why this fires (R17).
+        session.expect_add_error().return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = req_plugin.run_request(&mut session, &mut log).await;
         assert_eq!(res, PluginRunningResult::GoodNext);
@@ -1635,21 +1714,105 @@ mod tests {
         let mut session = body_mock(Ok(bytes::Bytes::from_static(b"scan-me")));
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(res, PluginRunningResult::ErrResponse { status: 403, body: None });
+        assert_eq!(
+            res,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: None
+            }
+        );
     }
 
     /// When `read_request_body` returns `Unimplemented` (ungated plugin / no
-    /// buffering backing), the body hook is not driven, so the deny guest never
-    /// runs its body path and the request continues (GoodNext).
+    /// buffering backing), the deny guest's body hook is not driven — but this
+    /// is a genuine read failure, not admission, so it goes through
+    /// `fail_mode` like any other Wasm runtime failure (Task 7). With the
+    /// `fail_open: false` default that means fail-closed (500), not a silent
+    /// GoodNext skip; `wasm_read_failure_honors_fail_open` pins the
+    /// `fail_open: true` override of this same read error.
     #[tokio::test]
-    async fn request_body_skipped_when_read_unimplemented() {
+    async fn request_body_read_failure_fails_closed_by_default() {
         use crate::plugins::runtime::traits::session::BodyReadError;
         let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
         let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
         let mut session = body_mock(Err(BodyReadError::Unimplemented));
+        session
+            .expect_add_error()
+            .withf(|status| *status == edgion_resources::EdgionStatus::BodyReadUnimplemented)
+            .times(1)
+            .return_const(());
+        session.expect_record_outcome().return_const(());
         let mut log = PluginLog::new("Wasm");
         let res = plugin.run_request(&mut session, &mut log).await;
-        assert_eq!(res, PluginRunningResult::GoodNext);
+        assert!(matches!(res, PluginRunningResult::ErrResponse { status: 500, .. }));
+    }
+
+    /// R17: an ungated wasm module (no operator `body:` block) whose body read
+    /// fails with `Unimplemented` must still record an `EdgionStatus` via
+    /// `ctx.add_error`, not just a `PluginLog` line — otherwise the newly-common
+    /// default-500 for a body-hook wasm guest is invisible in the access log's
+    /// structured `errors` array. Pins the mapping used at the
+    /// `run_request_body_phase` call site (mirrors `body_gate.rs`'s
+    /// `body_read_failure_result`).
+    #[tokio::test]
+    async fn ungated_body_read_unimplemented_records_edgion_status() {
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), false)).expect("plugin");
+        let mut session = body_mock(Err(BodyReadError::Unimplemented));
+        session
+            .expect_add_error()
+            .withf(|status| *status == edgion_resources::EdgionStatus::BodyReadUnimplemented)
+            .times(1)
+            .return_const(());
+        session.expect_record_outcome().return_const(());
+        let mut log = PluginLog::new("Wasm");
+        let res = plugin.run_request(&mut session, &mut log).await;
+        assert!(
+            matches!(res, PluginRunningResult::ErrResponse { status: 500, .. }),
+            "fail_open defaults to false, so the ungated read failure must still fail-close"
+        );
+    }
+
+    /// R5: `failOpen: true` governs wasm RUNTIME failures, not admission. A refusal
+    /// means the guest's body hook would inspect nothing, so it must fail closed
+    /// even though this plugin is configured fail-open.
+    #[tokio::test]
+    async fn wasm_refusal_is_fail_close_even_with_fail_open_configured() {
+        use crate::plugins::runtime::traits::session::BodyReadError;
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).expect("plugin");
+        let mut session = body_mock(Err(BodyReadError::NotBuffered));
+        let mut log = PluginLog::new("Wasm");
+
+        let res = plugin.run_request(&mut session, &mut log).await;
+        assert!(
+            matches!(res, PluginRunningResult::ErrResponse { status: 500, .. }),
+            "a refusal must not be softened by failOpen, got {res:?}"
+        );
+    }
+
+    /// R6: a genuine read failure keeps the existing knob. With `failOpen: true`
+    /// an `Unimplemented` read leaves the body hook undriven and the request
+    /// continues — the fail-close default for this same read error is pinned by
+    /// `request_body_read_failure_fails_closed_by_default`.
+    #[tokio::test]
+    async fn wasm_read_failure_honors_fail_open() {
+        use crate::plugins::runtime::traits::session::BodyReadError;
+        let f = write_temp_wasm(GUEST_REQUEST_BODY_DENY);
+        let plugin = WasmPlugin::create_request(&config_for(f.path(), true)).expect("plugin");
+        let mut session = body_mock(Err(BodyReadError::Unimplemented));
+        session
+            .expect_add_error()
+            .withf(|status| *status == edgion_resources::EdgionStatus::BodyReadUnimplemented)
+            .times(1)
+            .return_const(());
+        session.expect_record_outcome().return_const(());
+        let mut log = PluginLog::new("Wasm");
+
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::GoodNext
+        );
     }
 
     /// Request-body buffer-mode guest that reads the `host` request header
@@ -1706,7 +1869,10 @@ mod tests {
         let res = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(
             res,
-            PluginRunningResult::ErrResponse { status: 403, body: None },
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: None
+            },
             "guest must see the request header AND the body in the body phase"
         );
     }
@@ -1748,7 +1914,13 @@ mod tests {
         let res = gate.run_request(&mut session, &mut log).await;
         // The guest hook (GUEST_REQUEST_BODY_DENY) receives the buffered body
         // in `proxy_on_request_body` and denies on the non-empty body.
-        assert_eq!(res, PluginRunningResult::ErrResponse { status: 403, body: None });
+        assert_eq!(
+            res,
+            PluginRunningResult::ErrResponse {
+                status: 403,
+                body: None
+            }
+        );
         assert_eq!(
             calls.load(std::sync::atomic::Ordering::SeqCst),
             2,

@@ -410,6 +410,41 @@ pub struct RequestInfo {
     /// Whether the request is a gRPC or gRPC-Web request
     #[serde(skip)]
     pub is_grpc_request: bool,
+    /// Whether the client declared a request body, snapshotted in
+    /// `build_request_metadata` **before any plugin runs**.
+    ///
+    /// `None` means the snapshot never ran, which is a bug — the body-gate
+    /// predicate treats it as a refusal (fail-close) rather than guessing.
+    /// This is deliberately `Option<bool>` and not `bool`: `RequestInfo`
+    /// derives `Default`, and a defaulted `false` would read as "no body,
+    /// run the plugin without one".
+    #[serde(skip)]
+    pub body_declared: Option<bool>,
+    /// Whether the request is currently within the request-processing stage,
+    /// where the client body (if any) has not yet been proxied upstream.
+    ///
+    /// Set `true` in `snapshot_body_declared` at the same entry point as
+    /// `body_declared`. Stays `true` through `request_filter`'s route/gateway/
+    /// global request-stage plugins *and* the later backendRef-scoped request
+    /// plugin chains (`pg_upstream_peer.rs`'s HTTP path,
+    /// `routes/grpc/integration.rs`'s gRPC path) that run after `request_filter`
+    /// returns but before an upstream connect is attempted -- a read at either
+    /// of those call sites is serviceable because Pingora has not started
+    /// pumping the downstream body upstream yet. It is flipped back to
+    /// `false` at the tail of `upstream_request_filter`
+    /// (`pg_upstream_request_filter.rs`), which runs only after a successful
+    /// upstream connect and right before body proxying begins -- the true
+    /// moment after which `read_request_body` must be refused, never
+    /// answered with a misleading zero-length `Ok`.
+    ///
+    /// Defaults to `false` (the safe/refuse direction): a `RequestInfo` built
+    /// without going through the real request-entry snapshot (a bare
+    /// `RequestInfo::default()` in a test, or a future code path that never
+    /// reaches `snapshot_body_declared`) reads as "past the request stage"
+    /// rather than silently defaulting to "still the request stage" and
+    /// permitting a body read it should not.
+    #[serde(skip)]
+    pub in_request_body_stage: bool,
     /// gRPC service (parsed from path)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grpc_service: Option<String>,
@@ -1691,6 +1726,15 @@ mod sensitive_tests {
         assert!(!json.contains("10.0.0.1"), "remote_addr leaked: {}", json);
         assert!(!json.contains("/api/users/alice"), "path leaked: {}", json);
         assert!(json.contains("***"), "replace_with not found: {}", json);
+    }
+
+    #[test]
+    fn body_declared_defaults_to_none_not_false() {
+        // `RequestInfo` derives `Default`. A plain `bool` would default `false`,
+        // which the predicate would read as "no body — run the plugin". `None`
+        // means "the snapshot never ran" and fails closed instead.
+        let info = RequestInfo::default();
+        assert_eq!(info.body_declared, None);
     }
 }
 

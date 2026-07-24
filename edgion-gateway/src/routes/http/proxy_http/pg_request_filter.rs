@@ -248,6 +248,16 @@ pub async fn request_filter(
     set_x_real_ip(session, ctx);
     append_x_forwarded_for(session, ctx);
 
+    // Request-stage plugins have run, but this is NOT the exit point for
+    // `in_request_body_stage`: two more request-plugin stages still run after
+    // this function returns -- the backendRef-scoped chain in
+    // `pg_upstream_peer.rs::upstream_peer` (HTTP and gRPC) -- and Pingora has
+    // not started pumping the downstream body upstream yet at that point.
+    // The marker is cleared later, at the tail of `upstream_request_filter`
+    // (`pg_upstream_request_filter.rs`), which is the true boundary right
+    // before body proxying begins. See `in_request_body_stage`'s doc for the
+    // full lifecycle.
+
     Ok(false)
 }
 
@@ -260,40 +270,17 @@ async fn build_request_metadata(
     session: &mut Session,
     ctx: &mut EdgionHttpContext,
 ) -> pingora_core::Result<bool> {
+    // Snapshot whether the client declared a body, BEFORE any plugin runs.
+    // See `snapshot_body_declared` for why this must not be deferred.
+    snapshot_body_declared(session, ctx);
+
     let req_header = session.req_header();
     let raw_path = req_header.uri.path().to_string();
     let raw_query = req_header.uri.query().map(str::to_string);
     let path_norm_cfg = get_path_normalization_config();
 
     // Protocol detection: check for WebSocket, gRPC-Web, and gRPC
-    if ctx.request_info.discover_protocol.is_none() {
-        // Check for WebSocket
-        if let Some(upgrade) = req_header.headers.get("upgrade") {
-            if let Ok(upgrade_str) = upgrade.to_str() {
-                if upgrade_str.eq_ignore_ascii_case("websocket") {
-                    ctx.request_info.discover_protocol = Some("websocket".to_string());
-                }
-            }
-        }
-
-        // Check for gRPC/gRPC-Web (if not WebSocket)
-        if ctx.request_info.discover_protocol.is_none() {
-            if let Some(ct) = req_header.headers.get("content-type") {
-                if let Ok(ct_str) = ct.to_str() {
-                    // Media type matching is case-insensitive (RFC 9110 §8.3.1);
-                    // gRPC-Web must be tested first since its prefix also
-                    // satisfies the native gRPC prefix check.
-                    if super::is_grpc_web_content_type(ct_str) {
-                        ctx.request_info.discover_protocol = Some("grpc-web".to_string());
-                        ctx.request_info.is_grpc_request = true;
-                    } else if super::is_grpc_content_type(ct_str) {
-                        ctx.request_info.discover_protocol = Some("grpc".to_string());
-                        ctx.request_info.is_grpc_request = true;
-                    }
-                }
-            }
-        }
-    }
+    detect_request_protocol(req_header, ctx);
 
     // Parse client-supplied `grpc-timeout` deadline. The gRPC-over-HTTP/2 spec
     // expects servers / intermediaries to honour it; the parsed deadline is
@@ -449,6 +436,73 @@ async fn build_request_metadata(
     }
 
     Ok(false) // Continue processing
+}
+
+/// Snapshot whether the client declared a request body, BEFORE any plugin runs.
+///
+/// This must not be deferred to the body gate. `is_body_empty()` is pingora's
+/// transport-aware predicate (H1: RFC 9112 6.3; h2: END_STREAM / content-length
+/// 0), but on H1 it derives framing from the LIVE header map via
+/// `init_body_reader()`. The gate runs mid-chain, so an earlier plugin removing
+/// `Content-Length` would make a bodied request look empty. Taken here, the
+/// header map is still the client's, and the H1 framing is pinned at the one
+/// moment when pinning it is correct.
+///
+/// Extracted so the derivation is directly testable: an inversion here would
+/// make a bodied request look bodyless and silently skip body inspection.
+///
+/// Also marks entry into the request-processing stage (`in_request_body_stage`)
+/// -- see that field's doc for why this is the paired entry point and where the
+/// matching exit write lives.
+fn snapshot_body_declared(session: &mut Session, ctx: &mut EdgionHttpContext) {
+    ctx.request_info.body_declared = Some(!session.is_body_empty());
+    ctx.request_info.in_request_body_stage = true;
+}
+
+/// Detect WebSocket / gRPC / gRPC-Web from the request's `Upgrade` and
+/// `Content-Type` headers, when no protocol has already been discovered
+/// upstream of this call. A no-op once `discover_protocol` is already set.
+///
+/// WebSocket is checked first: only an exact (case-insensitive) `Upgrade:
+/// websocket` token match sets it -- a comma-separated upgrade list (e.g.
+/// `Upgrade: websocket, h2c`) or an unrecognized single token (e.g. `Upgrade:
+/// foo`) leaves `discover_protocol` unset here, falling through to the
+/// gRPC/gRPC-Web content-type check. gRPC-Web is tested before native gRPC
+/// since its media-type prefix also satisfies the gRPC prefix check (RFC 9110
+/// §8.3.1 media types are case-insensitive).
+///
+/// Extracted from `build_request_metadata` so protocol detection is directly
+/// unit-testable against a bare `RequestHeader` -- see
+/// `protocol_detection_tests` -- following the same extraction precedent as
+/// `snapshot_body_declared`.
+fn detect_request_protocol(req_header: &RequestHeader, ctx: &mut EdgionHttpContext) {
+    if ctx.request_info.discover_protocol.is_some() {
+        return;
+    }
+
+    // Check for WebSocket
+    if let Some(upgrade) = req_header.headers.get("upgrade") {
+        if let Ok(upgrade_str) = upgrade.to_str() {
+            if upgrade_str.eq_ignore_ascii_case("websocket") {
+                ctx.request_info.discover_protocol = Some("websocket".to_string());
+            }
+        }
+    }
+
+    // Check for gRPC/gRPC-Web (if not WebSocket)
+    if ctx.request_info.discover_protocol.is_none() {
+        if let Some(ct) = req_header.headers.get("content-type") {
+            if let Ok(ct_str) = ct.to_str() {
+                if super::is_grpc_web_content_type(ct_str) {
+                    ctx.request_info.discover_protocol = Some("grpc-web".to_string());
+                    ctx.request_info.is_grpc_request = true;
+                } else if super::is_grpc_content_type(ct_str) {
+                    ctx.request_info.discover_protocol = Some("grpc".to_string());
+                    ctx.request_info.is_grpc_request = true;
+                }
+            }
+        }
+    }
 }
 
 /// Serve ACME HTTP-01 challenge response if there is an active challenge matching the request.
@@ -622,6 +676,121 @@ mod tests {
         assert_eq!(status, None);
         assert_eq!(ctx.request_path(), "/admin//../secret");
         assert_eq!(ctx.path(), "/secret");
+    }
+}
+
+/// Coverage for `snapshot_body_declared`, the `body_declared` snapshot taken
+/// at the top of `build_request_metadata`.
+///
+/// `build_request_metadata` itself cannot be driven from a unit test: it is a
+/// private `async fn` that takes `&EdgionHttpProxy`, and every field of that
+/// struct (access logger, gateway config, route managers, ...) is built only
+/// by the live listener bootstrap in `runtime/server/listener_builder.rs` —
+/// there is no test helper anywhere in this crate that constructs one, and
+/// hand-assembling all of it just to reach this one line would be far more
+/// scaffolding than the line under test.
+///
+/// Instead this drives a real `pingora_proxy::Session` off real HTTP/1.1
+/// request bytes over a `tokio::io::duplex` pair — the same pattern
+/// `session_adapter.rs`'s `test_session()` helper uses — and calls
+/// `snapshot_body_declared` directly against it, asserting on
+/// `ctx.request_info.body_declared`. Unlike the hand-set `body_declared` in
+/// `ctx.rs` / `session_adapter.rs`'s tests, this exercises pingora's real H1
+/// framing (`init_body_reader()`), so a dropped `!` in `snapshot_body_declared`
+/// would flip these assertions and fail.
+#[cfg(test)]
+mod body_declared_snapshot_tests {
+    use super::*;
+    use tokio::io::AsyncWriteExt;
+
+    /// Build a real HTTP/1.1 `Session` from literal request bytes.
+    ///
+    /// `pub(super)` so `protocol_detection_tests` (a sibling module) can reuse
+    /// it instead of duplicating the duplex-pair plumbing.
+    pub(super) async fn session_from_request(raw_request: &[u8]) -> Session {
+        let (mut client, server) = tokio::io::duplex(4096);
+        let stream: pingora_core::protocols::Stream = Box::new(server);
+        let mut session = Session::new_h1(stream);
+        client
+            .write_all(raw_request)
+            .await
+            .expect("write request into duplex pair");
+        drop(client); // header (and body, if any) bytes are already buffered
+        session
+            .read_request()
+            .await
+            .expect("read_request should succeed")
+            .then_some(())
+            .expect("client must not have closed before sending the request");
+        session
+    }
+
+    #[tokio::test]
+    async fn post_with_content_length_and_body_declares_body_true() {
+        let mut session =
+            session_from_request(b"POST /submit HTTP/1.1\r\nHost: test\r\nContent-Length: 5\r\n\r\nhello").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        snapshot_body_declared(&mut session, &mut ctx);
+
+        assert_eq!(ctx.request_info.body_declared, Some(true));
+    }
+
+    #[tokio::test]
+    async fn get_with_no_content_length_or_transfer_encoding_declares_body_false() {
+        let mut session = session_from_request(b"GET /status HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        snapshot_body_declared(&mut session, &mut ctx);
+
+        assert_eq!(ctx.request_info.body_declared, Some(false));
+    }
+}
+
+/// Coverage for `detect_request_protocol`'s `Upgrade` handling.
+///
+/// This is the property `session_adapter.rs`'s (now-removed) tautological
+/// `request_admission_unknown_upgrade_token_buffers` test claimed to cover
+/// but never actually exercised (it encoded no `Upgrade` header at all). The
+/// real property lives here, at the source of `discover_protocol`: only an
+/// exact `Upgrade: websocket` token sets it; an unrecognized token or a
+/// comma-list containing `websocket` must not.
+#[cfg(test)]
+mod protocol_detection_tests {
+    use super::body_declared_snapshot_tests::session_from_request;
+    use super::*;
+
+    #[tokio::test]
+    async fn upgrade_websocket_sets_discover_protocol() {
+        let session = session_from_request(b"GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        detect_request_protocol(session.req_header(), &mut ctx);
+
+        assert_eq!(ctx.request_info.discover_protocol.as_deref(), Some("websocket"));
+    }
+
+    #[tokio::test]
+    async fn upgrade_unknown_token_does_not_set_websocket() {
+        let session = session_from_request(b"GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: foo\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        detect_request_protocol(session.req_header(), &mut ctx);
+
+        assert_ne!(ctx.request_info.discover_protocol.as_deref(), Some("websocket"));
+    }
+
+    #[tokio::test]
+    async fn upgrade_comma_list_does_not_set_websocket() {
+        // A comma-separated Upgrade list is not an exact "websocket" token
+        // match -- treating it as one would let a client smuggle a body past
+        // the websocket-handshake shape checks in `request_admission`.
+        let session = session_from_request(b"GET /ws HTTP/1.1\r\nHost: test\r\nUpgrade: websocket, h2c\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        detect_request_protocol(session.req_header(), &mut ctx);
+
+        assert_ne!(ctx.request_info.discover_protocol.as_deref(), Some("websocket"));
     }
 }
 

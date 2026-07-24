@@ -399,9 +399,13 @@ fn select_buffer(state: &HostState, buf_type: i32) -> Option<Vec<u8>> {
     match buf_type {
         BUF_VM_CONFIGURATION => Some(state.vm_config.clone()),
         BUF_PLUGIN_CONFIGURATION => Some(state.plugin_config.clone()),
-        BUF_HTTP_CALL_RESPONSE_BODY => {
-            Some(state.callout_response.as_ref().map(|r| r.body.clone()).unwrap_or_default())
-        }
+        BUF_HTTP_CALL_RESPONSE_BODY => Some(
+            state
+                .callout_response
+                .as_ref()
+                .map(|r| r.body.clone())
+                .unwrap_or_default(),
+        ),
         // Buffer mode: the full request body staged by the body gate.
         BUF_HTTP_REQUEST_BODY => Some(state.request_body.clone()),
         // Read-only chunk window (body observation): the CURRENT chunk only,
@@ -1254,7 +1258,10 @@ mod tests {
     fn buffer_select_returns_request_body() {
         let mut state = HostState::default();
         state.request_body = b"POST-BODY".to_vec();
-        assert_eq!(select_buffer(&state, BUF_HTTP_REQUEST_BODY), Some(b"POST-BODY".to_vec()));
+        assert_eq!(
+            select_buffer(&state, BUF_HTTP_REQUEST_BODY),
+            Some(b"POST-BODY".to_vec())
+        );
         assert_eq!(select_buffer(&state, BUF_HTTP_RESPONSE_BODY), Some(Vec::new()));
         assert_eq!(select_buffer(&state, 999), None);
     }

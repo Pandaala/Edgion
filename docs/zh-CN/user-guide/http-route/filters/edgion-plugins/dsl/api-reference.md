@@ -325,10 +325,11 @@ if not req.has_header("X-Request-Id") {
 
 **约束**：
 - 解码后的字符串同样受 VM 的 `maxStringLen` 限制（默认 8192 字节，硬上限 1,048,576 字节），与其他所有 DSL 字符串值一致。由于 `from_utf8_lossy` 可能将每个非法字节扩展为 3 字节的 U+FFFD，一个原始字节数接近上限的请求体，解码后可能超出 `maxStringLen`。超出限制会抛出 `StringTooLong`，与其他运行时错误一样按 `errorPolicy` 处理——**不会**为其单独放宽一个更大的上限。若需读取更大的请求体，应同时调高 `maxStringLen` 和插件的 `body.maxBodySize`；超过 1 MiB 的字符串上限后，`req.body` 就不是合适的工具了，应改用 `ext_proc` 或 `wasm`。
-- 只有脚本引用了 `req.body` 时才会被门控以缓冲请求体；从不读取 `req.body` 的脚本不会被门控，也不产生任何缓冲开销。
-- 读取请求体失败时按脚本的 `errorPolicy` 处理：`Ignore`（默认）跳过插件（fail-open）；`Deny` / `DenyWith` 拒绝请求（fail-close）。fail-close 脚本（`Deny`/`DenyWith`）无法通过运维方配置的 `body.conditions` 缩小缓冲范围——请求体是无条件必需的，这与其他所有 fail-close 的读体插件遵循同一安全不变量。fail-open 脚本（默认 `Ignore`）仍可使用 `body.conditions` 缩小缓冲范围。
+- 只有脚本引用了 `req.body` 时才会被门控以缓冲请求体；从不读取 `req.body` 的脚本不会被门控，也不产生任何缓冲开销。该门控只安装在 `requestPlugins` 数组和异步 `upstreamResponsePlugins` 数组上——具体因阶段而异的行为见下文。
+- **在 `requestPlugins` 中**，该插件受 body gate 保护：读体失败或拒绝都是 fail-close，无论 `errorPolicy` 如何设置，请求都会被拒绝。`errorPolicy` 仍然管辖脚本*运行过程中*抛出的错误（包括脚本运行后该内置函数抛出的错误），但它不能再让一个需要请求体的脚本在请求体不可用时被跳过。网关直接拒绝缓冲的请求体（gRPC，或携带请求体的升级请求）同样会被拒绝，而不是被跳过。
+- **在 `upstreamResponseFilterPlugins` 中**，引用了 `req.body` 的脚本**不会**被 body gate 保护（该门控只安装在 `requestPlugins` 和异步 `upstreamResponsePlugins` 数组上），而到了这个阶段请求体已经被代理转发出去，因此读取总是会被拒绝（refused）。这个拒绝会作为普通脚本运行时错误按 `errorPolicy` 处理——在默认的 `Ignore` 策略下，脚本会被静默跳过，而不是拒绝请求。依赖 `req.body` 做强制校验的脚本不应放在 `upstreamResponseFilterPlugins` 中；如果确实放在那里，必须设置 `errorPolicy: Deny`（或 `DenyWith`）才能 fail-close。相关遗留缺口见 `tasks/todo/response-body-gate-sync-stage.md`。
 
-**注意**：请求体缓冲运行时尚未实现，因此目前 `req.body` 总是产生读体错误：`Deny`/`DenyWith` 脚本会拒绝请求（500），`Ignore` 脚本会静默跳过插件。缓冲运行时上线后将返回真实的代理请求体，脚本无需任何改动。
+**注意**：请求体缓冲运行时尚未实现，因此目前在 `requestPlugins` 中，`req.body` 总是产生读体错误，任何引用了它的脚本都会被拒绝（500），与 `errorPolicy` 无关（这是门控默认的 `FailClose` 策略）。缓冲运行时上线后将返回真实的代理请求体，脚本无需任何改动——但 `upstreamResponseFilterPlugins` 是例外：那里的读取会被拒绝是因为到该阶段请求体已经不存在了，与缓冲运行时是否上线无关。
 
 **示例**：
 ```
@@ -690,13 +691,13 @@ if ct != nil and regex_find(ct, "text/html") != nil {
 
 **签名**：`resp.body` → `Str`
 
-返回被缓冲的代理上游响应体，使用 `String::from_utf8_lossy` 解码（非法 UTF-8 → U+FFFD，不截断）。仅在响应阶段（`upstreamResponsePlugins`）有效。
+返回被缓冲的代理上游响应体，使用 `String::from_utf8_lossy` 解码（非法 UTF-8 → U+FFFD，不截断）。仅在响应阶段（`upstreamResponseFilterPlugins`）有效——DSL 不能放入异步的 `upstreamResponsePlugins` 数组（该数组只接受 `ext_proc`）。
 
 **返回值**：完整解码后的响应体字符串。
 
-**约束**：与 `req.body` 相同——同样受 `maxStringLen` 限制（默认 8192 字节，上限 1,048,576 字节，按解码后长度计算；读取更大响应体时应对齐 `body.maxBodySize`；超过 1 MiB 应改用 `ext_proc`/`wasm`）；脚本只有引用了 `resp.body` 才会被门控以缓冲响应体；读体失败按 `errorPolicy` 处理（`Ignore` = 跳过/fail-open，`Deny`/`DenyWith` = 拒绝/fail-close，且 fail-close 脚本无法用 `body.conditions` 缩小范围）。完整说明参见 [`req.body`](#reqbody)。
+**约束**：长度限制与 `req.body` 相同——同样受 `maxStringLen` 限制（默认 8192 字节，上限 1,048,576 字节，按解码后长度计算；读取更大响应体时应对齐 `body.maxBodySize`；超过 1 MiB 应改用 `ext_proc`/`wasm`）；脚本只有引用了 `resp.body` 才会被门控以缓冲响应体。**与 `req.body` 不同，`resp.body` 的读体失败目前并不是 fail-close**：`upstreamResponseFilterPlugins`（DSL 在响应阶段唯一可用的数组）没有像 `requestPlugins` 和异步 `upstreamResponsePlugins` 数组那样被 body gate 包裹，因此一次拒绝或读取失败会作为普通脚本运行时错误按 `errorPolicy` 处理——在默认的 `Ignore` 策略下，插件会被静默跳过，而不是拒绝请求。依赖 `resp.body` 做强制校验的脚本必须设置 `errorPolicy: Deny`（或 `DenyWith`）才能 fail-close；保持默认的 `Ignore` 意味着读体失败时响应会被原样放行。
 
-**注意**：在请求体缓冲运行时上线之前，`resp.body` 总是产生读体错误（fail-close 拒绝并返回 500，fail-open 跳过插件）——与 `req.body` 当前的行为一致。
+**注意**：在请求体缓冲运行时上线之前，`resp.body` 总是产生读体错误。由于同步的响应过滤器数组未被门控，这与其他脚本错误一样处理：在默认的 `errorPolicy: Ignore` 下脚本会被静默跳过，而不是被拒绝。相关遗留缺口见 `tasks/todo/response-body-gate-sync-stage.md`。
 
 **示例**：
 ```

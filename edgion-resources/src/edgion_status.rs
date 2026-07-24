@@ -159,6 +159,39 @@ pub enum EdgionStatus {
     /// also fail. Surfaced to the client as 504.
     RequestTimeoutExceeded = 504_01,
 
+    /// Body buffering refused: the request declared a body but claims the
+    /// WebSocket protocol. A refusal is never softened by `on_read_failure`
+    /// (design R5), so this is always a hard failure (HTTP 500).
+    ///
+    /// This group starts at `500_17`, not `500_16`: `StickyBackendUnhealthy`
+    /// above is spelled `50016` without the digit separator, so `500_16` is
+    /// already taken and reusing it is an E0081 duplicate-discriminant error.
+    /// When adding a variant here, grep for both spellings of the value.
+    BodyRefusedWebsocket = 500_17,
+
+    /// Body buffering refused: gRPC (matched by content-type OR by GRPCRoute).
+    /// A streaming gRPC body does not end until the RPC does (HTTP 500).
+    BodyRefusedGrpc = 500_18,
+
+    /// Body buffering refused: the read was issued from the wrong stage, or the
+    /// pre-plugin `body_declared` snapshot never ran (HTTP 500).
+    BodyRefusedStage = 500_19,
+
+    /// Body read aborted: the stream ended prematurely (HTTP 500).
+    BodyReadAborted = 500_20,
+
+    /// Body read exceeded its time bound. Client-caused, so a client error —
+    /// matching nginx `client_body_timeout` and Envoy (HTTP 408).
+    BodyReadTimeout = 408_01,
+
+    /// Body exceeded the configured buffer cap (HTTP 413).
+    BodyReadTooLarge = 413_01,
+
+    /// Body buffering is not built on this binary. Fires on every buffered
+    /// request until the P0 buffering runtime lands, which is accurate: body
+    /// consumers are non-functional today (HTTP 500).
+    BodyReadUnimplemented = 500_21,
+
     /// Client-supplied `grpc-timeout` deadline already exceeded before peer
     /// selection. Surfaced to the gRPC client as `grpc-status: 4` (DEADLINE_EXCEEDED)
     /// via the standard 504 → grpc-status mapping.
@@ -274,6 +307,13 @@ mod tests {
             EdgionStatus::RequestTimeoutExceeded => Some(504),
             EdgionStatus::GrpcClientDeadlineExceeded => Some(504),
             EdgionStatus::BackendRequestTimeoutRetry => Some(504),
+            EdgionStatus::BodyRefusedWebsocket => Some(500),
+            EdgionStatus::BodyRefusedGrpc => Some(500),
+            EdgionStatus::BodyRefusedStage => Some(500),
+            EdgionStatus::BodyReadAborted => Some(500),
+            EdgionStatus::BodyReadTimeout => Some(408),
+            EdgionStatus::BodyReadTooLarge => Some(413),
+            EdgionStatus::BodyReadUnimplemented => Some(500),
             EdgionStatus::PluginResponseReplaced => None,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc => None,
             EdgionStatus::OutboundTlsVerifyUnsupported => None,
@@ -343,6 +383,13 @@ mod tests {
             EdgionStatus::RequestTimeoutExceeded,
             EdgionStatus::GrpcClientDeadlineExceeded,
             EdgionStatus::BackendRequestTimeoutRetry,
+            EdgionStatus::BodyRefusedWebsocket,
+            EdgionStatus::BodyRefusedGrpc,
+            EdgionStatus::BodyRefusedStage,
+            EdgionStatus::BodyReadAborted,
+            EdgionStatus::BodyReadTimeout,
+            EdgionStatus::BodyReadTooLarge,
+            EdgionStatus::BodyReadUnimplemented,
             EdgionStatus::PluginResponseReplaced,
             EdgionStatus::PluginResponseReplaceUnsupportedGrpc,
             EdgionStatus::OutboundTlsVerifyUnsupported,
@@ -353,5 +400,16 @@ mod tests {
         for &s in all {
             assert_eq!(s.http_status(), expected_http(s), "http_status mismatch for {s:?}");
         }
+    }
+
+    #[test]
+    fn body_status_codes_map_to_their_http_status() {
+        assert_eq!(EdgionStatus::BodyRefusedWebsocket.http_status(), Some(500));
+        assert_eq!(EdgionStatus::BodyRefusedGrpc.http_status(), Some(500));
+        assert_eq!(EdgionStatus::BodyRefusedStage.http_status(), Some(500));
+        assert_eq!(EdgionStatus::BodyReadAborted.http_status(), Some(500));
+        assert_eq!(EdgionStatus::BodyReadUnimplemented.http_status(), Some(500));
+        assert_eq!(EdgionStatus::BodyReadTimeout.http_status(), Some(408));
+        assert_eq!(EdgionStatus::BodyReadTooLarge.http_status(), Some(413));
     }
 }

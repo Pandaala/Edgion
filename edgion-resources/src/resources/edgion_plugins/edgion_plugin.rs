@@ -140,7 +140,7 @@ impl EdgionPlugin {
     /// else returns `None`, so an operator `body:` on a non-consuming plugin is
     /// rejected at preparse and never wraps it in a body gate.
     pub fn body_requirement(&self, stage: BodyStage) -> Option<super::body_requirement::BodyRequirement> {
-        use super::body_requirement::{BodyReadFailureMode, BodyRequirement};
+        use super::body_requirement::BodyRequirement;
         use EdgionPlugin::*;
         match self {
             // HMAC consumes the REQUEST body only, and only when Digest
@@ -149,9 +149,15 @@ impl EdgionPlugin {
                 Some(BodyRequirement::fail_close())
             }
             // DSL consumes a body only when its script references the matching
-            // builtin at this stage. Fail policy is derived from the script's
-            // own errorPolicy (Ignore = fail-open; Deny/DenyWith = fail-close) —
-            // do NOT use fail_close() here (DSL defaults to fail-open).
+            // builtin at this stage.
+            //
+            // The fail policy is NOT derived from `errorPolicy`. That field
+            // governs script RUNTIME errors; body availability is a different
+            // question. A refusal is unconditionally fail-close by design (R5),
+            // and a failed read means the script's body check never ran — for a
+            // script written to enforce something, silently passing is the one
+            // outcome that must not happen. `errorPolicy` still applies to every
+            // error raised inside the script, including by the body builtin.
             Dsl(cfg) => {
                 let script = cfg.compile_and_validate().ok()?;
                 let wanted = match stage {
@@ -161,13 +167,7 @@ impl EdgionPlugin {
                 if !script.references_builtin(wanted) {
                     return None;
                 }
-                let mode = match cfg.error_policy {
-                    Some(super::plugin_configs::DslErrorPolicy::Deny)
-                    | Some(super::plugin_configs::DslErrorPolicy::DenyWith { .. }) => BodyReadFailureMode::FailClose,
-                    // None defaults to Ignore (fail-open).
-                    _ => BodyReadFailureMode::FailOpen,
-                };
-                Some(BodyRequirement::with_failure_mode(mode))
+                Some(BodyRequirement::fail_close())
             }
             // Exhaustive (no `_`, matching `type_name`/`validation_error`): a new
             // body-consuming plugin MUST add itself above, or this fails to
@@ -223,8 +223,7 @@ impl EdgionPlugin {
     /// `body:` block at the request stage only (it has no response buffer mode).
     /// Every other plugin gates solely on its intrinsic declaration.
     pub fn accepts_body(&self, stage: BodyStage) -> bool {
-        (matches!(self, EdgionPlugin::Wasm(_)) && stage == BodyStage::Request)
-            || self.body_requirement(stage).is_some()
+        (matches!(self, EdgionPlugin::Wasm(_)) && stage == BodyStage::Request) || self.body_requirement(stage).is_some()
     }
 
     /// Get the plugin type name
@@ -647,19 +646,46 @@ mod dsl_body_requirement_tests {
     }
 
     #[test]
-    fn dsl_failure_mode_follows_error_policy() {
-        // default (None ⇒ Ignore) ⇒ fail-open
-        let open = dsl("let b = req.body", None);
+    fn dsl_failure_mode_is_fail_close_regardless_of_error_policy() {
+        // `errorPolicy` governs script RUNTIME errors, not body availability. A
+        // refusal or a failed read means the script's body check never ran, so
+        // the intrinsic body requirement is unconditionally fail-close — this
+        // used to vary with `errorPolicy` (None/Ignore => fail-open), which is
+        // exactly the silent-pass hole this test now guards against.
+        let none_policy = dsl("let b = req.body", None);
         assert_eq!(
-            open.body_requirement(BodyStage::Request).unwrap().on_read_failure,
-            BodyReadFailureMode::FailOpen
-        );
-        // Deny ⇒ fail-close
-        let close = dsl("let b = req.body", Some(DslErrorPolicy::Deny));
-        assert_eq!(
-            close.body_requirement(BodyStage::Request).unwrap().on_read_failure,
+            none_policy
+                .body_requirement(BodyStage::Request)
+                .unwrap()
+                .on_read_failure,
             BodyReadFailureMode::FailClose
         );
+        let deny = dsl("let b = req.body", Some(DslErrorPolicy::Deny));
+        assert_eq!(
+            deny.body_requirement(BodyStage::Request).unwrap().on_read_failure,
+            BodyReadFailureMode::FailClose
+        );
+    }
+
+    #[test]
+    fn dsl_body_requirement_is_fail_close_regardless_of_error_policy() {
+        // `errorPolicy` governs SCRIPT runtime errors. Body availability is not a
+        // script error: a refusal or a failed read means the script's body check
+        // never ran, and an enforcement script must not silently pass.
+        for policy in [r#""ignore""#, r#""deny""#] {
+            let json = format!(
+                r#"{{ "type": "Dsl", "config": {{ "name": "t", "source": "let b = req.body", "errorPolicy": {policy} }} }}"#
+            );
+            let p: EdgionPlugin = serde_json::from_str(&json).expect("parses");
+            let req = p
+                .body_requirement(BodyStage::Request)
+                .expect("dsl script referencing req.body declares a body requirement");
+            assert_eq!(
+                req.on_read_failure,
+                BodyReadFailureMode::FailClose,
+                "errorPolicy {policy} must not weaken the body requirement"
+            );
+        }
     }
 }
 

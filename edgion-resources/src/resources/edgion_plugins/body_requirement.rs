@@ -90,16 +90,6 @@ impl BodyRequirement {
         Self::default()
     }
 
-    /// A minimal requirement with no explicit cap / gate and the given failure
-    /// mode. Used by plugins whose fail policy is config-derived (e.g. DSL maps
-    /// its `errorPolicy` onto this).
-    pub fn with_failure_mode(mode: BodyReadFailureMode) -> Self {
-        Self {
-            on_read_failure: mode,
-            ..Self::default()
-        }
-    }
-
     /// True when this requirement should reject on a read failure.
     pub fn is_fail_close(&self) -> bool {
         self.on_read_failure == BodyReadFailureMode::FailClose

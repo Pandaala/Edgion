@@ -13,9 +13,15 @@
 //!    the plugin's own `maxBodySize` LIMIT to the result (a body larger than the
 //!    plugin's limit → too-large for THAT plugin only). The inner plugin re-reads
 //!    the now-cached bytes.
-//! 3. On a read failure (or over-limit) applies [`BodyReadFailureMode`]:
-//!    `FailClose` (default) rejects with `500` (or `413` if the body was too
-//!    large); `FailOpen` skips the plugin as if it were disabled.
+//! 3. On a REFUSAL (`BodyReadError::NotBuffered`) rejects with `500`
+//!    unconditionally: the admission model decided this request class is not
+//!    bufferable, and no `on_read_failure` value may soften that. On a genuine
+//!    read failure (or over-limit) applies [`BodyReadFailureMode`]: `FailClose`
+//!    (default) rejects with `500` (`413` oversize, `408` timeout); `FailOpen`
+//!    skips the plugin as if it were disabled.
+//!
+//! There is no protocol bypass. Which requests are bufferable is decided by the
+//! read adapter, not here — see the body-gate admission model design.
 //!
 //! Wrapping order is `Conditional( BodyGate( inner ) )`: the entry-level
 //! run_if/skip_if is evaluated first, so a plugin skipped by its own conditions
@@ -29,14 +35,7 @@ use super::traits::{PluginSession, RequestFilter, UpstreamResponse};
 use crate::plugins::runtime::conditions::{EvaluationResult, PluginConditionsExt};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{BodyReadFailureMode, BodyRequirement};
-
-/// True for a tunneled/upgrade request whose body stream never delivers
-/// end-of-stream — buffering it would deadlock. Covers both `Upgrade:` (HTTP/1.1
-/// WebSocket) and `CONNECT` (plain tunnel + RFC 8441 h2 extended CONNECT, which
-/// carries NO `Upgrade` header). Mirrors `session_adapter.rs`'s upgrade test.
-fn is_tunnel_request(session: &dyn PluginSession) -> bool {
-    session.get_method().eq_ignore_ascii_case("CONNECT") || session.header_value("upgrade").is_some()
-}
+use edgion_resources::EdgionStatus;
 
 /// How much to physically buffer: the gateway-wide `maxBodySize`. This is a
 /// SHARED per-request size — it does not depend on any per-plugin `maxBodySize`
@@ -97,24 +96,23 @@ impl RequestFilter for BodyGatedRequestFilter {
             }
         }
 
-        // 2. WebSocket/Upgrade/CONNECT bypass: forcing a full-body buffer on a
-        //    tunneled request would deadlock (end-of-stream never arrives). Skip
-        //    buffering and run the plugin without it, regardless of fail policy.
-        if is_tunnel_request(session) {
-            log.push("upgrade/connect request, body buffering skipped");
-            return self.inner.run_request(session, log).await;
-        }
+        // No CONNECT check: `pingora-proxy` answers CONNECT with 405 in
+        // `handle_new_request`, before `process_request`, gated on
+        // `HttpServerOptions::allow_connect_method_proxying` — which defaults
+        // false and Edgion never sets. Verified for plain and RFC 8441 h2
+        // extended CONNECT. Do not set that option without revisiting this.
 
-        // 3. Buffer the body to the shared (gateway-wide) size, then apply this
+        // 2. Buffer the body to the shared (gateway-wide) size, then apply this
         //    plugin's own `maxBodySize` limit. The inner plugin re-reads the
         //    now-cached bytes.
         let cap = buffer_cap(session);
-        match session.read_request_body(Some(cap)).await {
+        let read_result = session.read_request_body(Some(cap)).await;
+        match read_result {
             Ok(body) => match over_plugin_limit(&self.requirement, &body) {
-                Some(err) => body_read_failure_result(&self.requirement, log, &err),
+                Some(err) => body_read_failure_result(session, &self.requirement, log, &err),
                 None => self.inner.run_request(session, log).await,
             },
-            Err(err) => body_read_failure_result(&self.requirement, log, &err),
+            Err(err) => body_read_failure_result(session, &self.requirement, log, &err),
         }
     }
 }
@@ -151,45 +149,70 @@ impl UpstreamResponse for BodyGatedUpstreamResponse {
             }
         }
 
-        // WebSocket/Upgrade/CONNECT bypass (symmetric with the request gate): a
-        // tunneled exchange never delivers end-of-stream, so buffering the
-        // response body would deadlock. Skip buffering and run the plugin.
-        if is_tunnel_request(session) {
-            log.push("upgrade/connect request, response body buffering skipped");
-            return self.inner.run_upstream_response(session, log).await;
-        }
-
         let cap = buffer_cap(session);
-        match session.read_response_body(Some(cap)).await {
+        let read_result = session.read_response_body(Some(cap)).await;
+        match read_result {
             Ok(body) => match over_plugin_limit(&self.requirement, &body) {
-                Some(err) => body_read_failure_result(&self.requirement, log, &err),
+                Some(err) => body_read_failure_result(session, &self.requirement, log, &err),
                 None => self.inner.run_upstream_response(session, log).await,
             },
-            Err(err) => body_read_failure_result(&self.requirement, log, &err),
+            Err(err) => body_read_failure_result(session, &self.requirement, log, &err),
         }
     }
 }
 
-/// Record the read failure on the plugin log and resolve the fail-open/close
-/// policy into the plugin result. Fail-open → `Nothing` (skip). Fail-close →
-/// `ErrResponse`: an oversize body maps to `413` (client error, matching
-/// Envoy/Kong); every other reason maps to `500`.
+/// Resolve a failed body read into a plugin result.
+///
+/// Two axes, deliberately separate:
+///
+/// - A **refusal** (`NotBuffered`) is a statement that this request class is
+///   outside what the gateway supports. It is ALWAYS fail-close and is never
+///   routed through `on_read_failure` — tolerating it would mean running an
+///   inspection plugin that inspected nothing, which no configuration should
+///   be able to express. The precise reason is already on `ctx` as an
+///   `EdgionStatus`, recorded by the read adapter.
+/// - A **read failure** (`TooLarge` / `Incomplete` / `Timeout` /
+///   `Unimplemented`) is a runtime condition an operator may reasonably choose
+///   to tolerate, so it keeps the `on_read_failure` knob. Oversize maps to 413
+///   and a read timeout to 408 (client errors); everything else to 500.
 fn body_read_failure_result(
+    session: &mut dyn PluginSession,
     requirement: &BodyRequirement,
     log: &mut PluginLog,
     err: &BodyReadError,
 ) -> PluginRunningResult {
+    if matches!(err, BodyReadError::NotBuffered) {
+        // The adapter already recorded WHICH refusal on ctx; do not double-count.
+        log.push_err("body-refused");
+        return PluginRunningResult::ErrResponse {
+            status: 500,
+            body: None,
+        };
+    }
+
+    // R17: a read failure is alertable too, and only `ctx.add_error` reaches the
+    // access log — a `PluginLog` line alone stays inside a nested per-plugin array.
+    session.add_error(match err {
+        BodyReadError::TooLarge { .. } => EdgionStatus::BodyReadTooLarge,
+        BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
+        BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
+        BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
+        // Handled above; unreachable.
+        BodyReadError::NotBuffered => EdgionStatus::BodyRefusedStage,
+    });
+
     match requirement.on_read_failure {
         BodyReadFailureMode::FailClose => {
             let status = match err {
                 BodyReadError::TooLarge { .. } => 413,
+                BodyReadError::Timeout => 408,
                 _ => 500,
             };
-            log.push(&format!("body read failed ({err}), fail-close ({status})"));
+            log.push_err("body-read-failed");
             PluginRunningResult::ErrResponse { status, body: None }
         }
         BodyReadFailureMode::FailOpen => {
-            log.push(&format!("body read failed ({err}), fail-open (skipped)"));
+            log.push_err("body-read-failed-open");
             PluginRunningResult::Nothing
         }
     }
@@ -205,14 +228,12 @@ mod tests {
     use edgion_resources::resources::edgion_plugins::conditions::{Condition, IncludeCondition, PluginConditions};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A mock session that is not a tunnel/upgrade request and carries a default
-    /// ctx (so the body gate's tunnel check and cap resolution have what they
-    /// need). Tests layer a `read_request_body` expectation on top.
+    /// A mock session that carries a default ctx (so cap resolution has what
+    /// it needs). Tests layer a `read_request_body` expectation on top.
     fn base_session() -> MockPluginSession {
         let mut session = MockPluginSession::new();
-        session.expect_header_value().returning(|_| None);
-        session.expect_get_method().return_const("GET".to_string());
         session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_add_error().returning(|_| ());
         session
     }
 
@@ -315,53 +336,6 @@ mod tests {
 
         let mut log = PluginLog::new("test");
         let result = gate.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn upgrade_request_skips_buffering() {
-        let inner = CountingFilter::new();
-        let gate = BodyGatedRequestFilter::new(Box::new(inner), BodyRequirement::fail_close());
-
-        // Upgrade request → the gate must skip buffering entirely (no
-        // read_request_body expectation is set, so any call would panic).
-        let mut session = MockPluginSession::new();
-        session.expect_get_method().return_const("GET".to_string());
-        session
-            .expect_header_value()
-            .returning(|name| (name == "upgrade").then(|| "websocket".to_string()));
-
-        let mut log = PluginLog::new("test");
-        let result = gate.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn connect_request_skips_buffering() {
-        // CONNECT (incl. h2 extended CONNECT) carries no Upgrade header but must
-        // still bypass buffering — read_request_body is never expected.
-        let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
-        let mut session = MockPluginSession::new();
-        session.expect_get_method().return_const("CONNECT".to_string());
-        session.expect_header_value().returning(|_| None);
-
-        let mut log = PluginLog::new("test");
-        let result = gate.run_request(&mut session, &mut log).await;
-        assert_eq!(result, PluginRunningResult::GoodNext);
-    }
-
-    #[tokio::test]
-    async fn response_gate_upgrade_skips_buffering() {
-        let gate = response_gate();
-        // read_response_body is never expected → any call panics.
-        let mut session = MockPluginSession::new();
-        session.expect_get_method().return_const("GET".to_string());
-        session
-            .expect_header_value()
-            .returning(|name| (name == "upgrade").then(|| "websocket".to_string()));
-
-        let mut log = PluginLog::new("test");
-        let result = gate.run_upstream_response(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
     }
 
@@ -628,6 +602,198 @@ mod tests {
             result,
             PluginRunningResult::ErrResponse {
                 status: 413,
+                body: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn timeout_maps_to_408() {
+        let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
+        let mut session = base_session();
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::Timeout));
+
+        let mut log = PluginLog::new("test");
+        let result = gate.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 408,
+                body: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn refusal_is_fail_close_even_for_a_fail_open_plugin() {
+        // R5. Without this, `Upgrade: websocket` or a forged
+        // `content-type: application/grpc` on a POST would SKIP a fail-open body
+        // consumer entirely — D1 with extra steps.
+        let req = BodyRequirement {
+            on_read_failure: BodyReadFailureMode::FailOpen,
+            ..Default::default()
+        };
+        let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), req);
+
+        let mut session = base_session();
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::NotBuffered));
+
+        let mut log = PluginLog::new("test");
+        let result = gate.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            },
+            "a refusal must never be softened into a skip"
+        );
+    }
+
+    #[tokio::test]
+    async fn response_gate_refusal_is_fail_close_even_for_a_fail_open_plugin() {
+        let gate = BodyGatedUpstreamResponse::new(
+            Box::new(CountingResponse {
+                name: "CountingResp".to_string(),
+            }),
+            BodyRequirement {
+                on_read_failure: BodyReadFailureMode::FailOpen,
+                ..Default::default()
+            },
+        );
+
+        let mut session = base_session();
+        session
+            .expect_read_response_body()
+            .returning(|_| Err(BodyReadError::NotBuffered));
+
+        let mut log = PluginLog::new("test");
+        let result = gate.run_upstream_response(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn genuine_read_failures_still_honor_fail_open() {
+        // R6: the knob keeps governing real read failures. Uses `Timeout` rather
+        // than `Unimplemented` (already covered by `fail_open_skips_plugin`) so
+        // this test exercises a distinct variant instead of duplicating it.
+        let req = BodyRequirement {
+            on_read_failure: BodyReadFailureMode::FailOpen,
+            ..Default::default()
+        };
+        let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), req);
+
+        let mut session = base_session();
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::Timeout));
+
+        let mut log = PluginLog::new("test");
+        assert_eq!(
+            gate.run_request(&mut session, &mut log).await,
+            PluginRunningResult::Nothing
+        );
+    }
+
+    // ===== Pin the BodyReadError -> EdgionStatus mapping =====
+    //
+    // `base_session()`'s `expect_add_error().returning(|_| ())` accepts any
+    // status, so it cannot catch a swapped arm in `body_read_failure_result`.
+    // These tests build a session mock local to each case with a `.withf(...)`
+    // predicate on the exact expected `EdgionStatus`, so a swapped mapping fails
+    // the test instead of silently passing.
+
+    /// A session mock like `base_session()`, but with a strict `add_error`
+    /// expectation pinned to `expected` (called exactly once) instead of the
+    /// permissive any-status stub.
+    fn session_expecting_error(expected: EdgionStatus) -> MockPluginSession {
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session
+            .expect_add_error()
+            .withf(move |status| *status == expected)
+            .times(1)
+            .returning(|_| ());
+        session
+    }
+
+    #[tokio::test]
+    async fn too_large_records_body_read_too_large_status() {
+        let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
+        let mut session = session_expecting_error(EdgionStatus::BodyReadTooLarge);
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::TooLarge { limit: 1024 }));
+
+        let mut log = PluginLog::new("test");
+        gate.run_request(&mut session, &mut log).await;
+    }
+
+    #[tokio::test]
+    async fn timeout_records_body_read_timeout_status() {
+        let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
+        let mut session = session_expecting_error(EdgionStatus::BodyReadTimeout);
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::Timeout));
+
+        let mut log = PluginLog::new("test");
+        gate.run_request(&mut session, &mut log).await;
+    }
+
+    #[tokio::test]
+    async fn incomplete_records_body_read_aborted_status() {
+        let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
+        let mut session = session_expecting_error(EdgionStatus::BodyReadAborted);
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::Incomplete));
+
+        let mut log = PluginLog::new("test");
+        gate.run_request(&mut session, &mut log).await;
+    }
+
+    #[tokio::test]
+    async fn unimplemented_records_body_read_unimplemented_status() {
+        let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
+        let mut session = session_expecting_error(EdgionStatus::BodyReadUnimplemented);
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::Unimplemented));
+
+        let mut log = PluginLog::new("test");
+        gate.run_request(&mut session, &mut log).await;
+    }
+
+    #[tokio::test]
+    async fn not_buffered_never_reaches_add_error() {
+        // The read adapter already recorded the specific refusal reason on ctx;
+        // the gate deliberately does not double-count it via `add_error`.
+        let gate = BodyGatedRequestFilter::new(Box::new(CountingFilter::new()), BodyRequirement::fail_close());
+
+        let mut session = MockPluginSession::new();
+        session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_add_error().times(0);
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::NotBuffered));
+
+        let mut log = PluginLog::new("test");
+        let result = gate.run_request(&mut session, &mut log).await;
+        assert_eq!(
+            result,
+            PluginRunningResult::ErrResponse {
+                status: 500,
                 body: None
             }
         );

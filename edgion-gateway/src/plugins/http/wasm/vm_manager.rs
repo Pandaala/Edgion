@@ -1260,12 +1260,8 @@ impl VmLease {
                 return Ok(0);
             }
         }
-        let (ctx_id, action) = self.open_and_call_with(
-            "proxy_on_request_body",
-            "request_body",
-            body_size,
-            end_of_stream as i32,
-        )?;
+        let (ctx_id, action) =
+            self.open_and_call_with("proxy_on_request_body", "request_body", body_size, end_of_stream as i32)?;
         self.close_context(ctx_id)?;
         Ok(action)
     }

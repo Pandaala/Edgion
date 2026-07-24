@@ -9,7 +9,7 @@ use std::sync::Arc;
 use super::conditions::{EvaluationResult, PluginConditionsExt};
 use super::dye_plan::{CompiledDyePlan, CompiledDyeRule};
 use super::log::{EdgionPluginsLog, EdgionPluginsLogToken, PluginLog};
-use super::traits::session::RouteProto;
+use super::traits::session::{BodyReadError, BodyReadResult, RouteProto};
 use super::traits::{DyeOutcome, PluginSession, PluginSessionError, PluginSessionResult};
 use crate::link_sys::template::evaluate_template;
 use crate::runtime::server::{http_to_grpc_status, send_grpc_trailers_only_frame};
@@ -361,6 +361,100 @@ impl<'a> PingoraSessionAdapter<'a> {
     }
 }
 
+/// Outcome of the request-side body admission predicate. Kept pure and
+/// separate from the adapter so the ordering — which IS the semantics — is
+/// unit-testable without a live `Session`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RequestAdmission {
+    /// The request truthfully declared no body.
+    PassThrough,
+    /// We decline to buffer. Always fail-close; never softened by policy.
+    Refuse(EdgionStatus),
+    /// Buffer the body.
+    Buffer,
+}
+
+/// Request-side admission predicate. The evaluation ORDER is the semantics:
+/// step 1 must precede the websocket check, or a genuine bodyless WebSocket
+/// handshake would be refused and every WebSocket through a Gateway carrying a
+/// body plugin would fail.
+///
+/// Reads only pre-plugin ctx snapshots — never `get_method()`, never a live
+/// request header — so a plugin calling `set_upstream_method("CONNECT")` or
+/// removing `content-length` cannot influence the decision.
+pub(crate) fn request_admission(ctx: &EdgionHttpContext, past_request_stage: bool) -> RequestAdmission {
+    // 1. Did the client declare a body at all?
+    match ctx.request_info.body_declared {
+        Some(false) => return RequestAdmission::PassThrough,
+        // The snapshot never ran. Fail closed rather than guess.
+        None => return RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage),
+        Some(true) => {}
+    }
+
+    // 2. Wrong stage: the request body is long gone once request-stage
+    //    processing has completed (any of: the response header is bound, the
+    //    upstream response body stage, or any later stage).
+    if past_request_stage {
+        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage);
+    }
+
+    // 3. Declared a body AND claims WebSocket — an anomalous shape no
+    //    legitimate client produces.
+    if ctx.request_info.discover_protocol.as_deref() == Some("websocket") {
+        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedWebsocket);
+    }
+
+    // 4. gRPC, by EITHER fact. `is_grpc_request` is client-controlled and
+    //    `is_grpc_route_matched` misses gRPC that fell through to HTTPRoute on
+    //    a listener with no GRPCRoutes; each covers the other's blind spot.
+    //    Widening a refusal with a client-controlled fact is safe precisely
+    //    because a refusal cannot be softened into a skip.
+    if ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched {
+        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc);
+    }
+
+    RequestAdmission::Buffer
+}
+
+/// Response-side admission predicate. Keys on the RESPONSE, not on the
+/// request's protocol label.
+///
+/// `was_upgraded()` is deliberately not used: it hardcodes `false` for H2, and
+/// on H1 it is set only when the 101 is written downstream — after this runs.
+/// `status == 101` is the correct and sufficient key.
+pub(crate) fn response_admission(ctx: &EdgionHttpContext, status: Option<u16>, is_head: bool) -> RequestAdmission {
+    // 1. No response header bound: this is a request-stage call.
+    let Some(status) = status else {
+        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage);
+    };
+
+    // 2. Only a real 101 is a tunnel.
+    if status == 101 {
+        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedWebsocket);
+    }
+
+    // 3. A gRPC response body does not end until the RPC does.
+    if ctx.request_info.is_grpc_request || ctx.is_grpc_route_matched {
+        return RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc);
+    }
+
+    // 4. Statuses that carry no body, plus HEAD (RFC 9110 9.3.2).
+    if is_head || matches!(status, 100..=199 | 204 | 304) {
+        return RequestAdmission::PassThrough;
+    }
+
+    RequestAdmission::Buffer
+}
+
+/// Resolve the effective buffer cap. `None` from a caller means "the gateway
+/// default", never "unbounded", and a per-call value can only tighten.
+pub(crate) fn resolve_cap(max_bytes: Option<u64>, ctx_cap: u64) -> u64 {
+    match max_bytes {
+        Some(v) => v.min(ctx_cap),
+        None => ctx_cap,
+    }
+}
+
 #[async_trait]
 impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     fn header_value(&self, name: &str) -> Option<String> {
@@ -709,6 +803,60 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                 "http".to_string()
             }
         })
+    }
+
+    fn declares_body(&self) -> Option<bool> {
+        self.ctx.request_info.body_declared
+    }
+
+    async fn read_request_body(&mut self, max_bytes: Option<u64>) -> BodyReadResult {
+        // `in_request_body_stage` (set at request entry, cleared in
+        // `upstream_request_filter` once the upstream is connected and the
+        // request is about to be written — see that field's doc) is the
+        // ctx-snapshot source of truth for "are we still in the request
+        // stage", covering every post-request-stage
+        // construction site uniformly (response-header-bound stages, the
+        // upstream response *body* stage, and beyond) rather than the
+        // `response_header.is_some()` proxy this replaced, which was `false`
+        // at the upstream response body stage even though that stage runs
+        // strictly after the request body is fully proxied upstream.
+        let past_request_stage = !self.ctx.request_info.in_request_body_stage;
+        match request_admission(self.ctx, past_request_stage) {
+            RequestAdmission::PassThrough => Ok(bytes::Bytes::new()),
+            RequestAdmission::Refuse(status) => {
+                self.ctx.add_error(status);
+                Err(BodyReadError::NotBuffered)
+            }
+            RequestAdmission::Buffer => {
+                // The buffering runtime is P0. The cap is resolved here (not by
+                // the caller) so a `None` can never mean "unbounded" once the
+                // real read lands.
+                let _cap = resolve_cap(max_bytes, self.ctx.max_body_size_bytes);
+                Err(BodyReadError::Unimplemented)
+            }
+        }
+    }
+
+    async fn read_response_body(&mut self, max_bytes: Option<u64>) -> BodyReadResult {
+        // Copy both facts out before touching `self.ctx` mutably.
+        let status = self.response_header.as_ref().map(|h| h.status.as_u16());
+        let is_head = self.inner.req_header().method == http::Method::HEAD;
+
+        match response_admission(self.ctx, status, is_head) {
+            RequestAdmission::PassThrough => Ok(bytes::Bytes::new()),
+            RequestAdmission::Refuse(status) => {
+                self.ctx.add_error(status);
+                Err(BodyReadError::NotBuffered)
+            }
+            RequestAdmission::Buffer => {
+                // Not implementable at this stage: `response_filter` is handed
+                // only the downstream Session, and the upstream body arrives
+                // via the per-chunk `upstream_response_body_filter` callback.
+                // The chunk-accumulate-then-replay mechanism is P0's spike.
+                let _cap = resolve_cap(max_bytes, self.ctx.max_body_size_bytes);
+                Err(BodyReadError::Unimplemented)
+            }
+        }
     }
 
     fn grpc_service(&self) -> Option<String> {
@@ -1260,6 +1408,161 @@ mod tests {
 
         assert_eq!(params.get("query"), Some(&"hello%20world".to_string()));
     }
+
+    #[test]
+    fn resolve_cap_never_treats_none_as_unbounded() {
+        // Three production call sites pass `None`. It means "gateway default",
+        // never "unbounded".
+        assert_eq!(resolve_cap(None, 1024), 1024);
+        // A plugin may tighten...
+        assert_eq!(resolve_cap(Some(512), 1024), 512);
+        // ...but never enlarge past the gateway-wide cap.
+        assert_eq!(resolve_cap(Some(4096), 1024), 1024);
+    }
+
+    /// Build a request-stage ctx with the given snapshot + protocol facts.
+    fn admission_ctx(declared: Option<bool>, proto: Option<&str>, grpc: bool) -> EdgionHttpContext {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.body_declared = declared;
+        ctx.request_info.discover_protocol = proto.map(str::to_string);
+        ctx.request_info.is_grpc_request = grpc;
+        ctx
+    }
+
+    #[test]
+    fn request_admission_no_declared_body_passes_through() {
+        let ctx = admission_ctx(Some(false), None, false);
+        assert_eq!(request_admission(&ctx, false), RequestAdmission::PassThrough);
+    }
+
+    #[test]
+    fn request_admission_missing_snapshot_refuses() {
+        let ctx = admission_ctx(None, None, false);
+        assert_eq!(
+            request_admission(&ctx, false),
+            RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage)
+        );
+    }
+
+    #[test]
+    fn request_admission_response_stage_refuses() {
+        // After the request body is proxied the H1 reader is Complete(n>0), so a
+        // naive predicate would fall through to "buffer" and answer a zero-length
+        // Ok. That is a silent violation of the Empty/Absent distinction.
+        let ctx = admission_ctx(Some(true), None, false);
+        assert_eq!(
+            request_admission(&ctx, true),
+            RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage)
+        );
+    }
+
+    #[test]
+    fn request_admission_websocket_with_body_refuses() {
+        let ctx = admission_ctx(Some(true), Some("websocket"), false);
+        assert_eq!(
+            request_admission(&ctx, false),
+            RequestAdmission::Refuse(EdgionStatus::BodyRefusedWebsocket)
+        );
+    }
+
+    #[test]
+    fn request_admission_bodyless_websocket_handshake_passes_through() {
+        // A genuine handshake declares no body, so step 1 answers before the
+        // websocket check is ever consulted. Order is the semantics.
+        let ctx = admission_ctx(Some(false), Some("websocket"), false);
+        assert_eq!(request_admission(&ctx, false), RequestAdmission::PassThrough);
+    }
+
+    #[test]
+    fn request_admission_grpc_refuses_via_either_fact() {
+        // Forged content-type (client-controlled) — safe to widen a REFUSAL with.
+        let ctx = admission_ctx(Some(true), None, true);
+        assert_eq!(
+            request_admission(&ctx, false),
+            RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc)
+        );
+
+        // Route-derived, with no gRPC content-type at all.
+        let mut ctx = admission_ctx(Some(true), None, false);
+        ctx.is_grpc_route_matched = true;
+        assert_eq!(
+            request_admission(&ctx, false),
+            RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc)
+        );
+    }
+
+    #[test]
+    fn request_admission_ordinary_post_buffers() {
+        let ctx = admission_ctx(Some(true), None, false);
+        assert_eq!(request_admission(&ctx, false), RequestAdmission::Buffer);
+    }
+
+    #[test]
+    fn response_admission_request_stage_refuses() {
+        // No response header bound means this was called from the request stage.
+        // Without this guard steps 2-4 all miss and step 5 would block on a
+        // response that does not exist yet.
+        let ctx = EdgionHttpContext::new();
+        assert_eq!(
+            response_admission(&ctx, None, false),
+            RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage)
+        );
+    }
+
+    #[test]
+    fn response_admission_real_101_refuses() {
+        let ctx = EdgionHttpContext::new();
+        assert_eq!(
+            response_admission(&ctx, Some(101), false),
+            RequestAdmission::Refuse(EdgionStatus::BodyRefusedWebsocket)
+        );
+    }
+
+    #[test]
+    fn response_admission_upgrade_request_answered_200_buffers() {
+        // The request's protocol label is irrelevant to whether the RESPONSE body
+        // is bufferable. Only a real 101 is a tunnel.
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.discover_protocol = Some("websocket".to_string());
+        assert_eq!(response_admission(&ctx, Some(200), false), RequestAdmission::Buffer);
+    }
+
+    #[test]
+    fn response_admission_grpc_refuses() {
+        let mut ctx = EdgionHttpContext::new();
+        ctx.request_info.is_grpc_request = true;
+        assert_eq!(
+            response_admission(&ctx, Some(200), false),
+            RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc)
+        );
+    }
+
+    #[test]
+    fn response_admission_bodyless_statuses_pass_through() {
+        let ctx = EdgionHttpContext::new();
+        for status in [100u16, 199, 204, 304] {
+            assert_eq!(
+                response_admission(&ctx, Some(status), false),
+                RequestAdmission::PassThrough,
+                "status {status} carries no body"
+            );
+        }
+    }
+
+    #[test]
+    fn response_admission_head_response_passes_through() {
+        // RFC 9110 9.3.2: a HEAD response carries Content-Length but no body.
+        // Same class as 204/304 — the one place a request fact legitimately
+        // enters the response predicate.
+        let ctx = EdgionHttpContext::new();
+        assert_eq!(response_admission(&ctx, Some(200), true), RequestAdmission::PassThrough);
+    }
+
+    #[test]
+    fn response_admission_ordinary_200_buffers() {
+        let ctx = EdgionHttpContext::new();
+        assert_eq!(response_admission(&ctx, Some(200), false), RequestAdmission::Buffer);
+    }
 }
 
 #[cfg(test)]
@@ -1538,5 +1841,141 @@ mod record_outcome_tests {
         assert_eq!(ctx.request_info.status, Some(200));
         assert!(ctx.request_info.grpc_status.is_some());
         assert!(pending_ops(&ctx).is_empty());
+    }
+
+    /// Pins the trait accessor a real adapter exposes over the ctx field,
+    /// using the same `test_session()` construction the rest of this module
+    /// already relies on for adapter-level tests.
+    #[tokio::test]
+    async fn declares_body_accessor_forwards_ctx_snapshot() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+
+        ctx.request_info.body_declared = Some(true);
+        let adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        assert_eq!(adapter.declares_body(), Some(true));
+    }
+
+    /// Regression pin for Finding 1: `read_request_body` must derive its
+    /// stage signal from `ctx.request_info.in_request_body_stage`, not from
+    /// whether a response header happens to be bound. This is the exact
+    /// shape of the original bug -- `PingoraSessionAdapter::new` (no bound
+    /// response header) constructed at the upstream response *body* stage
+    /// (`plugin_runtime.rs`'s `run_upstream_response_body_plugins`), which
+    /// runs strictly after the request body has been proxied upstream.
+    /// Simulates that stage by clearing the marker directly, the same way
+    /// `request_filter`'s single exit-point write does in production, then
+    /// drives the real trait method (not the bare `request_admission`
+    /// predicate) so a future regression that re-derives the stage signal
+    /// from `response_header.is_some()` fails this test.
+    #[tokio::test]
+    async fn read_request_body_refuses_once_past_request_stage() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = false;
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let result = adapter.read_request_body(None).await;
+            assert!(matches!(result, Err(BodyReadError::NotBuffered)));
+        }
+        assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+    }
+
+    /// Regression pin for the backendRef-scoped plugin stage: `request_filter`
+    /// no longer clears `in_request_body_stage` at its own tail -- the marker
+    /// stays `true` through the backendRef request-plugin call sites in
+    /// `pg_upstream_peer.rs` (HTTP) and `routes/grpc/integration.rs` (gRPC),
+    /// both of which run after `request_filter` returns but before Pingora has
+    /// started pumping the downstream body upstream. Drives the real
+    /// `PingoraSessionAdapter::read_request_body` with the exact ctx shape
+    /// that holds at those call sites and asserts it resolves to the
+    /// buffering stub (`Unimplemented`), not the stage/protocol refusal
+    /// (`NotBuffered` / `EdgionStatus::BodyRefusedStage`) that
+    /// `read_request_body_refuses_once_past_request_stage` above pins for the
+    /// opposite (post-`upstream_request_filter`) direction.
+    #[tokio::test]
+    async fn read_request_body_admits_during_backend_ref_plugin_stage() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+
+        let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+        let result = adapter.read_request_body(None).await;
+        assert!(matches!(result, Err(BodyReadError::Unimplemented)));
+    }
+
+    /// Regression coverage for `read_response_body`'s own wiring (the
+    /// override at the top of this file), mirroring
+    /// `read_request_body_refuses_once_past_request_stage` above: a bare
+    /// `response_admission` unit test (see the `response_admission_*` tests
+    /// earlier in this module) cannot catch a bug in how the override reads
+    /// `self.response_header` / `self.inner.req_header().method` or whether
+    /// it forwards the refusal to `ctx.add_error`. This drives the real
+    /// trait method through a `with_response_header`-bound adapter over a
+    /// real `pingora_proxy::Session`, status 101, the upgrade-refusal case.
+    #[tokio::test]
+    async fn read_response_body_refuses_upgrade_status() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut response_header = ResponseHeader::build(101, None).unwrap();
+
+        {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            let result = adapter.read_response_body(None).await;
+            assert!(matches!(result, Err(BodyReadError::NotBuffered)));
+        }
+        assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedWebsocket));
+    }
+
+    /// Stage-guard counterpart: `PingoraSessionAdapter::new` binds no
+    /// response header at all, which `response_admission` treats as "not at
+    /// the response stage" and refuses. Confirms the override still routes
+    /// through `response_admission`'s `None` arm and records the refusal.
+    #[tokio::test]
+    async fn read_response_body_refuses_without_bound_response_header() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let result = adapter.read_response_body(None).await;
+            assert!(matches!(result, Err(BodyReadError::NotBuffered)));
+        }
+        assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+    }
+
+    /// PassThrough path: a bodyless status (204) on a bound response header
+    /// must return an empty, non-error body rather than falling into the
+    /// `Buffer`/`Unimplemented` arm.
+    #[tokio::test]
+    async fn read_response_body_bodyless_status_passes_through_empty() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut response_header = ResponseHeader::build(204, None).unwrap();
+
+        let result = {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            adapter.read_response_body(None).await
+        };
+        assert_eq!(result.expect("204 must pass through"), Bytes::new());
+    }
+
+    /// Buffer path: an ordinary 200 on a non-HEAD, non-gRPC request must
+    /// reach the `Buffer` arm and fail with `Unimplemented` (real chunk
+    /// buffering is not wired up yet). `test_session()`'s request is a plain
+    /// `GET`, so this also pins the `is_head` comparison: an inverted
+    /// comparison would misroute this case to `PassThrough` instead.
+    #[tokio::test]
+    async fn read_response_body_ordinary_200_is_unimplemented() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        let mut response_header = ResponseHeader::build(200, None).unwrap();
+
+        let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+        let result = adapter.read_response_body(None).await;
+        assert!(matches!(result, Err(BodyReadError::Unimplemented)));
     }
 }

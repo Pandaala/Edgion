@@ -2352,9 +2352,12 @@ impl DslTestSuite {
     //
     // Because the DSL script is body-gated, the failure is handled by the body
     // GATE (`BodyGatedRequestFilter`), NOT the DSL runtime's `apply_error_policy`:
-    // under `errorPolicy: deny` the intrinsic requirement is fail-close, so the
-    // gate short-circuits with `PluginRunningResult::ErrResponse { status: 500,
-    // body: None }` BEFORE the inner DSL filter ever runs. The request-stage
+    // the intrinsic requirement is UNCONDITIONALLY fail-close (see
+    // `EdgionPlugin::body_requirement`'s `Dsl` arm — this does not come from
+    // `errorPolicy`, which only governs script runtime errors, not body
+    // availability), so the gate short-circuits with
+    // `PluginRunningResult::ErrResponse { status: 500, body: None }` BEFORE
+    // the inner DSL filter ever runs. The request-stage
     // terminator renders `body: None` as an EMPTY body — so the client sees a 500
     // with an empty body, not the DSL runtime's "DSL execution error" string
     // (that string only appears for a NON-body-gated failure such as Scenario 28's

@@ -1654,6 +1654,7 @@ mod tests {
         session.expect_get_method().return_const("POST".to_string());
         session.expect_header_value().returning(|_| None);
         session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_add_error().returning(|_| ());
         session
             .expect_read_request_body()
             .returning(|_| Err(BodyReadError::Unimplemented));
@@ -1705,6 +1706,7 @@ mod tests {
         session.expect_get_method().return_const("POST".to_string());
         session.expect_header_value().returning(|_| None);
         session.expect_ctx().return_const(EdgionHttpContext::new());
+        session.expect_add_error().returning(|_| ());
         session
             .expect_read_request_body()
             .returning(|_| Err(BodyReadError::Unimplemented));
