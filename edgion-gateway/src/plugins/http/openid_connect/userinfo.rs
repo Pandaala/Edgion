@@ -105,7 +105,7 @@ impl OpenidConnect {
         {
             Ok(v) => v,
             Err(e) => {
-                super::token_exchange::note_oidc_san_mismatch(&e, "userinfo");
+                super::token_exchange::note_oidc_san_mismatch(&e);
                 return None;
             }
         };

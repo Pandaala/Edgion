@@ -31,14 +31,38 @@ Verify that OpenID Connect outbound connections fail with `OutboundTlsSanMismatc
    - `OutboundSanVerifier` checks for SAN `nonmatching.example.com` → NOT FOUND
    - TLS connection rejected
 
-3. **Expected HTTP response**:
-   - Token introspection fails (no TLS connection)
-   - Plugin reports a generic outbound connection/auth failure
-   - Gateway log line: `OIDC outbound call rejected by TLS SAN pinning` (OIDC) or
-     plugin log `outbound tls san mismatch` (LDAP), each carrying the verifier's reason
-   - Counter `edgion_gateway_outbound_tls_san_mismatch_total{plugin="..."}` increments
-   - Access log `errors` array contains `"OutboundTlsSanMismatch"`
-   - Authorization fails with Deny (unauthAction behavior)
+3. **Expected HTTP response** — the probe request MUST carry a bearer token:
+   - **Without** an `Authorization: Bearer <token>` header there is no outbound call at all:
+     `bearerOnly: true` short-circuits to `401 Unauthorized - Missing bearer token` and the counter
+     does **not** move. `unauthAction: Deny` is what selects that 401; it plays no part in the SAN
+     path.
+   - **With** a bearer token, verification runs, the handshake fails, and the plugin returns
+     **`502`** (`OidcVerifyError::Other { status: 502 }` → `send_plain_error`) — not a 401/403, and
+     the auth-failure delay is deliberately skipped for 502.
+   - Counter `edgion_gateway_outbound_tls_san_mismatch_total{plugin="openid_connect"}` increments.
+   - Access log carries the `PluginLog` tag from `err.log_tag()` for the 502; see below for why it
+     carries no `OutboundTlsSanMismatch` status.
+
+   **Which SAN site actually fires here.** With `verificationMode: IntrospectionOnly` and a cold
+   cache, `verify_token_via_introspection` calls `get_or_fetch_discovery()` *before* the
+   introspection POST, so the handshake fails inside `jwks_provider.rs` — that site increments the
+   counter and (as of 2026-07-26, still) emits a `tracing::warn!`. The introspection POST's own SAN
+   site (`token_exchange::note_oidc_san_mismatch`) is not reached in this fixture, and it is
+   counter-only by design: it owns no `PluginLog`, and the request hot path forbids `tracing::*`
+   (log-safety Iron rule 3).
+
+   **No `OutboundTlsSanMismatch` in the access log for this fixture.** Only two frames stamp the
+   status (and write the plugin log entries `outbound tls san mismatch` + `san <reason>`):
+   `request_filter_impl.rs` (the `UnauthAction::Auth` arm) and `callback.rs` (`handle_callback`).
+   Every other frame that reaches `get_or_fetch_discovery()` — including this fixture's
+   `verify_token_via_introspection` — `map_err`s the typed `JwksProviderError::TlsSanMismatch` away
+   and stamps nothing. The first frame is unreachable here: `bearerOnly: true` short-circuits before
+   the `unauth_action` match. The second *is* dispatched under `bearerOnly: true` (the callback-path
+   check runs before the bearer-only short-circuit), but it returns at the very first guard — this
+   fixture declares no `sessionSecretRef`, so `resolve_session_secret()` fails and it replies
+   `401 Unauthorized - Missing session secret` long before the discovery fetch. To assert on the
+   access-log `errors` array, use the LDAP fixture or an OIDC fixture with the interactive
+   (non-bearer-only) flow.
 
 ## Current Limitation
 

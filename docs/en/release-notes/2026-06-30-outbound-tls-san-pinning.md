@@ -22,7 +22,7 @@ Other backends—LinkSys providers (Redis, etcd, Elasticsearch, Kafka), ext_proc
 - `validation.hostname` and `validation.subjectAltNames` are **accepted and enforced at runtime**.
 - During TLS handshake to the OIDC provider (e.g., Keycloak, Okta, Azure AD) or LDAP server, the gateway's rustls verifier checks that the peer certificate's Subject Alternative Names (SANs) match the configured values.
 - If verification fails (certificate SAN does not contain the expected hostname or value), the handshake is aborted immediately. The connection records `EdgionStatus::OutboundTlsSanMismatch` in the gateway access log.
-- Handshake failures propagate to the request: the client receives an error response, and the gateway logs the rejection reason (see Diagnostics below).
+- Handshake failures propagate to the request: the client receives an error response, and the gateway records the rejection (see Diagnostics below).
 
 ### LinkSys, ext_proc, and Global Defaults (Still Deferred)
 
@@ -36,11 +36,13 @@ Other backends—LinkSys providers (Redis, etcd, Elasticsearch, Kafka), ext_proc
 |------|------|--------------|-----------|
 | 999_09 | `OutboundTlsSanMismatch` | 502 Bad Gateway (default) | Outbound peer certificate Subject Alternative Names did not match the configured `validation.subjectAltNames` or `validation.hostname` |
 
-> **Scope note.** `OutboundTlsSanMismatch` appears in the access log for the LDAP bind and the OIDC
-> discovery fetch. The OIDC token-exchange, refresh, revoke, and userinfo calls record the
-> `edgion_gateway_outbound_tls_san_mismatch_total` counter and a gateway warn log, but do not stamp
-> the per-request status. A SAN mismatch is a configuration error that fails every request
-> identically, so the counter is the intended alerting signal on all paths.
+> **Scope note.** `OutboundTlsSanMismatch` appears in the access log for the LDAP bind, and — on the
+> OIDC side — only for the discovery fetch reached from the interactive login redirect and the
+> callback handler. Every other OIDC outbound call (token exchange, refresh, revoke, introspection,
+> userinfo, and the discovery fetch reached from any of them) records the
+> `edgion_gateway_outbound_tls_san_mismatch_total` counter and stamps no per-request status. A SAN
+> mismatch is a configuration error that fails every request identically, so the counter is the
+> intended alerting signal on all paths.
 
 ## Operator Action Required
 
@@ -146,8 +148,8 @@ When a handshake fails due to SAN mismatch, the access log's `errors` array cont
 ### SSL Log (Gateway Data Plane)
 
 `ssl.log` records *inbound* TLS handshake diagnostics only (client → gateway) and is not touched by
-outbound SAN pinning. For outbound TLS SAN mismatches, use the gateway log line, the counter, and
-the access log `errors` array described above.
+outbound SAN pinning. For outbound TLS SAN mismatches, use the counter and the access log `errors`
+array described above.
 
 ### Debugging Commands
 

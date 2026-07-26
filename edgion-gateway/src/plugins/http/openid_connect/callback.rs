@@ -241,7 +241,8 @@ impl OpenidConnect {
             Err(e) => {
                 if let JwksProviderError::TlsSanMismatch { ref reason } = e {
                     session.add_error(edgion_resources::EdgionStatus::OutboundTlsSanMismatch);
-                    tracing::warn!(reason = %reason, "OIDC callback discovery rejected by SAN pinning");
+                    plugin_log.push_err("outbound tls san mismatch");
+                    plugin_log.push_fmt("san {}", la![reason.as_str()]);
                 }
                 let _ = self.send_plain_error(session, 502, "Bad Gateway").await;
                 return PluginRunningResult::ErrTerminateRequest;

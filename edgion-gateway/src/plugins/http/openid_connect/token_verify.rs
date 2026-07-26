@@ -57,7 +57,7 @@ impl OpenidConnect {
         };
 
         let resp = request.send().await.map_err(|e| {
-            super::token_exchange::note_oidc_san_mismatch(&e, "introspection");
+            super::token_exchange::note_oidc_san_mismatch(&e);
             OidcVerifyError::Other {
                 status: 502,
                 message: "Bad Gateway".to_string(),

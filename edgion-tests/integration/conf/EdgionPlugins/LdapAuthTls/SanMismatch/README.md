@@ -27,9 +27,8 @@ Verify that LDAP TLS outbound connections fail with `OutboundTlsSanMismatch` err
 
 2. **LDAP Authentication**: FAILS — no LDAP exchange occurs
    - Plugin reports a generic outbound connection/auth failure
-   - Gateway log line: `OIDC outbound call rejected by TLS SAN pinning` (OIDC) or
-     plugin log `outbound tls san mismatch` (LDAP), each carrying the verifier's reason
-   - Counter `edgion_gateway_outbound_tls_san_mismatch_total{plugin="..."}` increments
+   - Plugin log `outbound tls san mismatch` followed by `san <reason>` (the verifier's reason)
+   - Counter `edgion_gateway_outbound_tls_san_mismatch_total{plugin="ldap_auth"}` increments
    - Access log `errors` array contains `"OutboundTlsSanMismatch"`
 
 ## Dependencies

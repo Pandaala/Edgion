@@ -43,13 +43,22 @@ is a bug" rule also gets a line there.
 - **Rule**: every outbound `reqwest::Client` MUST be built through the
   factory. A bare `reqwest::Client::builder()` outside `#[cfg(test)]` code is
   a bug.
-- **Verified consumers** (2026-07-19): the shared singleton,
+- **Verified consumers** (2026-07-26): the shared singleton,
   `ManagedOutboundClient`, both DSL `http.call` clients, wasm guest callouts
   and OCI pulls, openid_connect (default branch), request_mirror,
   the elasticsearch link_sys provider, health-check probes,
   all_endpoint_status, the controller ACME DNS-01 providers
   (`edgion-controller/src/services/acme/dns_provider.rs`, factory-default
-  `Deny` redirects kept deliberately).
+  `Deny` redirects kept deliberately), and the CLI admin-API client
+  (`edgion-cli/src/cli/client.rs` `build_cli_client` +
+  `edgion-cli/src/cli/commands/login.rs` `probe_status`).
+- **Operator-CLI caveat**: `edgion-cli` is the one consumer that sets
+  `disable_proxy: false`. Rule 3's proxy-env disable exists to stop a *server*
+  from being steered through an attacker-influenced proxy; the CLI runs as the
+  operator on the operator's own machine, where honoring `HTTP(S)_PROXY` is a
+  requirement, not a leak. `redirect: Deny` still applies — the admin API never
+  redirects, and following one would carry the bearer token across an
+  https -> http downgrade on the same host.
 - **Exemptions**:
   - openid_connect SAN-pinning branch
     (`edgion-gateway/src/plugins/http/openid_connect/plugin.rs`) builds a raw

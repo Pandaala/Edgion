@@ -1,20 +1,16 @@
 use super::*;
 
-/// Record and log an outbound TLS SAN-pinning rejection on an OIDC outbound call.
+/// Record an outbound TLS SAN-pinning rejection on an OIDC outbound call.
 ///
-/// These call sites do not emit `EdgionStatus::OutboundTlsSanMismatch`: threading a
-/// typed error to a session-owning frame would cost a signature cascade for a
-/// failure that is already visible in the counter and this log line, and that
-/// fires on every request once the configuration is wrong.
-pub(super) fn note_oidc_san_mismatch(err: &reqwest::Error, call: &'static str) {
-    if let Some(reason) = crate::tls::validation::outbound_san_mismatch_reason(err) {
+/// The `edgion_gateway_outbound_tls_san_mismatch_total{plugin="openid_connect"}` counter is
+/// the only channel here. Every caller sits on the request hot path, which forbids `tracing::*`
+/// at any level (log-safety Iron rule 3), and none of them can reach the `PluginLog`; threading a
+/// typed error up to a `PluginLog`-owning frame would cost a signature cascade across the five
+/// outbound call paths. A SAN mismatch is a configuration error that fails every request
+/// identically, so the counter is the intended alerting signal.
+pub(super) fn note_oidc_san_mismatch(err: &reqwest::Error) {
+    if crate::tls::validation::outbound_san_mismatch_reason(err).is_some() {
         crate::observe::metrics::registry::record_outbound_tls_san_mismatch("openid_connect");
-        tracing::warn!(
-            component = "openid_connect",
-            call = call,
-            reason = %reason,
-            "OIDC outbound call rejected by TLS SAN pinning"
-        );
     }
 }
 
@@ -175,7 +171,7 @@ impl OpenidConnect {
         };
 
         let resp = request.send().await.map_err(|e| {
-            note_oidc_san_mismatch(&e, "token_exchange");
+            note_oidc_san_mismatch(&e);
             OidcVerifyError::Other {
                 status: 502,
                 message: "Bad Gateway".to_string(),
@@ -231,10 +227,7 @@ impl OpenidConnect {
             }
         };
 
-        let resp = request
-            .send()
-            .await
-            .inspect_err(|e| note_oidc_san_mismatch(e, "revoke_token"))?;
+        let resp = request.send().await.inspect_err(note_oidc_san_mismatch)?;
         if !resp.status().is_success() {
             return Err(format!("Revocation request failed with status {}", resp.status()).into());
         }
@@ -334,7 +327,7 @@ impl OpenidConnect {
         };
 
         let resp = request.send().await.map_err(|e| {
-            note_oidc_san_mismatch(&e, "token_refresh");
+            note_oidc_san_mismatch(&e);
             OidcVerifyError::Other {
                 status: 502,
                 message: "Bad Gateway".to_string(),

@@ -22,7 +22,7 @@ Phase 2 在 Phase 1 schema 对齐的基础上，通过**启用 OIDC 和 LDAP 插
 - `validation.hostname` 和 `validation.subjectAltNames` 被**接受并在运行时强制执行**。
 - 在 TLS 握手到 OIDC 提供商（如 Keycloak、Okta、Azure AD）或 LDAP 服务器时，网关的 rustls 验证器检查对端证书的 Subject Alternative Names (SANs) 是否与配置的值匹配。
 - 如果验证失败（证书 SAN 不包含预期的主机名或值），握手立即中止。连接会在网关访问日志中记录 `EdgionStatus::OutboundTlsSanMismatch`。
-- 握手失败会传播到请求：客户端收到错误响应，网关记录拒绝原因（详见下方"诊断"章节）。
+- 握手失败会传播到请求：客户端收到错误响应，网关记录该拒绝（详见下方"诊断"章节）。
 
 ### LinkSys、ext_proc 和全局默认（仍处于延期阶段）
 
@@ -36,10 +36,11 @@ Phase 2 在 Phase 1 schema 对齐的基础上，通过**启用 OIDC 和 LDAP 插
 |------|------|----------|------|
 | 999_09 | `OutboundTlsSanMismatch` | 502 Bad Gateway（默认） | 出站对端证书的 Subject Alternative Names 与配置的 `validation.subjectAltNames` 或 `validation.hostname` 不匹配 |
 
-> **范围说明。** `OutboundTlsSanMismatch` 会出现在 LDAP bind 和 OIDC discovery 请求的访问日志中。OIDC
-> 的 token-exchange、refresh、revoke 和 userinfo 调用只会记录 `edgion_gateway_outbound_tls_san_mismatch_total`
-> 计数器和一条网关 warn 日志，不会写入单次请求的状态。SAN 不匹配属于配置错误，会使每个请求以相同方式失败，
-> 因此该计数器是所有路径上的预期告警信号。
+> **范围说明。** `OutboundTlsSanMismatch` 会出现在 LDAP bind 的访问日志中；OIDC 一侧只有交互式登录
+> 跳转和 callback 处理这两个入口触发的 discovery 请求会写入该状态。其余所有 OIDC 出站调用
+> （token-exchange、refresh、revoke、introspection、userinfo，以及从这些路径触发的 discovery 请求）
+> 只记录 `edgion_gateway_outbound_tls_san_mismatch_total` 计数器，不写入单次请求的状态。
+> SAN 不匹配属于配置错误，会使每个请求以相同方式失败，因此该计数器是所有路径上的预期告警信号。
 
 ## 操作员操作必需
 
@@ -145,7 +146,7 @@ spec:
 ### SSL 日志（网关数据平面）
 
 `ssl.log` 只记录*入站* TLS 握手诊断信息（client → gateway），不涉及出站 SAN 固定。对于出站 TLS SAN
-不匹配，请使用上文描述的网关日志行、计数器以及访问日志 `errors` 数组。
+不匹配，请使用上文描述的计数器以及访问日志 `errors` 数组。
 
 ### 调试命令
 
