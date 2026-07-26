@@ -173,8 +173,15 @@ pub enum EdgionStatus {
     /// A streaming gRPC body does not end until the RPC does (HTTP 500).
     BodyRefusedGrpc = 500_18,
 
-    /// Body buffering refused: the read was issued from the wrong stage, or the
-    /// pre-plugin `body_declared` snapshot never ran (HTTP 500).
+    /// Body buffering refused: the read was issued from the wrong stage — the
+    /// request body is already gone (or the response is not bound yet) at the
+    /// stage the caller reached from (HTTP 500).
+    ///
+    /// This is EXPECTED, routine traffic: a body-consuming plugin placed in a
+    /// post-request stage emits it on every request by design. Do not alert on
+    /// it. The bug signal lives in `BodyRefusedNoSnapshot` instead — the two
+    /// were deliberately split so a real code-path defect is not buried under
+    /// this variant's volume.
     BodyRefusedStage = 500_19,
 
     /// Body read aborted: the stream ended prematurely (HTTP 500).
@@ -191,6 +198,20 @@ pub enum EdgionStatus {
     /// request until the P0 buffering runtime lands, which is accurate: body
     /// consumers are non-functional today (HTTP 500).
     BodyReadUnimplemented = 500_21,
+
+    /// Body buffering refused: the pre-plugin `body_declared` snapshot never
+    /// ran, so the admission predicate has no trustworthy fact to decide on and
+    /// fails closed rather than guessing (HTTP 500).
+    ///
+    /// Unlike `BodyRefusedStage` this is a BUG, not expected traffic: some code
+    /// path reached body-read admission without first calling
+    /// `snapshot_body_declared`. It should never appear in the access log —
+    /// a non-zero rate is alertable.
+    ///
+    /// Emitted by the request-side predicate only: the response side does not
+    /// consult `body_declared`, so a missing snapshot there surfaces as an
+    /// ordinary buffered read rather than this status.
+    BodyRefusedNoSnapshot = 500_22,
 
     /// Client-supplied `grpc-timeout` deadline already exceeded before peer
     /// selection. Surfaced to the gRPC client as `grpc-status: 4` (DEADLINE_EXCEEDED)
@@ -310,6 +331,7 @@ mod tests {
             EdgionStatus::BodyRefusedWebsocket => Some(500),
             EdgionStatus::BodyRefusedGrpc => Some(500),
             EdgionStatus::BodyRefusedStage => Some(500),
+            EdgionStatus::BodyRefusedNoSnapshot => Some(500),
             EdgionStatus::BodyReadAborted => Some(500),
             EdgionStatus::BodyReadTimeout => Some(408),
             EdgionStatus::BodyReadTooLarge => Some(413),
@@ -386,6 +408,7 @@ mod tests {
             EdgionStatus::BodyRefusedWebsocket,
             EdgionStatus::BodyRefusedGrpc,
             EdgionStatus::BodyRefusedStage,
+            EdgionStatus::BodyRefusedNoSnapshot,
             EdgionStatus::BodyReadAborted,
             EdgionStatus::BodyReadTimeout,
             EdgionStatus::BodyReadTooLarge,
@@ -407,6 +430,7 @@ mod tests {
         assert_eq!(EdgionStatus::BodyRefusedWebsocket.http_status(), Some(500));
         assert_eq!(EdgionStatus::BodyRefusedGrpc.http_status(), Some(500));
         assert_eq!(EdgionStatus::BodyRefusedStage.http_status(), Some(500));
+        assert_eq!(EdgionStatus::BodyRefusedNoSnapshot.http_status(), Some(500));
         assert_eq!(EdgionStatus::BodyReadAborted.http_status(), Some(500));
         assert_eq!(EdgionStatus::BodyReadUnimplemented.http_status(), Some(500));
         assert_eq!(EdgionStatus::BodyReadTimeout.http_status(), Some(408));

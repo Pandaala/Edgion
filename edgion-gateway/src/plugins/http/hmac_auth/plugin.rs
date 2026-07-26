@@ -18,9 +18,11 @@ use sha2::{Digest, Sha256, Sha384, Sha512};
 
 use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
 use crate::plugins::runtime::log::{la, sensitive};
+use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::resources::edgion_plugins::{HmacAlgorithm, HmacAuthConfig, HmacCredential};
+use edgion_resources::EdgionStatus;
 
 type HmacSha256 = Hmac<Sha256>;
 type HmacSha384 = Hmac<Sha384>;
@@ -304,11 +306,34 @@ impl HmacAuth {
     ///
     /// Requires the request body to have been buffered (the body gate ensures
     /// this before the plugin runs). Only SHA-256 is accepted.
+    ///
+    /// A failed read records the matching `EdgionStatus` before denying, using
+    /// the same `BodyReadError` -> `EdgionStatus` mapping as
+    /// `body_gate.rs::body_read_failure_result` and `wasm/plugin.rs` — the
+    /// returned `&'static str` is the client-visible denial reason and must
+    /// stay opaque, so `ctx.add_error` is the only place the specific cause
+    /// becomes observable. `NotBuffered` is excluded: the read adapter already
+    /// recorded which refusal, and double-counting it here would inflate that
+    /// status.
+    ///
+    /// Only the STATUS mapping is shared. The HTTP code is not: auth is
+    /// fail-closed, so the caller answers every denial with the plugin's auth
+    /// error response, not with `body_gate.rs`'s per-error 413/408 split.
     async fn verify_body_digest(session: &mut dyn PluginSession) -> Result<(), &'static str> {
-        let body = session
-            .read_request_body(None)
-            .await
-            .map_err(|_| "request body unavailable")?;
+        let body = match session.read_request_body(None).await {
+            Ok(body) => body,
+            Err(err) => {
+                match err {
+                    BodyReadError::TooLarge { .. } => session.add_error(EdgionStatus::BodyReadTooLarge),
+                    BodyReadError::Timeout => session.add_error(EdgionStatus::BodyReadTimeout),
+                    BodyReadError::Incomplete => session.add_error(EdgionStatus::BodyReadAborted),
+                    BodyReadError::Unimplemented => session.add_error(EdgionStatus::BodyReadUnimplemented),
+                    // Already recorded on ctx by the read adapter.
+                    BodyReadError::NotBuffered => {}
+                }
+                return Err("request body unavailable");
+            }
+        };
         let digest_header = session.header_value("digest").ok_or("Missing Digest header")?;
         Self::check_body_digest(&body, &digest_header)
     }
@@ -601,6 +626,50 @@ mod tests {
         assert_eq!(
             HmacAuth::check_body_digest(b"x", "no-equals-sign"),
             Err("Malformed Digest header")
+        );
+    }
+
+    /// Every distinct `BodyReadError` must reach the access log as its own
+    /// `EdgionStatus`, matching `body_gate.rs` / `wasm/plugin.rs`. The denial
+    /// reason returned to the caller stays opaque, so `add_error` is the only
+    /// place the cause is observable — collapsing the variants here would make
+    /// a timeout indistinguishable from an oversize body in production.
+    #[tokio::test]
+    async fn verify_body_digest_records_status_per_read_error() {
+        for (err, expected) in [
+            (BodyReadError::TooLarge { limit: 8 }, EdgionStatus::BodyReadTooLarge),
+            (BodyReadError::Timeout, EdgionStatus::BodyReadTimeout),
+            (BodyReadError::Incomplete, EdgionStatus::BodyReadAborted),
+            (BodyReadError::Unimplemented, EdgionStatus::BodyReadUnimplemented),
+        ] {
+            let mut session = MockPluginSession::new();
+            session.expect_read_request_body().returning(move |_| Err(err.clone()));
+            session
+                .expect_add_error()
+                .withf(move |status| *status == expected)
+                .times(1)
+                .returning(|_| ());
+
+            assert_eq!(
+                HmacAuth::verify_body_digest(&mut session).await,
+                Err("request body unavailable")
+            );
+        }
+    }
+
+    /// `NotBuffered` is the one variant that must NOT be re-recorded: the read
+    /// adapter already put the specific refusal on ctx.
+    #[tokio::test]
+    async fn verify_body_digest_does_not_double_count_refusal() {
+        let mut session = MockPluginSession::new();
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::NotBuffered));
+        session.expect_add_error().times(0);
+
+        assert_eq!(
+            HmacAuth::verify_body_digest(&mut session).await,
+            Err("request body unavailable")
         );
     }
 

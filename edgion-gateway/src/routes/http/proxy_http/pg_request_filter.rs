@@ -453,10 +453,15 @@ async fn build_request_metadata(
 ///
 /// Also marks entry into the request-processing stage (`in_request_body_stage`)
 /// -- see that field's doc for why this is the paired entry point and where the
-/// matching exit write lives.
+/// matching exit write lives -- and snapshots whether the DOWNSTREAM method was
+/// `HEAD` (`method_is_head`), which the response-side admission predicate reads
+/// instead of the live request header a request-stage plugin can rewrite via
+/// `set_upstream_method`. All three writes belong here for the same reason:
+/// this is the one point that runs before any plugin can mutate the request.
 fn snapshot_body_declared(session: &mut Session, ctx: &mut EdgionHttpContext) {
     ctx.request_info.body_declared = Some(!session.is_body_empty());
     ctx.request_info.in_request_body_stage = true;
+    ctx.request_info.method_is_head = session.req_header().method == http::Method::HEAD;
 }
 
 /// Detect WebSocket / gRPC / gRPC-Web from the request's `Upgrade` and
@@ -744,6 +749,30 @@ mod body_declared_snapshot_tests {
         snapshot_body_declared(&mut session, &mut ctx);
 
         assert_eq!(ctx.request_info.body_declared, Some(false));
+    }
+
+    /// The `method_is_head` half of the snapshot, off real H1 request bytes:
+    /// the response-side admission predicate reads this field instead of the
+    /// plugin-mutable live header, so an inverted comparison here would put the
+    /// hole straight back (see `RequestInfo::method_is_head`).
+    #[tokio::test]
+    async fn head_request_snapshots_method_is_head() {
+        let mut session = session_from_request(b"HEAD /status HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        snapshot_body_declared(&mut session, &mut ctx);
+
+        assert!(ctx.request_info.method_is_head);
+    }
+
+    #[tokio::test]
+    async fn non_head_request_snapshots_method_is_head_false() {
+        let mut session = session_from_request(b"GET /status HTTP/1.1\r\nHost: test\r\n\r\n").await;
+        let mut ctx = EdgionHttpContext::default();
+
+        snapshot_body_declared(&mut session, &mut ctx);
+
+        assert!(!ctx.request_info.method_is_head);
     }
 }
 

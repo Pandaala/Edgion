@@ -387,7 +387,13 @@ pub(crate) fn request_admission(ctx: &EdgionHttpContext, past_request_stage: boo
     match ctx.request_info.body_declared {
         Some(false) => return RequestAdmission::PassThrough,
         // The snapshot never ran. Fail closed rather than guess.
-        None => return RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage),
+        //
+        // Deliberately NOT `BodyRefusedStage`: that variant fires on every
+        // request for any body consumer placed in a post-request stage, which
+        // is expected traffic. This arm is a BUG — a call site reached body
+        // admission without `snapshot_body_declared`. Sharing one status would
+        // bury the bug signal under the expected case's volume.
+        None => return RequestAdmission::Refuse(EdgionStatus::BodyRefusedNoSnapshot),
         Some(true) => {}
     }
 
@@ -416,13 +422,38 @@ pub(crate) fn request_admission(ctx: &EdgionHttpContext, past_request_stage: boo
     RequestAdmission::Buffer
 }
 
+/// Whether a status code is one that carries no response body (RFC 9110).
+///
+/// Deliberately module-private: its only legitimate use is inside
+/// `read_response_body`, where it is applied to BOTH the live status and the
+/// ctx snapshot to build `bodyless_agreed`. Applying it to one of them alone is
+/// the bug this split exists to prevent, so the helper is not offered crate-wide
+/// as an invitation to do that.
+#[inline]
+fn is_bodyless_status(status: u16) -> bool {
+    matches!(status, 100..=199 | 204 | 304)
+}
+
 /// Response-side admission predicate. Keys on the RESPONSE, not on the
 /// request's protocol label.
 ///
 /// `was_upgraded()` is deliberately not used: it hardcodes `false` for H2, and
 /// on H1 it is set only when the 101 is written downstream — after this runs.
 /// `status == 101` is the correct and sufficient key.
-pub(crate) fn response_admission(ctx: &EdgionHttpContext, status: Option<u16>, is_head: bool) -> RequestAdmission {
+///
+/// Step 4 — the only step that returns the SILENT `PassThrough` — takes its two
+/// inputs pre-agreed by the caller. Both `is_head` and `bodyless_agreed` must
+/// already be the AND of a live, plugin-mutable fact and its pre-plugin
+/// snapshot; see `read_response_body`. Steps 1–3 deliberately keep reading the
+/// live status alone, because they all steer toward `Refuse` — the loud
+/// direction, which a mutated fact may safely widen (the same reasoning
+/// `request_admission`'s gRPC OR relies on).
+pub(crate) fn response_admission(
+    ctx: &EdgionHttpContext,
+    status: Option<u16>,
+    is_head: bool,
+    bodyless_agreed: bool,
+) -> RequestAdmission {
     // 1. No response header bound: this is a request-stage call.
     let Some(status) = status else {
         return RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage);
@@ -439,7 +470,7 @@ pub(crate) fn response_admission(ctx: &EdgionHttpContext, status: Option<u16>, i
     }
 
     // 4. Statuses that carry no body, plus HEAD (RFC 9110 9.3.2).
-    if is_head || matches!(status, 100..=199 | 204 | 304) {
+    if is_head || bodyless_agreed {
         return RequestAdmission::PassThrough;
     }
 
@@ -838,11 +869,44 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn read_response_body(&mut self, max_bytes: Option<u64>) -> BodyReadResult {
-        // Copy both facts out before touching `self.ctx` mutably.
+        // Copy the facts out before touching `self.ctx` mutably.
         let status = self.response_header.as_ref().map(|h| h.status.as_u16());
-        let is_head = self.inner.req_header().method == http::Method::HEAD;
+        // Same unanimity rule as `is_head` below, for the other half of the
+        // bodyless short-circuit. The bound response header is response-stage
+        // mutable — `set_response_status` writes straight into it, reachable
+        // from DSL's `resp.set_status` and from `response_rewrite` — so a
+        // `resp.set_status(204)` ahead of a body consumer in the same array
+        // would otherwise fabricate `Ok(Bytes::new())` for a response whose
+        // body is real and is on its way to the client. `ctx.request_info.status`
+        // is the upstream's own status, stamped in `upstream_response_filter`
+        // before any response-stage plugin runs. `None` (never stamped) yields
+        // `false` -> `Buffer`, the loud direction.
+        let bodyless_agreed =
+            status.is_some_and(is_bodyless_status) && self.ctx.request_info.status.is_some_and(is_bodyless_status);
+        // `PassThrough` is the SILENT disposition — it resolves to
+        // `Ok(Bytes::new())`, whose contract is "the response truthfully
+        // declared no body". It therefore requires BOTH the pre-plugin
+        // snapshot and the live header to agree the request is HEAD; any
+        // disagreement steers to `Buffer`, which can only fail loudly.
+        //
+        // Neither fact is sufficient alone, because `set_upstream_method`
+        // rewrites the live header and each direction breaks one of them:
+        //
+        // - snapshot alone: a downstream `HEAD` rewritten to a body-carrying
+        //   method makes pingora write the real body downstream
+        //   (`init_body_writer` keys on this same live header), while the
+        //   snapshot still says HEAD -> a consumer inspects nothing and
+        //   believes the response was empty.
+        // - live header alone: a rewrite TO `HEAD` (reachable at the response
+        //   stage too — DSL's `req.set_method` is not stage-gated) fabricates
+        //   the same silent skip after the body already arrived.
+        //
+        // The mutable fact can only ever NARROW `PassThrough`, never widen it —
+        // the mirror of `request_admission`'s gRPC OR, where a client-controlled
+        // fact can only widen a refusal. See `method_is_head`'s doc.
+        let is_head = self.ctx.request_info.method_is_head && self.inner.req_header().method == http::Method::HEAD;
 
-        match response_admission(self.ctx, status, is_head) {
+        match response_admission(self.ctx, status, is_head, bodyless_agreed) {
             RequestAdmission::PassThrough => Ok(bytes::Bytes::new()),
             RequestAdmission::Refuse(status) => {
                 self.ctx.add_error(status);
@@ -1440,8 +1504,21 @@ mod tests {
         let ctx = admission_ctx(None, None, false);
         assert_eq!(
             request_admission(&ctx, false),
-            RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage)
+            RequestAdmission::Refuse(EdgionStatus::BodyRefusedNoSnapshot)
         );
+    }
+
+    #[test]
+    fn missing_snapshot_and_wrong_stage_are_distinguishable() {
+        // Both refuse, but they must not share one status: the missing-snapshot
+        // arm is a code-path bug, the wrong-stage arm is expected traffic for
+        // any body consumer in a post-request stage. A shared variant would make
+        // the bug undetectable in the access log.
+        let bug = request_admission(&admission_ctx(None, None, false), false);
+        let expected = request_admission(&admission_ctx(Some(true), None, false), true);
+        assert_eq!(bug, RequestAdmission::Refuse(EdgionStatus::BodyRefusedNoSnapshot));
+        assert_eq!(expected, RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage));
+        assert_ne!(bug, expected);
     }
 
     #[test]
@@ -1504,7 +1581,7 @@ mod tests {
         // response that does not exist yet.
         let ctx = EdgionHttpContext::new();
         assert_eq!(
-            response_admission(&ctx, None, false),
+            response_admission(&ctx, None, false, false),
             RequestAdmission::Refuse(EdgionStatus::BodyRefusedStage)
         );
     }
@@ -1513,7 +1590,7 @@ mod tests {
     fn response_admission_real_101_refuses() {
         let ctx = EdgionHttpContext::new();
         assert_eq!(
-            response_admission(&ctx, Some(101), false),
+            response_admission(&ctx, Some(101), false, false),
             RequestAdmission::Refuse(EdgionStatus::BodyRefusedWebsocket)
         );
     }
@@ -1524,7 +1601,10 @@ mod tests {
         // is bufferable. Only a real 101 is a tunnel.
         let mut ctx = EdgionHttpContext::new();
         ctx.request_info.discover_protocol = Some("websocket".to_string());
-        assert_eq!(response_admission(&ctx, Some(200), false), RequestAdmission::Buffer);
+        assert_eq!(
+            response_admission(&ctx, Some(200), false, false),
+            RequestAdmission::Buffer
+        );
     }
 
     #[test]
@@ -1532,7 +1612,7 @@ mod tests {
         let mut ctx = EdgionHttpContext::new();
         ctx.request_info.is_grpc_request = true;
         assert_eq!(
-            response_admission(&ctx, Some(200), false),
+            response_admission(&ctx, Some(200), false, false),
             RequestAdmission::Refuse(EdgionStatus::BodyRefusedGrpc)
         );
     }
@@ -1542,9 +1622,25 @@ mod tests {
         let ctx = EdgionHttpContext::new();
         for status in [100u16, 199, 204, 304] {
             assert_eq!(
-                response_admission(&ctx, Some(status), false),
+                response_admission(&ctx, Some(status), false, true),
                 RequestAdmission::PassThrough,
                 "status {status} carries no body"
+            );
+        }
+    }
+
+    #[test]
+    fn response_admission_bodyless_status_without_agreement_buffers() {
+        // The silent PassThrough needs `bodyless_agreed`, not just a bodyless
+        // live status: `read_response_body` only sets it when the upstream's own
+        // stamped status agrees, so a plugin rewriting 200 -> 204 ahead of a body
+        // consumer cannot fabricate "this response has no body".
+        let ctx = EdgionHttpContext::new();
+        for status in [100u16, 199, 204, 304] {
+            assert_eq!(
+                response_admission(&ctx, Some(status), false, false),
+                RequestAdmission::Buffer,
+                "status {status} must not short-circuit without agreement"
             );
         }
     }
@@ -1555,13 +1651,19 @@ mod tests {
         // Same class as 204/304 — the one place a request fact legitimately
         // enters the response predicate.
         let ctx = EdgionHttpContext::new();
-        assert_eq!(response_admission(&ctx, Some(200), true), RequestAdmission::PassThrough);
+        assert_eq!(
+            response_admission(&ctx, Some(200), true, false),
+            RequestAdmission::PassThrough
+        );
     }
 
     #[test]
     fn response_admission_ordinary_200_buffers() {
         let ctx = EdgionHttpContext::new();
-        assert_eq!(response_admission(&ctx, Some(200), false), RequestAdmission::Buffer);
+        assert_eq!(
+            response_admission(&ctx, Some(200), false, false),
+            RequestAdmission::Buffer
+        );
     }
 }
 
@@ -1947,13 +2049,15 @@ mod record_outcome_tests {
         assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
     }
 
-    /// PassThrough path: a bodyless status (204) on a bound response header
-    /// must return an empty, non-error body rather than falling into the
+    /// PassThrough path: a bodyless status (204) that the UPSTREAM itself sent —
+    /// both the bound header and `ctx.request_info.status` agree — must return
+    /// an empty, non-error body rather than falling into the
     /// `Buffer`/`Unimplemented` arm.
     #[tokio::test]
     async fn read_response_body_bodyless_status_passes_through_empty() {
         let mut session = test_session().await;
         let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.status = Some(204);
         let mut response_header = ResponseHeader::build(204, None).unwrap();
 
         let result = {
@@ -1963,11 +2067,61 @@ mod record_outcome_tests {
         assert_eq!(result.expect("204 must pass through"), Bytes::new());
     }
 
+    /// Regression pin for the status half of the same defect shape as Finding 3:
+    /// the bound response header is response-stage mutable
+    /// (`set_response_status`, reachable from DSL's `resp.set_status` and from
+    /// `response_rewrite`), so a `resp.set_status(204)` ordered ahead of a body
+    /// consumer in the SAME `upstreamResponseFilterPlugins` array must not
+    /// fabricate the bodyless short-circuit — the upstream sent 200 and its body
+    /// is real and downstream-bound. Must stay on the `Buffer` arm.
+    #[tokio::test]
+    async fn read_response_body_ignores_plugin_rewritten_bodyless_status() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        // The upstream's own status, stamped in `upstream_response_filter`
+        // before any response-stage plugin ran.
+        ctx.request_info.status = Some(200);
+        let mut response_header = ResponseHeader::build(200, None).unwrap();
+
+        let result = {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            adapter.set_response_status(204).expect("204 is a valid status");
+            assert_eq!(adapter.response_header.as_ref().unwrap().status.as_u16(), 204);
+            adapter.read_response_body(None).await
+        };
+        assert!(
+            matches!(result, Err(BodyReadError::Unimplemented)),
+            "a plugin-rewritten bodyless status must not downgrade the read to PassThrough"
+        );
+    }
+
+    /// The mirror direction: the upstream really did send 204, a plugin rewrote
+    /// it to 200. There is no body either way, but the disagreement must still
+    /// steer to the loud `Buffer` rather than the silent `PassThrough` — the
+    /// same conservative choice the HEAD pair makes.
+    #[tokio::test]
+    async fn read_response_body_ignores_bodyless_snapshot_when_status_rewritten_away() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.status = Some(204);
+        let mut response_header = ResponseHeader::build(204, None).unwrap();
+
+        let result = {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            adapter.set_response_status(200).expect("200 is a valid status");
+            adapter.read_response_body(None).await
+        };
+        assert!(
+            matches!(result, Err(BodyReadError::Unimplemented)),
+            "a rewritten-away-from-bodyless response must not keep the short-circuit"
+        );
+    }
+
     /// Buffer path: an ordinary 200 on a non-HEAD, non-gRPC request must
     /// reach the `Buffer` arm and fail with `Unimplemented` (real chunk
-    /// buffering is not wired up yet). `test_session()`'s request is a plain
-    /// `GET`, so this also pins the `is_head` comparison: an inverted
-    /// comparison would misroute this case to `PassThrough` instead.
+    /// buffering is not wired up yet). `method_is_head` is left at its
+    /// `false` default, so this also pins the `is_head` routing: an inverted
+    /// read would misroute this case to `PassThrough` instead.
     #[tokio::test]
     async fn read_response_body_ordinary_200_is_unimplemented() {
         let mut session = test_session().await;
@@ -1977,5 +2131,80 @@ mod record_outcome_tests {
         let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
         let result = adapter.read_response_body(None).await;
         assert!(matches!(result, Err(BodyReadError::Unimplemented)));
+    }
+
+    /// A genuine, unrewritten HEAD request still short-circuits to
+    /// `PassThrough`: both the snapshot and the live header say HEAD, so
+    /// closing the plugin-mutable holes must not break the RFC 9110 9.3.2 case
+    /// itself.
+    #[tokio::test]
+    async fn read_response_body_genuine_head_passes_through_empty() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.method_is_head = true;
+        session.req_header_mut().set_method(http::Method::HEAD);
+        let mut response_header = ResponseHeader::build(200, None).unwrap();
+
+        let result = {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            adapter.read_response_body(None).await
+        };
+        assert_eq!(result.expect("genuine HEAD must pass through"), Bytes::new());
+    }
+
+    /// Regression pin for Finding 3, rewrite-TO-HEAD direction: a plugin
+    /// calling `set_upstream_method("HEAD")` must not fabricate the bodyless
+    /// short-circuit. Reachable at the response stage too — DSL's
+    /// `req.set_method` is not stage-gated — where the upstream body has
+    /// already arrived. The read must stay on the `Buffer` arm
+    /// (`Unimplemented` today) rather than silently resolving to
+    /// `PassThrough` -> `Ok(empty)`, which a body-inspecting plugin reads as
+    /// "the response genuinely had no body".
+    #[tokio::test]
+    async fn read_response_body_ignores_plugin_rewritten_head_method() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        // The snapshot ran on the real downstream GET.
+        ctx.request_info.method_is_head = false;
+        let mut response_header = ResponseHeader::build(200, None).unwrap();
+
+        let result = {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            adapter.set_upstream_method("HEAD").expect("HEAD parses");
+            assert_eq!(adapter.inner.req_header().method, http::Method::HEAD);
+            adapter.read_response_body(None).await
+        };
+        assert!(
+            matches!(result, Err(BodyReadError::Unimplemented)),
+            "a plugin-rewritten HEAD must not downgrade the read to PassThrough"
+        );
+    }
+
+    /// Regression pin for Finding 3, rewrite-AWAY-FROM-HEAD direction (the
+    /// mirror hole a snapshot-only read would open): the client sent HEAD, a
+    /// request-stage plugin rewrote the method to a body-carrying one, so the
+    /// upstream returns a real body AND pingora writes it downstream — its
+    /// `init_body_writer` keys on the same live header the rewrite mutated.
+    /// Trusting the snapshot alone here would hand a body consumer
+    /// `Ok(empty)` for a response that demonstrably has a body.
+    #[tokio::test]
+    async fn read_response_body_ignores_head_snapshot_when_method_rewritten_away() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        // The client really did send HEAD.
+        ctx.request_info.method_is_head = true;
+        let mut response_header = ResponseHeader::build(200, None).unwrap();
+
+        let result = {
+            let mut adapter = PingoraSessionAdapter::with_response_header(&mut session, &mut ctx, &mut response_header);
+            // A request-stage plugin (e.g. proxy_rewrite `method: GET`) rewrites
+            // it, so the upstream response carries a body after all.
+            adapter.set_upstream_method("GET").expect("GET parses");
+            adapter.read_response_body(None).await
+        };
+        assert!(
+            matches!(result, Err(BodyReadError::Unimplemented)),
+            "a rewritten-away-from-HEAD request must not keep the bodyless short-circuit"
+        );
     }
 }

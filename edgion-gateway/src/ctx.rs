@@ -445,6 +445,38 @@ pub struct RequestInfo {
     /// permitting a body read it should not.
     #[serde(skip)]
     pub in_request_body_stage: bool,
+    /// Whether the DOWNSTREAM request method was `HEAD`, snapshotted in
+    /// `snapshot_body_declared` at the same entry point as `body_declared`,
+    /// **before any plugin runs**.
+    ///
+    /// `read_response_body` needs this fact (RFC 9110 9.3.2: a HEAD response
+    /// carries `Content-Length` but no body) to decide the bodyless
+    /// short-circuit, and ANDs it with the live request method — the silent
+    /// `PassThrough` disposition requires both to agree. Neither is sufficient
+    /// alone, because `set_upstream_method` (reachable from `proxy_rewrite` and
+    /// from DSL's `req.set_method`, which is not stage-gated) rewrites the live
+    /// header in place and each direction breaks one of them:
+    ///
+    /// - Live header alone: a rewrite TO `HEAD` makes `read_response_body`
+    ///   report "no body" for a response whose body already arrived.
+    /// - This snapshot alone: a downstream `HEAD` rewritten to a body-carrying
+    ///   method makes pingora write the real body downstream (its
+    ///   `init_body_writer` keys on the same live header this rewrite mutated),
+    ///   while the snapshot still says HEAD.
+    ///
+    /// Both directions land a body-inspecting plugin on `Ok(Bytes::new())`,
+    /// whose contract is "the response truthfully declared no body" — silently
+    /// downgrading "inspect the body" into "inspect nothing and believe it was
+    /// empty". ANDing lets the mutable fact only NARROW `PassThrough`, never
+    /// widen it; `request_admission` applies the same discipline in the mirror
+    /// direction (a client-controlled fact may only widen a refusal).
+    ///
+    /// Defaults to `false` (the safe direction): a `RequestInfo` that never
+    /// reached the snapshot reads as "not HEAD", which routes to `Buffer` — an
+    /// attempted read that can fail loudly — rather than to the silent
+    /// `PassThrough`. A genuine HEAD response has no body to buffer either way.
+    #[serde(skip)]
+    pub method_is_head: bool,
     /// gRPC service (parsed from path)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grpc_service: Option<String>,
