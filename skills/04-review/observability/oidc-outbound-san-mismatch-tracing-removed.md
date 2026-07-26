@@ -95,22 +95,24 @@ the same branch, not a missing capability.
 
 `cicd/checks/check_gateway_no_tracing.py` scans `plugins/http/*/plugin.rs`,
 `request_filter_impl.rs`, and `request_stage.rs` — `token_exchange.rs`, `token_verify.rs`,
-`userinfo.rs`, `callback.rs`, and `jwks_provider.rs` are **not** in `DP_GLOBS`, so this violation was
+`userinfo.rs`, and `callback.rs` are **not** in `DP_GLOBS`, so this violation was
 invisible to the gate and had to be found by review. Same gap class as the wasm finding
 ([wasm-request-path-tracing-removed.md](wasm-request-path-tracing-removed.md)). Audit these files by
-inspection.
+inspection. (`jwks_provider.rs` joined the gate's scan set on 2026-07-26 — see
+[oidc-jwks-provider-tracing-relocated.md](oidc-jwks-provider-tracing-relocated.md). The remaining
+four are not added because `token_exchange.rs` names `tracing::*` in a doc comment, which the
+line-based scanner cannot distinguish from a call.)
 
-## Explicitly out of scope (still present, tracked separately)
+## Deferred at the time, since closed
 
-`jwks_provider.rs` keeps five `tracing::*` sites: `warn!` on the discovery fetch (~:178), the JWKS
-fetch (~:289) and the stale-cache fallback (~:332), plus `info!` at ~:210 / ~:313. The stale-cache
-warn is the one that fires most often in practice. Those functions
-(`get_or_fetch_discovery`, `get_jwks`) are
-**dual-use** — driven both by the background prewarm/retry task spawned in `plugin.rs` and by a
-request-path lazy fetch — so they need a different resolution than a plain deletion, and the prewarm
-exhaustion warn (`plugin.rs` ~:485) currently points operators at those lines. Tracked in
-`tasks/todo/oidc-jwks-provider-dual-use-tracing.md`. A re-report scoped to `jwks_provider.rs` is that
-todo, not a re-open of this finding.
+`jwks_provider.rs` kept five `tracing::*` sites (discovery-fetch / JWKS-fetch / stale-cache `warn!`
+plus two `info!`) because `get_or_fetch_discovery` is dual-use — driven both by the background
+prewarm task in `plugin.rs` and by a request-path lazy fetch. Closed separately on 2026-07-26: four
+sites deleted, `"OIDC discovery document loaded"` relocated to `spawn_discovery_prewarm`, and the
+prewarm-exhaustion warn (`plugin.rs`) reworded to stop citing the deleted lines. `get_jwks` turned
+out to have **no** cold caller at all. See
+[oidc-jwks-provider-tracing-relocated.md](oidc-jwks-provider-tracing-relocated.md); a re-report
+scoped to `jwks_provider.rs` is that finding, not a re-open of this one.
 
 ## Re-evaluation Triggers
 

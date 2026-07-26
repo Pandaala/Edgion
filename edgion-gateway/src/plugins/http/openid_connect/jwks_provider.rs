@@ -2,8 +2,15 @@
 //!
 //! A single instance maintains both the discovery document and the JWKS cache,
 //! **with unified stale-while-revalidate semantics**: when the JWKS endpoint is
-//! unreachable and a cached set exists locally, the cached set is returned (with
-//! a warn log) instead of propagating the fetch error.
+//! unreachable and a cached set exists locally, the cached set is returned
+//! (flagged `served_stale`) instead of propagating the fetch error.
+//!
+//! Both entry points are reachable from the request path, so this file is
+//! `tracing`-free (Iron rule 3). Failures surface through
+//! `edgion_gateway_outbound_tls_san_mismatch_total`, the caller's `PluginLog` /
+//! `EdgionStatus`, and the `served_stale` dye outcome recorded by
+//! `discovery_jwks.rs`. The one genuinely cold signal — "discovery document
+//! loaded" — is emitted by the background prewarm task in `plugin.rs`.
 //! `JwksProviderConfig` parameterizes TTL / min refresh interval / response byte
 //! limit / timeout / component label. The discovery document shape is determined
 //! by the generic `D: DiscoveryDoc` -- the OIDC gateway plugin uses an extended
@@ -78,8 +85,9 @@ pub struct JwksProviderConfig {
     pub discovery_max_response_bytes: usize,
     pub jwks_max_response_bytes: usize,
     pub request_timeout: Duration,
-    /// Stable, low-cardinality component label for tracing (`"admin_auth"`,
-    /// `"openid_connect"`). Avoid per-instance dynamic strings.
+    /// Stable, low-cardinality component label used as the `plugin` label of
+    /// `edgion_gateway_outbound_tls_san_mismatch_total`. Avoid per-instance
+    /// dynamic strings.
     pub component_label: &'static str,
 }
 
@@ -174,12 +182,7 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             .await
             .map_err(|e| match outbound_san_mismatch_reason(&e) {
                 Some(reason) => {
-                    record_outbound_tls_san_mismatch("openid_connect");
-                    tracing::warn!(
-                        component = self.config.component_label,
-                        reason = %reason,
-                        "OIDC discovery fetch rejected by outbound TLS SAN pinning"
-                    );
+                    record_outbound_tls_san_mismatch(self.config.component_label);
                     JwksProviderError::TlsSanMismatch { reason }
                 }
                 None => JwksProviderError::Other(format!("Failed to fetch discovery document: {}", e)),
@@ -207,20 +210,13 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
         // Caller-supplied config-aware validation runs before caching.
         (self.validator)(&doc).map_err(JwksProviderError::Other)?;
 
-        tracing::info!(
-            component = self.config.component_label,
-            issuer = doc.issuer(),
-            jwks_uri = doc.jwks_uri(),
-            "OIDC discovery document loaded"
-        );
-
         *self.discovery_doc.write().await = Some(doc.clone());
         Ok(doc)
     }
 
     /// Get JWKS. Stale-while-revalidate: if the upstream fetch fails and we
-    /// have a cached set, return the cached set with a warn log. Only when
-    /// **no** cached set exists does the error propagate.
+    /// have a cached set, return the cached set flagged `served_stale`. Only
+    /// when **no** cached set exists does the error propagate.
     ///
     /// `force_refresh=true` skips the TTL fast-path (used on JWT `kid` miss);
     /// `jwks_min_refresh_interval` still gates back-to-back refreshes.
@@ -284,13 +280,8 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
                 .send()
                 .await
                 .map_err(|e| {
-                    if let Some(reason) = outbound_san_mismatch_reason(&e) {
-                        record_outbound_tls_san_mismatch("openid_connect");
-                        tracing::warn!(
-                            component = self.config.component_label,
-                            reason = %reason,
-                            "JWKS fetch rejected by outbound TLS SAN pinning"
-                        );
+                    if outbound_san_mismatch_reason(&e).is_some() {
+                        record_outbound_tls_san_mismatch(self.config.component_label);
                     }
                     format!("JWKS request failed: {}", e)
                 })?;
@@ -310,11 +301,6 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
 
         match fetch_result {
             Ok(jwks) => {
-                tracing::info!(
-                    component = self.config.component_label,
-                    num_keys = jwks.keys.len(),
-                    "JWKS refreshed successfully"
-                );
                 state.set = Some(jwks.clone());
                 state.expires_at = Some(now + ttl);
                 Ok(JwksLookup {
@@ -324,16 +310,13 @@ impl<D: DiscoveryDoc> JwksProvider<D> {
             }
             Err(err) => match state.set.clone() {
                 Some(cached) => {
-                    // Stale-while-revalidate: log and serve stale.
+                    // Stale-while-revalidate: serve stale and let the caller record the
+                    // degradation (`discovery_jwks.rs` maps `served_stale` to a fail-open
+                    // dye outcome in the access log).
                     // Bump expires_at by min_refresh_interval so subsequent calls within the
                     // backoff window hit the fast path instead of re-fetching every request
                     // during a prolonged IdP outage.
                     state.expires_at = Some(now + min_refresh);
-                    tracing::warn!(
-                        component = self.config.component_label,
-                        error = %err,
-                        "JWKS fetch failed, serving stale cache"
-                    );
                     Ok(JwksLookup {
                         set: cached,
                         served_stale: true,

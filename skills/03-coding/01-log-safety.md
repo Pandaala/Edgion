@@ -170,6 +170,10 @@ Includes `certificate_callback` / `handshake_complete_callback`.
 - `backends/mod.rs` peer selection, `backends/validation.rs` SSRF check, `backends/outlier_detection/store.rs` circuit-breaking decision, `backends/policy/` per-request policy
 - `cache/**` per-request lookup
 - SNI→cert matching in `tls/store/cert_matcher.rs` (called by `certificate_callback`)
+- `plugins/http/openid_connect/jwks_provider.rs` — `get_or_fetch_discovery` / `get_jwks` do a lazy
+  fetch on a cold cache, so both are request-path reachable. Its only cold caller is
+  `spawn_discovery_prewarm` in `openid_connect/plugin.rs`, which is where any cold-path log line for
+  this provider must live
 - `runtime/server/error_response.rs` (response generated when `fail_to_proxy` / `request_filter` reject)
 
 #### Explicitly **not** data plane (even under `gateway/`)
@@ -275,6 +279,7 @@ rg -n 'tracing::' \
   edgion-gateway/src/plugins/runtime/gateway_api_filters/ \
   edgion-gateway/src/plugins/http/*/plugin.rs \
   edgion-gateway/src/plugins/http/*/request_filter_impl.rs \
+  edgion-gateway/src/plugins/http/openid_connect/jwks_provider.rs \
   edgion-gateway/src/lb/selection/ \
   edgion-gateway/src/lb/runtime_state/ \
   edgion-gateway/src/backends/mod.rs \

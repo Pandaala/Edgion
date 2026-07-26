@@ -83,6 +83,10 @@ DP_FILES = [
     "tls/runtime/backend/cert_extractor.rs",
     "tls/boringssl/mtls_verify_callback.rs",
     "tls/store/cert_matcher.rs",
+    # Request-path reachable via the OIDC lazy discovery / JWKS fetch. Its only
+    # cold caller (the prewarm task) lives in plugin.rs, so nothing in this file
+    # may trace.
+    "plugins/http/openid_connect/jwks_provider.rs",
     "plugins/runtime/plugin_runtime.rs",
     "plugins/runtime/conditional_filter.rs",
     "plugins/runtime/reject_filter.rs",
@@ -101,8 +105,10 @@ DP_GLOBS = [
     "plugins/stream/*/plugin.rs",
 ]
 
-# Config-apply handlers are never on the request path, even inside a DP dir.
-NAME_SKIP = re.compile(r"conf_handler")
+# Never on the request path, even inside a DP dir: config-apply handlers, and
+# wholly test-only helper files (declared `#[cfg(test)] mod ...` by their parent,
+# so they carry no `mod tests` block of their own for TEST_MOD_RE to latch on).
+NAME_SKIP = re.compile(r"conf_handler|test_helpers")
 
 # A function whose name matches this is construction / config-build / once-init
 # / trait-boilerplate -- tracing there is control-plane and allowed. Everything
@@ -121,6 +127,10 @@ COLD_FN = re.compile(
 TRACING = re.compile(r"tracing::|use\s+tracing|#\[instrument|\b\w*_span!|\bevent!")
 
 FN_RE = re.compile(r"\bfn\s+([a-z_][A-Za-z0-9_]*)")
+# Trailing unit-test module, including the `<topic>_tests` naming several files use.
+# Matching this (rather than any `#[cfg(test)]`) is what keeps the latch in
+# collect_violations from firing on a test-only item mid-file.
+TEST_MOD_RE = re.compile(r"\bmod\s+\w*tests?\b")
 OPT_OUT = "tracing-allow:"
 
 
@@ -152,7 +162,12 @@ def collect_violations():
         in_test = False
         rel = os.path.relpath(path, ROOT)
         for i, line in enumerate(lines, 1):
-            if "#[cfg(test)]" in line or re.search(r"\bmod\s+tests?\b", line):
+            # `in_test` latches to EOF, so it must only trip on the trailing test
+            # MODULE -- not on a bare `#[cfg(test)]` attribute over a single item.
+            # A file with a test-only `use`/fn near the top (jwks_provider.rs) would
+            # otherwise latch at that line and silently skip every later hot-path
+            # tracing call, turning its gate coverage into decoration.
+            if TEST_MOD_RE.search(line):
                 in_test = True
             m = FN_RE.search(line)
             if m:

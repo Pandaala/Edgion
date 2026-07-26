@@ -449,6 +449,13 @@ impl OpenidConnect {
 /// exponential backoff) so a slow-starting IdP eventually populates the cache.
 /// The Weak ref drops with the plugin: once the owning OpenidConnect is gone
 /// (config resync, plugin removal), the next upgrade fails and the task exits.
+///
+/// This task is also the only place allowed to log a successful discovery load:
+/// `JwksProvider::get_or_fetch_discovery` is request-path reachable (lazy fetch
+/// on a cold cache), so the emission lives here on the provably cold caller
+/// rather than inside the provider. A discovery load that happens only via the
+/// request-path lazy fetch therefore logs nothing — the prewarm-exhausted warn
+/// below already told the operator the cache was left cold.
 #[cfg(not(test))]
 fn spawn_discovery_prewarm(
     jwks_provider: std::sync::Weak<JwksProvider<DiscoveryDocument>>,
@@ -461,10 +468,19 @@ fn spawn_discovery_prewarm(
     tokio::spawn(async move {
         // Cumulative wall time after each delay: 1, 3, 7, 15, 31, 63, 123, 183, 243, 303 s.
         const RETRY_DELAYS_SECS: [u64; 10] = [1, 2, 4, 8, 16, 32, 60, 60, 60, 60];
+        let log_loaded = |doc: &DiscoveryDocument| {
+            tracing::info!(
+                component = "openid_connect",
+                issuer = %doc.issuer,
+                jwks_uri = %doc.jwks_uri,
+                "OIDC discovery document loaded"
+            );
+        };
         let Some(provider) = jwks_provider.upgrade() else {
             return;
         };
-        if provider.get_or_fetch_discovery().await.is_ok() {
+        if let Ok(doc) = provider.get_or_fetch_discovery().await {
+            log_loaded(&doc);
             return;
         }
         // Release the strong ref before sleeping so the plugin Arc can drop
@@ -475,7 +491,8 @@ fn spawn_discovery_prewarm(
             let Some(provider) = jwks_provider.upgrade() else {
                 return;
             };
-            if provider.get_or_fetch_discovery().await.is_ok() {
+            if let Ok(doc) = provider.get_or_fetch_discovery().await {
+                log_loaded(&doc);
                 return;
             }
         }
@@ -487,8 +504,10 @@ fn spawn_discovery_prewarm(
             plugin_namespace = %plugin_namespace,
             discovery_url = %discovery_url,
             "OIDC discovery prewarm exhausted retries; cache remains cold until first request \
-             triggers lazy fetch. If outbound TLS SAN pinning is configured, check \
-             edgion_gateway_outbound_tls_san_mismatch_total and the SAN pinning warn logs above"
+             triggers lazy fetch. If outbound TLS SAN pinning is configured, check the \
+             edgion_gateway_outbound_tls_san_mismatch_total counter and the access log for \
+             OutboundTlsSanMismatch (the discovery fetch itself is request-path reachable and \
+             therefore logs nothing)"
         );
     });
 }

@@ -46,10 +46,11 @@ Verify that OpenID Connect outbound connections fail with `OutboundTlsSanMismatc
    **Which SAN site actually fires here.** With `verificationMode: IntrospectionOnly` and a cold
    cache, `verify_token_via_introspection` calls `get_or_fetch_discovery()` *before* the
    introspection POST, so the handshake fails inside `jwks_provider.rs` — that site increments the
-   counter and (as of 2026-07-26, still) emits a `tracing::warn!`. The introspection POST's own SAN
-   site (`token_exchange::note_oidc_san_mismatch`) is not reached in this fixture, and it is
+   counter and nothing else. The introspection POST's own SAN site
+   (`token_exchange::note_oidc_san_mismatch`) is not reached in this fixture, and it is likewise
    counter-only by design: it owns no `PluginLog`, and the request hot path forbids `tracing::*`
-   (log-safety Iron rule 3).
+   (log-safety Iron rule 3). Both sites were `tracing::warn!`-free as of 2026-07-26; do not expect
+   any gateway log line for this fixture beyond the access-log entry for the 502.
 
    **No `OutboundTlsSanMismatch` in the access log for this fixture.** Only two frames stamp the
    status (and write the plugin log entries `outbound tls san mismatch` + `san <reason>`):
