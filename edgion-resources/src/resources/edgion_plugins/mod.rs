@@ -41,7 +41,7 @@ pub use plugin_configs::{
     ExtUpstreamExtract, ExtUpstreamOnMissing, ExtUpstreamOnNoMatch, ExtractConfig, FaultHeaderEntry,
     FaultInjectionConfig, ForwardAuthConfig, ForwardAuthDecision, HashAlgorithm, HashCalcConfig, HeaderActions,
     HeaderCertAuthConfig, HeaderEntry, HeaderRename, HmacAlgorithm, HmacAuthConfig, HmacAuthSecretGroup,
-    HmacCredential, HttpMethod, IpRestrictionConfig, IpSource, JweContentEncryption, JweDecryptConfig,
+    HmacCredential, HttpMethod, IpRestrictionConfig, IpSource, JsonBodyRewrite, JweContentEncryption, JweDecryptConfig,
     JweKeyManagement, JwtAlgorithm, JwtAuthConfig, JwtIssuerGroup, KeyAuthConfig, KeyMetadata, LdapAuthConfig,
     LimitHeaderNames, LogExtSource, LruCacheConfig, MappingConfig, MockConfig, OnMissing, OnMissingKey, OnRedisFailure,
     OpenidConnectConfig, ProxyRewriteConfig, RateLimitAlgorithm, RateLimitConfig, RateLimitPolicy,

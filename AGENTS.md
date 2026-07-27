@@ -234,6 +234,26 @@ Resource structs in `edgion-resources/src/resources/` serve two paths: the **K8s
 
 **Limits to check by inspection (the guard does NOT):** it checks field *presence*, not types/patterns; and it covers only the three structural CRDs. The five tagged-enum CRDs (plugins, stream_plugins, acme, link_sys, edgion_config_data) model their config as `x-kubernetes-preserve-unknown-fields` and are NOT field-guarded — for them the `#[schemars(skip)]` + redact discipline above is the only safeguard. One narrow exception: the EdgionPlugins CRD's per-stage `type` discriminator enums ARE drift-guarded by `edgion-resources/tests/plugin_crd_type_coverage.rs`, which compares the committed stage enums against `schema_for!(EdgionPlugin)` (Direction-1 = a variant absent from every stage enum, i.e. un-appliable; Direction-2 = a dead/duplicate enum entry naming no real variant). Per the lenient-admission policy it does NOT enforce strict per-stage scoping — a plugin valid only at another stage is caught later by the `Accepted=False` status condition, not at admission. The `config` sub-schemas of all five remain unguarded. When adding or renaming a struct field on any resource, re-run the guard and re-check this invariant; audit `serialize`d secret/resolved fields for a missing `#[schemars(skip)]`.
 
+## HTTP body handling invariants
+
+These are architectural boundaries, not implementation suggestions:
+
+1. **Only the proxied request body may be cached.** Request plugins that require
+   the complete body share the request-scoped `BodyStorage`; it may spill from
+   memory to disk and is bounded by the gateway physical body cap. Do not add a
+   response-side `BodyStorage` or another request-body cache.
+2. **The main proxy upstream response is always streaming.** Process it only
+   through Pingora's per-chunk response-body path, preserving backpressure and
+   unbounded download/SSE behavior. Response-body plugins may inspect or
+   transform the current chunk but must not accumulate unbounded state.
+   Full-upstream-body APIs or modes (for example DSL `resp.body` or ExtProc
+   response `BUFFERED`) must be rejected during configuration validation.
+3. **A plugin-initiated outbound call is a separate bounded exchange.** Such a
+   call may aggregate its response body only behind an explicit hard byte cap
+   (normally a 1 MiB global/configured limit), enforced while streaming the
+   response. Exceeding the cap fails the call; it must never silently truncate,
+   fall back to an uncapped read, or change the main upstream response policy.
+
 ## Cross-cutting unification rules
 
 One canonical implementation per cross-cutting mechanism — violating any line below is a bug.

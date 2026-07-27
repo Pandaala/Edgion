@@ -1,6 +1,5 @@
 # Advanced Wasm scenarios (same reference guest header_demo.wasm) exercising the
-# v2 capabilities end-to-end: HTTP callout + Pause/resume, response-body
-# read-only observation, and on_tick + shared data.
+# v2 capabilities end-to-end: HTTP callout + Pause/resume and on_tick + shared data.
 #
 # Guest behavior selected by request headers (see edgion-tests/wasm/README.md):
 #   x-wasm-callout-url: <origin>  -> dispatch GET <origin>/verify forwarding
@@ -10,8 +9,7 @@
 #   x-wasm-read-body: 1           -> request header x-wasm-bodybytes = shared count.
 #   x-wasm-read-callout: 1        -> request header x-wasm-calloutticks = shared
 #                                    "calloutticks" (bumped by tick-phase callouts).
-# Response body hook (body-filter stage): adds each chunk's bytes to shared
-# "bodybytes". on_tick increments shared "ticks" every 1s and — because
+# on_tick increments shared "ticks" every 1s and — because
 # pluginConfig carries a callout origin — dispatches GET <origin>/verify with
 # "Bearer valid-token" each tick; the 200 callback bumps shared "calloutticks".
 #
@@ -43,15 +41,6 @@ spec:
           - "http://127.0.0.1:30040"
         calloutTimeoutMs: 3000
   upstreamResponseFilterPlugins:
-    - type: Wasm
-      enable: true
-      config:
-        source:
-          file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
-        pluginConfig: "http://127.0.0.1:30040"
-        failOpen: false
-        timeoutMs: 1000
-  upstreamResponseBodyFilterPlugins:
     - type: Wasm
       enable: true
       config:

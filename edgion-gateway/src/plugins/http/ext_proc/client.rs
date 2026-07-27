@@ -16,7 +16,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use edgion_common::ext_proc::proto::external_processor_client::ExternalProcessorClient;
-use edgion_common::ext_proc::proto::{ProcessingRequest, ProcessingResponse};
+use edgion_common::ext_proc::proto::{
+    common_response::ResponseStatus, processing_response, CommonResponse, ProcessingRequest, ProcessingResponse,
+};
 use edgion_common::link_sys_core::outbound_tls::{resolve_outbound_tls, EffectiveCa};
 use edgion_resources::plugin_configs::ExtProcConfig;
 use hyper_util::client::legacy::connect::HttpConnector;
@@ -25,6 +27,85 @@ use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer, ServerNam
 use rustls::{ClientConfig, RootCertStore};
 use tokio_rustls::TlsConnector;
 use tonic::transport::{Channel, Uri};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProcessingPhase {
+    RequestHeaders,
+    ResponseHeaders,
+    RequestBody,
+    ResponseBody,
+    RequestTrailers,
+    ResponseTrailers,
+}
+
+impl ProcessingPhase {
+    fn from_request(request: &ProcessingRequest) -> Result<Self, tonic::Status> {
+        use edgion_common::ext_proc::proto::processing_request::Request;
+
+        match request.request {
+            Some(Request::RequestHeaders(_)) => Ok(Self::RequestHeaders),
+            Some(Request::ResponseHeaders(_)) => Ok(Self::ResponseHeaders),
+            Some(Request::RequestBody(_)) => Ok(Self::RequestBody),
+            Some(Request::ResponseBody(_)) => Ok(Self::ResponseBody),
+            Some(Request::RequestTrailers(_)) => Ok(Self::RequestTrailers),
+            Some(Request::ResponseTrailers(_)) => Ok(Self::ResponseTrailers),
+            None => Err(tonic::Status::invalid_argument(
+                "ext_proc request has no processing phase",
+            )),
+        }
+    }
+
+    fn accepts(self, response: &ProcessingResponse) -> bool {
+        use processing_response::Response;
+
+        matches!(
+            (self, response.response.as_ref()),
+            (Self::RequestHeaders, Some(Response::RequestHeaders(_)))
+                | (Self::ResponseHeaders, Some(Response::ResponseHeaders(_)))
+                | (Self::RequestBody, Some(Response::RequestBody(_)))
+                | (Self::ResponseBody, Some(Response::ResponseBody(_)))
+                | (Self::RequestTrailers, Some(Response::RequestTrailers(_)))
+                | (Self::ResponseTrailers, Some(Response::ResponseTrailers(_)))
+        )
+    }
+}
+
+fn common_response(response: &ProcessingResponse) -> Option<&CommonResponse> {
+    use processing_response::Response;
+
+    match response.response.as_ref() {
+        Some(Response::RequestHeaders(response)) | Some(Response::ResponseHeaders(response)) => {
+            response.response.as_ref()
+        }
+        Some(Response::RequestBody(response)) | Some(Response::ResponseBody(response)) => response.response.as_ref(),
+        _ => None,
+    }
+}
+
+fn response_status(response: &ProcessingResponse) -> Result<ResponseStatus, tonic::Status> {
+    let Some(common) = common_response(response) else {
+        return Ok(ResponseStatus::Continue);
+    };
+    ResponseStatus::try_from(common.status)
+        .map_err(|_| tonic::Status::failed_precondition("ext_proc processor returned an invalid response status"))
+}
+
+async fn send_phase(
+    sender: &mut Option<tokio::sync::mpsc::Sender<ProcessingRequest>>,
+    request: ProcessingRequest,
+    last_phase: bool,
+) -> Result<(), tonic::Status> {
+    sender
+        .as_ref()
+        .ok_or_else(|| tonic::Status::internal("ext_proc request stream was already closed"))?
+        .send(request)
+        .await
+        .map_err(|_| tonic::Status::unavailable("ext_proc processor closed the request stream"))?;
+    if last_phase {
+        sender.take();
+    }
+    Ok(())
+}
 
 /// Thin wrapper around the generated ext_proc gRPC client.
 #[derive(Clone)]
@@ -104,16 +185,67 @@ impl ExtProcClient {
     /// so a processor that accepts the stream and then stalls before emitting a
     /// verdict would otherwise hang the request path forever.
     pub async fn exchange(&self, request: ProcessingRequest) -> Result<ProcessingResponse, tonic::Status> {
+        let mut responses = self.exchange_all(vec![request]).await?;
+        responses
+            .pop()
+            .ok_or_else(|| tonic::Status::unavailable("ext_proc processor returned no response"))
+    }
+
+    /// Send all phases for one transaction on one ext_proc stream.
+    pub async fn exchange_all(
+        &self,
+        requests: Vec<ProcessingRequest>,
+    ) -> Result<Vec<ProcessingResponse>, tonic::Status> {
         let mut client = self.client.clone();
+        let phases = requests
+            .iter()
+            .map(ProcessingPhase::from_request)
+            .collect::<Result<Vec<_>, _>>()?;
         let fut = async move {
-            let outbound = tokio_stream::once(request);
+            let mut pending = phases.into_iter().zip(requests).peekable();
+            let Some((first_phase, first_request)) = pending.next() else {
+                return Ok(Vec::new());
+            };
+
+            let (tx, rx) = tokio::sync::mpsc::channel(1);
+            let mut sender = Some(tx);
+            send_phase(&mut sender, first_request, pending.peek().is_none()).await?;
+            let outbound = tokio_stream::wrappers::ReceiverStream::new(rx);
             let mut inbound = client.process(outbound).await?.into_inner();
-            match inbound.message().await? {
-                Some(resp) => Ok(resp),
-                None => Err(tonic::Status::unavailable(
-                    "ext_proc processor closed the stream without a response",
-                )),
+            let mut responses = Vec::with_capacity(pending.size_hint().0 + 1);
+            let mut phase = first_phase;
+            loop {
+                match inbound.message().await? {
+                    Some(response) => {
+                        let terminal = matches!(
+                            response.response,
+                            Some(processing_response::Response::ImmediateResponse(_))
+                        );
+                        if !terminal && !phase.accepts(&response) {
+                            return Err(tonic::Status::failed_precondition(
+                                "ext_proc processor returned a verdict for the wrong phase",
+                            ));
+                        }
+                        let stop_direction =
+                            !terminal && response_status(&response)? == ResponseStatus::ContinueAndReplace;
+                        responses.push(response);
+                        if terminal || stop_direction {
+                            break;
+                        }
+                        let Some((next_phase, next_request)) = pending.next() else {
+                            break;
+                        };
+                        send_phase(&mut sender, next_request, pending.peek().is_none()).await?;
+                        phase = next_phase;
+                    }
+                    None => {
+                        return Err(tonic::Status::failed_precondition(
+                            "ext_proc processor closed the stream without all phase responses",
+                        ))
+                    }
+                }
             }
+            Ok(responses)
         };
         match tokio::time::timeout(self.timeout, fut).await {
             Ok(result) => result,
@@ -288,6 +420,9 @@ impl rustls::client::danger::ServerCertVerifier for AcceptAllVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use edgion_common::ext_proc::proto::{
+        processing_request, BodyResponse, HeadersResponse, HttpBody, HttpHeaders, ImmediateResponse,
+    };
     use edgion_resources::plugin_configs::GrpcServiceConfig;
     use edgion_resources::resources::backend_tls_policy::BackendTLSPolicyCACertificateRef;
     use edgion_resources::resources::common::outbound_tls::OutboundTlsValidation;
@@ -312,6 +447,90 @@ mod tests {
             },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn processing_phase_accepts_only_matching_response() {
+        let header_request = ProcessingRequest {
+            request: Some(processing_request::Request::RequestHeaders(HttpHeaders::default())),
+        };
+        let body_request = ProcessingRequest {
+            request: Some(processing_request::Request::RequestBody(HttpBody::default())),
+        };
+        let header_response = ProcessingResponse {
+            response: Some(processing_response::Response::RequestHeaders(HeadersResponse::default())),
+        };
+        let body_response = ProcessingResponse {
+            response: Some(processing_response::Response::RequestBody(BodyResponse::default())),
+        };
+
+        let header_phase = ProcessingPhase::from_request(&header_request).unwrap();
+        let body_phase = ProcessingPhase::from_request(&body_request).unwrap();
+        assert!(header_phase.accepts(&header_response));
+        assert!(!header_phase.accepts(&body_response));
+        assert!(body_phase.accepts(&body_response));
+        assert!(!body_phase.accepts(&header_response));
+    }
+
+    #[test]
+    fn immediate_response_is_terminal_not_a_phase_verdict() {
+        let request = ProcessingRequest {
+            request: Some(processing_request::Request::RequestHeaders(HttpHeaders::default())),
+        };
+        let immediate = ProcessingResponse {
+            response: Some(processing_response::Response::ImmediateResponse(
+                ImmediateResponse::default(),
+            )),
+        };
+
+        assert!(!ProcessingPhase::from_request(&request).unwrap().accepts(&immediate));
+        assert!(matches!(
+            immediate.response,
+            Some(processing_response::Response::ImmediateResponse(_))
+        ));
+    }
+
+    #[test]
+    fn response_status_detects_continue_and_replace_and_rejects_unknown() {
+        use edgion_common::ext_proc::proto::{HeadersResponse, ProcessingResponse};
+
+        let response_with_status = |status| ProcessingResponse {
+            response: Some(processing_response::Response::RequestHeaders(HeadersResponse {
+                response: Some(CommonResponse {
+                    status,
+                    ..Default::default()
+                }),
+            })),
+        };
+
+        assert_eq!(
+            response_status(&response_with_status(ResponseStatus::ContinueAndReplace as i32)).unwrap(),
+            ResponseStatus::ContinueAndReplace
+        );
+        assert_eq!(
+            response_status(&response_with_status(ResponseStatus::Continue as i32)).unwrap(),
+            ResponseStatus::Continue
+        );
+        assert_eq!(
+            response_status(&response_with_status(99)).unwrap_err().code(),
+            tonic::Code::FailedPrecondition
+        );
+    }
+
+    #[tokio::test]
+    async fn final_phase_half_closes_request_stream() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let mut sender = Some(tx);
+        let request = ProcessingRequest {
+            request: Some(processing_request::Request::RequestHeaders(HttpHeaders::default())),
+        };
+
+        send_phase(&mut sender, request, true).await.unwrap();
+        assert!(rx.recv().await.is_some());
+        assert!(
+            rx.recv().await.is_none(),
+            "the processor must observe EOF immediately after the final phase"
+        );
     }
 
     /// System CA + verify=true (default outbound) + tls=true must construct a

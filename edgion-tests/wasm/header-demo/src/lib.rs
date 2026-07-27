@@ -17,8 +17,12 @@
 //!   `<origin>` must be listed in the plugin's `calloutAllowlist`.
 //! - `x-wasm-read-ticks: 1` -> read the shared `ticks` counter into request
 //!   header `x-wasm-ticks` (proves on_tick liveness + shared-data read).
-//! - `x-wasm-read-body: 1`  -> read the shared `bodybytes` counter into request
-//!   header `x-wasm-bodybytes` (proves the response-body hook fired).
+//! - `x-wasm-read-body: 1` -> read the shared response `bodybytes` counter into
+//!   request header `x-wasm-bodybytes`.
+//! - `x-wasm-read-request-body: 1` -> read the shared `requestbodybytes`
+//!   counter, callback count, and terminal count into request headers
+//!   `x-wasm-requestbodybytes`, `x-wasm-requestbodycalls`, and
+//!   `x-wasm-requestbodyeos`.
 //! - `x-wasm-read-callout: 1` -> read the shared `calloutticks` counter into
 //!   request header `x-wasm-calloutticks` (proves the tick-phase callout loop:
 //!   on_tick dispatch -> root-context callback -> shared-data write).
@@ -184,6 +188,16 @@ impl HttpContext for HeaderDemo {
             let n = read_shared_counter(self, "bodybytes");
             self.set_http_request_header("x-wasm-bodybytes", Some(&n.to_string()));
         }
+        if self.get_http_request_header("x-wasm-read-request-body").as_deref() == Some("1") {
+            for (counter, header) in [
+                ("requestbodybytes", "x-wasm-requestbodybytes"),
+                ("requestbodycalls", "x-wasm-requestbodycalls"),
+                ("requestbodyeos", "x-wasm-requestbodyeos"),
+            ] {
+                let n = read_shared_counter(self, counter);
+                self.set_http_request_header(header, Some(&n.to_string()));
+            }
+        }
         if self.get_http_request_header("x-wasm-read-callout").as_deref() == Some("1") {
             let n = read_shared_counter(self, "calloutticks");
             self.set_http_request_header("x-wasm-calloutticks", Some(&n.to_string()));
@@ -224,6 +238,17 @@ impl HttpContext for HeaderDemo {
         // Read-only observation: count the chunk's bytes into shared state.
         if body_size > 0 {
             bump_shared_counter(self, "bodybytes", body_size as u64);
+        }
+        Action::Continue
+    }
+
+    fn on_http_request_body(&mut self, body_size: usize, end_of_stream: bool) -> Action {
+        if body_size > 0 {
+            bump_shared_counter(self, "requestbodybytes", body_size as u64);
+            bump_shared_counter(self, "requestbodycalls", 1);
+            if end_of_stream {
+                bump_shared_counter(self, "requestbodyeos", 1);
+            }
         }
         Action::Continue
     }

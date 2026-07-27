@@ -63,7 +63,7 @@ use pingora_http::ResponseHeader;
 use std::sync::Arc;
 
 use crate::plugins::http::common::auth_common::apply_auth_failure_delay;
-use crate::plugins::http::common::outbound::call::outbound_call;
+use crate::plugins::http::common::outbound::call::outbound_call_with_body;
 use crate::plugins::http::common::outbound::client::ManagedOutboundClient;
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter};
@@ -89,6 +89,7 @@ pub struct ForwardAuth {
     status_on_error: u16,
     /// Decision phase: header propagation, error status, and timing.
     decision: ForwardAuthDecision,
+    forward_body: bool,
 }
 
 impl ForwardAuth {
@@ -114,6 +115,7 @@ impl ForwardAuth {
             client: Arc::new(client),
             status_on_error: config.conn.status_on_error,
             decision: config.decision.clone(),
+            forward_body: config.forward_body,
         })
     }
 
@@ -187,12 +189,29 @@ impl RequestFilter for ForwardAuth {
         //   health gate → rate gate → compile+build request → retry loop →
         //   passive-health tracking → response-size cap →
         //   Ok(OutboundResponse) for any completed HTTP exchange.
-        let resp = match outbound_call(
+        let body = if self.forward_body {
+            match session.read_request_body(None).await {
+                Ok(body) => Some(body),
+                Err(_) => {
+                    session.add_error(edgion_resources::EdgionStatus::BodyReadAborted);
+                    plugin_log.push_err("forward auth body unavailable");
+                    return PluginRunningResult::ErrResponse {
+                        status: 500,
+                        body: None,
+                    };
+                }
+            }
+        } else {
+            None
+        };
+
+        let resp = match outbound_call_with_body(
             &self.client,
             session,
             None,
             FORWARD_AUTH_GLOBAL_MAX_BYTES,
             extra_headers,
+            body,
         )
         .await
         {
@@ -320,6 +339,7 @@ mod tests {
             client: Arc::new(client),
             status_on_error: 503,
             decision,
+            forward_body: false,
         }
     }
 
@@ -333,6 +353,7 @@ mod tests {
             client: Arc::new(client),
             status_on_error: 503,
             decision,
+            forward_body: false,
         }
     }
 
@@ -518,6 +539,7 @@ mod tests {
                 client: Arc::new(client),
                 status_on_error: 503,
                 decision: ForwardAuthDecision::default(),
+                forward_body: false,
             }
         };
 

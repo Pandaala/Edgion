@@ -1,0 +1,18 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-req-body-read
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Dsl
+      config:
+        name: "req-body-read"
+        source: |
+          let digest = sha256(req.body)
+          if digest != "d509bff642a353f88582e8a846ecae041c333b79c57a7a24ff310fbdb7e914e9" {
+            return deny(422, "body digest mismatch")
+          }
+        maxStringLen: 262144
+        errorPolicy: deny

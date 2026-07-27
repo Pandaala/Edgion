@@ -17,13 +17,9 @@ pub type PluginSessionResult<T> = Result<T, PluginSessionError>;
 
 /// Why a body could not be read.
 ///
-/// Pingora streams bodies chunk-by-chunk and does not buffer the full body, so
-/// the buffering runtime (P0 `01-body-processing-runtime.md`) is not yet built;
-/// [`PluginSession::read_request_body`] / `read_response_body` therefore default
-/// to [`BodyReadError::Unimplemented`]. The body gate maps every variant
-/// except [`BodyReadError::NotBuffered`] to the plugin's configured
-/// fail-open / fail-close policy; `NotBuffered` bypasses that policy and is
-/// always fail-close (see its own doc below).
+/// The body gate applies plugin failure policy only to recoverable read
+/// failures. Admission refusals and the gateway-wide physical buffer limit are
+/// always fail-close because the original body is unavailable for forwarding.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BodyReadError {
     /// Full-body buffering is not implemented on this binary (current default).
@@ -33,9 +29,14 @@ pub enum BodyReadError {
     /// the request had no body, and it is never softened by
     /// `BodyRequirement::on_read_failure`.
     NotBuffered,
-    /// The body exceeded the configured buffer cap and was not retained.
-    /// The body gate maps this to HTTP 413 (client error), unlike other
-    /// fail-close reasons which map to 500.
+    /// The body exceeded the gateway-wide physical buffer limit. During
+    /// capture, the partial body is discarded and the error always maps to
+    /// HTTP 413. During an atomic mutation, the previous complete version
+    /// remains available and the mutating plugin's failure policy applies.
+    BufferLimitExceeded { limit: u64 },
+    /// The complete body was buffered, but exceeds a plugin's own logical
+    /// inspection limit. Because the forwarding copy still exists, the
+    /// plugin's configured fail-open / fail-close policy can apply.
     TooLarge { limit: u64 },
     /// The body stream ended prematurely / was aborted.
     Incomplete,
@@ -50,6 +51,9 @@ impl std::fmt::Display for BodyReadError {
         match self {
             BodyReadError::Unimplemented => write!(f, "body buffering not implemented"),
             BodyReadError::NotBuffered => write!(f, "body not buffered"),
+            BodyReadError::BufferLimitExceeded { limit } => {
+                write!(f, "body exceeds gateway buffer limit of {limit} bytes")
+            }
             BodyReadError::TooLarge { limit } => write!(f, "body exceeds buffer cap of {limit} bytes"),
             BodyReadError::Incomplete => write!(f, "body stream incomplete"),
             BodyReadError::Timeout => write!(f, "body read timed out"),
@@ -350,11 +354,10 @@ pub trait PluginSession: Send + Sync {
     // returning it by value is a refcount bump, not a copy — no borrow of the
     // session is held, which keeps the method mockable and easy to compose.
     //
-    // Both default to `Err(BodyReadError::Unimplemented)`: Pingora does not buffer
-    // bodies yet. The real `PingoraSessionAdapter` overrides already decide
-    // `Unimplemented` vs. a stage/protocol `NotBuffered` refusal (the
-    // admission predicates); only the actual byte-buffering is still
-    // pending, landing with the P0 buffering runtime.
+    // Defaults remain `Err(BodyReadError::Unimplemented)` for mocks and
+    // capability-disabled binaries. `PingoraSessionAdapter` overrides the
+    // request methods when the body-buffering feature is enabled; response
+    // buffering still requires a separate Pingora seam.
 
     /// Read the full request body, buffering it on first call so it is available
     /// during the request phase, before the request is proxied upstream.
@@ -368,6 +371,30 @@ pub trait PluginSession: Send + Sync {
     /// `max_bytes` caps the buffer on the first (buffering) call.
     async fn read_response_body(&mut self, _max_bytes: Option<u64>) -> BodyReadResult {
         Err(BodyReadError::Unimplemented)
+    }
+
+    /// Replace a byte range in the buffered request body. Unchanged regions
+    /// retain their `Bytes` backing allocation.
+    async fn replace_request_body_slice(
+        &mut self,
+        _range: std::ops::Range<usize>,
+        _replacement: Bytes,
+    ) -> BodyReadResult {
+        Err(BodyReadError::Unimplemented)
+    }
+
+    /// Replace the complete buffered request body used for every upstream
+    /// attempt.
+    async fn overwrite_request_body(&mut self, _body: Bytes) -> Result<(), BodyReadError> {
+        Err(BodyReadError::Unimplemented)
+    }
+
+    /// Compute SHA-256 without requiring a contiguous materialization of a
+    /// disk-backed buffered request body.
+    async fn request_body_sha256(&mut self) -> Result<[u8; 32], BodyReadError> {
+        use sha2::Digest;
+        let body = self.read_request_body(None).await?;
+        Ok(sha2::Sha256::digest(body).into())
     }
 
     // ========== Entry-level dye suite (traffic tagging) ==========

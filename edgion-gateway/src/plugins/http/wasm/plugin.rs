@@ -240,10 +240,9 @@ impl WasmPlugin {
 
     /// Buffer-mode request-body drive. Runs only when the guest exports
     /// `proxy_on_request_body` and the body gate has buffered the body (the
-    /// `read_request_body` await returns `Ok`). A stubbed facade (no real
-    /// buffering runtime yet) returns `Err(Unimplemented)`, which now routes
-    /// through `fail_mode` like any other body-read failure -- it is no
-    /// longer a silent skip. A `NotBuffered` refusal is distinct: it fails
+    /// `read_request_body` await returns `Ok`). A binary without the body
+    /// capability returns `Err(Unimplemented)`, which routes through
+    /// `fail_mode` like any other body-read failure. A `NotBuffered` refusal is distinct: it fails
     /// closed unconditionally regardless of `failOpen`, since the guest's
     /// body hook would otherwise inspect nothing (see the read match below).
     /// A fresh lease is re-acquired from `entry` (the same
@@ -274,6 +273,14 @@ impl WasmPlugin {
                     body: Some("body unavailable".to_string()),
                 };
             }
+            Err(BodyReadError::BufferLimitExceeded { .. }) => {
+                session.add_error(EdgionStatus::BodyReadTooLarge);
+                log.push_err("wasm body-buffer-limit");
+                return PluginRunningResult::ErrResponse {
+                    status: 413,
+                    body: None,
+                };
+            }
             // Genuine read failures keep the configured policy, but must still
             // be alertable: `fail_mode` only writes a `PluginLog` line (nested
             // per-plugin array), while the access log's structured `errors`
@@ -283,6 +290,7 @@ impl WasmPlugin {
             Err(err) => {
                 session.add_error(match err {
                     BodyReadError::TooLarge { .. } => EdgionStatus::BodyReadTooLarge,
+                    BodyReadError::BufferLimitExceeded { .. } => EdgionStatus::BodyReadTooLarge,
                     BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
                     BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
                     BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
@@ -406,15 +414,12 @@ impl UpstreamResponseBodyFilter for WasmPlugin {
     ///   `NotBuffered` refusal (the gate was never installed / the request is
     ///   past the request-body stage) is always fail-close, unconditionally —
     ///   `failOpen` governs wasm *runtime* failures, not admission. A genuine
-    ///   read failure — including `Unimplemented`, which is what every read
-    ///   returns today because the real `PingoraSessionAdapter` has no
-    ///   accumulation backing yet (`RequestAdmission::Buffer` errs before
-    ///   buffering anything) — goes through `fail_mode`, so it honors
+    ///   read failure — including `Unimplemented` from a binary built without
+    ///   the request-buffering capability — goes through `fail_mode`, so it honors
     ///   `failOpen`, whose default is fail-close (`fail_open` defaults to
     ///   `false`). Either way the failure is recorded via `ctx.add_error` so it
-    ///   is alertable in the access log, not just logged to `PluginLog`. Once
-    ///   the buffering runtime lands, an ungated read must still fail rather
-    ///   than auto-buffer — see the facade contract in
+    ///   is alertable in the access log, not just logged to `PluginLog`. An
+    ///   ungated read must still fail rather than auto-buffer — see the facade contract in
     ///   `docs/superpowers/specs/2026-07-22-wasm-body-wiring-design.md`.
     /// - **Response streaming observation** (this method, unchanged). `body_size`
     ///   is the CURRENT chunk's length and `get_buffer_bytes(HttpResponseBody)`

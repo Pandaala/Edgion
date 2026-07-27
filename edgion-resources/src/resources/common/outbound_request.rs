@@ -74,6 +74,19 @@ impl OutboundRequestSpec {
         if self.args.forward_all || self.cookies.forward_all {
             return Some("forwardAll is only supported on headers; remove it from args/cookies".to_string());
         }
+        let explicit_framing_header = self
+            .headers
+            .origin
+            .iter()
+            .map(|field| field.name.as_str())
+            .chain(self.headers.custom.iter().map(|field| field.name.as_str()))
+            .find(|name| name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("transfer-encoding"));
+        if let Some(name) = explicit_framing_header {
+            return Some(format!(
+                "request.headers must not configure proxy-managed framing header {name}; \
+                 the outbound client derives framing from the body actually sent"
+            ));
+        }
         if let Some(err) = self.body_validation_error() {
             return Some(err);
         }
@@ -523,6 +536,42 @@ body:
             spec.validation_error().is_none(),
             "raw + explicit CT is the supported combo"
         );
+    }
+
+    #[test]
+    fn explicit_content_length_header_is_rejected() {
+        let spec = OutboundRequestSpec {
+            headers: ListFields {
+                custom: vec![CustomField {
+                    name: "Content-Length".to_string(),
+                    source: CustomSource::Value("9".to_string()),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let err = spec.validation_error().expect("Content-Length must be proxy-managed");
+        assert!(err.contains("Content-Length"), "got: {err}");
+    }
+
+    #[test]
+    fn explicit_transfer_encoding_origin_is_rejected() {
+        let spec = OutboundRequestSpec {
+            headers: ListFields {
+                origin: vec![OriginField {
+                    name: "transfer-encoding".to_string(),
+                    presence: PresencePolicy::SkipIfMissing,
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let err = spec
+            .validation_error()
+            .expect("Transfer-Encoding must be proxy-managed");
+        assert!(err.contains("transfer-encoding"), "got: {err}");
     }
 
     #[test]

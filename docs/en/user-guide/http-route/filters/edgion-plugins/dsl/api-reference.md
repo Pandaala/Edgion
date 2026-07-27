@@ -689,22 +689,15 @@ if ct != nil and regex_find(ct, "text/html") != nil {
 
 ### resp.body
 
-**Signature**: `resp.body` → `Str`
-
-Returns the buffered proxied upstream response body, decoded with `String::from_utf8_lossy` (invalid UTF-8 → U+FFFD, never truncated). Only valid in the response phase (`upstreamResponseFilterPlugins`) — DSL cannot be placed in the async `upstreamResponsePlugins` array (that array accepts only `ext_proc`).
-
-**Return value**: The full decoded response body as a string.
-
-**Constraints**: Same as `req.body` for the length cap — subject to `maxStringLen` (default 8192 bytes, ceiling 1,048,576 bytes) on the decoded length (align with `body.maxBodySize` for larger bodies; beyond 1 MiB use `ext_proc`/`wasm`); the script is only gated to buffer the response body when it references `resp.body`. **Unlike `req.body`, a `resp.body` read failure is NOT fail-close today**: `upstreamResponseFilterPlugins` (the only array DSL can occupy in the response phase) is not wrapped by the body gate that `requestPlugins` and the async `upstreamResponsePlugins` array get, so a refusal or read error surfaces as an ordinary script runtime error subject to `errorPolicy` like any other — and with the default `Ignore`, the plugin is silently skipped rather than the request being denied. A script that relies on `resp.body` for enforcement must set `errorPolicy: Deny` (or `DenyWith`) to fail closed; leaving the default `Ignore` means a body-read failure lets the response through unmodified.
-
-**Note**: Until the body-buffering runtime lands, `resp.body` always surfaces a body-read error. Because the sync response-filter array is ungated, this is handled like any other script error: under the default `errorPolicy: Ignore` the script is silently skipped, not rejected. See the tracked gap in `tasks/todo/response-body-gate-sync-stage.md`.
+`resp.body` is not supported. Configuration validation rejects scripts that
+reference it because proxied upstream response bodies remain streaming-only.
+Use response-header DSL operations or a per-chunk response-body plugin such as
+Wasm when streaming observation is sufficient.
 
 **Example**:
 ```
+-- Rejected during EdgionPlugins validation:
 let b = resp.body
-if regex_find(b, "internal_error") != nil {
-  resp.set_status(502)
-}
 ```
 
 ---

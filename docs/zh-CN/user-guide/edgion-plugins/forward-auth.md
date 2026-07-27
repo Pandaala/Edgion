@@ -93,6 +93,7 @@ spec:
 |------|------|--------|------|
 | `target` | object | 必填 | Kubernetes Service 后端：`{name, namespace, port}`。端口必填；namespace 默认为插件所在命名空间。 |
 | `timeoutMs` | integer | `5000` | 请求超时（毫秒）。 |
+| `forwardBody` | boolean | `false` | 将缓冲后的入站请求 body 原样转发给鉴权服务。启用时，网关移除 `Transfer-Encoding`，并将出站 `Content-Length` 设置为缓冲 body 的实际字节数。 |
 | `timeoutMsTemplate` | string | `null` | 渲染单次请求超时的模板，如 `"${ctx:desired_timeout_ms}"`。**只接受 `${ctx:...}`、`${clientIp}` 以及匹配路由变量**——客户端可控的来源（`header`/`query`/`cookie`/`path`/`method`/`uri`）会在准入时被拒绝，因为它会让攻击者把鉴权服务的超时压得足够低，从而强制每次调用都超时。渲染结果非数字、为空或低于下限（< 50 毫秒）时回退到 `timeoutMs`；无论如何，渲染值都会被限幅到 60000 毫秒。在准入时编译并校验。 |
 | `success` | object | `null` | 成功判定条件：`statusCodes`（数组，省略或非空时任意 2xx；显式的空列表会在准入时被拒绝）加上可选的 `body` 断言（`pointer` + **恰好一个** `equals`/`notEquals`/`exists`/`in`，在准入时强制校验），按与运算组合。**取代已移除的 `successStatusCodes`**——参见上方破坏性变更说明，以及 [运维指南 → 连接器 → Success](../../ops-guide/infrastructure/connectors.md#成功判定-success) 中的完整 schema、严格类型规则、指针缺失语义，以及 `body` 设置时 `maxResponseBytes >= 4096` 的要求。 |
 | `statusOnError` | integer | `503` | 鉴权服务不可达时（连接失败、超时、服务宕机）返回的状态码，范围 200–599。总是失败关闭，不存在 fail-open 模式。 |
@@ -107,9 +108,9 @@ spec:
 |------|------|--------|------|
 | `request.path` | object | `null` | 覆盖鉴权请求路径。`{ template: "/verify" }`。省略则复用入站路径。 |
 | `request.method` | object | `null` | 覆盖 HTTP 方法。`{ template: "GET" }`。省略则复用入站方法。 |
-| `request.headers.forwardAll` | boolean | **`true`** | 转发原始请求中所有非 hop-by-hop 请求头。这是 forward_auth 的默认值。 |
-| `request.headers.origin` | array | `[]` | 从原始请求选择性转发的请求头列表。每项：`{ name, presence }`。presence 策略：`skipIfMissing`（默认）、`required`、`warnIfMissing`。 |
-| `request.headers.custom` | array | `[]` | 从配置或 Secret 注入的自定义请求头。字面量：`{ name, value: "..." }`；模板：`{ name, template: "..." }`（可包含 `${secretRef:ns/name:key}`）。 |
+| `request.headers.forwardAll` | boolean | **`true`** | 转发原始请求中所有非 hop-by-hop、非消息分帧请求头。这是 forward_auth 的默认值。 |
+| `request.headers.origin` | array | `[]` | 从原始请求选择性转发的请求头列表。每项：`{ name, presence }`。presence 策略：`skipIfMissing`（默认）、`required`、`warnIfMissing`。`Content-Length` 和 `Transfer-Encoding` 由代理管理，配置时会被拒绝。 |
+| `request.headers.custom` | array | `[]` | 从配置或 Secret 注入的自定义请求头。字面量：`{ name, value: "..." }`；模板：`{ name, template: "..." }`（可包含 `${secretRef:ns/name:key}`）。`Content-Length` 和 `Transfer-Encoding` 由代理管理，配置时会被拒绝。 |
 
 #### `decision` — 鉴权后行为
 
@@ -124,7 +125,7 @@ spec:
 
 ### `request.headers.forwardAll` 默认语义
 
-`ForwardAuthConfig` 默认将 `request.headers.forwardAll` 设为 `true`——鉴权服务将收到原始请求中**所有**非 hop-by-hop 请求头（包括 `Authorization`、`Cookie`、自定义头等）。这保留了经典的"透明透传"行为，并与 Traefik / Envoy 的默认策略一致。
+`ForwardAuthConfig` 默认将 `request.headers.forwardAll` 设为 `true`——鉴权服务将收到原始请求中**所有**非 hop-by-hop、非消息分帧请求头（包括 `Authorization`、`Cookie`、自定义头等）。这保留了经典的"透明透传"行为，并与 Traefik / Envoy 的默认策略一致。
 
 如需选择性转发，请将 `forwardAll` 显式设为 `false`，并在 `request.headers.origin` 中列举所需请求头。
 
@@ -145,6 +146,8 @@ spec:
 
 `connection`, `keep-alive`, `proxy-authenticate`, `proxy-authorization`,
 `te`, `trailers`, `transfer-encoding`, `upgrade`
+
+`Content-Length` 和 `Transfer-Encoding` 只描述当前这一跳的 HTTP 消息，因此不会从客户端请求继承，也不能在 `origin`/`custom` 中配置。网关根据鉴权请求的实际 body 生成分帧信息：无 body 时不声明这两个请求头；配置或转发的缓冲 body 则使用其实际字节数作为 `Content-Length`。
 
 ### Secret 注入
 
@@ -308,7 +311,7 @@ spec:
 | SSRF 防护 | backendRef + IP 校验 | 否 | 否 | 否 |
 | Cookie 转发 | 通过 `forwardAll` 或 `origin` | 是 | 是 | 是 |
 | TLS 支持 | 是（`tls` 块） | 是 | 是 | 是 |
-| 转发 Body | 否 | `forwardBody` | 否 | 否 |
+| 转发 Body | `forwardBody` | `forwardBody` | 否 | 否 |
 
 ## 鉴权服务开发指南
 
@@ -318,6 +321,7 @@ spec:
 - 方法：`request.method.template`（默认：复用入站方法）
 - 路径：`request.path.template`
 - Header：原始请求头（或选择性子集）+ `X-Forwarded-*` 元数据 + `request.headers.custom`
+- Body：默认不发送；`forwardBody: true` 时发送完整的缓冲入站 body
 
 **鉴权服务返回给网关的响应：**
 - **成功**（满足 `success` 判定条件——状态码在 `success.statusCodes`，默认任意 2xx，与 `success.body` 断言按与运算组合）：鉴权通过
@@ -357,7 +361,7 @@ func authHandler(w http.ResponseWriter, r *http.Request) {
 1. **backendRef 目标**：`target` 字段是 Kubernetes Service 引用（`name`/`namespace`/`port`），不是 URI。网关通过 EndpointSlice 在调用时动态解析 Pod endpoints。
 2. **SSRF 防护**：每个解析出的 Pod IP 在拨号前经 `validate_endpoint_backend_addr` 校验，回环地址和链路本地地址会被拒绝。
 3. **不跟随重定向**：HTTP Client 不自动跟随重定向。鉴权服务返回 301/302 会被视为鉴权失败。
-4. **Body 不转发**：当前版本不向鉴权服务转发原始请求 Body。大多数鉴权场景不需要。
+4. **可选 Body 转发**：默认不向鉴权服务发送原始请求 body。仅在鉴权决策确实需要时设置 `forwardBody: true`；这会启用请求缓冲，并受网关统一的 body 大小上限约束。
 5. **热重载**：更新 `EdgionPlugins` 资源后自动热重载，无需重启网关。
 6. **forwardAll 默认值**：`request.headers.forwardAll` 对 forward_auth 默认为 `true`（与 webhook 插件默认 `false` 不同）。
 

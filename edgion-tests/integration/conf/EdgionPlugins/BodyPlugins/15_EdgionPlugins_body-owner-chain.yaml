@@ -1,0 +1,48 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: body-owner-chain
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: HmacAuth
+      config:
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: hmac-body-credentials
+                namespace: edgion-default
+        algorithms: [hmac-sha256]
+        clockSkew: 300
+        enforceHeaders: ["@request-target", host, date, digest]
+        validateRequestBody: true
+    - enable: true
+      type: ExtProc
+      config:
+        grpcService:
+          target: "127.0.0.1:30041"
+          timeoutMs: 2000
+        processingMode:
+          requestHeaderMode: SEND
+          requestBodyMode: BUFFERED
+        failureModeAllow: false
+    - enable: true
+      type: ForwardAuth
+      config:
+        target:
+          name: auth-body
+          namespace: edgion-default
+          port: 30040
+        request:
+          path:
+            template: /verify
+          method:
+            template: POST
+          headers:
+            forwardAll: true
+            custom:
+              - name: Authorization
+                value: Bearer valid-token
+        forwardBody: true
+        decision: {}

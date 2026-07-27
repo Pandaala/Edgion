@@ -38,11 +38,11 @@ spec:
 | `BasicAuth` | HTTP Basic authentication | ✅ username/password |
 | `JwtAuth` | JWT token verification (RSA/EC/HMAC/EdDSA) | ✅ public/secret keys |
 | `JweDecrypt` | JWE encrypted token decryption | ✅ encryption key |
-| `HmacAuth` | HMAC signature verification | ✅ access_key + secret_key |
+| `HmacAuth` | HMAC signature verification; `validateRequestBody` verifies the buffered request `Digest` | ✅ access_key + secret_key |
 | `KeyAuth` | API key authentication | ✅ API keys |
 | `HeaderCertAuth` | Request-header / connection certificate authentication | — |
 | `LdapAuth` | LDAP authentication | — |
-| `ForwardAuth` | Forward to an external authentication service | — |
+| `ForwardAuth` | Forward to an external authentication service; `forwardBody` includes the buffered original request body | — |
 | `OpenidConnect` | OpenID Connect / OAuth2 | ✅ client_secret + session_secret |
 
 ### Security
@@ -74,12 +74,12 @@ spec:
 | `RequestRedirect` | HTTP redirect (Gateway API standard) |
 | `UrlRewrite` | URL rewrite (Gateway API standard) |
 | `RequestMirror` | Request mirroring (Gateway API standard) |
-| `ProxyRewrite` | Proxy rewrite (advanced path/header rewriting) |
+| `ProxyRewrite` | Proxy rewrite (advanced path/header rewriting and JSON request-body transforms) |
 | `ResponseRewrite` | Response rewrite (status code/headers/body) |
 | `RealIp` | Real IP extraction |
 | `CtxSet` | Set context variables |
-| `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation + immediate-response short-circuit. MVP is header-only (no body); peer of `ForwardAuth`. Runs in the `RequestFilter` and async `UpstreamResponse` stages. |
-| `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No request-body hooks, no body rewrite, no gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a content-addressed disk cache). Runs in the `RequestFilter`, sync `UpstreamResponseFilter`, and `UpstreamResponseBodyFilter` stages. See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
+| `ExtProc` | External processing over a gRPC bidirectional stream (Envoy `ext_proc` compatible): request/response header mutation, `BUFFERED` request-body processing/mutation, and immediate-response short-circuit. Response-body buffering is not supported yet. |
+| `Wasm` | Executes a proxy-wasm ABI v0.2 guest module (WebAssembly, run via wasmtime) in-process: header mutation, local responses, HTTP callouts (`calloutAllowlist`-gated; request phase with Pause/resume, and from `on_tick` with root-context callbacks when the module's plugins agree on one allowlist), buffered `proxy_on_request_body` when the request entry declares `body:`, read-only response-body observation, shared data (per-module KV with CAS), and `on_tick` timers. No body rewrite or gRPC callouts. Source forms: `file` / `inline` / `url` / `oci` (gateway-side pull from an OCI registry, with a content-addressed disk cache). See `docs/en/user-guide/http-route/filters/edgion-plugins/wasm.md`. |
 | `TraceContext` | W3C trace-context propagation and normalization |
 
 ### Routing/Backend

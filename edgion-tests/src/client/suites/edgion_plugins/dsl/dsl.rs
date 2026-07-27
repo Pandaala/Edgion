@@ -2341,83 +2341,6 @@ impl DslTestSuite {
             },
         )
     }
-
-    // ==================== Scenario 30: req.body — pre-P0 fail-close ====================
-    // DSL source: `let b = req.body` under errorPolicy: deny.
-    //
-    // `req.body` triggers the intrinsic body-read gate (BodyStage::Request, see
-    // edgion-resources' `EdgionPlugin::body_requirement`). The P0 body-buffering
-    // runtime (`read_request_body` returning the real proxied bytes) is not
-    // implemented yet, so the read always fails with `BodyReadError::Unimplemented`.
-    //
-    // Because the DSL script is body-gated, the failure is handled by the body
-    // GATE (`BodyGatedRequestFilter`), NOT the DSL runtime's `apply_error_policy`:
-    // the intrinsic requirement is UNCONDITIONALLY fail-close (see
-    // `EdgionPlugin::body_requirement`'s `Dsl` arm — this does not come from
-    // `errorPolicy`, which only governs script runtime errors, not body
-    // availability), so the gate short-circuits with
-    // `PluginRunningResult::ErrResponse { status: 500, body: None }` BEFORE
-    // the inner DSL filter ever runs. The request-stage
-    // terminator renders `body: None` as an EMPTY body — so the client sees a 500
-    // with an empty body, not the DSL runtime's "DSL execution error" string
-    // (that string only appears for a NON-body-gated failure such as Scenario 28's
-    // `time_format`, whose DSL runtime actually executes).
-    //
-    // The positive-path assertion (the real request body content flowing through
-    // `req.body`) arrives together with the P0 buffering runtime
-    // (tasks/todo/llm-ai-gateway/01-body-processing-runtime.md); asserting it here
-    // would require faking that runtime, which this scenario deliberately does
-    // not do. The complementary "a header-only script is never gated" claim is
-    // already exercised by every other scenario in this suite (e.g. Scenario 1's
-    // `test_header_check_deny`, which never references a body builtin and runs
-    // unaffected) — adding a redundant copy here would not assert anything new.
-
-    /// Test: a request WITH a body, against a script that reads `req.body` under
-    /// `errorPolicy: deny` → 500 fail-close (pre-P0 current-state behavior).
-    fn test_req_body_read_fails_closed() -> TestCase {
-        TestCase::new(
-            "dsl_req_body_read_fails_closed",
-            "DSL: req.body under deny policy fails closed pre-P0 (500)",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let url = format!("http://{}:31180/test/dsl-req-body-read/api", ctx.target_host);
-                    let response = ctx
-                        .http_client
-                        .post(url)
-                        .header("host", "dsl-req-body-read.example.com")
-                        .header("content-type", "application/json")
-                        .body(r#"{"hello":"world"}"#)
-                        .send()
-                        .await;
-                    match response {
-                        Ok(resp) => {
-                            let status = resp.status().as_u16();
-                            let body = resp.text().await.unwrap_or_default();
-                            // The body gate short-circuits with ErrResponse{body:None}
-                            // before the DSL runtime runs, so the 500 carries an EMPTY
-                            // body (not the DSL runtime's "DSL execution error" string).
-                            if status == 500 && body.is_empty() {
-                                TestResult::passed_with_message(
-                                    start.elapsed(),
-                                    "500 with empty body (pre-P0 body-gate fail-close, before DSL runtime)".to_string(),
-                                )
-                            } else {
-                                TestResult::failed(
-                                    start.elapsed(),
-                                    format!(
-                                        "Expected 500 with empty body (body-gate fail-close), got status={} body={}",
-                                        status, body
-                                    ),
-                                )
-                            }
-                        }
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
-                    }
-                })
-            },
-        )
-    }
 }
 
 impl TestSuite for DslTestSuite {
@@ -2495,8 +2418,6 @@ impl TestSuite for DslTestSuite {
             // Scenario 28: time_format ApiError path — deny vs ignore error policy
             Self::test_time_format_deny_returns_500(),
             Self::test_time_format_ignore_passes_through(),
-            // Scenario 30: req.body — pre-P0 fail-close (positive path arrives with P0)
-            Self::test_req_body_read_fails_closed(),
         ]
     }
 }

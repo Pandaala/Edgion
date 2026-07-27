@@ -18,6 +18,7 @@ use crate::backends::policy::backend_traffic::authority::render_authority;
 use crate::backends::policy::backend_traffic::store::get_backend_traffic_policy_store;
 
 use super::client::{HealthState, ManagedOutboundClient};
+use super::request::sync_outbound_body_framing;
 use crate::plugins::runtime::PluginSession;
 
 // ============================================================
@@ -111,6 +112,17 @@ pub async fn outbound_call(
     global_max_bytes: usize,
     extra_headers: &[(&str, &str)],
 ) -> Result<OutboundResponse, OutboundCallError> {
+    outbound_call_with_body(client, session, path_override, global_max_bytes, extra_headers, None).await
+}
+
+pub async fn outbound_call_with_body(
+    client: &ManagedOutboundClient,
+    session: &dyn PluginSession,
+    path_override: Option<&str>,
+    global_max_bytes: usize,
+    extra_headers: &[(&str, &str)],
+    body_override: Option<bytes::Bytes>,
+) -> Result<OutboundResponse, OutboundCallError> {
     // ── 1. Health gate ────────────────────────────────────────────────────────
     if !client.health.healthy.load(Ordering::Relaxed) && !should_halfopen_probe(client) {
         return Err(OutboundCallError::Unhealthy);
@@ -180,6 +192,10 @@ pub async fn outbound_call(
                         crate::observe::metrics::record_injected_header_skipped();
                     }
                 }
+                if let Some(body) = body_override {
+                    *req.body_mut() = Some(body.into());
+                }
+                sync_outbound_body_framing(&mut req).map_err(OutboundCallError::Connect)?;
                 req
             }
             // Build failure (missing required origin field, invalid URL/method) is a

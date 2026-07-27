@@ -8,6 +8,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use edgion_dsl::bytecode::BuiltinId;
+
 use crate::resources::edgion_plugins::plugin_configs::LinkSysRef;
 use crate::resources::edgion_plugins::PluginValidation;
 
@@ -157,6 +159,11 @@ impl DslConfig {
             ..Default::default()
         };
         let script = edgion_dsl::resolve_script(self.source.as_deref(), self.bytecode.as_deref(), &val_limits)?;
+        if script.references_builtin(BuiltinId::RespBody) {
+            return Err(
+                "resp.body is not supported because proxied upstream response bodies remain streaming-only".to_string(),
+            );
+        }
         self.validate()?;
         let valid_names: std::collections::HashSet<&str> = self.linksys_refs.iter().map(|r| r.name.as_str()).collect();
         edgion_dsl::check_redis_link_names(&script, &valid_names)?;
@@ -287,6 +294,19 @@ mod tests {
             .validation_error()
             .expect("redis call referencing an undeclared link must fail");
         assert!(err.contains("linkSysRefs"), "got: {err}");
+    }
+
+    #[test]
+    fn validation_error_rejects_streaming_upstream_response_body_read() {
+        let config = DslConfig {
+            name: "response-body".to_string(),
+            source: Some("let body = resp.body".to_string()),
+            ..Default::default()
+        };
+        let err = config
+            .validation_error()
+            .expect("proxied upstream response bodies must remain streaming-only");
+        assert!(err.contains("streaming-only"), "got: {err}");
     }
 
     #[test]

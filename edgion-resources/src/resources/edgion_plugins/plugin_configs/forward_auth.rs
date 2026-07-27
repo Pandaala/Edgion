@@ -126,6 +126,11 @@ pub struct ForwardAuthConfig {
     #[serde(default = "default_forward_auth_request")]
     pub request: OutboundRequestSpec,
 
+    /// Forward the complete original request body to the authentication
+    /// service. The plugin entry must also declare its body policy and limit.
+    #[serde(default)]
+    pub forward_body: bool,
+
     /// Decision-phase configuration: header propagation and timing.
     pub decision: ForwardAuthDecision,
 
@@ -149,6 +154,7 @@ impl Default for ForwardAuthConfig {
         Self {
             conn: ExternalHttpConnection::default(),
             request,
+            forward_body: false,
             decision: ForwardAuthDecision::default(),
             resolved_secrets: None,
         }
@@ -317,5 +323,26 @@ mod tests {
             .validation_error()
             .expect("forward_auth must inherit body validation");
         assert!(err.contains("Content-Type"), "got: {err}");
+    }
+
+    #[test]
+    fn forward_auth_rejects_conflicting_body_sources() {
+        use crate::resources::common::outbound_request::BodySpec;
+
+        let mut cfg = ForwardAuthConfig::default();
+        cfg.conn.target.service.name = Some("auth".to_string());
+        cfg.conn.target.service.port = Some(8080);
+        cfg.forward_body = true;
+        cfg.request.body = Some(BodySpec::Raw {
+            template: "configured-body".to_string(),
+        });
+
+        let err = cfg
+            .validation_error()
+            .expect("forwardBody and request.body must be mutually exclusive");
+        assert!(
+            err.contains("forwardBody") && err.contains("request.body"),
+            "got: {err}"
+        );
     }
 }

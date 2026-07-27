@@ -1630,7 +1630,7 @@ mod tests {
     async fn add_from_request_filters_wraps_body_consuming_plugin() {
         // A body-consuming plugin (HMAC with validateRequestBody) must be wrapped
         // in a body gate by the wiring. Proof: running the built filter force-reads
-        // the body (Unimplemented today) and fail-closes 500 BEFORE HMAC's own
+        // the body (the mock returns Unimplemented) and fail-closes 500 BEFORE HMAC's own
         // logic. If the gate were NOT wired in, HMAC would instead 401 on the
         // missing Authorization header (ErrTerminateRequest).
         use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
@@ -1677,7 +1677,7 @@ mod tests {
         // known after module load), so it opts into request buffer mode purely
         // through an operator `body:` block on the entry. Proof, mirroring the
         // HMAC case above: with `body:` set, the built filter must force-read
-        // the body (Unimplemented today) and fail-close 500 BEFORE ever
+        // the body (the mock returns Unimplemented) and fail-close 500 BEFORE ever
         // reaching WasmPlugin's own logic (which would otherwise try to load
         // the module and fail differently). If the gate were not wired for
         // Wasm, `read_request_body` would never be called by the gate at all

@@ -458,7 +458,10 @@ fn create_echo_router(server_addr_str: String) -> Router {
         // GET /mirror/reset: clear all stored mirror captures (between test cases)
         .route("/mirror/reset", get(mirror_reset_handler))
         // --- Retry-sequence endpoints (for retry-on-status integration tests) ---
-        .route("/retry-sequence/{test_id}/{status_list}", get(retry_sequence_handler))
+        .route(
+            "/retry-sequence/{test_id}/{status_list}",
+            get(retry_sequence_handler).post(retry_sequence_handler),
+        )
         .route("/retry-sequence-reset", get(retry_sequence_reset_handler))
         // --- Streaming-body endpoints (for per-try-timeout mid-body tests) ---
         // GET /stream-stall/{test_id}: 200 + one body chunk, then hang the body forever
@@ -676,6 +679,7 @@ async fn auth_header_probe_handler(req: AxumRequest<Body>) -> impl IntoResponse 
 async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
     use axum::body::to_bytes;
     use axum::http::StatusCode;
+    use sha2::{Digest, Sha256};
 
     let received_at_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -700,6 +704,7 @@ async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
 
     // Read body (truncate at 4KB)
     let body_bytes = to_bytes(req.into_body(), 4096).await.unwrap_or_default();
+    let body_sha256 = hex::encode(Sha256::digest(&body_bytes));
     let body = String::from_utf8_lossy(&body_bytes).into_owned();
 
     let capture = MirrorCapture {
@@ -716,7 +721,11 @@ async fn mirror_capture_handler(req: AxumRequest<Body>) -> impl IntoResponse {
         info!("mirror/capture: stored request for trace_id={}", trace_id);
     }
 
-    (StatusCode::OK, "mirror-captured")
+    (
+        StatusCode::OK,
+        [("x-captured-body-sha256", body_sha256)],
+        "mirror-captured",
+    )
 }
 
 /// /mirror/query/{trace_id} — return all captured mirror requests for a trace_id.
@@ -813,8 +822,33 @@ async fn mirror_reset_handler() -> impl IntoResponse {
 /// status_list format: "502,503,200" — returns 502 on 1st call, 503 on 2nd, 200 on 3rd+.
 /// An entry may carry a delay: "200d3000" — sleep 3000ms then return 200
 /// (delay capped at 10s); out-of-range calls reuse the last entry including its delay.
-async fn retry_sequence_handler(Path((test_id, status_list)): Path<(String, String)>) -> impl IntoResponse {
+async fn retry_sequence_handler(
+    Path((test_id, status_list)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
+    body: axum::body::Bytes,
+) -> impl IntoResponse {
     use axum::http::StatusCode;
+    use sha2::{Digest, Sha256};
+
+    if let Some(expected) = headers
+        .get("x-expected-body-sha256")
+        .and_then(|value| value.to_str().ok())
+    {
+        let actual = hex::encode(Sha256::digest(&body));
+        if actual != expected {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                [
+                    ("x-error".to_string(), "request body digest mismatch".to_string()),
+                    ("x-attempt-number".to_string(), "0".to_string()),
+                    ("x-attempt-history".to_string(), String::new()),
+                    ("x-test-id".to_string(), test_id),
+                ],
+                format!("request body digest mismatch: expected={expected}, actual={actual}"),
+            )
+                .into_response();
+        }
+    }
 
     // Entry syntax: "STATUS" or "STATUSdDELAY_MS" (e.g. "200d3000" = sleep
     // 3000ms then return 200). Delay is capped at 10s for safety.
@@ -1545,9 +1579,9 @@ mod ext_proc_server {
     use anyhow::Result;
     use edgion_common::ext_proc::proto::external_processor_server::{ExternalProcessor, ExternalProcessorServer};
     use edgion_common::ext_proc::proto::{
-        common_response::ResponseStatus, processing_request, processing_response, CommonResponse, HeaderAppendAction,
-        HeaderMutation, HeaderValue as EpHeaderValue, HeaderValueOption, HeadersResponse, HttpStatus,
-        ImmediateResponse, ProcessingRequest, ProcessingResponse,
+        body_mutation, common_response::ResponseStatus, processing_request, processing_response, BodyMutation,
+        BodyResponse, CommonResponse, HeaderAppendAction, HeaderMutation, HeaderValue as EpHeaderValue,
+        HeaderValueOption, HeadersResponse, HttpStatus, ImmediateResponse, ProcessingRequest, ProcessingResponse,
     };
     use futures::Stream;
     use tonic::{transport::Server, Request, Response, Status};
@@ -1557,6 +1591,7 @@ mod ext_proc_server {
     /// Trigger: make the processor emit a malformed (empty) verdict, to exercise
     /// the gateway's fail-mode handling of an unusable answer.
     const BAD_VERDICT_HEADER: &str = "x-ext-proc-badverdict";
+    const TEST_MODE_HEADER: &str = "x-ext-proc-test-mode";
 
     #[derive(Default)]
     struct FakeProcessor;
@@ -1610,9 +1645,62 @@ mod ext_proc_server {
         }
     }
 
-    fn handle(req: ProcessingRequest) -> Option<ProcessingResponse> {
-        match req.request? {
+    fn request_body_verdict_with(body: &'static [u8]) -> ProcessingResponse {
+        ProcessingResponse {
+            response: Some(processing_response::Response::RequestBody(BodyResponse {
+                response: Some(CommonResponse {
+                    status: ResponseStatus::Continue as i32,
+                    header_mutation: None,
+                    body_mutation: Some(BodyMutation {
+                        mutation: Some(body_mutation::Mutation::Body(body.to_vec())),
+                    }),
+                    trailers: None,
+                    clear_route_cache: false,
+                }),
+            })),
+        }
+    }
+
+    fn request_headers_verdict(status: ResponseStatus, body: Option<&'static [u8]>) -> ProcessingResponse {
+        ProcessingResponse {
+            response: Some(processing_response::Response::RequestHeaders(HeadersResponse {
+                response: Some(CommonResponse {
+                    status: status as i32,
+                    header_mutation: None,
+                    body_mutation: body.map(|body| BodyMutation {
+                        mutation: Some(body_mutation::Mutation::Body(body.to_vec())),
+                    }),
+                    trailers: None,
+                    clear_route_cache: false,
+                }),
+            })),
+        }
+    }
+
+    fn header_value(headers: &edgion_common::ext_proc::proto::HeaderMap, name: &str) -> Option<String> {
+        headers
+            .headers
+            .iter()
+            .find(|header| header.key.eq_ignore_ascii_case(name))
+            .map(|header| {
+                if header.raw_value.is_empty() {
+                    header.value.clone()
+                } else {
+                    String::from_utf8_lossy(&header.raw_value).into_owned()
+                }
+            })
+    }
+
+    fn handle(req: ProcessingRequest, mode: &mut Option<String>) -> (Option<ProcessingResponse>, bool) {
+        let Some(request) = req.request else {
+            return (None, false);
+        };
+        match request {
             processing_request::Request::RequestHeaders(h) => {
+                *mode = h
+                    .headers
+                    .as_ref()
+                    .and_then(|headers| header_value(headers, TEST_MODE_HEADER));
                 let has = |name: &str| {
                     h.headers
                         .as_ref()
@@ -1621,16 +1709,38 @@ mod ext_proc_server {
                 };
                 if has(BAD_VERDICT_HEADER) {
                     // Malformed verdict: an empty ProcessingResponse (no oneof).
-                    return Some(ProcessingResponse { response: None });
+                    return (Some(ProcessingResponse { response: None }), false);
                 }
-                Some(if has(BLOCK_HEADER) {
-                    immediate_403()
-                } else {
-                    headers_verdict(true, "x-ext-proc-req")
-                })
+                match mode.as_deref() {
+                    Some("wrong-order") => (Some(request_body_verdict_with(b"wrong-phase-body")), false),
+                    Some("missing-body") => (Some(headers_verdict(true, "x-ext-proc-req")), true),
+                    Some("continue-and-replace") => (
+                        Some(request_headers_verdict(
+                            ResponseStatus::ContinueAndReplace,
+                            Some(b"replaced-at-headers"),
+                        )),
+                        true,
+                    ),
+                    _ => (
+                        Some(if has(BLOCK_HEADER) {
+                            immediate_403()
+                        } else {
+                            headers_verdict(true, "x-ext-proc-req")
+                        }),
+                        false,
+                    ),
+                }
             }
-            processing_request::Request::ResponseHeaders(_) => Some(headers_verdict(false, "x-ext-proc-resp")),
-            _ => None,
+            processing_request::Request::ResponseHeaders(_) => (Some(headers_verdict(false, "x-ext-proc-resp")), false),
+            processing_request::Request::RequestBody(_) => {
+                let response = match mode.as_deref() {
+                    Some("duplicate-header") | Some("wrong-order") => headers_verdict(true, "x-duplicate-phase"),
+                    Some("bodyless-create") => request_body_verdict_with(b"created-by-ext-proc"),
+                    _ => request_body_verdict_with(b"processed-by-ext-proc"),
+                };
+                (Some(response), false)
+            }
+            _ => (None, false),
         }
     }
 
@@ -1645,11 +1755,16 @@ mod ext_proc_server {
             let mut inbound = request.into_inner();
             let (tx, rx) = tokio::sync::mpsc::channel(4);
             tokio::spawn(async move {
+                let mut mode = None;
                 while let Ok(Some(req)) = inbound.message().await {
-                    if let Some(resp) = handle(req) {
+                    let (response, terminal) = handle(req, &mut mode);
+                    if let Some(resp) = response {
                         if tx.send(Ok(resp)).await.is_err() {
                             break;
                         }
+                    }
+                    if terminal {
+                        break;
                     }
                 }
             });
@@ -2078,11 +2193,26 @@ async fn oidc_introspect_handler(req: AxumRequest<Body>) -> impl IntoResponse {
 ///
 /// Also echoes back X-Forwarded-* headers in response body for validation.
 async fn auth_verify_handler(req: AxumRequest<Body>) -> impl IntoResponse {
+    use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::Json;
     use serde_json::json;
+    use sha2::{Digest, Sha256};
 
-    let headers = req.headers();
+    let (parts, body) = req.into_parts();
+    let headers = parts.headers;
+    let Ok(body) = to_bytes(body, 1024 * 1024).await else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    if let Some(expected) = headers
+        .get("x-auth-expected-body-sha256")
+        .and_then(|value| value.to_str().ok())
+    {
+        let actual = hex::encode(Sha256::digest(&body));
+        if actual != expected {
+            return StatusCode::FORBIDDEN.into_response();
+        }
+    }
 
     // Collect X-Forwarded-* headers for response body (so client can verify them)
     let forwarded_host = headers

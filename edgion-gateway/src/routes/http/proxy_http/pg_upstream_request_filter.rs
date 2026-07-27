@@ -47,14 +47,59 @@ pub async fn upstream_request_filter(
 
     apply_upstream_authority(upstream_request, ctx);
 
+    #[cfg(feature = "body-buffering")]
+    sync_body_framing_headers(upstream_request, ctx)?;
+
     // Body proxying is about to begin: both backendRef-scoped request-plugin
     // call sites have already run by this point (a prerequisite for reaching
     // a successful connect and this hook), so `read_request_body` must be
     // refused from here on. This is the single exit point paired with
     // `snapshot_body_declared`'s entry write.
     ctx.request_info.in_request_body_stage = false;
+    #[cfg(feature = "body-buffering")]
+    {
+        // Request-stage plugins can no longer inspect the body. Release their
+        // shared view now; Pingora independently retains the replay owner
+        // until the upstream attempt and response-commit lifecycle completes.
+        ctx.request_body = None;
+    }
 
     Ok(())
+}
+
+#[cfg(feature = "body-buffering")]
+fn sync_body_framing_headers(
+    upstream_request: &mut RequestHeader,
+    ctx: &mut EdgionHttpContext,
+) -> pingora_core::Result<()> {
+    let len = match ctx.modified_request_body_len {
+        Some(len) => len,
+        None => {
+            let Some(body) = &ctx.request_body else {
+                return Ok(());
+            };
+            if !body.is_modified() {
+                return Ok(());
+            }
+            let len = body.len().map_err(|_| {
+                pingora_core::Error::explain(
+                    pingora_core::ErrorType::InternalError,
+                    "modified request body length is unavailable",
+                )
+            })?;
+            ctx.modified_request_body_len = Some(len);
+            len
+        }
+    };
+    upstream_request.remove_header(&http::header::TRANSFER_ENCODING);
+    upstream_request
+        .insert_header(http::header::CONTENT_LENGTH, len.to_string())
+        .map_err(|_| {
+            pingora_core::Error::explain(
+                pingora_core::ErrorType::InternalError,
+                "failed to synchronize modified request body framing",
+            )
+        })
 }
 
 /// Overwrite the upstream `Host` with the authority composed in `upstream_peer`
@@ -92,5 +137,43 @@ mod authority_tests {
         let ctx2 = EdgionHttpContext::default();
         apply_upstream_authority(&mut req2, &ctx2);
         assert_eq!(req2.headers.get("host").unwrap(), "gw.example.com");
+    }
+}
+
+#[cfg(all(test, feature = "body-buffering"))]
+mod body_framing_tests {
+    use super::sync_body_framing_headers;
+    use crate::request_body::BodyStorage;
+    use crate::EdgionHttpContext;
+    use bytes::Bytes;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+
+    #[tokio::test]
+    async fn mutation_sets_content_length_and_removes_transfer_encoding() {
+        let (mut storage, view) = BodyStorage::new(64);
+        storage.write(&Bytes::from_static(b"old")).await.unwrap();
+        storage.finish().await.unwrap();
+        view.overwrite_body(Bytes::from_static(b"new-body")).unwrap();
+
+        let mut ctx = EdgionHttpContext {
+            request_body: Some(view),
+            ..Default::default()
+        };
+        let mut request = pingora_http::RequestHeader::build("POST", b"/", None).unwrap();
+        request.insert_header("transfer-encoding", "chunked").unwrap();
+        request.insert_header("content-length", "3").unwrap();
+
+        sync_body_framing_headers(&mut request, &mut ctx).unwrap();
+        assert_eq!(request.headers.get("content-length").unwrap(), "8");
+        assert!(!request.headers.contains_key("transfer-encoding"));
+
+        ctx.request_body = None;
+        let mut retry_request = pingora_http::RequestHeader::build("POST", b"/", None).unwrap();
+        retry_request.insert_header("transfer-encoding", "chunked").unwrap();
+        retry_request.insert_header("content-length", "3").unwrap();
+
+        sync_body_framing_headers(&mut retry_request, &mut ctx).unwrap();
+        assert_eq!(retry_request.headers.get("content-length").unwrap(), "8");
+        assert!(!retry_request.headers.contains_key("transfer-encoding"));
     }
 }

@@ -29,6 +29,28 @@ use crate::plugins::http::common::http_client::{connection_listed_hop_by_hop, is
 use crate::plugins::runtime::traits::session::RouteProto;
 use crate::plugins::runtime::PluginSession;
 
+fn is_body_framing_header(name: &str) -> bool {
+    name.eq_ignore_ascii_case("content-length") || name.eq_ignore_ascii_case("transfer-encoding")
+}
+
+/// Rebuild framing for the body owned by this outbound HTTP hop.
+///
+/// Incoming framing is never reusable here: the configured method and body can
+/// differ from the downstream request. All current outbound body variants are
+/// replayable byte bodies, so their exact length is known before dispatch.
+pub(super) fn sync_outbound_body_framing(req: &mut reqwest::Request) -> Result<(), String> {
+    req.headers_mut().remove(reqwest::header::CONTENT_LENGTH);
+    req.headers_mut().remove(reqwest::header::TRANSFER_ENCODING);
+
+    let Some(body) = req.body().and_then(reqwest::Body::as_bytes) else {
+        return Ok(());
+    };
+    let len = reqwest::header::HeaderValue::from_str(&body.len().to_string())
+        .map_err(|err| format!("invalid outbound Content-Length: {err}"))?;
+    req.headers_mut().insert(reqwest::header::CONTENT_LENGTH, len);
+    Ok(())
+}
+
 // ============================================================
 // Public compiled types
 // ============================================================
@@ -331,6 +353,7 @@ impl CompiledRequest {
             }
         }
 
+        sync_outbound_body_framing(&mut req)?;
         Ok(req)
     }
 
@@ -342,7 +365,7 @@ impl CompiledRequest {
     ///
     /// When `self.headers.forward_all` is true, all incoming request headers
     /// are forwarded after stripping hop-by-hop headers (RFC 9110 §7.6.1),
-    /// including those nominated by the `Connection:` header value.
+    /// proxy-owned body framing, and names nominated by `Connection`.
     ///
     /// Explicit `origin` and `custom` fields are then applied on top, allowing
     /// operators to override or inject specific headers.
@@ -361,7 +384,7 @@ impl CompiledRequest {
             let conn_val = session.header_value("connection").unwrap_or_default();
             let dynamic = connection_listed_hop_by_hop(&conn_val);
             for (name, value) in session.request_headers() {
-                if !is_hop_by_hop_or_listed(&name, &dynamic) {
+                if !is_hop_by_hop_or_listed(&name, &dynamic) && !is_body_framing_header(&name) {
                     result.insert(name.to_ascii_lowercase(), value);
                 }
             }
@@ -621,6 +644,8 @@ mod tests {
         // All request headers returned by the session, including hop-by-hop and normal ones.
         session.expect_request_headers().return_const(vec![
             ("content-type".to_string(), "application/json".to_string()),
+            ("content-length".to_string(), "9".to_string()),
+            ("transfer-encoding".to_string(), "chunked".to_string()),
             ("connection".to_string(), "X-Custom-Hop".to_string()),
             ("keep-alive".to_string(), "timeout=5".to_string()),
             ("x-custom-hop".to_string(), "remove-this".to_string()),
@@ -649,11 +674,90 @@ mod tests {
             result.get("keep-alive").is_none(),
             "keep-alive should be stripped (static hop-by-hop)"
         );
+        assert!(
+            result.get("content-length").is_none(),
+            "content-length belongs to the outbound body, not the incoming request"
+        );
+        assert!(
+            result.get("transfer-encoding").is_none(),
+            "transfer-encoding belongs to the outbound transport"
+        );
         // Dynamically-listed hop-by-hop header must be stripped.
         assert!(
             result.get("x-custom-hop").is_none(),
             "x-custom-hop should be stripped (nominated by Connection header)"
         );
+    }
+
+    #[test]
+    fn bodyless_outbound_request_does_not_inherit_incoming_content_length() {
+        use edgion_resources::resources::common::outbound_request::{MethodSpec, OutboundRequestSpec, PathSpec};
+
+        let spec = OutboundRequestSpec {
+            path: Some(PathSpec {
+                template: "/verify".to_string(),
+                allow_override: false,
+            }),
+            method: Some(MethodSpec {
+                template: "GET".to_string(),
+            }),
+            headers: ListFields {
+                forward_all: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let compiled = CompiledRequest::from_spec(&spec).unwrap();
+
+        let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|name| name == "connection")
+            .return_const(None::<String>);
+        session.expect_request_headers().return_const(vec![
+            ("authorization".to_string(), "Bearer valid-token".to_string()),
+            ("content-length".to_string(), "9".to_string()),
+        ]);
+
+        let req = compiled
+            .build_request(&session, None, "http://auth.test", None)
+            .unwrap();
+
+        assert!(req.body().is_none());
+        assert!(req.headers().get(reqwest::header::CONTENT_LENGTH).is_none());
+        assert_eq!(
+            req.headers()
+                .get(reqwest::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer valid-token")
+        );
+    }
+
+    #[test]
+    fn body_framing_sync_replaces_stale_length_and_transfer_encoding() {
+        let mut req = reqwest::Request::new(
+            reqwest::Method::POST,
+            reqwest::Url::parse("http://upstream.test/").unwrap(),
+        );
+        req.headers_mut().insert(
+            reqwest::header::CONTENT_LENGTH,
+            reqwest::header::HeaderValue::from_static("99"),
+        );
+        req.headers_mut().insert(
+            reqwest::header::TRANSFER_ENCODING,
+            reqwest::header::HeaderValue::from_static("chunked"),
+        );
+        *req.body_mut() = Some(bytes::Bytes::from_static(b"abc").into());
+
+        sync_outbound_body_framing(&mut req).unwrap();
+
+        assert_eq!(
+            req.headers()
+                .get(reqwest::header::CONTENT_LENGTH)
+                .and_then(|value| value.to_str().ok()),
+            Some("3")
+        );
+        assert!(req.headers().get(reqwest::header::TRANSFER_ENCODING).is_none());
     }
 
     /// C2 regression: `forward_all=true` with a `Required` origin field whose
@@ -754,6 +858,10 @@ mod tests {
             req.headers().get("content-type").map(|v| v.to_str().unwrap()),
             Some("application/json")
         );
+        assert_eq!(
+            req.headers().get("content-length").map(|v| v.to_str().unwrap()),
+            Some(body.as_bytes().len().to_string().as_str())
+        );
     }
 
     #[test]
@@ -787,6 +895,10 @@ mod tests {
             req.headers().get("content-type").map(|v| v.to_str().unwrap()),
             Some("application/x-www-form-urlencoded")
         );
+        assert_eq!(
+            req.headers().get("content-length").map(|v| v.to_str().unwrap()),
+            Some(req_body_string(&req).len().to_string().as_str())
+        );
     }
 
     #[test]
@@ -809,6 +921,10 @@ mod tests {
         // Raw: no escaping, no auto Content-Type.
         assert_eq!(req_body_string(&req), "plain a\"b text");
         assert!(req.headers().get("content-type").is_none());
+        assert_eq!(
+            req.headers().get("content-length").map(|v| v.to_str().unwrap()),
+            Some("14")
+        );
     }
 
     #[test]
@@ -840,6 +956,10 @@ mod tests {
         assert_eq!(
             req.headers().get("content-type").map(|v| v.to_str().unwrap()),
             Some("application/json")
+        );
+        assert_eq!(
+            req.headers().get("content-length").map(|v| v.to_str().unwrap()),
+            Some("10")
         );
     }
 }

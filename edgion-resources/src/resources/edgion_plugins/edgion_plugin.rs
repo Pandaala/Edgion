@@ -120,9 +120,8 @@ pub enum EdgionPlugin {
 }
 
 /// Which async plugin stage a body requirement is being asked about.
-/// `req.body` needs the request body (request stage); `resp.body` needs the
-/// response body (upstream-response stage) — a plugin can consume one, both, or
-/// neither depending on stage.
+/// Buffered bodies are supported only at the request stage. Proxied upstream
+/// response bodies remain streaming-only.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BodyStage {
     Request,
@@ -148,6 +147,13 @@ impl EdgionPlugin {
             HmacAuth(cfg) if cfg.validate_request_body && stage == BodyStage::Request => {
                 Some(BodyRequirement::fail_close())
             }
+            ForwardAuth(cfg) if cfg.forward_body && stage == BodyStage::Request => Some(BodyRequirement::fail_close()),
+            ProxyRewrite(cfg) if cfg.json_body.is_some() && stage == BodyStage::Request => {
+                Some(BodyRequirement::fail_close())
+            }
+            ExtProc(cfg) if cfg.processing_mode.request_body_mode.is_buffered() && stage == BodyStage::Request => {
+                Some(BodyRequirement::fail_close())
+            }
             // DSL consumes a body only when its script references the matching
             // builtin at this stage.
             //
@@ -158,13 +164,9 @@ impl EdgionPlugin {
             // script written to enforce something, silently passing is the one
             // outcome that must not happen. `errorPolicy` still applies to every
             // error raised inside the script, including by the body builtin.
-            Dsl(cfg) => {
+            Dsl(cfg) if stage == BodyStage::Request => {
                 let script = cfg.compile_and_validate().ok()?;
-                let wanted = match stage {
-                    BodyStage::Request => BuiltinId::ReqBody,
-                    BodyStage::Response => BuiltinId::RespBody,
-                };
-                if !script.references_builtin(wanted) {
+                if !script.references_builtin(BuiltinId::ReqBody) {
                     return None;
                 }
                 Some(BodyRequirement::fail_close())
@@ -207,6 +209,7 @@ impl EdgionPlugin {
             | RegionRoute(_)
             | TraceContext(_)
             | ExtProc(_)
+            | Dsl(_)
             | GlobalAccessControl(_)
             | Canary(_)
             | Wasm(_) => None,
@@ -632,9 +635,11 @@ mod dsl_body_requirement_tests {
     }
 
     #[test]
-    fn dsl_resp_body_gated_at_response_stage_only() {
+    fn dsl_resp_body_is_rejected_instead_of_gated() {
         let p = dsl("let b = resp.body", None);
-        assert!(p.body_requirement(BodyStage::Response).is_some());
+        let EdgionPlugin::Dsl(config) = &p else { unreachable!() };
+        assert!(config.compile_and_validate().unwrap_err().contains("streaming-only"));
+        assert!(p.body_requirement(BodyStage::Response).is_none());
         assert!(p.body_requirement(BodyStage::Request).is_none());
     }
 
@@ -718,5 +723,23 @@ mod wasm_body_gate_tests {
             !p.accepts_body(BodyStage::Response),
             "Wasm has no response buffer mode, so it must not accept a body: block at the response stage"
         );
+    }
+}
+
+#[cfg(test)]
+mod request_body_plugin_requirement_tests {
+    use super::*;
+
+    #[test]
+    fn request_body_features_declare_request_only_requirements() {
+        for json in [
+            r#"{"type":"ForwardAuth","config":{"target":{"name":"auth","port":80},"forwardBody":true,"decision":{}}}"#,
+            r#"{"type":"ProxyRewrite","config":{"jsonBody":{"set":{"/name":"gateway"}}}}"#,
+            r#"{"type":"ExtProc","config":{"grpcService":{"target":"processor:9000"},"processingMode":{"requestBodyMode":"BUFFERED"}}}"#,
+        ] {
+            let plugin: EdgionPlugin = serde_json::from_str(json).expect("body plugin config parses");
+            assert!(plugin.body_requirement(BodyStage::Request).is_some(), "{json}");
+            assert!(plugin.body_requirement(BodyStage::Response).is_none(), "{json}");
+        }
     }
 }

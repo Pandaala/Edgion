@@ -1,7 +1,8 @@
 //! Body gate wrappers for body-aware plugins.
 //!
-//! A plugin that needs the fully-buffered request/response body is wrapped in a
-//! body gate. The gate, evaluated at the plugin's stage:
+//! A plugin that needs the fully buffered request body is wrapped in a body
+//! gate. Proxied upstream responses remain streaming-only. The gate, evaluated
+//! at the plugin's stage:
 //!
 //! 1. Applies the SECONDARY run/skip filter ([`BodyRequirement::conditions`],
 //!    re-using the same condition engine as the entry-level `conditions`). When
@@ -13,12 +14,11 @@
 //!    the plugin's own `maxBodySize` LIMIT to the result (a body larger than the
 //!    plugin's limit → too-large for THAT plugin only). The inner plugin re-reads
 //!    the now-cached bytes.
-//! 3. On a REFUSAL (`BodyReadError::NotBuffered`) rejects with `500`
-//!    unconditionally: the admission model decided this request class is not
-//!    bufferable, and no `on_read_failure` value may soften that. On a genuine
-//!    read failure (or over-limit) applies [`BodyReadFailureMode`]: `FailClose`
-//!    (default) rejects with `500` (`413` oversize, `408` timeout); `FailOpen`
-//!    skips the plugin as if it were disabled.
+//! 3. On a refusal (`NotBuffered`) or gateway-wide physical cap
+//!    (`BufferLimitExceeded`) rejects unconditionally: in both cases there is
+//!    no forwarding copy of the original body, so fail-open is impossible.
+//!    Recoverable read failures and per-plugin logical limits apply
+//!    [`BodyReadFailureMode`].
 //!
 //! There is no protocol bypass. Which requests are bufferable is decided by the
 //! read adapter, not here — see the body-gate admission model design.
@@ -117,7 +117,11 @@ impl RequestFilter for BodyGatedRequestFilter {
     }
 }
 
-/// Wrapper that force-buffers the response body before running the inner handler.
+/// Fail-closed backstop for an invalid response body gate.
+///
+/// Configuration validation rejects every such gate because proxied upstream
+/// responses are streaming-only. This wrapper remains defensive runtime
+/// handling if invalid configuration reaches the data plane.
 pub struct BodyGatedUpstreamResponse {
     inner: Box<dyn UpstreamResponse>,
     requirement: BodyRequirement,
@@ -171,6 +175,9 @@ impl UpstreamResponse for BodyGatedUpstreamResponse {
 ///   inspection plugin that inspected nothing, which no configuration should
 ///   be able to express. The precise reason is already on `ctx` as an
 ///   `EdgionStatus`, recorded by the read adapter.
+/// - A gateway-wide **physical cap** (`BufferLimitExceeded`) is also always
+///   fail-close: capture has been discarded and the original body cannot be
+///   forwarded.
 /// - A **read failure** (`TooLarge` / `Incomplete` / `Timeout` /
 ///   `Unimplemented`) is a runtime condition an operator may reasonably choose
 ///   to tolerate, so it keeps the `on_read_failure` knob. Oversize maps to 413
@@ -190,10 +197,20 @@ fn body_read_failure_result(
         };
     }
 
+    if matches!(err, BodyReadError::BufferLimitExceeded { .. }) {
+        session.add_error(EdgionStatus::BodyReadTooLarge);
+        log.push_err("body-buffer-limit");
+        return PluginRunningResult::ErrResponse {
+            status: 413,
+            body: None,
+        };
+    }
+
     // R17: a read failure is alertable too, and only `ctx.add_error` reaches the
     // access log — a `PluginLog` line alone stays inside a nested per-plugin array.
     session.add_error(match err {
         BodyReadError::TooLarge { .. } => EdgionStatus::BodyReadTooLarge,
+        BodyReadError::BufferLimitExceeded { .. } => EdgionStatus::BodyReadTooLarge,
         BodyReadError::Timeout => EdgionStatus::BodyReadTimeout,
         BodyReadError::Incomplete => EdgionStatus::BodyReadAborted,
         BodyReadError::Unimplemented => EdgionStatus::BodyReadUnimplemented,
@@ -322,6 +339,30 @@ mod tests {
         let mut log = PluginLog::new("test");
         let result = gate.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::Nothing);
+    }
+
+    #[tokio::test]
+    async fn gateway_buffer_limit_cannot_fail_open() {
+        let inner = CountingFilter::new();
+        let req = BodyRequirement {
+            on_read_failure: BodyReadFailureMode::FailOpen,
+            ..Default::default()
+        };
+        let gate = BodyGatedRequestFilter::new(Box::new(inner), req);
+
+        let mut session = base_session();
+        session
+            .expect_read_request_body()
+            .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 1024 }));
+
+        let mut log = PluginLog::new("test");
+        assert_eq!(
+            gate.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 413,
+                body: None
+            }
+        );
     }
 
     #[tokio::test]

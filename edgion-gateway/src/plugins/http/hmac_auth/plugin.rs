@@ -14,7 +14,9 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256, Sha384, Sha512};
+#[cfg(test)]
+use sha2::Digest;
+use sha2::{Sha256, Sha384, Sha512};
 
 use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
 use crate::plugins::runtime::log::{la, sensitive};
@@ -320,10 +322,11 @@ impl HmacAuth {
     /// fail-closed, so the caller answers every denial with the plugin's auth
     /// error response, not with `body_gate.rs`'s per-error 413/408 split.
     async fn verify_body_digest(session: &mut dyn PluginSession) -> Result<(), &'static str> {
-        let body = match session.read_request_body(None).await {
-            Ok(body) => body,
+        let body_hash = match session.request_body_sha256().await {
+            Ok(hash) => hash,
             Err(err) => {
                 match err {
+                    BodyReadError::BufferLimitExceeded { .. } => session.add_error(EdgionStatus::BodyReadTooLarge),
                     BodyReadError::TooLarge { .. } => session.add_error(EdgionStatus::BodyReadTooLarge),
                     BodyReadError::Timeout => session.add_error(EdgionStatus::BodyReadTimeout),
                     BodyReadError::Incomplete => session.add_error(EdgionStatus::BodyReadAborted),
@@ -335,20 +338,23 @@ impl HmacAuth {
             }
         };
         let digest_header = session.header_value("digest").ok_or("Missing Digest header")?;
-        Self::check_body_digest(&body, &digest_header)
+        Self::check_body_digest_hash(&body_hash, &digest_header)
     }
 
     /// Pure `Digest` header check: `SHA-256=<base64(sha256(body))>`.
+    #[cfg(test)]
     fn check_body_digest(body: &[u8], digest_header: &str) -> Result<(), &'static str> {
+        Self::check_body_digest_hash(&Sha256::digest(body), digest_header)
+    }
+
+    fn check_body_digest_hash(body_hash: &[u8], digest_header: &str) -> Result<(), &'static str> {
         // Split on the FIRST '=' so base64 padding stays with the value.
         let (algo, expected) = digest_header.split_once('=').ok_or("Malformed Digest header")?;
         if !algo.trim().eq_ignore_ascii_case("SHA-256") {
             return Err("Unsupported Digest algorithm");
         }
 
-        let mut hasher = Sha256::new();
-        hasher.update(body);
-        let computed = STANDARD.encode(hasher.finalize());
+        let computed = STANDARD.encode(body_hash);
         if computed != expected.trim() {
             return Err("Body digest mismatch");
         }
@@ -618,6 +624,18 @@ mod tests {
     }
 
     #[test]
+    fn test_check_empty_body_digest_matches() {
+        let digest = format!("SHA-256={}", STANDARD.encode(Sha256::digest([])));
+        assert!(HmacAuth::check_body_digest(b"", &digest).is_ok());
+    }
+
+    #[test]
+    fn test_check_empty_body_digest_mismatch() {
+        let digest = format!("SHA-256={}", STANDARD.encode(Sha256::digest(b"not empty")));
+        assert_eq!(HmacAuth::check_body_digest(b"", &digest), Err("Body digest mismatch"));
+    }
+
+    #[test]
     fn test_check_body_digest_bad_algorithm_and_format() {
         assert_eq!(
             HmacAuth::check_body_digest(b"x", "MD5=abc"),
@@ -643,7 +661,7 @@ mod tests {
             (BodyReadError::Unimplemented, EdgionStatus::BodyReadUnimplemented),
         ] {
             let mut session = MockPluginSession::new();
-            session.expect_read_request_body().returning(move |_| Err(err.clone()));
+            session.expect_request_body_sha256().returning(move || Err(err.clone()));
             session
                 .expect_add_error()
                 .withf(move |status| *status == expected)
@@ -663,8 +681,8 @@ mod tests {
     async fn verify_body_digest_does_not_double_count_refusal() {
         let mut session = MockPluginSession::new();
         session
-            .expect_read_request_body()
-            .returning(|_| Err(BodyReadError::NotBuffered));
+            .expect_request_body_sha256()
+            .returning(|| Err(BodyReadError::NotBuffered));
         session.expect_add_error().times(0);
 
         assert_eq!(
@@ -822,8 +840,8 @@ mod tests {
         session.expect_get_query().returning(|| None);
         session.expect_get_method().return_const("POST".to_string());
         session
-            .expect_read_request_body()
-            .returning(move |_| Ok(bytes::Bytes::from_static(body)));
+            .expect_request_body_sha256()
+            .returning(move || Ok(Sha256::digest(body).into()));
         session.expect_set_request_header().returning(|_, _| Ok(()));
         session.expect_remove_request_header().returning(|_| Ok(()));
         session.expect_write_response_header().returning(|_, _| Ok(()));

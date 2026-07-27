@@ -1,0 +1,125 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: hmac-body, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["hmac-body.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: hmac-body}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: body-owner-chain, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["body-owner-chain.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: body-owner-chain}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: body-mutation-retry-shorter, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["body-mutation-retry-shorter.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: body-mutation-retry-shorter}
+      retry:
+        attempts: 2
+        codes: [503]
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: body-mutation-retry-longer, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["body-mutation-retry-longer.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: body-mutation-retry-longer}
+      retry:
+        attempts: 2
+        codes: [503]
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: body-mirror-chain, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["body-mirror-chain.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: body-mirror-chain}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: body-mirror-chain-longer, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["body-mirror-chain-longer.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: body-mirror-chain-longer}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: forward-auth-body, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["forward-auth-body.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: forward-auth-body}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: proxy-rewrite-body, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["proxy-rewrite-body.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: proxy-rewrite-body}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: ext-proc-body, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["ext-proc-body.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: ext-proc-body}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: wasm-body, namespace: edgion-default}
+spec:
+  parentRefs: [{name: edgion-plugins-gateway, namespace: edgion-test}]
+  hostnames: ["wasm-body.example.com"]
+  rules:
+    - filters:
+        - type: ExtensionRef
+          extensionRef: {group: edgion.io, kind: EdgionPlugins, name: wasm-body}
+      backendRefs: [{name: test-http, namespace: edgion-test, port: 30001}]

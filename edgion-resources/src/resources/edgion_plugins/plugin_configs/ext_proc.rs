@@ -5,13 +5,8 @@
 //! the processor, which may mutate headers or short-circuit with an immediate
 //! response.
 //!
-//! ## MVP scope
-//!
-//! This release supports the **request-header** and **response-header** phases
-//! only. The gateway has no request-body plugin hook and its response-body hook
-//! is a read-only per-chunk path, so body processing is not implemented. Any
-//! attempt to enable a body mode other than `NONE`/`SKIP` is rejected by
-//! [`ExtProcConfig::validation_error`] rather than silently ignored.
+//! Request bodies support `BUFFERED`. Proxied upstream response bodies remain
+//! streaming-only, so response body modes are rejected.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -29,7 +24,7 @@ use crate::resources::edgion_plugins::PluginValidation;
 /// processingMode:
 ///   requestHeaderMode:  SEND
 ///   responseHeaderMode: SEND
-///   requestBodyMode:    SKIP   # must be SKIP/NONE this release
+///   requestBodyMode:    BUFFERED
 ///   responseBodyMode:   NONE   # must be SKIP/NONE this release
 /// failureModeAllow: false      # fail-close when the processor is unreachable
 /// ```
@@ -81,11 +76,12 @@ pub struct ProcessingMode {
     #[serde(default = "default_header_skip")]
     pub response_header_mode: HeaderSendMode,
 
-    /// Request body handling. Only `SKIP`/`NONE` are accepted this release.
+    /// Request body handling. `BUFFERED`, `SKIP`, and `NONE` are supported.
     #[serde(default)]
     pub request_body_mode: BodySendMode,
 
-    /// Response body handling. Only `SKIP`/`NONE` are accepted this release.
+    /// Response body handling. Only `SKIP`/`NONE` are accepted because proxied
+    /// upstream response bodies remain streaming-only.
     #[serde(default)]
     pub response_body_mode: BodySendMode,
 }
@@ -100,9 +96,9 @@ pub enum HeaderSendMode {
     Skip,
 }
 
-/// Body-phase send control. `STREAMED` / `BUFFERED` / `BUFFERED_PARTIAL` are
-/// accepted by the schema so the value parses, then explicitly rejected by
-/// validation — surfacing a clear error instead of a silent no-op.
+/// Body-phase send control. Unsupported stage/mode combinations parse and are
+/// then explicitly rejected by validation, surfacing a clear error instead of
+/// a silent no-op.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum BodySendMode {
@@ -113,7 +109,7 @@ pub enum BodySendMode {
     Skip,
     /// Stream body chunks — NOT supported this release.
     Streamed,
-    /// Buffer the full body — NOT supported this release.
+    /// Buffer the full body. Supported for requests only.
     Buffered,
     /// Buffer a partial body — NOT supported this release.
     BufferedPartial,
@@ -127,8 +123,15 @@ impl HeaderSendMode {
 }
 
 impl BodySendMode {
-    /// Whether this body mode is supported this release (only NONE/SKIP).
-    fn is_supported(&self) -> bool {
+    pub fn is_buffered(&self) -> bool {
+        matches!(self, BodySendMode::Buffered)
+    }
+
+    fn is_supported_request(&self) -> bool {
+        matches!(self, BodySendMode::None | BodySendMode::Skip | BodySendMode::Buffered)
+    }
+
+    fn is_supported_response(&self) -> bool {
         matches!(self, BodySendMode::None | BodySendMode::Skip)
     }
 }
@@ -233,19 +236,15 @@ impl PluginValidation for ExtProcConfig {
         if self.grpc_service.timeout_ms > MAX_TIMEOUT_MS {
             return Some(format!("grpcService.timeoutMs must not exceed {MAX_TIMEOUT_MS}"));
         }
-        // Body processing has no runtime path this release — reject loudly so a
-        // user never configures a silently-ignored mode.
-        if !self.processing_mode.request_body_mode.is_supported() {
-            return Some(
-                "processingMode.requestBodyMode only supports NONE or SKIP in this release \
-                 (request body processing is not implemented)"
-                    .to_string(),
-            );
+        // Reject unsupported body modes loudly so a user never configures a
+        // silently ignored mode.
+        if !self.processing_mode.request_body_mode.is_supported_request() {
+            return Some("processingMode.requestBodyMode supports NONE, SKIP, or BUFFERED".to_string());
         }
-        if !self.processing_mode.response_body_mode.is_supported() {
+        if !self.processing_mode.response_body_mode.is_supported_response() {
             return Some(
-                "processingMode.responseBodyMode only supports NONE or SKIP in this release \
-                 (response body processing is not implemented)"
+                "processingMode.responseBodyMode only supports NONE or SKIP because proxied \
+                 upstream response bodies remain streaming-only"
                     .to_string(),
             );
         }
@@ -348,6 +347,13 @@ mod tests {
         config.processing_mode.request_body_mode = BodySendMode::Streamed;
         let err = config.validation_error().unwrap();
         assert!(err.contains("requestBodyMode"), "got: {err}");
+    }
+
+    #[test]
+    fn accepts_buffered_request_body() {
+        let mut config = valid_base();
+        config.processing_mode.request_body_mode = BodySendMode::Buffered;
+        assert!(config.validation_error().is_none());
     }
 
     #[test]

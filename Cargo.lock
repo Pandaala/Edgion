@@ -1728,17 +1728,17 @@ dependencies = [
  "parking_lot",
  "percent-encoding",
  "pingora-core 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "pingora-core 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-core 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "pingora-http 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "pingora-ketama 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "pingora-ketama 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-ketama 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "pingora-limits 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "pingora-limits 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-limits 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "pingora-load-balancing 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "pingora-load-balancing 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-load-balancing 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "pingora-proxy 0.8.1 (registry+https://github.com/rust-lang/crates.io-index)",
- "pingora-proxy 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-proxy 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "proptest",
  "prost 0.13.5",
  "proxy-header",
@@ -4313,7 +4313,7 @@ dependencies = [
 [[package]]
 name = "pingora-boringssl"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "boring",
  "boring-sys",
@@ -4363,7 +4363,7 @@ dependencies = [
 [[package]]
 name = "pingora-cache"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -4381,12 +4381,12 @@ dependencies = [
  "lru",
  "once_cell",
  "parking_lot",
- "pingora-core 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-header-serde 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-lru 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-timeout 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-core 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-header-serde 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-lru 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-timeout 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "rand 0.8.7",
  "regex",
  "rmp",
@@ -4454,7 +4454,7 @@ dependencies = [
 [[package]]
 name = "pingora-core"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "ahash 0.8.12",
  "async-trait",
@@ -4480,13 +4480,13 @@ dependencies = [
  "ouroboros",
  "parking_lot",
  "percent-encoding",
- "pingora-boringssl 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-pool 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-runtime 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-rustls 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-timeout 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-boringssl 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-pool 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-runtime 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-rustls 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-timeout 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "prometheus",
  "rand 0.8.7",
  "regex",
@@ -4514,7 +4514,7 @@ checksum = "b23f7bc013de67e44ed902a82843f6157460b89d11da882bcc6f09f8ae380af1"
 [[package]]
 name = "pingora-error"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 
 [[package]]
 name = "pingora-header-serde"
@@ -4535,13 +4535,13 @@ dependencies = [
 [[package]]
 name = "pingora-header-serde"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "bytes",
  "http",
  "httparse",
- "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "thread_local",
  "zstd",
  "zstd-safe",
@@ -4561,11 +4561,11 @@ dependencies = [
 [[package]]
 name = "pingora-http"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "bytes",
  "http",
- "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
 ]
 
 [[package]]
@@ -4580,7 +4580,7 @@ dependencies = [
 [[package]]
 name = "pingora-ketama"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "crc32fast",
 ]
@@ -4597,7 +4597,7 @@ dependencies = [
 [[package]]
 name = "pingora-limits"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "ahash 0.8.12",
 ]
@@ -4627,7 +4627,7 @@ dependencies = [
 [[package]]
 name = "pingora-load-balancing"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -4636,11 +4636,11 @@ dependencies = [
  "futures",
  "http",
  "log",
- "pingora-core 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-ketama 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-runtime 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-core 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-ketama 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-runtime 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "rand 0.8.7",
  "tokio",
 ]
@@ -4660,7 +4660,7 @@ dependencies = [
 [[package]]
 name = "pingora-lru"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "arrayvec",
  "hashbrown 0.12.3",
@@ -4686,13 +4686,13 @@ dependencies = [
 [[package]]
 name = "pingora-pool"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "crossbeam-queue",
  "log",
  "lru",
  "parking_lot",
- "pingora-timeout 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-timeout 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "thread_local",
  "tokio",
 ]
@@ -4723,7 +4723,7 @@ dependencies = [
 [[package]]
 name = "pingora-proxy"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4733,10 +4733,10 @@ dependencies = [
  "http",
  "log",
  "once_cell",
- "pingora-cache 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-core 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
- "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-cache 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-core 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
+ "pingora-http 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "rand 0.8.7",
  "regex",
  "tokio",
@@ -4757,7 +4757,7 @@ dependencies = [
 [[package]]
 name = "pingora-runtime"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "once_cell",
  "rand 0.8.7",
@@ -4785,11 +4785,11 @@ dependencies = [
 [[package]]
 name = "pingora-rustls"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "log",
  "no_debug",
- "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79)",
+ "pingora-error 0.8.1 (git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5)",
  "ring",
  "rustls",
  "rustls-native-certs 0.7.3",
@@ -4814,7 +4814,7 @@ dependencies = [
 [[package]]
 name = "pingora-timeout"
 version = "0.8.1"
-source = "git+https://github.com/Pandaala/pingora.git?rev=a901689110cf603e02b878a11afdca0ce9cc1f79#a901689110cf603e02b878a11afdca0ce9cc1f79"
+source = "git+https://github.com/Pandaala/pingora.git?rev=57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5#57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5"
 dependencies = [
  "once_cell",
  "parking_lot",

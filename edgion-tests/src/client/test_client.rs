@@ -153,6 +153,26 @@ mod capability_tests {
             "body-reload/initial"
         ));
     }
+
+    #[test]
+    fn body_suites_are_registered_in_resource_and_default_sweeps() {
+        let runner = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/integration/run_integration.sh"
+        ));
+        for suite in ["DslBody", "BodyPlugins"] {
+            assert_eq!(
+                runner.matches(&format!("EdgionPlugins_{suite}")).count(),
+                2,
+                "{suite} must be invoked by both the EdgionPlugins resource sweep and the default sweep"
+            );
+            assert_eq!(
+                runner.matches(&format!("EdgionPlugins/{suite}")).count(),
+                1,
+                "{suite} config must be included in the EdgionPlugins resource-wide load list"
+            );
+        }
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -308,6 +328,8 @@ fn resolve_suite(resource: Option<&str>, item: Option<&str>, legacy: Option<&str
             "webhook-keyget" | "webhookkeyget" => "EdgionPlugins/WebhookKeyGet".to_string(),
             "rate-limit-redis" | "ratelimitredis" | "rlr" => "EdgionPlugins/RateLimitRedis".to_string(),
             "dsl" => "EdgionPlugins/Dsl".to_string(),
+            "dsl-body" | "dslbody" => "EdgionPlugins/DslBody".to_string(),
+            "body-plugins" | "bodyplugins" => "EdgionPlugins/BodyPlugins".to_string(),
             "EdgionConfigDataManaged" | "edgionconfigdatamanaged" | "data-managed" => {
                 "EdgionPlugins/EdgionConfigDataManaged".to_string()
             }
@@ -490,6 +512,9 @@ fn suite_to_port_key(suite: &str) -> &str {
         "EdgionPlugins/AccessLogExtern" => "EdgionPlugins/AccessLogExtern",
         "EdgionPlugins/WebhookKeyGet" => "EdgionPlugins",
         "EdgionPlugins/Dsl" => "EdgionPlugins",
+        "EdgionPlugins/DslBody" => "EdgionPlugins",
+        "EdgionPlugins/BodyPlugins" => "EdgionPlugins",
+        "EdgionPlugins/BodyDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslDynamic" => "EdgionPlugins",
         "EdgionPlugins/DslGrpcError" => "GRPCRoute/Basic",
         "Gateway/AllowedRoutes/Selector" => "Gateway/AllowedRoutes/Selector",
@@ -1554,6 +1579,42 @@ fn add_suites_for_suite(runner: &mut TestRunner, suite: &str, gateway: bool, pha
                 std::process::exit(1);
             }
             runner.add_suite(Box::new(suites::DslTestSuite));
+        }
+        "EdgionPlugins/DslBody" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/DslBody tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::DslBodyTestSuite));
+        }
+        "EdgionPlugins/BodyPlugins" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/BodyPlugins tests require --gateway flag");
+                std::process::exit(1);
+            }
+            runner.add_suite(Box::new(suites::BodyPluginsTestSuite));
+        }
+        "EdgionPlugins/BodyDynamic" => {
+            if !gateway {
+                eprintln!("Error: EdgionPlugins/BodyDynamic tests require --gateway flag");
+                std::process::exit(1);
+            }
+            match phase {
+                Some("initial") => {
+                    runner.add_suite(Box::new(suites::BodyDynamicInitialTestSuite));
+                }
+                Some("update") => {
+                    runner.add_suite(Box::new(suites::BodyDynamicUpdateTestSuite));
+                }
+                None => {
+                    runner.add_suite(Box::new(suites::BodyDynamicInitialTestSuite));
+                    runner.add_suite(Box::new(suites::BodyDynamicUpdateTestSuite));
+                }
+                _ => {
+                    eprintln!("Error: Invalid phase '{}'. Use 'initial' or 'update'", phase.unwrap());
+                    std::process::exit(1);
+                }
+            }
         }
         "EdgionPlugins/DslDynamic" => {
             if !gateway {

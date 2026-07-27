@@ -7,6 +7,7 @@ mod access_log_extern;
 mod all_endpoint_status;
 mod bandwidth_limit;
 mod basic_auth;
+mod body_plugins;
 mod canary;
 mod cors;
 mod csrf;
@@ -59,13 +60,16 @@ pub use basic_auth::{
     BasicAuthDynamicGroupedInitialTestSuite, BasicAuthDynamicGroupedUpdateTestSuite, BasicAuthDynamicInitialTestSuite,
     BasicAuthDynamicUpdateTestSuite, BasicAuthTestSuite,
 };
+pub use body_plugins::{BodyDynamicInitialTestSuite, BodyDynamicUpdateTestSuite, BodyPluginsTestSuite};
 pub use canary::{CanaryHotSwapFinalTestSuite, CanaryHotSwapInitialTestSuite, CanaryTestSuite};
 pub use cors::CorsPluginTestSuite;
 pub use csrf::CsrfTestSuite;
 pub use ctx_set::CtxSetTestSuite;
 pub use debug_access_log::PluginLogsTestSuite;
 pub use direct_endpoint::DirectEndpointTestSuite;
-pub use dsl::{DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite, DslTestSuite};
+pub use dsl::{
+    DslBodyTestSuite, DslDynamicInitialTestSuite, DslDynamicUpdateTestSuite, DslGrpcErrorTestSuite, DslTestSuite,
+};
 pub use dynamic_external_upstream::DynamicExternalUpstreamTestSuite;
 pub use dynamic_internal_upstream::DynamicInternalUpstreamTestSuite;
 pub use edgion_config_data_managed::EdgionConfigDataManagedTestSuite;

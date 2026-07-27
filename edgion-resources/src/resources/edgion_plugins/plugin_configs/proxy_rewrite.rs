@@ -6,6 +6,7 @@
 use regex::Regex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Proxy Rewrite plugin configuration
 ///
@@ -81,6 +82,10 @@ pub struct ProxyRewriteConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub headers: Option<HeaderActions>,
 
+    /// Structural JSON request-body rewrites using RFC 6901 JSON pointers.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json_body: Option<JsonBodyRewrite>,
+
     // ========== Runtime fields (not serialized) ==========
     /// Precompiled regex pattern.
     #[serde(skip)]
@@ -128,6 +133,18 @@ pub struct HeaderEntry {
     pub name: String,
     /// Header value (supports variable substitution)
     pub value: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JsonBodyRewrite {
+    /// Values to set, keyed by JSON pointer. The pointed location must exist.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub set: BTreeMap<String, serde_json::Value>,
+
+    /// Existing locations to remove, expressed as JSON pointers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub remove: Vec<String>,
 }
 
 /// Request header operations configuration.
@@ -179,6 +196,14 @@ impl ProxyRewriteConfig {
             }
         }
 
+        if let Some(rewrite) = &self.json_body {
+            for pointer in rewrite.set.keys().chain(rewrite.remove.iter()) {
+                if !pointer.starts_with('/') {
+                    return Some(format!("JSON body pointer must start with '/': {pointer}"));
+                }
+            }
+        }
+
         None
     }
 
@@ -210,6 +235,7 @@ impl ProxyRewriteConfig {
             || self.host.is_some()
             || self.method.is_some()
             || self.headers.is_some()
+            || self.json_body.is_some()
     }
 }
 

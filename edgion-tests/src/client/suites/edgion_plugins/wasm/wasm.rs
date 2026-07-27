@@ -523,55 +523,6 @@ impl WasmPluginTestSuite {
             },
         )
     }
-
-    // ==================== 10. Response-body read-only observation ====================
-    fn test_body_observation() -> TestCase {
-        TestCase::new(
-            "plugin_wasm_body_observation",
-            "Wasm plugin: the read-only response-body hook accumulates byte counts into shared data",
-            |ctx: TestContext| {
-                Box::pin(async move {
-                    let start = Instant::now();
-                    let url = format!("{}/headers", ctx.http_url());
-                    // First request: its response body flows through the body hook,
-                    // accumulating bytes into the shared `bodybytes` counter.
-                    let _ = ctx.http_client.get(&url).header("host", ADV_HOST).send().await;
-                    // Second request reads the accumulated count.
-                    let resp = ctx
-                        .http_client
-                        .get(&url)
-                        .header("host", ADV_HOST)
-                        .header("x-wasm-read-body", "1")
-                        .send()
-                        .await;
-                    match resp {
-                        Ok(r) if r.status() == 200 => match r.json::<Value>().await {
-                            Ok(body) => {
-                                let n = body["headers"]["x-wasm-bodybytes"]
-                                    .as_str()
-                                    .and_then(|s| s.parse::<u64>().ok())
-                                    .unwrap_or(0);
-                                if n > 0 {
-                                    TestResult::passed_with_message(
-                                        start.elapsed(),
-                                        format!("Body hook observed {} response-body bytes via shared data", n),
-                                    )
-                                } else {
-                                    TestResult::failed(
-                                        start.elapsed(),
-                                        "x-wasm-bodybytes is 0 (response-body hook did not fire?)".to_string(),
-                                    )
-                                }
-                            }
-                            Err(e) => TestResult::failed(start.elapsed(), format!("JSON parse: {}", e)),
-                        },
-                        Ok(r) => TestResult::failed(start.elapsed(), format!("Expected 200, got {}", r.status())),
-                        Err(e) => TestResult::failed(start.elapsed(), format!("Request failed: {}", e)),
-                    }
-                })
-            },
-        )
-    }
 }
 
 impl TestSuite for WasmPluginTestSuite {
@@ -590,7 +541,6 @@ impl TestSuite for WasmPluginTestSuite {
             Self::test_callout_denied(),
             Self::test_tick_shared_data(),
             Self::test_tick_callout(),
-            Self::test_body_observation(),
         ]
     }
 }

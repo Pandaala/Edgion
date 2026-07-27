@@ -2,25 +2,36 @@
 //!
 //! Covers the request-header phase (`RequestFilter`) and response-header
 //! phase (the async `UpstreamResponse` hook). The processor may mutate headers
-//! or return an `ImmediateResponse` to short-circuit. Body phases are not
-//! supported (rejected at config validation).
+//! or return an `ImmediateResponse` to short-circuit. The request phase also
+//! supports a fully buffered body and body replacement. Response-body modes
+//! remain rejected until the response buffering seam exists.
 //!
 //! A single plugin type implements both traits; the runtime constructs a
 //! separate instance per stage from the same config.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 
 use super::client::ExtProcClient;
 use super::mutation;
 use crate::plugins::runtime::log::la;
 use crate::plugins::runtime::{DyeOutcome, PluginLog, PluginSession, RequestFilter, UpstreamResponse};
 use edgion_common::ext_proc::proto::{
-    processing_request, processing_response, HeaderMutation, HttpHeaders, ImmediateResponse, ProcessingRequest,
+    body_mutation, common_response::ResponseStatus, processing_request, processing_response, CommonResponse,
+    HeaderMutation, HttpBody, HttpHeaders, ImmediateResponse, ProcessingRequest,
 };
 use edgion_resources::filters::PluginRunningResult;
 use edgion_resources::plugin_configs::{ExtProcConfig, ProcessingMode};
 
 const PLUGIN_NAME: &str = "ExtProc";
+
+fn exchange_failure_reason(status: &tonic::Status) -> &'static str {
+    if status.code() == tonic::Code::FailedPrecondition {
+        "bad verdict"
+    } else {
+        "unreachable"
+    }
+}
 
 pub struct ExtProc {
     name: String,
@@ -104,6 +115,61 @@ impl ExtProc {
             }
         }
     }
+
+    async fn apply_request_common_response(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        mut common: Option<CommonResponse>,
+        apply_body_mutation: bool,
+    ) -> Result<(), PluginRunningResult> {
+        let Some(common) = common.as_mut() else {
+            return Ok(());
+        };
+        if apply_body_mutation {
+            if let Some(mutation) = common.body_mutation.take() {
+                let body = match mutation.mutation {
+                    Some(body_mutation::Mutation::Body(body)) => Some(Bytes::from(body)),
+                    Some(body_mutation::Mutation::ClearBody(true)) => Some(Bytes::new()),
+                    Some(body_mutation::Mutation::ClearBody(false)) | None => None,
+                };
+                if let Some(body) = body {
+                    session
+                        .overwrite_request_body(body)
+                        .await
+                        .map_err(|_| self.fail_mode(session, log, "body mutation failed", None))?;
+                }
+            }
+        }
+        if let Some(headers) = common.header_mutation.as_ref() {
+            let count = mutation::apply_to_request(session, headers, log);
+            log.push_fmt("req hdr mut {}", la![count.to_string().as_str()]);
+        }
+        Ok(())
+    }
+
+    fn apply_response_headers_response(
+        &self,
+        session: &mut dyn PluginSession,
+        log: &mut PluginLog,
+        common: Option<CommonResponse>,
+    ) -> PluginRunningResult {
+        if common.as_ref().is_some_and(|response| {
+            ResponseStatus::try_from(response.status).ok() == Some(ResponseStatus::ContinueAndReplace)
+        }) {
+            return self.fail_mode(
+                session,
+                log,
+                "bad verdict",
+                Some("response body replacement unsupported"),
+            );
+        }
+        if let Some(mutation) = headers_mutation(common.as_ref()) {
+            let count = mutation::apply_to_response(session, mutation, log);
+            log.push_fmt("resp hdr mut {}", la![count.to_string().as_str()]);
+        }
+        PluginRunningResult::GoodNext
+    }
 }
 
 /// Clamp a processor-supplied status code into a valid final-response range.
@@ -154,38 +220,74 @@ impl RequestFilter for ExtProc {
     }
 
     async fn run_request(&self, session: &mut dyn PluginSession, log: &mut PluginLog) -> PluginRunningResult {
-        if !self.mode.request_header_mode.is_send() {
+        let send_headers = self.mode.request_header_mode.is_send();
+        let send_body = self.mode.request_body_mode.is_buffered();
+        if !send_headers && !send_body {
             return PluginRunningResult::GoodNext;
         }
 
-        let request = ProcessingRequest {
-            request: Some(processing_request::Request::RequestHeaders(HttpHeaders {
-                headers: Some(mutation::collect_request_headers(session)),
-                end_of_stream: true,
-            })),
-        };
-
-        let resp = match self.client.exchange(request).await {
-            Ok(resp) => resp,
-            Err(status) => {
-                return self.fail_mode(session, log, "unreachable", Some(status.code().description()));
+        let body = if send_body {
+            match session.read_request_body(None).await {
+                Ok(body) => Some(body),
+                Err(_) => return self.fail_mode(session, log, "body unavailable", None),
             }
+        } else {
+            None
         };
-
-        match resp.response {
-            Some(processing_response::Response::RequestHeaders(hr)) => {
-                if let Some(m) = headers_mutation(hr.response.as_ref()) {
-                    let n = mutation::apply_to_request(session, m, log);
-                    log.push_fmt("req hdr mut {}", la![n.to_string().as_str()]);
-                }
-                PluginRunningResult::GoodNext
-            }
-            Some(processing_response::Response::ImmediateResponse(imm)) => immediate_reply(session, log, imm),
-            // Wrong phase or empty verdict: a malformed answer must honor the
-            // configured fail mode, not silently continue (which would defeat
-            // fail-close).
-            _ => self.fail_mode(session, log, "bad verdict", None),
+        let mut requests = Vec::with_capacity(2);
+        if send_headers {
+            requests.push(ProcessingRequest {
+                request: Some(processing_request::Request::RequestHeaders(HttpHeaders {
+                    headers: Some(mutation::collect_request_headers(session)),
+                    end_of_stream: !send_body,
+                })),
+            });
         }
+        if let Some(body) = body {
+            requests.push(ProcessingRequest {
+                request: Some(processing_request::Request::RequestBody(HttpBody {
+                    body: body.to_vec(),
+                    end_of_stream: true,
+                })),
+            });
+        }
+
+        let responses = match self.client.exchange_all(requests).await {
+            Ok(responses) => responses,
+            Err(status) => {
+                let reason = exchange_failure_reason(&status);
+                return self.fail_mode(session, log, reason, Some(status.code().description()));
+            }
+        };
+
+        for response in responses {
+            match response.response {
+                Some(processing_response::Response::RequestHeaders(hr)) => {
+                    let apply_body_mutation = hr.response.as_ref().is_some_and(|common| {
+                        ResponseStatus::try_from(common.status).ok() == Some(ResponseStatus::ContinueAndReplace)
+                    });
+                    if let Err(result) = self
+                        .apply_request_common_response(session, log, hr.response, apply_body_mutation)
+                        .await
+                    {
+                        return result;
+                    }
+                }
+                Some(processing_response::Response::RequestBody(br)) => {
+                    if let Err(result) = self
+                        .apply_request_common_response(session, log, br.response, true)
+                        .await
+                    {
+                        return result;
+                    }
+                }
+                Some(processing_response::Response::ImmediateResponse(imm)) => {
+                    return immediate_reply(session, log, imm);
+                }
+                _ => return self.fail_mode(session, log, "bad verdict", None),
+            }
+        }
+        PluginRunningResult::GoodNext
     }
 }
 
@@ -210,17 +312,18 @@ impl UpstreamResponse for ExtProc {
         let resp = match self.client.exchange(request).await {
             Ok(resp) => resp,
             Err(status) => {
-                return self.fail_mode(session, log, "unreachable", Some(status.code().description()));
+                return self.fail_mode(
+                    session,
+                    log,
+                    exchange_failure_reason(&status),
+                    Some(status.code().description()),
+                );
             }
         };
 
         match resp.response {
             Some(processing_response::Response::ResponseHeaders(hr)) => {
-                if let Some(m) = headers_mutation(hr.response.as_ref()) {
-                    let n = mutation::apply_to_response(session, m, log);
-                    log.push_fmt("resp hdr mut {}", la![n.to_string().as_str()]);
-                }
-                PluginRunningResult::GoodNext
+                self.apply_response_headers_response(session, log, hr.response)
             }
             Some(processing_response::Response::ImmediateResponse(imm)) => immediate_reply(session, log, imm),
             _ => self.fail_mode(session, log, "bad verdict", None),
@@ -247,6 +350,168 @@ mod tests {
             failure_mode_allow,
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn request_body_response_overwrites_buffered_body() {
+        use crate::plugins::runtime::traits::session::MockPluginSession;
+        use edgion_common::ext_proc::proto::{body_mutation, BodyMutation, CommonResponse};
+
+        let ext_proc = ExtProc::build(&test_config(false)).expect("client build must not touch the network");
+        let mut session = MockPluginSession::new();
+        session
+            .expect_overwrite_request_body()
+            .withf(|body| body.as_ref() == b"processed")
+            .returning(|_| Ok(()));
+        let response = CommonResponse {
+            body_mutation: Some(BodyMutation {
+                mutation: Some(body_mutation::Mutation::Body(b"processed".to_vec())),
+            }),
+            ..Default::default()
+        };
+        let mut log = PluginLog::new("ExtProc");
+        assert!(ext_proc
+            .apply_request_common_response(&mut session, &mut log, Some(response), true)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn header_continue_ignores_header_phase_body_mutation() {
+        use edgion_common::ext_proc::proto::{body_mutation, BodyMutation, CommonResponse};
+
+        let ext_proc = ExtProc::build(&test_config(false)).expect("client build must not touch the network");
+        let mut session = MockPluginSession::new();
+        session.expect_overwrite_request_body().never();
+        let response = CommonResponse {
+            status: ResponseStatus::Continue as i32,
+            body_mutation: Some(BodyMutation {
+                mutation: Some(body_mutation::Mutation::Body(b"must-not-apply".to_vec())),
+            }),
+            ..Default::default()
+        };
+
+        let mut log = PluginLog::new("ExtProc");
+        assert!(ext_proc
+            .apply_request_common_response(&mut session, &mut log, Some(response), false)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn request_body_response_applies_header_mutation() {
+        use edgion_common::ext_proc::proto::{HeaderAppendAction, HeaderMutation, HeaderValue, HeaderValueOption};
+
+        let ext_proc = ExtProc::build(&test_config(false)).expect("client build must not touch the network");
+        let mut session = MockPluginSession::new();
+        session
+            .expect_set_request_header()
+            .withf(|name, value| name == "x-body-verdict" && value == "applied")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let response = CommonResponse {
+            header_mutation: Some(HeaderMutation {
+                set_headers: vec![HeaderValueOption {
+                    header: Some(HeaderValue {
+                        key: "x-body-verdict".to_string(),
+                        value: "applied".to_string(),
+                        raw_value: Vec::new(),
+                    }),
+                    append_action: HeaderAppendAction::OverwriteIfExistsOrAdd as i32,
+                    keep_empty_value: false,
+                }],
+                remove_headers: Vec::new(),
+            }),
+            ..Default::default()
+        };
+
+        let mut log = PluginLog::new("ExtProc");
+        assert!(ext_proc
+            .apply_request_common_response(&mut session, &mut log, Some(response), true)
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn response_header_continue_and_replace_uses_failure_policy() {
+        let ext_proc = ExtProc::build(&test_config(true)).expect("client build must not touch the network");
+        let mut session = MockPluginSession::new();
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "bad-verdict")
+            .times(1)
+            .return_const(());
+        let response = CommonResponse {
+            status: ResponseStatus::ContinueAndReplace as i32,
+            ..Default::default()
+        };
+
+        let mut log = PluginLog::new("ExtProc");
+        assert!(matches!(
+            ext_proc.apply_response_headers_response(&mut session, &mut log, Some(response)),
+            PluginRunningResult::GoodNext
+        ));
+    }
+
+    #[tokio::test]
+    async fn request_body_mutation_failure_honors_fail_open() {
+        use crate::plugins::runtime::traits::session::BodyReadError;
+        use edgion_common::ext_proc::proto::{body_mutation, BodyMutation, CommonResponse};
+
+        let ext_proc = ExtProc::build(&test_config(true)).expect("client build must not touch the network");
+        let mut session = MockPluginSession::new();
+        session
+            .expect_overwrite_request_body()
+            .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailOpen) && value == "body-mutation-failed")
+            .times(1)
+            .return_const(());
+        let response = CommonResponse {
+            body_mutation: Some(BodyMutation {
+                mutation: Some(body_mutation::Mutation::Body(b"oversized".to_vec())),
+            }),
+            ..Default::default()
+        };
+
+        let mut log = PluginLog::new("ExtProc");
+        let result = ext_proc
+            .apply_request_common_response(&mut session, &mut log, Some(response), true)
+            .await;
+        assert!(matches!(result, Err(PluginRunningResult::GoodNext)));
+    }
+
+    #[tokio::test]
+    async fn request_body_mutation_failure_honors_fail_close() {
+        use crate::plugins::runtime::traits::session::BodyReadError;
+        use edgion_common::ext_proc::proto::{body_mutation, BodyMutation, CommonResponse};
+
+        let ext_proc = ExtProc::build(&test_config(false)).expect("client build must not touch the network");
+        let mut session = MockPluginSession::new();
+        session
+            .expect_overwrite_request_body()
+            .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
+        session
+            .expect_record_outcome()
+            .withf(|outcome, value| matches!(outcome, DyeOutcome::FailClose) && value == "body-mutation-failed")
+            .times(1)
+            .return_const(());
+        let response = CommonResponse {
+            body_mutation: Some(BodyMutation {
+                mutation: Some(body_mutation::Mutation::Body(b"oversized".to_vec())),
+            }),
+            ..Default::default()
+        };
+
+        let mut log = PluginLog::new("ExtProc");
+        let result = ext_proc
+            .apply_request_common_response(&mut session, &mut log, Some(response), true)
+            .await;
+        assert!(matches!(
+            result,
+            Err(PluginRunningResult::ErrResponse { status: 500, .. })
+        ));
     }
 
     /// `fail_mode` is the single choke point both `run_request` and

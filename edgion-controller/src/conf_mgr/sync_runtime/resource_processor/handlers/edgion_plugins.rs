@@ -3098,6 +3098,7 @@ mod tests {
                 ..Default::default()
             },
             request,
+            forward_body: false,
             decision: ForwardAuthDecision::default(),
             resolved_secrets: None,
         };

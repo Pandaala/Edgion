@@ -1,0 +1,19 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: hmac-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: HmacAuth
+      config:
+        secretGroups:
+          - name: default
+            secretRefs:
+              - name: hmac-body-credentials
+                namespace: edgion-default
+        algorithms: [hmac-sha256]
+        clockSkew: 300
+        enforceHeaders: ["@request-target", host, date, digest]
+        validateRequestBody: true

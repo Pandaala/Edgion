@@ -217,7 +217,32 @@ impl RequestFilter for RequestMirrorPlugin {
                 return PluginRunningResult::GoodNext;
             }
         };
-        let headers = self.build_headers(session, &target);
+        #[cfg(feature = "body-buffering")]
+        let has_committed_body = session.ctx().request_body.is_some();
+        #[cfg(not(feature = "body-buffering"))]
+        let has_committed_body = false;
+
+        let committed_body = if has_committed_body {
+            match session.read_request_body(None).await {
+                Ok(body) => Some(body),
+                Err(_) => {
+                    log.push_err("mirror body snapshot error");
+                    return PluginRunningResult::GoodNext;
+                }
+            }
+        } else {
+            None
+        };
+
+        let mut headers = self.build_headers(session, &target);
+        if committed_body.is_some() {
+            // This mirror hop owns framing for the immutable snapshot. The
+            // downstream Content-Length may describe V0 rather than the
+            // committed version, and reqwest derives the correct length from
+            // Body::from(Bytes).
+            headers.remove(reqwest::header::CONTENT_LENGTH);
+            headers.remove(reqwest::header::TRANSFER_ENCODING);
+        }
         let x_trace_id = session
             .ctx()
             .request_info
@@ -236,6 +261,7 @@ impl RequestFilter for RequestMirrorPlugin {
         let task_channel_full_flag = channel_full_flag.clone();
 
         let channel_full_timeout_ms = self.tuning.channel_full_timeout_ms;
+        let uses_committed_snapshot = committed_body.is_some();
 
         let writer_handle = tokio::spawn(async move {
             let _permit = permit;
@@ -244,8 +270,12 @@ impl RequestFilter for RequestMirrorPlugin {
 
             // Arc<AtomicU64> instead of Rc<Cell<u64>>: tokio::spawn requires Send futures,
             // so Rc is not usable here even though the closure runs in a single task.
-            let bytes_sent = Arc::new(AtomicU64::new(0));
-            let chunks_sent = Arc::new(AtomicU64::new(0));
+            let bytes_sent = Arc::new(AtomicU64::new(
+                committed_body.as_ref().map_or(0, |body| body.len() as u64),
+            ));
+            let chunks_sent = Arc::new(AtomicU64::new(u64::from(
+                committed_body.as_ref().is_some_and(|body| !body.is_empty()),
+            )));
 
             let bytes_ref = bytes_sent.clone();
             let chunks_ref = chunks_sent.clone();
@@ -257,12 +287,15 @@ impl RequestFilter for RequestMirrorPlugin {
                 chunk_result
             });
 
-            let stream_body = reqwest::Body::wrap_stream(tracked_stream);
+            let mirror_body = match committed_body {
+                Some(body) => reqwest::Body::from(body),
+                None => reqwest::Body::wrap_stream(tracked_stream),
+            };
             let send_result = tokio::time::timeout(total_timeout, async {
                 client
                     .request(method, &url)
                     .headers(headers)
-                    .body(stream_body)
+                    .body(mirror_body)
                     .send()
                     .await
             })
@@ -270,7 +303,11 @@ impl RequestFilter for RequestMirrorPlugin {
 
             let (status, error) = match send_result {
                 Ok(Ok(resp)) => {
-                    let _ = resp.bytes().await;
+                    // The mirrored response is intentionally irrelevant to the
+                    // main request. Dropping it after the headers avoids both
+                    // unbounded aggregation and letting an infinite response
+                    // retain the mirror concurrency permit.
+                    drop(resp);
                     ("ok", None)
                 }
                 Ok(Err(e)) => {
@@ -311,12 +348,20 @@ impl RequestFilter for RequestMirrorPlugin {
             record_mirror_metric(status);
         });
 
-        session.set_mirror_state(MirrorState::Streaming {
-            body_tx,
-            writer_handle,
-            channel_full_flag,
-            channel_full_timeout_ms,
-        });
+        if uses_committed_snapshot {
+            // Dropping a JoinHandle detaches the task. No request-body-filter
+            // state is installed because the task owns an immutable body
+            // snapshot and never consumes Pingora's replay cursor.
+            drop(body_tx);
+            drop(writer_handle);
+        } else {
+            session.set_mirror_state(MirrorState::Streaming {
+                body_tx,
+                writer_handle,
+                channel_full_flag,
+                channel_full_timeout_ms,
+            });
+        }
         log.push("mirror sent");
         PluginRunningResult::GoodNext
     }

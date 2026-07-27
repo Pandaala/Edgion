@@ -13,13 +13,16 @@ spec:
     - matches:
         - path:
             type: PathPrefix
-            value: /test/dsl-req-body-read
+            value: /
       filters:
         - type: ExtensionRef
           extensionRef:
             group: edgion.io
             kind: EdgionPlugins
             name: dsl-req-body-read
+      retry:
+        attempts: 2
+        codes: [503]
       backendRefs:
         - name: test-http
           namespace: edgion-test

@@ -4,6 +4,7 @@
 //! Supports URI, Host, Method, and Headers modification.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use regex::Regex;
 use std::sync::LazyLock;
@@ -336,6 +337,90 @@ impl ProxyRewrite {
             }
         }
     }
+
+    async fn modify_json_body(
+        &self,
+        session: &mut dyn PluginSession,
+        plugin_log: &mut PluginLog,
+    ) -> Result<(), PluginRunningResult> {
+        let Some(rewrite) = &self.config.json_body else {
+            return Ok(());
+        };
+        let body = session.read_request_body(None).await.map_err(|_| {
+            plugin_log.push_err("json body unavailable");
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            }
+        })?;
+        let mut value: serde_json::Value = serde_json::from_slice(&body).map_err(|_| {
+            plugin_log.push_err("json body invalid");
+            PluginRunningResult::ErrResponse {
+                status: 400,
+                body: None,
+            }
+        })?;
+
+        for pointer in &rewrite.remove {
+            remove_json_pointer(&mut value, pointer).map_err(|_| {
+                plugin_log.push_err("json remove failed");
+                PluginRunningResult::ErrResponse {
+                    status: 400,
+                    body: None,
+                }
+            })?;
+        }
+        for (pointer, replacement) in &rewrite.set {
+            let target = value.pointer_mut(pointer).ok_or_else(|| {
+                plugin_log.push_err("json set failed");
+                PluginRunningResult::ErrResponse {
+                    status: 400,
+                    body: None,
+                }
+            })?;
+            *target = replacement.clone();
+        }
+
+        let body = serde_json::to_vec(&value).map_err(|_| PluginRunningResult::ErrResponse {
+            status: 500,
+            body: None,
+        })?;
+        session
+            .overwrite_request_body(Bytes::from(body))
+            .await
+            .map_err(|_| PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None,
+            })?;
+        plugin_log.push("json body rewrite");
+        Ok(())
+    }
+}
+
+fn decode_pointer_token(token: &str) -> String {
+    token.replace("~1", "/").replace("~0", "~")
+}
+
+fn remove_json_pointer(value: &mut serde_json::Value, pointer: &str) -> Result<(), ()> {
+    let (parent, leaf) = pointer.rsplit_once('/').ok_or(())?;
+    let parent = if parent.is_empty() {
+        value
+    } else {
+        value.pointer_mut(parent).ok_or(())?
+    };
+    let leaf = decode_pointer_token(leaf);
+    match parent {
+        serde_json::Value::Object(map) => map.remove(&leaf).map(|_| ()).ok_or(()),
+        serde_json::Value::Array(items) => {
+            let index = leaf.parse::<usize>().map_err(|_| ())?;
+            if index >= items.len() {
+                return Err(());
+            }
+            items.remove(index);
+            Ok(())
+        }
+        _ => Err(()),
+    }
 }
 
 #[async_trait]
@@ -349,6 +434,10 @@ impl RequestFilter for ProxyRewrite {
         if self.config.validation_error().is_some() {
             plugin_log.push_err("config invalid");
             return PluginRunningResult::GoodNext;
+        }
+
+        if let Err(result) = self.modify_json_body(session, plugin_log).await {
+            return result;
         }
 
         // Get original path and query for variable substitution and preservation
@@ -388,6 +477,33 @@ impl RequestFilter for ProxyRewrite {
 mod tests {
     use super::*;
     use crate::plugins::runtime::traits::session::MockPluginSession;
+    use edgion_resources::resources::edgion_plugins::JsonBodyRewrite;
+    use std::collections::BTreeMap;
+
+    #[tokio::test]
+    async fn json_body_rewrite_sets_removes_and_overwrites_buffer() {
+        let mut set = BTreeMap::new();
+        set.insert("/name".to_string(), serde_json::json!("gateway"));
+        let plugin = ProxyRewrite::new(&ProxyRewriteConfig {
+            json_body: Some(JsonBodyRewrite {
+                set,
+                remove: vec!["/secret".to_string()],
+            }),
+            ..Default::default()
+        });
+        let mut session = MockPluginSession::new();
+        session
+            .expect_read_request_body()
+            .returning(|_| Ok(Bytes::from_static(br#"{"name":"old","secret":"drop"}"#)));
+        session
+            .expect_overwrite_request_body()
+            .withf(|body| body.as_ref() == br#"{"name":"gateway"}"#)
+            .returning(|_| Ok(()));
+        let mut log = PluginLog::new("ProxyRewrite");
+
+        assert!(plugin.modify_json_body(&mut session, &mut log).await.is_ok());
+        assert!(log.contains("json body rewrite"));
+    }
     use edgion_resources::resources::edgion_plugins::RegexUri;
 
     #[tokio::test]
@@ -402,6 +518,7 @@ mod tests {
             host: None,
             method: None,
             headers: None,
+            json_body: None,
             compiled_regex: None,
         };
 

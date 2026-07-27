@@ -1,0 +1,24 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: wasm-body
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - enable: true
+      type: Wasm
+      body:
+        maxBodySize: 1MiB
+      config:
+        source:
+          file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
+        failOpen: false
+        timeoutMs: 1000
+  upstreamResponseBodyFilterPlugins:
+    - enable: true
+      type: Wasm
+      config:
+        source:
+          file: ../../../edgion-tests/wasm/artifacts/header_demo.wasm
+        failOpen: false
+        timeoutMs: 1000

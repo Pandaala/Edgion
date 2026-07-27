@@ -1152,6 +1152,8 @@ run_all_tests() {
                     run_test "EdgionPlugins_Cors" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Cors" || test_failed=true
                     run_test "EdgionPlugins_Dsl" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Dsl" || test_failed=true
                     run_test "EdgionPlugins_DslGrpcError" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
+                    run_test "EdgionPlugins_DslBody" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslBody" || test_failed=true
+                    run_test "EdgionPlugins_BodyPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i BodyPlugins" || test_failed=true
                     if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
                         run_test "EdgionPlugins_AllEndpointStatus" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
                     else
@@ -1348,6 +1350,8 @@ run_all_tests() {
         run_test "EdgionPlugins_WebhookKeyGet" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i WebhookKeyGet" || test_failed=true
         run_test "EdgionPlugins_Dsl" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i Dsl" || test_failed=true
         run_test "EdgionPlugins_DslGrpcError" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslGrpcError" || test_failed=true
+        run_test "EdgionPlugins_DslBody" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i DslBody" || test_failed=true
+        run_test "EdgionPlugins_BodyPlugins" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i BodyPlugins" || test_failed=true
         if ! should_skip_test "EdgionPlugins_AllEndpointStatus"; then
             run_test "EdgionPlugins_AllEndpointStatus" "${EDGION_TEST_CLIENT_BIN} -g -r EdgionPlugins -i AllEndpointStatus" || test_failed=true
         else
@@ -1494,7 +1498,7 @@ main() {
             base_suites="${base_suites},EdgionPlugins/base"
             # When running all EdgionPlugins tests, load all plugin configs
             if [ -z "$G_ITEM" ]; then
-                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/GlobalAccessControl,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/AllEndpointStatus"
+                suites="${base_suites},EdgionPlugins/DebugAccessLog,EdgionPlugins/PluginCondition,EdgionPlugins/CtxSet,EdgionPlugins/BasicAuth,EdgionPlugins/JwtAuth,EdgionPlugins/JweDecrypt,EdgionPlugins/HmacAuth,EdgionPlugins/HeaderCertAuth,EdgionPlugins/KeyAuth,EdgionPlugins/ProxyRewrite,EdgionPlugins/RateLimit,EdgionPlugins/RealIp,EdgionPlugins/ResponseRewrite,EdgionPlugins/RequestRestriction,EdgionPlugins/GlobalAccessControl,EdgionPlugins/IpRestrictionPartialGood,EdgionPlugins/PathNormalization,EdgionPlugins/PathNormalization/ForwardView,EdgionPlugins/FaultInjection,EdgionPlugins/ForwardAuth,EdgionPlugins/OpenidConnect,EdgionPlugins/BandwidthLimit,EdgionPlugins/DirectEndpoint,EdgionPlugins/DynamicInternalUpstream,EdgionPlugins/DynamicExternalUpstream,EdgionPlugins/RegionRoute,EdgionPlugins/GlobalConnectionIpRestriction,EdgionPlugins/WebhookKeyGet,EdgionPlugins/Dsl,EdgionPlugins/DslGrpcError,EdgionPlugins/DslBody,EdgionPlugins/BodyPlugins,EdgionPlugins/AllEndpointStatus"
                 if $FULL_TEST; then
                     suites="${suites},EdgionPlugins/LdapAuth,EdgionPlugins/LdapAuthTls"
                 fi

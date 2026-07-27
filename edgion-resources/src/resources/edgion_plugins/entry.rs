@@ -470,10 +470,9 @@ pub struct UpstreamResponseEntry {
     #[schemars(skip)]
     pub policy_action: Option<crate::resources::plugin_policy::PluginPolicyAction>,
 
-    /// Optional body requirement. When set (by the operator) or declared
-    /// intrinsically by the plugin, the runtime wraps the plugin in a body gate
-    /// that buffers the response body and applies the configured fail-open /
-    /// fail-close policy on a read failure.
+    /// Reserved body requirement. Proxied upstream responses are
+    /// streaming-only, so validation rejects this field for every currently
+    /// supported response-stage plugin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<BodyRequirement>,
 

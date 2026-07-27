@@ -78,7 +78,7 @@ pub use linksys_ref::LinkSysRef;
 pub use lru_cache_config::LruCacheConfig;
 pub use mock::MockConfig;
 pub use openid_connect::{EndpointAuthMethod, OpenidConnectConfig, UnauthAction, VerificationMode};
-pub use proxy_rewrite::{HeaderActions, HeaderEntry, HttpMethod, ProxyRewriteConfig, RegexUri};
+pub use proxy_rewrite::{HeaderActions, HeaderEntry, HttpMethod, JsonBodyRewrite, ProxyRewriteConfig, RegexUri};
 pub use rate_limit::{LimitHeaderNames, OnMissingKey, RateLimitConfig, RateLimitScope};
 pub use rate_limit_redis::{OnRedisFailure, RateLimitAlgorithm, RateLimitPolicy, RateLimitRedisConfig};
 pub use real_ip::RealIpConfig;

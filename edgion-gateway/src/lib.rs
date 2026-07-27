@@ -117,6 +117,8 @@ pub mod link_sys;
 pub mod observe;
 #[cfg(any(feature = "body-buffering", feature = "upstream-pingora"))]
 pub mod plugins;
+#[cfg(feature = "body-buffering")]
+pub mod request_body;
 #[cfg(any(feature = "body-buffering", feature = "upstream-pingora"))]
 pub mod routes;
 #[cfg(any(feature = "body-buffering", feature = "upstream-pingora"))]

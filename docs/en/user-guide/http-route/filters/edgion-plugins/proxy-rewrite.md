@@ -45,6 +45,9 @@ spec:
 | `headers.add` | Array\<Object\> | none | Add request headers (append to existing values) |
 | `headers.set` | Array\<Object\> | none | Set request headers (overwrite existing values) |
 | `headers.remove` | Array\<String\> | none | Remove request headers |
+| `jsonBody` | Object | none | Structurally rewrite a buffered JSON request body |
+| `jsonBody.set` | Object | `{}` | Map of existing JSON Pointer targets to replacement JSON values |
+| `jsonBody.remove` | Array\<String\> | `[]` | JSON Pointer targets to remove before applying `set` |
 
 ### Variable Reference
 
@@ -271,6 +274,22 @@ When multiple rewriting operations are configured simultaneously, the execution 
 ---
 
 ## Important Notes
+
+### JSON body rewrite
+
+`jsonBody` activates request buffering. Every path uses JSON Pointer syntax and
+must start with `/`. `remove` runs first; each `set` target must exist after
+removals. Invalid JSON or an invalid/missing target returns `400`.
+
+```yaml
+config:
+  jsonBody:
+    remove:
+      - /credentials/password
+    set:
+      /profile/tier: premium
+      /enabled: true
+```
 
 ### 1. URI vs regexUri Priority
 

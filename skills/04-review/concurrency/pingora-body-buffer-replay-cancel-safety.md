@@ -53,7 +53,11 @@ commit before rewinding, so a retry never skips the first chunk.
 - `consume` is just "advance the logical cursor by N" — keep it a plain field update.
 - Copy the poll-once-then-drop test harness
   (`replay_survives_select_cancellation` in `pingora-core/.../v1/server.rs`) against
-  the disk impl.
+  the disk impl. Also copy the mid-Replaying retry-rewind harness (BC-011):
+  `rewind_from_mid_replay_re_serves_full_body` (v1) and
+  `test_early_body_buffer_rewind_from_mid_replay_h2` (v2) — multi-chunk replay,
+  rewind with a pending commit, and rewind after a cancelled in-flight read; this
+  is where cursor vs pending-commit vs fd state is most likely to go wrong.
 
 ## Re-evaluation Triggers
 
