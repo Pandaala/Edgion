@@ -13,22 +13,38 @@
 Edgion is a Kubernetes gateway built on Rust + Pingora, using a Controller–Gateway split architecture with gRPC-based configuration sync.
 It supports HTTP/1.1, HTTP/2, gRPC, TCP, UDP, TLS, and WebSocket, and includes a plugin system, load balancing, and TLS/mTLS.
 
-**Three binaries**: Controller (handles K8s resources), Gateway (data-plane proxy), edgion-cli (CLI debugging tool). The federation Center has been extracted to the separate EdgionCenter repository.
+**Three product binary roles**: Controller (handles K8s resources), Gateway
+(data-plane proxy), and edgion-cli (CLI debugging tool). Gateway also has the
+diagnostic `edgion-gateway-stock` artifact, compiled against original
+Pingora for regression comparison. The federation Center has been extracted to
+the separate EdgionCenter repository.
 
 **Workspace layout** (Cargo workspace, resolver 2): the code is split across crates rather than one root crate —
 - `edgion-dsl` — EdgionDSL language core: nom parser, bytecode compiler, static validator, and the config-independent compile/validate entry points (`resolve_script`, `check_redis_link_names`). Leaf crate with no workspace-internal deps. VM execution and builtin runtime dispatch stay in `edgion-gateway`.
 - `edgion-resources` — shared resource/config schema. Depends only on `edgion-dsl` (so `DslConfig` validation can run the real compiler).
-- `edgion-common` — shared infra: config loader, observability/log bootstrap, secret store, link-system core (+ etcd provider), TLS validation, auth, conf_sync/fed_sync proto codegen. Depends on `edgion-resources`. Backend-agnostic (TLS backend flows in via workspace `pingora-core` feature unification). Exposes a `test-util` feature for cross-crate test helpers.
+- `edgion-common` — shared infra: config loader, observability/log bootstrap, secret store, link-system core (+ etcd provider), TLS validation, auth, conf_sync/fed_sync proto codegen. Depends on `edgion-resources`. Backend-agnostic and does not link Pingora. Exposes a `test-util` feature for cross-crate test helpers.
 - `edgion-gateway` — data plane; the `edgion-gateway` binary lives here. Owns `boringssl`/`rustls` + allocator features.
 - `edgion-controller` — control plane; the `edgion-controller` binary lives here. Depends only on `edgion-common`/`edgion-resources` — **not** on `edgion-gateway`. Plugin validation on resource ingest runs the schema-layer `EdgionPlugins::validate_plugins` (in `edgion-resources`), which reproduces the gateway `compile_plugins` preparse errors in full — DSL scripts are compiled and statically validated via the shared `edgion-dsl` crate; the only gateway-only residual is DSL VM init (`Vm::new`), which cannot be predicted statically. The former `controller → gateway` edge is gone, so the workspace dependency graph is a clean DAG (`dsl → resources → common → {gateway, controller, cli}`).
 - `edgion-cli` — the `edgion-cli` binary + lib; depends only on `edgion-common`/`edgion-resources`.
 - `edgion-tests` — the end-to-end integration-test harness; a workspace member kept out of `default-members`. Owns the test/helper bins (`test_server`, `test_client`, `cache_residue`, …). There is **no** root `edgion` package — the workspace root is a virtual manifest.
 
-Each binary crate sets its own `#[global_allocator]`; libraries set none. Because each binary is its own package, the precise form is `cargo build -p <crate> --bin <name>`. The three main binaries (`edgion-gateway`, `edgion-controller`, `edgion-cli`) are all in `default-members`, so a bare `cargo build --bin <name>` from the workspace root *does* resolve them. The bins that do NOT resolve bare are the ones in `edgion-tests` (`test_server`, `test_client`), since that crate is deliberately excluded from `default-members` — build those with `cargo build -p edgion-tests --bin <name>`.
+Each binary crate sets its own `#[global_allocator]`; libraries set none.
+Because each binary is its own package, the precise form is
+`cargo build -p <crate> --bin <name>`. The three main binaries
+(`edgion-gateway`, `edgion-controller`, `edgion-cli`) are all in
+`default-members`, so a bare `cargo build --bin <name>` from the workspace root
+*does* resolve them. The diagnostic `edgion-gateway-stock` target requires
+the `upstream-pingora` feature and must use the explicit command in
+`skills/02-features/01-binary-and-deployment/02-feature-flags.md`. The bins
+that do NOT resolve bare are the ones in `edgion-tests` (`test_server`,
+`test_client`), since that crate is deliberately excluded from
+`default-members` — build those with
+`cargo build -p edgion-tests --bin <name>`.
 
 **Feature Flags** (mutually exclusive — pay attention at build time):
 - TLS backend: `boringssl` (default) | `rustls`
 - Memory allocator: `allocator-jemalloc` (default) | `allocator-mimalloc` | `allocator-system`
+- Gateway Pingora source: `body-buffering` (default Edgion fork) | `upstream-pingora` (original Pingora 0.8.1)
 
 **BoringSSL FIPS (image-only)**: `fips` is a gateway cargo feature enabled only in release/CI
 Docker builds (requires `boringssl`; not a default, not toggled at runtime). On a FIPS build,

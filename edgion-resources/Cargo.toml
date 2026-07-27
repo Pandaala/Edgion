@@ -36,10 +36,6 @@ url.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 
-# Pingora (err.rs `Error`, `TcpKeepaliveConfig::to_pingora`); TLS backend feature
-# is supplied by the workspace via feature unification with the binary crates.
-pingora-core.workspace = true
-
 # Auth / crypto config helpers
 jsonwebtoken.workspace = true
 zeroize.workspace = true

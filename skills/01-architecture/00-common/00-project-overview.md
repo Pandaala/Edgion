@@ -56,7 +56,9 @@ Cargo workspace with crate-owned binary entry points:
 
 Example binaries (used in testing): `test_server`, `test_client`, `test_client_direct`, `resource_diff`, `config_load_validator`.
 
-The Gateway and Controller binary crates default to `allocator-jemalloc` + `boringssl`; the CLI defaults only to `allocator-jemalloc`. Library crates do not share that binary-feature default.
+The Gateway defaults to `allocator-jemalloc` + `boringssl` + `body-buffering`.
+The Controller and CLI default only to `allocator-jemalloc`. Library crates do
+not share those binary-feature defaults.
 
 ## Code directory organization
 

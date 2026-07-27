@@ -195,7 +195,10 @@ impl EdgionTcpProxy {
 
         // 7. Connect to upstream
         let mut peer = BasicPeer::new(&upstream_addr_str);
-        peer.options.tcp_keepalive = unit.tcp_keepalive.as_ref().map(|k| k.to_pingora());
+        peer.options.tcp_keepalive = unit
+            .tcp_keepalive
+            .as_ref()
+            .map(crate::routes::common::to_pingora_tcp_keepalive);
         // Bound the connect (TCP handshake) so an unreachable backend fails fast
         // instead of stranding the downstream connection until the OS TCP
         // retransmit timeout; mirrors the HTTP path's connection_timeout.

@@ -12,11 +12,148 @@ use edgion_tests::{dynamic, port_config, suites};
 
 use anyhow::Result;
 use clap::Parser;
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::Once;
+use std::sync::{Once, OnceLock};
 use std::time::Instant;
 
 static INIT: Once = Once::new();
+static CAPABILITY_REGISTRY: OnceLock<String> = OnceLock::new();
+const KNOWN_GATEWAY_CAPABILITIES: &[&str] = &["body-buffering"];
+
+fn capability_entry_applies(kind: &str, entry_id: &str, id: &str) -> bool {
+    entry_id == id || (kind == "suite" && id.strip_prefix(entry_id).is_some_and(|suffix| suffix.starts_with('/')))
+}
+
+fn validate_capability_registry(contents: &str) -> Result<()> {
+    let mut entries = HashSet::new();
+    let conf_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("integration/conf");
+    for (index, raw_line) in contents.lines().enumerate() {
+        let line = raw_line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let fields: Vec<_> = line.split('\t').collect();
+        if fields.len() != 3 {
+            anyhow::bail!(
+                "capability registry line {} must contain exactly three tab-separated fields",
+                index + 1
+            );
+        }
+        let (kind, id, capability) = (fields[0], fields[1], fields[2]);
+        if !matches!(kind, "suite" | "dynamic") {
+            anyhow::bail!("capability registry line {} has unknown kind `{kind}`", index + 1);
+        }
+        if id.is_empty() || capability.is_empty() {
+            anyhow::bail!("capability registry line {} contains an empty field", index + 1);
+        }
+        if !KNOWN_GATEWAY_CAPABILITIES.contains(&capability) {
+            anyhow::bail!(
+                "capability registry line {} has unknown capability `{capability}`",
+                index + 1
+            );
+        }
+        if !entries.insert((kind, id)) {
+            anyhow::bail!("capability registry contains duplicate {kind} id `{id}`");
+        }
+        match kind {
+            "suite" if !conf_root.join(id).is_dir() => {
+                anyhow::bail!(
+                    "capability registry suite `{id}` does not exist under {}",
+                    conf_root.display()
+                );
+            }
+            "dynamic" if !dynamic::all().iter().any(|scenario| scenario.id == id) => {
+                anyhow::bail!("capability registry dynamic scenario `{id}` is not registered");
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn capability_registry() -> Result<&'static str> {
+    if CAPABILITY_REGISTRY.get().is_none() {
+        let path = std::env::var_os("EDGION_CAPABILITY_REGISTRY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("integration/capabilities.tsv"));
+        let contents =
+            std::fs::read_to_string(&path).map_err(|err| anyhow::anyhow!("read {}: {err}", path.display()))?;
+        validate_capability_registry(&contents)?;
+        let _ = CAPABILITY_REGISTRY.set(contents);
+    }
+    Ok(CAPABILITY_REGISTRY.get().expect("capability registry initialized"))
+}
+
+fn required_capability(kind: &str, id: &str) -> Result<Option<&'static str>> {
+    Ok(capability_registry()?.lines().find_map(|line| {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            return None;
+        }
+        let mut fields = line.split('\t');
+        match (fields.next(), fields.next(), fields.next(), fields.next()) {
+            (Some(entry_kind), Some(entry_id), Some(capability), None)
+                if entry_kind == kind && capability_entry_applies(kind, entry_id, id) =>
+            {
+                Some(capability)
+            }
+            _ => None,
+        }
+    }))
+}
+
+fn gateway_has_capability(capability: &str) -> bool {
+    std::env::var("EDGION_TEST_GATEWAY_CAPABILITIES")
+        .ok()
+        .is_some_and(|value| value.lines().any(|line| line == format!("{capability}=enabled")))
+}
+
+fn missing_capability(kind: &str, id: &str) -> Result<Option<&'static str>> {
+    Ok(required_capability(kind, id)?.filter(|capability| !gateway_has_capability(capability)))
+}
+
+#[cfg(test)]
+mod capability_tests {
+    use super::{capability_entry_applies, validate_capability_registry};
+
+    #[test]
+    fn empty_registry_is_valid() {
+        validate_capability_registry("# kind\tid\trequired-capability\n").unwrap();
+    }
+
+    #[test]
+    fn rejects_malformed_unknown_and_duplicate_entries() {
+        assert!(validate_capability_registry("suite base body-buffering\n").is_err());
+        assert!(validate_capability_registry("suite\tbase\tunknown\n").is_err());
+        assert!(validate_capability_registry("other\tbase\tbody-buffering\n").is_err());
+        assert!(validate_capability_registry("suite\tbase\tbody-buffering\nsuite\tbase\tbody-buffering\n").is_err());
+    }
+
+    #[test]
+    fn suite_capability_applies_to_nested_config_only() {
+        assert!(capability_entry_applies(
+            "suite",
+            "EdgionPlugins/Body",
+            "EdgionPlugins/Body"
+        ));
+        assert!(capability_entry_applies(
+            "suite",
+            "EdgionPlugins/Body",
+            "EdgionPlugins/Body/initial"
+        ));
+        assert!(!capability_entry_applies(
+            "suite",
+            "EdgionPlugins/Body",
+            "EdgionPlugins/BodyOther"
+        ));
+        assert!(!capability_entry_applies(
+            "dynamic",
+            "body-reload",
+            "body-reload/initial"
+        ));
+    }
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "test-client")]
@@ -1877,6 +2014,13 @@ async fn main() -> Result<()> {
 
     // --dynamic-scenario <id>: run a single scenario and exit.
     if let Some(ref sid) = cli.dynamic_scenario {
+        if let Some(capability) = missing_capability("dynamic", sid)? {
+            if std::env::var("EDGION_INTEGRATION_EXPLICIT_TARGET").as_deref() != Ok("0") {
+                anyhow::bail!("dynamic scenario `{sid}` requires Gateway capability `{capability}`");
+            }
+            println!("SKIPPED: dynamic scenario `{sid}` requires Gateway capability `{capability}`");
+            return Ok(());
+        }
         return run_dynamic_scenario(&cli, sid).await;
     }
 
@@ -1886,6 +2030,14 @@ async fn main() -> Result<()> {
         cli.item.as_deref(),
         cli.legacy_command.as_deref(),
     );
+
+    if let Some(capability) = missing_capability("suite", &suite)? {
+        if std::env::var("EDGION_INTEGRATION_EXPLICIT_TARGET").as_deref() != Ok("0") {
+            anyhow::bail!("suite `{suite}` requires Gateway capability `{capability}`");
+        }
+        println!("SKIPPED: suite `{suite}` requires Gateway capability `{capability}`");
+        return Ok(());
+    }
 
     // Port config key
     let port_key = suite_to_port_key(&suite);

@@ -105,16 +105,22 @@ instant-acme = "0.8.4"
 boring = "4"
 boring-sys = "4"
 
-# Pingora. IMPORTANT: declared WITHOUT a TLS backend feature. Workspace-dep
-# features are additive, so the backend each binary crate selects (via its own
-# `[features]` forwarding `pingora-core/boringssl` etc.) is unioned in — putting
-# `boringssl`/`rustls` here would force it onto every member.
-pingora-core = { version = "0.8.1", features = ["connection_filter"] }
-pingora-http = "0.8.1"
-pingora-proxy = "0.8.1"
-pingora-limits = "0.8.1"
-pingora-load-balancing = "0.8.1"
-pingora-ketama = "0.8.1"
+# Pingora source families. The Gateway selects exactly one complete family so
+# public types never cross a registry/Git source boundary. Pin the fork to an
+# immutable revision so standalone and CI builds are reproducible.
+pingora-core-upstream = { package = "pingora-core", version = "=0.8.1", features = ["connection_filter"] }
+pingora-http-upstream = { package = "pingora-http", version = "=0.8.1" }
+pingora-proxy-upstream = { package = "pingora-proxy", version = "=0.8.1" }
+pingora-limits-upstream = { package = "pingora-limits", version = "=0.8.1" }
+pingora-load-balancing-upstream = { package = "pingora-load-balancing", version = "=0.8.1" }
+pingora-ketama-upstream = { package = "pingora-ketama", version = "=0.8.1" }
+
+pingora-core-edgion = { package = "pingora-core", git = "https://github.com/Pandaala/pingora.git", rev = "a901689110cf603e02b878a11afdca0ce9cc1f79", features = ["connection_filter"] }
+pingora-http-edgion = { package = "pingora-http", git = "https://github.com/Pandaala/pingora.git", rev = "a901689110cf603e02b878a11afdca0ce9cc1f79" }
+pingora-proxy-edgion = { package = "pingora-proxy", git = "https://github.com/Pandaala/pingora.git", rev = "a901689110cf603e02b878a11afdca0ce9cc1f79" }
+pingora-limits-edgion = { package = "pingora-limits", git = "https://github.com/Pandaala/pingora.git", rev = "a901689110cf603e02b878a11afdca0ce9cc1f79" }
+pingora-load-balancing-edgion = { package = "pingora-load-balancing", git = "https://github.com/Pandaala/pingora.git", rev = "a901689110cf603e02b878a11afdca0ce9cc1f79" }
+pingora-ketama-edgion = { package = "pingora-ketama", git = "https://github.com/Pandaala/pingora.git", rev = "a901689110cf603e02b878a11afdca0ce9cc1f79" }
 
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros", "ws"] }

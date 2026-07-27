@@ -165,26 +165,11 @@ pub struct Condition {
 
 /// Resolved, comparable TCP keepalive configuration for an L4 upstream.
 ///
-/// Deliberately an Edgion-local type rather than Pingora's `TcpKeepalive`:
-/// it is `PartialEq`/`Eq` (Pingora's is not). Converted to Pingora's runtime
-/// type at the data-plane edge via [`TcpKeepaliveConfig::to_pingora`].
+/// Deliberately an Edgion-local type rather than a data-plane runtime type so
+/// the shared schema crate does not depend on a specific proxy implementation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TcpKeepaliveConfig {
     pub idle: std::time::Duration,
     pub interval: std::time::Duration,
     pub count: usize,
-}
-
-impl TcpKeepaliveConfig {
-    /// Convert to Pingora's runtime keepalive type. `user_timeout` is
-    /// Linux-only; `Duration::ZERO` tells the kernel to use the system default.
-    pub fn to_pingora(&self) -> pingora_core::protocols::l4::ext::TcpKeepalive {
-        pingora_core::protocols::l4::ext::TcpKeepalive {
-            idle: self.idle,
-            interval: self.interval,
-            count: self.count,
-            #[cfg(target_os = "linux")]
-            user_timeout: std::time::Duration::ZERO,
-        }
-    }
 }

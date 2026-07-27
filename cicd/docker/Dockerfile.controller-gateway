@@ -7,6 +7,7 @@
 #
 # Build arguments:
 #   BINARY_PATH:  Path to pre-built backend binaries (e.g. target/aarch64-unknown-linux-gnu/release)
+#   GATEWAY_BINARY: Gateway artifact to package (default: edgion-gateway)
 #   RUNTIME_BASE: Runtime base image (default: debian:bookworm-slim)
 #
 # Usage (called by build-image.sh --controller-gateway):
@@ -18,6 +19,7 @@ ARG RUNTIME_BASE=debian:bookworm-slim
 FROM ${RUNTIME_BASE}
 
 ARG BINARY_PATH
+ARG GATEWAY_BINARY=edgion-gateway
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -29,7 +31,7 @@ RUN apt-get update && apt-get install -y \
 # Copy pre-built backend binaries
 RUN --mount=type=bind,source=${BINARY_PATH},target=/tmp/binaries \
     cp /tmp/binaries/edgion-controller /usr/local/bin/edgion-controller && \
-    cp /tmp/binaries/edgion-gateway /usr/local/bin/edgion-gateway && \
+    cp /tmp/binaries/${GATEWAY_BINARY} /usr/local/bin/edgion-gateway && \
     cp /tmp/binaries/edgion-cli /usr/local/bin/edgion-cli && \
     chmod +x /usr/local/bin/edgion-controller /usr/local/bin/edgion-gateway /usr/local/bin/edgion-cli
 

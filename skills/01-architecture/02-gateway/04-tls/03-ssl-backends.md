@@ -10,9 +10,9 @@ description: Gateway TLS build backends and capability boundaries — BoringSSL,
 `edgion-gateway` has two mutually exclusive TLS backend features:
 
 ```toml
-default = ["allocator-jemalloc", "boringssl"]
-boringssl = ["pingora-core/boringssl", "pingora-proxy/boringssl", ...]
-rustls = ["pingora-core/rustls", "pingora-proxy/rustls"]
+default = ["allocator-jemalloc", "boringssl", "body-buffering"]
+boringssl = ["pingora-core-edgion?/boringssl", "pingora-core-upstream?/boringssl", ...]
+rustls = ["pingora-core-edgion?/rustls", "pingora-core-upstream?/rustls", ...]
 fips = ["boringssl", "boring/fips-link-precompiled"]
 ```
 

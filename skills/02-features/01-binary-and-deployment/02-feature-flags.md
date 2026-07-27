@@ -15,14 +15,16 @@ individual binary crates, so feature-selecting commands must name a package with
 | `allocator-jemalloc` | Yes | Yes | Yes | Default; mutually exclusive with the other allocators |
 | `allocator-mimalloc` | Yes | Yes | Yes | Optional |
 | `allocator-system` | Yes | Yes | Yes | Optional |
-| `boringssl` | Yes | Yes | No | Default TLS backend where present; mutually exclusive with `rustls` |
-| `rustls` | Yes | Yes | No | Alternate Pingora TLS backend |
+| `boringssl` | Yes | No | No | Default Gateway TLS backend; mutually exclusive with `rustls` |
+| `rustls` | Yes | No | No | Alternate Gateway Pingora TLS backend |
+| `body-buffering` | Yes | No | No | Default; selects the complete Edgion Pingora fork family |
+| `upstream-pingora` | Yes | No | No | Selects the complete original Pingora 0.8.1 family; mutually exclusive with `body-buffering` |
 | `fips` | Yes | No | No | Release/image-only; implies `boringssl`, requires the precompiled FIPS module |
 | `legacy_route_tests` | Yes | No | No | Non-default legacy test surface |
 
-Allocator selection and `#[global_allocator]` live in each binary entry point, not
-in a workspace-root library. The Controller selects a Pingora TLS backend because it
-links Pingora directly. The CLI has allocator features only.
+Allocator selection and `#[global_allocator]` live in each binary entry point,
+not in a workspace-root library. Only the Gateway selects a Pingora source and
+TLS backend. Controller and CLI have allocator features only.
 
 ## Gateway TLS and FIPS
 
@@ -38,6 +40,9 @@ documented in `../02-config/01-gateway-config.md`.
 All three binaries still install the rustls crypto provider at startup for libraries
 that use rustls; this does not change the selected Pingora data-plane backend.
 
+The Controller no longer links Pingora. Pingora source and TLS-backend selection
+are Gateway-local.
+
 ## Build Examples
 
 ```bash
@@ -47,13 +52,18 @@ cargo build
 # A specific default binary
 cargo build -p edgion-gateway --bin edgion-gateway
 
+# Stock Pingora comparison Gateway
+cargo build -p edgion-gateway --bin edgion-gateway-stock \
+  --no-default-features \
+  --features allocator-jemalloc,boringssl,upstream-pingora
+
 # Gateway with mimalloc + BoringSSL
 cargo build -p edgion-gateway --bin edgion-gateway --release \
-  --no-default-features --features allocator-mimalloc,boringssl
+  --no-default-features --features allocator-mimalloc,boringssl,body-buffering
 
-# Controller with system allocator + rustls
+# Controller with system allocator
 cargo build -p edgion-controller --bin edgion-controller \
-  --no-default-features --features allocator-system,rustls
+  --no-default-features --features allocator-system
 
 # CLI with mimalloc (there is no CLI TLS-backend feature)
 cargo build -p edgion-cli --bin edgion-cli \

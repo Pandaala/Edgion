@@ -15,6 +15,18 @@ use std::time::Duration;
 /// all protocols. Update here only; do not re-declare in protocol modules.
 pub(crate) const UNSAFE_UPSTREAM_ADDRESS_LOG: &str = "unsafe upstream address";
 
+/// Convert the shared, runtime-agnostic keepalive configuration at the
+/// data-plane boundary. `user_timeout = 0` keeps the Linux system default.
+pub(crate) fn to_pingora_tcp_keepalive(config: &TcpKeepaliveConfig) -> pingora_core::protocols::l4::ext::TcpKeepalive {
+    pingora_core::protocols::l4::ext::TcpKeepalive {
+        idle: config.idle,
+        interval: config.interval,
+        count: config.count,
+        #[cfg(target_os = "linux")]
+        user_timeout: std::time::Duration::ZERO,
+    }
+}
+
 /// Check if a specific parentRef has Accepted=True in the route status.
 ///
 /// Returns true when no matching status entry is found (optimistic: include
@@ -400,7 +412,7 @@ mod tests {
             interval: std::time::Duration::from_secs(30),
             count: 5,
         };
-        let ka = cfg.to_pingora();
+        let ka = to_pingora_tcp_keepalive(&cfg);
         assert_eq!(ka.idle, std::time::Duration::from_secs(120));
         assert_eq!(ka.interval, std::time::Duration::from_secs(30));
         assert_eq!(ka.count, 5);

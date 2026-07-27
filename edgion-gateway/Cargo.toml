@@ -12,13 +12,38 @@ path = "src/lib.rs"
 [[bin]]
 name = "edgion-gateway"
 path = "src/bin/edgion_gateway.rs"
+required-features = ["body-buffering"]
+
+[[bin]]
+name = "edgion-gateway-stock"
+path = "src/bin/edgion_gateway_stock.rs"
+required-features = ["upstream-pingora"]
 
 [lints]
 workspace = true
 
 [features]
 # Default features
-default = ["allocator-jemalloc", "boringssl"]
+default = ["allocator-jemalloc", "boringssl", "body-buffering"]
+
+# Pingora source selection (mutually exclusive).
+body-buffering = [
+    "dep:pingora-core-edgion",
+    "dep:pingora-http-edgion",
+    "dep:pingora-limits-edgion",
+    "dep:pingora-load-balancing-edgion",
+    "dep:pingora-proxy-edgion",
+    "dep:pingora-ketama-edgion",
+    "dep:tempfile",
+]
+upstream-pingora = [
+    "dep:pingora-core-upstream",
+    "dep:pingora-http-upstream",
+    "dep:pingora-limits-upstream",
+    "dep:pingora-load-balancing-upstream",
+    "dep:pingora-proxy-upstream",
+    "dep:pingora-ketama-upstream",
+]
 
 # Memory allocator selection (mutually exclusive) — lives with the binary.
 allocator-jemalloc = ["tikv-jemallocator"]
@@ -27,14 +52,18 @@ allocator-system = []
 
 # TLS backend selection (mutually exclusive)
 boringssl = [
-    "pingora-core/boringssl",
-    "pingora-proxy/boringssl",
+    "pingora-core-edgion?/boringssl",
+    "pingora-proxy-edgion?/boringssl",
+    "pingora-core-upstream?/boringssl",
+    "pingora-proxy-upstream?/boringssl",
     "dep:boring-sys",
     "dep:boring",
 ]
 rustls = [
-    "pingora-core/rustls",
-    "pingora-proxy/rustls",
+    "pingora-core-edgion?/rustls",
+    "pingora-proxy-edgion?/rustls",
+    "pingora-core-upstream?/rustls",
+    "pingora-proxy-upstream?/rustls",
 ]
 
 # FIPS-validated BoringSSL. Image-build only (NOT a default). Links a prebuilt
@@ -121,12 +150,20 @@ aes-gcm.workspace = true
 hex.workspace = true
 jsonwebtoken.workspace = true
 
-# Pingora
-pingora-core.workspace = true
-pingora-http.workspace = true
-pingora-limits.workspace = true
-pingora-load-balancing.workspace = true
-pingora-proxy.workspace = true
+# Pingora. Exactly one complete source family is selected by the Gateway flavor.
+pingora-core-edgion = { workspace = true, optional = true }
+pingora-http-edgion = { workspace = true, optional = true }
+pingora-limits-edgion = { workspace = true, optional = true }
+pingora-load-balancing-edgion = { workspace = true, optional = true }
+pingora-proxy-edgion = { workspace = true, optional = true }
+pingora-ketama-edgion = { workspace = true, optional = true }
+
+pingora-core-upstream = { workspace = true, optional = true }
+pingora-http-upstream = { workspace = true, optional = true }
+pingora-limits-upstream = { workspace = true, optional = true }
+pingora-load-balancing-upstream = { workspace = true, optional = true }
+pingora-proxy-upstream = { workspace = true, optional = true }
+pingora-ketama-upstream = { workspace = true, optional = true }
 etcd-client.workspace = true
 fred.workspace = true
 
@@ -167,8 +204,9 @@ time.workspace = true
 sha1.workspace = true
 ldap3.workspace = true
 rskafka.workspace = true
-pingora-ketama.workspace = true
 tower.workspace = true
+# Runtime body storage for the body-enabled flavor.
+tempfile = { workspace = true, optional = true }
 # Wasm runtime for the proxy-wasm host plugin
 wasmtime.workspace = true
 

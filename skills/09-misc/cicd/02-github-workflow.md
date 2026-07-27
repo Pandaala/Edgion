@@ -51,17 +51,25 @@ The repo currently has the following workflows under `.github/workflows/`:
 `ci.yml` triggers on `push` / `pull_request` to `main` or `master`, in the following order:
 
 1. `check` -> `cargo check --workspace --all-targets`
-2. `fmt` -> `cargo fmt --all -- --check`
-3. `agent-docs` -> `python3 cicd/checks/validate_agent_docs.py`
-4. `clippy` -> `cargo clippy --workspace --all-targets`
-5. `test` -> `cargo test --all`
-6. `ci-success` -> aggregates the results of the previous five jobs to provide a stable check for branch protection
+2. `gateway-flavors` -> build the body and stock Gateway artifacts, probe
+   their compiled capabilities, and verify Pingora source isolation
+3. `fmt` -> `cargo fmt --all -- --check`
+4. `agent-docs` -> `python3 cicd/checks/validate_agent_docs.py`
+5. `clippy` -> `cargo clippy --workspace --all-targets`
+6. `test` -> `cargo test --all`
+7. `ci-success` -> aggregates the results of the previous six jobs to provide a stable check for branch protection
 
 Key facts:
 
-- The four Rust jobs `check`, `fmt`, `clippy`, and `test` each run the local action [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml) first
+- The five Rust jobs `check`, `gateway-flavors`, `fmt`, `clippy`, and `test`
+  each run the local action
+  [../../../.github/actions/setup-rust/action.yml](../../../.github/actions/setup-rust/action.yml)
+  first
 - `agent-docs` only needs checkout + `python3 cicd/checks/validate_agent_docs.py`; it does not depend on Rust toolchain initialization
-- `fmt` does not install system dependencies and does not enable cargo cache; the other build-style Rust jobs install dependencies and enable cache
+- `fmt` does not install system dependencies and does not enable cargo cache;
+  the other build-style Rust jobs install dependencies and enable cache.
+  `gateway-flavors` uses a per-flavor cache key because the two artifacts
+  activate different Pingora source families
 - The current CI commands do not include `--all-features`; before changing this, confirm whether you really want to expand the matrix rather than casually inflate CI cost
 - `check` and `clippy` pass `--workspace` on purpose: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip the harness. `--workspace` gives it the same fast type-check + clippy signal that `cargo test --all` already exercises at compile time
 

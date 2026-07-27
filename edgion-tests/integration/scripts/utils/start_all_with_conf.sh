@@ -33,6 +33,8 @@ if [ "${EDGION_COVERAGE:-0}" = "1" ]; then
 else
     BIN_DIR="${PROJECT_ROOT}/target/debug"
 fi
+GATEWAY_BIN="${EDGION_GATEWAY_BIN:-${BIN_DIR}/edgion-gateway}"
+GATEWAY_FLAVOR="${EDGION_GATEWAY_FLAVOR:-body}"
 
 # Workdirectory
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
@@ -79,6 +81,71 @@ GATEWAY_PROBE_PORT="${GATEWAY_PROBE_PORT:-12000}"
 
 # LoadTestsuite（default，Loadall）
 SUITES=""
+CAPABILITY_REGISTRY="${PROJECT_ROOT}/edgion-tests/integration/capabilities.tsv"
+
+gateway_has_capability() {
+    local capability="$1"
+    echo "${EDGION_TEST_GATEWAY_CAPABILITIES:-}" | grep -q "^${capability}=enabled$"
+}
+
+load_gateway_capabilities() {
+    local capabilities
+    if ! capabilities=$("$GATEWAY_BIN" --print-build-capabilities); then
+        log_error "Failed to read build capabilities from ${GATEWAY_BIN}"
+        return 1
+    fi
+    if ! echo "$capabilities" | grep -q '^format=edgion-build-capabilities/v1$'; then
+        log_error "Unsupported Gateway capability format from ${GATEWAY_BIN}"
+        return 1
+    fi
+    case "$GATEWAY_FLAVOR" in
+        body)
+            echo "$capabilities" | grep -q '^body-buffering=enabled$' || {
+                log_error "Body Gateway does not report body-buffering=enabled"
+                return 1
+            }
+            ;;
+        upstream)
+            echo "$capabilities" | grep -q '^body-buffering=disabled$' || {
+                log_error "Upstream Gateway does not report body-buffering=disabled"
+                return 1
+            }
+            ;;
+        *)
+            log_error "Unknown EDGION_GATEWAY_FLAVOR: ${GATEWAY_FLAVOR}"
+            return 1
+            ;;
+    esac
+    EDGION_TEST_GATEWAY_CAPABILITIES="$capabilities"
+    export EDGION_TEST_GATEWAY_CAPABILITIES
+}
+
+validate_capability_registry() {
+    if ! EDGION_CAPABILITY_REGISTRY="$CAPABILITY_REGISTRY" \
+        "${BIN_DIR}/test_client" --list-dynamic-scenarios > /dev/null; then
+        log_error "Integration capability registry validation failed"
+        return 1
+    fi
+}
+
+suite_is_supported() {
+    local suite="$1"
+    local kind id capability
+    while IFS=$'\t' read -r kind id capability; do
+        case "$kind" in
+            ""|\#*) continue ;;
+        esac
+        if [ "$kind" = "suite" ]; then
+            case "$suite" in
+                "$id"|"$id"/*)
+                    gateway_has_capability "$capability"
+                    return $?
+                    ;;
+            esac
+        fi
+    done < "$CAPABILITY_REGISTRY"
+    return 0
+}
 
 # =============================================================================
 # log
@@ -179,8 +246,8 @@ check_binaries() {
         missing=true
     fi
     
-    if [ ! -f "${BIN_DIR}/edgion-gateway" ]; then
-        log_error "edgion-gateway Build"
+    if [ ! -x "${GATEWAY_BIN}" ]; then
+        log_error "Gateway binary not found or not executable: ${GATEWAY_BIN}"
         missing=true
     fi
     
@@ -469,7 +536,7 @@ start_gateway() {
     RUST_LOG="${gateway_rust_log}" \
     EDGION_TEST_ACCESS_LOG_PATH="${LOG_DIR}/edgion_access.log" \
     EDGION_ALLOW_INTEGRATION_TESTING_MODE=1 \
-    "${BIN_DIR}/edgion-gateway" \
+    "${GATEWAY_BIN}" \
         -c "$GATEWAY_CONFIG" \
         --work-dir "${WORK_DIR}" \
         --server-addr "${CONF_SYNC_SCHEME}://127.0.0.1:${CONTROLLER_GRPC_PORT}" \
@@ -653,14 +720,13 @@ load_generated_secrets() {
 # =============================================================================
 get_suites_to_load() {
     local conf_dir="${PROJECT_ROOT}/edgion-tests/integration/conf"
+    local suites=""
     
     if [ -n "$SUITES" ]; then
         # usespecifysuite
-        echo "$SUITES" | tr ',' ' '
+        suites=$(echo "$SUITES" | tr ',' ' ')
     else
         # default： conf directoryalldirectory
-        local suites=""
-        
         # resource (HTTPRoute, GRPCRoute, TCPRoute, UDPRoute )
         for resource_dir in "${conf_dir}"/*; do
             if [ -d "$resource_dir" ]; then
@@ -727,8 +793,18 @@ get_suites_to_load() {
             fi
         done
         
-        echo $suites
     fi
+
+    local supported=""
+    local suite
+    for suite in $suites; do
+        if suite_is_supported "$suite"; then
+            supported="${supported} ${suite}"
+        else
+            log_warning "Skip unsupported suite config: ${suite}" >&2
+        fi
+    done
+    echo "$supported"
 }
 
 # =============================================================================
@@ -825,6 +901,9 @@ save_info() {
     # currentWorkdirectorypath
     mkdir -p "${PROJECT_ROOT}/tmp/integration_testing"
     echo "$WORK_DIR" > "${PROJECT_ROOT}/tmp/integration_testing/.current"
+    printf '%s\n' "$GATEWAY_FLAVOR" > "${WORK_DIR}/gateway-flavor"
+    printf '%s\n' "$GATEWAY_BIN" > "${WORK_DIR}/gateway-bin"
+    printf '%s\n' "$EDGION_TEST_GATEWAY_CAPABILITIES" > "${WORK_DIR}/gateway-capabilities"
     
     # info
     cat > "${WORK_DIR}/info.txt" << EOF
@@ -903,6 +982,8 @@ main() {
 
     # : Checkbinaryfile
     check_binaries
+    load_gateway_capabilities
+    validate_capability_registry
     
     # : Workdirectory
     log_section "Workdirectory"

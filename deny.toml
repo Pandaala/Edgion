@@ -91,7 +91,10 @@ deny = [
 ]
 
 [sources]
-# crates.io only: git dependencies have no immutable-snapshot guarantee
-# (upstream force-push swaps the code inside your build).
+# Git sources are denied except for Edgion's Pingora fork. Cargo.toml pins that
+# fork to a full commit revision; floating branches and every other Git source
+# remain denied.
 unknown-registry = "deny"
 unknown-git = "deny"
+required-git-spec = "rev"
+allow-git = ["https://github.com/Pandaala/pingora.git"]

@@ -12,12 +12,6 @@ path = "src/lib.rs"
 [lints]
 workspace = true
 
-# TLS backend selection is driven by the workspace: `pingora-core` is unified
-# across the dependency graph (resolver 2), so the binary crates' `boringssl` /
-# `rustls` feature flows into this crate's `pingora-core` automatically — the
-# same arrangement `edgion-resources` relies on. `edgion-common` has no
-# TLS-backend-gated code, so it deliberately exposes no TLS feature of its own.
-
 [features]
 # Exposes cross-crate test helpers (env-var serialization locks, JWKS discovery
 # seeding) to other crates' test builds. Enabled via their `[dev-dependencies]`
@@ -59,8 +53,6 @@ parking_lot.workspace = true
 regex.workspace = true
 rand.workspace = true
 
-# Pingora (TLS backend feature flows from the workspace via unification)
-pingora-core.workspace = true
 etcd-client.workspace = true
 
 # Metrics

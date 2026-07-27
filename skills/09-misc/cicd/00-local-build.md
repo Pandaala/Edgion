@@ -13,7 +13,8 @@ Use this skill to answer:
 
 ## Facts to check first
 
-- The default features are `allocator-jemalloc` + `boringssl`
+- Gateway default features are `allocator-jemalloc` + `boringssl` +
+  `body-buffering`
 - proto generation is owned by member build scripts (notably `edgion-common/build.rs`), so a working `protoc` is required locally
 - The Docker build environment explicitly installs the following dependencies; treat it as a trustworthy reference for local dependencies:
   - `cmake`
@@ -62,13 +63,17 @@ Common combinations:
 cargo build
 
 # Gateway rustls build
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls,body-buffering"
 
 # mimalloc + boringssl
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-mimalloc,boringssl"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-mimalloc,boringssl,body-buffering"
 
 # system allocator + boringssl
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-system,boringssl,body-buffering"
+
+# Stock Pingora comparison build
+cargo build -p edgion-gateway --bin edgion-gateway-stock --release \
+  --no-default-features --features "allocator-jemalloc,boringssl,upstream-pingora"
 ```
 
 For more detailed feature semantics:

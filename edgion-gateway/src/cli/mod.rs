@@ -26,6 +26,10 @@ use config::EdgionGatewayConfig;
     long_about = None
 )]
 pub struct EdgionGatewayCli {
+    /// Print compile-time Gateway capabilities in a machine-readable format and exit.
+    #[arg(long)]
+    pub print_build_capabilities: bool,
+
     #[command(flatten)]
     pub config: EdgionGatewayConfig,
 }

@@ -21,6 +21,31 @@ Other variants in `cicd/docker/` (not detailed here):
 
 - `cicd/docker/Dockerfile.controller-gateway` (+ `cicd/docker/controller-gateway-entrypoint.sh`) — packages pre-built binaries (controller + gateway + cli) into one standalone backend image (no dashboard/nginx). Driven by `build-image.sh --controller-gateway`
 
+## Gateway image flavors
+
+`cicd/build-image.sh` defaults to the body-enabled Edgion Pingora fork. Select
+the unmodified Pingora comparison build with `--stock`.
+
+| Flavor | Gateway binary | Standard image | Controller-Gateway image |
+|--------|----------------|----------------|--------------------------|
+| `body` (default) | `edgion-gateway` | `edgion-gateway` | `edgion-controller-gateway` |
+| `stock` | `edgion-gateway-stock` | `edgion-gateway-stock` | `edgion-controller-gateway-stock` |
+
+The Controller image remains `edgion-controller` for both flavors because the
+Controller does not link Pingora. `stock` is an external artifact/flavor name;
+the internal Cargo feature remains `upstream-pingora`.
+
+```bash
+# Default body-enabled images
+cicd/build-image.sh
+
+# Images compiled against stock Pingora
+cicd/build-image.sh --stock
+
+# Stock Pingora Controller-Gateway bundle
+cicd/build-image.sh --controller-gateway --stock
+```
+
 ## The 4 stages of `cicd/docker/Dockerfile`
 
 ### 1. `chef`
@@ -131,7 +156,7 @@ Key arguments:
 
 | Argument | Purpose |
 |----------|---------|
-| `BINARY` | `gateway` / `controller` or example name |
+| `BINARY` | `gateway` / `gateway-stock` / `controller` or test-harness name |
 | `BUILD_TYPE` | `bin` or `example` |
 | `BINARY_PATH` | Pre-built artifact directory |
 | `RUNTIME_BASE` | Runtime base image, defaults to `debian:bookworm-slim` |

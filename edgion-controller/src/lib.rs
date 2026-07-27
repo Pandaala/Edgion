@@ -1,7 +1,5 @@
-// Mutually exclusive feature invariants. These selections wire incompatible
-// backends (multiple `#[global_allocator]` statics, conflicting pingora TLS
-// backends), so fail the build early with an intentional message instead of
-// emitting confusing downstream errors (e.g. via `--all-features`).
+// Mutually exclusive allocator invariants. Fail the build early with an
+// intentional message instead of emitting duplicate-global errors.
 #[cfg(any(
     all(feature = "allocator-jemalloc", feature = "allocator-mimalloc"),
     all(feature = "allocator-jemalloc", feature = "allocator-system"),
@@ -10,9 +8,6 @@
 compile_error!(
     "features `allocator-jemalloc`, `allocator-mimalloc`, and `allocator-system` are mutually exclusive; enable exactly one"
 );
-
-#[cfg(all(feature = "boringssl", feature = "rustls"))]
-compile_error!("features `boringssl` and `rustls` are mutually exclusive; enable exactly one TLS backend");
 
 /// Name of the active global memory allocator (selected by the binary's
 /// `allocator-*` feature). Reported in startup/version output.

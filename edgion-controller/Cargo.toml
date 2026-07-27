@@ -17,18 +17,12 @@ path = "src/bin/edgion_controller.rs"
 workspace = true
 
 [features]
-default = ["allocator-jemalloc", "boringssl"]
+default = ["allocator-jemalloc"]
 
 # Memory allocator selection (mutually exclusive) — lives with the binary.
 allocator-jemalloc = ["tikv-jemallocator"]
 allocator-mimalloc = ["mimalloc"]
 allocator-system = []
-
-# TLS backend selection — the controller has no TLS-gated code of its own, but
-# it links pingora (core/proxy) directly, so it must pick pingora's backend.
-# (Previously forwarded through the gateway crate; that dependency is now gone.)
-boringssl = ["pingora-core/boringssl", "pingora-proxy/boringssl"]
-rustls = ["pingora-core/rustls", "pingora-proxy/rustls"]
 
 [dependencies]
 # Memory allocators (optional, controlled by features)
@@ -92,9 +86,6 @@ sha2.workspace = true
 hmac.workspace = true
 hex.workspace = true
 
-# Pingora
-pingora-core.workspace = true
-pingora-proxy.workspace = true
 etcd-client.workspace = true
 
 # Metrics
@@ -127,6 +118,7 @@ tonic-build.workspace = true
 
 [dev-dependencies]
 edgion-common = { workspace = true, features = ["test-util"] }
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 mockall.workspace = true
 expect-test.workspace = true

@@ -8,7 +8,8 @@ description: Use for pre-commit/local checks, CI/CD workflows, Docker builds, re
 > Edgion build and release workflow. Rust is pinned to `1.96.1`: `rust-toolchain.toml`
 > (`channel = "1.96.1"`) is the single source of truth, and CI plus release/Docker builds
 > declare the same version so all three agree. Default Gateway and
-> Controller features are `allocator-jemalloc` + `boringssl`.
+> Controller defaults to `allocator-jemalloc`; Pingora source/TLS features are
+> Gateway-local.
 > In-repo binaries: `edgion-gateway` (data plane), `edgion-controller` (control plane), and `edgion-cli` (CLI). The federation Center lives in the separate EdgionCenter repository.
 
 ## File list
@@ -31,7 +32,7 @@ cargo build
 cargo build --release
 
 # Select features on an owning package
-cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls"
+cargo build -p edgion-gateway --release --no-default-features --features "allocator-jemalloc,rustls,body-buffering"
 
 # Project quick pre-commit sequence
 cargo fmt --all

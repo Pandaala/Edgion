@@ -33,6 +33,7 @@ IMAGE_REGISTRY="${IMAGE_REGISTRY:-docker.io}"
 IMAGE_NAMESPACE="${IMAGE_NAMESPACE:-pandaala}"
 RUST_VERSION="${RUST_VERSION:-1.96.1}"
 FEATURES="${FEATURES:-default}"
+GATEWAY_FLAVOR="body"
 BINARIES="gateway controller"
 # Test harness binaries. These are [[bin]] targets of the edgion-tests crate
 # (formerly under examples/, now moved into edgion-tests). Built only via the
@@ -50,6 +51,64 @@ BUILDER_IMAGE="edgion-builder"
 
 # Docker image name for the standalone controller-gateway bundle.
 CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway"
+GATEWAY_BINARY="edgion-gateway"
+GATEWAY_FEATURES="default"
+GATEWAY_NO_DEFAULT_FEATURES=false
+
+feature_list_contains() {
+    local list=$1
+    local feature=$2
+    case ",${list}," in
+        *",${feature},"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+configure_gateway_flavor() {
+    case "${GATEWAY_FLAVOR}" in
+        body)
+            GATEWAY_BINARY="edgion-gateway"
+            BINARIES="gateway controller"
+            CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway"
+            if [[ "${FEATURES}" == "default" ]]; then
+                GATEWAY_FEATURES="default"
+                GATEWAY_NO_DEFAULT_FEATURES=false
+            else
+                if feature_list_contains "${FEATURES}" "upstream-pingora"; then
+                    log_error "Gateway flavor body cannot enable upstream-pingora"
+                    exit 1
+                fi
+                GATEWAY_FEATURES="${FEATURES}"
+                if ! feature_list_contains "${GATEWAY_FEATURES}" "body-buffering"; then
+                    GATEWAY_FEATURES="${GATEWAY_FEATURES},body-buffering"
+                fi
+                GATEWAY_NO_DEFAULT_FEATURES=true
+            fi
+            ;;
+        stock)
+            GATEWAY_BINARY="edgion-gateway-stock"
+            BINARIES="gateway-stock controller"
+            CONTROLLER_GATEWAY_IMAGE="edgion-controller-gateway-stock"
+            GATEWAY_NO_DEFAULT_FEATURES=true
+            if [[ "${FEATURES}" == "default" ]]; then
+                GATEWAY_FEATURES="allocator-jemalloc,boringssl,upstream-pingora"
+            else
+                if feature_list_contains "${FEATURES}" "body-buffering"; then
+                    log_error "Gateway flavor stock cannot enable body-buffering"
+                    exit 1
+                fi
+                GATEWAY_FEATURES="${FEATURES}"
+                if ! feature_list_contains "${GATEWAY_FEATURES}" "upstream-pingora"; then
+                    GATEWAY_FEATURES="${GATEWAY_FEATURES},upstream-pingora"
+                fi
+            fi
+            ;;
+        *)
+            log_error "Unknown gateway flavor: ${GATEWAY_FLAVOR} (expected body or stock)"
+            exit 1
+            ;;
+    esac
+}
 
 # Ensure Docker Buildx builder exists and is selected
 ensure_buildx() {
@@ -137,7 +196,10 @@ Options:
     --test-images                Build ONLY the test harness images
                                  (test_server + test_client); skips standard images
     --controller-gateway         Build standalone bundle image: controller + gateway
-                                 Image: edgion-controller-gateway (skips standard images)
+                                 Image: edgion-controller-gateway[-stock]
+                                 (skips standard images)
+    --stock                      Build against stock Pingora instead of the
+                                 default body-enabled Edgion fork
     -h, --help                   Show this help message
 
 Test-Images Notes:
@@ -158,7 +220,7 @@ Environment Variables:
     IMAGE_NAMESPACE     Image namespace (default: pandaala)
     VERSION             Image version (overrides git tag; default: ${DEFAULT_VERSION})
     RUST_VERSION        Rust version for builder (default: 1.96.1)
-    FEATURES            Cargo features (default: default)
+    FEATURES            Gateway Cargo features (default: default)
 
 Examples:
     # Build for current architecture only
@@ -185,6 +247,9 @@ Examples:
 
     # Build controller-gateway bundle: controller + gateway
     $0 --controller-gateway
+
+    # Build the diagnostic Gateway against stock Pingora
+    $0 --stock
 
 Build Flow:
     Stage 1: Build Docker builder image (one-time)
@@ -303,12 +368,22 @@ compile_binaries() {
     # Ensure builder image exists
     ensure_builder_image "${platform}"
 
+    local gateway_feature_args=""
+    if [[ "${GATEWAY_NO_DEFAULT_FEATURES}" == "true" ]]; then
+        gateway_feature_args="--no-default-features --features \"${GATEWAY_FEATURES}\""
+    fi
+
     local build_cmd="cargo build --release \
             --target \"${target}\" \
-            --bin edgion-gateway \
+            -p edgion-controller \
             --bin edgion-controller \
-            --bin edgion-cli \
-            --features \"${FEATURES}\""
+            -p edgion-cli \
+            --bin edgion-cli && \
+        cargo build --release \
+            --target \"${target}\" \
+            -p edgion-gateway \
+            --bin \"${GATEWAY_BINARY}\" \
+            ${gateway_feature_args}"
 
     if [[ "${force_rebuild}" == "true" ]]; then
         log_info "Force rebuild requested for ${arch}: cleaning target ${target} first"
@@ -327,10 +402,10 @@ compile_binaries() {
         "${builder_tag}" \
         bash -c "${build_cmd}"
 
-        if [[ $? -ne 0 ]]; then
+    if [[ $? -ne 0 ]]; then
         log_error "Compilation failed for ${arch}"
-            exit 1
-        fi
+        exit 1
+    fi
 
     log_success "Compiled binaries for ${arch}"
 }
@@ -653,18 +728,27 @@ compile_controller_gateway_binaries() {
     IFS=':' read -r platform target suffix <<< "${arch_info}"
     local builder_tag="${BUILDER_IMAGE}:${platform//\//-}"
 
-    # Bundle binaries: controller + gateway + cli
-    local bins="--bin edgion-cli --bin edgion-gateway --bin edgion-controller"
-
     log_info "Compiling controller-gateway binaries for ${arch} (${target})..."
     log_info "This may take several minutes on first build..."
 
     ensure_builder_image "${platform}"
 
+    local gateway_feature_args=""
+    if [[ "${GATEWAY_NO_DEFAULT_FEATURES}" == "true" ]]; then
+        gateway_feature_args="--no-default-features --features \"${GATEWAY_FEATURES}\""
+    fi
+
     local build_cmd="cargo build --release \
             --target \"${target}\" \
-            ${bins} \
-            --features \"${FEATURES}\""
+            -p edgion-controller \
+            --bin edgion-controller \
+            -p edgion-cli \
+            --bin edgion-cli && \
+        cargo build --release \
+            --target \"${target}\" \
+            -p edgion-gateway \
+            --bin \"${GATEWAY_BINARY}\" \
+            ${gateway_feature_args}"
 
     if [[ "${force_rebuild}" == "true" ]]; then
         log_info "Force rebuild requested for ${arch}: cleaning target ${target} first"
@@ -716,6 +800,7 @@ build_controller_gateway_image() {
         docker buildx build
         --file "${PROJECT_DIR}/cicd/docker/Dockerfile.controller-gateway"
         --build-arg "BINARY_PATH=${bin_path}"
+        --build-arg "GATEWAY_BINARY=${GATEWAY_BINARY}"
         --platform "${platform}"
         --tag "${image_tag}"
     )
@@ -874,6 +959,10 @@ main() {
                 controller_gateway=true
                 shift
                 ;;
+            --stock)
+                GATEWAY_FLAVOR="stock"
+                shift
+                ;;
             -h|--help)
                 show_usage
                 exit 0
@@ -890,6 +979,10 @@ main() {
     if [[ "${test_images}" == "true" ]] && [[ "${controller_gateway}" == "true" ]]; then
         log_error "--test-images and --controller-gateway are mutually exclusive"
         exit 1
+    fi
+
+    if [[ "${test_images}" != "true" ]]; then
+        configure_gateway_flavor
     fi
 
     # --from-tag: resolve version from current git tag
@@ -959,13 +1052,19 @@ main() {
     log_info "Push: ${push}"
     if [[ "${controller_gateway}" == "true" ]]; then
         log_info "Mode: Controller-Gateway (standalone bundle image)"
-        log_info "  → edgion-controller-gateway (controller + gateway)"
+        log_info "Gateway flavor: ${GATEWAY_FLAVOR}"
+        log_info "Gateway binary: ${GATEWAY_BINARY}"
+        log_info "Gateway features: ${GATEWAY_FEATURES}"
+        log_info "  → ${CONTROLLER_GATEWAY_IMAGE} (controller + gateway)"
     elif [[ "${test_images}" == "true" ]]; then
         log_info "Mode: Test images (test harness only)"
         log_info "  → edgion-test-server, edgion-test-client"
     else
         log_info "Mode: Standard"
-        log_info "  → edgion-gateway, edgion-controller"
+        log_info "Gateway flavor: ${GATEWAY_FLAVOR}"
+        log_info "Gateway binary: ${GATEWAY_BINARY}"
+        log_info "Gateway features: ${GATEWAY_FEATURES}"
+        log_info "  → edgion-${BINARIES// /, edgion-}"
     fi
     echo ""
 
