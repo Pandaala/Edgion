@@ -1119,12 +1119,13 @@ mod tests {
         assert_eq!(body, "if-match=\"v123\";authorization-present=false");
     }
 
-    /// Drive a single HttpProxy request through handle_center_message and return
-    /// the status code of the HttpProxyResponse the handler emits. The admin
-    /// router is empty: the sanitisation checks under test all reject before the
-    /// request ever reaches the router.
+    /// Drive a single HttpProxy request through handle_center_message against
+    /// `admin_router` and return the whole HttpProxyResponse the handler emits.
     #[cfg(test)]
-    async fn run_http_proxy(req: crate::fed_sync::proto::HttpProxyRequest) -> u32 {
+    async fn run_http_proxy_with_router(
+        req: crate::fed_sync::proto::HttpProxyRequest,
+        admin_router: axum::Router,
+    ) -> crate::fed_sync::proto::HttpProxyResponse {
         use crate::authz::{Authorizer, CenterPolicy};
         use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig};
         use std::sync::Arc;
@@ -1140,7 +1141,6 @@ mod tests {
         let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
         let (tx, mut rx) = tokio::sync::mpsc::channel::<ControllerMessage>(8);
         let tx = Arc::new(tx);
-        let admin_router = axum::Router::new();
         let proxy_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
         let mut active_watch_cancel: Option<tokio_util::sync::CancellationToken> = None;
 
@@ -1159,9 +1159,17 @@ mod tests {
         // The HttpProxy arm spawns a task; await the response it sends.
         let msg = rx.recv().await.expect("expected an HttpProxyResponse");
         match msg.payload {
-            Some(CtrlPayload::HttpProxyResponse(resp)) => resp.status_code,
+            Some(CtrlPayload::HttpProxyResponse(resp)) => resp,
             other => panic!("expected HttpProxyResponse, got {:?}", other),
         }
+    }
+
+    /// Status code for a request driven against an empty admin router: the
+    /// sanitisation checks built on this all reject before the request ever
+    /// reaches a route.
+    #[cfg(test)]
+    async fn run_http_proxy(req: crate::fed_sync::proto::HttpProxyRequest) -> u32 {
+        run_http_proxy_with_router(req, axum::Router::new()).await.status_code
     }
 
     /// An oversized request body is rejected with 413 before any router work.
@@ -1207,55 +1215,22 @@ mod tests {
     }
 
     /// Reload now arrives as an ordinary proxied POST. The tunnel must let
-    /// `POST /api/v1/reload` through the path allowlist and reach the router.
-    ///
-    /// This mirrors `run_http_proxy`'s setup rather than calling it directly:
-    /// that helper always wires an empty `admin_router` and returns only the
-    /// status code, so it cannot exercise "the request actually reaches a
-    /// registered handler and its body comes back."
+    /// `POST /api/v1/reload` through the path allowlist, reach a registered
+    /// handler, and carry that handler's body back.
     #[tokio::test]
     async fn http_proxy_reload_post_reaches_router() {
-        use crate::authz::{Authorizer, CenterPolicy};
-        use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig};
-        use std::sync::Arc;
-
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let conf_mgr = Arc::new(
-            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
-                tmp.path().to_path_buf(),
-            )))
-            .await
-            .expect("ConfMgr::create failed"),
-        );
-        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<ControllerMessage>(8);
-        let tx = Arc::new(tx);
-        let admin_router = axum::Router::new().route("/api/v1/reload", axum::routing::post(|| async { "reload-ok" }));
-        let proxy_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
-        let mut active_watch_cancel: Option<tokio_util::sync::CancellationToken> = None;
-
-        handle_center_message(
-            CenterPayload::HttpProxy(crate::fed_sync::proto::HttpProxyRequest {
+        let resp = run_http_proxy_with_router(
+            crate::fed_sync::proto::HttpProxyRequest {
                 request_id: "t4".to_string(),
                 method: "POST".to_string(),
                 path: "/api/v1/reload".to_string(),
                 headers: Default::default(),
                 body: Vec::new(),
-            }),
-            tx,
-            admin_router,
-            conf_mgr,
-            &mut active_watch_cancel,
-            proxy_semaphore,
-            authorizer,
+            },
+            axum::Router::new().route("/api/v1/reload", axum::routing::post(|| async { "reload-ok" })),
         )
-        .await
-        .expect("handle_center_message returned Err");
+        .await;
 
-        let msg = rx.recv().await.expect("expected an HttpProxyResponse");
-        let Some(CtrlPayload::HttpProxyResponse(resp)) = msg.payload else {
-            panic!("expected HttpProxyResponse, got {:?}", msg.payload);
-        };
         assert_eq!(resp.status_code, 200);
         assert_eq!(String::from_utf8(resp.body).expect("utf8"), "reload-ok");
     }

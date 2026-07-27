@@ -194,11 +194,8 @@ Query params: `limit=N` (page size) and `continue=<token>` (K8s-style cursor). R
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/v1/region-routes/effective` | Effective region-route view |
-| GET | `/api/v1/cluster-region-routes` | Cluster region-route config data |
-| GET | `/api/v1/service-region-routes` | Service region-route config data |
 | GET | `/api/v1/global-ip-restrictions/effective` | Effective global IP restrictions |
-| POST | `/api/v1/cluster-region-routes/failover` | Patch cluster failover state |
-| POST | `/api/v1/service-region-routes/failover` | Patch service failover state |
+| POST | `/api/v1/cluster-region-routes/failover` | Patch region failover state |
 | POST | `/api/v1/services/acme/{namespace}/{name}/trigger` | Trigger ACME processing |
 | POST | `/api/v1/services/conf-sync-ca/rotate` | Trigger conf_sync CA rotation |
 | GET | `/api/v1/diagnostics/nested_ext_ref_usage` | ExtensionRef usage diagnostics |
@@ -295,7 +292,7 @@ Endpoints intentionally not gated:
 
 **Known gaps** (write paths that touch `ConfCenter` but are not yet covered by this gate, tracked separately):
 
-- `POST /api/v1/cluster-region-routes/failover` and `POST /api/v1/service-region-routes/failover` — `region_route_handlers::patch_edgion_config_data_failover` calls `ConfCenter::update_one` on `EdgionConfigData` but does not flow through `parse_resource_and_update_version`. Shares the same init-race risk; out of scope for the initial fix.
+- `POST /api/v1/cluster-region-routes/failover` — `region_route_handlers::patch_edgion_config_data_failover` calls `ConfCenter::update_one` on `EdgionConfigData` but does not flow through `parse_resource_and_update_version`. Shares the same init-race risk; out of scope for the initial fix.
 - `POST /api/v1/admin/wipe-all` — test-mode-only (gated by `is_test_mode()`), calls `delete_one` per kind. No production exposure.
 
 ## Interaction with edgion-cli

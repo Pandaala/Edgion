@@ -9,9 +9,8 @@
 //!  - Write (create / update / delete) on EdgionConfigData only
 //!    (region-route and ip-restriction handlers drive this).
 //!  - List and failover on RegionRoute (synthetic classifier label, not a
-//!    ResourceKind): list allows the aggregate read endpoints
-//!    (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes,
-//!    GET /api/v1/region-routes/effective), and failover covers the POST
+//!    ResourceKind): list allows the effective read endpoint
+//!    (GET /api/v1/region-routes/effective), and failover covers the POST
 //!    failover endpoint.
 //!  - server-info on the NonResource route (GET /api/v1/server-info). It exposes
 //!    only a reload marker (server_id), readiness, and mode -- no secrets -- so
@@ -118,9 +117,8 @@ const DEFAULT_READ_KINDS: &[&str] = &[
 ///   1. read (get, list, watch, list-keys) on all ResourceKinds except Secret.
 ///   2. write (create, update, delete) on EdgionConfigData.
 ///   3. list, failover on RegionRoute (synthetic label -- not a ResourceKind).
-///      `list` covers the aggregate read endpoints
-///      (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes,
-///      GET /api/v1/region-routes/effective), all of which classify as
+///      `list` covers the effective read endpoint
+///      (GET /api/v1/region-routes/effective), which classifies as
 ///      (list, "RegionRoute"). `failover` covers the POST failover endpoint.
 ///      `get` is intentionally NOT granted: no classifier route currently emits
 ///      (get, "RegionRoute"), so granting it would be a dead permission that
@@ -155,7 +153,7 @@ pub(crate) fn default_center_policy() -> CenterPolicy {
                 kinds: vec![ResourceKind::EdgionConfigData.as_str().to_string()],
             },
             // Rule 3: list and failover on RegionRoute (synthetic label).
-            // list covers the aggregate region-route read endpoints;
+            // list covers the effective region-route read endpoint;
             // failover covers the POST failover operation. `get` is omitted
             // because no classifier route emits (get, "RegionRoute").
             FedAllowRule {
@@ -253,9 +251,8 @@ mod tests {
     // -- RegionRoute: only list and failover are allowed --
     //
     // RegionRoute is a synthetic classifier label (not a ResourceKind variant).
-    // The aggregate read endpoints GET /api/v1/cluster-region-routes,
-    // GET /api/v1/service-region-routes, and GET /api/v1/region-routes/effective
-    // all classify as (list, "RegionRoute"), so the default grants `list`.
+    // The effective read endpoint GET /api/v1/region-routes/effective classifies
+    // as (list, "RegionRoute"), so the default grants `list`.
     // `get` is intentionally NOT granted: no classifier route emits
     // (get, "RegionRoute"), so allowing it would be a dead permission.
 

@@ -495,7 +495,6 @@ Omit it entirely when not using federation.
 | `enabled` | `Boolean` | `true` | Hot-reloadable kill-switch; `false` stops the federation client without a restart (reload via `POST /api/v1/reload`) |
 | `env` | `Array<String>` | `[]` | Environment tags reported to Center |
 | `tag` | `Array<String>` | `[]` | Extension tags reported to Center |
-| `ping_interval_secs` | `Integer` | `30` | Federation keep-alive ping interval |
 | `security` | Object | — | mTLS certificates for the channel; required (federation fails closed without it) |
 | `rbac` | Object | built-in default | RBAC for Center operations; absent applies a built-in default policy |
 

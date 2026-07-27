@@ -59,13 +59,8 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
         ("GET", "/api/v1/access") => return Some((Verb::AccessSelf, NON_RESOURCE_KIND.into())),
         ("POST", "/api/v1/reload") => return Some((Verb::Reload, NON_RESOURCE_KIND.into())),
         ("GET", "/api/v1/server-info") => return Some((Verb::ServerInfo, NON_RESOURCE_KIND.into())),
-        ("POST", "/api/v1/cluster-region-routes/failover") | ("POST", "/api/v1/service-region-routes/failover") => {
-            return Some((Verb::Failover, "RegionRoute".into()))
-        }
+        ("POST", "/api/v1/cluster-region-routes/failover") => return Some((Verb::Failover, "RegionRoute".into())),
         ("GET", "/api/v1/region-routes/effective") => return Some((Verb::List, "RegionRoute".into())),
-        ("GET", "/api/v1/cluster-region-routes") | ("GET", "/api/v1/service-region-routes") => {
-            return Some((Verb::List, "RegionRoute".into()))
-        }
         ("POST", "/api/v1/services/acme/{namespace}/{name}/trigger") => {
             return Some((Verb::AcmeTrigger, "Service".into()))
         }
@@ -200,15 +195,8 @@ mod tests {
     }
 
     #[test]
-    fn service_region_routes_failover_is_failover_regionroute() {
-        let (v, k) = classify("POST", Some("/api/v1/service-region-routes/failover"), None).unwrap();
-        assert_eq!(v, Verb::Failover);
-        assert_eq!(k, "RegionRoute");
-    }
-
-    #[test]
-    fn cluster_region_routes_list_is_list_regionroute() {
-        let (v, k) = classify("GET", Some("/api/v1/cluster-region-routes"), None).unwrap();
+    fn region_routes_effective_is_list_regionroute() {
+        let (v, k) = classify("GET", Some("/api/v1/region-routes/effective"), None).unwrap();
         assert_eq!(v, Verb::List);
         assert_eq!(k, "RegionRoute");
     }

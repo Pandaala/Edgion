@@ -717,9 +717,8 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 | `enabled` | `bool` | `true` | Hot-reloadable kill-switch. `false` stops the federation client without a restart. Reloaded via `POST /api/v1/reload`. |
 | `env` | `Vec<String>` | `[]` | Environment tags reported to Center (e.g. `["production"]`). |
 | `tag` | `Vec<String>` | `[]` | Arbitrary extension tags reported to Center. |
-| `ping_interval_secs` | `u64` | `30` | Heartbeat interval in seconds for the federation keep-alive ping. |
 | `security` | `ConfSyncSecurityConfig` | — | mTLS certificates for the gRPC channel (same format as `conf_sync_security`). Required -- federation fails closed without it. |
-| `rbac` | `FedRbacConfig?` | `null` | RBAC for Center operations. **Absent => built-in default policy applies (read `get`/`list`/`watch`/`list-keys` on all ResourceKinds except `Secret`; write `create`/`update`/`delete` on `EdgionConfigData`; `list`/`failover` on synthetic `RegionRoute`; `server-info` on synthetic `NonResource`). Present => the explicit rules fully override the default.** |
+| `rbac` | `FedRbacConfig?` | `null` | RBAC for Center operations. **Absent => built-in default policy applies (read `get`/`list`/`watch`/`list-keys` on all ResourceKinds except `Secret`; write `create`/`update`/`delete` on `EdgionConfigData`; `list`/`failover` on synthetic `RegionRoute`; `server-info`/`reload` on synthetic `NonResource`). Present => the explicit rules fully override the default.** |
 
 ### `[center.rbac]` -- Federation RBAC
 
@@ -729,9 +728,9 @@ Connects this Controller to a Federation Center. Omit this section entirely if y
 |------|---------|
 | Read (`get`, `list`, `watch`, `list-keys`) | All resource kinds **except** `Secret` (EdgionTls IS readable; only the Secret kind is excluded for credential safety) |
 | Write (`create`, `update`, `delete`) | `EdgionConfigData` only (drives IP-restriction sync + region-route sync; grants write to ALL plugin metadata) |
-| `list`, `failover` | `RegionRoute` (synthetic label): `list` covers the aggregate read endpoints; `failover` covers the POST failover endpoint. No route classifies as `(get, RegionRoute)`. |
-| `server-info` | `NonResource` (synthetic label), for read-only server identity/readiness checks |
-| Everything else (`reload`, `diagnostics`, `wipe-all`, `debug`, etc.) | Denied |
+| `list`, `failover` | `RegionRoute` (synthetic label): `list` covers the effective read endpoint (`GET /api/v1/region-routes/effective`); `failover` covers the POST failover endpoint. No route classifies as `(get, RegionRoute)`. |
+| `server-info`, `reload` | `NonResource` (synthetic label): read-only server identity/readiness checks, plus the Center reload button arriving as a proxied `POST /api/v1/reload` |
+| Everything else (`diagnostics`, `wipe-all`, `debug`, etc.) | Denied |
 
 **When `rbac` is present**, the explicit rules fully override the built-in default. This is how operators grant more (e.g., Secret read or reload) or less than the default.
 

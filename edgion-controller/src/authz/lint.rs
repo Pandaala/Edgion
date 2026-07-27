@@ -14,7 +14,7 @@ use edgion_resources::resource::kind::ResourceKind;
 
 /// Synthetic classifier kinds that are valid in a policy but are NOT `ResourceKind`s.
 ///
-/// - `RegionRoute`: the aggregate region-route read/failover endpoints.
+/// - `RegionRoute`: the effective region-route read endpoint and the failover endpoint.
 /// - `NonResource`: non-resource operational endpoints (server-info, diagnostics,
 ///   reload, ...) — see `api::authz_classifier::NON_RESOURCE_KIND`. Having a named
 ///   kind lets policies scope these without resorting to `kinds: ["*"]`.

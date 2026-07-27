@@ -755,9 +755,6 @@ pub struct CenterClientConfig {
     pub env: Vec<String>,
     /// Arbitrary extension tags
     pub tag: Vec<String>,
-    /// Heartbeat interval in seconds (default: 30)
-    #[serde(default = "default_ping_interval_secs")]
-    pub ping_interval_secs: u64,
     /// TLS config for the federation gRPC channel to Center.
     #[serde(default)]
     pub security: ConfSyncSecurityConfig,
@@ -767,10 +764,6 @@ pub struct CenterClientConfig {
     /// Default-deny RBAC for Center operations. Absent => Center authorizes nothing.
     #[serde(default)]
     pub rbac: Option<FedRbacConfig>,
-}
-
-fn default_ping_interval_secs() -> u64 {
-    30
 }
 
 fn default_center_enabled() -> bool {
@@ -785,7 +778,6 @@ impl Default for CenterClientConfig {
             cluster: String::new(),
             env: Vec::new(),
             tag: Vec::new(),
-            ping_interval_secs: default_ping_interval_secs(),
             security: ConfSyncSecurityConfig::default(),
             enabled: default_center_enabled(),
             rbac: None,
@@ -918,7 +910,6 @@ center:
         assert_eq!(center.name, "ctrl-01");
         assert_eq!(center.cluster, "prod-cn");
         assert_eq!(center.env, vec!["production"]);
-        assert_eq!(center.ping_interval_secs, 30); // default
     }
 
     // ── Group E: metrics_resource_abnormal defaults (2 independent, kept) ───

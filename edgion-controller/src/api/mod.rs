@@ -607,25 +607,13 @@ pub fn create_admin_router(
             get(region_route_handlers::list_region_routes_effective),
         )
         .route(
-            "/api/v1/cluster-region-routes",
-            get(region_route_handlers::list_cluster_region_edgion_config_data),
-        )
-        .route(
-            "/api/v1/service-region-routes",
-            get(region_route_handlers::list_service_region_edgion_config_data),
-        )
-        .route(
             "/api/v1/global-ip-restrictions/effective",
             get(effective_handlers::global_ip_restrictions_effective),
         )
-        // New-URL aliases for RegionRoute failover
+        // RegionRoute failover
         .route(
             "/api/v1/cluster-region-routes/failover",
             post(region_route_handlers::cluster_edgion_config_data_failover),
-        )
-        .route(
-            "/api/v1/service-region-routes/failover",
-            post(region_route_handlers::service_edgion_config_data_failover),
         )
         // Services: ACME manual trigger
         .route("/api/v1/services/acme/{namespace}/{name}/trigger", post(trigger_acme))

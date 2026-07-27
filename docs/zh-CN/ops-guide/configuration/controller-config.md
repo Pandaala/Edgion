@@ -351,7 +351,6 @@ Token 生成工作流、轮换说明和所有安全注意事项，详见[联邦 
 | `enabled` | `Boolean` | `true` | 热重载开关；`false` 可停止联邦客户端而无需重启（通过 `POST /api/v1/reload` 重载） |
 | `env` | `Array<String>` | `[]` | 上报给 Center 的环境标签 |
 | `tag` | `Array<String>` | `[]` | 上报给 Center 的扩展标签 |
-| `ping_interval_secs` | `Integer` | `30` | 联邦 keepalive ping 间隔 |
 | `security` | Object | — | 通道的 mTLS 证书；必填（无此配置时联邦失败关闭） |
 | `rbac` | Object | 内置默认 | Center 操作的 RBAC；缺失时应用内置默认策略 |
 

@@ -47,8 +47,8 @@ Key notes:
   region-route or IP-restriction records. This is a known limitation of the
   kind-level granularity.
 - `RegionRoute` is a synthetic classifier label (not a `ResourceKind` variant).
-  `list` covers the aggregate read endpoints
-  (`GET /api/v1/cluster-region-routes`, `GET /api/v1/service-region-routes`);
+  `list` covers the effective read endpoint
+  (`GET /api/v1/region-routes/effective`);
   `failover` covers the POST failover endpoint. `get` is intentionally NOT
   granted: no classifier route emits `(get, RegionRoute)`, so allowing it would
   be a dead permission. These verbs are kept in a separate rule from the

@@ -1,9 +1,10 @@
 //! Region Route API handlers.
 //!
-//! The region-route base table lives in `EdgionPlugins.RegionRouteConfig.regions`; the
-//! `GET /api/v1/cluster-region-routes` and `GET /api/v1/service-region-routes` endpoints
-//! are deprecated stubs that return empty lists. Dynamic overrides use
-//! `RegionRouteOverride` EdgionConfigData.
+//! The region-route base table lives in `EdgionPlugins.RegionRouteConfig.regions`; dynamic
+//! overrides use `RegionRouteOverride` EdgionConfigData. `GET /api/v1/region-routes/effective`
+//! serves the merged view and `POST /api/v1/cluster-region-routes/failover` patches a single
+//! region's `failoverTo`. Center reaches both by drilling into one controller through the
+//! federation proxy tunnel; it does not aggregate them fleet-wide.
 
 use axum::{extract::State, http::StatusCode, response::Json};
 use edgion_resources::resources::edgion_config_data::validate_regions;
@@ -28,26 +29,6 @@ pub struct EdgionConfigDataFailoverRequest {
 }
 
 // ============= Handlers =============
-
-/// `GET /api/v1/cluster-region-routes` — deprecated stub; returns an empty list.
-///
-/// Region topology lives in `EdgionPlugins.RegionRouteConfig.regions`. Dynamic overrides
-/// are `RegionRouteOverride` EdgionConfigData, listable via the configserver API.
-pub async fn list_cluster_region_edgion_config_data(
-    State(_state): State<Arc<AdminState>>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    Ok(Json(serde_json::json!({ "success": true, "data": [] })))
-}
-
-/// `GET /api/v1/service-region-routes` — deprecated stub; returns an empty list.
-///
-/// Per-service failover is expressed via `RegionRouteOverride.regions[].failoverTo` in an
-/// EdgionConfigData.
-pub async fn list_service_region_edgion_config_data(
-    State(_state): State<Arc<AdminState>>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    Ok(Json(serde_json::json!({ "success": true, "data": [] })))
-}
 
 /// `GET /api/v1/region-routes/effective`
 ///
@@ -233,30 +214,6 @@ fn route_usage(kind: &str, namespace: &str, name: &str, rule_index: usize, backe
 /// Patches a single region's `failoverTo` in a `RegionRouteOverride` EdgionConfigData.
 /// The `name` field must refer to a `RegionRouteOverride` EdgionConfigData.
 pub async fn cluster_edgion_config_data_failover(
-    State(state): State<Arc<AdminState>>,
-    Json(body): Json<EdgionConfigDataFailoverRequest>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match patch_edgion_config_data_failover(
-        &state,
-        &body.namespace,
-        &body.name,
-        "RegionRouteOverride",
-        &body.region_name,
-        &body.failover_to,
-    )
-    .await
-    {
-        Ok(true) => Ok(Json(serde_json::json!({ "success": true, "modified": true }))),
-        Ok(false) => Err(StatusCode::NOT_FOUND),
-        Err(_e) => Err(StatusCode::INTERNAL_SERVER_ERROR),
-    }
-}
-
-/// `POST /api/v1/service-region-routes/failover`
-///
-/// Deprecated; delegates to the same `RegionRouteOverride` patch path as
-/// `cluster_edgion_config_data_failover`.
-pub async fn service_edgion_config_data_failover(
     State(state): State<Arc<AdminState>>,
     Json(body): Json<EdgionConfigDataFailoverRequest>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
