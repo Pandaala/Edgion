@@ -160,6 +160,18 @@ mod capability_tests {
             env!("CARGO_MANIFEST_DIR"),
             "/integration/scripts/integration/run_integration.sh"
         ));
+        assert!(
+            runner.contains(r#"log_warn "${name} test skipped""#),
+            "capability skips must use the runner's defined warning helper"
+        );
+        let starter = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/integration/scripts/utils/start_all_with_conf.sh"
+        ));
+        assert!(
+            starter.contains("stock)") && starter.contains("Stock Gateway does not report body-buffering=disabled"),
+            "the shared starter must accept the runner's stock flavor name"
+        );
         for suite in ["DslBody", "BodyPlugins"] {
             assert_eq!(
                 runner.matches(&format!("EdgionPlugins_{suite}")).count(),

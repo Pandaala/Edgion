@@ -876,7 +876,7 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         self.ctx.request_info.body_declared
     }
 
-    async fn read_request_body(&mut self, max_bytes: Option<u64>) -> BodyReadResult {
+    async fn ensure_request_body(&mut self, max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
         // `in_request_body_stage` (set at request entry, cleared in
         // `upstream_request_filter` once the upstream is connected and the
         // request is about to be written — see that field's doc) is the
@@ -892,9 +892,9 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
             RequestAdmission::PassThrough => {
                 #[cfg(feature = "body-buffering")]
                 if let Some(view) = self.ctx.request_body.as_ref() {
-                    return view.read_all().await;
+                    return view.len();
                 }
-                Ok(bytes::Bytes::new())
+                Ok(0)
             }
             RequestAdmission::Refuse(status) => {
                 self.ctx.add_error(status);
@@ -909,8 +909,8 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
 
                 #[cfg(feature = "body-buffering")]
                 {
-                    if let Some(view) = self.ctx.request_body.clone() {
-                        return view.read_all().await;
+                    if let Some(view) = self.ctx.request_body.as_ref() {
+                        return view.len();
                     }
 
                     let cap = resolve_cap(max_bytes, self.ctx.max_body_size_bytes);
@@ -970,12 +970,21 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
                         }
                     }
 
-                    let body = view.read_all().await?;
+                    let len = view.len()?;
                     self.ctx.request_body = Some(view);
-                    Ok(body)
+                    Ok(len)
                 }
             }
         }
+    }
+
+    async fn read_request_body(&mut self, max_bytes: Option<u64>) -> BodyReadResult {
+        self.ensure_request_body(max_bytes).await?;
+        #[cfg(feature = "body-buffering")]
+        if let Some(view) = self.ctx.request_body.as_ref() {
+            return view.read_all().await;
+        }
+        Ok(bytes::Bytes::new())
     }
 
     async fn read_response_body(&mut self, max_bytes: Option<u64>) -> BodyReadResult {
@@ -1073,10 +1082,10 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
         #[cfg(feature = "body-buffering")]
         {
             if self.ctx.request_body.is_none() {
-                let body = self.read_request_body(None).await?;
+                self.ensure_request_body(None).await?;
                 if self.ctx.request_body.is_none() {
                     use sha2::Digest;
-                    return Ok(sha2::Sha256::digest(body).into());
+                    return Ok(sha2::Sha256::digest([]).into());
                 }
             }
             self.ctx
@@ -1835,7 +1844,11 @@ mod tests {
 #[cfg(test)]
 mod record_outcome_tests {
     use super::*;
+    #[cfg(feature = "body-buffering")]
+    use crate::request_body::DEFAULT_MEMORY_BUFFER_BYTES;
     use edgion_resources::resources::edgion_plugins::{DyeOutcome, DyeSuite};
+    #[cfg(feature = "body-buffering")]
+    use sha2::Digest;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     /// Build a minimal real `pingora_proxy::Session` for adapter-level tests.
@@ -1897,7 +1910,8 @@ mod record_outcome_tests {
     }
 
     async fn test_session_with_body(body: &[u8]) -> Session {
-        let (mut client, server) = tokio::io::duplex(4096);
+        let capacity = body.len().saturating_add(1024).max(4096);
+        let (mut client, server) = tokio::io::duplex(capacity);
         let stream: pingora_core::protocols::Stream = Box::new(server);
         let mut session = Session::new_h1(stream);
         let header = format!(
@@ -2218,6 +2232,35 @@ mod record_outcome_tests {
             adapter.read_request_body(None).await,
             Err(BodyReadError::BufferLimitExceeded { limit: 4 })
         );
+    }
+
+    #[cfg(feature = "body-buffering")]
+    #[tokio::test]
+    async fn ensure_request_body_hashes_disk_without_materializing() {
+        let body = vec![b'x'; DEFAULT_MEMORY_BUFFER_BYTES + 1];
+        let expected: [u8; 32] = sha2::Sha256::digest(&body).into();
+        let mut session = test_session_with_body(&body).await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            assert_eq!(
+                adapter
+                    .ensure_request_body(None)
+                    .await
+                    .expect("body capture must complete"),
+                body.len() as u64
+            );
+            assert_eq!(
+                adapter.request_body_sha256().await.expect("disk-backed body must hash"),
+                expected
+            );
+        }
+
+        let view = ctx.request_body.as_ref().expect("captured body view must exist");
+        assert!(!view.is_materialized(), "streaming hash must not fill read_all cache");
     }
 
     #[tokio::test]

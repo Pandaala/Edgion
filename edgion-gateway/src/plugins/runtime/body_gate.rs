@@ -1,8 +1,10 @@
 //! Body gate wrappers for body-aware plugins.
 //!
-//! A plugin that needs the fully buffered request body is wrapped in a body
-//! gate. Proxied upstream responses remain streaming-only. The gate, evaluated
-//! at the plugin's stage:
+//! Most plugins that need the fully buffered request body are wrapped in a body
+//! gate. HMAC is the narrow exception: it owns the same resolved requirement so
+//! cheap authentication can finish before capture, then hashes through the
+//! non-materializing body view. Proxied upstream responses remain
+//! streaming-only. The gate, evaluated at the plugin's stage:
 //!
 //! 1. Applies the SECONDARY run/skip filter ([`BodyRequirement::conditions`],
 //!    re-using the same condition engine as the entry-level `conditions`). When
@@ -57,9 +59,8 @@ fn plugin_limit_bytes(requirement: &BodyRequirement) -> Option<u64> {
 /// Apply the per-plugin `maxBodySize` limit to an already-read body: if the body
 /// is larger than the plugin's own limit, that plugin (and only that plugin)
 /// treats it as too-large. `None` = within the limit / no limit, run the plugin.
-fn over_plugin_limit(requirement: &BodyRequirement, body: &bytes::Bytes) -> Option<BodyReadError> {
-    plugin_limit_bytes(requirement)
-        .and_then(|limit| (body.len() as u64 > limit).then_some(BodyReadError::TooLarge { limit }))
+pub(crate) fn over_plugin_limit_len(requirement: &BodyRequirement, body_len: u64) -> Option<BodyReadError> {
+    plugin_limit_bytes(requirement).and_then(|limit| (body_len > limit).then_some(BodyReadError::TooLarge { limit }))
 }
 
 /// Wrapper that force-buffers the request body before running the inner filter.
@@ -108,7 +109,7 @@ impl RequestFilter for BodyGatedRequestFilter {
         let cap = buffer_cap(session);
         let read_result = session.read_request_body(Some(cap)).await;
         match read_result {
-            Ok(body) => match over_plugin_limit(&self.requirement, &body) {
+            Ok(body) => match over_plugin_limit_len(&self.requirement, body.len() as u64) {
                 Some(err) => body_read_failure_result(session, &self.requirement, log, &err),
                 None => self.inner.run_request(session, log).await,
             },
@@ -156,7 +157,7 @@ impl UpstreamResponse for BodyGatedUpstreamResponse {
         let cap = buffer_cap(session);
         let read_result = session.read_response_body(Some(cap)).await;
         match read_result {
-            Ok(body) => match over_plugin_limit(&self.requirement, &body) {
+            Ok(body) => match over_plugin_limit_len(&self.requirement, body.len() as u64) {
                 Some(err) => body_read_failure_result(session, &self.requirement, log, &err),
                 None => self.inner.run_upstream_response(session, log).await,
             },
@@ -182,7 +183,7 @@ impl UpstreamResponse for BodyGatedUpstreamResponse {
 ///   `Unimplemented`) is a runtime condition an operator may reasonably choose
 ///   to tolerate, so it keeps the `on_read_failure` knob. Oversize maps to 413
 ///   and a read timeout to 408 (client errors); everything else to 500.
-fn body_read_failure_result(
+pub(crate) fn body_read_failure_result(
     session: &mut dyn PluginSession,
     requirement: &BodyRequirement,
     log: &mut PluginLog,

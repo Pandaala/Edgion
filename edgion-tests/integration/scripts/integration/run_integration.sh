@@ -1922,7 +1922,7 @@ main() {
             local end_time=$(date +%s)
             local duration=$((end_time - start_time))
             if grep -q '^SKIPPED:' "$log_file"; then
-                log_warning "${name} test skipped"
+                log_warn "${name} test skipped"
                 report_test "$name" "SKIP" "$duration"
                 return 0
             fi

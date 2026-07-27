@@ -367,6 +367,17 @@ pub trait PluginSession: Send + Sync {
         Err(BodyReadError::Unimplemented)
     }
 
+    /// Ensure the request body is completely captured without requiring a
+    /// contiguous materialization, and return its final length.
+    ///
+    /// The default preserves compatibility for test sessions and alternate
+    /// adapters by using the full-body accessor. The Pingora adapter overrides
+    /// this method so a disk-backed body remains on disk.
+    async fn ensure_request_body(&mut self, max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
+        let body = self.read_request_body(max_bytes).await?;
+        u64::try_from(body.len()).map_err(|_| BodyReadError::Incomplete)
+    }
+
     /// Read the full upstream response body, buffering it on first call.
     /// `max_bytes` caps the buffer on the first (buffering) call.
     async fn read_response_body(&mut self, _max_bytes: Option<u64>) -> BodyReadResult {

@@ -105,9 +105,9 @@ load_gateway_capabilities() {
                 return 1
             }
             ;;
-        upstream)
+        stock)
             echo "$capabilities" | grep -q '^body-buffering=disabled$' || {
-                log_error "Upstream Gateway does not report body-buffering=disabled"
+                log_error "Stock Gateway does not report body-buffering=disabled"
                 return 1
             }
             ;;

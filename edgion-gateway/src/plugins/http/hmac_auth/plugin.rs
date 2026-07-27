@@ -19,11 +19,12 @@ use sha2::Digest;
 use sha2::{Sha256, Sha384, Sha512};
 
 use crate::plugins::http::common::auth_common::{apply_auth_failure_delay, send_gateway_auth_error_response};
+use crate::plugins::runtime::body_gate::{body_read_failure_result, over_plugin_limit_len};
 use crate::plugins::runtime::log::{la, sensitive};
 use crate::plugins::runtime::traits::session::BodyReadError;
 use crate::plugins::runtime::{PluginLog, PluginSession, RequestFilter};
 use edgion_resources::filters::PluginRunningResult;
-use edgion_resources::resources::edgion_plugins::{HmacAlgorithm, HmacAuthConfig, HmacCredential};
+use edgion_resources::resources::edgion_plugins::{BodyRequirement, HmacAlgorithm, HmacAuthConfig, HmacCredential};
 use edgion_resources::EdgionStatus;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -44,20 +45,29 @@ pub struct HmacAuth {
     name: String,
     config: HmacAuthConfig,
     credentials: Arc<HashMap<String, HmacCredential>>,
+    body_requirement: BodyRequirement,
 }
 
 impl HmacAuth {
     /// Create plugin for runtime.
-    pub fn create(config: &HmacAuthConfig) -> Box<dyn RequestFilter> {
-        Box::new(Self::new(config))
+    pub fn create(config: &HmacAuthConfig, body_requirement: Option<BodyRequirement>) -> Box<dyn RequestFilter> {
+        Box::new(Self::with_body_requirement(config, body_requirement))
     }
 
     /// Create plugin instance.
     pub fn new(config: &HmacAuthConfig) -> Self {
+        Self::with_body_requirement(config, None)
+    }
+
+    fn with_body_requirement(config: &HmacAuthConfig, body_requirement: Option<BodyRequirement>) -> Self {
+        let intrinsic = config.validate_request_body.then(BodyRequirement::fail_close);
+        let body_requirement =
+            BodyRequirement::resolve(body_requirement, intrinsic).unwrap_or_else(BodyRequirement::fail_close);
         Self {
             name: "HmacAuth".to_string(),
             config: config.clone(),
             credentials: Arc::new(config.resolved_credentials.clone().unwrap_or_default()),
+            body_requirement,
         }
     }
 
@@ -306,8 +316,8 @@ impl HmacAuth {
     /// (`Digest: SHA-256=<base64(sha256(body))>`, Kong `validate_request_body`
     /// semantics). Returns the denial reason on mismatch/absence.
     ///
-    /// Requires the request body to have been buffered (the body gate ensures
-    /// this before the plugin runs). Only SHA-256 is accepted.
+    /// Requires the request body to have been captured before hashing. Only
+    /// SHA-256 is accepted.
     ///
     /// A failed read records the matching `EdgionStatus` before denying, using
     /// the same `BodyReadError` -> `EdgionStatus` mapping as
@@ -318,10 +328,17 @@ impl HmacAuth {
     /// recorded which refusal, and double-counting it here would inflate that
     /// status.
     ///
-    /// Only the STATUS mapping is shared. The HTTP code is not: auth is
-    /// fail-closed, so the caller answers every denial with the plugin's auth
-    /// error response, not with `body_gate.rs`'s per-error 413/408 split.
+    /// Initial capture and logical-size failures are handled before this helper
+    /// through `body_read_failure_result`, preserving the generic gate's
+    /// 413/408/500 mapping. A later hashing failure reaches this helper and uses
+    /// the plugin's opaque authentication error response.
+    #[cfg(test)]
     async fn verify_body_digest(session: &mut dyn PluginSession) -> Result<(), &'static str> {
+        let expected = Self::expected_body_digest(session)?;
+        Self::verify_body_digest_expected(session, &expected).await
+    }
+
+    async fn verify_body_digest_expected(session: &mut dyn PluginSession, expected: &str) -> Result<(), &'static str> {
         let body_hash = match session.request_body_sha256().await {
             Ok(hash) => hash,
             Err(err) => {
@@ -337,8 +354,11 @@ impl HmacAuth {
                 return Err("request body unavailable");
             }
         };
-        let digest_header = session.header_value("digest").ok_or("Missing Digest header")?;
-        Self::check_body_digest_hash(&body_hash, &digest_header)
+        let computed = STANDARD.encode(body_hash);
+        if computed != expected {
+            return Err("Body digest mismatch");
+        }
+        Ok(())
     }
 
     /// Pure `Digest` header check: `SHA-256=<base64(sha256(body))>`.
@@ -347,18 +367,28 @@ impl HmacAuth {
         Self::check_body_digest_hash(&Sha256::digest(body), digest_header)
     }
 
+    #[cfg(test)]
     fn check_body_digest_hash(body_hash: &[u8], digest_header: &str) -> Result<(), &'static str> {
+        let expected = Self::parse_body_digest_header(digest_header)?;
+        let computed = STANDARD.encode(body_hash);
+        if computed != expected {
+            return Err("Body digest mismatch");
+        }
+        Ok(())
+    }
+
+    fn expected_body_digest(session: &dyn PluginSession) -> Result<String, &'static str> {
+        let digest_header = session.header_value("digest").ok_or("Missing Digest header")?;
+        Self::parse_body_digest_header(&digest_header).map(str::to_owned)
+    }
+
+    fn parse_body_digest_header(digest_header: &str) -> Result<&str, &'static str> {
         // Split on the FIRST '=' so base64 padding stays with the value.
         let (algo, expected) = digest_header.split_once('=').ok_or("Malformed Digest header")?;
         if !algo.trim().eq_ignore_ascii_case("SHA-256") {
             return Err("Unsupported Digest algorithm");
         }
-
-        let computed = STANDARD.encode(body_hash);
-        if computed != expected.trim() {
-            return Err("Body digest mismatch");
-        }
-        Ok(())
+        Ok(expected.trim())
     }
 
     fn signed_date_header<'a>(&self, signed_headers: &'a [String]) -> Option<&'a str> {
@@ -419,9 +449,9 @@ impl RequestFilter for HmacAuth {
     }
 
     // Body requirement is declared on `EdgionPlugin::body_requirement` (schema
-    // layer) so the controller and gateway agree: HMAC consumes the request body
-    // exactly when `validateRequestBody` is set, and the runtime then buffers it
-    // (fail-close) before this plugin runs.
+    // layer) so the controller and gateway agree. HMAC owns the resolved
+    // requirement at runtime: cheap authentication runs first, then body capture
+    // and streaming digest verification run fail-closed.
 
     async fn run_request(&self, session: &mut dyn PluginSession, plugin_log: &mut PluginLog) -> PluginRunningResult {
         let auth_header = match self.extract_auth_header(session) {
@@ -547,7 +577,28 @@ impl RequestFilter for HmacAuth {
                     )
                     .await;
             }
-            if let Err(message) = Self::verify_body_digest(session).await {
+
+            let expected_digest = match Self::expected_body_digest(session) {
+                Ok(expected) => expected,
+                Err(message) => {
+                    return self.reject(session, plugin_log, 401, message, "Deny body digest").await;
+                }
+            };
+
+            let requirement = &self.body_requirement;
+            let capture = session.ensure_request_body(None).await;
+            match capture {
+                Ok(body_len) => {
+                    if let Some(err) = over_plugin_limit_len(requirement, body_len) {
+                        return body_read_failure_result(session, requirement, plugin_log, &err);
+                    }
+                }
+                Err(err) => {
+                    return body_read_failure_result(session, requirement, plugin_log, &err);
+                }
+            }
+
+            if let Err(message) = Self::verify_body_digest_expected(session, &expected_digest).await {
                 return self.reject(session, plugin_log, 401, message, "Deny body digest").await;
             }
         }
@@ -661,6 +712,10 @@ mod tests {
             (BodyReadError::Unimplemented, EdgionStatus::BodyReadUnimplemented),
         ] {
             let mut session = MockPluginSession::new();
+            session
+                .expect_header_value()
+                .withf(|name| name == "digest")
+                .return_const(Some("SHA-256=unused".to_string()));
             session.expect_request_body_sha256().returning(move || Err(err.clone()));
             session
                 .expect_add_error()
@@ -680,6 +735,10 @@ mod tests {
     #[tokio::test]
     async fn verify_body_digest_does_not_double_count_refusal() {
         let mut session = MockPluginSession::new();
+        session
+            .expect_header_value()
+            .withf(|name| name == "digest")
+            .return_const(Some("SHA-256=unused".to_string()));
         session
             .expect_request_body_sha256()
             .returning(|| Err(BodyReadError::NotBuffered));
@@ -882,6 +941,7 @@ mod tests {
         let body = b"{\"a\":1}";
         let plugin = plugin_validate_body();
         let mut session = signed_session(&["@request-target", "date"], Some(&body_digest(body)), body);
+        session.expect_ensure_request_body().times(0);
         let mut log = PluginLog::new("HmacAuth");
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
@@ -893,6 +953,9 @@ mod tests {
         let body = b"{\"a\":1}";
         let plugin = plugin_validate_body();
         let mut session = signed_session(&["@request-target", "date", "digest"], Some(&body_digest(body)), body);
+        session
+            .expect_ensure_request_body()
+            .returning(move |_| Ok(body.len() as u64));
         let mut log = PluginLog::new("HmacAuth");
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::GoodNext);
@@ -906,9 +969,85 @@ mod tests {
         // Sign a digest computed over DIFFERENT bytes than the buffered body.
         let signed_digest = body_digest(b"{\"a\":2}");
         let mut session = signed_session(&["@request-target", "date", "digest"], Some(&signed_digest), real_body);
+        session
+            .expect_ensure_request_body()
+            .returning(move |_| Ok(real_body.len() as u64));
         let mut log = PluginLog::new("HmacAuth");
         let result = plugin.run_request(&mut session, &mut log).await;
         assert_eq!(result, PluginRunningResult::ErrTerminateRequest);
         assert!(log.contains("Deny body digest"));
+    }
+
+    #[tokio::test]
+    async fn validate_body_enforces_plugin_limit_after_capture() {
+        let body = b"12345";
+        let mut plugin = plugin_validate_body();
+        plugin.body_requirement.max_body_size = Some("4".to_string());
+        let mut session = signed_session(&["@request-target", "date", "digest"], Some(&body_digest(body)), body);
+        session
+            .expect_ensure_request_body()
+            .returning(move |_| Ok(body.len() as u64));
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::BodyReadTooLarge)
+            .times(1)
+            .returning(|_| ());
+
+        let mut log = PluginLog::new("HmacAuth");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 413,
+                body: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_body_preserves_physical_cap_failure() {
+        let body = b"12345";
+        let plugin = plugin_validate_body();
+        let mut session = signed_session(&["@request-target", "date", "digest"], Some(&body_digest(body)), body);
+        session
+            .expect_ensure_request_body()
+            .returning(|_| Err(BodyReadError::BufferLimitExceeded { limit: 4 }));
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::BodyReadTooLarge)
+            .times(1)
+            .returning(|_| ());
+
+        let mut log = PluginLog::new("HmacAuth");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 413,
+                body: None
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn validate_body_fails_closed_without_buffering_capability() {
+        let body = b"12345";
+        let plugin = plugin_validate_body();
+        let mut session = signed_session(&["@request-target", "date", "digest"], Some(&body_digest(body)), body);
+        session
+            .expect_ensure_request_body()
+            .returning(|_| Err(BodyReadError::Unimplemented));
+        session
+            .expect_add_error()
+            .withf(|status| *status == EdgionStatus::BodyReadUnimplemented)
+            .times(1)
+            .returning(|_| ());
+
+        let mut log = PluginLog::new("HmacAuth");
+        assert_eq!(
+            plugin.run_request(&mut session, &mut log).await,
+            PluginRunningResult::ErrResponse {
+                status: 500,
+                body: None
+            }
+        );
     }
 }

@@ -81,6 +81,11 @@ impl BodyStorageView {
         self.inner.mutation.read().is_some()
     }
 
+    #[cfg(test)]
+    pub(crate) fn is_materialized(&self) -> bool {
+        self.inner.materialized.get().is_some()
+    }
+
     pub async fn replace_slice(&self, range: std::ops::Range<usize>, replacement: Bytes) -> BodyReadResult {
         let body = self.read_all().await?;
         if range.start > range.end || range.end > body.len() {
@@ -655,6 +660,11 @@ mod tests {
         capture(&mut disk, &[b"hash-", b"me"]).await;
         assert!(matches!(disk.storage, CaptureStorage::FinishedDisk { .. }));
         assert_eq!(disk_view.sha256().await.unwrap(), expected);
+        assert!(disk_view.inner.materialized.get().is_none());
+
+        disk_view.overwrite_body(Bytes::from_static(b"mutated")).unwrap();
+        let mutated_expected: [u8; 32] = Sha256::digest(b"mutated").into();
+        assert_eq!(disk_view.sha256().await.unwrap(), mutated_expected);
         assert!(disk_view.inner.materialized.get().is_none());
     }
 

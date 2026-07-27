@@ -175,6 +175,11 @@ impl ForwardAuthConfig {
                 self.conn.status_on_error
             ));
         }
+        if self.forward_body && self.request.body.is_some() {
+            return Some(
+                "forwardBody and request.body are mutually exclusive; configure only one body source".to_string(),
+            );
+        }
         // Delegate request-level validation (rejects forward_all on args/cookies)
         if let Some(e) = self.request.validation_error() {
             return Some(e);
@@ -333,6 +338,11 @@ mod tests {
         cfg.conn.target.service.name = Some("auth".to_string());
         cfg.conn.target.service.port = Some(8080);
         cfg.forward_body = true;
+        assert!(
+            cfg.validation_error().is_none(),
+            "forwardBody must remain valid when request.body is absent"
+        );
+
         cfg.request.body = Some(BodySpec::Raw {
             template: "configured-body".to_string(),
         });
@@ -343,6 +353,12 @@ mod tests {
         assert!(
             err.contains("forwardBody") && err.contains("request.body"),
             "got: {err}"
+        );
+
+        cfg.forward_body = false;
+        assert!(
+            cfg.validation_error().is_none(),
+            "request.body must remain valid when forwardBody is false"
         );
     }
 }

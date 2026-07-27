@@ -8,7 +8,7 @@
 
 proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可运行在任意兼容 host（Envoy、本网关或其他实现）上，无需重新编译 host 本身。你不需要针对 Edgion 内部 API 编写原生 Rust 插件，而是用你偏好语言的 [proxy-wasm SDK](https://crates.io/crates/proxy-wasm) 编译出一个体积较小的 WebAssembly 模块，把编译产物 `.wasm` 字节码交给本插件。网关只编译一次、缓存编译结果，并对初始化好的实例做池化，因此单次请求的执行成本很低。
 
-实现的 ABI 是一个刻意收敛的子集（见下文）：header 读写、本地响应、**HTTP callout**（请求阶段 Pause/恢复，以及 `on_tick` 内发起）、**请求 body 整体缓冲模式**（完整 body、由 guest 声明、可拒绝请求）、**响应 body 只读观测**（按 chunk）、**shared data** 与**定时器**（`on_tick`）。body *改写*（`proxy_set_buffer_bytes`）未实现，响应侧的整体缓冲模式（响应 body 的"完整 body"模式）也尚不存在。
+实现的 ABI 是一个刻意收敛的子集（见下文）：header 读写、本地响应、**HTTP callout**（请求阶段 Pause/恢复，以及 `on_tick` 内发起）、**请求 body 整体缓冲模式**（完整 body、由 guest 声明、可拒绝请求）、**响应 body 只读观测**（按 chunk）、**shared data** 与**定时器**（`on_tick`）。body *改写*（`proxy_set_buffer_bytes`）未实现。主上游响应始终保持流式传输，不支持完整响应体缓冲。
 
 ## 支持的 ABI 子集
 
@@ -202,20 +202,20 @@ Edgion 支持两种、有意区分开的 wasm body 行为：
 | `proxy_get_buffer_bytes` 返回 | **完整缓冲 body** | 仅**当前 chunk** |
 | 能否拒绝请求 | ✅（`proxy_send_local_response`） | ❌（响应头已发出） |
 | 能否改写 body | ❌（`proxy_set_buffer_bytes` 是返回 `UNIMPLEMENTED` 的桩实现） | ❌ |
-| 如何选择 | 静态：条目上有运营者 `body:` 块，**且**编译出的 guest 模块导出了 `proxy_on_request_body` | 静态：guest 模块是否导出 `proxy_on_response_body` |
+| 如何选择 | 静态：编译出的 guest 模块导出了 `proxy_on_request_body`；可选的 `body:` 块用于添加执行前 body 策略 | 静态：guest 模块是否导出 `proxy_on_response_body` |
 
 **这是对 proxy-wasm spec 的有意偏离。** spec 把缓冲建模为 guest 在运行时逐 chunk 做的*动态*决策（`if !end_of_stream { Action::Pause }` 告诉宿主继续缓冲；`Action::Continue` 告诉宿主继续流式转发）。Envoy 的实现方式是把 `Pause` 映射成 `StopIterationAndBuffer`，由它的 filter manager 持有缓冲区。Edgion 在两侧都做不到这一点——响应 body filter 是**同步**、body 不可变的直接传递（入参 `&Option<Bytes>`，返回 `Option<Duration>`；无法扣留或累积某个 chunk），而且"这个插件是否拿到完整 body"必须在任何钩子运行之前、模块加载时就决定一次。所以 Edgion 只在**一次、静态**地选择模式：依据编译出的 guest 模块导出了哪个钩子、以及运营者把它挂在哪个阶段——而不是依据 guest 每次请求返回的 `Action` 值。
 
 ### 请求 body 整体缓冲模式
 
-把 Wasm 条目列在 `requestPlugins` 下、且使用的 guest 模块导出了 `proxy_on_request_body`，就会进入整体缓冲模式：`proxy_on_request_headers` 运行之后（且仅当它返回 `Continue`，即没有已经拒绝或 trap），网关会尝试缓冲完整的请求 body，成功后调用 `proxy_on_request_body` **恰好一次**：`body_size` 为完整 body 的长度、`end_of_stream = true`，`proxy_get_buffer_bytes(HttpRequestBody, 0, body_size)` 返回完整内容。guest 可以检视完整 body——用于请求体 WAF、敏感信息扫描或签名校验——并像在 header 钩子里一样通过 `proxy_send_local_response` 拒绝请求。
+Wasm 条目列在 `requestPlugins` 下且 guest 导出了 `proxy_on_request_body` 时，就会进入完整请求体模式。没有 `body:` 块时，`proxy_on_request_headers` 返回 `Continue`（即没有已经拒绝或 trap）之后，网关才会懒捕获完整的请求 body。随后网关调用 `proxy_on_request_body` **恰好一次**：`body_size` 为完整 body 的长度、`end_of_stream = true`，`proxy_get_buffer_bytes(HttpRequestBody, 0, body_size)` 返回完整内容。guest 可以检视完整 body——用于请求体 WAF、敏感信息扫描或签名校验——并像在 header 钩子里一样通过 `proxy_send_local_response` 拒绝请求。
 
 需要注意的现状与限制：
 
-- **通过 `body:` 由运营者主动开启。** 不同于自身声明了 body 需求的插件（如 `HmacAuth` 的 `validateRequestBody`），Wasm 没有能表达"需要 body"的自有配置字段——guest 导出了哪些钩子只有模块加载之后才知道，不是插件配置本身能决定的。因此请求整体缓冲模式需要运营者在 `Wasm` 请求条目上显式加一个 `body:` 块来开启（`maxBodySize`/`conditions`/`onReadFailure` 都是可选的，均有合理默认值）。`body:` 块里的 `maxBodySize`（如果设置）是叠加在下面网关级上限之上的**单插件限制**（超过则返回 `413`），不是缓冲区大小本身。如果 guest 模块并未导出 `proxy_on_request_body`，加了 `body:` 也只是白白缓冲一份 body——钩子仍然不会被调用（见下面最后一条）。
+- **通过可选的 `body:` 添加策略门控。** 导出的钩子会开启请求捕获；`body:` 则在 Wasm 请求头钩子之前添加通用门控。它的 `maxBodySize` 是叠加在网关物理上限之上的**单插件策略限制**，不是缓冲区分配大小：超过限制时，默认的 `onReadFailure: failClose` 返回 `413`，而 `failOpen` 会跳过整个 Wasm 条目。`conditions` 决定是否执行这层前置门控策略；条件要求跳过时，内部 Wasm 仍会因为导出的钩子而稍后捕获 body。如果 guest 没有导出 `proxy_on_request_body`，配置 `body:` 仍会在请求头钩子之前捕获，但不会运行 body 钩子。
 - **上限**：缓冲受网关级 `EdgionGatewayConfig.spec.maxBodySize` 约束，不是某个插件专属的值。
-- **依赖共享的 body 缓冲基建（过渡性缺口）。** 整体 body 读取走的是所有整体缓冲模式插件共用的内部 facade。在该 facade 的真实累积实现接入请求路径之前，body 网关的读取会固定失败并返回 `Unimplemented`——这**不等同于**钩子被静默跳过。带 `body:` 声明的 Wasm 条目会像其他被 body 网关接管的插件一样，按其 `onReadFailure` 策略处理这次失败：默认（`failClose`）在 guest 运行之前就以 `500` 拒绝请求；`failOpen` 则跳过该插件（如同未启用）并放行请求。等基建接入后，带 `body:` 声明的条目才会真正走到 `proxy_on_request_body` 并拿到真实缓冲的 body，而不是在网关处失败。
-- **没有 `body:` 块的条目、若 guest 导出了钩子，并不会被跳过。** 没有 `body:` 块意味着不会安装 `BodyGatedRequestFilter`，但只要 guest 模块导出了 `proxy_on_request_body`，`run_request_body_phase` 就会驱动该钩子——这与是否有 `body:` 网关无关——并仍然会调用（未被接管的）`read_request_body`。目前该读取总是返回 `Unimplemented`（缓冲基建尚未接入请求路径），而 `Unimplemented` 会像其他 wasm 运行时失败一样处理：走 `fail_mode`，按 `failOpen`（`WasmConfig.fail_open`，默认 `false`）决策。因此，如今一个未网关化、但 guest 导出了该钩子的条目，**默认会以 `500` fail-close**——不再是静默跳过。在插件上设置 `failOpen: true` 可以恢复此前的跳过并放行行为。由于每个 proxy-wasm SDK 生成的 guest 都会导出 `proxy_on_request_body`（属于生成的脚手架代码），这几乎影响所有 guest 模块，而不仅仅是真正实现了 body 检查的模块——这正是该默认值需要重视的原因。若 guest 确实没有导出 `proxy_on_request_body`，则不受影响：该阶段无论是否设置了 `body:` 都会被完全跳过。
+- **共享且有界的捕获。** 该模式复用其他完整请求体插件使用的请求级 body 存储。捕获是懒执行的，受网关物理上限约束，超过内存阈值后会溢写磁盘，并向 guest 暴露此前插件产生的当前不可变 body 版本。网关物理上限和不符合缓冲条件的请求始终 fail-close。
+- **捕获时机取决于是否配置 `body:`。** 配置后，通用门控会先捕获并应用策略，再运行任何 Wasm 钩子；未配置时，先运行请求头钩子，只有干净的 `Continue` 才继续懒捕获并运行 body 钩子。两条路径中的 body 钩子看到的是同一个完整请求版本。未导出 `proxy_on_request_body` 的 guest 会完全跳过 body 阶段。
 
 请求 body guest 的最小形态：
 
@@ -243,7 +243,7 @@ impl HttpContext for BodyScanner {
 
 ### 响应 body 观测（只读）
 
-把 Wasm 条目列在 `upstreamResponseBodyFilterPlugins` 下，`proxy_on_response_body` 会对每个上游 chunk 触发一次。这是目前响应侧**唯一**可用的 wasm body 模式——响应侧还没有对应请求侧整体缓冲模式的能力（见[剩余限制](#剩余限制)）。
+把 Wasm 条目列在 `upstreamResponseBodyFilterPlugins` 下，`proxy_on_response_body` 会对每个上游 chunk 触发一次。这是响应侧**唯一**可用的 wasm body 模式：主上游响应始终保持流式传输，不提供完整响应体缓冲模式（见[剩余限制](#剩余限制)）。
 
 > ### ⚠️ 按 chunk 而非整体——移植 guest 前必读
 >
@@ -254,7 +254,7 @@ impl HttpContext for BodyScanner {
 > if !end_of_stream { return Action::Pause; }             // 期望宿主缓冲
 > let body = self.get_http_response_body(0, body_size)?;  // 以为拿到完整 body
 > ```
-> ——**只会看到最后一个 chunk**。对 WAF 或敏感数据扫描器来说这是**静默漏检**。因此宿主在这里**不会**静默忽略 `Pause`：它会递增 `edgion_wasm_body_pause_unsupported_total{module}` 并按模块告警一次。**请对该指标配告警**——它是一个可靠信号，说明线上某个 guest 想要它没拿到的整体 body 缓冲。这种缓冲能力今天已经存在于*请求*侧（见上文[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)，前提是共享基建就绪）；*响应*侧则需要一个本网关尚未构建的整体缓冲模式。
+> ——**只会看到最后一个 chunk**。对 WAF 或敏感数据扫描器来说这是**静默漏检**。因此宿主在这里**不会**静默忽略 `Pause`：它会递增 `edgion_wasm_body_pause_unsupported_total{module}` 并按模块告警一次。**请对该指标配告警**——它是一个可靠信号，说明线上某个 guest 期望完整 body 缓冲。完整 body 模式只在*请求*侧可用，由导出的 `proxy_on_request_body` 钩子选择；可选的 `body:` 块用于添加策略。主上游响应始终仅支持流式处理。
 
 在每 chunk 模型下正确的用法：
 
@@ -364,8 +364,8 @@ trap 风暴表现为 `edgion_wasm_trap_total` 与 `edgion_wasm_instance_discard_
 
 ## 剩余限制
 
-- **请求 body 整体缓冲模式依赖共享的 body 缓冲基建，尚未接入请求路径**：带 `body:` 块的条目会被 body 网关接管，所以在基建落地之前，其缓冲读取固定失败，条目按自身 `onReadFailure` 策略解决（默认 `failClose` 返回 `500`，`failOpen` 则跳过该插件）——而不是静默跳过。**没有** `body:` 块的 `Wasm` 条目**并非**不受影响：只要 guest 导出了 `proxy_on_request_body`（每个 proxy-wasm SDK guest 都会导出），未被接管的读取仍会执行，现在会返回 `Unimplemented`，经 `fail_mode` 处理后默认以 `500` fail-close（`failOpen: true` 可恢复旧的跳过行为）。见[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)。
-- **响应侧没有整体缓冲模式**：响应 body 观测仅按 chunk、只读——不能改写 body，不能在 body 阶段短路，`Action::Pause` 无法兑现——按标准整体缓冲范式写的 guest 只会看到当前 chunk。见[响应 body 观测](#响应-body-观测只读)一节的警告。
+- **请求 body 整体缓冲模式由导出的钩子选择**：共享运行时会在网关物理上限约束下懒捕获完整请求。可选的 `body:` 块用于添加执行前条件、单插件 `maxBodySize` 和 `onReadFailure` 处理，而不是捕获开关。见[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)。
+- **响应侧没有整体缓冲模式**：主上游响应始终保持流式传输。Wasm 响应 body 观测仅按 chunk、只读——不能改写 body，不能在 body 阶段短路，`Action::Pause` 无法兑现——因此按标准整体缓冲范式写的 guest 只会看到当前 chunk。见[响应 body 观测](#响应-body-观测只读)一节的警告。
 - **任何方向都不支持 body 改写**（`proxy_set_buffer_bytes`）：请求侧和响应侧都注册为固定返回 `STATUS_UNIMPLEMENTED` 的桩实现。
 - **静态选模式，非动态 Pause/Continue**：不同于 Envoy，插件拿到哪种 body 模式在模块加载时就由编译出的 guest 导出了哪些钩子决定，而不是由 guest 每次请求返回的 `Action` 决定。见[两种 body 模式，静态选择](#两种-body-模式静态选择)。
 - **无 gRPC callout**（`proxy_dispatch_grpc_call`）：调用即 trap。
@@ -436,7 +436,7 @@ impl Context for AuthPlugin {
 }
 ```
 
-参考 guest 实现的完整契约（含 panic、本地响应测试路径）与产物重建方法见 `edgion-tests/wasm/README.md`。参考 guest 演练了响应 body 观测（`on_http_response_body`），但尚未演练请求 body 整体缓冲模式；该范式见上文[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)的独立代码片段。
+参考 guest 实现的完整契约（含 panic、本地响应测试路径）与产物重建方法见 `edgion-tests/wasm/README.md`。参考 guest 同时演练了完整请求 body 模式（`on_http_request_body`）和按 chunk 的响应 body 观测（`on_http_response_body`）。
 
 ## FAQ
 
@@ -450,7 +450,7 @@ impl Context for AuthPlugin {
 
 ### Q：我的请求意外返回了 `500`，而不是运行 `proxy_on_request_body`？
 
-这是当前过渡性缺口的表现，而不是"钩子从未运行"：如果编译出的 guest 模块导出了 `proxy_on_request_body`（加载时探测一次——SDK 层面重写了 `on_http_request_body` 但因为 context 类型没有实现它而没有被注册进导出表的情况不算），该钩子阶段就一定会驱动一次 body 读取。[请求 body 整体缓冲模式](#请求-body-整体缓冲模式)依赖共享的 body 缓冲 facade，目前尚未接入请求路径，因此该读取目前总是返回 `Unimplemented`——与旧行为不同，这不再被静默跳过，而是走 `fail_mode`，默认以 `500` fail-close（`WasmConfig.fail_open` 默认 `false`）。如果希望在缓冲基建落地前恢复旧的跳过并放行行为，请在插件上设置 `failOpen: true`。由于每个 proxy-wasm SDK 生成的 guest 都会导出 `proxy_on_request_body`（属于生成的脚手架代码），这可能会影响那些原本根本不打算使用该钩子的模块。
+确认 `Wasm` 条目位于 `requestPlugins`，并且编译出的 guest 确实导出了 `proxy_on_request_body`。然后检查网关物理上限和请求是否允许缓冲（gRPC 和携带 body 的升级请求会被拒绝）。如果条目配置了 `body:`，还应检查其 `conditions`、`maxBodySize` 和 `onReadFailure`：fail-close 的限制或读取失败会拒绝请求，fail-open 的策略失败会跳过整个条目；准入拒绝和网关物理上限绝不会 fail-open。
 
 ### Q：guest 模块在响应阶段不生效？
 

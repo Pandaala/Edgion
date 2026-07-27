@@ -499,22 +499,23 @@ impl PluginRuntime {
                     }
                 }
 
-                match Self::create_request_filter_from_edgion(&entry.plugin, namespace) {
+                let body_req = Self::resolve_body_requirement(
+                    &entry.plugin,
+                    entry.body.clone(),
+                    edgion_resources::resources::edgion_plugins::BodyStage::Request,
+                );
+
+                match Self::create_request_filter_from_edgion(&entry.plugin, namespace, body_req.clone()) {
                     CreateResult::Ok(Some(filter)) => {
-                        // Resolve the effective body requirement from the
-                        // operator's `body:` and the plugin's intrinsic
-                        // declaration (the operator may tune size/conditions but
-                        // may not downgrade an intrinsic fail-close). When present,
-                        // wrap the inner filter in a body gate (inside the
-                        // Conditional wrapper, so entry run_if/skip_if runs first).
-                        let body_req = Self::resolve_body_requirement(
-                            &entry.plugin,
-                            entry.body.clone(),
-                            edgion_resources::resources::edgion_plugins::BodyStage::Request,
-                        );
+                        // Most body consumers use the generic gate. HMAC owns
+                        // its requirement so it can complete cheap authentication
+                        // before capturing and hashing the request body.
                         let gated: Box<dyn RequestFilter> = match body_req {
-                            Some(req) => Box::new(BodyGatedRequestFilter::new(filter, req)),
+                            Some(req) if !matches!(&entry.plugin, EdgionPlugin::HmacAuth(_)) => {
+                                Box::new(BodyGatedRequestFilter::new(filter, req))
+                            }
                             None => filter,
+                            Some(_) => filter,
                         };
                         // Wrap with ConditionalRequestFilter to support condition evaluation
                         let conditional_filter = ConditionalRequestFilter::with_alias_and_dye(
@@ -1022,6 +1023,7 @@ impl PluginRuntime {
     fn create_request_filter_from_edgion(
         plugin: &EdgionPlugin,
         namespace: &str,
+        body_requirement: Option<edgion_resources::resources::edgion_plugins::BodyRequirement>,
     ) -> CreateResult<Box<dyn RequestFilter>> {
         match plugin {
             EdgionPlugin::RequestHeaderModifier(config) => {
@@ -1050,7 +1052,7 @@ impl PluginRuntime {
             EdgionPlugin::JweDecrypt(config) => {
                 CreateResult::Ok(Some(Box::new(JweDecrypt::new(config, namespace.to_string()))))
             }
-            EdgionPlugin::HmacAuth(config) => CreateResult::Ok(Some(HmacAuth::create(config))),
+            EdgionPlugin::HmacAuth(config) => CreateResult::Ok(Some(HmacAuth::create(config, body_requirement))),
             EdgionPlugin::HeaderCertAuth(config) => {
                 CreateResult::Ok(Some(Box::new(HeaderCertAuth::new(config, namespace.to_string()))))
             }
@@ -1627,14 +1629,11 @@ mod tests {
     use edgion_resources::resources::{EdgionPlugin, KeyAuthConfig, RequestFilterEntry};
 
     #[tokio::test]
-    async fn add_from_request_filters_wraps_body_consuming_plugin() {
-        // A body-consuming plugin (HMAC with validateRequestBody) must be wrapped
-        // in a body gate by the wiring. Proof: running the built filter force-reads
-        // the body (the mock returns Unimplemented) and fail-closes 500 BEFORE HMAC's own
-        // logic. If the gate were NOT wired in, HMAC would instead 401 on the
-        // missing Authorization header (ErrTerminateRequest).
-        use crate::plugins::runtime::traits::session::{BodyReadError, MockPluginSession};
-        use crate::EdgionHttpContext;
+    async fn add_from_request_filters_defers_hmac_body_capture() {
+        // HMAC owns its resolved body requirement instead of using the generic
+        // eager gate. A malformed Authorization header must be rejected before
+        // any request-body capture is attempted.
+        use crate::plugins::runtime::traits::session::MockPluginSession;
         use edgion_resources::resources::HmacAuthConfig;
 
         let cfg = HmacAuthConfig {
@@ -1652,22 +1651,21 @@ mod tests {
 
         let mut session = MockPluginSession::new();
         session.expect_get_method().return_const("POST".to_string());
-        session.expect_header_value().returning(|_| None);
-        session.expect_ctx().return_const(EdgionHttpContext::new());
-        session.expect_add_error().returning(|_| ());
-        session
-            .expect_read_request_body()
-            .returning(|_| Err(BodyReadError::Unimplemented));
+        session.expect_header_value().returning(|name| match name {
+            "authorization" => Some("malformed".to_string()),
+            _ => None,
+        });
+        session.expect_ensure_request_body().times(0);
+        session.expect_write_response_header().returning(|_, _| Ok(()));
+        session.expect_write_response_body().returning(|_, _| Ok(()));
+        session.expect_shutdown().returning(|| {});
 
         let mut log = PluginLog::new("HmacAuth");
         let result = filter.run_request(&mut session, &mut log).await;
         assert_eq!(
             result,
-            PluginRunningResult::ErrResponse {
-                status: 500,
-                body: None
-            },
-            "consuming plugin must be gated (fail-close) before its own auth logic"
+            PluginRunningResult::ErrTerminateRequest,
+            "HMAC must reject malformed authentication before capturing the body"
         );
     }
 
@@ -2034,7 +2032,7 @@ mod tests {
         let plugin = EdgionPlugin::Canary(config);
 
         // Verify request stage returns Ok(Some(...)).
-        let result = PluginRuntime::create_request_filter_from_edgion(&plugin, "default");
+        let result = PluginRuntime::create_request_filter_from_edgion(&plugin, "default", None);
         assert!(
             matches!(result, CreateResult::Ok(Some(_))),
             "Canary should construct in request stage"
