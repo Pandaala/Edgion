@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod route_matching_tests {
-    use crate::routes::http::routes_mgr::{HttpPortRouteManager, RouteManager};
+    use crate::routes::http::routes_mgr::{GlobalHttpRouteManagers, HttpPortRouteManager};
     use crate::runtime::store::get_global_gateway_store;
     use edgion_common::conf_sync::traits::ConfHandler;
     use edgion_resources::{Gateway, HTTPRoute};
@@ -249,7 +249,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_with_normal_routes() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -290,7 +290,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_with_regex_routes() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -323,7 +323,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_with_mixed_routes() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -364,7 +364,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_route() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -398,7 +398,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_route() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -434,7 +434,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_change_hostname() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com", "api1.example.com"]);
@@ -479,7 +479,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_hostname_from_route() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -526,7 +526,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_multiple_routes_same_hostname() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -575,7 +575,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_regex_only_to_normal_only() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -617,7 +617,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_last_route_cleans_hostname() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -653,7 +653,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_regex_and_normal_both_empty_removes_hostname() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -698,7 +698,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_keep_regex_remove_normal() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -743,7 +743,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_only_exact_routes() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -784,7 +784,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_only_prefix_routes() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -825,7 +825,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_mixed_exact_and_prefix_routes() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -866,7 +866,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_only_regex_routes_multiple() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -907,7 +907,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_full_set_all_types_mixed() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -956,7 +956,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_prefix_route() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -987,7 +987,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_regex_route() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -1018,7 +1018,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_mixed_routes() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -1057,7 +1057,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_normal_keep_regex() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -1102,7 +1102,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_regex_keep_normal() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -1147,7 +1147,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_change_from_prefix_to_exact() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -1189,7 +1189,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_change_from_normal_to_regex() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -1231,7 +1231,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_multiple_regex_routes() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -1273,7 +1273,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_multiple_prefix_routes() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -1315,7 +1315,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_remove_all_routes_cleans_hostname() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -1369,7 +1369,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_regex_then_add_normal() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);
@@ -1411,7 +1411,7 @@ mod route_matching_tests {
 
     #[test]
     fn test_partial_update_add_normal_then_add_regex() {
-        let mgr = RouteManager::new();
+        let mgr = GlobalHttpRouteManagers::new();
 
         // Setup: Create gateway and add to store
         let gateway = create_test_gateway("default", "gateway1", vec!["api.example.com"]);

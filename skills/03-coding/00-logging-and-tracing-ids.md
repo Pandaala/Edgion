@@ -24,7 +24,7 @@ Controller                         Gateway (Data Plane)
 │   use provided sv                │ ConfHandler.full_set()   │
 │         ↓                        │   / partial_update()     │
 │ gRPC WatcherEvent                │         ↓                │
-│   {type, sync_version, data}  ──►│ RouteManager / TlsStore  │
+│   {type, sync_version, data}  ──►│ Route mgrs / TlsStore    │
 │                                  │   get_sync_version()     │
 │                                  │         ↓                │
 │                                  │ MatchInfo.sv / MatchedInfo.sv

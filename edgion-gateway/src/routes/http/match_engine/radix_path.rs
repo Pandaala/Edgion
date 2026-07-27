@@ -66,7 +66,10 @@ impl RadixPath {
             (true, false) => 1,  // static prefix
             (true, true) => 0,   // param prefix (lowest)
         };
-        let path_char_count = normalized.len();
+        // Unicode character count, not `str::len()` (UTF-8 byte length): the spec
+        // wording is "characters", and a multi-byte literal must not be weighted
+        // as if it were several characters long.
+        let path_char_count = normalized.chars().count();
         let priority_weight = path_char_count * 4 + type_bonus;
 
         Self {
@@ -218,6 +221,22 @@ mod tests {
         let exact = RadixPath::new("/api/users", 0, false);
         let prefix = RadixPath::new("/api/users", 0, true);
         assert!(exact.priority_weight > prefix.priority_weight);
+    }
+
+    // Locks the Gateway API "largest number of characters" wording: the weight is
+    // derived from the Unicode character count, NOT the UTF-8 byte length.
+    #[test]
+    fn test_priority_weight_counts_chars_not_bytes() {
+        // "/cafe" is 5 chars / 5 bytes; "/café" is 5 chars / 6 bytes.
+        let ascii = RadixPath::new("/cafe", 0, false);
+        let multibyte = RadixPath::new("/café", 1, false);
+        assert_eq!(multibyte.priority_weight, 5 * 4 + 3);
+        assert_eq!(multibyte.priority_weight, ascii.priority_weight);
+
+        // A pattern that is genuinely one character longer still outranks it.
+        let longer = RadixPath::new("/caféx", 2, false);
+        assert_eq!(longer.priority_weight, 6 * 4 + 3);
+        assert!(longer.priority_weight > multibyte.priority_weight);
     }
 
     #[test]

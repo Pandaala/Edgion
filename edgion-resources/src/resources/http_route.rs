@@ -216,8 +216,16 @@ impl fmt::Debug for HTTPRouteRule {
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HTTPRouteMatch {
-    /// Path specifies a HTTP request path matcher
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Path specifies a HTTP request path matcher.
+    ///
+    /// Omitting it means `{type: PathPrefix, value: "/"}` per the Gateway API
+    /// spec. On Kubernetes the API server backfills that value from the
+    /// structural schema at admission, but the File and Etcd config-center
+    /// backends never pass through admission — so the default is replicated
+    /// here to keep every backend on the same semantics. Without it a
+    /// spec-valid header/method-only match compiles into a route unit with no
+    /// radix-tree entry and becomes permanently unreachable.
+    #[serde(default = "default_path_prefix_root", skip_serializing_if = "Option::is_none")]
     pub path: Option<HTTPPathMatch>,
 
     /// Headers specifies HTTP request header matchers
@@ -231,6 +239,14 @@ pub struct HTTPRouteMatch {
     /// Method specifies HTTP method matcher
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
+}
+
+/// Gateway API structural default for an omitted `HTTPRouteMatch.path`.
+fn default_path_prefix_root() -> Option<HTTPPathMatch> {
+    Some(HTTPPathMatch {
+        match_type: Some("PathPrefix".to_string()),
+        value: Some("/".to_string()),
+    })
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, JsonSchema)]
@@ -1174,6 +1190,30 @@ mod tests {
         assert_eq!(serde_json::to_value(TLSRouteStatus::default()).unwrap(), expected);
         assert_eq!(serde_json::to_value(UDPRouteStatus::default()).unwrap(), expected);
         assert_eq!(serde_json::to_value(EdgionTlsStatus::default()).unwrap(), expected);
+    }
+
+    #[test]
+    fn match_without_path_defaults_to_path_prefix_root() {
+        // The K8s API server backfills this from the structural schema at
+        // admission; File/Etcd config-center sources never pass through it, so
+        // the default must come from deserialization or the match compiles
+        // into a route unit with no radix-tree entry (permanently unreachable).
+        let m: HTTPRouteMatch = serde_json::from_value(serde_json::json!({
+            "headers": [{ "name": "x-internal", "value": "true" }]
+        }))
+        .unwrap();
+        let path = m.path.expect("omitted path must default, not stay None");
+        assert_eq!(path.match_type.as_deref(), Some("PathPrefix"));
+        assert_eq!(path.value.as_deref(), Some("/"));
+
+        // An explicit path is never overwritten by the default.
+        let m: HTTPRouteMatch = serde_json::from_value(serde_json::json!({
+            "path": { "type": "Exact", "value": "/api" }
+        }))
+        .unwrap();
+        let path = m.path.expect("explicit path must survive");
+        assert_eq!(path.match_type.as_deref(), Some("Exact"));
+        assert_eq!(path.value.as_deref(), Some("/api"));
     }
 
     fn backend_ref(group: Option<&str>, kind: Option<&str>) -> HTTPBackendRef {

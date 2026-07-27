@@ -9,8 +9,8 @@ pub mod tls;
 pub mod udp;
 
 pub use http::{
-    create_route_manager_handler, get_global_http_route_managers, get_global_route_manager, DomainRouteRules,
-    EdgionHttpProxy, GlobalHttpRouteManagers, HttpRouteRuleUnit, RouteManager,
+    create_route_manager_handler, get_global_http_route_managers, DomainRouteRules, EdgionHttpProxy,
+    GlobalHttpRouteManagers, HttpRouteRuleUnit,
 };
 
 pub use grpc::{

@@ -136,3 +136,20 @@ spec:
         - name: test-http
           namespace: edgion-test
           port: 30001
+
+    # Rule 10: header-only match with `path` deliberately omitted.
+    # Per the Gateway API spec an omitted path means `PathPrefix /`. On
+    # Kubernetes the API server backfills that at admission; this suite runs
+    # against the FileSystem config center, which never passes through
+    # admission, so this rule pins the deserialization-side default. Without
+    # it the rule compiles into a route unit with no radix-tree entry and is
+    # unreachable at every path.
+    - matches:
+        - headers:
+            - type: Exact
+              name: X-No-Path-Match
+              value: "yes"
+      backendRefs:
+        - name: test-http
+          namespace: edgion-test
+          port: 30001

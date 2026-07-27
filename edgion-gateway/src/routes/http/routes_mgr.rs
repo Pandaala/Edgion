@@ -557,13 +557,6 @@ pub fn get_global_http_route_managers() -> &'static GlobalHttpRouteManagers {
     GLOBAL_HTTP_ROUTE_MANAGERS.get_or_init(GlobalHttpRouteManagers::new)
 }
 
-// Legacy type aliases for backward compatibility.
-pub type RouteManager = GlobalHttpRouteManagers;
-
-pub fn get_global_route_manager() -> &'static GlobalHttpRouteManagers {
-    get_global_http_route_managers()
-}
-
 impl GlobalHttpRouteManagers {
     /// Test helper: get the per-listener manager for the default HTTP listener (port 80).
     /// The returned Arc is stable; inner route table updates are

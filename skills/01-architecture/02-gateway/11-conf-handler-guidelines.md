@@ -67,7 +67,7 @@ Reference implementation: HTTPRoute computes affected `ListenerKey`s from the ol
 
 | Handler | Resource | File path |
 |---------|----------|-----------|
-| RouteManager | HTTPRoute | `routes/http/conf_handler_impl.rs` |
+| GlobalHttpRouteManagers | HTTPRoute | `routes/http/conf_handler_impl.rs` |
 | GrpcRouteManager | GRPCRoute | `routes/grpc/conf_handler_impl.rs` |
 | GlobalTlsRouteManagers | TLSRoute | `routes/tls/conf_handler_impl.rs` |
 | GlobalTcpRouteManagers | TCPRoute | `routes/tcp/conf_handler_impl.rs` |

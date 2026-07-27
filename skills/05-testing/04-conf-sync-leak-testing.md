@@ -54,7 +54,7 @@ Both scripts are **self-contained** — they auto-start and auto-stop the enviro
 
 | Resource | ConfigClient kind | Derived Store(s) |
 |----------|-------------------|-------------------|
-| HTTPRoute | `httproute` | RouteManager (exact_domains, wildcard_domains, catch_all, http_routes) |
+| HTTPRoute | `httproute` | GlobalHttpRouteManagers (exact_domains, wildcard_domains, catch_all, http_routes) |
 | GRPCRoute | `grpcroute` | GrpcRouteManager (grpc_routes, resource_keys) |
 | TCPRoute | `tcproute` | GlobalTcpRouteManagers (route_cache, listener_count) |
 | UDPRoute | `udproute` | GlobalUdpRouteManagers (route_cache, listener_count) |

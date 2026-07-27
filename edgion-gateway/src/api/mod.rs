@@ -456,7 +456,7 @@ struct PluginStoreStatsV2 {
 
 /// Collect statistics from all derived stores for config-sync leak detection.
 async fn store_stats(State(client): State<Arc<ConfigClient>>) -> Json<ApiResponse<StoreStatsResponse>> {
-    let http_routes = crate::routes::http::get_global_route_manager().stats();
+    let http_routes = crate::routes::http::get_global_http_route_managers().stats();
     let grpc_routes = crate::routes::grpc::get_global_grpc_route_manager().stats();
     let tcp_routes = crate::routes::tcp::get_global_tcp_route_managers().stats();
     let udp_routes = crate::routes::udp::get_global_udp_route_managers().stats();
