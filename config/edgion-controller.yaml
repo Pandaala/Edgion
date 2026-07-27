@@ -171,14 +171,18 @@ conf_sync:
 #   #   - write (create/update/delete) on EdgionConfigData only
 #   #     (drives IP-restriction sync + region-route sync; grants write to ALL plugin
 #   #     metadata, not only region/ip -- this limitation is intentional for simplicity)
-#   #   - get, list, and failover on RegionRoute (synthetic label, not a ResourceKind):
-#   #     get/list allow the aggregate read endpoints
+#   #   - list and failover on RegionRoute (synthetic label, not a ResourceKind):
+#   #     list allows the aggregate read endpoints
 #   #     (GET /api/v1/cluster-region-routes, GET /api/v1/service-region-routes);
 #   #     failover covers the POST failover endpoint
-#   #   - NO reload, server-info, diagnostics, or any other verb beyond the above
+#   #   - server-info and reload on the NonResource route
+#   #     (GET /api/v1/server-info, POST /api/v1/reload) -- server-info is
+#   #     read-only, reload only re-applies the on-disk config; neither exposes
+#   #     secrets
+#   #   - NO diagnostics, wipe-all, or any other verb beyond the above
 #   #
 #   # PRESENT => the explicit rules FULLY OVERRIDE the built-in default.
-#   # Use an explicit rbac block to grant more (e.g. Secret read, reload) or less
+#   # Use an explicit rbac block to grant more (e.g. Secret read) or less
 #   # than the default. See docs/en/ops-guide/federation-rbac.md for examples.
 #   #
 #   # IMPORTANT -- kind casing: kinds MUST use the canonical PascalCase resource

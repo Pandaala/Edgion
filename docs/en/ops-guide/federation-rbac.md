@@ -35,8 +35,9 @@ default policy applies automatically:
 | `get`, `list`, `watch`, `list-keys` | `Secret` | **No** — credential safety |
 | `create`, `update`, `delete` | `EdgionConfigData` | Yes |
 | `create`, `update`, `delete` | Any other kind | No |
-| `get`, `list`, `failover` | `RegionRoute` (synthetic label, not a resource kind) | Yes |
-| `reload`, `server-info`, `diagnostics`, and everything else | Any | No |
+| `list`, `failover` | `RegionRoute` (synthetic label, not a resource kind) | Yes |
+| `server-info`, `reload` | `NonResource` (synthetic label, not a resource kind) | Yes |
+| `diagnostics`, and everything else | Any | No |
 
 Key notes:
 
@@ -46,13 +47,18 @@ Key notes:
   region-route or IP-restriction records. This is a known limitation of the
   kind-level granularity.
 - `RegionRoute` is a synthetic classifier label (not a `ResourceKind` variant).
-  `get` and `list` cover the aggregate read endpoints
+  `list` covers the aggregate read endpoints
   (`GET /api/v1/cluster-region-routes`, `GET /api/v1/service-region-routes`);
-  `failover` covers the POST failover endpoint. These three verbs are kept in a
-  separate rule from the ResourceKind read rule because `RegionRoute` is not part
-  of the exhaustiveness gate.
-- `reload` is **not** included in the default. If Center must trigger config
-  reloads, supply an explicit `rbac` block.
+  `failover` covers the POST failover endpoint. `get` is intentionally NOT
+  granted: no classifier route emits `(get, RegionRoute)`, so allowing it would
+  be a dead permission. These verbs are kept in a separate rule from the
+  ResourceKind read rule because `RegionRoute` is not part of the
+  exhaustiveness gate.
+- `reload` **is** included in the default, scoped to the synthetic
+  `NonResource` label: the Center's reload button arrives as a proxied
+  `POST /api/v1/reload`, classified `(reload, NonResource)` by the same route
+  classifier that emits `(server-info, NonResource)`. It is not granted on any
+  actual resource kind.
 
 When an explicit `rbac` block is present it **fully overrides** the built-in
 default. There is no merging.

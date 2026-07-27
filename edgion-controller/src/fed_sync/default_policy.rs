@@ -16,8 +16,12 @@
 //!  - server-info on the NonResource route (GET /api/v1/server-info). It exposes
 //!    only a reload marker (server_id), readiness, and mode -- no secrets -- so
 //!    it is safe to read by default; Center uses it to verify reload propagation.
+//!  - reload on the NonResource route (POST /api/v1/reload). The Center's
+//!    reload button arrives as a proxied request classified on the same
+//!    synthetic NonResource label; the Command channel that used to carry it
+//!    is gone.
 //!
-//! Nothing else is allowed: no reload, diagnostics, wipe-all.
+//! Nothing else is allowed: no diagnostics, wipe-all.
 //!
 //! When `center.rbac` is `Some(...)` the operator's config is used verbatim;
 //! the built-in default is NOT applied.
@@ -126,6 +130,10 @@ const DEFAULT_READ_KINDS: &[&str] = &[
 ///      label only used on the fed-proxy routing layer.
 ///   4. server-info on the NonResource route. Read-only and non-sensitive
 ///      (server_id / ready / mode only); Center reads it to verify reloads.
+///   5. reload on the NonResource route. The Center's reload button arrives
+///      as a proxied POST /api/v1/reload, classified (reload, NonResource) by
+///      the same synthetic label as rule 4; the Command channel that used to
+///      carry it is gone.
 pub(crate) fn default_center_policy() -> CenterPolicy {
     let read_kinds: Vec<String> = DEFAULT_READ_KINDS.iter().map(|s| s.to_string()).collect();
 
@@ -158,6 +166,13 @@ pub(crate) fn default_center_policy() -> CenterPolicy {
             // non-sensitive (server_id / ready / mode); used to verify reloads.
             FedAllowRule {
                 verbs: vec!["server-info".to_string()],
+                kinds: vec![NON_RESOURCE_KIND.to_string()],
+            },
+            // Rule 5: reload on the non-resource route. The Center's reload
+            // button arrives as a proxied POST /api/v1/reload; the Command
+            // channel that used to carry it is gone.
+            FedAllowRule {
+                verbs: vec!["reload".to_string()],
                 kinds: vec![NON_RESOURCE_KIND.to_string()],
             },
         ],
@@ -274,7 +289,12 @@ mod tests {
     }
 
     #[test]
-    fn default_denies_reload_any() {
+    fn default_allows_reload_on_non_resource() {
+        assert!(allows(&az(), Verb::Reload, NON_RESOURCE_KIND));
+    }
+
+    #[test]
+    fn default_denies_reload_on_resource_kinds() {
         assert!(!allows(&az(), Verb::Reload, "Gateway"));
         assert!(!allows(&az(), Verb::Reload, "*"));
     }

@@ -263,8 +263,10 @@ mod tests {
                 .unwrap()
                 .allowed
         );
+        // The default Center policy grants `reload` on the non-resource route
+        // so the Center's reload action works without operator configuration.
         assert!(
-            !snapshot
+            snapshot
                 .operations
                 .iter()
                 .find(|operation| operation.name == "reload")

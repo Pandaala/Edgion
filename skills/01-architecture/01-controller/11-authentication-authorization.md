@@ -103,7 +103,8 @@ Module: `edgion-controller/src/fed_sync/default_policy.rs`. Applied **only when 
 - **Write** (`create` / `update` / `delete`) on **`EdgionConfigData` only** (the region-route and ip-restriction handlers drive this kind).
 - **`list` / `failover`** on the synthetic **`RegionRoute`** label. `get` is intentionally absent because no classifier route emits `(get, RegionRoute)`.
 - **`server-info`** on synthetic **`NonResource`** for read-only server identity/readiness checks.
-- **Nothing else**: no `reload`, `diagnostics`, `wipe-all`, or `debug`.
+- **`reload`** on synthetic **`NonResource`** — the Center's reload button arrives as a proxied `POST /api/v1/reload`, classified `(reload, NonResource)`; the Command channel that used to carry it is gone.
+- **Nothing else**: no `diagnostics`, `wipe-all`, or `debug`.
 
 A compile-time exhaustiveness gate (`is_default_readable`) forces every new `ResourceKind` to make an explicit readable/excluded decision — adding a kind without updating it is a compile error.
 

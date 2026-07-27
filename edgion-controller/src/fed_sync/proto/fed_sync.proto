@@ -41,12 +41,12 @@ message ControllerMessage {
     oneof payload {
         RegisterRequest      register              = 1;  // First message: register self info
         Pong                 pong                  = 2;  // Heartbeat response
-        CommandResponse      command_response      = 4;  // Response to a command from center
         HttpProxyResponse    http_proxy_response   = 5;  // HTTP proxy response
         FedWatchListResponse watch_list_response   = 6;  // Reverse list/watch: full list response
         FedWatchEventResponse watch_event_response = 7;  // Reverse list/watch: incremental event response
         StatsReport          stats_report          = 8;  // Resource count snapshot pushed by controller
     }
+    reserved 4;
 }
 
 message RegisterRequest {
@@ -54,17 +54,11 @@ message RegisterRequest {
     string          cluster         = 2;  // Cluster identifier (fixed string)
     repeated string env             = 3;  // Environment label list
     repeated string tag             = 4;  // Extended label list
-    repeated string supported_kinds = 5;  // List of resource kinds held by this controller (excluding no_sync_kinds)
+    reserved 5;
 }
 
 message Pong {
     uint64 timestamp = 1;  // echo Ping.timestamp, millisecond timestamp
-}
-
-message CommandResponse {
-    string request_id = 1;
-    bool   success    = 2;
-    string message    = 3;  // Error message on failure
 }
 
 // ── Center → Controller ──────────────────────────────────────
@@ -73,10 +67,10 @@ message CenterMessage {
     oneof payload {
         RegisterAck      register_ack  = 1;  // Registration acknowledgement
         Ping             ping          = 2;  // Heartbeat
-        CommandRequest   command       = 4;  // Dispatched command
         HttpProxyRequest http_proxy    = 5;  // HTTP proxy request (Center forwards a frontend request)
         FedWatchRequest  watch_request = 6;  // Request controller to perform reverse list/watch
     }
+    reserved 4;
 }
 
 message RegisterAck {
@@ -86,28 +80,6 @@ message RegisterAck {
 
 message Ping {
     uint64 timestamp = 1;  // Millisecond timestamp
-}
-
-message CommandRequest {
-    string request_id = 1;
-    oneof command {
-        ReloadCommand reload = 2;
-        ApplyCommand  apply  = 3;
-        DeleteCommand delete = 4;
-    }
-}
-
-message ReloadCommand {}
-
-message ApplyCommand {
-    string kind = 1;
-    string data = 2;  // Resource JSON (ConfCenter raw format)
-}
-
-message DeleteCommand {
-    string kind      = 1;
-    string namespace = 2;
-    string name      = 3;
 }
 
 // ── HTTP Proxy (Center <-> Controller HTTP tunnel) ────────────

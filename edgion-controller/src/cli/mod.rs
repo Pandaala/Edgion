@@ -1,5 +1,4 @@
 use crate::api::{create_admin_router, serve_with_shutdown as serve_admin_api_with_shutdown};
-use crate::conf_mgr::conf_center::traits::CenterLifeCycle;
 use crate::conf_mgr::{ConfMgr, SchemaValidator, ShutdownHandle};
 use crate::conf_sync::{ConfigSyncGrpcServer, ConfigSyncServerProvider};
 use crate::config::EdgionControllerConfig;
@@ -734,14 +733,6 @@ impl EdgionControllerCli {
         // on reload and ensures the prior task is awaited before a new one spawns,
         // preventing dual registration at Center.
         if let Some(center_config) = config.center.clone() {
-            let kinds: Vec<String> = conf_mgr
-                .runtime()
-                .processor_registry
-                .all_kinds()
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
-
             // Build the fed router:
             //   1. Base admin router (routes + handlers, no auth).
             //   2. route_layer: authz_layer (innermost route_layer -- added first).
@@ -774,18 +765,16 @@ impl EdgionControllerCli {
             // `Clone`; the authz route_layer inside it shares the same
             // `Arc<Authorizer>`, so cloning the router per spawn is cheap and
             // correct -- all spawns see the same live policy.
-            let kinds_for_spawn = kinds;
             let conf_mgr_for_spawn = conf_mgr.clone();
             let authorizer_for_spawn = authorizer.clone();
 
             let spawn_client = move |rx: watch::Receiver<bool>| {
                 let router = fed_router.clone();
                 let cfg = center_config.clone();
-                let kinds = kinds_for_spawn.clone();
                 let conf_mgr = conf_mgr_for_spawn.clone();
                 let authorizer = authorizer_for_spawn.clone();
                 tokio::spawn(async move {
-                    crate::fed_sync::fed_client::run(cfg, kinds, rx, router, conf_mgr, authorizer).await;
+                    crate::fed_sync::fed_client::run(cfg, rx, router, conf_mgr, authorizer).await;
                 })
             };
 

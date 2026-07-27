@@ -4,7 +4,7 @@
 //! 1. Connect to center address
 //! 2. Open bidirectional stream (Sync RPC)
 //! 3. Send RegisterRequest as first message
-//! 4. Loop: handle CenterMessage (Ping, CommandRequest, RegisterAck, WatchRequest)
+//! 4. Loop: handle CenterMessage (Ping, RegisterAck, HttpProxyRequest, WatchRequest)
 //! 5. On error: exponential backoff, reconnect
 
 use anyhow::Result;
@@ -19,8 +19,8 @@ use crate::conf_mgr::ConfMgr;
 use crate::config::CenterClientConfig;
 use crate::fed_sync::proto::{
     center_message::Payload as CenterPayload, controller_message::Payload as CtrlPayload,
-    federation_sync_client::FederationSyncClient, CenterMessage, CommandResponse, ControllerMessage,
-    FedWatchEventResponse, FedWatchListResponse, HttpProxyResponse, Pong, RegisterRequest, StatsReport,
+    federation_sync_client::FederationSyncClient, CenterMessage, ControllerMessage, FedWatchEventResponse,
+    FedWatchListResponse, HttpProxyResponse, Pong, RegisterRequest, StatsReport,
 };
 use edgion_common::observe::fed_metrics;
 
@@ -41,7 +41,9 @@ const MAX_PROXY_REQUEST_BODY: usize = 1024 * 1024;
 /// router. Everything else (hop-by-hop, `Authorization`, `Cookie`,
 /// `X-Forwarded-*`, ...) is dropped: the Center identity is established by mTLS
 /// plus the injected RBAC role, never by a Center-supplied request header.
-const ALLOWED_PROXY_HEADERS: &[&str] = &["accept", "content-type", "user-agent"];
+/// `if-match` is forwarded because it carries the CAS precondition for
+/// Center-issued writes; DELETE has no request-body fallback for it.
+const ALLOWED_PROXY_HEADERS: &[&str] = &["accept", "content-type", "if-match", "user-agent"];
 
 /// Path prefixes the federation proxy may reach on the admin router. Anything
 /// outside this set is rejected with 404 before it touches the router, so a
@@ -120,7 +122,6 @@ fn refusal_reason(r: edgion_common::conf_sync::config::MtlsRefusal) -> &'static 
 /// Exits only when `shutdown` is triggered.
 pub async fn run(
     config: CenterClientConfig,
-    supported_kinds: Vec<String>,
     mut shutdown: watch::Receiver<bool>,
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
@@ -231,7 +232,7 @@ pub async fn run(
                 tracing::info!(component = "fed_client", "Shutdown signal received, exiting");
                 return;
             }
-            result = connect_and_run(&config, &supported_kinds, admin_router.clone(), conf_mgr.clone(), authorizer.clone()) => {
+            result = connect_and_run(&config, admin_router.clone(), conf_mgr.clone(), authorizer.clone()) => {
                 match result {
                     Ok(()) => {
                         // Only reset backoff if connection was alive long enough.
@@ -270,7 +271,6 @@ pub async fn run(
 
 async fn connect_and_run(
     config: &CenterClientConfig,
-    supported_kinds: &[String],
     admin_router: axum::Router,
     conf_mgr: Arc<ConfMgr>,
     authorizer: Arc<Authorizer>,
@@ -310,7 +310,6 @@ async fn connect_and_run(
             cluster: config.cluster.clone(),
             env: config.env.clone(),
             tag: config.tag.clone(),
-            supported_kinds: supported_kinds.to_vec(),
         })),
     };
     tx.send(register).await?;
@@ -488,41 +487,6 @@ async fn handle_center_message(
             tx.send(ControllerMessage {
                 payload: Some(CtrlPayload::Pong(Pong {
                     timestamp: ping.timestamp,
-                })),
-            })
-            .await?;
-        }
-
-        CenterPayload::Command(cmd) => {
-            tracing::info!(
-                component = "fed_client",
-                request_id = %cmd.request_id,
-                "CommandRequest received"
-            );
-            use crate::fed_sync::proto::command_request::Command;
-            let (success, message) = match cmd.command {
-                Some(Command::Reload(_)) => {
-                    use tower::ServiceExt;
-                    match http::Request::builder()
-                        .method(http::Method::POST)
-                        .uri("/api/v1/reload")
-                        .body(axum::body::Body::empty())
-                    {
-                        Ok(req) => match admin_router.clone().oneshot(req).await {
-                            Ok(resp) if resp.status().is_success() => (true, "Reload requested".to_string()),
-                            Ok(resp) => (false, format!("Reload returned {}", resp.status())),
-                            Err(e) => (false, format!("Reload failed: {}", e)),
-                        },
-                        Err(e) => (false, format!("Failed to build reload request: {}", e)),
-                    }
-                }
-                _ => (false, "Command not supported".to_string()),
-            };
-            tx.send(ControllerMessage {
-                payload: Some(CtrlPayload::CommandResponse(CommandResponse {
-                    request_id: cmd.request_id,
-                    success,
-                    message,
                 })),
             })
             .await?;
@@ -750,7 +714,9 @@ async fn handle_center_message(
                 );
                 // Mirror the existing watch-error frame shape: CtrlPayload::WatchEventResponse
                 // with a non-empty `error` field and all other fields defaulted to zero/empty.
-                // The Center interprets a non-empty `error` as a terminal error and re-watches.
+                // The Center treats the exact string "Forbidden" as terminal: it stops
+                // watching for this session and does not re-watch. Any other non-empty
+                // error is treated as transient: the Center backoff (3s) re-watches.
                 let err_msg = ControllerMessage {
                     payload: Some(CtrlPayload::WatchEventResponse(FedWatchEventResponse {
                         request_id: req.request_id,
@@ -1081,6 +1047,78 @@ mod tests {
         );
     }
 
+    /// The federation proxy must forward `If-Match` (CAS precondition for
+    /// Center-issued writes; DELETE has no body fallback) and must keep
+    /// stripping credential headers such as `Authorization`.
+    #[tokio::test]
+    async fn http_proxy_forwards_if_match_and_strips_authorization() {
+        use crate::authz::{Authorizer, CenterPolicy};
+        use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig};
+        use crate::fed_sync::proto::{controller_message::Payload as CtrlPayload, HttpProxyRequest};
+        use std::collections::HashMap;
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let conf_mgr = Arc::new(
+            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
+                tmp.path().to_path_buf(),
+            )))
+            .await
+            .expect("ConfMgr::create failed"),
+        );
+        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<ControllerMessage>(8);
+        let tx = Arc::new(tx);
+        let admin_router = axum::Router::new().route(
+            "/api/v1/echo-headers",
+            axum::routing::get(|headers: axum::http::HeaderMap| async move {
+                let if_match = headers
+                    .get("if-match")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                let has_authorization = headers.contains_key("authorization");
+                format!("if-match={if_match};authorization-present={has_authorization}")
+            }),
+        );
+        let proxy_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let mut active_watch_cancel: Option<tokio_util::sync::CancellationToken> = None;
+
+        let payload = CenterPayload::HttpProxy(HttpProxyRequest {
+            request_id: "p1".to_string(),
+            method: "GET".to_string(),
+            path: "/api/v1/echo-headers".to_string(),
+            headers: HashMap::from([
+                ("if-match".to_string(), "\"v123\"".to_string()),
+                ("authorization".to_string(), "Bearer secret".to_string()),
+            ]),
+            body: Vec::new(),
+        });
+
+        handle_center_message(
+            payload,
+            tx,
+            admin_router,
+            conf_mgr,
+            &mut active_watch_cancel,
+            proxy_semaphore,
+            authorizer,
+        )
+        .await
+        .expect("handle_center_message failed");
+
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timed out waiting for HttpProxyResponse")
+            .expect("channel closed without a response");
+        let Some(CtrlPayload::HttpProxyResponse(resp)) = msg.payload else {
+            panic!("expected HttpProxyResponse, got {:?}", msg.payload);
+        };
+        assert_eq!(resp.status_code, 200);
+        let body = String::from_utf8(resp.body).expect("utf8 body");
+        assert_eq!(body, "if-match=\"v123\";authorization-present=false");
+    }
+
     /// Drive a single HttpProxy request through handle_center_message and return
     /// the status code of the HttpProxyResponse the handler emits. The admin
     /// router is empty: the sanitisation checks under test all reject before the
@@ -1166,5 +1204,59 @@ mod tests {
         })
         .await;
         assert_eq!(status, 404);
+    }
+
+    /// Reload now arrives as an ordinary proxied POST. The tunnel must let
+    /// `POST /api/v1/reload` through the path allowlist and reach the router.
+    ///
+    /// This mirrors `run_http_proxy`'s setup rather than calling it directly:
+    /// that helper always wires an empty `admin_router` and returns only the
+    /// status code, so it cannot exercise "the request actually reaches a
+    /// registered handler and its body comes back."
+    #[tokio::test]
+    async fn http_proxy_reload_post_reaches_router() {
+        use crate::authz::{Authorizer, CenterPolicy};
+        use crate::conf_mgr::{ConfCenterConfig, ConfMgr, FileSystemConfig};
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let conf_mgr = Arc::new(
+            ConfMgr::create(ConfCenterConfig::FileSystem(FileSystemConfig::new(
+                tmp.path().to_path_buf(),
+            )))
+            .await
+            .expect("ConfMgr::create failed"),
+        );
+        let authorizer = Arc::new(Authorizer::new(CenterPolicy::deny_all()));
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<ControllerMessage>(8);
+        let tx = Arc::new(tx);
+        let admin_router = axum::Router::new().route("/api/v1/reload", axum::routing::post(|| async { "reload-ok" }));
+        let proxy_semaphore = Arc::new(tokio::sync::Semaphore::new(1));
+        let mut active_watch_cancel: Option<tokio_util::sync::CancellationToken> = None;
+
+        handle_center_message(
+            CenterPayload::HttpProxy(crate::fed_sync::proto::HttpProxyRequest {
+                request_id: "t4".to_string(),
+                method: "POST".to_string(),
+                path: "/api/v1/reload".to_string(),
+                headers: Default::default(),
+                body: Vec::new(),
+            }),
+            tx,
+            admin_router,
+            conf_mgr,
+            &mut active_watch_cancel,
+            proxy_semaphore,
+            authorizer,
+        )
+        .await
+        .expect("handle_center_message returned Err");
+
+        let msg = rx.recv().await.expect("expected an HttpProxyResponse");
+        let Some(CtrlPayload::HttpProxyResponse(resp)) = msg.payload else {
+            panic!("expected HttpProxyResponse, got {:?}", msg.payload);
+        };
+        assert_eq!(resp.status_code, 200);
+        assert_eq!(String::from_utf8(resp.body).expect("utf8"), "reload-ok");
     }
 }
