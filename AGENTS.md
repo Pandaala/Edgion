@@ -162,6 +162,10 @@ When the user says "run check", "check the code", "format the code", "run CI", "
 6. **Metrics inventory guard**: `python3 cicd/checks/check_metrics_inventory.py` —
    the inventory doc must list every emitted metric (both directions) and no emit
    site may use a high-cardinality label off the allowlist.
+7. **Pingora source policy**: `python3 cicd/checks/check_pingora_source_policy.py` —
+   all six Edgion fork dependencies must share the development `edgion` branch
+   or one release tag, and the lockfile must resolve the complete fork family
+   to one commit.
 
 > `--workspace` is intentional: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip it. `--workspace` brings it back into the fast check/clippy signal (matching what `cargo test --all` already compiles).
 

@@ -68,16 +68,19 @@ CI 和 release 现在都依赖同一个本地 action：
 
 当前 `ci.yml` 的主检查顺序是：
 
-1. `cargo check --workspace --all-targets`
-2. `cargo fmt --all -- --check`
-3. `python3 cicd/checks/validate_agent_docs.py`
-4. `cargo clippy --workspace --all-targets`
-5. `cargo test --all`
-6. 汇总 job `ci-success`
+1. `python3 cicd/checks/check_pingora_source_policy.py`
+2. `cargo check --locked --workspace --all-targets`
+3. `cargo fmt --all -- --check`
+4. `python3 cicd/checks/validate_agent_docs.py`
+5. `cargo clippy --locked --workspace --all-targets`
+6. `cargo test --locked --all`
+7. 汇总 job `ci-success`
 
 这里有几个容易被误解的点：
 
 - 当前 CI 命令没有默认扩大到 `--all-features`
+- 所有会解析依赖的 CI 命令都使用 `--locked`；实际构建由已提交的
+  lockfile 决定，不会跟随可移动分支的当前 tip
 - `check` 和 `clippy` 带 `--workspace`，目的是把 `edgion-tests`（一个被排除在 `default-members` 之外的 workspace 成员）也覆盖进来；若只用 `--all-targets`，会漏掉这个测试框架
 - `python3 cicd/checks/validate_agent_docs.py` 专门负责兜住 `AGENTS.md`、`skills/` 和 dev-guide 入口层的一致性
 - `fmt` job 不安装系统依赖，也不开 Cargo cache
@@ -94,7 +97,7 @@ CI 和 release 现在都依赖同一个本地 action：
 - checkout
 - 调用 `setup-rust`
 - cache `~/.cargo/registry` 与 `~/.cargo/git`
-- `cargo fetch`
+- `cargo fetch --locked`
 
 ### 2. `build-binaries`
 
@@ -138,12 +141,19 @@ CI 和 release 现在都依赖同一个本地 action：
 如果你只是想本地复现当前 CI，优先跑：
 
 ```bash
-cargo check --workspace --all-targets
+python3 cicd/checks/check_pingora_source_policy.py
+cargo check --locked --workspace --all-targets
 cargo fmt --all -- --check
 python3 cicd/checks/validate_agent_docs.py
-cargo clippy --workspace --all-targets
-cargo test --all
+cargo clippy --locked --workspace --all-targets
+cargo test --locked --all
 ```
+
+Edgion 的 Pingora 依赖在开发阶段跟踪 fork 的 `edgion` 分支，但
+`Cargo.lock` 会锁定精确 commit。推进 fork 因而必须形成一次经过审查的
+lockfile 变更。CI、release 和镜像构建都使用 `--locked`，不会因为分支
+tip 移动而隐式升级。若 release milestone 需要让 manifest 本身表达发布
+身份，可以使用受保护的不可变 tag，但六个 fork 依赖必须一起修改。
 
 如果你想接近 release 二进制构建，优先看：
 

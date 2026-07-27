@@ -1,0 +1,15 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-late-body-unbuffered
+  namespace: edgion-default
+spec:
+  upstreamResponseFilterPlugins:
+    - type: Dsl
+      config:
+        name: "late-body-reader-without-buffer"
+        source: |
+          if req.body == "late-body" {
+            resp.set_header("X-Late-Body", "unexpected")
+          }
+        errorPolicy: deny

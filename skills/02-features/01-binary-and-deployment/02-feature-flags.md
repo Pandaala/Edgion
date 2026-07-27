@@ -43,6 +43,24 @@ that use rustls; this does not change the selected Pingora data-plane backend.
 The Controller no longer links Pingora. Pingora source and TLS-backend selection
 are Gateway-local.
 
+## Pingora Fork Source Policy
+
+The six `pingora-*-edgion` workspace dependencies all track the fork's
+`edgion` branch. They must move as one source family; never pin or advance only
+one package.
+
+Reproducibility comes from the committed `Cargo.lock`, which records the exact
+Git commit for every fork package. CI, release workflows, and image builds use
+`--locked`, so a moved branch cannot change a build until the lockfile is
+intentionally refreshed and reviewed. Release milestones may replace the
+branch selector with one protected immutable tag when a manifest-level release
+identity is required; all six entries must change together.
+
+Run `python3 cicd/checks/check_pingora_source_policy.py` after any Pingora
+dependency edit. It verifies the six manifest entries and that the complete
+fork family resolves to one commit. The stock family remains the exact
+crates.io version `0.8.1`.
+
 ## Build Examples
 
 ```bash

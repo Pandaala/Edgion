@@ -80,6 +80,7 @@ fn applicable_stages(plugin: &EdgionPlugin) -> StageSet {
         | LdapAuth(_)
         | Mock(_)
         | ProxyRewrite(_)
+        | RequestBodyBuffer(_)
         | RequestRestriction(_)
         | RateLimit(_)
         | RateLimitRedis(_)

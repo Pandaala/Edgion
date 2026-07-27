@@ -31,6 +31,7 @@ mod rate_limit;
 mod rate_limit_redis;
 mod real_ip;
 mod region_route;
+mod request_body_buffer;
 mod request_match;
 mod request_mirror;
 mod request_restriction;
@@ -85,6 +86,7 @@ pub use real_ip::RealIpConfig;
 pub use region_route::{
     HashAlgorithm, HashCalcConfig, RegionDef, RegionRouteConfig, RouteByKeyConfMatchMeta, RouteRule,
 };
+pub use request_body_buffer::RequestBodyBufferConfig;
 pub use request_match::{OnMissing, RestrictionRule, RestrictionSource, SanType};
 pub use request_mirror::RequestMirrorPluginConfig;
 pub use request_restriction::{RequestRestrictionConfig, RestrictionMode, RuleGroup};

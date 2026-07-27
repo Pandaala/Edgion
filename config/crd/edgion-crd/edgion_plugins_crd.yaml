@@ -193,6 +193,7 @@ spec:
                           - RateLimitRedis
                           - RealIp
                           - RequestRestriction
+                          - RequestBodyBuffer
                           - RequestHeaderModifier
                           - ResponseHeaderModifier
                           - RequestRedirect

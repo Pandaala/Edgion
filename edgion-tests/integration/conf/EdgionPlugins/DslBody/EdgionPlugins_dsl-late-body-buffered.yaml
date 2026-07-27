@@ -1,0 +1,20 @@
+apiVersion: edgion.io/v1
+kind: EdgionPlugins
+metadata:
+  name: dsl-late-body-buffered
+  namespace: edgion-default
+spec:
+  requestPlugins:
+    - type: RequestBodyBuffer
+      config: {}
+      body:
+        maxBodySize: 1MiB
+  upstreamResponseFilterPlugins:
+    - type: Dsl
+      config:
+        name: "late-body-reader"
+        source: |
+          if req.body == "late-body" {
+            resp.set_header("X-Late-Body", "matched")
+          }
+        errorPolicy: deny

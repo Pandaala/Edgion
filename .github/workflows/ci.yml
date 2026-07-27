@@ -29,8 +29,11 @@ jobs:
       # of `default-members`) gets the fast type-check signal too — without it,
       # `--all-targets` alone covers only default members and harness breakages
       # surface much later in the slow `test` job.
+      - name: Verify Pingora source policy
+        run: python3 cicd/checks/check_pingora_source_policy.py
+
       - name: Run cargo check
-        run: cargo check --workspace --all-targets
+        run: cargo check --locked --workspace --all-targets
 
   gateway-flavors:
     name: Gateway Flavor (${{ matrix.flavor }})
@@ -60,17 +63,17 @@ jobs:
       - name: Build body Gateway
         if: matrix.flavor == 'body'
         run: |
-          cargo build -p edgion-gateway --bin edgion-gateway
-          cargo tree -p edgion-gateway --edges normal > /tmp/gateway-tree.txt
+          cargo build --locked -p edgion-gateway --bin edgion-gateway
+          cargo tree --locked -p edgion-gateway --edges normal > /tmp/gateway-tree.txt
 
       - name: Build stock Gateway
         if: matrix.flavor == 'stock'
         run: |
-          cargo build -p edgion-gateway \
+          cargo build --locked -p edgion-gateway \
             --bin edgion-gateway-stock \
             --no-default-features \
             --features allocator-jemalloc,boringssl,upstream-pingora
-          cargo tree -p edgion-gateway \
+          cargo tree --locked -p edgion-gateway \
             --edges normal \
             --no-default-features \
             --features allocator-jemalloc,boringssl,upstream-pingora \
@@ -143,7 +146,7 @@ jobs:
       # `--workspace` so clippy also lints `edgion-tests` (excluded from
       # `default-members`); otherwise the harness never gets a clippy signal in CI.
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --locked --workspace --all-targets
 
   test:
     name: Test
@@ -160,7 +163,7 @@ jobs:
           cache-key-prefix: "cargo-test"
 
       - name: Run tests
-        run: cargo test --all
+        run: cargo test --locked --all
 
   # Summary job for branch protection
   ci-success:

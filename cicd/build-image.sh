@@ -373,13 +373,13 @@ compile_binaries() {
         gateway_feature_args="--no-default-features --features \"${GATEWAY_FEATURES}\""
     fi
 
-    local build_cmd="cargo build --release \
+    local build_cmd="cargo build --locked --release \
             --target \"${target}\" \
             -p edgion-controller \
             --bin edgion-controller \
             -p edgion-cli \
             --bin edgion-cli && \
-        cargo build --release \
+        cargo build --locked --release \
             --target \"${target}\" \
             -p edgion-gateway \
             --bin \"${GATEWAY_BINARY}\" \
@@ -436,7 +436,7 @@ compile_test_binaries() {
         testbin_args+=" --bin ${testbin}"
     done
 
-    local build_cmd="cargo build --release \
+    local build_cmd="cargo build --locked --release \
             --target \"${target}\" \
             -p edgion-tests${testbin_args}"
 
@@ -738,13 +738,13 @@ compile_controller_gateway_binaries() {
         gateway_feature_args="--no-default-features --features \"${GATEWAY_FEATURES}\""
     fi
 
-    local build_cmd="cargo build --release \
+    local build_cmd="cargo build --locked --release \
             --target \"${target}\" \
             -p edgion-controller \
             --bin edgion-controller \
             -p edgion-cli \
             --bin edgion-cli && \
-        cargo build --release \
+        cargo build --locked --release \
             --target \"${target}\" \
             -p edgion-gateway \
             --bin \"${GATEWAY_BINARY}\" \

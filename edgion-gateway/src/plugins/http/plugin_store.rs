@@ -722,6 +722,9 @@ mod compile_plugins_tests {
                 ..Default::default()
             })
         }
+        fn request_body_buffer() -> EdgionPlugin {
+            EdgionPlugin::RequestBodyBuffer(Default::default())
+        }
         fn aliased(mut e: RequestFilterEntry, alias: &str) -> RequestFilterEntry {
             e.alias = Some(alias.to_string());
             e
@@ -886,6 +889,17 @@ mod compile_plugins_tests {
             (
                 "dsl_valid",
                 mk(Some(vec![RequestFilterEntry::new(dsl("let a = 1"))]), None),
+            ),
+            (
+                "request_body_buffer_valid",
+                mk(Some(vec![RequestFilterEntry::new(request_body_buffer())]), None),
+            ),
+            (
+                "request_body_buffer_wrong_stage",
+                mk(
+                    None,
+                    Some(vec![UpstreamResponseFilterEntry::new(request_body_buffer())]),
+                ),
             ),
             (
                 "dsl_bad_syntax",

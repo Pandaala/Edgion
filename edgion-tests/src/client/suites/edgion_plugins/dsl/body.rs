@@ -15,6 +15,64 @@ const BODY_SHA256: &str = "d509bff642a353f88582e8a846ecae041c333b79c57a7a24ff310
 pub struct DslBodyTestSuite;
 
 impl DslBodyTestSuite {
+    fn test_late_body_read_requires_explicit_prebuffer() -> TestCase {
+        TestCase::new(
+            "dsl_late_body_read_requires_explicit_prebuffer",
+            "A response-stage DSL reads only a request body cached explicitly during the request stage",
+            |ctx: TestContext| {
+                Box::pin(async move {
+                    let start = Instant::now();
+                    let url = format!("http://{}:31180/echo", ctx.target_host);
+                    let buffered = ctx
+                        .http_client
+                        .post(&url)
+                        .header("host", "dsl-late-body-buffered.example.com")
+                        .body("late-body")
+                        .send()
+                        .await;
+                    let buffered = match buffered {
+                        Ok(response) => response,
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("Buffered request failed: {error}"));
+                        }
+                    };
+                    let buffered_status = buffered.status().as_u16();
+                    let buffered_marker = buffered
+                        .headers()
+                        .get("x-late-body")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string();
+
+                    let unbuffered = ctx
+                        .http_client
+                        .post(url)
+                        .header("host", "dsl-late-body-unbuffered.example.com")
+                        .body("late-body")
+                        .send()
+                        .await;
+                    let unbuffered_status = match unbuffered {
+                        Ok(response) => response.status().as_u16(),
+                        Err(error) => {
+                            return TestResult::failed(start.elapsed(), format!("Unbuffered request failed: {error}"));
+                        }
+                    };
+
+                    if buffered_status == 200 && buffered_marker == "matched" && unbuffered_status == 500 {
+                        TestResult::passed(start.elapsed())
+                    } else {
+                        TestResult::failed(
+                            start.elapsed(),
+                            format!(
+                                "Expected buffered=200/matched and unbuffered=500, got buffered={buffered_status}/{buffered_marker:?}, unbuffered={unbuffered_status}"
+                            ),
+                        )
+                    }
+                })
+            },
+        )
+    }
+
     async fn raw_chunked_exchange(target_host: &str, host: &str, chunks: &[&[u8]]) -> Result<String, String> {
         let mut stream = TcpStream::connect(format!("{target_host}:31180"))
             .await
@@ -359,6 +417,7 @@ impl TestSuite for DslBodyTestSuite {
 
     fn test_cases(&self) -> Vec<TestCase> {
         vec![
+            Self::test_late_body_read_requires_explicit_prebuffer(),
             Self::test_expect_continue_single_interim_then_success(),
             Self::test_expect_continue_single_interim_then_reject(),
             Self::test_chunked_unknown_length_rejected_at_limit(),

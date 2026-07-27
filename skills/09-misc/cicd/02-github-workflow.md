@@ -50,13 +50,14 @@ The repo currently has the following workflows under `.github/workflows/`:
 
 `ci.yml` triggers on `push` / `pull_request` to `main` or `master`, in the following order:
 
-1. `check` -> `cargo check --workspace --all-targets`
+1. `check` -> Pingora source-policy guard, then
+   `cargo check --locked --workspace --all-targets`
 2. `gateway-flavors` -> build the body and stock Gateway artifacts, probe
    their compiled capabilities, and verify Pingora source isolation
 3. `fmt` -> `cargo fmt --all -- --check`
 4. `agent-docs` -> `python3 cicd/checks/validate_agent_docs.py`
-5. `clippy` -> `cargo clippy --workspace --all-targets`
-6. `test` -> `cargo test --all`
+5. `clippy` -> `cargo clippy --locked --workspace --all-targets`
+6. `test` -> `cargo test --locked --all`
 7. `ci-success` -> aggregates the results of the previous six jobs to provide a stable check for branch protection
 
 Key facts:
@@ -71,6 +72,11 @@ Key facts:
   `gateway-flavors` uses a per-flavor cache key because the two artifacts
   activate different Pingora source families
 - The current CI commands do not include `--all-features`; before changing this, confirm whether you really want to expand the matrix rather than casually inflate CI cost
+- Every resolving Cargo command uses `--locked`. The manifest follows the
+  Edgion Pingora `edgion` branch, but CI always builds the exact commit in the
+  committed lockfile. `check_pingora_source_policy.py` also verifies that all
+  six direct fork dependencies share that branch and the complete lockfile
+  family resolves to one commit.
 - `check` and `clippy` pass `--workspace` on purpose: `edgion-tests` is a workspace member excluded from `default-members`, so a bare `--all-targets` would skip the harness. `--workspace` gives it the same fast type-check + clippy signal that `cargo test --all` already exercises at compile time
 
 ## What the local `setup-rust` action does
@@ -102,7 +108,7 @@ When changing it, treat it as "shared infrastructure", not as a private script f
    - checkout
    - call `setup-rust`
    - cache only `~/.cargo/registry` and `~/.cargo/git`
-   - `cargo fetch`
+   - `cargo fetch --locked`
 
 2. `build-binaries`
    - `amd64` / `arm64` matrix
@@ -182,14 +188,14 @@ different directory. The commands below mirror the `build-binaries` job exactly
 
 ```bash
 # amd64
-cargo build --profile production \
+cargo build --locked --profile production \
   -p edgion-gateway -p edgion-controller -p edgion-cli \
   --bin edgion-gateway --bin edgion-controller --bin edgion-cli \
   --target x86_64-unknown-linux-gnu
 
 # arm64
 rustup target add aarch64-unknown-linux-gnu
-cargo build --profile production \
+cargo build --locked --profile production \
   -p edgion-gateway -p edgion-controller -p edgion-cli \
   --bin edgion-gateway --bin edgion-controller --bin edgion-cli \
   --target aarch64-unknown-linux-gnu

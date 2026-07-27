@@ -35,6 +35,11 @@ The Controller image remains `edgion-controller` for both flavors because the
 Controller does not link Pingora. `stock` is an external artifact/flavor name;
 the internal Cargo feature remains `upstream-pingora`.
 
+All source-building image paths use Cargo's `--locked` mode. The body flavor
+therefore uses the exact Edgion Pingora commit recorded in `Cargo.lock`, even
+though the workspace manifest follows the fork's `edgion` branch. The stock
+flavor remains sourced from crates.io.
+
 ```bash
 # Default body-enabled images
 cicd/build-image.sh

@@ -1040,7 +1040,10 @@ pub struct EdgionHttpContext {
     pub max_body_size_bytes: u64,
 
     /// Full request body captured during the request stage. Pingora owns the
-    /// mutable capture/replay buffer; this is its read-only plugin view.
+    /// mutable capture/replay buffer; this read-only view stays available
+    /// through the final upstream-response-header plugin chain. That chain may
+    /// read the existing cache but cannot initiate capture. The view is then
+    /// released before the streamed response body begins.
     #[cfg(feature = "body-buffering")]
     pub request_body: Option<Arc<BodyStorageView>>,
 

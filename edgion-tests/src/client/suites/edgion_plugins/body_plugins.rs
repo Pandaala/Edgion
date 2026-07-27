@@ -752,7 +752,18 @@ impl BodyPluginsTestSuite {
                         Ok(counters) => counters,
                         Err(error) => return TestResult::failed(start.elapsed(), error),
                     };
-                    let delta = (after.0 - before.0, after.1 - before.1, after.2 - before.2);
+                    let Some(delta) = after
+                        .0
+                        .checked_sub(before.0)
+                        .zip(after.1.checked_sub(before.1))
+                        .zip(after.2.checked_sub(before.2))
+                        .map(|((bytes, calls), eos)| (bytes, calls, eos))
+                    else {
+                        return TestResult::failed(
+                            start.elapsed(),
+                            format!("Wasm request-body counters decreased: before={before:?}, after={after:?}"),
+                        );
+                    };
                     if delta == (11, 1, 1) {
                         TestResult::passed(start.elapsed())
                     } else {

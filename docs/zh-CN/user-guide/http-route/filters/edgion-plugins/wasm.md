@@ -26,6 +26,8 @@ proxy-wasm 是一套可移植的代理扩展 ABI：编写一次扩展，即可�
 | `proxy_on_done` / `proxy_on_delete` | —（上下文清理） | 每个请求级上下文结束之后 |
 
 Wasm **不支持**（异步的）`upstreamResponsePlugins` 阶段。
+如果模块需要完整请求 body，应将其放在 `requestPlugins`。`RequestBodyBuffer`
+可为 DSL 等受支持的后续消费者保留请求 body，但响应阶段的 Wasm 宿主阶段不会暴露该缓存。
 
 ### Host 调用
 

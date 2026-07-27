@@ -53,16 +53,11 @@ pub async fn upstream_request_filter(
     // Body proxying is about to begin: both backendRef-scoped request-plugin
     // call sites have already run by this point (a prerequisite for reaching
     // a successful connect and this hook), so `read_request_body` must be
-    // refused from here on. This is the single exit point paired with
-    // `snapshot_body_declared`'s entry write.
+    // refused from here on UNLESS an earlier request plugin already populated
+    // the shared cache. This is the single exit point paired with
+    // `snapshot_body_declared`'s entry write; it closes capture, not cached
+    // reads.
     ctx.request_info.in_request_body_stage = false;
-    #[cfg(feature = "body-buffering")]
-    {
-        // Request-stage plugins can no longer inspect the body. Release their
-        // shared view now; Pingora independently retains the replay owner
-        // until the upstream attempt and response-commit lifecycle completes.
-        ctx.request_body = None;
-    }
 
     Ok(())
 }

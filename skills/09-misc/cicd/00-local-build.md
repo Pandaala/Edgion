@@ -15,6 +15,9 @@ Use this skill to answer:
 
 - Gateway default features are `allocator-jemalloc` + `boringssl` +
   `body-buffering`
+- The Edgion Pingora dependencies follow the `edgion` branch, while the
+  committed `Cargo.lock` pins the exact commit. Use `--locked` when reproducing
+  CI or release builds.
 - proto generation is owned by member build scripts (notably `edgion-common/build.rs`), so a working `protoc` is required locally
 - The Docker build environment explicitly installs the following dependencies; treat it as a trustworthy reference for local dependencies:
   - `cmake`
@@ -53,6 +56,12 @@ cargo build --release -p edgion-tests --bin test_server --bin test_client
 > differently and lands in `target/<triple>/production/`. To reproduce the
 > shipped artifact, follow
 > [02-github-workflow.md → Reproduce the release binary builds](02-github-workflow.md#reproduce-the-release-binary-builds).
+>
+> Normal local development may omit `--locked`; Cargo can then refresh the
+> lockfile when dependency changes are intentional. CI/release reproduction
+> must add `--locked` and must not rewrite `Cargo.lock`. After advancing the
+> Pingora fork, review that only its source-family entries changed and run
+> `python3 cicd/checks/check_pingora_source_policy.py`.
 
 ## Feature combinations
 

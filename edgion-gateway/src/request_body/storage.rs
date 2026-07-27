@@ -34,12 +34,13 @@ struct MutationBody {
     len: u64,
 }
 
-/// Shared request-body handle used by request-stage plugins.
+/// Shared request-body handle captured by request-stage plugins.
 ///
 /// Capture/replay stays owned by Pingora through [`BodyStorage`]. For a
 /// disk-backed body, the first plugin inspection materializes one bounded
-/// `Bytes`; later readers clone that same allocation. Plugins may replace byte
-/// ranges before the upstream request starts.
+/// `Bytes`; later readers, including response-stage consumers, clone that same
+/// allocation. Plugins may replace byte ranges only before the upstream
+/// request starts.
 pub struct BodyStorageView {
     inner: Arc<BodyStorageViewInner>,
 }

@@ -327,7 +327,7 @@ if not req.has_header("X-Request-Id") {
 - 解码后的字符串同样受 VM 的 `maxStringLen` 限制（默认 8192 字节，硬上限 1,048,576 字节），与其他所有 DSL 字符串值一致。由于 `from_utf8_lossy` 可能将每个非法字节扩展为 3 字节的 U+FFFD，一个原始字节数接近上限的请求体，解码后可能超出 `maxStringLen`。超出限制会抛出 `StringTooLong`，与其他运行时错误一样按 `errorPolicy` 处理——**不会**为其单独放宽一个更大的上限。若需读取更大的请求体，应同时调高 `maxStringLen` 和插件的 `body.maxBodySize`；超过 1 MiB 的字符串上限后，`req.body` 就不是合适的工具了，应改用 `ext_proc` 或 `wasm`。
 - 只有脚本引用了 `req.body` 时才会被门控以缓冲请求体；从不读取 `req.body` 的脚本不会被门控，也不产生任何缓冲开销。该门控只为 `requestPlugins` 中的 DSL 条目安装——具体因阶段而异的行为见下文。
 - **在 `requestPlugins` 中**，该插件受 body gate 保护：读体失败或拒绝都是 fail-close，无论 `errorPolicy` 如何设置，请求都会被拒绝。`errorPolicy` 仍然管辖脚本*运行过程中*抛出的错误（包括脚本运行后该内置函数抛出的错误），但它不能再让一个需要请求体的脚本在请求体不可用时被跳过。网关直接拒绝缓冲的请求体（gRPC，或携带请求体的升级请求）同样会被拒绝，而不是被跳过。
-- **在 `upstreamResponseFilterPlugins` 中**，引用了 `req.body` 的脚本**不会**被 body gate 保护，而到了这个阶段请求体已经被代理转发出去，因此读取总是会被拒绝（refused）。这个拒绝会作为普通脚本运行时错误按 `errorPolicy` 处理——在默认的 `Ignore` 策略下，脚本会被静默跳过，而不是拒绝请求。依赖 `req.body` 做强制校验的脚本不应放在 `upstreamResponseFilterPlugins` 中；如果确实放在那里，必须设置 `errorPolicy: Deny`（或 `DenyWith`）才能 fail-close。相关遗留缺口见 `tasks/todo/response-body-gate-sync-stage.md`。
+- **在 `upstreamResponseFilterPlugins` 中**，前面的请求阶段插件填充共享缓存后，脚本即可读取 `req.body`。可在 `requestPlugins` 中配置 `RequestBodyBuffer` 来完成预缓存。晚阶段读取绝不会新建缓存；对于声明了 body 的请求，缺少缓存会抛出普通脚本运行时错误，并由 `errorPolicy` 处理；确实无 body 的请求无需缓存，会读取到空字符串。若已声明的请求 body 不可用时必须 fail-close，请使用 `Deny` 或 `DenyWith`。
 
 **示例**：
 ```

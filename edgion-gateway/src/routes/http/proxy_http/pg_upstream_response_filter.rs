@@ -8,6 +8,17 @@ use pingora_http::ResponseHeader;
 use pingora_proxy::Session;
 use std::time::Instant;
 
+#[cfg(feature = "body-buffering")]
+#[inline]
+fn release_late_request_body_view(ctx: &mut EdgionHttpContext) {
+    // The final response-header plugin chain is the last supported late
+    // request-body consumer. Release its view here so an SSE/large download
+    // cannot retain spilled-body file descriptors or materialized bytes for
+    // the lifetime of the response. Retry early returns deliberately occur
+    // before this point and keep the view for the next attempt.
+    ctx.request_body = None;
+}
+
 #[inline]
 pub fn upstream_response_filter(
     edgion_http: &EdgionHttpProxy,
@@ -261,5 +272,34 @@ pub fn upstream_response_filter(
         }
     }
 
+    #[cfg(feature = "body-buffering")]
+    release_late_request_body_view(ctx);
+
     Ok(())
+}
+
+#[cfg(all(test, feature = "body-buffering"))]
+mod tests {
+    use super::release_late_request_body_view;
+    use crate::request_body::BodyStorage;
+    use crate::EdgionHttpContext;
+    use bytes::Bytes;
+    use pingora_core::protocols::http::RequestBodyBuffer;
+
+    #[tokio::test]
+    async fn final_response_header_stage_releases_request_body_view() {
+        let (mut storage, view) = BodyStorage::new(64);
+        storage.write(&Bytes::from_static(b"cached")).await.unwrap();
+        storage.finish().await.unwrap();
+
+        let mut ctx = EdgionHttpContext {
+            request_body: Some(view),
+            modified_request_body_len: Some(6),
+            ..Default::default()
+        };
+        release_late_request_body_view(&mut ctx);
+
+        assert!(ctx.request_body.is_none());
+        assert_eq!(ctx.modified_request_body_len, Some(6));
+    }
 }

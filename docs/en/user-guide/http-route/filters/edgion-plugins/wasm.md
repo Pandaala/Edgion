@@ -26,6 +26,9 @@ The implemented ABI is a deliberate subset (see below): header read/write, local
 | `proxy_on_done` / `proxy_on_delete` | — (per-context cleanup) | After each per-request context finishes |
 
 Wasm is **not** available at `upstreamResponsePlugins` (async response stage).
+If a module needs the complete request body, place it in `requestPlugins`.
+`RequestBodyBuffer` can preserve a request body for supported later consumers
+such as DSL, but response-stage Wasm host phases do not expose that cache.
 
 ### Host calls
 

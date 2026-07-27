@@ -11,8 +11,8 @@ use super::plugin_configs::{
     DynamicInternalUpstreamConfig, ExtProcConfig, FaultInjectionConfig, ForwardAuthConfig, GlobalAccessControlConfig,
     HeaderCertAuthConfig, HmacAuthConfig, IpRestrictionConfig, JweDecryptConfig, JwtAuthConfig, KeyAuthConfig,
     LdapAuthConfig, MockConfig, OpenidConnectConfig, ProxyRewriteConfig, RateLimitConfig, RateLimitRedisConfig,
-    RealIpConfig, RegionRouteConfig, RequestMirrorPluginConfig, RequestRestrictionConfig, ResponseRewriteConfig,
-    TraceContextConfig, WasmConfig,
+    RealIpConfig, RegionRouteConfig, RequestBodyBufferConfig, RequestMirrorPluginConfig, RequestRestrictionConfig,
+    ResponseRewriteConfig, TraceContextConfig, WasmConfig,
 };
 use crate::resources::http_route::{HTTPHeaderFilter, HTTPRequestRedirectFilter, HTTPURLRewriteFilter};
 
@@ -74,6 +74,8 @@ pub enum EdgionPlugin {
     ProxyRewrite(ProxyRewriteConfig),
     /// Request Restriction filter (restrict access based on headers, cookies, query, path, method, referer)
     RequestRestriction(RequestRestrictionConfig),
+    /// Buffer the proxied request body for later-stage consumers.
+    RequestBodyBuffer(RequestBodyBufferConfig),
     /// Response Rewrite filter (rewrite status code and headers before returning to client)
     ResponseRewrite(ResponseRewriteConfig),
     /// RateLimit filter (CMS algorithm for high-performance rate limiting)
@@ -151,6 +153,14 @@ impl EdgionPlugin {
             ProxyRewrite(cfg) if cfg.json_body.is_some() && stage == BodyStage::Request => {
                 Some(BodyRequirement::fail_close())
             }
+            // RequestBodyBuffer is a non-security capture primitive. Unlike
+            // auth/validation consumers, operators may narrow its capture
+            // scope with `body.conditions`; an empty intrinsic condition set
+            // still means "capture whenever the entry runs".
+            RequestBodyBuffer(_) if stage == BodyStage::Request => Some(BodyRequirement {
+                conditions: Some(Default::default()),
+                ..BodyRequirement::fail_close()
+            }),
             ExtProc(cfg) if cfg.processing_mode.request_body_mode.is_buffered() && stage == BodyStage::Request => {
                 Some(BodyRequirement::fail_close())
             }
@@ -192,6 +202,7 @@ impl EdgionPlugin {
             | Mock(_)
             | DebugAccessLogToHeader(_)
             | ProxyRewrite(_)
+            | RequestBodyBuffer(_)
             | RequestRestriction(_)
             | ResponseRewrite(_)
             | RateLimit(_)
@@ -250,6 +261,7 @@ impl EdgionPlugin {
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::DebugAccessLogToHeader(_) => "DebugAccessLogToHeader",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
+            EdgionPlugin::RequestBodyBuffer(_) => "RequestBodyBuffer",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::ResponseRewrite(_) => "ResponseRewrite",
             EdgionPlugin::RateLimit(_) => "RateLimit",
@@ -382,6 +394,7 @@ impl EdgionPlugin {
             EdgionPlugin::KeyAuth(c) => c.validation_error(),
             EdgionPlugin::ResponseRewrite(c) => c.validation_error(),
             EdgionPlugin::ProxyRewrite(c) => c.validation_error(),
+            EdgionPlugin::RequestBodyBuffer(c) => c.validation_error(),
             EdgionPlugin::RequestRestriction(c) => c.validation_error(),
             EdgionPlugin::RateLimit(c) => c.validation_error(),
             EdgionPlugin::RateLimitRedis(c) => c.validation_error(),
@@ -729,6 +742,8 @@ mod wasm_body_gate_tests {
 #[cfg(test)]
 mod request_body_plugin_requirement_tests {
     use super::*;
+    use crate::conditions::PluginConditions;
+    use crate::resources::edgion_plugins::{BodyReadFailureMode, BodyRequirement};
 
     #[test]
     fn request_body_features_declare_request_only_requirements() {
@@ -736,10 +751,28 @@ mod request_body_plugin_requirement_tests {
             r#"{"type":"ForwardAuth","config":{"target":{"name":"auth","port":80},"forwardBody":true,"decision":{}}}"#,
             r#"{"type":"ProxyRewrite","config":{"jsonBody":{"set":{"/name":"gateway"}}}}"#,
             r#"{"type":"ExtProc","config":{"grpcService":{"target":"processor:9000"},"processingMode":{"requestBodyMode":"BUFFERED"}}}"#,
+            r#"{"type":"RequestBodyBuffer","config":{}}"#,
         ] {
             let plugin: EdgionPlugin = serde_json::from_str(json).expect("body plugin config parses");
             assert!(plugin.body_requirement(BodyStage::Request).is_some(), "{json}");
             assert!(plugin.body_requirement(BodyStage::Response).is_none(), "{json}");
         }
+    }
+
+    #[test]
+    fn request_body_buffer_preserves_operator_capture_conditions() {
+        let plugin: EdgionPlugin = serde_json::from_str(r#"{"type":"RequestBodyBuffer","config":{}}"#).unwrap();
+        let operator = BodyRequirement {
+            conditions: Some(PluginConditions {
+                skip: None,
+                run: Some(vec![]),
+            }),
+            on_read_failure: BodyReadFailureMode::FailOpen,
+            ..Default::default()
+        };
+
+        let resolved = BodyRequirement::resolve(Some(operator), plugin.body_requirement(BodyStage::Request)).unwrap();
+        assert!(resolved.conditions.is_some());
+        assert!(resolved.is_fail_close());
     }
 }

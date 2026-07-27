@@ -104,9 +104,9 @@ RUN case "${PROFILE}" in \
       *)         PROFILE_FLAG="--profile ${PROFILE}" ;; \
     esac; \
     if [ "$BUILD_TYPE" = "example" ]; then \
-      cargo chef cook ${PROFILE_FLAG} -p edgion-tests --recipe-path recipe.json; \
+      cargo chef cook --locked ${PROFILE_FLAG} -p edgion-tests --recipe-path recipe.json; \
     else \
-      cargo chef cook ${PROFILE_FLAG} -p "${BINARY}" --features "${FEATURES}" --recipe-path recipe.json; \
+      cargo chef cook --locked ${PROFILE_FLAG} -p "${BINARY}" --features "${FEATURES}" --recipe-path recipe.json; \
     fi
 
 # Copy source code
@@ -123,13 +123,13 @@ RUN case "${PROFILE}" in \
     esac; \
     if [ "$BUILD_TYPE" = "example" ]; then \
       echo "Building edgion-tests bin: ${BINARY} (${PROFILE})"; \
-      cargo build ${PROFILE_FLAG} -p edgion-tests --bin "${BINARY}"; \
+      cargo build --locked ${PROFILE_FLAG} -p edgion-tests --bin "${BINARY}"; \
       cp /app/target/${OUT_DIR}/${BINARY} /app/edgion-binary; \
       touch /app/edgion-cli-binary; \
     else \
       echo "Building bin: ${BINARY} (${PROFILE})"; \
-      cargo build ${PROFILE_FLAG} -p "${BINARY}" --features "${FEATURES}" --bin "${BINARY}"; \
-      cargo build ${PROFILE_FLAG} -p edgion-cli --bin edgion-cli; \
+      cargo build --locked ${PROFILE_FLAG} -p "${BINARY}" --features "${FEATURES}" --bin "${BINARY}"; \
+      cargo build --locked ${PROFILE_FLAG} -p edgion-cli --bin edgion-cli; \
       cp /app/target/${OUT_DIR}/${BINARY} /app/edgion-binary; \
       cp /app/target/${OUT_DIR}/edgion-cli /app/edgion-cli-binary; \
     fi

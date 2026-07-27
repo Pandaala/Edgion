@@ -53,6 +53,7 @@ spec:
 | `Csrf` | CSRF protection |
 | `IpRestriction` | IP allow/deny list (CIDR supported). Inline `allow`/`deny` groups are **partial-good**: a bad CIDR entry is skipped (not fatal); the plugin loads with the valid entries. Bad entries surface as a `PartiallyInvalid` status condition (reason `RuleInvalid`); `Accepted` stays `True`. A skipped inline deny entry also increments `edgion_ip_deny_entries_skipped_total{scope="http"}`. |
 | `RequestRestriction` | Request restrictions (header/body rules) |
+| `RequestBodyBuffer` | Explicitly populate the shared request-body cache for later-stage consumers |
 | `GlobalAccessControl` | L7 allow-list with IP/CIDR and composite request match groups |
 
 ### Traffic Control
@@ -108,7 +109,7 @@ HTTP plugins execute across Pingora's 4 stages:
 
 | Stage | Trigger Time | Typical Plugins |
 |-------|--------------|-----------------|
-| `spec.requestPlugins` (`RequestFilter`) | After the request is received and before backend selection | Auth, RateLimit, CORS, routing plugins, `ExtProc`, `Wasm` |
+| `spec.requestPlugins` (`RequestFilter`) | After the request is received and before backend selection | Auth, RateLimit, CORS, routing plugins, `RequestBodyBuffer`, `ExtProc`, `Wasm` |
 | `spec.upstreamResponseFilterPlugins` (`UpstreamResponseFilter`) | After upstream response headers are received, synchronous | ResponseHeaderModifier, DSL, `Wasm` |
 | `spec.upstreamResponseBodyFilterPlugins` (`UpstreamResponseBodyFilter`) | For each upstream response body chunk | ResponseRewrite, `Wasm` read-only observation |
 | `spec.upstreamResponsePlugins` (`UpstreamResponse`) | After upstream response headers arrive, asynchronous | `ExtProc` only in the current catalog |

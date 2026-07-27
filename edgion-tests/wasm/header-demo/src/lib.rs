@@ -243,7 +243,9 @@ impl HttpContext for HeaderDemo {
     }
 
     fn on_http_request_body(&mut self, body_size: usize, end_of_stream: bool) -> Action {
-        if body_size > 0 {
+        // Headers and body phases use distinct guest contexts, so identify
+        // counter-read probes from the headers copied into this body phase.
+        if self.get_http_request_header("x-wasm-read-request-body").as_deref() != Some("1") {
             bump_shared_counter(self, "requestbodybytes", body_size as u64);
             bump_shared_counter(self, "requestbodycalls", 1);
             if end_of_stream {

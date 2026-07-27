@@ -106,8 +106,10 @@ boring = "4"
 boring-sys = "4"
 
 # Pingora source families. The Gateway selects exactly one complete family so
-# public types never cross a registry/Git source boundary. Pin the fork to an
-# immutable revision so standalone and CI builds are reproducible.
+# public types never cross a registry/Git source boundary. Development follows
+# the fork's `edgion` branch; the committed Cargo.lock pins the exact commit,
+# and CI/release builds use `--locked`. Release milestones may temporarily use
+# a protected immutable tag when a manifest-level source identity is required.
 pingora-core-upstream = { package = "pingora-core", version = "=0.8.1", features = ["connection_filter"] }
 pingora-http-upstream = { package = "pingora-http", version = "=0.8.1" }
 pingora-proxy-upstream = { package = "pingora-proxy", version = "=0.8.1" }
@@ -115,12 +117,12 @@ pingora-limits-upstream = { package = "pingora-limits", version = "=0.8.1" }
 pingora-load-balancing-upstream = { package = "pingora-load-balancing", version = "=0.8.1" }
 pingora-ketama-upstream = { package = "pingora-ketama", version = "=0.8.1" }
 
-pingora-core-edgion = { package = "pingora-core", git = "https://github.com/Pandaala/pingora.git", rev = "57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5", features = ["connection_filter"] }
-pingora-http-edgion = { package = "pingora-http", git = "https://github.com/Pandaala/pingora.git", rev = "57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5" }
-pingora-proxy-edgion = { package = "pingora-proxy", git = "https://github.com/Pandaala/pingora.git", rev = "57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5" }
-pingora-limits-edgion = { package = "pingora-limits", git = "https://github.com/Pandaala/pingora.git", rev = "57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5" }
-pingora-load-balancing-edgion = { package = "pingora-load-balancing", git = "https://github.com/Pandaala/pingora.git", rev = "57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5" }
-pingora-ketama-edgion = { package = "pingora-ketama", git = "https://github.com/Pandaala/pingora.git", rev = "57328f15aba6cfd5bf1d3a5b1f9a547f5a4d3bc5" }
+pingora-core-edgion = { package = "pingora-core", git = "https://github.com/Pandaala/pingora.git", branch = "edgion", features = ["connection_filter"] }
+pingora-http-edgion = { package = "pingora-http", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-proxy-edgion = { package = "pingora-proxy", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-limits-edgion = { package = "pingora-limits", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-load-balancing-edgion = { package = "pingora-load-balancing", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
+pingora-ketama-edgion = { package = "pingora-ketama", git = "https://github.com/Pandaala/pingora.git", branch = "edgion" }
 
 # HTTP server / client
 axum = { version = "0.8.8", features = ["macros", "ws"] }

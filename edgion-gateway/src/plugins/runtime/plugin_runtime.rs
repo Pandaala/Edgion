@@ -60,6 +60,7 @@ use crate::plugins::http::rate_limit::RateLimit;
 use crate::plugins::http::rate_limit_redis::RateLimitRedis;
 use crate::plugins::http::real_ip::RealIp;
 use crate::plugins::http::region_route::RegionRoute;
+use crate::plugins::http::request_body_buffer::RequestBodyBuffer;
 use crate::plugins::http::request_mirror::RequestMirrorPlugin;
 use crate::plugins::http::request_restriction::RequestRestriction;
 use crate::plugins::http::response_rewrite::ResponseRewrite;
@@ -1061,6 +1062,7 @@ impl PluginRuntime {
             EdgionPlugin::FaultInjection(config) => CreateResult::Ok(Some(Box::new(FaultInjection::new(config)))),
             EdgionPlugin::Mock(config) => CreateResult::Ok(Some(Box::new(Mock::new(config)))),
             EdgionPlugin::ProxyRewrite(config) => CreateResult::Ok(Some(Box::new(ProxyRewrite::new(config)))),
+            EdgionPlugin::RequestBodyBuffer(_) => CreateResult::Ok(Some(RequestBodyBuffer::create())),
             EdgionPlugin::RequestRestriction(config) => CreateResult::Ok(Some(RequestRestriction::create(config))),
             EdgionPlugin::RateLimit(config) => CreateResult::Ok(Some(RateLimit::create(config))),
             EdgionPlugin::RateLimitRedis(config) => CreateResult::Ok(Some(RateLimitRedis::create(config))),
@@ -1126,6 +1128,7 @@ impl PluginRuntime {
             | EdgionPlugin::LdapAuth(_)
             | EdgionPlugin::Mock(_)
             | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::RateLimit(_)
             | EdgionPlugin::RateLimitRedis(_)
@@ -1186,6 +1189,7 @@ impl PluginRuntime {
             | EdgionPlugin::Mock(_)
             | EdgionPlugin::DebugAccessLogToHeader(_)
             | EdgionPlugin::ProxyRewrite(_)
+            | EdgionPlugin::RequestBodyBuffer(_)
             | EdgionPlugin::RequestRestriction(_)
             | EdgionPlugin::ResponseRewrite(_)
             | EdgionPlugin::RateLimit(_)
@@ -1228,6 +1232,7 @@ impl PluginRuntime {
             EdgionPlugin::LdapAuth(_) => "LdapAuth",
             EdgionPlugin::Mock(_) => "Mock",
             EdgionPlugin::ProxyRewrite(_) => "ProxyRewrite",
+            EdgionPlugin::RequestBodyBuffer(_) => "RequestBodyBuffer",
             EdgionPlugin::RequestRestriction(_) => "RequestRestriction",
             EdgionPlugin::RateLimit(_) => "RateLimit",
             EdgionPlugin::RateLimitRedis(_) => "RateLimitRedis",

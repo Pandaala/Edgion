@@ -172,12 +172,12 @@ impl<'a> PingoraSessionAdapter<'a> {
 
     #[cfg(feature = "body-buffering")]
     async fn ensure_bodyless_request_replay_owner(&mut self) -> Result<(), BodyReadError> {
-        if self.ctx.request_body.is_some() {
-            return Ok(());
-        }
         if !self.ctx.request_info.in_request_body_stage {
             self.ctx.add_error(EdgionStatus::BodyRefusedStage);
             return Err(BodyReadError::NotBuffered);
+        }
+        if self.ctx.request_body.is_some() {
+            return Ok(());
         }
         if self.ctx.request_info.discover_protocol.as_deref() == Some("websocket")
             || self.inner.req_header().method == http::Method::CONNECT
@@ -877,6 +877,14 @@ impl<'a> PluginSession for PingoraSessionAdapter<'a> {
     }
 
     async fn ensure_request_body(&mut self, max_bytes: Option<u64>) -> Result<u64, BodyReadError> {
+        // A response-stage consumer may read a body that an earlier request
+        // plugin explicitly buffered. The stage boundary forbids starting a
+        // new capture; it does not invalidate the request-scoped shared cache.
+        #[cfg(feature = "body-buffering")]
+        if let Some(view) = self.ctx.request_body.as_ref() {
+            return view.len();
+        }
+
         // `in_request_body_stage` (set at request entry, cleared in
         // `upstream_request_filter` once the upstream is connected and the
         // request is about to be written — see that field's doc) is the
@@ -2187,6 +2195,78 @@ mod record_outcome_tests {
             let result = adapter.read_request_body(None).await;
             assert!(matches!(result, Err(BodyReadError::NotBuffered)));
         }
+        assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+    }
+
+    /// A truthfully bodyless request needs no capture and remains readable as
+    /// the canonical empty body after the request stage.
+    #[tokio::test]
+    async fn read_request_body_bodyless_past_request_stage_is_empty() {
+        let mut session = test_session().await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(false);
+        ctx.request_info.in_request_body_stage = false;
+
+        let body = {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter.read_request_body(None).await.expect("bodyless late read")
+        };
+
+        assert!(body.is_empty());
+        assert!(ctx.request_body.is_none());
+        assert!(!ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+    }
+
+    /// A late consumer may reuse an existing request-scoped body cache, but
+    /// may not initiate capture after the request-body service window.
+    #[tokio::test]
+    async fn read_request_body_reuses_existing_cache_past_request_stage() {
+        let mut session = test_session_with_body(b"buffered-before-upstream").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+
+        let first = {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter.read_request_body(None).await.expect("request-stage capture")
+        };
+        ctx.request_info.in_request_body_stage = false;
+        let second = {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter.read_request_body(None).await.expect("late cached read")
+        };
+
+        assert_eq!(first, Bytes::from_static(b"buffered-before-upstream"));
+        assert_eq!(first.as_ptr(), second.as_ptr());
+        assert!(!ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
+    }
+
+    /// Late stages may read an existing cache, but must never acquire mutable
+    /// replay ownership even when that cache is still present.
+    #[tokio::test]
+    async fn overwrite_request_body_refuses_existing_cache_past_request_stage() {
+        let mut session = test_session_with_body(b"immutable-after-upstream").await;
+        let mut ctx = EdgionHttpContext::default();
+        ctx.request_info.body_declared = Some(true);
+        ctx.request_info.in_request_body_stage = true;
+
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            adapter.read_request_body(None).await.expect("request-stage capture");
+        }
+        ctx.request_info.in_request_body_stage = false;
+        {
+            let mut adapter = PingoraSessionAdapter::new(&mut session, &mut ctx);
+            let result = adapter
+                .overwrite_request_body(Bytes::from_static(b"late mutation"))
+                .await;
+            assert!(matches!(result, Err(BodyReadError::NotBuffered)));
+        }
+
+        assert_eq!(
+            ctx.request_body.as_ref().unwrap().read_all().await.unwrap(),
+            Bytes::from_static(b"immutable-after-upstream")
+        );
         assert!(ctx.edgion_status.contains(&EdgionStatus::BodyRefusedStage));
     }
 

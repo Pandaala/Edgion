@@ -68,16 +68,19 @@ So if you edit this action, treat it as shared infrastructure rather than a priv
 
 The current `ci.yml` check order is:
 
-1. `cargo check --workspace --all-targets`
-2. `cargo fmt --all -- --check`
-3. `python3 cicd/checks/validate_agent_docs.py`
-4. `cargo clippy --workspace --all-targets`
-5. `cargo test --all`
-6. summary job `ci-success`
+1. `python3 cicd/checks/check_pingora_source_policy.py`
+2. `cargo check --locked --workspace --all-targets`
+3. `cargo fmt --all -- --check`
+4. `python3 cicd/checks/validate_agent_docs.py`
+5. `cargo clippy --locked --workspace --all-targets`
+6. `cargo test --locked --all`
+7. summary job `ci-success`
 
 A few details are easy to misunderstand:
 
 - the current CI commands do not automatically expand to `--all-features`
+- every dependency-resolving CI command uses `--locked`; the committed
+  lockfile, not the current tip of a movable branch, determines the build
 - `check` and `clippy` use `--workspace` so they also cover `edgion-tests` (a workspace member excluded from `default-members`); a bare `--all-targets` would skip the harness
 - `python3 cicd/checks/validate_agent_docs.py` is the guardrail for `AGENTS.md`, `skills/`, and the dev-guide entry layer
 - the `fmt` job does not install system dependencies and does not use Cargo cache
@@ -94,7 +97,7 @@ Purpose:
 - checkout
 - call `setup-rust`
 - cache `~/.cargo/registry` and `~/.cargo/git`
-- run `cargo fetch`
+- run `cargo fetch --locked`
 
 ### 2. `build-binaries`
 
@@ -138,12 +141,20 @@ For this repository, command ownership works best in layers:
 If you only want to reproduce the current CI checks locally, start with:
 
 ```bash
-cargo check --workspace --all-targets
+python3 cicd/checks/check_pingora_source_policy.py
+cargo check --locked --workspace --all-targets
 cargo fmt --all -- --check
 python3 cicd/checks/validate_agent_docs.py
-cargo clippy --workspace --all-targets
-cargo test --all
+cargo clippy --locked --workspace --all-targets
+cargo test --locked --all
 ```
+
+The Edgion Pingora dependencies follow the fork's `edgion` branch during
+development, but `Cargo.lock` pins the exact commit. An intentional fork update
+is therefore a reviewed lockfile change. CI, release, and image builds never
+advance the branch implicitly because they use `--locked`. Release milestones
+may use a protected immutable tag when the manifest itself must carry the
+release identity; all six fork dependency entries must change together.
 
 If you need something closer to release binary packaging, start with:
 

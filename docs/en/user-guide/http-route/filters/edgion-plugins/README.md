@@ -34,6 +34,7 @@ HTTP Route-level plugins provided by Edgion, configured via the `EdgionPlugins` 
 | [real-ip.md](real-ip.md) | Client real IP extraction |
 | [region-route.md](region-route.md) | Region-based routing |
 | [request-mirror.md](request-mirror.md) | Request mirroring |
+| [request-body-buffer.md](request-body-buffer.md) | Explicitly cache a request body for later-stage consumers |
 | [request-restriction.md](request-restriction.md) | Request filtering |
 | [response-rewrite.md](response-rewrite.md) | Response rewrite |
 | [trace-context.md](trace-context.md) | W3C Trace Context propagation |
