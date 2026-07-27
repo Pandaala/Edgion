@@ -10,9 +10,9 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::MicroTime;
 use k8s_openapi::chrono::Utc;
 use kube::api::{Api, Patch, PatchParams, PostParams};
 use kube::Client;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::sync::watch;
 
 use super::controller_metrics;
 
@@ -153,22 +153,31 @@ impl LeaderElectionConfig {
 pub struct LeaderElection {
     client: Client,
     config: LeaderElectionConfig,
-    is_leader: Arc<AtomicBool>,
+    /// Current leadership flag, published as a `watch` channel so process-wide
+    /// singleton components (the federation client supervisor) can subscribe to
+    /// edges instead of polling. The sender is the authoritative storage; there
+    /// is no separate atomic. `send_replace` returns the previous value, exactly
+    /// like the `AtomicBool::swap` it replaced.
+    is_leader: Arc<watch::Sender<bool>>,
 }
 
 impl LeaderElection {
-    /// Create a new leader election instance
-    pub fn new(client: Client, config: LeaderElectionConfig) -> Self {
+    /// Create a new leader election instance.
+    ///
+    /// `is_leader` is supplied by the owning center so the same sender can be
+    /// created before `start()` and subscribed to via
+    /// `CenterLifeCycle::leader_signal`.
+    pub fn new(client: Client, config: LeaderElectionConfig, is_leader: Arc<watch::Sender<bool>>) -> Self {
         Self {
             client,
             config,
-            is_leader: Arc::new(AtomicBool::new(false)),
+            is_leader,
         }
     }
 
     /// Check if this instance is the leader
     pub fn is_leader(&self) -> bool {
-        self.is_leader.load(Ordering::Acquire)
+        *self.is_leader.borrow()
     }
 
     /// Get a handle that can be cloned and used to check leader status
@@ -240,7 +249,7 @@ impl LeaderElection {
                             identity = %self.config.identity,
                             "Shutdown signal received, stopping leader election"
                         );
-                        if self.is_leader.swap(false, Ordering::Release) {
+                        if self.is_leader.send_replace(false) {
                             controller_metrics().set_leader(false);
                             // Release the lease so a successor can take over on
                             // its next tick instead of waiting out
@@ -292,7 +301,7 @@ impl LeaderElection {
             match self.try_acquire_or_renew(&lease_api).await {
                 Ok(true) => {
                     last_renewed = Some(Instant::now());
-                    if !self.is_leader.swap(true, Ordering::Release) {
+                    if !self.is_leader.send_replace(true) {
                         tracing::info!(
                             component = "leader_election",
                             identity = %self.config.identity,
@@ -307,7 +316,7 @@ impl LeaderElection {
                     // someone else (or we lost a CAS race). Reset deadline
                     // tracking so a future re-acquire starts a fresh window.
                     last_renewed = None;
-                    if self.is_leader.swap(false, Ordering::Release) {
+                    if self.is_leader.send_replace(false) {
                         tracing::info!(
                             component = "leader_election",
                             identity = %self.config.identity,
@@ -341,7 +350,7 @@ impl LeaderElection {
                             lease_namespace = %self.config.lease_namespace,
                             "Lease resource missing (404); forcing step-down and attempting recreate"
                         );
-                        if self.is_leader.swap(false, Ordering::Release) {
+                        if self.is_leader.send_replace(false) {
                             tracing::info!(
                                 component = "leader_election",
                                 identity = %self.config.identity,
@@ -365,7 +374,7 @@ impl LeaderElection {
                         continue;
                     }
 
-                    let was_leader = self.is_leader.load(Ordering::Acquire);
+                    let was_leader = self.is_leader();
                     let within_deadline = was_leader
                         && last_renewed
                             .map(|t| Instant::now().saturating_duration_since(t) < renew_deadline)
@@ -393,7 +402,7 @@ impl LeaderElection {
                             error = %e,
                             "Failed to acquire/renew lease"
                         );
-                        if self.is_leader.swap(false, Ordering::Release) {
+                        if self.is_leader.send_replace(false) {
                             tracing::info!(
                                 component = "leader_election",
                                 identity = %self.config.identity,
@@ -668,13 +677,13 @@ impl LeaderElection {
 /// Handle to check leader status from anywhere
 #[derive(Clone)]
 pub struct LeaderHandle {
-    is_leader: Arc<AtomicBool>,
+    is_leader: Arc<watch::Sender<bool>>,
 }
 
 impl LeaderHandle {
     /// Check if this instance is the leader
     pub fn is_leader(&self) -> bool {
-        self.is_leader.load(Ordering::Acquire)
+        *self.is_leader.borrow()
     }
 
     /// Wait until this instance becomes leader, with cancellation support

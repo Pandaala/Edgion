@@ -431,6 +431,28 @@ pub trait CenterLifeCycle: Send + Sync {
     fn leadership_status(&self) -> LeadershipStatus {
         LeadershipStatus::NotApplicable
     }
+
+    /// Live leadership signal for process-wide singleton components.
+    ///
+    /// Today the sole consumer is the federation client supervisor: the
+    /// federation session is keyed by `controller_id` (`cluster/name`), which is
+    /// identical on every replica, so exactly one replica may hold it. The
+    /// receiver carries `true` while this process is the leader.
+    ///
+    /// This is ORTHOGONAL to [`CenterLifeCycle::leadership_status`], and the two
+    /// deliberately DISAGREE in Kubernetes mode: `leadership_status` feeds the
+    /// Admin API not-leader 409 gate and must stay `NotApplicable` there
+    /// (Kubernetes routes admin traffic to the leader via the `edgion.io/leader`
+    /// pod-label Service selector, and in `ha_mode: all-serve` followers must
+    /// keep serving reads), yet `leader_signal` DOES return `Some` there. Do not
+    /// "unify" them.
+    ///
+    /// `None` means this backend has no leader election at all (FileSystem), so
+    /// the caller is always eligible and must behave exactly as if the signal
+    /// were permanently `true`.
+    fn leader_signal(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+        None
+    }
 }
 
 /// A center's leadership view, consumed by the Admin API not-leader gate.

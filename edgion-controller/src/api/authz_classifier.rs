@@ -69,10 +69,6 @@ pub fn classify(method: &Method, matched_path: Option<&str>, kind_param: Option<
         ("POST", "/api/v1/services/conf-sync-ca/rotate") => {
             return Some((Verb::ConfSyncRotate, NON_RESOURCE_KIND.into()))
         }
-        // Effective (resolved) GlobalConnectionIpRestriction view for the Center
-        // dashboard: a read-only projection of EdgionStreamPlugins, so it is
-        // classified as `list` on that kind.
-        ("GET", "/api/v1/global-ip-restrictions/effective") => return Some((Verb::List, "EdgionStreamPlugins".into())),
         // test-mode-only routes (registered only under is_test_mode()); axum never
         // matches these in production.
         ("POST", "/api/v1/admin/wipe-all") => return Some((Verb::WipeAll, NON_RESOURCE_KIND.into())),
@@ -213,13 +209,6 @@ mod tests {
         let (v, k) = classify("POST", Some("/api/v1/services/conf-sync-ca/rotate"), None).unwrap();
         assert_eq!(v, Verb::ConfSyncRotate);
         assert_eq!(k, NON_RESOURCE_KIND);
-    }
-
-    #[test]
-    fn global_ip_restrictions_effective_is_list_stream_plugins() {
-        let (v, k) = classify("GET", Some("/api/v1/global-ip-restrictions/effective"), None).unwrap();
-        assert_eq!(v, Verb::List);
-        assert_eq!(k, "EdgionStreamPlugins");
     }
 
     #[test]

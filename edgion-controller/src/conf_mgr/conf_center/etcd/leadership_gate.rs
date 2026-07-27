@@ -1,12 +1,13 @@
 //! Leader state shared between the election supervisor, the lifecycle gate,
 //! the Admin API 409 gate, and the pre-write fence (spec §4.6, §6.2).
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use arc_swap::ArcSwapOption;
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct LeaderInfo {
@@ -16,7 +17,11 @@ pub struct LeaderInfo {
 }
 
 pub struct LeaderState {
-    is_leader: AtomicBool,
+    /// Current leadership flag, published as a `watch` channel so process-wide
+    /// singleton components (the federation client supervisor) can subscribe to
+    /// edges instead of polling. The sender is the authoritative storage; there
+    /// is no separate atomic.
+    is_leader: Arc<watch::Sender<bool>>,
     last_ok_mono_millis: AtomicU64, // millis since a process-start baseline
     last_ok_wall_millis: AtomicU64, // unix millis
     lease_duration: Duration,
@@ -34,7 +39,7 @@ pub fn wall_now() -> u64 {
 impl LeaderState {
     pub fn new(lease_duration: Duration) -> Arc<Self> {
         Arc::new(Self {
-            is_leader: AtomicBool::new(false),
+            is_leader: Arc::new(watch::channel(false).0),
             last_ok_mono_millis: AtomicU64::new(0),
             last_ok_wall_millis: AtomicU64::new(0),
             lease_duration,
@@ -43,10 +48,15 @@ impl LeaderState {
         })
     }
     pub fn set_leader(&self, v: bool) {
-        self.is_leader.store(v, Ordering::Release);
+        // `send_replace` never fails when there are no receivers, unlike `send`.
+        self.is_leader.send_replace(v);
     }
     pub fn is_leader(&self) -> bool {
-        self.is_leader.load(Ordering::Acquire)
+        *self.is_leader.borrow()
+    }
+    /// Subscribe to the leadership flag. See `CenterLifeCycle::leader_signal`.
+    pub fn subscribe_leader(&self) -> watch::Receiver<bool> {
+        self.is_leader.subscribe()
     }
     pub fn record_keepalive_now(&self) {
         self.record_keepalive_at(Instant::now(), wall_now());
@@ -110,6 +120,12 @@ impl LeaderHandle {
     }
     pub fn is_leader(&self) -> bool {
         self.inner.is_leader()
+    }
+    /// Live leadership signal for process-wide singleton components
+    /// (see `CenterLifeCycle::leader_signal`). Deliberately NOT composed with
+    /// lease freshness — that stricter composition belongs to `LeadershipGate`.
+    pub fn subscribe(&self) -> watch::Receiver<bool> {
+        self.inner.subscribe_leader()
     }
     pub fn current_leader(&self) -> Option<LeaderInfo> {
         self.inner.current_leader()

@@ -63,11 +63,29 @@ conf_center:
 | `set_config_sync_server(Some)` | Leader + CachesReady | CachesReady (any replica) |
 | Status writeback to K8s | Leader (`leader_handle` guard) | Leader (`leader_handle` guard) |
 | Leader-only services (ACME, conf-sync CA rotation, DNS resolver, status reconciliation) | Leader (implicit; main flow starts only on leader) | Leader (explicit `start_leader_services()`) |
+| Federation client (`center.enabled`) | Leader | Leader — a follower keeps serving reads but does **not** federate |
 | Leadership-loss handling | Exit `run_main_flow`, clear everything, return to `wait_until_leader` | Only `stop_leader_services()`; keep serving gRPC |
 | Gateway connection target | `edgion-controller-leader` Service | `edgion-controller` (all-pods) Service |
 | gRPC interruption on leader switchover | Yes (cache rebuild ~5–15s) | No (other replicas keep serving) |
 | K8s API server load | 1x watcher connection | Nx watcher connections (N = replica count) |
 | Memory footprint | Only the Leader uses cache memory | All replicas use cache memory |
+
+## Federation Client Is Leader-Only in Both Modes
+
+The federation session at Center is keyed by `controller_id` (`cluster/name`), which is
+identical on every replica; registering a second session for the same `controller_id`
+displaces and cancels the first. The federation supervisor's run predicate is therefore
+`center.enabled && is_leader` (`fed_sync::supervisor::should_run`), fed by
+`CenterLifeCycle::leader_signal()`.
+
+This is the one behavior in `all-serve` where a follower does less than the leader while
+still serving gRPC reads normally. The leadership signal used here is deliberately NOT
+`leadership_status()`, which stays `NotApplicable` in Kubernetes so the Admin API
+not-leader 409 gate remains disabled.
+
+Metrics: `edgion_fed_kill_switch_state` reports only the operator's `center.enabled`
+intent, and `edgion_fed_client_running` reports whether the client is actually running.
+A follower reporting `kill_switch_state=1, client_running=0` is the healthy steady state.
 
 ## Status-Write Leader Guard
 
@@ -207,4 +225,5 @@ rules:
 
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/center.rs` — `run_leader_only_lifecycle`, `run_all_serve_lifecycle`, `run_main_flow`, `run_serving_flow`
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/leader_election.rs` — `LeaderElection`, `LeaderHandle`
+- `edgion-controller/src/fed_sync/supervisor.rs` — `should_run`, `run_supervisor` (federation leadership gate)
 - `edgion-controller/src/conf_mgr/conf_center/kubernetes/config.rs` — `HaMode` enum

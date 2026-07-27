@@ -194,7 +194,6 @@ Query params: `limit=N` (page size) and `continue=<token>` (K8s-style cursor). R
 | Method | Path | Purpose |
 |--------|------|---------|
 | GET | `/api/v1/region-routes/effective` | Effective region-route view |
-| GET | `/api/v1/global-ip-restrictions/effective` | Effective global IP restrictions |
 | POST | `/api/v1/cluster-region-routes/failover` | Patch region failover state |
 | POST | `/api/v1/services/acme/{namespace}/{name}/trigger` | Trigger ACME processing |
 | POST | `/api/v1/services/conf-sync-ca/rotate` | Trigger conf_sync CA rotation |

@@ -786,6 +786,12 @@ impl EdgionControllerCli {
             let initial = initial_center_cfg_for_supervisor;
             let authorizer_for_supervisor = authorizer.clone();
 
+            // Leadership gate: the federation session at Center is keyed by
+            // `controller_id` (`cluster/name`), identical on every replica, so
+            // only the leader may hold it. `None` (FileSystem: no election)
+            // leaves the client gated on `center.enabled` alone.
+            let leader_signal = conf_mgr.leader_signal();
+
             let supervisor = crate::fed_sync::supervisor::FederationSupervisor::new(spawn_client);
             // Intentionally detached: run_supervisor lives for the process lifetime,
             // driven by the reload watch channel whose sender is stored in AdminState.
@@ -793,6 +799,7 @@ impl EdgionControllerCli {
                 supervisor,
                 initial,
                 reload_rx,
+                leader_signal,
                 authorizer_for_supervisor,
             ));
         }

@@ -42,6 +42,23 @@ impl KubernetesStorage {
         })
     }
 
+    /// Test-only constructor backed by an in-process stub transport.
+    ///
+    /// Lets a unit test build a `KubernetesCenter` without a cluster and
+    /// without a TLS stack. The stub service answers every request with an
+    /// empty 200; no test using this issues a request. Must be called from
+    /// within a Tokio runtime (`Client::new` spawns a buffer worker).
+    #[cfg(test)]
+    pub(super) fn new_unconnected_for_test() -> Self {
+        let service = tower::service_fn(|_req: http::Request<kube::client::Body>| async {
+            Ok::<_, std::convert::Infallible>(http::Response::new(kube::client::Body::empty()))
+        });
+        Self {
+            client: Client::new(service, "default"),
+            allowed_namespaces: BTreeSet::new(),
+        }
+    }
+
     /// Resolve ApiResource and Scope for a resource kind.
     async fn resolve_api_resource(&self, kind: &str) -> Result<(ApiResource, Scope), ConfWriterError> {
         fn api_resource(group: &str, version: &str, kind: &str, plural: &str) -> ApiResource {

@@ -161,6 +161,13 @@ impl CenterLifeCycle for EtcdCenter {
         Some(self.term_token_slot.clone())
     }
 
+    /// The election (and therefore the signal) is built in `EtcdCenter::new`,
+    /// so this returns `Some` from construction onward — there is no window in
+    /// which the federation supervisor could ask before the signal exists.
+    fn leader_signal(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+        Some(self.election.handle().subscribe())
+    }
+
     fn leadership_status(&self) -> LeadershipStatus {
         let handle = self.election.handle();
         if handle.is_leader() {

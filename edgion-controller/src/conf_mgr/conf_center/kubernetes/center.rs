@@ -34,7 +34,7 @@ use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
@@ -229,6 +229,13 @@ pub struct KubernetesCenter {
     reload_tx: Mutex<Option<mpsc::Sender<()>>>,
     /// Aggregated controller runtime (stores, registries)
     runtime: Arc<ControllerRuntime>,
+    /// Live leadership flag published to process-wide singleton components via
+    /// `CenterLifeCycle::leader_signal` (today: the federation client
+    /// supervisor). Created here in `new()` — NOT in `start()` — so there is no
+    /// window in which a subscriber could ask before the signal exists. The same
+    /// sender is handed to `LeaderElection` in `start()`, which is the only
+    /// writer.
+    leader_flag: Arc<watch::Sender<bool>>,
 }
 
 impl KubernetesCenter {
@@ -252,6 +259,7 @@ impl KubernetesCenter {
             shutdown_handle: Mutex::new(None),
             reload_tx: Mutex::new(None),
             runtime: Arc::new(ControllerRuntime::new()),
+            leader_flag: Arc::new(watch::channel(false).0),
         })
     }
 
@@ -1239,7 +1247,7 @@ impl CenterLifeCycle for KubernetesCenter {
         );
 
         let leader_config = self.create_leader_election_config()?;
-        let leader_election = LeaderElection::new(client.clone(), leader_config);
+        let leader_election = LeaderElection::new(client.clone(), leader_config, self.leader_flag.clone());
         let leader_handle = leader_election.handle();
 
         // Fail-fast on startup if leader-election prerequisites are missing
@@ -1285,6 +1293,13 @@ impl CenterLifeCycle for KubernetesCenter {
         true
     }
 
+    /// Kubernetes DOES have a leader election, so this returns `Some` even
+    /// though `leadership_status()` stays `NotApplicable` here. The two signals
+    /// intentionally disagree — see `CenterLifeCycle::leader_signal`.
+    fn leader_signal(&self) -> Option<watch::Receiver<bool>> {
+        Some(self.leader_flag.subscribe())
+    }
+
     /// Request a reload (re-initialize all processors and stores)
     fn request_reload(&self) -> Result<(), String> {
         if let Some(tx) = self.reload_tx.lock().as_ref() {
@@ -1302,6 +1317,64 @@ impl CenterLifeCycle for KubernetesCenter {
 
 // KubernetesCenter automatically implements ConfCenter via blanket impl
 // because it implements both CenterApi and CenterLifeCycle
+
+#[cfg(test)]
+mod leadership_signal_tests {
+    use super::*;
+    use crate::conf_mgr::conf_center::traits::LeadershipStatus;
+
+    /// Build a `KubernetesCenter` without touching a cluster. Only the
+    /// leadership signal is exercised, which never talks to the apiserver.
+    fn unconnected_center() -> KubernetesCenter {
+        KubernetesCenter {
+            config: KubernetesConfig::new("edgion"),
+            writer: KubernetesStorage::new_unconnected_for_test(),
+            config_sync_server: RwLock::new(None),
+            shutdown_handle: Mutex::new(None),
+            reload_tx: Mutex::new(None),
+            runtime: Arc::new(ControllerRuntime::new()),
+            leader_flag: Arc::new(watch::channel(false).0),
+        }
+    }
+
+    /// The two leadership signals deliberately DISAGREE in Kubernetes mode.
+    ///
+    /// `leadership_status()` must stay `NotApplicable` — it drives the Admin API
+    /// not-leader 409 gate, and Kubernetes routes admin traffic to the leader
+    /// via the `edgion.io/leader` pod-label Service selector while `all-serve`
+    /// followers must keep serving reads. `leader_signal()` must nevertheless be
+    /// `Some`, because the federation client is a process-wide singleton keyed
+    /// by a replica-invariant `controller_id`.
+    ///
+    /// "Unifying" the two would either 409 every follower request or let every
+    /// replica fight over the federation session. This test exists to make that
+    /// mistake fail loudly.
+    #[tokio::test]
+    async fn leadership_status_is_not_applicable_while_leader_signal_is_some() {
+        let center = unconnected_center();
+        assert_eq!(
+            center.leadership_status(),
+            LeadershipStatus::NotApplicable,
+            "K8s must keep the Admin API not-leader gate disabled"
+        );
+        assert!(
+            center.leader_signal().is_some(),
+            "K8s must still expose a live leadership signal for the federation client"
+        );
+    }
+
+    /// The signal exists from `new()` onward and tracks the shared sender, so
+    /// the federation supervisor can never subscribe before the signal exists.
+    #[tokio::test]
+    async fn leader_signal_tracks_the_shared_flag() {
+        let center = unconnected_center();
+        let mut rx = center.leader_signal().expect("signal present at construction");
+        assert!(!*rx.borrow_and_update(), "a fresh center starts as a follower");
+
+        center.leader_flag.send_replace(true);
+        assert!(*rx.borrow(), "promotion must be visible to subscribers");
+    }
+}
 
 #[cfg(test)]
 mod caches_ready_tests {

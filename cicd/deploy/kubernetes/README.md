@@ -184,7 +184,7 @@ Edit `controller/configmap.yaml` to customize:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `conf_center.watch_namespaces` | `[]` (all) | Limit namespaces to watch |
-| `conf_center.ha_mode` | `leader-only` | HA mode: `leader-only` or `all-serve` |
+| `conf_center.ha_mode` | `leader-only` | HA mode: `leader-only` or `all-serve`. In both modes only the leader replica runs the federation client (EdgionCenter), so an `all-serve` follower keeps serving gRPC reads but does not federate |
 | `conf_center.leader_election.*` | — | Lease timing parameters |
 | `logging.log_level` | `info` | Controller log level |
 

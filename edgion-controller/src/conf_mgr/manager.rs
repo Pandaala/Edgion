@@ -155,6 +155,13 @@ impl ConfMgr {
         self.conf_center.leadership_status()
     }
 
+    /// Live leadership signal for process-wide singleton components (the
+    /// federation client). `None` = this backend has no election (FileSystem).
+    /// Orthogonal to `leadership_status` — see `CenterLifeCycle::leader_signal`.
+    pub fn leader_signal(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+        self.conf_center.leader_signal()
+    }
+
     /// Collect a stats snapshot for fed_sync push if anything has changed since
     /// last call. Returns `Some((per_kind, total))` when at least one processor
     /// is dirty (and clears the dirty flags); otherwise `None`.
@@ -218,6 +225,10 @@ impl CenterLifeCycle for ConfMgr {
 
     fn leadership_status(&self) -> super::conf_center::traits::LeadershipStatus {
         self.conf_center.leadership_status()
+    }
+
+    fn leader_signal(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
+        self.conf_center.leader_signal()
     }
 }
 

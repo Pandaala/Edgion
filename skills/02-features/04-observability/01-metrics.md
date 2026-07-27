@@ -100,7 +100,10 @@ The current workspace defines these Controller/common families under `edgion_fed
 - `watch_events_total`
 - `ready_gate_wait_seconds_last`
 - `rbac_denied_total`
-- `kill_switch_state`
+- `kill_switch_state` — the operator's `center.enabled` intent only
+- `client_running` — whether the federation client is actually running here; only
+  the leader replica runs it, so a follower reports `kill_switch_state=1` with
+  `client_running=0`
 
 Use the exact full names and bounded label domains from
 `edgion-common/src/observe/fed_metrics.rs`. Center-side watch aggregation, takeover,

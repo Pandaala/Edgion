@@ -9,7 +9,6 @@ mod common;
 mod configserver_handlers;
 mod debug_handlers;
 mod diagnostics_handlers;
-mod effective_handlers;
 pub(crate) mod ip_allowlist;
 mod namespaced_handlers;
 mod public_paths;
@@ -605,10 +604,6 @@ pub fn create_admin_router(
         .route(
             "/api/v1/region-routes/effective",
             get(region_route_handlers::list_region_routes_effective),
-        )
-        .route(
-            "/api/v1/global-ip-restrictions/effective",
-            get(effective_handlers::global_ip_restrictions_effective),
         )
         // RegionRoute failover
         .route(

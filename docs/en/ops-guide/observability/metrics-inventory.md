@@ -72,7 +72,8 @@
 | edgion_fed_watch_events_total | Counter | controller | kind, direction (sent/recv) | self | Watch events flowing across the federation link | - |
 | edgion_fed_ready_gate_wait_seconds_last | Gauge | controller | none | self | Last observed ready-gate wait in seconds (Controller side) | - |
 | edgion_fed_rbac_denied_total | Counter | controller | verb, kind, source (center/cli_token/unknown) | self | RBAC denials on the Controller admin-API federation path | - |
-| edgion_fed_kill_switch_state | Gauge | controller | none | self | Federation kill-switch state; 1 = enabled, 0 = disabled. Emitted on every supervisor start/stop transition | - |
+| edgion_fed_kill_switch_state | Gauge | controller | none | self | Federation kill-switch state — the operator's `center.enabled` intent only; 1 = enabled, 0 = disabled. Emitted on every supervisor apply | - |
+| edgion_fed_client_running | Gauge | controller | none | self | Whether the federation client is actually running in this process; 1 = running, 0 = not running. `kill_switch_state == 1 and client_running == 0` is the normal steady state of a non-leader replica (only the leader may hold the federation session) | `edgion_fed_kill_switch_state == 1 and max(edgion_fed_client_running) == 0` (enabled but no replica is federating) |
 | edgion_controller_resource_abnormal | Gauge | controller | kind, namespace, name, err, warn | self | One series per resource with at least one failing status condition; `err`/`warn` are JSON arrays of the triggering condition types, capped at 1000 entries per snapshot | `edgion_controller_resource_abnormal{err!=""}` |
 | edgion_controller_init_sync_duration_seconds_last | Gauge | controller | kind | self | Duration of the last initial sync, per resource kind | - |
 | edgion_controller_active | Gauge | controller | none | self | Number of active resource controllers | - |
